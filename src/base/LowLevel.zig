@@ -396,6 +396,7 @@ pub const LowLevel = enum {
 
     pub const ProcResultSemantics = union(enum) {
         fresh,
+        alias_arg: usize,
         borrow_arg: usize,
         no_return,
         requires_explicit_summary,
@@ -408,6 +409,18 @@ pub const LowLevel = enum {
     pub fn borrowedArgNeededForResult(self: LowLevel, arg_index: usize) bool {
         return switch (self) {
             .list_get_unsafe => arg_index == 0,
+            else => false,
+        };
+    }
+
+    /// Some low-levels retain a borrowed argument inside a freshly-produced
+    /// result value. RC insertion must incref those borrowed arguments before
+    /// the call so the result owns its stored reference explicitly.
+    pub fn borrowedArgRetainedByResult(self: LowLevel, arg_index: usize) bool {
+        return switch (self) {
+            .list_append_unsafe => arg_index == 1,
+            .list_prepend => arg_index == 1,
+            .list_set => arg_index == 2,
             else => false,
         };
     }
@@ -705,6 +718,33 @@ pub const LowLevel = enum {
     pub fn procResultSemantics(self: LowLevel) ProcResultSemantics {
         return switch (self) {
             .crash => .no_return,
+            // These low-levels consume an owned container/string argument and
+            // return the continued ownership of that value, regardless of
+            // whether the runtime path reuses the same allocation or moves the
+            // ownership into a freshly allocated result.
+            .str_concat,
+            .str_trim,
+            .str_trim_start,
+            .str_trim_end,
+            .str_with_ascii_lowercased,
+            .str_with_ascii_uppercased,
+            .str_reserve,
+            .str_release_excess_capacity,
+            .list_concat,
+            .list_append_unsafe,
+            .list_drop_at,
+            .list_sublist,
+            .list_drop_first,
+            .list_drop_last,
+            .list_take_first,
+            .list_take_last,
+            .list_reserve,
+            .list_set,
+            .list_prepend,
+            .list_reverse,
+            .list_release_excess_capacity,
+            => .{ .alias_arg = 0 },
+
             .list_get_unsafe => .{ .borrow_arg = 0 },
 
             // These produce container results whose payload provenance needs a more

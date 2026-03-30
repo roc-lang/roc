@@ -31,7 +31,6 @@ fn isBuiltinModuleEnv(env: *const ModuleEnv) bool {
 }
 
 const MIR = mir.MIR;
-const LIR = lir.LIR;
 const LirStore = lir.LirStore;
 const WasmCodeGen = backend.wasm.WasmCodeGen;
 

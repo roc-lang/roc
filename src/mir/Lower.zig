@@ -21,6 +21,7 @@ const types = @import("types");
 const MIR = @import("MIR.zig");
 const Monotype = @import("Monotype.zig");
 const Monomorphize = @import("Monomorphize.zig");
+const DebugVerifyMir = @import("DebugVerifyMir.zig");
 
 const Ident = base.Ident;
 const Region = base.Region;
@@ -133,6 +134,7 @@ const LocalCallablePath = struct {
 
 const LoopContext = struct {
     exit_id: MIR.JoinPointId,
+    exit_scope: u64,
 };
 
 const RequiredLookupTarget = struct {
@@ -148,6 +150,11 @@ const VisiblePatternBinding = struct {
 const BlockStmtScopeInfo = struct {
     before: u64,
     after: u64,
+};
+
+const LoweredExprWithScope = struct {
+    entry: MIR.CFStmtId,
+    exit_scope: u64,
 };
 
 // --- Fields ---
@@ -169,7 +176,9 @@ types_store: *const types.Store,
 /// Current module being lowered
 current_module_idx: u32,
 
-/// Scope key used to make local pattern symbols specialization-specific.
+/// Lowering-time scope key used to distinguish lexically-shadowed CIR binders.
+/// This is only a source-binder lookup environment during CIR -> MIR lowering.
+/// It must never be treated as executable MIR semantics.
 /// 0 means unscoped (module/pattern only).
 current_pattern_scope: u64,
 
@@ -182,8 +191,8 @@ type_scope: ?*const types.TypeScope,
 type_scope_module_idx: ?u32,
 type_scope_caller_module_idx: ?u32,
 
-/// Map from ((scope_key << 64) | (module_idx << 32 | CIR.Pattern.Idx)) → MIR.LocalId
-/// Used to resolve CIR local lookups to executable MIR locals.
+/// Map from ((scope_key << 64) | (module_idx << 32 | CIR.Pattern.Idx)) → MIR.LocalId.
+/// Used only to resolve CIR local lookups to the current MIR local during lowering.
 pattern_symbols: std.AutoHashMap(u128, MIR.LocalId),
 
 /// Specialization bindings: maps polymorphic type vars to concrete monotypes.
@@ -2616,12 +2625,16 @@ fn lowerNamedConstDefFromSourceExpr(
     const ret_stmt = try self.store.addCFStmt(self.allocator, .{ .ret = .{ .value = result_local } });
     const body = try self.lowerCirExprInto(expr_idx, result_local, ret_stmt);
 
-    return self.store.registerConstDef(self.allocator, .{
+    const id = try self.store.registerConstDef(self.allocator, .{
         .symbol = symbol,
         .body = body,
         .monotype = monotype,
         .source_region = region,
     });
+    if (builtin.mode == .Debug) {
+        try DebugVerifyMir.verifyConst(self.allocator, self.store, id);
+    }
+    return id;
 }
 
 fn freshSyntheticLocal(self: *Self, monotype: Monotype.Idx, reassignable: bool) Allocator.Error!MIR.LocalId {
@@ -2642,17 +2655,6 @@ fn freshJoinPointId(self: *Self) MIR.JoinPointId {
     const id = self.next_join_point_id;
     self.next_join_point_id += 1;
     return @enumFromInt(id);
-}
-
-fn currentBodyReassignableLocals(self: *Self) Allocator.Error![]MIR.LocalId {
-    const bindings = try self.currentVisibleReassignableBindings();
-    defer self.allocator.free(bindings);
-
-    var locals = try self.allocator.alloc(MIR.LocalId, bindings.len);
-    for (bindings, 0..) |binding, i| {
-        locals[i] = binding.local;
-    }
-    return locals;
 }
 
 fn sourceExprResultMonotype(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!Monotype.Idx {
@@ -4742,10 +4744,16 @@ fn lowerLambdaInto(
 
     if (reserved_lambda) |reserved| {
         try self.store.setLambda(reserved, lowered_lambda);
+        if (builtin.mode == .Debug) {
+            try DebugVerifyMir.verifyLambda(self.allocator, self.store, reserved);
+        }
         return reserved;
     }
 
     const lowered = try self.store.addLambda(self.allocator, lowered_lambda);
+    if (builtin.mode == .Debug) {
+        try DebugVerifyMir.verifyLambda(self.allocator, self.store, lowered);
+    }
     try self.lowered_callable_lambdas.put(cache_key, lowered);
     return lowered;
 }
@@ -5430,6 +5438,9 @@ fn lowerClosureLambda(
         .recursion = .not_recursive,
         .hosted = null,
     });
+    if (builtin.mode == .Debug) {
+        try DebugVerifyMir.verifyLambda(self.allocator, self.store, lowered);
+    }
     try self.lowered_callable_lambdas.put(cache_key, lowered);
     return lowered;
 }
@@ -5854,6 +5865,9 @@ fn lowerReservedTrivialClosureLambda(
         .recursion = if (recursive_captures.items.len != 0) .recursive else .not_recursive,
         .hosted = null,
     });
+    if (builtin.mode == .Debug) {
+        try DebugVerifyMir.verifyLambda(self.allocator, self.store, reserved_lambda);
+    }
 
     return reserved_lambda;
 }
@@ -6969,73 +6983,6 @@ fn bindExactCallableLocal(
     try self.bindExactLambdaLocal(local_id, lambda_id);
 }
 
-// CIR `if` is only front-end sugar here. Strongest-form MIR lowers it
-// immediately into explicit Bool `switch_stmt` control flow plus `join`/`jump`
-// value merges.
-fn lowerBoolBranchChainInto(
-    self: *Self,
-    branches: []const CIR.Expr.IfBranch.Idx,
-    final_else: CIR.Expr.Idx,
-    target: MIR.LocalId,
-    next: MIR.CFStmtId,
-) Allocator.Error!MIR.CFStmtId {
-    const module_env = self.all_module_envs[self.current_module_idx];
-
-    if (branches.len == 0) {
-        return self.lowerCirExprInto(final_else, target, next);
-    }
-
-    const branch = module_env.store.getIfBranch(branches[0]);
-    if (self.cirExprKnownBoolValue(self.current_module_idx, branch.cond)) |known_bool| {
-        return if (known_bool)
-            self.lowerCirExprInto(branch.body, target, next)
-        else
-            self.lowerBoolBranchChainInto(branches[1..], final_else, target, next);
-    }
-    const cond_mono = try self.resolveMonotype(branch.cond);
-    const result_mono = self.store.getLocal(target).monotype;
-    const cond_local = try self.freshSyntheticLocal(cond_mono, false);
-    const join_id = self.freshJoinPointId();
-    const join_params = try self.store.addLocalSpan(self.allocator, &.{target});
-    const else_value = try self.freshSyntheticLocal(result_mono, false);
-    const else_jump = try self.store.addCFStmt(self.allocator, .{ .jump = .{
-        .id = join_id,
-        .args = try self.store.addLocalSpan(self.allocator, &.{else_value}),
-    } });
-
-    const else_body = try self.lowerBoolBranchChainInto(branches[1..], final_else, else_value, else_jump);
-
-    const then_value = try self.freshSyntheticLocal(result_mono, false);
-    const then_jump = try self.store.addCFStmt(self.allocator, .{ .jump = .{
-        .id = join_id,
-        .args = try self.store.addLocalSpan(self.allocator, &.{then_value}),
-    } });
-    const then_body = try self.lowerCirExprInto(
-        branch.body,
-        then_value,
-        then_jump,
-    );
-    const tag_names = boolTagNamesForMonotype(self, cond_mono) orelse std.debug.panic(
-        "statement-only MIR if expected Bool condition monotype for expr {d}",
-        .{@intFromEnum(branch.cond)},
-    );
-
-    const switch_stmt = try self.lowerSwitchOnDiscriminant(
-        cond_local,
-        cond_mono,
-        tag_names.true_name,
-        then_body,
-        else_body,
-    );
-
-    return self.store.addCFStmt(self.allocator, .{ .join = .{
-        .id = join_id,
-        .params = join_params,
-        .body = next,
-        .remainder = try self.lowerCirExprInto(branch.cond, cond_local, switch_stmt),
-    } });
-}
-
 fn cirExprKnownBoolValue(self: *const Self, module_idx: u32, expr_idx: CIR.Expr.Idx) ?bool {
     const module_env = self.all_module_envs[module_idx];
     return switch (module_env.store.getExpr(expr_idx)) {
@@ -7616,94 +7563,107 @@ fn lowerLoopBreakJump(self: *Self) Allocator.Error!MIR.CFStmtId {
         "statement-only MIR break appeared outside any active loop",
         .{},
     );
-    const carried_locals = try self.currentBodyReassignableLocals();
-    defer self.allocator.free(carried_locals);
     return self.store.addCFStmt(self.allocator, .{ .jump = .{
         .id = loop_ctx.exit_id,
-        .args = try self.store.addLocalSpan(self.allocator, carried_locals),
+        .args = try self.buildCarriedJumpArgs(
+            self.current_pattern_scope,
+            loop_ctx.exit_scope,
+        ),
     } });
 }
 
 fn lowerWhileStmtInto(
     self: *Self,
     while_stmt: std.meta.TagPayload(CIR.Statement, .s_while),
+    before_scope: u64,
     next: MIR.CFStmtId,
 ) Allocator.Error!MIR.CFStmtId {
-    const carried_locals = try self.currentBodyReassignableLocals();
-    defer self.allocator.free(carried_locals);
+    const after_scope = self.current_pattern_scope;
+    const head_scope = self.freshChildPatternScope(before_scope);
+    try self.predeclareVisibleReassignableBindingsInScope(before_scope, head_scope);
 
-    const carried_span = try self.store.addLocalSpan(self.allocator, carried_locals);
     const loop_exit_id = self.freshJoinPointId();
     const loop_head_id = self.freshJoinPointId();
 
     try self.active_loops.append(self.allocator, .{
         .exit_id = loop_exit_id,
+        .exit_scope = after_scope,
     });
     defer _ = self.active_loops.pop();
 
     const cond_mono = try self.resolveMonotype(while_stmt.cond);
     const cond_local = try self.freshSyntheticLocal(cond_mono, false);
 
+    self.current_pattern_scope = head_scope;
+    const discrim_local = try self.freshSyntheticLocal(self.store.monotype_store.primIdx(.u64), false);
+    const switch_placeholder = try self.store.addCFStmt(self.allocator, .{ .runtime_error = .type_error });
+    const discrim_stmt = try self.lowerRefInto(
+        discrim_local,
+        .{ .discriminant = .{ .source = cond_local } },
+        switch_placeholder,
+    );
+    const lowered_cond = try self.lowerExprWithExitScope(while_stmt.cond, cond_local, discrim_stmt);
+
+    self.current_pattern_scope = lowered_cond.exit_scope;
     const continue_jump = try self.store.addCFStmt(self.allocator, .{ .jump = .{
         .id = loop_head_id,
-        .args = carried_span,
+        .args = MIR.LocalSpan.empty(),
     } });
     const body_value = try self.freshSyntheticLocal(try self.resolveMonotype(while_stmt.body), false);
-    const true_body = try self.lowerCirExprInto(while_stmt.body, body_value, continue_jump);
+    const lowered_body = try self.lowerExprWithExitScope(while_stmt.body, body_value, continue_jump);
+    self.store.getCFStmtPtr(continue_jump).jump.args = try self.buildCarriedJumpArgs(
+        lowered_body.exit_scope,
+        head_scope,
+    );
+
     const false_body = try self.store.addCFStmt(self.allocator, .{ .jump = .{
         .id = loop_exit_id,
-        .args = carried_span,
+        .args = try self.buildCarriedJumpArgs(lowered_cond.exit_scope, after_scope),
     } });
 
     const tag_names = boolTagNamesForMonotype(self, cond_mono) orelse std.debug.panic(
         "statement-only MIR while expected Bool condition monotype for expr {d}",
         .{@intFromEnum(while_stmt.cond)},
     );
-    const switch_stmt = try self.lowerSwitchOnDiscriminant(cond_local, cond_mono, tag_names.true_name, true_body, false_body);
-    const head_body = try self.lowerCirExprInto(while_stmt.cond, cond_local, switch_stmt);
+    self.store.getCFStmtPtr(switch_placeholder).* = .{ .switch_stmt = .{
+        .scrutinee = discrim_local,
+        .branches = try self.store.addSwitchBranches(self.allocator, &.{.{
+            .value = self.tagDiscriminantForMonotypeName(cond_mono, tag_names.true_name),
+            .body = lowered_body.entry,
+        }}),
+        .default_branch = false_body,
+    } };
+
+    const initial_jump = try self.store.addCFStmt(self.allocator, .{ .jump = .{
+        .id = loop_head_id,
+        .args = try self.buildCarriedJumpArgs(before_scope, head_scope),
+    } });
 
     const head_join = try self.store.addCFStmt(self.allocator, .{ .join = .{
         .id = loop_head_id,
-        .params = carried_span,
-        .body = head_body,
-        .remainder = try self.store.addCFStmt(self.allocator, .{ .jump = .{
-            .id = loop_head_id,
-            .args = carried_span,
-        } }),
+        .params = try self.buildJoinParamSpan(head_scope),
+        .body = lowered_cond.entry,
+        .remainder = initial_jump,
     } });
 
     return self.store.addCFStmt(self.allocator, .{ .join = .{
         .id = loop_exit_id,
-        .params = carried_span,
+        .params = try self.buildJoinParamSpan(after_scope),
         .body = next,
         .remainder = head_join,
     } });
-}
-
-fn lowerBoolExprInto(
-    self: *Self,
-    expr_idx: CIR.Expr.Idx,
-    on_true: MIR.CFStmtId,
-    on_false: MIR.CFStmtId,
-) Allocator.Error!MIR.CFStmtId {
-    const cond_mono = try self.resolveMonotype(expr_idx);
-    const cond_local = try self.freshSyntheticLocal(cond_mono, false);
-    const tag_names = boolTagNamesForMonotype(self, cond_mono) orelse std.debug.panic(
-        "statement-only MIR Bool control-flow expected Bool condition monotype for expr {d}",
-        .{@intFromEnum(expr_idx)},
-    );
-    const switch_stmt = try self.lowerSwitchOnDiscriminant(cond_local, cond_mono, tag_names.true_name, on_true, on_false);
-    return self.lowerCirExprInto(expr_idx, cond_local, switch_stmt);
 }
 
 fn lowerForStmtInto(
     self: *Self,
     module_env: *const ModuleEnv,
     for_stmt: std.meta.TagPayload(CIR.Statement, .s_for),
+    before_scope: u64,
     next: MIR.CFStmtId,
 ) Allocator.Error!MIR.CFStmtId {
-    const carried_locals = try self.currentBodyReassignableLocals();
-    defer self.allocator.free(carried_locals);
+    const after_scope = self.current_pattern_scope;
+    const head_scope = self.freshChildPatternScope(before_scope);
+    try self.predeclareVisibleReassignableBindingsInScope(before_scope, head_scope);
 
     const list_mono = try self.resolveMonotype(for_stmt.expr);
     const item_mono = switch (self.store.monotype_store.getMonotype(list_mono)) {
@@ -7721,61 +7681,55 @@ fn lowerForStmtInto(
         self.currentCommonIdents(),
     );
 
-    const list_local = try self.freshSyntheticLocal(list_mono, false);
-    const len_local = try self.freshSyntheticLocal(u64_mono, false);
-    const index_local = try self.freshSyntheticLocal(u64_mono, false);
-
-    const head_args = try self.allocator.alloc(MIR.LocalId, carried_locals.len + 3);
-    defer self.allocator.free(head_args);
-    @memcpy(head_args[0..carried_locals.len], carried_locals);
-    head_args[carried_locals.len] = list_local;
-    head_args[carried_locals.len + 1] = len_local;
-    head_args[carried_locals.len + 2] = index_local;
-
-    const carried_span = try self.store.addLocalSpan(self.allocator, carried_locals);
-    const head_params = try self.store.addLocalSpan(self.allocator, head_args);
+    const init_list_local = try self.freshSyntheticLocal(list_mono, false);
+    const init_len_local = try self.freshSyntheticLocal(u64_mono, false);
+    const init_index_local = try self.freshSyntheticLocal(u64_mono, false);
+    const head_list_local = try self.freshSyntheticLocal(list_mono, false);
+    const head_len_local = try self.freshSyntheticLocal(u64_mono, false);
+    const head_index_local = try self.freshSyntheticLocal(u64_mono, false);
 
     const loop_exit_id = self.freshJoinPointId();
     const loop_head_id = self.freshJoinPointId();
 
     try self.active_loops.append(self.allocator, .{
         .exit_id = loop_exit_id,
+        .exit_scope = after_scope,
     });
     defer _ = self.active_loops.pop();
 
     const false_body = try self.store.addCFStmt(self.allocator, .{ .jump = .{
         .id = loop_exit_id,
-        .args = carried_span,
+        .args = try self.buildCarriedJumpArgs(head_scope, after_scope),
     } });
 
     const one_local = try self.freshSyntheticLocal(u64_mono, false);
     const next_index_local = try self.freshSyntheticLocal(u64_mono, false);
     const item_local = try self.freshSyntheticLocal(item_mono, false);
     const body_value = try self.freshSyntheticLocal(try self.resolveMonotype(for_stmt.body), false);
-    const loop_back_args = try self.allocator.alloc(MIR.LocalId, carried_locals.len + 3);
-    defer self.allocator.free(loop_back_args);
-    @memcpy(loop_back_args[0..carried_locals.len], carried_locals);
-    loop_back_args[carried_locals.len] = list_local;
-    loop_back_args[carried_locals.len + 1] = len_local;
-    loop_back_args[carried_locals.len + 2] = next_index_local;
-
     const loop_back = try self.store.addCFStmt(self.allocator, .{ .jump = .{
         .id = loop_head_id,
-        .args = try self.store.addLocalSpan(self.allocator, loop_back_args),
+        .args = MIR.LocalSpan.empty(),
     } });
     const increment_stmt = try self.store.addCFStmt(self.allocator, .{ .assign_low_level = .{
         .target = next_index_local,
         .op = .num_plus,
-        .args = try self.store.addLocalSpan(self.allocator, &.{ index_local, one_local }),
+        .args = try self.store.addLocalSpan(self.allocator, &.{ head_index_local, one_local }),
         .next = loop_back,
     } });
     try self.predeclarePatternLocals(module_env, for_stmt.patt);
-    const body_stmt = try self.lowerCirExprInto(for_stmt.body, body_value, increment_stmt);
+    self.current_pattern_scope = head_scope;
+    const lowered_body = try self.lowerExprWithExitScope(for_stmt.body, body_value, increment_stmt);
+    self.store.getCFStmtPtr(loop_back).jump.args = try self.buildCarriedJumpArgsWithExtraLocals(
+        lowered_body.exit_scope,
+        head_scope,
+        &.{ head_list_local, head_len_local, next_index_local },
+    );
+    const body_stmt = lowered_body.entry;
     const bind_item = try self.lowerPatternBindingLocalInto(module_env, for_stmt.patt, item_local, body_stmt);
     const get_item = try self.store.addCFStmt(self.allocator, .{ .assign_low_level = .{
         .target = item_local,
         .op = .list_get_unsafe,
-        .args = try self.store.addLocalSpan(self.allocator, &.{ list_local, index_local }),
+        .args = try self.store.addLocalSpan(self.allocator, &.{ head_list_local, head_index_local }),
         .next = bind_item,
     } });
     const true_body = try self.store.addCFStmt(self.allocator, .{ .assign_literal = .{
@@ -7793,125 +7747,46 @@ fn lowerForStmtInto(
     const cond_stmt = try self.store.addCFStmt(self.allocator, .{ .assign_low_level = .{
         .target = cond_local,
         .op = .num_is_lt,
-        .args = try self.store.addLocalSpan(self.allocator, &.{ index_local, len_local }),
+        .args = try self.store.addLocalSpan(self.allocator, &.{ head_index_local, head_len_local }),
         .next = switch_stmt,
     } });
 
     const initial_jump = try self.store.addCFStmt(self.allocator, .{ .jump = .{
         .id = loop_head_id,
-        .args = head_params,
+        .args = try self.buildCarriedJumpArgsWithExtraLocals(
+            before_scope,
+            head_scope,
+            &.{ init_list_local, init_len_local, init_index_local },
+        ),
     } });
     const init_index = try self.store.addCFStmt(self.allocator, .{ .assign_literal = .{
-        .target = index_local,
+        .target = init_index_local,
         .literal = .{ .int = .{ .bytes = @bitCast(@as(i128, 0)), .kind = .i128 } },
         .next = initial_jump,
     } });
     const init_len = try self.store.addCFStmt(self.allocator, .{ .assign_low_level = .{
-        .target = len_local,
+        .target = init_len_local,
         .op = .list_len,
-        .args = try self.store.addLocalSpan(self.allocator, &.{list_local}),
+        .args = try self.store.addLocalSpan(self.allocator, &.{init_list_local}),
         .next = init_index,
     } });
-    const init_list = try self.lowerCirExprInto(for_stmt.expr, list_local, init_len);
+    const init_list = try self.lowerCirExprInto(for_stmt.expr, init_list_local, init_len);
 
     const head_join = try self.store.addCFStmt(self.allocator, .{ .join = .{
         .id = loop_head_id,
-        .params = head_params,
+        .params = try self.buildJoinParamSpanWithExtraLocals(
+            head_scope,
+            &.{ head_list_local, head_len_local, head_index_local },
+        ),
         .body = cond_stmt,
         .remainder = init_list,
     } });
 
     return self.store.addCFStmt(self.allocator, .{ .join = .{
         .id = loop_exit_id,
-        .params = carried_span,
+        .params = try self.buildJoinParamSpan(after_scope),
         .body = next,
         .remainder = head_join,
-    } });
-}
-
-fn lowerMatchInto(
-    self: *Self,
-    module_env: *const ModuleEnv,
-    match_expr: CIR.Expr.Match,
-    target: MIR.LocalId,
-    next: MIR.CFStmtId,
-) Allocator.Error!MIR.CFStmtId {
-    const cond_mono = try self.resolveMonotype(match_expr.cond);
-    const result_mono = self.store.getLocal(target).monotype;
-    const cond_local = try self.freshSyntheticLocal(cond_mono, false);
-    const join_id = self.freshJoinPointId();
-    const join_params = try self.store.addLocalSpan(self.allocator, &.{target});
-
-    const branch_indices = module_env.store.sliceMatchBranches(match_expr.branches);
-    for (branch_indices) |branch_idx| {
-        const cir_branch = module_env.store.getMatchBranch(branch_idx);
-        const branch_pattern_indices = module_env.store.sliceMatchBranchPatterns(cir_branch.patterns);
-        const representative_pattern_idx = if (branch_pattern_indices.len > 0)
-            module_env.store.getMatchBranchPattern(branch_pattern_indices[0]).pattern
-        else
-            null;
-
-        for (branch_pattern_indices, 0..) |branch_pattern_idx, pattern_i| {
-            const branch_pattern = module_env.store.getMatchBranchPattern(branch_pattern_idx);
-            if (pattern_i != 0) {
-                if (representative_pattern_idx) |representative| {
-                    try self.alignAlternativePatternSymbols(module_env, representative, branch_pattern.pattern);
-                }
-            }
-            try self.bindPatternMonotypes(module_env, branch_pattern.pattern, cond_mono);
-            try self.predeclarePatternLocals(module_env, branch_pattern.pattern);
-        }
-    }
-
-    const match_failure = try self.store.addCFStmt(self.allocator, .{ .runtime_error = .type_error });
-    const branch_degenerate_failure = try self.store.addCFStmt(self.allocator, .{ .runtime_error = .type_error });
-
-    var entry = match_failure;
-    var branch_i = branch_indices.len;
-    while (branch_i > 0) {
-        branch_i -= 1;
-        const cir_branch = module_env.store.getMatchBranch(branch_indices[branch_i]);
-        const branch_fallthrough = entry;
-        const branch_value_local = try self.freshSyntheticLocal(result_mono, false);
-        const branch_value = try self.lowerCirExprInto(
-            cir_branch.value,
-            branch_value_local,
-            try self.store.addCFStmt(self.allocator, .{ .jump = .{
-                .id = join_id,
-                .args = try self.store.addLocalSpan(self.allocator, &.{branch_value_local}),
-            } }),
-        );
-        const guarded_body = if (cir_branch.guard) |guard_idx|
-            try self.lowerBoolExprInto(guard_idx, branch_value, branch_fallthrough)
-        else
-            branch_value;
-
-        const branch_pattern_indices = module_env.store.sliceMatchBranchPatterns(cir_branch.patterns);
-        var branch_entry = branch_fallthrough;
-        var pattern_i = branch_pattern_indices.len;
-        while (pattern_i > 0) {
-            pattern_i -= 1;
-            const branch_pattern = module_env.store.getMatchBranchPattern(branch_pattern_indices[pattern_i]);
-            branch_entry = try self.lowerPatternMatchLocalInto(
-                module_env,
-                branch_pattern.pattern,
-                cond_local,
-                if (branch_pattern.degenerate) branch_degenerate_failure else guarded_body,
-                branch_entry,
-            );
-        }
-
-        if (branch_pattern_indices.len == 0) {
-            branch_entry = guarded_body;
-        }
-        entry = branch_entry;
-    }
-
-    return self.store.addCFStmt(self.allocator, .{ .join = .{
-        .id = join_id,
-        .params = join_params,
-        .body = next,
-        .remainder = try self.lowerCirExprInto(match_expr.cond, cond_local, entry),
     } });
 }
 
@@ -7990,8 +7865,8 @@ fn lowerBlockStmtInto(
         .s_type_anno,
         .s_type_var_alias,
         => next,
-        .s_for => |s_for| self.lowerForStmtInto(module_env, s_for, next),
-        .s_while => |s_while| self.lowerWhileStmtInto(s_while, next),
+        .s_for => |s_for| self.lowerForStmtInto(module_env, s_for, before_pattern_scope, next),
+        .s_while => |s_while| self.lowerWhileStmtInto(s_while, before_pattern_scope, next),
         .s_break => self.lowerLoopBreakJump(),
     };
 }
@@ -8240,12 +8115,318 @@ fn predeclarePatternLocals(
     }
 }
 
-fn lowerBlockInto(
+fn aliasVisibleReassignableBindingsIntoScope(
+    self: *Self,
+    start_scope: u64,
+    final_scope: u64,
+    exit_scope: u64,
+    next: MIR.CFStmtId,
+) Allocator.Error!MIR.CFStmtId {
+    const start_bindings = try self.visibleReassignableBindingsInScope(start_scope);
+    defer self.allocator.free(start_bindings);
+    const final_bindings = try self.visibleReassignableBindingsInScope(final_scope);
+    defer self.allocator.free(final_bindings);
+    const exit_bindings = try self.visibleReassignableBindingsInScope(exit_scope);
+    defer self.allocator.free(exit_bindings);
+
+    if (final_bindings.len != exit_bindings.len or start_bindings.len != exit_bindings.len) {
+        std.debug.panic(
+            "statement-only MIR block carry invariant violated: start/final/exit reassignable binding arities differ ({d}, {d}, {d})",
+            .{ start_bindings.len, final_bindings.len, exit_bindings.len },
+        );
+    }
+
+    var current = next;
+    var i = exit_bindings.len;
+    while (i > 0) {
+        i -= 1;
+        if (start_bindings[i].pattern_idx != final_bindings[i].pattern_idx or
+            start_bindings[i].pattern_idx != exit_bindings[i].pattern_idx)
+        {
+            std.debug.panic(
+                "statement-only MIR block carry invariant violated: mismatched carried reassignable binding ordering",
+                .{},
+            );
+        }
+
+        const source_local = final_bindings[i].local;
+        const exit_local = exit_bindings[i].local;
+        if (source_local == exit_local) continue;
+        current = try self.lowerLocalAliasInto(exit_local, source_local, current);
+    }
+
+    return current;
+}
+
+fn buildCarriedJumpArgsWithValue(
+    self: *Self,
+    source_scope: u64,
+    dest_scope: u64,
+    value_local: MIR.LocalId,
+) Allocator.Error!MIR.LocalSpan {
+    const source_bindings = try self.visibleReassignableBindingsInScope(source_scope);
+    defer self.allocator.free(source_bindings);
+    const dest_bindings = try self.visibleReassignableBindingsInScope(dest_scope);
+    defer self.allocator.free(dest_bindings);
+
+    if (source_bindings.len != dest_bindings.len) {
+        std.debug.panic(
+            "statement-only MIR join invariant violated: carried binding arity mismatch source={d} dest={d}",
+            .{ source_bindings.len, dest_bindings.len },
+        );
+    }
+
+    const args = try self.allocator.alloc(MIR.LocalId, dest_bindings.len + 1);
+    defer self.allocator.free(args);
+    args[0] = value_local;
+    for (source_bindings, dest_bindings, 0..) |source_binding, dest_binding, i| {
+        if (source_binding.pattern_idx != dest_binding.pattern_idx) {
+            std.debug.panic(
+                "statement-only MIR join invariant violated: carried binding pattern ordering diverged across scopes",
+                .{},
+            );
+        }
+        args[i + 1] = source_binding.local;
+    }
+    return self.store.addLocalSpan(self.allocator, args);
+}
+
+fn buildCarriedJumpArgs(
+    self: *Self,
+    source_scope: u64,
+    dest_scope: u64,
+) Allocator.Error!MIR.LocalSpan {
+    const source_bindings = try self.visibleReassignableBindingsInScope(source_scope);
+    defer self.allocator.free(source_bindings);
+    const dest_bindings = try self.visibleReassignableBindingsInScope(dest_scope);
+    defer self.allocator.free(dest_bindings);
+
+    if (source_bindings.len != dest_bindings.len) {
+        std.debug.panic(
+            "statement-only MIR join invariant violated: carried binding arity mismatch source={d} dest={d}",
+            .{ source_bindings.len, dest_bindings.len },
+        );
+    }
+
+    const args = try self.allocator.alloc(MIR.LocalId, dest_bindings.len);
+    defer self.allocator.free(args);
+    for (source_bindings, dest_bindings, 0..) |source_binding, dest_binding, i| {
+        if (source_binding.pattern_idx != dest_binding.pattern_idx) {
+            std.debug.panic(
+                "statement-only MIR join invariant violated: carried binding pattern ordering diverged across scopes",
+                .{},
+            );
+        }
+        args[i] = source_binding.local;
+    }
+    return self.store.addLocalSpan(self.allocator, args);
+}
+
+fn buildJoinParamSpanWithValue(
+    self: *Self,
+    result_local: MIR.LocalId,
+    scope: u64,
+) Allocator.Error!MIR.LocalSpan {
+    const bindings = try self.visibleReassignableBindingsInScope(scope);
+    defer self.allocator.free(bindings);
+
+    const params = try self.allocator.alloc(MIR.LocalId, bindings.len + 1);
+    defer self.allocator.free(params);
+    params[0] = result_local;
+    for (bindings, 0..) |binding, i| {
+        params[i + 1] = binding.local;
+    }
+    return self.store.addLocalSpan(self.allocator, params);
+}
+
+fn buildJoinParamSpan(
+    self: *Self,
+    scope: u64,
+) Allocator.Error!MIR.LocalSpan {
+    const bindings = try self.visibleReassignableBindingsInScope(scope);
+    defer self.allocator.free(bindings);
+
+    const params = try self.allocator.alloc(MIR.LocalId, bindings.len);
+    defer self.allocator.free(params);
+    for (bindings, 0..) |binding, i| {
+        params[i] = binding.local;
+    }
+    return self.store.addLocalSpan(self.allocator, params);
+}
+
+fn buildCarriedJumpArgsWithExtraLocals(
+    self: *Self,
+    source_scope: u64,
+    dest_scope: u64,
+    extra_locals: []const MIR.LocalId,
+) Allocator.Error!MIR.LocalSpan {
+    const source_bindings = try self.visibleReassignableBindingsInScope(source_scope);
+    defer self.allocator.free(source_bindings);
+    const dest_bindings = try self.visibleReassignableBindingsInScope(dest_scope);
+    defer self.allocator.free(dest_bindings);
+
+    if (source_bindings.len != dest_bindings.len) {
+        std.debug.panic(
+            "statement-only MIR loop invariant violated: carried binding arity mismatch source={d} dest={d}",
+            .{ source_bindings.len, dest_bindings.len },
+        );
+    }
+
+    const args = try self.allocator.alloc(MIR.LocalId, dest_bindings.len + extra_locals.len);
+    defer self.allocator.free(args);
+    for (source_bindings, dest_bindings, 0..) |source_binding, dest_binding, i| {
+        if (source_binding.pattern_idx != dest_binding.pattern_idx) {
+            std.debug.panic(
+                "statement-only MIR loop invariant violated: carried binding pattern ordering diverged across scopes",
+                .{},
+            );
+        }
+        args[i] = source_binding.local;
+    }
+    @memcpy(args[dest_bindings.len..], extra_locals);
+    return self.store.addLocalSpan(self.allocator, args);
+}
+
+fn buildJoinParamSpanWithExtraLocals(
+    self: *Self,
+    scope: u64,
+    extra_locals: []const MIR.LocalId,
+) Allocator.Error!MIR.LocalSpan {
+    const bindings = try self.visibleReassignableBindingsInScope(scope);
+    defer self.allocator.free(bindings);
+
+    const params = try self.allocator.alloc(MIR.LocalId, bindings.len + extra_locals.len);
+    defer self.allocator.free(params);
+    for (bindings, 0..) |binding, i| {
+        params[i] = binding.local;
+    }
+    @memcpy(params[bindings.len..], extra_locals);
+    return self.store.addLocalSpan(self.allocator, params);
+}
+
+fn lowerBoolBranchChainIntoWithExitScope(
+    self: *Self,
+    branches: []const CIR.Expr.IfBranch.Idx,
+    final_else: CIR.Expr.Idx,
+    target: MIR.LocalId,
+    next: MIR.CFStmtId,
+) Allocator.Error!LoweredExprWithScope {
+    const start_scope = self.current_pattern_scope;
+    const module_env = self.all_module_envs[self.current_module_idx];
+
+    if (branches.len == 0) {
+        return self.lowerExprWithExitScope(final_else, target, next);
+    }
+
+    const branch = module_env.store.getIfBranch(branches[0]);
+    if (self.cirExprKnownBoolValue(self.current_module_idx, branch.cond)) |known_bool| {
+        return if (known_bool)
+            self.lowerExprWithExitScope(branch.body, target, next)
+        else
+            self.lowerBoolBranchChainIntoWithExitScope(branches[1..], final_else, target, next);
+    }
+
+    const cond_mono = try self.resolveMonotype(branch.cond);
+    const result_mono = self.store.getLocal(target).monotype;
+    const cond_local = try self.freshSyntheticLocal(cond_mono, false);
+    const discrim_local = try self.freshSyntheticLocal(self.store.monotype_store.primIdx(.u64), false);
+    const switch_placeholder = try self.store.addCFStmt(self.allocator, .{ .runtime_error = .type_error });
+    const discrim_stmt = try self.lowerRefInto(
+        discrim_local,
+        .{ .discriminant = .{ .source = cond_local } },
+        switch_placeholder,
+    );
+    const lowered_cond = try self.lowerExprWithExitScope(branch.cond, cond_local, discrim_stmt);
+    const join_scope = self.freshChildPatternScope(lowered_cond.exit_scope);
+    try self.predeclareVisibleReassignableBindingsInScope(lowered_cond.exit_scope, join_scope);
+    const join_id = self.freshJoinPointId();
+
+    self.current_pattern_scope = lowered_cond.exit_scope;
+    const else_value = try self.freshSyntheticLocal(result_mono, false);
+    const else_jump = try self.store.addCFStmt(self.allocator, .{ .jump = .{
+        .id = join_id,
+        .args = MIR.LocalSpan.empty(),
+    } });
+    const lowered_else = try self.lowerBoolBranchChainIntoWithExitScope(branches[1..], final_else, else_value, else_jump);
+    self.store.getCFStmtPtr(else_jump).jump.args = try self.buildCarriedJumpArgsWithValue(
+        lowered_else.exit_scope,
+        join_scope,
+        else_value,
+    );
+
+    self.current_pattern_scope = lowered_cond.exit_scope;
+    const then_value = try self.freshSyntheticLocal(result_mono, false);
+    const then_jump = try self.store.addCFStmt(self.allocator, .{ .jump = .{
+        .id = join_id,
+        .args = MIR.LocalSpan.empty(),
+    } });
+    const lowered_then = try self.lowerExprWithExitScope(branch.body, then_value, then_jump);
+    self.store.getCFStmtPtr(then_jump).jump.args = try self.buildCarriedJumpArgsWithValue(
+        lowered_then.exit_scope,
+        join_scope,
+        then_value,
+    );
+
+    const tag_names = boolTagNamesForMonotype(self, cond_mono) orelse std.debug.panic(
+        "statement-only MIR if expected Bool condition monotype for expr {d}",
+        .{@intFromEnum(branch.cond)},
+    );
+    self.store.getCFStmtPtr(switch_placeholder).* = .{ .switch_stmt = .{
+        .scrutinee = discrim_local,
+        .branches = try self.store.addSwitchBranches(self.allocator, &.{
+            .{
+                .value = self.tagDiscriminantForMonotypeName(cond_mono, tag_names.true_name),
+                .body = lowered_then.entry,
+            },
+        }),
+        .default_branch = lowered_else.entry,
+    } };
+
+    const entry = try self.store.addCFStmt(self.allocator, .{ .join = .{
+        .id = join_id,
+        .params = try self.buildJoinParamSpanWithValue(target, join_scope),
+        .body = next,
+        .remainder = lowered_cond.entry,
+    } });
+
+    return .{
+        .entry = entry,
+        .exit_scope = join_scope,
+    };
+}
+
+fn lowerExprWithExitScope(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+    target: MIR.LocalId,
+    next: MIR.CFStmtId,
+) Allocator.Error!LoweredExprWithScope {
+    const module_env = self.all_module_envs[self.current_module_idx];
+    const start_scope = self.current_pattern_scope;
+    const lowered = switch (module_env.store.getExpr(expr_idx)) {
+        .e_block => |block| try self.lowerBlockExprIntoWithExitScope(block, target, next),
+        .e_if => |if_expr| try self.lowerBoolBranchChainIntoWithExitScope(
+            module_env.store.sliceIfBranches(if_expr.branches),
+            if_expr.final_else,
+            target,
+            next,
+        ),
+        .e_match => |match_expr| try self.lowerMatchIntoWithExitScope(module_env, match_expr, target, next),
+        else => .{
+            .entry = try self.lowerCirExprInto(expr_idx, target, next),
+            .exit_scope = self.current_pattern_scope,
+        },
+    };
+    self.current_pattern_scope = start_scope;
+    return lowered;
+}
+
+fn lowerBlockExprIntoWithExitScope(
     self: *Self,
     block: anytype,
     target: MIR.LocalId,
     next: MIR.CFStmtId,
-) Allocator.Error!MIR.CFStmtId {
+) Allocator.Error!LoweredExprWithScope {
     const module_env = self.all_module_envs[self.current_module_idx];
     const stmts = module_env.store.sliceStatements(block.stmts);
     const saved_scope = self.current_pattern_scope;
@@ -8256,7 +8437,7 @@ fn lowerBlockInto(
     for (stmts, 0..) |stmt_idx, i| {
         scope_infos[i].before = scope;
         switch (module_env.store.getStatement(stmt_idx)) {
-            .s_decl, .s_var, .s_reassign => {
+            .s_decl, .s_var, .s_reassign, .s_for, .s_while => {
                 scope = self.freshChildPatternScope(scope);
                 scope_infos[i].after = scope;
             },
@@ -8267,10 +8448,18 @@ fn lowerBlockInto(
 
         self.current_pattern_scope = scope_infos[i].after;
         try self.predeclareTrivialBlockStmtPatterns(module_env, stmt_idx);
+        switch (module_env.store.getStatement(stmt_idx)) {
+            .s_for, .s_while => try self.predeclareVisibleReassignableBindingsInScope(
+                scope_infos[i].before,
+                scope_infos[i].after,
+            ),
+            else => {},
+        }
     }
 
     self.current_pattern_scope = scope;
-    var entry = try self.lowerCirExprInto(block.final_expr, target, next);
+    const lowered_final = try self.lowerExprWithExitScope(block.final_expr, target, next);
+    var entry = lowered_final.entry;
     var i = stmts.len;
     while (i > 0) {
         i -= 1;
@@ -8279,7 +8468,273 @@ fn lowerBlockInto(
         self.current_pattern_scope = scope_infos[i].before;
     }
     self.current_pattern_scope = saved_scope;
-    return entry;
+    return .{
+        .entry = entry,
+        .exit_scope = lowered_final.exit_scope,
+    };
+}
+
+fn lowerBlockIntoWithExitScope(
+    self: *Self,
+    block: anytype,
+    target: MIR.LocalId,
+    next: MIR.CFStmtId,
+) Allocator.Error!LoweredExprWithScope {
+    const module_env = self.all_module_envs[self.current_module_idx];
+    const stmts = module_env.store.sliceStatements(block.stmts);
+    const saved_scope = self.current_pattern_scope;
+    const scope_infos = try self.allocator.alloc(BlockStmtScopeInfo, stmts.len);
+    defer self.allocator.free(scope_infos);
+
+    var scope = self.current_pattern_scope;
+    for (stmts, 0..) |stmt_idx, i| {
+        scope_infos[i].before = scope;
+        switch (module_env.store.getStatement(stmt_idx)) {
+            .s_decl, .s_var, .s_reassign, .s_for, .s_while => {
+                scope = self.freshChildPatternScope(scope);
+                scope_infos[i].after = scope;
+            },
+            else => {
+                scope_infos[i].after = scope;
+            },
+        }
+
+        self.current_pattern_scope = scope_infos[i].after;
+        try self.predeclareTrivialBlockStmtPatterns(module_env, stmt_idx);
+        switch (module_env.store.getStatement(stmt_idx)) {
+            .s_for, .s_while => try self.predeclareVisibleReassignableBindingsInScope(
+                scope_infos[i].before,
+                scope_infos[i].after,
+            ),
+            else => {},
+        }
+    }
+
+    const exit_scope = self.freshChildPatternScope(saved_scope);
+    try self.predeclareVisibleReassignableBindingsInScope(saved_scope, exit_scope);
+    const after_final_join_id = self.freshJoinPointId();
+    const after_final_jump = try self.store.addCFStmt(self.allocator, .{ .jump = .{
+        .id = after_final_join_id,
+        .args = MIR.LocalSpan.empty(),
+    } });
+
+    self.current_pattern_scope = scope;
+    const lowered_final = try self.lowerExprWithExitScope(block.final_expr, target, after_final_jump);
+    const carried_next = try self.aliasVisibleReassignableBindingsIntoScope(
+        saved_scope,
+        lowered_final.exit_scope,
+        exit_scope,
+        next,
+    );
+    var entry = try self.store.addCFStmt(self.allocator, .{ .join = .{
+        .id = after_final_join_id,
+        .params = MIR.LocalSpan.empty(),
+        .body = carried_next,
+        .remainder = lowered_final.entry,
+    } });
+    var i = stmts.len;
+    while (i > 0) {
+        i -= 1;
+        self.current_pattern_scope = scope_infos[i].after;
+        entry = try self.lowerBlockStmtInto(module_env, stmts[i], scope_infos[i].before, entry);
+        self.current_pattern_scope = scope_infos[i].before;
+    }
+    self.current_pattern_scope = saved_scope;
+    return .{
+        .entry = entry,
+        .exit_scope = exit_scope,
+    };
+}
+
+fn lowerMatchIntoWithExitScope(
+    self: *Self,
+    module_env: *const ModuleEnv,
+    match_expr: CIR.Expr.Match,
+    target: MIR.LocalId,
+    next: MIR.CFStmtId,
+) Allocator.Error!LoweredExprWithScope {
+    const cond_mono = try self.resolveMonotype(match_expr.cond);
+    const cond_local = try self.freshSyntheticLocal(cond_mono, false);
+    const dispatch_join_id = self.freshJoinPointId();
+    const dispatch_jump = try self.store.addCFStmt(self.allocator, .{ .jump = .{
+        .id = dispatch_join_id,
+        .args = MIR.LocalSpan.empty(),
+    } });
+    const lowered_cond = try self.lowerExprWithExitScope(match_expr.cond, cond_local, dispatch_jump);
+
+    const join_scope = self.freshChildPatternScope(lowered_cond.exit_scope);
+    try self.predeclareVisibleReassignableBindingsInScope(lowered_cond.exit_scope, join_scope);
+    const join_id = self.freshJoinPointId();
+
+    const branch_indices = module_env.store.sliceMatchBranches(match_expr.branches);
+    const match_failure = try self.store.addCFStmt(self.allocator, .{ .runtime_error = .type_error });
+    const branch_degenerate_failure = try self.store.addCFStmt(self.allocator, .{ .runtime_error = .type_error });
+
+    const entry = try self.lowerMatchBranchChainInto(
+        module_env,
+        branch_indices,
+        lowered_cond.exit_scope,
+        cond_local,
+        cond_mono,
+        target,
+        join_id,
+        join_scope,
+        match_failure,
+        branch_degenerate_failure,
+    );
+
+    const dispatch_join = try self.store.addCFStmt(self.allocator, .{ .join = .{
+        .id = dispatch_join_id,
+        .params = MIR.LocalSpan.empty(),
+        .body = entry,
+        .remainder = lowered_cond.entry,
+    } });
+
+    return .{
+        .entry = try self.store.addCFStmt(self.allocator, .{ .join = .{
+            .id = join_id,
+            .params = try self.buildJoinParamSpanWithValue(target, join_scope),
+            .body = next,
+            .remainder = dispatch_join,
+        } }),
+        .exit_scope = join_scope,
+    };
+}
+
+fn lowerMatchBranchChainInto(
+    self: *Self,
+    module_env: *const ModuleEnv,
+    branch_indices: []const CIR.Expr.Match.Branch.Idx,
+    input_scope: u64,
+    cond_local: MIR.LocalId,
+    cond_mono: Monotype.Idx,
+    result_local: MIR.LocalId,
+    result_join_id: MIR.JoinPointId,
+    result_join_scope: u64,
+    on_exhausted: MIR.CFStmtId,
+    branch_degenerate_failure: MIR.CFStmtId,
+) Allocator.Error!MIR.CFStmtId {
+    if (branch_indices.len == 0) return on_exhausted;
+
+    const cir_branch = module_env.store.getMatchBranch(branch_indices[0]);
+    const rest_scope = self.freshChildPatternScope(input_scope);
+    try self.predeclareVisibleReassignableBindingsInScope(input_scope, rest_scope);
+    const rest_entry = try self.lowerMatchBranchChainInto(
+        module_env,
+        branch_indices[1..],
+        rest_scope,
+        cond_local,
+        cond_mono,
+        result_local,
+        result_join_id,
+        result_join_scope,
+        on_exhausted,
+        branch_degenerate_failure,
+    );
+    const rest_join_id = self.freshJoinPointId();
+    const rest_join_params = try self.buildJoinParamSpan(rest_scope);
+    const pattern_fail_jump = try self.store.addCFStmt(self.allocator, .{ .jump = .{
+        .id = rest_join_id,
+        .args = try self.buildCarriedJumpArgs(input_scope, rest_scope),
+    } });
+
+    const branch_scope = self.freshChildPatternScope(input_scope);
+    const saved_scope = self.current_pattern_scope;
+    self.current_pattern_scope = branch_scope;
+    defer self.current_pattern_scope = saved_scope;
+
+    const branch_pattern_indices = module_env.store.sliceMatchBranchPatterns(cir_branch.patterns);
+    const representative_pattern_idx = if (branch_pattern_indices.len > 0)
+        module_env.store.getMatchBranchPattern(branch_pattern_indices[0]).pattern
+    else
+        null;
+    for (branch_pattern_indices, 0..) |branch_pattern_idx, pattern_i| {
+        const branch_pattern = module_env.store.getMatchBranchPattern(branch_pattern_idx);
+        if (pattern_i != 0) {
+            if (representative_pattern_idx) |representative| {
+                try self.alignAlternativePatternSymbols(module_env, representative, branch_pattern.pattern);
+            }
+        }
+        try self.bindPatternMonotypes(module_env, branch_pattern.pattern, cond_mono);
+        try self.predeclarePatternLocals(module_env, branch_pattern.pattern);
+    }
+
+    const result_mono = self.store.getLocal(result_local).monotype;
+    const branch_value_local = try self.freshSyntheticLocal(result_mono, false);
+    const branch_jump = try self.store.addCFStmt(self.allocator, .{ .jump = .{
+        .id = result_join_id,
+        .args = MIR.LocalSpan.empty(),
+    } });
+    const lowered_branch_value = try self.lowerExprWithExitScope(cir_branch.value, branch_value_local, branch_jump);
+    self.store.getCFStmtPtr(branch_jump).jump.args = try self.buildCarriedJumpArgsWithValue(
+        lowered_branch_value.exit_scope,
+        result_join_scope,
+        branch_value_local,
+    );
+
+    const guarded_body = if (cir_branch.guard) |guard_idx| blk: {
+        const guard_mono = try self.resolveMonotype(guard_idx);
+        const tag_names = boolTagNamesForMonotype(self, guard_mono) orelse std.debug.panic(
+            "statement-only MIR match guard expected Bool condition monotype for expr {d}",
+            .{@intFromEnum(guard_idx)},
+        );
+        const guard_local = try self.freshSyntheticLocal(guard_mono, false);
+        const guard_discrim_local = try self.freshSyntheticLocal(self.store.monotype_store.primIdx(.u64), false);
+        const guard_switch_placeholder = try self.store.addCFStmt(self.allocator, .{ .runtime_error = .type_error });
+        const guard_discrim_stmt = try self.lowerRefInto(
+            guard_discrim_local,
+            .{ .discriminant = .{ .source = guard_local } },
+            guard_switch_placeholder,
+        );
+        const lowered_guard = try self.lowerExprWithExitScope(guard_idx, guard_local, guard_discrim_stmt);
+        const guard_false_jump = try self.store.addCFStmt(self.allocator, .{ .jump = .{
+            .id = rest_join_id,
+            .args = try self.buildCarriedJumpArgs(lowered_guard.exit_scope, rest_scope),
+        } });
+        self.store.getCFStmtPtr(guard_switch_placeholder).* = .{ .switch_stmt = .{
+            .scrutinee = guard_discrim_local,
+            .branches = try self.store.addSwitchBranches(self.allocator, &.{.{
+                .value = self.tagDiscriminantForMonotypeName(guard_mono, tag_names.true_name),
+                .body = lowered_branch_value.entry,
+            }}),
+            .default_branch = guard_false_jump,
+        } };
+        break :blk lowered_guard.entry;
+    } else lowered_branch_value.entry;
+
+    var branch_entry = pattern_fail_jump;
+    var pattern_i = branch_pattern_indices.len;
+    while (pattern_i > 0) {
+        pattern_i -= 1;
+        const branch_pattern = module_env.store.getMatchBranchPattern(branch_pattern_indices[pattern_i]);
+        branch_entry = try self.lowerPatternMatchLocalInto(
+            module_env,
+            branch_pattern.pattern,
+            cond_local,
+            if (branch_pattern.degenerate) branch_degenerate_failure else guarded_body,
+            branch_entry,
+        );
+    }
+
+    if (branch_pattern_indices.len == 0) {
+        branch_entry = guarded_body;
+    }
+
+    return self.store.addCFStmt(self.allocator, .{ .join = .{
+        .id = rest_join_id,
+        .params = rest_join_params,
+        .body = rest_entry,
+        .remainder = branch_entry,
+    } });
+}
+
+fn lowerBlockInto(
+    self: *Self,
+    block: anytype,
+    target: MIR.LocalId,
+    next: MIR.CFStmtId,
+) Allocator.Error!MIR.CFStmtId {
+    return (try self.lowerBlockIntoWithExitScope(block, target, next)).entry;
 }
 
 fn findWrappingClosureExpr(
@@ -8830,13 +9285,13 @@ fn lowerCirExprInto(
         .e_unary_minus => |um| self.lowerUnaryMinusInto(um, target, next),
         .e_unary_not => |unary| self.lowerUnaryNotInto(unary, target, next),
         .e_call => |call| self.lowerCallInto(module_env, expr_idx, call, target, next),
-        .e_match => |match_expr| self.lowerMatchInto(module_env, match_expr, target, next),
-        .e_if => |if_expr| self.lowerBoolBranchChainInto(
+        .e_match => |match_expr| (try self.lowerMatchIntoWithExitScope(module_env, match_expr, target, next)).entry,
+        .e_if => |if_expr| (try self.lowerBoolBranchChainIntoWithExitScope(
             module_env.store.sliceIfBranches(if_expr.branches),
             if_expr.final_else,
             target,
             next,
-        ),
+        )).entry,
         .e_dbg => |dbg_expr| blk: {
             const value_mono = try self.resolveMonotype(dbg_expr.expr);
             const value_local = try self.freshSyntheticLocal(value_mono, false);

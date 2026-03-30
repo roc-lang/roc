@@ -248,7 +248,7 @@ fn inferReturnContracts(
             }
 
             for (args, params) |arg, param| {
-                const arg_info = try resolveJumpArgInfo(param_index_by_symbol, results, arg);
+                const arg_info = try resolveJumpArgInfo(allocator, store, param_index_by_symbol, results, arg);
                 try mergeJoinInputInfo(store, join_inputs, param, arg_info);
             }
         },
@@ -329,21 +329,143 @@ fn collectJoinParams(
 }
 
 fn resolveJumpArgInfo(
+    allocator: Allocator,
+    store: *LirStore,
     param_index_by_symbol: *const ParamIndexMap,
     results: *const LocalResultMap,
     arg: LocalId,
 ) Allocator.Error!LocalResultInfo {
-    if (param_index_by_symbol.contains(localKey(arg))) {
-        return .{ .semantics = .{ .alias_of = .{
-            .owner = arg,
+    var visited = VisitedMap.init(allocator);
+    defer visited.deinit();
+    return .{ .semantics = try resolveJoinInputSemantics(
+        allocator,
+        store,
+        param_index_by_symbol,
+        results,
+        arg,
+        &visited,
+    ) };
+}
+
+fn resolveJoinInputSemantics(
+    allocator: Allocator,
+    store: *LirStore,
+    param_index_by_symbol: *const ParamIndexMap,
+    results: *const LocalResultMap,
+    local: LocalId,
+    visited: *VisitedMap,
+) Allocator.Error!LIR.ResultSemantics {
+    const key = localKey(local);
+    if (param_index_by_symbol.contains(key)) {
+        return .{ .alias_of = .{
+            .owner = local,
             .projections = RefProjectionSpan.empty(),
-        } } };
+        } };
     }
 
-    return results.get(localKey(arg)) orelse std.debug.panic(
+    const gop = try visited.getOrPut(key);
+    if (gop.found_existing) {
+        std.debug.panic(
+            "DebugOwnershipSummary invariant violated: cyclic jump-input provenance for local {d}",
+            .{@intFromEnum(local)},
+        );
+    }
+
+    const info = results.get(key) orelse std.debug.panic(
         "DebugOwnershipSummary invariant violated: jump arg local {d} had no known result semantics",
-        .{@intFromEnum(arg)},
+        .{@intFromEnum(local)},
     );
+
+    return switch (info.semantics) {
+        .fresh => .fresh,
+        .alias_of => |aliased| try composeProjectedSemantics(
+            allocator,
+            store,
+            try resolveJoinInputSemantics(
+                allocator,
+                store,
+                param_index_by_symbol,
+                results,
+                aliased.owner,
+                visited,
+            ),
+            aliased.projections,
+        ),
+        .borrow_of => |borrowed| try composeProjectedBorrowSemantics(
+            allocator,
+            store,
+            try resolveJoinInputSemantics(
+                allocator,
+                store,
+                param_index_by_symbol,
+                results,
+                borrowed.owner,
+                visited,
+            ),
+            borrowed.projections,
+            borrowed.region,
+        ),
+    };
+}
+
+fn composeProjectedSemantics(
+    allocator: Allocator,
+    store: *LirStore,
+    base: LIR.ResultSemantics,
+    projections: RefProjectionSpan,
+) Allocator.Error!LIR.ResultSemantics {
+    return switch (base) {
+        .fresh => .fresh,
+        .alias_of => |aliased| .{ .alias_of = .{
+            .owner = aliased.owner,
+            .projections = try appendProjectionSpans(allocator, store, aliased.projections, projections),
+        } },
+        .borrow_of => |borrowed| .{ .borrow_of = .{
+            .owner = borrowed.owner,
+            .projections = try appendProjectionSpans(allocator, store, borrowed.projections, projections),
+            .region = borrowed.region,
+        } },
+    };
+}
+
+fn composeProjectedBorrowSemantics(
+    allocator: Allocator,
+    store: *LirStore,
+    base: LIR.ResultSemantics,
+    projections: RefProjectionSpan,
+    region: LIR.BorrowRegion,
+) Allocator.Error!LIR.ResultSemantics {
+    return switch (base) {
+        .fresh => .fresh,
+        .alias_of => |aliased| .{ .borrow_of = .{
+            .owner = aliased.owner,
+            .projections = try appendProjectionSpans(allocator, store, aliased.projections, projections),
+            .region = region,
+        } },
+        .borrow_of => |borrowed| .{ .borrow_of = .{
+            .owner = borrowed.owner,
+            .projections = try appendProjectionSpans(allocator, store, borrowed.projections, projections),
+            .region = borrowed.region,
+        } },
+    };
+}
+
+fn appendProjectionSpans(
+    allocator: Allocator,
+    store: *LirStore,
+    prefix: RefProjectionSpan,
+    suffix: RefProjectionSpan,
+) Allocator.Error!RefProjectionSpan {
+    const left = store.getRefProjectionSpan(prefix);
+    const right = store.getRefProjectionSpan(suffix);
+    if (left.len == 0) return suffix;
+    if (right.len == 0) return prefix;
+
+    var combined = std.ArrayList(RefProjection).empty;
+    defer combined.deinit(allocator);
+    try combined.appendSlice(allocator, left);
+    try combined.appendSlice(allocator, right);
+    return try store.addRefProjectionSpan(combined.items);
 }
 
 fn mergeJoinInputInfo(

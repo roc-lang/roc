@@ -80,6 +80,7 @@ fn isBuiltinModuleEnv(env: *const ModuleEnv) bool {
     return env.display_module_name_idx.eql(env.idents.builtin_module);
 }
 
+/// Lowers one CIR expression into post-RC statement-only LIR suitable for eval.
 pub const LirProgram = struct {
     allocator: Allocator,
     global_layout_store: ?*layout.Store = null,
@@ -238,7 +239,7 @@ pub const LirProgram = struct {
         maybe_type_scope: ?*const types.TypeScope,
     ) Error!LowerResult {
         var mir_store = MIR.Store.init(self.allocator) catch return error.OutOfMemory;
-        errdefer mir_store.deinit(self.allocator);
+        defer mir_store.deinit(self.allocator);
 
         var monomorphization = if (maybe_type_scope) |type_scope|
             mir.Monomorphize.runRootSourceExprWithTypeScope(
@@ -279,7 +280,6 @@ pub const LirProgram = struct {
         }
 
         const root_const_id = mir_lower.lowerRootConst(expr_idx) catch return error.RuntimeError;
-
         var mir_analyses = mir.Analyses.init(
             self.allocator,
             &mir_store,
@@ -297,7 +297,6 @@ pub const LirProgram = struct {
 
         const root_proc_id = mir_to_lir.lower(root_const_id) catch return error.RuntimeError;
         try mir_to_lir.flush();
-
         var rc_pass = lir.RcInsert.RcInsertPass.init(self.allocator, &lir_store, layout_store_ptr) catch return error.OutOfMemory;
         defer rc_pass.deinit();
         try rc_pass.insertRcOpsForAllProcs();
@@ -330,7 +329,7 @@ pub const LirProgram = struct {
         type_scope: ?*const types.TypeScope,
     ) Error!LowerResult {
         var mir_store = MIR.Store.init(self.allocator) catch return error.OutOfMemory;
-        errdefer mir_store.deinit(self.allocator);
+        defer mir_store.deinit(self.allocator);
 
         var monomorphization = if (type_scope) |ts|
             mir.Monomorphize.runRootSourceExprWithTypeScope(

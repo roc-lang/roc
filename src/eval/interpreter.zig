@@ -4,6 +4,7 @@
 //! All evaluation follows explicit `CFStmt` control flow and explicit RC ops.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const layout_mod = @import("layout");
 const lir = @import("lir");
@@ -79,6 +80,7 @@ const InterpreterRocEnv = struct {
     runtime_error_message: ?[]const u8 = null,
     expect_message: ?[]const u8 = null,
     jmp_buf: JmpBuf = undefined,
+    active_jmp_buf: ?*JmpBuf = null,
     caller_roc_ops: *RocOps,
 
     fn init(allocator: Allocator, caller_roc_ops: *RocOps) InterpreterRocEnv {
@@ -106,6 +108,16 @@ const InterpreterRocEnv = struct {
     /// Reset just the crash state before calling a builtin that might crash.
     fn resetCrash(self: *InterpreterRocEnv) void {
         self.crashed = false;
+    }
+
+    fn installJumpBuf(self: *InterpreterRocEnv, jmp_buf: *JmpBuf) ?*JmpBuf {
+        const prev = self.active_jmp_buf;
+        self.active_jmp_buf = jmp_buf;
+        return prev;
+    }
+
+    fn restoreJumpBuf(self: *InterpreterRocEnv, prev: ?*JmpBuf) void {
+        self.active_jmp_buf = prev;
     }
 
     fn currentRocOps(self: *InterpreterRocEnv) *RocOps {
@@ -158,7 +170,12 @@ const InterpreterRocEnv = struct {
         const msg = roc_crashed.utf8_bytes[0..roc_crashed.len];
         if (self.crash_message) |old| self.allocator.free(old);
         self.crash_message = self.allocator.dupe(u8, msg) catch null;
-        longjmp(&self.jmp_buf, 1);
+        const active_jmp_buf = self.active_jmp_buf orelse std.debug.panic(
+            "LIR/interpreter invariant violated: roc_crashed fired without an active jump buffer",
+            .{},
+        );
+        self.active_jmp_buf = null;
+        longjmp(active_jmp_buf, 1);
     }
 };
 
@@ -202,6 +219,31 @@ pub const Interpreter = struct {
         DivisionByZero,
         Crash,
     };
+
+    const CrashBoundary = struct {
+        env: *InterpreterRocEnv,
+        prev_jmp_buf: ?*JmpBuf,
+
+        fn init(env: *InterpreterRocEnv) CrashBoundary {
+            env.resetCrash();
+            return .{
+                .env = env,
+                .prev_jmp_buf = env.installJumpBuf(&env.jmp_buf),
+            };
+        }
+
+        fn deinit(self: *CrashBoundary) void {
+            self.env.restoreJumpBuf(self.prev_jmp_buf);
+        }
+
+        fn set(self: *CrashBoundary) c_int {
+            return setjmp(&self.env.jmp_buf);
+        }
+    };
+
+    fn enterCrashBoundary(self: *LirInterpreter) CrashBoundary {
+        return CrashBoundary.init(self.roc_env);
+    }
 
     const LocalSlot = struct {
         assigned: bool = false,
@@ -361,8 +403,9 @@ pub const Interpreter = struct {
     /// Use this for data that RocList.bytes or RocStr.bytes will point to,
     /// so builtins can safely call isUnique()/decref() on it.
     fn allocRocDataWithRc(self: *LirInterpreter, data_bytes: usize, element_alignment: u32, elements_refcounted: bool) Error![*]u8 {
-        self.roc_env.resetCrash();
-        const sj = setjmp(&self.roc_env.jmp_buf);
+        var crash_boundary = self.enterCrashBoundary();
+        defer crash_boundary.deinit();
+        const sj = crash_boundary.set();
         if (sj != 0) return error.Crash;
         return builtins.utils.allocateWithRefcount(data_bytes, element_alignment, elements_refcounted, &self.roc_ops);
     }
@@ -427,6 +470,12 @@ pub const Interpreter = struct {
         const prev_recover_runtime_placeholders = self.recover_runtime_placeholders;
         self.recover_runtime_placeholders = request.recover_runtime_placeholders;
         defer self.recover_runtime_placeholders = prev_recover_runtime_placeholders;
+
+        var eval_jmp_buf: JmpBuf = undefined;
+        const prev_jmp_buf = self.roc_env.installJumpBuf(&eval_jmp_buf);
+        defer self.roc_env.restoreJumpBuf(prev_jmp_buf);
+        const sj = setjmp(&eval_jmp_buf);
+        if (sj != 0) return error.Crash;
 
         const args = try self.marshalAbiArgs(request.arg_ptr, request.arg_layouts);
         const result_value = try self.evalProcById(request.proc_id, args);
@@ -744,12 +793,43 @@ pub const Interpreter = struct {
 
     fn evalAssignRef(self: *LirInterpreter, frame: *const Frame, op: lir.RefOp, target_layout: layout_mod.Idx) Error!Value {
         return switch (op) {
-            .local => |source| frame.getLocal(source),
+            .local => |source| self.normalizeValueToLayout(
+                frame.getLocal(source),
+                self.store.getLocal(source).layout_idx,
+                target_layout,
+            ),
             .field => |field| blk: {
                 const source_val = frame.getLocal(field.source);
                 const source_layout = self.store.getLocal(field.source).layout_idx;
-                const field_offset = self.helper.structFieldOffset(source_layout, field.field_idx);
-                break :blk source_val.offset(field_offset);
+                const struct_base = self.resolveStructBaseValue(source_val, source_layout);
+                const struct_layout_val = self.layout_store.getLayout(struct_base.layout);
+                const field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(
+                    struct_layout_val.data.struct_.idx,
+                    field.field_idx,
+                );
+                const actual_field_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(
+                    struct_layout_val.data.struct_.idx,
+                    field.field_idx,
+                );
+                const field_value = self.normalizeValueToLayout(
+                    struct_base.value.offset(field_offset),
+                    actual_field_layout,
+                    target_layout,
+                );
+                if (builtin.mode == .Debug and self.helper.sizeOf(target_layout) > 0 and field_value.isZst()) {
+                    std.debug.panic(
+                        "LIR/interpreter invariant violated: field projection source_local={d} source_layout={d} base_layout={d} field_idx={d} actual_field_layout={d} target_layout={d} normalized to ZST",
+                        .{
+                            @intFromEnum(field.source),
+                            @intFromEnum(source_layout),
+                            @intFromEnum(struct_base.layout),
+                            field.field_idx,
+                            @intFromEnum(actual_field_layout),
+                            @intFromEnum(target_layout),
+                        },
+                    );
+                }
+                break :blk field_value;
             },
             .tag_payload => |payload| blk: {
                 const source_val = frame.getLocal(payload.source);
@@ -759,7 +839,11 @@ pub const Interpreter = struct {
                 const actual_payload_layout = self.tagPayloadLayout(source_layout, disc);
                 break :blk self.normalizeValueToLayout(tag_base.value, actual_payload_layout, target_layout);
             },
-            .nominal => |nominal| frame.getLocal(nominal.backing_ref),
+            .nominal => |nominal| self.normalizeValueToLayout(
+                frame.getLocal(nominal.backing_ref),
+                self.store.getLocal(nominal.backing_ref).layout_idx,
+                target_layout,
+            ),
             .discriminant => |discriminant| blk: {
                 const source_val = frame.getLocal(discriminant.source);
                 const source_layout = self.store.getLocal(discriminant.source).layout_idx;
@@ -793,18 +877,108 @@ pub const Interpreter = struct {
         };
     }
 
+    const AllocatedStruct = struct {
+        outer: Value,
+        base: Value,
+        base_layout: layout_mod.Idx,
+    };
+
+    fn allocStructValue(self: *LirInterpreter, struct_layout: layout_mod.Idx) Error!AllocatedStruct {
+        const struct_layout_val = self.layout_store.getLayout(struct_layout);
+        switch (struct_layout_val.tag) {
+            .zst => return .{
+                .outer = Value.zst,
+                .base = Value.zst,
+                .base_layout = .zst,
+            },
+            .box_of_zst => return .{
+                .outer = Value.zst,
+                .base = Value.zst,
+                .base_layout = .zst,
+            },
+            .box => {
+                const box_info = self.layout_store.getBoxInfo(struct_layout_val);
+                const data_ptr = try self.allocRocDataWithRc(
+                    box_info.elem_size,
+                    box_info.elem_alignment,
+                    box_info.contains_refcounted,
+                );
+                @memset(data_ptr[0..box_info.elem_size], 0);
+                const boxed = try self.alloc(struct_layout);
+                if (self.layout_store.targetUsize().size() == 8) {
+                    boxed.write(usize, @intFromPtr(data_ptr));
+                } else {
+                    boxed.write(u32, @intCast(@intFromPtr(data_ptr)));
+                }
+                return .{
+                    .outer = boxed,
+                    .base = .{ .ptr = data_ptr },
+                    .base_layout = struct_layout_val.data.box,
+                };
+            },
+            .struct_ => {
+                const outer = try self.alloc(struct_layout);
+                return .{
+                    .outer = outer,
+                    .base = outer,
+                    .base_layout = struct_layout,
+                };
+            },
+            else => std.debug.panic(
+                "LIR/interpreter invariant violated: assign_struct target layout {d} is not a struct or boxed struct",
+                .{@intFromEnum(struct_layout)},
+            ),
+        }
+    }
+
     fn evalStructLiteral(self: *LirInterpreter, frame: *const Frame, fields: LocalSpan, struct_layout: layout_mod.Idx) Error!Value {
         const field_locals = self.store.getLocalSpan(fields);
-        const struct_val = try self.alloc(struct_layout);
+        const allocated = try self.allocStructValue(struct_layout);
+        const base_layout_val = self.layout_store.getLayout(allocated.base_layout);
+        if (base_layout_val.tag != .struct_) {
+            if (field_locals.len != 0) {
+                std.debug.panic(
+                    "LIR/interpreter invariant violated: boxed/zst struct literal for layout {d} had {d} fields but no struct base layout",
+                    .{ @intFromEnum(struct_layout), field_locals.len },
+                );
+            }
+            return allocated.outer;
+        }
         for (field_locals, 0..) |field_local, i| {
-            const field_layout = self.store.getLocal(field_local).layout_idx;
+            const field_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(
+                base_layout_val.data.struct_.idx,
+                @intCast(i),
+            );
             const field_size = self.helper.sizeOf(field_layout);
             if (field_size == 0) continue;
-            const field_offset = self.helper.structFieldOffset(struct_layout, @intCast(i));
-            const field_value = frame.getLocal(field_local);
-            struct_val.offset(field_offset).copyFrom(field_value, field_size);
+            const field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(
+                base_layout_val.data.struct_.idx,
+                @intCast(i),
+            );
+            const field_value = self.normalizeValueToLayout(
+                frame.getLocal(field_local),
+                self.store.getLocal(field_local).layout_idx,
+                field_layout,
+            );
+            if (builtin.mode == .Debug and field_value.isZst()) {
+                std.debug.panic(
+                    "LIR/interpreter invariant violated: struct field local {d} in proc {d} had ZST value for non-ZST layout {d} (local_layout={d}, local_layout_data={any}, field_layout_data={any}, struct_layout_data={any}, field index {d} of struct layout {d})",
+                    .{
+                        @intFromEnum(field_local),
+                        @intFromEnum(frame.proc_id),
+                        @intFromEnum(field_layout),
+                        @intFromEnum(self.store.getLocal(field_local).layout_idx),
+                        self.layout_store.getLayout(self.store.getLocal(field_local).layout_idx),
+                        self.layout_store.getLayout(field_layout),
+                        self.layout_store.getLayout(struct_layout),
+                        i,
+                        @intFromEnum(struct_layout),
+                    },
+                );
+            }
+            allocated.base.offset(field_offset).copyFrom(field_value, field_size);
         }
-        return struct_val;
+        return allocated.outer;
     }
 
     const AllocatedTag = struct {
@@ -862,7 +1036,12 @@ pub const Interpreter = struct {
             if (arg_locals.len == 1) {
                 const payload_size = self.helper.sizeOf(payload_layout);
                 if (payload_size > 0) {
-                    allocated.base.copyFrom(frame.getLocal(arg_locals[0]), payload_size);
+                    const payload_value = self.normalizeValueToLayout(
+                        frame.getLocal(arg_locals[0]),
+                        self.store.getLocal(arg_locals[0]).layout_idx,
+                        payload_layout,
+                    );
+                    allocated.base.copyFrom(payload_value, payload_size);
                 }
             }
             return allocated.outer;
@@ -879,7 +1058,12 @@ pub const Interpreter = struct {
                 payload_layout_val.data.struct_.idx,
                 @intCast(i),
             );
-            allocated.base.offset(field_offset).copyFrom(frame.getLocal(arg_local), field_size);
+            const field_value = self.normalizeValueToLayout(
+                frame.getLocal(arg_local),
+                self.store.getLocal(arg_local).layout_idx,
+                field_layout,
+            );
+            allocated.base.offset(field_offset).copyFrom(field_value, field_size);
         }
 
         return allocated.outer;
@@ -911,7 +1095,12 @@ pub const Interpreter = struct {
         const elem_data = try self.allocRocDataWithRc(total_elem_bytes, elem_alignment, elems_rc);
         for (elem_locals, 0..) |elem_local, i| {
             const offset = i * elem_size;
-            @memcpy(elem_data[offset..][0..elem_size], frame.getLocal(elem_local).readBytes(elem_size));
+            const elem_value = self.normalizeValueToLayout(
+                frame.getLocal(elem_local),
+                self.store.getLocal(elem_local).layout_idx,
+                elem_layout,
+            );
+            @memcpy(elem_data[offset..][0..elem_size], elem_value.readBytes(elem_size));
         }
 
         return self.rocListToValue(.{
@@ -953,8 +1142,9 @@ pub const Interpreter = struct {
         const ret_buf = try self.arena.allocator().alloc(u8, @max(ret_size, 1));
         @memset(ret_buf, 0);
 
-        self.roc_env.resetCrash();
-        const sj = setjmp(&self.roc_env.jmp_buf);
+        var crash_boundary = self.enterCrashBoundary();
+        defer crash_boundary.deinit();
+        const sj = crash_boundary.set();
         if (sj != 0) return error.Crash;
 
         const hosted_fn = self.roc_ops.hosted_fns.fns[hosted.index];
@@ -1278,38 +1468,21 @@ pub const Interpreter = struct {
         return .zst;
     }
 
-    fn listElementValue(
-        self: *LirInterpreter,
-        list_val: Value,
-        list_layout: layout_mod.Idx,
-        elem_layout: layout_mod.Idx,
-        index: usize,
-    ) Error!Value {
-        const rl = valueToRocList(list_val);
-        if (index >= rl.len()) return error.RuntimeError;
-
-        const info = self.listElemInfo(list_layout);
-        if (info.width == 0) {
-            return try self.alloc(elem_layout);
-        }
-
-        const bytes = rl.bytes orelse return error.RuntimeError;
-        return .{ .ptr = bytes + index * info.width };
-    }
-
     // ── Builtin call with crash recovery ──
 
     fn callBuiltinStr1(self: *LirInterpreter, comptime func: anytype, a: RocStr, ret_layout: layout_mod.Idx) Error!Value {
-        self.roc_env.resetCrash();
-        const sj = setjmp(&self.roc_env.jmp_buf);
+        var crash_boundary = self.enterCrashBoundary();
+        defer crash_boundary.deinit();
+        const sj = crash_boundary.set();
         if (sj != 0) return error.Crash;
         const result = func(a, &self.roc_ops);
         return self.rocStrToValue(result, ret_layout);
     }
 
     fn callBuiltinStr2(self: *LirInterpreter, comptime func: anytype, a: RocStr, b: RocStr, ret_layout: layout_mod.Idx) Error!Value {
-        self.roc_env.resetCrash();
-        const sj = setjmp(&self.roc_env.jmp_buf);
+        var crash_boundary = self.enterCrashBoundary();
+        defer crash_boundary.deinit();
+        const sj = crash_boundary.set();
         if (sj != 0) return error.Crash;
         const result = func(a, b, &self.roc_ops);
         return self.rocStrToValue(result, ret_layout);
@@ -1384,8 +1557,9 @@ pub const Interpreter = struct {
                 break :blk val;
             },
             .str_repeat => blk: {
-                self.roc_env.resetCrash();
-                const sj = setjmp(&self.roc_env.jmp_buf);
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                const sj = crash_boundary.set();
                 if (sj != 0) return error.Crash;
                 const result = builtins.str.repeatC(valueToRocStr(args[0]), args[1].read(u64), &self.roc_ops);
                 break :blk self.rocStrToValue(result, ll.ret_layout);
@@ -1399,8 +1573,9 @@ pub const Interpreter = struct {
                 break :blk val;
             },
             .str_to_utf8 => blk: {
-                self.roc_env.resetCrash();
-                const sj = setjmp(&self.roc_env.jmp_buf);
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                const sj = crash_boundary.set();
                 if (sj != 0) return error.Crash;
                 const result = builtins.str.strToUtf8C(valueToRocStr(args[0]), &self.roc_ops);
                 break :blk self.rocListToValue(result, ll.ret_layout);
@@ -1410,8 +1585,9 @@ pub const Interpreter = struct {
                 // The C builtin returns FromUtf8Try (a flat struct).
                 // Convert to the Roc tag union layout using layout-resolved offsets,
                 // following the same pattern as the dev backend (LirCodeGen.zig).
-                self.roc_env.resetCrash();
-                const sj = setjmp(&self.roc_env.jmp_buf);
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                const sj = crash_boundary.set();
                 if (sj != 0) return error.Crash;
                 const result = builtins.str.fromUtf8C(valueToRocList(args[0]), UpdateMode.Immutable, &self.roc_ops);
 
@@ -1471,50 +1647,57 @@ pub const Interpreter = struct {
                 break :blk val;
             },
             .str_from_utf8_lossy => blk: {
-                self.roc_env.resetCrash();
-                const sj = setjmp(&self.roc_env.jmp_buf);
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                const sj = crash_boundary.set();
                 if (sj != 0) return error.Crash;
                 const result = builtins.str.fromUtf8Lossy(valueToRocList(args[0]), &self.roc_ops);
                 break :blk self.rocStrToValue(result, ll.ret_layout);
             },
             .str_split_on => blk: {
-                self.roc_env.resetCrash();
-                const sj = setjmp(&self.roc_env.jmp_buf);
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                const sj = crash_boundary.set();
                 if (sj != 0) return error.Crash;
                 const result = builtins.str.strSplitOn(valueToRocStr(args[0]), valueToRocStr(args[1]), &self.roc_ops);
                 break :blk self.rocListToValue(result, ll.ret_layout);
             },
             .str_join_with => blk: {
-                self.roc_env.resetCrash();
-                const sj = setjmp(&self.roc_env.jmp_buf);
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                const sj = crash_boundary.set();
                 if (sj != 0) return error.Crash;
                 const result = builtins.str.strJoinWithC(valueToRocList(args[0]), valueToRocStr(args[1]), &self.roc_ops);
                 break :blk self.rocStrToValue(result, ll.ret_layout);
             },
             .str_with_capacity => blk: {
-                self.roc_env.resetCrash();
-                const sj = setjmp(&self.roc_env.jmp_buf);
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                const sj = crash_boundary.set();
                 if (sj != 0) return error.Crash;
                 const result = builtins.str.withCapacityC(args[0].read(u64), &self.roc_ops);
                 break :blk self.rocStrToValue(result, ll.ret_layout);
             },
             .str_reserve => blk: {
-                self.roc_env.resetCrash();
-                const sj = setjmp(&self.roc_env.jmp_buf);
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                const sj = crash_boundary.set();
                 if (sj != 0) return error.Crash;
                 const result = builtins.str.reserveC(valueToRocStr(args[0]), args[1].read(u64), &self.roc_ops);
                 break :blk self.rocStrToValue(result, ll.ret_layout);
             },
             .str_release_excess_capacity => blk: {
-                self.roc_env.resetCrash();
-                const sj = setjmp(&self.roc_env.jmp_buf);
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                const sj = crash_boundary.set();
                 if (sj != 0) return error.Crash;
                 const result = builtins.str.strReleaseExcessCapacity(&self.roc_ops, valueToRocStr(args[0]));
                 break :blk self.rocStrToValue(result, ll.ret_layout);
             },
             .str_inspect => blk: {
-                self.roc_env.resetCrash();
-                const sj = setjmp(&self.roc_env.jmp_buf);
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                const sj = crash_boundary.set();
                 if (sj != 0) return error.Crash;
                 var result: RocStr = undefined;
                 const roc_str = valueToRocStr(args[0]);
@@ -1541,8 +1724,9 @@ pub const Interpreter = struct {
             .i128_to_str => self.numToStr(i128, args[0], ll.ret_layout),
             .dec_to_str => blk: {
                 const dec = RocDec{ .num = args[0].read(i128) };
-                self.roc_env.resetCrash();
-                const sj = setjmp(&self.roc_env.jmp_buf);
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                const sj = crash_boundary.set();
                 if (sj != 0) return error.Crash;
                 const result = builtins.dec.to_str(dec, &self.roc_ops);
                 break :blk self.rocStrToValue(result, ll.ret_layout);
@@ -1564,8 +1748,9 @@ pub const Interpreter = struct {
                 const is_float = l.tag == .scalar and l.data.scalar.tag == .frac;
                 if (isDec(arg_layout)) {
                     const dec = RocDec{ .num = args[0].read(i128) };
-                    self.roc_env.resetCrash();
-                    const sj = setjmp(&self.roc_env.jmp_buf);
+                    var crash_boundary = self.enterCrashBoundary();
+                    defer crash_boundary.deinit();
+                    const sj = crash_boundary.set();
                     if (sj != 0) return error.Crash;
                     const result = builtins.dec.to_str(dec, &self.roc_ops);
                     break :blk self.rocStrToValue(result, ll.ret_layout);
@@ -1592,10 +1777,26 @@ pub const Interpreter = struct {
                 const rl = valueToRocList(args[0]);
                 const idx = args[1].read(u64);
                 const info = self.listElemInfo(arg_layout);
+                if (builtin.mode == .Debug and info.rc) {
+                    std.debug.print(
+                        "interp list_get_unsafe: list_bytes=0x{x} len={d} cap={d} idx={d} elem_width={d}\n",
+                        .{ @intFromPtr(rl.bytes), rl.len(), rl.capacity_or_alloc_ptr, idx, info.width },
+                    );
+                }
                 if (info.width == 0 or rl.bytes == null) break :blk try self.alloc(ll.ret_layout);
                 const elem_ptr = rl.bytes.? + @as(usize, @intCast(idx)) * info.width;
                 const val = try self.allocBytes(info.width);
                 @memcpy(val.ptr[0..info.width], elem_ptr[0..info.width]);
+                if (builtin.mode == .Debug and info.rc and info.width == 24) {
+                    std.debug.print(
+                        "  get bytes: {x} {x} {x} {x} {x} {x} {x} {x} {x} {x} {x} {x} {x} {x} {x} {x} {x} {x} {x} {x} {x} {x} {x} {x}\n",
+                        .{
+                            val.ptr[0], val.ptr[1], val.ptr[2], val.ptr[3], val.ptr[4], val.ptr[5], val.ptr[6], val.ptr[7],
+                            val.ptr[8], val.ptr[9], val.ptr[10], val.ptr[11], val.ptr[12], val.ptr[13], val.ptr[14], val.ptr[15],
+                            val.ptr[16], val.ptr[17], val.ptr[18], val.ptr[19], val.ptr[20], val.ptr[21], val.ptr[22], val.ptr[23],
+                        },
+                    );
+                }
                 break :blk val;
             },
             .list_append_unsafe => blk: {
@@ -1603,8 +1804,16 @@ pub const Interpreter = struct {
                 // Use the safe listAppend which reserves capacity first,
                 // matching the dev codegen (LirCodeGen) behavior.
                 const info = self.listElemInfo(arg_layout);
-                self.roc_env.resetCrash();
-                const sj = setjmp(&self.roc_env.jmp_buf);
+                if (builtin.mode == .Debug and info.rc) {
+                    const rl = valueToRocList(args[0]);
+                    std.debug.print(
+                        "interp list_append_unsafe: list_bytes=0x{x} len={d} cap={d} elem_ptr=0x{x} elem_width={d}\n",
+                        .{ @intFromPtr(rl.bytes), rl.len(), rl.capacity_or_alloc_ptr, @intFromPtr(args[1].ptr), info.width },
+                    );
+                }
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                const sj = crash_boundary.set();
                 if (sj != 0) return error.Crash;
                 const result = builtins.list.listAppend(
                     valueToRocList(args[0]),
@@ -1618,14 +1827,25 @@ pub const Interpreter = struct {
                     &builtins.list.copy_fallback,
                     &self.roc_ops,
                 );
+                if (builtin.mode == .Debug and info.rc and info.width == 24 and result.bytes != null and result.len() > 0) {
+                    const last_ptr = result.bytes.? + (result.len() - 1) * info.width;
+                    std.debug.print(
+                        "  append bytes: {x} {x} {x} {x} {x} {x} {x} {x} {x} {x} {x} {x} {x} {x} {x} {x} {x} {x} {x} {x} {x} {x} {x} {x}\n",
+                        .{
+                            last_ptr[0], last_ptr[1], last_ptr[2], last_ptr[3], last_ptr[4], last_ptr[5], last_ptr[6], last_ptr[7],
+                            last_ptr[8], last_ptr[9], last_ptr[10], last_ptr[11], last_ptr[12], last_ptr[13], last_ptr[14], last_ptr[15],
+                            last_ptr[16], last_ptr[17], last_ptr[18], last_ptr[19], last_ptr[20], last_ptr[21], last_ptr[22], last_ptr[23],
+                        },
+                    );
+                }
                 break :blk self.rocListToValue(result, ll.ret_layout);
             },
             .list_concat => blk: {
                 const info = self.listElemInfo(arg_layout);
                 trace.log("list_concat: elem_width={d} align={d} rc={any}", .{ info.width, info.alignment, info.rc });
+                const list_a = valueToRocList(args[0]);
+                const list_b = valueToRocList(args[1]);
                 if (info.width == 0) {
-                    const list_a = valueToRocList(args[0]);
-                    const list_b = valueToRocList(args[1]);
                     const total_len = list_a.len() + list_b.len();
                     const result = RocList{
                         .bytes = null,
@@ -1634,12 +1854,15 @@ pub const Interpreter = struct {
                     };
                     break :blk self.rocListToValue(result, ll.ret_layout);
                 }
-                self.roc_env.resetCrash();
-                const sj = setjmp(&self.roc_env.jmp_buf);
-                if (sj != 0) return error.Crash;
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                const sj = crash_boundary.set();
+                if (sj != 0) {
+                    return error.Crash;
+                }
                 const result = builtins.list.listConcat(
-                    valueToRocList(args[0]),
-                    valueToRocList(args[1]),
+                    list_a,
+                    list_b,
                     info.alignment,
                     info.width,
                     info.rc,
@@ -1653,8 +1876,9 @@ pub const Interpreter = struct {
             },
             .list_prepend => blk: {
                 const info = self.listElemInfo(arg_layout);
-                self.roc_env.resetCrash();
-                const sj = setjmp(&self.roc_env.jmp_buf);
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                const sj = crash_boundary.set();
                 if (sj != 0) return error.Crash;
                 const copy_fn: *const fn (?[*]u8, ?[*]u8) callconv(.c) void = &(struct {
                     fn f(_: ?[*]u8, _: ?[*]u8) callconv(.c) void {}
@@ -1691,8 +1915,9 @@ pub const Interpreter = struct {
                 const len = args[1].offset(len_field_off).read(u64);
                 const source_list = valueToRocList(args[0]);
 
-                self.roc_env.resetCrash();
-                const sj = setjmp(&self.roc_env.jmp_buf);
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                const sj = crash_boundary.set();
                 if (sj != 0) return error.Crash;
                 const result = builtins.list.listSublist(
                     source_list,
@@ -1709,8 +1934,9 @@ pub const Interpreter = struct {
             },
             .list_drop_at => blk: {
                 const info = self.listElemInfo(arg_layout);
-                self.roc_env.resetCrash();
-                const sj = setjmp(&self.roc_env.jmp_buf);
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                const sj = crash_boundary.set();
                 if (sj != 0) return error.Crash;
                 const result = builtins.list.listDropAt(
                     valueToRocList(args[0]),
@@ -1728,8 +1954,9 @@ pub const Interpreter = struct {
             },
             .list_set => blk: {
                 const info = self.listElemInfo(arg_layout);
-                self.roc_env.resetCrash();
-                const sj = setjmp(&self.roc_env.jmp_buf);
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                const sj = crash_boundary.set();
                 if (sj != 0) return error.Crash;
                 const copy_fn: *const fn (?[*]u8, ?[*]u8) callconv(.c) void = &(struct {
                     fn f(_: ?[*]u8, _: ?[*]u8) callconv(.c) void {}
@@ -1758,11 +1985,19 @@ pub const Interpreter = struct {
                 break :blk val;
             },
             .list_with_capacity => blk: {
+                if (builtin.mode == .Debug) {
+                    const ret_layout = self.layout_store.getLayout(ll.ret_layout);
+                    std.debug.print(
+                        "interp list_with_capacity: ret_layout={d} tag={s}\n",
+                        .{ @intFromEnum(ll.ret_layout), @tagName(ret_layout.tag) },
+                    );
+                }
                 const elem_layout = self.listElemLayout(ll.ret_layout);
                 const sa = self.helper.sizeAlignOf(elem_layout);
                 const elems_rc = self.helper.containsRefcounted(elem_layout);
-                self.roc_env.resetCrash();
-                const sj = setjmp(&self.roc_env.jmp_buf);
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                const sj = crash_boundary.set();
                 if (sj != 0) return error.Crash;
                 const result = builtins.list.listWithCapacity(
                     args[0].read(u64),
@@ -1777,8 +2012,9 @@ pub const Interpreter = struct {
             },
             .list_reserve => blk: {
                 const info = self.listElemInfo(arg_layout);
-                self.roc_env.resetCrash();
-                const sj = setjmp(&self.roc_env.jmp_buf);
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                const sj = crash_boundary.set();
                 if (sj != 0) return error.Crash;
                 const result = builtins.list.listReserve(
                     valueToRocList(args[0]),
@@ -1795,8 +2031,9 @@ pub const Interpreter = struct {
             },
             .list_release_excess_capacity => blk: {
                 const info = self.listElemInfo(arg_layout);
-                self.roc_env.resetCrash();
-                const sj = setjmp(&self.roc_env.jmp_buf);
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                const sj = crash_boundary.set();
                 if (sj != 0) return error.Crash;
                 const result = builtins.list.listReleaseExcessCapacity(
                     valueToRocList(args[0]),
@@ -2331,6 +2568,15 @@ pub const Interpreter = struct {
     fn numCmpOp(self: *LirInterpreter, a: Value, b: Value, arg_layout: layout_mod.Idx, op: CmpOp) Error!Value {
         const val = try self.alloc(.bool);
         const size = self.helper.sizeOf(arg_layout);
+        const layout_val = self.layout_store.getLayout(arg_layout);
+
+        if (op == .eq and switch (layout_val.tag) {
+            .scalar, .zst => false,
+            else => true,
+        }) {
+            val.write(u8, if (try self.valuesEqual(a, b, arg_layout)) 1 else 0);
+            return val;
+        }
 
         const result: bool = switch (size) {
             1 => if (isUnsigned(arg_layout))
@@ -2342,8 +2588,7 @@ pub const Interpreter = struct {
             else
                 cmpOp(i16, a.read(i16), b.read(i16), op),
             4 => blk: {
-                const l = self.layout_store.getLayout(arg_layout);
-                break :blk if (l.tag == .scalar and l.data.scalar.tag == .frac)
+                break :blk if (layout_val.tag == .scalar and layout_val.data.scalar.tag == .frac)
                     cmpOp(f32, a.read(f32), b.read(f32), op)
                 else if (isUnsigned(arg_layout))
                     cmpOp(u32, a.read(u32), b.read(u32), op)
@@ -2351,8 +2596,7 @@ pub const Interpreter = struct {
                     cmpOp(i32, a.read(i32), b.read(i32), op);
             },
             8 => blk: {
-                const l = self.layout_store.getLayout(arg_layout);
-                break :blk if (l.tag == .scalar and l.data.scalar.tag == .frac)
+                break :blk if (layout_val.tag == .scalar and layout_val.data.scalar.tag == .frac)
                     cmpOp(f64, a.read(f64), b.read(f64), op)
                 else if (isUnsigned(arg_layout))
                     cmpOp(u64, a.read(u64), b.read(u64), op)
@@ -2363,10 +2607,102 @@ pub const Interpreter = struct {
                 cmpOp(u128, a.read(u128), b.read(u128), op)
             else
                 cmpOp(i128, a.read(i128), b.read(i128), op),
-            else => false,
+            else => std.debug.panic(
+                "LIR/interpreter invariant violated: non-equality compare on unsupported layout {d} size={d}",
+                .{ @intFromEnum(arg_layout), size },
+            ),
         };
         val.write(u8, if (result) 1 else 0);
         return val;
+    }
+
+    fn valuesEqual(self: *LirInterpreter, a: Value, b: Value, layout_idx: layout_mod.Idx) Error!bool {
+        const layout_val = self.layout_store.getLayout(layout_idx);
+        return switch (layout_val.tag) {
+            .zst => true,
+            .scalar => switch (layout_val.data.scalar.tag) {
+                .str => builtins.str.strEqual(valueToRocStr(a), valueToRocStr(b)),
+                .frac => switch (self.helper.sizeOf(layout_idx)) {
+                    4 => a.read(f32) == b.read(f32),
+                    8 => a.read(f64) == b.read(f64),
+                    16 => a.read(i128) == b.read(i128),
+                    else => std.debug.panic(
+                        "LIR/interpreter invariant violated: fractional layout {d} has unsupported size {d}",
+                        .{ @intFromEnum(layout_idx), self.helper.sizeOf(layout_idx) },
+                    ),
+                },
+                .int => switch (self.helper.sizeOf(layout_idx)) {
+                    1 => if (isUnsigned(layout_idx)) a.read(u8) == b.read(u8) else a.read(i8) == b.read(i8),
+                    2 => if (isUnsigned(layout_idx)) a.read(u16) == b.read(u16) else a.read(i16) == b.read(i16),
+                    4 => if (isUnsigned(layout_idx)) a.read(u32) == b.read(u32) else a.read(i32) == b.read(i32),
+                    8 => if (isUnsigned(layout_idx)) a.read(u64) == b.read(u64) else a.read(i64) == b.read(i64),
+                    16 => if (isUnsigned(layout_idx)) a.read(u128) == b.read(u128) else a.read(i128) == b.read(i128),
+                    else => std.debug.panic(
+                        "LIR/interpreter invariant violated: scalar layout {d} has unsupported size {d}",
+                        .{ @intFromEnum(layout_idx), self.helper.sizeOf(layout_idx) },
+                    ),
+                },
+            },
+            .box_of_zst => true,
+            .box => blk: {
+                const a_ptr = self.readBoxedDataPointer(a);
+                const b_ptr = self.readBoxedDataPointer(b);
+                if (a_ptr == null or b_ptr == null) break :blk a_ptr == null and b_ptr == null;
+                break :blk try self.valuesEqual(.{ .ptr = a_ptr.? }, .{ .ptr = b_ptr.? }, layout_val.data.box);
+            },
+            .struct_ => blk: {
+                const struct_data = self.layout_store.getStructData(layout_val.data.struct_.idx);
+                const fields = self.layout_store.struct_fields.sliceRange(struct_data.getFields());
+                var field_index: usize = 0;
+                while (field_index < fields.len) : (field_index += 1) {
+                    const field = fields.get(@intCast(field_index));
+                    const field_layout = field.layout;
+                    const field_size = self.helper.sizeOf(field_layout);
+                    if (field_size == 0) continue;
+                    const field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(
+                        layout_val.data.struct_.idx,
+                        field.index,
+                    );
+                    if (!try self.valuesEqual(a.offset(field_offset), b.offset(field_offset), field_layout)) {
+                        break :blk false;
+                    }
+                }
+                break :blk true;
+            },
+            .tag_union => blk: {
+                const a_base = self.resolveTagUnionBaseValue(a, layout_idx);
+                const b_base = self.resolveTagUnionBaseValue(b, layout_idx);
+                const a_disc = self.helper.readTagDiscriminant(a_base.value, a_base.layout);
+                const b_disc = self.helper.readTagDiscriminant(b_base.value, b_base.layout);
+                if (a_disc != b_disc) break :blk false;
+                const payload_layout = self.tagPayloadLayout(a_base.layout, a_disc);
+                if (self.helper.sizeOf(payload_layout) == 0) break :blk true;
+                break :blk try self.valuesEqual(a_base.value, b_base.value, payload_layout);
+            },
+            .list_of_zst => valueToRocList(a).len() == valueToRocList(b).len(),
+            .list => blk: {
+                const a_list = valueToRocList(a);
+                const b_list = valueToRocList(b);
+                if (a_list.len() != b_list.len()) break :blk false;
+                const elem_layout = self.listElemLayout(layout_idx);
+                const elem_size = self.helper.sizeOf(elem_layout);
+                if (elem_size == 0) break :blk true;
+                const a_bytes = a_list.bytes orelse break :blk b_list.bytes == null;
+                const b_bytes = b_list.bytes orelse break :blk false;
+                var i: usize = 0;
+                while (i < a_list.len()) : (i += 1) {
+                    const offset = i * elem_size;
+                    if (!try self.valuesEqual(.{ .ptr = a_bytes + offset }, .{ .ptr = b_bytes + offset }, elem_layout)) {
+                        break :blk false;
+                    }
+                }
+                break :blk true;
+            },
+            .closure => std.debug.panic(
+                "LIR/interpreter invariant violated: function equality survived lowering",
+                .{},
+            ),
+        };
     }
 
     fn evalCompare(self: *LirInterpreter, a: Value, b: Value, arg_layout: layout_mod.Idx, ret_layout: layout_mod.Idx) Error!Value {
@@ -2444,8 +2780,9 @@ pub const Interpreter = struct {
         const size = self.helper.sizeOf(arg_layout);
         const l = self.layout_store.getLayout(arg_layout);
         if (isDec(arg_layout)) {
-            self.roc_env.resetCrash();
-            const sj = setjmp(&self.roc_env.jmp_buf);
+            var crash_boundary = self.enterCrashBoundary();
+            defer crash_boundary.deinit();
+            const sj = crash_boundary.set();
             if (sj != 0) return error.Crash;
             val.write(i128, builtins.dec.powC(RocDec{ .num = a.read(i128) }, RocDec{ .num = b.read(i128) }, &self.roc_ops));
         } else if (l.tag == .scalar and l.data.scalar.tag == .frac) {
@@ -2709,8 +3046,9 @@ pub const Interpreter = struct {
 
     fn evalListDropFirst(self: *LirInterpreter, list_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx) Error!Value {
         const info = self.listElemInfo(list_layout);
-        self.roc_env.resetCrash();
-        const sj = setjmp(&self.roc_env.jmp_buf);
+        var crash_boundary = self.enterCrashBoundary();
+        defer crash_boundary.deinit();
+        const sj = crash_boundary.set();
         if (sj != 0) return error.Crash;
         const result = builtins.list.listSublist(
             valueToRocList(list_arg),
@@ -2731,8 +3069,9 @@ pub const Interpreter = struct {
         const info = self.listElemInfo(list_layout);
         const len = rl.len();
         if (len == 0) return self.rocListToValue(rl, ret_layout);
-        self.roc_env.resetCrash();
-        const sj = setjmp(&self.roc_env.jmp_buf);
+        var crash_boundary = self.enterCrashBoundary();
+        defer crash_boundary.deinit();
+        const sj = crash_boundary.set();
         if (sj != 0) return error.Crash;
         const result = builtins.list.listSublist(
             rl,
@@ -2750,8 +3089,9 @@ pub const Interpreter = struct {
 
     fn evalListTakeFirst(self: *LirInterpreter, list_arg: Value, count_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx) Error!Value {
         const info = self.listElemInfo(list_layout);
-        self.roc_env.resetCrash();
-        const sj = setjmp(&self.roc_env.jmp_buf);
+        var crash_boundary = self.enterCrashBoundary();
+        defer crash_boundary.deinit();
+        const sj = crash_boundary.set();
         if (sj != 0) return error.Crash;
         const result = builtins.list.listSublist(
             valueToRocList(list_arg),
@@ -2773,8 +3113,9 @@ pub const Interpreter = struct {
         const len = rl.len();
         const take = count_arg.read(u64);
         const start = if (take >= len) 0 else len - @as(usize, @intCast(take));
-        self.roc_env.resetCrash();
-        const sj = setjmp(&self.roc_env.jmp_buf);
+        var crash_boundary = self.enterCrashBoundary();
+        defer crash_boundary.deinit();
+        const sj = crash_boundary.set();
         if (sj != 0) return error.Crash;
         const result = builtins.list.listSublist(
             rl,
@@ -2796,8 +3137,9 @@ pub const Interpreter = struct {
         if (rl.len() <= 1 or rl.bytes == null or info.width == 0)
             return self.rocListToValue(rl, ret_layout);
         // Clone and reverse in-place
-        self.roc_env.resetCrash();
-        const sj = setjmp(&self.roc_env.jmp_buf);
+        var crash_boundary = self.enterCrashBoundary();
+        defer crash_boundary.deinit();
+        const sj = crash_boundary.set();
         if (sj != 0) return error.Crash;
         const new_list = builtins.list.shallowClone(rl, rl.len(), info.width, info.alignment, info.rc, &self.roc_ops);
         if (new_list.bytes) |bytes| {
@@ -2823,8 +3165,9 @@ pub const Interpreter = struct {
             // Ok: { first_elem, rest_list }
             @memcpy(val.ptr[0..info.width], rl.bytes.?[0..info.width]);
             // Rest list starts at offset info.width
-            self.roc_env.resetCrash();
-            const sj = setjmp(&self.roc_env.jmp_buf);
+            var crash_boundary = self.enterCrashBoundary();
+            defer crash_boundary.deinit();
+            const sj = crash_boundary.set();
             if (sj != 0) return error.Crash;
             const rest = builtins.list.listSublist(
                 rl,
@@ -2855,8 +3198,9 @@ pub const Interpreter = struct {
             // Ok: { last_elem, rest_list }
             const last_offset = (rl.len() - 1) * info.width;
             @memcpy(val.ptr[0..info.width], rl.bytes.?[last_offset..][0..info.width]);
-            self.roc_env.resetCrash();
-            const sj = setjmp(&self.roc_env.jmp_buf);
+            var crash_boundary = self.enterCrashBoundary();
+            defer crash_boundary.deinit();
+            const sj = crash_boundary.set();
             if (sj != 0) return error.Crash;
             const rest = builtins.list.listSublist(
                 rl,
@@ -2926,22 +3270,25 @@ pub const Interpreter = struct {
                 break :blk result.value.num;
             },
             .div => blk: {
-                self.roc_env.resetCrash();
-                const sj = setjmp(&self.roc_env.jmp_buf);
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                const sj = crash_boundary.set();
                 if (sj != 0) break :blk @as(i128, 0);
                 break :blk builtins.dec.divC(RocDec{ .num = av }, RocDec{ .num = bv }, &self.roc_ops);
             },
             .div_trunc => blk: {
-                self.roc_env.resetCrash();
-                const sj = setjmp(&self.roc_env.jmp_buf);
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                const sj = crash_boundary.set();
                 if (sj != 0) break :blk @as(i128, 0);
                 break :blk builtins.dec.divTruncC(RocDec{ .num = av }, RocDec{ .num = bv }, &self.roc_ops);
             },
             .rem => blk: {
                 // Dec rem: a - trunc(a/b) * b
                 if (bv == 0) break :blk @as(i128, 0);
-                self.roc_env.resetCrash();
-                const sj = setjmp(&self.roc_env.jmp_buf);
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                const sj = crash_boundary.set();
                 if (sj != 0) break :blk @as(i128, 0);
                 const div_result = builtins.dec.divTruncC(RocDec{ .num = av }, RocDec{ .num = bv }, &self.roc_ops);
                 const mul_result = RocDec.mulWithOverflow(RocDec{ .num = div_result }, RocDec{ .num = bv });
@@ -2949,8 +3296,9 @@ pub const Interpreter = struct {
             },
             .mod => blk: {
                 if (bv == 0) break :blk @as(i128, 0);
-                self.roc_env.resetCrash();
-                const sj = setjmp(&self.roc_env.jmp_buf);
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                const sj = crash_boundary.set();
                 if (sj != 0) break :blk @as(i128, 0);
                 const div_result = builtins.dec.divTruncC(RocDec{ .num = av }, RocDec{ .num = bv }, &self.roc_ops);
                 const mul_result = RocDec.mulWithOverflow(RocDec{ .num = div_result }, RocDec{ .num = bv });
@@ -3012,25 +3360,6 @@ pub const Interpreter = struct {
 
     // String operations
 
-    fn rawBytesEqual(a: []const u8, b: []const u8) bool {
-        if (a.len != b.len) return false;
-        for (a, b) |lhs, rhs| {
-            if (lhs != rhs) return false;
-        }
-        return true;
-    }
-
-    fn rocStrEqualSlices(a: []const u8, b: []const u8) bool {
-        return dev_wrappers.roc_builtins_str_equal(
-            if (a.len == 0) null else @constCast(a.ptr),
-            a.len,
-            a.len,
-            if (b.len == 0) null else @constCast(b.ptr),
-            b.len,
-            b.len,
-        );
-    }
-
     // Layout helpers
 
     fn readBoxedDataPointer(self: *const LirInterpreter, boxed: Value) ?[*]u8 {
@@ -3048,6 +3377,46 @@ pub const Interpreter = struct {
         value: Value,
         layout: layout_mod.Idx,
     };
+
+    const ResolvedStructBase = struct {
+        value: Value,
+        layout: layout_mod.Idx,
+    };
+
+    fn resolveStructBaseValue(
+        self: *LirInterpreter,
+        struct_val: Value,
+        struct_layout: layout_mod.Idx,
+    ) ResolvedStructBase {
+        const struct_layout_val = self.layout_store.getLayout(struct_layout);
+        switch (struct_layout_val.tag) {
+            .box => {
+                const inner_layout = struct_layout_val.data.box;
+                const inner_layout_val = self.layout_store.getLayout(inner_layout);
+                if (inner_layout_val.tag != .struct_) {
+                    std.debug.panic(
+                        "LIR/interpreter invariant violated: field projection source layout {d} boxes non-struct layout {d}",
+                        .{ @intFromEnum(struct_layout), @intFromEnum(inner_layout) },
+                    );
+                }
+                const data_ptr = self.readBoxedDataPointer(struct_val) orelse {
+                    return .{ .value = Value.zst, .layout = inner_layout };
+                };
+                return .{
+                    .value = .{ .ptr = data_ptr },
+                    .layout = inner_layout,
+                };
+            },
+            .struct_ => return .{
+                .value = struct_val,
+                .layout = struct_layout,
+            },
+            else => std.debug.panic(
+                "LIR/interpreter invariant violated: field projection source layout {d} is not a struct or boxed struct",
+                .{@intFromEnum(struct_layout)},
+            ),
+        }
+    }
 
     fn resolveTagUnionBaseValue(
         self: *LirInterpreter,
@@ -3089,36 +3458,6 @@ pub const Interpreter = struct {
                 break :blk if (discriminant < variants.len) variants.get(discriminant).payload_layout else .zst;
             },
             else => .zst,
-        };
-    }
-
-    fn tagPayloadArgValue(
-        self: *LirInterpreter,
-        union_val: Value,
-        union_layout: layout_mod.Idx,
-        discriminant: u16,
-        arg_index: u32,
-    ) struct { value: Value, layout: layout_mod.Idx } {
-        const tag_base = self.resolveTagUnionBaseValue(union_val, union_layout);
-        const payload_layout = self.tagPayloadLayout(union_layout, discriminant);
-        const payload_layout_val = self.layout_store.getLayout(payload_layout);
-        if (payload_layout_val.tag == .struct_) {
-            const field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(
-                payload_layout_val.data.struct_.idx,
-                arg_index,
-            );
-            const field_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(
-                payload_layout_val.data.struct_.idx,
-                arg_index,
-            );
-            return .{
-                .value = tag_base.value.offset(field_offset),
-                .layout = field_layout,
-            };
-        }
-        return .{
-            .value = tag_base.value,
-            .layout = payload_layout,
         };
     }
 

@@ -157,13 +157,6 @@ fn runViaDev(
 
     const arg_layouts: []const layout.Idx = arg_layouts_buf[0..arg_layouts_len];
 
-    // Build cross-module ident map for platform-to-app type resolution
-    var platform_to_app_idents = if (app_module_env) |ae|
-        platform_env.buildPlatformToAppIdentMap(gpa, ae) catch return error.EvalFailed
-    else
-        std.AutoHashMap(base.Ident.Idx, base.Ident.Idx).init(gpa);
-    defer platform_to_app_idents.deinit();
-
     // Generate native code using the RocCall ABI entrypoint wrapper
     var code_result = dev_eval.generateEntrypointCode(
         platform_env,
@@ -172,7 +165,6 @@ fn runViaDev(
         app_module_env,
         arg_layouts,
         ret_layout,
-        &platform_to_app_idents,
     ) catch {
         return error.EvalFailed;
     };

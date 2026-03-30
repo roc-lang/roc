@@ -7,14 +7,13 @@
 //! ## Architecture overview
 //!
 //! Each test goes through a front-end (parse, canonicalize, type-check)
-//! and is then evaluated by up to three independent backends:
+//! and is then evaluated by up to four independent backends:
 //!
 //!   1. **Interpreter** — walks the LIR directly.
 //!   2. **Dev backend** — lowers LIR to native machine code.
 //!   3. **WASM backend** — lowers LIR to WebAssembly, runs via bytebox.
-//!
-//! (LLVM is temporarily disabled — it currently aliases the dev backend.
-//! Infrastructure is kept so it can be re-enabled easily.)
+//!   4. **LLVM backend** — currently a loud TODO panic until statement-only
+//!      LLVM code generation is implemented.
 //!
 //! ALL backends run via Str.inspect and must produce identical output strings.
 //! This catches bugs where a backend produces a value of the right type but
@@ -631,8 +630,7 @@ fn runSingleTest(allocator: std.mem.Allocator, tc: TestCase, preloaded: *const P
 }
 
 fn hasAnySkip(skip: TestCase.Skip) bool {
-    // NOTE: llvm is excluded — it currently aliases dev, so skip.llvm is ignored.
-    return skip.interpreter or skip.dev or skip.wasm;
+    return skip.interpreter or skip.dev or skip.wasm or skip.llvm;
 }
 
 fn runSingleTestInner(allocator: std.mem.Allocator, tc: TestCase, preloaded: *const PreloadedBuiltins) !TestOutcome {
@@ -951,10 +949,10 @@ fn printHelp() void {
     const help =
         \\Roc Eval Test Runner
         \\
-        \\Runs eval tests across backends (interpreter, dev, wasm) in parallel
+        \\Runs eval tests across backends (interpreter, dev, wasm, llvm) in parallel
         \\and compares results via Str.inspect. Each backend evaluation runs in
         \\a forked child process for crash isolation.
-        \\(LLVM backend temporarily disabled — currently aliases dev backend.)
+        \\(LLVM backend is currently a loud TODO panic until statement-only LLVM codegen is implemented.)
         \\
         \\USAGE:
         \\  zig build test-eval               Run with defaults.

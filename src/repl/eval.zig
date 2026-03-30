@@ -848,7 +848,6 @@ pub const Repl = struct {
     /// Evaluate a str_inspect-wrapped expression using the interpreter.
     /// The expression should already be wrapped in Str.inspect, so the result is a Str.
     fn evaluateWithInterpreter(self: *Repl, module_env: *ModuleEnv, inspect_expr: can.CIR.Expr.Idx, imported_modules: []const *const ModuleEnv) !StepResult {
-
         // Lower CIR → MIR → LIR → RC
         var lir_program = eval_mod.LirProgram.init(self.allocator, .u64);
         defer lir_program.deinit();

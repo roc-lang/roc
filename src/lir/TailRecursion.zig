@@ -113,6 +113,10 @@ pub const TailRecursionPass = struct {
         };
     }
 
+    fn cloneSwitchBranches(self: *TailRecursionPass, span: ir.CFSwitchBranchSpan) Allocator.Error![]ir.CFSwitchBranch {
+        return self.allocator.dupe(ir.CFSwitchBranch, self.store.getCFSwitchBranches(span));
+    }
+
     /// Transforms a statement graph, rewriting tail-recursive call/return pairs into jumps.
     pub fn transformStmt(self: *TailRecursionPass, stmt_id: CFStmtId) Allocator.Error!CFStmtId {
         const stmt = self.store.getCFStmt(stmt_id);
@@ -143,8 +147,10 @@ pub const TailRecursionPass = struct {
             .switch_stmt => |switch_stmt| blk: {
                 var rewritten_branches: std.ArrayListUnmanaged(ir.CFSwitchBranch) = .empty;
                 defer rewritten_branches.deinit(self.allocator);
+                const original_branches = try self.cloneSwitchBranches(switch_stmt.branches);
+                defer self.allocator.free(original_branches);
 
-                for (self.store.getCFSwitchBranches(switch_stmt.branches)) |branch| {
+                for (original_branches) |branch| {
                     try rewritten_branches.append(self.allocator, .{
                         .value = branch.value,
                         .body = try self.transformStmt(branch.body),

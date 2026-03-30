@@ -3425,12 +3425,6 @@ test "issue 9281: dev evaluator stack overflow with nested recursive opaque type
         ret_layout = try layout_store_ptr.fromTypeVar(module_idx, expr_type_var, &type_scope, null);
     }
 
-    var platform_to_app_idents = if (entry.app_module_env) |ae|
-        try entry.platform_env.buildPlatformToAppIdentMap(test_allocator, ae)
-    else
-        std.AutoHashMap(base.Ident.Idx, base.Ident.Idx).init(test_allocator);
-    defer platform_to_app_idents.deinit();
-
     var code_result = try dev_eval.generateEntrypointCode(
         entry.platform_env,
         entry.entrypoint_expr,
@@ -3438,7 +3432,6 @@ test "issue 9281: dev evaluator stack overflow with nested recursive opaque type
         entry.app_module_env,
         arg_layouts_buf[0..arg_layouts_len],
         ret_layout,
-        &platform_to_app_idents,
     );
     defer code_result.deinit();
 

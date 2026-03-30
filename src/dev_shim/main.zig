@@ -437,15 +437,8 @@ fn evaluateFromSharedMemory(entry_idx: u32, host_roc_ops: *RocOps, ret_ptr: *any
         return error.CodeGenFailed;
     };
 
-    // Build cross-module ident map for platform-to-app type resolution
-    var platform_to_app_idents = env_ptr.buildPlatformToAppIdentMap(allocator, app_env) catch {
-        host_roc_ops.crash("Failed to build platform-to-app ident map");
-        return error.CodeGenFailed;
-    };
-    defer platform_to_app_idents.deinit();
-
     // Compile CIR → native code using entrypoint wrapper (RocCall ABI)
-    var code_result = dev_eval.generateEntrypointCode(env_ptr, expr_idx, all_module_envs, app_env, layouts.arg_layouts, layouts.ret_layout, &platform_to_app_idents) catch |err| {
+    var code_result = dev_eval.generateEntrypointCode(env_ptr, expr_idx, all_module_envs, app_env, layouts.arg_layouts, layouts.ret_layout) catch |err| {
         const err_msg = std.fmt.bufPrint(&buf, "Code generation failed: {s}", .{@errorName(err)}) catch "Code generation failed";
         host_roc_ops.crash(err_msg);
         return error.CodeGenFailed;

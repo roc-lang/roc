@@ -25,9 +25,16 @@ const LocalSpan = LIR.LocalSpan;
 const RefProjectionSpan = LIR.RefProjectionSpan;
 
 const LocalResultMap = std.AutoHashMap(u64, LIR.ResultSemantics);
+const LocalDefinitionMap = std.AutoHashMap(u64, DefinitionSite);
 const JoinMetaMap = std.AutoHashMap(u32, JoinMeta);
 const JoinInputMap = std.AutoHashMap(u64, JoinInput);
 const VisitedMap = std.AutoHashMap(u64, void);
+
+const DefinitionSite = union(enum) {
+    param,
+    join_param: JoinPointId,
+    stmt: CFStmtId,
+};
 
 const JoinMeta = struct {
     scopes: []BorrowScopeId,
@@ -43,6 +50,8 @@ pub fn verifyProc(
     allocator: Allocator,
     store: *LirStore,
     layout_store: *const layout.Store,
+    owner_kind: []const u8,
+    owner_id: u64,
     ret_layout: layout.Idx,
     params: LIR.LocalSpan,
     declared_contract: LIR.ProcResultContract,
@@ -57,8 +66,8 @@ pub fn verifyProc(
         );
         if (!procContractsEqual(store, declared_contract, inferred_contract)) {
             std.debug.panic(
-                "DebugVerifyLir invariant violated: proc result contract does not match inferred return provenance; declared={any} inferred={any}",
-                .{ declared_contract, inferred_contract },
+                "DebugVerifyLir invariant violated: {s} {d} proc result contract does not match inferred return provenance; declared={any} inferred={any}",
+                .{ owner_kind, owner_id, declared_contract, inferred_contract },
             );
         }
     }
@@ -67,6 +76,8 @@ pub fn verifyProc(
     defer join_scopes.deinit();
     var join_inputs = JoinInputs.init(allocator);
     defer join_inputs.deinit();
+    var local_definitions = LocalDefinitionMap.init(allocator);
+    defer local_definitions.deinit();
 
     var active_scopes = std.ArrayList(BorrowScopeId).empty;
     defer active_scopes.deinit(allocator);
@@ -75,9 +86,10 @@ pub fn verifyProc(
     var env = VerifyEnv.init(allocator);
     defer env.deinit();
     for (store.getLocalSpan(params)) |param| {
+        try recordDefinition(&local_definitions, param, .param);
         try env.results.put(localKey(param), .fresh);
     }
-    try verifyStmt(store, &join_scopes, &join_inputs, body, &env, null, null);
+    try verifyStmt(store, &join_scopes, &join_inputs, &local_definitions, body, &env, null, null, owner_kind, owner_id);
 }
 
 const JoinScopes = struct {
@@ -270,70 +282,81 @@ fn verifyStmt(
     store: *const LirStore,
     join_scopes: *const JoinScopes,
     join_inputs: *JoinInputs,
+    local_definitions: *LocalDefinitionMap,
     stmt_id: CFStmtId,
     env: *VerifyEnv,
     current_scope_exit: ?BorrowScopeId,
     scope_exit_envs: ?*std.ArrayList(VerifyEnv),
+    owner_kind: []const u8,
+    owner_id: u64,
 ) Allocator.Error!void {
     switch (store.getCFStmt(stmt_id)) {
         .assign_symbol => |assign| {
+            try recordDefinition(local_definitions, assign.target, .{ .stmt = stmt_id });
             try env.results.put(localKey(assign.target), .fresh);
-            try verifyStmt(store, join_scopes, join_inputs, assign.next, env, current_scope_exit, scope_exit_envs);
+            try verifyStmt(store, join_scopes, join_inputs, local_definitions, assign.next, env, current_scope_exit, scope_exit_envs, owner_kind, owner_id);
         },
         .assign_ref => |assign| {
             try ensureLocalUsable(store, env, refOpSource(assign.op), stmt_id);
+            try recordDefinition(local_definitions, assign.target, .{ .stmt = stmt_id });
             try env.results.put(localKey(assign.target), assign.result);
-            try verifyStmt(store, join_scopes, join_inputs, assign.next, env, current_scope_exit, scope_exit_envs);
+            try verifyStmt(store, join_scopes, join_inputs, local_definitions, assign.next, env, current_scope_exit, scope_exit_envs, owner_kind, owner_id);
         },
         .assign_literal => |assign| {
+            try recordDefinition(local_definitions, assign.target, .{ .stmt = stmt_id });
             try env.results.put(localKey(assign.target), assign.result);
-            try verifyStmt(store, join_scopes, join_inputs, assign.next, env, current_scope_exit, scope_exit_envs);
+            try verifyStmt(store, join_scopes, join_inputs, local_definitions, assign.next, env, current_scope_exit, scope_exit_envs, owner_kind, owner_id);
         },
         .assign_call => |assign| {
             try ensureLocalsUsable(store, env, store.getLocalSpan(assign.args), stmt_id);
+            try recordDefinition(local_definitions, assign.target, .{ .stmt = stmt_id });
             try env.results.put(localKey(assign.target), assign.result);
-            try verifyStmt(store, join_scopes, join_inputs, assign.next, env, current_scope_exit, scope_exit_envs);
+            try verifyStmt(store, join_scopes, join_inputs, local_definitions, assign.next, env, current_scope_exit, scope_exit_envs, owner_kind, owner_id);
         },
         .assign_low_level => |assign| {
             try ensureLocalsUsable(store, env, store.getLocalSpan(assign.args), stmt_id);
+            try recordDefinition(local_definitions, assign.target, .{ .stmt = stmt_id });
             try env.results.put(localKey(assign.target), assign.result);
-            try verifyStmt(store, join_scopes, join_inputs, assign.next, env, current_scope_exit, scope_exit_envs);
+            try verifyStmt(store, join_scopes, join_inputs, local_definitions, assign.next, env, current_scope_exit, scope_exit_envs, owner_kind, owner_id);
         },
         .assign_list => |assign| {
             try ensureLocalsUsable(store, env, store.getLocalSpan(assign.elems), stmt_id);
+            try recordDefinition(local_definitions, assign.target, .{ .stmt = stmt_id });
             try env.results.put(localKey(assign.target), assign.result);
-            try verifyStmt(store, join_scopes, join_inputs, assign.next, env, current_scope_exit, scope_exit_envs);
+            try verifyStmt(store, join_scopes, join_inputs, local_definitions, assign.next, env, current_scope_exit, scope_exit_envs, owner_kind, owner_id);
         },
         .assign_struct => |assign| {
             try ensureLocalsUsable(store, env, store.getLocalSpan(assign.fields), stmt_id);
+            try recordDefinition(local_definitions, assign.target, .{ .stmt = stmt_id });
             try env.results.put(localKey(assign.target), assign.result);
-            try verifyStmt(store, join_scopes, join_inputs, assign.next, env, current_scope_exit, scope_exit_envs);
+            try verifyStmt(store, join_scopes, join_inputs, local_definitions, assign.next, env, current_scope_exit, scope_exit_envs, owner_kind, owner_id);
         },
         .assign_tag => |assign| {
             try ensureLocalsUsable(store, env, store.getLocalSpan(assign.args), stmt_id);
+            try recordDefinition(local_definitions, assign.target, .{ .stmt = stmt_id });
             try env.results.put(localKey(assign.target), assign.result);
-            try verifyStmt(store, join_scopes, join_inputs, assign.next, env, current_scope_exit, scope_exit_envs);
+            try verifyStmt(store, join_scopes, join_inputs, local_definitions, assign.next, env, current_scope_exit, scope_exit_envs, owner_kind, owner_id);
         },
         .debug => |stmt| {
             try ensureLocalUsable(store, env, stmt.message, stmt_id);
-            try verifyStmt(store, join_scopes, join_inputs, stmt.next, env, current_scope_exit, scope_exit_envs);
+            try verifyStmt(store, join_scopes, join_inputs, local_definitions, stmt.next, env, current_scope_exit, scope_exit_envs, owner_kind, owner_id);
         },
         .expect => |stmt| {
             try ensureLocalUsable(store, env, stmt.condition, stmt_id);
-            try verifyStmt(store, join_scopes, join_inputs, stmt.next, env, current_scope_exit, scope_exit_envs);
+            try verifyStmt(store, join_scopes, join_inputs, local_definitions, stmt.next, env, current_scope_exit, scope_exit_envs, owner_kind, owner_id);
         },
         .runtime_error => {},
         .incref => |inc| {
             try ensureLocalUsable(store, env, inc.value, stmt_id);
-            try verifyStmt(store, join_scopes, join_inputs, inc.next, env, current_scope_exit, scope_exit_envs);
+            try verifyStmt(store, join_scopes, join_inputs, local_definitions, inc.next, env, current_scope_exit, scope_exit_envs, owner_kind, owner_id);
         },
         .decref => |dec| {
             try ensureLocalUsable(store, env, dec.value, stmt_id);
-            try verifyStmt(store, join_scopes, join_inputs, dec.next, env, current_scope_exit, scope_exit_envs);
+            try verifyStmt(store, join_scopes, join_inputs, local_definitions, dec.next, env, current_scope_exit, scope_exit_envs, owner_kind, owner_id);
         },
         .free => |free_stmt| {
             try ensureLocalUsable(store, env, free_stmt.value, stmt_id);
-            try verifyStmt(store, join_scopes, join_inputs, free_stmt.next, env, current_scope_exit, scope_exit_envs);
+            try verifyStmt(store, join_scopes, join_inputs, local_definitions, free_stmt.next, env, current_scope_exit, scope_exit_envs, owner_kind, owner_id);
         },
         .switch_stmt => |switch_stmt| {
             try ensureLocalUsable(store, env, switch_stmt.cond, stmt_id);
@@ -341,12 +364,12 @@ fn verifyStmt(
 
             var default_env = try env.clone();
             defer default_env.deinit();
-            try verifyStmt(store, join_scopes, join_inputs, switch_stmt.default_branch, &default_env, current_scope_exit, scope_exit_envs);
+            try verifyStmt(store, join_scopes, join_inputs, local_definitions, switch_stmt.default_branch, &default_env, current_scope_exit, scope_exit_envs, owner_kind, owner_id);
 
             for (store.getCFSwitchBranches(switch_stmt.branches)) |branch| {
                 var branch_env = try env.clone();
                 defer branch_env.deinit();
-                try verifyStmt(store, join_scopes, join_inputs, branch.body, &branch_env, current_scope_exit, scope_exit_envs);
+                try verifyStmt(store, join_scopes, join_inputs, local_definitions, branch.body, &branch_env, current_scope_exit, scope_exit_envs, owner_kind, owner_id);
             }
         },
         .borrow_scope => |scope| {
@@ -360,17 +383,18 @@ fn verifyStmt(
                 exit_env_list.deinit(env.allocator);
             }
 
-            try verifyStmt(store, join_scopes, join_inputs, scope.body, &body_env, scope.id, &exit_env_list);
+            try verifyStmt(store, join_scopes, join_inputs, local_definitions, scope.body, &body_env, scope.id, &exit_env_list, owner_kind, owner_id);
             if (exit_env_list.items.len == 0) return;
 
             try mergeScopeExitEnvs(store, env, exit_env_list.items, scope.id);
-            try verifyStmt(store, join_scopes, join_inputs, scope.remainder, env, current_scope_exit, scope_exit_envs);
+            try verifyStmt(store, join_scopes, join_inputs, local_definitions, scope.remainder, env, current_scope_exit, scope_exit_envs, owner_kind, owner_id);
         },
         .join => |join| {
-            try verifyStmt(store, join_scopes, join_inputs, join.remainder, env, current_scope_exit, scope_exit_envs);
+            try verifyStmt(store, join_scopes, join_inputs, local_definitions, join.remainder, env, current_scope_exit, scope_exit_envs, owner_kind, owner_id);
             var body_env = try env.clone();
             defer body_env.deinit();
             for (store.getLocalSpan(join.params)) |param| {
+                try recordDefinition(local_definitions, param, .{ .join_param = join.id });
                 const input = join_inputs.get(param) orelse std.debug.panic(
                     "DebugVerifyLir invariant violated: join param {d} has no verified incoming jump semantics",
                     .{@intFromEnum(param)},
@@ -385,10 +409,10 @@ fn verifyStmt(
                     LIR.ResultSemantics.fresh;
                 try body_env.results.put(localKey(param), semantics);
             }
-            try verifyStmt(store, join_scopes, join_inputs, join.body, &body_env, current_scope_exit, scope_exit_envs);
+            try verifyStmt(store, join_scopes, join_inputs, local_definitions, join.body, &body_env, current_scope_exit, scope_exit_envs, owner_kind, owner_id);
         },
         .jump => |jump| {
-            try ensureJumpArgsMatchTarget(store, join_scopes, jump.target, jump.args);
+            try ensureJumpArgsMatchTarget(store, join_scopes, jump.target, jump.args, owner_kind, owner_id, stmt_id);
             const args = store.getLocalSpan(jump.args);
             const params = store.getLocalSpan(join_scopes.params(jump.target));
             for (args, params) |arg, param| {
@@ -416,6 +440,20 @@ fn verifyStmt(
         },
         .crash => {},
     }
+}
+
+fn recordDefinition(definitions: *LocalDefinitionMap, local: LocalId, site: DefinitionSite) Allocator.Error!void {
+    const key = localKey(local);
+    const gop = try definitions.getOrPut(key);
+    if (!gop.found_existing) {
+        gop.value_ptr.* = site;
+        return;
+    }
+
+    std.debug.panic(
+        "DebugVerifyLir invariant violated: local {d} was defined more than once; first={any} second={any}",
+        .{ @intFromEnum(local), gop.value_ptr.*, site },
+    );
 }
 
 fn mergeScopeExitEnvs(
@@ -503,25 +541,33 @@ fn ensureJumpArgsMatchTarget(
     join_scopes: *const JoinScopes,
     target: JoinPointId,
     args: LocalSpan,
+    owner_kind: []const u8,
+    owner_id: u64,
+    stmt_id: CFStmtId,
 ) Allocator.Error!void {
     const params = store.getLocalSpan(join_scopes.params(target));
     const jump_args = store.getLocalSpan(args);
 
     if (params.len != jump_args.len) {
         std.debug.panic(
-            "DebugVerifyLir invariant violated: jump to join point {d} passes {d} args but target expects {d}",
-            .{ @intFromEnum(target), jump_args.len, params.len },
+            "DebugVerifyLir invariant violated: {s} {d} stmt {d} jump to join point {d} passes {d} args but target expects {d}",
+            .{ owner_kind, owner_id, @intFromEnum(stmt_id), @intFromEnum(target), jump_args.len, params.len },
         );
     }
 
     for (jump_args, params, 0..) |arg, param, i| {
         if (store.getLocal(arg).layout_idx != store.getLocal(param).layout_idx) {
             std.debug.panic(
-                "DebugVerifyLir invariant violated: jump arg {d} to join point {d} has layout {d}, expected {d}",
+                "DebugVerifyLir invariant violated: {s} {d} stmt {d} jump arg {d} local={d} to join point {d} has layout {d}, expected join param local={d} layout {d}",
                 .{
+                    owner_kind,
+                    owner_id,
+                    @intFromEnum(stmt_id),
                     i,
+                    @intFromEnum(arg),
                     @intFromEnum(target),
                     @intFromEnum(store.getLocal(arg).layout_idx),
+                    @intFromEnum(param),
                     @intFromEnum(store.getLocal(param).layout_idx),
                 },
             );
@@ -633,120 +679,56 @@ fn panicMissingLocalSemantics(
     stmt_id: CFStmtId,
     local: LocalId,
 ) noreturn {
-    debugPrintStmtSummary(store, stmt_id);
-    std.debug.panic(
-        "DebugVerifyLir invariant violated: missing result semantics for local {d} at stmt {d} ({s})",
-        .{
-            @intFromEnum(local),
-            @intFromEnum(stmt_id),
-            @tagName(store.getCFStmt(stmt_id)),
-        },
-    );
-}
-
-fn debugPrintStmtSummary(store: *const LirStore, stmt_id: CFStmtId) void {
     switch (store.getCFStmt(stmt_id)) {
-        .assign_symbol => |assign| std.debug.print(
-            "DebugVerifyLir stmt {d}: assign_symbol target={d} symbol={d} next={d}\n",
+        .assign_low_level => |assign| std.debug.panic(
+            "DebugVerifyLir invariant violated: missing result semantics for local {d} at stmt {d} (assign_low_level op={s} args={any})",
             .{
+                @intFromEnum(local),
                 @intFromEnum(stmt_id),
-                @intFromEnum(assign.target),
-                assign.symbol.raw(),
-                @intFromEnum(assign.next),
+                @tagName(assign.op),
+                store.getLocalSpan(assign.args),
             },
         ),
-        .assign_ref => |assign| std.debug.print(
-            "DebugVerifyLir stmt {d}: assign_ref target={d} source={d} result={s} next={d}\n",
+        .assign_call => |assign| std.debug.panic(
+            "DebugVerifyLir invariant violated: missing result semantics for local {d} at stmt {d} (assign_call proc={d} args={any})",
             .{
+                @intFromEnum(local),
                 @intFromEnum(stmt_id),
-                @intFromEnum(assign.target),
-                @intFromEnum(refOpSource(assign.op)),
-                @tagName(assign.result),
-                @intFromEnum(assign.next),
+                @intFromEnum(assign.proc),
+                store.getLocalSpan(assign.args),
             },
         ),
-        .assign_literal => |assign| std.debug.print(
-            "DebugVerifyLir stmt {d}: assign_literal target={d} next={d}\n",
-            .{ @intFromEnum(stmt_id), @intFromEnum(assign.target), @intFromEnum(assign.next) },
+        .assign_list => |assign| std.debug.panic(
+            "DebugVerifyLir invariant violated: missing result semantics for local {d} at stmt {d} (assign_list elems={any})",
+            .{
+                @intFromEnum(local),
+                @intFromEnum(stmt_id),
+                store.getLocalSpan(assign.elems),
+            },
         ),
-        .assign_call => |assign| switch (assign.result) {
-            .alias_of => |aliased| std.debug.print(
-                "DebugVerifyLir stmt {d}: assign_call target={d} result=alias_of owner={d} args={any} next={d}\n",
-                .{
-                    @intFromEnum(stmt_id),
-                    @intFromEnum(assign.target),
-                    @intFromEnum(aliased.owner),
-                    store.getLocalSpan(assign.args),
-                    @intFromEnum(assign.next),
-                },
-            ),
-            .borrow_of => |borrowed| std.debug.print(
-                "DebugVerifyLir stmt {d}: assign_call target={d} result=borrow_of owner={d} args={any} next={d}\n",
-                .{
-                    @intFromEnum(stmt_id),
-                    @intFromEnum(assign.target),
-                    @intFromEnum(borrowed.owner),
-                    store.getLocalSpan(assign.args),
-                    @intFromEnum(assign.next),
-                },
-            ),
-            .fresh => std.debug.print(
-                "DebugVerifyLir stmt {d}: assign_call target={d} result=fresh args={any} next={d}\n",
-                .{
-                    @intFromEnum(stmt_id),
-                    @intFromEnum(assign.target),
-                    store.getLocalSpan(assign.args),
-                    @intFromEnum(assign.next),
-                },
-            ),
-        },
-        .assign_low_level => |assign| std.debug.print(
-            "DebugVerifyLir stmt {d}: assign_low_level target={d} op={s} next={d}\n",
-            .{ @intFromEnum(stmt_id), @intFromEnum(assign.target), @tagName(assign.op), @intFromEnum(assign.next) },
+        .assign_struct => |assign| std.debug.panic(
+            "DebugVerifyLir invariant violated: missing result semantics for local {d} at stmt {d} (assign_struct fields={any})",
+            .{
+                @intFromEnum(local),
+                @intFromEnum(stmt_id),
+                store.getLocalSpan(assign.fields),
+            },
         ),
-        .assign_list => |assign| std.debug.print(
-            "DebugVerifyLir stmt {d}: assign_list target={d} next={d}\n",
-            .{ @intFromEnum(stmt_id), @intFromEnum(assign.target), @intFromEnum(assign.next) },
+        .assign_tag => |assign| std.debug.panic(
+            "DebugVerifyLir invariant violated: missing result semantics for local {d} at stmt {d} (assign_tag args={any})",
+            .{
+                @intFromEnum(local),
+                @intFromEnum(stmt_id),
+                store.getLocalSpan(assign.args),
+            },
         ),
-        .assign_struct => |assign| std.debug.print(
-            "DebugVerifyLir stmt {d}: assign_struct target={d} next={d}\n",
-            .{ @intFromEnum(stmt_id), @intFromEnum(assign.target), @intFromEnum(assign.next) },
-        ),
-        .assign_tag => |assign| std.debug.print(
-            "DebugVerifyLir stmt {d}: assign_tag target={d} next={d}\n",
-            .{ @intFromEnum(stmt_id), @intFromEnum(assign.target), @intFromEnum(assign.next) },
-        ),
-        .debug => |stmt| std.debug.print(
-            "DebugVerifyLir stmt {d}: debug message={d} next={d}\n",
-            .{ @intFromEnum(stmt_id), @intFromEnum(stmt.message), @intFromEnum(stmt.next) },
-        ),
-        .expect => |stmt| std.debug.print(
-            "DebugVerifyLir stmt {d}: expect condition={d} next={d}\n",
-            .{ @intFromEnum(stmt_id), @intFromEnum(stmt.condition), @intFromEnum(stmt.next) },
-        ),
-        .switch_stmt => |sw| std.debug.print(
-            "DebugVerifyLir stmt {d}: switch cond={d} default={d}\n",
-            .{ @intFromEnum(stmt_id), @intFromEnum(sw.cond), @intFromEnum(sw.default_branch) },
-        ),
-        .borrow_scope => |scope| std.debug.print(
-            "DebugVerifyLir stmt {d}: borrow_scope id={d} body={d} remainder={d}\n",
-            .{ @intFromEnum(stmt_id), @intFromEnum(scope.id), @intFromEnum(scope.body), @intFromEnum(scope.remainder) },
-        ),
-        .join => |join| std.debug.print(
-            "DebugVerifyLir stmt {d}: join body={d} remainder={d}\n",
-            .{ @intFromEnum(stmt_id), @intFromEnum(join.body), @intFromEnum(join.remainder) },
-        ),
-        .jump => |jump| std.debug.print(
-            "DebugVerifyLir stmt {d}: jump target={d}\n",
-            .{ @intFromEnum(stmt_id), @intFromEnum(jump.target) },
-        ),
-        .ret => |ret_stmt| std.debug.print(
-            "DebugVerifyLir stmt {d}: ret value={d}\n",
-            .{ @intFromEnum(stmt_id), @intFromEnum(ret_stmt.value) },
-        ),
-        else => std.debug.print(
-            "DebugVerifyLir stmt {d}: {s}\n",
-            .{ @intFromEnum(stmt_id), @tagName(store.getCFStmt(stmt_id)) },
+        else => std.debug.panic(
+            "DebugVerifyLir invariant violated: missing result semantics for local {d} at stmt {d} ({s})",
+            .{
+                @intFromEnum(local),
+                @intFromEnum(stmt_id),
+                @tagName(store.getCFStmt(stmt_id)),
+            },
         ),
     }
 }
