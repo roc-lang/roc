@@ -3466,10 +3466,14 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
     // Value restriction: only generalize at the inner lambda level, not the
     // outer e_closure wrapper (which delegates to e_lambda's own checkExpr).
-    // Also skip generalization for lambdas that are direct call arguments —
-    // they're consumed immediately, so independent generalization would only
-    // pollute outer scope ranks via Rank.min in merge.
-    const should_generalize = isFunctionDef(&self.cir.store, expr) and expr != .e_closure and !is_call_arg;
+    // Skip generalization for lambdas that are direct call arguments inside
+    // other functions — they're consumed immediately and independent
+    // generalization would pollute the enclosing function's type vars
+    // (via Rank.min in merge pulling outer-rank vars to rank 0).
+    // At the outermost rank, allow generalization so that the enclosing
+    // value's type is properly generalized for instantiation at use sites.
+    const should_generalize = isFunctionDef(&self.cir.store, expr) and expr != .e_closure and
+        (!is_call_arg or env.rank() == .outermost);
 
     // Push/pop ranks based on if we should generalize
     if (should_generalize) try env.var_pool.pushRank();
