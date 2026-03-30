@@ -1025,7 +1025,6 @@ fn collectReachableFromStmt(
     reachable_consts: *std.AutoHashMap(u32, void),
     visited_stmts: *std.AutoHashMap(u32, void),
 ) Allocator.Error!void {
-    _ = current_lambda;
     const gop = try visited_stmts.getOrPut(@intFromEnum(stmt_id));
     if (gop.found_existing) return;
 

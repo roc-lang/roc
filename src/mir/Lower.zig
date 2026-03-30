@@ -5074,6 +5074,7 @@ fn lowerLambdaInto(
     while (callable_only_i > 0) {
         callable_only_i -= 1;
         const callable_only_capture = callable_only_captures.items[callable_only_i];
+        try self.bindExactLambdaLocal(callable_only_capture.local, callable_only_capture.lambda_id);
         body = try self.store.addCFStmt(self.allocator, .{ .assign_lambda = .{
             .target = callable_only_capture.local,
             .lambda = callable_only_capture.lambda_id,
@@ -5677,6 +5678,7 @@ fn lowerClosureLambda(
             );
         } else {
             const lambda_id = callable_only_capture.lambda_id orelse unreachable;
+            try self.bindExactLambdaLocal(callable_only_capture.local, lambda_id);
             body = try self.store.addCFStmt(self.allocator, .{ .assign_lambda = .{
                 .target = callable_only_capture.local,
                 .lambda = lambda_id,
@@ -6196,6 +6198,7 @@ fn lowerReservedTrivialClosureLambda(
         recursive_i -= 1;
         const recursive_capture = recursive_captures.items[recursive_i];
         const member_lambda = try self.lowerResolvedCallableInstLambda(recursive_capture.callable_inst_id);
+        try self.bindExactLambdaLocal(recursive_capture.local, member_lambda);
         body = if (!(try self.callableInstProducesClosureValue(recursive_capture.callable_inst_id)))
             try self.store.addCFStmt(self.allocator, .{ .assign_lambda = .{
                 .target = recursive_capture.local,
@@ -6241,6 +6244,7 @@ fn lowerReservedTrivialClosureLambda(
             );
         } else {
             const lambda_id = callable_only_capture.lambda_id orelse unreachable;
+            try self.bindExactLambdaLocal(callable_only_capture.local, lambda_id);
             body = try self.store.addCFStmt(self.allocator, .{ .assign_lambda = .{
                 .target = callable_only_capture.local,
                 .lambda = lambda_id,
@@ -6661,6 +6665,7 @@ fn lowerResolvedCallableInstValueInto(
     }
 
     const runtime_captures = self.scratch_local_ids.sliceFromStart(capture_top);
+    try self.bindExactLambdaLocal(target, lambda_id);
     var current = if (runtime_captures.len == 0)
         try self.store.addCFStmt(self.allocator, .{ .assign_lambda = .{
             .target = target,
@@ -10194,6 +10199,7 @@ fn lowerCirExprInto(
             }
 
             const lambda_id = try self.lowerLambda(module_env, expr_idx, lambda, monotype);
+            try self.bindExactLambdaLocal(target, lambda_id);
             break :blk self.store.addCFStmt(self.allocator, .{ .assign_lambda = .{
                 .target = target,
                 .lambda = lambda_id,
@@ -10281,6 +10287,7 @@ fn lowerCirExprInto(
                 try self.scratch_local_ids.append(capture_local);
             }
             const runtime_captures = self.scratch_local_ids.sliceFromStart(capture_top);
+            try self.bindExactLambdaLocal(target, lambda_id);
             if (runtime_captures.len == 0) {
                 var current = try self.store.addCFStmt(self.allocator, .{ .assign_lambda = .{
                     .target = target,
