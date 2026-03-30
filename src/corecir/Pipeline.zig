@@ -84,7 +84,7 @@ pub const CallableInstSetSpan = LambdaSpecialize.CallableInstSetSpan;
 pub const CallableInstSet = LambdaSpecialize.CallableInstSet;
 
 /// One statically resolved dispatch target definition.
-pub const DispatchExprTarget = LambdaSpecialize.DispatchExprTarget;
+pub const DispatchExprTarget = ContextMono.DispatchExprTarget;
 
 /// Associates a source call site with the callable instantiation chosen for it.
 pub const CallSiteResolution = struct {
@@ -115,7 +115,7 @@ const MutationKind = enum(u8) {
     context_expr_monotypes,
     context_pattern_monotypes,
     dispatch_expr_callable_insts,
-    dispatch_expr_targets,
+    context_dispatch_targets,
     callable_inst_sets,
     context_pattern_callable_inst_sets,
     expr_callable_inst_sets,
@@ -339,8 +339,8 @@ pub const Result = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?DispatchExprTarget {
-        return self.lambda_specialize.getDispatchExprTarget(
-            context_callable_inst,
+        return self.context_mono.getDispatchExprTarget(
+            @enumFromInt(@intFromEnum(context_callable_inst)),
             root_source_expr_context,
             module_idx,
             expr_idx,
@@ -509,7 +509,7 @@ pub const Result = struct {
     }
 };
 
-/// Monomorphizes callable templates into explicit callable instantiations.
+/// Pipelines callable templates into explicit callable instantiations.
 pub const Pass = struct {
     allocator: Allocator,
     all_module_envs: []const *ModuleEnv,
@@ -894,7 +894,7 @@ pub const Pass = struct {
         return result;
     }
 
-    /// Monomorphize all callables rooted in the current module.
+    /// Pipeline all callables rooted in the current module.
     pub fn runModule(self: *Pass) Allocator.Error!Result {
         var result = try Result.init(self.allocator, self.current_module_idx, null);
 
@@ -936,7 +936,7 @@ pub const Pass = struct {
             iterations += 1;
             if (std.debug.runtime_safety and iterations > 32) {
                 std.debug.panic(
-                    "Monomorphize: root fixed point did not converge (module={d}, contextualize_roots={}, revision={d}, templates={d}, callable_insts={d}, expr_callable_insts={d}, expr_callable_inst_sets={d}, call_sites={d}, call_site_sets={d}, dispatch={d}, lookups={d}, lookup_sets={d}, context_monos={d}, context_pattern_monos={d}, context_pattern_callable_insts={d}, context_pattern_sets={d}, closure_capture_monos={d}, closure_capture_callable_insts={d}, mutation_counts={any})",
+                    "Pipeline: root fixed point did not converge (module={d}, contextualize_roots={}, revision={d}, templates={d}, callable_insts={d}, expr_callable_insts={d}, expr_callable_inst_sets={d}, call_sites={d}, call_site_sets={d}, dispatch={d}, lookups={d}, lookup_sets={d}, context_monos={d}, context_pattern_monos={d}, context_pattern_callable_insts={d}, context_pattern_sets={d}, closure_capture_monos={d}, closure_capture_callable_insts={d}, mutation_counts={any})",
                     .{
                         self.current_module_idx,
                         contextualize_roots,
@@ -1113,7 +1113,7 @@ pub const Pass = struct {
             if (existing != template_id) {
                 if (std.debug.runtime_safety) {
                     std.debug.panic(
-                        "Monomorphize: conflicting callable template aliases for source key {d} (existing={d}, new={d})",
+                        "Pipeline: conflicting callable template aliases for source key {d} (existing={d}, new={d})",
                         .{ source_key, @intFromEnum(existing), @intFromEnum(template_id) },
                     );
                 }
@@ -1136,7 +1136,7 @@ pub const Pass = struct {
             if (existing.module_idx != module_idx or existing.expr_idx != expr_idx) {
                 if (std.debug.runtime_safety) {
                     std.debug.panic(
-                        "Monomorphize: conflicting source exprs for source key {d} (existing={d}:{d}, new={d}:{d})",
+                        "Pipeline: conflicting source exprs for source key {d} (existing={d}:{d}, new={d}:{d})",
                         .{
                             source_key,
                             existing.module_idx,
@@ -1691,7 +1691,7 @@ pub const Pass = struct {
 
         const root_source_expr_context = self.rootSourceExprContext(self.active_callable_inst_context);
 
-        const fn_monotype = try self.resolveExprMonotypeIfMonomorphizableResolved(
+        const fn_monotype = try self.resolveExprMonotypeIfExactResolved(
             result,
             module_idx,
             expr_idx,
@@ -2858,7 +2858,7 @@ pub const Pass = struct {
                             return;
                         }
                         std.debug.panic(
-                            "Monomorphize missing direct-callee template for expr={d} module={d} callee_expr={d} tag={s}",
+                            "Pipeline missing direct-callee template for expr={d} module={d} callee_expr={d} tag={s}",
                             .{
                                 @intFromEnum(call_expr_idx),
                                 module_idx,
@@ -2872,7 +2872,7 @@ pub const Pass = struct {
                 .e_lambda, .e_closure, .e_hosted_lambda => {
                     if (std.debug.runtime_safety) {
                         std.debug.panic(
-                            "Monomorphize: demanded direct call expr {d} in module {d} has direct-callable callee expr {d} ({s}) without a callable template",
+                            "Pipeline: demanded direct call expr {d} in module {d} has direct-callable callee expr {d} ({s}) without a callable template",
                             .{
                                 @intFromEnum(call_expr_idx),
                                 module_idx,
@@ -2906,7 +2906,7 @@ pub const Pass = struct {
                     else
                         "<anonymous>";
                     std.debug.panic(
-                        "Monomorphize unresolved direct callee '{s}' template={d} kind={s} template_module={d} template_expr={d} call_module={d} call_expr={d} context={d} root_source_expr={d}",
+                        "Pipeline unresolved direct callee '{s}' template={d} kind={s} template_module={d} template_expr={d} call_module={d} call_expr={d} context={d} root_source_expr={d}",
                         .{
                             binding_name,
                             @intFromEnum(template_id),
@@ -3100,7 +3100,7 @@ pub const Pass = struct {
         if (arg_patterns.len != arg_exprs.len) {
             if (std.debug.runtime_safety) {
                 std.debug.panic(
-                    "Monomorphize: callable param arity mismatch for callable inst {d} (patterns={d}, args={d})",
+                    "Pipeline: callable param arity mismatch for callable inst {d} (patterns={d}, args={d})",
                     .{ @intFromEnum(callee_callable_inst_id), arg_patterns.len, arg_exprs.len },
                 );
             }
@@ -3296,7 +3296,7 @@ pub const Pass = struct {
         self.active_template_context = result.lambda_solved.callable_template_ids_by_source.get(template.source_key) orelse {
             if (std.debug.runtime_safety) {
                 std.debug.panic(
-                    "Monomorphize: missing template id for source key {d} while completing template body",
+                    "Pipeline: missing template id for source key {d} while completing template body",
                     .{template.source_key},
                 );
             }
@@ -3324,7 +3324,7 @@ pub const Pass = struct {
             iterations += 1;
             if (std.debug.runtime_safety and iterations > 32) {
                 std.debug.panic(
-                    "Monomorphize: template binding completion did not converge for template={d}",
+                    "Pipeline: template binding completion did not converge for template={d}",
                     .{@intFromEnum(template.cir_expr)},
                 );
             }
@@ -3573,7 +3573,7 @@ pub const Pass = struct {
             if (param_vars.len != arg_exprs.len) {
                 if (std.debug.runtime_safety) {
                     std.debug.panic(
-                        "Monomorphize: direct call template arity mismatch at expr {d} (params={d}, args={d})",
+                        "Pipeline: direct call template arity mismatch at expr {d} (params={d}, args={d})",
                         .{
                             @intFromEnum(call_expr_idx),
                             param_vars.len,
@@ -5149,7 +5149,7 @@ pub const Pass = struct {
             result.getCallableInst(context_callable_inst).template;
         defer self.active_template_context = saved_template_context;
 
-        const fn_monotype = try self.resolveExprMonotypeIfMonomorphizableResolved(result, module_idx, expr_idx);
+        const fn_monotype = try self.resolveExprMonotypeIfExactResolved(result, module_idx, expr_idx);
         if (fn_monotype.isNone()) return null;
 
         const template = result.getCallableTemplate(template_id).*;
@@ -5252,7 +5252,7 @@ pub const Pass = struct {
             if (param_vars.len != actual_args.items.len) {
                 if (std.debug.runtime_safety) {
                     std.debug.panic(
-                        "Monomorphize: dispatch template arity mismatch at expr {d} (params={d}, args={d})",
+                        "Pipeline: dispatch template arity mismatch at expr {d} (params={d}, args={d})",
                         .{
                             @intFromEnum(expr_idx),
                             param_vars.len,
@@ -5473,7 +5473,7 @@ pub const Pass = struct {
                 else
                     null;
                 std.debug.panic(
-                    "Monomorphize: conflicting exact expr monotypes for ctx={d} module={d} expr={d} kind={s} region={any} existing={d}@{d} existing_mono={any} new={d}@{d} new_mono={any} template_expr={d} template_kind={s}",
+                    "Pipeline: conflicting exact expr monotypes for ctx={d} module={d} expr={d} kind={s} region={any} existing={d}@{d} existing_mono={any} new={d}@{d} new_mono={any} template_expr={d} template_kind={s}",
                     .{
                         @intFromEnum(self.active_callable_inst_context),
                         module_idx,
@@ -5582,7 +5582,7 @@ pub const Pass = struct {
 
         if (std.debug.runtime_safety) {
             std.debug.panic(
-                "Monomorphize: conflicting {s} monotypes while merging key={any} existing={d}@{d} existing_mono={any} new={d}@{d} new_mono={any}",
+                "Pipeline: conflicting {s} monotypes while merging key={any} existing={d}@{d} existing_mono={any} new={d}@{d} new_mono={any}",
                 .{
                     label,
                     key,
@@ -5904,7 +5904,7 @@ pub const Pass = struct {
             if (std.debug.runtime_safety) {
                 const method_name = self.dispatchTargetMethodText(module_env, resolved_target) orelse "<unreadable>";
                 std.debug.panic(
-                    "Monomorphize: demanded dispatch expr {d} in module {d} resolved to method '{s}' without a callable template",
+                    "Pipeline: demanded dispatch expr {d} in module {d} resolved to method '{s}' without a callable template",
                     .{ @intFromEnum(expr_idx), module_idx, method_name },
                 );
             }
@@ -5977,8 +5977,8 @@ pub const Pass = struct {
     ) Allocator.Error!void {
         if (self.scratch_context_expr_monotypes_depth != 0) return;
         try self.putTracked(
-            .dispatch_expr_targets,
-            &result.lambda_specialize.dispatch_expr_targets,
+            .context_dispatch_targets,
+            &result.context_mono.resolved_dispatch_targets,
             self.resultExprKey(context_callable_inst, module_idx, expr_idx),
             dispatch_target,
         );
@@ -6376,7 +6376,7 @@ pub const Pass = struct {
         const constraint = try self.lookupDispatchConstraintForExpr(result, module_idx, expr_idx, method_name) orelse {
             if (std.debug.runtime_safety) {
                 std.debug.panic(
-                    "Monomorphize: no static dispatch constraint for expr={d} method='{s}'",
+                    "Pipeline: no static dispatch constraint for expr={d} method='{s}'",
                     .{ @intFromEnum(expr_idx), module_env.getIdent(method_name) },
                 );
             }
@@ -6649,7 +6649,7 @@ pub const Pass = struct {
                     const existing_method_text = self.dispatchTargetMethodText(module_env, existing) orelse {
                         if (std.debug.runtime_safety) {
                             std.debug.panic(
-                                "Monomorphize: existing candidate method ident {d} unreadable",
+                                "Pipeline: existing candidate method ident {d} unreadable",
                                 .{existing.method_ident.idx},
                             );
                         }
@@ -6660,7 +6660,7 @@ pub const Pass = struct {
                             !std.mem.eql(u8, existing_method_text, candidate_env.getIdent(method_ident))))
                     {
                         std.debug.panic(
-                            "Monomorphize: ambiguous dispatch for method '{s}' expr={d}",
+                            "Pipeline: ambiguous dispatch for method '{s}' expr={d}",
                             .{
                                 method_name_text,
                                 @intFromEnum(expr_idx),
@@ -6676,7 +6676,7 @@ pub const Pass = struct {
         return found_target orelse {
             if (std.debug.runtime_safety) {
                 std.debug.panic(
-                    "Monomorphize: no candidate for method '{s}' expr={d}",
+                    "Pipeline: no candidate for method '{s}' expr={d}",
                     .{ method_name_text, @intFromEnum(expr_idx) },
                 );
             }
@@ -7319,7 +7319,7 @@ pub const Pass = struct {
 
         if (std.debug.runtime_safety) {
             std.debug.panic(
-                "Monomorphize: could not resolve origin module '{s}' from source module {d}",
+                "Pipeline: could not resolve origin module '{s}' from source module {d}",
                 .{ origin_name, source_module_idx },
             );
         }
@@ -7394,7 +7394,7 @@ pub const Pass = struct {
         const method_name = self.dispatchTargetMethodText(source_env, target) orelse {
             if (std.debug.runtime_safety) {
                 std.debug.panic(
-                    "Monomorphize: method ident {d} not readable from source module {d} or target module {d}",
+                    "Pipeline: method ident {d} not readable from source module {d} or target module {d}",
                     .{ target.method_ident.idx, source_module_idx, target_module_idx },
                 );
             }
@@ -7404,7 +7404,7 @@ pub const Pass = struct {
         const target_ident = target_env.common.findIdent(method_name) orelse {
             if (std.debug.runtime_safety) {
                 std.debug.panic(
-                    "Monomorphize: method '{s}' not found in target module {d}",
+                    "Pipeline: method '{s}' not found in target module {d}",
                     .{ method_name, target_module_idx },
                 );
             }
@@ -7413,7 +7413,7 @@ pub const Pass = struct {
         const target_node_idx = target_env.getExposedNodeIndexById(target_ident) orelse {
             if (std.debug.runtime_safety) {
                 std.debug.panic(
-                    "Monomorphize: exposed node not found for method '{s}' in module {d}",
+                    "Pipeline: exposed node not found for method '{s}' in module {d}",
                     .{ method_name, target_module_idx },
                 );
             }
@@ -7422,7 +7422,7 @@ pub const Pass = struct {
         if (!target_env.store.isDefNode(target_node_idx)) {
             if (std.debug.runtime_safety) {
                 std.debug.panic(
-                    "Monomorphize: exposed node for method '{s}' is not a def node (module={d}, node={d})",
+                    "Pipeline: exposed node for method '{s}' is not a def node (module={d}, node={d})",
                     .{ method_name, target_module_idx, target_node_idx },
                 );
             }
@@ -7606,7 +7606,7 @@ pub const Pass = struct {
                 {
                     if (std.debug.runtime_safety) {
                         std.debug.panic(
-                            "Monomorphize: conflicting exact binding for type var root {d} in module {d}",
+                            "Pipeline: conflicting exact binding for type var root {d} in module {d}",
                             .{ @intFromEnum(entry.key_ptr.type_var), module_idx },
                         );
                     }
@@ -7897,7 +7897,7 @@ pub const Pass = struct {
             if (!(try self.monotypesStructurallyEqual(result, existing, monotype))) {
                 if (std.debug.runtime_safety) {
                     std.debug.panic(
-                        "Monomorphize: conflicting monotype binding for type var root {d}",
+                        "Pipeline: conflicting monotype binding for type var root {d}",
                         .{@intFromEnum(resolved.var_)},
                     );
                 }
@@ -8174,7 +8174,7 @@ pub const Pass = struct {
                         if (flatRecordRepresentsEmpty(store_types, record)) return;
                         if (builtin.mode == .Debug) {
                             std.debug.panic(
-                                "Monomorphize invariant violated: non-empty store record matched unit monotype (module={d}, active_callable_inst={d}, monotype={d})",
+                                "Pipeline invariant violated: non-empty store record matched unit monotype (module={d}, active_callable_inst={d}, monotype={d})",
                                 .{
                                     module_idx,
                                     @intFromEnum(self.active_callable_inst_context),
@@ -8187,7 +8187,7 @@ pub const Pass = struct {
                     else => {
                         if (builtin.mode == .Debug) {
                             std.debug.panic(
-                                "Monomorphize invariant violated: expected record monotype for store record, got {s} (module={d}, active_callable_inst={d}, monotype={d})",
+                                "Pipeline invariant violated: expected record monotype for store record, got {s} (module={d}, active_callable_inst={d}, monotype={d})",
                                 .{
                                     @tagName(mono),
                                     module_idx,
@@ -9824,7 +9824,7 @@ pub const Pass = struct {
                 if (self.active_callable_inst_context.isNone()) {
                     if (std.debug.runtime_safety) {
                         std.debug.panic(
-                            "Monomorphize: closure template expr={d} requires lexical owner template={d} but no active callable inst is available",
+                            "Pipeline: closure template expr={d} requires lexical owner template={d} but no active callable inst is available",
                             .{
                                 @intFromEnum(template.cir_expr),
                                 @intFromEnum(template.lexical_owner_template),
@@ -9845,7 +9845,7 @@ pub const Pass = struct {
 
                 if (std.debug.runtime_safety) {
                     std.debug.panic(
-                        "Monomorphize: closure template expr={d} could not resolve lexical owner template={d} from active callable inst={d}",
+                        "Pipeline: closure template expr={d} could not resolve lexical owner template={d} from active callable inst={d}",
                         .{
                             @intFromEnum(template.cir_expr),
                             @intFromEnum(template.lexical_owner_template),
@@ -9950,7 +9950,7 @@ pub const Pass = struct {
             iterations += 1;
             if (std.debug.runtime_safety and iterations > 32) {
                 std.debug.panic(
-                    "Monomorphize: callable-inst binding fixed point did not converge for callable_inst={d}",
+                    "Pipeline: callable-inst binding fixed point did not converge for callable_inst={d}",
                     .{
                         @intFromEnum(callable_inst_id),
                     },
@@ -10048,7 +10048,7 @@ pub const Pass = struct {
         if (boundary.arg_patterns.len != fn_mono.args.len) {
             if (std.debug.runtime_safety) {
                 std.debug.panic(
-                    "Monomorphize: callable signature arity mismatch for expr {d} (patterns={d}, monos={d})",
+                    "Pipeline: callable signature arity mismatch for expr {d} (patterns={d}, monos={d})",
                     .{
                         @intFromEnum(callable_expr_idx),
                         boundary.arg_patterns.len,
@@ -10141,7 +10141,7 @@ pub const Pass = struct {
         if (boundary.arg_patterns.len != param_vars.len) {
             if (std.debug.runtime_safety) {
                 std.debug.panic(
-                    "Monomorphize: template boundary arity mismatch for expr {d} (patterns={d}, vars={d})",
+                    "Pipeline: template boundary arity mismatch for expr {d} (patterns={d}, vars={d})",
                     .{
                         @intFromEnum(template.cir_expr),
                         boundary.arg_patterns.len,
@@ -10292,7 +10292,7 @@ pub const Pass = struct {
         if (boundary.arg_patterns.len != fn_mono.args.len) {
             if (std.debug.runtime_safety) {
                 std.debug.panic(
-                    "Monomorphize: template fn-monotype arity mismatch for expr {d} (patterns={d}, monos={d})",
+                    "Pipeline: template fn-monotype arity mismatch for expr {d} (patterns={d}, monos={d})",
                     .{
                         @intFromEnum(template.cir_expr),
                         boundary.arg_patterns.len,
@@ -10459,7 +10459,7 @@ pub const Pass = struct {
 
         if (std.debug.runtime_safety) {
             std.debug.panic(
-                "Monomorphize: record field '{s}' missing from monotype (template_module={d}, mono_module={d})",
+                "Pipeline: record field '{s}' missing from monotype (template_module={d}, mono_module={d})",
                 .{ self.all_module_envs[template_module_idx].getIdent(field_name), template_module_idx, mono_module_idx },
             );
         }
@@ -10489,7 +10489,7 @@ pub const Pass = struct {
 
         if (std.debug.runtime_safety) {
             std.debug.panic(
-                "Monomorphize: record field '{s}' missing from monotype (template_module={d}, mono_module={d})",
+                "Pipeline: record field '{s}' missing from monotype (template_module={d}, mono_module={d})",
                 .{ self.all_module_envs[template_module_idx].getIdent(field_name), template_module_idx, mono_module_idx },
             );
         }
@@ -10519,7 +10519,7 @@ pub const Pass = struct {
 
         if (std.debug.runtime_safety) {
             std.debug.panic(
-                "Monomorphize: tag '{s}' missing from monotype",
+                "Pipeline: tag '{s}' missing from monotype",
                 .{self.all_module_envs[template_module_idx].getIdent(tag_name)},
             );
         }
@@ -10657,7 +10657,7 @@ pub const Pass = struct {
             if (payload_vars.len != mono_tag.payloads.len) {
                 if (std.debug.runtime_safety) {
                     std.debug.panic(
-                        "Monomorphize: payload arity mismatch for tag '{s}'",
+                        "Pipeline: payload arity mismatch for tag '{s}'",
                         .{self.all_module_envs[template_module_idx].getIdent(tag_name)},
                     );
                 }
@@ -10682,7 +10682,7 @@ pub const Pass = struct {
 
         if (std.debug.runtime_safety) {
             std.debug.panic(
-                "Monomorphize: tag '{s}' missing from monotype",
+                "Pipeline: tag '{s}' missing from monotype",
                 .{self.all_module_envs[template_module_idx].getIdent(tag_name)},
             );
         }
@@ -10719,7 +10719,7 @@ pub const Pass = struct {
                     else
                         null;
                     std.debug.panic(
-                        "Monomorphize: conflicting monotype binding for type var root {d} in module {d} existing={d}@{d} existing_mono={any} new={d}@{d} new_mono={any} ctx={d} root_source_expr={d} template_expr={d} template_kind={s}",
+                        "Pipeline: conflicting monotype binding for type var root {d} in module {d} existing={d}@{d} existing_mono={any} new={d}@{d} new_mono={any} ctx={d} root_source_expr={d} template_expr={d} template_kind={s}",
                         .{
                             @intFromEnum(resolved_key.type_var),
                             resolved_key.module_idx,
@@ -10915,7 +10915,7 @@ pub const Pass = struct {
                         if (flatRecordRepresentsEmpty(template_types, record)) return;
                         if (builtin.mode == .Debug) {
                             std.debug.panic(
-                                "Monomorphize invariant violated: non-empty template record matched unit monotype (template_module={d}, mono_module={d}, active_callable_inst={d}, monotype={d})",
+                                "Pipeline invariant violated: non-empty template record matched unit monotype (template_module={d}, mono_module={d}, active_callable_inst={d}, monotype={d})",
                                 .{
                                     template_module_idx,
                                     mono_module_idx,
@@ -10929,7 +10929,7 @@ pub const Pass = struct {
                     else => {
                         if (builtin.mode == .Debug) {
                             std.debug.panic(
-                                "Monomorphize invariant violated: expected record monotype for template record, got {s} (template_module={d}, mono_module={d}, active_callable_inst={d}, monotype={d})",
+                                "Pipeline invariant violated: expected record monotype for template record, got {s} (template_module={d}, mono_module={d}, active_callable_inst={d}, monotype={d})",
                                 .{
                                     @tagName(mono),
                                     template_module_idx,
@@ -11211,7 +11211,7 @@ pub const Pass = struct {
         }
         if (std.debug.runtime_safety) {
             std.debug.panic(
-                "Monomorphize bindFlatTypeMonotypes mismatch: flat_type={s} mono={s} template_module={d} mono_module={d} active_callable_inst={d} monotype={d} probe_mode={}",
+                "Pipeline bindFlatTypeMonotypes mismatch: flat_type={s} mono={s} template_module={d} mono_module={d} active_callable_inst={d} monotype={d} probe_mode={}",
                 .{
                     @tagName(flat_type),
                     @tagName(mono),
@@ -11239,7 +11239,7 @@ pub const Pass = struct {
         }
         if (std.debug.runtime_safety) {
             std.debug.panic(
-                "Monomorphize bindFlatTypeMonotypes hit err tail: flat_type={s} template_module={d} mono_module={d} active_callable_inst={d} monotype={d} probe_mode={}",
+                "Pipeline bindFlatTypeMonotypes hit err tail: flat_type={s} template_module={d} mono_module={d} active_callable_inst={d} monotype={d} probe_mode={}",
                 .{
                     @tagName(flat_type),
                     template_module_idx,
@@ -12396,7 +12396,7 @@ fn identLastSegment(ident: []const u8) []const u8 {
     return ident[idx + 1 ..];
 }
 
-/// Monomorphize one expression tree rooted in the given module.
+/// Pipeline one expression tree rooted in the given module.
 pub fn runRootSourceExpr(
     allocator: Allocator,
     all_module_envs: []const *ModuleEnv,
@@ -12416,7 +12416,7 @@ pub fn runRootSourceExpr(
     return pass.runRootSourceExpr(expr_idx);
 }
 
-/// Monomorphize one root source expression using an explicit type scope for cross-module substitutions.
+/// Pipeline one root source expression using an explicit type scope for cross-module substitutions.
 pub fn runRootSourceExprWithTypeScope(
     allocator: Allocator,
     all_module_envs: []const *ModuleEnv,
@@ -12440,7 +12440,7 @@ pub fn runRootSourceExprWithTypeScope(
     return pass.runRootSourceExpr(expr_idx);
 }
 
-/// Monomorphize an explicit set of root source expressions in the current module.
+/// Pipeline an explicit set of root source expressions in the current module.
 pub fn runRootSourceExprs(
     allocator: Allocator,
     all_module_envs: []const *ModuleEnv,
@@ -12460,7 +12460,7 @@ pub fn runRootSourceExprs(
     return pass.runRootSourceExprs(exprs);
 }
 
-/// Monomorphize explicit root source expressions using an explicit type scope for cross-module substitutions.
+/// Pipeline explicit root source expressions using an explicit type scope for cross-module substitutions.
 pub fn runRootSourceExprsWithTypeScope(
     allocator: Allocator,
     all_module_envs: []const *ModuleEnv,
@@ -12484,7 +12484,7 @@ pub fn runRootSourceExprsWithTypeScope(
     return pass.runRootSourceExprs(exprs);
 }
 
-/// Monomorphize all callables rooted in the current module.
+/// Pipeline all callables rooted in the current module.
 pub fn runModule(
     allocator: Allocator,
     all_module_envs: []const *ModuleEnv,
@@ -12503,7 +12503,7 @@ pub fn runModule(
     return pass.runModule();
 }
 
-/// Monomorphize all callables rooted in the current module using an explicit type scope.
+/// Pipeline all callables rooted in the current module using an explicit type scope.
 pub fn runModuleWithTypeScope(
     allocator: Allocator,
     all_module_envs: []const *ModuleEnv,

@@ -77,12 +77,18 @@ pub const ContextPatternKey = struct {
     pattern_raw: u32,
 };
 
+pub const DispatchExprTarget = struct {
+    module_idx: u32,
+    def_idx: CIR.Def.Idx,
+};
+
 pub const Result = struct {
     monotype_store: Monotype.Store,
     subst_entries: std.ArrayListUnmanaged(TypeSubstEntry),
     substs: std.ArrayListUnmanaged(TypeSubst),
     context_expr_monotypes: std.AutoHashMapUnmanaged(ContextExprKey, ResolvedMonotype),
     context_pattern_monotypes: std.AutoHashMapUnmanaged(ContextPatternKey, ResolvedMonotype),
+    resolved_dispatch_targets: std.AutoHashMapUnmanaged(ContextExprKey, DispatchExprTarget),
     root_module_idx: u32,
     root_source_expr_idx: ?CIR.Expr.Idx,
 
@@ -93,6 +99,7 @@ pub const Result = struct {
             .substs = .empty,
             .context_expr_monotypes = .empty,
             .context_pattern_monotypes = .empty,
+            .resolved_dispatch_targets = .empty,
             .root_module_idx = root_module_idx,
             .root_source_expr_idx = root_source_expr_idx,
         };
@@ -104,6 +111,7 @@ pub const Result = struct {
         self.substs.deinit(allocator);
         self.context_expr_monotypes.deinit(allocator);
         self.context_pattern_monotypes.deinit(allocator);
+        self.resolved_dispatch_targets.deinit(allocator);
     }
 
     pub fn contextExprKey(
@@ -160,6 +168,21 @@ pub const Result = struct {
             context_id,
             module_idx,
             pattern_idx,
+        ));
+    }
+
+    pub fn getDispatchExprTarget(
+        self: *const Result,
+        context_id: ContextId,
+        root_source_expr_context: ?CIR.Expr.Idx,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) ?DispatchExprTarget {
+        return self.resolved_dispatch_targets.get(contextExprKey(
+            context_id,
+            root_source_expr_context,
+            module_idx,
+            expr_idx,
         ));
     }
 
