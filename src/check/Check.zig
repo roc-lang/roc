@@ -1778,6 +1778,40 @@ pub fn checkPlatformRequirements(
         }
         // Note: If the export is not found, the canonicalizer should have already reported an error
     }
+
+    // Process any deferred static dispatch constraints that arose from unifying
+    // platform types with app types. Without this, constraints on app expressions
+    // (e.g., method calls like `args.drop_first(1)`) whose receiver types are only
+    // resolved by platform requirements would never get their dispatch targets set,
+    // causing panics during MIR lowering.
+    //
+    // Skip entries whose constraints are all from_numeral — these are numeric literal
+    // constraints whose flex vars were unified with non-numeric platform types (e.g.,
+    // Err(1) where the platform expects Err([Exit(I32)])). They will be resolved
+    // later by finalizeNumericDefaults; processing them here would produce spurious
+    // "missing method" errors.
+    {
+        var i: usize = 0;
+        while (i < env.deferred_static_dispatch_constraints.items.items.len) {
+            const dc = env.deferred_static_dispatch_constraints.items.items[i];
+            const constraints = self.types.sliceStaticDispatchConstraints(dc.constraints);
+            var all_from_numeral = true;
+            for (constraints) |c| {
+                if (c.origin != .from_numeral) {
+                    all_from_numeral = false;
+                    break;
+                }
+            }
+            if (all_from_numeral) {
+                _ = env.deferred_static_dispatch_constraints.items.orderedRemove(i);
+            } else {
+                i += 1;
+            }
+        }
+        if (env.deferred_static_dispatch_constraints.items.items.len > 0) {
+            try self.checkStaticDispatchConstraints(&env, false);
+        }
+    }
 }
 
 /// Find a type alias declaration by name and return the var for its underlying type.
@@ -6350,6 +6384,12 @@ pub fn finalizeNumericDefaults(self: *Self) std.mem.Allocator.Error!void {
     var env = try self.env_pool.acquire();
     defer self.env_pool.release(env);
     try self.finalizeNumericDefaultsInternal(&env);
+
+    // After finalizing numeric defaults, resolve any remaining deferred
+    // static dispatch constraints (e.g., Dec.plus, Dec.to_str).
+    if (env.deferred_static_dispatch_constraints.items.items.len > 0) {
+        try self.checkStaticDispatchConstraints(&env, true);
+    }
 }
 
 fn finalizeNumericDefaultsInternal(self: *Self, env: *Env) std.mem.Allocator.Error!void {
