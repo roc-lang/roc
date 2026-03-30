@@ -10,10 +10,10 @@ type=repl
 » Ok(Box.box(100))
 ~~~
 # OUTPUT
-[Box(1), Box(2), Box(3)]
+[Box(1.0), Box(2.0), Box(3.0)]
 ---
-{ count: 5, value: Box("hello") }
+{ count: 5.0, value: Box("hello") }
 ---
-Ok(Box(100))
+Ok(Box(100.0))
 # PROBLEMS
 NIL

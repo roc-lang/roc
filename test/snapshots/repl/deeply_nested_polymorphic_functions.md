@@ -8,6 +8,6 @@ type=repl
 » (|twice, identity| { a: twice(identity, 42), b: twice(|x| x + 1, 100) })(|f, val| f(f(val)), |x| x)
 ~~~
 # OUTPUT
-{ a: 42, b: 102 }
+{ a: 42.0, b: 102.0 }
 # PROBLEMS
 NIL

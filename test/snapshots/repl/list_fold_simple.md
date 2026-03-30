@@ -8,6 +8,6 @@ type=repl
 » [1, 2].fold(0, |acc, n| acc + n)
 ~~~
 # OUTPUT
-3
+3.0
 # PROBLEMS
 NIL

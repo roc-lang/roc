@@ -43,6 +43,11 @@ type_apply_data: collections.SafeList(TypeApplyData), // Typed storage for type 
 pattern_list_data: collections.SafeList(PatternListData), // Typed storage for pattern lists
 index_data: collections.SafeList(u32), // Storage for variable-length index arrays (tuple elems, tag args, scratch spans)
 scratch: ?*Scratch, // Nullable because when we deserialize a NodeStore, we don't bother to reinitialize scratch.
+/// Expressions whose type doesn't match the expected return type in their context.
+/// Populated by the type checker for match/if branch bodies, read by the interpreter
+/// to crash at runtime when an erroneous branch is actually taken.
+/// Key: @intFromEnum(CIR.Expr.Idx) of the branch body expression.
+erroneous_exprs: std.AutoHashMapUnmanaged(u32, void) = .{},
 
 /// A pair of u32 values representing a span (start index and length).
 /// Used for storing argument lists, field lists, branch lists, etc.
@@ -243,6 +248,7 @@ pub fn deinit(store: *NodeStore) void {
     store.type_apply_data.deinit(store.gpa);
     store.pattern_list_data.deinit(store.gpa);
     store.index_data.deinit(store.gpa);
+    store.erroneous_exprs.deinit(store.gpa);
     if (store.scratch) |scratch| {
         scratch.deinit(store.gpa);
     }
@@ -272,9 +278,9 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 66;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 70;
 /// Count of the expression nodes in the ModuleEnv
-pub const MODULEENV_EXPR_NODE_COUNT = 44;
+pub const MODULEENV_EXPR_NODE_COUNT = 45;
 /// Count of the statement nodes in the ModuleEnv
 pub const MODULEENV_STATEMENT_NODE_COUNT = 17;
 /// Count of the type annotation nodes in the ModuleEnv
@@ -681,6 +687,10 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         .expr_string_segment => {
             const p = payload.expr_string_segment;
             return CIR.Expr.initStrSegment(@enumFromInt(p.segment_idx));
+        },
+        .expr_bytes_literal => {
+            const p = payload.expr_string_segment;
+            return .{ .e_bytes_literal = .{ .literal = @enumFromInt(p.segment_idx) } };
         },
         .expr_string => {
             const p = payload.expr_string;
@@ -1900,6 +1910,12 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         },
         .e_str_segment => |e| {
             node.tag = .expr_string_segment;
+            node.setPayload(.{ .expr_string_segment = .{
+                .segment_idx = @intFromEnum(e.literal),
+            } });
+        },
+        .e_bytes_literal => |e| {
+            node.tag = .expr_bytes_literal;
             node.setPayload(.{ .expr_string_segment = .{
                 .segment_idx = @intFromEnum(e.literal),
             } });
@@ -3313,6 +3329,10 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
             node.tag = .diag_where_clause_not_allowed_in_type_decl;
             region = r.region;
         },
+        .open_ext_not_allowed_in_type_decl => |r| {
+            node.tag = .diag_open_ext_not_allowed_in_type_decl;
+            region = r.region;
+        },
         .type_module_missing_matching_type => |r| {
             node.tag = .diag_type_module_missing_matching_type;
             region = r.region;
@@ -3398,6 +3418,21 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
         .tuple_elem_not_canonicalized => |r| {
             node.tag = .diag_tuple_elem_not_canonicalized;
             region = r.region;
+        },
+        .file_import_not_found => |r| {
+            node.tag = .diag_file_import_not_found;
+            region = r.region;
+            node.setPayload(.{ .diag_single_value = .{ .value = @intFromEnum(r.path) } });
+        },
+        .file_import_io_error => |r| {
+            node.tag = .diag_file_import_io_error;
+            region = r.region;
+            node.setPayload(.{ .diag_single_value = .{ .value = @intFromEnum(r.path) } });
+        },
+        .file_import_not_utf8 => |r| {
+            node.tag = .diag_file_import_not_utf8;
+            region = r.region;
+            node.setPayload(.{ .diag_single_value = .{ .value = @intFromEnum(r.path) } });
         },
         .module_not_found => |r| {
             node.tag = .diag_module_not_found;
@@ -3695,6 +3730,18 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         .diag_tuple_elem_not_canonicalized => return CIR.Diagnostic{ .tuple_elem_not_canonicalized = .{
             .region = store.getRegionAt(node_idx),
         } },
+        .diag_file_import_not_found => return CIR.Diagnostic{ .file_import_not_found = .{
+            .path = @enumFromInt(payload.diag_single_value.value),
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_file_import_io_error => return CIR.Diagnostic{ .file_import_io_error = .{
+            .path = @enumFromInt(payload.diag_single_value.value),
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_file_import_not_utf8 => return CIR.Diagnostic{ .file_import_not_utf8 = .{
+            .path = @enumFromInt(payload.diag_single_value.value),
+            .region = store.getRegionAt(node_idx),
+        } },
         .diag_module_not_found => return CIR.Diagnostic{ .module_not_found = .{
             .module_name = @as(base.Ident.Idx, @bitCast(payload.diag_single_ident.ident)),
             .region = store.getRegionAt(node_idx),
@@ -3762,6 +3809,9 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .region = store.getRegionAt(node_idx),
         } },
         .diag_where_clause_not_allowed_in_type_decl => return CIR.Diagnostic{ .where_clause_not_allowed_in_type_decl = .{
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_open_ext_not_allowed_in_type_decl => return CIR.Diagnostic{ .open_ext_not_allowed_in_type_decl = .{
             .region = store.getRegionAt(node_idx),
         } },
         .diag_type_module_missing_matching_type => return CIR.Diagnostic{ .type_module_missing_matching_type = .{
@@ -4139,7 +4189,7 @@ pub const Serialized = extern struct {
 /// Resolve all pending lookups in this store.
 /// Called before type-checking, when all dependencies are canonicalized.
 /// This converts expr_pending_lookup to expr_external_lookup (or leaves as-is for error).
-pub fn resolvePendingLookups(store: *NodeStore, env: anytype, imported_envs: []const *@TypeOf(env.*)) void {
+pub fn resolvePendingLookups(store: *NodeStore, env: anytype, imported_envs: []const *const @TypeOf(env.*)) void {
     const trace_pending = @import("build_options").trace_build;
 
     const nodes_len = store.nodes.len();
@@ -4190,7 +4240,7 @@ pub fn resolvePendingLookups(store: *NodeStore, env: anytype, imported_envs: []c
                 }
 
                 // Find the target module env
-                var target_env: ?*@TypeOf(env.*) = null;
+                var target_env: ?*const @TypeOf(env.*) = null;
                 for (imported_envs) |imported_env| {
                     if (std.mem.eql(u8, imported_env.module_name, base_import_name)) {
                         target_env = imported_env;
@@ -4294,7 +4344,7 @@ pub fn resolvePendingLookups(store: *NodeStore, env: anytype, imported_envs: []c
                         import_name;
 
                     // Find the target module env
-                    var target_env: ?*@TypeOf(env.*) = null;
+                    var target_env: ?*const @TypeOf(env.*) = null;
                     for (imported_envs) |imported_env| {
                         if (std.mem.eql(u8, imported_env.module_name, base_import_name)) {
                             target_env = imported_env;
@@ -4365,7 +4415,7 @@ pub fn resolvePendingLookups(store: *NodeStore, env: anytype, imported_envs: []c
                         import_name;
 
                     // Find the target module env
-                    var target_env: ?*@TypeOf(env.*) = null;
+                    var target_env: ?*const @TypeOf(env.*) = null;
                     for (imported_envs) |imported_env| {
                         if (std.mem.eql(u8, imported_env.module_name, base_import_name)) {
                             target_env = imported_env;

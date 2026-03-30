@@ -34,6 +34,9 @@ pub const TailRecursion = @import("TailRecursion.zig");
 /// MIR → LIR translation pass
 pub const MirToLir = @import("MirToLir.zig");
 
+/// Ownership normalization for binding-based RC analysis
+pub const OwnershipNormalize = @import("OwnershipNormalize.zig");
+
 /// LIR-level reference counting insertion pass
 pub const RcInsert = @import("rc_insert.zig");
 
@@ -51,8 +54,6 @@ pub const LirPatternId = LIR.LirPatternId;
 pub const LirExprSpan = LIR.LirExprSpan;
 /// Re-export pattern span type
 pub const LirPatternSpan = LIR.LirPatternSpan;
-/// Re-export closure representation type
-pub const ClosureRepresentation = LIR.ClosureRepresentation;
 /// Re-export capture type
 pub const LirCapture = LIR.LirCapture;
 /// Re-export recursive flag type
@@ -61,11 +62,6 @@ pub const Recursive = LIR.Recursive;
 pub const SelfRecursive = LIR.SelfRecursive;
 /// Re-export join point ID type
 pub const JoinPointId = LIR.JoinPointId;
-/// Re-export lambda set member type
-pub const LambdaSetMember = LIR.LambdaSetMember;
-/// Re-export lambda set member span type
-pub const LambdaSetMemberSpan = LIR.LambdaSetMemberSpan;
-
 /// Control flow statement type for tail recursion
 pub const CFStmt = LIR.CFStmt;
 /// Control flow statement ID type
@@ -80,14 +76,17 @@ pub const CFMatchBranch = LIR.CFMatchBranch;
 pub const CFMatchBranchSpan = LIR.CFMatchBranchSpan;
 /// Layout index span type
 pub const LayoutIdxSpan = LIR.LayoutIdxSpan;
-/// LIR procedure type
-pub const LirProc = LIR.LirProc;
+/// LIR proc-spec ID type
+pub const LirProcSpecId = LIR.LirProcSpecId;
+/// LIR proc-spec type
+pub const LirProcSpec = LIR.LirProcSpec;
 
 test "lir tests" {
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(LIR);
     std.testing.refAllDecls(LirExprStore);
     std.testing.refAllDecls(MirToLir);
+    std.testing.refAllDecls(OwnershipNormalize);
     std.testing.refAllDecls(TailRecursion);
     std.testing.refAllDecls(RcInsert);
 }

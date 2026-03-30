@@ -20,16 +20,18 @@
 //!                       Values: x64musl, arm64musl, x64glibc, arm64glibc, native
 //!   --mode=<mode>       Test mode (default: all applicable)
 //!                       Values: cross, native, valgrind
-//!   --backend=<name>    Roc backend (default: interpreter for run, llvm for build)
-//!                       Values: dev, llvm
+//!   --app=<path>        Run only one app within the selected platform
+//!   --opt=<name>        Roc optimization level (default: dev)
+//!                       Values: dev, interpreter
 //!   --verbose           Show detailed output
 //!
 //! Examples:
 //!   test_runner ./zig-out/bin/roc int                    # All int tests
 //!   test_runner ./zig-out/bin/roc fx --target=x64musl    # fx cross-compile to x64musl
 //!   test_runner ./zig-out/bin/roc str --mode=valgrind    # str under valgrind
+//!   test_runner ./zig-out/bin/roc str --mode=valgrind --app=test/str/app.roc
 //!   test_runner ./zig-out/bin/roc int --mode=native      # int native only
-//!   test_runner ./zig-out/bin/roc fx --backend=dev       # fx with dev backend
+//!   test_runner ./zig-out/bin/roc fx --opt=dev           # fx with dev backend
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -55,7 +57,8 @@ const Args = struct {
     platform_name: []const u8,
     target_filter: ?[]const u8,
     mode: TestMode,
-    backend: ?[]const u8,
+    app_filter: ?[]const u8,
+    opt: ?[]const u8,
     verbose: bool,
     /// Raw args buffer - caller must free via std.process.argsFree
     raw_args: [][:0]u8,
@@ -76,6 +79,13 @@ pub fn main() !void {
         std.debug.print("Available platforms: int, str, fx, fx-open\n", .{});
         std.process.exit(1);
     };
+
+    if (args.app_filter) |app_filter| {
+        if (!platformContainsApp(platform, app_filter)) {
+            std.debug.print("Error: App filter '{s}' does not match any app in platform '{s}'\n", .{ app_filter, platform.name });
+            std.process.exit(1);
+        }
+    }
 
     // Validate target if specified
     if (args.target_filter) |target_name| {
@@ -101,8 +111,11 @@ pub fn main() !void {
         std.debug.print("Target filter: {s}\n", .{t});
     }
     std.debug.print("Mode: {s}\n", .{@tagName(args.mode)});
-    if (args.backend) |backend| {
-        std.debug.print("Backend: {s}\n", .{backend});
+    if (args.app_filter) |app_filter| {
+        std.debug.print("App filter: {s}\n", .{app_filter});
+    }
+    if (args.opt) |opt| {
+        std.debug.print("Opt: {s}\n", .{opt});
     }
     std.debug.print("\n", .{});
 
@@ -170,7 +183,8 @@ fn runCrossCompileTests(
     }
 
     if (verify_failed) {
-        std.debug.print("\nPlatform verification failed. Aborting.\n", .{});
+        std.debug.print("\nPlatform verification failed. Aborting.\n" ++
+            "To regenerate host libraries, run: zig build test-platforms\n", .{});
         std.process.exit(1);
     }
 
@@ -194,12 +208,14 @@ fn runCrossCompileTests(
                     continue;
                 }
 
+                if (!appMatchesFilter(roc_file, args.app_filter)) continue;
+
                 std.debug.print("Building {s} for {s}... ", .{ app_name, target.name });
 
                 const output_name = try std.fmt.allocPrint(allocator, "{s}_{s}", .{ platform.name, target.name });
                 defer allocator.free(output_name);
 
-                const result = try runner_core.crossCompile(allocator, args.roc_binary, roc_file, target.name, output_name, args.backend);
+                const result = try runner_core.crossCompile(allocator, args.roc_binary, roc_file, target.name, output_name, args.opt);
                 stats.record(result);
             }
         },
@@ -217,17 +233,25 @@ fn runCrossCompileTests(
                     continue;
                 }
 
-                std.debug.print("Cross-compiling {d} tests for {s}...\n", .{ specs.len, target.name });
+                var matching_count: usize = 0;
+                for (specs) |spec| {
+                    if (appMatchesFilter(spec.roc_file, args.app_filter)) matching_count += 1;
+                }
 
-                for (specs, 0..) |spec, i| {
-                    const test_num = i + 1;
-                    std.debug.print("[{d}/{d}] {s}... ", .{ test_num, specs.len, spec.roc_file });
+                std.debug.print("Cross-compiling {d} tests for {s}...\n", .{ matching_count, target.name });
+
+                var test_num: usize = 0;
+                for (specs) |spec| {
+                    if (!appMatchesFilter(spec.roc_file, args.app_filter)) continue;
+
+                    test_num += 1;
+                    std.debug.print("[{d}/{d}] {s}... ", .{ test_num, matching_count, spec.roc_file });
 
                     const basename = std.fs.path.stem(spec.roc_file);
                     const output_name = try std.fmt.allocPrint(allocator, "{s}_{s}", .{ basename, target.name });
                     defer allocator.free(output_name);
 
-                    const result = try runner_core.crossCompile(allocator, args.roc_binary, spec.roc_file, target.name, output_name, args.backend);
+                    const result = try runner_core.crossCompile(allocator, args.roc_binary, spec.roc_file, target.name, output_name, args.opt);
                     stats.record(result);
                 }
             }
@@ -246,17 +270,25 @@ fn runCrossCompileTests(
                     continue;
                 }
 
-                std.debug.print("Cross-compiling {d} tests for {s}...\n", .{ specs.len, target.name });
+                var matching_count: usize = 0;
+                for (specs) |spec| {
+                    if (appMatchesFilter(spec.roc_file, args.app_filter)) matching_count += 1;
+                }
 
-                for (specs, 0..) |spec, i| {
-                    const test_num = i + 1;
-                    std.debug.print("[{d}/{d}] {s}... ", .{ test_num, specs.len, spec.roc_file });
+                std.debug.print("Cross-compiling {d} tests for {s}...\n", .{ matching_count, target.name });
+
+                var test_num: usize = 0;
+                for (specs) |spec| {
+                    if (!appMatchesFilter(spec.roc_file, args.app_filter)) continue;
+
+                    test_num += 1;
+                    std.debug.print("[{d}/{d}] {s}... ", .{ test_num, matching_count, spec.roc_file });
 
                     const basename = std.fs.path.stem(spec.roc_file);
                     const output_name = try std.fmt.allocPrint(allocator, "{s}_{s}", .{ basename, target.name });
                     defer allocator.free(output_name);
 
-                    const result = try runner_core.crossCompile(allocator, args.roc_binary, spec.roc_file, target.name, output_name, args.backend);
+                    const result = try runner_core.crossCompile(allocator, args.roc_binary, spec.roc_file, target.name, output_name, args.opt);
                     stats.record(result);
                 }
             }
@@ -288,12 +320,14 @@ fn runNativeTests(
             const roc_file = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ platform.base_dir, app_name });
             defer allocator.free(roc_file);
 
+            if (!appMatchesFilter(roc_file, args.app_filter)) return;
+
             const output_name = try std.fmt.allocPrint(allocator, "{s}_native", .{platform.name});
             defer allocator.free(output_name);
 
             // Build
             std.debug.print("Building {s} native... ", .{app_name});
-            const build_result = try runner_core.buildNative(allocator, args.roc_binary, roc_file, output_name, args.backend);
+            const build_result = try runner_core.buildNative(allocator, args.roc_binary, roc_file, output_name, args.opt);
             stats.record(build_result);
 
             if (build_result != .passed) {
@@ -321,19 +355,27 @@ fn runNativeTests(
                     const test_num = i + 1;
                     std.debug.print("[{d}/{d}] {s}... ", .{ test_num, specs.len, spec.roc_file });
 
-                    const result = try runner_core.runWithIoSpec(allocator, args.roc_binary, spec.roc_file, spec.io_spec, args.backend);
+                    const result = try runner_core.runWithIoSpec(allocator, args.roc_binary, spec.roc_file, spec.io_spec, args.opt);
                     stats.record(result);
                 }
             } else {
                 // Just build and run each test
-                for (specs, 0..) |spec, i| {
-                    const test_num = i + 1;
+                var matching_count: usize = 0;
+                for (specs) |spec| {
+                    if (appMatchesFilter(spec.roc_file, args.app_filter)) matching_count += 1;
+                }
+
+                var test_num: usize = 0;
+                for (specs) |spec| {
+                    if (!appMatchesFilter(spec.roc_file, args.app_filter)) continue;
+
+                    test_num += 1;
                     const basename = std.fs.path.stem(spec.roc_file);
                     const output_name = try std.fmt.allocPrint(allocator, "{s}_native", .{basename});
                     defer allocator.free(output_name);
 
-                    std.debug.print("[{d}/{d}] Building {s}... ", .{ test_num, specs.len, spec.roc_file });
-                    const build_result = try runner_core.buildNative(allocator, args.roc_binary, spec.roc_file, output_name, args.backend);
+                    std.debug.print("[{d}/{d}] Building {s}... ", .{ test_num, matching_count, spec.roc_file });
+                    const build_result = try runner_core.buildNative(allocator, args.roc_binary, spec.roc_file, output_name, args.opt);
                     stats.record(build_result);
 
                     if (build_result == .passed) {
@@ -352,16 +394,24 @@ fn runNativeTests(
 
         .simple_list => |specs| {
             // Build and run each test (no IO spec verification)
-            std.debug.print("Running {d} native tests...\n", .{specs.len});
+            var matching_count: usize = 0;
+            for (specs) |spec| {
+                if (appMatchesFilter(spec.roc_file, args.app_filter)) matching_count += 1;
+            }
 
-            for (specs, 0..) |spec, i| {
-                const test_num = i + 1;
+            std.debug.print("Running {d} native tests...\n", .{matching_count});
+
+            var test_num: usize = 0;
+            for (specs) |spec| {
+                if (!appMatchesFilter(spec.roc_file, args.app_filter)) continue;
+
+                test_num += 1;
                 const basename = std.fs.path.stem(spec.roc_file);
                 const output_name = try std.fmt.allocPrint(allocator, "{s}_native", .{basename});
                 defer allocator.free(output_name);
 
-                std.debug.print("[{d}/{d}] Building {s}... ", .{ test_num, specs.len, spec.roc_file });
-                const build_result = try runner_core.buildNative(allocator, args.roc_binary, spec.roc_file, output_name, args.backend);
+                std.debug.print("[{d}/{d}] Building {s}... ", .{ test_num, matching_count, spec.roc_file });
+                const build_result = try runner_core.buildNative(allocator, args.roc_binary, spec.roc_file, output_name, args.opt);
                 stats.record(build_result);
 
                 if (build_result == .passed) {
@@ -403,6 +453,8 @@ fn runValgrindTests(
             const roc_file = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ platform.base_dir, app_name });
             defer allocator.free(roc_file);
 
+            if (!appMatchesFilter(roc_file, args.app_filter)) return;
+
             std.debug.print("Running {s} under valgrind... ", .{app_name});
             const result = try runner_core.runWithValgrind(allocator, args.roc_binary, roc_file);
             stats.record(result);
@@ -412,7 +464,7 @@ fn runValgrindTests(
             // For valgrind, only run tests that don't use stdin
             var valgrind_safe_count: usize = 0;
             for (specs) |spec| {
-                if (std.mem.indexOf(u8, spec.io_spec, "0<") == null) {
+                if (std.mem.indexOf(u8, spec.io_spec, "0<") == null and appMatchesFilter(spec.roc_file, args.app_filter)) {
                     valgrind_safe_count += 1;
                 }
             }
@@ -426,6 +478,8 @@ fn runValgrindTests(
                     continue;
                 }
 
+                if (!appMatchesFilter(spec.roc_file, args.app_filter)) continue;
+
                 test_num += 1;
                 std.debug.print("[{d}/{d}] {s}... ", .{ test_num, valgrind_safe_count, spec.roc_file });
                 const result = try runner_core.runWithValgrind(allocator, args.roc_binary, spec.roc_file);
@@ -435,11 +489,19 @@ fn runValgrindTests(
 
         .simple_list => |specs| {
             // All simple tests are valgrind-safe (no stdin)
-            std.debug.print("Running {d} valgrind tests...\n", .{specs.len});
+            var matching_count: usize = 0;
+            for (specs) |spec| {
+                if (appMatchesFilter(spec.roc_file, args.app_filter)) matching_count += 1;
+            }
 
-            for (specs, 0..) |spec, i| {
-                const test_num = i + 1;
-                std.debug.print("[{d}/{d}] {s}... ", .{ test_num, specs.len, spec.roc_file });
+            std.debug.print("Running {d} valgrind tests...\n", .{matching_count});
+
+            var test_num: usize = 0;
+            for (specs) |spec| {
+                if (!appMatchesFilter(spec.roc_file, args.app_filter)) continue;
+
+                test_num += 1;
+                std.debug.print("[{d}/{d}] {s}... ", .{ test_num, matching_count, spec.roc_file });
                 const result = try runner_core.runWithValgrind(allocator, args.roc_binary, spec.roc_file);
                 stats.record(result);
             }
@@ -460,7 +522,8 @@ fn parseArgs(allocator: Allocator) !Args {
         .platform_name = raw_args[2],
         .target_filter = null,
         .mode = .all,
-        .backend = null,
+        .app_filter = null,
+        .opt = null,
         .verbose = false,
         .raw_args = raw_args,
     };
@@ -487,8 +550,10 @@ fn parseArgs(allocator: Allocator) !Args {
                 std.debug.print("Available modes: cross, native, valgrind, all\n", .{});
                 std.process.exit(1);
             }
-        } else if (std.mem.startsWith(u8, arg, "--backend=")) {
-            args.backend = arg["--backend=".len..];
+        } else if (std.mem.startsWith(u8, arg, "--app=")) {
+            args.app_filter = arg["--app=".len..];
+        } else if (std.mem.startsWith(u8, arg, "--opt=")) {
+            args.opt = arg["--opt=".len..];
         } else if (std.mem.eql(u8, arg, "--verbose")) {
             args.verbose = true;
         } else {
@@ -499,6 +564,35 @@ fn parseArgs(allocator: Allocator) !Args {
     }
 
     return args;
+}
+
+fn appMatchesFilter(roc_file: []const u8, app_filter: ?[]const u8) bool {
+    const filter = app_filter orelse return true;
+
+    return std.mem.eql(u8, roc_file, filter) or
+        std.mem.eql(u8, std.fs.path.basename(roc_file), filter);
+}
+
+fn platformContainsApp(platform: PlatformConfig, app_filter: []const u8) bool {
+    switch (platform.test_apps) {
+        .single => |app_name| {
+            var buf: [std.fs.max_path_bytes]u8 = undefined;
+            const full_path = std.fmt.bufPrint(&buf, "{s}/{s}", .{ platform.base_dir, app_name }) catch return false;
+            return appMatchesFilter(full_path, app_filter);
+        },
+        .spec_list => |specs| {
+            for (specs) |spec| {
+                if (appMatchesFilter(spec.roc_file, app_filter)) return true;
+            }
+        },
+        .simple_list => |specs| {
+            for (specs) |spec| {
+                if (appMatchesFilter(spec.roc_file, app_filter)) return true;
+            }
+        },
+    }
+
+    return false;
 }
 
 fn printUsage() void {
@@ -516,16 +610,18 @@ fn printUsage() void {
         \\                      Values: x64musl, arm64musl, x64glibc, arm64glibc, native
         \\  --mode=<mode>       Test mode (default: all applicable)
         \\                      Values: cross, native, valgrind, all
-        \\  --backend=<name>    Roc backend to use (default: interpreter for run, llvm for build)
-        \\                      Values: dev, llvm
+        \\  --app=<path>        Run only one app within the selected platform
+        \\  --opt=<name>        Roc optimization level (default: dev)
+        \\                      Values: dev, interpreter
         \\  --verbose           Show detailed output
         \\
         \\Examples:
         \\  test_runner ./zig-out/bin/roc int                    # All int tests
         \\  test_runner ./zig-out/bin/roc fx --target=x64musl    # fx cross-compile to x64musl
         \\  test_runner ./zig-out/bin/roc str --mode=valgrind    # str under valgrind
+        \\  test_runner ./zig-out/bin/roc str --mode=valgrind --app=test/str/app.roc
         \\  test_runner ./zig-out/bin/roc int --mode=native      # int native only
-        \\  test_runner ./zig-out/bin/roc fx --backend=dev       # fx with dev backend
+        \\  test_runner ./zig-out/bin/roc fx --opt=dev           # fx with dev backend
         \\
     , .{});
 }

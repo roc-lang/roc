@@ -49,43 +49,17 @@ pub const TimingInfo = struct {
 };
 const Allocator = std.mem.Allocator;
 
+const threading = @import("threading.zig");
+const Io = @import("io").Io;
+
 const parallel = base.parallel;
 const AtomicUsize = std.atomic.Value(usize);
-const Mutex = std.Thread.Mutex;
-const Condition = std.Thread.Condition;
 
-/// File provider for reading module sources.
-/// Implementations must be thread-safe (stateless reads) as they may be called
-/// concurrently from multiple worker threads.
-pub const FileProvider = struct {
-    ctx: ?*anyopaque,
-    read: *const fn (ctx: ?*anyopaque, path: []const u8, gpa: Allocator) Allocator.Error!?[]u8,
+const Mutex = threading.Mutex;
+const Condition = threading.Condition;
 
-    /// Default filesystem provider - reads files directly from the filesystem.
-    /// Thread-safe as std.fs operations are independent per call.
-    pub const filesystem = FileProvider{
-        .ctx = null,
-        .read = filesystemRead,
-    };
-
-    /// Check if a file exists by attempting to read it through the provider.
-    /// This ensures virtual/in-memory files are found the same way as disk files.
-    pub fn fileExists(self: FileProvider, path: []const u8, gpa: Allocator) bool {
-        const data = self.read(self.ctx, path, gpa) catch return false;
-        if (data) |d| {
-            gpa.free(d);
-            return true;
-        }
-        return false;
-    }
-
-    fn filesystemRead(_: ?*anyopaque, path: []const u8, gpa: Allocator) Allocator.Error!?[]u8 {
-        return std.fs.cwd().readFileAlloc(gpa, path, std.math.maxInt(usize)) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            else => return null, // File not found or other IO error
-        };
-    }
-};
+// FileProvider was removed in favour of the unified Io abstraction (src/io/Io.zig).
+// Callers that previously used FileProvider now use Io.readFile / Io.fileExists directly.
 
 /// Build execution mode
 pub const Mode = enum { single_threaded, multi_threaded };
@@ -147,7 +121,7 @@ const ModuleState = struct {
     /// DFS visitation color for cycle detection: 0=white (unvisited), 1=gray (visiting), 2=black (finished)
     visit_color: u8 = 0,
     /// Atomic flag to prevent concurrent processing of the same module (0=free, 1=working)
-    working: if (@import("builtin").target.cpu.arch != .wasm32) std.atomic.Value(u8) else u8 = if (@import("builtin").target.cpu.arch != .wasm32) std.atomic.Value(u8).init(0) else 0,
+    working: if (!threading.is_freestanding) std.atomic.Value(u8) else u8 = if (!threading.is_freestanding) std.atomic.Value(u8).init(0) else 0,
     /// Cached AST from parsing phase - heap-allocated to avoid copy issues with ArrayLists
     cached_ast: ?*parse.AST = null,
     /// True if this module was loaded from cache. Cached modules have their env memory
@@ -288,8 +262,8 @@ pub const PackageEnv = struct {
     compiler_version: []const u8,
     /// Builtin modules (Bool, Try, Str) for auto-importing in canonicalization (not owned)
     builtin_modules: *const BuiltinModules,
-    /// File provider for reading sources (defaults to filesystem)
-    file_provider: FileProvider = FileProvider.filesystem,
+    /// I/O abstraction for reading sources and other filesystem/stdio operations.
+    io: Io = Io.default(),
 
     lock: Mutex = .{},
     cond: Condition = .{},
@@ -330,7 +304,7 @@ pub const PackageEnv = struct {
         import_name: []const u8,
     };
 
-    pub fn init(gpa: Allocator, package_name: []const u8, root_dir: []const u8, mode: Mode, max_threads: usize, target: roc_target.RocTarget, sink: ReportSink, schedule_hook: ScheduleHook, compiler_version: []const u8, builtin_modules: *const BuiltinModules, file_provider: ?FileProvider) PackageEnv {
+    pub fn init(gpa: Allocator, package_name: []const u8, root_dir: []const u8, mode: Mode, max_threads: usize, target: roc_target.RocTarget, sink: ReportSink, schedule_hook: ScheduleHook, compiler_version: []const u8, builtin_modules: *const BuiltinModules, io: ?Io) PackageEnv {
         // Pre-allocate module storage to avoid reallocation during multi-threaded processing
         var modules = std.ArrayList(ModuleState).empty;
         if (mode == .multi_threaded) {
@@ -347,7 +321,7 @@ pub const PackageEnv = struct {
             .schedule_hook = schedule_hook,
             .compiler_version = compiler_version,
             .builtin_modules = builtin_modules,
-            .file_provider = file_provider orelse FileProvider.filesystem,
+            .io = io orelse Io.default(),
             .injector = std.ArrayList(Task).empty,
             .modules = modules,
             .discovered = std.ArrayList(ModuleId).empty,
@@ -367,7 +341,7 @@ pub const PackageEnv = struct {
         schedule_hook: ScheduleHook,
         compiler_version: []const u8,
         builtin_modules: *const BuiltinModules,
-        file_provider: ?FileProvider,
+        io: ?Io,
     ) PackageEnv {
         // Pre-allocate module storage to avoid reallocation during multi-threaded processing
         var modules = std.ArrayList(ModuleState).empty;
@@ -386,7 +360,7 @@ pub const PackageEnv = struct {
             .schedule_hook = schedule_hook,
             .compiler_version = compiler_version,
             .builtin_modules = builtin_modules,
-            .file_provider = file_provider orelse FileProvider.filesystem,
+            .io = io orelse Io.default(),
             .injector = std.ArrayList(Task).empty,
             .modules = modules,
             .discovered = std.ArrayList(ModuleId).empty,
@@ -501,7 +475,7 @@ pub const PackageEnv = struct {
         // In single-threaded mode, we always need to run our local processing loop.
         const should_run_local = self.schedule_hook.isNoOp() or self.mode == .single_threaded;
         if (should_run_local) {
-            if (@import("builtin").target.cpu.arch == .wasm32) {
+            if (threading.is_freestanding) {
                 // On wasm32, always run single-threaded at comptime
                 try self.runSingleThread();
             } else {
@@ -534,7 +508,10 @@ pub const PackageEnv = struct {
 
     fn runMultiThread(self: *PackageEnv) !void {
         const options = parallel.ProcessOptions{
-            .max_threads = if (self.max_threads == 0) (std.Thread.getCpuCount() catch 1) else self.max_threads,
+            .max_threads = if (self.max_threads == 0)
+                threading.getCpuCount()
+            else
+                self.max_threads,
             .use_per_thread_arenas = false,
         };
 
@@ -578,7 +555,7 @@ pub const PackageEnv = struct {
 
     pub fn ensureModule(self: *PackageEnv, name: []const u8, path: []const u8) !ModuleId {
         // In multi-threaded mode, lock to prevent race conditions when growing arrays
-        const needs_lock = self.mode == .multi_threaded and @import("builtin").target.cpu.arch != .wasm32;
+        const needs_lock = self.mode == .multi_threaded and !threading.is_freestanding;
         if (needs_lock) self.lock.lock();
         defer if (needs_lock) self.lock.unlock();
 
@@ -637,7 +614,7 @@ pub const PackageEnv = struct {
         } else {
             // Default behavior: use internal injector
             try self.injector.append(self.gpa, .{ .module_id = module_id });
-            if (@import("builtin").target.cpu.arch != .wasm32) self.cond.signal();
+            if (!threading.is_freestanding) self.cond.signal();
         }
     }
 
@@ -714,11 +691,11 @@ pub const PackageEnv = struct {
         // In local mode, it's invoked by the internal run* loops.
 
         // Acquire lock and atomically check/set working flag
-        if (@import("builtin").target.cpu.arch != .wasm32) self.lock.lock();
+        if (!threading.is_freestanding) self.lock.lock();
         const st = &self.modules.items[task.module_id];
 
         // Atomic compare-and-swap to claim work on this module
-        const already_working = if (@import("builtin").target.cpu.arch != .wasm32) blk: {
+        const already_working = if (!threading.is_freestanding) blk: {
             // For multi-threaded: use atomic CAS to claim the module (0 -> 1)
             const result = st.working.cmpxchgWeak(0, 1, .seq_cst, .seq_cst);
             break :blk result != null; // null means swap succeeded
@@ -730,18 +707,18 @@ pub const PackageEnv = struct {
         };
 
         if (already_working) {
-            if (@import("builtin").target.cpu.arch != .wasm32) self.lock.unlock();
+            if (!threading.is_freestanding) self.lock.unlock();
             return; // Another worker is already processing this module
         }
 
         // Snapshot phase while holding lock
         const phase = st.phase;
-        if (@import("builtin").target.cpu.arch != .wasm32) self.lock.unlock();
+        if (!threading.is_freestanding) self.lock.unlock();
 
         // Process the module based on its phase
         defer {
             // Atomically clear working flag when done
-            if (@import("builtin").target.cpu.arch != .wasm32) {
+            if (!threading.is_freestanding) {
                 self.lock.lock();
                 if (task.module_id < self.modules.items.len) {
                     _ = self.modules.items[task.module_id].working.store(0, .seq_cst);
@@ -828,8 +805,11 @@ pub const PackageEnv = struct {
     }
 
     fn readModuleSource(self: *PackageEnv, path: []const u8) ![]u8 {
-        const data = try self.file_provider.read(self.file_provider.ctx, path, self.gpa) orelse
-            return error.FileNotFound;
+        const data = self.io.readFile(path, self.gpa) catch |err| switch (err) {
+            error.FileNotFound => return error.FileNotFound,
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.FileNotFound,
+        };
 
         // Normalize line endings (CRLF -> LF) for consistent cross-platform behavior.
         // This reallocates to the correct size if normalization occurs, ensuring
@@ -858,7 +838,7 @@ pub const PackageEnv = struct {
         }
 
         // canonicalize using the AST
-        const canon_start = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
+        const canon_start = if (!threading.is_freestanding) std.time.nanoTimestamp() else 0;
 
         // Use shared canonicalization function to ensure consistency with snapshot tool
         // Pass sibling module names from the same directory so MODULE NOT FOUND isn't
@@ -882,21 +862,21 @@ pub const PackageEnv = struct {
             null, // Use filesystem access check
         );
 
-        const canon_end = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
-        if (@import("builtin").target.cpu.arch != .wasm32) {
+        const canon_end = if (!threading.is_freestanding) std.time.nanoTimestamp() else 0;
+        if (!threading.is_freestanding) {
             self.total_canonicalize_ns += @intCast(canon_end - canon_start);
         }
 
         // Collect canonicalization diagnostics
-        const canon_diag_start = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
+        const canon_diag_start = if (!threading.is_freestanding) std.time.nanoTimestamp() else 0;
         const diags = try env.getDiagnostics();
         defer self.gpa.free(diags);
         for (diags) |d| {
             const report = try env.diagnosticToReport(d, self.gpa, st.path);
             try st.reports.append(self.gpa, report);
         }
-        const canon_diag_end = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
-        if (@import("builtin").target.cpu.arch != .wasm32) {
+        const canon_diag_end = if (!threading.is_freestanding) std.time.nanoTimestamp() else 0;
+        if (!threading.is_freestanding) {
             self.total_canonicalize_diagnostics_ns += @intCast(canon_diag_end - canon_diag_start);
         }
 
@@ -1003,7 +983,7 @@ pub const PackageEnv = struct {
                 // Wake dependents and stop
                 for (st.dependents.items) |dep| try self.enqueue(dep);
                 for (child.dependents.items) |dep| try self.enqueue(dep);
-                if (@import("builtin").target.cpu.arch != .wasm32) self.cond.broadcast();
+                if (!threading.is_freestanding) self.cond.broadcast();
                 return;
             }
 
@@ -1084,17 +1064,17 @@ pub const PackageEnv = struct {
         builtin_indices: can.CIR.BuiltinIndices,
         imported_envs: []const *ModuleEnv,
         module_envs_out: *std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType),
+        source_dir: ?[]const u8,
     ) !Check {
-        // Populate module_envs with Bool, Try, Dict, Set using shared function
-        try Can.populateModuleEnvs(
-            module_envs_out,
-            env,
-            builtin_module_env,
-            builtin_indices,
-        );
-
         // Canonicalize
-        var czer = try Can.init(allocators, env, parse_ast, module_envs_out);
+        var czer = try Can.initModule(allocators, env, parse_ast, .{
+            .builtin_types = .{
+                .builtin_module_env = builtin_module_env,
+                .builtin_indices = builtin_indices,
+            },
+            .imported_modules = module_envs_out,
+        });
+        czer.source_dir = source_dir;
         try czer.canonicalizeFile();
         try czer.validateForChecking();
         czer.deinit();
@@ -1145,21 +1125,13 @@ pub const PackageEnv = struct {
         package_name: []const u8,
         resolver: ?ImportResolver,
         additional_known_modules: []const KnownModule,
-        file_provider: ?FileProvider,
+        io: ?Io,
     ) !void {
         const gpa = allocators.gpa;
 
-        // Create module_envs map for auto-importing builtin types
+        // Create module_envs map for explicit imported modules used during canonicalization
         var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
         defer module_envs_map.deinit();
-
-        // Populate module_envs with Bool, Try, Dict, Set using shared function
-        try Can.populateModuleEnvs(
-            &module_envs_map,
-            env,
-            builtin_module_env,
-            builtin_indices,
-        );
 
         // Add sibling modules - use placeholder-based approach for all paths.
         // In canonicalize-first mode, modules use placeholders during canonicalization.
@@ -1180,13 +1152,15 @@ pub const PackageEnv = struct {
             const sibling_ident = try env.insertIdent(base.Ident.for_text(sibling_name));
             const qualified_ident = try env.insertIdent(base.Ident.for_text(sibling_name));
 
-            // Check if sibling file exists (via FileProvider if available, else filesystem)
+            // Check if sibling file exists (via Io abstraction)
             const file_name = try std.fmt.allocPrint(gpa, "{s}.roc", .{sibling_name});
             defer gpa.free(file_name);
             const file_path = try std.fs.path.join(gpa, &.{ root_dir, file_name });
             defer gpa.free(file_path);
-            const exists = if (file_provider) |fp|
-                fp.fileExists(file_path, gpa)
+            const exists = if (io) |io_val|
+                io_val.fileExists(file_path)
+            else if (comptime threading.is_freestanding)
+                false
             else blk: {
                 std.fs.cwd().access(file_path, .{}) catch break :blk false;
                 break :blk true;
@@ -1274,7 +1248,14 @@ pub const PackageEnv = struct {
             }
         }
 
-        var czer = try Can.init(allocators, env, parse_ast, &module_envs_map);
+        var czer = try Can.initModule(allocators, env, parse_ast, .{
+            .builtin_types = .{
+                .builtin_module_env = builtin_module_env,
+                .builtin_indices = builtin_indices,
+            },
+            .imported_modules = &module_envs_map,
+        });
+        czer.source_dir = root_dir;
         try czer.canonicalizeFile();
         try czer.validateForChecking();
         czer.deinit();
@@ -1288,6 +1269,7 @@ pub const PackageEnv = struct {
         builtin_module_env: *const ModuleEnv,
         imported_envs: []const *ModuleEnv,
         target: roc_target.RocTarget,
+        io: ?Io,
     ) !Check {
         // Load builtin indices from the binary data generated at build time
         const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
@@ -1301,17 +1283,9 @@ pub const PackageEnv = struct {
             .builtin_indices = builtin_indices,
         };
 
-        // Create module_envs map for auto-importing builtin types
+        // Create module_envs map for explicit imported modules used during canonicalization
         var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
         errdefer module_envs_map.deinit();
-
-        // Populate module_envs with Bool, Try, Dict, Set using shared function
-        try Can.populateModuleEnvs(
-            &module_envs_map,
-            env,
-            builtin_module_env,
-            builtin_indices,
-        );
 
         var checker = try Check.init(
             gpa,
@@ -1335,20 +1309,13 @@ pub const PackageEnv = struct {
 
         // After type checking, evaluate top-level declarations at compile time
         const builtin_types_for_eval = BuiltinTypes.init(builtin_indices, builtin_module_env, builtin_module_env, builtin_module_env);
-        var comptime_evaluator = try eval.ComptimeEvaluator.init(gpa, env, imported_envs, &checker.problems, builtin_types_for_eval, builtin_module_env, &checker.import_mapping, target);
+        var comptime_evaluator = try eval.ComptimeEvaluator.init(gpa, env, imported_envs, &checker.problems, builtin_types_for_eval, builtin_module_env, &checker.import_mapping, target, io);
         defer comptime_evaluator.deinit();
         _ = try comptime_evaluator.evalAll();
 
         module_envs_map.deinit();
 
         return checker;
-    }
-
-    /// Resolve all pending lookups in a module's CIR.
-    /// Called before type-checking, when all dependencies are canonicalized.
-    /// This converts e_lookup_pending to e_lookup_external (or error).
-    fn resolvePendingLookups(env: *ModuleEnv, imported_envs: []const *ModuleEnv) void {
-        env.store.resolvePendingLookups(env, imported_envs);
     }
 
     fn doTypeCheck(self: *PackageEnv, module_id: ModuleId) !void {
@@ -1398,26 +1365,26 @@ pub const PackageEnv = struct {
 
         // Resolve pending lookups that were deferred during canonicalization
         // This converts e_lookup_pending to e_lookup_external now that all dependencies are available
-        resolvePendingLookups(env, imported_envs.items);
+        env.store.resolvePendingLookups(env, imported_envs.items);
 
-        const check_start = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
-        var checker = try typeCheckModule(self.gpa, env, self.builtin_modules.builtin_module.env, imported_envs.items, self.target);
+        const check_start = if (!threading.is_freestanding) std.time.nanoTimestamp() else 0;
+        var checker = try typeCheckModule(self.gpa, env, self.builtin_modules.builtin_module.env, imported_envs.items, self.target, self.io);
         defer checker.deinit();
-        const check_end = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
-        if (@import("builtin").target.cpu.arch != .wasm32) {
+        const check_end = if (!threading.is_freestanding) std.time.nanoTimestamp() else 0;
+        if (!threading.is_freestanding) {
             self.total_type_checking_ns += @intCast(check_end - check_start);
         }
 
         // Build reports from problems
-        const check_diag_start = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
+        const check_diag_start = if (!threading.is_freestanding) std.time.nanoTimestamp() else 0;
         var rb = try ReportBuilder.init(self.gpa, env, env, &checker.snapshots, &checker.problems, st.path, imported_envs.items, &checker.import_mapping, &checker.regions);
         defer rb.deinit();
         for (checker.problems.problems.items) |prob| {
             const rep = rb.build(prob) catch continue;
             try st.reports.append(self.gpa, rep);
         }
-        const check_diag_end = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
-        if (@import("builtin").target.cpu.arch != .wasm32) {
+        const check_diag_end = if (!threading.is_freestanding) std.time.nanoTimestamp() else 0;
+        if (!threading.is_freestanding) {
             self.total_check_diagnostics_ns += @intCast(check_diag_end - check_diag_start);
         }
 
@@ -1441,7 +1408,7 @@ pub const PackageEnv = struct {
 
         // Wake dependents to re-check unblock
         for (st.dependents.items) |dep| try self.enqueue(dep);
-        if (@import("builtin").target.cpu.arch != .wasm32) self.cond.broadcast();
+        if (!threading.is_freestanding) self.cond.broadcast();
     }
 
     fn resolveModulePath(self: *PackageEnv, mod_name: []const u8) ![]const u8 {

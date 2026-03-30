@@ -188,6 +188,8 @@ pub const CommonIdents = extern struct {
     // Synthetic identifiers for ? operator desugaring
     question_ok: Ident.Idx,
     question_err: Ident.Idx,
+    // Synthetic identifier for .. implicit rigids in open tag unions or records
+    open_ext: Ident.Idx,
 
     /// Insert all well-known identifiers into a CommonEnv.
     /// Use this when creating a fresh ModuleEnv from scratch.
@@ -277,6 +279,8 @@ pub const CommonIdents = extern struct {
             // Synthetic identifiers for ? operator desugaring
             .question_ok = try common.insertIdent(gpa, Ident.for_text("#ok")),
             .question_err = try common.insertIdent(gpa, Ident.for_text("#err")),
+            // Synthetic identifier for .. implicit rigids in open tag unions or records
+            .open_ext = try common.insertIdent(gpa, Ident.for_text("#others")),
         };
     }
 
@@ -369,6 +373,8 @@ pub const CommonIdents = extern struct {
             // Synthetic identifiers for ? operator desugaring
             .question_ok = common.findIdent("#ok") orelse unreachable,
             .question_err = common.findIdent("#err") orelse unreachable,
+            // Synthetic identifier for .. implicit rigids in open tag unions or records
+            .open_ext = common.findIdent("#others") orelse unreachable,
         };
     }
 };
@@ -409,6 +415,9 @@ requires_types: RequiredType.SafeList,
 /// Type alias mappings from for-clauses in requires declarations.
 /// Stores (alias_name, rigid_name) pairs like (Model, model).
 for_clause_aliases: ForClauseAlias.SafeList,
+/// Platform provides entries mapping Roc identifiers to FFI symbols.
+/// Populated during canonicalization for platform modules. Empty for non-platform modules.
+provides_entries: ProvidesEntry.SafeList,
 /// Rigid type variable mappings from platform for-clause after unification.
 /// Maps rigid names (e.g., "model") to their resolved type variables in the app's type store.
 /// Populated during checkPlatformRequirements when the platform has a for-clause.
@@ -457,12 +466,6 @@ import_mapping: types_mod.import_mapping.ImportMapping,
 /// Populated during canonicalization when methods are defined in associated blocks.
 method_idents: MethodIdents,
 
-/// Whether lambda lifting has been run on this module
-is_lambda_lifted: bool = false,
-
-/// Whether closures have been defunctionalized in this module
-is_defunctionalized: bool = false,
-
 /// Whether to defer finalizing numeric defaults until after platform requirements are checked.
 /// Set to true for app modules that have platform imports, so that numeric literals can be
 /// constrained by platform types (e.g., I64) before defaulting to Dec.
@@ -487,6 +490,19 @@ pub const ForClauseAlias = struct {
     rigid_name: Ident.Idx,
     /// The type annotation of this alias stmt
     alias_stmt_idx: CIR.Statement.Idx,
+
+    pub const SafeList = collections.SafeList(@This());
+};
+
+/// Platform provides entry mapping a Roc identifier to its FFI symbol.
+/// Populated during canonicalization for platform modules from the provides clause.
+/// For example, `{ main_for_host!: "main" }` creates an entry with ident="main_for_host!"
+/// and ffi_symbol pointing to the interned string "main".
+pub const ProvidesEntry = struct {
+    /// The Roc identifier (e.g., "main_for_host!")
+    ident: Ident.Idx,
+    /// The FFI symbol string (e.g., "main")
+    ffi_symbol: StringLiteral.Idx,
 
     pub const SafeList = collections.SafeList(@This());
 };
@@ -516,6 +532,7 @@ pub fn relocate(self: *Self, offset: isize) void {
     self.external_decls.relocate(offset);
     self.requires_types.relocate(offset);
     self.for_clause_aliases.relocate(offset);
+    self.provides_entries.relocate(offset);
     self.imports.relocate(offset);
     self.store.relocate(offset);
     self.deferred_numeric_literals.relocate(offset);
@@ -572,11 +589,12 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .exports = .{ .span = .{ .start = 0, .len = 0 } },
         .requires_types = try RequiredType.SafeList.initCapacity(gpa, 4),
         .for_clause_aliases = try ForClauseAlias.SafeList.initCapacity(gpa, 4),
+        .provides_entries = try ProvidesEntry.SafeList.initCapacity(gpa, 4),
         .rigid_vars = std.AutoHashMapUnmanaged(Ident.Idx, TypeVar){},
         .builtin_statements = .{ .span = .{ .start = 0, .len = 0 } },
         .external_decls = try CIR.ExternalDecl.SafeList.initCapacity(gpa, 16),
         .imports = CIR.Import.Store.init(),
-        .module_name = undefined, // Will be set later during canonicalization
+        .module_name = "", // May be set later during canonicalization
         .display_module_name_idx = Ident.Idx.NONE, // Will be set later during canonicalization
         .qualified_module_ident = Ident.Idx.NONE, // Will be set by coordinator
         .diagnostics = CIR.Diagnostic.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } },
@@ -586,8 +604,6 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .deferred_numeric_literals = try DeferredNumericLiteral.SafeList.initCapacity(gpa, 32),
         .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
         .method_idents = MethodIdents.init(),
-        .is_lambda_lifted = false,
-        .is_defunctionalized = false,
     };
 }
 
@@ -598,6 +614,7 @@ pub fn deinit(self: *Self) void {
     self.external_decls.deinit(self.gpa);
     self.requires_types.deinit(self.gpa);
     self.for_clause_aliases.deinit(self.gpa);
+    self.provides_entries.deinit(self.gpa);
     self.rigid_vars.deinit(self.gpa);
     self.imports.deinit(self.gpa);
     self.deferred_numeric_literals.deinit(self.gpa);
@@ -1520,6 +1537,42 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .file_import_not_found => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            const path_text = self.common.getString(data.path);
+            break :blk try CIR.Diagnostic.buildFileImportNotFoundReport(
+                allocator,
+                path_text,
+                region_info,
+                filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+        },
+        .file_import_io_error => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            const path_text = self.common.getString(data.path);
+            break :blk try CIR.Diagnostic.buildFileImportIOErrorReport(
+                allocator,
+                path_text,
+                region_info,
+                filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+        },
+        .file_import_not_utf8 => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            const path_text = self.common.getString(data.path);
+            break :blk try CIR.Diagnostic.buildFileImportNotUtf8Report(
+                allocator,
+                path_text,
+                region_info,
+                filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+        },
         .module_not_found => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
@@ -1714,6 +1767,36 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
                 self.getSourceAll(),
                 self.getLineStartsAll(),
             );
+
+            break :blk report;
+        },
+        .open_ext_not_allowed_in_type_decl => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "OPEN EXT NOT ALLOWED IN TYPE DECLARATION", .warning);
+
+            // Format the message to match origin/main
+            try report.document.addText("You cannot use a ");
+            try report.document.addInlineCode("..");
+            try report.document.addReflowingText(" inside a type declaration:");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addAnnotated("Hint:", .emphasized);
+            try report.document.addReflowingText(" You need a named variable, like ");
+            try report.document.addInlineCode("..others");
+            try report.document.addReflowingText(", to use this here.");
 
             break :blk report;
         },
@@ -2307,6 +2390,7 @@ pub const Serialized = extern struct {
     exports: CIR.Def.Span,
     requires_types: RequiredType.SafeList.Serialized,
     for_clause_aliases: ForClauseAlias.SafeList.Serialized,
+    provides_entries: ProvidesEntry.SafeList.Serialized,
     rigid_vars_reserved: [4]u64, // Reserved space for rigid_vars (AutoHashMapUnmanaged is ~32 bytes), initialized at runtime
     builtin_statements: CIR.Statement.Span,
     external_decls: CIR.ExternalDecl.SafeList.Serialized,
@@ -2322,10 +2406,8 @@ pub const Serialized = extern struct {
     deferred_numeric_literals: DeferredNumericLiteral.SafeList.Serialized,
     import_mapping_reserved: [6]u64, // Reserved space for import_mapping (AutoHashMap is ~40 bytes), initialized at runtime
     method_idents: MethodIdents.Serialized,
-    // Reserved space for is_lambda_lifted and is_defunctionalized booleans
-    // (2 bytes of data + 6 bytes padding to maintain alignment)
-    is_lambda_lifted_reserved: u8,
-    is_defunctionalized_reserved: u8,
+    // Reserved space (was is_lambda_lifted and is_defunctionalized, now unused)
+    _reserved_flags: [2]u8 = .{ 0, 0 },
     _padding: [6]u8 = .{ 0, 0, 0, 0, 0, 0 },
 
     /// Serialize a ModuleEnv into this Serialized struct, appending data to the writer
@@ -2347,6 +2429,7 @@ pub const Serialized = extern struct {
 
         try self.requires_types.serialize(&env.requires_types, allocator, writer);
         try self.for_clause_aliases.serialize(&env.for_clause_aliases, allocator, writer);
+        try self.provides_entries.serialize(&env.provides_entries, allocator, writer);
         try self.external_decls.serialize(&env.external_decls, allocator, writer);
         try self.imports.serialize(&env.imports, allocator, writer);
 
@@ -2376,9 +2459,7 @@ pub const Serialized = extern struct {
         // Serialize method_idents map
         try self.method_idents.serialize(&env.method_idents, allocator, writer);
 
-        // Set lambda lifting status flags (these are runtime-only and initialized during deserialization)
-        self.is_lambda_lifted_reserved = 0;
-        self.is_defunctionalized_reserved = 0;
+        self._reserved_flags = .{ 0, 0 };
     }
 
     /// Deserialize into a freshly allocated ModuleEnv (no in-place modification of cache buffer).
@@ -2406,6 +2487,7 @@ pub const Serialized = extern struct {
             .exports = self.exports,
             .requires_types = self.requires_types.deserializeInto(base_addr),
             .for_clause_aliases = self.for_clause_aliases.deserializeInto(base_addr),
+            .provides_entries = self.provides_entries.deserializeInto(base_addr),
             .builtin_statements = self.builtin_statements,
             .external_decls = self.external_decls.deserializeInto(base_addr),
             .imports = try self.imports.deserializeInto(base_addr, gpa),
@@ -2451,6 +2533,7 @@ pub const Serialized = extern struct {
             .exports = self.exports,
             .requires_types = self.requires_types.deserializeInto(base_addr),
             .for_clause_aliases = self.for_clause_aliases.deserializeInto(base_addr),
+            .provides_entries = self.provides_entries.deserializeInto(base_addr),
             .builtin_statements = self.builtin_statements,
             .external_decls = self.external_decls.deserializeInto(base_addr),
             .imports = try self.imports.deserializeInto(base_addr, gpa),
@@ -2466,8 +2549,6 @@ pub const Serialized = extern struct {
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
             .method_idents = self.method_idents.deserializeInto(base_addr),
             .rigid_vars = std.AutoHashMapUnmanaged(Ident.Idx, TypeVar){},
-            .is_lambda_lifted = false,
-            .is_defunctionalized = false,
         };
 
         return env;
@@ -2502,8 +2583,7 @@ pub fn getExposedNodeIndexById(self: *const Self, ident_idx: Ident.Idx) ?u16 {
 /// Get the exposed node index for a type given its statement index.
 /// This is used for auto-imported builtin types where we have the statement index pre-computed.
 /// For auto-imported types, the statement index IS the node/var index directly.
-pub fn getExposedNodeIndexByStatementIdx(self: *const Self, stmt_idx: CIR.Statement.Idx) ?u16 {
-    _ = self; // Not needed for this simplified implementation
+pub fn getExposedNodeIndexByStatementIdx(_: *const Self, stmt_idx: CIR.Statement.Idx) ?u16 {
 
     // For auto-imported builtin types (Bool, Try, etc.), the statement index
     // IS the node/var index. This is because type declarations get type variables

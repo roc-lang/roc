@@ -3,108 +3,120 @@
 //! can be provided from JavaScript and most other operations return errors.
 
 const std = @import("std");
-const fs_mod = @import("fs");
-const Filesystem = fs_mod.Filesystem;
+const io_mod = @import("io");
+const Io = io_mod.Io;
 
 const Allocator = std.mem.Allocator;
+
 // Helper function to handle OOM errors
 fn handleOom() noreturn {
     @panic("Out of memory");
 }
 
-/// Global storage for source code provided from JavaScript
-pub var global_source: ?[]const u8 = null;
-/// Global allocator provided from JavaScript
-pub var global_allocator: ?Allocator = null;
-/// Global filename for the source file (defaults to "main.roc")
-pub var global_filename: []const u8 = "main.roc";
+/// Context struct holding state for the WASM filesystem.
+/// Replaces previous global mutable state.
+pub const WasmContext = struct {
+    source: ?[]const u8 = null,
+    allocator: ?Allocator = null,
+    filename: []const u8 = "main.roc",
 
-/// Set the source code that will be returned by readFile.
-/// This is called from JavaScript via WASM exports.
-pub fn setSource(allocator: Allocator, source: []const u8) void {
-    // Free previous source if it exists
-    if (global_source) |prev_source| {
-        if (global_allocator) |prev_allocator| {
-            prev_allocator.free(prev_source);
+    /// Set the source code that will be returned by readFile.
+    pub fn setSource(self: *WasmContext, alloc: Allocator, source: []const u8) void {
+        // Free previous source if it exists
+        if (self.source) |prev_source| {
+            if (self.allocator) |prev_allocator| {
+                prev_allocator.free(prev_source);
+            }
         }
+
+        // Store new source
+        self.source = alloc.dupe(u8, source) catch handleOom();
+        self.allocator = alloc;
     }
 
-    // Store new source
-    global_source = allocator.dupe(u8, source) catch handleOom();
-    global_allocator = allocator;
-}
-
-/// Set the filename for the source file.
-/// This affects which file paths are recognized as the source file.
-pub fn setFilename(allocator: Allocator, filename: []const u8) void {
-    // Free previous filename if it was allocated (not the default)
-    if (global_allocator) |prev_allocator| {
-        if (global_filename.ptr != "main.roc".ptr) {
-            prev_allocator.free(global_filename);
+    /// Set the filename for the source file.
+    pub fn setFilename(self: *WasmContext, alloc: Allocator, filename: []const u8) void {
+        // Free previous filename if it was allocated (not the default)
+        if (self.allocator) |prev_allocator| {
+            if (self.filename.ptr != "main.roc".ptr) {
+                prev_allocator.free(self.filename);
+            }
         }
+
+        // Store new filename
+        self.filename = alloc.dupe(u8, filename) catch handleOom();
+        self.allocator = alloc;
     }
+};
 
-    // Store new filename
-    global_filename = allocator.dupe(u8, filename) catch handleOom();
-    global_allocator = allocator;
+/// Get a WASM filesystem implementation backed by the given context.
+pub fn wasm(wasm_ctx: *WasmContext) Io {
+    return .{ .ctx = @ptrCast(wasm_ctx), .vtable = wasm_vtable };
 }
 
-/// Get a WASM filesystem implementation
-pub fn wasm() Filesystem {
-    return Filesystem{
-        .fileExists = &fileExistsWasm,
-        .readFile = &readFileWasm,
-        .readFileInto = &readFileIntoWasm,
-        .writeFile = &writeFileWasm,
-        .openDir = &openDirWasm,
-        .dirName = &dirNameWasm,
-        .baseName = &baseNameWasm,
-        .canonicalize = &canonicalizeWasm,
-        .makePath = &makePathWasm,
-        .rename = &renameWasm,
-        .getFileInfo = &getFileInfoWasm,
-    };
+const wasm_vtable = Io.VTable{
+    .readFile = &readFileWasm,
+    .readFileInto = &readFileIntoWasm,
+    .writeFile = &writeFileWasm,
+    .fileExists = &fileExistsWasm,
+    .stat = &statWasm,
+    .listDir = &listDirWasm,
+    .dirName = &dirNameWasm,
+    .baseName = &baseNameWasm,
+    .joinPath = &joinPathWasm,
+    .canonicalize = &canonicalizeWasm,
+    .makePath = &makePathWasm,
+    .rename = &renameWasm,
+    .getEnvVar = &getEnvVarWasm,
+    .fetchUrl = &fetchUrlWasm,
+    .writeStdout = &writeStdoutWasm,
+    .writeStderr = &writeStderrWasm,
+    .readStdin = &readStdinWasm,
+    .isTty = &isTtyWasm,
+};
+
+/// Recover the WasmContext from an opaque pointer.
+fn getCtx(ctx_ptr: ?*anyopaque) *WasmContext {
+    return @ptrCast(@alignCast(ctx_ptr.?));
 }
 
-/// Check if the given path matches the current source filename
-fn matchesSourceFile(path: []const u8) bool {
+/// Check if the given path matches the current source filename.
+fn matchesSourceFile(self: *WasmContext, path: []const u8) bool {
     // Check exact match
-    if (std.mem.eql(u8, path, global_filename)) return true;
+    if (std.mem.eql(u8, path, self.filename)) return true;
     // Check with leading slash
     if (path.len > 0 and path[0] == '/') {
-        if (std.mem.eql(u8, path[1..], global_filename)) return true;
+        if (std.mem.eql(u8, path[1..], self.filename)) return true;
     }
     // Check if path ends with /filename
-    if (std.mem.endsWith(u8, path, global_filename)) {
-        const prefix_len = path.len - global_filename.len;
+    if (std.mem.endsWith(u8, path, self.filename)) {
+        const prefix_len = path.len - self.filename.len;
         if (prefix_len > 0 and path[prefix_len - 1] == '/') return true;
     }
     return false;
 }
 
-fn fileExistsWasm(absolute_path: []const u8) Filesystem.OpenError!bool {
-    // For the playground, we assume the source file always exists
-    // and all other files don't exist
-    return matchesSourceFile(absolute_path);
+fn fileExistsWasm(ctx_ptr: ?*anyopaque, path: []const u8) bool {
+    const self = getCtx(ctx_ptr);
+    return matchesSourceFile(self, path);
 }
 
-fn readFileWasm(relative_path: []const u8, allocator: Allocator) Filesystem.ReadError![]const u8 {
-    // Only support reading the source file
-    if (matchesSourceFile(relative_path)) {
-        if (global_source) |source| {
-            return allocator.dupe(u8, source) catch handleOom();
+fn readFileWasm(ctx_ptr: ?*anyopaque, path: []const u8, alloc: Allocator) Io.ReadError![]u8 {
+    const self = getCtx(ctx_ptr);
+    if (matchesSourceFile(self, path)) {
+        if (self.source) |source| {
+            return alloc.dupe(u8, source) catch handleOom();
         } else {
             return error.FileNotFound;
         }
     }
-
     return error.FileNotFound;
 }
 
-fn readFileIntoWasm(path: []const u8, buffer: []u8) Filesystem.ReadError!usize {
-    // Only support reading the source file
-    if (matchesSourceFile(path)) {
-        if (global_source) |source| {
+fn readFileIntoWasm(ctx_ptr: ?*anyopaque, path: []const u8, buffer: []u8) Io.ReadError!usize {
+    const self = getCtx(ctx_ptr);
+    if (matchesSourceFile(self, path)) {
+        if (self.source) |source| {
             if (buffer.len < source.len) {
                 return error.StreamTooLong;
             }
@@ -114,22 +126,34 @@ fn readFileIntoWasm(path: []const u8, buffer: []u8) Filesystem.ReadError!usize {
             return error.FileNotFound;
         }
     }
-
     return error.FileNotFound;
 }
 
-fn writeFileWasm(_: []const u8, _: []const u8) Filesystem.WriteError!void {
-    // Writing files is not supported in WASM playground
+fn writeFileWasm(_: ?*anyopaque, _: []const u8, _: []const u8) Io.WriteError!void {
     return error.AccessDenied;
 }
 
-fn openDirWasm(_: []const u8) Filesystem.OpenError!Filesystem.Dir {
-    // Directory operations are not supported in WASM playground
+fn statWasm(ctx_ptr: ?*anyopaque, path: []const u8) Io.StatError!Io.FileInfo {
+    const self = getCtx(ctx_ptr);
+    if (matchesSourceFile(self, path)) {
+        if (self.source) |source| {
+            return Io.FileInfo{
+                .kind = .file,
+                .size = source.len,
+                .mtime_ns = 0,
+            };
+        } else {
+            return error.FileNotFound;
+        }
+    }
     return error.FileNotFound;
 }
 
-fn dirNameWasm(absolute_path: []const u8) ?[]const u8 {
-    // Simple implementation without std.fs.path to avoid posix dependencies
+fn listDirWasm(_: ?*anyopaque, _: []const u8, _: Allocator) Io.ListError![]Io.FileEntry {
+    return error.FileNotFound;
+}
+
+fn dirNameWasm(_: ?*anyopaque, absolute_path: []const u8) ?[]const u8 {
     if (std.mem.lastIndexOfScalar(u8, absolute_path, '/')) |last_slash| {
         if (last_slash == 0) {
             return "/";
@@ -139,41 +163,64 @@ fn dirNameWasm(absolute_path: []const u8) ?[]const u8 {
     return null;
 }
 
-fn baseNameWasm(absolute_path: []const u8) ?[]const u8 {
-    // Simple implementation without std.fs.path to avoid posix dependencies
+fn baseNameWasm(_: ?*anyopaque, absolute_path: []const u8) []const u8 {
     if (std.mem.lastIndexOfScalar(u8, absolute_path, '/')) |last_slash| {
         return absolute_path[last_slash + 1 ..];
     }
     return absolute_path;
 }
 
-fn canonicalizeWasm(root_relative_path: []const u8, allocator: Allocator) Filesystem.CanonicalizeError![]const u8 {
-    // For WASM, just return a clean version of the path
-    return allocator.dupe(u8, root_relative_path) catch handleOom();
-}
-
-fn makePathWasm(_: []const u8) Filesystem.MakePathError!void {
-    // Directory creation is not supported in WASM playground
-    return error.AccessDenied;
-}
-
-fn renameWasm(_: []const u8, _: []const u8) Filesystem.RenameError!void {
-    // File operations are not supported in WASM playground
-    return error.AccessDenied;
-}
-
-fn getFileInfoWasm(path: []const u8) Filesystem.GetFileInfoError!Filesystem.FileInfo {
-    // Only support getting info for the source file
-    if (matchesSourceFile(path)) {
-        if (global_source) |source| {
-            return Filesystem.FileInfo{
-                .mtime_ns = 0, // No real timestamps in WASM
-                .size = source.len,
-            };
-        } else {
-            return error.FileNotFound;
+fn joinPathWasm(_: ?*anyopaque, parts: []const []const u8, allocator: Allocator) Allocator.Error![]const u8 {
+    var total: usize = 0;
+    for (parts, 0..) |part, i| {
+        total += part.len;
+        if (i < parts.len - 1) total += 1;
+    }
+    const buf = try allocator.alloc(u8, total);
+    var pos: usize = 0;
+    for (parts, 0..) |part, i| {
+        @memcpy(buf[pos..][0..part.len], part);
+        pos += part.len;
+        if (i < parts.len - 1) {
+            buf[pos] = '/';
+            pos += 1;
         }
     }
+    return buf;
+}
 
-    return error.FileNotFound;
+fn canonicalizeWasm(_: ?*anyopaque, root_relative_path: []const u8, alloc: Allocator) Io.CanonicalizeError![]const u8 {
+    return alloc.dupe(u8, root_relative_path) catch handleOom();
+}
+
+fn makePathWasm(_: ?*anyopaque, _: []const u8) Io.MakePathError!void {
+    return error.AccessDenied;
+}
+
+fn renameWasm(_: ?*anyopaque, _: []const u8, _: []const u8) Io.RenameError!void {
+    return error.AccessDenied;
+}
+
+fn getEnvVarWasm(_: ?*anyopaque, _: []const u8, _: Allocator) Io.GetEnvVarError![]u8 {
+    return error.EnvironmentVariableNotFound;
+}
+
+fn fetchUrlWasm(_: ?*anyopaque, _: Allocator, _: []const u8, _: []const u8) Io.FetchUrlError!void {
+    return error.Unsupported;
+}
+
+fn writeStdoutWasm(_: ?*anyopaque, _: []const u8) Io.StdioError!void {
+    // WASM: stdout silently dropped (JS host can intercept via import override if desired)
+}
+
+fn writeStderrWasm(_: ?*anyopaque, _: []const u8) Io.StdioError!void {
+    // WASM: stderr silently dropped
+}
+
+fn readStdinWasm(_: ?*anyopaque, _: []u8) Io.StdioError!usize {
+    return 0;
+}
+
+fn isTtyWasm(_: ?*anyopaque) bool {
+    return false;
 }

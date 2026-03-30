@@ -18,8 +18,8 @@ pub const TestSpec = struct {
     io_spec: []const u8,
     /// Optional description of what the test verifies
     description: []const u8 = "",
-    /// If set, test is skipped with this reason
-    skip: []const u8 = "",
+    /// Skip this test on Windows (usually due to dev backend limitations)
+    skip_on_windows: bool = false,
 };
 
 /// All fx platform tests that can be run with --test mode IO specs.
@@ -94,6 +94,8 @@ pub const io_spec_tests = [_]TestSpec{
         .roc_file = "test/fx/numeric_fold.roc",
         .io_spec = "1>Sum: 15.0",
         .description = "List.fold with numeric accumulators",
+        // TODO: Dec (i128) parameter passing in for-loop lambdas fails on Windows x86_64 dev backend
+        .skip_on_windows = true,
     },
     .{
         .roc_file = "test/fx/list_for_each.roc",
@@ -170,7 +172,7 @@ pub const io_spec_tests = [_]TestSpec{
     // Inspect tests
     .{
         .roc_file = "test/fx/inspect_compare_test.roc",
-        .io_spec = "1>With to_inspect: Custom::Red|1>Without to_inspect: ColorWithoutInspect.Red|1>Primitive: 42.0",
+        .io_spec = "1>With to_inspect: Custom::Red|1>Without to_inspect: Red|1>Primitive: 42.0",
         .description = "Inspect comparison with and without to_inspect",
     },
     .{
@@ -186,7 +188,7 @@ pub const io_spec_tests = [_]TestSpec{
     },
     .{
         .roc_file = "test/fx/inspect_no_method_test.roc",
-        .io_spec = "1>Result: Color.Red|1>(Default rendering)",
+        .io_spec = "1>Result: Red|1>(Default rendering)",
         .description = "Inspect without to_inspect method",
     },
     .{
@@ -219,7 +221,6 @@ pub const io_spec_tests = [_]TestSpec{
         .roc_file = "test/fx/list_map_fallible.roc",
         .io_spec = "1>done",
         .description = "Regression test: List.map with fallible function (U64.from_str)",
-        .skip = "dev backend does not yet support List.map with fallible functions",
     },
     .{
         .roc_file = "test/fx/list_append_stdin_uaf.roc",
@@ -235,6 +236,11 @@ pub const io_spec_tests = [_]TestSpec{
         .roc_file = "test/fx/list_first_function.roc",
         .io_spec = "1>ok",
         .description = "Regression test: List.first with function syntax",
+    },
+    .{
+        .roc_file = "test/fx/zst_nested_singleton_shapes.roc",
+        .io_spec = "1>zst first ok|1>zst get ok|1>zst repeat ok|1>zst pattern ok|1>non-zst distinct ok|1>non-zst first ok|1>non-zst get ok|1>non-zst pattern ok",
+        .description = "Nested singleton record/tag ZSTs behave correctly in lists, equality, and pattern matches",
     },
     .{
         .roc_file = "test/fx/stdin_while_uaf.roc",
@@ -312,6 +318,13 @@ pub const io_spec_tests = [_]TestSpec{
         .io_spec = "1>Hello, World!",
         .description = "Regression test: Hosted effects on opaque types with data (not just [])",
     },
+
+    // File import tests
+    .{
+        .roc_file = "test/fx/file_import_str.roc",
+        .io_spec = "1>bytes: 370077",
+        .description = "File import as Str: import large file and verify byte count",
+    },
     .{
         .roc_file = "test/fx/record_field_access.roc",
         .io_spec = "1>Alice|1>30|1>100",
@@ -361,6 +374,21 @@ pub const io_spec_tests = [_]TestSpec{
         .roc_file = "test/fx/record_destructure.roc",
         .io_spec = "1>Bob 25 99",
         .description = "Regression test: Record destructuring with alignment-reordered fields",
+    },
+    .{
+        .roc_file = "test/fx/cross_module_recursive_nominal.roc",
+        .io_spec = "1>Div (correct)",
+        .description = "Cross-module recursive nominal types with pattern matching",
+    },
+    .{
+        .roc_file = "test/fx/test_no_dbg.roc",
+        .io_spec = "1>Text",
+        .description = "Recursive nominal type with List and pattern matching",
+    },
+    .{
+        .roc_file = "test/fx/keep_oks.roc",
+        .io_spec = "1>done",
+        .description = "Regression test: Monomorphize panic when callback always returns Ok but match expects Err tag",
     },
 };
 

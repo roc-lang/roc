@@ -10,9 +10,9 @@ type=repl
 » Str.concat(Box.unbox(Box.box("shared")), Box.unbox(Box.box("shared")))
 ~~~
 # OUTPUT
-42
+42.0
 ---
-42
+42.0
 ---
 "sharedshared"
 # PROBLEMS

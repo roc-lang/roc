@@ -14,6 +14,9 @@ const backend = @import("backend");
 pub const ExecutableMemory = backend.ExecutableMemory;
 /// Layout module (re-exported for result type information)
 pub const layout = @import("layout");
+/// Interpreter-specific layout module, forked to keep runtime evaluation isolated
+/// from future dev-backend layout changes.
+pub const interpreter_layout = @import("interpreter_layout");
 /// Utilities for loading compiled builtin modules
 pub const builtin_loading = @import("builtin_loading.zig");
 /// Centralized loading and management of builtin modules
@@ -84,5 +87,6 @@ test "eval tests" {
     std.testing.refAllDecls(@import("test/interpreter_style_test.zig"));
     std.testing.refAllDecls(@import("test/low_level_interp_test.zig"));
     std.testing.refAllDecls(@import("test/mono_emit_test.zig"));
+    std.testing.refAllDecls(@import("test/closure_test.zig"));
     std.testing.refAllDecls(@import("test/stack_test.zig"));
 }

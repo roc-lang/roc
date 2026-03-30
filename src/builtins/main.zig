@@ -3,14 +3,14 @@
 //! This module provides C-compatible functions for Roc's built-in functionality.
 //! All functions are exported and follow C calling conventions.
 //!
-//! The exported functions are available in the static library `libroc_builtins.a`
+//! The exported functions are available in the object file `roc_builtins.o`
 //! and can be used by including the appropriate header file.
 //!
 //! ## Usage from C
 //!
 //! ```c
 //! #include "roc_builtins.h"
-//! // Link against libroc_builtins.a
+//! // Link against roc_builtins.o
 //! ```
 const builtin = @import("builtin");
 const utils = @import("utils.zig");

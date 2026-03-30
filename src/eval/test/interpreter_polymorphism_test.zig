@@ -558,11 +558,9 @@ test "interpreter tag union: nested tag in tuple in tag (issue #8750)" {
     const rt_var = try interp2.translateTypeVar(resources.module_env, ct_var);
     const rendered = try interp2.renderValueRocWithType(result, rt_var, &ops);
     defer interpreter_allocator.free(rendered);
-    // The nested tag union renders with variant index since the renderer doesn't
-    // have full type info for the inner tag. The key is that we get here without
-    // stack overflow.
+    // The key is that we get here without stack overflow.
     const expected =
-        \\Ok((<tag_union variant=0>, 5.0))
+        \\Ok((Name("hello"), 5.0))
     ;
     try std.testing.expectEqualStrings(expected, rendered);
 }

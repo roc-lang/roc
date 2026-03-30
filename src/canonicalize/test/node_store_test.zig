@@ -453,7 +453,7 @@ test "NodeStore round trip - Expressions" {
     });
     try expressions.append(gpa, CIR.Expr{
         .e_run_low_level = .{
-            .op = .str_is_empty,
+            .op = .str_count_utf8_bytes,
             .args = .{ .span = .{ .start = rand.random().int(u32), .len = rand.random().int(u32) } },
         },
     });
@@ -653,6 +653,12 @@ test "NodeStore round trip - Diagnostics" {
 
     try diagnostics.append(gpa, CIR.Diagnostic{
         .where_clause_not_allowed_in_type_decl = .{
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
+        .open_ext_not_allowed_in_type_decl = .{
             .region = rand_region(),
         },
     });
@@ -942,6 +948,27 @@ test "NodeStore round trip - Diagnostics" {
         .deprecated_number_suffix = .{
             .suffix = rand_idx(StringLiteral.Idx),
             .suggested = rand_idx(StringLiteral.Idx),
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
+        .file_import_not_found = .{
+            .path = rand_idx(StringLiteral.Idx),
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
+        .file_import_io_error = .{
+            .path = rand_idx(StringLiteral.Idx),
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
+        .file_import_not_utf8 = .{
+            .path = rand_idx(StringLiteral.Idx),
             .region = rand_region(),
         },
     });

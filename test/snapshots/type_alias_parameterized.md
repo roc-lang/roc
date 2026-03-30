@@ -122,17 +122,14 @@ NO CHANGE
 					(ty-rigid-var-lookup (ty-rigid-var (name "a")))))))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-closure
-			(captures
-				(capture (ident "swapPair")))
-			(e-lambda
-				(args
-					(p-underscore))
-				(e-call
-					(e-lookup-local
-						(p-assign (ident "swapPair")))
-					(e-num (value "1"))
-					(e-num (value "2"))))))
+		(e-lambda
+			(args
+				(p-underscore))
+			(e-call
+				(e-lookup-local
+					(p-assign (ident "swapPair")))
+				(e-num (value "1"))
+				(e-num (value "2")))))
 	(s-alias-decl
 		(ty-header (name "Pair")
 			(ty-args

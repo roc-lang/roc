@@ -10,10 +10,10 @@ type=repl
 » Try.Ok(5) ?? (Try.Ok(10) ?? 42)
 ~~~
 # OUTPUT
-42
+42.0
 ---
-10
+10.0
 ---
-5
+5.0
 # PROBLEMS
 NIL

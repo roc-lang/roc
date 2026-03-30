@@ -152,3 +152,7 @@ src/snapshots/**/*.html
 kcov-output/
 
 .direnv
+.mcp.json
+
+# Generated glue output files
+test/glue/*/roc_platform_abi.zig

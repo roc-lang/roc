@@ -53,10 +53,7 @@ NO CHANGE
 		(annotation
 			(ty-fn (effectful true)
 				(ty-lookup (name "Str") (builtin))
-				(ty-apply (name "Try") (builtin)
-					(ty-record)
-					(ty-tag-union
-						(ty-underscore))))))
+				(ty-record))))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-lambda
@@ -69,9 +66,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Str => Try({  }, [..])"))
+		(patt (type "Str => {}"))
 		(patt (type "_arg -> Error")))
 	(expressions
-		(expr (type "Str => Try({  }, [..])"))
+		(expr (type "Str => {}"))
 		(expr (type "_arg -> Error"))))
 ~~~

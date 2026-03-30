@@ -48,33 +48,27 @@ NO CHANGE
 		(annotation
 			(ty-fn (effectful true)
 				(ty-lookup (name "Str") (builtin))
-				(ty-apply (name "Try") (builtin)
-					(ty-record)
-					(ty-tag-union
-						(ty-underscore))))))
+				(ty-record))))
 	(d-let
 		(p-assign (ident "x"))
 		(e-num (value "5")))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-closure
-			(captures
-				(capture (ident "x")))
-			(e-lambda
-				(args
-					(p-underscore))
-				(e-lookup-local
-					(p-assign (ident "x")))))))
+		(e-lambda
+			(args
+				(p-underscore))
+			(e-lookup-local
+				(p-assign (ident "x"))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Str => Try({  }, [..])"))
+		(patt (type "Str => {}"))
 		(patt (type "Dec"))
 		(patt (type "_arg -> Dec")))
 	(expressions
-		(expr (type "Str => Try({  }, [..])"))
+		(expr (type "Str => {}"))
 		(expr (type "Dec"))
 		(expr (type "_arg -> Dec"))))
 ~~~

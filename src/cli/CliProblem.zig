@@ -110,6 +110,11 @@ pub const CliProblem = union(enum) {
 
     // Build/Compilation Problems
 
+    /// `roc build` is not supported for headerless apps
+    build_not_supported_for_headerless: struct {
+        app_path: []const u8,
+    },
+
     /// Compilation produced errors
     compilation_failed: struct {
         path: []const u8,
@@ -224,6 +229,7 @@ pub const CliProblem = union(enum) {
             .file_not_found,
             .platform_not_found,
             .no_platform_found,
+            .build_not_supported_for_headerless,
             .compilation_failed,
             .linker_failed,
             => .fatal,
@@ -280,6 +286,7 @@ pub const CliProblem = union(enum) {
             .platform_validation_failed => |info| try createPlatformValidationFailedReport(allocator, info),
             .absolute_platform_path => |info| try createAbsolutePlatformPathReport(allocator, info),
             .invalid_app_header => |info| try createInvalidAppHeaderReport(allocator, info),
+            .build_not_supported_for_headerless => |info| try createBuildNotSupportedForHeaderlessReport(allocator, info),
             .compilation_failed => |info| try createCompilationFailedReport(allocator, info),
             .linker_failed => |info| try createLinkerFailedReport(allocator, info),
             .object_compilation_failed => |info| try createObjectCompilationFailedReport(allocator, info),
@@ -552,6 +559,31 @@ fn createInvalidAppHeaderReport(allocator: Allocator, info: anytype) !Report {
     try report.document.addText(") is used to qualify imports from the package like ");
     try report.document.addAnnotated("pf.Stdout", .emphasized);
     try report.document.addText(".");
+
+    return report;
+}
+
+fn createBuildNotSupportedForHeaderlessReport(allocator: Allocator, info: anytype) !Report {
+    var report = Report.init(allocator, "BUILD NOT SUPPORTED", .fatal);
+
+    try report.document.addText("The file ");
+    try report.document.addAnnotated(info.app_path, .path);
+    try report.document.addText(" is a headerless app, which uses a simple builtin platform");
+    try report.document.addLineBreak();
+    try report.document.addText("designed for tutorials and cannot be compiled to a standalone executable.");
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
+    try report.document.addText("To run this file, use:");
+    try report.document.addLineBreak();
+    try report.document.addCodeBlock(
+        \\roc <path>
+    );
+    try report.document.addLineBreak();
+    try report.document.addText("To build a standalone executable, add an app header with a platform:");
+    try report.document.addLineBreak();
+    try report.document.addCodeBlock(
+        \\app [main!] { pf: platform "https://..." }
+    );
 
     return report;
 }

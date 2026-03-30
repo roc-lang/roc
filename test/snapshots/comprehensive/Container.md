@@ -858,38 +858,35 @@ main = {
 				(ty-rigid-var-lookup (ty-rigid-var (name "c"))))))
 	(d-let
 		(p-assign (ident "transform_twice"))
-		(e-closure
-			(captures
-				(capture (ident "compose")))
-			(e-lambda
-				(args
-					(p-assign (ident "f"))
-					(p-assign (ident "x")))
-				(e-block
-					(s-let
-						(p-assign (ident "first"))
-						(e-call
-							(e-lookup-local
-								(p-assign (ident "compose")))
-							(e-lookup-local
-								(p-assign (ident "f")))
-							(e-lookup-local
-								(p-assign (ident "f")))
-							(e-lookup-local
-								(p-assign (ident "x")))))
-					(s-let
-						(p-assign (ident "second"))
-						(e-call
-							(e-lookup-local
-								(p-assign (ident "compose")))
-							(e-lookup-local
-								(p-assign (ident "f")))
-							(e-lookup-local
-								(p-assign (ident "f")))
-							(e-lookup-local
-								(p-assign (ident "first")))))
-					(e-lookup-local
-						(p-assign (ident "second")))))))
+		(e-lambda
+			(args
+				(p-assign (ident "f"))
+				(p-assign (ident "x")))
+			(e-block
+				(s-let
+					(p-assign (ident "first"))
+					(e-call
+						(e-lookup-local
+							(p-assign (ident "compose")))
+						(e-lookup-local
+							(p-assign (ident "f")))
+						(e-lookup-local
+							(p-assign (ident "f")))
+						(e-lookup-local
+							(p-assign (ident "x")))))
+				(s-let
+					(p-assign (ident "second"))
+					(e-call
+						(e-lookup-local
+							(p-assign (ident "compose")))
+						(e-lookup-local
+							(p-assign (ident "f")))
+						(e-lookup-local
+							(p-assign (ident "f")))
+						(e-lookup-local
+							(p-assign (ident "first")))))
+				(e-lookup-local
+					(p-assign (ident "second"))))))
 	(d-let
 		(p-assign (ident "make_processor"))
 		(e-lambda

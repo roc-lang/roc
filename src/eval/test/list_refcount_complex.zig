@@ -66,7 +66,7 @@ test "list refcount complex - list of tuples with integers" {
         \\    t1 = (1, 2)
         \\    t2 = (3, 4)
         \\    lst = [t1, t2]
-        \\    match lst { [first, ..] => match first { (a, b) => a + b, _ => 0 }, _ => 0 }
+        \\    match lst { [first, ..] => match first { (a, b) => a + b }, _ => 0 }
         \\}
     , 3, .no_trace);
 }
@@ -77,7 +77,7 @@ test "list refcount complex - list of tuples with strings" {
         \\    t1 = ("a", "b")
         \\    t2 = ("c", "d")
         \\    lst = [t1, t2]
-        \\    match lst { [first, ..] => match first { (s, _) => s, _ => "" }, _ => "" }
+        \\    match lst { [first, ..] => match first { (s, _) => s }, _ => "" }
         \\}
     , "a", .no_trace);
 }

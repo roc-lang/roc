@@ -3,73 +3,76 @@
 const std = @import("std");
 const util = @import("util.zig");
 
-test "glue command with DebugGlue succeeds" {
+/// Run `roc glue` with given opt level and glue spec, returning result and tmp_dir.
+/// Caller must free result.stdout, result.stderr, and tmp_path.
+/// tmp_dir is returned for further inspection of generated files.
+fn runGlueCommand(
+    allocator: std.mem.Allocator,
+    opt: []const u8,
+    glue_spec: []const u8,
+    tmp_path: []const u8,
+) !util.RocResult {
+    const result = try util.runRocCommand(allocator, &.{
+        "glue",
+        opt,
+        glue_spec,
+        tmp_path,
+        "test/fx/platform/main.roc",
+    });
+    // Common checks: should not panic
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "PANIC") == null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "unreachable") == null);
+    return result;
+}
+
+fn checkGlueSuccess(result: util.RocResult, label: []const u8) !void {
+    if (result.term != .Exited or result.term.Exited != 0) {
+        std.debug.print("\n{s} command failed!\nstderr:\n{s}\nstdout:\n{s}\nExit term: {}\n", .{
+            label, result.stderr, result.stdout, result.term,
+        });
+        try std.testing.expect(false);
+    }
+}
+
+test "glue command with DebugGlue succeeds (interpreter)" {
     const allocator = std.testing.allocator;
 
-    // Create temp directory for output
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
     const tmp_path = tmp_dir.dir.realpathAlloc(allocator, ".") catch unreachable;
     defer allocator.free(tmp_path);
 
-    // Run: roc experimental-glue src/glue/src/DebugGlue.roc <tmp_path> test/fx/platform/main.roc
-    const result = try util.runRocCommand(allocator, &.{
-        "experimental-glue",
-        "src/glue/src/DebugGlue.roc",
-        tmp_path,
-        "test/fx/platform/main.roc",
-    });
+    const result = try runGlueCommand(allocator, "--opt=interpreter", "src/glue/src/DebugGlue.roc", tmp_path);
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
-    // Should not panic
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "PANIC") == null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "unreachable") == null);
-
-    // Should complete successfully
-    if (result.term != .Exited or result.term.Exited != 0) {
-        std.debug.print("\nDebugGlue command failed!\nstderr:\n{s}\nstdout:\n{s}\n", .{ result.stderr, result.stdout });
-        std.debug.print("Exit term: {}\n", .{result.term});
-        try std.testing.expect(false);
-    }
+    try checkGlueSuccess(result, "DebugGlue");
 
     // Empty string would indicate an encoding bug with the small string optimization
     try std.testing.expect(std.mem.indexOf(u8, result.stderr, "name: \"\"") == null);
 
     // Should show the actual entry point name from the platform header
-    // For fx platform, the requires entry is "main!" with type "() => {}"
-    // ROC DBG output goes to stderr
     try std.testing.expect(std.mem.indexOf(u8, result.stderr, "name: \"main!\"") != null);
 }
 
-test "glue command with CGlue generates expected C header" {
+test "glue command with DebugGlue succeeds (dev backend)" {
+    // TODO: dev backend fails with compilation failure
+    return error.SkipZigTest;
+}
+
+test "glue command with CGlue generates expected C header (interpreter)" {
     const allocator = std.testing.allocator;
 
-    // Create temp directory for output
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
     const tmp_path = tmp_dir.dir.realpathAlloc(allocator, ".") catch unreachable;
     defer allocator.free(tmp_path);
 
-    // Run: roc experimental-glue src/glue/src/CGlue.roc <tmp_path> test/fx/platform/main.roc
-    const result = try util.runRocCommand(allocator, &.{
-        "experimental-glue",
-        "src/glue/src/CGlue.roc",
-        tmp_path,
-        "test/fx/platform/main.roc",
-    });
+    const result = try runGlueCommand(allocator, "--opt=interpreter", "src/glue/src/CGlue.roc", tmp_path);
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
-    // Should not panic
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "PANIC") == null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "unreachable") == null);
-
-    // Should complete successfully
-    if (result.term != .Exited or result.term.Exited != 0) {
-        std.debug.print("\nCGlue command failed!\nstderr:\n{s}\nstdout:\n{s}\n", .{ result.stderr, result.stdout });
-        try std.testing.expect(false);
-    }
+    try checkGlueSuccess(result, "CGlue");
 
     // Read the generated header file
     const generated_path = std.fs.path.join(allocator, &.{ tmp_path, "roc_platform_abi.h" }) catch unreachable;
@@ -114,30 +117,24 @@ test "glue command with CGlue generates expected C header" {
     }
 }
 
-test "glue command generated C header compiles with zig cc" {
+test "glue command with CGlue generates expected C header (dev backend)" {
+    // TODO: dev backend fails with compilation failure
+    return error.SkipZigTest;
+}
+
+test "glue command generated C header compiles with zig cc (interpreter)" {
     const allocator = std.testing.allocator;
 
-    // Create temp directory for output
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
     const tmp_path = tmp_dir.dir.realpathAlloc(allocator, ".") catch unreachable;
     defer allocator.free(tmp_path);
 
-    // Run: roc experimental-glue src/glue/src/CGlue.roc <tmp_path> test/fx/platform/main.roc
-    const glue_result = try util.runRocCommand(allocator, &.{
-        "experimental-glue",
-        "src/glue/src/CGlue.roc",
-        tmp_path,
-        "test/fx/platform/main.roc",
-    });
+    const glue_result = try runGlueCommand(allocator, "--opt=interpreter", "src/glue/src/CGlue.roc", tmp_path);
     defer allocator.free(glue_result.stdout);
     defer allocator.free(glue_result.stderr);
 
-    // Should complete successfully
-    if (glue_result.term != .Exited or glue_result.term.Exited != 0) {
-        std.debug.print("\nCGlue command failed!\nstderr:\n{s}\nstdout:\n{s}\n", .{ glue_result.stderr, glue_result.stdout });
-        try std.testing.expect(false);
-    }
+    try checkGlueSuccess(glue_result, "CGlue");
 
     // Write a minimal C file that includes the header and instantiates the types
     const test_c_content =
@@ -211,15 +208,59 @@ test "glue command generated C header compiles with zig cc" {
     }
 }
 
-test "CGlue.roc expect tests pass" {
+test "glue command generated C header compiles with zig cc (dev backend)" {
+    // TODO: dev backend fails with compilation failure
+    return error.SkipZigTest;
+}
+
+test "glue command with ZigGlue succeeds (interpreter)" {
+    // Regression test for nominal_translate_cache fix in interpreter.zig.
     const allocator = std.testing.allocator;
 
-    // Run: roc test src/glue/src/CGlue.roc
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const tmp_path = tmp_dir.dir.realpathAlloc(allocator, ".") catch unreachable;
+    defer allocator.free(tmp_path);
+
+    const result = try runGlueCommand(allocator, "--opt=interpreter", "src/glue/src/ZigGlue.roc", tmp_path);
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "misaligned") == null);
+    try checkGlueSuccess(result, "ZigGlue");
+
+    // Should produce a Zig output file
+    const generated_path = std.fs.path.join(allocator, &.{ tmp_path, "roc_platform_abi.zig" }) catch unreachable;
+    defer allocator.free(generated_path);
+
+    const generated_content = std.fs.cwd().readFileAlloc(allocator, generated_path, 1024 * 1024) catch |err| {
+        std.debug.print("\nFailed to read generated file '{s}': {}\n", .{ generated_path, err });
+        try std.testing.expect(false);
+        unreachable;
+    };
+    defer allocator.free(generated_content);
+
+    // Generated file should contain key Zig constructs
+    try std.testing.expect(std.mem.indexOf(u8, generated_content, "pub const RocStr") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated_content, "pub const RocOps") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated_content, "Entrypoint") != null);
+}
+
+test "glue command with ZigGlue succeeds (dev backend)" {
+    // TODO: dev backend hangs during roc glue execution
+    return error.SkipZigTest;
+}
+
+test "CGlue.roc expect tests pass (interpreter)" {
+    const allocator = std.testing.allocator;
+
+    // Run: roc test --opt=interpreter src/glue/src/CGlue.roc
     // --no-cache avoids a cache interaction bug where the module cache
     // populated by earlier glue tests (roc build) is incompatible with
     // what roc test's interpreter expects, causing a .ty_tag_union panic.
     const result = try util.runRocCommand(allocator, &.{
         "test",
+        "--opt=interpreter",
         "--no-cache",
         "src/glue/src/CGlue.roc",
     });
@@ -236,4 +277,9 @@ test "CGlue.roc expect tests pass" {
         std.debug.print("Exit term: {}\n", .{result.term});
         try std.testing.expect(false);
     }
+}
+
+test "CGlue.roc expect tests pass (dev backend)" {
+    // TODO: dev backend fails with SIGSEGV
+    return error.SkipZigTest;
 }

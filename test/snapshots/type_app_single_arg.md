@@ -96,21 +96,18 @@ main! = |_| processList(["one", "two"])
 				(ty-lookup (name "U64") (builtin)))))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-closure
-			(captures
-				(capture (ident "processList")))
-			(e-lambda
-				(args
-					(p-underscore))
-				(e-call
-					(e-lookup-local
-						(p-assign (ident "processList")))
-					(e-list
-						(elems
-							(e-string
-								(e-literal (string "one")))
-							(e-string
-								(e-literal (string "two"))))))))))
+		(e-lambda
+			(args
+				(p-underscore))
+			(e-call
+				(e-lookup-local
+					(p-assign (ident "processList")))
+				(e-list
+					(elems
+						(e-string
+							(e-literal (string "one")))
+						(e-string
+							(e-literal (string "two")))))))))
 ~~~
 # TYPES
 ~~~clojure

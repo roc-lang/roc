@@ -28,6 +28,9 @@ const check = @import("check");
 const unbundle = @import("unbundle");
 const fmt = @import("fmt");
 const WasmFilesystem = @import("WasmFilesystem.zig");
+
+// WASM filesystem context — module-level so it persists across compilations.
+var wasm_ctx: WasmFilesystem.WasmContext = .{};
 const layout = @import("layout");
 const collections = @import("collections");
 const compiled_builtins = @import("compiled_builtins");
@@ -625,7 +628,7 @@ fn handleReadyState(message_type: MessageType, root: std.json.Value, response_bu
                 "main.roc";
 
             // Set filename in filesystem for file operations
-            WasmFilesystem.setFilename(allocator, filename);
+            wasm_ctx.setFilename(allocator, filename);
 
             // Derive module name from filename (strip .roc extension)
             const module_name = if (std.mem.endsWith(u8, filename, ".roc"))
@@ -865,12 +868,12 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
     }
 
     // Set up the source in WASM filesystem - this creates a properly allocated copy
-    WasmFilesystem.setSource(allocator, source);
+    wasm_ctx.setSource(allocator, source);
 
-    // Use the duplicated source from WasmFilesystem for the rest of compilation.
+    // Use the duplicated source from WasmContext for the rest of compilation.
     // The original `source` slice points to JSON parser memory which will be freed
-    // when processMessage returns, so we must use the stable copy stored in global_source.
-    const stable_source = WasmFilesystem.global_source orelse return error.OutOfMemory;
+    // when processMessage returns, so we must use the stable copy stored in wasm_ctx.source.
+    const stable_source = wasm_ctx.source orelse return error.OutOfMemory;
 
     logDebug("compileSource: Starting compilation (source len={})\n", .{stable_source.len});
 
@@ -1020,6 +1023,7 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
                 .exports = serialized_ptr.exports,
                 .requires_types = serialized_ptr.requires_types.deserializeInto(base_ptr),
                 .for_clause_aliases = serialized_ptr.for_clause_aliases.deserializeInto(base_ptr),
+                .provides_entries = serialized_ptr.provides_entries.deserializeInto(base_ptr),
                 .builtin_statements = serialized_ptr.builtin_statements,
                 .external_decls = serialized_ptr.external_decls.deserializeInto(base_ptr),
                 .imports = try serialized_ptr.imports.deserializeInto(base_ptr, gpa),
@@ -1088,14 +1092,13 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
         .builtin_indices = builtin_indices,
     };
 
-    // Create module_envs map for canonicalization (enables qualified calls)
-    var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
-    defer module_envs_map.deinit();
-    // Use the shared populateModuleEnvs function to set up auto-imported types
-    try Can.populateModuleEnvs(&module_envs_map, module_env, builtin_module.env, builtin_indices);
-
     logDebug("compileSource: Starting canonicalization\n", .{});
-    var czer = try Can.init(&allocators, env, result.parse_ast.?, &module_envs_map);
+    var czer = try Can.initModule(&allocators, env, result.parse_ast.?, .{
+        .builtin_types = .{
+            .builtin_module_env = builtin_module.env,
+            .builtin_indices = builtin_indices,
+        },
+    });
     defer czer.deinit();
 
     czer.canonicalizeFile() catch |err| {
@@ -1138,7 +1141,7 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
         type_can_ir.imports.resolveImports(type_can_ir, imported_envs);
 
         // Use pointer to the stored CIR to ensure solver references valid memory
-        var solver = try Check.init(allocator, &type_can_ir.types, type_can_ir, imported_envs, &module_envs_map, &type_can_ir.store.regions, module_builtin_ctx);
+        var solver = try Check.init(allocator, &type_can_ir.types, type_can_ir, imported_envs, null, &type_can_ir.store.regions, module_builtin_ctx);
         result.solver = solver;
 
         solver.checkFile() catch |check_err| {

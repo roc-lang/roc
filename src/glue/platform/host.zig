@@ -48,13 +48,17 @@ fn handleRocStackOverflow() noreturn {
         const kernel32 = struct {
             extern "kernel32" fn GetStdHandle(nStdHandle: DWORD) callconv(.winapi) HANDLE;
             extern "kernel32" fn WriteFile(hFile: HANDLE, lpBuffer: [*]const u8, nNumberOfBytesToWrite: DWORD, lpNumberOfBytesWritten: ?*DWORD, lpOverlapped: ?*anyopaque) callconv(.winapi) i32;
-            extern "kernel32" fn ExitProcess(uExitCode: c_uint) callconv(.winapi) noreturn;
+            extern "kernel32" fn TerminateProcess(hProcess: HANDLE, uExitCode: c_uint) callconv(.winapi) i32;
+            extern "kernel32" fn GetCurrentProcess() callconv(.winapi) HANDLE;
         };
 
         const stderr_handle = kernel32.GetStdHandle(STD_ERROR_HANDLE);
         var bytes_written: DWORD = 0;
         _ = kernel32.WriteFile(stderr_handle, STACK_OVERFLOW_MESSAGE.ptr, STACK_OVERFLOW_MESSAGE.len, &bytes_written, null);
-        kernel32.ExitProcess(134);
+        // Use TerminateProcess instead of ExitProcess: after a stack overflow the
+        // stack is blown and ExitProcess's DLL cleanup can trigger a secondary crash.
+        _ = kernel32.TerminateProcess(kernel32.GetCurrentProcess(), 134);
+        @trap();
     } else if (comptime builtin.os.tag != .wasi) {
         _ = posix.write(posix.STDERR_FILENO, STACK_OVERFLOW_MESSAGE) catch {};
         posix.exit(134);
@@ -374,12 +378,22 @@ const ModuleTypeInfoRoc = extern struct {
     name: RocStr,
 };
 
+/// ProvidesEntry := { ffi_symbol : Str, name : Str, type_id : U64 }
+/// Fields ordered by alignment descending, then alphabetically
+const ProvidesEntry = extern struct {
+    ffi_symbol: RocStr,
+    name: RocStr,
+    type_id: u64,
+};
+
 /// Types opaque type internals (matches Types.roc)
-/// Fields are ordered alphabetically in Roc records
-/// Types record: { entrypoints : List({ name : Str, type_id : U64 }), modules : List(ModuleTypeInfo) }
+/// Fields ordered by alignment descending, then alphabetically
+/// Types record: { entrypoints : List(EntryPoint), modules : List(ModuleTypeInfo), provides_entries : List(ProvidesEntry), type_table : List(TypeRepr) }
 const TypesInner = extern struct {
     entrypoints: RocList, // List({ name : Str, type_id : U64 })
     modules: RocList, // List(ModuleTypeInfo)
+    provides_entries: RocList, // List(ProvidesEntry)
+    type_table: RocList, // List(TypeRepr)
 };
 
 /// Result (List File) Str - Roc Result type
@@ -775,6 +789,33 @@ fn platform_main(args: [][*:0]u8) !c_int {
     else
         RocList.empty();
 
+    // Build provides list from entry point names
+    // In standalone mode, entry point names are FFI symbols, so use them as both name and ffi_symbol
+    const provides_list = if (entry_point_names.len > 0) pblk: {
+        const prov_data_size = entry_point_names.len * @sizeOf(ProvidesEntry);
+        const prov_bytes = builtins.utils.allocateWithRefcount(
+            prov_data_size,
+            @alignOf(ProvidesEntry),
+            true, // elements ARE refcounted (ProvidesEntry contains RocStr)
+            &roc_ops,
+        );
+        const prov_ptr: [*]ProvidesEntry = @ptrCast(@alignCast(prov_bytes));
+
+        for (entry_point_names, 0..) |name, idx| {
+            prov_ptr[idx] = ProvidesEntry{
+                .ffi_symbol = createBigRocStr(name, &roc_ops),
+                .name = createBigRocStr(name, &roc_ops),
+                .type_id = 0,
+            };
+        }
+
+        break :pblk RocList{
+            .bytes = prov_bytes,
+            .length = entry_point_names.len,
+            .capacity_or_alloc_ptr = entry_point_names.len,
+        };
+    } else RocList.empty();
+
     // Heap-allocate TypesInner using Roc's allocation scheme
     // This ensures a valid refcount is present at bytes-8, which Roc's
     // list operations expect when checking isUnique() etc.
@@ -790,6 +831,8 @@ fn platform_main(args: [][*:0]u8) !c_int {
     types_inner_ptr.* = TypesInner{
         .entrypoints = entrypoints_list,
         .modules = modules_list,
+        .provides_entries = provides_list,
+        .type_table = RocList.empty(),
     };
 
     // Create a List Types with one element (the Types structure)

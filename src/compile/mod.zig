@@ -1,6 +1,7 @@
 //! Compilation-related types and functionality, such as cache management and package building.
 
 const std = @import("std");
+const threading_mod = @import("threading.zig");
 
 pub const package = @import("compile_package.zig");
 pub const build = @import("compile_build.zig");
@@ -11,6 +12,7 @@ pub const module_discovery = @import("module_discovery.zig");
 pub const dependency_sort = @import("dependency_sort.zig");
 pub const serialize_modules = @import("serialize_modules.zig");
 pub const runner = @import("runner.zig");
+pub const threading = @import("threading.zig");
 
 // Actor model components
 pub const messages = @import("messages.zig");
@@ -22,7 +24,23 @@ pub const key = @import("cache_key.zig");
 pub const config = @import("cache_config.zig");
 pub const reporting = @import("cache_reporting.zig");
 pub const manager = @import("cache_manager.zig");
-pub const cleanup = @import("cache_cleanup.zig");
+pub const cleanup = if (!threading_mod.is_freestanding) @import("cache_cleanup.zig") else struct {
+    pub const CleanupStats = struct {
+        temp_dirs_deleted: u32 = 0,
+        temp_files_deleted: u32 = 0,
+        cache_files_deleted: u32 = 0,
+        empty_dirs_deleted: u32 = 0,
+        errors: u32 = 0,
+    };
+
+    pub const CleanupThread = struct {};
+
+    pub fn startBackgroundCleanup(_: std.mem.Allocator, _: Io) !?CleanupThread {
+        return null;
+    }
+
+    pub fn deleteTempDir(_: std.mem.Allocator, _: []const u8) void {}
+};
 
 pub const Header = module.Header;
 pub const CacheModule = module.CacheModule;
@@ -36,6 +54,7 @@ pub const CacheCleanup = cleanup;
 pub const CleanupStats = cleanup.CleanupStats;
 pub const PackageEnv = package.PackageEnv;
 pub const BuildEnv = build.BuildEnv;
+pub const Io = @import("io").Io;
 
 // /// Global cache statistics (optional, for debugging)
 // var global_stats: Stats = .{};
@@ -59,7 +78,9 @@ pub const BuildEnv = build.BuildEnv;
 // }
 
 test "compile tests" {
-    std.testing.refAllDecls(@import("cache_cleanup.zig"));
+    if (!threading_mod.is_freestanding) {
+        std.testing.refAllDecls(@import("cache_cleanup.zig"));
+    }
     std.testing.refAllDecls(@import("cache_config.zig"));
     std.testing.refAllDecls(@import("cache_key.zig"));
     std.testing.refAllDecls(@import("cache_manager.zig"));

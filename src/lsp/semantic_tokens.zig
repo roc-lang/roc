@@ -12,6 +12,8 @@ const tokenize = @import("parse").tokenize;
 const parse = @import("parse");
 const can = @import("can");
 const base = @import("base");
+const eval_mod = @import("eval");
+const compiled_builtins = @import("compiled_builtins");
 const line_info = @import("line_info.zig");
 
 const Allocators = base.Allocators;
@@ -22,6 +24,7 @@ const LineInfo = line_info.LineInfo;
 const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
 const Region = base.Region;
+const builtin_loading = eval_mod.builtin_loading;
 
 /// Semantic token indices matching TOKEN_TYPES in capabilities.zig.
 pub const SemanticType = enum(u32) {
@@ -300,8 +303,21 @@ pub fn extractSemanticTokensWithImports(
         return extractSemanticTokens(allocator, source, info);
     };
 
+    const builtin_indices = builtin_loading.deserializeBuiltinIndices(allocator, compiled_builtins.builtin_indices_bin) catch {
+        return extractSemanticTokens(allocator, source, info);
+    };
+    var builtin_module = builtin_loading.loadCompiledModule(allocator, compiled_builtins.builtin_bin, "Builtin", compiled_builtins.builtin_source) catch {
+        return extractSemanticTokens(allocator, source, info);
+    };
+    defer builtin_module.deinit();
+
     // Create canonicalizer and run
-    var canonicalizer = can.Can.init(&allocators, &module_env, parse_ast, null) catch {
+    var canonicalizer = can.Can.initModule(&allocators, &module_env, parse_ast, .{
+        .builtin_types = .{
+            .builtin_module_env = builtin_module.env,
+            .builtin_indices = builtin_indices,
+        },
+    }) catch {
         return extractSemanticTokens(allocator, source, info);
     };
     defer canonicalizer.deinit();

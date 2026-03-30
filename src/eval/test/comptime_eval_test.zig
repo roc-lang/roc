@@ -6,10 +6,13 @@ const types = @import("types");
 const base = @import("base");
 const can = @import("can");
 const check = @import("check");
+const compile_build = @import("compile_build");
 const compiled_builtins = @import("compiled_builtins");
 const ComptimeEvaluator = @import("../comptime_evaluator.zig").ComptimeEvaluator;
+const DevEvaluator = @import("../mod.zig").DevEvaluator;
 const BuiltinTypes = @import("../builtins.zig").BuiltinTypes;
 const builtin_loading = @import("../builtin_loading.zig");
+const layout = @import("layout");
 const roc_target = @import("roc_target");
 
 const Can = can.Can;
@@ -73,7 +76,12 @@ fn parseCheckAndEvalModuleWithName(src: []const u8, module_name: []const u8) !Ev
     };
 
     // Create canonicalizer
-    var czer = try Can.init(&allocators, module_env, parse_ast, null);
+    var czer = try Can.initModule(&allocators, module_env, parse_ast, .{
+        .builtin_types = .{
+            .builtin_module_env = builtin_module.env,
+            .builtin_indices = builtin_indices,
+        },
+    });
     defer czer.deinit();
 
     // Canonicalize the module
@@ -97,7 +105,7 @@ fn parseCheckAndEvalModuleWithName(src: []const u8, module_name: []const u8) !Ev
 
     // Create and run comptime evaluator with real builtins
     const builtin_types = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
-    const evaluator = try ComptimeEvaluator.init(gpa, module_env, &.{}, problems, builtin_types, builtin_module.env, &checker.import_mapping, roc_target.RocTarget.detectNative());
+    const evaluator = try ComptimeEvaluator.init(gpa, module_env, &.{}, problems, builtin_types, builtin_module.env, &checker.import_mapping, roc_target.RocTarget.detectNative(), null);
 
     return .{
         .module_env = module_env,
@@ -160,9 +168,6 @@ fn parseCheckAndEvalModuleWithImport(src: []const u8, import_name: []const u8, i
     var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
     defer module_envs.deinit();
 
-    // Populate module_envs with builtin types (like production does)
-    try Can.populateModuleEnvs(&module_envs, module_env, builtin_module.env, builtin_indices);
-
     // Convert import name to Ident.Idx using the MODULE's ident store (not a temporary one!)
     // This is important because the canonicalizer will look up identifiers in this same store
     const import_ident = try module_env.insertIdent(base.Ident.for_text(import_name));
@@ -172,7 +177,13 @@ fn parseCheckAndEvalModuleWithImport(src: []const u8, import_name: []const u8, i
     try module_envs.put(import_ident, .{ .env = imported_module, .qualified_type_ident = import_qualified_ident });
 
     // Create canonicalizer with imports
-    var czer = try Can.init(&allocators, module_env, parse_ast, &module_envs);
+    var czer = try Can.initModule(&allocators, module_env, parse_ast, .{
+        .builtin_types = .{
+            .builtin_module_env = builtin_module.env,
+            .builtin_indices = builtin_indices,
+        },
+        .imported_modules = &module_envs,
+    });
     defer czer.deinit();
 
     // Canonicalize the module
@@ -192,7 +203,7 @@ fn parseCheckAndEvalModuleWithImport(src: []const u8, import_name: []const u8, i
     module_env.imports.resolveImports(module_env, imported_envs.items);
 
     // Type check the module
-    var checker = try Check.init(gpa, &module_env.types, module_env, imported_envs.items, &module_envs, &module_env.store.regions, builtin_ctx);
+    var checker = try Check.init(gpa, &module_env.types, module_env, imported_envs.items, null, &module_env.store.regions, builtin_ctx);
     defer checker.deinit();
 
     try checker.checkFile();
@@ -207,7 +218,7 @@ fn parseCheckAndEvalModuleWithImport(src: []const u8, import_name: []const u8, i
 
     // Create and run comptime evaluator with real builtins
     const builtin_types = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
-    const evaluator = try ComptimeEvaluator.init(gpa, module_env, other_envs_slice, problems, builtin_types, builtin_module.env, &checker.import_mapping, roc_target.RocTarget.detectNative());
+    const evaluator = try ComptimeEvaluator.init(gpa, module_env, other_envs_slice, problems, builtin_types, builtin_module.env, &checker.import_mapping, roc_target.RocTarget.detectNative(), null);
 
     return .{
         .module_env = module_env,
@@ -251,6 +262,30 @@ fn cleanupEvalModuleWithImport(result: anytype) void {
     builtin_module_mut.deinit();
 }
 
+fn expectNoCanDiagnostics(module_env: *ModuleEnv) !void {
+    const diagnostics = try module_env.getDiagnostics();
+    defer test_allocator.free(diagnostics);
+
+    try testing.expectEqual(@as(usize, 0), diagnostics.len);
+}
+
+fn expectNoUndeclaredTypeDiagnostics(module_env: *ModuleEnv, forbidden_names: []const []const u8) !void {
+    const diagnostics = try module_env.getDiagnostics();
+    defer test_allocator.free(diagnostics);
+
+    for (diagnostics) |diagnostic| {
+        switch (diagnostic) {
+            .undeclared_type => |data| {
+                const type_name = module_env.getIdent(data.name);
+                for (forbidden_names) |forbidden_name| {
+                    try testing.expect(!std.mem.eql(u8, type_name, forbidden_name));
+                }
+            },
+            else => {},
+        }
+    }
+}
+
 test "comptime eval - simple constant" {
     const src = "x = 42";
 
@@ -262,6 +297,24 @@ test "comptime eval - simple constant" {
     // Should evaluate 1 declaration with no crashes
     try testing.expectEqual(@as(u32, 1), summary.evaluated);
     try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval helper auto-imports builtin typed suffix types" {
+    const src =
+        \\typed = 0.I64
+        \\frac = 3.14.Dec
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    try expectNoCanDiagnostics(result.module_env);
+
+    const summary = try result.evaluator.evalAll();
+
+    try testing.expectEqual(@as(u32, 2), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+    try testing.expectEqual(@as(usize, 0), result.problems.len());
 }
 
 test "comptime eval - crash in constant" {
@@ -403,6 +456,42 @@ test "comptime eval - cross-module constant works" {
     // The constant in module B should evaluate successfully using module A's value
     try testing.expectEqual(@as(u32, 1), summary_b.evaluated);
     try testing.expectEqual(@as(u32, 0), summary_b.crashed);
+}
+
+test "comptime imported-module helper auto-imports builtin typed suffix types" {
+    const src_a =
+        \\module [answer]
+        \\
+        \\answer = 41.I64
+    ;
+
+    var result_a = try parseCheckAndEvalModuleWithName(src_a, "A");
+    defer cleanupEvalModule(&result_a);
+
+    const summary_a = try result_a.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary_a.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary_a.crashed);
+
+    const src_b =
+        \\module []
+        \\
+        \\import A
+        \\
+        \\typed = 1.I64
+        \\frac = 3.14.Dec
+        \\combined = A.answer + typed
+    ;
+
+    var result_b = try parseCheckAndEvalModuleWithImport(src_b, "A", result_a.module_env);
+    defer cleanupEvalModuleWithImport(&result_b);
+
+    try expectNoUndeclaredTypeDiagnostics(result_b.module_env, &.{ "I64", "Dec" });
+
+    const summary_b = try result_b.evaluator.evalAll();
+
+    try testing.expectEqual(@as(u32, 3), summary_b.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary_b.crashed);
+    try testing.expectEqual(@as(usize, 0), result_b.problems.len());
 }
 
 test "comptime eval - cross-module crash is detected" {
@@ -2717,7 +2806,7 @@ test "encode - custom format type with infallible encoding (empty error type)" {
         \\    encode_str = |_self, str| Ok(Str.to_utf8(str))
         \\}
         \\
-        \\fmt = Utf8
+        \\fmt = Utf8.Format
     ;
 
     var res = try parseCheckAndEvalModule(src);
@@ -2988,7 +3077,7 @@ test "issue 8979: while (True) with break should not crash" {
 test "issue 8979: while (True) with conditional break should not crash" {
     const src =
         \\result = {
-        \\    var $i = 0i64
+        \\    var $i = 0.I64
         \\    while (True) {
         \\        if $i >= 5 {
         \\            break
@@ -3015,7 +3104,7 @@ test "issue 8979: while with mutable condition should not crash" {
         \\    while ($continue) {
         \\        $continue = False
         \\    }
-        \\    42i64
+        \\    42.I64
         \\}
     ;
 
@@ -3031,7 +3120,7 @@ test "issue 8979: while with mutable condition should not crash" {
 test "issue 8979: while with comparison involving mutable var should not crash" {
     const src =
         \\result = {
-        \\    var $i = 0i64
+        \\    var $i = 0.I64
         \\    while ($i < 5) {
         \\        $i = $i + 1
         \\    }
@@ -3070,7 +3159,7 @@ test "issue 8979: nested while - inner break does not save outer loop" {
     const src =
         \\e = {
         \\    while (True) {
-        \\        var $j = 0i64
+        \\        var $j = 0.I64
         \\        while ($j < 3) {
         \\            if $j == 2 { break }
         \\            $j = $j + 1
@@ -3088,6 +3177,273 @@ test "issue 8979: nested while - inner break does not save outer loop" {
     try testing.expectEqual(@as(u32, 1), summary.crashed);
 }
 
+test "tag union matching with payload inside function - single module" {
+    // Regression test: opaque-wrapped tag union matching with payloads.
+    // Single-module version (works). See also cross-module version below.
+    const src =
+        \\MyTag := [Foo({x: U64, y: U64}), Bar, Baz(Str)]
+        \\
+        \\lookup = |items, idx| {
+        \\    match List.get(items, idx) {
+        \\        Ok(val) =>
+        \\            match val {
+        \\                Foo(rec) => rec.x
+        \\                Baz(_) => 99
+        \\                _ => 0
+        \\            }
+        \\        Err(_) => 0
+        \\    }
+        \\}
+        \\
+        \\expect {
+        \\    items = [MyTag.Foo({x: 42, y: 7})]
+        \\    r = match List.get(items, 0) {
+        \\        Ok(val) => match val { Foo(rec) => rec.x, _ => 0 }
+        \\        Err(_) => 0
+        \\    }
+        \\    r == 42
+        \\}
+        \\
+        \\expect lookup([MyTag.Foo({x: 42, y: 7})], 0) == 42
+    ;
+
+    var res = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&res);
+
+    const summary = try res.evaluator.evalAll();
+
+    try testing.expect(summary.evaluated >= 1);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+    try testing.expectEqual(@as(usize, 0), res.problems.len());
+}
+
+test "tag union matching with payload inside function - cross module" {
+    // Regression test: opaque-wrapped tag union matching with payloads fails
+    // when the opaque type is defined in another module and the match occurs
+    // inside a called function. See bug-report-interpreter-tag-matching.md
+    const src_a =
+        \\module [MyTag]
+        \\
+        \\MyTag := [Foo({x: U64, y: U64}), Bar, Baz(Str)]
+    ;
+
+    var result_a = try parseCheckAndEvalModuleWithName(src_a, "A");
+    defer cleanupEvalModule(&result_a);
+
+    const summary_a = try result_a.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 0), summary_a.crashed);
+
+    const src_b =
+        \\module []
+        \\
+        \\import A exposing [MyTag]
+        \\
+        \\lookup = |items, idx| {
+        \\    match List.get(items, idx) {
+        \\        Ok(val) =>
+        \\            match val {
+        \\                Foo(rec) => rec.x
+        \\                Baz(_) => 99
+        \\                _ => 0
+        \\            }
+        \\        Err(_) => 0
+        \\    }
+        \\}
+        \\
+        \\# Inline version (should work)
+        \\expect {
+        \\    items = [MyTag.Foo({x: 42, y: 7})]
+        \\    r = match List.get(items, 0) {
+        \\        Ok(val) => match val { Foo(rec) => rec.x, _ => 0 }
+        \\        Err(_) => 0
+        \\    }
+        \\    r == 42
+        \\}
+        \\
+        \\# Function version (the bug - should also give 42)
+        \\expect lookup([MyTag.Foo({x: 42, y: 7})], 0) == 42
+    ;
+
+    var result_b = try parseCheckAndEvalModuleWithImport(src_b, "A", result_a.module_env);
+    defer cleanupEvalModuleWithImport(&result_b);
+
+    const summary_b = try result_b.evaluator.evalAll();
+
+    // Both expects should pass - 0 problems means no expect failures
+    try testing.expect(summary_b.evaluated >= 1);
+    try testing.expectEqual(@as(u32, 0), summary_b.crashed);
+    try testing.expectEqual(@as(usize, 0), result_b.problems.len());
+}
+
 // Note: List.repeat test temporarily disabled while investigating
 // why List.repeat triggers the infinite loop check. List.repeat
 // is implemented with recursion in Roc, not while loops.
+
+test "issue 9262: dev evaluator handles opaque function field lookup" {
+    const src =
+        \\W(a) := { f : {} -> [V(a)] }.{
+        \\    run : W(a) -> [V(a)]
+        \\    run = |w| (w.f)({})
+        \\
+        \\    mk : a -> W(a)
+        \\    mk = |val| { f: |_| V(val) }
+        \\}
+        \\
+        \\result = W.run(W.mk("x")) == V("x")
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
+    const target_def = result.module_env.store.getDef(defs[defs.len - 1]);
+
+    var dev_eval = try DevEvaluator.init(test_allocator, null);
+    defer dev_eval.deinit();
+
+    const all_module_envs = [_]*ModuleEnv{ result.builtin_module.env, result.module_env };
+    var code_result = try dev_eval.generateCode(result.module_env, target_def.expr, &all_module_envs, null);
+    defer code_result.deinit();
+
+    try testing.expectEqual(@as(usize, 0), result.problems.len());
+    try testing.expect(code_result.code.len > 0);
+    try testing.expect(code_result.entry_offset < code_result.code.len);
+}
+
+test "issue 9281: dev evaluator stack overflow with nested recursive opaque types across modules" {
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const tmp_path = try tmp_dir.dir.realpathAlloc(test_allocator, ".");
+    defer test_allocator.free(tmp_path);
+
+    const repo_root = try std.fs.cwd().realpathAlloc(test_allocator, ".");
+    defer test_allocator.free(repo_root);
+
+    const platform_main_path = try std.fs.path.join(test_allocator, &.{ repo_root, "test", "fx", "platform", "main.roc" });
+    defer test_allocator.free(platform_main_path);
+
+    const platform_header_path = try test_allocator.dupe(u8, platform_main_path);
+    defer test_allocator.free(platform_header_path);
+    std.mem.replaceScalar(u8, platform_header_path, '\\', '/');
+
+    try tmp_dir.dir.makePath("pkg");
+    try tmp_dir.dir.writeFile(.{
+        .sub_path = "pkg/main.roc",
+        .data = "package [Inner, Outer] {}\n",
+    });
+    try tmp_dir.dir.writeFile(.{
+        .sub_path = "pkg/Inner.roc",
+        .data =
+        \\Inner := [
+        \\    Leaf(I64),
+        \\    Branch(Inner),
+        \\]
+        ,
+    });
+    try tmp_dir.dir.writeFile(.{
+        .sub_path = "pkg/Outer.roc",
+        .data =
+        \\import Inner exposing [Inner]
+        \\
+        \\Outer := [
+        \\    Div(List(Outer)),
+        \\    Node(Inner),
+        \\    Text(Str),
+        \\].{
+        \\    div : List(Outer) -> Outer
+        \\    div = |children| Div(children)
+        \\
+        \\    text : Str -> Outer
+        \\    text = |s| Text(s)
+        \\}
+        ,
+    });
+
+    const app_source = try std.fmt.allocPrint(test_allocator,
+        \\app [main!] {{
+        \\    pf: platform "{s}",
+        \\    pkg: "./pkg/main.roc",
+        \\}}
+        \\
+        \\import pf.Stdout
+        \\import pkg.Outer
+        \\
+        \\main! = || {{
+        \\    tree = Outer.div([Outer.text("hello")])
+        \\    match tree {{
+        \\        Div(_) => Stdout.line!("Div (correct)")
+        \\        _ => Stdout.line!("other")
+        \\    }}
+        \\}}
+        \\
+    , .{platform_header_path});
+    defer test_allocator.free(app_source);
+
+    try tmp_dir.dir.writeFile(.{
+        .sub_path = "app.roc",
+        .data = app_source,
+    });
+
+    const app_path = try std.fs.path.join(test_allocator, &.{ tmp_path, "app.roc" });
+    defer test_allocator.free(app_path);
+
+    var build_env = try compile_build.BuildEnv.init(test_allocator, .single_threaded, 1, roc_target.RocTarget.detectNative(), tmp_path);
+    defer build_env.deinit();
+
+    try build_env.discoverDependencies(app_path);
+    try build_env.compileDiscovered();
+
+    var resolved = try build_env.getResolvedModuleEnvs(test_allocator);
+    defer test_allocator.free(resolved.compiled_modules);
+    defer test_allocator.free(resolved.all_module_envs);
+
+    try resolved.processHostedFunctions(test_allocator, null);
+    const entry = try resolved.findEntrypoint();
+
+    var dev_eval = try DevEvaluator.init(test_allocator, null);
+    defer dev_eval.deinit();
+
+    const layout_store_ptr = try dev_eval.ensureGlobalLayoutStore(resolved.all_module_envs);
+    const module_idx: u32 = for (resolved.all_module_envs, 0..) |env, i| {
+        if (env == entry.platform_env) break @intCast(i);
+    } else unreachable;
+
+    const expr_type_var = ModuleEnv.varFrom(entry.entrypoint_expr);
+    const resolved_type = entry.platform_env.types.resolveVar(expr_type_var);
+    const maybe_func = resolved_type.desc.content.unwrapFunc();
+
+    var arg_layouts_buf: [16]layout.Idx = undefined;
+    var arg_layouts_len: usize = 0;
+    var ret_layout: layout.Idx = undefined;
+
+    if (maybe_func) |func| {
+        const arg_vars = entry.platform_env.types.sliceVars(func.args);
+        var type_scope = types.TypeScope.init(test_allocator);
+        defer type_scope.deinit();
+
+        for (arg_vars, 0..) |arg_var, i| {
+            arg_layouts_buf[i] = try layout_store_ptr.fromTypeVar(module_idx, arg_var, &type_scope, null);
+        }
+
+        arg_layouts_len = arg_vars.len;
+        ret_layout = try layout_store_ptr.fromTypeVar(module_idx, func.ret, &type_scope, null);
+    } else {
+        var type_scope = types.TypeScope.init(test_allocator);
+        defer type_scope.deinit();
+        ret_layout = try layout_store_ptr.fromTypeVar(module_idx, expr_type_var, &type_scope, null);
+    }
+
+    var code_result = try dev_eval.generateEntrypointCode(
+        entry.platform_env,
+        entry.entrypoint_expr,
+        resolved.all_module_envs,
+        entry.app_module_env,
+        arg_layouts_buf[0..arg_layouts_len],
+        ret_layout,
+    );
+    defer code_result.deinit();
+
+    try testing.expect(code_result.code.len > 0);
+    try testing.expect(code_result.entry_offset < code_result.code.len);
+}

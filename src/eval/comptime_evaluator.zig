@@ -4,15 +4,17 @@
 //! converting any crashes into diagnostics that are reported normally.
 
 const std = @import("std");
-const builtin = @import("builtin");
 const base = @import("base");
 const builtins = @import("builtins");
+const Io = @import("io").Io;
 const i128h = builtins.compiler_rt_128;
 const can = @import("can");
 const check_mod = @import("check");
 const types_mod = @import("types");
 const import_mapping_mod = types_mod.import_mapping;
-const Interpreter = @import("interpreter.zig").Interpreter;
+const interpreter_mod = @import("interpreter.zig");
+const Interpreter = interpreter_mod.Interpreter;
+const isRecordStyleStruct = interpreter_mod.isRecordStyleStruct;
 const eval_mod = @import("mod.zig");
 
 const RocOps = builtins.host_abi.RocOps;
@@ -31,7 +33,7 @@ const ProblemStore = check_mod.problem.Store;
 const EvalError = Interpreter.Error;
 const CrashContext = eval_mod.CrashContext;
 const BuiltinTypes = eval_mod.BuiltinTypes;
-const layout_mod = @import("layout");
+const layout_mod = @import("interpreter_layout");
 const roc_target = @import("roc_target");
 
 fn comptimeRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.c) void {
@@ -94,16 +96,12 @@ fn comptimeRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) v
     realloc_args.answer = new_ptr;
 }
 
-fn comptimeRocDbg(dbg_args: *const RocDbg, _: *anyopaque) callconv(.c) void {
-    // stderr not available on freestanding targets
-    if (comptime builtin.os.tag != .freestanding) {
-        var stderr_buffer: [256]u8 = undefined;
-        var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
-        const stderr = &stderr_writer.interface;
-        const msg_slice = dbg_args.utf8_bytes[0..dbg_args.len];
-        stderr.print("[dbg] {s}\n", .{msg_slice}) catch {};
-        stderr.flush() catch {};
-    }
+fn comptimeRocDbg(dbg_args: *const RocDbg, env: *anyopaque) callconv(.c) void {
+    const evaluator: *ComptimeEvaluator = @ptrCast(@alignCast(env));
+    const msg_slice = dbg_args.utf8_bytes[0..dbg_args.len];
+    var buf: [256]u8 = undefined;
+    const msg = std.fmt.bufPrint(&buf, "[dbg] {s}\n", .{msg_slice}) catch "[dbg] (message too long)\n";
+    evaluator.io.writeStderr(msg) catch {};
 }
 
 fn comptimeRocExpectFailed(expect_args: *const RocExpectFailed, env: *anyopaque) callconv(.c) void {
@@ -171,6 +169,8 @@ pub const ComptimeEvaluator = struct {
     roc_arena: std.heap.ArenaAllocator,
     /// Track allocation sizes for realloc (maps ptr -> size)
     roc_alloc_sizes: std.AutoHashMap(usize, usize),
+    /// Io context for routing [dbg] output
+    io: Io,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -181,6 +181,7 @@ pub const ComptimeEvaluator = struct {
         builtin_module_env: ?*const ModuleEnv,
         import_mapping: *const import_mapping_mod.ImportMapping,
         target: roc_target.RocTarget,
+        io: ?Io,
     ) !ComptimeEvaluator {
         const interp = try Interpreter.init(allocator, cir, builtin_types, builtin_module_env, other_envs, import_mapping, null, null, target);
 
@@ -197,6 +198,7 @@ pub const ComptimeEvaluator = struct {
             .current_expr_region = null,
             .roc_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
             .roc_alloc_sizes = std.AutoHashMap(usize, usize).init(allocator),
+            .io = io orelse Io.default(),
         };
     }
 
@@ -336,15 +338,36 @@ pub const ComptimeEvaluator = struct {
 
         // Get the runtime type variable from the StackValue
         const rt_var = stack_value.rt_var;
+
         const resolved = self.interpreter.runtime_types.resolveVar(rt_var);
 
-        // Check if it's a tag union type
+        // Check if this is a non-opaque nominal type (declared with :=) whose backing
+        // is a tag union (e.g. Color := [Red, Green, Blue]). We must NOT fold these because
+        // the folded expression loses the nominal type information, causing layout
+        // inconsistencies when the test runner's interpreter later evaluates it.
+        // Opaque types (declared with ::) like builtin numeric types (Dec, I64) are safe
+        // to fold since they go through numeric paths (e_num) that preserve type info.
+        if (resolved.desc.content == .structure and
+            resolved.desc.content.structure == .nominal_type)
+        {
+            const nom = resolved.desc.content.structure.nominal_type;
+            if (!nom.is_opaque) {
+                const backing_var = self.interpreter.runtime_types.getNominalBackingVar(nom);
+                const backing_resolved = self.interpreter.runtime_types.resolveVar(backing_var);
+                if (backing_resolved.desc.content == .structure and
+                    backing_resolved.desc.content.structure == .tag_union) return;
+            }
+        }
+
+        // Check if it's a tag union type (without unwrapping nominals/aliases)
         const is_tag_union = resolved.desc.content == .structure and
             resolved.desc.content.structure == .tag_union;
 
         // Special case for Bool type: u8 scalar with value 0 or 1
-        // This handles nominal Bool types that aren't properly tracked through rt_var
-        if (layout.tag == .scalar and layout.data.scalar.tag == .int and
+        // This handles Bool types (which may be aliases or nominals not fully tracked
+        // through rt_var). Only apply when the type is NOT detected as a bare tag union,
+        // to avoid misidentifying tag union discriminants as Bool.
+        if (!is_tag_union and layout.tag == .scalar and layout.data.scalar.tag == .int and
             layout.data.scalar.data.int == .u8)
         {
             const val = stack_value.asI128();
@@ -356,21 +379,21 @@ pub const ComptimeEvaluator = struct {
         }
 
         if (is_tag_union) {
-            // Tag unions can be scalars (no payload) or tuples (with payload)
+            // Tag unions can be scalars (no payload) or structs (with payload)
             switch (layout.tag) {
                 .scalar => try self.foldTagUnionScalar(expr_idx, stack_value),
-                .tuple => try self.foldTagUnionTuple(expr_idx, stack_value),
+                .struct_ => try self.foldTagUnionTuple(expr_idx, stack_value),
                 .tag_union => try self.foldTagUnionWithPayload(expr_idx, stack_value),
-                // Record, list, closure, box layouts for tag unions can't be constant-folded
-                .record, .list, .closure, .box, .box_of_zst, .list_of_zst, .zst => return,
+                // List, closure, box layouts for tag unions can't be constant-folded
+                .list, .closure, .box, .box_of_zst, .list_of_zst, .zst => return,
             }
         } else {
             // Not a tag union - check layout type
             switch (layout.tag) {
                 .scalar => try self.foldScalar(expr_idx, stack_value, layout),
-                .tuple => try self.foldTuple(expr_idx, stack_value),
+                .struct_ => try self.foldTuple(expr_idx, stack_value),
                 // These remain as-is - no constant folding needed or possible
-                .closure, .record, .list, .tag_union, .box, .box_of_zst, .list_of_zst, .zst => return,
+                .closure, .list, .tag_union, .box, .box_of_zst, .list_of_zst, .zst => return,
             }
         }
     }
@@ -460,8 +483,8 @@ pub const ComptimeEvaluator = struct {
                     },
                 }
             },
-            // Str and opaque_ptr scalars can't be meaningfully folded to simpler expressions
-            .str, .opaque_ptr => return,
+            // Str scalars can't be meaningfully folded to simpler expressions
+            .str => return,
         }
     }
 
@@ -611,7 +634,7 @@ pub const ComptimeEvaluator = struct {
             defer arg_indices.deinit();
 
             // Check if payload is a tuple (multiple args) or single value
-            if (payload_value.layout.tag == .tuple and arg_vars.len > 1) {
+            if (payload_value.layout.tag == .struct_ and arg_vars.len > 1) {
                 // Multiple arguments - payload is a tuple
                 var payload_acc = try payload_value.asTuple(&self.interpreter.runtime_layout_store);
                 for (0..arg_vars.len) |i| {
@@ -703,7 +726,7 @@ pub const ComptimeEvaluator = struct {
             defer arg_indices.deinit();
 
             // Check if payload is a tuple (multiple args) or single value
-            if (payload_layout.tag == .tuple and arg_vars.len > 1) {
+            if (payload_layout.tag == .struct_ and arg_vars.len > 1) {
                 // Multiple arguments - payload is a tuple
                 var payload_acc = try payload_value.asTuple(&self.interpreter.runtime_layout_store);
                 for (0..arg_vars.len) |i| {
@@ -726,6 +749,10 @@ pub const ComptimeEvaluator = struct {
     /// Fold a tuple value by recursively folding each element
     /// Creates constant expressions for each element and replaces the tuple expression
     fn foldTuple(self: *ComptimeEvaluator, expr_idx: CIR.Expr.Idx, stack_value: eval_mod.StackValue) !void {
+        // Unit/empty tuples can be represented with a null pointer; no elements to fold.
+        const struct_info = self.interpreter.runtime_layout_store.getStructInfo(stack_value.layout);
+        if (struct_info.fields.len == 0) return;
+
         // Get the tuple accessor
         var accessor = try stack_value.asTuple(&self.interpreter.runtime_layout_store);
         const elem_count = accessor.getElementCount();
@@ -806,10 +833,10 @@ pub const ComptimeEvaluator = struct {
             // Handle tag union types
             switch (layout.tag) {
                 .scalar => return try self.createTagUnionScalarExpr(stack_value, region),
-                .tuple => return try self.createTagUnionTupleExpr(stack_value, region),
+                .struct_ => return try self.createTagUnionTupleExpr(stack_value, region),
                 .tag_union => return try self.createTagUnionWithPayloadExpr(stack_value, region),
                 // These can't be constant-folded to expressions
-                .record, .list, .closure, .box, .box_of_zst, .list_of_zst, .zst => {
+                .list, .closure, .box, .box_of_zst, .list_of_zst, .zst => {
                     return error.NotImplemented;
                 },
             }
@@ -817,9 +844,9 @@ pub const ComptimeEvaluator = struct {
             // Non-tag union types
             switch (layout.tag) {
                 .scalar => return try self.createScalarExpr(stack_value, layout, region),
-                .tuple => return try self.createTupleExpr(stack_value, region),
+                .struct_ => return try self.createTupleExpr(stack_value, region),
                 // These can't be constant-folded
-                .closure, .record, .list, .tag_union, .box, .box_of_zst, .list_of_zst, .zst => {
+                .closure, .list, .tag_union, .box, .box_of_zst, .list_of_zst, .zst => {
                     return error.NotImplemented;
                 },
             }
@@ -907,7 +934,7 @@ pub const ComptimeEvaluator = struct {
                     },
                 }
             },
-            .str, .opaque_ptr => return error.NotImplemented,
+            .str => return error.NotImplemented,
         }
     }
 
@@ -1031,7 +1058,7 @@ pub const ComptimeEvaluator = struct {
             defer arg_indices.deinit();
 
             // Check if payload is a tuple (multiple args) or single value
-            if (payload_value.layout.tag == .tuple and arg_vars.len > 1) {
+            if (payload_value.layout.tag == .struct_ and arg_vars.len > 1) {
                 // Multiple arguments - payload is a tuple
                 var payload_acc = try payload_value.asTuple(&self.interpreter.runtime_layout_store);
                 for (0..arg_vars.len) |i| {
@@ -1127,7 +1154,7 @@ pub const ComptimeEvaluator = struct {
             defer arg_indices.deinit();
 
             // Check if payload is a tuple (multiple args) or single value
-            if (payload_layout.tag == .tuple and arg_vars.len > 1) {
+            if (payload_layout.tag == .struct_ and arg_vars.len > 1) {
                 // Multiple arguments - payload is a tuple
                 var payload_acc = try payload_value.asTuple(&self.interpreter.runtime_layout_store);
                 for (0..arg_vars.len) |i| {
@@ -1339,7 +1366,7 @@ pub const ComptimeEvaluator = struct {
             // Step 2: Look up the from_numeral method for this nominal type
             // Get the module where the type is defined
             const origin_module_ident = nominal_type.origin_module;
-            const is_builtin = origin_module_ident == self.env.idents.builtin_module;
+            const is_builtin = origin_module_ident.eql(self.env.idents.builtin_module);
 
             const origin_env: *const ModuleEnv = if (is_builtin) blk: {
                 break :blk self.interpreter.builtin_module_env orelse {
@@ -1350,7 +1377,7 @@ pub const ComptimeEvaluator = struct {
                 // For user-defined types, use interpreter's module lookup
                 break :blk self.interpreter.module_envs.get(origin_module_ident) orelse {
                     // Module not found - might be current module
-                    if (origin_module_ident == self.env.qualified_module_ident) {
+                    if (origin_module_ident.eql(self.env.qualified_module_ident)) {
                         break :blk self.env;
                     }
                     // Unknown module - skip for now
@@ -1854,13 +1881,13 @@ pub const ComptimeEvaluator = struct {
         var accessor = try dest.asRecord(&self.interpreter.runtime_layout_store);
 
         // Use self.env for field lookups since the record was built with self.env's idents
-        const is_neg_idx = accessor.findFieldIndex(self.env.idents.is_negative) orelse return error.OutOfMemory;
+        const is_neg_idx = accessor.findFieldIndex(self.env.getIdent(self.env.idents.is_negative)) orelse return error.OutOfMemory;
         try accessor.setFieldByIndex(is_neg_idx, is_negative, roc_ops);
 
-        const before_pt_idx = accessor.findFieldIndex(self.env.idents.digits_before_pt) orelse return error.OutOfMemory;
+        const before_pt_idx = accessor.findFieldIndex(self.env.getIdent(self.env.idents.digits_before_pt)) orelse return error.OutOfMemory;
         try accessor.setFieldByIndex(before_pt_idx, digits_before_pt, roc_ops);
 
-        const after_pt_idx = accessor.findFieldIndex(self.env.idents.digits_after_pt) orelse return error.OutOfMemory;
+        const after_pt_idx = accessor.findFieldIndex(self.env.getIdent(self.env.idents.digits_after_pt)) orelse return error.OutOfMemory;
         try accessor.setFieldByIndex(after_pt_idx, digits_after_pt, roc_ops);
 
         return dest;
@@ -1915,61 +1942,49 @@ pub const ComptimeEvaluator = struct {
                 return tag_value == 1;
             }
             return true; // Unknown format, optimistically allow
-        } else if (result.layout.tag == .record) {
-            var accessor = result.asRecord(&self.interpreter.runtime_layout_store) catch return true;
-            // Use layout store's env for field lookups since records use that env's idents
-            const layout_env = self.interpreter.runtime_layout_store.getEnv();
-            const tag_idx = accessor.findFieldIndex(layout_env.idents.tag) orelse return true;
-            const tag_rt_var = self.interpreter.runtime_types.fresh() catch return true;
-            const tag_field = accessor.getFieldByIndex(tag_idx, tag_rt_var) catch return true;
-
-            if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
-                const tag_value = tag_field.asI128();
-                if (tag_value == 0) {
-                    // This is an Err - try to extract InvalidNumeral(Str) message
-                    const error_msg = try self.problems.putExtraString(try self.extractInvalidNumeralMessage(accessor, region));
-                    const problem = Problem{
-                        .comptime_eval_error = .{
-                            .error_name = error_msg,
-                            .region = region,
-                        },
-                    };
-                    _ = try self.problems.appendProblem(self.allocator, problem);
-                    return false;
+        } else if (result.layout.tag == .struct_) {
+            // Struct tag union (record-style or tuple-style)
+            const tag_field = blk: {
+                if (isRecordStyleStruct(result.layout, &self.interpreter.runtime_layout_store)) {
+                    var accessor = result.asRecord(&self.interpreter.runtime_layout_store) catch return true;
+                    const layout_env = self.interpreter.runtime_layout_store.getEnv();
+                    const tag_idx = accessor.findFieldIndex(layout_env.getIdent(layout_env.idents.tag)) orelse return true;
+                    const tag_rt_var = self.interpreter.runtime_types.fresh() catch return true;
+                    break :blk accessor.getFieldByIndex(tag_idx, tag_rt_var) catch return true;
+                } else {
+                    var accessor = result.asTuple(&self.interpreter.runtime_layout_store) catch return true;
+                    const tag_elem_rt_var = self.interpreter.runtime_types.fresh() catch return true;
+                    break :blk accessor.getElement(1, tag_elem_rt_var) catch return true;
                 }
-                return true; // Ok
-            }
-            return true; // Unknown format, optimistically allow
-        } else if (result.layout.tag == .tuple) {
-            // Tuple layout (payload, tag) - newer representation for tag unions
-            // For tuple layouts, the interpreter stores error messages in last_error_message
-            // (which was already checked at the start of this function).
-            // If we get here, we just need to check if it was an Err and return false.
-            var accessor = result.asTuple(&self.interpreter.runtime_layout_store) catch return true;
-
-            // Element 1 is tag discriminant - getElement takes original index directly
-            const tag_elem_rt_var = self.interpreter.runtime_types.fresh() catch return true;
-            const tag_field = accessor.getElement(1, tag_elem_rt_var) catch return true;
+            };
 
             if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
                 const tag_value = tag_field.asI128();
-                // Tag indices: Ok and Err are ordered alphabetically, so Err=0 and Ok=1
-                // The interpreter writes ok_index for in_range, err_index for !in_range
-                // Looking at appendUnionTags sorting, "Err" < "Ok" alphabetically
                 if (tag_value == 0) {
-                    // This is an Err - the detailed message should have been in last_error_message
-                    // If we get here, something went wrong but we know it's an error
-                    const error_msg = try self.problems.putFmtExtraString(
-                        "Numeric literal validation failed",
-                        .{},
-                    );
-                    const problem = Problem{
-                        .comptime_eval_error = .{
-                            .error_name = error_msg,
-                            .region = region,
-                        },
-                    };
-                    _ = try self.problems.appendProblem(self.allocator, problem);
+                    // This is an Err - try to extract error message
+                    if (isRecordStyleStruct(result.layout, &self.interpreter.runtime_layout_store)) {
+                        const accessor = result.asRecord(&self.interpreter.runtime_layout_store) catch return true;
+                        const error_msg = try self.problems.putExtraString(try self.extractInvalidNumeralMessage(accessor, region));
+                        const problem = Problem{
+                            .comptime_eval_error = .{
+                                .error_name = error_msg,
+                                .region = region,
+                            },
+                        };
+                        _ = try self.problems.appendProblem(self.allocator, problem);
+                    } else {
+                        const error_msg = try self.problems.putFmtExtraString(
+                            "Numeric literal validation failed",
+                            .{},
+                        );
+                        const problem = Problem{
+                            .comptime_eval_error = .{
+                                .error_name = error_msg,
+                                .region = region,
+                            },
+                        };
+                        _ = try self.problems.appendProblem(self.allocator, problem);
+                    }
                     return false;
                 }
                 return true; // Ok
@@ -1996,7 +2011,7 @@ pub const ComptimeEvaluator = struct {
         // Get the payload field from the Try record
         // Use layout store's env for field lookups
         const layout_env = self.interpreter.runtime_layout_store.getEnv();
-        const payload_idx = try_accessor.findFieldIndex(layout_env.idents.payload) orelse {
+        const payload_idx = try_accessor.findFieldIndex(layout_env.getIdent(layout_env.idents.payload)) orelse {
             // This should never happen - Try type must have a payload field
             return try std.fmt.allocPrint(self.allocator, "Internal error: from_numeral returned malformed Try value (missing payload field)", .{});
         };
@@ -2009,7 +2024,7 @@ pub const ComptimeEvaluator = struct {
 
         // The payload for Err is the error type: [InvalidNumeral(Str), ...]
         // This is itself a tag union which may be a record { tag, payload } or just a scalar
-        if (payload_field.layout.tag == .record) {
+        if (payload_field.layout.tag == .struct_) {
             // Tag union with payload - look for InvalidNumeral tag
             var err_accessor = payload_field.asRecord(&self.interpreter.runtime_layout_store) catch {
                 return try std.fmt.allocPrint(self.allocator, "Internal error: from_numeral error payload is not a valid record", .{});
@@ -2017,7 +2032,7 @@ pub const ComptimeEvaluator = struct {
 
             // Check if this has a payload field (for the Str)
             // Single-tag unions might not have a "tag" field, so we look for payload first
-            if (err_accessor.findFieldIndex(layout_env.idents.payload)) |err_payload_idx| {
+            if (err_accessor.findFieldIndex(layout_env.getIdent(layout_env.idents.payload))) |err_payload_idx| {
                 const err_payload_rt_var = self.interpreter.runtime_types.fresh() catch {
                     return try std.fmt.allocPrint(self.allocator, "Internal error: could not create rt_var for InvalidNumeral payload", .{});
                 };

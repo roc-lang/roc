@@ -1,135 +1,421 @@
 //! Tests for the REPL
+const builtin = @import("builtin");
 const std = @import("std");
 const Repl = @import("eval.zig").Repl;
 const TestEnv = @import("repl_test_env.zig").TestEnv;
 
-// Tests
 const testing = std.testing;
+const posix = std.posix;
 
-// Use page_allocator for REPL tests (doesn't track leaks).
-// The interpreter/REPL has known memory leak issues that we're not fixing now.
-// We want to focus on getting the dev backend working without leaks.
-const interpreter_allocator = std.heap.page_allocator;
+const alloc = std.testing.allocator;
+const Backend = enum { interpreter, dev, wasm, llvm };
 
-test "Repl - initialization and cleanup" {
-    var test_env = TestEnv.init(interpreter_allocator);
+/// Run expression on interpreter only (for tests with known dev backend bugs).
+fn expectInterpreter(expr: []const u8, expected: []const u8) !void {
+    var test_env = TestEnv.init(alloc);
     defer test_env.deinit();
+    var repl = try Repl.init(alloc, test_env.get_ops(), null);
+    defer repl.deinit();
+    const result = try repl.step(expr);
+    defer alloc.free(result);
+    testing.expectEqualStrings(expected, result) catch |err| {
+        std.debug.print("INTERPRETER FAILED for: {s}\n", .{expr});
+        return err;
+    };
+}
 
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), null);
+fn expectBackend(backend: Backend, expr: []const u8, expected: []const u8) !void {
+    var test_env = TestEnv.init(alloc);
+    defer test_env.deinit();
+    var repl = switch (backend) {
+        .interpreter => try Repl.init(alloc, test_env.get_ops(), null),
+        .dev => try Repl.initWithBackend(alloc, test_env.get_ops(), test_env.crashContextPtr(), .dev),
+        .wasm => try Repl.initWithWasmBackend(alloc, test_env.get_ops(), test_env.crashContextPtr()),
+        .llvm => try Repl.initWithBackend(alloc, test_env.get_ops(), test_env.crashContextPtr(), .llvm),
+    };
     defer repl.deinit();
 
+    const result = try repl.step(expr);
+    defer alloc.free(result);
+    testing.expectEqualStrings(expected, result) catch |err| {
+        const backend_name = switch (backend) {
+            .interpreter => "INTERPRETER",
+            .dev => "DEV BACKEND",
+            .wasm => "WASM BACKEND",
+            .llvm => "LLVM BACKEND",
+        };
+        std.debug.print("{s} FAILED for: {s}\n", .{ backend_name, expr });
+        return err;
+    };
+}
+
+/// Run expression on interpreter, dev, wasm, and llvm backends, assert same expected output.
+fn expectAllNative(expr: []const u8, expected: []const u8) !void {
+    try expectBackend(.interpreter, expr, expected);
+    try expectBackend(.dev, expr, expected);
+    try expectBackend(.wasm, expr, expected);
+    try expectBackend(.llvm, expr, expected);
+}
+
+test "Repl - initialization and cleanup" {
+    var test_env = TestEnv.init(alloc);
+    defer test_env.deinit();
+    var repl = try Repl.init(alloc, test_env.get_ops(), null);
+    defer repl.deinit();
     try testing.expect(repl.definitions.count() == 0);
 }
 
 test "Repl - special commands" {
-    var test_env = TestEnv.init(interpreter_allocator);
+    var test_env = TestEnv.init(alloc);
     defer test_env.deinit();
-
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), null);
+    var repl = try Repl.init(alloc, test_env.get_ops(), null);
     defer repl.deinit();
 
     const help_result = try repl.step(":help");
-    defer interpreter_allocator.free(help_result);
+    defer alloc.free(help_result);
     try testing.expect(std.mem.indexOf(u8, help_result, "Enter an expression") != null);
 
     const exit_result = try repl.step(":exit");
-    defer interpreter_allocator.free(exit_result);
+    defer alloc.free(exit_result);
     try testing.expectEqualStrings("Goodbye!", exit_result);
 
     const empty_result = try repl.step("");
-    defer interpreter_allocator.free(empty_result);
+    defer alloc.free(empty_result);
     try testing.expectEqualStrings("", empty_result);
 }
 
 test "Repl - simple expressions" {
-    var test_env = TestEnv.init(interpreter_allocator);
-    defer test_env.deinit();
-
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), null);
-    defer repl.deinit();
-
-    const result = try repl.step("42");
-    defer interpreter_allocator.free(result);
-    try testing.expectEqualStrings("42", result);
+    try expectAllNative("42", "42.0");
 }
 
 test "Repl - string expressions" {
-    var test_env = TestEnv.init(interpreter_allocator);
-    defer test_env.deinit();
+    try expectAllNative("\"Hello, World!\"", "\"Hello, World!\"");
+}
 
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), null);
+test "Repl - Bool.True" {
+    try expectAllNative("Bool.True", "True");
+}
+
+test "Repl - Bool.False" {
+    try expectAllNative("Bool.False", "False");
+}
+
+test "Repl - Bool.not(False)" {
+    try expectAllNative("Bool.not(False)", "True");
+}
+
+test "Repl - Bool.not(Bool.True)" {
+    try expectAllNative("Bool.not(Bool.True)", "False");
+}
+
+test "Repl - Bool.not(Bool.False)" {
+    try expectAllNative("Bool.not(Bool.False)", "True");
+}
+
+test "Repl - !Bool.True" {
+    try expectAllNative("!Bool.True", "False");
+}
+
+test "Repl - !Bool.False" {
+    try expectAllNative("!Bool.False", "True");
+}
+
+test "Repl - I8.mod_by negative positive" {
+    try expectAllNative("I8.mod_by(-10, 3)", "2");
+}
+
+test "Repl - I8.mod_by positive negative" {
+    try expectAllNative("I8.mod_by(10, -3)", "-2");
+}
+
+test "Repl - I8.mod_by negative negative" {
+    try expectAllNative("I8.mod_by(-10, -3)", "-1");
+}
+
+test "Repl - Str.is_empty" {
+    try expectAllNative("Str.is_empty(\"\")", "True");
+    try expectAllNative("Str.is_empty(\"a\")", "False");
+}
+
+test "Repl - lambda renders as <function>" {
+    try expectAllNative("|x| x + 1", "<function>");
+    try expectAllNative("|x, y| x + y", "<function>");
+}
+
+test "Repl - Str.to_utf8" {
+    try expectAllNative("Str.to_utf8(\"hello\")", "[104, 101, 108, 108, 111]");
+    try expectAllNative("List.len(Str.to_utf8(\"\"))", "0");
+    try expectAllNative("List.len(Str.to_utf8(\"hello\"))", "5");
+    try expectAllNative("List.len(Str.to_utf8(\"é\"))", "2");
+    try expectAllNative("List.len(Str.to_utf8(\"🎉\"))", "4");
+    try expectAllNative("List.len(Str.to_utf8(\"Hello, World!\"))", "13");
+    try expectAllNative("List.len(Str.to_utf8(\"日本語\"))", "9");
+    try expectAllNative("List.len(Str.to_utf8(\"a é 🎉\"))", "9");
+    try expectAllNative("List.is_empty(Str.to_utf8(\"\"))", "True");
+    try expectAllNative("List.is_empty(Str.to_utf8(\"x\"))", "False");
+}
+
+test "Repl - Str.from_utf8_lossy" {
+    try expectAllNative("Str.from_utf8_lossy(Str.to_utf8(\"hello\"))", "\"hello\"");
+    try expectAllNative("Str.from_utf8_lossy(Str.to_utf8(\"\"))", "\"\"");
+    try expectAllNative("Str.from_utf8_lossy(Str.to_utf8(\"🎉 party!\"))", "\"🎉 party!\"");
+    try expectAllNative("Str.from_utf8_lossy(Str.to_utf8(\"abc123\"))", "\"abc123\"");
+}
+
+test "Repl - Str.from_utf8 Ok" {
+    try expectAllNative("Str.from_utf8([72, 105])", "Ok(\"Hi\")");
+}
+
+test "Repl - Str.from_utf8 ok_or" {
+    try expectAllNative("Str.from_utf8([72, 105]).ok_or(\"fallback\")", "\"Hi\"");
+}
+
+test "Repl - Str.from_utf8 snapshot sequence" {
+    const steps = &[_][2][]const u8{
+        .{ "Str.from_utf8([72, 105])", "Ok(\"Hi\")" },
+        .{ "Str.from_utf8([])", "Ok(\"\")" },
+        .{ "Str.from_utf8([82, 111, 99])", "Ok(\"Roc\")" },
+        .{ "Str.from_utf8([240, 159, 144, 166])", "Ok(\"🐦\")" },
+        .{ "Str.from_utf8([195, 169])", "Ok(\"é\")" },
+        .{ "Str.from_utf8([255]).is_err()", "True" },
+        .{ "Str.from_utf8([72, 105]).is_ok()", "True" },
+        .{ "Str.from_utf8([72, 105]).ok_or(\"fallback\")", "\"Hi\"" },
+        .{ "Str.from_utf8([255]).ok_or(\"fallback\")", "\"fallback\"" },
+        .{ "Str.from_utf8([255])", "Err(BadUtf8({ index: 0, problem: InvalidStartByte }))" },
+    };
+    try expectStateful(.interpreter, steps);
+    try expectStateful(.dev, steps);
+}
+
+test "Repl - U8.from_str result format" {
+    try expectAllNative("U8.from_str(\"42\")", "Ok(42)");
+}
+
+test "Repl - F32.from_str result format" {
+    try expectAllNative("F32.from_str(\"3.14\")", "Ok(3.140000104904175)");
+}
+
+test "Repl - list literals" {
+    try expectAllNative("List.len([1, 2, 3])", "3");
+    try expectAllNative("[1, 2, 3]", "[1.0, 2.0, 3.0]");
+    try expectAllNative("[\"hello\", \"world\", \"test\"]", "[\"hello\", \"world\", \"test\"]");
+    try expectAllNative("List.len([\"hello\", \"world\", \"test\"])", "3");
+}
+
+test "Repl - list operations" {
+    try expectAllNative("List.len(List.concat([1, 2], [3, 4]))", "4");
+    try expectAllNative("List.len(List.concat([], [1, 2, 3]))", "3");
+    try expectAllNative("List.len(List.concat([1, 2, 3], []))", "3");
+    try expectAllNative("List.contains([1, 2, 3, 4, 5], 3)", "True");
+    try expectAllNative("List.drop_if([1, 2, 3, 4, 5], |x| x > 2)", "[1.0, 2.0]");
+    try expectAllNative("List.keep_if([1, 2, 3, 4, 5], |x| x > 2)", "[3.0, 4.0, 5.0]");
+    try expectAllNative("List.keep_if([1, 2, 3], |_| Bool.False)", "[]");
+    try expectAllNative("List.fold_rev([1.I64, 2.I64, 3.I64], 0.I64, |x, acc| acc * 10 + x)", "321");
+    try expectAllNative("List.fold_rev([1], 0, |x, acc| acc * 10 + x)", "1.0");
+    try expectAllNative("List.fold_rev([1, 2, 3], 0, |x, acc| acc * 10 + x)", "321.0");
+    try expectAllNative("List.fold_rev([], 42, |x, acc| x + acc)", "42.0");
+}
+
+test "Repl - List.with_capacity" {
+    try expectAllNative("List.with_capacity(10)", "[]");
+    // TODO: List.first on empty list returns Ok({}) in dev backend instead of Err(ListWasEmpty)
+    // try expectBoth("List.first(List.with_capacity(10))", "Err(ListWasEmpty)");
+    try expectInterpreter("List.first(List.with_capacity(10))", "Err(ListWasEmpty)");
+}
+
+test "Repl - List.append" {
+    try expectAllNative("List.append([1, 2], 3)", "[1.0, 2.0, 3.0]");
+}
+
+test "Repl - range_to" {
+    // TODO: Dev backend crashes on 1.to(3) — Dec range_to not fully supported
+    // try expectBoth("1.to(3)", "[1.0, 2.0, 3.0]");
+    try expectInterpreter("1.to(3)", "[1.0, 2.0, 3.0]");
+}
+
+test "Repl - list_sort_with" {
+    try expectAllNative("List.len(List.sort_with([3, 1, 2], |a, b| if a < b LT else if a > b GT else EQ))", "3");
+    try expectAllNative("List.len(List.sort_with([5, 2, 8, 1, 9], |a, b| if a < b LT else if a > b GT else EQ))", "5");
+    try expectAllNative("List.len(List.sort_with([], |a, b| if a < b LT else if a > b GT else EQ))", "0");
+    try expectAllNative("List.len(List.sort_with([42], |a, b| if a < b LT else if a > b GT else EQ))", "1");
+}
+
+test "Repl - list fold with concat" {
+    try expectAllNative("List.len(List.fold([1, 2, 3], [], |acc, x| List.concat(acc, [x])))", "3");
+}
+
+// Stateful tests (assignments, variable redefinition) - these use multi-step REPL
+// sessions so we test each backend separately but with the same expectations.
+
+fn expectStateful(backend: Backend, steps: []const [2][]const u8) !void {
+    var test_env = TestEnv.init(alloc);
+    defer test_env.deinit();
+    var repl = switch (backend) {
+        .interpreter => try Repl.init(alloc, test_env.get_ops(), null),
+        .dev => try Repl.initWithBackend(alloc, test_env.get_ops(), null, .dev),
+        .wasm => try Repl.initWithWasmBackend(alloc, test_env.get_ops(), null),
+        .llvm => try Repl.initWithBackend(alloc, test_env.get_ops(), null, .llvm),
+    };
     defer repl.deinit();
 
-    const result = try repl.step("\"Hello, World!\"");
-    defer interpreter_allocator.free(result);
-    try testing.expectEqualStrings("\"Hello, World!\"", result);
+    for (steps) |step| {
+        const result = try repl.step(step[0]);
+        defer alloc.free(result);
+        testing.expectEqualStrings(step[1], result) catch |err| {
+            const backend_name = switch (backend) {
+                .interpreter => "INTERPRETER",
+                .dev => "DEV BACKEND",
+                .wasm => "WASM BACKEND",
+                .llvm => "LLVM BACKEND",
+            };
+            std.debug.print("{s} FAILED for: {s}\n", .{ backend_name, step[0] });
+            return err;
+        };
+    }
+}
+
+fn expectStepsFinal(backend: Backend, steps: []const []const u8, expected: []const u8) !void {
+    var test_env = TestEnv.init(alloc);
+    defer test_env.deinit();
+    var repl = switch (backend) {
+        .interpreter => try Repl.init(alloc, test_env.get_ops(), null),
+        .dev => try Repl.initWithBackend(alloc, test_env.get_ops(), null, .dev),
+        .wasm => try Repl.initWithWasmBackend(alloc, test_env.get_ops(), null),
+        .llvm => try Repl.initWithBackend(alloc, test_env.get_ops(), null, .llvm),
+    };
+    defer repl.deinit();
+
+    for (steps, 0..) |step, i| {
+        const result = try repl.step(step);
+        defer alloc.free(result);
+
+        if (i + 1 == steps.len) {
+            testing.expectEqualStrings(expected, result) catch |err| {
+                const backend_name = switch (backend) {
+                    .interpreter => "INTERPRETER",
+                    .dev => "DEV BACKEND",
+                    .wasm => "WASM BACKEND",
+                    .llvm => "LLVM BACKEND",
+                };
+                std.debug.print("{s} FAILED for: {s}\n", .{ backend_name, step });
+                return err;
+            };
+        }
+    }
+}
+
+fn expectStepsFinalInChild(backend: Backend, steps: []const []const u8, expected: []const u8) !void {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+
+    const pid = try posix.fork();
+
+    if (pid == 0) {
+        expectStepsFinal(backend, steps, expected) catch |err| {
+            std.debug.print("child expectStepsFinal error: {}\n", .{err});
+            std.c._exit(1);
+        };
+
+        std.c._exit(0);
+    }
+
+    const wait_result = posix.waitpid(pid, 0);
+    const status = wait_result.status;
+    const termination_signal: u8 = @truncate(status & 0x7f);
+
+    if (termination_signal != 0) {
+        std.debug.print("child terminated with signal {d}\n", .{termination_signal});
+        return error.TestUnexpectedResult;
+    }
+
+    const exit_code: u8 = @truncate((status >> 8) & 0xff);
+    try testing.expectEqual(@as(u8, 0), exit_code);
 }
 
 test "Repl - silent assignments" {
-    var test_env = TestEnv.init(interpreter_allocator);
-    defer test_env.deinit();
+    const steps = &[_][2][]const u8{
+        .{ "x = 5", "assigned `x`" },
+        .{ "x", "5.0" },
+    };
+    try expectStateful(.interpreter, steps);
+    try expectStateful(.dev, steps);
+    try expectStateful(.wasm, steps);
+    try expectStateful(.llvm, steps);
+}
 
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), null);
-    defer repl.deinit();
+test "Repl - issue 9258 opaque type param field access" {
+    const steps = &[_][]const u8{
+        "Wrapper(a) := { inner : a }",
+        "unwrap : Wrapper(a) -> a",
+        "unwrap = |w| w.inner",
+        "unwrap({ inner: \"hello\" })",
+    };
 
-    // Assignment should return descriptive output
-    const result1 = try repl.step("x = 5");
-    defer interpreter_allocator.free(result1);
-    try testing.expectEqualStrings("assigned `x`", result1);
+    try expectStepsFinal(.interpreter, steps, "\"hello\"");
+    try expectStepsFinalInChild(.dev, steps, "\"hello\"");
+}
 
-    // Expression should evaluate with context
-    const result2 = try repl.step("x");
-    defer interpreter_allocator.free(result2);
-    try testing.expectEqualStrings("5", result2);
+test "Repl - polymorphic numeric in comparison snapshot sequence" {
+    const steps = &[_][2][]const u8{
+        .{ "is_positive = |x| x > 0", "assigned `is_positive`" },
+        .{ "List.any([-1, 0, 1], is_positive)", "True" },
+        .{ "List.any([-1, 0, -2], is_positive)", "False" },
+    };
+    try expectStateful(.interpreter, steps);
+    try expectStateful(.dev, steps);
 }
 
 test "Repl - variable redefinition" {
-    var test_env = TestEnv.init(interpreter_allocator);
-    defer test_env.deinit();
-
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), null);
-    defer repl.deinit();
-
-    // First definition
-    const result1 = try repl.step("x = 5");
-    defer interpreter_allocator.free(result1);
-    try testing.expectEqualStrings("assigned `x`", result1);
-
-    // Define y in terms of x
-    const result2 = try repl.step("y = x + 1");
-    defer interpreter_allocator.free(result2);
-    try testing.expectEqualStrings("assigned `y`", result2);
-
-    // Evaluate y
-    const result3 = try repl.step("y");
-    defer interpreter_allocator.free(result3);
-    try testing.expectEqualStrings("6", result3);
-
-    // Redefine x
-    const result4 = try repl.step("x = 3");
-    defer interpreter_allocator.free(result4);
-    try testing.expectEqualStrings("assigned `x`", result4);
-
-    // Evaluate y again (should reflect new x value)
-    const result5 = try repl.step("y");
-    defer interpreter_allocator.free(result5);
-    try testing.expectEqualStrings("4", result5);
+    const steps = &[_][2][]const u8{
+        .{ "x = 5", "assigned `x`" },
+        .{ "y = x + 1", "assigned `y`" },
+        .{ "y", "6.0" },
+        .{ "x = 3", "assigned `x`" },
+        .{ "y", "4.0" },
+    };
+    try expectStateful(.interpreter, steps);
+    try expectStateful(.dev, steps);
+    try expectStateful(.wasm, steps);
+    try expectStateful(.llvm, steps);
 }
 
-test "Repl - build full source with block syntax" {
-    var test_env = TestEnv.init(interpreter_allocator);
-    defer test_env.deinit();
+test "Repl - for loop over list" {
+    const steps = &[_][2][]const u8{
+        .{ "[\"hello\", \"world\", \"test\"]", "[\"hello\", \"world\", \"test\"]" },
+        .{ "count = { var counter_ = 0; for _ in [\"hello\", \"world\", \"test\"] { counter_ = counter_ + 1 }; counter_ }", "assigned `count`" },
+    };
+    try expectStateful(.interpreter, steps);
+    try expectStateful(.dev, steps);
+    try expectStateful(.wasm, steps);
+    try expectStateful(.llvm, steps);
+}
 
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), null);
+test "Repl - for loop snapshots" {
+    const steps = &[_][2][]const u8{
+        .{ "unchanged = { var value_ = 42; for n in [] { value_ = n }; value_ }", "assigned `unchanged`" },
+        .{ "result = { var allTrue_ = Bool.True; for b in [Bool.True, Bool.True, Bool.False] { if b == Bool.False { allTrue_ = Bool.False } else { {} } }; allTrue_ }", "assigned `result`" },
+        .{ "count = { var counter_ = 0; for _ in [\"hello\", \"world\", \"test\"] { counter_ = counter_ + 1 }; counter_ }", "assigned `count`" },
+        .{ "sum = { var total_ = 0; for n in [1, 2, 3, 4, 5] { total_ = total_ + n }; total_ }", "assigned `sum`" },
+        .{ "product = { var result_ = 0; for i in [1, 2, 3] { for j in [10, 20] { result_ = result_ + (i * j) } }; result_ }", "assigned `product`" },
+    };
+    try expectStateful(.interpreter, steps);
+    try expectStateful(.dev, steps);
+    try expectStateful(.wasm, steps);
+    try expectStateful(.llvm, steps);
+}
+
+// Non-evaluation tests that only need one backend
+
+test "Repl - build full source with block syntax" {
+    var test_env = TestEnv.init(alloc);
+    defer test_env.deinit();
+    var repl = try Repl.init(alloc, test_env.get_ops(), null);
     defer repl.deinit();
 
-    // Add definitions manually to test source building
     try repl.addOrReplaceDefinition("x = 5", "x");
     try repl.addOrReplaceDefinition("y = x + 1", "y");
 
-    // Build full source for evaluating y
     const full_source = try repl.buildFullSource("y");
-    defer interpreter_allocator.free(full_source);
+    defer alloc.free(full_source);
 
     const expected =
         \\{
@@ -142,23 +428,19 @@ test "Repl - build full source with block syntax" {
 }
 
 test "Repl - definition replacement" {
-    var test_env = TestEnv.init(interpreter_allocator);
+    var test_env = TestEnv.init(alloc);
     defer test_env.deinit();
-
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), null);
+    var repl = try Repl.init(alloc, test_env.get_ops(), null);
     defer repl.deinit();
 
-    // Manually add definitions to test replacement behavior
     try repl.addOrReplaceDefinition("x = 1", "x");
     try repl.addOrReplaceDefinition("x = 2", "x");
     try repl.addOrReplaceDefinition("x = 3", "x");
 
-    // Verify only the latest definition is kept (replacement, not accumulation)
     try testing.expect(repl.definitions.count() == 1);
 
-    // Build source shows the latest definition
     const full_source = try repl.buildFullSource("x");
-    defer interpreter_allocator.free(full_source);
+    defer alloc.free(full_source);
 
     const expected =
         \\{
@@ -169,416 +451,15 @@ test "Repl - definition replacement" {
     try testing.expectEqualStrings(full_source, expected);
 }
 
-// TODO: Fix e_lookup_external implementation to support cross-module function calls
-// test "Repl - qualified Bool.not call" {
-//     var test_env = TestEnv.init(interpreter_allocator);
-//     defer test_env.deinit();
-//
-//     var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), null);
-//     defer repl.deinit();
-//
-//     // Test Bool.not(True) should return False
-//     const result1 = try repl.step("Bool.not(True)");
-//     defer interpreter_allocator.free(result1);
-//     try testing.expectEqualStrings(result1, "False");
-//
-//     // Test Bool.not(False) should return True
-//     const result2 = try repl.step("Bool.not(False)");
-//     defer interpreter_allocator.free(result2);
-//     try testing.expectEqualStrings(result2, "True");
-// }
-
-// NOTE: The "minimal interpreter integration" test has been removed.
-// The interpreter has been replaced by the dev backend with Mono IR.
-// The REPL now uses DevEvaluator for evaluation.
-
-test "Repl - Str.is_empty works for empty and non-empty strings" {
-    var test_env = TestEnv.init(interpreter_allocator);
-    defer test_env.deinit();
-
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), null);
-    defer repl.deinit();
-
-    const empty_result = try repl.step("Str.is_empty(\"\")");
-    defer interpreter_allocator.free(empty_result);
-    try testing.expectEqualStrings("True", empty_result);
-
-    const non_empty_result = try repl.step("Str.is_empty(\"a\")");
-    defer interpreter_allocator.free(non_empty_result);
-    try testing.expectEqualStrings("False", non_empty_result);
-}
-
-test "Repl - List.len(Str.to_utf8(\"hello\")) should not leak" {
-    var test_env = TestEnv.init(interpreter_allocator);
-    defer test_env.deinit();
-
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), null);
-    defer repl.deinit();
-
-    // This expression was leaking memory
-    const result = try repl.step("List.len(Str.to_utf8(\"hello\"))");
-    defer interpreter_allocator.free(result);
-    try testing.expectEqualStrings("5", result);
-}
-
-test "Repl - Str.to_utf8 returns list that should not leak" {
-    var test_env = TestEnv.init(interpreter_allocator);
-    defer test_env.deinit();
-
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), null);
-    defer repl.deinit();
-
-    // Test Str.to_utf8 directly - the resulting list should be decreffed
-    const result = try repl.step("Str.to_utf8(\"hello\")");
-    defer interpreter_allocator.free(result);
-    try testing.expectEqualStrings("[104, 101, 108, 108, 111]", result);
-}
-
-test "Repl - multiple Str.to_utf8 calls should not leak" {
-    var test_env = TestEnv.init(interpreter_allocator);
-    defer test_env.deinit();
-
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), null);
-    defer repl.deinit();
-
-    // Test multiple calls in same REPL session
-    {
-        const result1 = try repl.step("List.len(Str.to_utf8(\"\"))");
-        defer interpreter_allocator.free(result1);
-        try testing.expectEqualStrings("0", result1);
-    }
-    {
-        const result2 = try repl.step("List.len(Str.to_utf8(\"hello\"))");
-        defer interpreter_allocator.free(result2);
-        try testing.expectEqualStrings("5", result2);
-    }
-    {
-        const result3 = try repl.step("List.len(Str.to_utf8(\"é\"))");
-        defer interpreter_allocator.free(result3);
-        try testing.expectEqualStrings("2", result3);
-    }
-}
-
-test "Repl - list literals should not leak" {
-    var test_env = TestEnv.init(interpreter_allocator);
-    defer test_env.deinit();
-
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), null);
-    defer repl.deinit();
-
-    // Test list literals
-    {
-        const result = try repl.step("List.len([1, 2, 3])");
-        defer interpreter_allocator.free(result);
-        try testing.expectEqualStrings("3", result);
-    }
-    {
-        const result = try repl.step("[1, 2, 3]");
-        defer interpreter_allocator.free(result);
-        try testing.expectEqualStrings("[1, 2, 3]", result);
-    }
-}
-
-test "Repl - list of strings should not leak" {
-    var test_env = TestEnv.init(interpreter_allocator);
-    defer test_env.deinit();
-
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), null);
-    defer repl.deinit();
-
-    // List of strings - similar to what snapshot tests do
-    const result = try repl.step("List.len([\"hello\", \"world\", \"test\"])");
-    defer interpreter_allocator.free(result);
-    try testing.expectEqualStrings("3", result);
-}
-
-test "Repl - from_utf8_lossy should not leak" {
-    var test_env = TestEnv.init(interpreter_allocator);
-    defer test_env.deinit();
-
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), null);
-    defer repl.deinit();
-
-    {
-        const result = try repl.step("Str.from_utf8_lossy(Str.to_utf8(\"hello\"))");
-        defer interpreter_allocator.free(result);
-        try testing.expectEqualStrings("\"hello\"", result);
-    }
-}
-
-test "Repl - for loop over list should not leak" {
-    var test_env = TestEnv.init(interpreter_allocator);
-    defer test_env.deinit();
-
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), null);
-    defer repl.deinit();
-
-    // Simple list of strings - test that list literals are properly freed
-    {
-        const result = try repl.step("[\"hello\", \"world\", \"test\"]");
-        defer interpreter_allocator.free(result);
-        try testing.expectEqualStrings("[\"hello\", \"world\", \"test\"]", result);
-    }
-
-    // For loop assignment - matches snapshot pattern
-    {
-        const result = try repl.step("count = { var counter_ = 0; for _ in [\"hello\", \"world\", \"test\"] { counter_ = counter_ + 1 }; counter_ }");
-        defer interpreter_allocator.free(result);
-        try testing.expectEqualStrings("assigned `count`", result);
-    }
-}
-
-test "Repl - list_sort_with should not leak" {
-    var test_env = TestEnv.init(interpreter_allocator);
-    defer test_env.deinit();
-
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), null);
-    defer repl.deinit();
-
-    // Test list_sort_with - matches the snapshot pattern
-    {
-        const result = try repl.step("List.len(List.sort_with([3, 1, 2], |a, b| if a < b LT else if a > b GT else EQ))");
-        defer interpreter_allocator.free(result);
-        try testing.expectEqualStrings("3", result);
-    }
-    {
-        const result = try repl.step("List.len(List.sort_with([5, 2, 8, 1, 9], |a, b| if a < b LT else if a > b GT else EQ))");
-        defer interpreter_allocator.free(result);
-        try testing.expectEqualStrings("5", result);
-    }
-}
-
-test "Repl - list fold with concat should not leak" {
-    var test_env = TestEnv.init(interpreter_allocator);
-    defer test_env.deinit();
-
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), null);
-    defer repl.deinit();
-
-    // Test List.fold with List.concat - creates list literals in callback
-    const result = try repl.step("List.len(List.fold([1, 2, 3], [], |acc, x| List.concat(acc, [x])))");
-    defer interpreter_allocator.free(result);
-    try testing.expectEqualStrings("3", result);
-}
-
-test "Repl - all list operations should not leak" {
-    var test_env = TestEnv.init(interpreter_allocator);
-    defer test_env.deinit();
-
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), null);
-    defer repl.deinit();
-
-    // All list operation patterns from snapshots
-    {
-        const result = try repl.step("List.len(List.concat([1, 2], [3, 4]))");
-        defer interpreter_allocator.free(result);
-        try testing.expectEqualStrings("4", result);
-    }
-    {
-        const result = try repl.step("List.len(List.concat([], [1, 2, 3]))");
-        defer interpreter_allocator.free(result);
-        try testing.expectEqualStrings("3", result);
-    }
-    {
-        const result = try repl.step("List.len(List.concat([1, 2, 3], []))");
-        defer interpreter_allocator.free(result);
-        try testing.expectEqualStrings("3", result);
-    }
-    {
-        const result = try repl.step("List.contains([1, 2, 3, 4, 5], 3)");
-        defer interpreter_allocator.free(result);
-        try testing.expectEqualStrings("True", result);
-    }
-    {
-        const result = try repl.step("List.drop_if([1, 2, 3, 4, 5], |x| x > 2)");
-        defer interpreter_allocator.free(result);
-        try testing.expectEqualStrings("[1, 2]", result);
-    }
-    {
-        const result = try repl.step("List.keep_if([1, 2, 3, 4, 5], |x| x > 2)");
-        defer interpreter_allocator.free(result);
-        try testing.expectEqualStrings("[3, 4, 5]", result);
-    }
-    {
-        const result = try repl.step("List.keep_if([1, 2, 3], |_| Bool.False)");
-        defer interpreter_allocator.free(result);
-        try testing.expectEqualStrings("[]", result);
-    }
-    {
-        const result = try repl.step("List.fold_rev([1, 2, 3], 0, |x, acc| acc * 10 + x)");
-        defer interpreter_allocator.free(result);
-        try testing.expectEqualStrings("321", result);
-    }
-    {
-        const result = try repl.step("List.fold_rev([], 42, |x, acc| x + acc)");
-        defer interpreter_allocator.free(result);
-        try testing.expectEqualStrings("42", result);
-    }
-}
-
-test "Repl - all for loop snapshots should not leak" {
-    var test_env = TestEnv.init(interpreter_allocator);
-    defer test_env.deinit();
-
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), null);
-    defer repl.deinit();
-
-    // All the for loop snapshot patterns
-    {
-        const result = try repl.step("unchanged = { var value_ = 42; for n in [] { value_ = n }; value_ }");
-        defer interpreter_allocator.free(result);
-        try testing.expectEqualStrings("assigned `unchanged`", result);
-    }
-    {
-        const result = try repl.step("result = { var allTrue_ = Bool.True; for b in [Bool.True, Bool.True, Bool.False] { if b == Bool.False { allTrue_ = Bool.False } else { {} } }; allTrue_ }");
-        defer interpreter_allocator.free(result);
-        try testing.expectEqualStrings("assigned `result`", result);
-    }
-    {
-        const result = try repl.step("count = { var counter_ = 0; for _ in [\"hello\", \"world\", \"test\"] { counter_ = counter_ + 1 }; counter_ }");
-        defer interpreter_allocator.free(result);
-        try testing.expectEqualStrings("assigned `count`", result);
-    }
-    {
-        const result = try repl.step("sum = { var total_ = 0; for n in [1, 2, 3, 4, 5] { total_ = total_ + n }; total_ }");
-        defer interpreter_allocator.free(result);
-        try testing.expectEqualStrings("assigned `sum`", result);
-    }
-    {
-        const result = try repl.step("product = { var result_ = 0; for i in [1, 2, 3] { for j in [10, 20] { result_ = result_ + (i * j) } }; result_ }");
-        defer interpreter_allocator.free(result);
-        try testing.expectEqualStrings("assigned `product`", result);
-    }
-}
-
-test "Repl - full list_sort_with snapshot pattern" {
-    // This mimics exactly what the snapshot validation does
-    var test_env = TestEnv.init(interpreter_allocator);
-    defer test_env.deinit();
-
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), null);
-    defer repl.deinit();
-
-    // All expressions from list_sort_with.md - collected first then freed
-    var outputs = std.array_list.Managed([]const u8).init(interpreter_allocator);
-    defer {
-        for (outputs.items) |item| {
-            interpreter_allocator.free(item);
-        }
-        outputs.deinit();
-    }
-
-    try outputs.append(try repl.step("List.len(List.sort_with([3, 1, 2], |a, b| if a < b LT else if a > b GT else EQ))"));
-    try outputs.append(try repl.step("List.len(List.sort_with([5, 2, 8, 1, 9], |a, b| if a < b LT else if a > b GT else EQ))"));
-    try outputs.append(try repl.step("List.len(List.sort_with([], |a, b| if a < b LT else if a > b GT else EQ))"));
-    try outputs.append(try repl.step("List.len(List.sort_with([42], |a, b| if a < b LT else if a > b GT else EQ))"));
-    try outputs.append(try repl.step("List.first(List.sort_with([3, 1, 2], |a, b| if a < b LT else if a > b GT else EQ))"));
-    try outputs.append(try repl.step("List.first(List.sort_with([5, 2, 8, 1, 9], |a, b| if a < b LT else if a > b GT else EQ))"));
-    try outputs.append(try repl.step("List.first(List.sort_with([5, 4, 3, 2, 1], |a, b| if a > b LT else if a < b GT else EQ))"));
-    try outputs.append(try repl.step("List.len(List.sort_with([1, 1, 1, 1], |a, b| if a < b LT else if a > b GT else EQ))"));
-    try outputs.append(try repl.step("List.first(List.sort_with([1, 1, 1, 1], |a, b| if a < b LT else if a > b GT else EQ))"));
-    try outputs.append(try repl.step("List.len(List.sort_with([2, 1], |a, b| if a < b LT else if a > b GT else EQ))"));
-    try outputs.append(try repl.step("List.first(List.sort_with([2, 1], |a, b| if a < b LT else if a > b GT else EQ))"));
-
-    try testing.expectEqualStrings("3", outputs.items[0]);
-    try testing.expectEqualStrings("5", outputs.items[1]);
-}
-
-test "Repl - full str_to_utf8 snapshot test" {
-    var test_env = TestEnv.init(interpreter_allocator);
-    defer test_env.deinit();
-
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), null);
-    defer repl.deinit();
-
-    // All expressions from str_to_utf8.md
-    {
-        const result = try repl.step("List.len(Str.to_utf8(\"\"))");
-        defer interpreter_allocator.free(result);
-        try testing.expectEqualStrings("0", result);
-    }
-    {
-        const result = try repl.step("List.len(Str.to_utf8(\"hello\"))");
-        defer interpreter_allocator.free(result);
-        try testing.expectEqualStrings("5", result);
-    }
-    {
-        const result = try repl.step("List.len(Str.to_utf8(\"é\"))");
-        defer interpreter_allocator.free(result);
-        try testing.expectEqualStrings("2", result);
-    }
-    {
-        const result = try repl.step("List.len(Str.to_utf8(\"🎉\"))");
-        defer interpreter_allocator.free(result);
-        try testing.expectEqualStrings("4", result);
-    }
-    {
-        const result = try repl.step("List.len(Str.to_utf8(\"Hello, World!\"))");
-        defer interpreter_allocator.free(result);
-        try testing.expectEqualStrings("13", result);
-    }
-    {
-        const result = try repl.step("List.len(Str.to_utf8(\"日本語\"))");
-        defer interpreter_allocator.free(result);
-        try testing.expectEqualStrings("9", result);
-    }
-    {
-        const result = try repl.step("List.len(Str.to_utf8(\"a é 🎉\"))");
-        defer interpreter_allocator.free(result);
-        try testing.expectEqualStrings("9", result);
-    }
-    {
-        const result = try repl.step("Str.from_utf8_lossy(Str.to_utf8(\"hello\"))");
-        defer interpreter_allocator.free(result);
-        try testing.expectEqualStrings("\"hello\"", result);
-    }
-    {
-        const result = try repl.step("Str.from_utf8_lossy(Str.to_utf8(\"\"))");
-        defer interpreter_allocator.free(result);
-        try testing.expectEqualStrings("\"\"", result);
-    }
-    {
-        const result = try repl.step("Str.from_utf8_lossy(Str.to_utf8(\"🎉 party!\"))");
-        defer interpreter_allocator.free(result);
-        try testing.expectEqualStrings("\"🎉 party!\"", result);
-    }
-    {
-        const result = try repl.step("Str.from_utf8_lossy(Str.to_utf8(\"abc123\"))");
-        defer interpreter_allocator.free(result);
-        try testing.expectEqualStrings("\"abc123\"", result);
-    }
-    {
-        const result = try repl.step("List.is_empty(Str.to_utf8(\"\"))");
-        defer interpreter_allocator.free(result);
-        try testing.expectEqualStrings("True", result);
-    }
-    {
-        const result = try repl.step("List.is_empty(Str.to_utf8(\"x\"))");
-        defer interpreter_allocator.free(result);
-        try testing.expectEqualStrings("False", result);
-    }
-}
-
-test "Repl - lambda function renders as <function>" {
-    var test_env = TestEnv.init(interpreter_allocator);
-    defer test_env.deinit();
-
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), null);
-    defer repl.deinit();
-
-    const result = try repl.step("|x| x + 1");
-    defer interpreter_allocator.free(result);
-    try testing.expectEqualStrings("<function>", result);
-}
-
-test "Repl - multi-arg lambda function renders as <function>" {
-    var test_env = TestEnv.init(interpreter_allocator);
-    defer test_env.deinit();
-
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), null);
-    defer repl.deinit();
-
-    const result = try repl.step("|x, y| x + y");
-    defer interpreter_allocator.free(result);
-    try testing.expectEqualStrings("<function>", result);
+test "Repl - 4-arg lambda call (dev)" {
+    // Regression: 4 Dec params fill all 8 arg registers on aarch64,
+    // forcing roc_ops to pass-by-ptr. Previously crashed with segfault.
+    const steps = &[_][2][]const u8{
+        .{ "f = |a, b, c, d| a + b + c + d", "assigned `f`" },
+        .{ "f(10, 20, 30, 40)", "100.0" },
+    };
+    try expectStateful(.interpreter, steps);
+    try expectStateful(.dev, steps);
+    try expectStateful(.wasm, steps);
+    try expectStateful(.llvm, steps);
 }

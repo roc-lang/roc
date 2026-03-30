@@ -7,7 +7,7 @@ type=expr
 ~~~roc
 match nestedList {
     [[x], [y]] => x + y
-    [[x, y]] => x - y  
+    [[x, y]] => x - y
     [x, [y]] => x * y
 }
 ~~~
@@ -35,7 +35,7 @@ The value before this ***** operator has a type that doesn't have a **times** me
 ```
                 ^^^^^
 
-The value's type, which does not have a method named**times**, is:
+The value's type, which does not have a method named **times**, is:
 
     List(_a)
 

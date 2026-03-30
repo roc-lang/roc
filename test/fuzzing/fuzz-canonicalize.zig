@@ -79,7 +79,9 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
 
     // Process the input through BuildEnv
     // Panic on OOM so AFL++ knows it's a resource issue, not a bug in the fuzzed code
-    var build_env = BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative()) catch @panic("OOM during BuildEnv init");
+    const cwd = std.process.getCwdAlloc(gpa) catch @panic("Failed to get cwd");
+    defer gpa.free(cwd);
+    var build_env = BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd) catch @panic("OOM during BuildEnv init");
     defer build_env.deinit();
 
     build_env.build(abs_path) catch |err| {

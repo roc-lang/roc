@@ -1037,19 +1037,16 @@ main = |_| {
 											(p-assign (ident "num"))))))))))))
 	(d-let
 		(p-assign (ident "main"))
-		(e-closure
-			(captures
-				(capture (ident "container1")))
-			(e-lambda
-				(args
-					(p-underscore))
-				(e-block
-					(e-binop (op "add")
-						(e-dot-access (field "value")
-							(receiver
-								(e-lookup-local
-									(p-assign (ident "container1")))))
-						(e-num (value "10"))))))))
+		(e-lambda
+			(args
+				(p-underscore))
+			(e-block
+				(e-binop (op "add")
+					(e-dot-access (field "value")
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "container1")))))
+					(e-num (value "10")))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -1063,7 +1060,7 @@ main = |_| {
 		(patt (type "{}"))
 		(patt (type "List(Dec)"))
 		(patt (type "List(Str)"))
-		(patt (type "List([True, False, ..])"))
+		(patt (type "List([False, True, ..])"))
 		(patt (type "List(List(Dec))"))
 		(patt (type "List(List(Dec))"))
 		(patt (type "{ count: Dec, items: List(Dec) }"))
@@ -1092,7 +1089,7 @@ main = |_| {
 		(expr (type "{}"))
 		(expr (type "List(Dec)"))
 		(expr (type "List(Str)"))
-		(expr (type "List([True, False, ..])"))
+		(expr (type "List([False, True, ..])"))
 		(expr (type "List(List(Dec))"))
 		(expr (type "List(List(Dec))"))
 		(expr (type "{ count: Dec, items: List(Dec) }"))

@@ -49,17 +49,14 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "selfCapturing"))
-		(e-closure
-			(captures
-				(capture (ident "selfCapturing")))
-			(e-lambda
-				(args
-					(p-record-destructure
-						(destructs)))
-				(e-call
-					(e-lookup-local
-						(p-assign (ident "selfCapturing")))
-					(e-empty_record))))
+		(e-lambda
+			(args
+				(p-record-destructure
+					(destructs)))
+			(e-call
+				(e-lookup-local
+					(p-assign (ident "selfCapturing")))
+				(e-empty_record)))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-record)
@@ -69,7 +66,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "{  } -> U64")))
+		(patt (type "{} -> U64")))
 	(expressions
-		(expr (type "{  } -> U64"))))
+		(expr (type "{} -> U64"))))
 ~~~

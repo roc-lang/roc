@@ -5,7 +5,10 @@
 //! dependency cycle: main.zig → builtins → host_abi → @import("root") → main.zig.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const builtins = @import("builtins");
+
+const is_wasm = builtin.target.cpu.arch == .wasm32;
 
 pub const host_abi = builtins.host_abi;
 pub const RocStr = builtins.str.RocStr;
@@ -24,21 +27,32 @@ const env_sentinel: u8 = 0;
 /// Arguments are borrowed — refcounting is handled by the caller (RC insertion pass).
 pub fn echoHostedFn(_: *anyopaque, _: [*]u8, roc_str: *RocStr) callconv(.c) void {
     const message = roc_str.asSlice();
-    const stdout_file: std.fs.File = .stdout();
-    stdout_file.writeAll(message) catch |err| handleStdoutError(err);
-    stdout_file.writeAll("\n") catch |err| handleStdoutError(err);
+    if (comptime is_wasm) {
+        const js = struct {
+            extern "env" fn js_echo(ptr: [*]const u8, len: usize) void;
+        };
+        js.js_echo(message.ptr, message.len);
+    } else {
+        const stdout_file: std.fs.File = .stdout();
+        stdout_file.writeAll(message) catch |err| handleStdoutError(err);
+        stdout_file.writeAll("\n") catch |err| handleStdoutError(err);
+    }
     // Returns {} (ZST) — no bytes to write to ret_bytes
 }
 
 /// Handle stdout write errors: exit cleanly on broken pipe (standard
 /// Unix behavior), crash on other errors.
 fn handleStdoutError(err: anyerror) noreturn {
-    switch (err) {
-        error.BrokenPipe => std.process.exit(0),
-        else => {
-            std.debug.print("echo!: stdout write failed: {}\n", .{err});
-            std.process.exit(1);
-        },
+    if (comptime is_wasm) {
+        @trap();
+    } else {
+        switch (err) {
+            error.BrokenPipe => std.process.exit(0),
+            else => {
+                std.debug.print("echo!: stdout write failed: {}\n", .{err});
+                std.process.exit(1);
+            },
+        }
     }
 }
 
@@ -49,12 +63,14 @@ pub fn makeDefaultRocOps(hosted_fns: []host_abi.HostedFn) host_abi.RocOps {
 
         /// Allocate with a size prefix so realloc/dealloc can recover the old length.
         fn rocAlloc(alloc_args: *host_abi.RocAlloc, _: *anyopaque) callconv(.c) void {
-            const allocator = std.heap.page_allocator;
+            const alloc = if (comptime is_wasm) std.heap.wasm_allocator else std.heap.page_allocator;
             const total = alloc_args.length + size_prefix;
             const align_enum = std.mem.Alignment.fromByteUnits(@max(alloc_args.alignment, @alignOf(usize)));
-            const raw = allocator.rawAlloc(total, align_enum, @returnAddress()) orelse {
-                std.debug.print("roc_alloc failed: OOM\n", .{});
-                std.process.exit(1);
+            const raw = alloc.rawAlloc(total, align_enum, @returnAddress()) orelse {
+                if (comptime is_wasm) @trap() else {
+                    std.debug.print("roc_alloc failed: OOM\n", .{});
+                    std.process.exit(1);
+                }
             };
             // Store the allocation length in the prefix
             const size_slot: *usize = @ptrCast(@alignCast(raw));
@@ -67,7 +83,7 @@ pub fn makeDefaultRocOps(hosted_fns: []host_abi.HostedFn) host_abi.RocOps {
         }
 
         fn rocRealloc(realloc_args: *host_abi.RocRealloc, _: *anyopaque) callconv(.c) void {
-            const allocator = std.heap.page_allocator;
+            const alloc = if (comptime is_wasm) std.heap.wasm_allocator else std.heap.page_allocator;
             const align_enum = std.mem.Alignment.fromByteUnits(@max(realloc_args.alignment, @alignOf(usize)));
 
             // Read old size from prefix
@@ -77,9 +93,11 @@ pub fn makeDefaultRocOps(hosted_fns: []host_abi.HostedFn) host_abi.RocOps {
 
             // Allocate new block with size prefix
             const new_total = realloc_args.new_length + size_prefix;
-            const new_raw = allocator.rawAlloc(new_total, align_enum, @returnAddress()) orelse {
-                std.debug.print("roc_realloc failed: OOM\n", .{});
-                std.process.exit(1);
+            const new_raw = alloc.rawAlloc(new_total, align_enum, @returnAddress()) orelse {
+                if (comptime is_wasm) @trap() else {
+                    std.debug.print("roc_realloc failed: OOM\n", .{});
+                    std.process.exit(1);
+                }
             };
 
             // Write new size prefix
@@ -97,26 +115,38 @@ pub fn makeDefaultRocOps(hosted_fns: []host_abi.HostedFn) host_abi.RocOps {
         }
 
         fn rocDbg(dbg_args: *const host_abi.RocDbg, _: *anyopaque) callconv(.c) void {
-            const msg = dbg_args.utf8_bytes[0..dbg_args.len];
-            const stderr_file: std.fs.File = .stderr();
-            stderr_file.writeAll("[dbg] ") catch {};
-            stderr_file.writeAll(msg) catch {};
-            stderr_file.writeAll("\n") catch {};
+            if (comptime is_wasm) {
+                // No-op on wasm — no stderr available
+            } else {
+                const msg = dbg_args.utf8_bytes[0..dbg_args.len];
+                const stderr_file: std.fs.File = .stderr();
+                stderr_file.writeAll("[dbg] ") catch {};
+                stderr_file.writeAll(msg) catch {};
+                stderr_file.writeAll("\n") catch {};
+            }
         }
         fn rocExpectFailed(expect_args: *const host_abi.RocExpectFailed, _: *anyopaque) callconv(.c) void {
-            const msg = expect_args.utf8_bytes[0..expect_args.len];
-            const stderr_file: std.fs.File = .stderr();
-            stderr_file.writeAll("Expect failed: ") catch {};
-            stderr_file.writeAll(msg) catch {};
-            stderr_file.writeAll("\n") catch {};
+            if (comptime is_wasm) {
+                // No-op on wasm — no stderr available
+            } else {
+                const msg = expect_args.utf8_bytes[0..expect_args.len];
+                const stderr_file: std.fs.File = .stderr();
+                stderr_file.writeAll("Expect failed: ") catch {};
+                stderr_file.writeAll(msg) catch {};
+                stderr_file.writeAll("\n") catch {};
+            }
         }
         fn rocCrashed(crash_args: *const host_abi.RocCrashed, _: *anyopaque) callconv(.c) void {
-            const msg = crash_args.utf8_bytes[0..crash_args.len];
-            const stderr_file: std.fs.File = .stderr();
-            stderr_file.writeAll("Roc crashed: ") catch {};
-            stderr_file.writeAll(msg) catch {};
-            stderr_file.writeAll("\n") catch {};
-            std.process.exit(1);
+            if (comptime is_wasm) {
+                @trap();
+            } else {
+                const msg = crash_args.utf8_bytes[0..crash_args.len];
+                const stderr_file: std.fs.File = .stderr();
+                stderr_file.writeAll("Roc crashed: ") catch {};
+                stderr_file.writeAll(msg) catch {};
+                stderr_file.writeAll("\n") catch {};
+                std.process.exit(1);
+            }
         }
     };
 
@@ -135,6 +165,7 @@ pub fn makeDefaultRocOps(hosted_fns: []host_abi.HostedFn) host_abi.RocOps {
 /// Build a RocList of RocStr from CLI argument slices.
 /// Each argument is sanitized to valid UTF-8.
 pub fn buildCliArgs(app_args: []const []const u8, roc_ops: *host_abi.RocOps) RocList {
+    if (comptime is_wasm) return RocList.empty();
     if (app_args.len == 0) return RocList.empty();
 
     const allocator = std.heap.page_allocator;

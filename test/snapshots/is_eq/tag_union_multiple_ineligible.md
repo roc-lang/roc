@@ -26,7 +26,7 @@ expect result == result
 
 The type is:
 
-    [Ok(Str), Transform(a -> a), Validate(b -> Bool), Err(Str), ..]
+    [Err(Str), Ok(Str), Transform(a -> a), Validate(b -> Bool), ..]
       where [
         b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
         b.is_gt : b, b -> Bool,
@@ -201,15 +201,15 @@ expect result == result
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "[Ok(Str), Transform(a -> a), Validate(Dec -> Bool), Err(Str), ..]"))
-		(patt (type "[Ok(Str), Transform(a -> a), Validate(Dec -> Bool), Err(Str), ..]"))
-		(patt (type "[Ok(Str), Transform(a -> a), Validate(Dec -> Bool), Err(Str), ..]"))
-		(patt (type "[Ok(Str), Transform(a -> a), Validate(Dec -> Bool), Err(Str), ..]"))
-		(patt (type "[Ok(Str), Transform(a -> a), Validate(Dec -> Bool), Err(Str), ..]")))
+		(patt (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool), ..]"))
+		(patt (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool), ..]"))
+		(patt (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool), ..]"))
+		(patt (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool), ..]"))
+		(patt (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool), ..]")))
 	(expressions
-		(expr (type "[Ok(Str), Transform(a -> a), Validate(Dec -> Bool), Err(Str), ..]"))
-		(expr (type "[Ok(Str), Transform(a -> a), Validate(Dec -> Bool), Err(Str), ..]"))
-		(expr (type "[Ok(Str), Transform(a -> a), Validate(Dec -> Bool), Err(Str), ..]"))
-		(expr (type "[Ok(Str), Transform(a -> a), Validate(Dec -> Bool), Err(Str), ..]"))
-		(expr (type "[Ok(Str), Transform(a -> a), Validate(Dec -> Bool), Err(Str), ..]"))))
+		(expr (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool), ..]"))
+		(expr (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool), ..]"))
+		(expr (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool), ..]"))
+		(expr (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool), ..]"))
+		(expr (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool), ..]"))))
 ~~~

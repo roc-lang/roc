@@ -98,33 +98,6 @@ pub fn emitPattern(self: *Self, pattern_idx: CIR.Pattern.Idx) !void {
     try self.emitPatternValue(pattern);
 }
 
-/// Emit a pattern, checking for shadowing and generating unique names
-fn emitPatternWithShadowCheck(self: *Self, pattern_idx: CIR.Pattern.Idx) !void {
-    const pattern = self.module_env.store.getPattern(pattern_idx);
-
-    // Only handle assign patterns for shadowing (other patterns don't introduce names)
-    if (pattern == .assign) {
-        const name = self.module_env.getIdent(pattern.assign.ident);
-
-        if (self.names_in_scope.contains(name)) {
-            // Generate a unique name
-            const unique_name = try std.fmt.allocPrint(self.allocator, "{s}{d}", .{ name, self.rename_counter });
-            self.rename_counter += 1;
-
-            // Store the rename mapping
-            try self.capture_renames.put(pattern_idx, unique_name);
-            try self.names_in_scope.put(unique_name, {});
-            try self.emitIdent(unique_name);
-        } else {
-            try self.names_in_scope.put(name, {});
-            try self.emitIdent(name);
-        }
-    } else {
-        // For other pattern types, just emit normally
-        try self.emitPatternValue(pattern);
-    }
-}
-
 /// Emit a binop operand, wrapping in parens only if needed for precedence
 fn emitBinopOperand(self: *Self, expr_idx: Expr.Idx, outer_op: Expr.Binop.Op) !void {
     const expr = self.module_env.store.getExpr(expr_idx);
@@ -230,6 +203,10 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
         .e_str_segment => |seg| {
             const text = self.module_env.common.getString(seg.literal);
             try self.writer().print("\"{s}\"", .{text});
+        },
+        .e_bytes_literal => |bytes| {
+            const data = self.module_env.common.getString(bytes.literal);
+            try self.writer().print("<bytes:{d}>", .{data.len});
         },
         .e_str => |str| {
             // Multi-segment string
@@ -384,55 +361,12 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
             try self.emitTagName(name);
         },
         .e_closure => |closure| {
-            // Emit closure as a lambda with non-top-level captures as leading arguments
-            // e.g., |y| x + y with capture x becomes |x, y| x + y (if x is local)
-            // but top-level captures are not lifted (they're always in scope)
-            // Handle shadowing by generating unique names for captures
+            // Emit closure as its underlying lambda - captured variables are
+            // already in scope from the enclosing function/block, so we don't
+            // need to inline them as parameters.
             const lambda = self.module_env.store.getExpr(closure.lambda_idx);
             std.debug.assert(lambda == .e_lambda);
-
-            try self.write("|");
-
-            // First emit non-top-level captures as arguments, renaming if they would shadow
-            const captures = self.module_env.store.sliceCaptures(closure.captures);
-            var emitted_captures: u32 = 0;
-            for (captures) |capture_idx| {
-                const capture = self.module_env.store.getCapture(capture_idx);
-
-                // Skip top-level captures - they're always in scope
-                if (self.isTopLevelPattern(capture.pattern_idx)) continue;
-
-                if (emitted_captures > 0) try self.write(", ");
-                emitted_captures += 1;
-
-                const capture_name = self.module_env.getIdent(capture.name);
-
-                // Check if this name would shadow an existing name
-                if (self.names_in_scope.contains(capture_name)) {
-                    // Generate a unique name
-                    const unique_name = try std.fmt.allocPrint(self.allocator, "{s}{d}", .{ capture_name, self.rename_counter });
-                    self.rename_counter += 1;
-
-                    // Store the rename mapping
-                    try self.capture_renames.put(capture.pattern_idx, unique_name);
-                    try self.names_in_scope.put(unique_name, {});
-                    try self.write(unique_name);
-                } else {
-                    // No shadowing, use original name
-                    try self.names_in_scope.put(capture_name, {});
-                    try self.write(capture_name);
-                }
-            }
-
-            // Then emit the lambda's own arguments (also check for shadowing)
-            const args = self.module_env.store.slicePatterns(lambda.e_lambda.args);
-            for (args, 0..) |arg_idx, i| {
-                if (emitted_captures > 0 or i > 0) try self.write(", ");
-                try self.emitPatternWithShadowCheck(arg_idx);
-            }
-
-            try self.write("| ");
-            try self.emitExpr(lambda.e_lambda.body);
+            try self.emitExprValue(lambda);
         },
         .e_lambda => |lambda| {
             try self.write("|");
@@ -747,18 +681,6 @@ fn addPatternToScope(self: *Self, pattern_idx: CIR.Pattern.Idx) !void {
     }
     // For other pattern types (destructuring, etc.), we could recursively add names
     // but for now just handling simple assigns
-}
-
-/// Check if a pattern belongs to a top-level definition
-fn isTopLevelPattern(self: *Self, pattern_idx: CIR.Pattern.Idx) bool {
-    const defs = self.module_env.store.sliceDefs(self.module_env.all_defs);
-    for (defs) |def_idx| {
-        const def = self.module_env.store.getDef(def_idx);
-        if (def.pattern == pattern_idx) {
-            return true;
-        }
-    }
-    return false;
 }
 
 fn emitIntValue(self: *Self, value: CIR.IntValue) !void {

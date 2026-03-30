@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Roc Echo Platform</title>
+  <style>
+    body { font-family: monospace; max-width: 720px; margin: 2em auto; }
+    .file { margin-bottom: 1em; }
+    .file label { display: block; font-weight: bold; margin-bottom: 0.25em; }
+    textarea { width: 100%; height: 8em; font-family: inherit; font-size: 14px; tab-size: 4; }
+    #output { background: #111; color: #0f0; padding: 1em; min-height: 2em; white-space: pre-wrap; }
+    #errors { padding: 0.5em 0; }
+    button { margin: 0.5em 0; padding: 0.4em 1.2em; font-size: 14px; }
+    .report { border-left: 3px solid #ccc; padding: 0.5em 1em; margin: 0.5em 0; font-size: 13px; }
+    .report.error { border-color: #e55; background: #fee; }
+    .report.warning { border-color: #ea0; background: #ffe; }
+    .report.info { border-color: #48f; background: #eef; }
+    .report h1 { font-size: 14px; margin: 0 0 0.25em; }
+    .report pre { margin: 0.25em 0; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h1>Roc Echo Platform</h1>
+
+  <div class="file">
+    <label>Greeting.roc</label>
+    <textarea data-module="Greeting">Greeting := [].{
+    msg : Str
+    msg = "Hello from the Greeting module!"
+}</textarea>
+  </div>
+
+  <div class="file">
+    <label>main (headerless app)</label>
+    <textarea id="source">import Greeting
+
+main! = |_| {
+    echo!(Greeting.msg)
+    Ok({})
+}</textarea>
+  </div>
+
+  <button id="run" disabled>Run</button>
+  <div id="errors"></div>
+  <pre id="output"></pre>
+  <script src="app.js"></script>
+</body>
+</html>

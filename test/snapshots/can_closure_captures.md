@@ -155,14 +155,11 @@ main = (captureSimple, captureMultiple, outerFn, useClosure)
 		(e-num (value "42")))
 	(d-let
 		(p-assign (ident "captureSimple"))
-		(e-closure
-			(captures
-				(capture (ident "outer")))
-			(e-lambda
-				(args
-					(p-underscore))
-				(e-lookup-local
-					(p-assign (ident "outer"))))))
+		(e-lambda
+			(args
+				(p-underscore))
+			(e-lookup-local
+				(p-assign (ident "outer")))))
 	(d-let
 		(p-assign (ident "x"))
 		(e-num (value "1")))
@@ -171,49 +168,41 @@ main = (captureSimple, captureMultiple, outerFn, useClosure)
 		(e-num (value "2")))
 	(d-let
 		(p-assign (ident "captureMultiple"))
-		(e-closure
-			(captures
-				(capture (ident "x"))
-				(capture (ident "y")))
-			(e-lambda
-				(args
-					(p-underscore))
-				(e-binop (op "add")
-					(e-lookup-local
-						(p-assign (ident "x")))
-					(e-lookup-local
-						(p-assign (ident "y")))))))
+		(e-lambda
+			(args
+				(p-underscore))
+			(e-binop (op "add")
+				(e-lookup-local
+					(p-assign (ident "x")))
+				(e-lookup-local
+					(p-assign (ident "y"))))))
 	(d-let
 		(p-assign (ident "level1"))
 		(e-num (value "10")))
 	(d-let
 		(p-assign (ident "outerFn"))
-		(e-closure
-			(captures
-				(capture (ident "level1")))
-			(e-lambda
-				(args
-					(p-underscore))
-				(e-block
-					(s-let
-						(p-assign (ident "level2"))
-						(e-num (value "20")))
-					(s-let
-						(p-assign (ident "innerFn"))
-						(e-closure
-							(captures
-								(capture (ident "level1"))
-								(capture (ident "level2")))
-							(e-lambda
-								(args
-									(p-underscore))
-								(e-binop (op "add")
-									(e-lookup-local
-										(p-assign (ident "level1")))
-									(e-lookup-local
-										(p-assign (ident "level2")))))))
-					(e-lookup-local
-						(p-assign (ident "innerFn")))))))
+		(e-lambda
+			(args
+				(p-underscore))
+			(e-block
+				(s-let
+					(p-assign (ident "level2"))
+					(e-num (value "20")))
+				(s-let
+					(p-assign (ident "innerFn"))
+					(e-closure
+						(captures
+							(capture (ident "level2")))
+						(e-lambda
+							(args
+								(p-underscore))
+							(e-binop (op "add")
+								(e-lookup-local
+									(p-assign (ident "level1")))
+								(e-lookup-local
+									(p-assign (ident "level2")))))))
+				(e-lookup-local
+					(p-assign (ident "innerFn"))))))
 	(d-let
 		(p-assign (ident "makeClosure"))
 		(e-lambda

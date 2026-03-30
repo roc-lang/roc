@@ -123,8 +123,9 @@ This line defines a new _constant_ called `name`:
 name = Stdin.line!()
 ```
 
-Constants can't be reassigned or shadowed, so if you try to do `name =` again in the same scope, 
-`roc` will give a compile-time error.
+Constants should not be reassigned or shadowed, if you try to do `name =` again in the same scope, 
+`roc` will give a compile-time warning with exit code 2. That way, you can quickly write something with
+shadowing if you want but the non-zero exit code prevents it from ending up in production code because CI will fail.
 
 ### String interpolation
 
@@ -716,5 +717,5 @@ Roc has a first-class concept of _platforms_ and _applications_. You can [read a
 
 For more, check out:
 - [All builtin functions](https://github.com/roc-lang/roc/blob/main/src/build/roc/Builtin.roc)
-- [A single file demonstrating all Roc syntax](https://github.com/lukewilliamboswell/roc-platform-template-zig/blob/main/examples/all_roc_syntax.roc)
+- [A single file demonstrating all Roc syntax](https://github.com/roc-lang/roc/blob/main/test/echo/all_syntax_test.roc)
 - [Roc getting started guide](https://github.com/rickhull/roc-init) (community contributed)

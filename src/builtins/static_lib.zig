@@ -3,7 +3,7 @@
 //!
 //! This library provides:
 //! - Numeric overflow functions (for compiler-rt)
-//! - Dev backend wrapper functions (for roc build --backend=dev)
+//! - Dev backend wrapper functions (for roc build --opt=dev)
 
 // Export key functions that might need compiler-rt symbols
 comptime {
@@ -18,7 +18,7 @@ comptime {
     @import("num.zig").exportSubWithOverflow(i128, "roc__num_sub_with_overflow_");
 }
 
-// Export dev backend wrapper functions - these are used by `roc build --backend=dev`
+// Export dev backend wrapper functions - these are used by `roc build --opt=dev`
 // to call builtin functions via symbol references instead of direct function pointers.
 pub const dev_wrappers = @import("dev_wrappers.zig");
 
@@ -30,7 +30,6 @@ comptime {
     @export(&dw.roc_builtins_str_contains, .{ .name = "roc_builtins_str_contains" });
     @export(&dw.roc_builtins_str_starts_with, .{ .name = "roc_builtins_str_starts_with" });
     @export(&dw.roc_builtins_str_ends_with, .{ .name = "roc_builtins_str_ends_with" });
-    @export(&dw.roc_builtins_str_is_empty, .{ .name = "roc_builtins_str_is_empty" });
     @export(&dw.roc_builtins_str_equal, .{ .name = "roc_builtins_str_equal" });
     @export(&dw.roc_builtins_str_count_utf8_bytes, .{ .name = "roc_builtins_str_count_utf8_bytes" });
     @export(&dw.roc_builtins_str_caseless_ascii_equals, .{ .name = "roc_builtins_str_caseless_ascii_equals" });
@@ -47,10 +46,13 @@ comptime {
     @export(&dw.roc_builtins_str_drop_suffix, .{ .name = "roc_builtins_str_drop_suffix" });
     @export(&dw.roc_builtins_str_with_ascii_lowercased, .{ .name = "roc_builtins_str_with_ascii_lowercased" });
     @export(&dw.roc_builtins_str_with_ascii_uppercased, .{ .name = "roc_builtins_str_with_ascii_uppercased" });
-    @export(&dw.roc_builtins_str_with_prefix, .{ .name = "roc_builtins_str_with_prefix" });
     @export(&dw.roc_builtins_str_from_utf8_lossy, .{ .name = "roc_builtins_str_from_utf8_lossy" });
+    @export(&dw.roc_builtins_str_from_utf8, .{ .name = "roc_builtins_str_from_utf8" });
+    @export(&dw.roc_builtins_str_from_utf8_result, .{ .name = "roc_builtins_str_from_utf8_result" });
+    @export(&dw.roc_builtins_str_from_utf8_parts, .{ .name = "roc_builtins_str_from_utf8_parts" });
     @export(&dw.roc_builtins_str_escape_and_quote, .{ .name = "roc_builtins_str_escape_and_quote" });
     @export(&dw.roc_builtins_list_with_capacity, .{ .name = "roc_builtins_list_with_capacity" });
+    @export(&dw.roc_builtins_list_sort_with, .{ .name = "roc_builtins_list_sort_with" });
     @export(&dw.roc_builtins_list_append_unsafe, .{ .name = "roc_builtins_list_append_unsafe" });
     @export(&dw.roc_builtins_list_concat, .{ .name = "roc_builtins_list_concat" });
     @export(&dw.roc_builtins_list_prepend, .{ .name = "roc_builtins_list_prepend" });
@@ -58,6 +60,13 @@ comptime {
     @export(&dw.roc_builtins_list_replace, .{ .name = "roc_builtins_list_replace" });
     @export(&dw.roc_builtins_list_reserve, .{ .name = "roc_builtins_list_reserve" });
     @export(&dw.roc_builtins_list_release_excess_capacity, .{ .name = "roc_builtins_list_release_excess_capacity" });
+    @export(&dw.roc_builtins_list_decref_str, .{ .name = "roc_builtins_list_decref_str" });
+    @export(&dw.roc_builtins_list_decref_flat_list, .{ .name = "roc_builtins_list_decref_flat_list" });
+    @export(&dw.roc_builtins_list_decref_with, .{ .name = "roc_builtins_list_decref_with" });
+    @export(&dw.roc_builtins_list_free_flat_list, .{ .name = "roc_builtins_list_free_flat_list" });
+    @export(&dw.roc_builtins_list_free_with, .{ .name = "roc_builtins_list_free_with" });
+    @export(&dw.roc_builtins_box_decref_with, .{ .name = "roc_builtins_box_decref_with" });
+    @export(&dw.roc_builtins_box_free_with, .{ .name = "roc_builtins_box_free_with" });
     @export(&dw.roc_builtins_allocate_with_refcount, .{ .name = "roc_builtins_allocate_with_refcount" });
     @export(&dw.roc_builtins_incref_data_ptr, .{ .name = "roc_builtins_incref_data_ptr" });
     @export(&dw.roc_builtins_decref_data_ptr, .{ .name = "roc_builtins_decref_data_ptr" });
@@ -99,4 +108,6 @@ comptime {
     @export(&dw.roc_builtins_float_to_str, .{ .name = "roc_builtins_float_to_str" });
     // Numeric-from-string wrapper
     @export(&dw.roc_builtins_int_from_str, .{ .name = "roc_builtins_int_from_str" });
+    @export(&dw.roc_builtins_dec_from_str, .{ .name = "roc_builtins_dec_from_str" });
+    @export(&dw.roc_builtins_float_from_str, .{ .name = "roc_builtins_float_from_str" });
 }

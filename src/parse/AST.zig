@@ -693,6 +693,10 @@ pub const Diagnostic = struct {
         expected_expr_close_curly,
         expr_dot_suffix_not_allowed,
         incomplete_import,
+        file_import_expected_as,
+        file_import_expected_name,
+        file_import_expected_type,
+        file_import_invalid_type,
         nominal_associated_cannot_have_final_expression,
         type_alias_cannot_have_associated,
 
@@ -954,6 +958,15 @@ pub const Statement = union(enum) {
         nested_import: bool,
         region: TokenizedRegion,
     },
+    /// File import: `import "path" as name : Type`
+    /// Embeds file contents as Str or List(U8).
+    file_import: struct {
+        path_tok: Token.Idx,
+        name_tok: Token.Idx,
+        type_tok: Token.Idx,
+        is_bytes: bool,
+        region: TokenizedRegion,
+    },
     type_decl: struct {
         header: TypeHeader.Idx,
         anno: TypeAnno.Idx,
@@ -1047,6 +1060,18 @@ pub const Statement = union(enum) {
                     }
                     try tree.endNode(exposed, attrs2);
                 }
+                try tree.endNode(begin, attrs);
+            },
+            .file_import => |fi| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("s-file-import");
+                try ast.appendRegionInfoToSexprTree(env, tree, fi.region);
+                const attrs = tree.beginNode();
+
+                try tree.pushStringPair("path", ast.resolve(fi.path_tok));
+                try tree.pushStringPair("name", ast.resolve(fi.name_tok));
+                try tree.pushStringPair("type", if (fi.is_bytes) "List(U8)" else "Str");
+
                 try tree.endNode(begin, attrs);
             },
             .type_decl => |a| {
@@ -1236,6 +1261,7 @@ pub const Statement = union(enum) {
             .@"break" => |s| s.region,
             .type_anno => |s| s.region,
             .malformed => |m| m.region,
+            .file_import => |fi| fi.region,
         };
     }
 };
@@ -2158,7 +2184,7 @@ pub const TypeAnno = union(enum) {
     },
     record: struct {
         fields: AnnoRecordField.Span,
-        ext: ?TypeAnno.Idx,
+        ext: RecordExt,
         region: TokenizedRegion,
     },
     @"fn": struct {
@@ -2186,14 +2212,31 @@ pub const TypeAnno = union(enum) {
         /// Anonymous open tag union: `[A, B, ..]` - stores the DoubleDot token index
         open: Token.Idx,
         /// Named open tag union: `[A, B, ..ext]`
-        named: TypeAnno.Idx,
+        named: struct { anno: TypeAnno.Idx, region: TokenizedRegion },
     };
 
     pub const TagUnionRhs = packed struct {
         /// 0 = closed, 1 = anonymous open, 2 = named open
         ext_kind: u2,
-        tags_len: u30,
+        _padding: u30 = 0,
     };
+
+    /// Extension type for open records
+    pub const RecordExt = union(enum) {
+        /// Closed record: `{ name: Str }`
+        closed,
+        /// Anonymous open record: `{ name: Str, .. }` - stores the DoubleDot token index
+        open: Token.Idx,
+        /// Named open record: `{ name: Str, ..ext }`
+        named: struct { anno: TypeAnno.Idx, region: TokenizedRegion },
+    };
+
+    pub const RecordRhs = packed struct {
+        /// 0 = closed, 1 = anonymous open, 2 = named open
+        ext_kind: u2,
+        _padding: u30 = 0,
+    };
+
     pub const TypeAnnoFnRhs = packed struct { effectful: u1, args_len: u31 };
 
     /// Extract the region from any TypeAnno variant
@@ -2278,8 +2321,8 @@ pub const TypeAnno = union(enum) {
                 try tree.endNode(tags_begin, attrs2);
 
                 switch (a.ext) {
-                    .named => |named_idx| {
-                        try ast.store.getTypeAnno(named_idx).pushToSExprTree(gpa, env, ast, tree);
+                    .named => |named| {
+                        try ast.store.getTypeAnno(named.anno).pushToSExprTree(gpa, env, ast, tree);
                     },
                     .open => {
                         try tree.pushStaticAtom("..");
@@ -2322,12 +2365,22 @@ pub const TypeAnno = union(enum) {
                 }
 
                 // Output extension if present
-                if (a.ext) |ext_idx| {
-                    const ext_begin = tree.beginNode();
-                    try tree.pushStaticAtom("ty-record-ext");
-                    const ext_attrs = tree.beginNode();
-                    try ast.store.getTypeAnno(ext_idx).pushToSExprTree(gpa, env, ast, tree);
-                    try tree.endNode(ext_begin, ext_attrs);
+                switch (a.ext) {
+                    .named => |named| {
+                        const ext_begin = tree.beginNode();
+                        try tree.pushStaticAtom("ty-record-ext");
+                        const ext_attrs = tree.beginNode();
+                        try ast.store.getTypeAnno(named.anno).pushToSExprTree(gpa, env, ast, tree);
+                        try tree.endNode(ext_begin, ext_attrs);
+                    },
+                    .open => {
+                        const ext_begin = tree.beginNode();
+                        try tree.pushStaticAtom("ty-record-ext");
+                        const ext_attrs = tree.beginNode();
+                        try tree.pushStaticAtom("..");
+                        try tree.endNode(ext_begin, ext_attrs);
+                    },
+                    .closed => {},
                 }
 
                 try tree.endNode(begin, attrs);

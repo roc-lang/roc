@@ -253,3 +253,13 @@ test "polymorphic numeric in list used as List.get index unifies to U64 - regres
     }
     try testing.expect(found_index);
 }
+
+test "method call on numeric literal infers return type as Dec" {
+    // (-3.14).abs() should infer as Dec, not as an unresolved flex var.
+    // The literal -3.14 has type Dec (from from_numeral constraint),
+    // and abs : Dec -> Dec, so the call result must also be Dec.
+    var test_env = try TestEnv.initExpr("Test", "(-3.14).abs()");
+    defer test_env.deinit();
+
+    try test_env.assertLastDefType("Dec");
+}

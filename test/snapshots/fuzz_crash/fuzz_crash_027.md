@@ -190,7 +190,6 @@ UNDECLARED TYPE - fuzz_crash_027.md:30:2:30:5
 EMPTY TUPLE NOT ALLOWED - fuzz_crash_027.md:52:1:52:3
 UNDEFINED VARIABLE - fuzz_crash_027.md:65:4:65:5
 UNDEFINED VARIABLE - fuzz_crash_027.md:65:6:65:7
-UNUSED VARIABLE - fuzz_crash_027.md:64:11:64:14
 UNDEFINED VARIABLE - fuzz_crash_027.md:71:7:71:11
 UNUSED VARIABLE - fuzz_crash_027.md:1:1:1:1
 NOT IMPLEMENTED - fuzz_crash_027.md:74:7:74:12
@@ -503,18 +502,6 @@ Is there an `import` or `exposing` missing up-top?
 			x x
 ```
 			  ^
-
-
-**UNUSED VARIABLE**
-Variable `lue` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_lue` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_027.md:64:11:64:14:**
-```roc
-	match a {lue | Red => {
-```
-	         ^^^
 
 
 **UNDEFINED VARIABLE**
@@ -894,7 +881,7 @@ The type _List_ expects 1 argument, but got 0 instead.
 
 
 **TYPE MISMATCH**
-This `if` condition must evaluate to a `Bool`–either `True` or `False`:
+This `if` condition must evaluate to a `Bool` – either `True` or `False`:
 **fuzz_crash_027.md:50:5:50:8:**
 ```roc
 	if num {
@@ -951,7 +938,7 @@ This third branch is trying to match:
 
 But the expression between the `match` parenthesis has the type:
 
-    [Red, Blue, ..]
+    [Blue, Red, ..]
 
 These can never match! Either the pattern or expression has a problem.
 
@@ -1016,7 +1003,7 @@ The value before this **+** operator has a type that doesn't have a **plus** met
 ```
 		         ^^^^^^^^^^
 
-The value's type, which does not have a method named**plus**, is:
+The value's type, which does not have a method named **plus**, is:
 
     Str
 
@@ -1036,7 +1023,7 @@ It has the type:
 
 But the function's return type is:
 
-    Try({  }, _d)
+    Try({}, _d)
 
 **Hint:** All `return` statements and the final expression in a function must have the same type.
 
@@ -1936,7 +1923,7 @@ expect {
 							(patterns
 								(pattern (degenerate false)
 									(p-assign (ident "lue")))
-								(pattern (degenerate false)
+								(pattern (degenerate true)
 									(p-applied-tag)))
 							(value
 								(e-block
@@ -2085,316 +2072,313 @@ expect {
 								(e-num (value "121000")))))))))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-closure
-			(captures
-				(capture (ident "match_time")))
-			(e-lambda
-				(args
-					(p-underscore))
-				(e-block
-					(s-let
-						(p-assign (ident "world"))
-						(e-string
-							(e-literal (string "World"))))
-					(s-var
-						(p-assign (ident "number"))
-						(e-num (value "123")))
-					(s-expect
-						(e-binop (op "eq")
-							(e-runtime-error (tag "ident_not_in_scope"))
-							(e-num (value "1"))))
-					(s-let
-						(p-assign (ident "tag"))
-						(e-tag (name "Blue")))
-					(s-return
+		(e-lambda
+			(args
+				(p-underscore))
+			(e-block
+				(s-let
+					(p-assign (ident "world"))
+					(e-string
+						(e-literal (string "World"))))
+				(s-var
+					(p-assign (ident "number"))
+					(e-num (value "123")))
+				(s-expect
+					(e-binop (op "eq")
+						(e-runtime-error (tag "ident_not_in_scope"))
+						(e-num (value "1"))))
+				(s-let
+					(p-assign (ident "tag"))
+					(e-tag (name "Blue")))
+				(s-return
+					(e-lookup-local
+						(p-assign (ident "tag"))))
+				(s-expr
+					(e-not-implemented))
+				(s-expr
+					(e-call
 						(e-lookup-local
-							(p-assign (ident "tag"))))
-					(s-expr
-						(e-not-implemented))
-					(s-expr
-						(e-call
+							(p-assign (ident "match_time")))
+						(e-not-implemented)))
+				(s-expr
+					(e-call
+						(e-runtime-error (tag "ident_not_in_scope"))
+						(e-dbg
+							(e-num (value "42")))))
+				(s-crash (msg "Unreachtement"))
+				(s-let
+					(p-assign (ident "tag_with"))
+					(e-tag (name "Ok")
+						(args
 							(e-lookup-local
-								(p-assign (ident "match_time")))
-							(e-not-implemented)))
-					(s-expr
-						(e-call
-							(e-runtime-error (tag "ident_not_in_scope"))
-							(e-dbg
-								(e-num (value "42")))))
-					(s-crash (msg "Unreachtement"))
-					(s-let
-						(p-assign (ident "tag_with"))
-						(e-tag (name "Ok")
-							(args
-								(e-lookup-local
-									(p-assign (ident "number"))))))
-					(s-let
-						(p-assign (ident "ited"))
-						(e-string
-							(e-literal (string "Hello, "))
-							(e-lookup-local
-								(p-assign (ident "world")))
-							(e-literal (string ""))))
-					(s-let
-						(p-assign (ident "list"))
-						(e-list
-							(elems
-								(e-num (value "456")))))
-					(s-for
-						(p-assign (ident "n"))
+								(p-assign (ident "number"))))))
+				(s-let
+					(p-assign (ident "ited"))
+					(e-string
+						(e-literal (string "Hello, "))
 						(e-lookup-local
-							(p-assign (ident "list")))
-						(e-block
-							(s-expr
-								(e-call
-									(e-runtime-error (tag "ident_not_in_scope"))
-									(e-string
-										(e-literal (string "Adding "))
-										(e-lookup-local
-											(p-assign (ident "n")))
-										(e-literal (string " to "))
-										(e-lookup-local
-											(p-assign (ident "number")))
-										(e-literal (string "")))))
-							(s-reassign
-								(p-assign (ident "number"))
-								(e-binop (op "add")
+							(p-assign (ident "world")))
+						(e-literal (string ""))))
+				(s-let
+					(p-assign (ident "list"))
+					(e-list
+						(elems
+							(e-num (value "456")))))
+				(s-for
+					(p-assign (ident "n"))
+					(e-lookup-local
+						(p-assign (ident "list")))
+					(e-block
+						(s-expr
+							(e-call
+								(e-runtime-error (tag "ident_not_in_scope"))
+								(e-string
+									(e-literal (string "Adding "))
+									(e-lookup-local
+										(p-assign (ident "n")))
+									(e-literal (string " to "))
 									(e-lookup-local
 										(p-assign (ident "number")))
-									(e-lookup-local
-										(p-assign (ident "n")))))
-							(e-empty_record)))
-					(s-let
-						(p-assign (ident "record"))
-						(e-record
-							(fields
-								(field (name "foo")
-									(e-num (value "123")))
-								(field (name "bar")
-									(e-string
-										(e-literal (string "Hello"))))
-								(field (name "baz")
-									(e-lookup-local
-										(p-assign (ident "tag"))))
-								(field (name "qux")
-									(e-tag (name "Ok")
-										(args
-											(e-lookup-local
-												(p-assign (ident "world"))))))
-								(field (name "punned")
-									(e-runtime-error (tag "ident_not_in_scope"))))))
-					(s-let
-						(p-assign (ident "tuple"))
-						(e-tuple
-							(elems
-								(e-num (value "123"))
-								(e-string
-									(e-literal (string "World")))
+									(e-literal (string "")))))
+						(s-reassign
+							(p-assign (ident "number"))
+							(e-binop (op "add")
 								(e-lookup-local
-									(p-assign (ident "tag")))
-								(e-tag (name "Ok")
-									(args
-										(e-lookup-local
-											(p-assign (ident "world")))))
-								(e-tuple
-									(elems
-										(e-runtime-error (tag "ident_not_in_scope"))
-										(e-runtime-error (tag "self_referential_definition"))))
-								(e-list
-									(elems
-										(e-num (value "1"))
-										(e-num (value "2"))
-										(e-num (value "3")))))))
-					(s-let
-						(p-assign (ident "m_tuple"))
-						(e-tuple
-							(elems
-								(e-num (value "123"))
+									(p-assign (ident "number")))
+								(e-lookup-local
+									(p-assign (ident "n")))))
+						(e-empty_record)))
+				(s-let
+					(p-assign (ident "record"))
+					(e-record
+						(fields
+							(field (name "foo")
+								(e-num (value "123")))
+							(field (name "bar")
 								(e-string
-									(e-literal (string "World")))
-								(e-runtime-error (tag "ident_not_in_scope"))
+									(e-literal (string "Hello"))))
+							(field (name "baz")
+								(e-lookup-local
+									(p-assign (ident "tag"))))
+							(field (name "qux")
 								(e-tag (name "Ok")
 									(args
 										(e-lookup-local
-											(p-assign (ident "world")))))
-								(e-tuple
-									(elems
-										(e-runtime-error (tag "ident_not_in_scope"))
-										(e-lookup-local
-											(p-assign (ident "tuple")))))
-								(e-list
-									(elems
-										(e-num (value "1"))
-										(e-num (value "2"))
-										(e-num (value "3")))))))
-					(s-let
-						(p-assign (ident "bsult"))
-						(e-binop (op "or")
-							(e-binop (op "gt")
-								(e-match
-									(match
-										(cond
-											(e-tag (name "Err")
-												(args
-													(e-runtime-error (tag "ident_not_in_scope")))))
-										(branches
-											(branch
-												(patterns
-													(pattern (degenerate false)
-														(p-nominal-external (builtin)
-															(p-applied-tag))))
-												(value
-													(e-lookup-local
-														(p-assign (ident "#ok")))))
-											(branch
-												(patterns
-													(pattern (degenerate false)
-														(p-nominal-external (builtin)
-															(p-applied-tag))))
-												(value
-													(e-num (value "12")))))))
-								(e-binop (op "mul")
-									(e-num (value "5"))
-									(e-num (value "5"))))
-							(e-binop (op "or")
-								(e-binop (op "and")
-									(e-binop (op "lt")
-										(e-binop (op "add")
-											(e-num (value "13"))
-											(e-num (value "2")))
-										(e-num (value "5")))
-									(e-binop (op "ge")
-										(e-binop (op "sub")
-											(e-num (value "10"))
-											(e-num (value "1")))
-										(e-num (value "16"))))
-								(e-binop (op "le")
-									(e-num (value "12"))
-									(e-binop (op "div")
-										(e-num (value "3"))
-										(e-num (value "5")))))))
-					(s-let
-						(p-assign (ident "stale"))
-						(e-match
-							(match
-								(cond
-									(e-dot-access (field "recd")
-										(receiver
-											(e-match
-												(match
-													(cond
-														(e-dot-access (field "ned")
-															(receiver
-																(e-match
-																	(match
-																		(cond
-																			(e-dot-access (field "statod")
-																				(receiver
-																					(e-match
-																						(match
-																							(cond
-																								(e-call
-																									(e-runtime-error (tag "ident_not_in_scope"))
-																									(e-runtime-error (tag "ident_not_in_scope"))))
-																							(branches
-																								(branch
-																									(patterns
-																										(pattern (degenerate false)
-																											(p-nominal-external (builtin)
-																												(p-applied-tag))))
-																									(value
-																										(e-lookup-local
-																											(p-assign (ident "#ok")))))
-																								(branch
-																									(patterns
-																										(pattern (degenerate false)
-																											(p-nominal-external (builtin)
-																												(p-applied-tag))))
-																									(value
-																										(e-return
-																											(e-nominal-external
-																												(builtin)
-																												(e-tag (name "Err")
-																													(args
-																														(e-lookup-local
-																															(p-assign (ident "#err")))))))))))))
-																				(args)))
-																		(branches
-																			(branch
-																				(patterns
-																					(pattern (degenerate false)
-																						(p-nominal-external (builtin)
-																							(p-applied-tag))))
-																				(value
-																					(e-lookup-local
-																						(p-assign (ident "#ok")))))
-																			(branch
-																				(patterns
-																					(pattern (degenerate false)
-																						(p-nominal-external (builtin)
-																							(p-applied-tag))))
-																				(value
-																					(e-return
-																						(e-nominal-external
-																							(builtin)
-																							(e-tag (name "Err")
-																								(args
-																									(e-lookup-local
-																										(p-assign (ident "#err")))))))))))))
-															(args)))
-													(branches
-														(branch
-															(patterns
-																(pattern (degenerate false)
-																	(p-nominal-external (builtin)
-																		(p-applied-tag))))
-															(value
-																(e-lookup-local
-																	(p-assign (ident "#ok")))))
-														(branch
-															(patterns
-																(pattern (degenerate false)
-																	(p-nominal-external (builtin)
-																		(p-applied-tag))))
-															(value
-																(e-return
-																	(e-nominal-external
-																		(builtin)
-																		(e-tag (name "Err")
-																			(args
-																				(e-lookup-local
-																					(p-assign (ident "#err")))))))))))))))
-								(branches
-									(branch
-										(patterns
-											(pattern (degenerate false)
-												(p-nominal-external (builtin)
-													(p-applied-tag))))
-										(value
-											(e-lookup-local
-												(p-assign (ident "#ok")))))
-									(branch
-										(patterns
-											(pattern (degenerate false)
-												(p-nominal-external (builtin)
-													(p-applied-tag))))
-										(value
-											(e-return
-												(e-nominal-external
-													(builtin)
-													(e-tag (name "Err")
-														(args
-															(e-lookup-local
-																(p-assign (ident "#err")))))))))))))
-					(e-tag (name "Stdoline!")
-						(args
+											(p-assign (ident "world"))))))
+							(field (name "punned")
+								(e-runtime-error (tag "ident_not_in_scope"))))))
+				(s-let
+					(p-assign (ident "tuple"))
+					(e-tuple
+						(elems
+							(e-num (value "123"))
 							(e-string
-								(e-literal (string "How about "))
-								(e-call
-									(e-runtime-error (tag "qualified_ident_does_not_exist"))
+								(e-literal (string "World")))
+							(e-lookup-local
+								(p-assign (ident "tag")))
+							(e-tag (name "Ok")
+								(args
 									(e-lookup-local
-										(p-assign (ident "number"))))
-								(e-literal (string " as a"))))))))
+										(p-assign (ident "world")))))
+							(e-tuple
+								(elems
+									(e-runtime-error (tag "ident_not_in_scope"))
+									(e-runtime-error (tag "self_referential_definition"))))
+							(e-list
+								(elems
+									(e-num (value "1"))
+									(e-num (value "2"))
+									(e-num (value "3")))))))
+				(s-let
+					(p-assign (ident "m_tuple"))
+					(e-tuple
+						(elems
+							(e-num (value "123"))
+							(e-string
+								(e-literal (string "World")))
+							(e-runtime-error (tag "ident_not_in_scope"))
+							(e-tag (name "Ok")
+								(args
+									(e-lookup-local
+										(p-assign (ident "world")))))
+							(e-tuple
+								(elems
+									(e-runtime-error (tag "ident_not_in_scope"))
+									(e-lookup-local
+										(p-assign (ident "tuple")))))
+							(e-list
+								(elems
+									(e-num (value "1"))
+									(e-num (value "2"))
+									(e-num (value "3")))))))
+				(s-let
+					(p-assign (ident "bsult"))
+					(e-binop (op "or")
+						(e-binop (op "gt")
+							(e-match
+								(match
+									(cond
+										(e-tag (name "Err")
+											(args
+												(e-runtime-error (tag "ident_not_in_scope")))))
+									(branches
+										(branch
+											(patterns
+												(pattern (degenerate false)
+													(p-nominal-external (builtin)
+														(p-applied-tag))))
+											(value
+												(e-lookup-local
+													(p-assign (ident "#ok")))))
+										(branch
+											(patterns
+												(pattern (degenerate false)
+													(p-nominal-external (builtin)
+														(p-applied-tag))))
+											(value
+												(e-num (value "12")))))))
+							(e-binop (op "mul")
+								(e-num (value "5"))
+								(e-num (value "5"))))
+						(e-binop (op "or")
+							(e-binop (op "and")
+								(e-binop (op "lt")
+									(e-binop (op "add")
+										(e-num (value "13"))
+										(e-num (value "2")))
+									(e-num (value "5")))
+								(e-binop (op "ge")
+									(e-binop (op "sub")
+										(e-num (value "10"))
+										(e-num (value "1")))
+									(e-num (value "16"))))
+							(e-binop (op "le")
+								(e-num (value "12"))
+								(e-binop (op "div")
+									(e-num (value "3"))
+									(e-num (value "5")))))))
+				(s-let
+					(p-assign (ident "stale"))
+					(e-match
+						(match
+							(cond
+								(e-dot-access (field "recd")
+									(receiver
+										(e-match
+											(match
+												(cond
+													(e-dot-access (field "ned")
+														(receiver
+															(e-match
+																(match
+																	(cond
+																		(e-dot-access (field "statod")
+																			(receiver
+																				(e-match
+																					(match
+																						(cond
+																							(e-call
+																								(e-runtime-error (tag "ident_not_in_scope"))
+																								(e-runtime-error (tag "ident_not_in_scope"))))
+																						(branches
+																							(branch
+																								(patterns
+																									(pattern (degenerate false)
+																										(p-nominal-external (builtin)
+																											(p-applied-tag))))
+																								(value
+																									(e-lookup-local
+																										(p-assign (ident "#ok")))))
+																							(branch
+																								(patterns
+																									(pattern (degenerate false)
+																										(p-nominal-external (builtin)
+																											(p-applied-tag))))
+																								(value
+																									(e-return
+																										(e-nominal-external
+																											(builtin)
+																											(e-tag (name "Err")
+																												(args
+																													(e-lookup-local
+																														(p-assign (ident "#err")))))))))))))
+																			(args)))
+																	(branches
+																		(branch
+																			(patterns
+																				(pattern (degenerate false)
+																					(p-nominal-external (builtin)
+																						(p-applied-tag))))
+																			(value
+																				(e-lookup-local
+																					(p-assign (ident "#ok")))))
+																		(branch
+																			(patterns
+																				(pattern (degenerate false)
+																					(p-nominal-external (builtin)
+																						(p-applied-tag))))
+																			(value
+																				(e-return
+																					(e-nominal-external
+																						(builtin)
+																						(e-tag (name "Err")
+																							(args
+																								(e-lookup-local
+																									(p-assign (ident "#err")))))))))))))
+														(args)))
+												(branches
+													(branch
+														(patterns
+															(pattern (degenerate false)
+																(p-nominal-external (builtin)
+																	(p-applied-tag))))
+														(value
+															(e-lookup-local
+																(p-assign (ident "#ok")))))
+													(branch
+														(patterns
+															(pattern (degenerate false)
+																(p-nominal-external (builtin)
+																	(p-applied-tag))))
+														(value
+															(e-return
+																(e-nominal-external
+																	(builtin)
+																	(e-tag (name "Err")
+																		(args
+																			(e-lookup-local
+																				(p-assign (ident "#err")))))))))))))))
+							(branches
+								(branch
+									(patterns
+										(pattern (degenerate false)
+											(p-nominal-external (builtin)
+												(p-applied-tag))))
+									(value
+										(e-lookup-local
+											(p-assign (ident "#ok")))))
+								(branch
+									(patterns
+										(pattern (degenerate false)
+											(p-nominal-external (builtin)
+												(p-applied-tag))))
+									(value
+										(e-return
+											(e-nominal-external
+												(builtin)
+												(e-tag (name "Err")
+													(args
+														(e-lookup-local
+															(p-assign (ident "#err")))))))))))))
+				(e-tag (name "Stdoline!")
+					(args
+						(e-string
+							(e-literal (string "How about "))
+							(e-call
+								(e-runtime-error (tag "qualified_ident_does_not_exist"))
+								(e-lookup-local
+									(p-assign (ident "number"))))
+							(e-literal (string " as a")))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)
@@ -2514,8 +2498,8 @@ expect {
 		(patt (type "(Error, Error)"))
 		(patt (type "Bool -> Dec"))
 		(patt (type "U64 -> U64"))
-		(patt (type "[Red, Blue, ..], _arg -> Error"))
-		(patt (type "List(Error) -> Try({  }, _d)"))
+		(patt (type "[Blue, Red, ..], _arg -> Error"))
+		(patt (type "List(Error) -> Try({}, _d)"))
 		(patt (type "{}"))
 		(patt (type "Error")))
 	(type_decls
@@ -2551,8 +2535,8 @@ expect {
 		(expr (type "(Error, Error)"))
 		(expr (type "Bool -> Dec"))
 		(expr (type "U64 -> U64"))
-		(expr (type "[Red, Blue, ..], _arg -> Error"))
-		(expr (type "List(Error) -> Try({  }, _d)"))
+		(expr (type "[Blue, Red, ..], _arg -> Error"))
+		(expr (type "List(Error) -> Try({}, _d)"))
 		(expr (type "{}"))
 		(expr (type "Error"))))
 ~~~

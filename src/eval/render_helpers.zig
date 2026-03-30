@@ -3,11 +3,10 @@
 const std = @import("std");
 const types = @import("types");
 const can = @import("can");
-const layout = @import("layout");
+const layout = @import("interpreter_layout");
+const interpreter_values = @import("interpreter_values");
 const builtins = @import("builtins");
 const StackValue = @import("StackValue.zig");
-const i128h = builtins.compiler_rt_128;
-const RocDec = builtins.dec.RocDec;
 const TypeScope = types.TypeScope;
 
 /// Copy tags and sort them alphabetically, returning the tag at the given index.
@@ -20,51 +19,43 @@ fn getSortedTag(
     tag_union: types.TagUnion,
     tag_index: usize,
 ) ?types.Tag {
-    const tags = ctx.runtime_types.getTagsSlice(tag_union.tags);
-    if (tags.len == 0) return null;
+    // Gather tags across the full extension chain.
+    var all_tags = std.array_list.AlignedManaged(types.Tag, null).init(ctx.allocator);
+    defer all_tags.deinit();
 
-    // Fast path: if tags are already sorted, just return directly
-    // (check first two tags - if they're in order, likely all are)
-    if (tags.len <= 1) {
-        return if (tag_index < tags.len)
-            types.Tag{ .name = tags.items(.name)[tag_index], .args = tags.items(.args)[tag_index] }
-        else
-            null;
+    const initial_tags = ctx.runtime_types.getTagsSlice(tag_union.tags);
+    for (initial_tags.items(.name), initial_tags.items(.args)) |name, args| {
+        all_tags.append(.{ .name = name, .args = args }) catch return null;
     }
 
-    // Get ident store for sorting
+    var ext = tag_union.ext;
+    while (true) {
+        const ext_resolved = ctx.runtime_types.resolveVar(ext);
+        switch (ext_resolved.desc.content) {
+            .structure => |st| switch (st) {
+                .tag_union => |ext_tag_union| {
+                    const ext_tags = ctx.runtime_types.getTagsSlice(ext_tag_union.tags);
+                    for (ext_tags.items(.name), ext_tags.items(.args)) |name, args| {
+                        all_tags.append(.{ .name = name, .args = args }) catch return null;
+                    }
+                    ext = ext_tag_union.ext;
+                },
+                .empty_tag_union => break,
+                else => break,
+            },
+            .alias => |alias| {
+                ext = ctx.runtime_types.getAliasBackingVar(alias);
+            },
+            else => break,
+        }
+    }
+
+    if (all_tags.items.len == 0) return null;
+
     const ident_store = ctx.env.common.getIdentStore();
+    std.mem.sort(types.Tag, all_tags.items, ident_store, types.Tag.sortByNameAsc);
 
-    // Always copy and sort to ensure consistent ordering
-    // We cannot rely on storage order because the same source type may be translated
-    // multiple times with different cache generations, resulting in different
-    // runtime type vars with potentially different tag ordering.
-
-    // Tags are NOT sorted - need to copy and sort
-    // Use a stack buffer for small tag unions, allocate for larger ones
-    var stack_buf: [16]types.Tag = undefined;
-    var sorted_tags: []types.Tag = undefined;
-    var heap_allocated = false;
-
-    if (tags.len <= stack_buf.len) {
-        sorted_tags = stack_buf[0..tags.len];
-    } else {
-        sorted_tags = ctx.allocator.alloc(types.Tag, tags.len) catch return null;
-        heap_allocated = true;
-    }
-    defer if (heap_allocated) ctx.allocator.free(sorted_tags);
-
-    // Copy tags
-    const names = tags.items(.name);
-    const args = tags.items(.args);
-    for (names, args, 0..) |name, arg, i| {
-        sorted_tags[i] = types.Tag{ .name = name, .args = arg };
-    }
-
-    // Sort alphabetically
-    std.mem.sort(types.Tag, sorted_tags, ident_store, types.Tag.sortByNameAsc);
-
-    return if (tag_index < sorted_tags.len) sorted_tags[tag_index] else null;
+    return if (tag_index < all_tags.items.len) all_tags.items[tag_index] else null;
 }
 
 fn toVarRange(range: anytype) types.Var.SafeList.Range {
@@ -92,18 +83,37 @@ pub const RenderCtx = struct {
     to_inspect_callback: ?ToInspectCallback = null,
     /// Opaque context pointer passed to the to_inspect callback.
     callback_ctx: ?*anyopaque = null,
-    /// When true, render whole-number Dec values without .0 if the type is an unbound numeral.
-    /// Used by the REPL for cleaner output.
-    strip_unbound_numeral_decimal: bool = false,
 };
+
+fn shouldPreferIntegerLayoutRendering(ctx: *RenderCtx, rt_var: types.Var) bool {
+    var resolved = ctx.runtime_types.resolveVar(rt_var);
+    while (true) {
+        switch (resolved.desc.content) {
+            .alias => |al| {
+                const backing = ctx.runtime_types.getAliasBackingVar(al);
+                resolved = ctx.runtime_types.resolveVar(backing);
+            },
+            // When the type is still generic, trust concrete runtime layout for ints.
+            .flex, .rigid => return true,
+            .structure => |st| switch (st) {
+                .nominal_type => |nt| {
+                    return nt.ident.ident_idx.eql(ctx.env.idents.builtin_numeral);
+                },
+                else => return false,
+            },
+            else => return false,
+        }
+    }
+}
 
 /// Render `value` using the supplied runtime type variable, following alias/nominal backing.
 pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.Var) ![]u8 {
     const gpa = ctx.allocator;
     var resolved = ctx.runtime_types.resolveVar(rt_var);
 
-    // Check layout first for special rendering cases
-    // Str has .str layout, Bool has .int .u8 layout
+    // Check layout first for special rendering cases.
+    // Str has a dedicated scalar layout; ordinary tag unions, including Bool,
+    // are rendered structurally below using type information.
     if (value.layout.tag == .scalar) {
         const scalar = value.layout.data.scalar;
         if (scalar.tag == .str) {
@@ -122,6 +132,9 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
             }
             try buf.append('"');
             return buf.toOwnedSlice();
+        }
+        if (scalar.tag == .int and shouldPreferIntegerLayoutRendering(ctx, rt_var)) {
+            return renderValueRoc(ctx, value);
         }
     }
 
@@ -145,7 +158,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                         }
                     }
                     // Special handling for Box before unwrapping
-                    if (nt.ident.ident_idx == ctx.env.idents.box) {
+                    if (nt.ident.ident_idx.eql(ctx.env.idents.box)) {
                         // Use sliceNominalArgs which skips the backing var (first element)
                         const arg_vars = ctx.runtime_types.sliceNominalArgs(nt);
                         if (arg_vars.len != 1) {
@@ -188,26 +201,8 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                                 defer gpa.free(rendered_payload);
                                 try out.appendSlice(rendered_payload);
                             },
-                            .scalar => {
-                                // Box might be stored as a scalar opaque_ptr when inside other structures
-                                // Try to interpret it as a pointer to boxed data
-                                if (value.layout.data.scalar.tag == .opaque_ptr and payload_size > 0) {
-                                    if (value.ptr) |ptr| {
-                                        const data_ptr: *usize = @ptrCast(@alignCast(ptr));
-                                        payload_value.ptr = @as(*anyopaque, @ptrFromInt(data_ptr.*));
-                                        const rendered_payload = try renderValueRocWithType(ctx, payload_value, payload_var);
-                                        defer gpa.free(rendered_payload);
-                                        try out.appendSlice(rendered_payload);
-                                    } else {
-                                        try out.appendSlice("<null>");
-                                    }
-                                } else {
-                                    try out.appendSlice("<unsupported>");
-                                }
-                            },
                             else => {
-                                // Fallback - render as unsupported
-                                try out.appendSlice("<unsupported>");
+                                unreachable;
                             },
                         }
 
@@ -215,7 +210,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                         return out.toOwnedSlice();
                     }
                     // Special handling for List before unwrapping - render with element type info
-                    if (nt.ident.ident_idx == ctx.env.idents.list) {
+                    if (nt.ident.ident_idx.eql(ctx.env.idents.list)) {
                         // Use sliceNominalArgs which skips the backing var (first element)
                         const arg_vars = ctx.runtime_types.sliceNominalArgs(nt);
                         if (arg_vars.len != 1) {
@@ -256,16 +251,33 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                                 }
                             }
                         } else if (value.layout.tag == .list_of_zst) {
-                            // list_of_zst - elements have no data, just render count if non-empty
+                            // list_of_zst - elements may have no data (true ZST), or the list
+                            // may have been incorrectly classified as list_of_zst when the element
+                            // type resolved to flex during type translation (e.g., List(Package.Idx)
+                            // where Idx is an opaque type from another module). In the latter case,
+                            // the list has real data bytes that we can render.
                             const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(value.ptr.?));
                             const len = roc_list.len();
                             if (len > 0) {
-                                // For ZST lists, render each element using type info
-                                const elem_layout = layout.Layout.zst();
+                                // Try to compute real element layout from the type var.
+                                // If the element type has a concrete layout with non-zero size,
+                                // use actual data bytes for rendering instead of null pointers.
+                                const computed_elem_layout = if (roc_list.bytes != null) blk: {
+                                    const elem_layout_idx = ctx.layout_store.fromTypeVar(0, elem_type_var, ctx.type_scope, null) catch break :blk null;
+                                    const el = ctx.layout_store.getLayout(elem_layout_idx);
+                                    const el_size = ctx.layout_store.layoutSize(el);
+                                    if (el_size > 0) break :blk el else break :blk null;
+                                } else null;
+
                                 var i: usize = 0;
                                 while (i < len) : (i += 1) {
-                                    const elem_val = StackValue{
-                                        .layout = elem_layout,
+                                    const elem_val = if (computed_elem_layout) |el| StackValue{
+                                        .layout = el,
+                                        .ptr = @ptrCast(roc_list.bytes.? + i * ctx.layout_store.layoutSize(el)),
+                                        .is_initialized = true,
+                                        .rt_var = elem_type_var,
+                                    } else StackValue{
+                                        .layout = layout.Layout.zst(),
                                         .ptr = null,
                                         .is_initialized = true,
                                         .rt_var = elem_type_var,
@@ -323,156 +335,142 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                         return out.toOwnedSlice();
                     }
                 }
-            } else if (value.layout.tag == .tuple) {
-                // Tag union stored as tuple: (payload, tag_index) or (payload_tuple, tag_index)
-                // The last element of the tuple is the tag discriminant
-                var tup_acc = try value.asTuple(ctx.layout_store);
-                const count = tup_acc.getElementCount();
-                if (count > 0) {
-                    // Get tag index from the last element
-                    // rt_var not needed for tag discriminant access (it's always an integer)
-                    const tag_elem = try tup_acc.getElement(count - 1, undefined);
-                    if (tag_elem.layout.tag == .scalar and tag_elem.layout.data.scalar.tag == .int) {
-                        if (std.math.cast(usize, tag_elem.asI128())) |tag_idx| {
-                            tag_index = tag_idx;
-                            have_tag = true;
-                        }
-                    }
-                }
-                // Use getSortedTag to ensure consistent tag ordering
-                if (have_tag) {
-                    if (getSortedTag(ctx, tu, tag_index)) |sorted_tag| {
-                        const tag_name = ctx.env.getIdent(sorted_tag.name);
-                        var out = std.array_list.AlignedManaged(u8, null).init(gpa);
-                        errdefer out.deinit();
-                        try out.appendSlice(tag_name);
-                        const arg_vars = ctx.runtime_types.sliceVars(toVarRange(sorted_tag.args));
-                        if (arg_vars.len > 0) {
-                            try out.append('(');
-                            if (arg_vars.len == 1) {
-                                // Single payload: first element
-                                // Use the stored layout from the tuple element, not from type variables.
-                                // This ensures we use the layout that was actually used when creating the value.
-                                const arg_var = arg_vars[0];
-                                const payload_elem = try tup_acc.getElement(0, arg_var);
-                                const payload_value = StackValue{
-                                    .layout = payload_elem.layout,
-                                    .ptr = payload_elem.ptr,
-                                    .is_initialized = payload_elem.is_initialized,
-                                    .rt_var = arg_var,
-                                };
-                                const rendered = try renderValueRocWithType(ctx, payload_value, arg_var);
-                                defer gpa.free(rendered);
-                                try out.appendSlice(rendered);
-                            } else {
-                                // Multiple payloads: first element is a nested tuple containing all payload args
-                                // rt_var undefined for tuple access (we have the individual element types)
-                                const payload_elem = try tup_acc.getElement(0, undefined);
-                                if (payload_elem.layout.tag == .tuple) {
-                                    var payload_tup = try payload_elem.asTuple(ctx.layout_store);
-                                    var j: usize = 0;
-                                    while (j < arg_vars.len) : (j += 1) {
-                                        const elem_value = try payload_tup.getElement(j, arg_vars[j]);
-                                        const rendered = try renderValueRocWithType(ctx, elem_value, arg_vars[j]);
-                                        defer gpa.free(rendered);
-                                        try out.appendSlice(rendered);
-                                        if (j + 1 < arg_vars.len) try out.appendSlice(", ");
-                                    }
-                                } else {
-                                    // Fallback: render the raw payload
-                                    const rendered = try renderValueRoc(ctx, payload_elem);
-                                    defer gpa.free(rendered);
-                                    try out.appendSlice(rendered);
-                                }
-                            }
-                            try out.append(')');
-                        }
-                        return out.toOwnedSlice();
-                    }
-                }
-            } else if (value.layout.tag == .record) {
-                var acc = try value.asRecord(ctx.layout_store);
-                if (acc.findFieldIndex(ctx.env.idents.tag)) |idx| {
+            } else if (value.layout.tag == .struct_) {
+                // Struct representing a tag union - check if record-style (named fields) or tuple-style (indices)
+                var rec_acc = try value.asRecord(ctx.layout_store);
+                if (rec_acc.findFieldIndex(ctx.env.getIdent(ctx.env.idents.tag))) |tag_field_idx| {
+                    // Record-style: { tag, payload }
                     const field_rt = try ctx.runtime_types.fresh();
-                    const tag_field = try acc.getFieldByIndex(idx, field_rt);
+                    const tag_field = try rec_acc.getFieldByIndex(tag_field_idx, field_rt);
                     if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
                         const tmp_sv = StackValue{ .layout = tag_field.layout, .ptr = tag_field.ptr, .is_initialized = true, .rt_var = undefined };
-                        // Only treat as tag if value fits in usize (valid tag discriminants are small)
                         if (std.math.cast(usize, tmp_sv.asI128())) |tag_idx| {
                             tag_index = tag_idx;
                             have_tag = true;
                         }
                     }
-                }
-                // Use getSortedTag to ensure consistent tag ordering
-                if (have_tag) {
-                    if (getSortedTag(ctx, tu, tag_index)) |sorted_tag| {
-                        const tag_name = ctx.env.getIdent(sorted_tag.name);
-                        var out = std.array_list.AlignedManaged(u8, null).init(gpa);
-                        errdefer out.deinit();
-                        try out.appendSlice(tag_name);
-                        if (acc.findFieldIndex(ctx.env.idents.payload)) |pidx| {
-                            const field_rt = try ctx.runtime_types.fresh();
-                            const payload = try acc.getFieldByIndex(pidx, field_rt);
+                    if (have_tag) {
+                        if (getSortedTag(ctx, tu, tag_index)) |sorted_tag| {
+                            const tag_name = ctx.env.getIdent(sorted_tag.name);
+                            var out = std.array_list.AlignedManaged(u8, null).init(gpa);
+                            errdefer out.deinit();
+                            try out.appendSlice(tag_name);
+                            if (rec_acc.findFieldIndex(ctx.env.getIdent(ctx.env.idents.payload))) |pidx| {
+                                const payload_field_rt = try ctx.runtime_types.fresh();
+                                const payload = try rec_acc.getFieldByIndex(pidx, payload_field_rt);
+                                const arg_vars = ctx.runtime_types.sliceVars(toVarRange(sorted_tag.args));
+                                if (arg_vars.len > 0) {
+                                    try out.append('(');
+                                    if (arg_vars.len == 1) {
+                                        const arg_var = arg_vars[0];
+                                        const payload_value = StackValue{
+                                            .layout = payload.layout,
+                                            .ptr = payload.ptr,
+                                            .is_initialized = payload.is_initialized,
+                                            .rt_var = arg_var,
+                                        };
+                                        const rendered = try renderValueRocWithType(ctx, payload_value, arg_var);
+                                        defer gpa.free(rendered);
+                                        try out.appendSlice(rendered);
+                                    } else {
+                                        const tuple_size = ctx.layout_store.layoutSize(payload.layout);
+                                        if (tuple_size == 0 or payload.ptr == null) {
+                                            var j: usize = 0;
+                                            while (j < arg_vars.len) : (j += 1) {
+                                                const rendered = try renderValueRocWithType(
+                                                    ctx,
+                                                    StackValue{
+                                                        .layout = layout.Layout.zst(),
+                                                        .ptr = null,
+                                                        .is_initialized = true,
+                                                        .rt_var = arg_vars[j],
+                                                    },
+                                                    arg_vars[j],
+                                                );
+                                                defer gpa.free(rendered);
+                                                try out.appendSlice(rendered);
+                                                if (j + 1 < arg_vars.len) try out.appendSlice(", ");
+                                            }
+                                        } else {
+                                            var tuple_value = StackValue{
+                                                .layout = payload.layout,
+                                                .ptr = payload.ptr,
+                                                .is_initialized = payload.is_initialized,
+                                                .rt_var = undefined,
+                                            };
+                                            var tup_acc2 = try tuple_value.asTuple(ctx.layout_store);
+                                            var j: usize = 0;
+                                            while (j < arg_vars.len) : (j += 1) {
+                                                const elem_value = try tup_acc2.getElement(j, arg_vars[j]);
+                                                const rendered = try renderValueRocWithType(ctx, elem_value, arg_vars[j]);
+                                                defer gpa.free(rendered);
+                                                try out.appendSlice(rendered);
+                                                if (j + 1 < arg_vars.len) try out.appendSlice(", ");
+                                            }
+                                        }
+                                    }
+                                    try out.append(')');
+                                }
+                            }
+                            return out.toOwnedSlice();
+                        }
+                    }
+                } else {
+                    // Tuple-style: (payload, tag_index)
+                    var tup_acc = try value.asTuple(ctx.layout_store);
+                    const count = tup_acc.getElementCount();
+                    if (count > 0) {
+                        const tag_elem = try tup_acc.getElement(count - 1, undefined);
+                        if (tag_elem.layout.tag == .scalar and tag_elem.layout.data.scalar.tag == .int) {
+                            if (std.math.cast(usize, tag_elem.asI128())) |tag_idx| {
+                                tag_index = tag_idx;
+                                have_tag = true;
+                            }
+                        }
+                    }
+                    if (have_tag) {
+                        if (getSortedTag(ctx, tu, tag_index)) |sorted_tag| {
+                            const tag_name = ctx.env.getIdent(sorted_tag.name);
+                            var out = std.array_list.AlignedManaged(u8, null).init(gpa);
+                            errdefer out.deinit();
+                            try out.appendSlice(tag_name);
                             const arg_vars = ctx.runtime_types.sliceVars(toVarRange(sorted_tag.args));
                             if (arg_vars.len > 0) {
                                 try out.append('(');
                                 if (arg_vars.len == 1) {
                                     const arg_var = arg_vars[0];
-                                    // Use the stored payload layout from the record field, not from type variables.
-                                    // This ensures we use the layout that was actually used when creating the value.
+                                    const payload_elem = try tup_acc.getElement(0, arg_var);
                                     const payload_value = StackValue{
-                                        .layout = payload.layout,
-                                        .ptr = payload.ptr,
-                                        .is_initialized = payload.is_initialized,
+                                        .layout = payload_elem.layout,
+                                        .ptr = payload_elem.ptr,
+                                        .is_initialized = payload_elem.is_initialized,
                                         .rt_var = arg_var,
                                     };
                                     const rendered = try renderValueRocWithType(ctx, payload_value, arg_var);
                                     defer gpa.free(rendered);
                                     try out.appendSlice(rendered);
                                 } else {
-                                    // Multiple payloads: use the stored payload layout (should be a tuple)
-                                    const tuple_size = ctx.layout_store.layoutSize(payload.layout);
-                                    if (tuple_size == 0 or payload.ptr == null) {
+                                    const payload_elem = try tup_acc.getElement(0, undefined);
+                                    if (payload_elem.layout.tag == .struct_) {
+                                        var payload_tup = try payload_elem.asTuple(ctx.layout_store);
                                         var j: usize = 0;
                                         while (j < arg_vars.len) : (j += 1) {
-                                            const rendered = try renderValueRocWithType(
-                                                ctx,
-                                                StackValue{
-                                                    .layout = layout.Layout.zst(),
-                                                    .ptr = null,
-                                                    .is_initialized = true,
-                                                    .rt_var = arg_vars[j],
-                                                },
-                                                arg_vars[j],
-                                            );
-                                            defer gpa.free(rendered);
-                                            try out.appendSlice(rendered);
-                                            if (j + 1 < arg_vars.len) try out.appendSlice(", ");
-                                        }
-                                    } else {
-                                        var tuple_value = StackValue{
-                                            .layout = payload.layout,
-                                            .ptr = payload.ptr,
-                                            .is_initialized = payload.is_initialized,
-                                            .rt_var = undefined, // not needed - type known from layout
-                                        };
-                                        var tup_acc = try tuple_value.asTuple(ctx.layout_store);
-                                        var j: usize = 0;
-                                        while (j < arg_vars.len) : (j += 1) {
-                                            const sorted_idx = tup_acc.findElementIndexByOriginal(j) orelse return error.TypeMismatch;
-                                            const elem_value = try tup_acc.getElement(sorted_idx, arg_vars[j]);
+                                            const elem_value = try payload_tup.getElement(j, arg_vars[j]);
                                             const rendered = try renderValueRocWithType(ctx, elem_value, arg_vars[j]);
                                             defer gpa.free(rendered);
                                             try out.appendSlice(rendered);
                                             if (j + 1 < arg_vars.len) try out.appendSlice(", ");
                                         }
+                                    } else {
+                                        const rendered = try renderValueRoc(ctx, payload_elem);
+                                        defer gpa.free(rendered);
+                                        try out.appendSlice(rendered);
                                     }
                                 }
                                 try out.append(')');
                             }
+                            return out.toOwnedSlice();
                         }
-                        return out.toOwnedSlice();
                     }
                 }
             } else if (value.layout.tag == .tag_union) {
@@ -543,8 +541,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                                     var tup_acc = try tuple_value.asTuple(ctx.layout_store);
                                     var j: usize = 0;
                                     while (j < arg_vars.len) : (j += 1) {
-                                        const sorted_idx = tup_acc.findElementIndexByOriginal(j) orelse return error.TypeMismatch;
-                                        const elem_value = try tup_acc.getElement(sorted_idx, arg_vars[j]);
+                                        const elem_value = try tup_acc.getElement(j, arg_vars[j]);
                                         const rendered = try renderValueRocWithType(ctx, elem_value, arg_vars[j]);
                                         defer gpa.free(rendered);
                                         try out.appendSlice(rendered);
@@ -657,7 +654,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                     const name_text = ctx.env.getIdent(f.name);
                     try out.appendSlice(name_text);
                     try out.appendSlice(": ");
-                    const idx = acc.findFieldIndex(f.name) orelse {
+                    const idx = acc.findFieldIndex(name_text) orelse {
                         std.debug.panic("Record field not found in layout: type says field '{s}' exists but layout doesn't have it", .{name_text});
                     };
                     const field_rt = try ctx.runtime_types.fresh();
@@ -674,7 +671,49 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
             if (is_valid and all_fields.items.len == 0) {
                 return try gpa.dupe(u8, "{}");
             }
-            // Fall through to renderValueRoc which can use layout info
+            unreachable;
+        },
+        .tuple => |tuple| {
+            const elem_types = ctx.runtime_types.sliceVars(tuple.elems);
+            if (elem_types.len == 0) {
+                return try gpa.dupe(u8, "{}");
+            }
+
+            var out = std.array_list.AlignedManaged(u8, null).init(gpa);
+            errdefer out.deinit();
+            try out.append('(');
+
+            const tuple_size = ctx.layout_store.layoutSize(value.layout);
+            if (tuple_size == 0 or value.ptr == null) {
+                // Zero-sized tuple payloads (e.g. all-ZST elements) can have null pointers.
+                for (elem_types, 0..) |elem_type, i| {
+                    const rendered = try renderValueRocWithType(
+                        ctx,
+                        StackValue{
+                            .layout = layout.Layout.zst(),
+                            .ptr = null,
+                            .is_initialized = true,
+                            .rt_var = elem_type,
+                        },
+                        elem_type,
+                    );
+                    defer gpa.free(rendered);
+                    try out.appendSlice(rendered);
+                    if (i + 1 < elem_types.len) try out.appendSlice(", ");
+                }
+            } else {
+                var tup_acc = try value.asTuple(ctx.layout_store);
+                for (elem_types, 0..) |elem_type, i| {
+                    const elem_value = try tup_acc.getElement(i, elem_type);
+                    const rendered = try renderValueRocWithType(ctx, elem_value, elem_type);
+                    defer gpa.free(rendered);
+                    try out.appendSlice(rendered);
+                    if (i + 1 < elem_types.len) try out.appendSlice(", ");
+                }
+            }
+
+            try out.append(')');
+            return out.toOwnedSlice();
         },
         .empty_record => {
             return try gpa.dupe(u8, "{}");
@@ -682,234 +721,36 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
         .fn_pure, .fn_effectful, .fn_unbound => {
             return try gpa.dupe(u8, "<function>");
         },
-        else => {},
+        .empty_tag_union => {
+            return try gpa.dupe(u8, "<empty_tag_union>");
+        },
+        else => {
+            // Tuple, record_unbound, etc. — fall through to layout-based rendering
+        },
     };
 
-    // Handle Dec values specially when stripping unbound numeral decimals in REPL mode.
-    // When enabled, whole-number Dec values (like 2.0) display without the decimal (as 2).
-    if (ctx.strip_unbound_numeral_decimal and value.layout.tag == .scalar) {
-        const scalar = value.layout.data.scalar;
-        if (scalar.tag == .frac and scalar.data.frac == .dec) {
-            const dec = @as(*const RocDec, @ptrCast(@alignCast(value.ptr.?))).*;
-            // Check if this is a whole number (no fractional part)
-            if (i128h.rem_u128(@abs(dec.num), @as(u128, @intCast(RocDec.one_point_zero_i128))) == 0) {
-                const whole = i128h.divTrunc_i128(dec.num, RocDec.one_point_zero_i128);
-                var str_buf: [40]u8 = undefined;
-                return try gpa.dupe(u8, i128h.i128_to_str(&str_buf, whole).str);
-            }
-        }
-    }
-
-    return try renderValueRoc(ctx, value);
+    // Fallback: render using layout only (covers flex/rigid type vars, tuples, etc.)
+    return renderValueRoc(ctx, value);
 }
 
 /// Render `value` using only its layout (without additional type information).
+/// Delegates to the interpreter-specific `RocValue.format()` for canonical formatting.
 pub fn renderValueRoc(ctx: *RenderCtx, value: StackValue) ![]u8 {
-    const gpa = ctx.allocator;
-    if (value.layout.tag == .scalar) {
-        const scalar = value.layout.data.scalar;
-        switch (scalar.tag) {
-            .str => {
-                const rs: *const builtins.str.RocStr = @ptrCast(@alignCast(value.ptr.?));
-                const s = rs.asSlice();
-                var buf = std.array_list.AlignedManaged(u8, null).init(gpa);
-                errdefer buf.deinit();
-                try buf.append('"');
-                for (s) |ch| {
-                    switch (ch) {
-                        '\\' => try buf.appendSlice("\\\\"),
-                        '"' => try buf.appendSlice("\\\""),
-                        else => try buf.append(ch),
-                    }
-                }
-                try buf.append('"');
-                return buf.toOwnedSlice();
-            },
-            .int => {
-                // Check if this is an unsigned type that needs asU128
-                const precision = value.getIntPrecision();
-                var str_buf: [40]u8 = undefined;
-                return switch (precision) {
-                    .u64, .u128 => try gpa.dupe(u8, i128h.u128_to_str(&str_buf, value.asU128()).str),
-                    else => try gpa.dupe(u8, i128h.i128_to_str(&str_buf, value.asI128()).str),
-                };
-            },
-            .frac => {
-                std.debug.assert(value.ptr != null);
-                return switch (scalar.data.frac) {
-                    .f32 => {
-                        const ptr = @as(*const f32, @ptrCast(@alignCast(value.ptr.?)));
-                        var float_buf: [400]u8 = undefined;
-                        // Cast f32 to f64 and format at f64 precision to show the
-                        // exact binary representation (e.g. 3.140000104904175 for 3.14f32).
-                        return try gpa.dupe(u8, i128h.f64_to_str(&float_buf, @as(f64, ptr.*)));
-                    },
-                    .f64 => {
-                        const ptr = @as(*const f64, @ptrCast(@alignCast(value.ptr.?)));
-                        var float_buf: [400]u8 = undefined;
-                        return try gpa.dupe(u8, i128h.f64_to_str(&float_buf, ptr.*));
-                    },
-                    .dec => {
-                        const dec = @as(*const RocDec, @ptrCast(@alignCast(value.ptr.?))).*;
-                        // In REPL mode, strip .0 from whole-number Dec values
-                        if (ctx.strip_unbound_numeral_decimal and
-                            i128h.rem_u128(@abs(dec.num), @as(u128, @intCast(RocDec.one_point_zero_i128))) == 0)
-                        {
-                            const whole = i128h.divTrunc_i128(dec.num, RocDec.one_point_zero_i128);
-                            var str_buf: [40]u8 = undefined;
-                            return try gpa.dupe(u8, i128h.i128_to_str(&str_buf, whole).str);
-                        }
-                        var buf: [RocDec.max_str_length]u8 = undefined;
-                        const slice = dec.format_to_buf(&buf);
-                        return try gpa.dupe(u8, slice);
-                    },
-                };
-            },
-            else => {},
-        }
+    // Unit values can be represented as zero-sized structs in runtime layouts.
+    // Render these consistently as `{}` for Roc-facing output.
+    if (value.layout.tag == .zst or
+        (value.layout.tag == .struct_ and ctx.layout_store.layoutSize(value.layout) == 0))
+    {
+        return try ctx.allocator.dupe(u8, "{}");
     }
-    if (value.layout.tag == .tuple) {
-        var out = std.array_list.AlignedManaged(u8, null).init(gpa);
-        errdefer out.deinit();
-        try out.append('(');
-        var acc = try value.asTuple(ctx.layout_store);
-        const count = acc.getElementCount();
-        var i: usize = 0;
-        while (i < count) : (i += 1) {
-            // rt_var undefined (no type info available in this context)
-            const elem = try acc.getElement(i, undefined);
-            const rendered = try renderValueRoc(ctx, elem);
-            defer gpa.free(rendered);
-            try out.appendSlice(rendered);
-            if (i + 1 < count) try out.appendSlice(", ");
-        }
-        try out.append(')');
-        return out.toOwnedSlice();
-    }
-    if (value.layout.tag == .list) {
-        var out = std.array_list.AlignedManaged(u8, null).init(gpa);
-        errdefer out.deinit();
-        const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(value.ptr.?));
-        const len = roc_list.len();
-        try out.append('[');
-        if (len > 0) {
-            const elem_layout_idx = value.layout.data.list;
-            const elem_layout = ctx.layout_store.getLayout(elem_layout_idx);
-            const elem_size = ctx.layout_store.layoutSize(elem_layout);
-            var i: usize = 0;
-            while (i < len) : (i += 1) {
-                if (roc_list.bytes) |bytes| {
-                    const elem_ptr: *anyopaque = @ptrCast(bytes + i * elem_size);
-                    const elem_val = StackValue{ .layout = elem_layout, .ptr = elem_ptr, .is_initialized = true, .rt_var = undefined };
-                    const rendered = try renderValueRoc(ctx, elem_val);
-                    defer gpa.free(rendered);
-                    try out.appendSlice(rendered);
-                    if (i + 1 < len) try out.appendSlice(", ");
-                }
-            }
-        }
-        try out.append(']');
-        return out.toOwnedSlice();
-    }
-    if (value.layout.tag == .list_of_zst) {
-        // list_of_zst is used for empty lists - render as []
-        const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(value.ptr.?));
-        const len = roc_list.len();
-        if (len == 0) {
-            return try gpa.dupe(u8, "[]");
-        }
-        // Non-empty list of ZST - show count
-        return try std.fmt.allocPrint(gpa, "[<{d} zero-sized elements>]", .{len});
-    }
-    if (value.layout.tag == .record) {
-        var out = std.array_list.AlignedManaged(u8, null).init(gpa);
-        errdefer out.deinit();
-        const rec_data = ctx.layout_store.getRecordData(value.layout.data.record.idx);
-        if (rec_data.fields.count == 0) {
-            try out.appendSlice("{}");
-            return out.toOwnedSlice();
-        }
-        try out.appendSlice("{ ");
-        const fields = ctx.layout_store.record_fields.sliceRange(rec_data.getFields());
-        var i: usize = 0;
-        while (i < fields.len) : (i += 1) {
-            const fld = fields.get(i);
-            const name_text = ctx.env.getIdent(fld.name);
-            try out.appendSlice(name_text);
-            try out.appendSlice(": ");
-            const offset = ctx.layout_store.getRecordFieldOffset(value.layout.data.record.idx, @intCast(i));
-            const field_layout = ctx.layout_store.getLayout(fld.layout);
-            const base_ptr: [*]u8 = @ptrCast(@alignCast(value.ptr.?));
-            const field_ptr: *anyopaque = @ptrCast(base_ptr + offset);
-            const field_val = StackValue{ .layout = field_layout, .ptr = field_ptr, .is_initialized = true, .rt_var = undefined };
-            const rendered = try renderValueRoc(ctx, field_val);
-            defer gpa.free(rendered);
-            try out.appendSlice(rendered);
-            if (i + 1 < fields.len) try out.appendSlice(", ");
-        }
-        try out.appendSlice(" }");
-        return out.toOwnedSlice();
-    }
-    if (value.layout.tag == .box) {
-        // Layout-only Box rendering: we know it's a Box from layout but don't have type info
-        var out = std.array_list.AlignedManaged(u8, null).init(gpa);
-        errdefer out.deinit();
-        try out.appendSlice("Box(");
 
-        // Get the element layout and render the boxed value
-        const elem_layout_idx = value.layout.data.box;
-        const elem_layout = ctx.layout_store.getLayout(elem_layout_idx);
-        const elem_size = ctx.layout_store.layoutSize(elem_layout);
-
-        if (elem_size > 0) {
-            if (value.getBoxedData()) |data_ptr| {
-                const elem_val = StackValue{
-                    .layout = elem_layout,
-                    .ptr = @ptrCast(data_ptr),
-                    .is_initialized = true,
-                    .rt_var = undefined,
-                };
-                const rendered = try renderValueRoc(ctx, elem_val);
-                defer gpa.free(rendered);
-                try out.appendSlice(rendered);
-            } else {
-                try out.appendSlice("<null>");
-            }
-        } else {
-            // Zero-sized element
-            const elem_val = StackValue{
-                .layout = elem_layout,
-                .ptr = null,
-                .is_initialized = true,
-                .rt_var = undefined,
-            };
-            const rendered = try renderValueRoc(ctx, elem_val);
-            defer gpa.free(rendered);
-            try out.appendSlice(rendered);
-        }
-
-        try out.append(')');
-        return out.toOwnedSlice();
-    }
-    if (value.layout.tag == .box_of_zst) {
-        // Box of zero-sized type - render as Box({}) or similar
-        return try gpa.dupe(u8, "Box({})");
-    }
-    if (value.layout.tag == .tag_union) {
-        // Layout-only fallback for tag_union: show discriminant and raw payload
-        const tu_idx = value.layout.data.tag_union.idx;
-        const tu_data = ctx.layout_store.getTagUnionData(tu_idx);
-        const disc_offset = ctx.layout_store.getTagUnionDiscriminantOffset(tu_idx);
-        var out = std.array_list.AlignedManaged(u8, null).init(gpa);
-        errdefer out.deinit();
-        if (value.ptr) |ptr| {
-            const base_ptr: [*]u8 = @ptrCast(ptr);
-            const discriminant = tu_data.readDiscriminantFromPtr(base_ptr + disc_offset);
-            try std.fmt.format(out.writer(), "<tag_union variant={d}>", .{discriminant});
-        } else {
-            try out.appendSlice("<tag_union>");
-        }
-        return out.toOwnedSlice();
-    }
-    return try gpa.dupe(u8, "<unsupported>");
+    const roc_val = interpreter_values.RocValue{
+        .ptr = if (value.ptr) |p| @ptrCast(p) else null,
+        .lay = value.layout,
+    };
+    const fmt_ctx = interpreter_values.RocValue.FormatContext{
+        .layout_store = ctx.layout_store,
+        .ident_store = ctx.env.getIdentStoreConst(),
+    };
+    return roc_val.format(ctx.allocator, fmt_ctx);
 }

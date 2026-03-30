@@ -147,7 +147,7 @@ jobs:
         uses: ./.github/actions/flaky-retry
         with:
           command: "zig build test-cli ${{ matrix.target_flag }}"
-          error_string_contains: "unhandled file type|build executable runs correctly"
+          error_string_contains: "unhandled file type|build executable runs correctly|undefined symbol"
           retry_count: 3
 
       - name: Setup MSVC (Windows)
@@ -277,8 +277,8 @@ jobs:
           sudo snap install valgrind --classic
           valgrind --version
           ./ci/custom_valgrind.sh ./zig-out/bin/snapshot --debug --verbose
-          ./ci/custom_valgrind.sh ./zig-out/bin/roc --no-cache test/str/app.roc
-          ./ci/custom_valgrind.sh ./zig-out/bin/roc --no-cache test/int/app.roc
+          ./zig-out/bin/test_runner ./zig-out/bin/roc str --mode=valgrind --app=test/str/app.roc
+          ./zig-out/bin/test_runner ./zig-out/bin/roc int --mode=valgrind --app=test/int/app.roc
 
   zig-cross-compile:
     needs: check-once

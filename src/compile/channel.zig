@@ -11,11 +11,12 @@
 //! - Graceful shutdown via close()
 
 const std = @import("std");
-const builtin = @import("builtin");
+const threading = @import("threading.zig");
 
 const Allocator = std.mem.Allocator;
-const Mutex = std.Thread.Mutex;
-const Condition = std.Thread.Condition;
+
+const Mutex = threading.Mutex;
+const Condition = threading.Condition;
 
 /// Default channel capacity
 pub const DEFAULT_CAPACITY: usize = 1024;
@@ -97,6 +98,44 @@ pub fn Channel(comptime T: type) type {
             self.count += 1;
 
             // Signal that channel is non-empty
+            self.not_empty.signal();
+        }
+
+        /// Send an item, growing the buffer if full (never blocks on capacity).
+        /// Use this when the sender must remain responsive and cannot afford to
+        /// block — e.g. a coordinator that also needs to drain another channel.
+        pub fn sendGrowable(self: *Self, item: T) error{ Closed, OutOfMemory }!void {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+
+            if (self.closed) return error.Closed;
+
+            // Grow ring buffer if full
+            if (self.count >= self.buffer.len) {
+                const new_cap = self.buffer.len * 2;
+                const new_buffer = self.gpa.alloc(T, new_cap) catch return error.OutOfMemory;
+
+                // Linearize the ring into the new buffer
+                var i: usize = 0;
+                var pos = self.read_pos;
+                while (i < self.count) : (i += 1) {
+                    new_buffer[i] = self.buffer[pos];
+                    pos = (pos + 1) % self.buffer.len;
+                }
+
+                self.gpa.free(self.buffer);
+                self.buffer = new_buffer;
+                self.read_pos = 0;
+                self.write_pos = self.count;
+
+                // Wake any producers blocked in send() — there is room now.
+                self.not_full.broadcast();
+            }
+
+            self.buffer[self.write_pos] = item;
+            self.write_pos = (self.write_pos + 1) % self.buffer.len;
+            self.count += 1;
+
             self.not_empty.signal();
         }
 
@@ -301,6 +340,50 @@ test "Channel send after close" {
     try std.testing.expectError(error.Closed, result);
 }
 
+test "Channel sendGrowable grows buffer when full" {
+    var ch = try Channel(u32).init(std.testing.allocator, 2);
+    defer ch.deinit();
+
+    // Fill to capacity
+    try ch.sendGrowable(1);
+    try ch.sendGrowable(2);
+    try std.testing.expectEqual(@as(usize, 2), ch.capacity());
+
+    // This should grow the buffer instead of blocking
+    try ch.sendGrowable(3);
+    try std.testing.expectEqual(@as(usize, 4), ch.capacity());
+    try std.testing.expectEqual(@as(usize, 3), ch.len());
+
+    // Verify items come out in order
+    try std.testing.expectEqual(@as(u32, 1), ch.recv().?);
+    try std.testing.expectEqual(@as(u32, 2), ch.recv().?);
+    try std.testing.expectEqual(@as(u32, 3), ch.recv().?);
+}
+
+test "Channel sendGrowable with wrap-around growth" {
+    var ch = try Channel(u32).init(std.testing.allocator, 3);
+    defer ch.deinit();
+
+    // Fill and partially drain to create wrap-around state
+    try ch.send(10);
+    try ch.send(20);
+    try ch.send(30);
+    try std.testing.expectEqual(@as(u32, 10), ch.recv().?); // read_pos=1
+    try ch.send(40); // wraps: write_pos=0
+
+    // Buffer is full with [40, _, 20, 30] (read_pos=1, write_pos=1, count=3)
+    // sendGrowable should linearize and grow
+    try ch.sendGrowable(50);
+    try std.testing.expectEqual(@as(usize, 6), ch.capacity());
+    try std.testing.expectEqual(@as(usize, 4), ch.len());
+
+    // Verify order is preserved
+    try std.testing.expectEqual(@as(u32, 20), ch.recv().?);
+    try std.testing.expectEqual(@as(u32, 30), ch.recv().?);
+    try std.testing.expectEqual(@as(u32, 40), ch.recv().?);
+    try std.testing.expectEqual(@as(u32, 50), ch.recv().?);
+}
+
 test "Channel len and capacity" {
     var ch = try Channel(u32).init(std.testing.allocator, 8);
     defer ch.deinit();
@@ -360,7 +443,7 @@ test "Channel with struct type" {
 
 test "Channel multi-producer single-consumer" {
     // Skip on wasm where threads aren't available
-    if (builtin.target.cpu.arch == .wasm32) return error.SkipZigTest;
+    if (threading.is_freestanding) return error.SkipZigTest;
 
     var ch = try Channel(u32).init(std.testing.allocator, 16);
     defer ch.deinit();
@@ -401,7 +484,7 @@ test "Channel multi-producer single-consumer" {
 
 test "Channel blocking recv with timeout" {
     // Skip on wasm where threads aren't available
-    if (builtin.target.cpu.arch == .wasm32) return error.SkipZigTest;
+    if (threading.is_freestanding) return error.SkipZigTest;
 
     var ch = try Channel(u32).init(std.testing.allocator, 4);
     defer ch.deinit();
@@ -417,7 +500,7 @@ test "Channel blocking recv with timeout" {
 
 test "Channel producer-consumer coordination" {
     // Skip on wasm where threads aren't available
-    if (builtin.target.cpu.arch == .wasm32) return error.SkipZigTest;
+    if (threading.is_freestanding) return error.SkipZigTest;
 
     var ch = try Channel(u32).init(std.testing.allocator, 2); // Small buffer to test blocking
     defer ch.deinit();

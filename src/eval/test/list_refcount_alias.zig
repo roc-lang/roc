@@ -25,7 +25,7 @@ test "list refcount alias - return original after aliasing" {
     try runExpectI64(
         \\{
         \\    x = [1, 2, 3]
-        \\    y = x
+        \\    _y = x
         \\    match x { [a, b, c] => a + b + c, _ => 0 }
         \\}
     , 6, .no_trace);
@@ -43,13 +43,13 @@ test "list refcount alias - triple aliasing" {
     , 3, .no_trace);
 }
 
-test "list refcount alias - shadowing decrefs old list" {
-    // Shadow a variable with a new list - old list should be decreffed
+test "list refcount alias - mutable reassignment decrefs old list" {
+    // Reassign a mutable list - old list should be decreffed
     try runExpectI64(
         \\{
-        \\    x = [1, 2]
-        \\    x = [3, 4]
-        \\    match x { [a, b] => a + b, _ => 0 }
+        \\    var $x = [1, 2]
+        \\    $x = [3, 4]
+        \\    match $x { [a, b] => a + b, _ => 0 }
         \\}
     , 7, .no_trace);
 }
@@ -59,7 +59,7 @@ test "list refcount alias - multiple independent lists" {
     try runExpectI64(
         \\{
         \\    x = [1, 2]
-        \\    y = [3, 4]
+        \\    _y = [3, 4]
         \\    match x { [a, b] => a + b, _ => 0 }
         \\}
     , 3, .no_trace);
@@ -77,12 +77,12 @@ test "list refcount alias - empty list aliasing" {
 }
 
 test "list refcount alias - alias then shadow" {
-    // Alias a list, then shadow the original
+    // Alias a list, then reassign the original mutable binding
     try runExpectI64(
         \\{
-        \\    x = [1, 2]
-        \\    y = x
-        \\    x = [3, 4]
+        \\    var $x = [1, 2]
+        \\    y = $x
+        \\    $x = [3, 4]
         \\    match y { [a, b] => a + b, _ => 0 }
         \\}
     , 3, .no_trace);

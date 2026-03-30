@@ -103,7 +103,7 @@ typedef void (*HostedFn)(struct RocOps* ops, void* args, void* ret);
 
 /**
  * Arguments for Builder.print_value!
- * Roc signature: Builder => {  }
+ * Roc signature: Builder => {}
  * C function name: builder_print_value
  * Return type: void
  */
@@ -145,7 +145,7 @@ _Static_assert(_Alignof(HostGet_greetingArgs) >= 1, "HostGet_greetingArgs must b
 
 /**
  * Arguments for Stderr.line!
- * Roc signature: Str => {  }
+ * Roc signature: Str => {}
  * C function name: stderr_line
  * Return type: void
  */
@@ -166,7 +166,7 @@ _Static_assert(_Alignof(StderrLineArgs) >= 1, "StderrLineArgs must be aligned");
 
 /**
  * Arguments for Stdout.line!
- * Roc signature: Str => {  }
+ * Roc signature: Str => {}
  * C function name: stdout_line
  * Return type: void
  */

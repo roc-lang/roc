@@ -7,6 +7,7 @@ const std = @import("std");
 const base = @import("base");
 const parse = @import("parse");
 const TestEnv = @import("TestEnv.zig").TestEnv;
+const BuiltinTestContext = @import("./BuiltinTestContext.zig").BuiltinTestContext;
 const ModuleEnv = @import("../ModuleEnv.zig");
 const Can = @import("../Can.zig");
 const CIR = @import("../CIR.zig");
@@ -266,6 +267,8 @@ test "local type alias can be used in annotation" {
 
 test "scopeLookupTypeDecl API is accessible" {
     const gpa = testing.allocator;
+    var builtin_ctx = try BuiltinTestContext.init(gpa);
+    defer builtin_ctx.deinit();
     const source = "";
 
     var env = try ModuleEnv.init(gpa, source);
@@ -280,7 +283,7 @@ test "scopeLookupTypeDecl API is accessible" {
     const ast = try parse.parseExpr(&allocators, &env.common);
     defer ast.deinit();
 
-    var can = try Can.init(&allocators, &env, ast, null);
+    var can = try Can.initModule(&allocators, &env, ast, builtin_ctx.canInitContext());
     defer can.deinit();
 
     // Enter a scope
@@ -295,6 +298,8 @@ test "scopeLookupTypeDecl API is accessible" {
 
 test "introduceType API is accessible" {
     const gpa = testing.allocator;
+    var builtin_ctx = try BuiltinTestContext.init(gpa);
+    defer builtin_ctx.deinit();
     const source = "";
 
     var env = try ModuleEnv.init(gpa, source);
@@ -309,7 +314,7 @@ test "introduceType API is accessible" {
     const ast = try parse.parseExpr(&allocators, &env.common);
     defer ast.deinit();
 
-    var can = try Can.init(&allocators, &env, ast, null);
+    var can = try Can.initModule(&allocators, &env, ast, builtin_ctx.canInitContext());
     defer can.deinit();
 
     // Enter a scope for local type declarations
@@ -342,8 +347,36 @@ test "introduceType API is accessible" {
     try testing.expect(type_lookup.? == stmt_idx);
 }
 
+test "open ext not allowed in type decl" {
+    const source =
+        \\|_| {
+        \\    Counter := [A, B, ..]
+        \\    42
+        \\}
+    ;
+
+    var test_env = try TestEnv.init(source);
+    defer test_env.deinit();
+
+    _ = try test_env.canonicalizeExpr();
+
+    const diagnostics = try test_env.getDiagnostics();
+    defer testing.allocator.free(diagnostics);
+
+    var diag_count: usize = 0;
+    for (diagnostics) |diag| {
+        switch (diag) {
+            .open_ext_not_allowed_in_type_decl => diag_count += 1,
+            else => {},
+        }
+    }
+    try testing.expectEqual(@as(usize, 1), diag_count);
+}
+
 test "local type scoping - not visible after exiting block" {
     const gpa = testing.allocator;
+    var builtin_ctx = try BuiltinTestContext.init(gpa);
+    defer builtin_ctx.deinit();
     const source = "";
 
     var env = try ModuleEnv.init(gpa, source);
@@ -358,7 +391,7 @@ test "local type scoping - not visible after exiting block" {
     const ast = try parse.parseExpr(&allocators, &env.common);
     defer ast.deinit();
 
-    var can = try Can.init(&allocators, &env, ast, null);
+    var can = try Can.initModule(&allocators, &env, ast, builtin_ctx.canInitContext());
     defer can.deinit();
 
     // Enter outer scope

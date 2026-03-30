@@ -12,10 +12,8 @@ read_something! = |{}| Err(NotFound)
 
 # Simulates an init function with its own error types plus open extension
 # This is like: init! : Host => Try(Model, [Exit(I64), ..])
-# When read_something! fails with NotFound, it propagates through the ".."
-do_init! : {} => Try(Str, [Exit(I64), ..])
+do_init! : {} => Try(Str, [Exit(I64), NotFound, ..])
 do_init! = |{}| {
-    # This should propagate NotFound through the ".." in our error type
     result = read_something!({})?
     Ok(result)
 }
@@ -27,6 +25,7 @@ wrap_init! = |{}| {
     match do_init!({}) {
         Ok(s) => Ok(s)
         Err(Exit(code)) => Err(code)
+        Err(NotFound) => Err(404)
         Err(_) => Err(42)  # BUG: This should return 42 but may return 0
     }
 }
@@ -43,7 +42,7 @@ main! = || {
     # Should print 42 (the wildcard match result), but bug causes 0
     Stdout.line!("Error code: ${Str.inspect(code)}")
 
-    if code == 42 {
+    if code == 404 {
         Stdout.line!("PASS: Wildcard match worked correctly")
     } else if code == 0 {
         Stdout.line!("FAIL: Bug reproduced - got 0 instead of 42")

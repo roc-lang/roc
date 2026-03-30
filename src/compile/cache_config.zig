@@ -6,6 +6,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
+const Io = @import("io").Io;
 
 const Allocator = std.mem.Allocator;
 
@@ -34,6 +35,7 @@ pub const CacheConfig = struct {
     max_size_mb: u32 = 1024, // 1GB default
     max_age_days: u32 = 30, // 30 days default
     verbose: bool = false, // Print cache statistics
+    io: Io = Io.default(),
 
     const Self = @This();
 
@@ -43,9 +45,14 @@ pub const CacheConfig = struct {
     /// - Respects XDG_CACHE_HOME if set
     /// - Falls back to ~/.cache/roc on Unix and %APPDATA%\Roc on Windows
     /// - Uses "roc" on Unix and "Roc" on Windows as the cache dir name
-    pub fn getDefaultCacheDir(allocator: Allocator) ![]u8 {
+    pub fn getDefaultCacheDir(self: Self, allocator: Allocator) ![]u8 {
+        // ROC_CACHE_DIR overrides all platform defaults.
+        // Useful for test isolation and CI on any OS.
+        if (self.io.getEnvVar("ROC_CACHE_DIR", allocator)) |roc_dir| {
+            return roc_dir;
+        } else |_| {}
         // Respect XDG_CACHE_HOME if set
-        if (std.process.getEnvVarOwned(allocator, "XDG_CACHE_HOME")) |xdg_cache| {
+        if (self.io.getEnvVar("XDG_CACHE_HOME", allocator)) |xdg_cache| {
             defer allocator.free(xdg_cache);
             return std.fs.path.join(allocator, &[_][]const u8{ xdg_cache, getCacheDirName() });
         } else |_| {
@@ -55,7 +62,7 @@ pub const CacheConfig = struct {
                 else => "HOME",
             };
 
-            const home_dir = std.process.getEnvVarOwned(allocator, home_env) catch {
+            const home_dir = self.io.getEnvVar(home_env, allocator) catch {
                 return error.NoHomeDirectory;
             };
             defer allocator.free(home_dir);
@@ -76,7 +83,7 @@ pub const CacheConfig = struct {
         if (self.cache_dir) |dir| {
             return allocator.dupe(u8, dir);
         } else {
-            return getDefaultCacheDir(allocator);
+            return self.getDefaultCacheDir(allocator);
         }
     }
 
@@ -121,32 +128,6 @@ pub const CacheConfig = struct {
     /// Alias for getModuleCacheDir for backwards compatibility.
     pub fn getCacheEntriesDir(self: Self, allocator: Allocator) ![]u8 {
         return self.getModuleCacheDir(allocator);
-    }
-
-    /// Get the temporary directory for runtime executables.
-    /// This is in the system temp dir, not the persistent cache.
-    pub fn getTempDir(allocator: Allocator) ![]u8 {
-        const temp_base = switch (builtin.target.os.tag) {
-            .windows => std.process.getEnvVarOwned(allocator, "TEMP") catch
-                std.process.getEnvVarOwned(allocator, "TMP") catch
-                try allocator.dupe(u8, "C:\\Windows\\Temp"),
-            else => std.process.getEnvVarOwned(allocator, "TMPDIR") catch
-                try allocator.dupe(u8, "/tmp"),
-        };
-        defer allocator.free(temp_base);
-
-        return std.fs.path.join(allocator, &[_][]const u8{ temp_base, "roc" });
-    }
-
-    /// Get the version-specific temporary directory for runtime executables.
-    pub fn getVersionTempDir(allocator: Allocator) ![]u8 {
-        const temp_base = try getTempDir(allocator);
-        defer allocator.free(temp_base);
-
-        const version_dir = try getCompilerVersionDir(allocator);
-        defer allocator.free(version_dir);
-
-        return std.fs.path.join(allocator, &[_][]const u8{ temp_base, version_dir });
     }
 
     /// Get maximum cache size in bytes.
@@ -222,6 +203,32 @@ pub fn getCacheDirName() []const u8 {
         .windows => "Roc",
         else => "roc",
     };
+}
+
+/// Get the temporary directory for runtime executables.
+/// This is in the system temp dir, not the persistent cache.
+pub fn getTempDir(io: Io, allocator: Allocator) ![]u8 {
+    const temp_base = switch (builtin.target.os.tag) {
+        .windows => io.getEnvVar("TEMP", allocator) catch
+            io.getEnvVar("TMP", allocator) catch
+            try allocator.dupe(u8, "C:\\Windows\\Temp"),
+        else => io.getEnvVar("TMPDIR", allocator) catch
+            try allocator.dupe(u8, "/tmp"),
+    };
+    defer allocator.free(temp_base);
+
+    return std.fs.path.join(allocator, &[_][]const u8{ temp_base, "roc" });
+}
+
+/// Get the version-specific temporary directory for runtime executables.
+pub fn getVersionTempDir(io: Io, allocator: Allocator) ![]u8 {
+    const temp_base = try getTempDir(io, allocator);
+    defer allocator.free(temp_base);
+
+    const version_dir = try getCompilerVersionDir(allocator);
+    defer allocator.free(version_dir);
+
+    return std.fs.path.join(allocator, &[_][]const u8{ temp_base, version_dir });
 }
 
 /// Get a compiler version-specific directory name.

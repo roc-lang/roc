@@ -49,5 +49,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "[Ok(Dec), Err(Dec), ..]"))
+(expr (type "[Err(Dec), Ok(Dec), ..]"))
 ~~~

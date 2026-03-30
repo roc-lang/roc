@@ -56,7 +56,7 @@ pub const AST_STATEMENT_NODE_COUNT = 13;
 /// Count of the pattern nodes in the AST
 pub const AST_PATTERN_NODE_COUNT = 15;
 /// Count of the type annotation nodes in the AST
-pub const AST_TYPE_ANNO_NODE_COUNT = 10;
+pub const AST_TYPE_ANNO_NODE_COUNT = 11;
 /// Count of the expression nodes in the AST
 pub const AST_EXPR_NODE_COUNT = 26;
 
@@ -480,6 +480,13 @@ pub fn addStatement(store: *NodeStore, statement: AST.Statement) std.mem.Allocat
             const where_val: u32 = if (a.where) |w| @intFromEnum(w) + OPTIONAL_VALUE_OFFSET else 0;
             const is_var_bit: u32 = if (a.is_var) TYPE_ANNO_IS_VAR_BIT else 0;
             node.main_token = where_val | is_var_bit;
+        },
+        .file_import => |fi| {
+            node.tag = .file_import;
+            node.region = fi.region;
+            node.main_token = fi.path_tok;
+            node.data.lhs = fi.name_tok;
+            node.data.rhs = fi.type_tok | (if (fi.is_bytes) @as(u32, 1) << 31 else 0);
         },
         .malformed => {
             @panic("Use addMalformed instead");
@@ -1003,7 +1010,7 @@ pub fn addTypeAnno(store: *NodeStore, anno: AST.TypeAnno) std.mem.Allocator.Erro
             node.region = tu.region;
 
             // Store all tag_union data in flat format:
-            // [tags.span.start, tags.span.len, open_anno?]
+            // [tags.span.start, tags.span.len, ext_data...]
             const data_start = @as(u32, @intCast(store.extra_data.items.len));
             try store.extra_data.append(store.gpa, tu.tags.span.start);
             try store.extra_data.append(store.gpa, tu.tags.span.len);
@@ -1016,11 +1023,12 @@ pub fn addTypeAnno(store: *NodeStore, anno: AST.TypeAnno) std.mem.Allocator.Erro
             };
             const rhs = AST.TypeAnno.TagUnionRhs{
                 .ext_kind = ext_kind,
-                .tags_len = @as(u30, @intCast(tu.tags.span.len)),
             };
             switch (tu.ext) {
-                .named => |named_idx| {
-                    try store.extra_data.append(store.gpa, @intFromEnum(named_idx));
+                .named => |named| {
+                    try store.extra_data.append(store.gpa, @intFromEnum(named.anno));
+                    try store.extra_data.append(store.gpa, named.region.start);
+                    try store.extra_data.append(store.gpa, named.region.end);
                 },
                 .open => |double_dot_tok| {
                     try store.extra_data.append(store.gpa, double_dot_tok);
@@ -1042,20 +1050,30 @@ pub fn addTypeAnno(store: *NodeStore, anno: AST.TypeAnno) std.mem.Allocator.Erro
             node.region = r.region;
 
             // Store all data in extra_data:
-            // [fields.span.start, fields.span.len, ext?]
+            // [fields.span.start, fields.span.len, ext_data...]
             const data_start = @as(u32, @intCast(store.extra_data.items.len));
             try store.extra_data.append(store.gpa, r.fields.span.start);
             try store.extra_data.append(store.gpa, r.fields.span.len);
 
-            // Use packed struct similar to TagUnionRhs
-            const RecordRhs = packed struct { has_ext: u1, fields_len: u31 };
-            var rhs = RecordRhs{
-                .has_ext = 0,
-                .fields_len = @as(u31, @intCast(r.fields.span.len)),
+            // ext_kind: 0 = closed, 1 = anonymous open, 2 = named open
+            const ext_kind: u2 = switch (r.ext) {
+                .closed => 0,
+                .open => 1,
+                .named => 2,
             };
-            if (r.ext) |ext| {
-                rhs.has_ext = 1;
-                try store.extra_data.append(store.gpa, @intFromEnum(ext));
+            const rhs = AST.TypeAnno.RecordRhs{
+                .ext_kind = ext_kind,
+            };
+            switch (r.ext) {
+                .named => |named| {
+                    try store.extra_data.append(store.gpa, @intFromEnum(named.anno));
+                    try store.extra_data.append(store.gpa, named.region.start);
+                    try store.extra_data.append(store.gpa, named.region.end);
+                },
+                .open => |double_dot_tok| {
+                    try store.extra_data.append(store.gpa, double_dot_tok);
+                },
+                .closed => {},
             }
 
             node.data.lhs = data_start;
@@ -1447,6 +1465,17 @@ pub fn getStatement(store: *const NodeStore, statement_idx: AST.Statement.Idx) A
                 .anno = @enumFromInt(node.data.rhs),
                 .where = if (where_val != 0) @enumFromInt(where_val - OPTIONAL_VALUE_OFFSET) else null,
                 .is_var = is_var,
+            } };
+        },
+        .file_import => {
+            const is_bytes = (node.data.rhs & (@as(u32, 1) << 31)) != 0;
+            const type_tok = node.data.rhs & ~(@as(u32, 1) << 31);
+            return .{ .file_import = .{
+                .path_tok = node.main_token,
+                .name_tok = node.data.lhs,
+                .type_tok = type_tok,
+                .is_bytes = is_bytes,
+                .region = node.region,
             } };
         },
         .malformed => {
@@ -1993,7 +2022,7 @@ pub fn getTypeAnno(store: *const NodeStore, ty_anno_idx: AST.TypeAnno.Idx) AST.T
         .ty_union => {
             const rhs = @as(AST.TypeAnno.TagUnionRhs, @bitCast(node.data.rhs));
 
-            // Read flat data format: [tags.span.start, tags.span.len, open_anno?]
+            // Read flat data format: [tags.span.start, tags.span.len, ext_data...]
             var extra_data_pos = node.data.lhs;
             const tags_start = store.extra_data.items[extra_data_pos];
             extra_data_pos += 1;
@@ -2004,7 +2033,13 @@ pub fn getTypeAnno(store: *const NodeStore, ty_anno_idx: AST.TypeAnno.Idx) AST.T
             const ext: AST.TypeAnno.TagUnionExt = switch (rhs.ext_kind) {
                 0 => .closed,
                 1 => .{ .open = store.extra_data.items[extra_data_pos] },
-                2 => .{ .named = @enumFromInt(store.extra_data.items[extra_data_pos]) },
+                2 => .{ .named = .{
+                    .anno = @enumFromInt(store.extra_data.items[extra_data_pos]),
+                    .region = .{
+                        .start = store.extra_data.items[extra_data_pos + 1],
+                        .end = store.extra_data.items[extra_data_pos + 2],
+                    },
+                } },
                 3 => unreachable,
             };
 
@@ -2027,15 +2062,26 @@ pub fn getTypeAnno(store: *const NodeStore, ty_anno_idx: AST.TypeAnno.Idx) AST.T
             } };
         },
         .ty_record => {
-            const RecordRhs = packed struct { has_ext: u1, fields_len: u31 };
-            const rhs = @as(RecordRhs, @bitCast(node.data.rhs));
-            const extra_idx = node.data.lhs;
-            const fields_start = store.extra_data.items[extra_idx];
-            const fields_len = store.extra_data.items[extra_idx + 1];
-            const ext: ?AST.TypeAnno.Idx = if (rhs.has_ext == 1)
-                @enumFromInt(store.extra_data.items[extra_idx + 2])
-            else
-                null;
+            const rhs = @as(AST.TypeAnno.RecordRhs, @bitCast(node.data.rhs));
+            var extra_data_pos = node.data.lhs;
+            const fields_start = store.extra_data.items[extra_data_pos];
+            extra_data_pos += 1;
+            const fields_len = store.extra_data.items[extra_data_pos];
+            extra_data_pos += 1;
+
+            // ext_kind: 0 = closed, 1 = anonymous open, 2 = named open
+            const ext: AST.TypeAnno.RecordExt = switch (rhs.ext_kind) {
+                0 => .closed,
+                1 => .{ .open = store.extra_data.items[extra_data_pos] },
+                2 => .{ .named = .{
+                    .anno = @enumFromInt(store.extra_data.items[extra_data_pos]),
+                    .region = .{
+                        .start = store.extra_data.items[extra_data_pos + 1],
+                        .end = store.extra_data.items[extra_data_pos + 2],
+                    },
+                } },
+                3 => unreachable,
+            };
 
             return .{ .record = .{
                 .region = node.region,
