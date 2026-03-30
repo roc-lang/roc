@@ -10635,11 +10635,11 @@ pub const Pass = struct {
         return switch (flat_type) {
             .fn_pure, .fn_effectful, .fn_unbound => |func| blk: {
                 for (store_types.sliceVars(func.args)) |arg_var| {
-                    if (!try self.typeVarFullyBoundWithBindings(result, module_idx, store_types, arg_var, bindings, seen)) {
+                    if (!try self.typeVarMonomorphizableWithBindings(result, module_idx, store_types, arg_var, bindings, seen)) {
                         break :blk false;
                     }
                 }
-                break :blk try self.typeVarFullyBoundWithBindings(result, module_idx, store_types, func.ret, bindings, seen);
+                break :blk try self.typeVarMonomorphizableWithBindings(result, module_idx, store_types, func.ret, bindings, seen);
             },
             .nominal_type => |nominal| blk: {
                 for (store_types.sliceNominalArgs(nominal)) |arg_var| {
