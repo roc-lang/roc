@@ -7712,6 +7712,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.emitCmpRegReg(value_reg, tmp_reg);
                 self.codegen.freeGeneral(tmp_reg);
             }
+            // Free the register if ensureInGeneralReg allocated a new one.
+            // When value_loc is already .general_reg, ensureInGeneralReg returns
+            // the existing register which the caller still owns.
+            if (value_loc != .general_reg) {
+                self.codegen.freeGeneral(value_reg);
+            }
         }
 
         /// Emit list pattern bindings: length check and prefix/suffix element binding.
