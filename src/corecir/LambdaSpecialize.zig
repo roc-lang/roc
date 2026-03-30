@@ -200,10 +200,12 @@ pub const StageResult = struct {
     corecir: CoreCIR.Program,
     context_mono: ContextMono.Result,
     lambda_solved: LambdaSolved.Result,
+    lambda_specialize: Result,
     specialized: SpecializedCIR.Program,
 
     pub fn deinit(self: *StageResult, allocator: Allocator) void {
         self.specialized.deinit(allocator);
+        self.lambda_specialize.deinit(allocator);
         self.lambda_solved.deinit(allocator);
         self.context_mono.deinit(allocator);
         self.corecir.deinit(allocator);

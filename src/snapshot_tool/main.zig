@@ -4225,7 +4225,7 @@ fn processDevObjectSnapshot(
     panic_jmp = &mir_jmp_buf;
     defer panic_jmp = null;
 
-    var monomorphization = blk: {
+    var callable_pipeline = blk: {
         const mono = if (app_module_idx) |resolved_app_module_idx|
             mir_mod.Monomorphize.runRootSourceExprsWithTypeScope(
                 allocator,
@@ -4252,9 +4252,9 @@ fn processDevObjectSnapshot(
             return false;
         };
     };
-    defer monomorphization.deinit(allocator);
+    defer callable_pipeline.deinit(allocator);
 
-    var mir_lower = mir_mod.Lower.init(allocator, &mir_store, &monomorphization, all_module_envs, platform_types, platform_module_idx, app_module_idx) catch {
+    var mir_lower = mir_mod.Lower.init(allocator, &mir_store, &callable_pipeline, all_module_envs, platform_types, platform_module_idx, app_module_idx) catch {
         std.log.err("Failed to create MIR lowerer", .{});
         return false;
     };

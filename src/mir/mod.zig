@@ -13,8 +13,8 @@ pub const Analyses = @import("Analyses.zig");
 pub const CallableSummary = @import("CallableSummary.zig");
 pub const DebugVerifyMir = @import("DebugVerifyMir.zig");
 pub const Monotype = @import("Monotype.zig");
-/// Transitional all-in-one implementation to be split into ContextMono,
-/// LambdaSolved, and LambdaSpecialize ownership.
+/// Transitional coordinator for the staged CoreCIR -> ContextMono ->
+/// LambdaSolved -> LambdaSpecialize pipeline.
 pub const Monomorphize = @import("Monomorphize.zig");
 pub const Lower = @import("Lower.zig");
 pub const ResultSummary = @import("ResultSummary.zig");

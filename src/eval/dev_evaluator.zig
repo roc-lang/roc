@@ -752,7 +752,7 @@ pub const DevEvaluator = struct {
         var mir_store = MIR.Store.init(self.allocator) catch return error.OutOfMemory;
         defer mir_store.deinit(self.allocator);
 
-        var monomorphization = if (platform_type_scope) |*ts|
+        var callable_pipeline = if (platform_type_scope) |*ts|
             mir.Monomorphize.runRootSourceExprWithTypeScope(
                 self.allocator,
                 all_module_envs,
@@ -773,12 +773,12 @@ pub const DevEvaluator = struct {
                 app_module_idx,
                 expr_idx,
             ) catch return error.OutOfMemory;
-        defer monomorphization.deinit(self.allocator);
+        defer callable_pipeline.deinit(self.allocator);
 
         var mir_lower = mir.Lower.init(
             self.allocator,
             &mir_store,
-            &monomorphization,
+            &callable_pipeline,
             all_module_envs,
             &module_env.types,
             module_idx,
@@ -913,7 +913,7 @@ pub const DevEvaluator = struct {
         var mir_store = MIR.Store.init(self.allocator) catch return error.OutOfMemory;
         defer mir_store.deinit(self.allocator);
 
-        var monomorphization = if (platform_type_scope) |*ts|
+        var callable_pipeline = if (platform_type_scope) |*ts|
             mir.Monomorphize.runRootSourceExprWithTypeScope(
                 self.allocator,
                 all_module_envs,
@@ -934,12 +934,12 @@ pub const DevEvaluator = struct {
                 app_module_idx,
                 expr_idx,
             ) catch return error.OutOfMemory;
-        defer monomorphization.deinit(self.allocator);
+        defer callable_pipeline.deinit(self.allocator);
 
         var mir_lower = mir.Lower.init(
             self.allocator,
             &mir_store,
-            &monomorphization,
+            &callable_pipeline,
             all_module_envs,
             &module_env.types,
             module_idx,

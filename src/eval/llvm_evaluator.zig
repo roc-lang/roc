@@ -227,7 +227,7 @@ pub const LlvmEvaluator = struct {
         defer mir_store.deinit(self.allocator);
 
         // TODO: implement LLVM code generation for statement-only LIR.
-        var monomorphization = mir.Monomorphize.runExpr(
+        var callable_pipeline = mir.Monomorphize.runExpr(
             self.allocator,
             all_module_envs,
             &module_env.types,
@@ -235,12 +235,12 @@ pub const LlvmEvaluator = struct {
             null, // app_module_idx - not used for JIT evaluation
             expr_idx,
         ) catch return error.OutOfMemory;
-        defer monomorphization.deinit(self.allocator);
+        defer callable_pipeline.deinit(self.allocator);
 
         var mir_lower = mir.Lower.init(
             self.allocator,
             &mir_store,
-            &monomorphization,
+            &callable_pipeline,
             all_module_envs,
             &module_env.types,
             module_idx,

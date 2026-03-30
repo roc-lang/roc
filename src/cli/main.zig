@@ -4262,7 +4262,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         entrypoint_source_exprs[i] = entrypoint_source.expr_idx;
     }
 
-    var monomorphization = blk: {
+    var callable_pipeline = blk: {
         const mono = if (app_module_idx) |resolved_app_module_idx|
             mir.Monomorphize.runRootSourceExprsWithTypeScope(
                 ctx.gpa,
@@ -4289,9 +4289,9 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
             return error.OutOfMemory;
         };
     };
-    defer monomorphization.deinit(ctx.gpa);
+    defer callable_pipeline.deinit(ctx.gpa);
 
-    var mir_lower = mir.Lower.init(ctx.gpa, &mir_store, &monomorphization, all_module_envs, platform_types, platform_module_idx, app_module_idx) catch {
+    var mir_lower = mir.Lower.init(ctx.gpa, &mir_store, &callable_pipeline, all_module_envs, platform_types, platform_module_idx, app_module_idx) catch {
         std.log.err("Failed to create MIR lowerer", .{});
         return error.OutOfMemory;
     };
