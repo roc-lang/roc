@@ -191,46 +191,6 @@ pub const CallableProjection = union(enum) {
     nominal,
 };
 
-/// Span of callable-projection entries stored in Store.callable_projection_entries.
-pub const CallableProjectionSpan = extern struct {
-    start: u32,
-    len: u16,
-
-    /// Returns an empty callable-projection span.
-    pub fn empty() CallableProjectionSpan {
-        return .{ .start = 0, .len = 0 };
-    }
-
-    /// Reports whether this span is empty.
-    pub fn isEmpty(self: CallableProjectionSpan) bool {
-        return self.len == 0;
-    }
-};
-
-/// One exact callable binding rooted in a lambda parameter plus projections.
-pub const CallableBinding = struct {
-    source_param: LocalId,
-    projections: CallableProjectionSpan = .empty(),
-    lambda: LambdaId,
-    requires_hidden_capture: bool,
-};
-
-/// Span of callable bindings stored in Store.callable_bindings.
-pub const CallableBindingSpan = extern struct {
-    start: u32,
-    len: u16,
-
-    /// Returns an empty callable-binding span.
-    pub fn empty() CallableBindingSpan {
-        return .{ .start = 0, .len = 0 };
-    }
-
-    /// Reports whether this span is empty.
-    pub fn isEmpty(self: CallableBindingSpan) bool {
-        return self.len == 0;
-    }
-};
-
 /// One switch branch keyed by an explicit integer test value.
 pub const SwitchBranch = struct {
     value: u64,
@@ -275,7 +235,6 @@ pub const Lambda = struct {
     debug_name: Symbol,
     source_region: Region,
     captures_param: ?LocalId = null,
-    callable_bindings: CallableBindingSpan = .empty(),
     recursion: LambdaRecursion,
     hosted: ?HostedLambda = null,
 };
@@ -414,8 +373,6 @@ pub const Store = struct {
     locals: std.ArrayListUnmanaged(Local),
     local_defs: std.ArrayListUnmanaged(?LocalDef),
     local_ids: std.ArrayListUnmanaged(LocalId),
-    callable_projection_entries: std.ArrayListUnmanaged(CallableProjection),
-    callable_bindings: std.ArrayListUnmanaged(CallableBinding),
     lambdas: std.ArrayListUnmanaged(Lambda),
     lambda_states: std.ArrayListUnmanaged(EntryState),
     const_defs: std.ArrayListUnmanaged(ConstDef),
@@ -432,8 +389,6 @@ pub const Store = struct {
             .locals = .empty,
             .local_defs = .empty,
             .local_ids = .empty,
-            .callable_projection_entries = .empty,
-            .callable_bindings = .empty,
             .lambdas = .empty,
             .lambda_states = .empty,
             .const_defs = .empty,
@@ -451,8 +406,6 @@ pub const Store = struct {
         self.locals.deinit(allocator);
         self.local_defs.deinit(allocator);
         self.local_ids.deinit(allocator);
-        self.callable_projection_entries.deinit(allocator);
-        self.callable_bindings.deinit(allocator);
         self.lambdas.deinit(allocator);
         self.lambda_states.deinit(allocator);
         self.const_defs.deinit(allocator);
@@ -516,50 +469,6 @@ pub const Store = struct {
         return self.local_ids.items[span.start..][0..span.len];
     }
 
-    /// Appends callable projections and returns their stored span.
-    pub fn addCallableProjectionSpan(
-        self: *Store,
-        allocator: Allocator,
-        entries: []const CallableProjection,
-    ) Allocator.Error!CallableProjectionSpan {
-        if (entries.len == 0) return CallableProjectionSpan.empty();
-
-        const start: u32 = @intCast(self.callable_projection_entries.items.len);
-        try self.callable_projection_entries.appendSlice(allocator, entries);
-        return .{ .start = start, .len = @intCast(entries.len) };
-    }
-
-    /// Returns one callable-projection slice.
-    pub fn getCallableProjectionSpan(
-        self: *const Store,
-        span: CallableProjectionSpan,
-    ) []const CallableProjection {
-        if (span.len == 0) return &.{};
-        return self.callable_projection_entries.items[span.start..][0..span.len];
-    }
-
-    /// Appends callable bindings and returns their stored span.
-    pub fn addCallableBindingSpan(
-        self: *Store,
-        allocator: Allocator,
-        entries: []const CallableBinding,
-    ) Allocator.Error!CallableBindingSpan {
-        if (entries.len == 0) return CallableBindingSpan.empty();
-
-        const start: u32 = @intCast(self.callable_bindings.items.len);
-        try self.callable_bindings.appendSlice(allocator, entries);
-        return .{ .start = start, .len = @intCast(entries.len) };
-    }
-
-    /// Returns one callable-binding slice.
-    pub fn getCallableBindings(
-        self: *const Store,
-        span: CallableBindingSpan,
-    ) []const CallableBinding {
-        if (span.len == 0) return &.{};
-        return self.callable_bindings.items[span.start..][0..span.len];
-    }
-
     pub fn reserveCFStmt(self: *Store, allocator: Allocator) Allocator.Error!CFStmtId {
         const idx: u32 = @intCast(self.cf_stmts.items.len);
         try self.cf_stmts.append(allocator, .{ .runtime_error = .type_error });
@@ -618,7 +527,6 @@ pub const Store = struct {
             .debug_name = .none,
             .source_region = .zero(),
             .captures_param = null,
-            .callable_bindings = .empty(),
             .recursion = .not_recursive,
             .hosted = null,
         });

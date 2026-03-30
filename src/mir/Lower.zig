@@ -128,9 +128,29 @@ const CaptureMaterialization = union(enum) {
     },
 };
 
+const CallablePathSpan = extern struct {
+    start: u32,
+    len: u16,
+
+    fn empty() CallablePathSpan {
+        return .{ .start = 0, .len = 0 };
+    }
+
+    fn isEmpty(self: CallablePathSpan) bool {
+        return self.len == 0;
+    }
+};
+
+const CallableBinding = struct {
+    source_param: MIR.LocalId,
+    projections: CallablePathSpan = .empty(),
+    lambda: MIR.LambdaId,
+    requires_hidden_capture: bool,
+};
+
 const LocalCallablePath = struct {
     source_param: MIR.LocalId,
-    projections: MIR.CallableProjectionSpan = .empty(),
+    projections: CallablePathSpan = .empty(),
 };
 
 const LoopContext = struct {
@@ -274,8 +294,12 @@ exact_callable_locals: std.AutoHashMap(u32, MIR.LambdaId),
 /// Param/captures-param projection ancestry for locals inside the current body.
 callable_source_locals: std.AutoHashMap(u32, LocalCallablePath),
 
-/// Callable bindings currently in scope while lowering one lambda body.
-current_callable_bindings: ?[]const MIR.CallableBinding,
+/// Lower-private callable projection storage used only while deriving exact
+/// callable metadata for MIR locals.
+callable_projection_entries: std.ArrayListUnmanaged(MIR.CallableProjection),
+
+/// Exact callable bindings currently in scope while lowering one lambda body.
+current_callable_bindings: ?[]const CallableBinding,
 
 /// Demand-driven implicit captures for callable-inst lambda bodies.
 current_implicit_lambda_captures: ?*ImplicitLambdaCaptureState,
@@ -356,6 +380,7 @@ pub fn init(
         .current_root_source_expr_context = null,
         .exact_callable_locals = std.AutoHashMap(u32, MIR.LambdaId).init(allocator),
         .callable_source_locals = std.AutoHashMap(u32, LocalCallablePath).init(allocator),
+        .callable_projection_entries = .empty,
         .current_callable_bindings = null,
         .current_implicit_lambda_captures = null,
         .resolved_dispatch_targets = resolved_dispatch_targets,
@@ -394,6 +419,7 @@ pub fn deinit(self: *Self) void {
     self.skipped_callable_backed_binding_patterns.deinit();
     self.exact_callable_locals.deinit();
     self.callable_source_locals.deinit();
+    self.callable_projection_entries.deinit(self.allocator);
     self.resolved_dispatch_targets.deinit();
     self.scratch_local_ids.deinit();
     self.scratch_ident_idxs.deinit();
@@ -3472,11 +3498,11 @@ fn extendCallableSourceLocal(
 
     var projections = std.ArrayList(MIR.CallableProjection).empty;
     defer projections.deinit(self.allocator);
-    try projections.appendSlice(self.allocator, self.store.getCallableProjectionSpan(source_path.projections));
+    try projections.appendSlice(self.allocator, self.getCallableProjectionSpan(source_path.projections));
     try projections.append(self.allocator, projection);
     try self.callable_source_locals.put(@intFromEnum(target), .{
         .source_param = source_path.source_param,
-        .projections = try self.store.addCallableProjectionSpan(self.allocator, projections.items),
+        .projections = try self.addCallableProjectionSpan(projections.items),
     });
 }
 
@@ -4712,7 +4738,6 @@ fn lowerLambdaInto(
         .debug_name = .none,
         .source_region = module_env.store.getExprRegion(expr_idx),
         .captures_param = null,
-        .callable_bindings = MIR.CallableBindingSpan.empty(),
         .recursion = .not_recursive,
         .hosted = null,
     });
@@ -4731,7 +4756,7 @@ fn lowerLambdaInto(
     }
     defer self.current_implicit_lambda_captures = saved_implicit_lambda_captures;
 
-    var callable_bindings = std.ArrayList(MIR.CallableBinding).empty;
+    var callable_bindings = std.ArrayList(CallableBinding).empty;
     defer callable_bindings.deinit(self.allocator);
     if (self.current_callable_bindings) |enclosing_bindings| {
         for (enclosing_bindings) |binding| {
@@ -4882,7 +4907,6 @@ fn lowerLambdaInto(
         .debug_name = .none,
         .source_region = module_env.store.getExprRegion(expr_idx),
         .captures_param = captures_param_local,
-        .callable_bindings = try self.store.addCallableBindingSpan(self.allocator, callable_bindings.items),
         .recursion = .not_recursive,
         .hosted = null,
     };
@@ -4933,12 +4957,12 @@ fn lowerLambdaParamLocals(
 
 fn appendCallableBindingUnique(
     self: *Self,
-    out: *std.ArrayList(MIR.CallableBinding),
-    binding: MIR.CallableBinding,
+    out: *std.ArrayList(CallableBinding),
+    binding: CallableBinding,
 ) Allocator.Error!void {
     for (out.items) |existing| {
         if (existing.source_param != binding.source_param) continue;
-        if (!callableProjectionSpansEqual(self.store, existing.projections, binding.projections)) continue;
+        if (!callableProjectionSpansEqual(self, existing.projections, binding.projections)) continue;
         if (existing.lambda != binding.lambda or existing.requires_hidden_capture != binding.requires_hidden_capture) {
             std.debug.panic(
                 "statement-only MIR callable binding collision for parameter local {d}",
@@ -4979,12 +5003,12 @@ fn exactCallableResolutionFromCurrentCallableBindings(
 }
 
 fn callableProjectionSpansEqual(
-    store: *const MIR.Store,
-    lhs: MIR.CallableProjectionSpan,
-    rhs: MIR.CallableProjectionSpan,
+    self: *const Self,
+    lhs: CallablePathSpan,
+    rhs: CallablePathSpan,
 ) bool {
-    const lhs_items = store.getCallableProjectionSpan(lhs);
-    const rhs_items = store.getCallableProjectionSpan(rhs);
+    const lhs_items = self.getCallableProjectionSpan(lhs);
+    const rhs_items = self.getCallableProjectionSpan(rhs);
     if (lhs_items.len != rhs_items.len) return false;
 
     for (lhs_items, rhs_items) |lhs_item, rhs_item| {
@@ -5027,9 +5051,27 @@ fn getRuntimeCapturePatternSpan(
     return self.runtime_capture_patterns.items[span.start..][0..span.len];
 }
 
+fn addCallableProjectionSpan(
+    self: *Self,
+    entries: []const MIR.CallableProjection,
+) Allocator.Error!CallablePathSpan {
+    if (entries.len == 0) return CallablePathSpan.empty();
+    const start: u32 = @intCast(self.callable_projection_entries.items.len);
+    try self.callable_projection_entries.appendSlice(self.allocator, entries);
+    return .{ .start = start, .len = @intCast(entries.len) };
+}
+
+fn getCallableProjectionSpan(
+    self: *const Self,
+    span: CallablePathSpan,
+) []const MIR.CallableProjection {
+    if (span.len == 0) return &.{};
+    return self.callable_projection_entries.items[span.start..][0..span.len];
+}
+
 fn appendCurrentCallableBindings(
     self: *Self,
-    bindings: *std.ArrayList(MIR.CallableBinding),
+    bindings: *std.ArrayList(CallableBinding),
     param_locals: []const MIR.LocalId,
 ) Allocator.Error!void {
     if (self.current_callable_inst_context.isNone()) return;
@@ -5090,7 +5132,7 @@ fn appendCurrentCallableBindings(
         const binding_resolution = try self.resolveUniqueCallableBindingResolution(callable_members, current_mono);
         try self.appendCallableBindingUnique(bindings, .{
             .source_param = source_param,
-            .projections = try self.store.addCallableProjectionSpan(self.allocator, projections.items),
+            .projections = try self.addCallableProjectionSpan(projections.items),
             .lambda = binding_resolution.lambda,
             .requires_hidden_capture = binding_resolution.requires_hidden_capture,
         });
@@ -5099,7 +5141,7 @@ fn appendCurrentCallableBindings(
 
 fn appendDirectParamPatternCallableBindings(
     self: *Self,
-    bindings: *std.ArrayList(MIR.CallableBinding),
+    bindings: *std.ArrayList(CallableBinding),
     param_patterns: []const CIR.Pattern.Idx,
     param_locals: []const MIR.LocalId,
 ) Allocator.Error!void {
@@ -5145,7 +5187,7 @@ fn appendDirectParamPatternCallableBindings(
         );
         try self.appendCallableBindingUnique(bindings, .{
             .source_param = param_local,
-            .projections = MIR.CallableProjectionSpan.empty(),
+            .projections = CallablePathSpan.empty(),
             .lambda = binding_resolution.lambda,
             .requires_hidden_capture = binding_resolution.requires_hidden_capture,
         });
@@ -5300,7 +5342,7 @@ fn appendCaptureMaterialization(
 
 fn appendClosureCaptureCallableBindings(
     self: *Self,
-    bindings: *std.ArrayList(MIR.CallableBinding),
+    bindings: *std.ArrayList(CallableBinding),
     module_env: *const ModuleEnv,
     closure_expr_idx: CIR.Expr.Idx,
     captures: []const CIR.Expr.Capture.Idx,
@@ -5340,14 +5382,14 @@ fn appendClosureCaptureCallableBindings(
             const capture_lambda = try self.lowerResolvedCallableInstLambda(exact_capture_callable_inst_id);
             try self.appendCallableBindingUnique(bindings, .{
                 .source_param = captures_param,
-                .projections = try self.store.addCallableProjectionSpan(self.allocator, &.{.{ .field = capture_field_index }}),
+                .projections = try self.addCallableProjectionSpan(&.{.{ .field = capture_field_index }}),
                 .lambda = capture_lambda,
                 .requires_hidden_capture = try self.callableInstProducesClosureValue(exact_capture_callable_inst_id),
             });
         } else if (try self.resolveExactCallableResolutionForCapturePattern(capture.pattern_idx)) |capture_resolution| {
             try self.appendCallableBindingUnique(bindings, .{
                 .source_param = captures_param,
-                .projections = try self.store.addCallableProjectionSpan(self.allocator, &.{.{ .field = capture_field_index }}),
+                .projections = try self.addCallableProjectionSpan(&.{.{ .field = capture_field_index }}),
                 .lambda = capture_resolution.lambda,
                 .requires_hidden_capture = capture_resolution.requires_hidden_capture,
             });
@@ -5362,7 +5404,7 @@ fn appendClosureCaptureCallableBindings(
 
 fn appendImplicitLambdaCaptureCallableBindings(
     self: *Self,
-    bindings: *std.ArrayList(MIR.CallableBinding),
+    bindings: *std.ArrayList(CallableBinding),
     captures_param: MIR.LocalId,
     runtime_captures: []const ImplicitLambdaCapture,
 ) Allocator.Error!void {
@@ -5374,7 +5416,7 @@ fn appendImplicitLambdaCaptureCallableBindings(
         );
         try self.appendCallableBindingUnique(bindings, .{
             .source_param = captures_param,
-            .projections = try self.store.addCallableProjectionSpan(self.allocator, &.{.{ .field = @intCast(capture_field_index) }}),
+            .projections = try self.addCallableProjectionSpan(&.{.{ .field = @intCast(capture_field_index) }}),
             .lambda = capture_lambda,
             .requires_hidden_capture = capture.requires_hidden_capture,
         });
@@ -5508,13 +5550,12 @@ fn lowerClosureLambda(
         .debug_name = .none,
         .source_region = module_env.store.getExprRegion(expr_idx),
         .captures_param = captures_param_local,
-        .callable_bindings = MIR.CallableBindingSpan.empty(),
         .recursion = .not_recursive,
         .hosted = null,
     });
     try self.lowered_callable_lambdas.put(cache_key, active_lambda);
 
-    var callable_bindings = std.ArrayList(MIR.CallableBinding).empty;
+    var callable_bindings = std.ArrayList(CallableBinding).empty;
     defer callable_bindings.deinit(self.allocator);
     try self.appendCurrentCallableBindings(&callable_bindings, param_locals);
     try self.appendDirectParamPatternCallableBindings(&callable_bindings, param_patterns, param_locals);
@@ -5588,7 +5629,6 @@ fn lowerClosureLambda(
         .debug_name = .none,
         .source_region = module_env.store.getExprRegion(expr_idx),
         .captures_param = captures_param_local,
-        .callable_bindings = try self.store.addCallableBindingSpan(self.allocator, callable_bindings.items),
         .recursion = .not_recursive,
         .hosted = null,
     });
@@ -5753,7 +5793,6 @@ fn reserveResolvedCallableInstLambdaSkeleton(
         .debug_name = .none,
         .source_region = source_region,
         .captures_param = null,
-        .callable_bindings = MIR.CallableBindingSpan.empty(),
         .recursion = .not_recursive,
         .hosted = null,
     });
@@ -5925,12 +5964,11 @@ fn lowerReservedTrivialClosureLambda(
         .debug_name = .none,
         .source_region = module_env.store.getExprRegion(expr_idx),
         .captures_param = captures_param_local,
-        .callable_bindings = MIR.CallableBindingSpan.empty(),
         .recursion = .not_recursive,
         .hosted = null,
     });
 
-    var callable_bindings = std.ArrayList(MIR.CallableBinding).empty;
+    var callable_bindings = std.ArrayList(CallableBinding).empty;
     defer callable_bindings.deinit(self.allocator);
     try self.appendCurrentCallableBindings(&callable_bindings, param_locals);
     try self.appendDirectParamPatternCallableBindings(&callable_bindings, param_patterns, param_locals);
@@ -6026,7 +6064,6 @@ fn lowerReservedTrivialClosureLambda(
         .debug_name = .none,
         .source_region = module_env.store.getExprRegion(expr_idx),
         .captures_param = captures_param_local,
-        .callable_bindings = try self.store.addCallableBindingSpan(self.allocator, callable_bindings.items),
         .recursion = if (recursive_captures.items.len != 0) .recursive else .not_recursive,
         .hosted = null,
     });
