@@ -2202,13 +2202,14 @@ headers (for isUnique checks, reallocation, etc.). Fix: call
 - `str_split`, `str_join_with` — crash in `strJoinWithC` or `strSplitOn`
 - `str_from_utf8` — crash in `roc_builtins_str_from_utf8`
 
-Root cause hypothesis: the host `roc_alloc` returns a pointer with an 8-byte header
-(length + refcount), but `allocateWithRefcount` in the builtins also adds its own
-header (extra_bytes). This double-header causes the builtins to compute incorrect
-data offsets. The inline codegen allocations (emitHeapAlloc) rely on the host's header,
-so simply making `roc_alloc` raw breaks them. Fixing this requires either making ALL
-allocations go through `allocateWithRefcount`, or adjusting the host allocator to
-account for the builtins' header expectations.
+Key finding: even with the builtin wrapper returning an empty string (completely
+bypassing all builtin logic), the crash persists. This means the TrapUnreachable
+is NOT inside the merged builtins but in the APP-GENERATED wasm code. The crash
+likely happens in the codegen's list-of-strings creation path or in how the
+expression tree is evaluated before calling the builtin. The `list of strings
+length` test passes (creating the same list), so the issue is specific to the
+expression structure when combined with str_join_with/str_split/str_from_utf8
+call sites.
 
 ---
 
