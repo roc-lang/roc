@@ -178,18 +178,11 @@ pub const RefOp = union(enum) {
     tag_payload: struct {
         source: LocalId,
         payload_idx: u32,
+        tag_discriminant: u32,
     },
     nominal: struct {
         backing: LocalId,
     },
-};
-
-/// One callable projection step used for exact-callable summaries and staged
-/// specialization queries.
-pub const CallableProjection = union(enum) {
-    field: u32,
-    tag_payload: u32,
-    nominal,
 };
 
 /// One switch branch keyed by an explicit integer test value.

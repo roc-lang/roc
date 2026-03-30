@@ -45,6 +45,12 @@ const AliasSource = struct {
     forwards_ownership: bool,
 };
 
+const LocalDefinitionKind = union(enum) {
+    proc_param,
+    join_param,
+    stmt_result: LIR.ResultSemantics,
+};
+
 /// Inserts explicit reference-count statements into statement-only LIR.
 pub const RcInsertPass = struct {
     allocator: Allocator,
@@ -56,6 +62,9 @@ pub const RcInsertPass = struct {
     direct_use_summaries: std.AutoHashMap(u64, UseSummary),
     direct_forwarding_alias_borrows: std.AutoHashMap(u64, u32),
     local_alias_sources: std.AutoHashMap(u64, AliasSource),
+    local_definition_kinds: std.AutoHashMap(u64, LocalDefinitionKind),
+    promoted_fresh_join_params: std.AutoHashMap(u64, void),
+    owning_join_params: std.AutoHashMap(u64, void),
     active_join_params: std.AutoHashMap(u32, LIR.LocalSpan),
     proc_param_use_kinds: std.ArrayListUnmanaged([]UseKind),
 
@@ -70,6 +79,9 @@ pub const RcInsertPass = struct {
             .direct_use_summaries = std.AutoHashMap(u64, UseSummary).init(allocator),
             .direct_forwarding_alias_borrows = std.AutoHashMap(u64, u32).init(allocator),
             .local_alias_sources = std.AutoHashMap(u64, AliasSource).init(allocator),
+            .local_definition_kinds = std.AutoHashMap(u64, LocalDefinitionKind).init(allocator),
+            .promoted_fresh_join_params = std.AutoHashMap(u64, void).init(allocator),
+            .owning_join_params = std.AutoHashMap(u64, void).init(allocator),
             .active_join_params = std.AutoHashMap(u32, LIR.LocalSpan).init(allocator),
             .proc_param_use_kinds = .empty,
         };
@@ -82,6 +94,9 @@ pub const RcInsertPass = struct {
         self.direct_use_summaries.deinit();
         self.direct_forwarding_alias_borrows.deinit();
         self.local_alias_sources.deinit();
+        self.local_definition_kinds.deinit();
+        self.promoted_fresh_join_params.deinit();
+        self.owning_join_params.deinit();
         self.active_join_params.deinit();
         for (self.proc_param_use_kinds.items) |use_kinds| {
             self.allocator.free(use_kinds);
@@ -99,8 +114,11 @@ pub const RcInsertPass = struct {
         self.clearAnalysisState();
 
         const proc = self.store.getProcSpec(proc_id);
+        try self.recordProcParamDefinitions(proc.args);
         try self.countUsesInStmt(proc.body);
         try self.collectAliasSemanticsInStmt(proc.body);
+        try self.inferJoinParamAliasSources(proc.body);
+        try self.inferOwningJoinParams(proc.body);
         self.store.getProcSpecPtr(proc_id).body = try self.processStmt(proc.body);
     }
 
@@ -118,6 +136,9 @@ pub const RcInsertPass = struct {
         self.direct_use_summaries.clearRetainingCapacity();
         self.direct_forwarding_alias_borrows.clearRetainingCapacity();
         self.local_alias_sources.clearRetainingCapacity();
+        self.local_definition_kinds.clearRetainingCapacity();
+        self.promoted_fresh_join_params.clearRetainingCapacity();
+        self.owning_join_params.clearRetainingCapacity();
         self.active_join_params.clearRetainingCapacity();
     }
 
@@ -126,6 +147,9 @@ pub const RcInsertPass = struct {
     }
 
     fn rebuildProcParamUseKinds(self: *RcInsertPass) Allocator.Error!void {
+        try self.normalizeBorrowedProcReturns();
+        try self.normalizeFreshProcReturns();
+
         for (self.proc_param_use_kinds.items) |use_kinds| {
             self.allocator.free(use_kinds);
         }
@@ -164,19 +188,822 @@ pub const RcInsertPass = struct {
         }
     }
 
+    fn normalizeFreshProcReturns(self: *RcInsertPass) Allocator.Error!void {
+        for (0..self.store.getProcSpecs().len) |proc_index| {
+            const proc_id: LirProcSpecId = @enumFromInt(@as(u32, @intCast(proc_index)));
+            const proc_ptr = self.store.getProcSpecPtr(proc_id);
+            if (proc_ptr.result_contract != .fresh) continue;
+
+            self.clearAnalysisState();
+            try self.recordProcParamDefinitions(proc_ptr.args);
+            try self.collectAliasSemanticsInStmt(proc_ptr.body);
+            try self.inferJoinParamAliasSources(proc_ptr.body);
+            try self.markFreshReturnJoinParamsInStmt(proc_ptr.body);
+            try self.inferOwningJoinParams(proc_ptr.body);
+            proc_ptr.body = try self.normalizeFreshProcReturnsInStmt(proc_ptr.body);
+        }
+    }
+
+    fn localCarriesOwnedValue(self: *const RcInsertPass, local: LocalId) bool {
+        var current = local;
+        var steps: u32 = 0;
+
+        while (self.local_alias_sources.get(localKey(current))) |source| {
+            if (!source.forwards_ownership) return false;
+            current = @enumFromInt(@as(u32, @intCast(source.owner_key)));
+            steps += 1;
+            if (builtin.mode == .Debug and steps > 1024) {
+                std.debug.panic(
+                    "RcInsertPass invariant violated: ownership-carrying walk did not converge for local {d}",
+                    .{@intFromEnum(local)},
+                );
+            }
+        }
+
+        const def_kind = self.local_definition_kinds.get(localKey(current)) orelse std.debug.panic(
+            "RcInsertPass invariant violated: missing definition kind for local {d}",
+            .{@intFromEnum(current)},
+        );
+        return switch (def_kind) {
+            .proc_param => false,
+            .join_param => self.promoted_fresh_join_params.contains(localKey(current)) or
+                self.owning_join_params.contains(localKey(current)),
+            .stmt_result => |semantics| semantics == .fresh,
+        };
+    }
+
+    fn inferOwningJoinParams(self: *RcInsertPass, stmt_id: CFStmtId) Allocator.Error!void {
+        var changed = true;
+        var iterations: u32 = 0;
+        while (changed) {
+            changed = false;
+            iterations += 1;
+            if (builtin.mode == .Debug and iterations > 64) {
+                std.debug.panic(
+                    "RcInsertPass invariant violated: join-param ownership fixed point did not converge after {d} iterations",
+                    .{iterations},
+                );
+            }
+            try self.markOwningJoinParamsInStmt(stmt_id, &changed);
+        }
+    }
+
+    fn inferJoinParamAliasSources(self: *RcInsertPass, stmt_id: CFStmtId) Allocator.Error!void {
+        switch (self.store.getCFStmt(stmt_id)) {
+            .assign_symbol => |assign| try self.inferJoinParamAliasSources(assign.next),
+            .assign_ref => |assign| try self.inferJoinParamAliasSources(assign.next),
+            .assign_literal => |assign| try self.inferJoinParamAliasSources(assign.next),
+            .assign_call => |assign| try self.inferJoinParamAliasSources(assign.next),
+            .assign_low_level => |assign| try self.inferJoinParamAliasSources(assign.next),
+            .assign_list => |assign| try self.inferJoinParamAliasSources(assign.next),
+            .assign_struct => |assign| try self.inferJoinParamAliasSources(assign.next),
+            .assign_tag => |assign| try self.inferJoinParamAliasSources(assign.next),
+            .debug => |debug_stmt| try self.inferJoinParamAliasSources(debug_stmt.next),
+            .expect => |expect_stmt| try self.inferJoinParamAliasSources(expect_stmt.next),
+            .incref => |inc| try self.inferJoinParamAliasSources(inc.next),
+            .decref => |dec| try self.inferJoinParamAliasSources(dec.next),
+            .free => |free_stmt| try self.inferJoinParamAliasSources(free_stmt.next),
+            .switch_stmt => |switch_stmt| {
+                for (self.store.getCFSwitchBranches(switch_stmt.branches)) |branch| {
+                    try self.inferJoinParamAliasSources(branch.body);
+                }
+                try self.inferJoinParamAliasSources(switch_stmt.default_branch);
+            },
+            .borrow_scope => |scope| {
+                try self.inferJoinParamAliasSources(scope.body);
+                try self.inferJoinParamAliasSources(scope.remainder);
+            },
+            .join => |join| {
+                try self.inferAliasSourcesForJoin(join);
+                try self.inferJoinParamAliasSources(join.body);
+                try self.inferJoinParamAliasSources(join.remainder);
+            },
+            .jump, .ret, .runtime_error, .scope_exit, .crash => {},
+        }
+    }
+
+    fn inferAliasSourcesForJoin(
+        self: *RcInsertPass,
+        join: std.meta.TagPayload(CFStmt, .join),
+    ) Allocator.Error!void {
+        const params = self.store.getLocalSpan(join.params);
+        if (params.len == 0) return;
+
+        const seen = try self.allocator.alloc(bool, params.len);
+        defer self.allocator.free(seen);
+        const consistent = try self.allocator.alloc(bool, params.len);
+        defer self.allocator.free(consistent);
+        const roots = try self.allocator.alloc(?LocalId, params.len);
+        defer self.allocator.free(roots);
+        @memset(seen, false);
+        @memset(consistent, true);
+        for (roots) |*root| root.* = null;
+
+        try self.scanIncomingJumpAliasRoots(join.remainder, join.id, params, seen, consistent, roots);
+
+        for (params, seen, consistent, roots) |param, param_seen, is_consistent, maybe_root| {
+            if (!param_seen or !is_consistent) continue;
+            const root = maybe_root orelse continue;
+            if (root == param) continue;
+
+            const key = localKey(param);
+            const gop = try self.local_alias_sources.getOrPut(key);
+            if (gop.found_existing) {
+                if (builtin.mode == .Debug and (gop.value_ptr.owner_key != localKey(root) or !gop.value_ptr.forwards_ownership)) {
+                    std.debug.panic(
+                        "RcInsertPass invariant violated: join param {d} inferred alias root {d} conflicts with existing alias source",
+                        .{ @intFromEnum(param), @intFromEnum(root) },
+                    );
+                }
+            } else {
+                gop.value_ptr.* = .{
+                    .owner_key = localKey(root),
+                    .forwards_ownership = true,
+                };
+            }
+        }
+    }
+
+    fn scanIncomingJumpAliasRoots(
+        self: *RcInsertPass,
+        stmt_id: CFStmtId,
+        join_id: LIR.JoinPointId,
+        params: []const LocalId,
+        seen: []bool,
+        consistent: []bool,
+        roots: []?LocalId,
+    ) Allocator.Error!void {
+        switch (self.store.getCFStmt(stmt_id)) {
+            .assign_symbol => |assign| try self.scanIncomingJumpAliasRoots(assign.next, join_id, params, seen, consistent, roots),
+            .assign_ref => |assign| try self.scanIncomingJumpAliasRoots(assign.next, join_id, params, seen, consistent, roots),
+            .assign_literal => |assign| try self.scanIncomingJumpAliasRoots(assign.next, join_id, params, seen, consistent, roots),
+            .assign_call => |assign| try self.scanIncomingJumpAliasRoots(assign.next, join_id, params, seen, consistent, roots),
+            .assign_low_level => |assign| try self.scanIncomingJumpAliasRoots(assign.next, join_id, params, seen, consistent, roots),
+            .assign_list => |assign| try self.scanIncomingJumpAliasRoots(assign.next, join_id, params, seen, consistent, roots),
+            .assign_struct => |assign| try self.scanIncomingJumpAliasRoots(assign.next, join_id, params, seen, consistent, roots),
+            .assign_tag => |assign| try self.scanIncomingJumpAliasRoots(assign.next, join_id, params, seen, consistent, roots),
+            .debug => |debug_stmt| try self.scanIncomingJumpAliasRoots(debug_stmt.next, join_id, params, seen, consistent, roots),
+            .expect => |expect_stmt| try self.scanIncomingJumpAliasRoots(expect_stmt.next, join_id, params, seen, consistent, roots),
+            .incref => |inc| try self.scanIncomingJumpAliasRoots(inc.next, join_id, params, seen, consistent, roots),
+            .decref => |dec| try self.scanIncomingJumpAliasRoots(dec.next, join_id, params, seen, consistent, roots),
+            .free => |free_stmt| try self.scanIncomingJumpAliasRoots(free_stmt.next, join_id, params, seen, consistent, roots),
+            .switch_stmt => |switch_stmt| {
+                for (self.store.getCFSwitchBranches(switch_stmt.branches)) |branch| {
+                    try self.scanIncomingJumpAliasRoots(branch.body, join_id, params, seen, consistent, roots);
+                }
+                try self.scanIncomingJumpAliasRoots(switch_stmt.default_branch, join_id, params, seen, consistent, roots);
+            },
+            .borrow_scope => |scope| {
+                try self.scanIncomingJumpAliasRoots(scope.body, join_id, params, seen, consistent, roots);
+                try self.scanIncomingJumpAliasRoots(scope.remainder, join_id, params, seen, consistent, roots);
+            },
+            .join => |nested_join| {
+                try self.scanIncomingJumpAliasRoots(nested_join.body, join_id, params, seen, consistent, roots);
+                try self.scanIncomingJumpAliasRoots(nested_join.remainder, join_id, params, seen, consistent, roots);
+            },
+            .jump => |jump| {
+                if (jump.target != join_id) return;
+
+                const args = self.store.getLocalSpan(jump.args);
+                if (builtin.mode == .Debug and args.len != params.len) {
+                    std.debug.panic(
+                        "RcInsertPass invariant violated: jump to join {d} passed {d} args while alias-root scan expected {d}",
+                        .{ @intFromEnum(join_id), args.len, params.len },
+                    );
+                }
+
+                for (args, 0..) |arg, i| {
+                    seen[i] = true;
+                    const root = self.forwardingAliasRepresentative(arg);
+                    if (!consistent[i]) continue;
+                    if (roots[i]) |existing| {
+                        if (root == null or root.? != existing) {
+                            consistent[i] = false;
+                            roots[i] = null;
+                        }
+                    } else {
+                        roots[i] = root;
+                        if (root == null) consistent[i] = false;
+                    }
+                }
+            },
+            .ret, .runtime_error, .scope_exit, .crash => {},
+        }
+    }
+
+    fn forwardingAliasRepresentative(self: *const RcInsertPass, local: LocalId) ?LocalId {
+        const source = self.local_alias_sources.get(localKey(local)) orelse return local;
+        if (!source.forwards_ownership) return null;
+        return @enumFromInt(@as(u32, @intCast(source.owner_key)));
+    }
+
+    fn markOwningJoinParamsInStmt(self: *RcInsertPass, stmt_id: CFStmtId, changed: *bool) Allocator.Error!void {
+        switch (self.store.getCFStmt(stmt_id)) {
+            .assign_symbol => |assign| try self.markOwningJoinParamsInStmt(assign.next, changed),
+            .assign_ref => |assign| try self.markOwningJoinParamsInStmt(assign.next, changed),
+            .assign_literal => |assign| try self.markOwningJoinParamsInStmt(assign.next, changed),
+            .assign_call => |assign| try self.markOwningJoinParamsInStmt(assign.next, changed),
+            .assign_low_level => |assign| try self.markOwningJoinParamsInStmt(assign.next, changed),
+            .assign_list => |assign| try self.markOwningJoinParamsInStmt(assign.next, changed),
+            .assign_struct => |assign| try self.markOwningJoinParamsInStmt(assign.next, changed),
+            .assign_tag => |assign| try self.markOwningJoinParamsInStmt(assign.next, changed),
+            .debug => |debug_stmt| try self.markOwningJoinParamsInStmt(debug_stmt.next, changed),
+            .expect => |expect_stmt| try self.markOwningJoinParamsInStmt(expect_stmt.next, changed),
+            .incref => |inc| try self.markOwningJoinParamsInStmt(inc.next, changed),
+            .decref => |dec| try self.markOwningJoinParamsInStmt(dec.next, changed),
+            .free => |free_stmt| try self.markOwningJoinParamsInStmt(free_stmt.next, changed),
+            .switch_stmt => |switch_stmt| {
+                for (self.store.getCFSwitchBranches(switch_stmt.branches)) |branch| {
+                    try self.markOwningJoinParamsInStmt(branch.body, changed);
+                }
+                try self.markOwningJoinParamsInStmt(switch_stmt.default_branch, changed);
+            },
+            .borrow_scope => |scope| {
+                try self.markOwningJoinParamsInStmt(scope.body, changed);
+                try self.markOwningJoinParamsInStmt(scope.remainder, changed);
+            },
+            .join => |join| {
+                try self.markOwningJoinParamsForJoin(join, changed);
+                try self.markOwningJoinParamsInStmt(join.body, changed);
+                try self.markOwningJoinParamsInStmt(join.remainder, changed);
+            },
+            .jump, .ret, .runtime_error, .scope_exit, .crash => {},
+        }
+    }
+
+    fn markOwningJoinParamsForJoin(
+        self: *RcInsertPass,
+        join: std.meta.TagPayload(CFStmt, .join),
+        changed: *bool,
+    ) Allocator.Error!void {
+        const params = self.store.getLocalSpan(join.params);
+        if (params.len == 0) return;
+
+        const seen = try self.allocator.alloc(bool, params.len);
+        defer self.allocator.free(seen);
+        const all_owned = try self.allocator.alloc(bool, params.len);
+        defer self.allocator.free(all_owned);
+        @memset(seen, false);
+        @memset(all_owned, true);
+
+        try self.scanIncomingJumpsForJoin(join.remainder, join.id, params, seen, all_owned);
+
+        for (params, seen, all_owned) |param, param_seen, param_owned| {
+            if (!param_seen or !param_owned) continue;
+            const gop = try self.owning_join_params.getOrPut(localKey(param));
+            if (!gop.found_existing) {
+                gop.value_ptr.* = {};
+                changed.* = true;
+            }
+        }
+    }
+
+    fn scanIncomingJumpsForJoin(
+        self: *RcInsertPass,
+        stmt_id: CFStmtId,
+        join_id: LIR.JoinPointId,
+        params: []const LocalId,
+        seen: []bool,
+        all_owned: []bool,
+    ) Allocator.Error!void {
+        switch (self.store.getCFStmt(stmt_id)) {
+            .assign_symbol => |assign| try self.scanIncomingJumpsForJoin(assign.next, join_id, params, seen, all_owned),
+            .assign_ref => |assign| try self.scanIncomingJumpsForJoin(assign.next, join_id, params, seen, all_owned),
+            .assign_literal => |assign| try self.scanIncomingJumpsForJoin(assign.next, join_id, params, seen, all_owned),
+            .assign_call => |assign| try self.scanIncomingJumpsForJoin(assign.next, join_id, params, seen, all_owned),
+            .assign_low_level => |assign| try self.scanIncomingJumpsForJoin(assign.next, join_id, params, seen, all_owned),
+            .assign_list => |assign| try self.scanIncomingJumpsForJoin(assign.next, join_id, params, seen, all_owned),
+            .assign_struct => |assign| try self.scanIncomingJumpsForJoin(assign.next, join_id, params, seen, all_owned),
+            .assign_tag => |assign| try self.scanIncomingJumpsForJoin(assign.next, join_id, params, seen, all_owned),
+            .debug => |debug_stmt| try self.scanIncomingJumpsForJoin(debug_stmt.next, join_id, params, seen, all_owned),
+            .expect => |expect_stmt| try self.scanIncomingJumpsForJoin(expect_stmt.next, join_id, params, seen, all_owned),
+            .incref => |inc| try self.scanIncomingJumpsForJoin(inc.next, join_id, params, seen, all_owned),
+            .decref => |dec| try self.scanIncomingJumpsForJoin(dec.next, join_id, params, seen, all_owned),
+            .free => |free_stmt| try self.scanIncomingJumpsForJoin(free_stmt.next, join_id, params, seen, all_owned),
+            .switch_stmt => |switch_stmt| {
+                for (self.store.getCFSwitchBranches(switch_stmt.branches)) |branch| {
+                    try self.scanIncomingJumpsForJoin(branch.body, join_id, params, seen, all_owned);
+                }
+                try self.scanIncomingJumpsForJoin(switch_stmt.default_branch, join_id, params, seen, all_owned);
+            },
+            .borrow_scope => |scope| {
+                try self.scanIncomingJumpsForJoin(scope.body, join_id, params, seen, all_owned);
+                try self.scanIncomingJumpsForJoin(scope.remainder, join_id, params, seen, all_owned);
+            },
+            .join => |nested_join| {
+                try self.scanIncomingJumpsForJoin(nested_join.body, join_id, params, seen, all_owned);
+                try self.scanIncomingJumpsForJoin(nested_join.remainder, join_id, params, seen, all_owned);
+            },
+            .jump => |jump| {
+                if (jump.target != join_id) return;
+
+                const args = self.store.getLocalSpan(jump.args);
+                if (builtin.mode == .Debug and args.len != params.len) {
+                    std.debug.panic(
+                        "RcInsertPass invariant violated: jump to join {d} passed {d} args while ownership scan expected {d}",
+                        .{ @intFromEnum(join_id), args.len, params.len },
+                    );
+                }
+
+                for (args, params, 0..) |arg, param, i| {
+                    seen[i] = true;
+                    const carries_ownership = self.localCarriesOwnedValue(arg) or self.localForwardsOwnership(arg, param);
+                    all_owned[i] = all_owned[i] and carries_ownership;
+                }
+            },
+            .ret, .runtime_error, .scope_exit, .crash => {},
+        }
+    }
+
+    fn returnedJoinParam(self: *RcInsertPass, params: []const LocalId, local: LocalId) ?LocalId {
+        for (params) |param| {
+            if (param == local) return param;
+        }
+
+        var current = local;
+        var steps: u32 = 0;
+        while (self.local_alias_sources.get(localKey(current))) |source| {
+            const owner: LocalId = @enumFromInt(@as(u32, @intCast(source.owner_key)));
+            for (params) |param| {
+                if (param == owner) return param;
+            }
+            current = owner;
+            steps += 1;
+            if (builtin.mode == .Debug and steps > 1024) {
+                std.debug.panic(
+                    "RcInsertPass invariant violated: return-join root walk did not converge for local {d}",
+                    .{@intFromEnum(local)},
+                );
+            }
+        }
+
+        return null;
+    }
+
+    fn markFreshReturnJoinParamsInStmt(self: *RcInsertPass, stmt_id: CFStmtId) Allocator.Error!void {
+        switch (self.store.getCFStmt(stmt_id)) {
+            .assign_symbol => |assign| try self.markFreshReturnJoinParamsInStmt(assign.next),
+            .assign_ref => |assign| try self.markFreshReturnJoinParamsInStmt(assign.next),
+            .assign_literal => |assign| try self.markFreshReturnJoinParamsInStmt(assign.next),
+            .assign_call => |assign| try self.markFreshReturnJoinParamsInStmt(assign.next),
+            .assign_low_level => |assign| try self.markFreshReturnJoinParamsInStmt(assign.next),
+            .assign_list => |assign| try self.markFreshReturnJoinParamsInStmt(assign.next),
+            .assign_struct => |assign| try self.markFreshReturnJoinParamsInStmt(assign.next),
+            .assign_tag => |assign| try self.markFreshReturnJoinParamsInStmt(assign.next),
+            .debug => |debug_stmt| try self.markFreshReturnJoinParamsInStmt(debug_stmt.next),
+            .expect => |expect_stmt| try self.markFreshReturnJoinParamsInStmt(expect_stmt.next),
+            .incref => |inc| try self.markFreshReturnJoinParamsInStmt(inc.next),
+            .decref => |dec| try self.markFreshReturnJoinParamsInStmt(dec.next),
+            .free => |free_stmt| try self.markFreshReturnJoinParamsInStmt(free_stmt.next),
+            .switch_stmt => |switch_stmt| {
+                for (self.store.getCFSwitchBranches(switch_stmt.branches)) |branch| {
+                    try self.markFreshReturnJoinParamsInStmt(branch.body);
+                }
+                try self.markFreshReturnJoinParamsInStmt(switch_stmt.default_branch);
+            },
+            .borrow_scope => |scope| {
+                try self.markFreshReturnJoinParamsInStmt(scope.body);
+                try self.markFreshReturnJoinParamsInStmt(scope.remainder);
+            },
+            .join => |join| {
+                try self.markFreshReturnJoinParamsInJoinBody(self.store.getLocalSpan(join.params), join.body);
+                try self.markFreshReturnJoinParamsInStmt(join.body);
+                try self.markFreshReturnJoinParamsInStmt(join.remainder);
+            },
+            .jump, .ret, .runtime_error, .scope_exit, .crash => {},
+        }
+    }
+
+    fn markFreshReturnJoinParamsInJoinBody(self: *RcInsertPass, params: []const LocalId, stmt_id: CFStmtId) Allocator.Error!void {
+        switch (self.store.getCFStmt(stmt_id)) {
+            .assign_symbol => |assign| try self.markFreshReturnJoinParamsInJoinBody(params, assign.next),
+            .assign_ref => |assign| try self.markFreshReturnJoinParamsInJoinBody(params, assign.next),
+            .assign_literal => |assign| try self.markFreshReturnJoinParamsInJoinBody(params, assign.next),
+            .assign_call => |assign| try self.markFreshReturnJoinParamsInJoinBody(params, assign.next),
+            .assign_low_level => |assign| try self.markFreshReturnJoinParamsInJoinBody(params, assign.next),
+            .assign_list => |assign| try self.markFreshReturnJoinParamsInJoinBody(params, assign.next),
+            .assign_struct => |assign| try self.markFreshReturnJoinParamsInJoinBody(params, assign.next),
+            .assign_tag => |assign| try self.markFreshReturnJoinParamsInJoinBody(params, assign.next),
+            .debug => |debug_stmt| try self.markFreshReturnJoinParamsInJoinBody(params, debug_stmt.next),
+            .expect => |expect_stmt| try self.markFreshReturnJoinParamsInJoinBody(params, expect_stmt.next),
+            .incref => |inc| try self.markFreshReturnJoinParamsInJoinBody(params, inc.next),
+            .decref => |dec| try self.markFreshReturnJoinParamsInJoinBody(params, dec.next),
+            .free => |free_stmt| try self.markFreshReturnJoinParamsInJoinBody(params, free_stmt.next),
+            .switch_stmt => |switch_stmt| {
+                for (self.store.getCFSwitchBranches(switch_stmt.branches)) |branch| {
+                    try self.markFreshReturnJoinParamsInJoinBody(params, branch.body);
+                }
+                try self.markFreshReturnJoinParamsInJoinBody(params, switch_stmt.default_branch);
+            },
+            .borrow_scope => |scope| {
+                try self.markFreshReturnJoinParamsInJoinBody(params, scope.body);
+                try self.markFreshReturnJoinParamsInJoinBody(params, scope.remainder);
+            },
+            .join => |join| {
+                try self.markFreshReturnJoinParamsInJoinBody(params, join.body);
+                try self.markFreshReturnJoinParamsInJoinBody(params, join.remainder);
+            },
+            .ret => |ret_stmt| {
+                if (!self.layoutNeedsRc(self.localLayout(ret_stmt.value))) return;
+                if (self.returnedJoinParam(params, ret_stmt.value)) |param| {
+                    try self.promoted_fresh_join_params.put(localKey(param), {});
+                }
+            },
+            .jump, .runtime_error, .scope_exit, .crash => {},
+        }
+    }
+
+    fn normalizeFreshProcReturnsInStmt(self: *RcInsertPass, stmt_id: CFStmtId) Allocator.Error!CFStmtId {
+        const stmt = self.store.getCFStmt(stmt_id);
+        return switch (stmt) {
+            .assign_symbol => |assign| try self.store.addCFStmt(.{ .assign_symbol = .{
+                .target = assign.target,
+                .symbol = assign.symbol,
+                .next = try self.normalizeFreshProcReturnsInStmt(assign.next),
+            } }),
+            .assign_ref => |assign| try self.store.addCFStmt(.{ .assign_ref = .{
+                .target = assign.target,
+                .result = assign.result,
+                .op = assign.op,
+                .next = try self.normalizeFreshProcReturnsInStmt(assign.next),
+            } }),
+            .assign_literal => |assign| try self.store.addCFStmt(.{ .assign_literal = .{
+                .target = assign.target,
+                .result = assign.result,
+                .value = assign.value,
+                .next = try self.normalizeFreshProcReturnsInStmt(assign.next),
+            } }),
+            .assign_call => |assign| try self.store.addCFStmt(.{ .assign_call = .{
+                .target = assign.target,
+                .result = assign.result,
+                .proc = assign.proc,
+                .args = assign.args,
+                .next = try self.normalizeFreshProcReturnsInStmt(assign.next),
+            } }),
+            .assign_low_level => |assign| try self.store.addCFStmt(.{ .assign_low_level = .{
+                .target = assign.target,
+                .result = assign.result,
+                .op = assign.op,
+                .args = assign.args,
+                .next = try self.normalizeFreshProcReturnsInStmt(assign.next),
+            } }),
+            .assign_list => |assign| try self.store.addCFStmt(.{ .assign_list = .{
+                .target = assign.target,
+                .result = assign.result,
+                .elems = assign.elems,
+                .next = try self.normalizeFreshProcReturnsInStmt(assign.next),
+            } }),
+            .assign_struct => |assign| try self.store.addCFStmt(.{ .assign_struct = .{
+                .target = assign.target,
+                .result = assign.result,
+                .fields = assign.fields,
+                .next = try self.normalizeFreshProcReturnsInStmt(assign.next),
+            } }),
+            .assign_tag => |assign| try self.store.addCFStmt(.{ .assign_tag = .{
+                .target = assign.target,
+                .result = assign.result,
+                .discriminant = assign.discriminant,
+                .args = assign.args,
+                .next = try self.normalizeFreshProcReturnsInStmt(assign.next),
+            } }),
+            .debug => |debug_stmt| try self.store.addCFStmt(.{ .debug = .{
+                .message = debug_stmt.message,
+                .next = try self.normalizeFreshProcReturnsInStmt(debug_stmt.next),
+            } }),
+            .expect => |expect_stmt| try self.store.addCFStmt(.{ .expect = .{
+                .condition = expect_stmt.condition,
+                .next = try self.normalizeFreshProcReturnsInStmt(expect_stmt.next),
+            } }),
+            .switch_stmt => |switch_stmt| blk: {
+                var rewritten_branches: std.ArrayListUnmanaged(LIR.CFSwitchBranch) = .empty;
+                defer rewritten_branches.deinit(self.allocator);
+
+                for (self.store.getCFSwitchBranches(switch_stmt.branches)) |branch| {
+                    try rewritten_branches.append(self.allocator, .{
+                        .value = branch.value,
+                        .body = try self.normalizeFreshProcReturnsInStmt(branch.body),
+                    });
+                }
+
+                break :blk try self.store.addCFStmt(.{ .switch_stmt = .{
+                    .cond = switch_stmt.cond,
+                    .branches = try self.store.addCFSwitchBranches(rewritten_branches.items),
+                    .default_branch = try self.normalizeFreshProcReturnsInStmt(switch_stmt.default_branch),
+                } });
+            },
+            .borrow_scope => |scope| try self.store.addCFStmt(.{ .borrow_scope = .{
+                .id = scope.id,
+                .body = try self.normalizeFreshProcReturnsInStmt(scope.body),
+                .remainder = try self.normalizeFreshProcReturnsInStmt(scope.remainder),
+            } }),
+            .join => |join| blk: {
+                const join_key = @intFromEnum(join.id);
+                const gop = try self.active_join_params.getOrPut(join_key);
+                if (builtin.mode == .Debug and gop.found_existing) {
+                    std.debug.panic(
+                        "RcInsertPass invariant violated: normalizeFreshProcReturns encountered duplicate active join {d}",
+                        .{join_key},
+                    );
+                }
+                gop.value_ptr.* = join.params;
+                defer _ = self.active_join_params.remove(join_key);
+
+                break :blk try self.store.addCFStmt(.{ .join = .{
+                    .id = join.id,
+                    .params = join.params,
+                    .body = try self.normalizeFreshProcReturnsInStmt(join.body),
+                    .remainder = try self.normalizeFreshProcReturnsInStmt(join.remainder),
+                } });
+            },
+            .ret => |ret_stmt| blk: {
+                if (!self.layoutNeedsRc(self.localLayout(ret_stmt.value))) break :blk stmt_id;
+                if (self.localCarriesOwnedValue(ret_stmt.value)) break :blk stmt_id;
+
+                const ret_id = try self.store.addCFStmt(.{ .ret = .{ .value = ret_stmt.value } });
+                break :blk try self.store.addCFStmt(.{ .incref = .{
+                    .value = ret_stmt.value,
+                    .count = 1,
+                    .next = ret_id,
+                } });
+            },
+            .jump => |jump| blk: {
+                const params_span = self.active_join_params.get(@intFromEnum(jump.target)) orelse break :blk stmt_id;
+                const args = self.store.getLocalSpan(jump.args);
+                const params = self.store.getLocalSpan(params_span);
+                if (builtin.mode == .Debug and args.len != params.len) {
+                    std.debug.panic(
+                        "RcInsertPass invariant violated: normalizeFreshProcReturns saw jump {d} with {d} args, expected {d}",
+                        .{ @intFromEnum(jump.target), args.len, params.len },
+                    );
+                }
+
+                var promoted_args: std.ArrayListUnmanaged(LocalId) = .empty;
+                defer promoted_args.deinit(self.allocator);
+
+                for (args, params) |arg, param| {
+                    if (!self.promoted_fresh_join_params.contains(localKey(param))) continue;
+                    if (!self.layoutNeedsRc(self.localLayout(arg))) continue;
+                    if (self.localCarriesOwnedValue(arg)) continue;
+                    try promoted_args.append(self.allocator, arg);
+                }
+
+                if (promoted_args.items.len == 0) break :blk stmt_id;
+
+                const jump_id = try self.store.addCFStmt(.{ .jump = jump });
+                break :blk try self.prependRetainedBorrowArgIncrefs(promoted_args.items, jump_id);
+            },
+            .runtime_error, .scope_exit, .incref, .decref, .free, .crash => stmt_id,
+        };
+    }
+
+    fn normalizeBorrowedProcReturns(self: *RcInsertPass) Allocator.Error!void {
+        const proc_count = self.store.getProcSpecs().len;
+        if (proc_count == 0) return;
+
+        const borrowed_return_procs = try self.allocator.alloc(bool, proc_count);
+        defer self.allocator.free(borrowed_return_procs);
+
+        var any_borrowed_returns = false;
+        for (self.store.getProcSpecs(), 0..) |proc, i| {
+            borrowed_return_procs[i] = proc.result_contract == .borrow_of_param;
+            any_borrowed_returns = any_borrowed_returns or borrowed_return_procs[i];
+        }
+        if (!any_borrowed_returns) return;
+
+        for (0..proc_count) |proc_index| {
+            const proc_id: LirProcSpecId = @enumFromInt(@as(u32, @intCast(proc_index)));
+            const proc_ptr = self.store.getProcSpecPtr(proc_id);
+            proc_ptr.body = try self.normalizeBorrowedProcReturnsInStmt(
+                proc_ptr.body,
+                borrowed_return_procs,
+                borrowed_return_procs[proc_index],
+            );
+            if (borrowed_return_procs[proc_index]) {
+                proc_ptr.result_contract = .fresh;
+            }
+        }
+    }
+
+    fn normalizeBorrowedProcReturnsInStmt(
+        self: *RcInsertPass,
+        stmt_id: CFStmtId,
+        borrowed_return_procs: []const bool,
+        current_proc_promotes_borrowed_return: bool,
+    ) Allocator.Error!CFStmtId {
+        const stmt = self.store.getCFStmt(stmt_id);
+        return switch (stmt) {
+            .assign_symbol => |assign| try self.store.addCFStmt(.{ .assign_symbol = .{
+                .target = assign.target,
+                .symbol = assign.symbol,
+                .next = try self.normalizeBorrowedProcReturnsInStmt(
+                    assign.next,
+                    borrowed_return_procs,
+                    current_proc_promotes_borrowed_return,
+                ),
+            } }),
+            .assign_ref => |assign| try self.store.addCFStmt(.{ .assign_ref = .{
+                .target = assign.target,
+                .result = assign.result,
+                .op = assign.op,
+                .next = try self.normalizeBorrowedProcReturnsInStmt(
+                    assign.next,
+                    borrowed_return_procs,
+                    current_proc_promotes_borrowed_return,
+                ),
+            } }),
+            .assign_literal => |assign| try self.store.addCFStmt(.{ .assign_literal = .{
+                .target = assign.target,
+                .result = assign.result,
+                .value = assign.value,
+                .next = try self.normalizeBorrowedProcReturnsInStmt(
+                    assign.next,
+                    borrowed_return_procs,
+                    current_proc_promotes_borrowed_return,
+                ),
+            } }),
+            .assign_call => |assign| blk: {
+                const proc_index = @intFromEnum(assign.proc);
+                const normalized_result = if (proc_index < borrowed_return_procs.len and borrowed_return_procs[proc_index])
+                    LIR.ResultSemantics.fresh
+                else
+                    assign.result;
+                break :blk try self.store.addCFStmt(.{ .assign_call = .{
+                    .target = assign.target,
+                    .result = normalized_result,
+                    .proc = assign.proc,
+                    .args = assign.args,
+                    .next = try self.normalizeBorrowedProcReturnsInStmt(
+                        assign.next,
+                        borrowed_return_procs,
+                        current_proc_promotes_borrowed_return,
+                    ),
+                } });
+            },
+            .assign_low_level => |assign| try self.store.addCFStmt(.{ .assign_low_level = .{
+                .target = assign.target,
+                .result = assign.result,
+                .op = assign.op,
+                .args = assign.args,
+                .next = try self.normalizeBorrowedProcReturnsInStmt(
+                    assign.next,
+                    borrowed_return_procs,
+                    current_proc_promotes_borrowed_return,
+                ),
+            } }),
+            .assign_list => |assign| try self.store.addCFStmt(.{ .assign_list = .{
+                .target = assign.target,
+                .result = assign.result,
+                .elems = assign.elems,
+                .next = try self.normalizeBorrowedProcReturnsInStmt(
+                    assign.next,
+                    borrowed_return_procs,
+                    current_proc_promotes_borrowed_return,
+                ),
+            } }),
+            .assign_struct => |assign| try self.store.addCFStmt(.{ .assign_struct = .{
+                .target = assign.target,
+                .result = assign.result,
+                .fields = assign.fields,
+                .next = try self.normalizeBorrowedProcReturnsInStmt(
+                    assign.next,
+                    borrowed_return_procs,
+                    current_proc_promotes_borrowed_return,
+                ),
+            } }),
+            .assign_tag => |assign| try self.store.addCFStmt(.{ .assign_tag = .{
+                .target = assign.target,
+                .result = assign.result,
+                .discriminant = assign.discriminant,
+                .args = assign.args,
+                .next = try self.normalizeBorrowedProcReturnsInStmt(
+                    assign.next,
+                    borrowed_return_procs,
+                    current_proc_promotes_borrowed_return,
+                ),
+            } }),
+            .debug => |debug_stmt| try self.store.addCFStmt(.{ .debug = .{
+                .message = debug_stmt.message,
+                .next = try self.normalizeBorrowedProcReturnsInStmt(
+                    debug_stmt.next,
+                    borrowed_return_procs,
+                    current_proc_promotes_borrowed_return,
+                ),
+            } }),
+            .expect => |expect_stmt| try self.store.addCFStmt(.{ .expect = .{
+                .condition = expect_stmt.condition,
+                .next = try self.normalizeBorrowedProcReturnsInStmt(
+                    expect_stmt.next,
+                    borrowed_return_procs,
+                    current_proc_promotes_borrowed_return,
+                ),
+            } }),
+            .incref => |inc| try self.store.addCFStmt(.{ .incref = .{
+                .value = inc.value,
+                .count = inc.count,
+                .next = try self.normalizeBorrowedProcReturnsInStmt(
+                    inc.next,
+                    borrowed_return_procs,
+                    current_proc_promotes_borrowed_return,
+                ),
+            } }),
+            .decref => |dec| try self.store.addCFStmt(.{ .decref = .{
+                .value = dec.value,
+                .next = try self.normalizeBorrowedProcReturnsInStmt(
+                    dec.next,
+                    borrowed_return_procs,
+                    current_proc_promotes_borrowed_return,
+                ),
+            } }),
+            .free => |free_stmt| try self.store.addCFStmt(.{ .free = .{
+                .value = free_stmt.value,
+                .next = try self.normalizeBorrowedProcReturnsInStmt(
+                    free_stmt.next,
+                    borrowed_return_procs,
+                    current_proc_promotes_borrowed_return,
+                ),
+            } }),
+            .switch_stmt => |switch_stmt| blk: {
+                var rewritten_branches: std.ArrayListUnmanaged(LIR.CFSwitchBranch) = .empty;
+                defer rewritten_branches.deinit(self.allocator);
+                const original_branches = try self.cloneSwitchBranches(switch_stmt.branches);
+                defer self.allocator.free(original_branches);
+
+                for (original_branches) |branch| {
+                    try rewritten_branches.append(self.allocator, .{
+                        .value = branch.value,
+                        .body = try self.normalizeBorrowedProcReturnsInStmt(
+                            branch.body,
+                            borrowed_return_procs,
+                            current_proc_promotes_borrowed_return,
+                        ),
+                    });
+                }
+
+                break :blk try self.store.addCFStmt(.{ .switch_stmt = .{
+                    .cond = switch_stmt.cond,
+                    .branches = try self.store.addCFSwitchBranches(rewritten_branches.items),
+                    .default_branch = try self.normalizeBorrowedProcReturnsInStmt(
+                        switch_stmt.default_branch,
+                        borrowed_return_procs,
+                        current_proc_promotes_borrowed_return,
+                    ),
+                } });
+            },
+            .borrow_scope => |scope| try self.store.addCFStmt(.{ .borrow_scope = .{
+                .id = scope.id,
+                .body = try self.normalizeBorrowedProcReturnsInStmt(
+                    scope.body,
+                    borrowed_return_procs,
+                    current_proc_promotes_borrowed_return,
+                ),
+                .remainder = try self.normalizeBorrowedProcReturnsInStmt(
+                    scope.remainder,
+                    borrowed_return_procs,
+                    current_proc_promotes_borrowed_return,
+                ),
+            } }),
+            .join => |join| try self.store.addCFStmt(.{ .join = .{
+                .id = join.id,
+                .params = join.params,
+                .body = try self.normalizeBorrowedProcReturnsInStmt(
+                    join.body,
+                    borrowed_return_procs,
+                    current_proc_promotes_borrowed_return,
+                ),
+                .remainder = try self.normalizeBorrowedProcReturnsInStmt(
+                    join.remainder,
+                    borrowed_return_procs,
+                    current_proc_promotes_borrowed_return,
+                ),
+            } }),
+            .jump, .runtime_error, .scope_exit, .crash => stmt_id,
+            .ret => |ret_stmt| blk: {
+                if (!current_proc_promotes_borrowed_return) break :blk stmt_id;
+                if (!self.layoutNeedsRc(self.localLayout(ret_stmt.value))) break :blk stmt_id;
+
+                const ret_id = try self.store.addCFStmt(.{ .ret = .{ .value = ret_stmt.value } });
+                break :blk try self.store.addCFStmt(.{ .incref = .{
+                    .value = ret_stmt.value,
+                    .count = 1,
+                    .next = ret_id,
+                } });
+            },
+        };
+    }
+
     fn analyzeProcParamUseKinds(self: *RcInsertPass, proc: LIR.LirProcSpec) Allocator.Error![]UseKind {
         self.clearAnalysisState();
         try self.countUsesInStmt(proc.body);
+        try self.collectAliasSemanticsInStmt(proc.body);
 
         const params = self.store.getLocalSpan(proc.args);
         const use_kinds = try self.allocator.alloc(UseKind, params.len);
         for (params, 0..) |param, i| {
-            const summary = self.useSummary(param);
             const returned_aliases_param = switch (proc.result_contract) {
                 .alias_of_param => |contract| contract.param_index == i,
                 else => false,
             };
-            use_kinds[i] = if (summary.consume_count != 0 or returned_aliases_param) .consume else .borrow;
+            use_kinds[i] = if (self.paramOwnershipIsConsumed(param) or returned_aliases_param) .consume else .borrow;
         }
         return use_kinds;
     }
@@ -239,6 +1066,20 @@ pub const RcInsertPass = struct {
         return self.direct_use_summaries.get(localKey(local)) orelse .{};
     }
 
+    fn paramOwnershipIsConsumed(self: *const RcInsertPass, param: LocalId) bool {
+        if (self.directUseSummary(param).consume_count != 0) return true;
+
+        var it = self.direct_use_summaries.iterator();
+        while (it.next()) |entry| {
+            if (entry.value_ptr.consume_count == 0) continue;
+            const local: LocalId = @enumFromInt(@as(u32, @intCast(entry.key_ptr.*)));
+            if (local == param) return true;
+            if (self.localForwardsOwnership(local, param)) return true;
+        }
+
+        return false;
+    }
+
     fn recordForwardingAliasBorrow(self: *RcInsertPass, local: LocalId) Allocator.Error!void {
         if (!self.layoutNeedsRc(self.localLayout(local))) return;
         const gop = try self.direct_forwarding_alias_borrows.getOrPut(localKey(local));
@@ -256,6 +1097,34 @@ pub const RcInsertPass = struct {
             );
         }
         return direct - forwarding;
+    }
+
+    fn recordLocalDefinition(self: *RcInsertPass, local: LocalId, kind: LocalDefinitionKind) Allocator.Error!void {
+        const key = localKey(local);
+        const gop = try self.local_definition_kinds.getOrPut(key);
+        if (builtin.mode == .Debug and gop.found_existing) {
+            std.debug.panic(
+                "RcInsertPass invariant violated: local {d} recorded multiple definition kinds ({s} then {s})",
+                .{ @intFromEnum(local), @tagName(gop.value_ptr.*), @tagName(kind) },
+            );
+        }
+        gop.value_ptr.* = kind;
+    }
+
+    fn recordProcParamDefinitions(self: *RcInsertPass, params_span: LIR.LocalSpan) Allocator.Error!void {
+        for (self.store.getLocalSpan(params_span)) |param| {
+            try self.recordLocalDefinition(param, .proc_param);
+        }
+    }
+
+    fn recordJoinParamDefinitions(self: *RcInsertPass, params_span: LIR.LocalSpan) Allocator.Error!void {
+        for (self.store.getLocalSpan(params_span)) |param| {
+            try self.recordLocalDefinition(param, .join_param);
+        }
+    }
+
+    fn recordStmtDefinition(self: *RcInsertPass, local: LocalId, semantics: LIR.ResultSemantics) Allocator.Error!void {
+        try self.recordLocalDefinition(local, .{ .stmt_result = semantics });
     }
 
     fn refOpSource(op: LIR.RefOp) LocalId {
@@ -450,44 +1319,54 @@ pub const RcInsertPass = struct {
 
     fn collectAliasSemanticsInStmt(self: *RcInsertPass, stmt_id: CFStmtId) Allocator.Error!void {
         switch (self.store.getCFStmt(stmt_id)) {
-            .assign_symbol => |assign| try self.collectAliasSemanticsInStmt(assign.next),
+            .assign_symbol => |assign| {
+                try self.recordStmtDefinition(assign.target, .fresh);
+                try self.collectAliasSemanticsInStmt(assign.next);
+            },
             .assign_ref => |assign| {
+                try self.recordStmtDefinition(assign.target, assign.result);
                 if (self.layoutNeedsRc(self.localLayout(assign.target))) {
                     try self.recordAliasSemantics(assign.target, assign.result);
                 }
                 try self.collectAliasSemanticsInStmt(assign.next);
             },
             .assign_literal => |assign| {
+                try self.recordStmtDefinition(assign.target, assign.result);
                 if (self.layoutNeedsRc(self.localLayout(assign.target))) {
                     try self.recordAliasSemantics(assign.target, assign.result);
                 }
                 try self.collectAliasSemanticsInStmt(assign.next);
             },
             .assign_call => |assign| {
+                try self.recordStmtDefinition(assign.target, assign.result);
                 if (self.layoutNeedsRc(self.localLayout(assign.target))) {
                     try self.recordAliasSemantics(assign.target, assign.result);
                 }
                 try self.collectAliasSemanticsInStmt(assign.next);
             },
             .assign_low_level => |assign| {
+                try self.recordStmtDefinition(assign.target, assign.result);
                 if (self.layoutNeedsRc(self.localLayout(assign.target))) {
                     try self.recordAliasSemantics(assign.target, assign.result);
                 }
                 try self.collectAliasSemanticsInStmt(assign.next);
             },
             .assign_list => |assign| {
+                try self.recordStmtDefinition(assign.target, assign.result);
                 if (self.layoutNeedsRc(self.localLayout(assign.target))) {
                     try self.recordAliasSemantics(assign.target, assign.result);
                 }
                 try self.collectAliasSemanticsInStmt(assign.next);
             },
             .assign_struct => |assign| {
+                try self.recordStmtDefinition(assign.target, assign.result);
                 if (self.layoutNeedsRc(self.localLayout(assign.target))) {
                     try self.recordAliasSemantics(assign.target, assign.result);
                 }
                 try self.collectAliasSemanticsInStmt(assign.next);
             },
             .assign_tag => |assign| {
+                try self.recordStmtDefinition(assign.target, assign.result);
                 if (self.layoutNeedsRc(self.localLayout(assign.target))) {
                     try self.recordAliasSemantics(assign.target, assign.result);
                 }
@@ -507,6 +1386,7 @@ pub const RcInsertPass = struct {
                 try self.collectAliasSemanticsInStmt(scope.remainder);
             },
             .join => |join| {
+                try self.recordJoinParamDefinitions(join.params);
                 try self.collectAliasSemanticsInStmt(join.body);
                 try self.collectAliasSemanticsInStmt(join.remainder);
             },
@@ -520,8 +1400,12 @@ pub const RcInsertPass = struct {
         };
     }
 
-    fn closesOwningAliasRepresentative(stmt: CFStmt) bool {
+    fn closesOwningAliasRepresentative(_: *const RcInsertPass, stmt: CFStmt, _: LocalId) bool {
         return switch (stmt) {
+            .assign_ref => |assign| switch (assign.result) {
+                .alias_of => false,
+                else => false,
+            },
             .assign_call, .assign_low_level => switch (resultSemantics(stmt)) {
                 .alias_of => true,
                 else => false,
@@ -801,6 +1685,17 @@ pub const RcInsertPass = struct {
         var rewritten = next;
         for (params) |param| {
             if (!self.layoutNeedsRc(self.localLayout(param))) continue;
+            if (!self.localCarriesOwnedValue(param)) continue;
+
+            var forwarded_to_param_peer = false;
+            for (params) |other_param| {
+                if (other_param == param) continue;
+                if (self.localForwardsOwnership(other_param, param)) {
+                    forwarded_to_param_peer = true;
+                    break;
+                }
+            }
+            if (forwarded_to_param_peer) continue;
 
             var forwarded = false;
             for (forwarded_values) |value| {
@@ -928,10 +1823,27 @@ pub const RcInsertPass = struct {
                 @memcpy(nested_join_ids[0..internal_join_ids.len], internal_join_ids);
                 nested_join_ids[internal_join_ids.len] = join.id;
 
+                const nested_params = self.store.getLocalSpan(join.params);
+                var outer_params_for_nested_body: std.ArrayListUnmanaged(LocalId) = .empty;
+                defer outer_params_for_nested_body.deinit(self.allocator);
+                for (params) |param| {
+                    var shadowed_by_nested_join = false;
+                    for (nested_params) |nested_param| {
+                        if (self.localForwardsOwnership(nested_param, param)) {
+                            shadowed_by_nested_join = true;
+                            break;
+                        }
+                    }
+                    if (!shadowed_by_nested_join) {
+                        try outer_params_for_nested_body.append(self.allocator, param);
+                    }
+                }
+                const outer_body_params = outer_params_for_nested_body.items;
+
                 break :blk try self.store.addCFStmt(.{ .join = .{
                     .id = join.id,
                     .params = join.params,
-                    .body = try self.closeJoinParamsOnExit(params, nested_join_ids, join.body),
+                    .body = try self.closeJoinParamsOnExit(outer_body_params, nested_join_ids, join.body),
                     .remainder = try self.closeJoinParamsOnExit(params, nested_join_ids, join.remainder),
                 } });
             },
@@ -1026,7 +1938,7 @@ pub const RcInsertPass = struct {
                 if (summary.borrow_count != 0 and summary.consume_count == 0) {
                     next = try self.closeLocalOnExit(target, next);
                 }
-            } else if (closesOwningAliasRepresentative(stmt)) {
+            } else if (self.closesOwningAliasRepresentative(stmt, target)) {
                 if (summary.consume_count == 0 and self.directNonForwardingBorrowCount(target) != 0) {
                     next = try self.closeLocalOnExit(target, next);
                 }
@@ -1045,7 +1957,7 @@ pub const RcInsertPass = struct {
             }
         }
 
-        if (self.layoutNeedsRc(target_layout) and closesOwningAliasRepresentative(stmt)) {
+        if (self.layoutNeedsRc(target_layout) and self.closesOwningAliasRepresentative(stmt, target)) {
             const summary = self.useSummary(target);
             if (summary.consume_count > 1) {
                 const incref_stmt = try self.store.addCFStmt(.{ .incref = .{

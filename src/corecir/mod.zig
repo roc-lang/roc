@@ -1,6 +1,6 @@
 //! Core CIR pipeline stages that sit between canonical CIR and executable MIR.
 //!
-//! Long-term phase order:
+//! Phase order:
 //! 1. CoreCIR normalization
 //! 2. ContextMono exact source-level monotypes
 //! 3. LambdaSolved solved lambda-set semantics

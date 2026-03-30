@@ -1,12 +1,11 @@
 //! Shared statement-only lowering pipeline used by eval backends.
 //!
-//! Target phase order:
+//! Phase order:
 //! CoreCIR -> ContextMono -> LambdaSolved -> LambdaSpecialize ->
 //! SpecializedCIR -> MIR -> LIR -> RC.
 //!
-//! The current code is in the middle of that cutover. This module owns a
-//! shared layout store and exposes proc-root lowering results while the
-//! pipeline is being migrated to the explicit staged architecture.
+//! This module owns the shared layout store and exposes proc-root lowering
+//! results for the staged explicit architecture.
 
 const std = @import("std");
 const base = @import("base");

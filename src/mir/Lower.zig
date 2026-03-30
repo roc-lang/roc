@@ -315,14 +315,11 @@ in_progress_closure_value_callables: std.AutoHashMap(u32, void),
 /// lowering rather than ordinary value binding locals.
 skipped_callable_backed_binding_patterns: std.AutoHashMap(u64, void),
 
-/// Callable-inst context for context-sensitive monomorphized lookup/call resolution.
+/// Callable-inst context for context-sensitive staged lookup/call resolution.
 current_callable_inst_context: Pipeline.CallableInstId,
 
 /// Current root CIR source expression when no callable-inst context is active.
 current_root_source_expr_context: ?CIR.Expr.Idx,
-
-/// Exact callable lambdas already materialized into MIR locals.
-exact_callable_locals: std.AutoHashMap(u32, MIR.LambdaId),
 
 /// Demand-driven implicit captures for callable-inst lambda bodies.
 current_implicit_lambda_captures: ?*ImplicitLambdaCaptureState,
@@ -390,7 +387,6 @@ pub fn init(
         .skipped_callable_backed_binding_patterns = std.AutoHashMap(u64, void).init(allocator),
         .current_callable_inst_context = .none,
         .current_root_source_expr_context = null,
-        .exact_callable_locals = std.AutoHashMap(u32, MIR.LambdaId).init(allocator),
         .current_implicit_lambda_captures = null,
         .current_lambda_entry_bound_locals = null,
         .current_prelude_bound_locals = null,
@@ -428,7 +424,6 @@ pub fn deinit(self: *Self) void {
     self.callable_inst_produces_closure_value.deinit();
     self.in_progress_closure_value_callables.deinit();
     self.skipped_callable_backed_binding_patterns.deinit();
-    self.exact_callable_locals.deinit();
     self.scratch_local_ids.deinit();
     self.scratch_ident_idxs.deinit();
     self.scratch_cf_stmt_ids.deinit();
@@ -3537,12 +3532,12 @@ fn lowerLocalAliasInto(
         }
     }
     self.store.getLocalPtr(target).monotype = self.store.getLocal(source).monotype;
-    if (self.exact_callable_locals.get(@intFromEnum(source))) |lambda_id| {
-        try self.exact_callable_locals.put(@intFromEnum(target), lambda_id);
-        self.store.getLocalPtr(target).exact_callable = .{
-            .lambda = lambda_id,
-            .requires_hidden_capture = self.store.getLambdaAnyState(lambda_id).captures_param != null,
-        };
+    if (self.store.monotype_store.getMonotype(self.store.getLocal(target).monotype) == .func) {
+        const resolved = try self.resolveExactCallableResolutionForLocal(source) orelse std.debug.panic(
+            "statement-only MIR invariant violated: function-valued alias source local {d} lacked explicit exact callable while lowering alias target {d}",
+            .{ @intFromEnum(source), @intFromEnum(target) },
+        );
+        try self.bindExactLambdaLocal(target, resolved.lambda);
     } else {
         self.clearExactCallableLocal(target);
     }
@@ -3551,7 +3546,14 @@ fn lowerLocalAliasInto(
 
 fn clearExactCallableLocal(self: *Self, local_id: MIR.LocalId) void {
     self.store.getLocalPtr(local_id).exact_callable = null;
-    _ = self.exact_callable_locals.remove(@intFromEnum(local_id));
+}
+
+fn exactCallableResolutionsEqual(
+    left: ExactCallableResolution,
+    right: ExactCallableResolution,
+) bool {
+    return left.lambda == right.lambda and
+        left.requires_hidden_capture == right.requires_hidden_capture;
 }
 
 fn resolveExactCallableResolutionForLocal(
@@ -3565,14 +3567,44 @@ fn resolveExactCallableResolutionForLocal(
         };
     }
 
-    if (self.exact_callable_locals.get(@intFromEnum(local_id))) |lambda_id| {
-        return .{
-            .lambda = lambda_id,
-            .requires_hidden_capture = self.store.getLambdaAnyState(lambda_id).captures_param != null,
-        };
+    return null;
+}
+
+fn mergeExactCallableJoinIncoming(
+    self: *Self,
+    dest_local: MIR.LocalId,
+    source_local: MIR.LocalId,
+) Allocator.Error!void {
+    if (self.store.monotype_store.getMonotype(self.store.getLocal(dest_local).monotype) != .func) {
+        return;
     }
 
-    return null;
+    const source_resolution = try self.resolveExactCallableResolutionForLocal(source_local) orelse std.debug.panic(
+        "statement-only MIR invariant violated: function-valued join source local {d} lacked explicit exact callable while merging into join local {d}",
+        .{ @intFromEnum(source_local), @intFromEnum(dest_local) },
+    );
+
+    if (self.store.getLocal(dest_local).exact_callable) |existing| {
+        const existing_resolution = ExactCallableResolution{
+            .lambda = existing.lambda,
+            .requires_hidden_capture = existing.requires_hidden_capture,
+        };
+        if (!exactCallableResolutionsEqual(existing_resolution, source_resolution)) {
+            std.debug.panic(
+                "statement-only MIR invariant violated: join local {d} merged incompatible exact callables {d}/{any} and {d}/{any}",
+                .{
+                    @intFromEnum(dest_local),
+                    @intFromEnum(existing.lambda),
+                    existing.requires_hidden_capture,
+                    @intFromEnum(source_resolution.lambda),
+                    source_resolution.requires_hidden_capture,
+                },
+            );
+        }
+        return;
+    }
+
+    try self.bindExactLambdaLocal(dest_local, source_resolution.lambda);
 }
 
 fn resolveExactCallableResolutionForCapturePattern(
@@ -3614,8 +3646,14 @@ fn seedExactCallablePatternLocal(
             &.{};
 
     if (callable_inst_ids.len == 0) {
-        self.clearExactCallableLocal(local);
-        return;
+        std.debug.panic(
+            "statement-only MIR invariant violated: function-valued pattern local {d} for pattern {d} lacked an exact callable specialization in context callable_inst={d}",
+            .{
+                @intFromEnum(local),
+                @intFromEnum(pattern_idx),
+                @intFromEnum(self.current_callable_inst_context),
+            },
+        );
     }
 
     const resolution = try self.resolveUniqueExactCallableResolution(
@@ -4633,8 +4671,9 @@ fn ensureImplicitLambdaCaptureLocal(
 
     if (exact_callable_inst_id) |callable_inst_id| {
         try self.bindExactCallableLocal(local, callable_inst_id);
-        exact_lambda_id = self.exact_callable_locals.get(@intFromEnum(local));
-        requires_hidden_capture = try self.callableInstProducesClosureValue(callable_inst_id);
+        const exact_callable = self.store.getLocal(local).exact_callable orelse unreachable;
+        exact_lambda_id = exact_callable.lambda;
+        requires_hidden_capture = exact_callable.requires_hidden_capture;
     } else if (exact_lambda_id) |lambda_id| {
         try self.bindExactLambdaLocal(local, lambda_id);
     }
@@ -5484,9 +5523,10 @@ fn lowerClosureLambda(
                 if (self.current_callable_inst_context.isNone()) null else self.current_callable_inst_context,
             )) |capture_callable_inst_id| {
                 try self.bindExactCallableLocal(capture_local, capture_callable_inst_id);
+                const exact_callable = self.store.getLocal(capture_local).exact_callable orelse unreachable;
                 exact_capture_resolution = .{
-                    .lambda = self.exact_callable_locals.get(@intFromEnum(capture_local)).?,
-                    .requires_hidden_capture = try self.callableInstProducesClosureValue(capture_callable_inst_id),
+                    .lambda = exact_callable.lambda,
+                    .requires_hidden_capture = exact_callable.requires_hidden_capture,
                 };
                 if (!exact_capture_resolution.?.requires_hidden_capture) {
                     try callable_only_captures.append(self.allocator, .{
@@ -5969,9 +6009,10 @@ fn lowerReservedTrivialClosureLambda(
                 callable_inst_id,
             )) |capture_callable_inst_id| {
                 try self.bindExactCallableLocal(capture_local, capture_callable_inst_id);
+                const exact_callable = self.store.getLocal(capture_local).exact_callable orelse unreachable;
                 exact_capture_resolution = .{
-                    .lambda = self.exact_callable_locals.get(@intFromEnum(capture_local)).?,
-                    .requires_hidden_capture = try self.callableInstProducesClosureValue(capture_callable_inst_id),
+                    .lambda = exact_callable.lambda,
+                    .requires_hidden_capture = exact_callable.requires_hidden_capture,
                 };
                 if (!exact_capture_resolution.?.requires_hidden_capture) {
                     try callable_only_captures.append(self.allocator, .{
@@ -7180,6 +7221,11 @@ fn lowerResolvedDispatchTargetCallInto(
         null;
     if (exact_result_callable_inst_id) |callable_inst_id| {
         try self.bindExactCallableLocal(target, callable_inst_id);
+    } else if (self.store.monotype_store.getMonotype(target_monotype) == .func) {
+        std.debug.panic(
+            "statement-only MIR invariant violated: function-valued dispatch call result expr {d} lacked an exact callable specialization",
+            .{@intFromEnum(result_expr_idx)},
+        );
     } else {
         try self.refreshCallTargetMonotypeFromCallee(target, self.store.getLocal(callee_local).monotype);
     }
@@ -7331,6 +7377,11 @@ fn lowerCallInto(
         null;
     if (exact_result_callable_inst_id) |callable_inst_id| {
         try self.bindExactCallableLocal(target, callable_inst_id);
+    } else if (self.store.monotype_store.getMonotype(target_monotype) == .func) {
+        std.debug.panic(
+            "statement-only MIR invariant violated: function-valued call expr {d} lacked an exact callable specialization",
+            .{@intFromEnum(call_expr_idx)},
+        );
     } else {
         try self.refreshCallTargetMonotypeFromCallee(target, self.store.getLocal(callee_local).monotype);
     }
@@ -7633,7 +7684,10 @@ fn lowerDotAccessInto(
         )) |callable_inst_id| {
             try self.bindExactCallableLocal(target, callable_inst_id);
         } else {
-            self.clearExactCallableLocal(target);
+            std.debug.panic(
+                "statement-only MIR invariant violated: function-valued dot access expr {d} lacked an exact callable specialization",
+                .{@intFromEnum(expr_idx)},
+            );
         }
     }
     const field_stmt = try self.lowerRefInto(target, .{ .field = .{
@@ -7676,7 +7730,10 @@ fn lowerTupleAccessInto(
         )) |callable_inst_id| {
             try self.bindExactCallableLocal(target, callable_inst_id);
         } else {
-            self.clearExactCallableLocal(target);
+            std.debug.panic(
+                "statement-only MIR invariant violated: function-valued tuple access expr {d} lacked an exact callable specialization",
+                .{@intFromEnum(expr_idx)},
+            );
         }
     }
     const field_stmt = try self.lowerRefInto(target, .{ .field = .{
@@ -7737,7 +7794,6 @@ fn bindExactLambdaLocal(
         .lambda = lambda_id,
         .requires_hidden_capture = lambda.captures_param != null,
     };
-    try self.exact_callable_locals.put(@intFromEnum(local_id), lambda_id);
 }
 
 fn bindExactCallableLocal(
@@ -7751,7 +7807,6 @@ fn bindExactCallableLocal(
         .lambda = lambda_id,
         .requires_hidden_capture = self.store.getLambdaAnyState(lambda_id).captures_param != null,
     };
-    try self.exact_callable_locals.put(@intFromEnum(local_id), lambda_id);
 }
 
 fn cirExprKnownBoolValue(self: *const Self, module_idx: u32, expr_idx: CIR.Expr.Idx) ?bool {
@@ -9125,6 +9180,7 @@ fn buildCarriedJumpArgsWithValue(
     self: *Self,
     source_scope: u64,
     dest_scope: u64,
+    dest_value_local: MIR.LocalId,
     value_local: MIR.LocalId,
 ) Allocator.Error!MIR.LocalSpan {
     const source_bindings = try self.visibleReassignableBindingsInScope(source_scope);
@@ -9135,6 +9191,7 @@ fn buildCarriedJumpArgsWithValue(
     const args = try self.allocator.alloc(MIR.LocalId, dest_bindings.len + 1);
     defer self.allocator.free(args);
     args[0] = value_local;
+    try self.mergeExactCallableJoinIncoming(dest_value_local, value_local);
     var source_i: usize = 0;
     for (dest_bindings, 0..) |dest_binding, i| {
         args[i + 1] = findVisibleBindingLocal(
@@ -9143,6 +9200,7 @@ fn buildCarriedJumpArgsWithValue(
             dest_binding.pattern_idx,
             "statement-only MIR join invariant violated: source scope is missing a carried binding required by destination scope",
         );
+        try self.mergeExactCallableJoinIncoming(dest_binding.local, args[i + 1]);
     }
     return self.store.addLocalSpan(self.allocator, args);
 }
@@ -9167,6 +9225,7 @@ fn buildCarriedJumpArgs(
             dest_binding.pattern_idx,
             "statement-only MIR join invariant violated: source scope is missing a carried binding required by destination scope",
         );
+        try self.mergeExactCallableJoinIncoming(dest_binding.local, args[i]);
     }
     return self.store.addLocalSpan(self.allocator, args);
 }
@@ -9224,6 +9283,7 @@ fn buildCarriedJumpArgsWithExtraLocals(
             dest_binding.pattern_idx,
             "statement-only MIR loop invariant violated: source scope is missing a carried binding required by destination scope",
         );
+        try self.mergeExactCallableJoinIncoming(dest_binding.local, args[i]);
     }
     @memcpy(args[dest_bindings.len..], extra_locals);
     return self.store.addLocalSpan(self.allocator, args);
@@ -9292,6 +9352,7 @@ fn lowerBoolBranchChainIntoWithExitScope(
         .args = try self.buildCarriedJumpArgsWithValue(
             lowered_else.exit_scope,
             join_scope,
+            joined_value_local,
             else_value,
         ),
     } });
@@ -9305,6 +9366,7 @@ fn lowerBoolBranchChainIntoWithExitScope(
         .args = try self.buildCarriedJumpArgsWithValue(
             lowered_then.exit_scope,
             join_scope,
+            joined_value_local,
             then_value,
         ),
     } });
@@ -9465,6 +9527,7 @@ fn lowerBlockIntoWithExitScope(
         .args = try self.buildCarriedJumpArgsWithValue(
             lowered_final.exit_scope,
             exit_scope,
+            joined_final_local,
             final_value_local,
         ),
     } });
@@ -9509,6 +9572,7 @@ fn lowerMatchIntoWithExitScope(
         .args = try self.buildCarriedJumpArgsWithValue(
             lowered_cond.exit_scope,
             dispatch_scope,
+            dispatch_join_cond_local,
             cond_local,
         ),
     } });
@@ -9610,6 +9674,7 @@ fn lowerMatchBranchChainInto(
             .args = try self.buildCarriedJumpArgsWithValue(
                 lowered_branch_value.exit_scope,
                 result_join_scope,
+                result_local,
                 branch_value_local,
             ),
         } });
@@ -9684,6 +9749,7 @@ fn lowerMatchBranchChainInto(
                     .args = try self.buildCarriedJumpArgsWithValue(
                         lowered_branch_value.exit_scope,
                         result_join_scope,
+                        result_local,
                         branch_value_local,
                     ),
                 } });

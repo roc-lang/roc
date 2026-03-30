@@ -1,7 +1,7 @@
 //! Structured normalized CIR.
 //!
 //! This stage removes frontend sugar and normalizes structured source forms
-//! before contextual monomorphization and lambda-set solving.
+//! before contextual monotype determination and lambda-set solving.
 
 const std = @import("std");
 const can = @import("can");
@@ -22,9 +22,6 @@ pub const Root = struct {
 };
 
 /// Normalized structured source program.
-///
-/// The current implementation still references CIR nodes directly. The
-/// architectural cutover will replace this with a dedicated normalized store.
 pub const Program = struct {
     all_module_envs: []const *const ModuleEnv,
     roots: []const Root,

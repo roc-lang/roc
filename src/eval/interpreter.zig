@@ -836,8 +836,40 @@ pub const Interpreter = struct {
                 const source_layout = self.store.getLocal(payload.source).layout_idx;
                 const tag_base = self.resolveTagUnionBaseValue(source_val, source_layout);
                 const disc = self.helper.readTagDiscriminant(tag_base.value, tag_base.layout);
-                const actual_payload_layout = self.tagPayloadLayout(source_layout, disc);
-                break :blk self.normalizeValueToLayout(tag_base.value, actual_payload_layout, target_layout);
+                if (builtin.mode == .Debug and disc != payload.tag_discriminant) {
+                    std.debug.panic(
+                        "LIR/interpreter invariant violated: tag payload access expected discriminant {d} but observed {d}",
+                        .{ payload.tag_discriminant, disc },
+                    );
+                }
+                const actual_payload_layout = self.tagPayloadLayout(source_layout, payload.tag_discriminant);
+                const payload_layout_val = self.layout_store.getLayout(actual_payload_layout);
+                switch (payload_layout_val.tag) {
+                    .struct_ => {
+                        const field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(
+                            payload_layout_val.data.struct_.idx,
+                            payload.payload_idx,
+                        );
+                        const actual_field_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(
+                            payload_layout_val.data.struct_.idx,
+                            payload.payload_idx,
+                        );
+                        break :blk self.normalizeValueToLayout(
+                            tag_base.value.offset(field_offset),
+                            actual_field_layout,
+                            target_layout,
+                        );
+                    },
+                    else => {
+                        if (builtin.mode == .Debug and payload.payload_idx != 0) {
+                            std.debug.panic(
+                                "LIR/interpreter invariant violated: scalar tag payload access requested payload_idx {d} from non-struct payload layout {d}",
+                                .{ payload.payload_idx, @intFromEnum(actual_payload_layout) },
+                            );
+                        }
+                        break :blk self.normalizeValueToLayout(tag_base.value, actual_payload_layout, target_layout);
+                    },
+                }
             },
             .nominal => |nominal| self.normalizeValueToLayout(
                 frame.getLocal(nominal.backing_ref),

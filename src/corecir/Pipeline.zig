@@ -44,7 +44,7 @@ pub const ResolvedMonotype = ContextMono.ResolvedMonotype;
 /// One concrete type-variable assignment inside a callable instantiation substitution.
 pub const TypeSubstEntry = ContextMono.TypeSubstEntry;
 
-/// A packed slice of substitution entries stored in the monomorphization result.
+/// A packed slice of substitution entries stored in the staged pipeline result.
 pub const TypeSubstSpan = ContextMono.TypeSubstSpan;
 
 /// Describes the original callable form that produced a callable template.
@@ -68,16 +68,16 @@ pub const CallableParamSpecEntry = LambdaSpecialize.CallableParamSpecEntry;
 /// One structural projection applied before demanding callable callable instantiations.
 pub const CallableParamProjection = LambdaSpecialize.CallableParamProjection;
 
-/// Span of callable-parameter projections stored in the monomorphization store.
+/// Span of callable-parameter projections stored in the staged pipeline store.
 pub const CallableParamProjectionSpan = LambdaSpecialize.CallableParamProjectionSpan;
 
-/// Span of callable-parameter specification entries stored in the monomorphization store.
+/// Span of callable-parameter specification entries stored in the staged pipeline store.
 pub const CallableParamSpecSpan = LambdaSpecialize.CallableParamSpecSpan;
 
 /// Interned identifier for a set of demanded callable instantiations.
 pub const CallableInstSetId = LambdaSpecialize.CallableInstSetId;
 
-/// Contiguous span of callable-inst-set members in the monomorphization store.
+/// Contiguous span of callable-inst-set members in the staged pipeline store.
 pub const CallableInstSetSpan = LambdaSpecialize.CallableInstSetSpan;
 
 /// A deduplicated set of callable instantiations associated with one callable value.
@@ -170,7 +170,7 @@ const RequiredLookupTarget = struct {
     def_idx: CIR.Def.Idx,
 };
 
-/// Output of the MIR monomorphization pass.
+/// Output of the staged CoreCIR/context-mono/lambda-specialization pipeline.
 pub const Result = struct {
     context_mono: ContextMono.Result,
     lambda_solved: LambdaSolved.Result,
@@ -3716,8 +3716,8 @@ pub const Pass = struct {
                 }
 
                 // Function-valued arguments must be scanned/materialized through the same
-                // value-expression pipeline the rest of monomorphization uses before we
-                // conclude their exact callable identity is unavailable.
+                // value-expression pipeline the rest of staged callable resolution uses
+                // before we conclude their exact callable identity is unavailable.
                 try self.scanCirValueExpr(result, module_idx, expr_idx);
 
                 if (self.getValueExprCallableInstsInContext(result, context_callable_inst, module_idx, expr_idx)) |callable_inst_ids| {
@@ -4353,7 +4353,7 @@ pub const Pass = struct {
                 const resolved = try self.resolveExprMonotypeResolved(result, actual_module_idx, arg_expr_idx);
                 if (!resolved.isNone()) break :blk resolved;
                 // When exact resolution fails (e.g., tag unions with flex extension
-                // variables like [Red, ..]), fall back to monomorphizable resolution
+                // variables like [Red, ..]), fall back to concretizing resolution
                 // which closes flex extensions to produce a concrete monotype.
                 break :blk try self.resolveTypeVarMonotypeIfMonomorphizableResolved(
                     result,

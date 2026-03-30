@@ -9,8 +9,6 @@ const std = @import("std");
 
 pub const MIR = @import("MIR.zig");
 pub const Analyses = @import("Analyses.zig");
-/// MIR exact-callable summary analysis.
-pub const CallableSummary = @import("CallableSummary.zig");
 pub const DebugVerifyMir = @import("DebugVerifyMir.zig");
 pub const Monotype = @import("Monotype.zig");
 pub const Lower = @import("Lower.zig");
@@ -43,7 +41,6 @@ test "mir tests" {
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(MIR);
     std.testing.refAllDecls(Analyses);
-    std.testing.refAllDecls(CallableSummary);
     std.testing.refAllDecls(DebugVerifyMir);
     std.testing.refAllDecls(Monotype);
     std.testing.refAllDecls(ResultSummary);

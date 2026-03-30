@@ -557,6 +557,7 @@ fn ensureJumpArgsMatchTarget(
 
     for (jump_args, params, 0..) |arg, param, i| {
         if (store.getLocal(arg).layout_idx != store.getLocal(param).layout_idx) {
+            dumpStmtWindow(store, stmt_id);
             std.debug.panic(
                 "DebugVerifyLir invariant violated: {s} {d} stmt {d} jump arg {d} local={d} to join point {d} has layout {d}, expected join param local={d} layout {d}",
                 .{

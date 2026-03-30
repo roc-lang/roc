@@ -131,7 +131,7 @@ pub const ResultSemantics = union(enum) {
 /// One projection step applied to an alias or borrow root.
 pub const RefProjection = union(enum) {
     field: u16,
-    tag_payload,
+    tag_payload: u16,
     nominal,
 };
 
@@ -147,6 +147,8 @@ pub const RefOp = union(enum) {
     },
     tag_payload: struct {
         source: LocalId,
+        payload_idx: u16,
+        tag_discriminant: u16,
     },
     nominal: struct {
         backing_ref: LocalId,

@@ -14,7 +14,6 @@ const mir_mod = @import("mir");
 
 const MIR = mir_mod.MIR;
 const Analyses = mir_mod.Analyses;
-const CallableSummary = mir_mod.CallableSummary;
 const ResultSummary = mir_mod.ResultSummary;
 
 const LIR = @import("LIR.zig");
@@ -55,20 +54,9 @@ const BuilderProc = union(enum) {
 const MirTargetBinding = struct {
     key: u32,
     target: LirLocalId,
-    previous: ?LirLocalId,
-    installed_in_override_scope: bool,
 };
-const CallableResolution = CallableSummary.Resolution;
-const MirCallableResolutionMap = CallableSummary.OverrideMap;
+const CallableContract = ResultSummary.CallableContract;
 const MirOriginOverrideMap = std.AutoHashMap(u32, LoweredOrigin);
-
-const JoinCallableState = struct {
-    params: []const MIR.LocalId,
-    merged_callables: []?CallableResolution,
-    saw_incoming: bool,
-};
-
-const ActiveJoinCallableMap = std.AutoHashMap(u32, JoinCallableState);
 
 const JoinOriginState = struct {
     params: []const MIR.LocalId,
@@ -113,7 +101,6 @@ lowered_consts: LoweredConstMap,
 builder_procs: std.ArrayList(BuilderProc),
 current_local_map: ?*MirToLirLocalMap = null,
 current_local_scopes: MirToLirLocalScopeStack = .empty,
-current_callable_overrides: ?*MirCallableResolutionMap = null,
 current_origin_overrides: ?*MirOriginOverrideMap = null,
 current_lambda: ?MIR.LambdaId = null,
 current_borrow_region: LIR.BorrowRegion = .proc,
@@ -338,49 +325,6 @@ fn runtimeLambdaReturnLayout(self: *Self, lambda_id: MIR.LambdaId) Allocator.Err
     };
 }
 
-fn monotypeMayContainCallable(self: *const Self, mono_idx: MirMonotypeIdx) bool {
-    return switch (self.mir_store.monotype_store.getMonotype(mono_idx)) {
-        .func => true,
-        .record => |record| blk: {
-            for (self.mir_store.monotype_store.getFields(record.fields)) |field| {
-                if (self.monotypeMayContainCallable(field.type_idx)) break :blk true;
-            }
-            break :blk false;
-        },
-        .tuple => |tuple_data| blk: {
-            for (self.mir_store.monotype_store.getIdxSpan(tuple_data.elems)) |elem| {
-                if (self.monotypeMayContainCallable(elem)) break :blk true;
-            }
-            break :blk false;
-        },
-        .tag_union => |tag_union| blk: {
-            for (self.mir_store.monotype_store.getTags(tag_union.tags)) |tag| {
-                for (self.mir_store.monotype_store.getIdxSpan(tag.payloads)) |payload| {
-                    if (self.monotypeMayContainCallable(payload)) break :blk true;
-                }
-            }
-            break :blk false;
-        },
-        .box => |box_data| self.monotypeMayContainCallable(box_data.inner),
-        .list,
-        .prim,
-        .unit,
-        => false,
-        .recursive_placeholder => std.debug.panic(
-            "MirToLir invariant violated: recursive_placeholder survived monotype construction",
-            .{},
-        ),
-    };
-}
-
-fn localMayContainCallable(self: *const Self, local_id: MIR.LocalId) bool {
-    return self.monotypeMayContainCallable(self.mir_store.getLocal(local_id).monotype);
-}
-
-fn callableResolutionsEqual(left: CallableResolution, right: CallableResolution) bool {
-    return left.lambda == right.lambda and left.requires_hidden_capture == right.requires_hidden_capture;
-}
-
 fn loweredOriginsEqual(left: LoweredOrigin, right: LoweredOrigin) bool {
     return std.meta.eql(left, right);
 }
@@ -390,164 +334,42 @@ fn mergeLoweredOrigins(left: LoweredOrigin, right: LoweredOrigin) LoweredOrigin 
     return .fresh;
 }
 
-fn makeCallableSummaryResolver(self: *Self, overrides: *const MirCallableResolutionMap) CallableSummary.Resolver {
-    return .{
-        .allocator = self.allocator,
-        .mir_store = self.mir_store,
-        .table = self.analyses.getCallableSummary(),
-        .current_lambda = self.current_lambda,
-        .callable_overrides = overrides,
-    };
-}
-
-fn resolveCallableValuePathWithResolver(
-    resolver: *CallableSummary.Resolver,
-    local_id: MIR.LocalId,
-    value_local: MIR.LocalId,
-    reversed_path: *std.ArrayList(MIR.CallableProjection),
-) Allocator.Error!ResolvedCallable {
-    const resolved = try resolver.resolveCallableForLocalPath(local_id, reversed_path);
-    return .{
-        .lambda = resolved.lambda,
-        .captures_local = if (resolved.requires_hidden_capture) value_local else null,
-    };
-}
-
-fn resolveCallableValuePath(
-    self: *Self,
-    local_id: MIR.LocalId,
-    value_local: MIR.LocalId,
-    reversed_path: *std.ArrayList(MIR.CallableProjection),
-) Allocator.Error!ResolvedCallable {
-    var empty_overrides = MirCallableResolutionMap.init(self.allocator);
-    defer empty_overrides.deinit();
-    var resolver = self.makeCallableSummaryResolver(self.current_callable_overrides orelse &empty_overrides);
-    return resolveCallableValuePathWithResolver(&resolver, local_id, value_local, reversed_path);
-}
-
 fn resolveCallableValue(self: *Self, local_id: MIR.LocalId) Allocator.Error!ResolvedCallable {
-    var empty_overrides = MirCallableResolutionMap.init(self.allocator);
-    defer empty_overrides.deinit();
-    var resolver = self.makeCallableSummaryResolver(self.current_callable_overrides orelse &empty_overrides);
-    const resolved = try resolver.resolveLocal(local_id);
-    return .{
-        .lambda = resolved.lambda,
-        .captures_local = if (resolved.requires_hidden_capture) local_id else null,
-    };
-}
-
-fn collectJoinCallableResolutions(
-    self: *Self,
-    active_joins: *ActiveJoinCallableMap,
-    stmt_id: MIR.CFStmtId,
-) Allocator.Error!void {
-    const stmt = self.mir_store.getCFStmt(stmt_id);
-    switch (stmt) {
-        .assign_symbol => |assign| try self.collectJoinCallableResolutions(active_joins, assign.next),
-        .assign_ref => |assign| try self.collectJoinCallableResolutions(active_joins, assign.next),
-        .assign_literal => |assign| try self.collectJoinCallableResolutions(active_joins, assign.next),
-        .assign_lambda => |assign| try self.collectJoinCallableResolutions(active_joins, assign.next),
-        .assign_closure => |assign| try self.collectJoinCallableResolutions(active_joins, assign.next),
-        .assign_call => |assign| try self.collectJoinCallableResolutions(active_joins, assign.next),
-        .assign_low_level => |assign| try self.collectJoinCallableResolutions(active_joins, assign.next),
-        .assign_list => |assign| try self.collectJoinCallableResolutions(active_joins, assign.next),
-        .assign_struct => |assign| try self.collectJoinCallableResolutions(active_joins, assign.next),
-        .assign_tag => |assign| try self.collectJoinCallableResolutions(active_joins, assign.next),
-        .debug => |debug_stmt| try self.collectJoinCallableResolutions(active_joins, debug_stmt.next),
-        .expect => |expect_stmt| try self.collectJoinCallableResolutions(active_joins, expect_stmt.next),
-        .runtime_error, .scope_exit, .ret, .crash => {},
-        .switch_stmt => |switch_stmt| {
-            for (self.mir_store.getSwitchBranches(switch_stmt.branches)) |branch| {
-                try self.collectJoinCallableResolutions(active_joins, branch.body);
-            }
-            try self.collectJoinCallableResolutions(active_joins, switch_stmt.default_branch);
-        },
-        .borrow_scope => |scope_stmt| {
-            try self.collectJoinCallableResolutions(active_joins, scope_stmt.body);
-            try self.collectJoinCallableResolutions(active_joins, scope_stmt.remainder);
-        },
-        .join => |join_stmt| {
-            const join_key = @intFromEnum(join_stmt.id);
-            const join_params = self.mir_store.getLocalSpan(join_stmt.params);
-            const merged_callables = try self.allocator.alloc(?CallableResolution, join_params.len);
-            defer self.allocator.free(merged_callables);
-            @memset(merged_callables, null);
-
-            const gop = try active_joins.getOrPut(join_key);
-            if (gop.found_existing) {
-                std.debug.panic(
-                    "MirToLir invariant violated: nested/duplicate active callable join {d}",
-                    .{join_key},
-                );
-            }
-            gop.value_ptr.* = .{
-                .params = join_params,
-                .merged_callables = merged_callables,
-                .saw_incoming = false,
-            };
-            defer _ = active_joins.remove(join_key);
-
-            try self.collectJoinCallableResolutions(active_joins, join_stmt.remainder);
-            const join_state = active_joins.getPtr(join_key) orelse unreachable;
-            if (!join_state.saw_incoming) return;
-
-            var body_callable_overrides = MirCallableResolutionMap.init(self.allocator);
-            defer body_callable_overrides.deinit();
-            try body_callable_overrides.ensureTotalCapacity(@intCast(join_params.len));
-
-            for (join_params, merged_callables, 0..) |param, incoming_callable, i| {
-                if (!self.localMayContainCallable(param)) continue;
-                body_callable_overrides.putAssumeCapacity(
-                    @as(u32, @intFromEnum(param)),
-                    incoming_callable orelse std.debug.panic(
-                        "MirToLir invariant violated: join {d} param {d} had no incoming exact callable",
-                        .{ join_key, i },
-                    ),
-                );
-            }
-
-            const saved_callable_overrides = self.current_callable_overrides;
-            self.current_callable_overrides = &body_callable_overrides;
-            defer self.current_callable_overrides = saved_callable_overrides;
-
-            try self.collectJoinCallableResolutions(active_joins, join_stmt.body);
-        },
-        .jump => |jump| {
-            const join_state = active_joins.getPtr(@intFromEnum(jump.id)) orelse return;
-            const args = self.mir_store.getLocalSpan(jump.args);
-            if (args.len != join_state.params.len) {
-                std.debug.panic(
-                    "MirToLir invariant violated: jump to join {d} passed {d} args, expected {d}",
-                    .{ @intFromEnum(jump.id), args.len, join_state.params.len },
-                );
-            }
-
-            join_state.saw_incoming = true;
-            for (args, 0..) |arg, i| {
-                const param = join_state.params[i];
-                if (!self.localMayContainCallable(param)) continue;
-
-                var reversed_path = std.ArrayList(MIR.CallableProjection).empty;
-                defer reversed_path.deinit(self.allocator);
-                const incoming_callable = try self.resolveCallableValuePath(arg, arg, &reversed_path);
-                const incoming_resolution = CallableResolution{
-                    .lambda = incoming_callable.lambda,
-                    .requires_hidden_capture = incoming_callable.captures_local != null,
-                };
-
-                if (join_state.merged_callables[i]) |current| {
-                    if (!callableResolutionsEqual(current, incoming_resolution)) {
-                        std.debug.panic(
-                            "MirToLir TODO: merging incompatible exact callable identities across join {d} param {d} is not implemented yet",
-                            .{ @intFromEnum(jump.id), i },
-                        );
-                    }
-                } else {
-                    join_state.merged_callables[i] = incoming_resolution;
-                }
-            }
-        },
+    if (self.mir_store.getLocal(local_id).exact_callable) |exact_callable| {
+        return .{
+            .lambda = exact_callable.lambda,
+            .captures_local = if (exact_callable.requires_hidden_capture) local_id else null,
+        };
     }
+
+    return switch (self.mir_store.getLocalDef(local_id)) {
+        .lambda => |lambda_id| .{
+            .lambda = lambda_id,
+            .captures_local = null,
+        },
+        .closure => |closure| .{
+            .lambda = closure.lambda,
+            .captures_local = local_id,
+        },
+        .param,
+        .captures_param,
+        .join_param,
+        => std.debug.panic(
+            "MirToLir invariant violated: function-valued local {d} lacked explicit exact callable metadata",
+            .{@intFromEnum(local_id)},
+        ),
+        .symbol => |symbol| std.debug.panic(
+            "MirToLir invariant violated: function-valued symbol {d} survived strongest-form MIR callable lowering",
+            .{symbol.raw()},
+        ),
+        else => std.debug.panic(
+            "MirToLir invariant violated: local {d} was used as a callable value but local_def={s}",
+            .{
+                @intFromEnum(local_id),
+                @tagName(self.mir_store.getLocalDef(local_id)),
+            },
+        ),
+    };
 }
 
 fn collectJoinOrigins(
@@ -586,7 +408,6 @@ fn collectJoinOrigins(
             const merged_origins = try self.allocator.alloc(?LoweredOrigin, join_params.len);
             defer self.allocator.free(merged_origins);
             @memset(merged_origins, null);
-
             const gop = try active_joins.getOrPut(join_key);
             if (gop.found_existing) {
                 std.debug.panic(
@@ -648,49 +469,6 @@ fn collectJoinOrigins(
             }
         },
     }
-}
-
-fn buildJoinCallableOverrideMap(
-    self: *Self,
-    join_stmt: std.meta.TagPayload(MIR.CFStmt, .join),
-) Allocator.Error!MirCallableResolutionMap {
-    var overrides = MirCallableResolutionMap.init(self.allocator);
-    errdefer overrides.deinit();
-
-    const join_key = @intFromEnum(join_stmt.id);
-    const join_params = self.mir_store.getLocalSpan(join_stmt.params);
-    const merged_callables = try self.allocator.alloc(?CallableResolution, join_params.len);
-    defer self.allocator.free(merged_callables);
-    @memset(merged_callables, null);
-
-    var active_joins = ActiveJoinCallableMap.init(self.allocator);
-    defer active_joins.deinit();
-
-    const gop = try active_joins.getOrPut(join_key);
-    if (gop.found_existing) unreachable;
-    gop.value_ptr.* = .{
-        .params = join_params,
-        .merged_callables = merged_callables,
-        .saw_incoming = false,
-    };
-    defer _ = active_joins.remove(join_key);
-
-    try self.collectJoinCallableResolutions(&active_joins, join_stmt.remainder);
-    const join_state = active_joins.getPtr(join_key) orelse unreachable;
-    if (!join_state.saw_incoming) return overrides;
-
-    try overrides.ensureTotalCapacity(@intCast(join_params.len));
-    for (join_params, merged_callables, 0..) |param, incoming_callable, i| {
-        if (!self.localMayContainCallable(param)) continue;
-        overrides.putAssumeCapacity(
-            @as(u32, @intFromEnum(param)),
-            incoming_callable orelse std.debug.panic(
-                "MirToLir invariant violated: join {d} param {d} had no incoming exact callable",
-                .{ join_key, i },
-            ),
-        );
-    }
-    return overrides;
 }
 
 fn buildJoinOriginOverrideMap(
@@ -780,8 +558,13 @@ fn lookupMirLocalBinding(self: *Self, key: u32) ?LirLocalId {
 }
 
 fn bindMirLocal(self: *Self, key: u32, lir_local: LirLocalId) Allocator.Error!void {
-    if (self.currentLocalOverrideScope()) |scope| {
-        try scope.put(key, lir_local);
+    if (self.currentLocalMap().get(key)) |existing| {
+        if (existing != lir_local) {
+            std.debug.panic(
+                "MirToLir invariant violated: MIR local {d} was rebound from LIR local {d} to {d}",
+                .{ key, @intFromEnum(existing), @intFromEnum(lir_local) },
+            );
+        }
         return;
     }
     try self.currentLocalMap().put(key, lir_local);
@@ -819,51 +602,32 @@ fn mapMirLocal(self: *Self, mir_local: MIR.LocalId) Allocator.Error!LirLocalId {
 
 fn pushMirTargetBinding(self: *Self, mir_local: MIR.LocalId) Allocator.Error!MirTargetBinding {
     const key = @as(u32, @intFromEnum(mir_local));
+    if (self.lookupMirLocalBinding(key) != null) {
+        std.debug.panic(
+            "MirToLir invariant violated: attempted to create a second LIR binding for MIR local {d}",
+            .{@intFromEnum(mir_local)},
+        );
+    }
     const target = try self.lir_store.addLocal(.{
         .layout_idx = try self.runtimeValueLayoutFromMirLocal(mir_local),
     });
-
-    if (self.currentLocalOverrideScope()) |scope| {
-        const previous = scope.get(key);
-        try scope.put(key, target);
-        return .{
-            .key = key,
-            .target = target,
-            .previous = previous,
-            .installed_in_override_scope = true,
-        };
-    }
-
-    const map = self.currentLocalMap();
-    const previous = map.get(key);
-    try map.put(key, target);
+    try self.currentLocalMap().put(key, target);
     return .{
         .key = key,
         .target = target,
-        .previous = previous,
-        .installed_in_override_scope = false,
     };
 }
 
 fn popMirTargetBinding(self: *Self, binding: MirTargetBinding) void {
-    if (binding.installed_in_override_scope) {
-        const scope = self.currentLocalOverrideScope() orelse std.debug.panic(
-            "MirToLir invariant violated: target binding restore expected an active override scope",
-            .{},
+    const existing = self.currentLocalMap().get(binding.key) orelse std.debug.panic(
+        "MirToLir invariant violated: target binding for MIR local {d} disappeared before use completed",
+        .{binding.key},
+    );
+    if (existing != binding.target) {
+        std.debug.panic(
+            "MirToLir invariant violated: MIR local {d} changed LIR binding from {d} to {d} during lowering",
+            .{ binding.key, @intFromEnum(binding.target), @intFromEnum(existing) },
         );
-        if (binding.previous) |previous| {
-            scope.put(binding.key, previous) catch @panic("target binding restore failed");
-        } else {
-            _ = scope.remove(binding.key);
-        }
-        return;
-    }
-
-    const map = self.currentLocalMap();
-    if (binding.previous) |previous| {
-        map.put(binding.key, previous) catch @panic("target binding restore failed");
-    } else {
-        _ = map.remove(binding.key);
     }
 }
 
@@ -921,7 +685,7 @@ fn lowerSummaryProjectionSpan(
     for (summary_items, 0..) |projection, i| {
         lir_items[i] = switch (projection) {
             .field => |field_idx| .{ .field = field_idx },
-            .tag_payload => .tag_payload,
+            .tag_payload => |payload_idx| .{ .tag_payload = payload_idx },
             .nominal => .nominal,
         };
     }
@@ -1141,7 +905,7 @@ fn resolveMirLocalOrigin(
             .tag_payload => |payload| try self.borrowOrigin(
                 try self.resolveMirLocalOrigin(payload.source, visited),
                 self.current_borrow_region,
-                try self.singleProjectionSpan(.tag_payload),
+                try self.singleProjectionSpan(.{ .tag_payload = @intCast(payload.payload_idx) }),
             ),
             .discriminant => .fresh,
         },
@@ -1151,11 +915,7 @@ fn resolveMirLocalOrigin(
                     .lambda = lambda_id,
                     .captures_local = if (call_result.exact_requires_hidden_capture) call_result.callee else null,
                 }
-            else blk_resolved: {
-                var reversed_path = std.ArrayList(MIR.CallableProjection).empty;
-                defer reversed_path.deinit(self.allocator);
-                break :blk_resolved try self.resolveCallableValuePath(call_result.callee, call_result.callee, &reversed_path);
-            };
+            else try self.resolveCallableValue(call_result.callee);
 
             const visible_args = self.mir_store.getLocalSpan(call_result.args);
             const arg_count = visible_args.len + @intFromBool(resolved.captures_local != null);
@@ -1726,17 +1486,14 @@ fn lowerRootBody(self: *Self, root_body: MIR.CFStmtId) Allocator.Error!CFStmtId 
     var local_map = MirToLirLocalMap.init(self.allocator);
     defer local_map.deinit();
     const prev_local_map = self.current_local_map;
-    const prev_callable_overrides = self.current_callable_overrides;
     const prev_origin_overrides = self.current_origin_overrides;
     const prev_lambda = self.current_lambda;
     const prev_region = self.current_borrow_region;
     self.current_local_map = &local_map;
-    self.current_callable_overrides = null;
     self.current_origin_overrides = null;
     self.current_lambda = null;
     self.current_borrow_region = .proc;
     defer self.current_local_map = prev_local_map;
-    defer self.current_callable_overrides = prev_callable_overrides;
     defer self.current_origin_overrides = prev_origin_overrides;
     defer self.current_lambda = prev_lambda;
     defer self.current_borrow_region = prev_region;
@@ -1798,10 +1555,12 @@ fn lowerStmt(self: *Self, stmt_id: MIR.CFStmtId) Allocator.Error!CFStmtId {
                     target_binding.target,
                     try self.projectedBorrowResultSemantics(
                         payload.source,
-                        try self.singleProjectionSpan(.tag_payload),
+                        try self.singleProjectionSpan(.{ .tag_payload = @intCast(payload.payload_idx) }),
                     ),
                     .{ .tag_payload = .{
                         .source = try self.mapMirLocal(payload.source),
+                        .payload_idx = @intCast(payload.payload_idx),
+                        .tag_discriminant = @intCast(payload.tag_discriminant),
                     } },
                     lowered_next,
                 ),
@@ -1973,18 +1732,13 @@ fn lowerJoinStmt(
     const join_param_locals = try self.allocator.alloc(LirLocalId, join_params.len);
     defer self.allocator.free(join_param_locals);
     const lowered_remainder = try self.lowerStmt(join_stmt.remainder);
-    var body_callable_overrides = try self.buildJoinCallableOverrideMap(join_stmt);
-    defer body_callable_overrides.deinit();
     var body_origin_overrides = try self.buildJoinOriginOverrideMap(join_stmt);
     defer body_origin_overrides.deinit();
 
     const lowered_body = blk: {
-        const prev_callable_overrides = self.current_callable_overrides;
         const prev_origin_overrides = self.current_origin_overrides;
-        self.current_callable_overrides = &body_callable_overrides;
         self.current_origin_overrides = &body_origin_overrides;
         try self.pushLocalOverrideScope();
-        defer self.current_callable_overrides = prev_callable_overrides;
         defer self.current_origin_overrides = prev_origin_overrides;
         defer self.popLocalOverrideScope();
         for (join_params, 0..) |param_local, i| {
@@ -2063,20 +1817,6 @@ fn lowerDirectLambdaCall(
     }
     if (resolved.captures_local) |capture_local| {
         call_args[visible_args.len] = try self.mapMirLocal(capture_local);
-    }
-    if (self.current_lambda != null and resolved.lambda == @as(MIR.LambdaId, @enumFromInt(1))) {
-        const call_result_semantics = try self.directLambdaCallResultSemantics(resolved, visible_args);
-        std.debug.print(
-            "MirToLir call debug: caller_lambda={d} callee_lambda={d} target={d} contract={any} call_result={any} visible_args={any}\n",
-            .{
-                @intFromEnum(self.current_lambda.?),
-                @intFromEnum(resolved.lambda),
-                @intFromEnum(target),
-                self.analyses.getLambdaResultContract(resolved.lambda),
-                call_result_semantics,
-                visible_args,
-            },
-        );
     }
     return self.lir_store.addCFStmt(.{ .assign_call = .{
         .target = lowered_target,
@@ -2228,10 +1968,12 @@ fn lowerEntrypointCallableStmt(
                         target_binding.target,
                         try self.projectedBorrowResultSemantics(
                             payload.source,
-                            try self.singleProjectionSpan(.tag_payload),
+                            try self.singleProjectionSpan(.{ .tag_payload = @intCast(payload.payload_idx) }),
                         ),
                         .{ .tag_payload = .{
                             .source = try self.mapMirLocal(payload.source),
+                            .payload_idx = @intCast(payload.payload_idx),
+                            .tag_discriminant = @intCast(payload.tag_discriminant),
                         } },
                         lowered_next.body,
                     ),
@@ -2462,18 +2204,13 @@ fn lowerEntrypointCallableStmt(
             const join_param_locals = try self.allocator.alloc(LirLocalId, join_params.len);
             defer self.allocator.free(join_param_locals);
             const lowered_remainder = try self.lowerEntrypointCallableStmt(join_stmt.remainder, arg_locals, target, next);
-            var body_callable_overrides = try self.buildJoinCallableOverrideMap(join_stmt);
-            defer body_callable_overrides.deinit();
             var body_origin_overrides = try self.buildJoinOriginOverrideMap(join_stmt);
             defer body_origin_overrides.deinit();
 
             const lowered_body = blk_body: {
-                const prev_callable_overrides = self.current_callable_overrides;
                 const prev_origin_overrides = self.current_origin_overrides;
-                self.current_callable_overrides = &body_callable_overrides;
                 self.current_origin_overrides = &body_origin_overrides;
                 try self.pushLocalOverrideScope();
-                defer self.current_callable_overrides = prev_callable_overrides;
                 defer self.current_origin_overrides = prev_origin_overrides;
                 defer self.popLocalOverrideScope();
                 for (join_params, 0..) |param_local, i| {
@@ -2532,11 +2269,12 @@ fn lowerEntrypointProcBody(
     const must_call = arg_locals.len != 0 or root_mono == .func;
 
     if (!must_call) {
+        const result_contract = try self.lowerSummaryResultContract(
+            self.analyses.getConstResultContract(root_const_id),
+        );
         return .{
             .body = try self.lowerRootBody(root_const.body),
-            .result_contract = try self.lowerSummaryResultContract(
-                self.analyses.getConstResultContract(root_const_id),
-            ),
+            .result_contract = result_contract,
         };
     }
 
@@ -2546,17 +2284,14 @@ fn lowerEntrypointProcBody(
     var local_map = MirToLirLocalMap.init(self.allocator);
     defer local_map.deinit();
     const prev_local_map = self.current_local_map;
-    const prev_callable_overrides = self.current_callable_overrides;
     const prev_origin_overrides = self.current_origin_overrides;
     const prev_lambda = self.current_lambda;
     const prev_region = self.current_borrow_region;
     self.current_local_map = &local_map;
-    self.current_callable_overrides = null;
     self.current_origin_overrides = null;
     self.current_lambda = null;
     self.current_borrow_region = .proc;
     defer self.current_local_map = prev_local_map;
-    defer self.current_callable_overrides = prev_callable_overrides;
     defer self.current_origin_overrides = prev_origin_overrides;
     defer self.current_lambda = prev_lambda;
     defer self.current_borrow_region = prev_region;
@@ -2612,15 +2347,12 @@ fn lowerLambda(self: *Self, lambda_id: MIR.LambdaId) Allocator.Error!LirProcSpec
     var local_map = MirToLirLocalMap.init(self.allocator);
     defer local_map.deinit();
     const prev_local_map = self.current_local_map;
-    const prev_callable_overrides = self.current_callable_overrides;
     const prev_origin_overrides = self.current_origin_overrides;
     const prev_region = self.current_borrow_region;
     self.current_local_map = &local_map;
-    self.current_callable_overrides = null;
     self.current_origin_overrides = null;
     self.current_borrow_region = .proc;
     defer self.current_local_map = prev_local_map;
-    defer self.current_callable_overrides = prev_callable_overrides;
     defer self.current_origin_overrides = prev_origin_overrides;
     defer self.current_borrow_region = prev_region;
 
