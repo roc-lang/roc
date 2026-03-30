@@ -72,63 +72,6 @@ pub const Resolver = struct {
         return @intFromEnum(local);
     }
 
-    fn callableProjectionPathMatches(
-        self: *const Resolver,
-        binding_span: MIR.CallableProjectionSpan,
-        reversed_path: []const MIR.CallableProjection,
-    ) bool {
-        const binding = self.mir_store.getCallableProjectionSpan(binding_span);
-        if (binding.len != reversed_path.len) return false;
-
-        var i: usize = 0;
-        while (i < binding.len) : (i += 1) {
-            const binding_proj = binding[i];
-            const path_proj = reversed_path[reversed_path.len - 1 - i];
-            switch (binding_proj) {
-                .field => |binding_idx| switch (path_proj) {
-                    .field => |path_idx| if (binding_idx != path_idx) return false,
-                    else => return false,
-                },
-                .tag_payload => |binding_idx| switch (path_proj) {
-                    .tag_payload => |path_idx| if (binding_idx != path_idx) return false,
-                    else => return false,
-                },
-                .nominal => switch (path_proj) {
-                    .nominal => {},
-                    else => return false,
-                },
-            }
-        }
-
-        return true;
-    }
-
-    pub fn resolveCallableForParamProjection(
-        self: *Resolver,
-        source_param: MIR.LocalId,
-        reversed_path: []const MIR.CallableProjection,
-    ) Resolution {
-        const lambda_id = self.current_lambda orelse std.debug.panic(
-            "CallableSummary invariant violated: param-projection callable resolution escaped lambda analysis",
-            .{},
-        );
-        const lambda = self.mir_store.getLambda(lambda_id);
-
-        for (self.mir_store.getCallableBindings(lambda.callable_bindings)) |binding| {
-            if (binding.source_param != source_param) continue;
-            if (!self.callableProjectionPathMatches(binding.projections, reversed_path)) continue;
-            return .{
-                .lambda = binding.lambda,
-                .requires_hidden_capture = binding.requires_hidden_capture,
-            };
-        }
-
-        std.debug.panic(
-            "CallableSummary TODO: missing exact callable binding for parameter local {d}",
-            .{@intFromEnum(source_param)},
-        );
-    }
-
     pub fn resolveCallableFromStructValue(
         self: *Resolver,
         fields: MIR.LocalSpan,
@@ -230,8 +173,24 @@ pub const Resolver = struct {
             return resolved;
         }
 
+        if (self.mir_store.getLocal(local_id).exact_callable) |exact_callable| {
+            if (reversed_path.items.len != 0) {
+                std.debug.panic(
+                    "CallableSummary invariant violated: projected callable path escaped explicit exact-callable local {d}",
+                    .{@intFromEnum(local_id)},
+                );
+            }
+            return .{
+                .lambda = exact_callable.lambda,
+                .requires_hidden_capture = exact_callable.requires_hidden_capture,
+            };
+        }
+
         return switch (self.mir_store.getLocalDef(local_id)) {
-            .param, .captures_param => self.resolveCallableForParamProjection(local_id, reversed_path.items),
+            .param, .captures_param => std.debug.panic(
+                "CallableSummary invariant violated: function-valued param local {d} lacked explicit exact-callable metadata",
+                .{@intFromEnum(local_id)},
+            ),
             .join_param => |join_param| self.resolveCallableFromJoinParam(join_param, reversed_path.items),
             .lambda => |lambda_id| {
                 if (reversed_path.items.len != 0) {
@@ -737,35 +696,6 @@ pub fn build(
     return table;
 }
 
-fn callableProjectionPathMatches(
-    mir_store: *const MIR.Store,
-    binding_path: MIR.CallableProjectionSpan,
-    reversed_path: []const MIR.CallableProjection,
-) bool {
-    const binding_projections = mir_store.getCallableProjectionSpan(binding_path);
-    if (binding_projections.len != reversed_path.len) return false;
-
-    for (binding_projections, 0..) |binding_proj, i| {
-        const path_proj = reversed_path[reversed_path.len - 1 - i];
-        switch (binding_proj) {
-            .field => |binding_idx| switch (path_proj) {
-                .field => |path_idx| if (binding_idx != path_idx) return false,
-                else => return false,
-            },
-            .tag_payload => |binding_idx| switch (path_proj) {
-                .tag_payload => |path_idx| if (binding_idx != path_idx) return false,
-                else => return false,
-            },
-            .nominal => switch (path_proj) {
-                .nominal => {},
-                else => return false,
-            },
-        }
-    }
-
-    return true;
-}
-
 fn resolveReachableCalleeLambda(
     allocator: Allocator,
     mir_store: *const MIR.Store,
@@ -773,18 +703,19 @@ fn resolveReachableCalleeLambda(
     local_id: MIR.LocalId,
     reversed_path: *std.ArrayList(MIR.CallableProjection),
 ) Allocator.Error!?MIR.LambdaId {
+    _ = current_lambda;
+    if (mir_store.getLocal(local_id).exact_callable) |exact_callable| {
+        if (reversed_path.items.len != 0) {
+            std.debug.panic(
+                "CallableSummary invariant violated: projected reachable callable path escaped explicit exact-callable local {d}",
+                .{@intFromEnum(local_id)},
+            );
+        }
+        return exact_callable.lambda;
+    }
+
     return switch (mir_store.getLocalDef(local_id)) {
-        .param, .captures_param => blk: {
-            if (current_lambda) |lambda_id| {
-                const lambda = mir_store.getLambda(lambda_id);
-                for (mir_store.getCallableBindings(lambda.callable_bindings)) |binding| {
-                    if (binding.source_param != local_id) continue;
-                    if (!callableProjectionPathMatches(mir_store, binding.projections, reversed_path.items)) continue;
-                    break :blk binding.lambda;
-                }
-            }
-            break :blk null;
-        },
+        .param, .captures_param => null,
         .join_param => std.debug.panic(
             "CallableSummary invariant violated: reachable callable resolution must not inspect join params outside join analysis",
             .{},
@@ -968,16 +899,6 @@ fn collectReachableLambda(
 ) Allocator.Error!void {
     const gop = try reachable_lambdas.getOrPut(@intFromEnum(lambda_id));
     if (gop.found_existing) return;
-    for (mir_store.getCallableBindings(mir_store.getLambda(lambda_id).callable_bindings)) |binding| {
-        try collectReachableLambda(
-            allocator,
-            mir_store,
-            binding.lambda,
-            reachable_lambdas,
-            reachable_consts,
-            visited_stmts,
-        );
-    }
     try collectReachableFromStmt(allocator, mir_store, lambda_id, mir_store.getLambda(lambda_id).body, reachable_lambdas, reachable_consts, visited_stmts);
 }
 

@@ -3416,8 +3416,12 @@ fn lowerLocalAliasInto(
     self.store.getLocalPtr(target).monotype = self.store.getLocal(source).monotype;
     if (self.exact_callable_locals.get(@intFromEnum(source))) |lambda_id| {
         try self.exact_callable_locals.put(@intFromEnum(target), lambda_id);
+        self.store.getLocalPtr(target).exact_callable = .{
+            .lambda = lambda_id,
+            .requires_hidden_capture = self.store.getLambdaAnyState(lambda_id).captures_param != null,
+        };
     } else {
-        _ = self.exact_callable_locals.remove(@intFromEnum(target));
+        self.clearExactCallableLocal(target);
     }
     if (self.callable_source_locals.get(@intFromEnum(source))) |path| {
         try self.callable_source_locals.put(@intFromEnum(target), path);
@@ -3451,7 +3455,7 @@ fn updateCallableLocalMetadata(
     if (try self.resolveExactLambdaForLocal(target)) |lambda_id| {
         try self.bindExactLambdaLocal(target, lambda_id);
     } else {
-        _ = self.exact_callable_locals.remove(@intFromEnum(target));
+        self.clearExactCallableLocal(target);
     }
 }
 
@@ -3486,6 +3490,11 @@ fn seedCallableSourceLocal(
     });
 }
 
+fn clearExactCallableLocal(self: *Self, local_id: MIR.LocalId) void {
+    self.store.getLocalPtr(local_id).exact_callable = null;
+    _ = self.exact_callable_locals.remove(@intFromEnum(local_id));
+}
+
 fn resolveExactLambdaForLocal(self: *Self, local_id: MIR.LocalId) Allocator.Error!?MIR.LambdaId {
     if (self.callable_source_locals.get(@intFromEnum(local_id)) != null) {
         if (self.exactCallableResolutionFromCurrentCallableBindings(local_id)) |resolved| {
@@ -3502,6 +3511,13 @@ fn resolveExactCallableResolutionForLocal(
     self: *Self,
     local_id: MIR.LocalId,
 ) Allocator.Error!?ExactCallableResolution {
+    if (self.store.getLocal(local_id).exact_callable) |exact_callable| {
+        return .{
+            .lambda = exact_callable.lambda,
+            .requires_hidden_capture = exact_callable.requires_hidden_capture,
+        };
+    }
+
     if (self.callable_source_locals.get(@intFromEnum(local_id)) != null) {
         if (self.exactCallableResolutionFromCurrentCallableBindings(local_id)) |resolved| {
             return resolved;
@@ -3528,6 +3544,23 @@ fn resolveExactCallableResolutionForCapturePattern(
         capture_pattern_idx,
     ) orelse return null;
     return self.resolveExactCallableResolutionForLocal(capture_local);
+}
+
+fn seedExactCallableParamsFromCurrentBindings(
+    self: *Self,
+    param_locals: []const MIR.LocalId,
+) Allocator.Error!void {
+    for (param_locals) |param_local| {
+        if (try self.resolveExactCallableResolutionForLocal(param_local)) |resolved| {
+            try self.bindExactLambdaLocal(param_local, resolved.lambda);
+            self.store.getLocalPtr(param_local).exact_callable = .{
+                .lambda = resolved.lambda,
+                .requires_hidden_capture = resolved.requires_hidden_capture,
+            };
+        } else {
+            self.clearExactCallableLocal(param_local);
+        }
+    }
 }
 
 fn lowerConcatLocalsInto(
@@ -4735,6 +4768,7 @@ fn lowerLambdaInto(
     const saved_callable_bindings = self.current_callable_bindings;
     self.current_callable_bindings = callable_bindings.items;
     defer self.current_callable_bindings = saved_callable_bindings;
+    try self.seedExactCallableParamsFromCurrentBindings(param_locals);
 
     const result_local = try self.freshSyntheticLocal(ret_monotype, false);
     const ret_stmt = try self.store.addCFStmt(self.allocator, .{ .ret = .{ .value = result_local } });
@@ -5502,6 +5536,7 @@ fn lowerClosureLambda(
     const saved_callable_bindings = self.current_callable_bindings;
     self.current_callable_bindings = callable_bindings.items;
     defer self.current_callable_bindings = saved_callable_bindings;
+    try self.seedExactCallableParamsFromCurrentBindings(param_locals);
 
     const result_local = try self.freshSyntheticLocal(ret_monotype, false);
     const ret_stmt = try self.store.addCFStmt(self.allocator, .{ .ret = .{ .value = result_local } });
@@ -5917,6 +5952,7 @@ fn lowerReservedTrivialClosureLambda(
     const saved_callable_bindings = self.current_callable_bindings;
     self.current_callable_bindings = callable_bindings.items;
     defer self.current_callable_bindings = saved_callable_bindings;
+    try self.seedExactCallableParamsFromCurrentBindings(param_locals);
 
     const result_local = try self.freshSyntheticLocal(ret_monotype, false);
     const ret_stmt = try self.store.addCFStmt(self.allocator, .{ .ret = .{ .value = result_local } });
@@ -7257,7 +7293,12 @@ fn bindExactLambdaLocal(
     local_id: MIR.LocalId,
     lambda_id: MIR.LambdaId,
 ) Allocator.Error!void {
-    self.store.getLocalPtr(local_id).monotype = self.store.getLambdaAnyState(lambda_id).fn_monotype;
+    const lambda = self.store.getLambdaAnyState(lambda_id);
+    self.store.getLocalPtr(local_id).monotype = lambda.fn_monotype;
+    self.store.getLocalPtr(local_id).exact_callable = .{
+        .lambda = lambda_id,
+        .requires_hidden_capture = lambda.captures_param != null,
+    };
     try self.exact_callable_locals.put(@intFromEnum(local_id), lambda_id);
 }
 

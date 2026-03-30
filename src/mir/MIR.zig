@@ -98,9 +98,16 @@ pub const BorrowScopeId = enum(u32) {
 };
 
 /// One explicitly typed MIR local.
+pub const ExactCallable = struct {
+    lambda: LambdaId,
+    requires_hidden_capture: bool,
+};
+
+/// One explicitly typed MIR local.
 pub const Local = struct {
     monotype: Monotype.Idx,
     reassignable: bool = false,
+    exact_callable: ?ExactCallable = null,
 };
 
 /// One canonical definition for a MIR local.
@@ -396,7 +403,13 @@ pub const CFStmt = union(enum) {
 
 /// Flat storage for strongest-form MIR.
 pub const Store = struct {
+    const EntryState = enum {
+        reserved,
+        finalized,
+    };
+
     cf_stmts: std.ArrayListUnmanaged(CFStmt),
+    cf_stmt_states: std.ArrayListUnmanaged(EntryState),
     switch_branches: std.ArrayListUnmanaged(SwitchBranch),
     locals: std.ArrayListUnmanaged(Local),
     local_defs: std.ArrayListUnmanaged(?LocalDef),
@@ -404,6 +417,7 @@ pub const Store = struct {
     callable_projection_entries: std.ArrayListUnmanaged(CallableProjection),
     callable_bindings: std.ArrayListUnmanaged(CallableBinding),
     lambdas: std.ArrayListUnmanaged(Lambda),
+    lambda_states: std.ArrayListUnmanaged(EntryState),
     const_defs: std.ArrayListUnmanaged(ConstDef),
     monotype_store: Monotype.Store,
     const_defs_by_symbol: std.AutoHashMapUnmanaged(u64, ConstDefId),
@@ -413,6 +427,7 @@ pub const Store = struct {
     pub fn init(allocator: Allocator) Allocator.Error!Store {
         return .{
             .cf_stmts = .empty,
+            .cf_stmt_states = .empty,
             .switch_branches = .empty,
             .locals = .empty,
             .local_defs = .empty,
@@ -420,6 +435,7 @@ pub const Store = struct {
             .callable_projection_entries = .empty,
             .callable_bindings = .empty,
             .lambdas = .empty,
+            .lambda_states = .empty,
             .const_defs = .empty,
             .monotype_store = try Monotype.Store.init(allocator),
             .const_defs_by_symbol = .empty,
@@ -430,6 +446,7 @@ pub const Store = struct {
     /// Releases all storage owned by this MIR store.
     pub fn deinit(self: *Store, allocator: Allocator) void {
         self.cf_stmts.deinit(allocator);
+        self.cf_stmt_states.deinit(allocator);
         self.switch_branches.deinit(allocator);
         self.locals.deinit(allocator);
         self.local_defs.deinit(allocator);
@@ -437,6 +454,7 @@ pub const Store = struct {
         self.callable_projection_entries.deinit(allocator);
         self.callable_bindings.deinit(allocator);
         self.lambdas.deinit(allocator);
+        self.lambda_states.deinit(allocator);
         self.const_defs.deinit(allocator);
         self.monotype_store.deinit(allocator);
         self.const_defs_by_symbol.deinit(allocator);
@@ -542,23 +560,38 @@ pub const Store = struct {
         return self.callable_bindings.items[span.start..][0..span.len];
     }
 
-    /// Appends one MIR statement and returns its id.
-    pub fn addCFStmt(self: *Store, allocator: Allocator, stmt: CFStmt) Allocator.Error!CFStmtId {
+    pub fn reserveCFStmt(self: *Store, allocator: Allocator) Allocator.Error!CFStmtId {
         const idx: u32 = @intCast(self.cf_stmts.items.len);
-        try self.cf_stmts.append(allocator, stmt);
-        const id: CFStmtId = @enumFromInt(idx);
+        try self.cf_stmts.append(allocator, .{ .runtime_error = .type_error });
+        try self.cf_stmt_states.append(allocator, .reserved);
+        return @enumFromInt(idx);
+    }
+
+    pub fn finalizeCFStmt(self: *Store, id: CFStmtId, stmt: CFStmt) Allocator.Error!void {
+        const idx = @intFromEnum(id);
+        const state = &self.cf_stmt_states.items[idx];
+        if (state.* != .reserved) {
+            std.debug.panic(
+                "MIR invariant violated: finalizeCFStmt expected reserved stmt {d}, found state {s}",
+                .{ idx, @tagName(state.*) },
+            );
+        }
+        self.cf_stmts.items[idx] = stmt;
+        state.* = .finalized;
         try self.recordCFStmtLocalDefs(id, stmt);
+    }
+
+    /// Appends one finalized MIR statement and returns its id.
+    pub fn addCFStmt(self: *Store, allocator: Allocator, stmt: CFStmt) Allocator.Error!CFStmtId {
+        const id = try self.reserveCFStmt(allocator);
+        try self.finalizeCFStmt(id, stmt);
         return id;
     }
 
     /// Returns one MIR statement by id.
     pub fn getCFStmt(self: *const Store, id: CFStmtId) CFStmt {
+        self.assertCFStmtFinalized(id);
         return self.cf_stmts.items[@intFromEnum(id)];
-    }
-
-    /// Returns a mutable pointer to one MIR statement.
-    pub fn getCFStmtPtr(self: *Store, id: CFStmtId) *CFStmt {
-        return &self.cf_stmts.items[@intFromEnum(id)];
     }
 
     /// Stores switch branches and returns their span.
@@ -575,28 +608,68 @@ pub const Store = struct {
         return self.switch_branches.items[span.start..][0..span.len];
     }
 
-    /// Registers one MIR lambda and returns its id.
-    pub fn addLambda(self: *Store, allocator: Allocator, lambda: Lambda) Allocator.Error!LambdaId {
+    pub fn reserveLambda(self: *Store, allocator: Allocator) Allocator.Error!LambdaId {
         const idx: u32 = @intCast(self.lambdas.items.len);
-        try self.lambdas.append(allocator, lambda);
-        const id: LambdaId = @enumFromInt(idx);
+        try self.lambdas.append(allocator, .{
+            .fn_monotype = .none,
+            .params = .empty(),
+            .body = @enumFromInt(0),
+            .ret_monotype = .none,
+            .debug_name = .none,
+            .source_region = .zero(),
+            .captures_param = null,
+            .callable_bindings = .empty(),
+            .recursion = .not_recursive,
+            .hosted = null,
+        });
+        try self.lambda_states.append(allocator, .reserved);
+        return @enumFromInt(idx);
+    }
+
+    pub fn finalizeLambda(self: *Store, id: LambdaId, lambda: Lambda) Allocator.Error!void {
+        const idx = @intFromEnum(id);
+        const state = &self.lambda_states.items[idx];
+        if (state.* != .reserved) {
+            std.debug.panic(
+                "MIR invariant violated: finalizeLambda expected reserved lambda {d}, found state {s}",
+                .{ idx, @tagName(state.*) },
+            );
+        }
+        self.lambdas.items[idx] = lambda;
+        state.* = .finalized;
         try self.recordLambdaLocalDefs(id, lambda);
+    }
+
+    /// Registers one finalized MIR lambda and returns its id.
+    pub fn addLambda(self: *Store, allocator: Allocator, lambda: Lambda) Allocator.Error!LambdaId {
+        const id = try self.reserveLambda(allocator);
+        try self.finalizeLambda(id, lambda);
         return id;
     }
 
     /// Returns one MIR lambda by id.
     pub fn getLambda(self: *const Store, id: LambdaId) Lambda {
+        self.assertLambdaFinalized(id);
         return self.lambdas.items[@intFromEnum(id)];
     }
 
-    /// Returns a mutable pointer to one MIR lambda.
-    pub fn getLambdaPtr(self: *Store, id: LambdaId) *Lambda {
-        return &self.lambdas.items[@intFromEnum(id)];
+    /// Returns one MIR lambda by id regardless of whether it is still reserved.
+    /// Lowering uses this for reserved callable prototypes before body finalization.
+    pub fn getLambdaAnyState(self: *const Store, id: LambdaId) Lambda {
+        return self.lambdas.items[@intFromEnum(id)];
     }
 
-    /// Overwrites one existing MIR lambda and records its parameter definitions.
-    pub fn setLambda(self: *Store, id: LambdaId, lambda: Lambda) Allocator.Error!void {
-        self.lambdas.items[@intFromEnum(id)] = lambda;
+    /// Installs a reserved lambda prototype before final body/callable-bindings finalization.
+    pub fn installReservedLambdaPrototype(self: *Store, id: LambdaId, lambda: Lambda) Allocator.Error!void {
+        const idx = @intFromEnum(id);
+        const state = self.lambda_states.items[idx];
+        if (state != .reserved) {
+            std.debug.panic(
+                "MIR invariant violated: installReservedLambdaPrototype expected reserved lambda {d}, found state {s}",
+                .{ idx, @tagName(state) },
+            );
+        }
+        self.lambdas.items[idx] = lambda;
         try self.recordLambdaLocalDefs(id, lambda);
     }
 
@@ -646,6 +719,7 @@ pub const Store = struct {
     fn recordLocalDef(self: *Store, local: LocalId, def: LocalDef) Allocator.Error!void {
         const slot = &self.local_defs.items[@intFromEnum(local)];
         if (slot.* != null) {
+            if (std.meta.eql(slot.*.?, def)) return;
             std.debug.panic(
                 "MIR local {d} received multiple recorded definitions; existing={s} new={s}",
                 .{
@@ -656,6 +730,26 @@ pub const Store = struct {
             );
         }
         slot.* = def;
+    }
+
+    fn assertCFStmtFinalized(self: *const Store, id: CFStmtId) void {
+        const state = self.cf_stmt_states.items[@intFromEnum(id)];
+        if (state != .finalized) {
+            std.debug.panic(
+                "MIR invariant violated: accessed reserved CF stmt {d}",
+                .{@intFromEnum(id)},
+            );
+        }
+    }
+
+    fn assertLambdaFinalized(self: *const Store, id: LambdaId) void {
+        const state = self.lambda_states.items[@intFromEnum(id)];
+        if (state != .finalized) {
+            std.debug.panic(
+                "MIR invariant violated: accessed reserved lambda {d}",
+                .{@intFromEnum(id)},
+            );
+        }
     }
 
     fn recordCFStmtLocalDefs(self: *Store, stmt_id: CFStmtId, stmt: CFStmt) Allocator.Error!void {
