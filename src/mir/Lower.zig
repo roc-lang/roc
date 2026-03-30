@@ -69,6 +69,46 @@ const ClosureLowerPlan = struct {
     }
 };
 
+const ImplicitLambdaCapture = struct {
+    pattern_idx: CIR.Pattern.Idx,
+    local: MIR.LocalId,
+    monotype: Monotype.Idx,
+    exact_callable_inst_id: ?Monomorphize.CallableInstId,
+    exact_lambda_id: ?MIR.LambdaId,
+    requires_hidden_capture: bool,
+};
+
+const ExactCallableResolution = struct {
+    lambda: MIR.LambdaId,
+    requires_hidden_capture: bool,
+};
+
+const ImplicitLambdaCaptureState = struct {
+    items: std.ArrayList(ImplicitLambdaCapture),
+    by_pattern: std.AutoHashMap(CIR.Pattern.Idx, usize),
+
+    fn init(allocator: Allocator) ImplicitLambdaCaptureState {
+        return .{
+            .items = std.ArrayList(ImplicitLambdaCapture).empty,
+            .by_pattern = std.AutoHashMap(CIR.Pattern.Idx, usize).init(allocator),
+        };
+    }
+
+    fn deinit(self: *ImplicitLambdaCaptureState, allocator: Allocator) void {
+        self.items.deinit(allocator);
+        self.by_pattern.deinit();
+    }
+};
+
+const RuntimeCapturePatternSpan = extern struct {
+    start: u32,
+    len: u16,
+
+    fn empty() RuntimeCapturePatternSpan {
+        return .{ .start = 0, .len = 0 };
+    }
+};
+
 const CaptureMaterialization = union(enum) {
     exact_callable: struct {
         local: MIR.LocalId,
@@ -93,12 +133,21 @@ const LocalCallablePath = struct {
 
 const LoopContext = struct {
     exit_id: MIR.JoinPointId,
-    carried_locals: MIR.LocalSpan,
 };
 
 const RequiredLookupTarget = struct {
     module_idx: u32,
     def_idx: CIR.Def.Idx,
+};
+
+const VisiblePatternBinding = struct {
+    pattern_idx: CIR.Pattern.Idx,
+    local: MIR.LocalId,
+};
+
+const BlockStmtScopeInfo = struct {
+    before: u64,
+    after: u64,
 };
 
 // --- Fields ---
@@ -151,8 +200,9 @@ nominal_cycle_breakers: std.AutoHashMap(types.Var, Monotype.Idx),
 /// context-sensitive, but the lowered lambda body is unique per callable inst.
 lowered_callable_insts: std.AutoHashMap(u32, MIR.LambdaId),
 
-/// Cache for direct statement-lowered lambda expressions keyed by lowering context.
-lowered_callable_lambdas: std.AutoHashMap(u128, MIR.LambdaId),
+/// Cache for direct statement-lowered lambda expressions keyed by the full
+/// lowering context that can affect the emitted callable body.
+lowered_callable_lambdas: std.AutoHashMap(CallableCacheKey, MIR.LambdaId),
 
 /// Recursion guard for named top-level constants lowered on demand.
 in_progress_const_defs: std.AutoHashMap(u64, void),
@@ -167,6 +217,9 @@ next_synthetic_ident: u29,
 /// Counter for assigning unique local-pattern scopes to statement-lowered lambdas.
 next_statement_pattern_scope: u64,
 
+/// Parent scope links for lexically nested statement-lowered lambdas.
+pattern_scope_parents: std.AutoHashMap(u64, u64),
+
 /// Counter for assigning unique explicit join-point ids in strongest-form MIR.
 next_join_point_id: u32,
 
@@ -179,6 +232,11 @@ in_progress_callable_insts: std.AutoHashMap(u32, MIR.LambdaId),
 /// Reserved callable skeletons for recursive callable-inst groups whose bodies are not
 /// fully lowered yet but already need stable lambda ids.
 reserved_callable_insts: std.AutoHashMap(u32, MIR.LambdaId),
+
+/// Runtime capture patterns for lambda-template callable insts whose closure payload is
+/// synthesized from implicit captures rather than an explicit CIR `e_closure`.
+lowered_callable_runtime_captures: std.AutoHashMap(u32, RuntimeCapturePatternSpan),
+runtime_capture_patterns: std.ArrayListUnmanaged(CIR.Pattern.Idx),
 
 /// Memoized answer for whether a callable inst lowers to a runtime closure value.
 callable_inst_produces_closure_value: std.AutoHashMap(u32, bool),
@@ -204,6 +262,9 @@ callable_source_locals: std.AutoHashMap(u32, LocalCallablePath),
 
 /// Callable bindings currently in scope while lowering one lambda body.
 current_callable_bindings: ?[]const MIR.CallableBinding,
+
+/// Demand-driven implicit captures for callable-inst lambda bodies.
+current_implicit_lambda_captures: ?*ImplicitLambdaCaptureState,
 
 /// Pre-resolved static dispatch targets keyed by (module_idx, expr_idx).
 /// Filled from type-checker constraints so MIR lowering uses authoritative
@@ -261,15 +322,18 @@ pub fn init(
         .type_var_seen = std.AutoHashMap(types.Var, Monotype.Idx).init(allocator),
         .nominal_cycle_breakers = std.AutoHashMap(types.Var, Monotype.Idx).init(allocator),
         .lowered_callable_insts = std.AutoHashMap(u32, MIR.LambdaId).init(allocator),
-        .lowered_callable_lambdas = std.AutoHashMap(u128, MIR.LambdaId).init(allocator),
+        .lowered_callable_lambdas = std.AutoHashMap(CallableCacheKey, MIR.LambdaId).init(allocator),
         .in_progress_const_defs = std.AutoHashMap(u64, void).init(allocator),
         .symbol_metadata = std.AutoHashMap(u64, SymbolMetadata).init(allocator),
         .next_synthetic_ident = Ident.Idx.NONE.idx - 1,
         .next_statement_pattern_scope = 1,
+        .pattern_scope_parents = std.AutoHashMap(u64, u64).init(allocator),
         .next_join_point_id = 0,
         .current_body_local_floor = 0,
         .in_progress_callable_insts = std.AutoHashMap(u32, MIR.LambdaId).init(allocator),
         .reserved_callable_insts = std.AutoHashMap(u32, MIR.LambdaId).init(allocator),
+        .lowered_callable_runtime_captures = std.AutoHashMap(u32, RuntimeCapturePatternSpan).init(allocator),
+        .runtime_capture_patterns = .empty,
         .callable_inst_produces_closure_value = std.AutoHashMap(u32, bool).init(allocator),
         .in_progress_closure_value_callables = std.AutoHashMap(u32, void).init(allocator),
         .skipped_callable_backed_binding_patterns = std.AutoHashMap(u64, void).init(allocator),
@@ -278,6 +342,7 @@ pub fn init(
         .exact_callable_locals = std.AutoHashMap(u32, MIR.LambdaId).init(allocator),
         .callable_source_locals = std.AutoHashMap(u32, LocalCallablePath).init(allocator),
         .current_callable_bindings = null,
+        .current_implicit_lambda_captures = null,
         .resolved_dispatch_targets = resolved_dispatch_targets,
         .scratch_local_ids = try base.Scratch(MIR.LocalId).init(allocator),
         .scratch_ident_idxs = try base.Scratch(Ident.Idx).init(allocator),
@@ -303,8 +368,11 @@ pub fn deinit(self: *Self) void {
     self.lowered_callable_lambdas.deinit();
     self.in_progress_const_defs.deinit();
     self.symbol_metadata.deinit();
+    self.pattern_scope_parents.deinit();
     self.in_progress_callable_insts.deinit();
     self.reserved_callable_insts.deinit();
+    self.lowered_callable_runtime_captures.deinit();
+    self.runtime_capture_patterns.deinit(self.allocator);
     self.callable_inst_produces_closure_value.deinit();
     self.in_progress_closure_value_callables.deinit();
     self.skipped_callable_backed_binding_patterns.deinit();
@@ -349,13 +417,6 @@ fn packLocalSymbolId(module_idx: u32, ident_idx: Ident.Idx) u64 {
 fn packExternalDefSymbolId(module_idx: u32, def_node_idx: u16) u64 {
     if (builtin.mode == .Debug) std.debug.assert(module_idx <= std.math.maxInt(u31));
     return (symbol_namespace_external_def << 63) | (@as(u64, module_idx) << 32) | @as(u64, def_node_idx);
-}
-
-fn symbolMetadataModuleIdx(meta: SymbolMetadata) u32 {
-    return switch (meta) {
-        .local_ident => |m| m.module_idx,
-        .external_def => |m| m.module_idx,
-    };
 }
 
 fn moduleOwnsIdent(env: *const ModuleEnv, ident: Ident.Idx) bool {
@@ -535,9 +596,6 @@ fn monotypeFromTypeVarWithBindings(
     var_: types.Var,
     bindings: *std.AutoHashMap(types.Var, Monotype.Idx),
 ) Allocator.Error!Monotype.Idx {
-    var nominal_cycle_breakers = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
-    defer nominal_cycle_breakers.deinit();
-
     const saved_bindings = self.type_var_seen;
     const saved_breakers = self.nominal_cycle_breakers;
     const saved_ident_store = self.mono_scratches.ident_store;
@@ -545,7 +603,7 @@ fn monotypeFromTypeVarWithBindings(
     const saved_module_idx = self.mono_scratches.module_idx;
     const saved_all_module_envs = self.mono_scratches.all_module_envs;
     self.type_var_seen = bindings.*;
-    self.nominal_cycle_breakers = nominal_cycle_breakers;
+    self.nominal_cycle_breakers = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
     self.mono_scratches.ident_store = self.all_module_envs[module_idx].getIdentStoreConst();
     self.mono_scratches.module_env = self.all_module_envs[module_idx];
     self.mono_scratches.module_idx = module_idx;
@@ -553,6 +611,7 @@ fn monotypeFromTypeVarWithBindings(
     defer {
         bindings.* = self.type_var_seen;
         self.type_var_seen = saved_bindings;
+        self.nominal_cycle_breakers.deinit();
         self.nominal_cycle_breakers = saved_breakers;
         self.mono_scratches.ident_store = saved_ident_store;
         self.mono_scratches.module_env = saved_module_env;
@@ -830,38 +889,30 @@ fn bindTagUnionRowTail(
     try self.bindTypeVarMonotypes(ext_var, tail_mono);
 }
 
-fn packCallableCacheKey(
-    self: *const Self,
-    expr_idx: CIR.Expr.Idx,
-    fn_monotype: Monotype.Idx,
-) u128 {
-    const context_bits: u32 = @intFromEnum(self.current_callable_inst_context);
-    const module_bits: u32 = self.current_module_idx;
-    const expr_bits: u32 = @intFromEnum(expr_idx);
-    const mono_bits: u32 = @intFromEnum(fn_monotype);
-    return (@as(u128, context_bits) << 96) |
-        (@as(u128, module_bits) << 64) |
-        (@as(u128, expr_bits) << 32) |
-        @as(u128, mono_bits);
-}
-
-const CallableCacheKeyParts = struct {
+const CallableCacheKey = struct {
     context_callable_inst: Monomorphize.CallableInstId,
+    root_source_expr_context: u32,
     module_idx: u32,
     expr_idx: CIR.Expr.Idx,
     fn_monotype: Monotype.Idx,
+    parent_pattern_scope: u64,
 };
 
-fn unpackCallableCacheKey(key: u128) CallableCacheKeyParts {
-    const context_bits: u32 = @truncate(key >> 96);
-    const module_bits: u32 = @truncate(key >> 64);
-    const expr_bits: u32 = @truncate(key >> 32);
-    const mono_bits: u32 = @truncate(key);
+fn makeCallableCacheKey(
+    self: *const Self,
+    expr_idx: CIR.Expr.Idx,
+    fn_monotype: Monotype.Idx,
+) CallableCacheKey {
     return .{
-        .context_callable_inst = @enumFromInt(context_bits),
-        .module_idx = module_bits,
-        .expr_idx = @enumFromInt(expr_bits),
-        .fn_monotype = @enumFromInt(mono_bits),
+        .context_callable_inst = self.current_callable_inst_context,
+        .root_source_expr_context = if (self.current_root_source_expr_context) |root_expr|
+            @intFromEnum(root_expr)
+        else
+            std.math.maxInt(u32),
+        .module_idx = self.current_module_idx,
+        .expr_idx = expr_idx,
+        .fn_monotype = fn_monotype,
+        .parent_pattern_scope = self.current_pattern_scope,
     };
 }
 
@@ -870,26 +921,14 @@ fn lookupLoweredCallableLambdaCache(
     expr_idx: CIR.Expr.Idx,
     fn_monotype: Monotype.Idx,
 ) Allocator.Error!?MIR.LambdaId {
-    const exact_key = self.packCallableCacheKey(expr_idx, fn_monotype);
-    if (self.lowered_callable_lambdas.get(exact_key)) |cached| return cached;
-
-    var it = self.lowered_callable_lambdas.iterator();
-    while (it.next()) |entry| {
-        const parts = unpackCallableCacheKey(entry.key_ptr.*);
-        if (parts.context_callable_inst != self.current_callable_inst_context) continue;
-        if (parts.module_idx != self.current_module_idx) continue;
-        if (parts.expr_idx != expr_idx) continue;
-        if (!(try self.monotypesStructurallyEqual(parts.fn_monotype, fn_monotype))) continue;
-        return entry.value_ptr.*;
-    }
-
-    return null;
+    return self.lowered_callable_lambdas.get(makeCallableCacheKey(self, expr_idx, fn_monotype));
 }
 
 fn lookupMonomorphizedExprMonotype(self: *const Self, expr_idx: CIR.Expr.Idx) ?Monomorphize.ResolvedMonotype {
+    const rooted_context = self.monomorphizationRootSourceExprContext(self.current_callable_inst_context);
     const rooted = self.monomorphization.getExprMonotype(
         self.current_callable_inst_context,
-        self.monomorphizationRootSourceExprContext(self.current_callable_inst_context),
+        rooted_context,
         self.current_module_idx,
         expr_idx,
     );
@@ -1005,6 +1044,59 @@ fn selectCallableInstForFnMonotype(
     return resolved;
 }
 
+fn selectCallableInstForFnMonotypeAndTemplate(
+    self: *Self,
+    callable_inst_ids: []const Monomorphize.CallableInstId,
+    fn_monotype: Monotype.Idx,
+    fn_monotype_module_idx: u32,
+    preferred_template: Monomorphize.CallableTemplateId,
+) Allocator.Error!?Monomorphize.CallableInstId {
+    if (preferred_template.isNone()) return null;
+
+    var resolved: ?Monomorphize.CallableInstId = null;
+    for (callable_inst_ids) |callable_inst_id| {
+        const callable_inst = self.monomorphization.getCallableInst(callable_inst_id);
+        if (callable_inst.template != preferred_template) continue;
+        if (!try self.callableInstMatchesFnMonotype(callable_inst_id, fn_monotype, fn_monotype_module_idx)) continue;
+        if (resolved) |existing| {
+            if (existing != callable_inst_id) return null;
+        } else {
+            resolved = callable_inst_id;
+        }
+    }
+
+    return resolved;
+}
+
+fn preferredCallableTemplateForValueExpr(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+) ?Monomorphize.CallableTemplateId {
+    const module_env = self.all_module_envs[self.current_module_idx];
+    return switch (module_env.store.getExpr(expr_idx)) {
+        .e_lambda, .e_closure, .e_hosted_lambda => self.monomorphization.getExprCallableTemplate(
+            self.current_module_idx,
+            expr_idx,
+        ),
+        .e_lookup_local => |lookup| self.monomorphization.getLocalCallableTemplate(
+            self.current_module_idx,
+            lookup.pattern_idx,
+        ),
+        .e_lookup_external => |lookup| blk: {
+            const target_module_idx = self.resolveImportedModuleIdx(module_env, lookup.module_idx) orelse break :blk null;
+            break :blk self.monomorphization.getExternalCallableTemplate(target_module_idx, lookup.target_node_idx);
+        },
+        .e_lookup_required => |lookup| blk: {
+            const target = self.resolveRequiredLookupTarget(module_env, lookup) orelse break :blk null;
+            break :blk self.monomorphization.getExternalCallableTemplate(
+                target.module_idx,
+                @intCast(@intFromEnum(target.def_idx)),
+            );
+        },
+        else => null,
+    };
+}
+
 fn lookupMonomorphizedValueExprCallableInstForMonotype(
     self: *Self,
     expr_idx: CIR.Expr.Idx,
@@ -1012,12 +1104,27 @@ fn lookupMonomorphizedValueExprCallableInstForMonotype(
     fn_monotype_module_idx: u32,
 ) Allocator.Error!?Monomorphize.CallableInstId {
     if (self.lookupMonomorphizedValueExprCallableInsts(expr_idx)) |callable_inst_ids| {
+        if (self.preferredCallableTemplateForValueExpr(expr_idx)) |preferred_template| {
+            if (try self.selectCallableInstForFnMonotypeAndTemplate(
+                callable_inst_ids,
+                fn_monotype,
+                fn_monotype_module_idx,
+                preferred_template,
+            )) |callable_inst_id| {
+                return callable_inst_id;
+            }
+        }
         if (try self.selectCallableInstForFnMonotype(callable_inst_ids, fn_monotype, fn_monotype_module_idx)) |callable_inst_id| {
             return callable_inst_id;
         }
     }
 
     if (self.lookupMonomorphizedValueExprCallableInst(expr_idx)) |callable_inst_id| {
+        if (self.preferredCallableTemplateForValueExpr(expr_idx)) |preferred_template| {
+            if (self.monomorphization.getCallableInst(callable_inst_id).template != preferred_template) {
+                return null;
+            }
+        }
         if (try self.callableInstMatchesFnMonotype(callable_inst_id, fn_monotype, fn_monotype_module_idx)) {
             return callable_inst_id;
         }
@@ -1068,70 +1175,6 @@ fn lookupMonomorphizedValueExprCallableInstForMonotypeInModule(
     );
 }
 
-fn lookupMonomorphizedValueExprCallableInstInModule(
-    self: *Self,
-    module_idx: u32,
-    expr_idx: CIR.Expr.Idx,
-) ?Monomorphize.CallableInstId {
-    if (module_idx == self.current_module_idx) {
-        return self.lookupMonomorphizedValueExprCallableInst(expr_idx);
-    }
-
-    const module_env = self.all_module_envs[module_idx];
-    const saved_module_idx = self.current_module_idx;
-    const saved_types_store = self.types_store;
-    const saved_ident_store = self.mono_scratches.ident_store;
-    const saved_module_env = self.mono_scratches.module_env;
-    const saved_mono_module_idx = self.mono_scratches.module_idx;
-
-    self.current_module_idx = module_idx;
-    self.types_store = &module_env.types;
-    self.mono_scratches.ident_store = module_env.getIdentStoreConst();
-    self.mono_scratches.module_env = module_env;
-    self.mono_scratches.module_idx = module_idx;
-    defer {
-        self.current_module_idx = saved_module_idx;
-        self.types_store = saved_types_store;
-        self.mono_scratches.ident_store = saved_ident_store;
-        self.mono_scratches.module_env = saved_module_env;
-        self.mono_scratches.module_idx = saved_mono_module_idx;
-    }
-
-    return self.lookupMonomorphizedValueExprCallableInst(expr_idx);
-}
-
-fn lookupMonomorphizedValueExprCallableInstsInModule(
-    self: *Self,
-    module_idx: u32,
-    expr_idx: CIR.Expr.Idx,
-) ?[]const Monomorphize.CallableInstId {
-    if (module_idx == self.current_module_idx) {
-        return self.lookupMonomorphizedValueExprCallableInsts(expr_idx);
-    }
-
-    const module_env = self.all_module_envs[module_idx];
-    const saved_module_idx = self.current_module_idx;
-    const saved_types_store = self.types_store;
-    const saved_ident_store = self.mono_scratches.ident_store;
-    const saved_module_env = self.mono_scratches.module_env;
-    const saved_mono_module_idx = self.mono_scratches.module_idx;
-
-    self.current_module_idx = module_idx;
-    self.types_store = &module_env.types;
-    self.mono_scratches.ident_store = module_env.getIdentStoreConst();
-    self.mono_scratches.module_env = module_env;
-    self.mono_scratches.module_idx = module_idx;
-    defer {
-        self.current_module_idx = saved_module_idx;
-        self.types_store = saved_types_store;
-        self.mono_scratches.ident_store = saved_ident_store;
-        self.mono_scratches.module_env = saved_module_env;
-        self.mono_scratches.module_idx = saved_mono_module_idx;
-    }
-
-    return self.lookupMonomorphizedValueExprCallableInsts(expr_idx);
-}
-
 fn callableInstSlicesEqualAsSet(
     lhs: []const Monomorphize.CallableInstId,
     rhs: []const Monomorphize.CallableInstId,
@@ -1177,9 +1220,194 @@ fn callableParamProjectionSeqEqual(
     return true;
 }
 
+const CallableExprVisitKey = struct {
+    context_callable_inst_raw: u32,
+    module_idx: u32,
+    expr_raw: u32,
+};
+
+const CallableExprSource = struct {
+    context_callable_inst: Monomorphize.CallableInstId,
+    module_idx: u32,
+    expr_idx: CIR.Expr.Idx,
+};
+
+fn lookupMonomorphizedExprCallableInstInContext(
+    self: *const Self,
+    context_callable_inst: Monomorphize.CallableInstId,
+    module_idx: u32,
+    expr_idx: CIR.Expr.Idx,
+) ?Monomorphize.CallableInstId {
+    const rooted = self.monomorphization.getExprCallableInst(
+        context_callable_inst,
+        self.monomorphizationRootSourceExprContext(context_callable_inst),
+        module_idx,
+        expr_idx,
+    );
+    if (rooted != null) return rooted;
+
+    if (context_callable_inst.isNone()) {
+        return self.monomorphization.getExprCallableInst(.none, null, module_idx, expr_idx);
+    }
+
+    return null;
+}
+
+fn lookupMonomorphizedExprCallableInstsInContext(
+    self: *const Self,
+    context_callable_inst: Monomorphize.CallableInstId,
+    module_idx: u32,
+    expr_idx: CIR.Expr.Idx,
+) ?[]const Monomorphize.CallableInstId {
+    const rooted = self.monomorphization.getExprCallableInsts(
+        context_callable_inst,
+        self.monomorphizationRootSourceExprContext(context_callable_inst),
+        module_idx,
+        expr_idx,
+    );
+    if (rooted != null) return rooted;
+
+    if (context_callable_inst.isNone()) {
+        return self.monomorphization.getExprCallableInsts(.none, null, module_idx, expr_idx);
+    }
+
+    return null;
+}
+
+fn lookupMonomorphizedLookupCallableInstInContext(
+    self: *const Self,
+    context_callable_inst: Monomorphize.CallableInstId,
+    module_idx: u32,
+    expr_idx: CIR.Expr.Idx,
+) ?Monomorphize.CallableInstId {
+    const rooted = self.monomorphization.getLookupExprCallableInst(
+        context_callable_inst,
+        self.monomorphizationRootSourceExprContext(context_callable_inst),
+        module_idx,
+        expr_idx,
+    );
+    if (rooted != null) return rooted;
+
+    if (context_callable_inst.isNone()) {
+        return self.monomorphization.getLookupExprCallableInst(.none, null, module_idx, expr_idx);
+    }
+
+    return null;
+}
+
+fn lookupMonomorphizedLookupCallableInstsInContext(
+    self: *const Self,
+    context_callable_inst: Monomorphize.CallableInstId,
+    module_idx: u32,
+    expr_idx: CIR.Expr.Idx,
+) ?[]const Monomorphize.CallableInstId {
+    const rooted = self.monomorphization.getLookupExprCallableInsts(
+        context_callable_inst,
+        self.monomorphizationRootSourceExprContext(context_callable_inst),
+        module_idx,
+        expr_idx,
+    );
+    if (rooted != null) return rooted;
+
+    if (context_callable_inst.isNone()) {
+        return self.monomorphization.getLookupExprCallableInsts(.none, null, module_idx, expr_idx);
+    }
+
+    return null;
+}
+
+fn lookupMonomorphizedValueExprCallableInstInContext(
+    self: *const Self,
+    context_callable_inst: Monomorphize.CallableInstId,
+    module_idx: u32,
+    expr_idx: CIR.Expr.Idx,
+) ?Monomorphize.CallableInstId {
+    if (lookupMonomorphizedExprCallableInstInContext(self, context_callable_inst, module_idx, expr_idx)) |callable_inst_id| {
+        return callable_inst_id;
+    }
+    return lookupMonomorphizedLookupCallableInstInContext(self, context_callable_inst, module_idx, expr_idx);
+}
+
+fn lookupMonomorphizedValueExprCallableInstsInContext(
+    self: *const Self,
+    context_callable_inst: Monomorphize.CallableInstId,
+    module_idx: u32,
+    expr_idx: CIR.Expr.Idx,
+) ?[]const Monomorphize.CallableInstId {
+    const module_env = self.all_module_envs[module_idx];
+    switch (module_env.store.getExpr(expr_idx)) {
+        .e_lookup_local => |lookup| {
+            const rooted = self.monomorphization.getContextPatternCallableInsts(
+                context_callable_inst,
+                module_idx,
+                lookup.pattern_idx,
+            );
+            if (rooted != null) return rooted;
+
+            if (context_callable_inst.isNone()) {
+                return self.monomorphization.getContextPatternCallableInsts(
+                    .none,
+                    module_idx,
+                    lookup.pattern_idx,
+                );
+            }
+        },
+        else => {},
+    }
+
+    if (lookupMonomorphizedExprCallableInstsInContext(self, context_callable_inst, module_idx, expr_idx)) |callable_inst_ids| {
+        return callable_inst_ids;
+    }
+
+    return lookupMonomorphizedLookupCallableInstsInContext(self, context_callable_inst, module_idx, expr_idx);
+}
+
+fn lookupMonomorphizedCallSiteCallableInstInContext(
+    self: *const Self,
+    context_callable_inst: Monomorphize.CallableInstId,
+    module_idx: u32,
+    expr_idx: CIR.Expr.Idx,
+) ?Monomorphize.CallableInstId {
+    const rooted = self.monomorphization.getCallSiteCallableInst(
+        context_callable_inst,
+        self.monomorphizationRootSourceExprContext(context_callable_inst),
+        module_idx,
+        expr_idx,
+    );
+    if (rooted != null) return rooted;
+
+    if (context_callable_inst.isNone()) {
+        return self.monomorphization.getCallSiteCallableInst(.none, null, module_idx, expr_idx);
+    }
+
+    return null;
+}
+
+fn lookupMonomorphizedCallSiteCallableInstsInContext(
+    self: *const Self,
+    context_callable_inst: Monomorphize.CallableInstId,
+    module_idx: u32,
+    expr_idx: CIR.Expr.Idx,
+) ?[]const Monomorphize.CallableInstId {
+    const rooted = self.monomorphization.getCallSiteCallableInsts(
+        context_callable_inst,
+        self.monomorphizationRootSourceExprContext(context_callable_inst),
+        module_idx,
+        expr_idx,
+    );
+    if (rooted != null) return rooted;
+
+    if (context_callable_inst.isNone()) {
+        return self.monomorphization.getCallSiteCallableInsts(.none, null, module_idx, expr_idx);
+    }
+
+    return null;
+}
+
 fn callableInstSetMatchesExpr(
     self: *Self,
     expected_set_id: Monomorphize.CallableInstSetId,
+    context_callable_inst: Monomorphize.CallableInstId,
     module_idx: u32,
     expr_idx: CIR.Expr.Idx,
 ) bool {
@@ -1187,44 +1415,105 @@ fn callableInstSetMatchesExpr(
         self.monomorphization.getCallableInstSet(expected_set_id).members,
     );
 
-    if (self.lookupMonomorphizedValueExprCallableInstsInModule(module_idx, expr_idx)) |actual_members| {
+    if (lookupMonomorphizedValueExprCallableInstsInContext(
+        self,
+        context_callable_inst,
+        module_idx,
+        expr_idx,
+    )) |actual_members| {
         return callableInstSlicesEqualAsSet(expected_members, actual_members);
     }
 
-    if (self.lookupMonomorphizedValueExprCallableInstInModule(module_idx, expr_idx)) |actual_member| {
+    if (lookupMonomorphizedValueExprCallableInstInContext(
+        self,
+        context_callable_inst,
+        module_idx,
+        expr_idx,
+    )) |actual_member| {
         return expected_members.len == 1 and expected_members[0] == actual_member;
     }
 
     return false;
 }
 
-fn resolveRecordFieldSourceExpr(
+fn callableBoundaryBodyExpr(
+    self: *const Self,
+    module_idx: u32,
+    callable_expr_idx: CIR.Expr.Idx,
+) ?CIR.Expr.Idx {
+    const module_env = self.all_module_envs[module_idx];
+    return switch (module_env.store.getExpr(callable_expr_idx)) {
+        .e_lambda => |lambda_expr| lambda_expr.body,
+        .e_closure => |closure_expr| blk: {
+            const lambda_expr = module_env.store.getExpr(closure_expr.lambda_idx);
+            if (lambda_expr != .e_lambda) break :blk null;
+            break :blk lambda_expr.e_lambda.body;
+        },
+        .e_hosted_lambda => |hosted_expr| hosted_expr.body,
+        else => null,
+    };
+}
+
+fn resolveRecordFieldSourceExprInContext(
     self: *Self,
+    context_callable_inst: Monomorphize.CallableInstId,
     module_idx: u32,
     expr_idx: CIR.Expr.Idx,
     field_name: Monotype.Name,
-) ?struct { module_idx: u32, expr_idx: CIR.Expr.Idx } {
+    visiting: *std.AutoHashMapUnmanaged(CallableExprVisitKey, void),
+) ?CallableExprSource {
+    const visit_key = CallableExprVisitKey{
+        .context_callable_inst_raw = @intFromEnum(context_callable_inst),
+        .module_idx = module_idx,
+        .expr_raw = @intFromEnum(expr_idx),
+    };
+    if (visiting.contains(visit_key)) return null;
+    visiting.put(self.allocator, visit_key, {}) catch return null;
+    defer _ = visiting.remove(visit_key);
+
     const module_env = self.all_module_envs[module_idx];
     return switch (module_env.store.getExpr(expr_idx)) {
         .e_record => |record| blk: {
             for (module_env.store.sliceRecordFields(record.fields)) |field_idx| {
                 const field = module_env.store.getRecordField(field_idx);
                 if (!self.identsStructurallyEqual(field.name, field_name)) continue;
-                break :blk .{ .module_idx = module_idx, .expr_idx = field.value };
+                break :blk .{
+                    .context_callable_inst = context_callable_inst,
+                    .module_idx = module_idx,
+                    .expr_idx = field.value,
+                };
             }
 
             if (record.ext) |ext_expr| {
-                break :blk self.resolveRecordFieldSourceExpr(module_idx, ext_expr, field_name);
+                break :blk self.resolveRecordFieldSourceExprInContext(
+                    context_callable_inst,
+                    module_idx,
+                    ext_expr,
+                    field_name,
+                    visiting,
+                );
             }
 
             break :blk null;
         },
         .e_lookup_local => |lookup| blk: {
             if (self.monomorphization.getPatternSourceExpr(module_idx, lookup.pattern_idx)) |source| {
-                break :blk self.resolveRecordFieldSourceExpr(source.module_idx, source.expr_idx, field_name);
+                break :blk self.resolveRecordFieldSourceExprInContext(
+                    context_callable_inst,
+                    source.module_idx,
+                    source.expr_idx,
+                    field_name,
+                    visiting,
+                );
             }
             if (findDefByPattern(module_env, lookup.pattern_idx)) |def_idx| {
-                break :blk self.resolveRecordFieldSourceExpr(module_idx, module_env.store.getDef(def_idx).expr, field_name);
+                break :blk self.resolveRecordFieldSourceExprInContext(
+                    context_callable_inst,
+                    module_idx,
+                    module_env.store.getDef(def_idx).expr,
+                    field_name,
+                    visiting,
+                );
             }
             break :blk null;
         },
@@ -1232,41 +1521,114 @@ fn resolveRecordFieldSourceExpr(
             const target_module_idx = self.resolveImportedModuleIdx(module_env, lookup.module_idx) orelse break :blk null;
             if (!self.all_module_envs[target_module_idx].store.isDefNode(lookup.target_node_idx)) break :blk null;
             const def_idx: CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
-            break :blk self.resolveRecordFieldSourceExpr(target_module_idx, self.all_module_envs[target_module_idx].store.getDef(def_idx).expr, field_name);
+            break :blk self.resolveRecordFieldSourceExprInContext(
+                .none,
+                target_module_idx,
+                self.all_module_envs[target_module_idx].store.getDef(def_idx).expr,
+                field_name,
+                visiting,
+            );
         },
         .e_lookup_required => |lookup| blk: {
             const target = self.resolveRequiredLookupTarget(module_env, lookup) orelse break :blk null;
-            break :blk self.resolveRecordFieldSourceExpr(target.module_idx, self.all_module_envs[target.module_idx].store.getDef(target.def_idx).expr, field_name);
+            break :blk self.resolveRecordFieldSourceExprInContext(
+                .none,
+                target.module_idx,
+                self.all_module_envs[target.module_idx].store.getDef(target.def_idx).expr,
+                field_name,
+                visiting,
+            );
         },
-        .e_block => |block| self.resolveRecordFieldSourceExpr(module_idx, block.final_expr, field_name),
-        .e_dbg => |dbg_expr| self.resolveRecordFieldSourceExpr(module_idx, dbg_expr.expr, field_name),
-        .e_expect => |expect_expr| self.resolveRecordFieldSourceExpr(module_idx, expect_expr.body, field_name),
-        .e_return => |return_expr| self.resolveRecordFieldSourceExpr(module_idx, return_expr.expr, field_name),
-        .e_nominal => |nominal_expr| self.resolveRecordFieldSourceExpr(module_idx, nominal_expr.backing_expr, field_name),
-        .e_nominal_external => |nominal_expr| self.resolveRecordFieldSourceExpr(module_idx, nominal_expr.backing_expr, field_name),
+        .e_block => |block| self.resolveRecordFieldSourceExprInContext(context_callable_inst, module_idx, block.final_expr, field_name, visiting),
+        .e_dbg => |dbg_expr| self.resolveRecordFieldSourceExprInContext(context_callable_inst, module_idx, dbg_expr.expr, field_name, visiting),
+        .e_expect => |expect_expr| self.resolveRecordFieldSourceExprInContext(context_callable_inst, module_idx, expect_expr.body, field_name, visiting),
+        .e_return => |return_expr| self.resolveRecordFieldSourceExprInContext(context_callable_inst, module_idx, return_expr.expr, field_name, visiting),
+        .e_nominal => |nominal_expr| self.resolveRecordFieldSourceExprInContext(context_callable_inst, module_idx, nominal_expr.backing_expr, field_name, visiting),
+        .e_nominal_external => |nominal_expr| self.resolveRecordFieldSourceExprInContext(context_callable_inst, module_idx, nominal_expr.backing_expr, field_name, visiting),
+        .e_call => |call_expr| blk: {
+            if (self.getCallLowLevelOp(module_env, call_expr.func) != null) break :blk null;
+
+            if (lookupMonomorphizedCallSiteCallableInstsInContext(
+                self,
+                context_callable_inst,
+                module_idx,
+                expr_idx,
+            )) |callable_inst_ids| {
+                if (callable_inst_ids.len != 1) {
+                    std.debug.panic(
+                        "statement-only MIR TODO: exact callable matching through projected call-result record fields with ambiguous callee instantiations is not implemented yet",
+                        .{},
+                    );
+                }
+            }
+
+            const callee_callable_inst_id = lookupMonomorphizedCallSiteCallableInstInContext(
+                self,
+                context_callable_inst,
+                module_idx,
+                expr_idx,
+            ) orelse break :blk null;
+            const callee_callable_inst = self.monomorphization.getCallableInst(callee_callable_inst_id);
+            const callee_template = self.monomorphization.getCallableTemplate(callee_callable_inst.template);
+            const body_expr = self.callableBoundaryBodyExpr(callee_template.module_idx, callee_template.cir_expr) orelse break :blk null;
+            break :blk self.resolveRecordFieldSourceExprInContext(
+                callee_callable_inst_id,
+                callee_template.module_idx,
+                body_expr,
+                field_name,
+                visiting,
+            );
+        },
         else => null,
     };
 }
 
-fn resolveTupleElemSourceExpr(
+fn resolveTupleElemSourceExprInContext(
     self: *Self,
+    context_callable_inst: Monomorphize.CallableInstId,
     module_idx: u32,
     expr_idx: CIR.Expr.Idx,
     elem_idx: u32,
-) ?struct { module_idx: u32, expr_idx: CIR.Expr.Idx } {
+    visiting: *std.AutoHashMapUnmanaged(CallableExprVisitKey, void),
+) ?CallableExprSource {
+    const visit_key = CallableExprVisitKey{
+        .context_callable_inst_raw = @intFromEnum(context_callable_inst),
+        .module_idx = module_idx,
+        .expr_raw = @intFromEnum(expr_idx),
+    };
+    if (visiting.contains(visit_key)) return null;
+    visiting.put(self.allocator, visit_key, {}) catch return null;
+    defer _ = visiting.remove(visit_key);
+
     const module_env = self.all_module_envs[module_idx];
     return switch (module_env.store.getExpr(expr_idx)) {
         .e_tuple => |tuple_expr| blk: {
             const elems = module_env.store.sliceExpr(tuple_expr.elems);
             if (elem_idx >= elems.len) break :blk null;
-            break :blk .{ .module_idx = module_idx, .expr_idx = elems[elem_idx] };
+            break :blk .{
+                .context_callable_inst = context_callable_inst,
+                .module_idx = module_idx,
+                .expr_idx = elems[elem_idx],
+            };
         },
         .e_lookup_local => |lookup| blk: {
             if (self.monomorphization.getPatternSourceExpr(module_idx, lookup.pattern_idx)) |source| {
-                break :blk self.resolveTupleElemSourceExpr(source.module_idx, source.expr_idx, elem_idx);
+                break :blk self.resolveTupleElemSourceExprInContext(
+                    context_callable_inst,
+                    source.module_idx,
+                    source.expr_idx,
+                    elem_idx,
+                    visiting,
+                );
             }
             if (findDefByPattern(module_env, lookup.pattern_idx)) |def_idx| {
-                break :blk self.resolveTupleElemSourceExpr(module_idx, module_env.store.getDef(def_idx).expr, elem_idx);
+                break :blk self.resolveTupleElemSourceExprInContext(
+                    context_callable_inst,
+                    module_idx,
+                    module_env.store.getDef(def_idx).expr,
+                    elem_idx,
+                    visiting,
+                );
             }
             break :blk null;
         },
@@ -1274,18 +1636,64 @@ fn resolveTupleElemSourceExpr(
             const target_module_idx = self.resolveImportedModuleIdx(module_env, lookup.module_idx) orelse break :blk null;
             if (!self.all_module_envs[target_module_idx].store.isDefNode(lookup.target_node_idx)) break :blk null;
             const def_idx: CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
-            break :blk self.resolveTupleElemSourceExpr(target_module_idx, self.all_module_envs[target_module_idx].store.getDef(def_idx).expr, elem_idx);
+            break :blk self.resolveTupleElemSourceExprInContext(
+                .none,
+                target_module_idx,
+                self.all_module_envs[target_module_idx].store.getDef(def_idx).expr,
+                elem_idx,
+                visiting,
+            );
         },
         .e_lookup_required => |lookup| blk: {
             const target = self.resolveRequiredLookupTarget(module_env, lookup) orelse break :blk null;
-            break :blk self.resolveTupleElemSourceExpr(target.module_idx, self.all_module_envs[target.module_idx].store.getDef(target.def_idx).expr, elem_idx);
+            break :blk self.resolveTupleElemSourceExprInContext(
+                .none,
+                target.module_idx,
+                self.all_module_envs[target.module_idx].store.getDef(target.def_idx).expr,
+                elem_idx,
+                visiting,
+            );
         },
-        .e_block => |block| self.resolveTupleElemSourceExpr(module_idx, block.final_expr, elem_idx),
-        .e_dbg => |dbg_expr| self.resolveTupleElemSourceExpr(module_idx, dbg_expr.expr, elem_idx),
-        .e_expect => |expect_expr| self.resolveTupleElemSourceExpr(module_idx, expect_expr.body, elem_idx),
-        .e_return => |return_expr| self.resolveTupleElemSourceExpr(module_idx, return_expr.expr, elem_idx),
-        .e_nominal => |nominal_expr| self.resolveTupleElemSourceExpr(module_idx, nominal_expr.backing_expr, elem_idx),
-        .e_nominal_external => |nominal_expr| self.resolveTupleElemSourceExpr(module_idx, nominal_expr.backing_expr, elem_idx),
+        .e_block => |block| self.resolveTupleElemSourceExprInContext(context_callable_inst, module_idx, block.final_expr, elem_idx, visiting),
+        .e_dbg => |dbg_expr| self.resolveTupleElemSourceExprInContext(context_callable_inst, module_idx, dbg_expr.expr, elem_idx, visiting),
+        .e_expect => |expect_expr| self.resolveTupleElemSourceExprInContext(context_callable_inst, module_idx, expect_expr.body, elem_idx, visiting),
+        .e_return => |return_expr| self.resolveTupleElemSourceExprInContext(context_callable_inst, module_idx, return_expr.expr, elem_idx, visiting),
+        .e_nominal => |nominal_expr| self.resolveTupleElemSourceExprInContext(context_callable_inst, module_idx, nominal_expr.backing_expr, elem_idx, visiting),
+        .e_nominal_external => |nominal_expr| self.resolveTupleElemSourceExprInContext(context_callable_inst, module_idx, nominal_expr.backing_expr, elem_idx, visiting),
+        .e_call => |call_expr| blk: {
+            if (self.getCallLowLevelOp(module_env, call_expr.func) != null) break :blk null;
+
+            if (lookupMonomorphizedCallSiteCallableInstsInContext(
+                self,
+                context_callable_inst,
+                module_idx,
+                expr_idx,
+            )) |callable_inst_ids| {
+                if (callable_inst_ids.len != 1) {
+                    std.debug.panic(
+                        "statement-only MIR TODO: exact callable matching through projected call-result tuple elements with ambiguous callee instantiations is not implemented yet",
+                        .{},
+                    );
+                }
+            }
+
+            const callee_callable_inst_id = lookupMonomorphizedCallSiteCallableInstInContext(
+                self,
+                context_callable_inst,
+                module_idx,
+                expr_idx,
+            ) orelse break :blk null;
+            const callee_callable_inst = self.monomorphization.getCallableInst(callee_callable_inst_id);
+            const callee_template = self.monomorphization.getCallableTemplate(callee_callable_inst.template);
+            const body_expr = self.callableBoundaryBodyExpr(callee_template.module_idx, callee_template.cir_expr) orelse break :blk null;
+            break :blk self.resolveTupleElemSourceExprInContext(
+                callee_callable_inst_id,
+                callee_template.module_idx,
+                body_expr,
+                elem_idx,
+                visiting,
+            );
+        },
         else => null,
     };
 }
@@ -1316,6 +1724,7 @@ fn callableInstMatchesArgumentSpecs(
     const Visitor = struct {
         fn visit(
             lower: *Self,
+            context_callable_inst: Monomorphize.CallableInstId,
             module_idx: u32,
             expr_idx: CIR.Expr.Idx,
             monotype: Monotype.Idx,
@@ -1341,6 +1750,7 @@ fn callableInstMatchesArgumentSpecs(
                     if (candidate_matched[matched_index]) return false;
                     if (!lower.callableInstSetMatchesExpr(
                         candidate_specs[matched_index].callable_inst_set_id,
+                        context_callable_inst,
                         module_idx,
                         expr_idx,
                     )) return false;
@@ -1349,11 +1759,20 @@ fn callableInstMatchesArgumentSpecs(
                 },
                 .record => |record| {
                     for (lower.store.monotype_store.getFields(record.fields)) |field| {
-                        const source = lower.resolveRecordFieldSourceExpr(module_idx, expr_idx, field.name) orelse return false;
+                        var visiting: std.AutoHashMapUnmanaged(CallableExprVisitKey, void) = .empty;
+                        defer visiting.deinit(lower.allocator);
+                        const source = lower.resolveRecordFieldSourceExprInContext(
+                            context_callable_inst,
+                            module_idx,
+                            expr_idx,
+                            field.name,
+                            &visiting,
+                        ) orelse return false;
                         try proj_stack.append(lower.allocator, .{ .field = field.name });
                         defer _ = proj_stack.pop();
                         if (!(try visit(
                             lower,
+                            source.context_callable_inst,
                             source.module_idx,
                             source.expr_idx,
                             field.type_idx,
@@ -1368,11 +1787,20 @@ fn callableInstMatchesArgumentSpecs(
                 .tuple => |tuple_mono| {
                     const elems = lower.store.monotype_store.getIdxSpan(tuple_mono.elems);
                     for (elems, 0..) |elem_mono, elem_idx| {
-                        const source = lower.resolveTupleElemSourceExpr(module_idx, expr_idx, @intCast(elem_idx)) orelse return false;
+                        var visiting: std.AutoHashMapUnmanaged(CallableExprVisitKey, void) = .empty;
+                        defer visiting.deinit(lower.allocator);
+                        const source = lower.resolveTupleElemSourceExprInContext(
+                            context_callable_inst,
+                            module_idx,
+                            expr_idx,
+                            @intCast(elem_idx),
+                            &visiting,
+                        ) orelse return false;
                         try proj_stack.append(lower.allocator, .{ .tuple_elem = @intCast(elem_idx) });
                         defer _ = proj_stack.pop();
                         if (!(try visit(
                             lower,
+                            source.context_callable_inst,
                             source.module_idx,
                             source.expr_idx,
                             elem_mono,
@@ -1392,6 +1820,7 @@ fn callableInstMatchesArgumentSpecs(
     for (arg_exprs, 0..) |arg_expr_idx, param_index| {
         if (!(try Visitor.visit(
             self,
+            self.current_callable_inst_context,
             caller_module_idx,
             arg_expr_idx,
             param_monos[param_index],
@@ -1580,11 +2009,6 @@ fn lookupMonomorphizedDispatchCallableInst(self: *const Self, expr_idx: CIR.Expr
     }
 
     return null;
-}
-
-fn patternScopeForCallableInst(callable_inst_id: Monomorphize.CallableInstId) u64 {
-    if (callable_inst_id.isNone()) return 0;
-    return (@as(u64, 1) << 63) | (@as(u64, @intFromEnum(callable_inst_id)) + 1);
 }
 
 fn identTextForCompare(self: *const Self, ident: Ident.Idx) ?[]const u8 {
@@ -2064,86 +2488,6 @@ fn importMonotypeFromStoreRec(
     return placeholder;
 }
 
-fn monotypeIdxSpanIsValid(self: *const Self, span: Monotype.Span) bool {
-    const start: usize = @intCast(span.start);
-    return start <= self.store.monotype_store.extra_idx.items.len and
-        start + span.len <= self.store.monotype_store.extra_idx.items.len;
-}
-
-fn monotypeTagSpanIsValid(self: *const Self, span: Monotype.TagSpan) bool {
-    const start: usize = @intCast(span.start);
-    return start <= self.store.monotype_store.tags.items.len and
-        start + span.len <= self.store.monotype_store.tags.items.len;
-}
-
-fn monotypeFieldSpanIsValid(self: *const Self, span: Monotype.FieldSpan) bool {
-    const start: usize = @intCast(span.start);
-    return start <= self.store.monotype_store.fields.items.len and
-        start + span.len <= self.store.monotype_store.fields.items.len;
-}
-
-fn monotypeIdxIsValid(self: *const Self, monotype: Monotype.Idx) bool {
-    return !monotype.isNone() and @intFromEnum(monotype) < self.store.monotype_store.monotypes.items.len;
-}
-
-fn monotypeIsUnit(self: *const Self, monotype: Monotype.Idx) bool {
-    return self.monotypeIdxIsValid(monotype) and self.store.monotype_store.getMonotype(monotype) == .unit;
-}
-
-fn monotypeIsWellFormed(self: *const Self, monotype: Monotype.Idx) bool {
-    var seen = std.AutoHashMap(Monotype.Idx, void).init(self.allocator);
-    defer seen.deinit();
-    return self.monotypeIsWellFormedRec(monotype, &seen);
-}
-
-fn monotypeIsWellFormedRec(
-    self: *const Self,
-    monotype: Monotype.Idx,
-    seen: *std.AutoHashMap(Monotype.Idx, void),
-) bool {
-    if (!self.monotypeIdxIsValid(monotype)) return false;
-    if (seen.contains(monotype)) return true;
-    seen.put(monotype, {}) catch return false;
-
-    return switch (self.store.monotype_store.getMonotype(monotype)) {
-        .unit, .prim => true,
-        .recursive_placeholder => false,
-        .list => |list_mono| self.monotypeIsWellFormedRec(list_mono.elem, seen),
-        .box => |box_mono| self.monotypeIsWellFormedRec(box_mono.inner, seen),
-        .tuple => |tuple_mono| blk: {
-            if (!self.monotypeIdxSpanIsValid(tuple_mono.elems)) break :blk false;
-            for (self.store.monotype_store.getIdxSpan(tuple_mono.elems)) |elem| {
-                if (!self.monotypeIsWellFormedRec(elem, seen)) break :blk false;
-            }
-            break :blk true;
-        },
-        .func => |func_mono| blk: {
-            if (!self.monotypeIdxSpanIsValid(func_mono.args)) break :blk false;
-            for (self.store.monotype_store.getIdxSpan(func_mono.args)) |arg| {
-                if (!self.monotypeIsWellFormedRec(arg, seen)) break :blk false;
-            }
-            break :blk self.monotypeIsWellFormedRec(func_mono.ret, seen);
-        },
-        .record => |record_mono| blk: {
-            if (!self.monotypeFieldSpanIsValid(record_mono.fields)) break :blk false;
-            for (self.store.monotype_store.getFields(record_mono.fields)) |field| {
-                if (!self.monotypeIsWellFormedRec(field.type_idx, seen)) break :blk false;
-            }
-            break :blk true;
-        },
-        .tag_union => |tag_union_mono| blk: {
-            if (!self.monotypeTagSpanIsValid(tag_union_mono.tags)) break :blk false;
-            for (self.store.monotype_store.getTags(tag_union_mono.tags)) |tag| {
-                if (!self.monotypeIdxSpanIsValid(tag.payloads)) break :blk false;
-                for (self.store.monotype_store.getIdxSpan(tag.payloads)) |payload| {
-                    if (!self.monotypeIsWellFormedRec(payload, seen)) break :blk false;
-                }
-            }
-            break :blk true;
-        },
-    };
-}
-
 fn internSymbol(self: *Self, namespace_idx: u32, ident_idx: Ident.Idx) Allocator.Error!MIR.Symbol {
     const raw = packLocalSymbolId(namespace_idx, ident_idx);
     const gop = try self.symbol_metadata.getOrPut(raw);
@@ -2233,16 +2577,6 @@ fn internExternalDefSymbol(self: *Self, module_idx: u32, def_node_idx: u16) Allo
     return MIR.Symbol.fromRaw(raw);
 }
 
-fn getSymbolMetadata(self: *const Self, symbol: MIR.Symbol) SymbolMetadata {
-    const key = symbol.raw();
-    return self.symbol_metadata.get(key) orelse {
-        if (builtin.mode == .Debug) {
-            std.debug.panic("Missing symbol metadata for symbol key {d}", .{key});
-        }
-        unreachable;
-    };
-}
-
 /// Copy a CIR string literal into MIR's own string store.
 /// This ensures MIR is self-contained and downstream passes (LIR, codegen)
 /// never need to reach back into CIR module envs for string data.
@@ -2251,7 +2585,6 @@ fn copyStringToMir(self: *Self, module_env: *const ModuleEnv, cir_str_idx: Strin
     const str_bytes = module_env.getString(cir_str_idx);
     return self.store.strings.insert(self.allocator, str_bytes);
 }
-
 
 /// Create a symbol using MIR lowering's current opaque ID encoding.
 pub fn makeSymbol(self: *Self, module_idx: u32, ident_idx: Ident.Idx) Allocator.Error!MIR.Symbol {
@@ -2312,29 +2645,614 @@ fn freshJoinPointId(self: *Self) MIR.JoinPointId {
 }
 
 fn currentBodyReassignableLocals(self: *Self) Allocator.Error![]MIR.LocalId {
-    var locals = std.ArrayList(MIR.LocalId).empty;
-    errdefer locals.deinit(self.allocator);
+    const bindings = try self.currentVisibleReassignableBindings();
+    defer self.allocator.free(bindings);
 
-    for (self.store.locals.items[self.current_body_local_floor..], self.current_body_local_floor..) |local, i| {
-        if (!local.reassignable) continue;
-        try locals.append(self.allocator, @enumFromInt(@as(u32, @intCast(i))));
+    var locals = try self.allocator.alloc(MIR.LocalId, bindings.len);
+    for (bindings, 0..) |binding, i| {
+        locals[i] = binding.local;
     }
-
-    return locals.toOwnedSlice(self.allocator);
+    return locals;
 }
 
 fn sourceExprResultMonotype(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!Monotype.Idx {
-    const module_env = self.all_module_envs[self.current_module_idx];
-    const expr = module_env.store.getExpr(expr_idx);
-
-    if (expr == .e_run_low_level and expr.e_run_low_level.op == .str_inspect) {
-        // Test/repl helpers synthesize Str.inspect directly in CIR without threading a
-        // resolved type var through canonicalization. Strongest-form MIR must still
-        // force the root result to Str so later layout/codegen stages see the real ABI.
-        return self.store.monotype_store.primIdx(.str);
+    if (try self.semanticExprResultMonotype(expr_idx)) |monotype| {
+        return monotype;
     }
 
     return self.resolveMonotype(expr_idx);
+}
+
+fn boolMonotype(self: *Self) Allocator.Error!Monotype.Idx {
+    return self.store.monotype_store.addBoolTagUnion(
+        self.allocator,
+        self.current_module_idx,
+        self.currentCommonIdents(),
+    );
+}
+
+fn explicitExprMonotypeInModule(
+    self: *Self,
+    module_idx: u32,
+    expr_idx: CIR.Expr.Idx,
+) Allocator.Error!?Monotype.Idx {
+    if (module_idx == self.current_module_idx) {
+        return self.explicitExprMonotype(expr_idx);
+    }
+
+    const module_env = self.all_module_envs[module_idx];
+    const saved_module_idx = self.current_module_idx;
+    const saved_types_store = self.types_store;
+    const saved_ident_store = self.mono_scratches.ident_store;
+    const saved_module_env = self.mono_scratches.module_env;
+    const saved_mono_module_idx = self.mono_scratches.module_idx;
+
+    self.current_module_idx = module_idx;
+    self.types_store = &module_env.types;
+    self.mono_scratches.ident_store = module_env.getIdentStoreConst();
+    self.mono_scratches.module_env = module_env;
+    self.mono_scratches.module_idx = module_idx;
+    defer {
+        self.current_module_idx = saved_module_idx;
+        self.types_store = saved_types_store;
+        self.mono_scratches.ident_store = saved_ident_store;
+        self.mono_scratches.module_env = saved_module_env;
+        self.mono_scratches.module_idx = saved_mono_module_idx;
+    }
+
+    return self.explicitExprMonotype(expr_idx);
+}
+
+fn lowLevelResultMonotypeFromArgs(
+    self: *Self,
+    op: CIR.Expr.LowLevel,
+    arg_exprs: []const CIR.Expr.Idx,
+) Allocator.Error!?Monotype.Idx {
+    return switch (op) {
+        .str_is_eq,
+        .str_contains,
+        .str_caseless_ascii_equals,
+        .str_starts_with,
+        .str_ends_with,
+        .bool_not,
+        .num_is_eq,
+        .num_is_gt,
+        .num_is_gte,
+        .num_is_lt,
+        .num_is_lte,
+        => try self.boolMonotype(),
+
+        .str_concat,
+        .str_trim,
+        .str_trim_start,
+        .str_trim_end,
+        .str_with_ascii_lowercased,
+        .str_with_ascii_uppercased,
+        .str_repeat,
+        .str_with_capacity,
+        .str_reserve,
+        .str_release_excess_capacity,
+        .str_from_utf8_lossy,
+        .str_join_with,
+        .str_inspect,
+        .u8_to_str,
+        .i8_to_str,
+        .u16_to_str,
+        .i16_to_str,
+        .u32_to_str,
+        .i32_to_str,
+        .u64_to_str,
+        .i64_to_str,
+        .u128_to_str,
+        .i128_to_str,
+        .dec_to_str,
+        .f32_to_str,
+        .f64_to_str,
+        .num_to_str,
+        => self.store.monotype_store.primIdx(.str),
+
+        .str_count_utf8_bytes,
+        .list_len,
+        => self.store.monotype_store.primIdx(.u64),
+
+        .list_concat,
+        .list_append_unsafe,
+        .list_drop_at,
+        .list_sublist,
+        .list_set,
+        .list_prepend,
+        .list_drop_first,
+        .list_drop_last,
+        .list_take_first,
+        .list_take_last,
+        .list_reverse,
+        .list_reserve,
+        .list_release_excess_capacity,
+        => if (arg_exprs.len == 0) null else try self.explicitExprMonotype(arg_exprs[0]),
+
+        .list_with_capacity => null,
+
+        .list_get_unsafe => if (arg_exprs.len == 0) null else blk: {
+            const list_mono = (try self.explicitExprMonotype(arg_exprs[0])) orelse break :blk null;
+            break :blk switch (self.store.monotype_store.getMonotype(list_mono)) {
+                .list => |list| list.elem,
+                else => null,
+            };
+        },
+
+        .num_negate,
+        .num_abs,
+        .num_abs_diff,
+        .num_plus,
+        .num_minus,
+        .num_times,
+        .num_div_by,
+        .num_div_trunc_by,
+        .num_rem_by,
+        .num_mod_by,
+        .num_pow,
+        .num_sqrt,
+        .num_log,
+        .num_round,
+        .num_floor,
+        .num_ceiling,
+        .num_shift_left_by,
+        .num_shift_right_by,
+        .num_shift_right_zf_by,
+        => if (arg_exprs.len == 0) null else try self.explicitExprMonotype(arg_exprs[0]),
+
+        .u8_to_i8_wrap,
+        .u8_to_i8_try,
+        => self.store.monotype_store.primIdx(.i8),
+        .u8_to_i16 => self.store.monotype_store.primIdx(.i16),
+        .u8_to_i32 => self.store.monotype_store.primIdx(.i32),
+        .u8_to_i64 => self.store.monotype_store.primIdx(.i64),
+        .u8_to_i128 => self.store.monotype_store.primIdx(.i128),
+        .u8_to_u16 => self.store.monotype_store.primIdx(.u16),
+        .u8_to_u32 => self.store.monotype_store.primIdx(.u32),
+        .u8_to_u64 => self.store.monotype_store.primIdx(.u64),
+        .u8_to_u128 => self.store.monotype_store.primIdx(.u128),
+        .u8_to_f32 => self.store.monotype_store.primIdx(.f32),
+        .u8_to_f64 => self.store.monotype_store.primIdx(.f64),
+        .u8_to_dec => self.store.monotype_store.primIdx(.dec),
+
+        .i8_to_i16 => self.store.monotype_store.primIdx(.i16),
+        .i8_to_i32 => self.store.monotype_store.primIdx(.i32),
+        .i8_to_i64 => self.store.monotype_store.primIdx(.i64),
+        .i8_to_i128 => self.store.monotype_store.primIdx(.i128),
+        .i8_to_u8_wrap,
+        .i8_to_u8_try,
+        => self.store.monotype_store.primIdx(.u8),
+        .i8_to_u16_wrap,
+        .i8_to_u16_try,
+        => self.store.monotype_store.primIdx(.u16),
+        .i8_to_u32_wrap,
+        .i8_to_u32_try,
+        => self.store.monotype_store.primIdx(.u32),
+        .i8_to_u64_wrap,
+        .i8_to_u64_try,
+        => self.store.monotype_store.primIdx(.u64),
+        .i8_to_u128_wrap,
+        .i8_to_u128_try,
+        => self.store.monotype_store.primIdx(.u128),
+        .i8_to_f32 => self.store.monotype_store.primIdx(.f32),
+        .i8_to_f64 => self.store.monotype_store.primIdx(.f64),
+        .i8_to_dec => self.store.monotype_store.primIdx(.dec),
+
+        .u16_to_i8_wrap,
+        .u16_to_i8_try,
+        => self.store.monotype_store.primIdx(.i8),
+        .u16_to_i16_wrap,
+        .u16_to_i16_try,
+        => self.store.monotype_store.primIdx(.i16),
+        .u16_to_i32 => self.store.monotype_store.primIdx(.i32),
+        .u16_to_i64 => self.store.monotype_store.primIdx(.i64),
+        .u16_to_i128 => self.store.monotype_store.primIdx(.i128),
+        .u16_to_u8_wrap,
+        .u16_to_u8_try,
+        => self.store.monotype_store.primIdx(.u8),
+        .u16_to_u32 => self.store.monotype_store.primIdx(.u32),
+        .u16_to_u64 => self.store.monotype_store.primIdx(.u64),
+        .u16_to_u128 => self.store.monotype_store.primIdx(.u128),
+        .u16_to_f32 => self.store.monotype_store.primIdx(.f32),
+        .u16_to_f64 => self.store.monotype_store.primIdx(.f64),
+        .u16_to_dec => self.store.monotype_store.primIdx(.dec),
+
+        .i16_to_i8_wrap,
+        .i16_to_i8_try,
+        => self.store.monotype_store.primIdx(.i8),
+        .i16_to_i32 => self.store.monotype_store.primIdx(.i32),
+        .i16_to_i64 => self.store.monotype_store.primIdx(.i64),
+        .i16_to_i128 => self.store.monotype_store.primIdx(.i128),
+        .i16_to_u8_wrap,
+        .i16_to_u8_try,
+        => self.store.monotype_store.primIdx(.u8),
+        .i16_to_u16_wrap,
+        .i16_to_u16_try,
+        => self.store.monotype_store.primIdx(.u16),
+        .i16_to_u32_wrap,
+        .i16_to_u32_try,
+        => self.store.monotype_store.primIdx(.u32),
+        .i16_to_u64_wrap,
+        .i16_to_u64_try,
+        => self.store.monotype_store.primIdx(.u64),
+        .i16_to_u128_wrap,
+        .i16_to_u128_try,
+        => self.store.monotype_store.primIdx(.u128),
+        .i16_to_f32 => self.store.monotype_store.primIdx(.f32),
+        .i16_to_f64 => self.store.monotype_store.primIdx(.f64),
+        .i16_to_dec => self.store.monotype_store.primIdx(.dec),
+
+        .u32_to_i8_wrap,
+        .u32_to_i8_try,
+        => self.store.monotype_store.primIdx(.i8),
+        .u32_to_i16_wrap,
+        .u32_to_i16_try,
+        => self.store.monotype_store.primIdx(.i16),
+        .u32_to_i32_wrap,
+        .u32_to_i32_try,
+        => self.store.monotype_store.primIdx(.i32),
+        .u32_to_i64 => self.store.monotype_store.primIdx(.i64),
+        .u32_to_i128 => self.store.monotype_store.primIdx(.i128),
+        .u32_to_u8_wrap,
+        .u32_to_u8_try,
+        => self.store.monotype_store.primIdx(.u8),
+        .u32_to_u16_wrap,
+        .u32_to_u16_try,
+        => self.store.monotype_store.primIdx(.u16),
+        .u32_to_u64 => self.store.monotype_store.primIdx(.u64),
+        .u32_to_u128 => self.store.monotype_store.primIdx(.u128),
+        .u32_to_f32 => self.store.monotype_store.primIdx(.f32),
+        .u32_to_f64 => self.store.monotype_store.primIdx(.f64),
+        .u32_to_dec => self.store.monotype_store.primIdx(.dec),
+
+        .i32_to_i8_wrap,
+        .i32_to_i8_try,
+        => self.store.monotype_store.primIdx(.i8),
+        .i32_to_i16_wrap,
+        .i32_to_i16_try,
+        => self.store.monotype_store.primIdx(.i16),
+        .i32_to_i64 => self.store.monotype_store.primIdx(.i64),
+        .i32_to_i128 => self.store.monotype_store.primIdx(.i128),
+        .i32_to_u8_wrap,
+        .i32_to_u8_try,
+        => self.store.monotype_store.primIdx(.u8),
+        .i32_to_u16_wrap,
+        .i32_to_u16_try,
+        => self.store.monotype_store.primIdx(.u16),
+        .i32_to_u32_wrap,
+        .i32_to_u32_try,
+        => self.store.monotype_store.primIdx(.u32),
+        .i32_to_u64_wrap,
+        .i32_to_u64_try,
+        => self.store.monotype_store.primIdx(.u64),
+        .i32_to_u128_wrap,
+        .i32_to_u128_try,
+        => self.store.monotype_store.primIdx(.u128),
+        .i32_to_f32 => self.store.monotype_store.primIdx(.f32),
+        .i32_to_f64 => self.store.monotype_store.primIdx(.f64),
+        .i32_to_dec => self.store.monotype_store.primIdx(.dec),
+
+        .u64_to_i8_wrap,
+        .u64_to_i8_try,
+        => self.store.monotype_store.primIdx(.i8),
+        .u64_to_i16_wrap,
+        .u64_to_i16_try,
+        => self.store.monotype_store.primIdx(.i16),
+        .u64_to_i32_wrap,
+        .u64_to_i32_try,
+        => self.store.monotype_store.primIdx(.i32),
+        .u64_to_i64_wrap,
+        .u64_to_i64_try,
+        => self.store.monotype_store.primIdx(.i64),
+        .u64_to_i128 => self.store.monotype_store.primIdx(.i128),
+        .u64_to_u8_wrap,
+        .u64_to_u8_try,
+        => self.store.monotype_store.primIdx(.u8),
+        .u64_to_u16_wrap,
+        .u64_to_u16_try,
+        => self.store.monotype_store.primIdx(.u16),
+        .u64_to_u32_wrap,
+        .u64_to_u32_try,
+        => self.store.monotype_store.primIdx(.u32),
+        .u64_to_u128 => self.store.monotype_store.primIdx(.u128),
+        .u64_to_f32 => self.store.monotype_store.primIdx(.f32),
+        .u64_to_f64 => self.store.monotype_store.primIdx(.f64),
+        .u64_to_dec => self.store.monotype_store.primIdx(.dec),
+
+        .i64_to_i8_wrap,
+        .i64_to_i8_try,
+        => self.store.monotype_store.primIdx(.i8),
+        .i64_to_i16_wrap,
+        .i64_to_i16_try,
+        => self.store.monotype_store.primIdx(.i16),
+        .i64_to_i32_wrap,
+        .i64_to_i32_try,
+        => self.store.monotype_store.primIdx(.i32),
+        .i64_to_i128 => self.store.monotype_store.primIdx(.i128),
+        .i64_to_u8_wrap,
+        .i64_to_u8_try,
+        => self.store.monotype_store.primIdx(.u8),
+        .i64_to_u16_wrap,
+        .i64_to_u16_try,
+        => self.store.monotype_store.primIdx(.u16),
+        .i64_to_u32_wrap,
+        .i64_to_u32_try,
+        => self.store.monotype_store.primIdx(.u32),
+        .i64_to_u64_wrap,
+        .i64_to_u64_try,
+        => self.store.monotype_store.primIdx(.u64),
+        .i64_to_u128_wrap,
+        .i64_to_u128_try,
+        => self.store.monotype_store.primIdx(.u128),
+        .i64_to_f32 => self.store.monotype_store.primIdx(.f32),
+        .i64_to_f64 => self.store.monotype_store.primIdx(.f64),
+        .i64_to_dec => self.store.monotype_store.primIdx(.dec),
+
+        .u128_to_i8_wrap,
+        .u128_to_i8_try,
+        => self.store.monotype_store.primIdx(.i8),
+        .u128_to_i16_wrap,
+        .u128_to_i16_try,
+        => self.store.monotype_store.primIdx(.i16),
+        .u128_to_i32_wrap,
+        .u128_to_i32_try,
+        => self.store.monotype_store.primIdx(.i32),
+        .u128_to_i64_wrap,
+        .u128_to_i64_try,
+        => self.store.monotype_store.primIdx(.i64),
+        .u128_to_i128_wrap,
+        .u128_to_i128_try,
+        => self.store.monotype_store.primIdx(.i128),
+        .u128_to_u8_wrap,
+        .u128_to_u8_try,
+        => self.store.monotype_store.primIdx(.u8),
+        .u128_to_u16_wrap,
+        .u128_to_u16_try,
+        => self.store.monotype_store.primIdx(.u16),
+        .u128_to_u32_wrap,
+        .u128_to_u32_try,
+        => self.store.monotype_store.primIdx(.u32),
+        .u128_to_u64_wrap,
+        .u128_to_u64_try,
+        => self.store.monotype_store.primIdx(.u64),
+        .u128_to_f32 => self.store.monotype_store.primIdx(.f32),
+        .u128_to_f64 => self.store.monotype_store.primIdx(.f64),
+        .u128_to_dec_try_unsafe => self.store.monotype_store.primIdx(.dec),
+
+        .i128_to_i8_wrap,
+        .i128_to_i8_try,
+        => self.store.monotype_store.primIdx(.i8),
+        .i128_to_i16_wrap,
+        .i128_to_i16_try,
+        => self.store.monotype_store.primIdx(.i16),
+        .i128_to_i32_wrap,
+        .i128_to_i32_try,
+        => self.store.monotype_store.primIdx(.i32),
+        .i128_to_i64_wrap,
+        .i128_to_i64_try,
+        => self.store.monotype_store.primIdx(.i64),
+        .i128_to_u8_wrap,
+        .i128_to_u8_try,
+        => self.store.monotype_store.primIdx(.u8),
+        .i128_to_u16_wrap,
+        .i128_to_u16_try,
+        => self.store.monotype_store.primIdx(.u16),
+        .i128_to_u32_wrap,
+        .i128_to_u32_try,
+        => self.store.monotype_store.primIdx(.u32),
+        .i128_to_u64_wrap,
+        .i128_to_u64_try,
+        => self.store.monotype_store.primIdx(.u64),
+        .i128_to_u128_wrap,
+        .i128_to_u128_try,
+        => self.store.monotype_store.primIdx(.u128),
+        .i128_to_f32 => self.store.monotype_store.primIdx(.f32),
+        .i128_to_f64 => self.store.monotype_store.primIdx(.f64),
+        .i128_to_dec_try_unsafe => self.store.monotype_store.primIdx(.dec),
+
+        .f32_to_i8_trunc,
+        .f32_to_i8_try_unsafe,
+        => self.store.monotype_store.primIdx(.i8),
+        .f32_to_i16_trunc,
+        .f32_to_i16_try_unsafe,
+        => self.store.monotype_store.primIdx(.i16),
+        .f32_to_i32_trunc,
+        .f32_to_i32_try_unsafe,
+        => self.store.monotype_store.primIdx(.i32),
+        .f32_to_i64_trunc,
+        .f32_to_i64_try_unsafe,
+        => self.store.monotype_store.primIdx(.i64),
+        .f32_to_i128_trunc,
+        .f32_to_i128_try_unsafe,
+        => self.store.monotype_store.primIdx(.i128),
+        .f32_to_u8_trunc,
+        .f32_to_u8_try_unsafe,
+        => self.store.monotype_store.primIdx(.u8),
+        .f32_to_u16_trunc,
+        .f32_to_u16_try_unsafe,
+        => self.store.monotype_store.primIdx(.u16),
+        .f32_to_u32_trunc,
+        .f32_to_u32_try_unsafe,
+        => self.store.monotype_store.primIdx(.u32),
+        .f32_to_u64_trunc,
+        .f32_to_u64_try_unsafe,
+        => self.store.monotype_store.primIdx(.u64),
+        .f32_to_u128_trunc,
+        .f32_to_u128_try_unsafe,
+        => self.store.monotype_store.primIdx(.u128),
+        .f32_to_f64 => self.store.monotype_store.primIdx(.f64),
+
+        .f64_to_i8_trunc,
+        .f64_to_i8_try_unsafe,
+        => self.store.monotype_store.primIdx(.i8),
+        .f64_to_i16_trunc,
+        .f64_to_i16_try_unsafe,
+        => self.store.monotype_store.primIdx(.i16),
+        .f64_to_i32_trunc,
+        .f64_to_i32_try_unsafe,
+        => self.store.monotype_store.primIdx(.i32),
+        .f64_to_i64_trunc,
+        .f64_to_i64_try_unsafe,
+        => self.store.monotype_store.primIdx(.i64),
+        .f64_to_i128_trunc,
+        .f64_to_i128_try_unsafe,
+        => self.store.monotype_store.primIdx(.i128),
+        .f64_to_u8_trunc,
+        .f64_to_u8_try_unsafe,
+        => self.store.monotype_store.primIdx(.u8),
+        .f64_to_u16_trunc,
+        .f64_to_u16_try_unsafe,
+        => self.store.monotype_store.primIdx(.u16),
+        .f64_to_u32_trunc,
+        .f64_to_u32_try_unsafe,
+        => self.store.monotype_store.primIdx(.u32),
+        .f64_to_u64_trunc,
+        .f64_to_u64_try_unsafe,
+        => self.store.monotype_store.primIdx(.u64),
+        .f64_to_u128_trunc,
+        .f64_to_u128_try_unsafe,
+        => self.store.monotype_store.primIdx(.u128),
+        .f64_to_f32_wrap,
+        .f64_to_f32_try_unsafe,
+        => self.store.monotype_store.primIdx(.f32),
+
+        .dec_to_i8_trunc,
+        .dec_to_i8_try_unsafe,
+        => self.store.monotype_store.primIdx(.i8),
+        .dec_to_i16_trunc,
+        .dec_to_i16_try_unsafe,
+        => self.store.monotype_store.primIdx(.i16),
+        .dec_to_i32_trunc,
+        .dec_to_i32_try_unsafe,
+        => self.store.monotype_store.primIdx(.i32),
+        .dec_to_i64_trunc,
+        .dec_to_i64_try_unsafe,
+        => self.store.monotype_store.primIdx(.i64),
+        .dec_to_i128_trunc,
+        .dec_to_i128_try_unsafe,
+        => self.store.monotype_store.primIdx(.i128),
+        .dec_to_u8_trunc,
+        .dec_to_u8_try_unsafe,
+        => self.store.monotype_store.primIdx(.u8),
+        .dec_to_u16_trunc,
+        .dec_to_u16_try_unsafe,
+        => self.store.monotype_store.primIdx(.u16),
+        .dec_to_u32_trunc,
+        .dec_to_u32_try_unsafe,
+        => self.store.monotype_store.primIdx(.u32),
+        .dec_to_u64_trunc,
+        .dec_to_u64_try_unsafe,
+        => self.store.monotype_store.primIdx(.u64),
+        .dec_to_u128_trunc,
+        .dec_to_u128_try_unsafe,
+        => self.store.monotype_store.primIdx(.u128),
+        .dec_to_f32_wrap,
+        .dec_to_f32_try_unsafe,
+        => self.store.monotype_store.primIdx(.f32),
+        .dec_to_f64 => self.store.monotype_store.primIdx(.f64),
+
+        .box_box => if (arg_exprs.len == 0) null else blk: {
+            const inner = (try self.explicitExprMonotype(arg_exprs[0])) orelse break :blk null;
+            break :blk try self.store.monotype_store.addMonotype(self.allocator, .{ .box = .{ .inner = inner } });
+        },
+        .box_unbox => if (arg_exprs.len == 0) null else blk: {
+            const boxed = (try self.explicitExprMonotype(arg_exprs[0])) orelse break :blk null;
+            break :blk switch (self.store.monotype_store.getMonotype(boxed)) {
+                .box => |box| box.inner,
+                else => null,
+            };
+        },
+
+        .str_drop_prefix,
+        .str_drop_suffix,
+        .str_to_utf8,
+        .str_from_utf8,
+        .str_split_on,
+        .list_first,
+        .list_last,
+        .list_split_first,
+        .list_split_last,
+        .num_from_numeral,
+        .num_from_str,
+        .compare,
+        .crash,
+        => null,
+    };
+}
+
+fn semanticExprResultMonotype(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!?Monotype.Idx {
+    const module_env = self.all_module_envs[self.current_module_idx];
+    return switch (module_env.store.getExpr(expr_idx)) {
+        .e_lookup_local => |lookup| blk: {
+            if (self.monomorphization.getPatternSourceExpr(self.current_module_idx, lookup.pattern_idx)) |source| {
+                if (source.module_idx == self.current_module_idx and source.expr_idx == expr_idx) break :blk null;
+                break :blk try self.explicitExprMonotypeInModule(source.module_idx, source.expr_idx);
+            }
+            if (findDefByPattern(module_env, lookup.pattern_idx)) |def_idx| {
+                const def_expr_idx = module_env.store.getDef(def_idx).expr;
+                if (def_expr_idx == expr_idx) break :blk null;
+                break :blk try self.explicitExprMonotype(def_expr_idx);
+            }
+            break :blk null;
+        },
+        .e_lookup_external => |lookup| blk: {
+            const target_module_idx = self.resolveImportedModuleIdx(module_env, lookup.module_idx) orelse break :blk null;
+            if (!self.all_module_envs[target_module_idx].store.isDefNode(lookup.target_node_idx)) break :blk null;
+            const def_idx: CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
+            break :blk try self.explicitExprMonotypeInModule(
+                target_module_idx,
+                self.all_module_envs[target_module_idx].store.getDef(def_idx).expr,
+            );
+        },
+        .e_lookup_required => |lookup| blk: {
+            const target = self.resolveRequiredLookupTarget(module_env, lookup) orelse break :blk null;
+            break :blk try self.explicitExprMonotypeInModule(
+                target.module_idx,
+                self.all_module_envs[target.module_idx].store.getDef(target.def_idx).expr,
+            );
+        },
+        .e_block => |block| try self.explicitExprMonotype(block.final_expr),
+        .e_dbg => |dbg_expr| try self.explicitExprMonotype(dbg_expr.expr),
+        .e_expect => |expect_expr| try self.explicitExprMonotype(expect_expr.body),
+        .e_return => |return_expr| try self.explicitExprMonotype(return_expr.expr),
+        .e_nominal => |nominal| try self.explicitExprMonotype(nominal.backing_expr),
+        .e_nominal_external => |nominal| try self.explicitExprMonotype(nominal.backing_expr),
+        .e_unary_minus => |um| try self.explicitExprMonotype(um.expr),
+        .e_unary_not => try self.boolMonotype(),
+        .e_binop => |binop| switch (binop.op) {
+            .eq, .ne, .lt, .le, .gt, .ge, .@"and", .@"or" => try self.boolMonotype(),
+            else => try self.explicitExprMonotype(binop.lhs),
+        },
+        .e_call => |call| blk: {
+            const op = self.getCallLowLevelOp(module_env, call.func) orelse break :blk null;
+            break :blk try self.lowLevelResultMonotypeFromArgs(op, module_env.store.sliceExpr(call.args));
+        },
+        .e_run_low_level => |run_ll| try self.lowLevelResultMonotypeFromArgs(run_ll.op, module_env.store.sliceExpr(run_ll.args)),
+        else => null,
+    };
+}
+
+fn explicitExprMonotype(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!?Monotype.Idx {
+    if (self.lookupMonomorphizedExprMonotype(expr_idx)) |mono| {
+        return @as(?Monotype.Idx, try self.importMonotypeFromStore(
+            &self.monomorphization.monotype_store,
+            mono.idx,
+            mono.module_idx,
+            self.current_module_idx,
+        ));
+    }
+
+    if (try self.semanticExprResultMonotype(expr_idx)) |monotype| {
+        return monotype;
+    }
+
+    return self.explicitMonotypeFromTypeVarWithBindings(
+        self.current_module_idx,
+        self.types_store,
+        ModuleEnv.varFrom(expr_idx),
+        &self.type_var_seen,
+    );
 }
 
 fn lowerConstDefFromSourceExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ConstDefId {
@@ -2545,17 +3463,47 @@ fn seedCallableSourceLocal(
 }
 
 fn resolveExactLambdaForLocal(self: *Self, local_id: MIR.LocalId) Allocator.Error!?MIR.LambdaId {
+    if (self.callable_source_locals.get(@intFromEnum(local_id)) != null) {
+        if (self.exactCallableResolutionFromCurrentCallableBindings(local_id)) |resolved| {
+            return resolved.lambda;
+        }
+    }
+
     if (self.exact_callable_locals.get(@intFromEnum(local_id))) |lambda_id| return lambda_id;
 
-    const bindings = self.current_callable_bindings orelse return null;
-    const source_path = self.callable_source_locals.get(@intFromEnum(local_id)) orelse return null;
-    for (bindings) |binding| {
-        if (binding.source_param != source_path.source_param) continue;
-        if (!callableProjectionSpansEqual(self.store, binding.projections, source_path.projections)) continue;
-        return binding.lambda;
+    return null;
+}
+
+fn resolveExactCallableResolutionForLocal(
+    self: *Self,
+    local_id: MIR.LocalId,
+) Allocator.Error!?ExactCallableResolution {
+    if (self.callable_source_locals.get(@intFromEnum(local_id)) != null) {
+        if (self.exactCallableResolutionFromCurrentCallableBindings(local_id)) |resolved| {
+            return resolved;
+        }
+    }
+
+    if (self.exact_callable_locals.get(@intFromEnum(local_id))) |lambda_id| {
+        return .{
+            .lambda = lambda_id,
+            .requires_hidden_capture = self.store.getLambda(lambda_id).captures_param != null,
+        };
     }
 
     return null;
+}
+
+fn resolveExactCallableResolutionForCapturePattern(
+    self: *Self,
+    capture_pattern_idx: CIR.Pattern.Idx,
+) Allocator.Error!?ExactCallableResolution {
+    const capture_local = self.lookupExistingPatternLocalInAncestorScopes(
+        self.current_module_idx,
+        self.current_pattern_scope,
+        capture_pattern_idx,
+    ) orelse return null;
+    return self.resolveExactCallableResolutionForLocal(capture_local);
 }
 
 fn lowerConcatLocalsInto(
@@ -2679,16 +3627,41 @@ fn lowerListInspectLocalInto(
 
     const loop_exit_id = self.freshJoinPointId();
     const loop_head_id = self.freshJoinPointId();
+    const loop_head_params = try self.store.addLocalSpan(
+        self.allocator,
+        &.{
+            accum_local,
+            index_local,
+        },
+    );
+    const initial_head_args = try self.store.addLocalSpan(
+        self.allocator,
+        &.{
+            empty_local,
+            zero_local,
+        },
+    );
 
+    const exit_value_local = try self.freshSyntheticLocal(str_mono, false);
     const exit_jump = try self.store.addCFStmt(self.allocator, .{ .jump = .{
         .id = loop_exit_id,
-        .args = try self.store.addLocalSpan(self.allocator, &.{target}),
+        .args = try self.store.addLocalSpan(self.allocator, &.{exit_value_local}),
     } });
-    const false_body = try self.lowerConcatLocalsInto(&.{ open_local, accum_local, close_local }, target, exit_jump);
+    const false_body = try self.lowerConcatLocalsInto(
+        &.{ open_local, accum_local, close_local },
+        exit_value_local,
+        exit_jump,
+    );
 
     const loop_back = try self.store.addCFStmt(self.allocator, .{ .jump = .{
         .id = loop_head_id,
-        .args = try self.store.addLocalSpan(self.allocator, &.{ next_accum_local, next_index_local }),
+        .args = try self.store.addLocalSpan(
+            self.allocator,
+            &.{
+                next_accum_local,
+                next_index_local,
+            },
+        ),
     } });
     const next_index_stmt = try self.store.addCFStmt(self.allocator, .{ .assign_low_level = .{
         .target = next_index_local,
@@ -2735,7 +3708,7 @@ fn lowerListInspectLocalInto(
 
     const initial_jump = try self.store.addCFStmt(self.allocator, .{ .jump = .{
         .id = loop_head_id,
-        .args = try self.store.addLocalSpan(self.allocator, &.{ empty_local, zero_local }),
+        .args = initial_head_args,
     } });
     const init_comma = try self.lowerStrLiteralInto(comma_local, ", ", initial_jump);
     const init_empty = try self.lowerStrLiteralInto(empty_local, "", init_comma);
@@ -2760,7 +3733,7 @@ fn lowerListInspectLocalInto(
 
     const head_join = try self.store.addCFStmt(self.allocator, .{ .join = .{
         .id = loop_head_id,
-        .params = try self.store.addLocalSpan(self.allocator, &.{ accum_local, index_local }),
+        .params = loop_head_params,
         .body = cond_stmt,
         .remainder = init_len,
     } });
@@ -3212,7 +4185,18 @@ fn lowerLookupLocalInto(
     }
 
     const target_monotype = self.store.getLocal(target).monotype;
+    const pattern_source_expr = self.monomorphization.getPatternSourceExpr(self.current_module_idx, lookup.pattern_idx);
     if (self.store.monotype_store.getMonotype(target_monotype) == .func) {
+        if (pattern_source_expr) |source| {
+            if (source.module_idx == self.current_module_idx and source.expr_idx == expr_idx) {
+                std.debug.panic(
+                    "statement-only MIR invariant violated: function local lookup expr {d} resolved to itself as a pattern source",
+                    .{@intFromEnum(expr_idx)},
+                );
+            }
+            return self.lowerCapturedSourceExprInto(source, target, next);
+        }
+
         if (try self.lowerExactCallableLookupInto(expr_idx, target, next)) |lowered| {
             return lowered;
         }
@@ -3227,7 +4211,7 @@ fn lowerLookupLocalInto(
     }
 
     if (skipped_callable_backed) {
-        if (self.monomorphization.getPatternSourceExpr(self.current_module_idx, lookup.pattern_idx)) |source| {
+        if (pattern_source_expr) |source| {
             if (source.module_idx == self.current_module_idx and source.expr_idx == expr_idx) {
                 std.debug.panic(
                     "statement-only MIR invariant violated: callable-backed local lookup expr {d} resolved to itself as a pattern source",
@@ -3247,7 +4231,7 @@ fn lowerLookupLocalInto(
         return self.materializeTopLevelDefInto(self.current_module_idx, def_idx, symbol, target, next);
     }
 
-    if (self.monomorphization.getPatternSourceExpr(self.current_module_idx, lookup.pattern_idx)) |source| {
+    if (pattern_source_expr) |source| {
         if (source.module_idx == self.current_module_idx and source.expr_idx == expr_idx) {
             std.debug.panic(
                 "statement-only MIR invariant violated: local lookup expr {d} resolved to itself as a pattern source",
@@ -3257,14 +4241,115 @@ fn lowerLookupLocalInto(
         return self.lowerCapturedSourceExprInto(source, target, next);
     }
 
+    if (try self.ensureImplicitLambdaCaptureLocal(lookup.pattern_idx)) |capture_local| {
+        return self.lowerLocalAliasInto(target, capture_local, next);
+    }
+
     const def_idx = findDefByPattern(self.all_module_envs[self.current_module_idx], lookup.pattern_idx) orelse blk: {
+        const pattern = self.all_module_envs[self.current_module_idx].store.getPattern(lookup.pattern_idx);
+        const ident = switch (pattern) {
+            .assign => |assign| self.all_module_envs[self.current_module_idx].getIdent(assign.ident),
+            .as => |as_pattern| self.all_module_envs[self.current_module_idx].getIdent(as_pattern.ident),
+            else => "<non-binding>",
+        };
+        const has_root_local = self.lookupExistingPatternLocalInScope(
+            self.current_module_idx,
+            0,
+            lookup.pattern_idx,
+        ) != null;
+        const active_template = if (!self.current_callable_inst_context.isNone())
+            self.monomorphization.getCallableTemplate(
+                self.monomorphization.getCallableInst(self.current_callable_inst_context).template,
+            )
+        else
+            null;
         break :blk std.debug.panic(
-            "statement-only MIR invariant violated: local lookup pattern {d} had no in-scope local or top-level def",
-            .{@intFromEnum(lookup.pattern_idx)},
+            "statement-only MIR invariant violated: local lookup pattern {d} ({s}:{s}) in scope={d} had no in-scope local, no pattern source expr, no top-level def, root_local={any}, callable_inst={d}, callable_kind={s}, callable_expr={d}",
+            .{
+                @intFromEnum(lookup.pattern_idx),
+                @tagName(pattern),
+                ident,
+                self.current_pattern_scope,
+                has_root_local,
+                @intFromEnum(self.current_callable_inst_context),
+                if (active_template) |template| @tagName(template.kind) else "none",
+                if (active_template) |template| @intFromEnum(template.cir_expr) else std.math.maxInt(u32),
+            },
         );
     };
     const symbol = try self.lookupSymbolForPattern(self.current_module_idx, lookup.pattern_idx);
     return self.materializeTopLevelDefInto(self.current_module_idx, def_idx, symbol, target, next);
+}
+
+fn ensureImplicitLambdaCaptureLocal(
+    self: *Self,
+    pattern_idx: CIR.Pattern.Idx,
+) Allocator.Error!?MIR.LocalId {
+    const capture_state = self.current_implicit_lambda_captures orelse return null;
+
+    if (capture_state.by_pattern.get(pattern_idx)) |existing_index| {
+        return capture_state.items.items[existing_index].local;
+    }
+
+    const ancestor_local = self.lookupExistingPatternLocalInAncestorScopes(
+        self.current_module_idx,
+        self.current_pattern_scope,
+        pattern_idx,
+    );
+    if (ancestor_local == null and self.current_callable_inst_context.isNone()) return null;
+
+    const monotype = if (ancestor_local) |outer_local|
+        self.store.getLocal(outer_local).monotype
+    else
+        try self.monotypeFromTypeVarWithBindings(
+            self.current_module_idx,
+            self.types_store,
+            ModuleEnv.varFrom(pattern_idx),
+            &self.type_var_seen,
+        );
+    const local = try self.patternToLocal(pattern_idx);
+    self.store.getLocalPtr(local).monotype = monotype;
+
+    var exact_lambda_id: ?MIR.LambdaId = null;
+    var requires_hidden_capture = false;
+    if (ancestor_local) |outer_local| {
+        if (self.callable_source_locals.get(@intFromEnum(outer_local))) |source_path| {
+            try self.callable_source_locals.put(@intFromEnum(local), source_path);
+        }
+        if (try self.resolveExactCallableResolutionForLocal(outer_local)) |resolved| {
+            exact_lambda_id = resolved.lambda;
+            requires_hidden_capture = resolved.requires_hidden_capture;
+        }
+    }
+
+    const exact_callable_inst_id = if (exact_lambda_id == null and self.store.monotype_store.getMonotype(monotype) == .func)
+        try self.lookupMonomorphizedPatternCallableInstForMonotype(
+            pattern_idx,
+            monotype,
+            self.current_module_idx,
+        )
+    else
+        null;
+
+    if (exact_callable_inst_id) |callable_inst_id| {
+        try self.bindExactCallableLocal(local, callable_inst_id);
+        exact_lambda_id = self.exact_callable_locals.get(@intFromEnum(local));
+        requires_hidden_capture = try self.callableInstProducesClosureValue(callable_inst_id);
+    } else if (exact_lambda_id) |lambda_id| {
+        try self.bindExactLambdaLocal(local, lambda_id);
+    }
+
+    const new_index = capture_state.items.items.len;
+    try capture_state.items.append(self.allocator, .{
+        .pattern_idx = pattern_idx,
+        .local = local,
+        .monotype = monotype,
+        .exact_callable_inst_id = exact_callable_inst_id,
+        .exact_lambda_id = exact_lambda_id,
+        .requires_hidden_capture = requires_hidden_capture,
+    });
+    try capture_state.by_pattern.put(pattern_idx, new_index);
+    return local;
 }
 
 fn lowerLookupExternalInto(
@@ -3439,8 +4524,28 @@ fn lowerLambda(
     lambda: CIR.Expr.Lambda,
     fn_monotype: Monotype.Idx,
 ) Allocator.Error!MIR.LambdaId {
-    const cache_key = self.packCallableCacheKey(expr_idx, fn_monotype);
-    if (try self.lookupLoweredCallableLambdaCache(expr_idx, fn_monotype)) |cached| return cached;
+    return self.lowerLambdaInto(module_env, expr_idx, lambda, fn_monotype, null);
+}
+
+fn lowerLambdaInto(
+    self: *Self,
+    module_env: *const ModuleEnv,
+    expr_idx: CIR.Expr.Idx,
+    lambda: CIR.Expr.Lambda,
+    fn_monotype: Monotype.Idx,
+    reserved_lambda: ?MIR.LambdaId,
+) Allocator.Error!MIR.LambdaId {
+    const cache_key = makeCallableCacheKey(self, expr_idx, fn_monotype);
+    if (try self.lookupLoweredCallableLambdaCache(expr_idx, fn_monotype)) |cached| {
+        if (reserved_lambda) |reserved| {
+            if (cached == reserved) return cached;
+        } else {
+            return cached;
+        }
+    }
+    if (reserved_lambda) |reserved| {
+        try self.lowered_callable_lambdas.put(cache_key, reserved);
+    }
 
     const ret_monotype = switch (self.store.monotype_store.getMonotype(fn_monotype)) {
         .func => |func| func.ret,
@@ -3467,8 +4572,26 @@ fn lowerLambda(
         try self.predeclarePatternLocals(module_env, pattern_idx);
     }
 
+    const saved_implicit_lambda_captures = self.current_implicit_lambda_captures;
+    var implicit_lambda_captures = ImplicitLambdaCaptureState.init(self.allocator);
+    defer implicit_lambda_captures.deinit(self.allocator);
+    if (!self.current_callable_inst_context.isNone()) {
+        const active_template = self.monomorphization.getCallableTemplate(
+            self.monomorphization.getCallableInst(self.current_callable_inst_context).template,
+        );
+        if (active_template.kind == .lambda) {
+            self.current_implicit_lambda_captures = &implicit_lambda_captures;
+        }
+    }
+    defer self.current_implicit_lambda_captures = saved_implicit_lambda_captures;
+
     var callable_bindings = std.ArrayList(MIR.CallableBinding).empty;
     defer callable_bindings.deinit(self.allocator);
+    if (self.current_callable_bindings) |enclosing_bindings| {
+        for (enclosing_bindings) |binding| {
+            try self.appendCallableBindingUnique(&callable_bindings, binding);
+        }
+    }
     try self.appendCurrentCallableBindings(&callable_bindings, param_locals);
     try self.appendDirectParamPatternCallableBindings(&callable_bindings, param_patterns, param_locals);
     if (!self.current_callable_inst_context.isNone()) {
@@ -3504,24 +4627,125 @@ fn lowerLambda(
     const ret_stmt = try self.store.addCFStmt(self.allocator, .{ .ret = .{ .value = result_local } });
     var body = try self.lowerCirExprInto(lambda.body, result_local, ret_stmt);
 
+    const capture_top = self.scratch_local_ids.top();
+    defer self.scratch_local_ids.clearFrom(capture_top);
+    var capture_monotypes = std.ArrayList(Monotype.Idx).empty;
+    defer capture_monotypes.deinit(self.allocator);
+    var runtime_implicit_captures = std.ArrayList(ImplicitLambdaCapture).empty;
+    defer runtime_implicit_captures.deinit(self.allocator);
+    var callable_only_captures = std.ArrayList(struct {
+        local: MIR.LocalId,
+        lambda_id: MIR.LambdaId,
+    }).empty;
+    defer callable_only_captures.deinit(self.allocator);
+
+    for (implicit_lambda_captures.items.items) |capture| {
+        if (capture.exact_lambda_id) |lambda_id| {
+            if (!capture.requires_hidden_capture) {
+                try callable_only_captures.append(self.allocator, .{
+                    .local = capture.local,
+                    .lambda_id = lambda_id,
+                });
+                continue;
+            }
+        }
+
+        try self.scratch_local_ids.append(capture.local);
+        try capture_monotypes.append(
+            self.allocator,
+            try self.runtimeCaptureFieldMonotype(
+                capture.monotype,
+                if (capture.exact_lambda_id) |lambda_id|
+                    .{
+                        .lambda = lambda_id,
+                        .requires_hidden_capture = capture.requires_hidden_capture,
+                    }
+                else
+                    null,
+            ),
+        );
+        try runtime_implicit_captures.append(self.allocator, capture);
+    }
+
+    const runtime_capture_locals = self.scratch_local_ids.sliceFromStart(capture_top);
+    if (!self.current_callable_inst_context.isNone() and runtime_implicit_captures.items.len != 0) {
+        var runtime_capture_patterns = std.ArrayList(CIR.Pattern.Idx).empty;
+        defer runtime_capture_patterns.deinit(self.allocator);
+        try runtime_capture_patterns.ensureTotalCapacity(self.allocator, runtime_implicit_captures.items.len);
+        for (runtime_implicit_captures.items) |capture| {
+            runtime_capture_patterns.appendAssumeCapacity(capture.pattern_idx);
+        }
+        try self.lowered_callable_runtime_captures.put(
+            @intFromEnum(self.current_callable_inst_context),
+            try self.addRuntimeCapturePatternSpan(runtime_capture_patterns.items),
+        );
+    }
+    const captures_tuple_monotype = if (runtime_capture_locals.len == 0)
+        Monotype.Idx.none
+    else
+        try self.tupleMonotypeForFields(capture_monotypes.items);
+    const captures_param_local = if (runtime_capture_locals.len == 0)
+        null
+    else
+        try self.freshSyntheticLocal(captures_tuple_monotype, false);
+
+    if (captures_param_local) |captures_param| {
+        try self.seedCallableSourceLocal(captures_param);
+        try self.appendImplicitLambdaCaptureCallableBindings(
+            &callable_bindings,
+            captures_param,
+            runtime_implicit_captures.items,
+        );
+    }
+
     var i = param_patterns.len;
     while (i > 0) {
         i -= 1;
+        if (!self.paramPatternNeedsBindingStmt(module_env, param_patterns[i], param_locals[i])) continue;
         body = try self.lowerPatternBindingLocalInto(module_env, param_patterns[i], param_locals[i], body);
     }
 
-    const lowered = try self.store.addLambda(self.allocator, .{
+    if (captures_param_local) |captures_param| {
+        var capture_i = runtime_capture_locals.len;
+        while (capture_i > 0) {
+            capture_i -= 1;
+            body = try self.lowerRefInto(runtime_capture_locals[capture_i], .{ .field = .{
+                .source = captures_param,
+                .field_idx = @intCast(capture_i),
+            } }, body);
+        }
+    }
+
+    var callable_only_i = callable_only_captures.items.len;
+    while (callable_only_i > 0) {
+        callable_only_i -= 1;
+        const callable_only_capture = callable_only_captures.items[callable_only_i];
+        body = try self.store.addCFStmt(self.allocator, .{ .assign_lambda = .{
+            .target = callable_only_capture.local,
+            .lambda = callable_only_capture.lambda_id,
+            .next = body,
+        } });
+    }
+
+    const lowered_lambda = MIR.Lambda{
         .fn_monotype = fn_monotype,
         .params = params,
         .body = body,
         .ret_monotype = ret_monotype,
         .debug_name = .none,
         .source_region = module_env.store.getExprRegion(expr_idx),
-        .captures_param = null,
+        .captures_param = captures_param_local,
         .callable_bindings = try self.store.addCallableBindingSpan(self.allocator, callable_bindings.items),
         .recursion = .not_recursive,
         .hosted = null,
-    });
+    };
+
+    if (reserved_lambda) |reserved| {
+        try self.store.setLambda(reserved, lowered_lambda);
+        return reserved;
+    }
+
+    const lowered = try self.store.addLambda(self.allocator, lowered_lambda);
     try self.lowered_callable_lambdas.put(cache_key, lowered);
     return lowered;
 }
@@ -3545,7 +4769,18 @@ fn lowerLambdaParamLocals(
             &self.type_var_seen,
         );
         try self.bindPatternMonotypes(module_env, pattern_idx, monotype);
-        try self.scratch_local_ids.append(try self.freshSyntheticLocal(monotype, false));
+        const param_reassignable = switch (module_env.store.getPattern(pattern_idx)) {
+            .assign => |assign_pattern| assign_pattern.ident.attributes.reassignable,
+            .as => |as_pattern| as_pattern.ident.attributes.reassignable,
+            else => false,
+        };
+        const param_local = try self.freshSyntheticLocal(monotype, param_reassignable);
+        self.store.getLocalPtr(param_local).monotype = monotype;
+        switch (module_env.store.getPattern(pattern_idx)) {
+            .assign, .as => try self.bindPatternLocalInCurrentScope(pattern_idx, param_local),
+            else => {},
+        }
+        try self.scratch_local_ids.append(param_local);
     }
 
     return self.store.addLocalSpan(self.allocator, self.scratch_local_ids.sliceFromStart(scratch_top));
@@ -3569,6 +4804,33 @@ fn appendCallableBindingUnique(
     }
 
     try out.append(self.allocator, binding);
+}
+
+fn exactCallableResolutionFromCurrentCallableBindings(
+    self: *const Self,
+    source_local: MIR.LocalId,
+) ?ExactCallableResolution {
+    const bindings = self.current_callable_bindings orelse return null;
+    var resolved: ?MIR.LambdaId = null;
+    var requires_hidden_capture: ?bool = null;
+    for (bindings) |binding| {
+        if (binding.source_param != source_local) continue;
+        if (binding.projections.len != 0) continue;
+        if (resolved) |existing| {
+            if (existing != binding.lambda) return null;
+            if (requires_hidden_capture.? != binding.requires_hidden_capture) return null;
+        } else {
+            resolved = binding.lambda;
+            requires_hidden_capture = binding.requires_hidden_capture;
+        }
+    }
+    return if (resolved) |lambda|
+        .{
+            .lambda = lambda,
+            .requires_hidden_capture = requires_hidden_capture.?,
+        }
+    else
+        null;
 }
 
 fn callableProjectionSpansEqual(
@@ -3598,6 +4860,26 @@ fn callableProjectionSpansEqual(
     }
 
     return true;
+}
+
+fn addRuntimeCapturePatternSpan(
+    self: *Self,
+    patterns: []const CIR.Pattern.Idx,
+) Allocator.Error!RuntimeCapturePatternSpan {
+    if (patterns.len == 0) return RuntimeCapturePatternSpan.empty();
+    const start: u32 = @intCast(self.runtime_capture_patterns.items.len);
+    try self.runtime_capture_patterns.appendSlice(self.allocator, patterns);
+    return .{
+        .start = start,
+        .len = @intCast(patterns.len),
+    };
+}
+
+fn getRuntimeCapturePatternSpan(
+    self: *const Self,
+    span: RuntimeCapturePatternSpan,
+) []const CIR.Pattern.Idx {
+    return self.runtime_capture_patterns.items[span.start..][0..span.len];
 }
 
 fn appendCurrentCallableBindings(
@@ -3687,6 +4969,15 @@ fn appendDirectParamPatternCallableBindings(
     for (param_patterns, param_locals) |pattern_idx, param_local| {
         if (self.store.monotype_store.getMonotype(self.store.getLocal(param_local).monotype) != .func) continue;
 
+        var already_bound = false;
+        for (bindings.items) |existing| {
+            if (existing.source_param != param_local) continue;
+            if (existing.projections.len != 0) continue;
+            already_bound = true;
+            break;
+        }
+        if (already_bound) continue;
+
         const callable_inst_ids =
             if (self.monomorphization.getContextPatternCallableInsts(
                 self.current_callable_inst_context,
@@ -3751,40 +5042,6 @@ fn resolveUniqueCallableBindingResolution(
             if (existing.lambda != candidate.lambda or
                 existing.requires_hidden_capture != candidate.requires_hidden_capture)
             {
-                if (builtin.mode == .Debug) {
-                    std.debug.print(
-                        "[mir-binding-ambiguous] members={d}\n",
-                        .{callable_members.len},
-                    );
-                    std.debug.print(
-                        "  existing lambda={d} hidden_capture={}\n",
-                        .{
-                            @intFromEnum(existing.lambda),
-                            existing.requires_hidden_capture,
-                        },
-                    );
-                    std.debug.print(
-                        "  candidate inst={d} lambda={d} hidden_capture={}\n",
-                        .{
-                            @intFromEnum(callable_inst_id),
-                            @intFromEnum(candidate.lambda),
-                            candidate.requires_hidden_capture,
-                        },
-                    );
-                    for (callable_members) |member| {
-                        const member_inst = self.monomorphization.getCallableInst(member);
-                        std.debug.print(
-                            "  member inst={d} template={d} fn_mono={d} ctx={d} specs={d}\n",
-                            .{
-                                @intFromEnum(member),
-                                @intFromEnum(member_inst.template),
-                                @intFromEnum(member_inst.fn_monotype),
-                                @intFromEnum(member_inst.defining_context_callable_inst),
-                                self.monomorphization.getCallableParamSpecEntries(member_inst.callable_param_specs).len,
-                            },
-                        );
-                    }
-                }
                 std.debug.panic(
                     "statement-only MIR TODO: callable binding spec resolved to multiple distinct callable values ({d} members)",
                     .{callable_members.len},
@@ -3929,25 +5186,53 @@ fn appendClosureCaptureCallableBindings(
             continue;
         }
 
-        const exact_capture_callable_inst_id = (try self.resolveExactCallableInstForCapturePattern(
+        if (try self.resolveExactCallableInstForCapturePattern(
             closure_expr_idx,
             capture.pattern_idx,
             capture_monotype,
             closure_callable_inst_id,
-        )) orelse std.debug.panic(
+        )) |exact_capture_callable_inst_id| {
+            const capture_lambda = try self.lowerResolvedCallableInstLambda(exact_capture_callable_inst_id);
+            try self.appendCallableBindingUnique(bindings, .{
+                .source_param = captures_param,
+                .projections = try self.store.addCallableProjectionSpan(self.allocator, &.{.{ .field = capture_field_index }}),
+                .lambda = capture_lambda,
+                .requires_hidden_capture = try self.callableInstProducesClosureValue(exact_capture_callable_inst_id),
+            });
+        } else if (try self.resolveExactCallableResolutionForCapturePattern(capture.pattern_idx)) |capture_resolution| {
+            try self.appendCallableBindingUnique(bindings, .{
+                .source_param = captures_param,
+                .projections = try self.store.addCallableProjectionSpan(self.allocator, &.{.{ .field = capture_field_index }}),
+                .lambda = capture_resolution.lambda,
+                .requires_hidden_capture = capture_resolution.requires_hidden_capture,
+            });
+        } else std.debug.panic(
             "statement-only MIR TODO: missing exact callable binding for closure capture pattern {d}",
             .{@intFromEnum(capture.pattern_idx)},
         );
 
-        const capture_lambda = try self.lowerResolvedCallableInstLambda(exact_capture_callable_inst_id);
+        capture_field_index += 1;
+    }
+}
+
+fn appendImplicitLambdaCaptureCallableBindings(
+    self: *Self,
+    bindings: *std.ArrayList(MIR.CallableBinding),
+    captures_param: MIR.LocalId,
+    runtime_captures: []const ImplicitLambdaCapture,
+) Allocator.Error!void {
+    for (runtime_captures, 0..) |capture, capture_field_index| {
+        if (self.store.monotype_store.getMonotype(capture.monotype) != .func) continue;
+        const capture_lambda = capture.exact_lambda_id orelse std.debug.panic(
+            "statement-only MIR TODO: missing exact lambda binding for implicit lambda capture pattern {d}",
+            .{@intFromEnum(capture.pattern_idx)},
+        );
         try self.appendCallableBindingUnique(bindings, .{
             .source_param = captures_param,
-            .projections = try self.store.addCallableProjectionSpan(self.allocator, &.{.{ .field = capture_field_index }}),
+            .projections = try self.store.addCallableProjectionSpan(self.allocator, &.{.{ .field = @intCast(capture_field_index) }}),
             .lambda = capture_lambda,
-            .requires_hidden_capture = try self.callableInstProducesClosureValue(exact_capture_callable_inst_id),
+            .requires_hidden_capture = capture.requires_hidden_capture,
         });
-
-        capture_field_index += 1;
     }
 }
 
@@ -3958,7 +5243,7 @@ fn lowerClosureLambda(
     closure: CIR.Expr.Closure,
     fn_monotype: Monotype.Idx,
 ) Allocator.Error!MIR.LambdaId {
-    const cache_key = self.packCallableCacheKey(expr_idx, fn_monotype);
+    const cache_key = makeCallableCacheKey(self, expr_idx, fn_monotype);
     if (try self.lookupLoweredCallableLambdaCache(expr_idx, fn_monotype)) |cached| return cached;
 
     const lambda_expr = module_env.store.getExpr(closure.lambda_idx);
@@ -4001,7 +5286,8 @@ fn lowerClosureLambda(
     defer capture_monotypes.deinit(self.allocator);
     var callable_only_captures = std.ArrayList(struct {
         local: MIR.LocalId,
-        callable_inst_id: Monomorphize.CallableInstId,
+        callable_inst_id: ?Monomorphize.CallableInstId,
+        lambda_id: ?MIR.LambdaId,
     }).empty;
     defer callable_only_captures.deinit(self.allocator);
 
@@ -4015,6 +5301,7 @@ fn lowerClosureLambda(
             capture.pattern_idx,
         );
         self.store.getLocalPtr(capture_local).monotype = capture_monotype;
+        var exact_capture_resolution: ?ExactCallableResolution = null;
         if (self.store.monotype_store.getMonotype(capture_monotype) == .func) {
             if (try self.resolveExactCallableInstForCapturePattern(
                 expr_idx,
@@ -4023,24 +5310,43 @@ fn lowerClosureLambda(
                 if (self.current_callable_inst_context.isNone()) null else self.current_callable_inst_context,
             )) |capture_callable_inst_id| {
                 try self.bindExactCallableLocal(capture_local, capture_callable_inst_id);
-                if (!(try self.callableInstProducesClosureValue(capture_callable_inst_id))) {
+                exact_capture_resolution = .{
+                    .lambda = self.exact_callable_locals.get(@intFromEnum(capture_local)).?,
+                    .requires_hidden_capture = try self.callableInstProducesClosureValue(capture_callable_inst_id),
+                };
+                if (!exact_capture_resolution.?.requires_hidden_capture) {
                     try callable_only_captures.append(self.allocator, .{
                         .local = capture_local,
                         .callable_inst_id = capture_callable_inst_id,
+                        .lambda_id = null,
+                    });
+                    continue;
+                }
+            } else if (try self.resolveExactCallableResolutionForCapturePattern(capture.pattern_idx)) |capture_resolution| {
+                try self.bindExactLambdaLocal(capture_local, capture_resolution.lambda);
+                exact_capture_resolution = capture_resolution;
+                if (!capture_resolution.requires_hidden_capture) {
+                    try callable_only_captures.append(self.allocator, .{
+                        .local = capture_local,
+                        .callable_inst_id = null,
+                        .lambda_id = capture_resolution.lambda,
                     });
                     continue;
                 }
             }
         }
         try self.scratch_local_ids.append(capture_local);
-        capture_monotypes.appendAssumeCapacity(capture_monotype);
+        capture_monotypes.appendAssumeCapacity(
+            try self.runtimeCaptureFieldMonotype(capture_monotype, exact_capture_resolution),
+        );
     }
 
     const runtime_capture_locals = self.scratch_local_ids.sliceFromStart(capture_top);
 
     const captures_tuple_monotype = if (runtime_capture_locals.len == 0)
         Monotype.Idx.none
-    else try self.tupleMonotypeForFields(capture_monotypes.items);
+    else
+        try self.tupleMonotypeForFields(capture_monotypes.items);
 
     const captures_param_local = if (runtime_capture_locals.len == 0)
         null
@@ -4088,6 +5394,7 @@ fn lowerClosureLambda(
     var param_i = param_patterns.len;
     while (param_i > 0) {
         param_i -= 1;
+        if (!self.paramPatternNeedsBindingStmt(module_env, param_patterns[param_i], param_locals[param_i])) continue;
         body = try self.lowerPatternBindingLocalInto(module_env, param_patterns[param_i], param_locals[param_i], body);
     }
 
@@ -4095,11 +5402,20 @@ fn lowerClosureLambda(
     while (callable_only_i > 0) {
         callable_only_i -= 1;
         const callable_only_capture = callable_only_captures.items[callable_only_i];
-        body = try self.lowerResolvedCallableInstValueInto(
-            callable_only_capture.callable_inst_id,
-            callable_only_capture.local,
-            body,
-        );
+        if (callable_only_capture.callable_inst_id) |capture_callable_inst_id| {
+            body = try self.lowerResolvedCallableInstValueInto(
+                capture_callable_inst_id,
+                callable_only_capture.local,
+                body,
+            );
+        } else {
+            const lambda_id = callable_only_capture.lambda_id orelse unreachable;
+            body = try self.store.addCFStmt(self.allocator, .{ .assign_lambda = .{
+                .target = callable_only_capture.local,
+                .lambda = lambda_id,
+                .next = body,
+            } });
+        }
     }
 
     const lowered = try self.store.addLambda(self.allocator, .{
@@ -4240,10 +5556,14 @@ fn capturePatternRequiresRuntimeMaterialization(
         return self.callableInstProducesClosureValue(capture_callable_inst_id);
     }
 
+    if (try self.resolveExactCallableResolutionForCapturePattern(capture_pattern_idx)) |capture_resolution| {
+        return capture_resolution.requires_hidden_capture;
+    }
+
     return true;
 }
 
-fn reserveResolvedCallableInstClosureLambda(
+fn reserveResolvedCallableInstLambdaSkeleton(
     self: *Self,
     callable_inst_id: Monomorphize.CallableInstId,
     fn_monotype: Monotype.Idx,
@@ -4256,7 +5576,7 @@ fn reserveResolvedCallableInstClosureLambda(
     const ret_monotype = switch (self.store.monotype_store.getMonotype(fn_monotype)) {
         .func => |func| func.ret,
         else => std.debug.panic(
-            "statement-only MIR reserved closure lambda expected function monotype for callable inst {d}",
+            "statement-only MIR reserved callable lambda expected function monotype for callable inst {d}",
             .{@intFromEnum(callable_inst_id)},
         ),
     };
@@ -4287,7 +5607,7 @@ fn lowerReservedTrivialClosureLambda(
     callable_inst_id: Monomorphize.CallableInstId,
     reserved_lambda: MIR.LambdaId,
 ) Allocator.Error!MIR.LambdaId {
-    const cache_key = self.packCallableCacheKey(expr_idx, fn_monotype);
+    const cache_key = makeCallableCacheKey(self, expr_idx, fn_monotype);
     if (try self.lookupLoweredCallableLambdaCache(expr_idx, fn_monotype)) |cached| {
         if (cached == reserved_lambda) {
             if (self.in_progress_callable_insts.get(@intFromEnum(callable_inst_id)) != null) return cached;
@@ -4357,7 +5677,8 @@ fn lowerReservedTrivialClosureLambda(
     defer recursive_captures.deinit(self.allocator);
     var callable_only_captures = std.ArrayList(struct {
         local: MIR.LocalId,
-        callable_inst_id: Monomorphize.CallableInstId,
+        callable_inst_id: ?Monomorphize.CallableInstId,
+        lambda_id: ?MIR.LambdaId,
     }).empty;
     defer callable_only_captures.deinit(self.allocator);
 
@@ -4380,6 +5701,7 @@ fn lowerReservedTrivialClosureLambda(
             continue;
         }
         if (self.store.monotype_store.getMonotype(capture_monotype) == .func) {
+            var exact_capture_resolution: ?ExactCallableResolution = null;
             if (try self.resolveExactCallableInstForCapturePattern(
                 expr_idx,
                 capture.pattern_idx,
@@ -4387,14 +5709,36 @@ fn lowerReservedTrivialClosureLambda(
                 callable_inst_id,
             )) |capture_callable_inst_id| {
                 try self.bindExactCallableLocal(capture_local, capture_callable_inst_id);
-                if (!(try self.callableInstProducesClosureValue(capture_callable_inst_id))) {
+                exact_capture_resolution = .{
+                    .lambda = self.exact_callable_locals.get(@intFromEnum(capture_local)).?,
+                    .requires_hidden_capture = try self.callableInstProducesClosureValue(capture_callable_inst_id),
+                };
+                if (!exact_capture_resolution.?.requires_hidden_capture) {
                     try callable_only_captures.append(self.allocator, .{
                         .local = capture_local,
                         .callable_inst_id = capture_callable_inst_id,
+                        .lambda_id = null,
+                    });
+                    continue;
+                }
+            } else if (try self.resolveExactCallableResolutionForCapturePattern(capture.pattern_idx)) |capture_resolution| {
+                try self.bindExactLambdaLocal(capture_local, capture_resolution.lambda);
+                exact_capture_resolution = capture_resolution;
+                if (!capture_resolution.requires_hidden_capture) {
+                    try callable_only_captures.append(self.allocator, .{
+                        .local = capture_local,
+                        .callable_inst_id = null,
+                        .lambda_id = capture_resolution.lambda,
                     });
                     continue;
                 }
             }
+            try self.scratch_local_ids.append(capture_local);
+            try capture_monotypes.append(
+                self.allocator,
+                try self.runtimeCaptureFieldMonotype(capture_monotype, exact_capture_resolution),
+            );
+            continue;
         }
         try self.scratch_local_ids.append(capture_local);
         try capture_monotypes.append(self.allocator, capture_monotype);
@@ -4403,7 +5747,8 @@ fn lowerReservedTrivialClosureLambda(
     const nonrecursive_capture_locals = self.scratch_local_ids.sliceFromStart(capture_top);
     const captures_tuple_monotype = if (nonrecursive_capture_locals.len == 0)
         Monotype.Idx.none
-    else try self.tupleMonotypeForFields(capture_monotypes.items);
+    else
+        try self.tupleMonotypeForFields(capture_monotypes.items);
 
     const captures_param_local = if (nonrecursive_capture_locals.len == 0)
         null
@@ -4473,6 +5818,7 @@ fn lowerReservedTrivialClosureLambda(
     var param_i = param_patterns.len;
     while (param_i > 0) {
         param_i -= 1;
+        if (!self.paramPatternNeedsBindingStmt(module_env, param_patterns[param_i], param_locals[param_i])) continue;
         body = try self.lowerPatternBindingLocalInto(module_env, param_patterns[param_i], param_locals[param_i], body);
     }
 
@@ -4480,14 +5826,23 @@ fn lowerReservedTrivialClosureLambda(
     while (callable_only_i > 0) {
         callable_only_i -= 1;
         const callable_only_capture = callable_only_captures.items[callable_only_i];
-        body = try self.lowerResolvedCallableInstValueInto(
-            callable_only_capture.callable_inst_id,
-            callable_only_capture.local,
-            body,
-        );
+        if (callable_only_capture.callable_inst_id) |capture_callable_inst_id| {
+            body = try self.lowerResolvedCallableInstValueInto(
+                capture_callable_inst_id,
+                callable_only_capture.local,
+                body,
+            );
+        } else {
+            const lambda_id = callable_only_capture.lambda_id orelse unreachable;
+            body = try self.store.addCFStmt(self.allocator, .{ .assign_lambda = .{
+                .target = callable_only_capture.local,
+                .lambda = lambda_id,
+                .next = body,
+            } });
+        }
     }
 
-    self.store.getLambdaPtr(reserved_lambda).* = .{
+    try self.store.setLambda(reserved_lambda, .{
         .fn_monotype = fn_monotype,
         .params = params,
         .body = body,
@@ -4498,7 +5853,7 @@ fn lowerReservedTrivialClosureLambda(
         .callable_bindings = try self.store.addCallableBindingSpan(self.allocator, callable_bindings.items),
         .recursion = if (recursive_captures.items.len != 0) .recursive else .not_recursive,
         .hosted = null,
-    };
+    });
 
     return reserved_lambda;
 }
@@ -4507,6 +5862,10 @@ fn callableInstProducesClosureValue(
     self: *Self,
     callable_inst_id: Monomorphize.CallableInstId,
 ) Allocator.Error!bool {
+    if (self.lowered_callable_insts.get(@intFromEnum(callable_inst_id))) |lambda_id| {
+        return self.store.getLambda(lambda_id).captures_param != null;
+    }
+
     const callable_key = @intFromEnum(callable_inst_id);
     if (self.callable_inst_produces_closure_value.get(callable_key)) |cached| {
         return cached;
@@ -4523,27 +5882,69 @@ fn callableInstProducesClosureValue(
     const callable_inst = self.monomorphization.getCallableInst(callable_inst_id);
     const template = self.monomorphization.getCallableTemplate(callable_inst.template);
     const produces_closure = switch (template.kind) {
-        .closure => blk: {
-            const module_env = self.all_module_envs[template.module_idx];
-            const template_expr = module_env.store.getExpr(template.cir_expr);
-            const closure = switch (template_expr) {
-                .e_closure => |closure| closure,
-                else => std.debug.panic(
-                    "statement-only MIR callable-inst closure lowering expected closure expr for callable inst {d}, found {s}",
-                    .{ @intFromEnum(callable_inst_id), @tagName(template_expr) },
-                ),
-            };
+        .closure, .lambda => blk: {
+            if (self.lowered_callable_runtime_captures.get(callable_key)) |runtime_capture_patterns| {
+                break :blk self.getRuntimeCapturePatternSpan(runtime_capture_patterns).len != 0;
+            }
+            const runtime_closure = self.runtimeClosureExprForCallableInst(callable_inst_id) orelse break :blk false;
             break :blk (try self.closureRuntimeCaptureCount(
-                module_env,
-                template.cir_expr,
-                closure,
+                runtime_closure.module_env,
+                runtime_closure.expr_idx,
+                runtime_closure.closure,
                 callable_inst_id,
             )) != 0;
         },
-        .lambda, .top_level_def, .hosted_lambda => false,
+        .top_level_def, .hosted_lambda => false,
     };
     try self.callable_inst_produces_closure_value.put(callable_key, produces_closure);
     return produces_closure;
+}
+
+const RuntimeClosureExpr = struct {
+    module_env: *const ModuleEnv,
+    expr_idx: CIR.Expr.Idx,
+    closure: CIR.Expr.Closure,
+};
+
+fn runtimeClosureExprForCallableInst(
+    self: *Self,
+    callable_inst_id: Monomorphize.CallableInstId,
+) ?RuntimeClosureExpr {
+    const callable_inst = self.monomorphization.getCallableInst(callable_inst_id);
+    const template = self.monomorphization.getCallableTemplate(callable_inst.template);
+    const module_env = self.all_module_envs[template.module_idx];
+
+    return switch (template.kind) {
+        .closure => blk: {
+            const expr = module_env.store.getExpr(template.cir_expr);
+            const closure = switch (expr) {
+                .e_closure => |closure| closure,
+                else => std.debug.panic(
+                    "statement-only MIR callable-inst closure lowering expected closure expr for callable inst {d}, found {s}",
+                    .{ @intFromEnum(callable_inst_id), @tagName(expr) },
+                ),
+            };
+            break :blk .{
+                .module_env = module_env,
+                .expr_idx = template.cir_expr,
+                .closure = closure,
+            };
+        },
+        .lambda => blk: {
+            const closure_expr_idx = self.findWrappingClosureExpr(module_env, template.cir_expr) orelse break :blk null;
+            const closure_expr = module_env.store.getExpr(closure_expr_idx);
+            const closure = switch (closure_expr) {
+                .e_closure => |closure| closure,
+                else => unreachable,
+            };
+            break :blk .{
+                .module_env = module_env,
+                .expr_idx = closure_expr_idx,
+                .closure = closure,
+            };
+        },
+        .top_level_def, .hosted_lambda => null,
+    };
 }
 
 fn lowerResolvedCallableInstValueInto(
@@ -4564,25 +5965,49 @@ fn lowerResolvedCallableInstValueInto(
 
     const callable_inst = self.monomorphization.getCallableInst(callable_inst_id);
     const template = self.monomorphization.getCallableTemplate(callable_inst.template);
-    if (template.kind != .closure) {
-        std.debug.panic(
-            "statement-only MIR invariant violated: callable inst {d} required runtime captures but template kind was {s}",
-            .{ @intFromEnum(callable_inst_id), @tagName(template.kind) },
-        );
+    if (self.runtimeClosureExprForCallableInst(callable_inst_id) == null) {
+        if (self.lowered_callable_runtime_captures.get(@intFromEnum(callable_inst_id))) |runtime_capture_patterns| {
+            const capture_top = self.scratch_local_ids.top();
+            defer self.scratch_local_ids.clearFrom(capture_top);
+            for (self.getRuntimeCapturePatternSpan(runtime_capture_patterns)) |capture_pattern_idx| {
+                if (self.lookupExistingPatternLocalInScope(
+                    self.current_module_idx,
+                    self.current_pattern_scope,
+                    capture_pattern_idx,
+                )) |capture_local| {
+                    try self.scratch_local_ids.append(capture_local);
+                    continue;
+                }
+                if (try self.ensureImplicitLambdaCaptureLocal(capture_pattern_idx)) |capture_local| {
+                    try self.scratch_local_ids.append(capture_local);
+                    continue;
+                }
+                std.debug.panic(
+                    "statement-only MIR invariant violated: implicit runtime capture pattern {d} for callable inst {d} was not materialized in the current body",
+                    .{ @intFromEnum(capture_pattern_idx), @intFromEnum(callable_inst_id) },
+                );
+            }
+            return self.store.addCFStmt(self.allocator, .{ .assign_closure = .{
+                .target = target,
+                .lambda = lambda_id,
+                .captures = try self.store.addLocalSpan(
+                    self.allocator,
+                    self.scratch_local_ids.sliceFromStart(capture_top),
+                ),
+                .next = next,
+            } });
+        }
     }
 
+    const runtime_closure = self.runtimeClosureExprForCallableInst(callable_inst_id) orelse std.debug.panic(
+        "statement-only MIR invariant violated: callable inst {d} required runtime captures but had neither runtime closure expr nor implicit runtime capture metadata (template kind {s})",
+        .{ @intFromEnum(callable_inst_id), @tagName(template.kind) },
+    );
     const module_idx = template.module_idx;
-    const module_env = self.all_module_envs[module_idx];
-    const template_expr = module_env.store.getExpr(template.cir_expr);
-    const closure = switch (template_expr) {
-        .e_closure => |closure| closure,
-        else => std.debug.panic(
-            "statement-only MIR invariant violated: callable inst {d} required runtime captures but template expr was {s}",
-            .{ @intFromEnum(callable_inst_id), @tagName(template_expr) },
-        ),
-    };
+    const module_env = runtime_closure.module_env;
+    const closure = runtime_closure.closure;
 
-    var lower_plan = try self.planClosureLowering(module_env, template.cir_expr, closure, callable_inst_id);
+    var lower_plan = try self.planClosureLowering(module_env, runtime_closure.expr_idx, closure, callable_inst_id);
     defer lower_plan.deinit(self.allocator);
 
     const switching_module = module_idx != self.current_module_idx;
@@ -4626,24 +6051,23 @@ fn lowerResolvedCallableInstValueInto(
             self.current_module_idx,
             capture.pattern_idx,
         );
-        const capture_local = if (!skipped_callable_backed) if (self.lookupExistingPatternLocal(capture.pattern_idx)) |existing|
-            existing
-        else
-            try self.appendCaptureMaterialization(
+        const capture_local = if (!skipped_callable_backed) capture_blk: {
+            if (self.lookupExistingPatternLocal(capture.pattern_idx)) |existing| break :capture_blk existing;
+            if (try self.ensureImplicitLambdaCaptureLocal(capture.pattern_idx)) |implicit_capture| break :capture_blk implicit_capture;
+            break :capture_blk try self.appendCaptureMaterialization(
                 &capture_materializations,
                 module_env,
-                template.cir_expr,
-                callable_inst_id,
-                capture.pattern_idx,
-            )
-        else
-            try self.appendCaptureMaterialization(
-                &capture_materializations,
-                module_env,
-                template.cir_expr,
+                runtime_closure.expr_idx,
                 callable_inst_id,
                 capture.pattern_idx,
             );
+        } else try self.appendCaptureMaterialization(
+            &capture_materializations,
+            module_env,
+            runtime_closure.expr_idx,
+            callable_inst_id,
+            capture.pattern_idx,
+        );
 
         try self.scratch_local_ids.append(capture_local);
     }
@@ -4769,6 +6193,33 @@ fn resolveRuntimePatternMonotype(
     );
 }
 
+fn runtimeCaptureFieldMonotype(
+    self: *Self,
+    semantic_monotype: Monotype.Idx,
+    exact_resolution: ?ExactCallableResolution,
+) Allocator.Error!Monotype.Idx {
+    if (self.store.monotype_store.getMonotype(semantic_monotype) != .func) {
+        return semantic_monotype;
+    }
+
+    const resolved = exact_resolution orelse std.debug.panic(
+        "statement-only MIR TODO: missing exact callable resolution for function-valued runtime capture field",
+        .{},
+    );
+    if (!resolved.requires_hidden_capture) {
+        std.debug.panic(
+            "statement-only MIR invariant violated: callable-only lambda must not be materialized into a runtime capture field",
+            .{},
+        );
+    }
+
+    const captures_param = self.store.getLambda(resolved.lambda).captures_param orelse std.debug.panic(
+        "statement-only MIR invariant violated: callable resolution for lambda {d} required hidden captures but the lambda has no captures_param",
+        .{@intFromEnum(resolved.lambda)},
+    );
+    return self.store.getLocal(captures_param).monotype;
+}
+
 fn resolveExprMonotypeInModule(
     self: *Self,
     module_idx: u32,
@@ -4837,10 +6288,11 @@ fn lowerResolvedCallableInstLambda(
         callable_inst.fn_monotype_module_idx,
         module_idx,
     );
-    const reserved_lambda = if (template.kind == .closure)
-        try self.reserveResolvedCallableInstClosureLambda(callable_inst_id, fn_monotype, template.source_region)
-    else
-        null;
+    const reserved_lambda = try self.reserveResolvedCallableInstLambdaSkeleton(
+        callable_inst_id,
+        fn_monotype,
+        template.source_region,
+    );
 
     const switching_module = module_idx != self.current_module_idx;
     const saved_module_idx = self.current_module_idx;
@@ -4907,25 +6359,114 @@ fn lowerResolvedCallableInstLambda(
         }
     }
 
-    const lambda_id = switch (template_expr) {
-        .e_lambda => |lambda| try self.lowerLambda(module_env, template.cir_expr, lambda, fn_monotype),
-        .e_closure => |closure| try self.lowerReservedTrivialClosureLambda(
-            module_env,
-            template.cir_expr,
-            closure,
+    const lambda_id = if (self.runtimeClosureExprForCallableInst(callable_inst_id)) |runtime_closure|
+        try self.lowerReservedTrivialClosureLambda(
+            runtime_closure.module_env,
+            runtime_closure.expr_idx,
+            runtime_closure.closure,
             fn_monotype,
             callable_inst_id,
-            reserved_lambda orelse unreachable,
+            reserved_lambda,
+        )
+    else switch (template_expr) {
+        .e_lambda => |lambda| try self.lowerLambdaInto(
+            module_env,
+            template.cir_expr,
+            lambda,
+            fn_monotype,
+            reserved_lambda,
         ),
-        .e_hosted_lambda => |hosted| try self.lowerLambda(module_env, template.cir_expr, .{
-            .args = hosted.args,
-            .body = hosted.body,
-        }, fn_monotype),
+        .e_hosted_lambda => |hosted| try self.lowerLambdaInto(
+            module_env,
+            template.cir_expr,
+            .{
+                .args = hosted.args,
+                .body = hosted.body,
+            },
+            fn_monotype,
+            reserved_lambda,
+        ),
         else => std.debug.panic(
             "statement-only MIR callable-inst lambda lowering expected callable template, found {s}",
             .{@tagName(template_expr)},
         ),
     };
+
+    _ = self.reserved_callable_insts.remove(callable_inst_key);
+    try self.lowered_callable_insts.put(callable_inst_key, lambda_id);
+    return lambda_id;
+}
+
+fn lowerResolvedClosureExprLambda(
+    self: *Self,
+    module_env: *const ModuleEnv,
+    expr_idx: CIR.Expr.Idx,
+    closure: CIR.Expr.Closure,
+    fn_monotype: Monotype.Idx,
+    callable_inst_id: Monomorphize.CallableInstId,
+) Allocator.Error!MIR.LambdaId {
+    const callable_inst_key = @intFromEnum(callable_inst_id);
+    if (self.lowered_callable_insts.get(callable_inst_key)) |cached| return cached;
+    if (self.reserved_callable_insts.get(callable_inst_key)) |reserved| return reserved;
+
+    const callable_inst = self.monomorphization.getCallableInst(callable_inst_id);
+    const saved_callable_inst_context = self.current_callable_inst_context;
+    const saved_root_source_expr_context = self.current_root_source_expr_context;
+    const saved_type_var_seen = self.type_var_seen;
+    const saved_nominal_cycle_breakers = self.nominal_cycle_breakers;
+
+    self.type_var_seen = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
+    self.nominal_cycle_breakers = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
+    self.current_callable_inst_context = callable_inst_id;
+    self.current_root_source_expr_context = null;
+
+    defer {
+        self.type_var_seen.deinit();
+        self.type_var_seen = saved_type_var_seen;
+        self.nominal_cycle_breakers.deinit();
+        self.nominal_cycle_breakers = saved_nominal_cycle_breakers;
+        self.current_callable_inst_context = saved_callable_inst_context;
+        self.current_root_source_expr_context = saved_root_source_expr_context;
+    }
+
+    try self.seedTypeScopeBindingsInStore(
+        self.current_module_idx,
+        self.types_store,
+        &self.type_var_seen,
+    );
+
+    if (!callable_inst.subst.isNone()) {
+        const subst = self.monomorphization.getTypeSubst(callable_inst.subst);
+        for (self.monomorphization.getTypeSubstEntries(subst.entries)) |entry| {
+            if (builtin.mode == .Debug and entry.key.module_idx != self.current_module_idx) {
+                std.debug.panic(
+                    "Lower: callable inst subst entry from module {d} imported into module {d}",
+                    .{ entry.key.module_idx, self.current_module_idx },
+                );
+            }
+            const imported_mono = try self.importMonotypeFromStore(
+                &self.monomorphization.monotype_store,
+                entry.monotype.idx,
+                entry.monotype.module_idx,
+                self.current_module_idx,
+            );
+            try self.type_var_seen.put(entry.key.type_var, imported_mono);
+        }
+    }
+
+    const reserved_lambda = try self.reserveResolvedCallableInstLambdaSkeleton(
+        callable_inst_id,
+        fn_monotype,
+        module_env.store.getExprRegion(expr_idx),
+    );
+    const lambda_id = try self.lowerReservedTrivialClosureLambda(
+        module_env,
+        expr_idx,
+        closure,
+        fn_monotype,
+        callable_inst_id,
+        reserved_lambda,
+    );
 
     _ = self.reserved_callable_insts.remove(callable_inst_key);
     try self.lowered_callable_insts.put(callable_inst_key, lambda_id);
@@ -5017,22 +6558,29 @@ fn lowerCallInto(
             self.current_module_idx,
         );
     };
-    const callee_monotype = if (exact_callable_inst_id) |callable_inst_id|
-        blk: {
-            const callable_inst = self.monomorphization.getCallableInst(callable_inst_id);
-            break :blk try self.importMonotypeFromStore(
-                &self.monomorphization.monotype_store,
-                callable_inst.fn_monotype,
-                callable_inst.fn_monotype_module_idx,
-                self.current_module_idx,
-            );
-        }
+    const callee_monotype = if (exact_callable_inst_id) |callable_inst_id| blk: {
+        const callable_inst = self.monomorphization.getCallableInst(callable_inst_id);
+        break :blk try self.importMonotypeFromStore(
+            &self.monomorphization.monotype_store,
+            callable_inst.fn_monotype,
+            callable_inst.fn_monotype_module_idx,
+            self.current_module_idx,
+        );
+    } else try self.resolveMonotype(call.func);
+    const exact_call_lambda = if (exact_callable_inst_id) |callable_inst_id|
+        try self.lowerResolvedCallableInstLambda(callable_inst_id)
     else
-        try self.resolveMonotype(call.func);
+        null;
+    const exact_call_requires_hidden_capture = if (exact_callable_inst_id) |callable_inst_id|
+        try self.callableInstProducesClosureValue(callable_inst_id)
+    else
+        false;
     const callee_local = try self.freshSyntheticLocal(callee_monotype, false);
     const call_stmt = try self.store.addCFStmt(self.allocator, .{ .assign_call = .{
         .target = target,
         .callee = callee_local,
+        .exact_lambda = exact_call_lambda,
+        .exact_requires_hidden_capture = exact_call_requires_hidden_capture,
         .args = MIR.LocalSpan.empty(),
         .next = next,
     } });
@@ -5293,6 +6841,8 @@ fn lowerDotAccessInto(
             const call_stmt = try self.store.addCFStmt(self.allocator, .{ .assign_call = .{
                 .target = target,
                 .callee = callee_local,
+                .exact_lambda = lambda_id,
+                .exact_requires_hidden_capture = false,
                 .args = MIR.LocalSpan.empty(),
                 .next = next,
             } });
@@ -5447,21 +6997,23 @@ fn lowerBoolBranchChainInto(
     const cond_local = try self.freshSyntheticLocal(cond_mono, false);
     const join_id = self.freshJoinPointId();
     const join_params = try self.store.addLocalSpan(self.allocator, &.{target});
-    const outer_jump = try self.store.addCFStmt(self.allocator, .{ .jump = .{
+    const else_value = try self.freshSyntheticLocal(result_mono, false);
+    const else_jump = try self.store.addCFStmt(self.allocator, .{ .jump = .{
         .id = join_id,
-        .args = try self.store.addLocalSpan(self.allocator, &.{target}),
+        .args = try self.store.addLocalSpan(self.allocator, &.{else_value}),
     } });
 
-    const else_body = try self.lowerBoolBranchChainInto(branches[1..], final_else, target, outer_jump);
+    const else_body = try self.lowerBoolBranchChainInto(branches[1..], final_else, else_value, else_jump);
 
     const then_value = try self.freshSyntheticLocal(result_mono, false);
+    const then_jump = try self.store.addCFStmt(self.allocator, .{ .jump = .{
+        .id = join_id,
+        .args = try self.store.addLocalSpan(self.allocator, &.{then_value}),
+    } });
     const then_body = try self.lowerCirExprInto(
         branch.body,
         then_value,
-        try self.store.addCFStmt(self.allocator, .{ .jump = .{
-            .id = join_id,
-            .args = try self.store.addLocalSpan(self.allocator, &.{then_value}),
-        } }),
+        then_jump,
     );
     const tag_names = boolTagNamesForMonotype(self, cond_mono) orelse std.debug.panic(
         "statement-only MIR if expected Bool condition monotype for expr {d}",
@@ -5793,6 +7345,7 @@ fn lowerPatternBindingInto(
     pattern_idx: CIR.Pattern.Idx,
     expr_idx: CIR.Expr.Idx,
     mark_reassignable: bool,
+    rhs_pattern_scope: u64,
     next: MIR.CFStmtId,
 ) Allocator.Error!MIR.CFStmtId {
     const source_mono = try self.resolveMonotype(expr_idx);
@@ -5806,6 +7359,7 @@ fn lowerPatternBindingInto(
                     self.setPatternLocalsReassignable(module_env, pattern_idx, true);
                 }
                 try self.markSkippedCallableBackedBindingPatterns(module_env, pattern_idx);
+                self.current_pattern_scope = rhs_pattern_scope;
                 return next;
             },
             else => {},
@@ -5818,6 +7372,7 @@ fn lowerPatternBindingInto(
         self.setPatternLocalsReassignable(module_env, pattern_idx, true);
     }
     const bound = try self.lowerPatternBindingLocalInto(module_env, pattern_idx, source_local, next);
+    self.current_pattern_scope = rhs_pattern_scope;
     return self.lowerCirExprInto(expr_idx, source_local, bound);
 }
 
@@ -6061,9 +7616,11 @@ fn lowerLoopBreakJump(self: *Self) Allocator.Error!MIR.CFStmtId {
         "statement-only MIR break appeared outside any active loop",
         .{},
     );
+    const carried_locals = try self.currentBodyReassignableLocals();
+    defer self.allocator.free(carried_locals);
     return self.store.addCFStmt(self.allocator, .{ .jump = .{
         .id = loop_ctx.exit_id,
-        .args = loop_ctx.carried_locals,
+        .args = try self.store.addLocalSpan(self.allocator, carried_locals),
     } });
 }
 
@@ -6081,7 +7638,6 @@ fn lowerWhileStmtInto(
 
     try self.active_loops.append(self.allocator, .{
         .exit_id = loop_exit_id,
-        .carried_locals = carried_span,
     });
     defer _ = self.active_loops.pop();
 
@@ -6184,7 +7740,6 @@ fn lowerForStmtInto(
 
     try self.active_loops.append(self.allocator, .{
         .exit_id = loop_exit_id,
-        .carried_locals = carried_span,
     });
     defer _ = self.active_loops.pop();
 
@@ -6364,6 +7919,7 @@ fn lowerBlockStmtInto(
     self: *Self,
     module_env: *const ModuleEnv,
     stmt_idx: CIR.Statement.Idx,
+    before_pattern_scope: u64,
     next: MIR.CFStmtId,
 ) Allocator.Error!MIR.CFStmtId {
     const stmt = module_env.store.getStatement(stmt_idx);
@@ -6374,6 +7930,7 @@ fn lowerBlockStmtInto(
             decl.pattern,
             decl.expr,
             false,
+            before_pattern_scope,
             next,
         ),
         .s_var => |var_decl| self.lowerPatternBindingInto(
@@ -6381,6 +7938,7 @@ fn lowerBlockStmtInto(
             var_decl.pattern_idx,
             var_decl.expr,
             true,
+            before_pattern_scope,
             next,
         ),
         .s_reassign => |reassign| self.lowerPatternBindingInto(
@@ -6388,6 +7946,7 @@ fn lowerBlockStmtInto(
             reassign.pattern_idx,
             reassign.expr,
             false,
+            before_pattern_scope,
             next,
         ),
         .s_expr => |expr_stmt| blk: {
@@ -6444,37 +8003,228 @@ fn predeclareTrivialBlockStmtPatterns(
 ) Allocator.Error!void {
     switch (module_env.store.getStatement(stmt_idx)) {
         .s_decl => |decl| {
-            const source_mono = try self.resolveMonotype(decl.expr);
-            try self.bindPatternMonotypes(module_env, decl.pattern, source_mono);
+            if (builtin.mode == .Debug) {
+                const node_len = module_env.store.nodes.len();
+                if (@intFromEnum(decl.pattern) >= node_len or @intFromEnum(decl.expr) >= node_len) {
+                    std.debug.panic(
+                        "predeclareTrivialBlockStmtPatterns(s_decl): out-of-range stmt payload module={d} stmt={d} pattern={d} expr={d} node_len={d} callable_inst={d} root_source_expr={d}",
+                        .{
+                            self.current_module_idx,
+                            @intFromEnum(stmt_idx),
+                            @intFromEnum(decl.pattern),
+                            @intFromEnum(decl.expr),
+                            node_len,
+                            @intFromEnum(self.current_callable_inst_context),
+                            if (self.current_root_source_expr_context) |root_source_expr_idx| @intFromEnum(root_source_expr_idx) else std.math.maxInt(u32),
+                        },
+                    );
+                }
+            }
             try self.predeclarePatternLocals(module_env, decl.pattern);
-            if (self.store.monotype_store.getMonotype(source_mono) == .func and
-                self.callableBindingHasDemandedValueUse(decl.pattern))
-            {
-                switch (module_env.store.getExpr(decl.expr)) {
-                    .e_lambda, .e_closure, .e_hosted_lambda => {
-                        try self.markSkippedCallableBackedBindingPatterns(module_env, decl.pattern);
-                    },
-                    else => {},
+            if (try self.explicitExprMonotype(decl.expr)) |source_mono| {
+                if (builtin.mode == .Debug) {
+                    try self.debugAssertNoUnitPrimPatternBinding(module_env, decl.pattern, decl.expr, source_mono, stmt_idx, "s_decl");
+                }
+                try self.bindPatternMonotypes(module_env, decl.pattern, source_mono);
+                if (self.store.monotype_store.getMonotype(source_mono) == .func and
+                    self.callableBindingHasDemandedValueUse(decl.pattern))
+                {
+                    switch (module_env.store.getExpr(decl.expr)) {
+                        .e_lambda, .e_closure, .e_hosted_lambda => {
+                            try self.markSkippedCallableBackedBindingPatterns(module_env, decl.pattern);
+                        },
+                        else => {},
+                    }
                 }
             }
         },
         .s_var => |var_decl| {
-            const source_mono = try self.resolveMonotype(var_decl.expr);
-            try self.bindPatternMonotypes(module_env, var_decl.pattern_idx, source_mono);
+            if (builtin.mode == .Debug) {
+                const node_len = module_env.store.nodes.len();
+                if (@intFromEnum(var_decl.pattern_idx) >= node_len or @intFromEnum(var_decl.expr) >= node_len) {
+                    std.debug.panic(
+                        "predeclareTrivialBlockStmtPatterns(s_var): out-of-range stmt payload module={d} stmt={d} pattern={d} expr={d} node_len={d} callable_inst={d} root_source_expr={d}",
+                        .{
+                            self.current_module_idx,
+                            @intFromEnum(stmt_idx),
+                            @intFromEnum(var_decl.pattern_idx),
+                            @intFromEnum(var_decl.expr),
+                            node_len,
+                            @intFromEnum(self.current_callable_inst_context),
+                            if (self.current_root_source_expr_context) |root_source_expr_idx| @intFromEnum(root_source_expr_idx) else std.math.maxInt(u32),
+                        },
+                    );
+                }
+            }
             try self.predeclarePatternLocals(module_env, var_decl.pattern_idx);
-            if (self.store.monotype_store.getMonotype(source_mono) == .func and
-                self.callableBindingHasDemandedValueUse(var_decl.pattern_idx))
-            {
-                switch (module_env.store.getExpr(var_decl.expr)) {
-                    .e_lambda, .e_closure, .e_hosted_lambda => {
-                        try self.markSkippedCallableBackedBindingPatterns(module_env, var_decl.pattern_idx);
-                    },
-                    else => {},
+            self.setPatternLocalsReassignable(module_env, var_decl.pattern_idx, true);
+            if (try self.explicitExprMonotype(var_decl.expr)) |source_mono| {
+                if (builtin.mode == .Debug) {
+                    try self.debugAssertNoUnitPrimPatternBinding(module_env, var_decl.pattern_idx, var_decl.expr, source_mono, stmt_idx, "s_var");
+                }
+                try self.bindPatternMonotypes(module_env, var_decl.pattern_idx, source_mono);
+                if (self.store.monotype_store.getMonotype(source_mono) == .func and
+                    self.callableBindingHasDemandedValueUse(var_decl.pattern_idx))
+                {
+                    switch (module_env.store.getExpr(var_decl.expr)) {
+                        .e_lambda, .e_closure, .e_hosted_lambda => {
+                            try self.markSkippedCallableBackedBindingPatterns(module_env, var_decl.pattern_idx);
+                        },
+                        else => {},
+                    }
                 }
             }
         },
         else => {},
     }
+}
+
+fn debugAssertNoUnitPrimPatternBinding(
+    self: *Self,
+    module_env: *const ModuleEnv,
+    pattern_idx: CIR.Pattern.Idx,
+    expr_idx: CIR.Expr.Idx,
+    source_mono: Monotype.Idx,
+    stmt_idx: CIR.Statement.Idx,
+    stmt_kind: []const u8,
+) Allocator.Error!void {
+    if (self.store.monotype_store.getMonotype(source_mono) != .unit) return;
+
+    const resolved = self.types_store.resolveVar(ModuleEnv.varFrom(pattern_idx));
+    const requires_prim = switch (resolved.desc.content) {
+        .structure => |flat_type| switch (flat_type) {
+            .nominal_type => |nominal| blk: {
+                const common = self.currentCommonIdents();
+                break :blk nominal.origin_module.eql(common.builtin_module) and
+                    builtinPrimForNominal(nominal.ident.ident_idx, common) != null;
+            },
+            else => false,
+        },
+        else => false,
+    };
+    if (!requires_prim) return;
+
+    const expr = module_env.store.getExpr(expr_idx);
+    const maybe_low_level = switch (expr) {
+        .e_call => |call_expr| self.getCallLowLevelOp(module_env, call_expr.func),
+        else => null,
+    };
+    const call_func_expr: u32 = switch (expr) {
+        .e_call => |call_expr| @intFromEnum(call_expr.func),
+        else => std.math.maxInt(u32),
+    };
+    const call_func_tag: []const u8 = switch (expr) {
+        .e_call => |call_expr| @tagName(module_env.store.getExpr(call_expr.func)),
+        else => "none",
+    };
+    const call_func_pattern: u32 = switch (expr) {
+        .e_call => |call_expr| switch (module_env.store.getExpr(call_expr.func)) {
+            .e_lookup_local => |lookup| @intFromEnum(lookup.pattern_idx),
+            else => std.math.maxInt(u32),
+        },
+        else => std.math.maxInt(u32),
+    };
+    const call_func_source_expr: u32 = if (call_func_pattern != std.math.maxInt(u32))
+        if (self.monomorphization.getPatternSourceExpr(self.current_module_idx, @enumFromInt(call_func_pattern))) |source|
+            @intFromEnum(source.expr_idx)
+        else
+            std.math.maxInt(u32)
+    else
+        std.math.maxInt(u32);
+    const has_monomorphized_expr_mono = self.lookupMonomorphizedExprMonotype(expr_idx) != null;
+    const maybe_callsite_inst = switch (expr) {
+        .e_call => self.monomorphization.getCallSiteCallableInst(
+            self.current_callable_inst_context,
+            self.monomorphizationRootSourceExprContext(self.current_callable_inst_context),
+            self.current_module_idx,
+            expr_idx,
+        ),
+        else => null,
+    };
+    const callsite_template_expr: u32 = if (maybe_callsite_inst) |callsite_inst| blk: {
+        const callable_inst = self.monomorphization.getCallableInst(callsite_inst);
+        const template = self.monomorphization.getCallableTemplate(callable_inst.template);
+        break :blk @intFromEnum(template.cir_expr);
+    } else std.math.maxInt(u32);
+    const callsite_template_body_expr: u32 = if (maybe_callsite_inst) |callsite_inst| blk: {
+        const callable_inst = self.monomorphization.getCallableInst(callsite_inst);
+        const template = self.monomorphization.getCallableTemplate(callable_inst.template);
+        const template_env = self.all_module_envs[template.module_idx];
+        break :blk switch (template_env.store.getExpr(template.cir_expr)) {
+            .e_lambda => |lambda_expr| @intFromEnum(lambda_expr.body),
+            .e_hosted_lambda => |hosted_expr| @intFromEnum(hosted_expr.body),
+            .e_closure => |closure_expr| blk2: {
+                const lambda_expr = template_env.store.getExpr(closure_expr.lambda_idx);
+                break :blk2 switch (lambda_expr) {
+                    .e_lambda => |lambda| @intFromEnum(lambda.body),
+                    else => std.math.maxInt(u32),
+                };
+            },
+            else => std.math.maxInt(u32),
+        };
+    } else std.math.maxInt(u32);
+    const callsite_template_body_tag: []const u8 = if (maybe_callsite_inst) |callsite_inst| blk: {
+        const callable_inst = self.monomorphization.getCallableInst(callsite_inst);
+        const template = self.monomorphization.getCallableTemplate(callable_inst.template);
+        const template_env = self.all_module_envs[template.module_idx];
+        break :blk switch (template_env.store.getExpr(template.cir_expr)) {
+            .e_lambda => |lambda_expr| @tagName(template_env.store.getExpr(lambda_expr.body)),
+            .e_hosted_lambda => |hosted_expr| @tagName(template_env.store.getExpr(hosted_expr.body)),
+            .e_closure => |closure_expr| blk2: {
+                const lambda_expr = template_env.store.getExpr(closure_expr.lambda_idx);
+                break :blk2 switch (lambda_expr) {
+                    .e_lambda => |lambda| @tagName(template_env.store.getExpr(lambda.body)),
+                    else => "unknown",
+                };
+            },
+            else => "none",
+        };
+    } else "none";
+    const callsite_template_kind: []const u8 = if (maybe_callsite_inst) |callsite_inst| blk: {
+        const callable_inst = self.monomorphization.getCallableInst(callsite_inst);
+        const template = self.monomorphization.getCallableTemplate(callable_inst.template);
+        break :blk @tagName(template.kind);
+    } else "none";
+    const callsite_fn_monotype: []const u8 = if (maybe_callsite_inst) |callsite_inst| blk: {
+        const callable_inst = self.monomorphization.getCallableInst(callsite_inst);
+        break :blk @tagName(self.monomorphization.monotype_store.getMonotype(callable_inst.fn_monotype));
+    } else "none";
+    const callsite_ret_monotype: []const u8 = if (maybe_callsite_inst) |callsite_inst| blk: {
+        const callable_inst = self.monomorphization.getCallableInst(callsite_inst);
+        const fn_mono = self.monomorphization.monotype_store.getMonotype(callable_inst.fn_monotype);
+        break :blk switch (fn_mono) {
+            .func => |func| @tagName(self.monomorphization.monotype_store.getMonotype(func.ret)),
+            else => "non-func",
+        };
+    } else "none";
+
+    std.debug.panic(
+        "predeclareTrivialBlockStmtPatterns({s}): unit source monotype would bind builtin prim pattern module={d} stmt={d} pattern={d} expr={d} resolved_root={d} expr_tag={s} call_func_expr={d} call_func_tag={s} call_func_pattern={d} call_func_source_expr={d} low_level={s} has_monomorphized_expr_mono={} callsite_inst={d} callsite_template_expr={d} callsite_template_body_expr={d} callsite_template_body_tag={s} callsite_template_kind={s} callsite_fn_monotype={s} callsite_ret_monotype={s} callable_inst={d} root_source_expr={d}",
+        .{
+            stmt_kind,
+            self.current_module_idx,
+            @intFromEnum(stmt_idx),
+            @intFromEnum(pattern_idx),
+            @intFromEnum(expr_idx),
+            @intFromEnum(resolved.var_),
+            @tagName(expr),
+            call_func_expr,
+            call_func_tag,
+            call_func_pattern,
+            call_func_source_expr,
+            if (maybe_low_level) |op| @tagName(op) else "none",
+            has_monomorphized_expr_mono,
+            if (maybe_callsite_inst) |callsite_inst| @intFromEnum(callsite_inst) else std.math.maxInt(u32),
+            callsite_template_expr,
+            callsite_template_body_expr,
+            callsite_template_body_tag,
+            callsite_template_kind,
+            callsite_fn_monotype,
+            callsite_ret_monotype,
+            @intFromEnum(self.current_callable_inst_context),
+            if (self.current_root_source_expr_context) |root_source_expr_idx| @intFromEnum(root_source_expr_idx) else std.math.maxInt(u32),
+        },
+    );
 }
 
 fn predeclarePatternLocals(
@@ -6498,18 +8248,76 @@ fn lowerBlockInto(
 ) Allocator.Error!MIR.CFStmtId {
     const module_env = self.all_module_envs[self.current_module_idx];
     const stmts = module_env.store.sliceStatements(block.stmts);
+    const saved_scope = self.current_pattern_scope;
+    const scope_infos = try self.allocator.alloc(BlockStmtScopeInfo, stmts.len);
+    defer self.allocator.free(scope_infos);
 
-    for (stmts) |stmt_idx| {
+    var scope = self.current_pattern_scope;
+    for (stmts, 0..) |stmt_idx, i| {
+        scope_infos[i].before = scope;
+        switch (module_env.store.getStatement(stmt_idx)) {
+            .s_decl, .s_var, .s_reassign => {
+                scope = self.freshChildPatternScope(scope);
+                scope_infos[i].after = scope;
+            },
+            else => {
+                scope_infos[i].after = scope;
+            },
+        }
+
+        self.current_pattern_scope = scope_infos[i].after;
         try self.predeclareTrivialBlockStmtPatterns(module_env, stmt_idx);
     }
 
+    self.current_pattern_scope = scope;
     var entry = try self.lowerCirExprInto(block.final_expr, target, next);
     var i = stmts.len;
     while (i > 0) {
         i -= 1;
-        entry = try self.lowerBlockStmtInto(module_env, stmts[i], entry);
+        self.current_pattern_scope = scope_infos[i].after;
+        entry = try self.lowerBlockStmtInto(module_env, stmts[i], scope_infos[i].before, entry);
+        self.current_pattern_scope = scope_infos[i].before;
     }
+    self.current_pattern_scope = saved_scope;
     return entry;
+}
+
+fn findWrappingClosureExpr(
+    _: *Self,
+    module_env: *const ModuleEnv,
+    lambda_expr_idx: CIR.Expr.Idx,
+) ?CIR.Expr.Idx {
+    var found: ?CIR.Expr.Idx = null;
+
+    const node_count = module_env.store.nodes.len();
+    var raw_idx: usize = 0;
+    while (raw_idx < node_count) : (raw_idx += 1) {
+        const node_idx: CIR.Expr.Idx = @enumFromInt(raw_idx);
+        const node = module_env.store.nodes.get(@enumFromInt(raw_idx));
+        if (node.tag != .expr_closure) continue;
+
+        const expr = module_env.store.getExpr(node_idx);
+        const closure = switch (expr) {
+            .e_closure => |closure| closure,
+            else => unreachable,
+        };
+        if (closure.lambda_idx != lambda_expr_idx) continue;
+
+        if (found) |existing| {
+            std.debug.panic(
+                "statement-only MIR invariant violated: lambda expr {d} was wrapped by multiple closure exprs ({d}, {d})",
+                .{
+                    @intFromEnum(lambda_expr_idx),
+                    @intFromEnum(existing),
+                    @intFromEnum(node_idx),
+                },
+            );
+        }
+
+        found = node_idx;
+    }
+
+    return found;
 }
 
 fn lowerCirExprInto(
@@ -6838,15 +8646,24 @@ fn lowerCirExprInto(
         .e_lookup_external => |lookup| self.lowerLookupExternalInto(expr_idx, module_env, lookup, target, next),
         .e_lookup_required => |lookup| self.lowerLookupRequiredInto(expr_idx, module_env, lookup, target, next),
         .e_lambda => |lambda| blk: {
+            if (self.findWrappingClosureExpr(module_env, expr_idx)) |closure_expr_idx| {
+                break :blk try self.lowerCirExprInto(closure_expr_idx, target, next);
+            }
+
             const callable_inst_id = (try self.lookupMonomorphizedValueExprCallableInstForMonotype(
                 expr_idx,
                 monotype,
                 self.current_module_idx,
             )) orelse self.lookupMonomorphizedValueExprCallableInst(expr_idx);
-            const lambda_id = if (callable_inst_id) |resolved_callable_inst_id|
-                try self.lowerResolvedCallableInstLambda(resolved_callable_inst_id)
-            else
-                try self.lowerLambda(module_env, expr_idx, lambda, monotype);
+            if (callable_inst_id) |resolved_callable_inst_id| {
+                break :blk try self.lowerResolvedCallableInstValueInto(
+                    resolved_callable_inst_id,
+                    target,
+                    next,
+                );
+            }
+
+            const lambda_id = try self.lowerLambda(module_env, expr_idx, lambda, monotype);
             break :blk self.store.addCFStmt(self.allocator, .{ .assign_lambda = .{
                 .target = target,
                 .lambda = lambda_id,
@@ -6859,8 +8676,29 @@ fn lowerCirExprInto(
                 monotype,
                 self.current_module_idx,
             )) orelse self.lookupMonomorphizedValueExprCallableInst(expr_idx);
+            if (closure_callable_inst_id) |callable_inst_id| {
+                const template = self.monomorphization.getCallableTemplate(
+                    self.monomorphization.getCallableInst(callable_inst_id).template,
+                );
+                if (template.kind != .closure) {
+                    std.debug.panic(
+                        "statement-only MIR invariant violated: closure expr {d} resolved to callable inst {d} with template kind {s}",
+                        .{
+                            @intFromEnum(expr_idx),
+                            @intFromEnum(callable_inst_id),
+                            @tagName(template.kind),
+                        },
+                    );
+                }
+            }
             const lambda_id = if (closure_callable_inst_id) |callable_inst_id|
-                try self.lowerResolvedCallableInstLambda(callable_inst_id)
+                try self.lowerResolvedClosureExprLambda(
+                    module_env,
+                    expr_idx,
+                    closure,
+                    monotype,
+                    callable_inst_id,
+                )
             else
                 try self.lowerClosureLambda(module_env, expr_idx, closure, monotype);
             var lower_plan_storage: ?ClosureLowerPlan = null;
@@ -6891,27 +8729,25 @@ fn lowerCirExprInto(
                     self.current_module_idx,
                     capture.pattern_idx,
                 );
-                const capture_local = if (!skipped_callable_backed) if (self.lookupExistingPatternLocal(capture.pattern_idx)) |existing|
-                    existing
-                else
-                    try self.appendCaptureMaterialization(
-                        &capture_materializations,
-                        module_env,
-                        expr_idx,
-                        closure_callable_inst_id,
-                        capture.pattern_idx,
-                    )
-                else
-                    try self.appendCaptureMaterialization(
+                const capture_local = if (!skipped_callable_backed) capture_blk: {
+                    if (self.lookupExistingPatternLocal(capture.pattern_idx)) |existing| break :capture_blk existing;
+                    if (try self.ensureImplicitLambdaCaptureLocal(capture.pattern_idx)) |implicit_capture| break :capture_blk implicit_capture;
+                    break :capture_blk try self.appendCaptureMaterialization(
                         &capture_materializations,
                         module_env,
                         expr_idx,
                         closure_callable_inst_id,
                         capture.pattern_idx,
                     );
+                } else try self.appendCaptureMaterialization(
+                    &capture_materializations,
+                    module_env,
+                    expr_idx,
+                    closure_callable_inst_id,
+                    capture.pattern_idx,
+                );
                 try self.scratch_local_ids.append(capture_local);
             }
-
             const runtime_captures = self.scratch_local_ids.sliceFromStart(capture_top);
             if (runtime_captures.len == 0) {
                 var current = try self.store.addCFStmt(self.allocator, .{ .assign_lambda = .{
@@ -7153,12 +8989,7 @@ fn patternToLocal(self: *Self, pattern_idx: CIR.Pattern.Idx) Allocator.Error!MIR
         => Ident.Idx.NONE,
     };
 
-    const monotype = try self.monotypeFromTypeVarWithBindings(
-        self.current_module_idx,
-        self.types_store,
-        ModuleEnv.varFrom(pattern_idx),
-        &self.type_var_seen,
-    );
+    const monotype = try self.requirePatternMonotype(pattern_idx);
     const local = try self.store.addLocal(self.allocator, .{
         .monotype = monotype,
         .reassignable = ident_idx.attributes.reassignable,
@@ -7177,6 +9008,35 @@ fn lookupExistingPatternLocal(self: *Self, pattern_idx: CIR.Pattern.Idx) ?MIR.Lo
     return local;
 }
 
+fn bindPatternLocalInCurrentScope(
+    self: *Self,
+    pattern_idx: CIR.Pattern.Idx,
+    local: MIR.LocalId,
+) Allocator.Error!void {
+    const base_key: u64 = (@as(u64, self.current_module_idx) << 32) | @intFromEnum(pattern_idx);
+    const key: u128 = (@as(u128, self.current_pattern_scope) << 64) | @as(u128, base_key);
+    try self.pattern_symbols.put(key, local);
+}
+
+fn paramPatternNeedsBindingStmt(
+    self: *const Self,
+    module_env: *const ModuleEnv,
+    pattern_idx: CIR.Pattern.Idx,
+    source_local: MIR.LocalId,
+) bool {
+    return switch (module_env.store.getPattern(pattern_idx)) {
+        .assign => {
+            const existing = self.lookupExistingPatternLocalInScope(
+                self.current_module_idx,
+                self.current_pattern_scope,
+                pattern_idx,
+            ) orelse return true;
+            return existing != source_local;
+        },
+        else => true,
+    };
+}
+
 fn lookupExistingPatternLocalInScope(
     self: *const Self,
     module_idx: u32,
@@ -7186,6 +9046,24 @@ fn lookupExistingPatternLocalInScope(
     const base_key: u64 = (@as(u64, module_idx) << 32) | @intFromEnum(pattern_idx);
     const key: u128 = (@as(u128, pattern_scope) << 64) | @as(u128, base_key);
     return self.pattern_symbols.get(key);
+}
+
+fn lookupExistingPatternLocalInAncestorScopes(
+    self: *const Self,
+    module_idx: u32,
+    pattern_scope: u64,
+    pattern_idx: CIR.Pattern.Idx,
+) ?MIR.LocalId {
+    var scope = self.pattern_scope_parents.get(pattern_scope) orelse return null;
+    while (true) {
+        if (self.lookupExistingPatternLocalInScope(module_idx, scope, pattern_idx)) |local| {
+            return local;
+        }
+
+        scope = self.pattern_scope_parents.get(scope) orelse break;
+    }
+
+    return null;
 }
 
 fn makeSyntheticIdent(self: *Self, original_ident: Ident.Idx) Ident.Idx {
@@ -7198,9 +9076,103 @@ fn makeSyntheticIdent(self: *Self, original_ident: Ident.Idx) Ident.Idx {
 }
 
 fn freshStatementPatternScope(self: *Self) u64 {
+    return self.freshChildPatternScope(self.current_pattern_scope);
+}
+
+fn freshChildPatternScope(self: *Self, parent_scope: u64) u64 {
     const scope = self.next_statement_pattern_scope;
     self.next_statement_pattern_scope += 1;
+    if (parent_scope != 0) {
+        self.pattern_scope_parents.put(scope, parent_scope) catch @panic("OutOfMemory");
+    }
     return scope;
+}
+
+fn currentVisibleReassignableBindings(self: *Self) Allocator.Error![]VisiblePatternBinding {
+    var bindings = std.ArrayList(VisiblePatternBinding).empty;
+    errdefer bindings.deinit(self.allocator);
+
+    var seen_patterns = std.AutoHashMap(u64, void).init(self.allocator);
+    defer seen_patterns.deinit();
+
+    var scope = self.current_pattern_scope;
+    while (true) {
+        var it = self.pattern_symbols.iterator();
+        while (it.next()) |entry| {
+            const packed_key = entry.key_ptr.*;
+            const entry_scope: u64 = @truncate(packed_key >> 64);
+            if (entry_scope != scope) continue;
+
+            const base_key: u64 = @truncate(packed_key);
+            const entry_module_idx: u32 = @truncate(base_key >> 32);
+            if (entry_module_idx != self.current_module_idx) continue;
+            if (seen_patterns.contains(base_key)) continue;
+
+            const local = entry.value_ptr.*;
+            if (@intFromEnum(local) < self.current_body_local_floor) continue;
+            if (!self.store.getLocal(local).reassignable) continue;
+
+            try seen_patterns.put(base_key, {});
+            try bindings.append(self.allocator, .{
+                .pattern_idx = @enumFromInt(@as(u32, @truncate(base_key))),
+                .local = local,
+            });
+        }
+
+        if (scope == 0) break;
+        scope = self.pattern_scope_parents.get(scope) orelse 0;
+    }
+
+    std.mem.sort(
+        VisiblePatternBinding,
+        bindings.items,
+        {},
+        struct {
+            fn lessThan(_: void, lhs: VisiblePatternBinding, rhs: VisiblePatternBinding) bool {
+                return @intFromEnum(lhs.pattern_idx) < @intFromEnum(rhs.pattern_idx);
+            }
+        }.lessThan,
+    );
+
+    return bindings.toOwnedSlice(self.allocator);
+}
+
+fn visibleReassignableBindingsInScope(
+    self: *Self,
+    scope: u64,
+) Allocator.Error![]VisiblePatternBinding {
+    const saved_scope = self.current_pattern_scope;
+    self.current_pattern_scope = scope;
+    defer self.current_pattern_scope = saved_scope;
+    return self.currentVisibleReassignableBindings();
+}
+
+fn predeclareVisibleReassignableBindingsInScope(
+    self: *Self,
+    before_scope: u64,
+    after_scope: u64,
+) Allocator.Error!void {
+    const bindings = try self.visibleReassignableBindingsInScope(before_scope);
+    defer self.allocator.free(bindings);
+
+    const saved_scope = self.current_pattern_scope;
+    self.current_pattern_scope = after_scope;
+    defer self.current_pattern_scope = saved_scope;
+
+    for (bindings) |binding| {
+        if (self.lookupExistingPatternLocalInScope(
+            self.current_module_idx,
+            after_scope,
+            binding.pattern_idx,
+        ) != null) continue;
+
+        const source_local = binding.local;
+        const new_local = try self.freshSyntheticLocal(
+            self.store.getLocal(source_local).monotype,
+            true,
+        );
+        try self.bindPatternLocalInCurrentScope(binding.pattern_idx, new_local);
+    }
 }
 
 fn callableBindingHasDemandedValueUse(self: *const Self, pattern_idx: CIR.Pattern.Idx) bool {
@@ -7364,6 +9336,10 @@ fn resolveMonotype(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!Monotype
         );
     }
 
+    if (try self.semanticExprResultMonotype(expr_idx)) |monotype| {
+        return monotype;
+    }
+
     const type_var = ModuleEnv.varFrom(expr_idx);
     return try self.monotypeFromTypeVarWithBindings(
         self.current_module_idx,
@@ -7509,15 +9485,45 @@ fn refreshPatternLocalMonotype(
     pattern_idx: CIR.Pattern.Idx,
     local: MIR.LocalId,
 ) Allocator.Error!void {
+    const monotype = try self.requirePatternMonotype(pattern_idx);
+    self.store.getLocalPtr(local).monotype = monotype;
+}
+
+fn requirePatternMonotype(
+    self: *Self,
+    pattern_idx: CIR.Pattern.Idx,
+) Allocator.Error!Monotype.Idx {
+    const module_env = self.all_module_envs[self.current_module_idx];
+
+    if (self.monomorphization.getPatternSourceExpr(self.current_module_idx, pattern_idx)) |source| {
+        const monotype = try self.resolveExprMonotypeInModule(source.module_idx, source.expr_idx);
+        return monotype;
+    }
+
+    if (findDefByPattern(module_env, pattern_idx)) |def_idx| {
+        return self.resolveExprMonotypeInModule(self.current_module_idx, module_env.store.getDef(def_idx).expr);
+    }
+
     const maybe_monotype = try self.explicitMonotypeFromTypeVarWithBindings(
         self.current_module_idx,
         self.types_store,
         ModuleEnv.varFrom(pattern_idx),
         &self.type_var_seen,
     );
-    const monotype = maybe_monotype orelse return;
-    if (monotype.isNone()) return;
-    self.store.getLocalPtr(local).monotype = monotype;
+    if (maybe_monotype) |monotype| {
+        if (!monotype.isNone()) return monotype;
+    }
+
+    std.debug.panic(
+        "statement-only MIR invariant violated: missing exact monotype for pattern {d} in module {d} scope={d} callable_inst={d} root_source_expr={d}",
+        .{
+            @intFromEnum(pattern_idx),
+            self.current_module_idx,
+            self.current_pattern_scope,
+            @intFromEnum(self.current_callable_inst_context),
+            if (self.current_root_source_expr_context) |root_source_expr_idx| @intFromEnum(root_source_expr_idx) else std.math.maxInt(u32),
+        },
+    );
 }
 
 fn explicitMonotypeFromTypeVarWithBindings(
@@ -7527,15 +9533,11 @@ fn explicitMonotypeFromTypeVarWithBindings(
     var_: types.Var,
     bindings: *std.AutoHashMap(types.Var, Monotype.Idx),
 ) Allocator.Error!?Monotype.Idx {
+    _ = self;
+    _ = module_idx;
     const resolved = store_types.resolveVar(var_);
     return switch (resolved.desc.content) {
-        .flex, .rigid => bindings.get(resolved.var_),
-        .alias, .structure => try self.monotypeFromTypeVarWithBindings(
-            module_idx,
-            store_types,
-            var_,
-            bindings,
-        ),
+        .flex, .rigid, .alias, .structure => bindings.get(resolved.var_),
         .err => null,
     };
 }
@@ -7654,9 +9656,34 @@ fn bindTypeVarMonotypes(self: *Self, type_var: types.Var, monotype: Monotype.Idx
     const resolved = self.types_store.resolveVar(type_var);
     if (self.type_var_seen.get(resolved.var_)) |existing| {
         if (!(try self.monotypesStructurallyEqual(existing, monotype))) {
+            const context_template = if (!self.current_callable_inst_context.isNone())
+                self.monomorphization.getCallableTemplate(
+                    self.monomorphization.getCallableInst(self.current_callable_inst_context).template,
+                )
+            else
+                null;
+            const context_region = if (context_template) |template|
+                self.all_module_envs[template.module_idx].store.getExprRegion(template.cir_expr)
+            else
+                null;
+            const root_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(resolved.var_));
+            const root_node = self.all_module_envs[self.current_module_idx].store.nodes.get(root_node_idx);
             typeBindingInvariant(
-                "bindTypeVarMonotypes: conflicting monotype binding for type var root {d} (existing={d}, new={d})",
-                .{ @intFromEnum(resolved.var_), @intFromEnum(existing), @intFromEnum(monotype) },
+                "bindTypeVarMonotypes: conflicting monotype binding for type var root {d} node_tag={s} in module {d} existing={d} existing_mono={any} new={d} new_mono={any} callable_inst={d} root_source_expr={d} template_expr={d} template_kind={s} template_region={any}",
+                .{
+                    @intFromEnum(resolved.var_),
+                    @tagName(root_node.tag),
+                    self.current_module_idx,
+                    @intFromEnum(existing),
+                    self.store.monotype_store.getMonotype(existing),
+                    @intFromEnum(monotype),
+                    self.store.monotype_store.getMonotype(monotype),
+                    @intFromEnum(self.current_callable_inst_context),
+                    if (self.current_root_source_expr_context) |root_source_expr_idx| @intFromEnum(root_source_expr_idx) else std.math.maxInt(u32),
+                    if (context_template) |template| @intFromEnum(template.cir_expr) else std.math.maxInt(u32),
+                    if (context_template) |template| @tagName(template.kind) else "none",
+                    context_region,
+                },
             );
         }
         return;
@@ -7667,19 +9694,25 @@ fn bindTypeVarMonotypes(self: *Self, type_var: types.Var, monotype: Monotype.Idx
             try self.type_var_seen.put(resolved.var_, monotype);
         },
         .alias => |alias| {
+            try self.type_var_seen.put(resolved.var_, monotype);
             const backing_var = self.types_store.getAliasBackingVar(alias);
             try self.bindTypeVarMonotypes(backing_var, monotype);
         },
         .structure => |flat_type| {
             // Register before recursing so recursive structures short-circuit.
             try self.type_var_seen.put(resolved.var_, monotype);
-            try self.bindFlatTypeMonotypes(flat_type, monotype);
+            try self.bindFlatTypeMonotypes(resolved.var_, flat_type, monotype);
         },
         .err => {},
     }
 }
 
-fn bindFlatTypeMonotypes(self: *Self, flat_type: types.FlatType, monotype: Monotype.Idx) Allocator.Error!void {
+fn bindFlatTypeMonotypes(
+    self: *Self,
+    root_var: types.Var,
+    flat_type: types.FlatType,
+    monotype: Monotype.Idx,
+) Allocator.Error!void {
     if (monotype.isNone()) return;
 
     const mono = self.store.monotype_store.getMonotype(monotype);
@@ -7749,11 +9782,20 @@ fn bindFlatTypeMonotypes(self: *Self, flat_type: types.FlatType, monotype: Monot
             }
 
             if (origin.eql(common.builtin_module) and builtinPrimForNominal(ident, common) != null) {
+                const store_nodes_len = self.all_module_envs[self.current_module_idx].store.nodes.len();
                 switch (mono) {
                     .prim => {},
                     else => typeBindingInvariant(
-                        "bindFlatTypeMonotypes(nominal prim): expected prim monotype, found '{s}'",
-                        .{@tagName(mono)},
+                        "bindFlatTypeMonotypes(nominal prim): expected prim monotype, found '{s}' for root_var={d} module={d} store_nodes_len={d} root_var_in_range={any} callable_inst={d} root_source_expr={d}",
+                        .{
+                            @tagName(mono),
+                            @intFromEnum(root_var),
+                            self.current_module_idx,
+                            store_nodes_len,
+                            @intFromEnum(root_var) < store_nodes_len,
+                            @intFromEnum(self.current_callable_inst_context),
+                            if (self.current_root_source_expr_context) |root_source_expr_idx| @intFromEnum(root_source_expr_idx) else std.math.maxInt(u32),
+                        },
                     ),
                 }
                 return;

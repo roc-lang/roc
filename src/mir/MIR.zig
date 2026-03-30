@@ -103,6 +103,45 @@ pub const Local = struct {
     reassignable: bool = false,
 };
 
+/// One canonical definition for a MIR local.
+pub const LocalDef = union(enum) {
+    param: struct {
+        lambda: LambdaId,
+        index: u16,
+    },
+    captures_param: struct {
+        lambda: LambdaId,
+    },
+    join_param: struct {
+        join: JoinPointId,
+        index: u16,
+    },
+    symbol: Symbol,
+    ref: RefOp,
+    literal: LiteralValue,
+    lambda: LambdaId,
+    closure: struct {
+        lambda: LambdaId,
+        captures: LocalSpan,
+    },
+    call: struct {
+        callee: LocalId,
+        exact_lambda: ?LambdaId = null,
+        exact_requires_hidden_capture: bool = false,
+        args: LocalSpan,
+    },
+    low_level: struct {
+        op: CIR.Expr.LowLevel,
+        args: LocalSpan,
+    },
+    list: LocalSpan,
+    struct_: LocalSpan,
+    tag: struct {
+        name: Monotype.Name,
+        args: LocalSpan,
+    },
+};
+
 /// Span of LocalId values stored in Store.local_ids.
 pub const LocalSpan = extern struct {
     start: u32,
@@ -290,6 +329,8 @@ pub const CFStmt = union(enum) {
     assign_call: struct {
         target: LocalId,
         callee: LocalId,
+        exact_lambda: ?LambdaId = null,
+        exact_requires_hidden_capture: bool = false,
         args: LocalSpan,
         next: CFStmtId,
     },
@@ -358,6 +399,7 @@ pub const Store = struct {
     cf_stmts: std.ArrayListUnmanaged(CFStmt),
     switch_branches: std.ArrayListUnmanaged(SwitchBranch),
     locals: std.ArrayListUnmanaged(Local),
+    local_defs: std.ArrayListUnmanaged(?LocalDef),
     local_ids: std.ArrayListUnmanaged(LocalId),
     callable_projection_entries: std.ArrayListUnmanaged(CallableProjection),
     callable_bindings: std.ArrayListUnmanaged(CallableBinding),
@@ -373,6 +415,7 @@ pub const Store = struct {
             .cf_stmts = .empty,
             .switch_branches = .empty,
             .locals = .empty,
+            .local_defs = .empty,
             .local_ids = .empty,
             .callable_projection_entries = .empty,
             .callable_bindings = .empty,
@@ -389,6 +432,7 @@ pub const Store = struct {
         self.cf_stmts.deinit(allocator);
         self.switch_branches.deinit(allocator);
         self.locals.deinit(allocator);
+        self.local_defs.deinit(allocator);
         self.local_ids.deinit(allocator);
         self.callable_projection_entries.deinit(allocator);
         self.callable_bindings.deinit(allocator);
@@ -413,6 +457,7 @@ pub const Store = struct {
     pub fn addLocal(self: *Store, allocator: Allocator, local: Local) Allocator.Error!LocalId {
         const idx: u32 = @intCast(self.locals.items.len);
         try self.locals.append(allocator, local);
+        try self.local_defs.append(allocator, null);
         return @enumFromInt(idx);
     }
 
@@ -424,6 +469,19 @@ pub const Store = struct {
     /// Returns a mutable pointer to one MIR local.
     pub fn getLocalPtr(self: *Store, id: LocalId) *Local {
         return &self.locals.items[@intFromEnum(id)];
+    }
+
+    /// Returns the canonical definition for one MIR local.
+    pub fn getLocalDef(self: *const Store, id: LocalId) LocalDef {
+        return self.local_defs.items[@intFromEnum(id)] orelse std.debug.panic(
+            "MIR local {d} has no recorded local definition",
+            .{@intFromEnum(id)},
+        );
+    }
+
+    /// Returns the canonical definition for one MIR local if it was recorded.
+    pub fn getLocalDefOpt(self: *const Store, id: LocalId) ?LocalDef {
+        return self.local_defs.items[@intFromEnum(id)];
     }
 
     /// Stores a local-id slice and returns its span.
@@ -488,7 +546,9 @@ pub const Store = struct {
     pub fn addCFStmt(self: *Store, allocator: Allocator, stmt: CFStmt) Allocator.Error!CFStmtId {
         const idx: u32 = @intCast(self.cf_stmts.items.len);
         try self.cf_stmts.append(allocator, stmt);
-        return @enumFromInt(idx);
+        const id: CFStmtId = @enumFromInt(idx);
+        try self.recordCFStmtLocalDefs(id, stmt);
+        return id;
     }
 
     /// Returns one MIR statement by id.
@@ -519,7 +579,9 @@ pub const Store = struct {
     pub fn addLambda(self: *Store, allocator: Allocator, lambda: Lambda) Allocator.Error!LambdaId {
         const idx: u32 = @intCast(self.lambdas.items.len);
         try self.lambdas.append(allocator, lambda);
-        return @enumFromInt(idx);
+        const id: LambdaId = @enumFromInt(idx);
+        try self.recordLambdaLocalDefs(id, lambda);
+        return id;
     }
 
     /// Returns one MIR lambda by id.
@@ -530,6 +592,12 @@ pub const Store = struct {
     /// Returns a mutable pointer to one MIR lambda.
     pub fn getLambdaPtr(self: *Store, id: LambdaId) *Lambda {
         return &self.lambdas.items[@intFromEnum(id)];
+    }
+
+    /// Overwrites one existing MIR lambda and records its parameter definitions.
+    pub fn setLambda(self: *Store, id: LambdaId, lambda: Lambda) Allocator.Error!void {
+        self.lambdas.items[@intFromEnum(id)] = lambda;
+        try self.recordLambdaLocalDefs(id, lambda);
     }
 
     /// Returns all stored MIR lambdas.
@@ -575,4 +643,82 @@ pub const Store = struct {
         return self.const_defs_by_symbol.get(symbol.raw());
     }
 
+    fn recordLocalDef(self: *Store, local: LocalId, def: LocalDef) Allocator.Error!void {
+        const slot = &self.local_defs.items[@intFromEnum(local)];
+        if (slot.* != null) {
+            std.debug.panic(
+                "MIR local {d} received multiple recorded definitions; existing={s} new={s}",
+                .{
+                    @intFromEnum(local),
+                    @tagName(slot.*.?),
+                    @tagName(def),
+                },
+            );
+        }
+        slot.* = def;
+    }
+
+    fn recordCFStmtLocalDefs(self: *Store, stmt_id: CFStmtId, stmt: CFStmt) Allocator.Error!void {
+        switch (stmt) {
+            .assign_symbol => |assign| try self.recordLocalDef(assign.target, .{ .symbol = assign.symbol }),
+            .assign_ref => |assign| try self.recordLocalDef(assign.target, .{ .ref = assign.op }),
+            .assign_literal => |assign| try self.recordLocalDef(assign.target, .{ .literal = assign.literal }),
+            .assign_lambda => |assign| try self.recordLocalDef(assign.target, .{ .lambda = assign.lambda }),
+            .assign_closure => |assign| try self.recordLocalDef(assign.target, .{ .closure = .{
+                .lambda = assign.lambda,
+                .captures = assign.captures,
+            } }),
+            .assign_call => |assign| try self.recordLocalDef(assign.target, .{ .call = .{
+                .callee = assign.callee,
+                .exact_lambda = assign.exact_lambda,
+                .exact_requires_hidden_capture = assign.exact_requires_hidden_capture,
+                .args = assign.args,
+            } }),
+            .assign_low_level => |assign| try self.recordLocalDef(assign.target, .{ .low_level = .{
+                .op = assign.op,
+                .args = assign.args,
+            } }),
+            .assign_list => |assign| try self.recordLocalDef(assign.target, .{ .list = assign.elems }),
+            .assign_struct => |assign| try self.recordLocalDef(assign.target, .{ .struct_ = assign.fields }),
+            .assign_tag => |assign| try self.recordLocalDef(assign.target, .{ .tag = .{
+                .name = assign.name,
+                .args = assign.args,
+            } }),
+            .join => |join_stmt| {
+                for (self.getLocalSpan(join_stmt.params), 0..) |param, i| {
+                    try self.recordLocalDef(param, .{ .join_param = .{
+                        .join = join_stmt.id,
+                        .index = @intCast(i),
+                    } });
+                }
+            },
+            .debug,
+            .expect,
+            .runtime_error,
+            .switch_stmt,
+            .borrow_scope,
+            .scope_exit,
+            .jump,
+            .ret,
+            .crash,
+            => {},
+        }
+
+        _ = stmt_id;
+    }
+
+    fn recordLambdaLocalDefs(self: *Store, lambda_id: LambdaId, lambda: Lambda) Allocator.Error!void {
+        for (self.getLocalSpan(lambda.params), 0..) |param, i| {
+            try self.recordLocalDef(param, .{ .param = .{
+                .lambda = lambda_id,
+                .index = @intCast(i),
+            } });
+        }
+
+        if (lambda.captures_param) |captures_param| {
+            try self.recordLocalDef(captures_param, .{ .captures_param = .{
+                .lambda = lambda_id,
+            } });
+        }
+    }
 };
