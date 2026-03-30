@@ -23,6 +23,7 @@ pub const IndexRelocType = enum(u8) {
     type_index_leb = 6, // R_WASM_TYPE_INDEX_LEB — type index in `call_indirect`
     global_index_leb = 7, // R_WASM_GLOBAL_INDEX_LEB — global index in `global.get/set`
     event_index_leb = 10, // R_WASM_EVENT_INDEX_LEB
+    table_index_rel_sleb = 12, // R_WASM_TABLE_INDEX_REL_SLEB — PIC relative table index
     global_index_i32 = 13, // R_WASM_GLOBAL_INDEX_I32
     table_number_leb = 20, // R_WASM_TABLE_NUMBER_LEB
 };
@@ -37,6 +38,17 @@ pub const OffsetRelocType = enum(u8) {
     section_offset_i32 = 9, // R_WASM_SECTION_OFFSET_I32
     memory_addr_rel_sleb = 11, // R_WASM_MEMORY_ADDR_REL_SLEB — PIC relative signed addr
 };
+
+comptime {
+    // Index and Offset relocation type discriminants must not overlap,
+    // since they share the same type byte in the binary format and are
+    // distinguished by whether the value is an index or an offset type.
+    for (std.meta.tags(IndexRelocType)) |idx_tag| {
+        for (std.meta.tags(OffsetRelocType)) |off_tag| {
+            std.debug.assert(@intFromEnum(idx_tag) != @intFromEnum(off_tag));
+        }
+    }
+}
 
 // --- Relocation Entry ---
 
@@ -221,15 +233,23 @@ pub const SymInfo = struct {
     ///
     /// Explicitly named symbols return their stored name.
     /// Implicitly named undefined function/global/event/table symbols inherit
-    /// their name from the import section.
+    /// their name from the corresponding import array (function, global, or table).
     /// Section symbols and other unnamed non-import symbols return null.
-    pub fn resolveName(self: SymInfo, imports: []const Import) ?[]const u8 {
+    pub fn resolveName(
+        self: SymInfo,
+        fn_imports: []const Import,
+        global_imports: []const WasmModule.GlobalImport,
+        table_imports: []const WasmModule.TableImport,
+    ) ?[]const u8 {
         if (self.name) |n| return n;
 
         if (!self.isUndefined()) return null;
 
         return switch (self.kind) {
-            .function, .global, .event, .table => imports[self.index].field_name,
+            .function => if (self.index < fn_imports.len) fn_imports[self.index].field_name else null,
+            .global => if (self.index < global_imports.len) global_imports[self.index].field_name else null,
+            .table => if (self.index < table_imports.len) table_imports[self.index].field_name else null,
+            .event => if (self.index < fn_imports.len) fn_imports[self.index].field_name else null,
             else => null,
         };
     }
@@ -294,7 +314,9 @@ pub const RelocationSection = struct {
                         .event_index_leb,
                         .table_number_leb,
                         => WasmModule.overwritePaddedU32(section_bytes, idx.offset, value),
-                        .table_index_sleb => WasmModule.overwritePaddedI32(
+                        .table_index_sleb,
+                        .table_index_rel_sleb,
+                        => WasmModule.overwritePaddedI32(
                             section_bytes,
                             idx.offset,
                             @as(i32, @intCast(value)),
@@ -435,14 +457,16 @@ pub const LinkingSection = struct {
     }
 
     /// Find a symbol by name. For implicitly-named imported symbols, resolves
-    /// the name from the import section. Returns the symbol index, or null.
+    /// the name from the corresponding import section. Returns the symbol index, or null.
     pub fn findSymbolByName(
         self: *const LinkingSection,
         name: []const u8,
-        imports: []const Import,
+        fn_imports: []const Import,
+        global_imports: []const WasmModule.GlobalImport,
+        table_imports: []const WasmModule.TableImport,
     ) ?u32 {
         for (self.symbol_table.items, 0..) |sym, i| {
-            if (sym.resolveName(imports)) |sym_name| {
+            if (sym.resolveName(fn_imports, global_imports, table_imports)) |sym_name| {
                 if (std.mem.eql(u8, sym_name, name)) return @intCast(i);
             }
         }
@@ -667,7 +691,9 @@ test "LinkingSection.findSymbolByName — finds existing symbol" {
     };
 
     const imports: []const Import = &.{};
-    try testing.expectEqual(@as(?u32, 1), section.findSymbolByName("bar", imports));
+    const global_imports: []const WasmModule.GlobalImport = &.{};
+    const table_imports: []const WasmModule.TableImport = &.{};
+    try testing.expectEqual(@as(?u32, 1), section.findSymbolByName("bar", imports, global_imports, table_imports));
 }
 
 test "LinkingSection.findSymbolByName — returns null for missing symbol" {
@@ -690,7 +716,9 @@ test "LinkingSection.findSymbolByName — returns null for missing symbol" {
     };
 
     const imports: []const Import = &.{};
-    try testing.expectEqual(@as(?u32, null), section.findSymbolByName("missing", imports));
+    const global_imports: []const WasmModule.GlobalImport = &.{};
+    const table_imports: []const WasmModule.TableImport = &.{};
+    try testing.expectEqual(@as(?u32, null), section.findSymbolByName("missing", imports, global_imports, table_imports));
 }
 
 test "LinkingSection.findImportedFnSymIndex — finds undefined function symbol" {

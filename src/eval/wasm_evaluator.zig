@@ -35,6 +35,11 @@ const LirExprStore = lir.LirExprStore;
 const LirExprId = lir.LirExprId;
 const LirExpr = lir.LirExpr;
 const WasmCodeGen = backend.wasm.WasmCodeGen;
+const WasmModule = backend.wasm.WasmModule;
+
+/// Pre-built wasm32 builtins object (roc_builtins.o cross-compiled for wasm32-freestanding).
+/// Provided by the build system via the "wasm32_builtins" module import.
+const wasm32_builtins = @import("wasm32_builtins");
 
 /// Extract the result layout from a LIR expression.
 /// Mirrors the logic in dev_evaluator.zig.
@@ -184,6 +189,43 @@ pub const WasmEvaluator = struct {
     /// Real builds derive this from the platform's `provides` section.
     pub const default_entrypoint_name = "roc__main_for_host_1_exposed";
 
+    /// Prepare a WasmModule with merged builtins and populated BuiltinSymbols.
+    /// The builtins are resolved from code_bytes into func_bodies so that
+    /// subsequent addFunction/setFunctionBody calls from the codegen append
+    /// correctly and encode() produces a valid module.
+    fn prepareModuleWithBuiltins(self: *WasmEvaluator) Error!struct { module: WasmModule, syms: WasmModule.BuiltinSymbols } {
+        var builtins_module = WasmModule.preload(self.allocator, wasm32_builtins.bytes, true) catch
+            return error.RuntimeError;
+
+        var app_module = WasmModule.init(self.allocator);
+
+        // Add RocOps function imports BEFORE merging builtins.
+        // mergeModule computes func_remap from the current import count, so all
+        // imports must exist before merge for defined function indices to be correct.
+        const roc_ops_type_idx = app_module.addFuncType(
+            &.{ .i32, .i32 },
+            &.{},
+        ) catch return error.RuntimeError;
+
+        for ([_][]const u8{ "roc_alloc", "roc_dealloc", "roc_realloc", "roc_dbg", "roc_expect_failed", "roc_crashed" }) |name| {
+            _ = app_module.addImport("env", name, roc_ops_type_idx) catch return error.RuntimeError;
+        }
+
+        _ = app_module.mergeModule(&builtins_module) catch
+            return error.RuntimeError;
+
+        const syms = WasmModule.BuiltinSymbols.populate(&app_module) catch
+            return error.RuntimeError;
+
+        // Resolve all builtin-to-builtin relocations in code_bytes,
+        // then materialize into func_bodies so encode() can serialize them.
+        app_module.resolveCodeRelocations();
+        app_module.materializeFuncBodies() catch
+            return error.RuntimeError;
+
+        return .{ .module = app_module, .syms = syms };
+    }
+
     /// Generate wasm bytes for a CIR expression.
     /// `entrypoint_name` is the RocCall export name, derived from the platform's
     /// `provides` section. Use `default_entrypoint_name` for eval/REPL.
@@ -279,17 +321,20 @@ pub const WasmEvaluator = struct {
         else
             1;
 
-        // Generate wasm module
-        // TODO(Phase 12): Merge roc_builtins.o and populate real BuiltinSymbols.
-        // For now, use undefined — eval tests need builtins merged before this works.
-        const builtin_syms: backend.wasm.WasmModule.BuiltinSymbols = undefined;
-        var codegen = WasmCodeGen.init(self.allocator, &lir_store, layout_store_ptr, builtin_syms);
+        // Merge wasm32 builtins and resolve them into func_bodies so the
+        // codegen can append app functions and encode() produces a valid binary.
+        const prepared = self.prepareModuleWithBuiltins() catch {
+            return error.RuntimeError;
+        };
+
+        var codegen = WasmCodeGen.initWithHostModule(self.allocator, &lir_store, layout_store_ptr, prepared.module, prepared.syms);
         codegen.wasm_stack_bytes = self.wasm_stack_bytes;
         defer codegen.deinit();
 
         const gen_result = codegen.generateModule(final_expr_id, result_layout, entrypoint_name) catch {
             return error.RuntimeError;
         };
+
 
         return WasmCodeResult{
             .wasm_bytes = gen_result.wasm_bytes,

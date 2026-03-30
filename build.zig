@@ -2354,6 +2354,18 @@ pub fn build(b: *std.Build) void {
     roc_modules.eval.addImport("bytebox", bytebox.module("bytebox"));
     roc_modules.lsp.addImport("compiled_builtins", compiled_builtins_module);
 
+    // Embed the pre-built wasm32 builtins object so the eval/REPL pipeline can
+    // merge real compiled builtins into WASM modules (instead of using host imports).
+    const wasm32_builtins_files = b.addWriteFiles();
+    _ = wasm32_builtins_files.addCopyFile(b.path("src/cli/targets/wasm32/roc_builtins.o"), "roc_builtins.o");
+    const wasm32_builtins_module = b.createModule(.{
+        .root_source_file = wasm32_builtins_files.add("wasm32_builtins.zig",
+            \\pub const bytes = @embedFile("roc_builtins.o");
+            \\
+        ),
+    });
+    roc_modules.eval.addImport("wasm32_builtins", wasm32_builtins_module);
+
     // Setup test platform host libraries
     const wasm_host_step = setupTestPlatforms(b, target, optimize, roc_modules, test_platforms_step, strip, omit_frame_pointer, platform_filter);
 
@@ -3658,7 +3670,7 @@ fn addMainExe(
     for (cross_compile_builtins_targets) |cross_target| {
         const cross_resolved_target = b.resolveTargetQuery(cross_target.query);
 
-        // Build builtins object file for this target
+        // Build builtins object file for this target.
         const cross_builtins_obj = b.addObject(.{
             .name = b.fmt("roc_builtins_{s}", .{cross_target.name}),
             .root_module = b.createModule(.{

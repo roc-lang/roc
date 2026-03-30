@@ -17,6 +17,7 @@
 | 10 | Dead Code Elimination | Done |
 | 11 | Serialization Updates | Done |
 | 12 | CLI Integration — `roc build --target=wasm32` | Done |
+| 13 | PIC Support & Eval Builtins | In Progress |
 
 ## Overview
 
@@ -2117,6 +2118,79 @@ It must contain `linking` and `reloc.*` custom sections.
 - `crates/compiler/gen_wasm/src/lib.rs` lines 80–188: `build_app_module()`
 - `crates/compiler/gen_wasm/src/backend.rs` lines 79–114: `WasmBackend::new()`
 - `crates/compiler/gen_wasm/src/backend.rs` lines 296–304: `finalize()`
+
+---
+
+## Phase 13: PIC Support & Eval Builtins — In Progress
+
+### What
+
+Support Position Independent Code (PIC) WASM modules in the surgical linker, and
+wire the eval/REPL pipeline to merge real compiled builtins instead of using host
+import reimplementations.
+
+### Status
+
+**1281 of 1305 eval tests passing** (8 remaining failures in list_append, str_split,
+str_join_with, str_from_utf8 — all wasm-only ABI mismatches in specific builtin call sites).
+
+### Root Causes Fixed
+
+**Relocation offset mismatch**: `reloc.CODE` offsets are relative to the code section
+body (which includes a function-count LEB128 prefix), but `code_bytes` starts after
+that prefix. Fix: record the function count's LEB128 byte size during
+`parseCodeSection` and subtract it from all `reloc_code` entry offsets after parsing.
+
+**type_index_leb resolution**: `R_WASM_TYPE_INDEX_LEB` relocations (for `call_indirect`)
+need to remap placeholder type indices from the source type section to the merged type
+section. The original code used `sym.index` (function index) which is wrong. Fix:
+resolve `type_index_leb` during `mergeModule` when `type_remap` is available.
+
+**Builtin ABI mismatch**: The merged `roc_builtins_*` functions use the wasm32 native
+ABI (ptr/len/cap decomposition, split i128 args, sret result slots), but the codegen
+was passing pointer-to-struct arguments. Fix: added shared helpers for the merged
+builtins' ABI and migrated all call sites (string/list equality, string transforms,
+numeric conversions, list operations).
+
+### Implementation
+
+#### PIC Module Support (WasmModule.zig, WasmLinking.zig)
+
+- **GlobalImport / TableImport**: New types stored during `parseImportSection` so
+  PIC globals (`__memory_base`, `__table_base`) and tables (`__indirect_function_table`)
+  can be resolved by name during merge.
+- **resolveName dispatch**: Fixed to look up function symbols in `imports`, global
+  symbols in `global_imports`, and table symbols in `table_imports` (was incorrectly
+  indexing into `imports` for all symbol kinds).
+- **PIC globals in mergeModule**: `__memory_base` and `__table_base` are defined as
+  immutable i32 globals initialized to 0. `__indirect_function_table` enables the
+  module's table. These are encoded in the global section alongside `__stack_pointer`.
+- **Element section parsing**: `parseElementSection_` now extracts function indices
+  into `table_func_indices`. `mergeModule` remaps them through `func_remap`.
+- **table_index_rel_sleb (type 12)**: Added as `IndexRelocType` (no addend), with
+  correct signed LEB128 patching in both `applyRelocsU32` and `resolveCodeRelocations`.
+- **Table index resolution**: `table_index_sleb`, `table_index_rel_sleb`, and
+  `table_index_i32` resolve to the element section position (table index) rather
+  than the function index.
+
+#### Eval Pipeline (wasm_evaluator.zig, build.zig)
+
+- **Build system**: `wasm32_builtins` module embeds `roc_builtins.o` for wasm32 via
+  `addWriteFiles` + `@embedFile`, available to the eval module.
+- **prepareModuleWithBuiltins**: Creates a fresh module, adds RocOps imports (so the
+  import count is correct before merge), merges builtins, populates `BuiltinSymbols`,
+  resolves relocations, and materializes `func_bodies`.
+- **generateModule**: Uses `registerRocOpsFromModule` (finds existing imports) when
+  the module already has imports, instead of `registerRocOpsImports` (adds new ones).
+
+### Remaining Work
+
+8 eval tests still fail with wasm-only ABI mismatches in:
+- `list_append_unsafe` — element value appears to be read as 64-bit
+- `str_split`, `str_join_with` — WasmExecFailed (likely ptr/len decomposition issue)
+- `str_from_utf8` — WasmExecFailed
+
+These need the same ABI fix pattern applied to the remaining builtin call sites.
 
 ---
 

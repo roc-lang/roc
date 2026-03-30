@@ -268,6 +268,15 @@ const FuncBody = struct {
     body: []const u8,
 };
 
+/// A defined global variable (beyond the built-in __stack_pointer).
+/// Used for PIC globals like __memory_base and __table_base that
+/// resolve to constants in the final linked module.
+pub const DefinedGlobal = struct {
+    val_type: u8, // 0x7F = i32, 0x7E = i64
+    mutable: bool,
+    init_value: i32,
+};
+
 /// A data segment placed in linear memory
 const DataSegment = struct {
     offset: u32, // offset in linear memory
@@ -279,6 +288,22 @@ pub const Import = struct {
     module_name: []const u8,
     field_name: []const u8,
     type_idx: u32,
+};
+
+/// An imported global (e.g. __stack_pointer, __memory_base).
+/// PIC modules use these for position-independent addressing.
+pub const GlobalImport = struct {
+    module_name: []const u8,
+    field_name: []const u8,
+    val_type: u8, // raw valtype byte (0x7F=i32, 0x7E=i64, etc.)
+    mutable: bool,
+};
+
+/// An imported table (e.g. __indirect_function_table).
+/// PIC modules use this for indirect function calls.
+pub const TableImport = struct {
+    module_name: []const u8,
+    field_name: []const u8,
 };
 
 /// Wasm reference type for funcref tables
@@ -317,8 +342,20 @@ pub const WasmRocOps = struct {
     pub const total_size: u32 = 36;
 
     comptime {
-        // Verify layout consistency: last field offset + field size = total size.
+        // Verify layout: 9 consecutive i32 fields at 4-byte stride = 36 bytes total.
+        std.debug.assert(total_size == 36);
         std.debug.assert(hosted_fns_ptr + 4 == total_size);
+
+        // All offsets must be 4-byte aligned and sequential.
+        std.debug.assert(env_ptr == 0);
+        std.debug.assert(roc_alloc_table_idx == env_ptr + 4);
+        std.debug.assert(roc_dealloc_table_idx == roc_alloc_table_idx + 4);
+        std.debug.assert(roc_realloc_table_idx == roc_dealloc_table_idx + 4);
+        std.debug.assert(roc_dbg_table_idx == roc_realloc_table_idx + 4);
+        std.debug.assert(roc_expect_failed_table_idx == roc_dbg_table_idx + 4);
+        std.debug.assert(roc_crashed_table_idx == roc_expect_failed_table_idx + 4);
+        std.debug.assert(hosted_fns_count == roc_crashed_table_idx + 4);
+        std.debug.assert(hosted_fns_ptr == hosted_fns_count + 4);
     }
 };
 
@@ -331,6 +368,10 @@ func_bodies: std.ArrayList(FuncBody),
 exports: std.ArrayList(Export),
 /// Function imports (indices 0..import_fn_count-1 in the function index space).
 imports: std.ArrayList(Import),
+/// Global imports (e.g. __stack_pointer, __memory_base for PIC modules).
+global_imports: std.ArrayList(GlobalImport),
+/// Table imports (e.g. __indirect_function_table for PIC modules).
+table_imports: std.ArrayList(TableImport),
 data_segments: std.ArrayList(DataSegment),
 /// Next available offset for data placement in linear memory (grows up from 0).
 data_offset: u32,
@@ -342,6 +383,9 @@ stack_pointer_init: u32,
 has_table: bool,
 /// Function indices to place in the table (element section).
 table_func_indices: std.ArrayList(u32),
+/// Additional defined globals (beyond __stack_pointer at index 0).
+/// Used for PIC globals like __memory_base, __table_base.
+extra_globals: std.ArrayList(DefinedGlobal),
 
 // --- Fields for surgical linking (populated by preload) ---
 
@@ -358,6 +402,11 @@ import_fn_count: u32,
 /// Number of global imports parsed from the import section.
 /// Tracked for validation — global imports are not stored in the imports array.
 import_global_count: u32,
+/// LEB128 byte size of the function count in the code section header.
+/// Relocation offsets in reloc.CODE are relative to the section body (which
+/// includes the function count), but code_bytes starts AFTER the count.
+/// This delta must be subtracted from reloc offsets to index into code_bytes.
+code_section_fn_count_leb_size: u32,
 
 /// Linking metadata (symbol table, segment info, init funcs).
 linking: WasmLinking.LinkingSection,
@@ -375,6 +424,8 @@ pub fn init(allocator: Allocator) Self {
         .func_bodies = .empty,
         .exports = .empty,
         .imports = .empty,
+        .global_imports = .empty,
+        .table_imports = .empty,
         .data_segments = .empty,
         .data_offset = 1024, // reserve first 1KB for future use
         .has_memory = false,
@@ -383,11 +434,13 @@ pub fn init(allocator: Allocator) Self {
         .stack_pointer_init = 65536,
         .has_table = false,
         .table_func_indices = .empty,
+        .extra_globals = .empty,
         .code_bytes = .empty,
         .function_offsets = .empty,
         .dead_import_dummy_count = 0,
         .import_fn_count = 0,
         .import_global_count = 0,
+        .code_section_fn_count_leb_size = 0,
         .linking = .{ .symbol_table = .empty, .segment_info = .empty, .init_funcs = .empty },
         .reloc_code = .{ .name = "reloc.CODE", .target_section_index = 0, .entries = .empty },
         .reloc_data = .{ .name = "reloc.DATA", .target_section_index = 0, .entries = .empty },
@@ -409,11 +462,14 @@ pub fn deinit(self: *Self) void {
     self.func_bodies.deinit(self.allocator);
     self.exports.deinit(self.allocator);
     self.imports.deinit(self.allocator);
+    self.global_imports.deinit(self.allocator);
+    self.table_imports.deinit(self.allocator);
     for (self.data_segments.items) |ds| {
         self.allocator.free(ds.data);
     }
     self.data_segments.deinit(self.allocator);
     self.table_func_indices.deinit(self.allocator);
+    self.extra_globals.deinit(self.allocator);
     self.code_bytes.deinit(self.allocator);
     self.function_offsets.deinit(self.allocator);
     self.linking.symbol_table.deinit(self.allocator);
@@ -511,6 +567,20 @@ pub fn addDataSegment(self: *Self, data: []const u8, align_bytes: u32) !u32 {
 pub fn enableStackPointer(self: *Self, initial_value: u32) void {
     self.has_stack_pointer = true;
     self.stack_pointer_init = initial_value;
+}
+
+/// Add a defined global and return its index (accounting for __stack_pointer at 0).
+/// Used to define PIC globals like __memory_base and __table_base with value 0.
+pub fn addDefinedGlobal(self: *Self, val_type: u8, mutable: bool, init_value: i32) !u32 {
+    // Global 0 is __stack_pointer (when has_stack_pointer is true).
+    // Extra globals start at index 1.
+    const idx: u32 = 1 + @as(u32, @intCast(self.extra_globals.items.len));
+    try self.extra_globals.append(self.allocator, .{
+        .val_type = val_type,
+        .mutable = mutable,
+        .init_value = init_value,
+    });
+    return idx;
 }
 
 /// Enable the funcref table for call_indirect.
@@ -769,6 +839,8 @@ pub const BuiltinSymbols = struct {
             const sym_table_idx = module.linking.findSymbolByName(
                 sym_name,
                 module.imports.items,
+                module.global_imports.items,
+                module.table_imports.items,
             ) orelse return error.MissingBuiltinSymbol;
             @field(result, field_name) = module.linking.symbol_table.items[sym_table_idx].index;
         }
@@ -880,6 +952,13 @@ pub fn mergeModule(self: *Self, source: *const Self) !MergeResult {
         data_remap[i] = new_offset;
     }
 
+    // --- 5b. Merge element section (remap function indices) ---
+    for (source.table_func_indices.items) |src_func_idx| {
+        const remapped = func_remap[src_func_idx];
+        try self.table_func_indices.append(gpa, remapped);
+        self.has_table = true;
+    }
+
     // --- 6. Merge symbol table ---
     // symbol_remap: maps source symbol index → self symbol index.
     const source_sym_count = source.linking.symbol_table.items.len;
@@ -887,17 +966,17 @@ pub fn mergeModule(self: *Self, source: *const Self) !MergeResult {
     errdefer gpa.free(symbol_remap);
 
     // Track which __stack_pointer global we resolved to.
-    const self_stack_pointer_sym = self.linking.findSymbolByName("__stack_pointer", self.imports.items);
+    const self_stack_pointer_sym = self.linking.findSymbolByName("__stack_pointer", self.imports.items, self.global_imports.items, self.table_imports.items);
 
     for (source.linking.symbol_table.items, 0..) |src_sym, src_sym_idx| {
-        const src_name = src_sym.resolveName(source.imports.items);
+        const src_name = src_sym.resolveName(source.imports.items, source.global_imports.items, source.table_imports.items);
 
         switch (src_sym.kind) {
             .function => {
                 if (src_sym.isUndefined()) {
                     // Undefined function in source — resolve against self's symbol table.
                     if (src_name) |name| {
-                        if (self.linking.findSymbolByName(name, self.imports.items)) |existing| {
+                        if (self.linking.findSymbolByName(name, self.imports.items, self.global_imports.items, self.table_imports.items)) |existing| {
                             symbol_remap[src_sym_idx] = existing;
                             continue;
                         }
@@ -927,7 +1006,7 @@ pub fn mergeModule(self: *Self, source: *const Self) !MergeResult {
                 if (src_sym.isUndefined()) {
                     // Undefined data — resolve against self.
                     if (src_name) |name| {
-                        if (self.linking.findSymbolByName(name, self.imports.items)) |existing| {
+                        if (self.linking.findSymbolByName(name, self.imports.items, self.global_imports.items, self.table_imports.items)) |existing| {
                             symbol_remap[src_sym_idx] = existing;
                             continue;
                         }
@@ -958,8 +1037,24 @@ pub fn mergeModule(self: *Self, source: *const Self) !MergeResult {
                 // Resolve globals (like __stack_pointer) against self.
                 if (src_sym.isUndefined()) {
                     if (src_name) |name| {
-                        if (self.linking.findSymbolByName(name, self.imports.items)) |existing| {
+                        if (self.linking.findSymbolByName(name, self.imports.items, self.global_imports.items, self.table_imports.items)) |existing| {
                             symbol_remap[src_sym_idx] = existing;
+                            continue;
+                        }
+                        // PIC globals: define them as constants in the final module.
+                        // __memory_base and __table_base are 0 in statically-linked modules.
+                        if (std.mem.eql(u8, name, "__memory_base") or
+                            std.mem.eql(u8, name, "__table_base"))
+                        {
+                            const global_idx = try self.addDefinedGlobal(0x7F, false, 0); // i32, immutable, value=0
+                            const new_sym_idx: u32 = @intCast(self.linking.symbol_table.items.len);
+                            try self.linking.symbol_table.append(gpa, .{
+                                .kind = .global,
+                                .flags = 0, // defined (not undefined)
+                                .name = name,
+                                .index = global_idx,
+                            });
+                            symbol_remap[src_sym_idx] = new_sym_idx;
                             continue;
                         }
                     }
@@ -969,7 +1064,30 @@ pub fn mergeModule(self: *Self, source: *const Self) !MergeResult {
                 try self.linking.symbol_table.append(gpa, src_sym);
                 symbol_remap[src_sym_idx] = new_sym_idx;
             },
-            .section, .event, .table => {
+            .table => {
+                // PIC: __indirect_function_table → just enable the module's table.
+                if (src_sym.isUndefined()) {
+                    if (src_name) |name| {
+                        if (std.mem.eql(u8, name, "__indirect_function_table")) {
+                            self.has_table = true;
+                            // Map to a symbol that references table 0.
+                            const new_sym_idx: u32 = @intCast(self.linking.symbol_table.items.len);
+                            try self.linking.symbol_table.append(gpa, .{
+                                .kind = .table,
+                                .flags = 0,
+                                .name = name,
+                                .index = 0,
+                            });
+                            symbol_remap[src_sym_idx] = new_sym_idx;
+                            continue;
+                        }
+                    }
+                }
+                const new_sym_idx: u32 = @intCast(self.linking.symbol_table.items.len);
+                try self.linking.symbol_table.append(gpa, src_sym);
+                symbol_remap[src_sym_idx] = new_sym_idx;
+            },
+            .section, .event => {
                 // Carry over as-is.
                 const new_sym_idx: u32 = @intCast(self.linking.symbol_table.items.len);
                 try self.linking.symbol_table.append(gpa, src_sym);
@@ -983,6 +1101,26 @@ pub fn mergeModule(self: *Self, source: *const Self) !MergeResult {
     for (source.reloc_code.entries.items) |src_entry| {
         switch (src_entry) {
             .index => |idx| {
+                if (idx.type_id == .type_index_leb) {
+                    // R_WASM_TYPE_INDEX_LEB: the placeholder in code_bytes is the
+                    // SOURCE type index. Remap it immediately using type_remap rather
+                    // than deferring — resolveCodeRelocations doesn't have type_remap.
+                    const src_type_idx = readPaddedU32(
+                        self.code_bytes.items,
+                        base_code_offset + idx.offset,
+                    );
+                    const remapped = if (src_type_idx < type_remap.len)
+                        type_remap[src_type_idx]
+                    else
+                        src_type_idx;
+                    overwritePaddedU32(
+                        self.code_bytes.items,
+                        base_code_offset + idx.offset,
+                        remapped,
+                    );
+                    // Don't add to reloc_code — already resolved.
+                    continue;
+                }
                 try self.reloc_code.entries.append(gpa, .{ .index = .{
                     .type_id = idx.type_id,
                     .offset = base_code_offset + idx.offset,
@@ -1032,6 +1170,15 @@ pub fn mergeModule(self: *Self, source: *const Self) !MergeResult {
     };
 }
 
+/// Find the table index (position in table_func_indices) for a given function index.
+/// Returns null if the function is not in the table.
+fn findTableIndex(self: *const Self, func_idx: u32) ?u32 {
+    for (self.table_func_indices.items, 0..) |tfi, i| {
+        if (tfi == func_idx) return @intCast(i);
+    }
+    return null;
+}
+
 /// Resolve all code relocations in place.
 ///
 /// For each relocation entry in `reloc_code`, look up the symbol's resolved
@@ -1048,18 +1195,33 @@ pub fn resolveCodeRelocations(self: *Self) void {
                 // The resolved value is the symbol's index (function index, type index, etc.).
                 const value = sym.index;
                 switch (idx.type_id) {
+                    .type_index_leb => {
+                        // type_index_leb relocations are resolved during merge
+                        // (when the type_remap is available). If we get here, it's
+                        // a non-merged module — use the symbol index directly.
+                        overwritePaddedU32(self.code_bytes.items, idx.offset, value);
+                    },
                     .function_index_leb,
-                    .type_index_leb,
                     .global_index_leb,
                     .event_index_leb,
                     .table_number_leb,
                     => overwritePaddedU32(self.code_bytes.items, idx.offset, value),
-                    .table_index_sleb => overwritePaddedI32(
-                        self.code_bytes.items,
-                        idx.offset,
-                        @intCast(value),
-                    ),
-                    .table_index_i32, .global_index_i32 => {
+                    .table_index_sleb,
+                    .table_index_rel_sleb,
+                    => {
+                        const table_idx = self.findTableIndex(value) orelse value;
+                        overwritePaddedI32(
+                            self.code_bytes.items,
+                            idx.offset,
+                            @intCast(table_idx),
+                        );
+                    },
+                    .table_index_i32 => {
+                        const table_idx = self.findTableIndex(value) orelse value;
+                        const off: usize = @intCast(idx.offset);
+                        std.mem.writeInt(u32, self.code_bytes.items[off..][0..4], table_idx, .little);
+                    },
+                    .global_index_i32 => {
                         const off: usize = @intCast(idx.offset);
                         std.mem.writeInt(u32, self.code_bytes.items[off..][0..4], value, .little);
                     },
@@ -1531,6 +1693,26 @@ pub fn preload(allocator: Allocator, bytes: []const u8, require_relocatable: boo
         try module.parseCustomSection(bytes, &cursor);
     }
 
+    // Adjust reloc.CODE offsets: they are relative to the code section body
+    // (which includes the function count LEB128), but code_bytes starts after
+    // the count. Subtract the count's LEB128 size so offsets index into code_bytes.
+    if (module.code_section_fn_count_leb_size > 0) {
+        const delta = module.code_section_fn_count_leb_size;
+        for (module.reloc_code.entries.items) |*entry| {
+            switch (entry.*) {
+                .index => |*idx| {
+                    std.debug.assert(idx.offset >= delta);
+                    idx.offset -= delta;
+                },
+                .offset => |*off| {
+                    std.debug.assert(off.offset >= delta);
+                    off.offset -= delta;
+                },
+            }
+        }
+        module.code_section_fn_count_leb_size = 0;
+    }
+
     // Validate relocatable requirements
     if (require_relocatable) {
         if (module.linking.symbol_table.items.len == 0)
@@ -1621,6 +1803,10 @@ fn parseImportSection(self: *Self, bytes: []const u8, cursor: *usize) ParseError
                 cursor.* += 1;
                 _ = try readU32(bytes, cursor); // min
                 if (limits_flag == 0x01) _ = try readU32(bytes, cursor); // max
+                try self.table_imports.append(self.allocator, .{
+                    .module_name = module_name,
+                    .field_name = field_name,
+                });
             },
             0x02 => { // memory import
                 self.has_memory = true;
@@ -1631,9 +1817,16 @@ fn parseImportSection(self: *Self, bytes: []const u8, cursor: *usize) ParseError
                 if (limits_flag == 0x01) _ = try readU32(bytes, cursor); // max
             },
             0x03 => { // global import (e.g. __stack_pointer)
-                _ = try readU32(bytes, cursor); // val type
+                const val_type_byte = try readU32(bytes, cursor);
                 if (cursor.* >= bytes.len) return error.UnexpectedEnd;
-                cursor.* += 1; // mutability
+                const mutability = bytes[cursor.*];
+                cursor.* += 1;
+                try self.global_imports.append(self.allocator, .{
+                    .module_name = module_name,
+                    .field_name = field_name,
+                    .val_type = @intCast(val_type_byte),
+                    .mutable = mutability == 0x01,
+                });
                 self.import_global_count += 1;
             },
             else => return error.InvalidSection,
@@ -1708,10 +1901,38 @@ fn parseStartSection(_: *Self, bytes: []const u8, cursor: *usize) ParseError!voi
     cursor.* += section_size; // Skip start section
 }
 
-fn parseElementSection_(_: *Self, bytes: []const u8, cursor: *usize) ParseError!void {
+fn parseElementSection_(self: *Self, bytes: []const u8, cursor: *usize) ParseError!void {
     const section_size = try beginSection(bytes, cursor, .element_section) orelse return;
-    // Skip element section contents for now (parsed on demand during linking)
-    cursor.* += section_size;
+    const section_end = cursor.* + section_size;
+    const count = try readU32(bytes, cursor);
+
+    for (0..count) |_| {
+        const seg_flags = try readU32(bytes, cursor);
+
+        // Only handle flags=0 (active, table 0) — this is what LLVM/Zig emit for PIC.
+        // Skip other segment types (passive, declarative, etc.) gracefully.
+        if (seg_flags != 0) {
+            cursor.* = section_end;
+            return;
+        }
+
+        // Parse init expression: i32.const <offset>; end
+        if (cursor.* >= bytes.len) return error.UnexpectedEnd;
+        cursor.* += 1; // skip i32.const opcode
+        _ = try readI32(bytes, cursor); // skip offset value
+        if (cursor.* >= bytes.len) return error.UnexpectedEnd;
+        cursor.* += 1; // skip end opcode
+
+        // Parse function indices
+        const elem_count = try readU32(bytes, cursor);
+        for (0..elem_count) |_| {
+            const func_idx = try readU32(bytes, cursor);
+            try self.table_func_indices.append(self.allocator, func_idx);
+        }
+
+        self.has_table = true;
+    }
+    cursor.* = section_end;
 }
 
 fn parseDataCountSection(_: *Self, bytes: []const u8, cursor: *usize) ParseError!void {
@@ -1723,7 +1944,13 @@ fn parseCodeSection(self: *Self, bytes: []const u8, cursor: *usize) ParseError!v
     const section_size = try beginSection(bytes, cursor, .code_section) orelse return;
     const section_end = cursor.* + section_size;
 
+    const before_fn_count = cursor.*;
     const fn_count = try readU32(bytes, cursor);
+
+    // Record how many bytes the function count LEB128 consumed.
+    // reloc.CODE offsets are relative to section body (including fn count),
+    // but code_bytes starts after it — this delta is needed to adjust offsets.
+    self.code_section_fn_count_leb_size = @intCast(cursor.* - before_fn_count);
 
     // Store raw bytes of the entire code section body (after the count).
     // Record each function's byte offset within code_bytes.
@@ -1969,7 +2196,8 @@ fn encodeGlobalSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) 
     var section_data: std.ArrayList(u8) = .empty;
     defer section_data.deinit(gpa);
 
-    try leb128WriteU32(gpa, &section_data, 1); // 1 global
+    const global_count: u32 = 1 + @as(u32, @intCast(self.extra_globals.items.len));
+    try leb128WriteU32(gpa, &section_data, global_count);
 
     // Global 0: __stack_pointer (i32, mutable)
     try section_data.append(gpa, @intFromEnum(ValType.i32));
@@ -1977,6 +2205,15 @@ fn encodeGlobalSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) 
     try section_data.append(gpa, Op.i32_const);
     try leb128WriteI32(gpa, &section_data, @intCast(self.stack_pointer_init));
     try section_data.append(gpa, Op.end);
+
+    // Extra globals (PIC: __memory_base=0, __table_base=0, etc.)
+    for (self.extra_globals.items) |g| {
+        try section_data.append(gpa, g.val_type);
+        try section_data.append(gpa, if (g.mutable) @as(u8, 0x01) else @as(u8, 0x00));
+        try section_data.append(gpa, Op.i32_const);
+        try leb128WriteI32(gpa, &section_data, g.init_value);
+        try section_data.append(gpa, Op.end);
+    }
 
     try output.append(gpa, @intFromEnum(SectionId.global_section));
     try leb128WriteU32(gpa, output, @intCast(section_data.items.len));
@@ -2195,12 +2432,33 @@ pub fn leb128WriteI64(gpa: Allocator, output: *std.ArrayList(u8), value: i64) !v
 
 // --- Padded LEB128 utilities for surgical linking ---
 
-/// Overwrite 5 bytes at `buffer[offset..offset+5]` with a u32 in padded LEB128.
-/// The buffer must already have 5 bytes reserved at that position.
-/// This is the core primitive for surgical relocation patching.
+/// Fixed size of a padded LEB128 value in bytes.
+/// WASM relocatable objects use 5-byte padded LEB128 for all relocatable indices
+/// so that values can be patched in-place without shifting surrounding bytes.
+/// 5 = ceil(32/7) which is the maximum LEB128 encoding for a u32.
+const padded_leb128_size: u32 = 5;
+
+comptime {
+    // A u32 LEB128 uses at most ceil(32/7) = 5 bytes.
+    std.debug.assert(padded_leb128_size == 5);
+    std.debug.assert(padded_leb128_size == (32 + 6) / 7);
+}
+
+/// Read a u32 from a 5-byte padded LEB128 encoding in the buffer.
+pub fn readPaddedU32(buffer: []const u8, offset: u32) u32 {
+    const off: usize = @intCast(offset);
+    std.debug.assert(off + padded_leb128_size <= buffer.len);
+    var result: u32 = 0;
+    for (0..padded_leb128_size) |i| {
+        result |= @as(u32, buffer[off + i] & 0x7f) << @intCast(7 * i);
+    }
+    return result;
+}
+
 pub fn overwritePaddedU32(buffer: []u8, offset: u32, value: u32) void {
     var x = value;
     const off: usize = @intCast(offset);
+    std.debug.assert(off + padded_leb128_size <= buffer.len);
     for (0..4) |i| {
         buffer[off + i] = @as(u8, @truncate(x & 0x7f)) | 0x80;
         x >>= 7;
@@ -2213,6 +2471,7 @@ pub fn overwritePaddedU32(buffer: []u8, offset: u32, value: u32) void {
 pub fn overwritePaddedI32(buffer: []u8, offset: u32, value: i32) void {
     var x = value;
     const off: usize = @intCast(offset);
+    std.debug.assert(off + padded_leb128_size <= buffer.len);
     for (0..4) |i| {
         buffer[off + i] = @as(u8, @truncate(@as(u32, @bitCast(x)) & 0x7f)) | 0x80;
         x >>= 7;
@@ -2224,7 +2483,7 @@ pub fn overwritePaddedI32(buffer: []u8, offset: u32, value: i32) void {
 /// Used when emitting new relocatable instructions (call, global.get/set).
 pub fn appendPaddedU32(gpa: Allocator, output: *std.ArrayList(u8), value: u32) !void {
     var x = value;
-    for (0..4) |_| {
+    for (0..padded_leb128_size - 1) |_| {
         try output.append(gpa, @as(u8, @truncate(x & 0x7f)) | 0x80);
         x >>= 7;
     }
@@ -2709,12 +2968,12 @@ test "preload — symbol name resolution from imports" {
 
     // Symbol 0 is implicitly named — resolve via imports
     const sym0 = module.linking.symbol_table.items[0];
-    const resolved_name = sym0.resolveName(module.imports.items);
+    const resolved_name = sym0.resolveName(module.imports.items, module.global_imports.items, module.table_imports.items);
     try std.testing.expect(resolved_name != null);
     try std.testing.expectEqualStrings("roc__main_exposed", resolved_name.?);
 
     // findSymbolByName should find it
-    const found = module.linking.findSymbolByName("roc__main_exposed", module.imports.items);
+    const found = module.linking.findSymbolByName("roc__main_exposed", module.imports.items, module.global_imports.items, module.table_imports.items);
     try std.testing.expectEqual(@as(?u32, 0), found);
 }
 
@@ -3792,6 +4051,127 @@ test "mergeModule — data segment merged with adjusted offset" {
     try std.testing.expect(new_ds.offset >= 1024);
 }
 
+test "mergeModule — element section entries remapped and appended" {
+    const allocator = std.testing.allocator;
+    var host = try buildMergeHostModule(allocator);
+    defer host.deinit();
+    var builtins = try buildMergeBuiltinsModule(allocator);
+    defer builtins.deinit();
+
+    // Host has 1 table entry: func_idx=2 (host_fn_0)
+    _ = try host.addTableElement(2);
+
+    // Builtins have 1 table entry: func_idx=1 (builtin_fn_0, source index space)
+    try builtins.table_func_indices.append(allocator, 1);
+
+    var result = try host.mergeModule(&builtins);
+    defer result.deinit();
+
+    // Host had 1 + builtins had 1 → total 2
+    try std.testing.expectEqual(@as(usize, 2), host.table_func_indices.items.len);
+    // Host's entry unchanged
+    try std.testing.expectEqual(@as(u32, 2), host.table_func_indices.items[0]);
+    // Builtins' entry remapped: source fn 1 → self fn 3
+    // (host has 2 imports + 1 defined = base 3, source defined fn 0 maps to 3)
+    try std.testing.expectEqual(@as(u32, 3), host.table_func_indices.items[1]);
+    try std.testing.expect(host.has_table);
+}
+
+test "resolveCodeRelocations — table_index_sleb resolves to table index not function index" {
+    const allocator = std.testing.allocator;
+    var module = Self.init(allocator);
+    defer module.deinit();
+
+    // Type 0: (i32, i32) -> void
+    _ = try module.addFuncType(&.{ .i32, .i32 }, &.{});
+    // Type 1: () -> void
+    _ = try module.addFuncType(&.{}, &.{});
+
+    // 2 imports
+    _ = try module.addImport("env", "roc_alloc", 0);
+    _ = try module.addImport("env", "roc_dealloc", 0);
+    module.import_fn_count = 2;
+
+    // 3 defined functions (global indices 2, 3, 4)
+    try module.func_type_indices.append(allocator, 0);
+    try module.func_type_indices.append(allocator, 0);
+    try module.func_type_indices.append(allocator, 1);
+
+    // Table: fn 0 at table idx 0, fn 3 at table idx 1, fn 4 at table idx 2
+    _ = try module.addTableElement(0);
+    _ = try module.addTableElement(3);
+    _ = try module.addTableElement(4);
+
+    // Code: a function body with i32.const <table index placeholder>
+    try module.code_bytes.appendSlice(allocator, &.{0x08}); // body size
+    try module.code_bytes.append(allocator, 0x00); // no locals
+    try module.code_bytes.append(allocator, Op.i32_const);
+    try appendPaddedU32(allocator, &module.code_bytes, 0); // placeholder at offset 3
+    try module.code_bytes.append(allocator, Op.end);
+    try module.function_offsets.append(allocator, 0);
+
+    // Symbol: sym 0 = function at global index 4 (which is table index 2)
+    try module.linking.symbol_table.append(allocator, .{
+        .kind = .function,
+        .flags = 0,
+        .name = "my_fn",
+        .index = 4,
+    });
+
+    // Relocation: table_index_sleb at offset 3 → sym 0
+    try module.reloc_code.entries.append(allocator, .{ .index = .{
+        .type_id = .table_index_sleb,
+        .offset = 3,
+        .symbol_index = 0,
+    } });
+
+    module.resolveCodeRelocations();
+
+    // Should be patched to table index 2 (position in table_func_indices), NOT function index 4
+    var expected = [_]u8{0} ** 5;
+    overwritePaddedI32(&expected, 0, 2);
+    try std.testing.expectEqualSlices(u8, &expected, module.code_bytes.items[3..8]);
+}
+
+test "parseElementSection_ — parses function indices into table_func_indices" {
+    const allocator = std.testing.allocator;
+
+    // Build a module with known table entries, encode it, then re-parse.
+    var source = Self.init(allocator);
+    defer source.deinit();
+
+    _ = try source.addFuncType(&.{}, &.{});
+    _ = try source.addImport("env", "fn0", 0);
+    source.import_fn_count = 1;
+
+    try source.func_type_indices.append(allocator, 0); // fn 1
+    try source.func_type_indices.append(allocator, 0); // fn 2
+
+    // Minimal function bodies
+    try source.func_bodies.append(allocator, .{ .body = try allocator.dupe(u8, &.{ 0x00, Op.end }) });
+    try source.func_bodies.append(allocator, .{ .body = try allocator.dupe(u8, &.{ 0x00, Op.end }) });
+
+    _ = try source.addTableElement(1); // table idx 0 → fn 1
+    _ = try source.addTableElement(2); // table idx 1 → fn 2
+    source.has_table = true;
+
+    source.has_memory = true;
+
+    // Encode to binary
+    const encoded = try source.encode(allocator);
+    defer allocator.free(encoded);
+
+    // Re-parse from binary
+    var parsed = try Self.preload(allocator, encoded, false);
+    defer parsed.deinit();
+
+    // Verify element section was parsed
+    try std.testing.expectEqual(@as(usize, 2), parsed.table_func_indices.items.len);
+    try std.testing.expectEqual(@as(u32, 1), parsed.table_func_indices.items[0]);
+    try std.testing.expectEqual(@as(u32, 2), parsed.table_func_indices.items[1]);
+    try std.testing.expect(parsed.has_table);
+}
+
 test "BuiltinSymbols — all symbols found after merge" {
     const allocator = std.testing.allocator;
     var module = Self.init(allocator);
@@ -3826,9 +4206,9 @@ test "BuiltinSymbols — all symbols found after merge" {
         return err;
     };
 
-    // Spot check a few fields
-    try std.testing.expectEqual(@as(u32, 0), syms.dec_mul); // sym index 0 → roc_builtins_dec_mul_saturated
-    try std.testing.expectEqual(@as(u32, 20), syms.str_trim); // sym index 20
+    // Spot check a few fields (populate returns function index = i + 1, since index 0 is the import)
+    try std.testing.expectEqual(@as(u32, 1), syms.dec_mul); // function index 1 (first defined fn after import)
+    try std.testing.expectEqual(@as(u32, 21), syms.str_trim); // function index 21
 }
 
 test "BuiltinSymbols — fails when symbol missing" {
