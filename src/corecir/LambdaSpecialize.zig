@@ -118,7 +118,6 @@ pub const Result = struct {
     expr_callable_inst_sets: std.AutoHashMapUnmanaged(ContextExprKey, CallableInstSetId),
     call_site_callable_insts: std.AutoHashMapUnmanaged(ContextExprKey, CallableInstId),
     call_site_callable_inst_sets: std.AutoHashMapUnmanaged(ContextExprKey, CallableInstSetId),
-    dispatch_expr_callable_insts: std.AutoHashMapUnmanaged(ContextExprKey, CallableInstId),
     lookup_expr_callable_insts: std.AutoHashMapUnmanaged(ContextExprKey, CallableInstId),
     lookup_expr_callable_inst_sets: std.AutoHashMapUnmanaged(ContextExprKey, CallableInstSetId),
     closure_capture_monotypes: std.AutoHashMapUnmanaged(ContextCaptureKey, ContextMono.ResolvedMonotype),
@@ -137,7 +136,6 @@ pub const Result = struct {
             .expr_callable_inst_sets = .empty,
             .call_site_callable_insts = .empty,
             .call_site_callable_inst_sets = .empty,
-            .dispatch_expr_callable_insts = .empty,
             .lookup_expr_callable_insts = .empty,
             .lookup_expr_callable_inst_sets = .empty,
             .closure_capture_monotypes = .empty,
@@ -157,7 +155,6 @@ pub const Result = struct {
         self.expr_callable_inst_sets.deinit(allocator);
         self.call_site_callable_insts.deinit(allocator);
         self.call_site_callable_inst_sets.deinit(allocator);
-        self.dispatch_expr_callable_insts.deinit(allocator);
         self.lookup_expr_callable_insts.deinit(allocator);
         self.lookup_expr_callable_inst_sets.deinit(allocator);
         self.closure_capture_monotypes.deinit(allocator);
@@ -277,22 +274,6 @@ pub const Result = struct {
         );
         const set_id = self.expr_callable_inst_sets.get(key) orelse return null;
         return self.getCallableInstSetMembers(self.getCallableInstSet(set_id).members);
-    }
-
-    pub fn getDispatchExprCallableInst(
-        self: *const Result,
-        context_callable_inst: CallableInstId,
-        root_source_expr_context: ?CIR.Expr.Idx,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-    ) ?CallableInstId {
-        const key = ContextMono.Result.contextExprKey(
-            @enumFromInt(@intFromEnum(context_callable_inst)),
-            root_source_expr_context,
-            module_idx,
-            expr_idx,
-        );
-        return self.dispatch_expr_callable_insts.get(key);
     }
 
     pub fn getLookupExprCallableInst(

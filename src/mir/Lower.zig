@@ -2094,22 +2094,6 @@ fn lookupPipelinedCallSiteCallableInsts(
     return null;
 }
 
-fn lookupPipelinedDispatchCallableInst(self: *const Self, expr_idx: CIR.Expr.Idx) ?Pipeline.CallableInstId {
-    const rooted = self.callable_pipeline.lambda_specialize.getDispatchExprCallableInst(
-        self.current_callable_inst_context,
-        self.callablePipelineRootSourceExprContext(self.current_callable_inst_context),
-        self.current_module_idx,
-        expr_idx,
-    );
-    if (rooted != null) return rooted;
-
-    if (self.current_callable_inst_context.isNone()) {
-        return self.callable_pipeline.lambda_specialize.getDispatchExprCallableInst(.none, null, self.current_module_idx, expr_idx);
-    }
-
-    return null;
-}
-
 fn lookupPipelinedDispatchTarget(
     self: *const Self,
     expr_idx: CIR.Expr.Idx,
@@ -7122,22 +7106,7 @@ fn lowerResolvedDispatchTargetCallInto(
     }
     try actual_arg_exprs.appendSlice(self.allocator, arg_exprs);
 
-    const direct_dispatch_callable_inst = self.lookupPipelinedDispatchCallableInst(result_expr_idx);
-    const callee_effectful = if (direct_dispatch_callable_inst) |callable_inst_id|
-        switch (self.store.monotype_store.getMonotype(try self.importMonotypeFromStore(
-            &self.callable_pipeline.context_mono.monotype_store,
-            self.callable_pipeline.lambda_specialize.getCallableInst(callable_inst_id).fn_monotype,
-            self.callable_pipeline.lambda_specialize.getCallableInst(callable_inst_id).fn_monotype_module_idx,
-            self.current_module_idx,
-        ))) {
-            .func => |func| func.effectful,
-            else => std.debug.panic(
-                "statement-only MIR invariant violated: dispatch callable inst {d} did not have func monotype",
-                .{@intFromEnum(callable_inst_id)},
-            ),
-        }
-    else
-        try self.dispatchTargetEffectful(dispatch_target);
+    const callee_effectful = try self.dispatchTargetEffectful(dispatch_target);
     const callee_monotype = try self.resolveAppliedCallFnMonotype(
         self.store.getLocal(target).monotype,
         actual_arg_exprs.items,
@@ -7145,7 +7114,7 @@ fn lowerResolvedDispatchTargetCallInto(
     );
     const target_env = self.all_module_envs[dispatch_target.module_idx];
     const target_def = target_env.store.getDef(dispatch_target.def_idx);
-    const exact_dispatch_callable_inst = direct_dispatch_callable_inst orelse
+    const exact_dispatch_callable_inst =
         (try self.lookupPipelinedValueExprCallableInstForMonotypeInModule(
             dispatch_target.module_idx,
             target_def.expr,
@@ -7211,92 +7180,6 @@ fn lowerResolvedDispatchTargetCallInto(
         null;
     if (exact_result_callable_inst_id) |callable_inst_id| {
         try self.bindExactCallableLocal(target, callable_inst_id);
-    } else {
-        try self.refreshCallTargetMonotypeFromCallee(target, self.store.getLocal(callee_local).monotype);
-    }
-
-    std.mem.reverse(MIR.LocalId, self.scratch_local_ids.items.items[top..]);
-    const args = try self.store.addLocalSpan(self.allocator, self.scratch_local_ids.items.items[top..]);
-    try self.store.finalizeCFStmt(call_stmt, .{ .assign_call = .{
-        .target = target,
-        .callee = callee_local,
-        .exact_lambda = if (exact_call) |resolved| resolved.lambda else null,
-        .exact_requires_hidden_capture = if (exact_call) |resolved| resolved.requires_hidden_capture else false,
-        .args = args,
-        .next = next,
-    } });
-    return lowered_next;
-}
-
-fn lowerResolvedDispatchCallableInstCallInto(
-    self: *Self,
-    callable_inst_id: Pipeline.CallableInstId,
-    result_expr_idx: CIR.Expr.Idx,
-    receiver_expr: ?CIR.Expr.Idx,
-    arg_exprs: []const CIR.Expr.Idx,
-    target: MIR.LocalId,
-    next: MIR.CFStmtId,
-) Allocator.Error!MIR.CFStmtId {
-    var actual_arg_exprs = std.ArrayList(CIR.Expr.Idx).empty;
-    defer actual_arg_exprs.deinit(self.allocator);
-    if (receiver_expr) |receiver| {
-        try actual_arg_exprs.append(self.allocator, receiver);
-    }
-    try actual_arg_exprs.appendSlice(self.allocator, arg_exprs);
-
-    const callable_inst = self.callable_pipeline.lambda_specialize.getCallableInst(callable_inst_id);
-    const callee_effectful = switch (self.store.monotype_store.getMonotype(try self.importMonotypeFromStore(
-        &self.callable_pipeline.context_mono.monotype_store,
-        callable_inst.fn_monotype,
-        callable_inst.fn_monotype_module_idx,
-        self.current_module_idx,
-    ))) {
-        .func => |func| func.effectful,
-        else => std.debug.panic(
-            "statement-only MIR invariant violated: dispatch callable inst {d} did not have func monotype",
-            .{@intFromEnum(callable_inst_id)},
-        ),
-    };
-    const callee_monotype = try self.resolveAppliedCallFnMonotype(
-        self.store.getLocal(target).monotype,
-        actual_arg_exprs.items,
-        callee_effectful,
-    );
-    const callee_local = try self.freshSyntheticLocal(callee_monotype, false);
-
-    const top = self.scratch_local_ids.top();
-    defer self.scratch_local_ids.clearFrom(top);
-
-    const call_stmt = try self.store.reserveCFStmt(self.allocator);
-
-    var lowered_next = call_stmt;
-    var i: usize = actual_arg_exprs.items.len;
-    while (i > 0) {
-        i -= 1;
-        const arg_expr_idx = actual_arg_exprs.items[i];
-        const arg_local = try self.freshSyntheticLocal(try self.resolveMonotype(arg_expr_idx), false);
-        try self.scratch_local_ids.append(arg_local);
-        lowered_next = try self.lowerCirExprInto(arg_expr_idx, arg_local, lowered_next);
-    }
-
-    lowered_next = try self.lowerResolvedCallableInstValueInto(
-        callable_inst_id,
-        callee_local,
-        lowered_next,
-    );
-
-    const exact_call = try self.resolveExactCallableResolutionForLocal(callee_local);
-    const target_monotype = self.store.getLocal(target).monotype;
-    const exact_result_callable_inst_id = if (self.store.monotype_store.getMonotype(target_monotype) == .func)
-        try self.resolveBestExactCallableInstForExpr(
-            result_expr_idx,
-            target_monotype,
-            self.current_module_idx,
-        )
-    else
-        null;
-    if (exact_result_callable_inst_id) |resolved_callable_inst_id| {
-        try self.bindExactCallableLocal(target, resolved_callable_inst_id);
     } else {
         try self.refreshCallTargetMonotypeFromCallee(target, self.store.getLocal(callee_local).monotype);
     }
@@ -7709,17 +7592,6 @@ fn lowerDotAccessInto(
                     .{ module_env.getIdent(da.field_name), @tagName(self.store.monotype_store.getMonotype(receiver_mono)) },
                 ),
             };
-        }
-
-        if (self.lookupPipelinedDispatchCallableInst(expr_idx)) |dispatch_callable_inst| {
-            return self.lowerResolvedDispatchCallableInstCallInto(
-                dispatch_callable_inst,
-                expr_idx,
-                da.receiver,
-                dot_args,
-                target,
-                next,
-            );
         }
 
         if (self.lookupPipelinedDispatchTarget(expr_idx)) |dispatch_target| {

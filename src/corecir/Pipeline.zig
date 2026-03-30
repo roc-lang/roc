@@ -114,7 +114,6 @@ const MutationKind = enum(u8) {
     closure_capture_callable_insts,
     context_expr_monotypes,
     context_pattern_monotypes,
-    dispatch_expr_callable_insts,
     context_dispatch_targets,
     callable_inst_sets,
     context_pattern_callable_inst_sets,
@@ -310,21 +309,6 @@ pub const Result = struct {
         expr_idx: CIR.Expr.Idx,
     ) ?[]const CallableInstId {
         return self.lambda_specialize.getExprCallableInsts(
-            context_callable_inst,
-            root_source_expr_context,
-            module_idx,
-            expr_idx,
-        );
-    }
-
-    pub fn getDispatchExprCallableInst(
-        self: *const Result,
-        context_callable_inst: CallableInstId,
-        root_source_expr_context: ?CIR.Expr.Idx,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-    ) ?CallableInstId {
-        return self.lambda_specialize.getDispatchExprCallableInst(
             context_callable_inst,
             root_source_expr_context,
             module_idx,
@@ -936,7 +920,7 @@ pub const Pass = struct {
             iterations += 1;
             if (std.debug.runtime_safety and iterations > 32) {
                 std.debug.panic(
-                    "Pipeline: root fixed point did not converge (module={d}, contextualize_roots={}, revision={d}, templates={d}, callable_insts={d}, expr_callable_insts={d}, expr_callable_inst_sets={d}, call_sites={d}, call_site_sets={d}, dispatch={d}, lookups={d}, lookup_sets={d}, context_monos={d}, context_pattern_monos={d}, context_pattern_callable_insts={d}, context_pattern_sets={d}, closure_capture_monos={d}, closure_capture_callable_insts={d}, mutation_counts={any})",
+                    "Pipeline: root fixed point did not converge (module={d}, contextualize_roots={}, revision={d}, templates={d}, callable_insts={d}, expr_callable_insts={d}, expr_callable_inst_sets={d}, call_sites={d}, call_site_sets={d}, lookups={d}, lookup_sets={d}, context_monos={d}, context_pattern_monos={d}, context_pattern_callable_insts={d}, context_pattern_sets={d}, closure_capture_monos={d}, closure_capture_callable_insts={d}, mutation_counts={any})",
                     .{
                         self.current_module_idx,
                         contextualize_roots,
@@ -947,7 +931,6 @@ pub const Pass = struct {
                         result.lambda_specialize.expr_callable_inst_sets.count(),
                         result.lambda_specialize.call_site_callable_insts.count(),
                         result.lambda_specialize.call_site_callable_inst_sets.count(),
-                        result.lambda_specialize.dispatch_expr_callable_insts.count(),
                         result.lambda_specialize.lookup_expr_callable_insts.count(),
                         result.lambda_specialize.lookup_expr_callable_inst_sets.count(),
                         result.context_mono.context_expr_monotypes.count(),
@@ -5941,13 +5924,6 @@ pub const Pass = struct {
         callable_inst_id: CallableInstId,
     ) Allocator.Error!void {
         if (self.scratch_context_expr_monotypes_depth == 0) {
-            const key = self.resultExprKey(self.active_callable_inst_context, module_idx, expr_idx);
-            try self.putTracked(
-                .dispatch_expr_callable_insts,
-                &result.lambda_specialize.dispatch_expr_callable_insts,
-                key,
-                callable_inst_id,
-            );
             const callable_inst = result.getCallableInst(callable_inst_id);
             const template = result.getCallableTemplate(callable_inst.template);
             try self.recordExprCallableInst(
