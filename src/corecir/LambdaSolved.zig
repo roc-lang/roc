@@ -41,6 +41,19 @@ pub const CallableTemplate = struct {
     source_region: Region = Region.zero(),
 };
 
+pub const DeferredLocalCallable = struct {
+    pattern_idx: CIR.Pattern.Idx,
+    cir_expr: CIR.Expr.Idx,
+    module_idx: u32,
+    source_key: u64,
+    type_root: types.Var,
+};
+
+pub const ExprSource = struct {
+    module_idx: u32,
+    expr_idx: CIR.Expr.Idx,
+};
+
 pub const CapturePlanId = enum(u32) {
     _,
 
@@ -143,6 +156,9 @@ pub const ContextPatternKey = cm.ContextPatternKey;
 
 pub const Result = struct {
     callable_templates: std.ArrayListUnmanaged(CallableTemplate),
+    source_exprs: std.AutoHashMapUnmanaged(u64, ExprSource),
+    callable_template_ids_by_source: std.AutoHashMapUnmanaged(u64, CallableTemplateId),
+    deferred_local_callables: std.AutoHashMapUnmanaged(u64, DeferredLocalCallable),
     capture_entries: std.ArrayListUnmanaged(CaptureEntry),
     capture_plans: std.ArrayListUnmanaged(CapturePlan),
     lambda_set_members: std.ArrayListUnmanaged(LambdaSetMember),
@@ -158,6 +174,9 @@ pub const Result = struct {
     pub fn init(root_module_idx: u32, root_source_expr_idx: ?CIR.Expr.Idx) Result {
         return .{
             .callable_templates = .empty,
+            .source_exprs = .empty,
+            .callable_template_ids_by_source = .empty,
+            .deferred_local_callables = .empty,
             .capture_entries = .empty,
             .capture_plans = .empty,
             .lambda_set_members = .empty,
@@ -174,6 +193,9 @@ pub const Result = struct {
 
     pub fn deinit(self: *Result, allocator: Allocator) void {
         self.callable_templates.deinit(allocator);
+        self.source_exprs.deinit(allocator);
+        self.callable_template_ids_by_source.deinit(allocator);
+        self.deferred_local_callables.deinit(allocator);
         self.capture_entries.deinit(allocator);
         self.capture_plans.deinit(allocator);
         self.lambda_set_members.deinit(allocator);
@@ -183,5 +205,9 @@ pub const Result = struct {
         self.call_site_lambda_sets.deinit(allocator);
         self.lookup_expr_lambda_sets.deinit(allocator);
         self.context_pattern_lambda_sets.deinit(allocator);
+    }
+
+    pub fn getCallableTemplate(self: *const Result, callable_template_id: CallableTemplateId) *const CallableTemplate {
+        return &self.callable_templates.items[@intFromEnum(callable_template_id)];
     }
 };

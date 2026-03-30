@@ -134,6 +134,43 @@ pub const Result = struct {
             .pattern_raw = @intFromEnum(pattern_idx),
         };
     }
+
+    pub fn getExprMonotype(
+        self: *const Result,
+        context_id: ContextId,
+        root_source_expr_context: ?CIR.Expr.Idx,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) ?ResolvedMonotype {
+        return self.context_expr_monotypes.get(contextExprKey(
+            context_id,
+            root_source_expr_context,
+            module_idx,
+            expr_idx,
+        ));
+    }
+
+    pub fn getContextPatternMonotype(
+        self: *const Result,
+        context_id: ContextId,
+        module_idx: u32,
+        pattern_idx: CIR.Pattern.Idx,
+    ) ?ResolvedMonotype {
+        return self.context_pattern_monotypes.get(contextPatternKey(
+            context_id,
+            module_idx,
+            pattern_idx,
+        ));
+    }
+
+    pub fn getTypeSubst(self: *const Result, subst_id: TypeSubstId) *const TypeSubst {
+        return &self.substs.items[@intFromEnum(subst_id)];
+    }
+
+    pub fn getTypeSubstEntries(self: *const Result, span: TypeSubstSpan) []const TypeSubstEntry {
+        if (span.len == 0) return &.{};
+        return self.subst_entries.items[span.start..][0..span.len];
+    }
 };
 
 pub fn resolvedMonotype(idx: Monotype.Idx, module_idx: u32) ResolvedMonotype {

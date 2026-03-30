@@ -14,6 +14,7 @@ const types = @import("types");
 const Monotype = @import("Monotype.zig");
 const ContextMono = corecir.ContextMono;
 const LambdaSolved = corecir.LambdaSolved;
+const LambdaSpecialize = corecir.LambdaSpecialize;
 
 const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
@@ -57,15 +58,7 @@ pub const CallableTemplateId = LambdaSolved.CallableTemplateId;
 pub const TypeSubstId = ContextMono.TypeSubstId;
 
 /// Identifies one monomorphic callable instantiation.
-pub const CallableInstId = enum(u32) {
-    _,
-
-    pub const none: CallableInstId = @enumFromInt(std.math.maxInt(u32));
-
-    pub fn isNone(self: CallableInstId) bool {
-        return self == none;
-    }
-};
+pub const CallableInstId = LambdaSpecialize.CallableInstId;
 
 const BoundTypeVarKey = ContextMono.BoundTypeVarKey;
 
@@ -85,97 +78,34 @@ pub const CallableTemplateKind = LambdaSolved.CallableTemplateKind;
 pub const CallableTemplate = LambdaSolved.CallableTemplate;
 
 /// Records a block-local polymorphic callable that is materialized on demand.
-pub const DeferredLocalCallable = struct {
-    pattern_idx: CIR.Pattern.Idx,
-    cir_expr: CIR.Expr.Idx,
-    module_idx: u32,
-    source_key: u64,
-    type_root: types.Var,
-};
+pub const DeferredLocalCallable = LambdaSolved.DeferredLocalCallable;
 
 /// The canonical substitution assigned to one callable instantiation.
 pub const TypeSubst = ContextMono.TypeSubst;
 
 /// One concrete instantiation of a semantic callable template.
-pub const CallableInst = struct {
-    template: CallableTemplateId,
-    subst: TypeSubstId,
-    fn_monotype: Monotype.Idx,
-    fn_monotype_module_idx: u32,
-    defining_context_callable_inst: CallableInstId,
-    callable_param_specs: CallableParamSpecSpan = .empty(),
-};
+pub const CallableInst = LambdaSpecialize.CallableInst;
 
 /// One callable requirement originating from a higher-order parameter.
-pub const CallableParamSpecEntry = struct {
-    param_index: u16,
-    projections: CallableParamProjectionSpan = .empty(),
-    callable_inst_set_id: CallableInstSetId,
-};
+pub const CallableParamSpecEntry = LambdaSpecialize.CallableParamSpecEntry;
 
 /// One structural projection applied before demanding callable callable instantiations.
-pub const CallableParamProjection = union(enum) {
-    field: Monotype.Name,
-    tuple_elem: u32,
-};
+pub const CallableParamProjection = LambdaSpecialize.CallableParamProjection;
 
 /// Span of callable-parameter projections stored in the monomorphization store.
-pub const CallableParamProjectionSpan = extern struct {
-    start: u32,
-    len: u16,
-
-    pub fn empty() CallableParamProjectionSpan {
-        return .{ .start = 0, .len = 0 };
-    }
-
-    pub fn isEmpty(self: CallableParamProjectionSpan) bool {
-        return self.len == 0;
-    }
-};
+pub const CallableParamProjectionSpan = LambdaSpecialize.CallableParamProjectionSpan;
 
 /// Span of callable-parameter specification entries stored in the monomorphization store.
-pub const CallableParamSpecSpan = extern struct {
-    start: u32,
-    len: u16,
-
-    pub fn empty() CallableParamSpecSpan {
-        return .{ .start = 0, .len = 0 };
-    }
-
-    pub fn isEmpty(self: CallableParamSpecSpan) bool {
-        return self.len == 0;
-    }
-};
+pub const CallableParamSpecSpan = LambdaSpecialize.CallableParamSpecSpan;
 
 /// Interned identifier for a set of demanded callable instantiations.
-pub const CallableInstSetId = enum(u32) {
-    _,
-
-    pub const none: CallableInstSetId = @enumFromInt(std.math.maxInt(u32));
-
-    pub fn isNone(self: CallableInstSetId) bool {
-        return self == none;
-    }
-};
+pub const CallableInstSetId = LambdaSpecialize.CallableInstSetId;
 
 /// Contiguous span of callable-inst-set members in the monomorphization store.
-pub const CallableInstSetSpan = extern struct {
-    start: u32,
-    len: u16,
-
-    pub fn empty() CallableInstSetSpan {
-        return .{ .start = 0, .len = 0 };
-    }
-
-    pub fn isEmpty(self: CallableInstSetSpan) bool {
-        return self.len == 0;
-    }
-};
+pub const CallableInstSetSpan = LambdaSpecialize.CallableInstSetSpan;
 
 /// A deduplicated set of callable instantiations associated with one callable value.
-pub const CallableInstSet = struct {
-    members: CallableInstSetSpan,
-};
+pub const CallableInstSet = LambdaSpecialize.CallableInstSet;
 
 /// Associates a source call site with the callable instantiation chosen for it.
 pub const CallSiteResolution = struct {
@@ -184,30 +114,16 @@ pub const CallSiteResolution = struct {
     callable_inst: CallableInstId,
 };
 
-const ContextExprKey = struct {
-    context_callable_inst_raw: u32,
-    root_source_expr_raw: u32,
-    module_idx: u32,
-    expr_raw: u32,
-};
+const ContextExprKey = ContextMono.ContextExprKey;
 
-const ContextCaptureKey = struct {
-    closure_callable_inst_raw: u32,
-    module_idx: u32,
-    closure_expr_raw: u32,
-    pattern_raw: u32,
-};
+const ContextCaptureKey = LambdaSpecialize.ContextCaptureKey;
 
 const TemplateBodyCompletionKey = struct {
     template_source_key: u64,
     context_callable_inst_raw: u32,
 };
 
-const ContextPatternKey = struct {
-    context_callable_inst_raw: u32,
-    module_idx: u32,
-    pattern_raw: u32,
-};
+const ContextPatternKey = ContextMono.ContextPatternKey;
 
 const MutationKind = enum(u8) {
     callable_templates,
@@ -250,10 +166,7 @@ const AssociatedMethodTemplate = struct {
 };
 
 /// A source expression in a specific module, used for semantic value provenance.
-pub const ExprSource = struct {
-    module_idx: u32,
-    expr_idx: CIR.Expr.Idx,
-};
+pub const ExprSource = LambdaSolved.ExprSource;
 
 const ContextExprSource = struct {
     context_callable_inst: CallableInstId,
@@ -280,92 +193,26 @@ const RequiredLookupTarget = struct {
 
 /// Output of the MIR monomorphization pass.
 pub const Result = struct {
-    monotype_store: Monotype.Store,
-    callable_templates: std.ArrayListUnmanaged(CallableTemplate),
-    callable_insts: std.ArrayListUnmanaged(CallableInst),
-    callable_param_spec_entries: std.ArrayListUnmanaged(CallableParamSpecEntry),
-    callable_param_projection_entries: std.ArrayListUnmanaged(CallableParamProjection),
-    callable_inst_set_entries: std.ArrayListUnmanaged(CallableInstId),
-    callable_inst_sets: std.ArrayListUnmanaged(CallableInstSet),
-    subst_entries: std.ArrayListUnmanaged(TypeSubstEntry),
-    substs: std.ArrayListUnmanaged(TypeSubst),
-    context_expr_monotypes: std.AutoHashMapUnmanaged(ContextExprKey, ResolvedMonotype),
-    expr_callable_insts: std.AutoHashMapUnmanaged(ContextExprKey, CallableInstId),
-    expr_callable_inst_sets: std.AutoHashMapUnmanaged(ContextExprKey, CallableInstSetId),
-    call_site_callable_insts: std.AutoHashMapUnmanaged(ContextExprKey, CallableInstId),
-    call_site_callable_inst_sets: std.AutoHashMapUnmanaged(ContextExprKey, CallableInstSetId),
-    dispatch_expr_callable_insts: std.AutoHashMapUnmanaged(ContextExprKey, CallableInstId),
-    lookup_expr_callable_insts: std.AutoHashMapUnmanaged(ContextExprKey, CallableInstId),
-    lookup_expr_callable_inst_sets: std.AutoHashMapUnmanaged(ContextExprKey, CallableInstSetId),
-    closure_capture_monotypes: std.AutoHashMapUnmanaged(ContextCaptureKey, ResolvedMonotype),
-    closure_capture_callable_insts: std.AutoHashMapUnmanaged(ContextCaptureKey, CallableInstId),
-    context_pattern_monotypes: std.AutoHashMapUnmanaged(ContextPatternKey, ResolvedMonotype),
-    context_pattern_callable_insts: std.AutoHashMapUnmanaged(ContextPatternKey, CallableInstId),
-    context_pattern_callable_inst_sets: std.AutoHashMapUnmanaged(ContextPatternKey, CallableInstSetId),
-    source_exprs: std.AutoHashMapUnmanaged(u64, ExprSource),
-    callable_template_ids_by_source: std.AutoHashMapUnmanaged(u64, CallableTemplateId),
-    deferred_local_callables: std.AutoHashMapUnmanaged(u64, DeferredLocalCallable),
+    context_mono: ContextMono.Result,
+    lambda_solved: LambdaSolved.Result,
+    lambda_specialize: LambdaSpecialize.Result,
     root_module_idx: u32,
     root_source_expr_idx: ?CIR.Expr.Idx,
 
     pub fn init(allocator: Allocator, root_module_idx: u32, root_source_expr_idx: ?CIR.Expr.Idx) !Result {
         return .{
-            .monotype_store = try Monotype.Store.init(allocator),
-            .callable_templates = .empty,
-            .callable_insts = .empty,
-            .callable_param_spec_entries = .empty,
-            .callable_param_projection_entries = .empty,
-            .callable_inst_set_entries = .empty,
-            .callable_inst_sets = .empty,
-            .subst_entries = .empty,
-            .substs = .empty,
-            .context_expr_monotypes = .empty,
-            .expr_callable_insts = .empty,
-            .expr_callable_inst_sets = .empty,
-            .call_site_callable_insts = .empty,
-            .call_site_callable_inst_sets = .empty,
-            .dispatch_expr_callable_insts = .empty,
-            .lookup_expr_callable_insts = .empty,
-            .lookup_expr_callable_inst_sets = .empty,
-            .closure_capture_monotypes = .empty,
-            .closure_capture_callable_insts = .empty,
-            .context_pattern_monotypes = .empty,
-            .context_pattern_callable_insts = .empty,
-            .context_pattern_callable_inst_sets = .empty,
-            .source_exprs = .empty,
-            .callable_template_ids_by_source = .empty,
-            .deferred_local_callables = .empty,
+            .context_mono = try ContextMono.Result.init(allocator, root_module_idx, root_source_expr_idx),
+            .lambda_solved = LambdaSolved.Result.init(root_module_idx, root_source_expr_idx),
+            .lambda_specialize = LambdaSpecialize.Result.init(),
             .root_module_idx = root_module_idx,
             .root_source_expr_idx = root_source_expr_idx,
         };
     }
 
     pub fn deinit(self: *Result, allocator: Allocator) void {
-        self.monotype_store.deinit(allocator);
-        self.callable_templates.deinit(allocator);
-        self.callable_insts.deinit(allocator);
-        self.callable_param_spec_entries.deinit(allocator);
-        self.callable_param_projection_entries.deinit(allocator);
-        self.callable_inst_set_entries.deinit(allocator);
-        self.callable_inst_sets.deinit(allocator);
-        self.subst_entries.deinit(allocator);
-        self.substs.deinit(allocator);
-        self.context_expr_monotypes.deinit(allocator);
-        self.expr_callable_insts.deinit(allocator);
-        self.expr_callable_inst_sets.deinit(allocator);
-        self.call_site_callable_insts.deinit(allocator);
-        self.call_site_callable_inst_sets.deinit(allocator);
-        self.dispatch_expr_callable_insts.deinit(allocator);
-        self.lookup_expr_callable_insts.deinit(allocator);
-        self.lookup_expr_callable_inst_sets.deinit(allocator);
-        self.closure_capture_monotypes.deinit(allocator);
-        self.closure_capture_callable_insts.deinit(allocator);
-        self.context_pattern_monotypes.deinit(allocator);
-        self.context_pattern_callable_insts.deinit(allocator);
-        self.context_pattern_callable_inst_sets.deinit(allocator);
-        self.source_exprs.deinit(allocator);
-        self.callable_template_ids_by_source.deinit(allocator);
-        self.deferred_local_callables.deinit(allocator);
+        self.context_mono.deinit(allocator);
+        self.lambda_solved.deinit(allocator);
+        self.lambda_specialize.deinit(allocator);
     }
 
     pub fn callSiteKey(module_idx: u32, expr_idx: CIR.Expr.Idx) u64 {
@@ -379,7 +226,7 @@ pub const Result = struct {
         expr_idx: CIR.Expr.Idx,
     ) ContextExprKey {
         return .{
-            .context_callable_inst_raw = @intFromEnum(context_callable_inst),
+            .context_id_raw = @intFromEnum(context_callable_inst),
             .root_source_expr_raw = if (context_callable_inst.isNone() and root_source_expr_context != null)
                 @intFromEnum(root_source_expr_context.?)
             else
@@ -409,7 +256,7 @@ pub const Result = struct {
         pattern_idx: CIR.Pattern.Idx,
     ) ContextPatternKey {
         return .{
-            .context_callable_inst_raw = @intFromEnum(context_callable_inst),
+            .context_id_raw = @intFromEnum(context_callable_inst),
             .module_idx = module_idx,
             .pattern_raw = @intFromEnum(pattern_idx),
         };
@@ -422,7 +269,7 @@ pub const Result = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?CallableInstId {
-        const callable_inst_id = self.call_site_callable_insts.get(contextExprKey(context_callable_inst, root_source_expr_context, module_idx, expr_idx)) orelse return null;
+        const callable_inst_id = self.lambda_specialize.call_site_callable_insts.get(contextExprKey(context_callable_inst, root_source_expr_context, module_idx, expr_idx)) orelse return null;
         if (callable_inst_id.isNone()) return null;
         return callable_inst_id;
     }
@@ -434,7 +281,7 @@ pub const Result = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?[]const CallableInstId {
-        const set_id = self.call_site_callable_inst_sets.get(contextExprKey(context_callable_inst, root_source_expr_context, module_idx, expr_idx)) orelse return null;
+        const set_id = self.lambda_specialize.call_site_callable_inst_sets.get(contextExprKey(context_callable_inst, root_source_expr_context, module_idx, expr_idx)) orelse return null;
         return self.getCallableInstSetMembers(self.getCallableInstSet(set_id).members);
     }
 
@@ -445,7 +292,12 @@ pub const Result = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?ResolvedMonotype {
-        return self.context_expr_monotypes.get(contextExprKey(context_callable_inst, root_source_expr_context, module_idx, expr_idx));
+        return self.context_mono.getExprMonotype(
+            @enumFromInt(@intFromEnum(context_callable_inst)),
+            root_source_expr_context,
+            module_idx,
+            expr_idx,
+        );
     }
 
     pub fn getExprCallableInst(
@@ -455,7 +307,7 @@ pub const Result = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?CallableInstId {
-        const callable_inst_id = self.expr_callable_insts.get(contextExprKey(context_callable_inst, root_source_expr_context, module_idx, expr_idx)) orelse return null;
+        const callable_inst_id = self.lambda_specialize.expr_callable_insts.get(contextExprKey(context_callable_inst, root_source_expr_context, module_idx, expr_idx)) orelse return null;
         if (callable_inst_id.isNone()) return null;
         return callable_inst_id;
     }
@@ -467,7 +319,7 @@ pub const Result = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?[]const CallableInstId {
-        const set_id = self.expr_callable_inst_sets.get(contextExprKey(context_callable_inst, root_source_expr_context, module_idx, expr_idx)) orelse return null;
+        const set_id = self.lambda_specialize.expr_callable_inst_sets.get(contextExprKey(context_callable_inst, root_source_expr_context, module_idx, expr_idx)) orelse return null;
         return self.getCallableInstSetMembers(self.getCallableInstSet(set_id).members);
     }
 
@@ -478,7 +330,7 @@ pub const Result = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?CallableInstId {
-        return self.dispatch_expr_callable_insts.get(contextExprKey(context_callable_inst, root_source_expr_context, module_idx, expr_idx));
+        return self.lambda_specialize.dispatch_expr_callable_insts.get(contextExprKey(context_callable_inst, root_source_expr_context, module_idx, expr_idx));
     }
 
     pub fn getLookupExprCallableInst(
@@ -488,7 +340,7 @@ pub const Result = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?CallableInstId {
-        const callable_inst_id = self.lookup_expr_callable_insts.get(contextExprKey(context_callable_inst, root_source_expr_context, module_idx, expr_idx)) orelse return null;
+        const callable_inst_id = self.lambda_specialize.lookup_expr_callable_insts.get(contextExprKey(context_callable_inst, root_source_expr_context, module_idx, expr_idx)) orelse return null;
         if (callable_inst_id.isNone()) return null;
         return callable_inst_id;
     }
@@ -500,7 +352,7 @@ pub const Result = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?[]const CallableInstId {
-        const set_id = self.lookup_expr_callable_inst_sets.get(contextExprKey(context_callable_inst, root_source_expr_context, module_idx, expr_idx)) orelse return null;
+        const set_id = self.lambda_specialize.lookup_expr_callable_inst_sets.get(contextExprKey(context_callable_inst, root_source_expr_context, module_idx, expr_idx)) orelse return null;
         return self.getCallableInstSetMembers(self.getCallableInstSet(set_id).members);
     }
 
@@ -511,7 +363,7 @@ pub const Result = struct {
         closure_expr_idx: CIR.Expr.Idx,
         pattern_idx: CIR.Pattern.Idx,
     ) ?CallableInstId {
-        return self.closure_capture_callable_insts.get(contextCaptureKey(
+        return self.lambda_specialize.closure_capture_callable_insts.get(contextCaptureKey(
             closure_callable_inst,
             module_idx,
             closure_expr_idx,
@@ -526,7 +378,7 @@ pub const Result = struct {
         closure_expr_idx: CIR.Expr.Idx,
         pattern_idx: CIR.Pattern.Idx,
     ) ?ResolvedMonotype {
-        return self.closure_capture_monotypes.get(contextCaptureKey(
+        return self.lambda_specialize.closure_capture_monotypes.get(contextCaptureKey(
             closure_callable_inst,
             module_idx,
             closure_expr_idx,
@@ -540,7 +392,7 @@ pub const Result = struct {
         module_idx: u32,
         pattern_idx: CIR.Pattern.Idx,
     ) ?CallableInstId {
-        const callable_inst_id = self.context_pattern_callable_insts.get(contextPatternKey(context_callable_inst, module_idx, pattern_idx)) orelse return null;
+        const callable_inst_id = self.lambda_specialize.context_pattern_callable_insts.get(contextPatternKey(context_callable_inst, module_idx, pattern_idx)) orelse return null;
         if (callable_inst_id.isNone()) return null;
         return callable_inst_id;
     }
@@ -551,16 +403,19 @@ pub const Result = struct {
         module_idx: u32,
         pattern_idx: CIR.Pattern.Idx,
     ) ?ResolvedMonotype {
-        return self.context_pattern_monotypes.get(contextPatternKey(context_callable_inst, module_idx, pattern_idx));
+        return self.context_mono.getContextPatternMonotype(
+            @enumFromInt(@intFromEnum(context_callable_inst)),
+            module_idx,
+            pattern_idx,
+        );
     }
 
     pub fn getCallableInstSet(self: *const Result, callable_inst_set_id: CallableInstSetId) *const CallableInstSet {
-        return &self.callable_inst_sets.items[@intFromEnum(callable_inst_set_id)];
+        return self.lambda_specialize.getCallableInstSet(callable_inst_set_id);
     }
 
     pub fn getCallableInstSetMembers(self: *const Result, span: CallableInstSetSpan) []const CallableInstId {
-        if (span.len == 0) return &.{};
-        return self.callable_inst_set_entries.items[span.start..][0..span.len];
+        return self.lambda_specialize.getCallableInstSetMembers(span);
     }
 
     pub fn getContextPatternCallableInsts(
@@ -569,57 +424,54 @@ pub const Result = struct {
         module_idx: u32,
         pattern_idx: CIR.Pattern.Idx,
     ) ?[]const CallableInstId {
-        const set_id = self.context_pattern_callable_inst_sets.get(contextPatternKey(context_callable_inst, module_idx, pattern_idx)) orelse return null;
+        const set_id = self.lambda_specialize.context_pattern_callable_inst_sets.get(contextPatternKey(context_callable_inst, module_idx, pattern_idx)) orelse return null;
         return self.getCallableInstSetMembers(self.getCallableInstSet(set_id).members);
     }
 
     pub fn getCallableTemplate(self: *const Result, callable_template_id: CallableTemplateId) *const CallableTemplate {
-        return &self.callable_templates.items[@intFromEnum(callable_template_id)];
+        return self.lambda_solved.getCallableTemplate(callable_template_id);
     }
 
     pub fn getCallableInst(self: *const Result, callable_inst_id: CallableInstId) *const CallableInst {
-        return &self.callable_insts.items[@intFromEnum(callable_inst_id)];
+        return self.lambda_specialize.getCallableInst(callable_inst_id);
     }
 
     pub fn getCallableParamSpecEntries(
         self: *const Result,
         span: CallableParamSpecSpan,
     ) []const CallableParamSpecEntry {
-        if (span.len == 0) return &.{};
-        return self.callable_param_spec_entries.items[span.start..][0..span.len];
+        return self.lambda_specialize.getCallableParamSpecEntries(span);
     }
 
     pub fn getCallableParamProjectionEntries(
         self: *const Result,
         span: CallableParamProjectionSpan,
     ) []const CallableParamProjection {
-        if (span.len == 0) return &.{};
-        return self.callable_param_projection_entries.items[span.start..][0..span.len];
+        return self.lambda_specialize.getCallableParamProjectionEntries(span);
     }
 
     pub fn getTypeSubst(self: *const Result, subst_id: TypeSubstId) *const TypeSubst {
-        return &self.substs.items[@intFromEnum(subst_id)];
+        return self.context_mono.getTypeSubst(subst_id);
     }
 
     pub fn getTypeSubstEntries(self: *const Result, span: TypeSubstSpan) []const TypeSubstEntry {
-        if (span.len == 0) return &.{};
-        return self.subst_entries.items[span.start..][0..span.len];
+        return self.context_mono.getTypeSubstEntries(span);
     }
 
     pub fn getLocalCallableTemplate(self: *const Result, module_idx: u32, pattern_idx: CIR.Pattern.Idx) ?CallableTemplateId {
-        return self.callable_template_ids_by_source.get(packLocalPatternSourceKey(module_idx, pattern_idx));
+        return self.lambda_solved.callable_template_ids_by_source.get(packLocalPatternSourceKey(module_idx, pattern_idx));
     }
 
     pub fn getExternalCallableTemplate(self: *const Result, module_idx: u32, def_node_idx: u16) ?CallableTemplateId {
-        return self.callable_template_ids_by_source.get(packExternalDefSourceKey(module_idx, def_node_idx));
+        return self.lambda_solved.callable_template_ids_by_source.get(packExternalDefSourceKey(module_idx, def_node_idx));
     }
 
     pub fn getExprCallableTemplate(self: *const Result, module_idx: u32, expr_idx: CIR.Expr.Idx) ?CallableTemplateId {
-        return self.callable_template_ids_by_source.get(packExprSourceKey(module_idx, expr_idx));
+        return self.lambda_solved.callable_template_ids_by_source.get(packExprSourceKey(module_idx, expr_idx));
     }
 
     pub fn getDeferredLocalCallable(self: *const Result, module_idx: u32, pattern_idx: CIR.Pattern.Idx) ?DeferredLocalCallable {
-        return self.deferred_local_callables.get(packLocalPatternSourceKey(module_idx, pattern_idx));
+        return self.lambda_solved.deferred_local_callables.get(packLocalPatternSourceKey(module_idx, pattern_idx));
     }
 
     pub fn getPatternSourceExpr(
@@ -627,7 +479,7 @@ pub const Result = struct {
         module_idx: u32,
         pattern_idx: CIR.Pattern.Idx,
     ) ?ExprSource {
-        return self.source_exprs.get(packLocalPatternSourceKey(module_idx, pattern_idx));
+        return self.lambda_solved.source_exprs.get(packLocalPatternSourceKey(module_idx, pattern_idx));
     }
 };
 
@@ -1063,21 +915,21 @@ pub const Pass = struct {
                         self.current_module_idx,
                         contextualize_roots,
                         self.mutation_revision,
-                        result.callable_templates.items.len,
-                        result.callable_insts.items.len,
-                        result.expr_callable_insts.count(),
-                        result.expr_callable_inst_sets.count(),
-                        result.call_site_callable_insts.count(),
-                        result.call_site_callable_inst_sets.count(),
-                        result.dispatch_expr_callable_insts.count(),
-                        result.lookup_expr_callable_insts.count(),
-                        result.lookup_expr_callable_inst_sets.count(),
-                        result.context_expr_monotypes.count(),
-                        result.context_pattern_monotypes.count(),
-                        result.context_pattern_callable_insts.count(),
-                        result.context_pattern_callable_inst_sets.count(),
-                        result.closure_capture_monotypes.count(),
-                        result.closure_capture_callable_insts.count(),
+                        result.lambda_solved.callable_templates.items.len,
+                        result.lambda_specialize.callable_insts.items.len,
+                        result.lambda_specialize.expr_callable_insts.count(),
+                        result.lambda_specialize.expr_callable_inst_sets.count(),
+                        result.lambda_specialize.call_site_callable_insts.count(),
+                        result.lambda_specialize.call_site_callable_inst_sets.count(),
+                        result.lambda_specialize.dispatch_expr_callable_insts.count(),
+                        result.lambda_specialize.lookup_expr_callable_insts.count(),
+                        result.lambda_specialize.lookup_expr_callable_inst_sets.count(),
+                        result.context_mono.context_expr_monotypes.count(),
+                        result.context_mono.context_pattern_monotypes.count(),
+                        result.lambda_specialize.context_pattern_callable_insts.count(),
+                        result.lambda_specialize.context_pattern_callable_inst_sets.count(),
+                        result.lambda_specialize.closure_capture_monotypes.count(),
+                        result.lambda_specialize.closure_capture_callable_insts.count(),
                         self.mutation_counts,
                     },
                 );
@@ -1202,15 +1054,15 @@ pub const Pass = struct {
         kind: CallableTemplateKind,
         source_region: Region,
     ) Allocator.Error!CallableTemplateId {
-        if (result.callable_template_ids_by_source.get(source_key)) |existing| return existing;
+        if (result.lambda_solved.callable_template_ids_by_source.get(source_key)) |existing| return existing;
 
         const lexical_owner_template: CallableTemplateId = if (kind == .closure)
             self.active_template_context
         else
             .none;
 
-        const callable_template_id: CallableTemplateId = @enumFromInt(result.callable_templates.items.len);
-        try self.appendTracked(.callable_templates, &result.callable_templates, CallableTemplate{
+        const callable_template_id: CallableTemplateId = @enumFromInt(result.lambda_solved.callable_templates.items.len);
+        try self.appendTracked(.callable_templates, &result.lambda_solved.callable_templates, CallableTemplate{
             .source_key = source_key,
             .module_idx = module_idx,
             .cir_expr = cir_expr,
@@ -1220,7 +1072,7 @@ pub const Pass = struct {
             .lexical_owner_template = lexical_owner_template,
             .source_region = source_region,
         });
-        try self.putTracked(.callable_template_ids_by_source, &result.callable_template_ids_by_source, source_key, callable_template_id);
+        try self.putTracked(.callable_template_ids_by_source, &result.lambda_solved.callable_template_ids_by_source, source_key, callable_template_id);
 
         return callable_template_id;
     }
@@ -1231,7 +1083,7 @@ pub const Pass = struct {
         source_key: u64,
         template_id: CallableTemplateId,
     ) Allocator.Error!void {
-        if (result.callable_template_ids_by_source.get(source_key)) |existing| {
+        if (result.lambda_solved.callable_template_ids_by_source.get(source_key)) |existing| {
             if (existing != template_id) {
                 if (std.debug.runtime_safety) {
                     std.debug.panic(
@@ -1244,7 +1096,7 @@ pub const Pass = struct {
             return;
         }
 
-        try self.putTracked(.callable_template_ids_by_source, &result.callable_template_ids_by_source, source_key, template_id);
+        try self.putTracked(.callable_template_ids_by_source, &result.lambda_solved.callable_template_ids_by_source, source_key, template_id);
     }
 
     fn recordSourceExpr(
@@ -1254,7 +1106,7 @@ pub const Pass = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) Allocator.Error!void {
-        if (result.source_exprs.get(source_key)) |existing| {
+        if (result.lambda_solved.source_exprs.get(source_key)) |existing| {
             if (existing.module_idx != module_idx or existing.expr_idx != expr_idx) {
                 if (std.debug.runtime_safety) {
                     std.debug.panic(
@@ -1273,7 +1125,7 @@ pub const Pass = struct {
             return;
         }
 
-        try self.putTracked(.source_exprs, &result.source_exprs, source_key, ExprSource{
+        try self.putTracked(.source_exprs, &result.lambda_solved.source_exprs, source_key, ExprSource{
             .module_idx = module_idx,
             .expr_idx = expr_idx,
         });
@@ -1486,9 +1338,9 @@ pub const Pass = struct {
         if (!module_env.types.needsInstantiation(ModuleEnv.varFrom(expr_idx))) return;
 
         const source_key = packLocalPatternSourceKey(module_idx, pattern_idx);
-        if (result.deferred_local_callables.contains(source_key)) return;
+        if (result.lambda_solved.deferred_local_callables.contains(source_key)) return;
 
-        try self.putTracked(.deferred_local_callables, &result.deferred_local_callables, source_key, DeferredLocalCallable{
+        try self.putTracked(.deferred_local_callables, &result.lambda_solved.deferred_local_callables, source_key, DeferredLocalCallable{
             .pattern_idx = pattern_idx,
             .cir_expr = expr_idx,
             .module_idx = module_idx,
@@ -1867,7 +1719,7 @@ pub const Pass = struct {
         callable_inst_id: CallableInstId,
     ) Allocator.Error!void {
         const key = self.resultExprKeyWithRoot(context_callable_inst, root_source_expr_context, module_idx, expr_idx);
-        if (result.expr_callable_insts.get(key)) |existing_callable_inst_id| {
+        if (result.lambda_specialize.expr_callable_insts.get(key)) |existing_callable_inst_id| {
             if (existing_callable_inst_id == callable_inst_id) {
                 try self.mergeExprCallableInstSetWithRoot(
                     result,
@@ -1880,7 +1732,7 @@ pub const Pass = struct {
                 return;
             }
             if (!existing_callable_inst_id.isNone()) {
-                try self.putTracked(.expr_callable_insts, &result.expr_callable_insts, key, CallableInstId.none);
+                try self.putTracked(.expr_callable_insts, &result.lambda_specialize.expr_callable_insts, key, CallableInstId.none);
             }
             try self.mergeExprCallableInstSetWithRoot(
                 result,
@@ -1893,7 +1745,7 @@ pub const Pass = struct {
             return;
         }
 
-        try self.putTracked(.expr_callable_insts, &result.expr_callable_insts, key, callable_inst_id);
+        try self.putTracked(.expr_callable_insts, &result.lambda_specialize.expr_callable_insts, key, callable_inst_id);
         try self.mergeExprCallableInstSetWithRoot(
             result,
             context_callable_inst,
@@ -1915,12 +1767,12 @@ pub const Pass = struct {
         if (callable_inst_ids.len == 0) unreachable;
 
         const key = self.resultExprKey(context_callable_inst, module_idx, expr_idx);
-        if (result.expr_callable_insts.get(key)) |existing_callable_inst_id| {
+        if (result.lambda_specialize.expr_callable_insts.get(key)) |existing_callable_inst_id| {
             if (!existing_callable_inst_id.isNone()) {
-                try self.putTracked(.expr_callable_insts, &result.expr_callable_insts, key, CallableInstId.none);
+                try self.putTracked(.expr_callable_insts, &result.lambda_specialize.expr_callable_insts, key, CallableInstId.none);
             }
         } else {
-            try self.putTracked(.expr_callable_insts, &result.expr_callable_insts, key, CallableInstId.none);
+            try self.putTracked(.expr_callable_insts, &result.lambda_specialize.expr_callable_insts, key, CallableInstId.none);
         }
 
         for (callable_inst_ids) |callable_inst_id| {
@@ -1966,12 +1818,12 @@ pub const Pass = struct {
         if (self.active_iteration_expr_monotypes) |iteration_map| {
             if (iteration_map.get(key)) |resolved| return resolved;
             if (!self.active_callable_inst_context.isNone() and
-                key.context_callable_inst_raw == @intFromEnum(self.active_callable_inst_context))
+                key.context_id_raw == @intFromEnum(self.active_callable_inst_context))
             {
                 return null;
             }
         }
-        return result.context_expr_monotypes.get(key);
+        return result.context_mono.context_expr_monotypes.get(key);
     }
 
     fn exprUsesContextSensitiveNumericDefault(
@@ -2082,7 +1934,7 @@ pub const Pass = struct {
                 try self.mergeTrackedClosureCaptureMonotype(result, key, capture_mono);
             }
             if (local_capture_callable_inst orelse source_capture_callable_inst) |capture_callable_inst_id| {
-                try self.putTracked(.closure_capture_callable_insts, &result.closure_capture_callable_insts, key, capture_callable_inst_id);
+                try self.putTracked(.closure_capture_callable_insts, &result.lambda_specialize.closure_capture_callable_insts, key, capture_callable_inst_id);
                 continue;
             }
 
@@ -2095,7 +1947,7 @@ pub const Pass = struct {
                             capture_mono.idx,
                             capture_mono.module_idx,
                         );
-                        try self.putTracked(.closure_capture_callable_insts, &result.closure_capture_callable_insts, key, capture_callable_inst_id);
+                        try self.putTracked(.closure_capture_callable_insts, &result.lambda_specialize.closure_capture_callable_insts, key, capture_callable_inst_id);
                         try self.scanCallableInst(result, capture_callable_inst_id);
                         continue;
                     }
@@ -2103,7 +1955,7 @@ pub const Pass = struct {
             }
 
             if (enclosing_capture_callable_inst) |capture_callable_inst_id| {
-                try self.putTracked(.closure_capture_callable_insts, &result.closure_capture_callable_insts, key, capture_callable_inst_id);
+                try self.putTracked(.closure_capture_callable_insts, &result.lambda_specialize.closure_capture_callable_insts, key, capture_callable_inst_id);
                 continue;
             }
 
@@ -2115,7 +1967,7 @@ pub const Pass = struct {
                         capture_mono.idx,
                         capture_mono.module_idx,
                     );
-                    try self.putTracked(.closure_capture_callable_insts, &result.closure_capture_callable_insts, key, capture_callable_inst_id);
+                    try self.putTracked(.closure_capture_callable_insts, &result.lambda_specialize.closure_capture_callable_insts, key, capture_callable_inst_id);
                     try self.scanCallableInst(result, capture_callable_inst_id);
                 }
             }
@@ -2919,7 +2771,7 @@ pub const Pass = struct {
                         const callable_inst_id = resolved_callable_inst_ids[0];
                         try self.putTracked(
                             .call_site_callable_insts,
-                            &result.call_site_callable_insts,
+                            &result.lambda_specialize.call_site_callable_insts,
                             self.resultExprKey(self.active_callable_inst_context, module_idx, call_expr_idx),
                             callable_inst_id,
                         );
@@ -3095,7 +2947,7 @@ pub const Pass = struct {
             callable_inst_id,
         );
         try self.bindCurrentCallFromCallableInst(result, module_idx, call_expr_idx, call_expr, callable_inst_id);
-        const callable_inst_fn_mono = switch (result.monotype_store.getMonotype(callable_inst.fn_monotype)) {
+        const callable_inst_fn_mono = switch (result.context_mono.monotype_store.getMonotype(callable_inst.fn_monotype)) {
             .func => |func| func,
             else => unreachable,
         };
@@ -3131,7 +2983,7 @@ pub const Pass = struct {
         if (arg_exprs.len != param_monos.len) unreachable;
 
         for (arg_exprs, 0..) |arg_expr_idx, i| {
-            const param_mono = result.monotype_store.getIdxSpanItem(param_monos, i);
+            const param_mono = result.context_mono.monotype_store.getIdxSpanItem(param_monos, i);
             const maybe_template_id = try self.lookupDirectCalleeTemplate(result, module_idx, arg_expr_idx);
             const template_id = maybe_template_id orelse continue;
             const template = result.getCallableTemplate(template_id);
@@ -3262,7 +3114,7 @@ pub const Pass = struct {
         callable_inst_id: CallableInstId,
     ) Allocator.Error!void {
         const callable_inst = result.getCallableInst(callable_inst_id);
-        const callable_inst_fn_mono = switch (result.monotype_store.getMonotype(callable_inst.fn_monotype)) {
+        const callable_inst_fn_mono = switch (result.context_mono.monotype_store.getMonotype(callable_inst.fn_monotype)) {
             .func => |func| func,
             else => unreachable,
         };
@@ -3294,7 +3146,7 @@ pub const Pass = struct {
         const call_fn_monotype = try self.resolveDirectCallFnMonotype(result, module_idx, call_expr_idx, call_expr);
         if (call_fn_monotype.isNone()) return;
 
-        const fn_mono = switch (result.monotype_store.getMonotype(call_fn_monotype)) {
+        const fn_mono = switch (result.context_mono.monotype_store.getMonotype(call_fn_monotype)) {
             .func => |func| func,
             else => return,
         };
@@ -3415,7 +3267,7 @@ pub const Pass = struct {
         defer self.active_iteration_expr_monotypes = saved_iteration_expr_monotypes;
 
         const saved_template_context = self.active_template_context;
-        self.active_template_context = result.callable_template_ids_by_source.get(template.source_key) orelse {
+        self.active_template_context = result.lambda_solved.callable_template_ids_by_source.get(template.source_key) orelse {
             if (std.debug.runtime_safety) {
                 std.debug.panic(
                     "Monomorphize: missing template id for source key {d} while completing template body",
@@ -3547,8 +3399,8 @@ pub const Pass = struct {
             try arg_monotypes.append(self.allocator, arg_monotype.idx);
         }
 
-        const arg_span = try result.monotype_store.addIdxSpan(self.allocator, arg_monotypes.items);
-        return result.monotype_store.addMonotype(self.allocator, .{ .func = .{
+        const arg_span = try result.context_mono.monotype_store.addIdxSpan(self.allocator, arg_monotypes.items);
+        return result.context_mono.monotype_store.addMonotype(self.allocator, .{ .func = .{
             .args = arg_span,
             .ret = ret_monotype.idx,
             .effectful = effectful,
@@ -3727,7 +3579,7 @@ pub const Pass = struct {
         arg_exprs: []const CIR.Expr.Idx,
         out: *std.ArrayListUnmanaged(CallableParamSpecEntry),
     ) Allocator.Error!bool {
-        const func_mono = switch (result.monotype_store.getMonotype(fn_monotype)) {
+        const func_mono = switch (result.context_mono.monotype_store.getMonotype(fn_monotype)) {
             .func => |func| func,
             else => return true,
         };
@@ -3737,7 +3589,7 @@ pub const Pass = struct {
         defer projections.deinit(self.allocator);
         for (arg_exprs, 0..) |arg_expr_idx, param_index| {
             projections.clearRetainingCapacity();
-            const param_mono = result.monotype_store.getIdxSpanItem(func_mono.args, param_index);
+            const param_mono = result.context_mono.monotype_store.getIdxSpanItem(func_mono.args, param_index);
             if (!try self.collectCallableParamSpecsFromArgument(
                 result,
                 self.active_callable_inst_context,
@@ -3777,7 +3629,7 @@ pub const Pass = struct {
             &demand_visiting,
         );
 
-        switch (result.monotype_store.getMonotype(monotype)) {
+        switch (result.context_mono.monotype_store.getMonotype(monotype)) {
             .func => {
                 if (self.getValueExprCallableInstsInContext(result, context_callable_inst, module_idx, expr_idx)) |callable_inst_ids| {
                     const callable_inst_set_id = try self.internCallableInstSet(result, callable_inst_ids);
@@ -3827,7 +3679,7 @@ pub const Pass = struct {
                 return false;
             },
             .record => |record| {
-                for (result.monotype_store.getFields(record.fields)) |field| {
+                for (result.context_mono.monotype_store.getFields(record.fields)) |field| {
                     var visiting: std.AutoHashMapUnmanaged(ContextExprVisitKey, void) = .empty;
                     defer visiting.deinit(self.allocator);
                     const field_source = switch (try self.resolveRecordFieldExprInContext(
@@ -3862,7 +3714,7 @@ pub const Pass = struct {
                 return true;
             },
             .tuple => |tuple_mono| {
-                const elems = result.monotype_store.getIdxSpan(tuple_mono.elems);
+                const elems = result.context_mono.monotype_store.getIdxSpan(tuple_mono.elems);
                 for (elems, 0..) |elem_mono, elem_index| {
                     var visiting: std.AutoHashMapUnmanaged(ContextExprVisitKey, void) = .empty;
                     defer visiting.deinit(self.allocator);
@@ -4208,8 +4060,8 @@ pub const Pass = struct {
                 );
             },
             .applied_tag => |tag_pat| {
-                const mono_tags = switch (result.monotype_store.getMonotype(resolved_mono.idx)) {
-                    .tag_union => |tag_union| result.monotype_store.getTags(tag_union.tags),
+                const mono_tags = switch (result.context_mono.monotype_store.getMonotype(resolved_mono.idx)) {
+                    .tag_union => |tag_union| result.context_mono.monotype_store.getTags(tag_union.tags),
                     else => return,
                 };
                 const tag_idx = self.tagIndexByNameInSpan(
@@ -4217,13 +4069,13 @@ pub const Pass = struct {
                     module_idx,
                     tag_pat.name,
                     resolved_mono.module_idx,
-                    switch (result.monotype_store.getMonotype(resolved_mono.idx)) {
+                    switch (result.context_mono.monotype_store.getMonotype(resolved_mono.idx)) {
                         .tag_union => |tag_union| tag_union.tags,
                         else => unreachable,
                     },
                 );
                 const mono_tag = mono_tags[tag_idx];
-                const mono_payloads = result.monotype_store.getIdxSpan(mono_tag.payloads);
+                const mono_payloads = result.context_mono.monotype_store.getIdxSpan(mono_tag.payloads);
                 const payload_patterns = module_env.store.slicePatterns(tag_pat.args);
                 if (payload_patterns.len != mono_payloads.len) unreachable;
 
@@ -4237,8 +4089,8 @@ pub const Pass = struct {
                 }
             },
             .record_destructure => |record_pat| {
-                const mono_fields = switch (result.monotype_store.getMonotype(resolved_mono.idx)) {
-                    .record => |record_mono| result.monotype_store.getFields(record_mono.fields),
+                const mono_fields = switch (result.context_mono.monotype_store.getMonotype(resolved_mono.idx)) {
+                    .record => |record_mono| result.context_mono.monotype_store.getFields(record_mono.fields),
                     .unit => &.{},
                     else => return,
                 };
@@ -4264,7 +4116,7 @@ pub const Pass = struct {
                 }
             },
             .list => |list_pat| {
-                const elem_mono = switch (result.monotype_store.getMonotype(resolved_mono.idx)) {
+                const elem_mono = switch (result.context_mono.monotype_store.getMonotype(resolved_mono.idx)) {
                     .list => |list_mono| list_mono.elem,
                     else => return,
                 };
@@ -4288,8 +4140,8 @@ pub const Pass = struct {
                 }
             },
             .tuple => |tuple_pat| {
-                const mono_elems = switch (result.monotype_store.getMonotype(resolved_mono.idx)) {
-                    .tuple => |tuple_mono| result.monotype_store.getIdxSpan(tuple_mono.elems),
+                const mono_elems = switch (result.context_mono.monotype_store.getMonotype(resolved_mono.idx)) {
+                    .tuple => |tuple_mono| result.context_mono.monotype_store.getIdxSpan(tuple_mono.elems),
                     else => return,
                 };
                 const elem_patterns = module_env.store.slicePatterns(tuple_pat.patterns);
@@ -4595,7 +4447,7 @@ pub const Pass = struct {
         callable_inst_id: CallableInstId,
     ) Allocator.Error!void {
         const callable_inst = result.getCallableInst(callable_inst_id);
-        const fn_mono = switch (result.monotype_store.getMonotype(callable_inst.fn_monotype)) {
+        const fn_mono = switch (result.context_mono.monotype_store.getMonotype(callable_inst.fn_monotype)) {
             .func => |func| func,
             else => unreachable,
         };
@@ -4604,7 +4456,7 @@ pub const Pass = struct {
         if (arg_exprs.len != fn_mono.args.len) unreachable;
 
         for (arg_exprs, 0..) |arg_expr_idx, i| {
-            const param_mono = result.monotype_store.getIdxSpanItem(fn_mono.args, i);
+            const param_mono = result.context_mono.monotype_store.getIdxSpanItem(fn_mono.args, i);
             try self.bindCurrentExprTypeRoot(result, module_idx, arg_expr_idx, param_mono, callable_inst.fn_monotype_module_idx);
             var visiting: std.AutoHashMapUnmanaged(u64, void) = .empty;
             defer visiting.deinit(self.allocator);
@@ -4631,7 +4483,7 @@ pub const Pass = struct {
         fn_monotype: Monotype.Idx,
         fn_monotype_module_idx: u32,
     ) Allocator.Error!void {
-        const fn_mono = switch (result.monotype_store.getMonotype(fn_monotype)) {
+        const fn_mono = switch (result.context_mono.monotype_store.getMonotype(fn_monotype)) {
             .func => |func| func,
             else => return,
         };
@@ -4655,7 +4507,7 @@ pub const Pass = struct {
         if (arg_exprs.len != fn_mono.args.len) return;
 
         for (arg_exprs, 0..) |arg_expr_idx, i| {
-            const param_mono = result.monotype_store.getIdxSpanItem(fn_mono.args, i);
+            const param_mono = result.context_mono.monotype_store.getIdxSpanItem(fn_mono.args, i);
             try self.bindCurrentExprTypeRoot(result, module_idx, arg_expr_idx, param_mono, fn_monotype_module_idx);
             var visiting: std.AutoHashMapUnmanaged(u64, void) = .empty;
             defer visiting.deinit(self.allocator);
@@ -5399,7 +5251,7 @@ pub const Pass = struct {
         callable_inst_id: CallableInstId,
     ) Allocator.Error!void {
         const callable_inst = result.getCallableInst(callable_inst_id);
-        const fn_mono = switch (result.monotype_store.getMonotype(callable_inst.fn_monotype)) {
+        const fn_mono = switch (result.context_mono.monotype_store.getMonotype(callable_inst.fn_monotype)) {
             .func => |func| func,
             else => unreachable,
         };
@@ -5411,7 +5263,7 @@ pub const Pass = struct {
         if (actual_args.items.len != fn_mono.args.len) unreachable;
 
         for (actual_args.items, 0..) |arg_expr_idx, i| {
-            const param_mono = result.monotype_store.getIdxSpanItem(fn_mono.args, i);
+            const param_mono = result.context_mono.monotype_store.getIdxSpanItem(fn_mono.args, i);
             try self.bindCurrentExprTypeRoot(result, module_idx, arg_expr_idx, param_mono, callable_inst.fn_monotype_module_idx);
             var visiting: std.AutoHashMapUnmanaged(u64, void) = .empty;
             defer visiting.deinit(self.allocator);
@@ -5521,10 +5373,10 @@ pub const Pass = struct {
                         expr_region,
                         @intFromEnum(existing.idx),
                         existing.module_idx,
-                        result.monotype_store.getMonotype(existing.idx),
+                        result.context_mono.monotype_store.getMonotype(existing.idx),
                         @intFromEnum(resolved.idx),
                         resolved.module_idx,
-                        result.monotype_store.getMonotype(resolved.idx),
+                        result.context_mono.monotype_store.getMonotype(resolved.idx),
                         if (context_template) |template| @intFromEnum(template.cir_expr) else std.math.maxInt(u32),
                         if (context_template) |template| @tagName(template.kind) else "none",
                     },
@@ -5537,7 +5389,7 @@ pub const Pass = struct {
             try iteration_map.put(self.allocator, key, resolved);
         } else {
             if (self.scratch_context_expr_monotypes_depth != 0) {
-                try result.context_expr_monotypes.put(self.allocator, key, resolved);
+                try result.context_mono.context_expr_monotypes.put(self.allocator, key, resolved);
             } else {
                 try self.mergeTrackedContextExprMonotype(result, key, resolved);
             }
@@ -5553,7 +5405,7 @@ pub const Pass = struct {
         return self.mergeTrackedResolvedMonotypeMap(
             result,
             .context_expr_monotypes,
-            &result.context_expr_monotypes,
+            &result.context_mono.context_expr_monotypes,
             key,
             resolved,
             "exact expr",
@@ -5569,7 +5421,7 @@ pub const Pass = struct {
         return self.mergeTrackedResolvedMonotypeMap(
             result,
             .closure_capture_monotypes,
-            &result.closure_capture_monotypes,
+            &result.lambda_specialize.closure_capture_monotypes,
             key,
             resolved,
             "closure capture",
@@ -5585,7 +5437,7 @@ pub const Pass = struct {
         return self.mergeTrackedResolvedMonotypeMap(
             result,
             .context_pattern_monotypes,
-            &result.context_pattern_monotypes,
+            &result.context_mono.context_pattern_monotypes,
             key,
             resolved,
             "exact pattern",
@@ -5627,10 +5479,10 @@ pub const Pass = struct {
                     key,
                     @intFromEnum(existing.idx),
                     existing.module_idx,
-                    result.monotype_store.getMonotype(existing.idx),
+                    result.context_mono.monotype_store.getMonotype(existing.idx),
                     @intFromEnum(resolved.idx),
                     resolved.module_idx,
-                    result.monotype_store.getMonotype(resolved.idx),
+                    result.context_mono.monotype_store.getMonotype(resolved.idx),
                 },
             );
         }
@@ -5647,7 +5499,7 @@ pub const Pass = struct {
         const record_mono = try self.resolveExprMonotypeResolved(result, module_idx, expr_idx);
         if (record_mono.idx.isNone()) return;
 
-        const mono = result.monotype_store.getMonotype(record_mono.idx);
+        const mono = result.context_mono.monotype_store.getMonotype(record_mono.idx);
         const mono_record = switch (mono) {
             .record => |record| record,
             else => return,
@@ -5664,7 +5516,7 @@ pub const Pass = struct {
                 record_mono.module_idx,
                 mono_record.fields,
             );
-            const mono_field = result.monotype_store.getFieldItem(mono_record.fields, mono_field_idx);
+            const mono_field = result.context_mono.monotype_store.getFieldItem(mono_record.fields, mono_field_idx);
             if (exprMonotypeOwnedByInvocation(field_expr)) continue;
             try self.recordCurrentExprMonotype(
                 result,
@@ -5693,17 +5545,17 @@ pub const Pass = struct {
         const tuple_mono = try self.resolveExprMonotypeResolved(result, module_idx, expr_idx);
         if (tuple_mono.idx.isNone()) return;
 
-        const mono = result.monotype_store.getMonotype(tuple_mono.idx);
+        const mono = result.context_mono.monotype_store.getMonotype(tuple_mono.idx);
         const module_env = self.all_module_envs[module_idx];
         const elems = module_env.store.sliceExpr(tuple_expr.elems);
 
         switch (mono) {
             .record => |record| {
-                const fields = result.monotype_store.getFields(record.fields);
+                const fields = result.context_mono.monotype_store.getFields(record.fields);
                 if (fields.len != elems.len) return;
                 for (elems, 0..) |elem_expr_idx, i| {
                     const elem_expr = module_env.store.getExpr(elem_expr_idx);
-                    const field = result.monotype_store.getFieldItem(record.fields, i);
+                    const field = result.context_mono.monotype_store.getFieldItem(record.fields, i);
                     if (exprMonotypeOwnedByInvocation(elem_expr)) continue;
                     try self.recordCurrentExprMonotype(
                         result,
@@ -5718,7 +5570,7 @@ pub const Pass = struct {
                 if (tup.elems.len != elems.len) return;
                 for (elems, 0..) |elem_expr_idx, i| {
                     const elem_expr = module_env.store.getExpr(elem_expr_idx);
-                    const elem_mono = result.monotype_store.getIdxSpanItem(tup.elems, i);
+                    const elem_mono = result.context_mono.monotype_store.getIdxSpanItem(tup.elems, i);
                     if (exprMonotypeOwnedByInvocation(elem_expr)) continue;
                     try self.recordCurrentExprMonotype(
                         result,
@@ -5974,7 +5826,7 @@ pub const Pass = struct {
             const key = self.resultExprKey(self.active_callable_inst_context, module_idx, expr_idx);
             try self.putTracked(
                 .dispatch_expr_callable_insts,
-                &result.dispatch_expr_callable_insts,
+                &result.lambda_specialize.dispatch_expr_callable_insts,
                 key,
                 callable_inst_id,
             );
@@ -6018,7 +5870,7 @@ pub const Pass = struct {
             return self.lookupResolvedDispatchTarget(module_idx, expr_idx) == null and !constraint_resolved;
         }
 
-        return switch (result.monotype_store.getMonotype(receiver_monotype)) {
+        return switch (result.context_mono.monotype_store.getMonotype(receiver_monotype)) {
             .record, .tuple, .list, .unit => true,
             .tag_union => self.lookupResolvedDispatchTarget(module_idx, expr_idx) == null,
             else => false,
@@ -6045,7 +5897,7 @@ pub const Pass = struct {
             return self.lookupResolvedDispatchTarget(module_idx, expr_idx) == null and !constraint_resolved;
         }
 
-        const lhs_mono = result.monotype_store.getMonotype(lhs_monotype);
+        const lhs_mono = result.context_mono.monotype_store.getMonotype(lhs_monotype);
         return switch (lhs_mono) {
             .record, .tuple, .list, .unit, .prim => true,
             .tag_union => blk: {
@@ -6331,10 +6183,10 @@ pub const Pass = struct {
             const fn_monotype = try self.resolveTypeVarMonotypeIfMonomorphizableResolved(result, module_idx, constraint.fn_var);
             if (fn_monotype.isNone()) continue;
 
-            const mono = result.monotype_store.getMonotype(fn_monotype.idx);
+            const mono = result.context_mono.monotype_store.getMonotype(fn_monotype.idx);
             if (mono != .func) continue;
 
-            const fn_args = result.monotype_store.getIdxSpan(mono.func.args);
+            const fn_args = result.context_mono.monotype_store.getIdxSpan(mono.func.args);
             if (fn_args.len == 0) continue;
 
             if (!try self.monotypeDispatchCompatible(
@@ -6482,9 +6334,9 @@ pub const Pass = struct {
                 continue;
             }
 
-            const mono = result.monotype_store.getMonotype(fn_mono.idx);
+            const mono = result.context_mono.monotype_store.getMonotype(fn_mono.idx);
             if (mono != .func) continue;
-            const fn_args = result.monotype_store.getIdxSpan(mono.func.args);
+            const fn_args = result.context_mono.monotype_store.getIdxSpan(mono.func.args);
             const compatible = if (fn_args.len == 0)
                 true
             else
@@ -6575,7 +6427,7 @@ pub const Pass = struct {
         const candidate_mono = try self.resolveExprMonotype(result, target_def.module_idx, def.expr);
         if (candidate_mono.isNone()) return false;
 
-        const candidate_func = switch (result.monotype_store.getMonotype(candidate_mono)) {
+        const candidate_func = switch (result.context_mono.monotype_store.getMonotype(candidate_mono)) {
             .func => |func| func,
             else => return false,
         };
@@ -6590,7 +6442,7 @@ pub const Pass = struct {
             const actual_mono = try self.resolveExprMonotypeIfMonomorphizableResolved(result, source_module_idx, arg_expr_idx);
             if (actual_mono.isNone()) continue;
 
-            const expected_mono = result.monotype_store.getIdxSpanItem(candidate_func.args, i);
+            const expected_mono = result.context_mono.monotype_store.getIdxSpanItem(candidate_func.args, i);
             if (!try self.monotypesStructurallyEqualAcrossModules(
                 result,
                 expected_mono,
@@ -6831,7 +6683,7 @@ pub const Pass = struct {
         result: *Result,
         members: []const CallableInstId,
     ) Allocator.Error!CallableInstSetId {
-        for (result.callable_inst_sets.items, 0..) |existing_set, idx| {
+        for (result.lambda_specialize.callable_inst_sets.items, 0..) |existing_set, idx| {
             const existing_members = result.getCallableInstSetMembers(existing_set.members);
             if (existing_members.len != members.len) continue;
 
@@ -6848,16 +6700,16 @@ pub const Pass = struct {
         const span: CallableInstSetSpan = if (members.len == 0)
             CallableInstSetSpan.empty()
         else blk: {
-            const start: u32 = @intCast(result.callable_inst_set_entries.items.len);
-            try result.callable_inst_set_entries.appendSlice(self.allocator, members);
+            const start: u32 = @intCast(result.lambda_specialize.callable_inst_set_entries.items.len);
+            try result.lambda_specialize.callable_inst_set_entries.appendSlice(self.allocator, members);
             break :blk .{
                 .start = start,
                 .len = @intCast(members.len),
             };
         };
 
-        const set_id: CallableInstSetId = @enumFromInt(result.callable_inst_sets.items.len);
-        try self.appendTracked(.callable_inst_sets, &result.callable_inst_sets, CallableInstSet{ .members = span });
+        const set_id: CallableInstSetId = @enumFromInt(result.lambda_specialize.callable_inst_sets.items.len);
+        try self.appendTracked(.callable_inst_sets, &result.lambda_specialize.callable_inst_sets, CallableInstSet{ .members = span });
         return set_id;
     }
 
@@ -6870,7 +6722,7 @@ pub const Pass = struct {
         callable_inst_id: CallableInstId,
     ) Allocator.Error!void {
         const key = Result.contextPatternKey(context_callable_inst, module_idx, pattern_idx);
-        const existing_set_id = result.context_pattern_callable_inst_sets.get(key);
+        const existing_set_id = result.lambda_specialize.context_pattern_callable_inst_sets.get(key);
 
         var merged = std.ArrayList(CallableInstId).empty;
         defer merged.deinit(self.allocator);
@@ -6903,7 +6755,7 @@ pub const Pass = struct {
         );
 
         const set_id = try self.internCallableInstSet(result, merged.items);
-        try self.putTracked(.context_pattern_callable_inst_sets, &result.context_pattern_callable_inst_sets, key, set_id);
+        try self.putTracked(.context_pattern_callable_inst_sets, &result.lambda_specialize.context_pattern_callable_inst_sets, key, set_id);
     }
 
     fn mergeExprCallableInstSet(
@@ -6934,7 +6786,7 @@ pub const Pass = struct {
         callable_inst_id: CallableInstId,
     ) Allocator.Error!void {
         const key = self.resultExprKeyWithRoot(context_callable_inst, root_source_expr_context, module_idx, expr_idx);
-        const existing_set_id = result.expr_callable_inst_sets.get(key);
+        const existing_set_id = result.lambda_specialize.expr_callable_inst_sets.get(key);
 
         var merged = std.ArrayList(CallableInstId).empty;
         defer merged.deinit(self.allocator);
@@ -6967,7 +6819,7 @@ pub const Pass = struct {
         );
 
         const set_id = try self.internCallableInstSet(result, merged.items);
-        try self.putTracked(.expr_callable_inst_sets, &result.expr_callable_inst_sets, key, set_id);
+        try self.putTracked(.expr_callable_inst_sets, &result.lambda_specialize.expr_callable_inst_sets, key, set_id);
     }
 
     fn mergeLookupExprCallableInstSet(
@@ -6979,7 +6831,7 @@ pub const Pass = struct {
         callable_inst_id: CallableInstId,
     ) Allocator.Error!void {
         const key = self.resultExprKey(context_callable_inst, module_idx, expr_idx);
-        const existing_set_id = result.lookup_expr_callable_inst_sets.get(key);
+        const existing_set_id = result.lambda_specialize.lookup_expr_callable_inst_sets.get(key);
 
         var merged = std.ArrayList(CallableInstId).empty;
         defer merged.deinit(self.allocator);
@@ -7012,7 +6864,7 @@ pub const Pass = struct {
         );
 
         const set_id = try self.internCallableInstSet(result, merged.items);
-        try self.putTracked(.lookup_expr_callable_inst_sets, &result.lookup_expr_callable_inst_sets, key, set_id);
+        try self.putTracked(.lookup_expr_callable_inst_sets, &result.lambda_specialize.lookup_expr_callable_inst_sets, key, set_id);
     }
 
     fn mergeCallSiteCallableInstSet(
@@ -7024,7 +6876,7 @@ pub const Pass = struct {
         callable_inst_id: CallableInstId,
     ) Allocator.Error!void {
         const key = self.resultExprKey(context_callable_inst, module_idx, expr_idx);
-        const existing_set_id = result.call_site_callable_inst_sets.get(key);
+        const existing_set_id = result.lambda_specialize.call_site_callable_inst_sets.get(key);
 
         var merged = std.ArrayList(CallableInstId).empty;
         defer merged.deinit(self.allocator);
@@ -7057,7 +6909,7 @@ pub const Pass = struct {
         );
 
         const set_id = try self.internCallableInstSet(result, merged.items);
-        try self.putTracked(.call_site_callable_inst_sets, &result.call_site_callable_inst_sets, key, set_id);
+        try self.putTracked(.call_site_callable_inst_sets, &result.lambda_specialize.call_site_callable_inst_sets, key, set_id);
     }
 
     fn recordCallSiteCallableInstSet(
@@ -7071,12 +6923,12 @@ pub const Pass = struct {
         if (callable_inst_ids.len == 0) unreachable;
 
         const key = self.resultExprKey(context_callable_inst, module_idx, expr_idx);
-        if (result.call_site_callable_insts.get(key)) |existing_callable_inst_id| {
+        if (result.lambda_specialize.call_site_callable_insts.get(key)) |existing_callable_inst_id| {
             if (!existing_callable_inst_id.isNone()) {
-                try self.putTracked(.call_site_callable_insts, &result.call_site_callable_insts, key, CallableInstId.none);
+                try self.putTracked(.call_site_callable_insts, &result.lambda_specialize.call_site_callable_insts, key, CallableInstId.none);
             }
         } else {
-            try self.putTracked(.call_site_callable_insts, &result.call_site_callable_insts, key, CallableInstId.none);
+            try self.putTracked(.call_site_callable_insts, &result.lambda_specialize.call_site_callable_insts, key, CallableInstId.none);
         }
 
         for (callable_inst_ids) |callable_inst_id| {
@@ -7126,25 +6978,25 @@ pub const Pass = struct {
     ) Allocator.Error!void {
         const key = self.resultExprKey(context_callable_inst, module_idx, expr_idx);
         if (!context_callable_inst.isNone()) {
-            try self.putTracked(.call_site_callable_insts, &result.call_site_callable_insts, key, callable_inst_id);
+            try self.putTracked(.call_site_callable_insts, &result.lambda_specialize.call_site_callable_insts, key, callable_inst_id);
             const singleton_set_id = try self.internCallableInstSet(result, &.{callable_inst_id});
-            try self.putTracked(.call_site_callable_inst_sets, &result.call_site_callable_inst_sets, key, singleton_set_id);
+            try self.putTracked(.call_site_callable_inst_sets, &result.lambda_specialize.call_site_callable_inst_sets, key, singleton_set_id);
             return;
         }
 
-        if (result.call_site_callable_insts.get(key)) |existing_callable_inst_id| {
+        if (result.lambda_specialize.call_site_callable_insts.get(key)) |existing_callable_inst_id| {
             if (existing_callable_inst_id == callable_inst_id) {
                 try self.mergeCallSiteCallableInstSet(result, context_callable_inst, module_idx, expr_idx, callable_inst_id);
                 return;
             }
             if (!existing_callable_inst_id.isNone()) {
-                try self.putTracked(.call_site_callable_insts, &result.call_site_callable_insts, key, CallableInstId.none);
+                try self.putTracked(.call_site_callable_insts, &result.lambda_specialize.call_site_callable_insts, key, CallableInstId.none);
             }
             try self.mergeCallSiteCallableInstSet(result, context_callable_inst, module_idx, expr_idx, callable_inst_id);
             return;
         }
 
-        try self.putTracked(.call_site_callable_insts, &result.call_site_callable_insts, key, callable_inst_id);
+        try self.putTracked(.call_site_callable_insts, &result.lambda_specialize.call_site_callable_insts, key, callable_inst_id);
         try self.mergeCallSiteCallableInstSet(result, context_callable_inst, module_idx, expr_idx, callable_inst_id);
     }
 
@@ -7176,12 +7028,12 @@ pub const Pass = struct {
         if (callable_inst_ids.len == 0) unreachable;
 
         const key = Result.contextPatternKey(context_callable_inst, module_idx, pattern_idx);
-        if (result.context_pattern_callable_insts.get(key)) |existing_callable_inst_id| {
+        if (result.lambda_specialize.context_pattern_callable_insts.get(key)) |existing_callable_inst_id| {
             if (!existing_callable_inst_id.isNone()) {
-                try self.putTracked(.context_pattern_callable_insts, &result.context_pattern_callable_insts, key, CallableInstId.none);
+                try self.putTracked(.context_pattern_callable_insts, &result.lambda_specialize.context_pattern_callable_insts, key, CallableInstId.none);
             }
         } else {
-            try self.putTracked(.context_pattern_callable_insts, &result.context_pattern_callable_insts, key, CallableInstId.none);
+            try self.putTracked(.context_pattern_callable_insts, &result.lambda_specialize.context_pattern_callable_insts, key, CallableInstId.none);
         }
 
         for (callable_inst_ids) |callable_inst_id| {
@@ -7217,12 +7069,12 @@ pub const Pass = struct {
         if (callable_inst_ids.len == 0) unreachable;
 
         const key = self.resultExprKey(context_callable_inst, module_idx, expr_idx);
-        if (result.lookup_expr_callable_insts.get(key)) |existing_callable_inst_id| {
+        if (result.lambda_specialize.lookup_expr_callable_insts.get(key)) |existing_callable_inst_id| {
             if (!existing_callable_inst_id.isNone()) {
-                try self.putTracked(.lookup_expr_callable_insts, &result.lookup_expr_callable_insts, key, CallableInstId.none);
+                try self.putTracked(.lookup_expr_callable_insts, &result.lambda_specialize.lookup_expr_callable_insts, key, CallableInstId.none);
             }
         } else {
-            try self.putTracked(.lookup_expr_callable_insts, &result.lookup_expr_callable_insts, key, CallableInstId.none);
+            try self.putTracked(.lookup_expr_callable_insts, &result.lambda_specialize.lookup_expr_callable_insts, key, CallableInstId.none);
         }
 
         for (callable_inst_ids) |callable_inst_id| {
@@ -7438,7 +7290,7 @@ pub const Pass = struct {
     ) Allocator.Error!?AssociatedMethodTemplate {
         const source_env = self.all_module_envs[source_module_idx];
         const common = ModuleEnv.CommonIdents.find(&source_env.common);
-        const mono = result.monotype_store.getMonotype(monotype);
+        const mono = result.context_mono.monotype_store.getMonotype(monotype);
 
         const type_ident: Ident.Idx = switch (mono) {
             .prim => |prim| switch (prim) {
@@ -7536,8 +7388,8 @@ pub const Pass = struct {
             packExternalDefSourceKey(builtin_module_idx, node_idx),
         )) orelse return;
 
-        const args = try result.monotype_store.addIdxSpan(self.allocator, &.{box_monotype});
-        const fn_monotype = try result.monotype_store.addMonotype(self.allocator, .{ .func = .{
+        const args = try result.context_mono.monotype_store.addIdxSpan(self.allocator, &.{box_monotype});
+        const fn_monotype = try result.context_mono.monotype_store.addMonotype(self.allocator, .{ .func = .{
             .args = args,
             .ret = inner_monotype,
             .effectful = false,
@@ -7593,7 +7445,7 @@ pub const Pass = struct {
         scratches.module_env = module_env;
         scratches.module_idx = module_idx;
         scratches.all_module_envs = self.all_module_envs;
-        return result.monotype_store.fromTypeVar(
+        return result.context_mono.monotype_store.fromTypeVar(
             self.allocator,
             store_types,
             var_,
@@ -7645,10 +7497,10 @@ pub const Pass = struct {
         if (monotype.isNone() or from_module_idx == to_module_idx) return monotype;
         if (remapped.get(monotype)) |existing| return existing;
 
-        const mono = result.monotype_store.getMonotype(monotype);
+        const mono = result.context_mono.monotype_store.getMonotype(monotype);
         switch (mono) {
-            .unit => return result.monotype_store.unit_idx,
-            .prim => |prim| return result.monotype_store.primIdx(prim),
+            .unit => return result.context_mono.monotype_store.unit_idx,
+            .prim => |prim| return result.context_mono.monotype_store.primIdx(prim),
             .recursive_placeholder => {
                 if (builtin.mode == .Debug) {
                     std.debug.panic("remapMonotypeBetweenModules: unexpected recursive_placeholder", .{});
@@ -7658,7 +7510,7 @@ pub const Pass = struct {
             .list, .box, .tuple, .func, .record, .tag_union => {},
         }
 
-        const placeholder = try result.monotype_store.addMonotype(self.allocator, .recursive_placeholder);
+        const placeholder = try result.context_mono.monotype_store.addMonotype(self.allocator, .recursive_placeholder);
         try remapped.put(monotype, placeholder);
 
         const mapped_mono: Monotype.Monotype = switch (mono) {
@@ -7688,7 +7540,7 @@ pub const Pass = struct {
 
                 var elem_i: usize = 0;
                 while (elem_i < tuple_mono.elems.len) : (elem_i += 1) {
-                    const elem_mono = result.monotype_store.getIdxSpanItem(tuple_mono.elems, elem_i);
+                    const elem_mono = result.context_mono.monotype_store.getIdxSpanItem(tuple_mono.elems, elem_i);
                     try scratches.idxs.append(try self.remapMonotypeBetweenModulesRec(
                         result,
                         elem_mono,
@@ -7699,7 +7551,7 @@ pub const Pass = struct {
                     ));
                 }
 
-                const mapped_elems = try result.monotype_store.addIdxSpan(
+                const mapped_elems = try result.context_mono.monotype_store.addIdxSpan(
                     self.allocator,
                     scratches.idxs.sliceFromStart(idx_top),
                 );
@@ -7711,7 +7563,7 @@ pub const Pass = struct {
 
                 var arg_i: usize = 0;
                 while (arg_i < func_mono.args.len) : (arg_i += 1) {
-                    const arg_mono = result.monotype_store.getIdxSpanItem(func_mono.args, arg_i);
+                    const arg_mono = result.context_mono.monotype_store.getIdxSpanItem(func_mono.args, arg_i);
                     try scratches.idxs.append(try self.remapMonotypeBetweenModulesRec(
                         result,
                         arg_mono,
@@ -7721,7 +7573,7 @@ pub const Pass = struct {
                         scratches,
                     ));
                 }
-                const mapped_args = try result.monotype_store.addIdxSpan(
+                const mapped_args = try result.context_mono.monotype_store.addIdxSpan(
                     self.allocator,
                     scratches.idxs.sliceFromStart(idx_top),
                 );
@@ -7747,7 +7599,7 @@ pub const Pass = struct {
 
                 var field_i: usize = 0;
                 while (field_i < record_mono.fields.len) : (field_i += 1) {
-                    const field = result.monotype_store.getFieldItem(record_mono.fields, field_i);
+                    const field = result.context_mono.monotype_store.getFieldItem(record_mono.fields, field_i);
                     try scratches.fields.append(.{
                         .name = field.name,
                         .type_idx = try self.remapMonotypeBetweenModulesRec(
@@ -7761,7 +7613,7 @@ pub const Pass = struct {
                     });
                 }
 
-                const mapped_fields = try result.monotype_store.addFields(
+                const mapped_fields = try result.context_mono.monotype_store.addFields(
                     self.allocator,
                     scratches.fields.sliceFromStart(fields_top),
                 );
@@ -7773,13 +7625,13 @@ pub const Pass = struct {
 
                 var tag_i: usize = 0;
                 while (tag_i < tag_union_mono.tags.len) : (tag_i += 1) {
-                    const tag = result.monotype_store.getTagItem(tag_union_mono.tags, tag_i);
+                    const tag = result.context_mono.monotype_store.getTagItem(tag_union_mono.tags, tag_i);
                     const payload_top = scratches.idxs.top();
                     defer scratches.idxs.clearFrom(payload_top);
 
                     var payload_i: usize = 0;
                     while (payload_i < tag.payloads.len) : (payload_i += 1) {
-                        const payload_mono = result.monotype_store.getIdxSpanItem(tag.payloads, payload_i);
+                        const payload_mono = result.context_mono.monotype_store.getIdxSpanItem(tag.payloads, payload_i);
                         try scratches.idxs.append(try self.remapMonotypeBetweenModulesRec(
                             result,
                             payload_mono,
@@ -7790,7 +7642,7 @@ pub const Pass = struct {
                         ));
                     }
 
-                    const mapped_payloads = try result.monotype_store.addIdxSpan(
+                    const mapped_payloads = try result.context_mono.monotype_store.addIdxSpan(
                         self.allocator,
                         scratches.idxs.sliceFromStart(payload_top),
                     );
@@ -7800,7 +7652,7 @@ pub const Pass = struct {
                     });
                 }
 
-                const mapped_tags = try result.monotype_store.addTags(
+                const mapped_tags = try result.context_mono.monotype_store.addTags(
                     self.allocator,
                     scratches.tags.sliceFromStart(tags_top),
                 );
@@ -7809,7 +7661,7 @@ pub const Pass = struct {
             .unit, .prim, .recursive_placeholder => unreachable,
         };
 
-        result.monotype_store.monotypes.items[@intFromEnum(placeholder)] = mapped_mono;
+        result.context_mono.monotype_store.monotypes.items[@intFromEnum(placeholder)] = mapped_mono;
         return placeholder;
     }
 
@@ -8044,7 +7896,7 @@ pub const Pass = struct {
         scratches.module_idx = module_idx;
         scratches.all_module_envs = self.all_module_envs;
 
-        return result.monotype_store.fromTypeVar(
+        return result.context_mono.monotype_store.fromTypeVar(
             self.allocator,
             store_types,
             var_,
@@ -8067,7 +7919,7 @@ pub const Pass = struct {
     ) Allocator.Error!void {
         if (monotype.isNone()) return;
 
-        const mono = result.monotype_store.getMonotype(monotype);
+        const mono = result.context_mono.monotype_store.getMonotype(monotype);
 
         switch (flat_type) {
             .fn_pure, .fn_effectful, .fn_unbound => |func| {
@@ -8077,7 +7929,7 @@ pub const Pass = struct {
                 };
 
                 const type_args = store_types.sliceVars(func.args);
-                const mono_args = result.monotype_store.getIdxSpan(mfunc.args);
+                const mono_args = result.context_mono.monotype_store.getIdxSpan(mfunc.args);
                 if (type_args.len != mono_args.len) unreachable;
                 for (type_args, 0..) |arg_var, i| {
                     try self.bindTypeVarMonotypesInStore(result, module_idx, store_types, common_idents, bindings, arg_var, mono_args[i]);
@@ -8160,7 +8012,7 @@ pub const Pass = struct {
                         unreachable;
                     },
                 };
-                const mono_fields = result.monotype_store.getFields(mrec.fields);
+                const mono_fields = result.context_mono.monotype_store.getFields(mrec.fields);
                 var seen_field_indices: std.ArrayListUnmanaged(u32) = .empty;
                 defer seen_field_indices.deinit(self.allocator);
 
@@ -8232,7 +8084,7 @@ pub const Pass = struct {
                     },
                     else => unreachable,
                 };
-                const mono_fields = result.monotype_store.getFields(mrec.fields);
+                const mono_fields = result.context_mono.monotype_store.getFields(mrec.fields);
                 const fields = store_types.getRecordFieldsSlice(fields_range);
                 for (fields.items(.name), fields.items(.var_)) |field_name, field_var| {
                     const field_idx = self.recordFieldIndexByName(module_idx, field_name, module_idx, mono_fields);
@@ -8252,7 +8104,7 @@ pub const Pass = struct {
                     .tuple => |mtup| mtup,
                     else => unreachable,
                 };
-                const mono_elems = result.monotype_store.getIdxSpan(mtup.elems);
+                const mono_elems = result.context_mono.monotype_store.getIdxSpan(mtup.elems);
                 const elem_vars = store_types.sliceVars(tuple.elems);
                 if (mono_elems.len != elem_vars.len) unreachable;
                 for (elem_vars, mono_elems) |elem_var, elem_mono| {
@@ -8264,13 +8116,13 @@ pub const Pass = struct {
                     .tag_union => |mtag| mtag,
                     else => unreachable,
                 };
-                const mono_tags = result.monotype_store.getTags(mtag.tags);
+                const mono_tags = result.context_mono.monotype_store.getTags(mtag.tags);
                 const tags = store_types.getTagsSlice(tag_union.tags);
                 const tag_args = tags.items(.args);
                 if (tag_args.len != mono_tags.len) unreachable;
                 for (tag_args, mono_tags) |args_range, mono_tag| {
                     const payload_vars = store_types.sliceVars(args_range);
-                    const mono_payloads = result.monotype_store.getIdxSpan(mono_tag.payloads);
+                    const mono_payloads = result.context_mono.monotype_store.getIdxSpan(mono_tag.payloads);
                     if (payload_vars.len != mono_payloads.len) unreachable;
                     for (payload_vars, mono_payloads) |payload_var, payload_mono| {
                         try self.bindTypeVarMonotypesInStore(result, module_idx, store_types, common_idents, bindings, payload_var, payload_mono);
@@ -8336,7 +8188,7 @@ pub const Pass = struct {
                         if (ident.eql(common.box)) {
                             const type_args = module_env.types.sliceNominalArgs(nominal);
                             const outer_mono = try self.resolveTypeVarMonotype(result, module_idx, resolved.var_);
-                            const outer_box = result.monotype_store.getMonotype(outer_mono).box;
+                            const outer_box = result.context_mono.monotype_store.getMonotype(outer_mono).box;
                             try self.ensureBuiltinBoxUnboxCallableInst(result, module_idx, outer_mono, outer_box.inner);
                             if (type_args.len == 1) {
                                 try self.resolveStrInspectHelperCallableInstsForTypeVarWithSeen(result, module_idx, type_args[0], visiting);
@@ -8382,11 +8234,11 @@ pub const Pass = struct {
                                             method_info.module_idx,
                                         );
 
-                                        const method_func = switch (result.monotype_store.getMonotype(method_func_mono)) {
+                                        const method_func = switch (result.context_mono.monotype_store.getMonotype(method_func_mono)) {
                                             .func => |func| func,
                                             else => unreachable,
                                         };
-                                        const ret_mono = result.monotype_store.getMonotype(method_func.ret);
+                                        const ret_mono = result.context_mono.monotype_store.getMonotype(method_func.ret);
                                         if (!(ret_mono == .prim and ret_mono.prim == .str)) {
                                             try self.resolveStrInspectHelperCallableInstsForMonotype(
                                                 result,
@@ -8534,7 +8386,7 @@ pub const Pass = struct {
     ) Allocator.Error!void {
         if (monotype.isNone()) return;
 
-        switch (result.monotype_store.getMonotype(monotype)) {
+        switch (result.context_mono.monotype_store.getMonotype(monotype)) {
             .unit, .prim => {},
             .list => |list_mono| try self.resolveStrInspectHelperCallableInstsForMonotype(result, module_idx, list_mono.elem),
             .box => |box_mono| {
@@ -8544,7 +8396,7 @@ pub const Pass = struct {
             .tuple => |tuple_mono| {
                 var elem_i: usize = 0;
                 while (elem_i < tuple_mono.elems.len) : (elem_i += 1) {
-                    const elem_mono = result.monotype_store.getIdxSpanItem(tuple_mono.elems, elem_i);
+                    const elem_mono = result.context_mono.monotype_store.getIdxSpanItem(tuple_mono.elems, elem_i);
                     try self.resolveStrInspectHelperCallableInstsForMonotype(result, module_idx, elem_mono);
                 }
             },
@@ -8552,17 +8404,17 @@ pub const Pass = struct {
             .record => |record_mono| {
                 var field_i: usize = 0;
                 while (field_i < record_mono.fields.len) : (field_i += 1) {
-                    const field = result.monotype_store.getFieldItem(record_mono.fields, field_i);
+                    const field = result.context_mono.monotype_store.getFieldItem(record_mono.fields, field_i);
                     try self.resolveStrInspectHelperCallableInstsForMonotype(result, module_idx, field.type_idx);
                 }
             },
             .tag_union => |tag_union_mono| {
                 var tag_i: usize = 0;
                 while (tag_i < tag_union_mono.tags.len) : (tag_i += 1) {
-                    const tag = result.monotype_store.getTagItem(tag_union_mono.tags, tag_i);
+                    const tag = result.context_mono.monotype_store.getTagItem(tag_union_mono.tags, tag_i);
                     var payload_i: usize = 0;
                     while (payload_i < tag.payloads.len) : (payload_i += 1) {
-                        const payload_mono = result.monotype_store.getIdxSpanItem(tag.payloads, payload_i);
+                        const payload_mono = result.context_mono.monotype_store.getIdxSpanItem(tag.payloads, payload_i);
                         try self.resolveStrInspectHelperCallableInstsForMonotype(result, module_idx, payload_mono);
                     }
                 }
@@ -8591,7 +8443,7 @@ pub const Pass = struct {
         try self.scanModule(result, target_module_idx);
 
         const key = packExternalDefSourceKey(target_module_idx, target_node_idx);
-        if (result.source_exprs.get(key)) |source| return source;
+        if (result.lambda_solved.source_exprs.get(key)) |source| return source;
 
         const target_env = self.all_module_envs[target_module_idx];
         if (!target_env.store.isDefNode(target_node_idx)) return null;
@@ -9689,7 +9541,7 @@ pub const Pass = struct {
         else
             TypeSubstId.none;
 
-        for (result.callable_insts.items, 0..) |existing_callable_inst, idx| {
+        for (result.lambda_specialize.callable_insts.items, 0..) |existing_callable_inst, idx| {
             if (existing_callable_inst.template != template_id) continue;
             if (existing_callable_inst.fn_monotype_module_idx != fn_monotype_module_idx) continue;
             if (existing_callable_inst.defining_context_callable_inst != defining_context_callable_inst) continue;
@@ -9710,8 +9562,8 @@ pub const Pass = struct {
         }
 
         const callable_param_spec_span = try self.addCallableParamSpecEntries(result, callable_param_specs);
-        const callable_inst_id: CallableInstId = @enumFromInt(result.callable_insts.items.len);
-        try self.appendTracked(.callable_insts, &result.callable_insts, CallableInst{
+        const callable_inst_id: CallableInstId = @enumFromInt(result.lambda_specialize.callable_insts.items.len);
+        try self.appendTracked(.callable_insts, &result.lambda_specialize.callable_insts, CallableInst{
             .template = template_id,
             .subst = subst_id,
             .fn_monotype = fn_monotype,
@@ -9732,8 +9584,8 @@ pub const Pass = struct {
     ) Allocator.Error!CallableParamSpecSpan {
         if (entries.len == 0) return .empty();
 
-        const start: u32 = @intCast(result.callable_param_spec_entries.items.len);
-        try result.callable_param_spec_entries.appendSlice(self.allocator, entries);
+        const start: u32 = @intCast(result.lambda_specialize.callable_param_spec_entries.items.len);
+        try result.lambda_specialize.callable_param_spec_entries.appendSlice(self.allocator, entries);
         return .{
             .start = start,
             .len = @intCast(entries.len),
@@ -9747,8 +9599,8 @@ pub const Pass = struct {
     ) Allocator.Error!CallableParamProjectionSpan {
         if (entries.len == 0) return .empty();
 
-        const start: u32 = @intCast(result.callable_param_projection_entries.items.len);
-        try result.callable_param_projection_entries.appendSlice(self.allocator, entries);
+        const start: u32 = @intCast(result.lambda_specialize.callable_param_projection_entries.items.len);
+        try result.lambda_specialize.callable_param_projection_entries.appendSlice(self.allocator, entries);
         return .{
             .start = start,
             .len = @intCast(entries.len),
@@ -9977,7 +9829,7 @@ pub const Pass = struct {
     ) Allocator.Error!void {
         const module_env = self.all_module_envs[module_idx];
         const callable_expr = module_env.store.getExpr(callable_expr_idx);
-        const fn_mono = switch (result.monotype_store.getMonotype(callable_inst.fn_monotype)) {
+        const fn_mono = switch (result.context_mono.monotype_store.getMonotype(callable_inst.fn_monotype)) {
             .func => |func| func,
             else => return,
         };
@@ -10035,7 +9887,7 @@ pub const Pass = struct {
         );
 
         for (boundary.arg_patterns, 0..) |pattern_idx, i| {
-            const param_mono = result.monotype_store.getIdxSpanItem(fn_mono.args, i);
+            const param_mono = result.context_mono.monotype_store.getIdxSpanItem(fn_mono.args, i);
             if (!callable_inst_id.isNone()) {
                 try self.mergeTrackedContextPatternMonotype(
                     result,
@@ -10245,7 +10097,7 @@ pub const Pass = struct {
 
         const module_env = self.all_module_envs[template.module_idx];
         const boundary = self.callableBoundaryInfo(template.module_idx, template.cir_expr) orelse return;
-        const fn_mono = switch (result.monotype_store.getMonotype(fn_monotype.idx)) {
+        const fn_mono = switch (result.context_mono.monotype_store.getMonotype(fn_monotype.idx)) {
             .func => |func| func,
             else => return,
         };
@@ -10279,7 +10131,7 @@ pub const Pass = struct {
         );
 
         for (boundary.arg_patterns, 0..) |pattern_idx, i| {
-            const param_mono = result.monotype_store.getIdxSpanItem(fn_mono.args, i);
+            const param_mono = result.context_mono.monotype_store.getIdxSpanItem(fn_mono.args, i);
             try self.bindTypeVarMonotypes(
                 result,
                 template.module_idx,
@@ -10328,7 +10180,7 @@ pub const Pass = struct {
             fn_monotype_module_idx,
         );
 
-        for (result.substs.items, 0..) |existing_subst, idx| {
+        for (result.context_mono.substs.items, 0..) |existing_subst, idx| {
             if (try self.typeSubstEntriesEqual(
                 result,
                 result.getTypeSubstEntries(existing_subst.entries),
@@ -10341,16 +10193,16 @@ pub const Pass = struct {
         const entries_span: TypeSubstSpan = if (ordered_entries.items.len == 0)
             TypeSubstSpan.empty()
         else blk: {
-            const start: u32 = @intCast(result.subst_entries.items.len);
-            try result.subst_entries.appendSlice(self.allocator, ordered_entries.items);
+            const start: u32 = @intCast(result.context_mono.subst_entries.items.len);
+            try result.context_mono.subst_entries.appendSlice(self.allocator, ordered_entries.items);
             break :blk TypeSubstSpan{
                 .start = start,
                 .len = @as(u16, @intCast(ordered_entries.items.len)),
             };
         };
 
-        const subst_id: TypeSubstId = @enumFromInt(result.substs.items.len);
-        try self.appendTracked(.substs, &result.substs, TypeSubst{ .entries = entries_span });
+        const subst_id: TypeSubstId = @enumFromInt(result.context_mono.substs.items.len);
+        try self.appendTracked(.substs, &result.context_mono.substs, TypeSubst{ .entries = entries_span });
         return subst_id;
     }
 
@@ -10437,7 +10289,7 @@ pub const Pass = struct {
     ) u32 {
         var field_i: usize = 0;
         while (field_i < mono_fields.len) : (field_i += 1) {
-            const mono_field = result.monotype_store.getFieldItem(mono_fields, field_i);
+            const mono_field = result.context_mono.monotype_store.getFieldItem(mono_fields, field_i);
             if (self.identsStructurallyEqualAcrossModules(
                 template_module_idx,
                 field_name,
@@ -10467,7 +10319,7 @@ pub const Pass = struct {
     ) u32 {
         var tag_i: usize = 0;
         while (tag_i < mono_tags.len) : (tag_i += 1) {
-            const mono_tag = result.monotype_store.getTagItem(mono_tags, tag_i);
+            const mono_tag = result.context_mono.monotype_store.getTagItem(mono_tags, tag_i);
             if (self.identsStructurallyEqualAcrossModules(
                 template_module_idx,
                 tag_name,
@@ -10518,11 +10370,11 @@ pub const Pass = struct {
         }
 
         if (remaining_fields.items.len == 0) {
-            return result.monotype_store.unit_idx;
+            return result.context_mono.monotype_store.unit_idx;
         }
 
-        const field_span = try result.monotype_store.addFields(self.allocator, remaining_fields.items);
-        return try result.monotype_store.addMonotype(self.allocator, .{ .record = .{ .fields = field_span } });
+        const field_span = try result.context_mono.monotype_store.addFields(self.allocator, remaining_fields.items);
+        return try result.context_mono.monotype_store.addMonotype(self.allocator, .{ .record = .{ .fields = field_span } });
     }
 
     fn remainingTagUnionTailMonotype(
@@ -10539,8 +10391,8 @@ pub const Pass = struct {
             try remaining_tags.append(self.allocator, tag);
         }
 
-        const tag_span = try result.monotype_store.addTags(self.allocator, remaining_tags.items);
-        return try result.monotype_store.addMonotype(self.allocator, .{ .tag_union = .{ .tags = tag_span } });
+        const tag_span = try result.context_mono.monotype_store.addTags(self.allocator, remaining_tags.items);
+        return try result.context_mono.monotype_store.addMonotype(self.allocator, .{ .tag_union = .{ .tags = tag_span } });
     }
 
     fn bindRecordRowTail(
@@ -10607,7 +10459,7 @@ pub const Pass = struct {
     ) Allocator.Error!void {
         var tag_i: usize = 0;
         while (tag_i < mono_tags.len) : (tag_i += 1) {
-            const mono_tag = result.monotype_store.getTagItem(mono_tags, tag_i);
+            const mono_tag = result.context_mono.monotype_store.getTagItem(mono_tags, tag_i);
             if (!self.identsStructurallyEqualAcrossModules(
                 template_module_idx,
                 tag_name,
@@ -10626,7 +10478,7 @@ pub const Pass = struct {
             }
 
             for (payload_vars, 0..) |payload_var, i| {
-                const mono_payload = result.monotype_store.getIdxSpanItem(mono_tag.payloads, i);
+                const mono_payload = result.context_mono.monotype_store.getIdxSpanItem(mono_tag.payloads, i);
                 try self.bindTypeVarMonotypes(
                     result,
                     template_module_idx,
@@ -10686,10 +10538,10 @@ pub const Pass = struct {
                             resolved_key.module_idx,
                             @intFromEnum(existing.idx),
                             existing.module_idx,
-                            result.monotype_store.getMonotype(existing.idx),
+                            result.context_mono.monotype_store.getMonotype(existing.idx),
                             @intFromEnum(resolved_mono.idx),
                             resolved_mono.module_idx,
-                            result.monotype_store.getMonotype(resolved_mono.idx),
+                            result.context_mono.monotype_store.getMonotype(resolved_mono.idx),
                             @intFromEnum(self.active_callable_inst_context),
                             if (self.active_root_source_expr_context) |root_source_expr_idx| @intFromEnum(root_source_expr_idx) else std.math.maxInt(u32),
                             if (context_template) |template| @intFromEnum(template.cir_expr) else std.math.maxInt(u32),
@@ -10757,7 +10609,7 @@ pub const Pass = struct {
         if (self.binding_probe_mode and self.binding_probe_failed) return;
         if (monotype.isNone()) return;
 
-        const mono = result.monotype_store.getMonotype(monotype);
+        const mono = result.context_mono.monotype_store.getMonotype(monotype);
         const common_idents = ModuleEnv.CommonIdents.find(&self.all_module_envs[template_module_idx].common);
 
         switch (flat_type) {
@@ -10774,7 +10626,7 @@ pub const Pass = struct {
                 if (type_args.len != mfunc.args.len) unreachable;
 
                 for (type_args, 0..) |arg_var, i| {
-                    const mono_arg = result.monotype_store.getIdxSpanItem(mfunc.args, i);
+                    const mono_arg = result.context_mono.monotype_store.getIdxSpanItem(mfunc.args, i);
                     try self.bindTypeVarMonotypes(
                         result,
                         template_module_idx,
@@ -10920,7 +10772,7 @@ pub const Pass = struct {
                             mrec.fields,
                         );
                         try appendSeenIndex(self.allocator, &seen_field_indices, field_idx);
-                        const mono_field = result.monotype_store.getFieldItem(mrec.fields, field_idx);
+                        const mono_field = result.context_mono.monotype_store.getFieldItem(mrec.fields, field_idx);
                         try self.bindTypeVarMonotypes(
                             result,
                             template_module_idx,
@@ -10959,7 +10811,7 @@ pub const Pass = struct {
                                             mrec.fields,
                                         );
                                         try appendSeenIndex(self.allocator, &seen_field_indices, field_idx);
-                                        const mono_field = result.monotype_store.getFieldItem(mrec.fields, field_idx);
+                                        const mono_field = result.context_mono.monotype_store.getFieldItem(mrec.fields, field_idx);
                                         try self.bindTypeVarMonotypes(
                                             result,
                                             template_module_idx,
@@ -10987,7 +10839,7 @@ pub const Pass = struct {
                                     bindings,
                                     ordered_entries,
                                     ext_var,
-                                    result.monotype_store.getFields(mrec.fields),
+                                    result.context_mono.monotype_store.getFields(mrec.fields),
                                     seen_field_indices.items,
                                     mono_module_idx,
                                 );
@@ -11025,7 +10877,7 @@ pub const Pass = struct {
                         mono_module_idx,
                         mrec.fields,
                     );
-                    const mono_field = result.monotype_store.getFieldItem(mrec.fields, field_idx);
+                    const mono_field = result.context_mono.monotype_store.getFieldItem(mrec.fields, field_idx);
                     try self.bindTypeVarMonotypes(
                         result,
                         template_module_idx,
@@ -11049,7 +10901,7 @@ pub const Pass = struct {
                 const elem_vars = template_types.sliceVars(tuple.elems);
                 if (elem_vars.len != mtup.elems.len) unreachable;
                 for (elem_vars, 0..) |elem_var, i| {
-                    const elem_mono = result.monotype_store.getIdxSpanItem(mtup.elems, i);
+                    const elem_mono = result.context_mono.monotype_store.getIdxSpanItem(mtup.elems, i);
                     try self.bindTypeVarMonotypes(
                         result,
                         template_module_idx,
@@ -11127,7 +10979,7 @@ pub const Pass = struct {
                                     bindings,
                                     ordered_entries,
                                     ext_var,
-                                    result.monotype_store.getTags(mtag.tags),
+                                    result.context_mono.monotype_store.getTags(mtag.tags),
                                     seen_tag_indices.items,
                                     mono_module_idx,
                                 );
@@ -12013,8 +11865,8 @@ pub const Pass = struct {
         if (seen.contains(key)) return true;
         try seen.put(key, {});
 
-        const lhs_mono = result.monotype_store.getMonotype(lhs);
-        const rhs_mono = result.monotype_store.getMonotype(rhs);
+        const lhs_mono = result.context_mono.monotype_store.getMonotype(lhs);
+        const rhs_mono = result.context_mono.monotype_store.getMonotype(rhs);
         if (std.meta.activeTag(lhs_mono) != std.meta.activeTag(rhs_mono)) return false;
 
         return switch (lhs_mono) {
@@ -12024,8 +11876,8 @@ pub const Pass = struct {
             .list => |lhs_list| try self.monotypesStructurallyEqualRec(result, lhs_list.elem, rhs_mono.list.elem, seen),
             .box => |lhs_box| try self.monotypesStructurallyEqualRec(result, lhs_box.inner, rhs_mono.box.inner, seen),
             .tuple => |lhs_tuple| blk: {
-                const lhs_elems = result.monotype_store.getIdxSpan(lhs_tuple.elems);
-                const rhs_elems = result.monotype_store.getIdxSpan(rhs_mono.tuple.elems);
+                const lhs_elems = result.context_mono.monotype_store.getIdxSpan(lhs_tuple.elems);
+                const rhs_elems = result.context_mono.monotype_store.getIdxSpan(rhs_mono.tuple.elems);
                 if (lhs_elems.len != rhs_elems.len) break :blk false;
                 for (lhs_elems, rhs_elems) |lhs_elem, rhs_elem| {
                     if (!try self.monotypesStructurallyEqualRec(result, lhs_elem, rhs_elem, seen)) {
@@ -12036,8 +11888,8 @@ pub const Pass = struct {
             },
             .func => |lhs_func| blk: {
                 const rhs_func = rhs_mono.func;
-                const lhs_args = result.monotype_store.getIdxSpan(lhs_func.args);
-                const rhs_args = result.monotype_store.getIdxSpan(rhs_func.args);
+                const lhs_args = result.context_mono.monotype_store.getIdxSpan(lhs_func.args);
+                const rhs_args = result.context_mono.monotype_store.getIdxSpan(rhs_func.args);
                 if (lhs_func.effectful != rhs_func.effectful) break :blk false;
                 if (lhs_args.len != rhs_args.len) break :blk false;
                 for (lhs_args, rhs_args) |lhs_arg, rhs_arg| {
@@ -12048,8 +11900,8 @@ pub const Pass = struct {
                 break :blk try self.monotypesStructurallyEqualRec(result, lhs_func.ret, rhs_func.ret, seen);
             },
             .record => |lhs_record| blk: {
-                const lhs_fields = result.monotype_store.getFields(lhs_record.fields);
-                const rhs_fields = result.monotype_store.getFields(rhs_mono.record.fields);
+                const lhs_fields = result.context_mono.monotype_store.getFields(lhs_record.fields);
+                const rhs_fields = result.context_mono.monotype_store.getFields(rhs_mono.record.fields);
                 if (lhs_fields.len != rhs_fields.len) break :blk false;
                 for (lhs_fields, rhs_fields) |lhs_field, rhs_field| {
                     if (!lhs_field.name.textEqual(self.all_module_envs, rhs_field.name)) break :blk false;
@@ -12060,12 +11912,12 @@ pub const Pass = struct {
                 break :blk true;
             },
             .tag_union => |lhs_union| blk: {
-                const lhs_tags = result.monotype_store.getTags(lhs_union.tags);
-                const rhs_tags = result.monotype_store.getTags(rhs_mono.tag_union.tags);
+                const lhs_tags = result.context_mono.monotype_store.getTags(lhs_union.tags);
+                const rhs_tags = result.context_mono.monotype_store.getTags(rhs_mono.tag_union.tags);
                 if (lhs_tags.len != rhs_tags.len) break :blk false;
                 for (lhs_tags, rhs_tags) |lhs_tag, rhs_tag| {
-                    const lhs_payloads = result.monotype_store.getIdxSpan(lhs_tag.payloads);
-                    const rhs_payloads = result.monotype_store.getIdxSpan(rhs_tag.payloads);
+                    const lhs_payloads = result.context_mono.monotype_store.getIdxSpan(lhs_tag.payloads);
+                    const rhs_payloads = result.context_mono.monotype_store.getIdxSpan(rhs_tag.payloads);
                     if (!lhs_tag.name.textEqual(self.all_module_envs, rhs_tag.name)) break :blk false;
                     if (lhs_payloads.len != rhs_payloads.len) break :blk false;
                     for (lhs_payloads, rhs_payloads) |lhs_payload, rhs_payload| {
@@ -12094,8 +11946,8 @@ pub const Pass = struct {
         if (seen.contains(key)) return true;
         try seen.put(key, {});
 
-        const lhs_mono = result.monotype_store.getMonotype(lhs);
-        const rhs_mono = result.monotype_store.getMonotype(rhs);
+        const lhs_mono = result.context_mono.monotype_store.getMonotype(lhs);
+        const rhs_mono = result.context_mono.monotype_store.getMonotype(rhs);
         if (std.meta.activeTag(lhs_mono) != std.meta.activeTag(rhs_mono)) return false;
 
         return switch (lhs_mono) {
@@ -12119,8 +11971,8 @@ pub const Pass = struct {
                 seen,
             ),
             .tuple => |lhs_tuple| blk: {
-                const lhs_elems = result.monotype_store.getIdxSpan(lhs_tuple.elems);
-                const rhs_elems = result.monotype_store.getIdxSpan(rhs_mono.tuple.elems);
+                const lhs_elems = result.context_mono.monotype_store.getIdxSpan(lhs_tuple.elems);
+                const rhs_elems = result.context_mono.monotype_store.getIdxSpan(rhs_mono.tuple.elems);
                 if (lhs_elems.len != rhs_elems.len) break :blk false;
                 for (lhs_elems, rhs_elems) |lhs_elem, rhs_elem| {
                     if (!try self.monotypesStructurallyEqualAcrossModulesRec(
@@ -12136,8 +11988,8 @@ pub const Pass = struct {
             },
             .func => |lhs_func| blk: {
                 const rhs_func = rhs_mono.func;
-                const lhs_args = result.monotype_store.getIdxSpan(lhs_func.args);
-                const rhs_args = result.monotype_store.getIdxSpan(rhs_func.args);
+                const lhs_args = result.context_mono.monotype_store.getIdxSpan(lhs_func.args);
+                const rhs_args = result.context_mono.monotype_store.getIdxSpan(rhs_func.args);
                 if (lhs_func.effectful != rhs_func.effectful) break :blk false;
                 if (lhs_args.len != rhs_args.len) break :blk false;
                 for (lhs_args, rhs_args) |lhs_arg, rhs_arg| {
@@ -12160,8 +12012,8 @@ pub const Pass = struct {
                 );
             },
             .record => |lhs_record| blk: {
-                const lhs_fields = result.monotype_store.getFields(lhs_record.fields);
-                const rhs_fields = result.monotype_store.getFields(rhs_mono.record.fields);
+                const lhs_fields = result.context_mono.monotype_store.getFields(lhs_record.fields);
+                const rhs_fields = result.context_mono.monotype_store.getFields(rhs_mono.record.fields);
                 if (lhs_fields.len != rhs_fields.len) break :blk false;
 
                 var rhs_used = std.ArrayListUnmanaged(bool){};
@@ -12196,8 +12048,8 @@ pub const Pass = struct {
                 break :blk true;
             },
             .tag_union => |lhs_union| blk: {
-                const lhs_tags = result.monotype_store.getTags(lhs_union.tags);
-                const rhs_tags = result.monotype_store.getTags(rhs_mono.tag_union.tags);
+                const lhs_tags = result.context_mono.monotype_store.getTags(lhs_union.tags);
+                const rhs_tags = result.context_mono.monotype_store.getTags(rhs_mono.tag_union.tags);
                 if (lhs_tags.len != rhs_tags.len) break :blk false;
 
                 var rhs_used = std.ArrayListUnmanaged(bool){};
@@ -12216,8 +12068,8 @@ pub const Pass = struct {
                             rhs_tag.name,
                         )) continue;
 
-                        const lhs_payloads = result.monotype_store.getIdxSpan(lhs_tag.payloads);
-                        const rhs_payloads = result.monotype_store.getIdxSpan(rhs_tag.payloads);
+                        const lhs_payloads = result.context_mono.monotype_store.getIdxSpan(lhs_tag.payloads);
+                        const rhs_payloads = result.context_mono.monotype_store.getIdxSpan(rhs_tag.payloads);
                         if (lhs_payloads.len != rhs_payloads.len) continue;
 
                         var payloads_equal = true;
