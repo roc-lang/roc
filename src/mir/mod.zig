@@ -1,9 +1,9 @@
 //! Monomorphic Intermediate Representation (MIR)
 //!
-//! MIR sits between CIR (Canonical IR) and LIR (Layout IR).
+//! MIR sits between specialized structured callable IR and LIR.
 //! It is monomorphic, statement-oriented, local-centric, and uses globally
 //! unique symbols only at top-level/global materialization boundaries.
-//! Lambda set inference happens later on top of MIR.
+//! Lambda-set solving and specialization must happen before MIR lowering.
 
 const std = @import("std");
 
@@ -13,6 +13,8 @@ pub const Analyses = @import("Analyses.zig");
 pub const CallableSummary = @import("CallableSummary.zig");
 pub const DebugVerifyMir = @import("DebugVerifyMir.zig");
 pub const Monotype = @import("Monotype.zig");
+/// Transitional all-in-one implementation to be split into ContextMono,
+/// LambdaSolved, and LambdaSpecialize ownership.
 pub const Monomorphize = @import("Monomorphize.zig");
 pub const Lower = @import("Lower.zig");
 pub const ResultSummary = @import("ResultSummary.zig");

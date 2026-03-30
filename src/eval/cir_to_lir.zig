@@ -1,7 +1,12 @@
 //! Shared statement-only lowering pipeline used by eval backends.
 //!
-//! This module centralizes the CIR -> MIR -> LIR -> RC path for eval consumers.
-//! It owns a shared layout store and exposes proc-root lowering results.
+//! Target phase order:
+//! CoreCIR -> ContextMono -> LambdaSolved -> LambdaSpecialize ->
+//! SpecializedCIR -> MIR -> LIR -> RC.
+//!
+//! The current code is in the middle of that cutover. This module owns a
+//! shared layout store and exposes proc-root lowering results while the
+//! pipeline is being migrated to the explicit staged architecture.
 
 const std = @import("std");
 const base = @import("base");
@@ -9,6 +14,7 @@ const can = @import("can");
 const layout = @import("layout");
 const lir = @import("lir");
 const mir = @import("mir");
+const corecir = @import("corecir");
 const types = @import("types");
 
 const Allocator = std.mem.Allocator;
@@ -18,6 +24,7 @@ const CIR = can.CIR;
 const LirStore = lir.LirStore;
 const LirProcSpecId = lir.LirProcSpecId;
 const MIR = mir.MIR;
+const LambdaSpecialize = corecir.LambdaSpecialize;
 
 /// Find the index of a module environment in the all-module-env slice.
 pub fn findModuleEnvIdx(all_module_envs: []const *ModuleEnv, module_env: *ModuleEnv) ?u32 {
