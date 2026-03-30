@@ -13,9 +13,6 @@ pub const Analyses = @import("Analyses.zig");
 pub const CallableSummary = @import("CallableSummary.zig");
 pub const DebugVerifyMir = @import("DebugVerifyMir.zig");
 pub const Monotype = @import("Monotype.zig");
-/// Transitional coordinator for the staged CoreCIR -> ContextMono ->
-/// LambdaSolved -> LambdaSpecialize pipeline.
-pub const Monomorphize = @import("Monomorphize.zig");
 pub const Lower = @import("Lower.zig");
 pub const ResultSummary = @import("ResultSummary.zig");
 
@@ -49,6 +46,5 @@ test "mir tests" {
     std.testing.refAllDecls(CallableSummary);
     std.testing.refAllDecls(DebugVerifyMir);
     std.testing.refAllDecls(Monotype);
-    std.testing.refAllDecls(Monomorphize);
     std.testing.refAllDecls(ResultSummary);
 }

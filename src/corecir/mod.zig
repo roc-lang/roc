@@ -10,16 +10,20 @@
 const std = @import("std");
 
 pub const CoreCIR = @import("CoreCIR.zig");
+pub const Monotype = @import("Monotype.zig");
 pub const ContextMono = @import("ContextMono.zig");
 pub const LambdaSolved = @import("LambdaSolved.zig");
 pub const LambdaSpecialize = @import("LambdaSpecialize.zig");
+pub const Pipeline = @import("Pipeline.zig");
 pub const SpecializedCIR = @import("SpecializedCIR.zig");
 
 test "corecir tests" {
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(CoreCIR);
+    std.testing.refAllDecls(Monotype);
     std.testing.refAllDecls(ContextMono);
     std.testing.refAllDecls(LambdaSolved);
     std.testing.refAllDecls(LambdaSpecialize);
+    std.testing.refAllDecls(Pipeline);
     std.testing.refAllDecls(SpecializedCIR);
 }

@@ -60,6 +60,7 @@ const MirTargetBinding = struct {
 };
 const CallableResolution = CallableSummary.Resolution;
 const MirCallableResolutionMap = CallableSummary.OverrideMap;
+const MirOriginOverrideMap = std.AutoHashMap(u32, LoweredOrigin);
 
 const JoinCallableState = struct {
     params: []const MIR.LocalId,
@@ -68,6 +69,14 @@ const JoinCallableState = struct {
 };
 
 const ActiveJoinCallableMap = std.AutoHashMap(u32, JoinCallableState);
+
+const JoinOriginState = struct {
+    params: []const MIR.LocalId,
+    merged_origins: []?LoweredOrigin,
+    saw_incoming: bool,
+};
+
+const ActiveJoinOriginMap = std.AutoHashMap(u32, JoinOriginState);
 
 const ResolvedCallable = struct {
     lambda: MIR.LambdaId,
@@ -105,6 +114,7 @@ builder_procs: std.ArrayList(BuilderProc),
 current_local_map: ?*MirToLirLocalMap = null,
 current_local_scopes: MirToLirLocalScopeStack = .empty,
 current_callable_overrides: ?*MirCallableResolutionMap = null,
+current_origin_overrides: ?*MirOriginOverrideMap = null,
 current_lambda: ?MIR.LambdaId = null,
 current_borrow_region: LIR.BorrowRegion = .proc,
 current_stmt: ?MIR.CFStmtId = null,
@@ -371,6 +381,15 @@ fn callableResolutionsEqual(left: CallableResolution, right: CallableResolution)
     return left.lambda == right.lambda and left.requires_hidden_capture == right.requires_hidden_capture;
 }
 
+fn loweredOriginsEqual(left: LoweredOrigin, right: LoweredOrigin) bool {
+    return std.meta.eql(left, right);
+}
+
+fn mergeLoweredOrigins(left: LoweredOrigin, right: LoweredOrigin) LoweredOrigin {
+    if (loweredOriginsEqual(left, right)) return left;
+    return .fresh;
+}
+
 fn makeCallableSummaryResolver(self: *Self, overrides: *const MirCallableResolutionMap) CallableSummary.Resolver {
     return .{
         .allocator = self.allocator,
@@ -382,7 +401,6 @@ fn makeCallableSummaryResolver(self: *Self, overrides: *const MirCallableResolut
 }
 
 fn resolveCallableValuePathWithResolver(
-    self: *Self,
     resolver: *CallableSummary.Resolver,
     local_id: MIR.LocalId,
     value_local: MIR.LocalId,
@@ -404,7 +422,7 @@ fn resolveCallableValuePath(
     var empty_overrides = MirCallableResolutionMap.init(self.allocator);
     defer empty_overrides.deinit();
     var resolver = self.makeCallableSummaryResolver(self.current_callable_overrides orelse &empty_overrides);
-    return self.resolveCallableValuePathWithResolver(&resolver, local_id, value_local, reversed_path);
+    return resolveCallableValuePathWithResolver(&resolver, local_id, value_local, reversed_path);
 }
 
 fn resolveCallableValue(self: *Self, local_id: MIR.LocalId) Allocator.Error!ResolvedCallable {
@@ -532,6 +550,106 @@ fn collectJoinCallableResolutions(
     }
 }
 
+fn collectJoinOrigins(
+    self: *Self,
+    active_joins: *ActiveJoinOriginMap,
+    stmt_id: MIR.CFStmtId,
+) Allocator.Error!void {
+    const stmt = self.mir_store.getCFStmt(stmt_id);
+    switch (stmt) {
+        .assign_symbol => |assign| try self.collectJoinOrigins(active_joins, assign.next),
+        .assign_ref => |assign| try self.collectJoinOrigins(active_joins, assign.next),
+        .assign_literal => |assign| try self.collectJoinOrigins(active_joins, assign.next),
+        .assign_lambda => |assign| try self.collectJoinOrigins(active_joins, assign.next),
+        .assign_closure => |assign| try self.collectJoinOrigins(active_joins, assign.next),
+        .assign_call => |assign| try self.collectJoinOrigins(active_joins, assign.next),
+        .assign_low_level => |assign| try self.collectJoinOrigins(active_joins, assign.next),
+        .assign_list => |assign| try self.collectJoinOrigins(active_joins, assign.next),
+        .assign_struct => |assign| try self.collectJoinOrigins(active_joins, assign.next),
+        .assign_tag => |assign| try self.collectJoinOrigins(active_joins, assign.next),
+        .debug => |debug_stmt| try self.collectJoinOrigins(active_joins, debug_stmt.next),
+        .expect => |expect_stmt| try self.collectJoinOrigins(active_joins, expect_stmt.next),
+        .runtime_error, .scope_exit, .ret, .crash => {},
+        .switch_stmt => |switch_stmt| {
+            for (self.mir_store.getSwitchBranches(switch_stmt.branches)) |branch| {
+                try self.collectJoinOrigins(active_joins, branch.body);
+            }
+            try self.collectJoinOrigins(active_joins, switch_stmt.default_branch);
+        },
+        .borrow_scope => |scope_stmt| {
+            try self.collectJoinOrigins(active_joins, scope_stmt.body);
+            try self.collectJoinOrigins(active_joins, scope_stmt.remainder);
+        },
+        .join => |join_stmt| {
+            const join_key = @intFromEnum(join_stmt.id);
+            const join_params = self.mir_store.getLocalSpan(join_stmt.params);
+            const merged_origins = try self.allocator.alloc(?LoweredOrigin, join_params.len);
+            defer self.allocator.free(merged_origins);
+            @memset(merged_origins, null);
+
+            const gop = try active_joins.getOrPut(join_key);
+            if (gop.found_existing) {
+                std.debug.panic(
+                    "MirToLir invariant violated: nested/duplicate active origin join {d}",
+                    .{join_key},
+                );
+            }
+            gop.value_ptr.* = .{
+                .params = join_params,
+                .merged_origins = merged_origins,
+                .saw_incoming = false,
+            };
+            defer _ = active_joins.remove(join_key);
+
+            try self.collectJoinOrigins(active_joins, join_stmt.remainder);
+            const join_state = active_joins.getPtr(join_key) orelse unreachable;
+            if (!join_state.saw_incoming) return;
+
+            var body_origin_overrides = MirOriginOverrideMap.init(self.allocator);
+            defer body_origin_overrides.deinit();
+            try body_origin_overrides.ensureTotalCapacity(@intCast(join_params.len));
+
+            for (join_params, merged_origins, 0..) |param, incoming_origin, i| {
+                body_origin_overrides.putAssumeCapacity(
+                    @as(u32, @intFromEnum(param)),
+                    incoming_origin orelse std.debug.panic(
+                        "MirToLir invariant violated: join {d} param {d} had no incoming origin",
+                        .{ join_key, i },
+                    ),
+                );
+            }
+
+            const saved_origin_overrides = self.current_origin_overrides;
+            self.current_origin_overrides = &body_origin_overrides;
+            defer self.current_origin_overrides = saved_origin_overrides;
+
+            try self.collectJoinOrigins(active_joins, join_stmt.body);
+        },
+        .jump => |jump| {
+            const join_state = active_joins.getPtr(@intFromEnum(jump.id)) orelse return;
+            const args = self.mir_store.getLocalSpan(jump.args);
+            if (args.len != join_state.params.len) {
+                std.debug.panic(
+                    "MirToLir invariant violated: jump to join {d} passed {d} args, expected {d}",
+                    .{ @intFromEnum(jump.id), args.len, join_state.params.len },
+                );
+            }
+
+            join_state.saw_incoming = true;
+            for (args, 0..) |arg, i| {
+                var visited = std.AutoHashMap(u32, void).init(self.allocator);
+                defer visited.deinit();
+                const incoming_origin = try self.resolveMirLocalOrigin(arg, &visited);
+                if (join_state.merged_origins[i]) |current| {
+                    join_state.merged_origins[i] = mergeLoweredOrigins(current, incoming_origin);
+                } else {
+                    join_state.merged_origins[i] = incoming_origin;
+                }
+            }
+        },
+    }
+}
+
 fn buildJoinCallableOverrideMap(
     self: *Self,
     join_stmt: std.meta.TagPayload(MIR.CFStmt, .join),
@@ -568,6 +686,48 @@ fn buildJoinCallableOverrideMap(
             @as(u32, @intFromEnum(param)),
             incoming_callable orelse std.debug.panic(
                 "MirToLir invariant violated: join {d} param {d} had no incoming exact callable",
+                .{ join_key, i },
+            ),
+        );
+    }
+    return overrides;
+}
+
+fn buildJoinOriginOverrideMap(
+    self: *Self,
+    join_stmt: std.meta.TagPayload(MIR.CFStmt, .join),
+) Allocator.Error!MirOriginOverrideMap {
+    var overrides = MirOriginOverrideMap.init(self.allocator);
+    errdefer overrides.deinit();
+
+    const join_key = @intFromEnum(join_stmt.id);
+    const join_params = self.mir_store.getLocalSpan(join_stmt.params);
+    const merged_origins = try self.allocator.alloc(?LoweredOrigin, join_params.len);
+    defer self.allocator.free(merged_origins);
+    @memset(merged_origins, null);
+
+    var active_joins = ActiveJoinOriginMap.init(self.allocator);
+    defer active_joins.deinit();
+
+    const gop = try active_joins.getOrPut(join_key);
+    if (gop.found_existing) unreachable;
+    gop.value_ptr.* = .{
+        .params = join_params,
+        .merged_origins = merged_origins,
+        .saw_incoming = false,
+    };
+    defer _ = active_joins.remove(join_key);
+
+    try self.collectJoinOrigins(&active_joins, join_stmt.remainder);
+    const join_state = active_joins.getPtr(join_key) orelse unreachable;
+    if (!join_state.saw_incoming) return overrides;
+
+    try overrides.ensureTotalCapacity(@intCast(join_params.len));
+    for (join_params, merged_origins, 0..) |param, incoming_origin, i| {
+        overrides.putAssumeCapacity(
+            @as(u32, @intFromEnum(param)),
+            incoming_origin orelse std.debug.panic(
+                "MirToLir invariant violated: join {d} param {d} had no incoming origin",
                 .{ join_key, i },
             ),
         );
@@ -876,6 +1036,20 @@ fn loweredOriginToResultSemantics(origin: LoweredOrigin) ResultSemantics {
     };
 }
 
+fn projectedBorrowResultSemantics(
+    self: *Self,
+    source: MIR.LocalId,
+    extra_projections: LIR.RefProjectionSpan,
+) Allocator.Error!ResultSemantics {
+    var visited = std.AutoHashMap(u32, void).init(self.allocator);
+    defer visited.deinit();
+
+    const source_origin = try self.resolveMirLocalOrigin(source, &visited);
+    return loweredOriginToResultSemantics(
+        try self.borrowOrigin(source_origin, self.current_borrow_region, extra_projections),
+    );
+}
+
 fn lowerSummaryCallResultOrigin(
     self: *Self,
     contract: ResultSummary.ResultContract,
@@ -931,9 +1105,17 @@ fn resolveMirLocalOrigin(
     defer _ = visited.remove(key);
 
     return switch (self.mir_store.getLocalDef(local_id)) {
-        .param, .captures_param, .join_param => .{ .alias_of_local = .{
+        .param, .captures_param => .{ .alias_of_local = .{
             .owner = self.existingMappedMirLocal(local_id),
         } },
+        .join_param => if (self.current_origin_overrides) |overrides|
+            overrides.get(key) orelse .{ .alias_of_local = .{
+                .owner = self.existingMappedMirLocal(local_id),
+            } }
+        else
+            .{ .alias_of_local = .{
+                .owner = self.existingMappedMirLocal(local_id),
+            } },
         .symbol,
         .literal,
         .lambda,
@@ -1545,14 +1727,17 @@ fn lowerRootBody(self: *Self, root_body: MIR.CFStmtId) Allocator.Error!CFStmtId 
     defer local_map.deinit();
     const prev_local_map = self.current_local_map;
     const prev_callable_overrides = self.current_callable_overrides;
+    const prev_origin_overrides = self.current_origin_overrides;
     const prev_lambda = self.current_lambda;
     const prev_region = self.current_borrow_region;
     self.current_local_map = &local_map;
     self.current_callable_overrides = null;
+    self.current_origin_overrides = null;
     self.current_lambda = null;
     self.current_borrow_region = .proc;
     defer self.current_local_map = prev_local_map;
     defer self.current_callable_overrides = prev_callable_overrides;
+    defer self.current_origin_overrides = prev_origin_overrides;
     defer self.current_lambda = prev_lambda;
     defer self.current_borrow_region = prev_region;
 
@@ -1599,10 +1784,9 @@ fn lowerStmt(self: *Self, stmt_id: MIR.CFStmtId) Allocator.Error!CFStmtId {
                 ),
                 .field => |field| try self.emitAssignRef(
                     target_binding.target,
-                    borrowSemantics(
-                        try self.mapMirLocal(field.source),
+                    try self.projectedBorrowResultSemantics(
+                        field.source,
                         try self.singleProjectionSpan(.{ .field = @intCast(field.field_idx) }),
-                        self.current_borrow_region,
                     ),
                     .{ .field = .{
                         .source = try self.mapMirLocal(field.source),
@@ -1612,10 +1796,9 @@ fn lowerStmt(self: *Self, stmt_id: MIR.CFStmtId) Allocator.Error!CFStmtId {
                 ),
                 .tag_payload => |payload| try self.emitAssignRef(
                     target_binding.target,
-                    borrowSemantics(
-                        try self.mapMirLocal(payload.source),
+                    try self.projectedBorrowResultSemantics(
+                        payload.source,
                         try self.singleProjectionSpan(.tag_payload),
-                        self.current_borrow_region,
                     ),
                     .{ .tag_payload = .{
                         .source = try self.mapMirLocal(payload.source),
@@ -1792,12 +1975,17 @@ fn lowerJoinStmt(
     const lowered_remainder = try self.lowerStmt(join_stmt.remainder);
     var body_callable_overrides = try self.buildJoinCallableOverrideMap(join_stmt);
     defer body_callable_overrides.deinit();
+    var body_origin_overrides = try self.buildJoinOriginOverrideMap(join_stmt);
+    defer body_origin_overrides.deinit();
 
     const lowered_body = blk: {
         const prev_callable_overrides = self.current_callable_overrides;
+        const prev_origin_overrides = self.current_origin_overrides;
         self.current_callable_overrides = &body_callable_overrides;
+        self.current_origin_overrides = &body_origin_overrides;
         try self.pushLocalOverrideScope();
         defer self.current_callable_overrides = prev_callable_overrides;
+        defer self.current_origin_overrides = prev_origin_overrides;
         defer self.popLocalOverrideScope();
         for (join_params, 0..) |param_local, i| {
             const key = @as(u32, @intFromEnum(param_local));
@@ -1875,6 +2063,20 @@ fn lowerDirectLambdaCall(
     }
     if (resolved.captures_local) |capture_local| {
         call_args[visible_args.len] = try self.mapMirLocal(capture_local);
+    }
+    if (self.current_lambda != null and resolved.lambda == @as(MIR.LambdaId, @enumFromInt(1))) {
+        const call_result_semantics = try self.directLambdaCallResultSemantics(resolved, visible_args);
+        std.debug.print(
+            "MirToLir call debug: caller_lambda={d} callee_lambda={d} target={d} contract={any} call_result={any} visible_args={any}\n",
+            .{
+                @intFromEnum(self.current_lambda.?),
+                @intFromEnum(resolved.lambda),
+                @intFromEnum(target),
+                self.analyses.getLambdaResultContract(resolved.lambda),
+                call_result_semantics,
+                visible_args,
+            },
+        );
     }
     return self.lir_store.addCFStmt(.{ .assign_call = .{
         .target = lowered_target,
@@ -2012,10 +2214,9 @@ fn lowerEntrypointCallableStmt(
                     ),
                     .field => |field| try self.emitAssignRef(
                         target_binding.target,
-                        borrowSemantics(
-                            try self.mapMirLocal(field.source),
+                        try self.projectedBorrowResultSemantics(
+                            field.source,
                             try self.singleProjectionSpan(.{ .field = @intCast(field.field_idx) }),
-                            self.current_borrow_region,
                         ),
                         .{ .field = .{
                             .source = try self.mapMirLocal(field.source),
@@ -2025,10 +2226,9 @@ fn lowerEntrypointCallableStmt(
                     ),
                     .tag_payload => |payload| try self.emitAssignRef(
                         target_binding.target,
-                        borrowSemantics(
-                            try self.mapMirLocal(payload.source),
+                        try self.projectedBorrowResultSemantics(
+                            payload.source,
                             try self.singleProjectionSpan(.tag_payload),
-                            self.current_borrow_region,
                         ),
                         .{ .tag_payload = .{
                             .source = try self.mapMirLocal(payload.source),
@@ -2264,12 +2464,17 @@ fn lowerEntrypointCallableStmt(
             const lowered_remainder = try self.lowerEntrypointCallableStmt(join_stmt.remainder, arg_locals, target, next);
             var body_callable_overrides = try self.buildJoinCallableOverrideMap(join_stmt);
             defer body_callable_overrides.deinit();
+            var body_origin_overrides = try self.buildJoinOriginOverrideMap(join_stmt);
+            defer body_origin_overrides.deinit();
 
             const lowered_body = blk_body: {
                 const prev_callable_overrides = self.current_callable_overrides;
+                const prev_origin_overrides = self.current_origin_overrides;
                 self.current_callable_overrides = &body_callable_overrides;
+                self.current_origin_overrides = &body_origin_overrides;
                 try self.pushLocalOverrideScope();
                 defer self.current_callable_overrides = prev_callable_overrides;
+                defer self.current_origin_overrides = prev_origin_overrides;
                 defer self.popLocalOverrideScope();
                 for (join_params, 0..) |param_local, i| {
                     const key = @as(u32, @intFromEnum(param_local));
@@ -2342,14 +2547,17 @@ fn lowerEntrypointProcBody(
     defer local_map.deinit();
     const prev_local_map = self.current_local_map;
     const prev_callable_overrides = self.current_callable_overrides;
+    const prev_origin_overrides = self.current_origin_overrides;
     const prev_lambda = self.current_lambda;
     const prev_region = self.current_borrow_region;
     self.current_local_map = &local_map;
     self.current_callable_overrides = null;
+    self.current_origin_overrides = null;
     self.current_lambda = null;
     self.current_borrow_region = .proc;
     defer self.current_local_map = prev_local_map;
     defer self.current_callable_overrides = prev_callable_overrides;
+    defer self.current_origin_overrides = prev_origin_overrides;
     defer self.current_lambda = prev_lambda;
     defer self.current_borrow_region = prev_region;
 
@@ -2405,12 +2613,15 @@ fn lowerLambda(self: *Self, lambda_id: MIR.LambdaId) Allocator.Error!LirProcSpec
     defer local_map.deinit();
     const prev_local_map = self.current_local_map;
     const prev_callable_overrides = self.current_callable_overrides;
+    const prev_origin_overrides = self.current_origin_overrides;
     const prev_region = self.current_borrow_region;
     self.current_local_map = &local_map;
     self.current_callable_overrides = null;
+    self.current_origin_overrides = null;
     self.current_borrow_region = .proc;
     defer self.current_local_map = prev_local_map;
     defer self.current_callable_overrides = prev_callable_overrides;
+    defer self.current_origin_overrides = prev_origin_overrides;
     defer self.current_borrow_region = prev_region;
 
     for (value_params, 0..) |param_local, i| {

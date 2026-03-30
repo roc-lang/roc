@@ -6,7 +6,7 @@
 const std = @import("std");
 const can = @import("can");
 const types = @import("types");
-const Monotype = @import("../mir/Monotype.zig");
+const Monotype = @import("Monotype.zig");
 
 const Allocator = std.mem.Allocator;
 const CIR = can.CIR;

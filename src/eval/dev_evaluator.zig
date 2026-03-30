@@ -15,11 +15,13 @@ const builtin = @import("builtin");
 const base = @import("base");
 const Io = @import("io").Io;
 const can = @import("can");
+const corecir = @import("corecir");
 const types = @import("types");
 const layout = @import("layout");
 const backend = @import("backend");
 const mir = @import("mir");
 const MIR = mir.MIR;
+const Pipeline = corecir.Pipeline;
 const lir = @import("lir");
 const LirStore = lir.LirStore;
 const builtin_loading = @import("builtin_loading.zig");
@@ -753,7 +755,7 @@ pub const DevEvaluator = struct {
         defer mir_store.deinit(self.allocator);
 
         var callable_pipeline = if (platform_type_scope) |*ts|
-            mir.Monomorphize.runRootSourceExprWithTypeScope(
+            Pipeline.runRootSourceExprWithTypeScope(
                 self.allocator,
                 all_module_envs,
                 &module_env.types,
@@ -765,7 +767,7 @@ pub const DevEvaluator = struct {
                 app_module_idx.?,
             ) catch return error.OutOfMemory
         else
-            mir.Monomorphize.runRootSourceExpr(
+            Pipeline.runRootSourceExpr(
                 self.allocator,
                 all_module_envs,
                 &module_env.types,
@@ -914,7 +916,7 @@ pub const DevEvaluator = struct {
         defer mir_store.deinit(self.allocator);
 
         var callable_pipeline = if (platform_type_scope) |*ts|
-            mir.Monomorphize.runRootSourceExprWithTypeScope(
+            Pipeline.runRootSourceExprWithTypeScope(
                 self.allocator,
                 all_module_envs,
                 &module_env.types,
@@ -926,7 +928,7 @@ pub const DevEvaluator = struct {
                 app_module_idx.?,
             ) catch return error.OutOfMemory
         else
-            mir.Monomorphize.runRootSourceExpr(
+            Pipeline.runRootSourceExpr(
                 self.allocator,
                 all_module_envs,
                 &module_env.types,

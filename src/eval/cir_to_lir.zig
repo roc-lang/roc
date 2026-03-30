@@ -25,6 +25,7 @@ const LirStore = lir.LirStore;
 const LirProcSpecId = lir.LirProcSpecId;
 const MIR = mir.MIR;
 const LambdaSpecialize = corecir.LambdaSpecialize;
+const Pipeline = corecir.Pipeline;
 
 /// Find the index of a module environment in the all-module-env slice.
 pub fn findModuleEnvIdx(all_module_envs: []const *ModuleEnv, module_env: *ModuleEnv) ?u32 {
@@ -249,7 +250,7 @@ pub const LirProgram = struct {
         defer mir_store.deinit(self.allocator);
 
         var callable_pipeline = if (maybe_type_scope) |type_scope|
-            mir.Monomorphize.runRootSourceExprWithTypeScope(
+            Pipeline.runRootSourceExprWithTypeScope(
                 self.allocator,
                 all_module_envs,
                 &module_env.types,
@@ -261,7 +262,7 @@ pub const LirProgram = struct {
                 app_module_idx orelse return error.RuntimeError,
             ) catch return error.OutOfMemory
         else
-            mir.Monomorphize.runRootSourceExpr(
+            Pipeline.runRootSourceExpr(
                 self.allocator,
                 all_module_envs,
                 &module_env.types,
@@ -339,7 +340,7 @@ pub const LirProgram = struct {
         defer mir_store.deinit(self.allocator);
 
         var callable_pipeline = if (type_scope) |ts|
-            mir.Monomorphize.runRootSourceExprWithTypeScope(
+            Pipeline.runRootSourceExprWithTypeScope(
                 self.allocator,
                 all_module_envs,
                 &module_env.types,
@@ -351,7 +352,7 @@ pub const LirProgram = struct {
                 app_module_idx orelse return error.RuntimeError,
             ) catch return error.OutOfMemory
         else
-            mir.Monomorphize.runRootSourceExpr(
+            Pipeline.runRootSourceExpr(
                 self.allocator,
                 all_module_envs,
                 &module_env.types,

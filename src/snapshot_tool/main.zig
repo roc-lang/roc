@@ -14,6 +14,7 @@ const can = @import("can");
 const types = @import("types");
 const reporting = @import("reporting");
 const check = @import("check");
+const corecir = @import("corecir");
 const builtins = @import("builtins");
 const compile = @import("compile");
 const fmt = @import("fmt");
@@ -4087,6 +4088,7 @@ fn processDevObjectSnapshot(
 
     // 8. Find app module index and lower CIR → MIR → LIR
     const mir_mod = @import("mir");
+    const Pipeline = corecir.Pipeline;
     const MIR = mir_mod.MIR;
     const lir_mod = @import("lir");
 
@@ -4227,7 +4229,7 @@ fn processDevObjectSnapshot(
 
     var callable_pipeline = blk: {
         const mono = if (app_module_idx) |resolved_app_module_idx|
-            mir_mod.Monomorphize.runRootSourceExprsWithTypeScope(
+            Pipeline.runRootSourceExprsWithTypeScope(
                 allocator,
                 all_module_envs,
                 platform_types,
@@ -4239,7 +4241,7 @@ fn processDevObjectSnapshot(
                 resolved_app_module_idx,
             )
         else
-            mir_mod.Monomorphize.runRootSourceExprs(
+            Pipeline.runRootSourceExprs(
                 allocator,
                 all_module_envs,
                 platform_types,

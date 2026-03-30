@@ -15,6 +15,7 @@
 
 const std = @import("std");
 const can = @import("can");
+const corecir = @import("corecir");
 const layout = @import("layout");
 const mir = @import("mir");
 const lir = @import("lir");
@@ -25,6 +26,7 @@ const Allocator = std.mem.Allocator;
 const ModuleEnv = can.ModuleEnv;
 const CIR = can.CIR;
 const LoadedModule = builtin_loading.LoadedModule;
+const Pipeline = corecir.Pipeline;
 
 fn isBuiltinModuleEnv(env: *const ModuleEnv) bool {
     return env.display_module_name_idx.eql(env.idents.builtin_module);
@@ -164,7 +166,7 @@ pub const WasmEvaluator = struct {
         var mir_store = MIR.Store.init(self.allocator) catch return error.OutOfMemory;
         defer mir_store.deinit(self.allocator);
 
-        var callable_pipeline = mir.Monomorphize.runRootSourceExpr(
+        var callable_pipeline = Pipeline.runRootSourceExpr(
             self.allocator,
             all_module_envs,
             &module_env.types,

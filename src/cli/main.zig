@@ -21,6 +21,7 @@
 //! For detailed documentation, see `src/interpreter_shim/README.md`.
 
 const std = @import("std");
+const corecir = @import("corecir");
 
 /// Configure std library logging to suppress debug messages in production.
 /// This prevents debug logs from polluting stderr which should only contain
@@ -4156,6 +4157,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
 
     // Lower CIR → MIR → LIR
     const mir = @import("mir");
+    const Pipeline = corecir.Pipeline;
     const MIR = mir.MIR;
     const lir = @import("lir");
 
@@ -4264,7 +4266,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
 
     var callable_pipeline = blk: {
         const mono = if (app_module_idx) |resolved_app_module_idx|
-            mir.Monomorphize.runRootSourceExprsWithTypeScope(
+            Pipeline.runRootSourceExprsWithTypeScope(
                 ctx.gpa,
                 all_module_envs,
                 platform_types,
@@ -4276,7 +4278,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
                 resolved_app_module_idx,
             )
         else
-            mir.Monomorphize.runRootSourceExprs(
+            Pipeline.runRootSourceExprs(
                 ctx.gpa,
                 all_module_envs,
                 platform_types,

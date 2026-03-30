@@ -1,20 +1,19 @@
-//! Explicit callable monomorphization.
+//! Staged CoreCIR callable pipeline.
 //!
-//! This module owns the compiler phase that decides which callable instance
-//! every use site means before MIR lowering begins. `Lower` must consume the
-//! result of this pass; it must not infer callable instantiations itself.
+//! This module coordinates ContextMono, LambdaSolved, and LambdaSpecialize for
+//! reachable roots before MIR lowering begins. `Lower` must consume the result
+//! of this stage; it must not infer callable instantiations itself.
 
 const std = @import("std");
 const builtin = @import("builtin");
 const base = @import("base");
 const can = @import("can");
-const corecir = @import("corecir");
 const types = @import("types");
 
 const Monotype = @import("Monotype.zig");
-const ContextMono = corecir.ContextMono;
-const LambdaSolved = corecir.LambdaSolved;
-const LambdaSpecialize = corecir.LambdaSpecialize;
+const ContextMono = @import("ContextMono.zig");
+const LambdaSolved = @import("LambdaSolved.zig");
+const LambdaSpecialize = @import("LambdaSpecialize.zig");
 
 const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
@@ -84,6 +83,9 @@ pub const CallableInstSetSpan = LambdaSpecialize.CallableInstSetSpan;
 /// A deduplicated set of callable instantiations associated with one callable value.
 pub const CallableInstSet = LambdaSpecialize.CallableInstSet;
 
+/// One statically resolved dispatch target definition.
+pub const DispatchExprTarget = LambdaSpecialize.DispatchExprTarget;
+
 /// Associates a source call site with the callable instantiation chosen for it.
 pub const CallSiteResolution = struct {
     module_idx: u32,
@@ -113,6 +115,7 @@ const MutationKind = enum(u8) {
     context_expr_monotypes,
     context_pattern_monotypes,
     dispatch_expr_callable_insts,
+    dispatch_expr_targets,
     callable_inst_sets,
     context_pattern_callable_inst_sets,
     expr_callable_inst_sets,
@@ -322,6 +325,21 @@ pub const Result = struct {
         expr_idx: CIR.Expr.Idx,
     ) ?CallableInstId {
         return self.lambda_specialize.getDispatchExprCallableInst(
+            context_callable_inst,
+            root_source_expr_context,
+            module_idx,
+            expr_idx,
+        );
+    }
+
+    pub fn getDispatchExprTarget(
+        self: *const Result,
+        context_callable_inst: CallableInstId,
+        root_source_expr_context: ?CIR.Expr.Idx,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) ?DispatchExprTarget {
+        return self.lambda_specialize.getDispatchExprTarget(
             context_callable_inst,
             root_source_expr_context,
             module_idx,
@@ -3389,15 +3407,59 @@ pub const Pass = struct {
         call_expr_idx: CIR.Expr.Idx,
         call_expr: anytype,
     ) Allocator.Error!Monotype.Idx {
-        const ret_monotype = try self.resolveExprMonotypeIfMonomorphizableResolved(result, module_idx, call_expr_idx);
-        if (ret_monotype.isNone()) return .none;
-
         const module_env = self.all_module_envs[module_idx];
         const effectful = if (resolveFuncTypeInStore(&module_env.types, ModuleEnv.varFrom(call_expr.func))) |func_info|
             func_info.effectful
         else
             false;
-        const arg_exprs = module_env.store.sliceExpr(call_expr.args);
+        return self.resolveAppliedCallableFnMonotype(
+            result,
+            module_idx,
+            call_expr_idx,
+            module_env.store.sliceExpr(call_expr.args),
+            effectful,
+        );
+    }
+
+    fn resolveAppliedCallableFnMonotypeIfExactResolved(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+        arg_exprs: []const CIR.Expr.Idx,
+        effectful: bool,
+    ) Allocator.Error!Monotype.Idx {
+        const ret_monotype = try self.resolveExprMonotypeIfExactResolved(result, module_idx, expr_idx);
+        if (ret_monotype.isNone()) return .none;
+
+        var arg_monotypes = std.ArrayList(Monotype.Idx).empty;
+        defer arg_monotypes.deinit(self.allocator);
+
+        for (arg_exprs) |arg_expr_idx| {
+            const arg_monotype = try self.resolveExprMonotypeIfExactResolved(result, module_idx, arg_expr_idx);
+            if (arg_monotype.isNone()) return .none;
+            try arg_monotypes.append(self.allocator, arg_monotype.idx);
+        }
+
+        const arg_span = try result.context_mono.monotype_store.addIdxSpan(self.allocator, arg_monotypes.items);
+        return result.context_mono.monotype_store.addMonotype(self.allocator, .{ .func = .{
+            .args = arg_span,
+            .ret = ret_monotype.idx,
+            .effectful = effectful,
+        } });
+    }
+
+    fn resolveAppliedCallableFnMonotype(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+        arg_exprs: []const CIR.Expr.Idx,
+        effectful: bool,
+    ) Allocator.Error!Monotype.Idx {
+        const ret_monotype = try self.resolveExprMonotypeIfMonomorphizableResolved(result, module_idx, expr_idx);
+        if (ret_monotype.isNone()) return .none;
+
         var arg_monotypes = std.ArrayList(Monotype.Idx).empty;
         defer arg_monotypes.deinit(self.allocator);
 
@@ -3440,8 +3502,17 @@ pub const Pass = struct {
         const template_env = self.all_module_envs[template.module_idx];
         const template_types = &template_env.types;
         const arg_exprs = self.all_module_envs[module_idx].store.sliceExpr(call_expr.args);
-        const desired_fn_monotype = resolvedMonotype(
-            try self.resolveDirectCallFnMonotype(result, module_idx, call_expr_idx, call_expr),
+        const exact_desired_fn_monotype = resolvedMonotype(
+            try self.resolveAppliedCallableFnMonotypeIfExactResolved(
+                result,
+                module_idx,
+                call_expr_idx,
+                arg_exprs,
+                if (resolveFuncTypeInStore(&self.all_module_envs[module_idx].types, ModuleEnv.varFrom(call_expr.func))) |func_info|
+                    func_info.effectful
+                else
+                    false,
+            ),
             module_idx,
         );
         const defining_context_callable_inst = self.resolveTemplateDefiningContextCallableInst(result, template);
@@ -3452,8 +3523,10 @@ pub const Pass = struct {
         var ordered_entries = std.ArrayList(TypeSubstEntry).empty;
         defer ordered_entries.deinit(self.allocator);
 
-        try self.seedTemplateBindingsFromFnMonotype(result, template, desired_fn_monotype, &callee_bindings);
-        if (self.binding_probe_failed) return .none;
+        if (!exact_desired_fn_monotype.isNone()) {
+            try self.seedTemplateBindingsFromFnMonotype(result, template, exact_desired_fn_monotype, &callee_bindings);
+            if (self.binding_probe_failed) return .none;
+        }
 
         if (resolveFuncTypeInStore(template_types, template.type_root)) |resolved_func| {
             const ret_mono = try self.resolveExprMonotypeIfExactResolved(result, module_idx, call_expr_idx);
@@ -5133,6 +5206,14 @@ pub const Pass = struct {
         expr: CIR.Expr,
         template_id: CallableTemplateId,
     ) Allocator.Error!?CallableInstId {
+        const saved_binding_probe_mode = self.binding_probe_mode;
+        const saved_binding_probe_failed = self.binding_probe_failed;
+        self.binding_probe_mode = true;
+        self.binding_probe_failed = false;
+        defer {
+            self.binding_probe_mode = saved_binding_probe_mode;
+            self.binding_probe_failed = saved_binding_probe_failed;
+        }
         const template = result.getCallableTemplate(template_id).*;
         const template_env = self.all_module_envs[template.module_idx];
         const template_types = &template_env.types;
@@ -5147,6 +5228,24 @@ pub const Pass = struct {
         var actual_args = std.ArrayList(CIR.Expr.Idx).empty;
         defer actual_args.deinit(self.allocator);
         try self.appendDispatchActualArgs(module_idx, expr, &actual_args);
+
+        const exact_desired_fn_monotype = resolvedMonotype(
+            try self.resolveAppliedCallableFnMonotypeIfExactResolved(
+                result,
+                module_idx,
+                expr_idx,
+                actual_args.items,
+                if (resolveFuncTypeInStore(template_types, template.type_root)) |func_info|
+                    func_info.effectful
+                else
+                    false,
+            ),
+            module_idx,
+        );
+        if (!exact_desired_fn_monotype.isNone()) {
+            try self.seedTemplateBindingsFromFnMonotype(result, template, exact_desired_fn_monotype, &callee_bindings);
+        }
+        if (self.binding_probe_failed) return null;
 
         if (resolveFuncTypeInStore(template_types, template.type_root)) |resolved_func| {
             const param_vars = template_types.sliceVars(resolved_func.func.args);
@@ -5177,6 +5276,7 @@ pub const Pass = struct {
                         ret_mono.idx,
                         ret_mono.module_idx,
                     );
+                    if (self.binding_probe_failed) return null;
                 }
                 try self.bindTypeVarMonotypes(
                     result,
@@ -5188,6 +5288,7 @@ pub const Pass = struct {
                     ret_mono.idx,
                     ret_mono.module_idx,
                 );
+                if (self.binding_probe_failed) return null;
             }
 
             try self.bindTemplateParamsFromActualArgs(
@@ -5199,8 +5300,9 @@ pub const Pass = struct {
                 actual_args.items,
                 &callee_bindings,
                 &ordered_entries,
-                false,
+                true,
             );
+            if (self.binding_probe_failed) return null;
         }
 
         try self.seedTemplateBoundaryBindingsFromActuals(
@@ -5211,8 +5313,10 @@ pub const Pass = struct {
             try self.resolveExprMonotypeIfExactResolved(result, module_idx, expr_idx),
             &callee_bindings,
         );
+        if (self.binding_probe_failed) return null;
 
         try self.completeTemplateBindingsFromBody(result, template, &callee_bindings, defining_context_callable_inst);
+        if (self.binding_probe_failed) return null;
 
         var seen: std.AutoHashMapUnmanaged(types.Var, void) = .empty;
         defer seen.deinit(self.allocator);
@@ -5223,9 +5327,7 @@ pub const Pass = struct {
             template.type_root,
             &callee_bindings,
             &seen,
-        )) {
-            return null;
-        }
+        )) return null;
 
         const fn_monotype = try self.resolveTypeVarMonotypeWithBindings(
             result,
@@ -5243,11 +5345,10 @@ pub const Pass = struct {
             fn_monotype,
             template.module_idx,
             defining_context_callable_inst,
-        )) {
-            return null;
-        }
+        )) return null;
 
-        return try self.ensureCallableInstUnscanned(result, template_id, fn_monotype, template.module_idx);
+        const callable_inst_id = try self.ensureCallableInstUnscanned(result, template_id, fn_monotype, template.module_idx);
+        return callable_inst_id;
     }
 
     fn bindCurrentDispatchFromCallableInst(
@@ -5700,9 +5801,9 @@ pub const Pass = struct {
                         module_idx,
                         expr_idx,
                         expr,
-                        receiver_monotype.idx,
-                        dot_expr.field_name,
-                    )) |callable_inst_id| {
+                    receiver_monotype.idx,
+                    dot_expr.field_name,
+                )) |callable_inst_id| {
                         try self.recordDispatchExprCallableInst(result, module_idx, expr_idx, expr, callable_inst_id);
                         return;
                     }
@@ -5788,6 +5889,17 @@ pub const Pass = struct {
             },
             else => return,
         };
+        const target_def = try self.resolveDispatchTargetToExternalDef(module_idx, resolved_target);
+        try self.recordDispatchExprTarget(
+            result,
+            self.active_callable_inst_context,
+            module_idx,
+            expr_idx,
+            .{
+                .module_idx = target_def.module_idx,
+                .def_idx = @enumFromInt(target_def.def_node_idx),
+            },
+        );
         const template_id = try self.lookupResolvedDispatchTemplate(result, module_idx, resolved_target) orelse {
             if (std.debug.runtime_safety) {
                 const method_name = self.dispatchTargetMethodText(module_env, resolved_target) orelse "<unreadable>";
@@ -5809,8 +5921,6 @@ pub const Pass = struct {
             if (try self.inferDispatchCallableInst(result, module_idx, expr_idx, expr, template_id)) |inferred| {
                 break :blk inferred;
             }
-
-            if (self.active_bindings != null) return;
 
             const fn_monotype = try self.resolveTypeVarMonotypeIfExactResolved(result, module_idx, resolved_target.fn_var);
             if (!fn_monotype.isNone()) {
@@ -5855,6 +5965,23 @@ pub const Pass = struct {
         try self.scanCallableInst(result, callable_inst_id);
         try self.ensureCallableArgCallableInstsScannedSlice(result, module_idx, actual_args.items);
         try self.bindCurrentDispatchFromCallableInst(result, module_idx, expr_idx, expr, callable_inst_id);
+    }
+
+    fn recordDispatchExprTarget(
+        self: *Pass,
+        result: *Result,
+        context_callable_inst: CallableInstId,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+        dispatch_target: DispatchExprTarget,
+    ) Allocator.Error!void {
+        if (self.scratch_context_expr_monotypes_depth != 0) return;
+        try self.putTracked(
+            .dispatch_expr_targets,
+            &result.lambda_specialize.dispatch_expr_targets,
+            self.resultExprKey(context_callable_inst, module_idx, expr_idx),
+            dispatch_target,
+        );
     }
 
     fn dotDispatchHandledWithoutCallableInst(
@@ -7016,12 +7143,38 @@ pub const Pass = struct {
         pattern_idx: CIR.Pattern.Idx,
         callable_inst_id: CallableInstId,
     ) Allocator.Error!void {
-        return self.recordContextPatternCallableInstSet(
+        const key = Result.contextPatternKey(context_callable_inst, module_idx, pattern_idx);
+        if (result.lambda_specialize.context_pattern_callable_insts.get(key)) |existing_callable_inst_id| {
+            if (existing_callable_inst_id == callable_inst_id) {
+                try self.mergeContextPatternCallableInstSet(
+                    result,
+                    context_callable_inst,
+                    module_idx,
+                    pattern_idx,
+                    callable_inst_id,
+                );
+                return;
+            }
+            if (!existing_callable_inst_id.isNone()) {
+                try self.putTracked(.context_pattern_callable_insts, &result.lambda_specialize.context_pattern_callable_insts, key, CallableInstId.none);
+            }
+            try self.mergeContextPatternCallableInstSet(
+                result,
+                context_callable_inst,
+                module_idx,
+                pattern_idx,
+                callable_inst_id,
+            );
+            return;
+        }
+
+        try self.putTracked(.context_pattern_callable_insts, &result.lambda_specialize.context_pattern_callable_insts, key, callable_inst_id);
+        try self.mergeContextPatternCallableInstSet(
             result,
             context_callable_inst,
             module_idx,
             pattern_idx,
-            &.{callable_inst_id},
+            callable_inst_id,
         );
     }
 
@@ -7057,12 +7210,38 @@ pub const Pass = struct {
         expr_idx: CIR.Expr.Idx,
         callable_inst_id: CallableInstId,
     ) Allocator.Error!void {
-        return self.recordLookupExprCallableInstSet(
+        const key = self.resultExprKey(context_callable_inst, module_idx, expr_idx);
+        if (result.lambda_specialize.lookup_expr_callable_insts.get(key)) |existing_callable_inst_id| {
+            if (existing_callable_inst_id == callable_inst_id) {
+                try self.mergeLookupExprCallableInstSet(
+                    result,
+                    context_callable_inst,
+                    module_idx,
+                    expr_idx,
+                    callable_inst_id,
+                );
+                return;
+            }
+            if (!existing_callable_inst_id.isNone()) {
+                try self.putTracked(.lookup_expr_callable_insts, &result.lambda_specialize.lookup_expr_callable_insts, key, CallableInstId.none);
+            }
+            try self.mergeLookupExprCallableInstSet(
+                result,
+                context_callable_inst,
+                module_idx,
+                expr_idx,
+                callable_inst_id,
+            );
+            return;
+        }
+
+        try self.putTracked(.lookup_expr_callable_insts, &result.lambda_specialize.lookup_expr_callable_insts, key, callable_inst_id);
+        try self.mergeLookupExprCallableInstSet(
             result,
             context_callable_inst,
             module_idx,
             expr_idx,
-            &.{callable_inst_id},
+            callable_inst_id,
         );
     }
 
@@ -11592,11 +11771,11 @@ pub const Pass = struct {
         return switch (flat_type) {
             .fn_pure, .fn_effectful, .fn_unbound => |func| blk: {
                 for (store_types.sliceVars(func.args)) |arg_var| {
-                    if (!try self.typeVarFullyBoundWithoutBindings(result, module_idx, store_types, arg_var, seen)) {
+                    if (!try self.typeVarMonomorphizableWithoutBindings(result, module_idx, store_types, arg_var, seen)) {
                         break :blk false;
                     }
                 }
-                break :blk try self.typeVarFullyBoundWithoutBindings(result, module_idx, store_types, func.ret, seen);
+                break :blk try self.typeVarMonomorphizableWithoutBindings(result, module_idx, store_types, func.ret, seen);
             },
             .nominal_type => |nominal| blk: {
                 for (store_types.sliceNominalArgs(nominal)) |arg_var| {
@@ -11713,11 +11892,11 @@ pub const Pass = struct {
         return switch (flat_type) {
             .fn_pure, .fn_effectful, .fn_unbound => |func| blk: {
                 for (store_types.sliceVars(func.args)) |arg_var| {
-                    if (!try self.typeVarFullyBoundWithBindings(result, module_idx, store_types, arg_var, bindings, seen)) {
+                    if (!try self.typeVarMonomorphizableWithBindings(result, module_idx, store_types, arg_var, bindings, seen)) {
                         break :blk false;
                     }
                 }
-                break :blk try self.typeVarFullyBoundWithBindings(result, module_idx, store_types, func.ret, bindings, seen);
+                break :blk try self.typeVarMonomorphizableWithBindings(result, module_idx, store_types, func.ret, bindings, seen);
             },
             .nominal_type => |nominal| blk: {
                 for (store_types.sliceNominalArgs(nominal)) |arg_var| {

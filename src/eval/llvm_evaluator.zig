@@ -19,6 +19,7 @@
 const std = @import("std");
 const base = @import("base");
 const can = @import("can");
+const corecir = @import("corecir");
 const layout = @import("layout");
 const mir = @import("mir");
 const MIR = mir.MIR;
@@ -35,6 +36,7 @@ const Allocator = std.mem.Allocator;
 const ModuleEnv = can.ModuleEnv;
 const CIR = can.CIR;
 const LoadedModule = builtin_loading.LoadedModule;
+const Pipeline = corecir.Pipeline;
 
 // LLVM code generation and compilation are accessed via the "llvm_compile"
 // anonymous import, but only inside function bodies (lazy evaluation) to
@@ -227,7 +229,7 @@ pub const LlvmEvaluator = struct {
         defer mir_store.deinit(self.allocator);
 
         // TODO: implement LLVM code generation for statement-only LIR.
-        var callable_pipeline = mir.Monomorphize.runExpr(
+        var callable_pipeline = Pipeline.runRootSourceExpr(
             self.allocator,
             all_module_envs,
             &module_env.types,
