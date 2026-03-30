@@ -194,6 +194,202 @@ pub const Result = struct {
         if (span.len == 0) return &.{};
         return self.callable_param_projection_entries.items[span.start..][0..span.len];
     }
+
+    pub fn contextCaptureKey(
+        closure_callable_inst: CallableInstId,
+        module_idx: u32,
+        closure_expr_idx: CIR.Expr.Idx,
+        pattern_idx: CIR.Pattern.Idx,
+    ) ContextCaptureKey {
+        return .{
+            .closure_callable_inst_raw = @intFromEnum(closure_callable_inst),
+            .module_idx = module_idx,
+            .closure_expr_raw = @intFromEnum(closure_expr_idx),
+            .pattern_raw = @intFromEnum(pattern_idx),
+        };
+    }
+
+    pub fn getCallSiteCallableInst(
+        self: *const Result,
+        context_callable_inst: CallableInstId,
+        root_source_expr_context: ?CIR.Expr.Idx,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) ?CallableInstId {
+        const key = ContextMono.Result.contextExprKey(
+            @enumFromInt(@intFromEnum(context_callable_inst)),
+            root_source_expr_context,
+            module_idx,
+            expr_idx,
+        );
+        const callable_inst_id = self.call_site_callable_insts.get(key) orelse return null;
+        if (callable_inst_id.isNone()) return null;
+        return callable_inst_id;
+    }
+
+    pub fn getCallSiteCallableInsts(
+        self: *const Result,
+        context_callable_inst: CallableInstId,
+        root_source_expr_context: ?CIR.Expr.Idx,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) ?[]const CallableInstId {
+        const key = ContextMono.Result.contextExprKey(
+            @enumFromInt(@intFromEnum(context_callable_inst)),
+            root_source_expr_context,
+            module_idx,
+            expr_idx,
+        );
+        const set_id = self.call_site_callable_inst_sets.get(key) orelse return null;
+        return self.getCallableInstSetMembers(self.getCallableInstSet(set_id).members);
+    }
+
+    pub fn getExprCallableInst(
+        self: *const Result,
+        context_callable_inst: CallableInstId,
+        root_source_expr_context: ?CIR.Expr.Idx,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) ?CallableInstId {
+        const key = ContextMono.Result.contextExprKey(
+            @enumFromInt(@intFromEnum(context_callable_inst)),
+            root_source_expr_context,
+            module_idx,
+            expr_idx,
+        );
+        const callable_inst_id = self.expr_callable_insts.get(key) orelse return null;
+        if (callable_inst_id.isNone()) return null;
+        return callable_inst_id;
+    }
+
+    pub fn getExprCallableInsts(
+        self: *const Result,
+        context_callable_inst: CallableInstId,
+        root_source_expr_context: ?CIR.Expr.Idx,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) ?[]const CallableInstId {
+        const key = ContextMono.Result.contextExprKey(
+            @enumFromInt(@intFromEnum(context_callable_inst)),
+            root_source_expr_context,
+            module_idx,
+            expr_idx,
+        );
+        const set_id = self.expr_callable_inst_sets.get(key) orelse return null;
+        return self.getCallableInstSetMembers(self.getCallableInstSet(set_id).members);
+    }
+
+    pub fn getDispatchExprCallableInst(
+        self: *const Result,
+        context_callable_inst: CallableInstId,
+        root_source_expr_context: ?CIR.Expr.Idx,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) ?CallableInstId {
+        const key = ContextMono.Result.contextExprKey(
+            @enumFromInt(@intFromEnum(context_callable_inst)),
+            root_source_expr_context,
+            module_idx,
+            expr_idx,
+        );
+        return self.dispatch_expr_callable_insts.get(key);
+    }
+
+    pub fn getLookupExprCallableInst(
+        self: *const Result,
+        context_callable_inst: CallableInstId,
+        root_source_expr_context: ?CIR.Expr.Idx,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) ?CallableInstId {
+        const key = ContextMono.Result.contextExprKey(
+            @enumFromInt(@intFromEnum(context_callable_inst)),
+            root_source_expr_context,
+            module_idx,
+            expr_idx,
+        );
+        const callable_inst_id = self.lookup_expr_callable_insts.get(key) orelse return null;
+        if (callable_inst_id.isNone()) return null;
+        return callable_inst_id;
+    }
+
+    pub fn getLookupExprCallableInsts(
+        self: *const Result,
+        context_callable_inst: CallableInstId,
+        root_source_expr_context: ?CIR.Expr.Idx,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) ?[]const CallableInstId {
+        const key = ContextMono.Result.contextExprKey(
+            @enumFromInt(@intFromEnum(context_callable_inst)),
+            root_source_expr_context,
+            module_idx,
+            expr_idx,
+        );
+        const set_id = self.lookup_expr_callable_inst_sets.get(key) orelse return null;
+        return self.getCallableInstSetMembers(self.getCallableInstSet(set_id).members);
+    }
+
+    pub fn getClosureCaptureCallableInst(
+        self: *const Result,
+        closure_callable_inst: CallableInstId,
+        module_idx: u32,
+        closure_expr_idx: CIR.Expr.Idx,
+        pattern_idx: CIR.Pattern.Idx,
+    ) ?CallableInstId {
+        return self.closure_capture_callable_insts.get(contextCaptureKey(
+            closure_callable_inst,
+            module_idx,
+            closure_expr_idx,
+            pattern_idx,
+        ));
+    }
+
+    pub fn getClosureCaptureMonotype(
+        self: *const Result,
+        closure_callable_inst: CallableInstId,
+        module_idx: u32,
+        closure_expr_idx: CIR.Expr.Idx,
+        pattern_idx: CIR.Pattern.Idx,
+    ) ?ContextMono.ResolvedMonotype {
+        return self.closure_capture_monotypes.get(contextCaptureKey(
+            closure_callable_inst,
+            module_idx,
+            closure_expr_idx,
+            pattern_idx,
+        ));
+    }
+
+    pub fn getContextPatternCallableInst(
+        self: *const Result,
+        context_callable_inst: CallableInstId,
+        module_idx: u32,
+        pattern_idx: CIR.Pattern.Idx,
+    ) ?CallableInstId {
+        const key = ContextMono.Result.contextPatternKey(
+            @enumFromInt(@intFromEnum(context_callable_inst)),
+            module_idx,
+            pattern_idx,
+        );
+        const callable_inst_id = self.context_pattern_callable_insts.get(key) orelse return null;
+        if (callable_inst_id.isNone()) return null;
+        return callable_inst_id;
+    }
+
+    pub fn getContextPatternCallableInsts(
+        self: *const Result,
+        context_callable_inst: CallableInstId,
+        module_idx: u32,
+        pattern_idx: CIR.Pattern.Idx,
+    ) ?[]const CallableInstId {
+        const key = ContextMono.Result.contextPatternKey(
+            @enumFromInt(@intFromEnum(context_callable_inst)),
+            module_idx,
+            pattern_idx,
+        );
+        const set_id = self.context_pattern_callable_inst_sets.get(key) orelse return null;
+        return self.getCallableInstSetMembers(self.getCallableInstSet(set_id).members);
+    }
 };
 
 pub const StageResult = struct {

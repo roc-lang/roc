@@ -13,6 +13,35 @@ const Allocator = std.mem.Allocator;
 const Region = base.Region;
 const CIR = can.CIR;
 
+pub const CallableSourceNamespace = enum(u2) {
+    local_pattern = 0,
+    external_def = 1,
+    expr = 2,
+};
+
+pub fn packCallableSourceKey(namespace: CallableSourceNamespace, module_idx: u32, local_id: u32) u64 {
+    if (std.debug.runtime_safety) {
+        std.debug.assert(module_idx <= std.math.maxInt(u31));
+        std.debug.assert(local_id <= std.math.maxInt(u31));
+    }
+
+    return (@as(u64, @intFromEnum(namespace)) << 62) |
+        (@as(u64, module_idx) << 31) |
+        @as(u64, local_id);
+}
+
+pub fn packLocalPatternSourceKey(module_idx: u32, pattern_idx: CIR.Pattern.Idx) u64 {
+    return packCallableSourceKey(.local_pattern, module_idx, @intFromEnum(pattern_idx));
+}
+
+pub fn packExternalDefSourceKey(module_idx: u32, def_node_idx: u16) u64 {
+    return packCallableSourceKey(.external_def, module_idx, def_node_idx);
+}
+
+pub fn packExprSourceKey(module_idx: u32, expr_idx: CIR.Expr.Idx) u64 {
+    return packCallableSourceKey(.expr, module_idx, @intFromEnum(expr_idx));
+}
+
 pub const CallableTemplateId = enum(u32) {
     _,
 
@@ -209,5 +238,29 @@ pub const Result = struct {
 
     pub fn getCallableTemplate(self: *const Result, callable_template_id: CallableTemplateId) *const CallableTemplate {
         return &self.callable_templates.items[@intFromEnum(callable_template_id)];
+    }
+
+    pub fn getLocalCallableTemplate(self: *const Result, module_idx: u32, pattern_idx: CIR.Pattern.Idx) ?CallableTemplateId {
+        return self.callable_template_ids_by_source.get(packLocalPatternSourceKey(module_idx, pattern_idx));
+    }
+
+    pub fn getExternalCallableTemplate(self: *const Result, module_idx: u32, def_node_idx: u16) ?CallableTemplateId {
+        return self.callable_template_ids_by_source.get(packExternalDefSourceKey(module_idx, def_node_idx));
+    }
+
+    pub fn getExprCallableTemplate(self: *const Result, module_idx: u32, expr_idx: CIR.Expr.Idx) ?CallableTemplateId {
+        return self.callable_template_ids_by_source.get(packExprSourceKey(module_idx, expr_idx));
+    }
+
+    pub fn getDeferredLocalCallable(self: *const Result, module_idx: u32, pattern_idx: CIR.Pattern.Idx) ?DeferredLocalCallable {
+        return self.deferred_local_callables.get(packLocalPatternSourceKey(module_idx, pattern_idx));
+    }
+
+    pub fn getPatternSourceExpr(
+        self: *const Result,
+        module_idx: u32,
+        pattern_idx: CIR.Pattern.Idx,
+    ) ?ExprSource {
+        return self.source_exprs.get(packLocalPatternSourceKey(module_idx, pattern_idx));
     }
 };

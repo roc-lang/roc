@@ -22,34 +22,11 @@ const Region = base.Region;
 const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
 
-const CallableSourceNamespace = enum(u2) {
-    local_pattern = 0,
-    external_def = 1,
-    expr = 2,
-};
-
-fn packCallableSourceKey(namespace: CallableSourceNamespace, module_idx: u32, local_id: u32) u64 {
-    if (std.debug.runtime_safety) {
-        std.debug.assert(module_idx <= std.math.maxInt(u31));
-        std.debug.assert(local_id <= std.math.maxInt(u31));
-    }
-
-    return (@as(u64, @intFromEnum(namespace)) << 62) |
-        (@as(u64, module_idx) << 31) |
-        @as(u64, local_id);
-}
-
-fn packLocalPatternSourceKey(module_idx: u32, pattern_idx: CIR.Pattern.Idx) u64 {
-    return packCallableSourceKey(.local_pattern, module_idx, @intFromEnum(pattern_idx));
-}
-
-fn packExternalDefSourceKey(module_idx: u32, def_node_idx: u16) u64 {
-    return packCallableSourceKey(.external_def, module_idx, def_node_idx);
-}
-
-fn packExprSourceKey(module_idx: u32, expr_idx: CIR.Expr.Idx) u64 {
-    return packCallableSourceKey(.expr, module_idx, @intFromEnum(expr_idx));
-}
+const CallableSourceNamespace = LambdaSolved.CallableSourceNamespace;
+const packCallableSourceKey = LambdaSolved.packCallableSourceKey;
+const packLocalPatternSourceKey = LambdaSolved.packLocalPatternSourceKey;
+const packExternalDefSourceKey = LambdaSolved.packExternalDefSourceKey;
+const packExprSourceKey = LambdaSolved.packExprSourceKey;
 
 /// Identifies a semantic callable template before executable specialization.
 pub const CallableTemplateId = LambdaSolved.CallableTemplateId;
@@ -269,9 +246,12 @@ pub const Result = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?CallableInstId {
-        const callable_inst_id = self.lambda_specialize.call_site_callable_insts.get(contextExprKey(context_callable_inst, root_source_expr_context, module_idx, expr_idx)) orelse return null;
-        if (callable_inst_id.isNone()) return null;
-        return callable_inst_id;
+        return self.lambda_specialize.getCallSiteCallableInst(
+            context_callable_inst,
+            root_source_expr_context,
+            module_idx,
+            expr_idx,
+        );
     }
 
     pub fn getCallSiteCallableInsts(
@@ -281,8 +261,12 @@ pub const Result = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?[]const CallableInstId {
-        const set_id = self.lambda_specialize.call_site_callable_inst_sets.get(contextExprKey(context_callable_inst, root_source_expr_context, module_idx, expr_idx)) orelse return null;
-        return self.getCallableInstSetMembers(self.getCallableInstSet(set_id).members);
+        return self.lambda_specialize.getCallSiteCallableInsts(
+            context_callable_inst,
+            root_source_expr_context,
+            module_idx,
+            expr_idx,
+        );
     }
 
     pub fn getExprMonotype(
@@ -307,9 +291,12 @@ pub const Result = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?CallableInstId {
-        const callable_inst_id = self.lambda_specialize.expr_callable_insts.get(contextExprKey(context_callable_inst, root_source_expr_context, module_idx, expr_idx)) orelse return null;
-        if (callable_inst_id.isNone()) return null;
-        return callable_inst_id;
+        return self.lambda_specialize.getExprCallableInst(
+            context_callable_inst,
+            root_source_expr_context,
+            module_idx,
+            expr_idx,
+        );
     }
 
     pub fn getExprCallableInsts(
@@ -319,8 +306,12 @@ pub const Result = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?[]const CallableInstId {
-        const set_id = self.lambda_specialize.expr_callable_inst_sets.get(contextExprKey(context_callable_inst, root_source_expr_context, module_idx, expr_idx)) orelse return null;
-        return self.getCallableInstSetMembers(self.getCallableInstSet(set_id).members);
+        return self.lambda_specialize.getExprCallableInsts(
+            context_callable_inst,
+            root_source_expr_context,
+            module_idx,
+            expr_idx,
+        );
     }
 
     pub fn getDispatchExprCallableInst(
@@ -330,7 +321,12 @@ pub const Result = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?CallableInstId {
-        return self.lambda_specialize.dispatch_expr_callable_insts.get(contextExprKey(context_callable_inst, root_source_expr_context, module_idx, expr_idx));
+        return self.lambda_specialize.getDispatchExprCallableInst(
+            context_callable_inst,
+            root_source_expr_context,
+            module_idx,
+            expr_idx,
+        );
     }
 
     pub fn getLookupExprCallableInst(
@@ -340,9 +336,12 @@ pub const Result = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?CallableInstId {
-        const callable_inst_id = self.lambda_specialize.lookup_expr_callable_insts.get(contextExprKey(context_callable_inst, root_source_expr_context, module_idx, expr_idx)) orelse return null;
-        if (callable_inst_id.isNone()) return null;
-        return callable_inst_id;
+        return self.lambda_specialize.getLookupExprCallableInst(
+            context_callable_inst,
+            root_source_expr_context,
+            module_idx,
+            expr_idx,
+        );
     }
 
     pub fn getLookupExprCallableInsts(
@@ -352,8 +351,12 @@ pub const Result = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?[]const CallableInstId {
-        const set_id = self.lambda_specialize.lookup_expr_callable_inst_sets.get(contextExprKey(context_callable_inst, root_source_expr_context, module_idx, expr_idx)) orelse return null;
-        return self.getCallableInstSetMembers(self.getCallableInstSet(set_id).members);
+        return self.lambda_specialize.getLookupExprCallableInsts(
+            context_callable_inst,
+            root_source_expr_context,
+            module_idx,
+            expr_idx,
+        );
     }
 
     pub fn getClosureCaptureCallableInst(
@@ -363,12 +366,12 @@ pub const Result = struct {
         closure_expr_idx: CIR.Expr.Idx,
         pattern_idx: CIR.Pattern.Idx,
     ) ?CallableInstId {
-        return self.lambda_specialize.closure_capture_callable_insts.get(contextCaptureKey(
+        return self.lambda_specialize.getClosureCaptureCallableInst(
             closure_callable_inst,
             module_idx,
             closure_expr_idx,
             pattern_idx,
-        ));
+        );
     }
 
     pub fn getClosureCaptureMonotype(
@@ -378,12 +381,12 @@ pub const Result = struct {
         closure_expr_idx: CIR.Expr.Idx,
         pattern_idx: CIR.Pattern.Idx,
     ) ?ResolvedMonotype {
-        return self.lambda_specialize.closure_capture_monotypes.get(contextCaptureKey(
+        return self.lambda_specialize.getClosureCaptureMonotype(
             closure_callable_inst,
             module_idx,
             closure_expr_idx,
             pattern_idx,
-        ));
+        );
     }
 
     pub fn getContextPatternCallableInst(
@@ -392,9 +395,11 @@ pub const Result = struct {
         module_idx: u32,
         pattern_idx: CIR.Pattern.Idx,
     ) ?CallableInstId {
-        const callable_inst_id = self.lambda_specialize.context_pattern_callable_insts.get(contextPatternKey(context_callable_inst, module_idx, pattern_idx)) orelse return null;
-        if (callable_inst_id.isNone()) return null;
-        return callable_inst_id;
+        return self.lambda_specialize.getContextPatternCallableInst(
+            context_callable_inst,
+            module_idx,
+            pattern_idx,
+        );
     }
 
     pub fn getContextPatternMonotype(
@@ -424,8 +429,11 @@ pub const Result = struct {
         module_idx: u32,
         pattern_idx: CIR.Pattern.Idx,
     ) ?[]const CallableInstId {
-        const set_id = self.lambda_specialize.context_pattern_callable_inst_sets.get(contextPatternKey(context_callable_inst, module_idx, pattern_idx)) orelse return null;
-        return self.getCallableInstSetMembers(self.getCallableInstSet(set_id).members);
+        return self.lambda_specialize.getContextPatternCallableInsts(
+            context_callable_inst,
+            module_idx,
+            pattern_idx,
+        );
     }
 
     pub fn getCallableTemplate(self: *const Result, callable_template_id: CallableTemplateId) *const CallableTemplate {
@@ -459,19 +467,19 @@ pub const Result = struct {
     }
 
     pub fn getLocalCallableTemplate(self: *const Result, module_idx: u32, pattern_idx: CIR.Pattern.Idx) ?CallableTemplateId {
-        return self.lambda_solved.callable_template_ids_by_source.get(packLocalPatternSourceKey(module_idx, pattern_idx));
+        return self.lambda_solved.getLocalCallableTemplate(module_idx, pattern_idx);
     }
 
     pub fn getExternalCallableTemplate(self: *const Result, module_idx: u32, def_node_idx: u16) ?CallableTemplateId {
-        return self.lambda_solved.callable_template_ids_by_source.get(packExternalDefSourceKey(module_idx, def_node_idx));
+        return self.lambda_solved.getExternalCallableTemplate(module_idx, def_node_idx);
     }
 
     pub fn getExprCallableTemplate(self: *const Result, module_idx: u32, expr_idx: CIR.Expr.Idx) ?CallableTemplateId {
-        return self.lambda_solved.callable_template_ids_by_source.get(packExprSourceKey(module_idx, expr_idx));
+        return self.lambda_solved.getExprCallableTemplate(module_idx, expr_idx);
     }
 
     pub fn getDeferredLocalCallable(self: *const Result, module_idx: u32, pattern_idx: CIR.Pattern.Idx) ?DeferredLocalCallable {
-        return self.lambda_solved.deferred_local_callables.get(packLocalPatternSourceKey(module_idx, pattern_idx));
+        return self.lambda_solved.getDeferredLocalCallable(module_idx, pattern_idx);
     }
 
     pub fn getPatternSourceExpr(
@@ -479,7 +487,7 @@ pub const Result = struct {
         module_idx: u32,
         pattern_idx: CIR.Pattern.Idx,
     ) ?ExprSource {
-        return self.lambda_solved.source_exprs.get(packLocalPatternSourceKey(module_idx, pattern_idx));
+        return self.lambda_solved.getPatternSourceExpr(module_idx, pattern_idx);
     }
 };
 
