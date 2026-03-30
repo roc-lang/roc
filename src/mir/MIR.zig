@@ -184,7 +184,8 @@ pub const RefOp = union(enum) {
     },
 };
 
-/// One callable projection step used for exact callable bindings and summaries.
+/// One callable projection step used for exact-callable summaries and staged
+/// specialization queries.
 pub const CallableProjection = union(enum) {
     field: u32,
     tag_payload: u32,

@@ -15,6 +15,7 @@ const MIR = @import("MIR.zig");
 const Allocator = std.mem.Allocator;
 const LocalSet = std.AutoHashMap(u32, void);
 const JoinMap = std.AutoHashMap(u32, MIR.LocalSpan);
+const ActiveJoinSet = std.AutoHashMap(u32, void);
 const VisitedMap = std.AutoHashMap(u32, void);
 
 pub fn verifyConst(
@@ -32,7 +33,9 @@ pub fn verifyConst(
 
     var env = LocalSet.init(allocator);
     defer env.deinit();
-    try verifyStmt(allocator, store, def.body, &env, &joins, "const", @intFromEnum(const_id));
+    var active_joins = ActiveJoinSet.init(allocator);
+    defer active_joins.deinit();
+    try verifyStmt(allocator, store, def.body, &env, &joins, &active_joins, "const", @intFromEnum(const_id));
 }
 
 pub fn verifyLambda(
@@ -50,6 +53,8 @@ pub fn verifyLambda(
 
     var env = LocalSet.init(allocator);
     defer env.deinit();
+    var active_joins = ActiveJoinSet.init(allocator);
+    defer active_joins.deinit();
 
     for (store.getLocalSpan(lambda.params), 0..) |param, i| {
         switch (store.getLocalDef(param)) {
@@ -87,7 +92,7 @@ pub fn verifyLambda(
         try env.put(localKey(captures_param), {});
     }
 
-    try verifyStmt(allocator, store, lambda.body, &env, &joins, "lambda", @intFromEnum(lambda_id));
+    try verifyStmt(allocator, store, lambda.body, &env, &joins, &active_joins, "lambda", @intFromEnum(lambda_id));
 }
 
 fn collectJoins(
@@ -148,6 +153,7 @@ fn verifyStmt(
     stmt_id: MIR.CFStmtId,
     env: *LocalSet,
     joins: *const JoinMap,
+    active_joins: *ActiveJoinSet,
     owner_kind: []const u8,
     owner_id: u64,
 ) Allocator.Error!void {
@@ -155,68 +161,68 @@ fn verifyStmt(
         .assign_symbol => |assign| {
             try ensureStmtDefMatches(store, assign.target, .symbol, stmt_id, owner_kind, owner_id);
             try env.put(localKey(assign.target), {});
-            try verifyStmt(allocator, store, assign.next, env, joins, owner_kind, owner_id);
+            try verifyStmt(allocator, store, assign.next, env, joins, active_joins, owner_kind, owner_id);
         },
         .assign_ref => |assign| {
             try ensureRefSourcesUsable(store, env, assign.op, stmt_id, owner_kind, owner_id);
             try ensureStmtDefMatches(store, assign.target, .ref, stmt_id, owner_kind, owner_id);
             try env.put(localKey(assign.target), {});
-            try verifyStmt(allocator, store, assign.next, env, joins, owner_kind, owner_id);
+            try verifyStmt(allocator, store, assign.next, env, joins, active_joins, owner_kind, owner_id);
         },
         .assign_literal => |assign| {
             try ensureStmtDefMatches(store, assign.target, .literal, stmt_id, owner_kind, owner_id);
             try env.put(localKey(assign.target), {});
-            try verifyStmt(allocator, store, assign.next, env, joins, owner_kind, owner_id);
+            try verifyStmt(allocator, store, assign.next, env, joins, active_joins, owner_kind, owner_id);
         },
         .assign_lambda => |assign| {
             try ensureStmtDefMatches(store, assign.target, .lambda, stmt_id, owner_kind, owner_id);
             try env.put(localKey(assign.target), {});
-            try verifyStmt(allocator, store, assign.next, env, joins, owner_kind, owner_id);
+            try verifyStmt(allocator, store, assign.next, env, joins, active_joins, owner_kind, owner_id);
         },
         .assign_closure => |assign| {
             try ensureLocalsUsable(store, env, store.getLocalSpan(assign.captures), stmt_id, owner_kind, owner_id);
             try ensureStmtDefMatches(store, assign.target, .closure, stmt_id, owner_kind, owner_id);
             try env.put(localKey(assign.target), {});
-            try verifyStmt(allocator, store, assign.next, env, joins, owner_kind, owner_id);
+            try verifyStmt(allocator, store, assign.next, env, joins, active_joins, owner_kind, owner_id);
         },
         .assign_call => |assign| {
             try ensureLocalUsable(store, env, assign.callee, stmt_id, owner_kind, owner_id);
             try ensureLocalsUsable(store, env, store.getLocalSpan(assign.args), stmt_id, owner_kind, owner_id);
             try ensureStmtDefMatches(store, assign.target, .call, stmt_id, owner_kind, owner_id);
             try env.put(localKey(assign.target), {});
-            try verifyStmt(allocator, store, assign.next, env, joins, owner_kind, owner_id);
+            try verifyStmt(allocator, store, assign.next, env, joins, active_joins, owner_kind, owner_id);
         },
         .assign_low_level => |assign| {
             try ensureLocalsUsable(store, env, store.getLocalSpan(assign.args), stmt_id, owner_kind, owner_id);
             try ensureStmtDefMatches(store, assign.target, .low_level, stmt_id, owner_kind, owner_id);
             try env.put(localKey(assign.target), {});
-            try verifyStmt(allocator, store, assign.next, env, joins, owner_kind, owner_id);
+            try verifyStmt(allocator, store, assign.next, env, joins, active_joins, owner_kind, owner_id);
         },
         .assign_list => |assign| {
             try ensureLocalsUsable(store, env, store.getLocalSpan(assign.elems), stmt_id, owner_kind, owner_id);
             try ensureStmtDefMatches(store, assign.target, .list, stmt_id, owner_kind, owner_id);
             try env.put(localKey(assign.target), {});
-            try verifyStmt(allocator, store, assign.next, env, joins, owner_kind, owner_id);
+            try verifyStmt(allocator, store, assign.next, env, joins, active_joins, owner_kind, owner_id);
         },
         .assign_struct => |assign| {
             try ensureLocalsUsable(store, env, store.getLocalSpan(assign.fields), stmt_id, owner_kind, owner_id);
             try ensureStmtDefMatches(store, assign.target, .struct_, stmt_id, owner_kind, owner_id);
             try env.put(localKey(assign.target), {});
-            try verifyStmt(allocator, store, assign.next, env, joins, owner_kind, owner_id);
+            try verifyStmt(allocator, store, assign.next, env, joins, active_joins, owner_kind, owner_id);
         },
         .assign_tag => |assign| {
             try ensureLocalsUsable(store, env, store.getLocalSpan(assign.args), stmt_id, owner_kind, owner_id);
             try ensureStmtDefMatches(store, assign.target, .tag, stmt_id, owner_kind, owner_id);
             try env.put(localKey(assign.target), {});
-            try verifyStmt(allocator, store, assign.next, env, joins, owner_kind, owner_id);
+            try verifyStmt(allocator, store, assign.next, env, joins, active_joins, owner_kind, owner_id);
         },
         .debug => |stmt| {
             try ensureLocalUsable(store, env, stmt.value, stmt_id, owner_kind, owner_id);
-            try verifyStmt(allocator, store, stmt.next, env, joins, owner_kind, owner_id);
+            try verifyStmt(allocator, store, stmt.next, env, joins, active_joins, owner_kind, owner_id);
         },
         .expect => |stmt| {
             try ensureLocalUsable(store, env, stmt.condition, stmt_id, owner_kind, owner_id);
-            try verifyStmt(allocator, store, stmt.next, env, joins, owner_kind, owner_id);
+            try verifyStmt(allocator, store, stmt.next, env, joins, active_joins, owner_kind, owner_id);
         },
         .runtime_error, .scope_exit, .crash => {},
         .switch_stmt => |switch_stmt| {
@@ -224,25 +230,32 @@ fn verifyStmt(
 
             var default_env = try cloneLocalSet(allocator, env);
             defer default_env.deinit();
-            try verifyStmt(allocator, store, switch_stmt.default_branch, &default_env, joins, owner_kind, owner_id);
+            try verifyStmt(allocator, store, switch_stmt.default_branch, &default_env, joins, active_joins, owner_kind, owner_id);
 
             for (store.getSwitchBranches(switch_stmt.branches)) |branch| {
                 var branch_env = try cloneLocalSet(allocator, env);
                 defer branch_env.deinit();
-                try verifyStmt(allocator, store, branch.body, &branch_env, joins, owner_kind, owner_id);
+                try verifyStmt(allocator, store, branch.body, &branch_env, joins, active_joins, owner_kind, owner_id);
             }
         },
         .borrow_scope => |scope| {
             var body_env = try cloneLocalSet(allocator, env);
             defer body_env.deinit();
-            try verifyStmt(allocator, store, scope.body, &body_env, joins, owner_kind, owner_id);
-            try verifyStmt(allocator, store, scope.remainder, env, joins, owner_kind, owner_id);
+            try verifyStmt(allocator, store, scope.body, &body_env, joins, active_joins, owner_kind, owner_id);
+            try verifyStmt(allocator, store, scope.remainder, env, joins, active_joins, owner_kind, owner_id);
         },
         .join => |join| {
-            try verifyStmt(allocator, store, join.remainder, env, joins, owner_kind, owner_id);
-
             var body_env = try cloneLocalSet(allocator, env);
             defer body_env.deinit();
+            const join_key = @intFromEnum(join.id);
+            const gop = try active_joins.getOrPut(join_key);
+            if (gop.found_existing) {
+                std.debug.panic(
+                    "DebugVerifyMir invariant violated: join {d} was active multiple times in {s} {d}",
+                    .{ join_key, owner_kind, owner_id },
+                );
+            }
+            defer _ = active_joins.remove(join_key);
             for (store.getLocalSpan(join.params), 0..) |param, i| {
                 switch (store.getLocalDef(param)) {
                     .join_param => |def| {
@@ -260,13 +273,20 @@ fn verifyStmt(
                 }
                 try body_env.put(localKey(param), {});
             }
-            try verifyStmt(allocator, store, join.body, &body_env, joins, owner_kind, owner_id);
+            try verifyStmt(allocator, store, join.body, &body_env, joins, active_joins, owner_kind, owner_id);
+            try verifyStmt(allocator, store, join.remainder, env, joins, active_joins, owner_kind, owner_id);
         },
         .jump => |jump| {
             const params = joins.get(@intFromEnum(jump.id)) orelse std.debug.panic(
                 "DebugVerifyMir invariant violated: jump in {s} {d} targets unknown join {d}",
                 .{ owner_kind, owner_id, @intFromEnum(jump.id) },
             );
+            if (!active_joins.contains(@intFromEnum(jump.id))) {
+                std.debug.panic(
+                    "DebugVerifyMir invariant violated: jump in {s} {d} targets out-of-scope join {d}",
+                    .{ owner_kind, owner_id, @intFromEnum(jump.id) },
+                );
+            }
             const args = store.getLocalSpan(jump.args);
             const join_params = store.getLocalSpan(params);
             if (args.len != join_params.len) {
@@ -355,9 +375,33 @@ fn ensureLocalUsable(
 ) Allocator.Error!void {
     _ = store.getLocalDef(local);
     if (!env.contains(localKey(local))) {
+        std.debug.print(
+            "DebugVerifyMir missing local context: stmt={d} stmt_tag={s} local={d} local_def={s}\n",
+            .{
+                @intFromEnum(stmt_id),
+                @tagName(store.getCFStmt(stmt_id)),
+                @intFromEnum(local),
+                @tagName(store.getLocalDef(local)),
+            },
+        );
+        dumpStmtWindow(store, stmt_id, 8);
         std.debug.panic(
             "DebugVerifyMir invariant violated: stmt {d} in {s} {d} uses local {d} before it is available on that path",
             .{ @intFromEnum(stmt_id), owner_kind, owner_id, @intFromEnum(local) },
+        );
+    }
+}
+
+fn dumpStmtWindow(store: *const MIR.Store, center: MIR.CFStmtId, radius: u32) void {
+    const center_idx = @intFromEnum(center);
+    const start = center_idx -| radius;
+    const end = @min(store.cf_stmts.items.len, center_idx + radius + 1);
+    var idx = start;
+    while (idx < end) : (idx += 1) {
+        const stmt_id: MIR.CFStmtId = @enumFromInt(@as(u32, @intCast(idx)));
+        std.debug.print(
+            "  MIR stmt {d}: {any}\n",
+            .{ idx, store.getCFStmt(stmt_id) },
         );
     }
 }

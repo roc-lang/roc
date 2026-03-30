@@ -10573,13 +10573,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (runtime_ret_layout == .f32) {
                 const stack_offset = self.codegen.allocStackSlot(4);
                 if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emit.fcvtFloatFloat(.single, .V0, .double, .V0);
-                    const bits_reg = try self.allocTempGeneral();
-                    try self.codegen.emit.fmovGenFromFloat(.single, bits_reg, .V0);
-                    try self.codegen.emitStoreStack(.w32, stack_offset, bits_reg);
-                    self.codegen.freeGeneral(bits_reg);
+                    try self.codegen.emitStoreStackF32(stack_offset, .V0);
                 } else {
-                    try self.codegen.emit.cvtsd2ssRegReg(.XMM0, .XMM0);
                     try self.codegen.emit.movssMemReg(.RBP, stack_offset, .XMM0);
                 }
                 return .{ .stack = .{ .offset = stack_offset, .size = .dword } };

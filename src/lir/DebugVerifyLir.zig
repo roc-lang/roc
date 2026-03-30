@@ -679,6 +679,7 @@ fn panicMissingLocalSemantics(
     stmt_id: CFStmtId,
     local: LocalId,
 ) noreturn {
+    dumpStmtWindow(store, stmt_id);
     switch (store.getCFStmt(stmt_id)) {
         .assign_low_level => |assign| std.debug.panic(
             "DebugVerifyLir invariant violated: missing result semantics for local {d} at stmt {d} (assign_low_level op={s} args={any})",
@@ -730,6 +731,25 @@ fn panicMissingLocalSemantics(
                 @tagName(store.getCFStmt(stmt_id)),
             },
         ),
+    }
+}
+
+fn dumpStmtWindow(store: *const LirStore, center_stmt_id: CFStmtId) void {
+    const center = @as(usize, @intFromEnum(center_stmt_id));
+    const stmt_count = store.cf_stmts.items.len;
+    const start = center -| 5;
+    const end = @min(stmt_count, center + 6);
+
+    std.debug.print(
+        "DebugVerifyLir stmt window around {d}:\n",
+        .{@intFromEnum(center_stmt_id)},
+    );
+    for (start..end) |i| {
+        const id: CFStmtId = @enumFromInt(@as(u32, @intCast(i)));
+        std.debug.print(
+            "  stmt {d}: {any}\n",
+            .{ i, store.getCFStmt(id) },
+        );
     }
 }
 

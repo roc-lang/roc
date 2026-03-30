@@ -128,31 +128,6 @@ const CaptureMaterialization = union(enum) {
     },
 };
 
-const CallablePathSpan = extern struct {
-    start: u32,
-    len: u16,
-
-    fn empty() CallablePathSpan {
-        return .{ .start = 0, .len = 0 };
-    }
-
-    fn isEmpty(self: CallablePathSpan) bool {
-        return self.len == 0;
-    }
-};
-
-const CallableBinding = struct {
-    source_param: MIR.LocalId,
-    projections: CallablePathSpan = .empty(),
-    lambda: MIR.LambdaId,
-    requires_hidden_capture: bool,
-};
-
-const LocalCallablePath = struct {
-    source_param: MIR.LocalId,
-    projections: CallablePathSpan = .empty(),
-};
-
 const LoopContext = struct {
     exit_id: MIR.JoinPointId,
     exit_scope: u64,
@@ -278,8 +253,8 @@ callable_inst_produces_closure_value: std.AutoHashMap(u32, bool),
 /// Recursion guard for closure-value analysis across mutually recursive callable insts.
 in_progress_closure_value_callables: std.AutoHashMap(u32, void),
 
-/// Binding patterns whose callable identity is satisfied by explicit callable bindings
-/// rather than ordinary value binding locals.
+/// Binding patterns whose callable identity is satisfied by explicit exact-callable
+/// lowering rather than ordinary value binding locals.
 skipped_callable_backed_binding_patterns: std.AutoHashMap(u64, void),
 
 /// Callable-inst context for context-sensitive monomorphized lookup/call resolution.
@@ -290,16 +265,6 @@ current_root_source_expr_context: ?CIR.Expr.Idx,
 
 /// Exact callable lambdas already materialized into MIR locals.
 exact_callable_locals: std.AutoHashMap(u32, MIR.LambdaId),
-
-/// Param/captures-param projection ancestry for locals inside the current body.
-callable_source_locals: std.AutoHashMap(u32, LocalCallablePath),
-
-/// Lower-private callable projection storage used only while deriving exact
-/// callable metadata for MIR locals.
-callable_projection_entries: std.ArrayListUnmanaged(MIR.CallableProjection),
-
-/// Exact callable bindings currently in scope while lowering one lambda body.
-current_callable_bindings: ?[]const CallableBinding,
 
 /// Demand-driven implicit captures for callable-inst lambda bodies.
 current_implicit_lambda_captures: ?*ImplicitLambdaCaptureState,
@@ -379,9 +344,6 @@ pub fn init(
         .current_callable_inst_context = .none,
         .current_root_source_expr_context = null,
         .exact_callable_locals = std.AutoHashMap(u32, MIR.LambdaId).init(allocator),
-        .callable_source_locals = std.AutoHashMap(u32, LocalCallablePath).init(allocator),
-        .callable_projection_entries = .empty,
-        .current_callable_bindings = null,
         .current_implicit_lambda_captures = null,
         .resolved_dispatch_targets = resolved_dispatch_targets,
         .scratch_local_ids = try base.Scratch(MIR.LocalId).init(allocator),
@@ -418,8 +380,6 @@ pub fn deinit(self: *Self) void {
     self.in_progress_closure_value_callables.deinit();
     self.skipped_callable_backed_binding_patterns.deinit();
     self.exact_callable_locals.deinit();
-    self.callable_source_locals.deinit();
-    self.callable_projection_entries.deinit(self.allocator);
     self.resolved_dispatch_targets.deinit();
     self.scratch_local_ids.deinit();
     self.scratch_ident_idxs.deinit();
@@ -3425,7 +3385,9 @@ fn lowerRefInto(
     op: MIR.RefOp,
     next: MIR.CFStmtId,
 ) Allocator.Error!MIR.CFStmtId {
-    try self.updateCallableLocalMetadata(target, op);
+    _ = self;
+    _ = target;
+    _ = op;
     return self.store.addCFStmt(self.allocator, .{ .assign_ref = .{
         .target = target,
         .op = op,
@@ -3449,88 +3411,12 @@ fn lowerLocalAliasInto(
     } else {
         self.clearExactCallableLocal(target);
     }
-    if (self.callable_source_locals.get(@intFromEnum(source))) |path| {
-        try self.callable_source_locals.put(@intFromEnum(target), path);
-    } else {
-        _ = self.callable_source_locals.remove(@intFromEnum(target));
-    }
     return self.lowerRefInto(target, .{ .local = source }, next);
-}
-
-fn updateCallableLocalMetadata(
-    self: *Self,
-    target: MIR.LocalId,
-    op: MIR.RefOp,
-) Allocator.Error!void {
-    switch (op) {
-        .local => |source| {
-            if (self.callable_source_locals.get(@intFromEnum(source))) |path| {
-                try self.callable_source_locals.put(@intFromEnum(target), path);
-            } else {
-                _ = self.callable_source_locals.remove(@intFromEnum(target));
-            }
-        },
-        .field => |field| try self.extendCallableSourceLocal(target, field.source, .{ .field = field.field_idx }),
-        .tag_payload => |payload| try self.extendCallableSourceLocal(target, payload.source, .{ .tag_payload = payload.payload_idx }),
-        .nominal => |nominal| try self.extendCallableSourceLocal(target, nominal.backing, .nominal),
-        .discriminant => |_| {
-            _ = self.callable_source_locals.remove(@intFromEnum(target));
-        },
-    }
-
-    if (try self.resolveExactLambdaForLocal(target)) |lambda_id| {
-        try self.bindExactLambdaLocal(target, lambda_id);
-    } else {
-        self.clearExactCallableLocal(target);
-    }
-}
-
-fn extendCallableSourceLocal(
-    self: *Self,
-    target: MIR.LocalId,
-    source: MIR.LocalId,
-    projection: MIR.CallableProjection,
-) Allocator.Error!void {
-    const source_path = self.callable_source_locals.get(@intFromEnum(source)) orelse {
-        _ = self.callable_source_locals.remove(@intFromEnum(target));
-        return;
-    };
-
-    var projections = std.ArrayList(MIR.CallableProjection).empty;
-    defer projections.deinit(self.allocator);
-    try projections.appendSlice(self.allocator, self.getCallableProjectionSpan(source_path.projections));
-    try projections.append(self.allocator, projection);
-    try self.callable_source_locals.put(@intFromEnum(target), .{
-        .source_param = source_path.source_param,
-        .projections = try self.addCallableProjectionSpan(projections.items),
-    });
-}
-
-fn seedCallableSourceLocal(
-    self: *Self,
-    local_id: MIR.LocalId,
-) Allocator.Error!void {
-    try self.callable_source_locals.put(@intFromEnum(local_id), .{
-        .source_param = local_id,
-        .projections = .empty(),
-    });
 }
 
 fn clearExactCallableLocal(self: *Self, local_id: MIR.LocalId) void {
     self.store.getLocalPtr(local_id).exact_callable = null;
     _ = self.exact_callable_locals.remove(@intFromEnum(local_id));
-}
-
-fn resolveExactLambdaForLocal(self: *Self, local_id: MIR.LocalId) Allocator.Error!?MIR.LambdaId {
-    if (self.callable_source_locals.get(@intFromEnum(local_id)) != null) {
-        if (self.exactCallableResolutionFromCurrentCallableBindings(local_id)) |resolved| {
-            return resolved.lambda;
-        }
-    }
-
-    if (self.exact_callable_locals.get(@intFromEnum(local_id))) |lambda_id| return lambda_id;
-
-    return null;
 }
 
 fn resolveExactCallableResolutionForLocal(
@@ -3542,12 +3428,6 @@ fn resolveExactCallableResolutionForLocal(
             .lambda = exact_callable.lambda,
             .requires_hidden_capture = exact_callable.requires_hidden_capture,
         };
-    }
-
-    if (self.callable_source_locals.get(@intFromEnum(local_id)) != null) {
-        if (self.exactCallableResolutionFromCurrentCallableBindings(local_id)) |resolved| {
-            return resolved;
-        }
     }
 
     if (self.exact_callable_locals.get(@intFromEnum(local_id))) |lambda_id| {
@@ -3572,20 +3452,62 @@ fn resolveExactCallableResolutionForCapturePattern(
     return self.resolveExactCallableResolutionForLocal(capture_local);
 }
 
-fn seedExactCallableParamsFromCurrentBindings(
+fn seedExactCallablePatternLocal(
     self: *Self,
+    pattern_idx: CIR.Pattern.Idx,
+    local: MIR.LocalId,
+) Allocator.Error!void {
+    if (self.store.monotype_store.getMonotype(self.store.getLocal(local).monotype) != .func) {
+        self.clearExactCallableLocal(local);
+        return;
+    }
+
+    const callable_inst_ids =
+        if (self.callable_pipeline.lambda_specialize.getContextPatternCallableInsts(
+            self.current_callable_inst_context,
+            self.current_module_idx,
+            pattern_idx,
+        )) |ids|
+            ids
+        else if (self.callable_pipeline.lambda_specialize.getContextPatternCallableInst(
+            self.current_callable_inst_context,
+            self.current_module_idx,
+            pattern_idx,
+        )) |id|
+            &.{id}
+        else
+            &.{};
+
+    if (callable_inst_ids.len == 0) {
+        self.clearExactCallableLocal(local);
+        return;
+    }
+
+    const resolution = try self.resolveUniqueExactCallableResolution(
+        callable_inst_ids,
+        self.store.getLocal(local).monotype,
+    );
+    try self.bindExactLambdaLocal(local, resolution.lambda);
+    self.store.getLocalPtr(local).exact_callable = .{
+        .lambda = resolution.lambda,
+        .requires_hidden_capture = resolution.requires_hidden_capture,
+    };
+}
+
+fn seedExactCallableParamLocals(
+    self: *Self,
+    param_patterns: []const CIR.Pattern.Idx,
     param_locals: []const MIR.LocalId,
 ) Allocator.Error!void {
-    for (param_locals) |param_local| {
-        if (try self.resolveExactCallableResolutionForLocal(param_local)) |resolved| {
-            try self.bindExactLambdaLocal(param_local, resolved.lambda);
-            self.store.getLocalPtr(param_local).exact_callable = .{
-                .lambda = resolved.lambda,
-                .requires_hidden_capture = resolved.requires_hidden_capture,
-            };
-        } else {
-            self.clearExactCallableLocal(param_local);
-        }
+    if (param_patterns.len != param_locals.len) {
+        std.debug.panic(
+            "statement-only MIR invariant violated: lambda param pattern arity {d} != param local arity {d}",
+            .{ param_patterns.len, param_locals.len },
+        );
+    }
+
+    for (param_patterns, param_locals) |pattern_idx, param_local| {
+        try self.seedExactCallablePatternLocal(pattern_idx, param_local);
     }
 }
 
@@ -4466,9 +4388,6 @@ fn ensureImplicitLambdaCaptureLocal(
     var exact_lambda_id: ?MIR.LambdaId = null;
     var requires_hidden_capture = false;
     if (ancestor_local) |outer_local| {
-        if (self.callable_source_locals.get(@intFromEnum(outer_local))) |source_path| {
-            try self.callable_source_locals.put(@intFromEnum(local), source_path);
-        }
         if (try self.resolveExactCallableResolutionForLocal(outer_local)) |resolved| {
             exact_lambda_id = resolved.lambda;
             requires_hidden_capture = resolved.requires_hidden_capture;
@@ -4756,44 +4675,7 @@ fn lowerLambdaInto(
     }
     defer self.current_implicit_lambda_captures = saved_implicit_lambda_captures;
 
-    var callable_bindings = std.ArrayList(CallableBinding).empty;
-    defer callable_bindings.deinit(self.allocator);
-    if (self.current_callable_bindings) |enclosing_bindings| {
-        for (enclosing_bindings) |binding| {
-            try self.appendCallableBindingUnique(&callable_bindings, binding);
-        }
-    }
-    try self.appendCurrentCallableBindings(&callable_bindings, param_locals);
-    try self.appendDirectParamPatternCallableBindings(&callable_bindings, param_patterns, param_locals);
-    if (!self.current_callable_inst_context.isNone()) {
-        const callable_inst = self.callable_pipeline.lambda_specialize.getCallableInst(self.current_callable_inst_context);
-        const spec_count = self.callable_pipeline.lambda_specialize.getCallableParamSpecEntries(callable_inst.callable_param_specs).len;
-        var has_function_param = false;
-        for (param_locals) |param_local| {
-            if (self.store.monotype_store.getMonotype(self.store.getLocal(param_local).monotype) == .func) {
-                has_function_param = true;
-                break;
-            }
-        }
-        if (has_function_param and spec_count > 0 and callable_bindings.items.len == 0) {
-            std.debug.panic(
-                "statement-only MIR invariant violated: lambda expr {d} in callable inst {d} has function-valued params but no callable bindings (specs={d})",
-                .{
-                    @intFromEnum(expr_idx),
-                    @intFromEnum(self.current_callable_inst_context),
-                    spec_count,
-                },
-            );
-        }
-    }
-
-    for (param_locals) |param_local| {
-        try self.seedCallableSourceLocal(param_local);
-    }
-    const saved_callable_bindings = self.current_callable_bindings;
-    self.current_callable_bindings = callable_bindings.items;
-    defer self.current_callable_bindings = saved_callable_bindings;
-    try self.seedExactCallableParamsFromCurrentBindings(param_locals);
+    try self.seedExactCallableParamLocals(param_patterns, param_locals);
 
     const result_local = try self.freshSyntheticLocal(ret_monotype, false);
     const ret_stmt = try self.store.addCFStmt(self.allocator, .{ .ret = .{ .value = result_local } });
@@ -4860,15 +4742,6 @@ fn lowerLambdaInto(
         null
     else
         try self.freshSyntheticLocal(captures_tuple_monotype, false);
-
-    if (captures_param_local) |captures_param| {
-        try self.seedCallableSourceLocal(captures_param);
-        try self.appendImplicitLambdaCaptureCallableBindings(
-            &callable_bindings,
-            captures_param,
-            runtime_implicit_captures.items,
-        );
-    }
 
     var i = param_patterns.len;
     while (i > 0) {
@@ -4955,82 +4828,6 @@ fn lowerLambdaParamLocals(
     return self.store.addLocalSpan(self.allocator, self.scratch_local_ids.sliceFromStart(scratch_top));
 }
 
-fn appendCallableBindingUnique(
-    self: *Self,
-    out: *std.ArrayList(CallableBinding),
-    binding: CallableBinding,
-) Allocator.Error!void {
-    for (out.items) |existing| {
-        if (existing.source_param != binding.source_param) continue;
-        if (!callableProjectionSpansEqual(self, existing.projections, binding.projections)) continue;
-        if (existing.lambda != binding.lambda or existing.requires_hidden_capture != binding.requires_hidden_capture) {
-            std.debug.panic(
-                "statement-only MIR callable binding collision for parameter local {d}",
-                .{@intFromEnum(binding.source_param)},
-            );
-        }
-        return;
-    }
-
-    try out.append(self.allocator, binding);
-}
-
-fn exactCallableResolutionFromCurrentCallableBindings(
-    self: *const Self,
-    source_local: MIR.LocalId,
-) ?ExactCallableResolution {
-    const bindings = self.current_callable_bindings orelse return null;
-    var resolved: ?MIR.LambdaId = null;
-    var requires_hidden_capture: ?bool = null;
-    for (bindings) |binding| {
-        if (binding.source_param != source_local) continue;
-        if (binding.projections.len != 0) continue;
-        if (resolved) |existing| {
-            if (existing != binding.lambda) return null;
-            if (requires_hidden_capture.? != binding.requires_hidden_capture) return null;
-        } else {
-            resolved = binding.lambda;
-            requires_hidden_capture = binding.requires_hidden_capture;
-        }
-    }
-    return if (resolved) |lambda|
-        .{
-            .lambda = lambda,
-            .requires_hidden_capture = requires_hidden_capture.?,
-        }
-    else
-        null;
-}
-
-fn callableProjectionSpansEqual(
-    self: *const Self,
-    lhs: CallablePathSpan,
-    rhs: CallablePathSpan,
-) bool {
-    const lhs_items = self.getCallableProjectionSpan(lhs);
-    const rhs_items = self.getCallableProjectionSpan(rhs);
-    if (lhs_items.len != rhs_items.len) return false;
-
-    for (lhs_items, rhs_items) |lhs_item, rhs_item| {
-        switch (lhs_item) {
-            .field => |lhs_idx| switch (rhs_item) {
-                .field => |rhs_idx| if (lhs_idx != rhs_idx) return false,
-                else => return false,
-            },
-            .tag_payload => |lhs_idx| switch (rhs_item) {
-                .tag_payload => |rhs_idx| if (lhs_idx != rhs_idx) return false,
-                else => return false,
-            },
-            .nominal => switch (rhs_item) {
-                .nominal => {},
-                else => return false,
-            },
-        }
-    }
-
-    return true;
-}
-
 fn addRuntimeCapturePatternSpan(
     self: *Self,
     patterns: []const CIR.Pattern.Idx,
@@ -5050,168 +4847,24 @@ fn getRuntimeCapturePatternSpan(
 ) []const CIR.Pattern.Idx {
     return self.runtime_capture_patterns.items[span.start..][0..span.len];
 }
-
-fn addCallableProjectionSpan(
-    self: *Self,
-    entries: []const MIR.CallableProjection,
-) Allocator.Error!CallablePathSpan {
-    if (entries.len == 0) return CallablePathSpan.empty();
-    const start: u32 = @intCast(self.callable_projection_entries.items.len);
-    try self.callable_projection_entries.appendSlice(self.allocator, entries);
-    return .{ .start = start, .len = @intCast(entries.len) };
-}
-
-fn getCallableProjectionSpan(
-    self: *const Self,
-    span: CallablePathSpan,
-) []const MIR.CallableProjection {
-    if (span.len == 0) return &.{};
-    return self.callable_projection_entries.items[span.start..][0..span.len];
-}
-
-fn appendCurrentCallableBindings(
-    self: *Self,
-    bindings: *std.ArrayList(CallableBinding),
-    param_locals: []const MIR.LocalId,
-) Allocator.Error!void {
-    if (self.current_callable_inst_context.isNone()) return;
-
-    const callable_inst = self.callable_pipeline.lambda_specialize.getCallableInst(self.current_callable_inst_context);
-    const specs = self.callable_pipeline.lambda_specialize.getCallableParamSpecEntries(callable_inst.callable_param_specs);
-    if (specs.len == 0) return;
-
-    for (specs) |spec| {
-        if (spec.param_index >= param_locals.len) {
-            std.debug.panic(
-                "statement-only MIR callable binding param index {d} exceeds lambda arity {d}",
-                .{ spec.param_index, param_locals.len },
-            );
-        }
-
-        const source_param = param_locals[spec.param_index];
-        var current_mono = self.store.getLocal(source_param).monotype;
-        var projections = std.ArrayList(MIR.CallableProjection).empty;
-        defer projections.deinit(self.allocator);
-
-        for (self.callable_pipeline.lambda_specialize.getCallableParamProjectionEntries(spec.projections)) |projection| {
-            switch (projection) {
-                .field => |field_name| {
-                    const record_fields = switch (self.store.monotype_store.getMonotype(current_mono)) {
-                        .record => |record_mono| self.store.monotype_store.getFields(record_mono.fields),
-                        else => std.debug.panic(
-                            "statement-only MIR callable binding field projection expected record monotype",
-                            .{},
-                        ),
-                    };
-                    const field_idx = self.recordFieldIndexByName(field_name.ident, record_fields);
-                    current_mono = record_fields[field_idx].type_idx;
-                    try projections.append(self.allocator, .{ .field = @intCast(field_idx) });
-                },
-                .tuple_elem => |elem_idx| {
-                    const elem_monos = switch (self.store.monotype_store.getMonotype(current_mono)) {
-                        .tuple => |tuple_mono| self.store.monotype_store.getIdxSpan(tuple_mono.elems),
-                        else => std.debug.panic(
-                            "statement-only MIR callable binding tuple projection expected tuple monotype",
-                            .{},
-                        ),
-                    };
-                    if (elem_idx >= elem_monos.len) {
-                        std.debug.panic(
-                            "statement-only MIR callable binding tuple elem {d} exceeds tuple arity {d}",
-                            .{ elem_idx, elem_monos.len },
-                        );
-                    }
-                    current_mono = elem_monos[elem_idx];
-                    try projections.append(self.allocator, .{ .field = @intCast(elem_idx) });
-                },
-            }
-        }
-
-        const callable_inst_set = self.callable_pipeline.lambda_specialize.getCallableInstSet(spec.callable_inst_set_id);
-        const callable_members = self.callable_pipeline.lambda_specialize.getCallableInstSetMembers(callable_inst_set.members);
-        const binding_resolution = try self.resolveUniqueCallableBindingResolution(callable_members, current_mono);
-        try self.appendCallableBindingUnique(bindings, .{
-            .source_param = source_param,
-            .projections = try self.addCallableProjectionSpan(projections.items),
-            .lambda = binding_resolution.lambda,
-            .requires_hidden_capture = binding_resolution.requires_hidden_capture,
-        });
-    }
-}
-
-fn appendDirectParamPatternCallableBindings(
-    self: *Self,
-    bindings: *std.ArrayList(CallableBinding),
-    param_patterns: []const CIR.Pattern.Idx,
-    param_locals: []const MIR.LocalId,
-) Allocator.Error!void {
-    if (self.current_callable_inst_context.isNone()) return;
-    if (param_patterns.len != param_locals.len) {
-        std.debug.panic(
-            "statement-only MIR callable binding invariant violated: param pattern arity {d} != param local arity {d}",
-            .{ param_patterns.len, param_locals.len },
-        );
-    }
-
-    for (param_patterns, param_locals) |pattern_idx, param_local| {
-        if (self.store.monotype_store.getMonotype(self.store.getLocal(param_local).monotype) != .func) continue;
-
-        var already_bound = false;
-        for (bindings.items) |existing| {
-            if (existing.source_param != param_local) continue;
-            if (existing.projections.len != 0) continue;
-            already_bound = true;
-            break;
-        }
-        if (already_bound) continue;
-
-        const callable_inst_ids =
-            if (self.callable_pipeline.lambda_specialize.getContextPatternCallableInsts(
-                self.current_callable_inst_context,
-                self.current_module_idx,
-                pattern_idx,
-            )) |ids|
-                ids
-            else if (self.callable_pipeline.lambda_specialize.getContextPatternCallableInst(
-                self.current_callable_inst_context,
-                self.current_module_idx,
-                pattern_idx,
-            )) |id|
-                &.{id}
-            else
-                continue;
-
-        const binding_resolution = try self.resolveUniqueCallableBindingResolution(
-            callable_inst_ids,
-            self.store.getLocal(param_local).monotype,
-        );
-        try self.appendCallableBindingUnique(bindings, .{
-            .source_param = param_local,
-            .projections = CallablePathSpan.empty(),
-            .lambda = binding_resolution.lambda,
-            .requires_hidden_capture = binding_resolution.requires_hidden_capture,
-        });
-    }
-}
-
-const CallableBindingResolution = struct {
+const ExactCallableSetResolution = struct {
     lambda: MIR.LambdaId,
     requires_hidden_capture: bool,
 };
 
-fn resolveUniqueCallableBindingResolution(
+fn resolveUniqueExactCallableResolution(
     self: *Self,
     callable_members: []const Monomorphize.CallableInstId,
     expected_fn_monotype: Monotype.Idx,
-) Allocator.Error!CallableBindingResolution {
+) Allocator.Error!ExactCallableSetResolution {
     if (callable_members.len == 0) {
         std.debug.panic(
-            "statement-only MIR invariant violated: callable binding spec had no exact callable members",
+            "statement-only MIR invariant violated: exact callable set had no members",
             .{},
         );
     }
 
-    var resolved: ?CallableBindingResolution = null;
+    var resolved: ?ExactCallableSetResolution = null;
     var matching_members: usize = 0;
     for (callable_members) |callable_inst_id| {
         if (!(try self.callableInstMatchesFnMonotype(
@@ -5221,7 +4874,7 @@ fn resolveUniqueCallableBindingResolution(
         ))) continue;
 
         matching_members += 1;
-        const candidate = CallableBindingResolution{
+        const candidate = ExactCallableSetResolution{
             .lambda = try self.lowerResolvedCallableInstLambda(callable_inst_id),
             .requires_hidden_capture = try self.callableInstProducesClosureValue(callable_inst_id),
         };
@@ -5230,7 +4883,7 @@ fn resolveUniqueCallableBindingResolution(
                 existing.requires_hidden_capture != candidate.requires_hidden_capture)
             {
                 std.debug.panic(
-                    "statement-only MIR TODO: callable binding spec resolved to multiple distinct callable values ({d} members)",
+                    "statement-only MIR TODO: exact callable set resolved to multiple distinct callable values ({d} members)",
                     .{callable_members.len},
                 );
             }
@@ -5241,7 +4894,7 @@ fn resolveUniqueCallableBindingResolution(
 
     if (matching_members == 0) {
         std.debug.panic(
-            "statement-only MIR invariant violated: callable binding spec had no exact callable member matching expected fn monotype {d}",
+            "statement-only MIR invariant violated: exact callable set had no member matching expected fn monotype {d}",
             .{@intFromEnum(expected_fn_monotype)},
         );
     }
@@ -5338,89 +4991,6 @@ fn appendCaptureMaterialization(
         .module_idx = self.current_module_idx,
     } });
     return capture_local;
-}
-
-fn appendClosureCaptureCallableBindings(
-    self: *Self,
-    bindings: *std.ArrayList(CallableBinding),
-    module_env: *const ModuleEnv,
-    closure_expr_idx: CIR.Expr.Idx,
-    captures: []const CIR.Expr.Capture.Idx,
-    captures_param: MIR.LocalId,
-    closure_callable_inst_id: ?Monomorphize.CallableInstId,
-    recursive_members: []const RecursiveGroupMember,
-) Allocator.Error!void {
-    var capture_field_index: u32 = 0;
-    for (captures) |capture_idx| {
-        const capture = module_env.store.getCapture(capture_idx);
-        if (recursiveCallableInstForPattern(recursive_members, capture.pattern_idx) != null) continue;
-
-        if (!(try self.capturePatternRequiresRuntimeMaterialization(
-            module_env,
-            closure_expr_idx,
-            closure_callable_inst_id,
-            capture.pattern_idx,
-        ))) continue;
-
-        const capture_monotype = try self.resolveRuntimePatternMonotype(
-            module_env,
-            closure_expr_idx,
-            closure_callable_inst_id,
-            capture.pattern_idx,
-        );
-        if (self.store.monotype_store.getMonotype(capture_monotype) != .func) {
-            capture_field_index += 1;
-            continue;
-        }
-
-        if (try self.resolveExactCallableInstForCapturePattern(
-            closure_expr_idx,
-            capture.pattern_idx,
-            capture_monotype,
-            closure_callable_inst_id,
-        )) |exact_capture_callable_inst_id| {
-            const capture_lambda = try self.lowerResolvedCallableInstLambda(exact_capture_callable_inst_id);
-            try self.appendCallableBindingUnique(bindings, .{
-                .source_param = captures_param,
-                .projections = try self.addCallableProjectionSpan(&.{.{ .field = capture_field_index }}),
-                .lambda = capture_lambda,
-                .requires_hidden_capture = try self.callableInstProducesClosureValue(exact_capture_callable_inst_id),
-            });
-        } else if (try self.resolveExactCallableResolutionForCapturePattern(capture.pattern_idx)) |capture_resolution| {
-            try self.appendCallableBindingUnique(bindings, .{
-                .source_param = captures_param,
-                .projections = try self.addCallableProjectionSpan(&.{.{ .field = capture_field_index }}),
-                .lambda = capture_resolution.lambda,
-                .requires_hidden_capture = capture_resolution.requires_hidden_capture,
-            });
-        } else std.debug.panic(
-            "statement-only MIR TODO: missing exact callable binding for closure capture pattern {d}",
-            .{@intFromEnum(capture.pattern_idx)},
-        );
-
-        capture_field_index += 1;
-    }
-}
-
-fn appendImplicitLambdaCaptureCallableBindings(
-    self: *Self,
-    bindings: *std.ArrayList(CallableBinding),
-    captures_param: MIR.LocalId,
-    runtime_captures: []const ImplicitLambdaCapture,
-) Allocator.Error!void {
-    for (runtime_captures, 0..) |capture, capture_field_index| {
-        if (self.store.monotype_store.getMonotype(capture.monotype) != .func) continue;
-        const capture_lambda = capture.exact_lambda_id orelse std.debug.panic(
-            "statement-only MIR TODO: missing exact lambda binding for implicit lambda capture pattern {d}",
-            .{@intFromEnum(capture.pattern_idx)},
-        );
-        try self.appendCallableBindingUnique(bindings, .{
-            .source_param = captures_param,
-            .projections = try self.addCallableProjectionSpan(&.{.{ .field = @intCast(capture_field_index) }}),
-            .lambda = capture_lambda,
-            .requires_hidden_capture = capture.requires_hidden_capture,
-        });
-    }
 }
 
 fn lowerClosureLambda(
@@ -5555,29 +5125,7 @@ fn lowerClosureLambda(
     });
     try self.lowered_callable_lambdas.put(cache_key, active_lambda);
 
-    var callable_bindings = std.ArrayList(CallableBinding).empty;
-    defer callable_bindings.deinit(self.allocator);
-    try self.appendCurrentCallableBindings(&callable_bindings, param_locals);
-    try self.appendDirectParamPatternCallableBindings(&callable_bindings, param_patterns, param_locals);
-    if (captures_param_local) |captures_param| {
-        try self.seedCallableSourceLocal(captures_param);
-        try self.appendClosureCaptureCallableBindings(
-            &callable_bindings,
-            module_env,
-            expr_idx,
-            captures,
-            captures_param,
-            if (self.current_callable_inst_context.isNone()) null else self.current_callable_inst_context,
-            &.{},
-        );
-    }
-    for (param_locals) |param_local| {
-        try self.seedCallableSourceLocal(param_local);
-    }
-    const saved_callable_bindings = self.current_callable_bindings;
-    self.current_callable_bindings = callable_bindings.items;
-    defer self.current_callable_bindings = saved_callable_bindings;
-    try self.seedExactCallableParamsFromCurrentBindings(param_locals);
+    try self.seedExactCallableParamLocals(param_patterns, param_locals);
 
     const result_local = try self.freshSyntheticLocal(ret_monotype, false);
     const ret_stmt = try self.store.addCFStmt(self.allocator, .{ .ret = .{ .value = result_local } });
@@ -5968,29 +5516,7 @@ fn lowerReservedTrivialClosureLambda(
         .hosted = null,
     });
 
-    var callable_bindings = std.ArrayList(CallableBinding).empty;
-    defer callable_bindings.deinit(self.allocator);
-    try self.appendCurrentCallableBindings(&callable_bindings, param_locals);
-    try self.appendDirectParamPatternCallableBindings(&callable_bindings, param_patterns, param_locals);
-    if (captures_param_local) |captures_param| {
-        try self.seedCallableSourceLocal(captures_param);
-        try self.appendClosureCaptureCallableBindings(
-            &callable_bindings,
-            module_env,
-            expr_idx,
-            captures,
-            captures_param,
-            callable_inst_id,
-            lower_plan.recursive_members.items,
-        );
-    }
-    for (param_locals) |param_local| {
-        try self.seedCallableSourceLocal(param_local);
-    }
-    const saved_callable_bindings = self.current_callable_bindings;
-    self.current_callable_bindings = callable_bindings.items;
-    defer self.current_callable_bindings = saved_callable_bindings;
-    try self.seedExactCallableParamsFromCurrentBindings(param_locals);
+    try self.seedExactCallableParamLocals(param_patterns, param_locals);
 
     const result_local = try self.freshSyntheticLocal(ret_monotype, false);
     const ret_stmt = try self.store.addCFStmt(self.allocator, .{ .ret = .{ .value = result_local } });
@@ -7278,6 +6804,17 @@ fn lowerDotAccessInto(
         self.store.monotype_store.getFields(receiver_record.fields),
     );
     const receiver_local = try self.freshSyntheticLocal(receiver_mono, false);
+    if (self.store.monotype_store.getMonotype(self.store.getLocal(target).monotype) == .func) {
+        if (try self.resolveBestExactCallableInstForExpr(
+            expr_idx,
+            self.store.getLocal(target).monotype,
+            self.current_module_idx,
+        )) |callable_inst_id| {
+            try self.bindExactCallableLocal(target, callable_inst_id);
+        } else {
+            self.clearExactCallableLocal(target);
+        }
+    }
     const field_stmt = try self.lowerRefInto(target, .{ .field = .{
         .source = receiver_local,
         .field_idx = field_idx,
@@ -7784,6 +7321,7 @@ fn lowerPatternMatchLocalInto(
             while (i > 0) {
                 i -= 1;
                 const payload_local = try self.freshSyntheticLocal(payload_monos[i], false);
+                try self.seedExactCallablePatternLocal(payload_patterns[i], payload_local);
                 body = try self.lowerPatternMatchLocalInto(
                     module_env,
                     payload_patterns[i],
@@ -7818,6 +7356,7 @@ fn lowerPatternMatchLocalInto(
                         const destruct = module_env.store.getRecordDestruct(cir_destructs[i]);
                         const field_idx = self.recordFieldIndexByName(destruct.label, mono_fields);
                         const field_local = try self.freshSyntheticLocal(mono_fields[field_idx].type_idx, false);
+                        try self.seedExactCallablePatternLocal(destruct.kind.toPatternIdx(), field_local);
                         body = try self.lowerPatternMatchLocalInto(
                             module_env,
                             destruct.kind.toPatternIdx(),
@@ -7878,6 +7417,7 @@ fn lowerPatternMatchLocalInto(
             while (i > 0) {
                 i -= 1;
                 const elem_local = try self.freshSyntheticLocal(elem_monos[i], false);
+                try self.seedExactCallablePatternLocal(elem_patterns[i], elem_local);
                 body = try self.lowerPatternMatchLocalInto(
                     module_env,
                     elem_patterns[i],

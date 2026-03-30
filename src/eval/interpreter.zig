@@ -1777,26 +1777,10 @@ pub const Interpreter = struct {
                 const rl = valueToRocList(args[0]);
                 const idx = args[1].read(u64);
                 const info = self.listElemInfo(arg_layout);
-                if (builtin.mode == .Debug and info.rc) {
-                    std.debug.print(
-                        "interp list_get_unsafe: list_bytes=0x{x} len={d} cap={d} idx={d} elem_width={d}\n",
-                        .{ @intFromPtr(rl.bytes), rl.len(), rl.capacity_or_alloc_ptr, idx, info.width },
-                    );
-                }
                 if (info.width == 0 or rl.bytes == null) break :blk try self.alloc(ll.ret_layout);
                 const elem_ptr = rl.bytes.? + @as(usize, @intCast(idx)) * info.width;
                 const val = try self.allocBytes(info.width);
                 @memcpy(val.ptr[0..info.width], elem_ptr[0..info.width]);
-                if (builtin.mode == .Debug and info.rc and info.width == 24) {
-                    std.debug.print(
-                        "  get bytes: {x} {x} {x} {x} {x} {x} {x} {x} {x} {x} {x} {x} {x} {x} {x} {x} {x} {x} {x} {x} {x} {x} {x} {x}\n",
-                        .{
-                            val.ptr[0], val.ptr[1], val.ptr[2], val.ptr[3], val.ptr[4], val.ptr[5], val.ptr[6], val.ptr[7],
-                            val.ptr[8], val.ptr[9], val.ptr[10], val.ptr[11], val.ptr[12], val.ptr[13], val.ptr[14], val.ptr[15],
-                            val.ptr[16], val.ptr[17], val.ptr[18], val.ptr[19], val.ptr[20], val.ptr[21], val.ptr[22], val.ptr[23],
-                        },
-                    );
-                }
                 break :blk val;
             },
             .list_append_unsafe => blk: {
