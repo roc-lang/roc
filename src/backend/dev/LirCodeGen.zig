@@ -188,6 +188,9 @@ pub const BuiltinFn = enum {
     num_div_trunc_i128,
     num_rem_trunc_u128,
     num_rem_trunc_i128,
+    num_shl_u128,
+    num_shr_i128,
+    num_shr_u128,
     int_to_str,
     float_to_str,
     int_from_str,
@@ -274,6 +277,9 @@ pub const BuiltinFn = enum {
             .num_div_trunc_i128 => "roc_builtins_num_div_trunc_i128",
             .num_rem_trunc_u128 => "roc_builtins_num_rem_trunc_u128",
             .num_rem_trunc_i128 => "roc_builtins_num_rem_trunc_i128",
+            .num_shl_u128 => "roc_builtins_num_shl_u128",
+            .num_shr_i128 => "roc_builtins_num_shr_i128",
+            .num_shr_u128 => "roc_builtins_num_shr_u128",
             .int_to_str => "roc_builtins_int_to_str",
             .float_to_str => "roc_builtins_float_to_str",
             .int_from_str => "roc_builtins_int_from_str",
@@ -4452,6 +4458,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }),
                 .tag_payload => |payload| try self.generateTagPayloadAccess(.{
                     .source = payload.source,
+                    .payload_idx = payload.payload_idx,
+                    .tag_discriminant = payload.tag_discriminant,
                     .target_layout = target_layout,
                 }),
                 .nominal => |nominal| try self.generateExpr(nominal.backing_ref),
@@ -4621,16 +4629,32 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // For 128-bit operations, we work with the values as pairs of 64-bit words
             // Low word at offset 0, high word at offset 8
 
-            // Get low and high parts of both operands
             const signedness: std.builtin.Signedness = if (operand_layout == .u128) .unsigned else .signed;
             const lhs_parts = try self.getI128Parts(lhs_loc, signedness);
-            const rhs_parts = try self.getI128Parts(rhs_loc, signedness);
 
             // Allocate registers for result
             const result_low = try self.allocTempGeneral();
             const result_high = try self.allocTempGeneral();
 
             const is_unsigned = operand_layout == .u128;
+
+            if (op == .num_shift_left_by or op == .num_shift_right_by or op == .num_shift_right_zf_by) {
+                try self.callI128Shift(lhs_parts, rhs_loc, result_low, result_high, operand_layout, op);
+                self.codegen.freeGeneral(lhs_parts.low);
+                self.codegen.freeGeneral(lhs_parts.high);
+
+                const stack_offset = self.codegen.allocStackSlot(16);
+                try self.codegen.emitStoreStack(.w64, stack_offset, result_low);
+                try self.codegen.emitStoreStack(.w64, stack_offset + 8, result_high);
+
+                self.codegen.freeGeneral(result_low);
+                self.codegen.freeGeneral(result_high);
+
+                return .{ .stack_i128 = stack_offset };
+            }
+
+            // Get low and high parts of the RHS for non-shift operations.
+            const rhs_parts = try self.getI128Parts(rhs_loc, signedness);
 
             switch (op) {
                 .num_plus => {
@@ -5490,6 +5514,62 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.callBuiltin(&builder, fn_addr, builtin_fn);
 
             // Load results from stack slot
+            try self.codegen.emitLoadStack(.w64, result_low, result_slot);
+            try self.codegen.emitLoadStack(.w64, result_high, result_slot + 8);
+        }
+
+        /// Call i128/u128 shift builtin via decomposed wrapper.
+        /// Wrapper signature: (out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, shift_amount: u8) -> void
+        fn callI128Shift(
+            self: *Self,
+            lhs_parts: I128Parts,
+            shift_loc: ValueLocation,
+            result_low: GeneralReg,
+            result_high: GeneralReg,
+            operand_layout: layout.Idx,
+            op: lir.LowLevel,
+        ) Allocator.Error!void {
+            if (builtin.mode == .Debug and operand_layout == .dec) {
+                std.debug.panic(
+                    "LirCodeGen invariant violated: decimal layout reached i128 shift lowering",
+                    .{},
+                );
+            }
+
+            const fn_info: struct { addr: usize, builtin_fn: BuiltinFn } = switch (op) {
+                .num_shift_left_by => .{
+                    .addr = @intFromPtr(&dev_wrappers.roc_builtins_num_shl_u128),
+                    .builtin_fn = .num_shl_u128,
+                },
+                .num_shift_right_by => if (operand_layout == .u128)
+                    .{
+                        .addr = @intFromPtr(&dev_wrappers.roc_builtins_num_shr_u128),
+                        .builtin_fn = .num_shr_u128,
+                    }
+                else
+                    .{
+                        .addr = @intFromPtr(&dev_wrappers.roc_builtins_num_shr_i128),
+                        .builtin_fn = .num_shr_i128,
+                    },
+                .num_shift_right_zf_by => .{
+                    .addr = @intFromPtr(&dev_wrappers.roc_builtins_num_shr_u128),
+                    .builtin_fn = .num_shr_u128,
+                },
+                else => unreachable,
+            };
+
+            const shift_reg = try self.ensureInGeneralReg(shift_loc);
+            defer self.codegen.freeGeneral(shift_reg);
+
+            const result_slot = self.codegen.allocStackSlot(16);
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addLeaArg(frame_ptr, result_slot);
+            try builder.addLeaArg(frame_ptr, result_slot + 8);
+            try builder.addRegArg(lhs_parts.low);
+            try builder.addRegArg(lhs_parts.high);
+            try builder.addRegArg(shift_reg);
+            try self.callBuiltin(&builder, fn_info.addr, fn_info.builtin_fn);
+
             try self.codegen.emitLoadStack(.w64, result_low, result_slot);
             try self.codegen.emitLoadStack(.w64, result_high, result_slot + 8);
         }
@@ -7995,8 +8075,35 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const raw_value_loc = try self.generateExpr(tpa.source);
             const source_layout_idx = self.localLayout(tpa.source);
             const union_layout = ls.getLayout(source_layout_idx);
-            const payload_layout = ls.getLayout(tpa.target_layout);
-            const payload_size = ls.layoutSizeAlign(payload_layout).size;
+            const payload_layout_idx = switch (union_layout.tag) {
+                .tag_union => blk: {
+                    const variants = ls.getTagUnionVariants(ls.getTagUnionData(union_layout.data.tag_union.idx));
+                    break :blk variants.get(tpa.tag_discriminant).payload_layout;
+                },
+                .box => blk: {
+                    const inner_layout = ls.getLayout(union_layout.data.box);
+                    if (inner_layout.tag != .tag_union) {
+                        return raw_value_loc;
+                    }
+                    const variants = ls.getTagUnionVariants(ls.getTagUnionData(inner_layout.data.tag_union.idx));
+                    break :blk variants.get(tpa.tag_discriminant).payload_layout;
+                },
+                else => tpa.target_layout,
+            };
+            const payload_layout = ls.getLayout(payload_layout_idx);
+            const payload_offset: u32 = switch (payload_layout.tag) {
+                .struct_ => ls.getStructFieldOffsetByOriginalIndex(payload_layout.data.struct_.idx, tpa.payload_idx),
+                else => blk: {
+                    if (builtin.mode == .Debug and tpa.payload_idx != 0) {
+                        std.debug.panic(
+                            "LIR/codegen invariant violated: scalar tag payload access requested payload_idx {d}",
+                            .{tpa.payload_idx},
+                        );
+                    }
+                    break :blk 0;
+                },
+            };
+            const payload_size = ls.layoutSizeAlign(ls.getLayout(tpa.target_layout)).size;
 
             if (union_layout.tag == .tag_union) {
                 const value_loc = try self.materializeValueToStackForLayout(raw_value_loc, source_layout_idx);
@@ -8007,7 +8114,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .list_stack => |ls_info| ls_info.struct_offset,
                     else => unreachable,
                 };
-                return self.fieldLocationFromLayout(base_offset, payload_size, tpa.target_layout);
+                return self.fieldLocationFromLayout(base_offset + @as(i32, @intCast(payload_offset)), payload_size, tpa.target_layout);
             } else if (union_layout.tag == .box) {
                 const inner_layout = ls.getLayout(union_layout.data.box);
                 if (inner_layout.tag == .tag_union) {
@@ -8016,7 +8123,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     var copied: u32 = 0;
                     while (copied < payload_size) : (copied += 8) {
                         const temp_reg = try self.allocTempGeneral();
-                        try self.emitLoad(.w64, temp_reg, box_ptr_reg, @intCast(copied));
+                        try self.emitLoad(.w64, temp_reg, box_ptr_reg, @intCast(payload_offset + copied));
                         try self.emitStore(.w64, frame_ptr, dest_offset + @as(i32, @intCast(copied)), temp_reg);
                         self.codegen.freeGeneral(temp_reg);
                     }
