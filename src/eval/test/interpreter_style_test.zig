@@ -939,6 +939,48 @@ test "interpreter: List.fold count elements with inline lambda" {
     try std.testing.expectEqualStrings("4.0", rendered);
 }
 
+test "interpreter: recursive function with var does not clobber outer call's binding" {
+    // Regression test: when a function with `var $state` calls itself recursively,
+    // the inner call's `var $state = init` must create a NEW binding. Without the fix,
+    // inner call clobbers outer call's $state (same pattern_idx = same function body),
+    // so reading $state after the recursive call returns the inner call's final value
+    // instead of the outer call's value.
+    //
+    // f(3) should compute: 3 + f(2) = 3 + (2 + f(1)) = 3 + (2 + (1 + f(0))) = 3+2+1+0 = 6
+    // With the bug: inner calls clobber $state, so $state reads as 0 after recursion,
+    // giving 0+0+0+0 = 0.
+    const roc_src =
+        \\{
+        \\    f = |n| {
+        \\        var $state = n
+        \\        if n > 0 {
+        \\            inner = f(n - 1)
+        \\            $state + inner
+        \\        } else {
+        \\            $state
+        \\        }
+        \\    }
+        \\    f(3)
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
+
+    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
+    defer interp.deinit();
+
+    var host = TestHost.init(helpers.interpreter_allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    const rendered = try interp.renderValueRoc(result);
+    defer helpers.interpreter_allocator.free(rendered);
+    try std.testing.expectEqualStrings("6.0", rendered);
+}
+
 test "interpreter: List.fold from Builtin using numbers" {
     const roc_src = "List.fold([1, 2, 3], 0, |acc, item| acc + item)";
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
