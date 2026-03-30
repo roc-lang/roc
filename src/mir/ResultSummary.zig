@@ -148,10 +148,7 @@ const JoinOriginState = struct {
 
 const ActiveJoinMap = std.AutoHashMap(u32, JoinOriginState);
 
-const CallableResolution = struct {
-    lambda: MIR.LambdaId,
-    requires_hidden_capture: bool,
-};
+const CallableResolution = CallableSummary.Resolution;
 
 const JoinCallableState = struct {
     params: []const MIR.LocalId,
@@ -173,7 +170,7 @@ const Analyzer = struct {
     active_joins: *ActiveJoinMap,
     active_callable_joins: *ActiveJoinCallableMap,
     current_lambda: ?MIR.LambdaId,
-    callable_overrides: *const std.AutoHashMap(u32, CallableResolution),
+    callable_overrides: *const CallableSummary.OverrideMap,
 
     fn lambdaSummary(self: *const Analyzer, lambda_id: MIR.LambdaId) ResultContract {
         if (self.lambda_states) |states| {
@@ -441,152 +438,14 @@ const Analyzer = struct {
         return self.monotypeMayContainCallable(self.mir_store.getLocal(local_id).monotype);
     }
 
-    fn callableProjectionPathMatches(
-        self: *const Analyzer,
-        binding_span: MIR.CallableProjectionSpan,
-        reversed_path: []const MIR.CallableProjection,
-    ) bool {
-        const binding = self.mir_store.getCallableProjectionSpan(binding_span);
-        if (binding.len != reversed_path.len) return false;
-
-        var i: usize = 0;
-        while (i < binding.len) : (i += 1) {
-            const binding_proj = binding[i];
-            const path_proj = reversed_path[reversed_path.len - 1 - i];
-            switch (binding_proj) {
-                .field => |binding_idx| switch (path_proj) {
-                    .field => |path_idx| if (binding_idx != path_idx) return false,
-                    else => return false,
-                },
-                .tag_payload => |binding_idx| switch (path_proj) {
-                    .tag_payload => |path_idx| if (binding_idx != path_idx) return false,
-                    else => return false,
-                },
-                .nominal => switch (path_proj) {
-                    .nominal => {},
-                    else => return false,
-                },
-            }
-        }
-
-        return true;
-    }
-
-    fn resolveCallableForParamProjection(
-        self: *Analyzer,
-        source_param: MIR.LocalId,
-        reversed_path: []const MIR.CallableProjection,
-    ) CallableResolution {
-        const lambda_id = self.current_lambda orelse std.debug.panic(
-            "ResultSummary invariant violated: param-projection callable resolution escaped lambda analysis",
-            .{},
-        );
-        const lambda = self.mir_store.getLambda(lambda_id);
-
-        for (self.mir_store.getCallableBindings(lambda.callable_bindings)) |binding| {
-            if (binding.source_param != source_param) continue;
-            if (!self.callableProjectionPathMatches(binding.projections, reversed_path)) continue;
-            return .{
-                .lambda = binding.lambda,
-                .requires_hidden_capture = binding.requires_hidden_capture,
-            };
-        }
-
-        std.debug.panic(
-            "ResultSummary TODO: missing exact callable binding for parameter local {d} in lambda {d} (bindings={d}, path_len={d})",
-            .{
-                @intFromEnum(source_param),
-                @intFromEnum(lambda_id),
-                self.mir_store.getCallableBindings(lambda.callable_bindings).len,
-                reversed_path.len,
-            },
-        );
-    }
-
-    fn resolveCallableFromStructValue(
-        self: *Analyzer,
-        fields: MIR.LocalSpan,
-        reversed_path: *std.ArrayList(MIR.CallableProjection),
-    ) Allocator.Error!CallableResolution {
-        if (reversed_path.items.len == 0) {
-            std.debug.panic(
-                "ResultSummary invariant violated: callable resolution reached a non-callable struct value",
-                .{},
-            );
-        }
-
-        const next_projection = reversed_path.items[reversed_path.items.len - 1];
-        const field_idx = switch (next_projection) {
-            .field => |idx| idx,
-            else => std.debug.panic(
-                "ResultSummary invariant violated: callable struct resolution expected a field projection, found {s}",
-                .{@tagName(next_projection)},
-            ),
+    fn resolver(self: *const Analyzer) CallableSummary.Resolver {
+        return .{
+            .allocator = self.allocator,
+            .mir_store = self.mir_store,
+            .table = self.callable_summary,
+            .current_lambda = self.current_lambda,
+            .callable_overrides = self.callable_overrides,
         };
-
-        const field_locals = self.mir_store.getLocalSpan(fields);
-        if (field_idx >= field_locals.len) {
-            std.debug.panic(
-                "ResultSummary invariant violated: callable field index {d} is out of bounds for arity {d}",
-                .{ field_idx, field_locals.len },
-            );
-        }
-
-        reversed_path.items.len -= 1;
-        defer reversed_path.items.len += 1;
-        return self.resolveCallableForLocal(field_locals[field_idx], reversed_path);
-    }
-
-    fn resolveCallableFromTagValue(
-        self: *Analyzer,
-        args: MIR.LocalSpan,
-        reversed_path: *std.ArrayList(MIR.CallableProjection),
-    ) Allocator.Error!CallableResolution {
-        if (reversed_path.items.len == 0) {
-            std.debug.panic(
-                "ResultSummary invariant violated: callable resolution reached a non-callable tag value",
-                .{},
-            );
-        }
-
-        const next_projection = reversed_path.items[reversed_path.items.len - 1];
-        const payload_idx = switch (next_projection) {
-            .tag_payload => |idx| idx,
-            else => std.debug.panic(
-                "ResultSummary invariant violated: callable tag resolution expected a payload projection, found {s}",
-                .{@tagName(next_projection)},
-            ),
-        };
-
-        const payload_locals = self.mir_store.getLocalSpan(args);
-        if (payload_idx >= payload_locals.len) {
-            std.debug.panic(
-                "ResultSummary invariant violated: callable payload index {d} is out of bounds for arity {d}",
-                .{ payload_idx, payload_locals.len },
-            );
-        }
-
-        reversed_path.items.len -= 1;
-        defer reversed_path.items.len += 1;
-        return self.resolveCallableForLocal(payload_locals[payload_idx], reversed_path);
-    }
-
-    fn resolveCallableFromJoinParam(
-        self: *Analyzer,
-        join_param: MIR.LocalDef.join_param,
-        reversed_path: []const MIR.CallableProjection,
-    ) CallableResolution {
-        _ = join_param;
-        if (reversed_path.len != 0) {
-            std.debug.panic(
-                "ResultSummary TODO: exact callable resolution through projected join-param values is not implemented yet",
-                .{},
-            );
-        }
-        std.debug.panic(
-            "ResultSummary invariant violated: join-param callable resolution escaped active join overrides",
-            .{},
-        );
     }
 
     fn resolveCallableForLocal(
@@ -594,121 +453,8 @@ const Analyzer = struct {
         local_id: MIR.LocalId,
         reversed_path: *std.ArrayList(MIR.CallableProjection),
     ) Allocator.Error!CallableResolution {
-        if (self.callable_overrides.get(localKey(local_id))) |resolved| {
-            if (reversed_path.items.len != 0) {
-                std.debug.panic(
-                    "ResultSummary TODO: exact callable resolution through projected join-param values is not implemented yet",
-                    .{},
-                );
-            }
-            return resolved;
-        }
-
-        return switch (self.mir_store.getLocalDef(local_id)) {
-            .param, .captures_param => self.resolveCallableForParamProjection(local_id, reversed_path.items),
-            .join_param => |join_param| self.resolveCallableFromJoinParam(join_param, reversed_path.items),
-            .symbol => |symbol| std.debug.panic(
-                "ResultSummary invariant violated: function-valued symbol {d} survived strongest-form MIR callable lowering",
-                .{symbol.raw()},
-            ),
-            .lambda => |lambda_id| .{
-                .lambda = lambda_id,
-                .requires_hidden_capture = false,
-            },
-            .closure => |lambda_id| .{
-                .lambda = lambda_id,
-                .requires_hidden_capture = true,
-            },
-            .ref => |ref_op| switch (ref_op) {
-                .local => |source| try self.resolveCallableForLocal(source, reversed_path),
-                .nominal => |nominal| blk: {
-                    try reversed_path.append(self.allocator, .nominal);
-                    defer _ = reversed_path.pop();
-                    break :blk try self.resolveCallableForLocal(nominal.backing, reversed_path);
-                },
-                .field => |field| blk: {
-                    switch (self.mir_store.getLocalDef(field.source)) {
-                        .struct_ => |fields| {
-                            const field_locals = self.mir_store.getLocalSpan(fields);
-                            if (field.field_idx >= field_locals.len) {
-                                std.debug.panic(
-                                    "ResultSummary invariant violated: callable field index {d} is out of bounds for arity {d}",
-                                    .{ field.field_idx, field_locals.len },
-                                );
-                            }
-                            break :blk try self.resolveCallableForLocal(field_locals[field.field_idx], reversed_path);
-                        },
-                        else => {},
-                    }
-
-                    try reversed_path.append(self.allocator, .{ .field = field.field_idx });
-                    defer _ = reversed_path.pop();
-                    break :blk try self.resolveCallableForLocal(field.source, reversed_path);
-                },
-                .tag_payload => |payload| blk: {
-                    switch (self.mir_store.getLocalDef(payload.source)) {
-                        .tag => |tag_value| {
-                            const payload_locals = self.mir_store.getLocalSpan(tag_value.args);
-                            if (payload.payload_idx >= payload_locals.len) {
-                                std.debug.panic(
-                                    "ResultSummary invariant violated: callable payload index {d} is out of bounds for arity {d}",
-                                    .{ payload.payload_idx, payload_locals.len },
-                                );
-                            }
-                            break :blk try self.resolveCallableForLocal(payload_locals[payload.payload_idx], reversed_path);
-                        },
-                        else => {},
-                    }
-
-                    try reversed_path.append(self.allocator, .{ .tag_payload = payload.payload_idx });
-                    defer _ = reversed_path.pop();
-                    break :blk try self.resolveCallableForLocal(payload.source, reversed_path);
-                },
-                .discriminant => std.debug.panic(
-                    "ResultSummary invariant violated: callable resolution reached a discriminant ref local {d}",
-                    .{@intFromEnum(local_id)},
-                ),
-            },
-            .struct_ => |fields| try self.resolveCallableFromStructValue(fields, reversed_path),
-            .tag => |tag_value| try self.resolveCallableFromTagValue(tag_value.args, reversed_path),
-            .call => |call_result| {
-                if (reversed_path.items.len != 0) {
-                    std.debug.panic(
-                        "ResultSummary TODO: exact callable resolution through projected call results is not implemented yet",
-                        .{},
-                    );
-                }
-
-                const callee = if (call_result.exact_lambda) |lambda_id|
-                    CallableResolution{
-                        .lambda = lambda_id,
-                        .requires_hidden_capture = call_result.exact_requires_hidden_capture,
-                    }
-                else
-                    try self.resolveCallableForLocal(call_result.callee, reversed_path);
-                return switch (self.callable_summary.getLambdaContract(callee.lambda)) {
-                    .no_return => std.debug.panic(
-                        "ResultSummary invariant violated: call-result callable resolution reached no-return lambda {d}",
-                        .{@intFromEnum(callee.lambda)},
-                    ),
-                    .exact_lambda => |lambda_id| .{
-                        .lambda = lambda_id,
-                        .requires_hidden_capture = false,
-                    },
-                    .exact_closure => |lambda_id| .{
-                        .lambda = lambda_id,
-                        .requires_hidden_capture = true,
-                    },
-                };
-            },
-            .literal,
-            .low_level,
-            .list,
-            => std.debug.panic(
-                "ResultSummary invariant violated: callable resolution reached non-callable local def {s} for local {d}",
-                .{ @tagName(self.mir_store.getLocalDef(local_id)), @intFromEnum(local_id) },
-            ),
-        };
+        var resolver = self.resolver();
+        return resolver.resolveCallableForLocalPath(local_id, reversed_path);
     }
 
     fn collectReturnedCallable(
@@ -993,11 +739,12 @@ const Analyzer = struct {
                     );
                 }
 
-                if (!gop.value_ptr.saw_incoming) return false;
+                const join_state = self.active_joins.getPtr(join_key) orelse unreachable;
+                if (!join_state.saw_incoming) return false;
 
                 var body_env = try self.cloneEnv(env);
                 defer body_env.deinit();
-                var body_callable_overrides = std.AutoHashMap(u32, CallableResolution).init(self.allocator);
+                var body_callable_overrides = CallableSummary.OverrideMap.init(self.allocator);
                 defer body_callable_overrides.deinit();
                 try body_callable_overrides.ensureTotalCapacity(@intCast(join_params.len));
 
@@ -1078,7 +825,7 @@ const Analyzer = struct {
         self.current_lambda = lambda_id;
         var env = LocalOriginMap.init(self.allocator);
         defer env.deinit();
-        var callable_overrides = std.AutoHashMap(u32, CallableResolution).init(self.allocator);
+        var callable_overrides = CallableSummary.OverrideMap.init(self.allocator);
         defer callable_overrides.deinit();
         var active_joins = ActiveJoinMap.init(self.allocator);
         defer {
@@ -1124,7 +871,7 @@ const Analyzer = struct {
         self.current_lambda = null;
         var env = LocalOriginMap.init(self.allocator);
         defer env.deinit();
-        var callable_overrides = std.AutoHashMap(u32, CallableResolution).init(self.allocator);
+        var callable_overrides = CallableSummary.OverrideMap.init(self.allocator);
         defer callable_overrides.deinit();
         var active_joins = ActiveJoinMap.init(self.allocator);
         defer {
@@ -1296,8 +1043,8 @@ fn resolveReachableCalleeLambda(
                 "ResultSummary invariant violated: direct lambda local {d} was used with callable projections",
                 .{@intFromEnum(local_id)},
             ),
-        .closure => |lambda_id| if (reversed_path.items.len == 0)
-            lambda_id
+        .closure => |closure| if (reversed_path.items.len == 0)
+            closure.lambda
         else
             std.debug.panic(
                 "ResultSummary invariant violated: closure local {d} was used with callable projections",

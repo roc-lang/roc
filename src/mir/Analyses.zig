@@ -65,6 +65,11 @@ pub fn getConstCallableContract(self: *const Self, const_id: MIR.ConstDefId) Cal
     return self.callable_summary.getConstContract(const_id);
 }
 
+/// Returns the finalized exact-callable summary table.
+pub fn getCallableSummary(self: *const Self) *const CallableSummary.Table {
+    return &self.callable_summary;
+}
+
 /// Returns the precomputed result contract for one MIR lambda.
 pub fn getLambdaResultContract(self: *const Self, lambda_id: MIR.LambdaId) ResultSummary.ResultContract {
     return self.result_summary.getLambdaContract(lambda_id);
