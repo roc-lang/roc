@@ -1,6 +1,6 @@
 //! Monomorphic Intermediate Representation (MIR)
 //!
-//! MIR sits between specialized structured callable IR and LIR.
+//! MIR sits between lambdamono structured callable IR and LIR.
 //! It is monomorphic, statement-oriented, local-centric, and uses globally
 //! unique symbols only at top-level/global materialization boundaries.
 //! Lambda-set solving and specialization must happen before MIR lowering.

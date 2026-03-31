@@ -1,8 +1,8 @@
 //! Staged CoreCIR callable pipeline.
 //!
-//! This module coordinates ContextMono, LambdaSolved, and LambdaSpecialize for
+//! This module coordinates ContextMono, Lambdasolved, and Lambdamono for
 //! reachable roots before MIR lowering begins. `Lower` must consume the result
-//! of this stage; it must not infer callable instantiations itself.
+//! of this stage; it must not specialize exact callables itself.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -12,8 +12,8 @@ const types = @import("types");
 
 const Monotype = @import("Monotype.zig");
 const ContextMono = @import("ContextMono.zig");
-const LambdaSolved = @import("LambdaSolved.zig");
-const LambdaSpecialize = @import("LambdaSpecialize.zig");
+const Lambdasolved = @import("Lambdasolved.zig");
+const Lambdamono = @import("Lambdamono.zig");
 
 const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
@@ -21,20 +21,20 @@ const Region = base.Region;
 const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
 
-const CallableSourceNamespace = LambdaSolved.CallableSourceNamespace;
-const packCallableSourceKey = LambdaSolved.packCallableSourceKey;
-const packLocalPatternSourceKey = LambdaSolved.packLocalPatternSourceKey;
-const packExternalDefSourceKey = LambdaSolved.packExternalDefSourceKey;
-const packExprSourceKey = LambdaSolved.packExprSourceKey;
+const CallableSourceNamespace = Lambdasolved.CallableSourceNamespace;
+const packCallableSourceKey = Lambdasolved.packCallableSourceKey;
+const packLocalPatternSourceKey = Lambdasolved.packLocalPatternSourceKey;
+const packExternalDefSourceKey = Lambdasolved.packExternalDefSourceKey;
+const packExprSourceKey = Lambdasolved.packExprSourceKey;
 
 /// Identifies a semantic callable template before executable specialization.
-pub const CallableTemplateId = LambdaSolved.CallableTemplateId;
+pub const CallableTemplateId = Lambdasolved.CallableTemplateId;
 
 /// Identifies a canonical type-variable substitution for a callable template.
 pub const TypeSubstId = ContextMono.TypeSubstId;
 
 /// Identifies one monomorphic callable instantiation.
-pub const CallableInstId = LambdaSpecialize.CallableInstId;
+pub const CallableInstId = Lambdamono.CallableInstId;
 
 const BoundTypeVarKey = ContextMono.BoundTypeVarKey;
 
@@ -51,44 +51,48 @@ pub const TypeSubstEntry = ContextMono.TypeSubstEntry;
 pub const TypeSubstSpan = ContextMono.TypeSubstSpan;
 
 /// Describes the original callable form that produced a callable template.
-pub const CallableTemplateKind = LambdaSolved.CallableTemplateKind;
+pub const CallableTemplateKind = Lambdasolved.CallableTemplateKind;
 
 /// A semantic callable body that can later be instantiated monomorphically.
-pub const CallableTemplate = LambdaSolved.CallableTemplate;
-pub const ExternalDefSource = LambdaSolved.ExternalDefSource;
+pub const CallableTemplate = Lambdasolved.CallableTemplate;
+pub const ExternalDefSource = Lambdasolved.ExternalDefSource;
 
 /// Records a block-local polymorphic callable that is materialized on demand.
-pub const DeferredLocalCallable = LambdaSolved.DeferredLocalCallable;
+pub const DeferredLocalCallable = Lambdasolved.DeferredLocalCallable;
 
 /// The canonical substitution assigned to one callable instantiation.
 pub const TypeSubst = ContextMono.TypeSubst;
 
 /// One concrete instantiation of a semantic callable template.
-pub const CallableInst = LambdaSpecialize.CallableInst;
+pub const CallableInst = Lambdamono.CallableInst;
 
 /// One callable requirement originating from a higher-order parameter.
-pub const CallableParamSpecEntry = LambdaSpecialize.CallableParamSpecEntry;
+pub const CallableParamSpecEntry = Lambdamono.CallableParamSpecEntry;
 
-/// One structural projection applied before demanding callable callable instantiations.
-pub const CallableParamProjection = LambdaSpecialize.CallableParamProjection;
+/// One structural projection applied before demanding exact callables from a higher-order parameter.
+pub const CallableParamProjection = Lambdamono.CallableParamProjection;
 
 /// Span of callable-parameter projections stored in the staged pipeline store.
-pub const CallableParamProjectionSpan = LambdaSpecialize.CallableParamProjectionSpan;
+pub const CallableParamProjectionSpan = Lambdamono.CallableParamProjectionSpan;
 
 /// Span of callable-parameter specification entries stored in the staged pipeline store.
-pub const CallableParamSpecSpan = LambdaSpecialize.CallableParamSpecSpan;
+pub const CallableParamSpecSpan = Lambdamono.CallableParamSpecSpan;
 
-/// Interned identifier for a set of demanded callable instantiations.
-pub const CallableInstSetId = LambdaSpecialize.CallableInstSetId;
+/// Interned identifier for a solved lambda set of exact callable instantiations.
+pub const LambdaSetId = Lambdamono.LambdaSetId;
 
-/// Contiguous span of callable-inst-set members in the staged pipeline store.
-pub const CallableInstSetSpan = LambdaSpecialize.CallableInstSetSpan;
+/// Contiguous span of lambda-set members in the staged pipeline store.
+pub const LambdaSetSpan = Lambdamono.LambdaSetSpan;
 
-/// A deduplicated set of callable instantiations associated with one callable value.
-pub const CallableInstSet = LambdaSpecialize.CallableInstSet;
-pub const CaptureValuePlan = LambdaSpecialize.CaptureValuePlan;
-pub const CaptureValueSource = LambdaSpecialize.CaptureValueSource;
-pub const CaptureStorage = LambdaSpecialize.CaptureStorage;
+/// A deduplicated lambda set associated with one callable value.
+pub const LambdaSet = Lambdamono.LambdaSet;
+pub const CaptureValueSource = Lambdamono.CaptureValueSource;
+pub const CaptureStorage = Lambdamono.CaptureStorage;
+pub const CaptureField = Lambdamono.CaptureField;
+pub const CaptureFieldSpan = Lambdamono.CaptureFieldSpan;
+pub const CallableDef = Lambdamono.CallableDef;
+pub const CallableDefId = Lambdamono.CallableDefId;
+pub const CallablePlan = Lambdamono.CallablePlan;
 
 /// One statically resolved dispatch target definition.
 pub const DispatchExprTarget = ContextMono.DispatchExprTarget;
@@ -101,8 +105,6 @@ pub const CallSiteResolution = struct {
 };
 
 const ContextExprKey = ContextMono.ContextExprKey;
-
-const ContextCaptureKey = LambdaSpecialize.ContextCaptureKey;
 
 const TemplateBodyCompletionKey = struct {
     template_source_key: u64,
@@ -145,16 +147,15 @@ const MutationKind = enum(u8) {
     source_exprs,
     deferred_local_callables,
     expr_callable_insts,
-    closure_capture_value_plans,
     context_expr_monotypes,
     context_pattern_monotypes,
     resolved_typevar_monotypes,
     context_dispatch_targets,
-    callable_inst_sets,
-    context_pattern_callable_inst_sets,
-    expr_callable_inst_sets,
-    lookup_expr_callable_inst_sets,
-    call_site_callable_inst_sets,
+    lambda_sets,
+    context_pattern_lambda_sets,
+    expr_lambda_sets,
+    lookup_expr_lambda_sets,
+    call_site_lambda_sets,
     call_site_callable_insts,
     context_pattern_callable_insts,
     lookup_expr_callable_insts,
@@ -187,7 +188,7 @@ const RuntimeClosureExpr = struct {
 };
 
 /// A source expression in a specific module, used for semantic value provenance.
-pub const ExprSource = LambdaSolved.ExprSource;
+pub const ExprSource = Lambdasolved.ExprSource;
 
 const ContextExprSource = struct {
     source_context: SourceContext,
@@ -216,21 +217,24 @@ const RequiredLookupTarget = struct {
 /// Output of the staged CoreCIR/context-mono/lambda-specialization pipeline.
 pub const Result = struct {
     context_mono: ContextMono.Result,
-    lambda_solved: LambdaSolved.Result,
-    lambda_specialize: LambdaSpecialize.Result,
+    lambdasolved: Lambdasolved.Result,
+    lambdamono: Lambdamono.Result,
+    program: Lambdamono.Program,
 
     pub fn init(allocator: Allocator) !Result {
         return .{
             .context_mono = try ContextMono.Result.init(allocator),
-            .lambda_solved = LambdaSolved.Result.init(),
-            .lambda_specialize = LambdaSpecialize.Result.init(),
+            .lambdasolved = Lambdasolved.Result.init(),
+            .lambdamono = Lambdamono.Result.init(),
+            .program = Lambdamono.Program.init(),
         };
     }
 
     pub fn deinit(self: *Result, allocator: Allocator) void {
+        self.program.deinit(allocator);
         self.context_mono.deinit(allocator);
-        self.lambda_solved.deinit(allocator);
-        self.lambda_specialize.deinit(allocator);
+        self.lambdasolved.deinit(allocator);
+        self.lambdamono.deinit(allocator);
     }
 
     pub fn callSiteKey(module_idx: u32, expr_idx: CIR.Expr.Idx) u64 {
@@ -245,20 +249,6 @@ pub const Result = struct {
         return ContextMono.Result.contextExprKey(source_context, module_idx, expr_idx);
     }
 
-    pub fn contextCaptureKey(
-        closure_callable_inst: CallableInstId,
-        module_idx: u32,
-        closure_expr_idx: CIR.Expr.Idx,
-        pattern_idx: CIR.Pattern.Idx,
-    ) ContextCaptureKey {
-        return .{
-            .closure_callable_inst_raw = @intFromEnum(closure_callable_inst),
-            .module_idx = module_idx,
-            .closure_expr_raw = @intFromEnum(closure_expr_idx),
-            .pattern_raw = @intFromEnum(pattern_idx),
-        };
-    }
-
     pub fn contextPatternKey(
         source_context: SourceContext,
         module_idx: u32,
@@ -267,22 +257,31 @@ pub const Result = struct {
         return ContextMono.Result.contextPatternKey(source_context, module_idx, pattern_idx);
     }
 
-    pub fn getCallSiteCallableInst(
+    fn getCallSiteCallableInst(
         self: *const Result,
         source_context: SourceContext,
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?CallableInstId {
-        return self.lambda_specialize.getCallSiteCallableInst(source_context, module_idx, expr_idx);
+        return self.lambdamono.getCallSiteCallableInst(source_context, module_idx, expr_idx);
     }
 
-    pub fn getCallSiteCallableInsts(
+    pub fn getCallSiteCallablePlan(
+        self: *const Result,
+        source_context: SourceContext,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) ?CallablePlan {
+        return self.lambdamono.getCallSiteCallablePlan(source_context, module_idx, expr_idx);
+    }
+
+    fn getCallSiteLambdaSetMembers(
         self: *const Result,
         source_context: SourceContext,
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?[]const CallableInstId {
-        return self.lambda_specialize.getCallSiteCallableInsts(source_context, module_idx, expr_idx);
+        return self.lambdamono.getCallSiteLambdaSetMembers(source_context, module_idx, expr_idx);
     }
 
     pub fn getExprMonotype(
@@ -294,22 +293,31 @@ pub const Result = struct {
         return self.context_mono.getExprMonotype(source_context, module_idx, expr_idx);
     }
 
-    pub fn getExprCallableInst(
+    fn getExprCallableInst(
         self: *const Result,
         source_context: SourceContext,
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?CallableInstId {
-        return self.lambda_specialize.getExprCallableInst(source_context, module_idx, expr_idx);
+        return self.lambdamono.getExprCallableInst(source_context, module_idx, expr_idx);
     }
 
-    pub fn getExprCallableInsts(
+    pub fn getExprCallablePlan(
+        self: *const Result,
+        source_context: SourceContext,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) ?CallablePlan {
+        return self.lambdamono.getExprCallablePlan(source_context, module_idx, expr_idx);
+    }
+
+    fn getExprLambdaSetMembers(
         self: *const Result,
         source_context: SourceContext,
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?[]const CallableInstId {
-        return self.lambda_specialize.getExprCallableInsts(source_context, module_idx, expr_idx);
+        return self.lambdamono.getExprLambdaSetMembers(source_context, module_idx, expr_idx);
     }
 
     pub fn getDispatchExprTarget(
@@ -321,46 +329,49 @@ pub const Result = struct {
         return self.context_mono.getDispatchExprTarget(source_context, module_idx, expr_idx);
     }
 
-    pub fn getLookupExprCallableInst(
+    fn getLookupExprCallableInst(
         self: *const Result,
         source_context: SourceContext,
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?CallableInstId {
-        return self.lambda_specialize.getLookupExprCallableInst(source_context, module_idx, expr_idx);
+        return self.lambdamono.getLookupExprCallableInst(source_context, module_idx, expr_idx);
     }
 
-    pub fn getLookupExprCallableInsts(
+    pub fn getLookupExprCallablePlan(
+        self: *const Result,
+        source_context: SourceContext,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) ?CallablePlan {
+        return self.lambdamono.getLookupExprCallablePlan(source_context, module_idx, expr_idx);
+    }
+
+    fn getLookupExprLambdaSetMembers(
         self: *const Result,
         source_context: SourceContext,
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?[]const CallableInstId {
-        return self.lambda_specialize.getLookupExprCallableInsts(source_context, module_idx, expr_idx);
+        return self.lambdamono.getLookupExprLambdaSetMembers(source_context, module_idx, expr_idx);
     }
 
-    pub fn getClosureCaptureValuePlan(
-        self: *const Result,
-        closure_callable_inst: CallableInstId,
-        module_idx: u32,
-        closure_expr_idx: CIR.Expr.Idx,
-        pattern_idx: CIR.Pattern.Idx,
-    ) ?CaptureValuePlan {
-        return self.lambda_specialize.getClosureCaptureValuePlan(
-            closure_callable_inst,
-            module_idx,
-            closure_expr_idx,
-            pattern_idx,
-        );
-    }
-
-    pub fn getContextPatternCallableInst(
+    fn getContextPatternCallableInst(
         self: *const Result,
         source_context: SourceContext,
         module_idx: u32,
         pattern_idx: CIR.Pattern.Idx,
     ) ?CallableInstId {
-        return self.lambda_specialize.getContextPatternCallableInst(source_context, module_idx, pattern_idx);
+        return self.lambdamono.getContextPatternCallableInst(source_context, module_idx, pattern_idx);
+    }
+
+    pub fn getContextPatternCallablePlan(
+        self: *const Result,
+        source_context: SourceContext,
+        module_idx: u32,
+        pattern_idx: CIR.Pattern.Idx,
+    ) ?CallablePlan {
+        return self.lambdamono.getContextPatternCallablePlan(source_context, module_idx, pattern_idx);
     }
 
     pub fn getContextPatternMonotype(
@@ -372,43 +383,55 @@ pub const Result = struct {
         return self.context_mono.getContextPatternMonotype(source_context, module_idx, pattern_idx);
     }
 
-    pub fn getCallableInstSet(self: *const Result, callable_inst_set_id: CallableInstSetId) *const CallableInstSet {
-        return self.lambda_specialize.getCallableInstSet(callable_inst_set_id);
+    fn getLambdaSet(self: *const Result, lambda_set_id: LambdaSetId) *const LambdaSet {
+        return self.lambdamono.getLambdaSet(lambda_set_id);
     }
 
-    pub fn getCallableInstSetMembers(self: *const Result, span: CallableInstSetSpan) []const CallableInstId {
-        return self.lambda_specialize.getCallableInstSetMembers(span);
+    fn getLambdaSetMembers(self: *const Result, span: LambdaSetSpan) []const CallableInstId {
+        return self.lambdamono.getLambdaSetMembers(span);
     }
 
-    pub fn getContextPatternCallableInsts(
+    fn getContextPatternLambdaSetMembers(
         self: *const Result,
         source_context: SourceContext,
         module_idx: u32,
         pattern_idx: CIR.Pattern.Idx,
     ) ?[]const CallableInstId {
-        return self.lambda_specialize.getContextPatternCallableInsts(source_context, module_idx, pattern_idx);
+        return self.lambdamono.getContextPatternLambdaSetMembers(source_context, module_idx, pattern_idx);
     }
 
     pub fn getCallableTemplate(self: *const Result, callable_template_id: CallableTemplateId) *const CallableTemplate {
-        return self.lambda_solved.getCallableTemplate(callable_template_id);
+        return self.lambdasolved.getCallableTemplate(callable_template_id);
     }
 
     pub fn getCallableInst(self: *const Result, callable_inst_id: CallableInstId) *const CallableInst {
-        return self.lambda_specialize.getCallableInst(callable_inst_id);
+        return self.lambdamono.getCallableInst(callable_inst_id);
+    }
+
+    pub fn getCallableDef(self: *const Result, callable_def_id: CallableDefId) *const CallableDef {
+        return Lambdamono.getCallableDef(&self.program, callable_def_id);
+    }
+
+    pub fn getCallableDefForInst(self: *const Result, callable_inst_id: CallableInstId) *const CallableDef {
+        return self.getCallableDef(self.getCallableInst(callable_inst_id).callable_def);
+    }
+
+    pub fn getCaptureFields(self: *const Result, span: CaptureFieldSpan) []const CaptureField {
+        return Lambdamono.getCaptureFields(&self.program, span);
     }
 
     pub fn getCallableParamSpecEntries(
         self: *const Result,
         span: CallableParamSpecSpan,
     ) []const CallableParamSpecEntry {
-        return self.lambda_specialize.getCallableParamSpecEntries(span);
+        return self.lambdamono.getCallableParamSpecEntries(span);
     }
 
     pub fn getCallableParamProjectionEntries(
         self: *const Result,
         span: CallableParamProjectionSpan,
     ) []const CallableParamProjection {
-        return self.lambda_specialize.getCallableParamProjectionEntries(span);
+        return self.lambdamono.getCallableParamProjectionEntries(span);
     }
 
     pub fn getTypeSubst(self: *const Result, subst_id: TypeSubstId) *const TypeSubst {
@@ -420,19 +443,19 @@ pub const Result = struct {
     }
 
     pub fn getLocalCallableTemplate(self: *const Result, module_idx: u32, pattern_idx: CIR.Pattern.Idx) ?CallableTemplateId {
-        return self.lambda_solved.getLocalCallableTemplate(module_idx, pattern_idx);
+        return self.lambdasolved.getLocalCallableTemplate(module_idx, pattern_idx);
     }
 
     pub fn getExternalCallableTemplate(self: *const Result, module_idx: u32, def_node_idx: u16) ?CallableTemplateId {
-        return self.lambda_solved.getExternalCallableTemplate(module_idx, def_node_idx);
+        return self.lambdasolved.getExternalCallableTemplate(module_idx, def_node_idx);
     }
 
     pub fn getExprCallableTemplate(self: *const Result, module_idx: u32, expr_idx: CIR.Expr.Idx) ?CallableTemplateId {
-        return self.lambda_solved.getExprCallableTemplate(module_idx, expr_idx);
+        return self.lambdasolved.getExprCallableTemplate(module_idx, expr_idx);
     }
 
     pub fn getDeferredLocalCallable(self: *const Result, module_idx: u32, pattern_idx: CIR.Pattern.Idx) ?DeferredLocalCallable {
-        return self.lambda_solved.getDeferredLocalCallable(module_idx, pattern_idx);
+        return self.lambdasolved.getDeferredLocalCallable(module_idx, pattern_idx);
     }
 
     pub fn getPatternSourceExpr(
@@ -440,7 +463,7 @@ pub const Result = struct {
         module_idx: u32,
         pattern_idx: CIR.Pattern.Idx,
     ) ?ExprSource {
-        return self.lambda_solved.getPatternSourceExpr(module_idx, pattern_idx);
+        return self.lambdasolved.getPatternSourceExpr(module_idx, pattern_idx);
     }
 };
 
@@ -716,7 +739,7 @@ pub const Pass = struct {
         module_idx: u32,
         pattern_idx: CIR.Pattern.Idx,
     ) ?[]const CallableInstId {
-        return result.getContextPatternCallableInsts(
+        return result.getContextPatternLambdaSetMembers(
             callableInstSourceContext(context_callable_inst),
             module_idx,
             pattern_idx,
@@ -729,7 +752,7 @@ pub const Pass = struct {
         module_idx: u32,
         pattern_idx: CIR.Pattern.Idx,
     ) ?[]const CallableInstId {
-        return result.getContextPatternCallableInsts(self.currentSourceContext(), module_idx, pattern_idx);
+        return result.getContextPatternLambdaSetMembers(self.currentSourceContext(), module_idx, pattern_idx);
     }
 
     fn getExprCallableInstInContext(
@@ -758,7 +781,7 @@ pub const Pass = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?[]const CallableInstId {
-        return result.getExprCallableInsts(callableInstSourceContext(context_callable_inst), module_idx, expr_idx);
+        return result.getExprLambdaSetMembers(callableInstSourceContext(context_callable_inst), module_idx, expr_idx);
     }
 
     fn getExprCallableInstsInCurrentContext(
@@ -767,7 +790,7 @@ pub const Pass = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?[]const CallableInstId {
-        return result.getExprCallableInsts(self.currentSourceContext(), module_idx, expr_idx);
+        return result.getExprLambdaSetMembers(self.currentSourceContext(), module_idx, expr_idx);
     }
 
     fn getCallSiteCallableInstInContext(
@@ -796,7 +819,7 @@ pub const Pass = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?[]const CallableInstId {
-        return result.getCallSiteCallableInsts(callableInstSourceContext(context_callable_inst), module_idx, expr_idx);
+        return result.getCallSiteLambdaSetMembers(callableInstSourceContext(context_callable_inst), module_idx, expr_idx);
     }
 
     fn getCallSiteCallableInstsInCurrentContext(
@@ -805,7 +828,7 @@ pub const Pass = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?[]const CallableInstId {
-        return result.getCallSiteCallableInsts(self.currentSourceContext(), module_idx, expr_idx);
+        return result.getCallSiteLambdaSetMembers(self.currentSourceContext(), module_idx, expr_idx);
     }
 
     fn getLookupExprCallableInstsInContext(
@@ -815,7 +838,7 @@ pub const Pass = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?[]const CallableInstId {
-        return result.getLookupExprCallableInsts(callableInstSourceContext(context_callable_inst), module_idx, expr_idx);
+        return result.getLookupExprLambdaSetMembers(callableInstSourceContext(context_callable_inst), module_idx, expr_idx);
     }
 
     fn getLookupExprCallableInstsInCurrentContext(
@@ -824,7 +847,7 @@ pub const Pass = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?[]const CallableInstId {
-        return result.getLookupExprCallableInsts(self.currentSourceContext(), module_idx, expr_idx);
+        return result.getLookupExprLambdaSetMembers(self.currentSourceContext(), module_idx, expr_idx);
     }
 
     fn getLookupExprCallableInstInContext(
@@ -988,7 +1011,7 @@ pub const Pass = struct {
                 result.getCallableParamProjectionEntries(spec.projections),
                 projections.items,
             )) continue;
-            return result.getCallableInstSetMembers(result.getCallableInstSet(spec.callable_inst_set_id).members);
+            return result.getLambdaSetMembers(result.getLambdaSet(spec.lambda_set_id).members);
         }
 
         return null;
@@ -1085,7 +1108,7 @@ pub const Pass = struct {
         const module_env = self.all_module_envs[module_idx];
         switch (module_env.store.getExpr(expr_idx)) {
             .e_lookup_local => |lookup| {
-                if (result.getContextPatternCallableInsts(source_context, module_idx, lookup.pattern_idx)) |callable_inst_ids| {
+                if (result.getContextPatternLambdaSetMembers(source_context, module_idx, lookup.pattern_idx)) |callable_inst_ids| {
                     return callable_inst_ids;
                 }
             },
@@ -1096,11 +1119,11 @@ pub const Pass = struct {
             return callable_inst_ids;
         }
 
-        if (result.getExprCallableInsts(source_context, module_idx, expr_idx)) |callable_inst_ids| {
+        if (result.getExprLambdaSetMembers(source_context, module_idx, expr_idx)) |callable_inst_ids| {
             return callable_inst_ids;
         }
 
-        return result.getLookupExprCallableInsts(source_context, module_idx, expr_idx);
+        return result.getLookupExprLambdaSetMembers(source_context, module_idx, expr_idx);
     }
 
     fn resolveCallableParamProjectionRef(
@@ -1229,24 +1252,23 @@ pub const Pass = struct {
             iterations += 1;
             if (std.debug.runtime_safety and iterations > 32) {
                 std.debug.panic(
-                    "Pipeline: root fixed point did not converge (module={d}, contextualize_roots={}, revision={d}, templates={d}, callable_insts={d}, expr_callable_insts={d}, expr_callable_inst_sets={d}, call_sites={d}, call_site_sets={d}, lookups={d}, lookup_sets={d}, context_monos={d}, context_pattern_monos={d}, context_pattern_callable_insts={d}, context_pattern_sets={d}, closure_capture_value_plans={d}, mutation_counts={any})",
+                    "Pipeline: root fixed point did not converge (module={d}, contextualize_roots={}, revision={d}, templates={d}, callable_insts={d}, expr_callable_insts={d}, expr_lambda_sets={d}, call_sites={d}, call_site_sets={d}, lookups={d}, lookup_sets={d}, context_monos={d}, context_pattern_monos={d}, context_pattern_callable_insts={d}, context_pattern_sets={d}, mutation_counts={any})",
                     .{
                         self.current_module_idx,
                         contextualize_roots,
                         self.mutation_revision,
-                        result.lambda_solved.callable_templates.items.len,
-                        result.lambda_specialize.callable_insts.items.len,
-                        result.lambda_specialize.expr_callable_insts.count(),
-                        result.lambda_specialize.expr_callable_inst_sets.count(),
-                        result.lambda_specialize.call_site_callable_insts.count(),
-                        result.lambda_specialize.call_site_callable_inst_sets.count(),
-                        result.lambda_specialize.lookup_expr_callable_insts.count(),
-                        result.lambda_specialize.lookup_expr_callable_inst_sets.count(),
+                        result.lambdasolved.callable_templates.items.len,
+                        result.lambdamono.callable_insts.items.len,
+                        result.lambdamono.expr_callable_insts.count(),
+                        result.lambdamono.expr_lambda_sets.count(),
+                        result.lambdamono.call_site_callable_insts.count(),
+                        result.lambdamono.call_site_lambda_sets.count(),
+                        result.lambdamono.lookup_expr_callable_insts.count(),
+                        result.lambdamono.lookup_expr_lambda_sets.count(),
                         result.context_mono.context_expr_monotypes.count(),
                         result.context_mono.context_pattern_monotypes.count(),
-                        result.lambda_specialize.context_pattern_callable_insts.count(),
-                        result.lambda_specialize.context_pattern_callable_inst_sets.count(),
-                        result.lambda_specialize.closure_capture_value_plans.count(),
+                        result.lambdamono.context_pattern_callable_insts.count(),
+                        result.lambdamono.context_pattern_lambda_sets.count(),
                         self.mutation_counts,
                     },
                 );
@@ -1365,15 +1387,15 @@ pub const Pass = struct {
         kind: CallableTemplateKind,
         source_region: Region,
     ) Allocator.Error!CallableTemplateId {
-        if (result.lambda_solved.callable_template_ids_by_source.get(source_key)) |existing| return existing;
+        if (result.lambdasolved.callable_template_ids_by_source.get(source_key)) |existing| return existing;
 
         const lexical_owner_template: ?CallableTemplateId = if (kind == .closure)
             self.currentTemplateContext(result)
         else
             null;
 
-        const callable_template_id: CallableTemplateId = @enumFromInt(result.lambda_solved.callable_templates.items.len);
-        try self.appendTracked(.callable_templates, &result.lambda_solved.callable_templates, CallableTemplate{
+        const callable_template_id: CallableTemplateId = @enumFromInt(result.lambdasolved.callable_templates.items.len);
+        try self.appendTracked(.callable_templates, &result.lambdasolved.callable_templates, CallableTemplate{
             .source_key = source_key,
             .module_idx = module_idx,
             .cir_expr = cir_expr,
@@ -1384,7 +1406,7 @@ pub const Pass = struct {
             .external_def = externalDefSourceFromSourceKey(source_key),
             .source_region = source_region,
         });
-        try self.putTracked(.callable_template_ids_by_source, &result.lambda_solved.callable_template_ids_by_source, source_key, callable_template_id);
+        try self.putTracked(.callable_template_ids_by_source, &result.lambdasolved.callable_template_ids_by_source, source_key, callable_template_id);
 
         return callable_template_id;
     }
@@ -1395,7 +1417,7 @@ pub const Pass = struct {
         source_key: u64,
         template_id: CallableTemplateId,
     ) Allocator.Error!void {
-        if (result.lambda_solved.callable_template_ids_by_source.get(source_key)) |existing| {
+        if (result.lambdasolved.callable_template_ids_by_source.get(source_key)) |existing| {
             if (existing != template_id) {
                 if (std.debug.runtime_safety) {
                     std.debug.panic(
@@ -1409,7 +1431,7 @@ pub const Pass = struct {
         }
 
         if (externalDefSourceFromSourceKey(source_key)) |external_def| {
-            const template = &result.lambda_solved.callable_templates.items[@intFromEnum(template_id)];
+            const template = &result.lambdasolved.callable_templates.items[@intFromEnum(template_id)];
             if (template.external_def) |existing| {
                 if (existing.module_idx != external_def.module_idx or existing.def_idx != external_def.def_idx) {
                     if (std.debug.runtime_safety) {
@@ -1431,7 +1453,7 @@ pub const Pass = struct {
             }
         }
 
-        try self.putTracked(.callable_template_ids_by_source, &result.lambda_solved.callable_template_ids_by_source, source_key, template_id);
+        try self.putTracked(.callable_template_ids_by_source, &result.lambdasolved.callable_template_ids_by_source, source_key, template_id);
     }
 
     fn recordSourceExpr(
@@ -1441,7 +1463,7 @@ pub const Pass = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) Allocator.Error!void {
-        if (result.lambda_solved.source_exprs.get(source_key)) |existing| {
+        if (result.lambdasolved.source_exprs.get(source_key)) |existing| {
             if (existing.module_idx != module_idx or existing.expr_idx != expr_idx) {
                 if (std.debug.runtime_safety) {
                     std.debug.panic(
@@ -1460,7 +1482,7 @@ pub const Pass = struct {
             return;
         }
 
-        try self.putTracked(.source_exprs, &result.lambda_solved.source_exprs, source_key, ExprSource{
+        try self.putTracked(.source_exprs, &result.lambdasolved.source_exprs, source_key, ExprSource{
             .module_idx = module_idx,
             .expr_idx = expr_idx,
         });
@@ -1673,9 +1695,9 @@ pub const Pass = struct {
         if (!module_env.types.needsInstantiation(ModuleEnv.varFrom(expr_idx))) return;
 
         const source_key = packLocalPatternSourceKey(module_idx, pattern_idx);
-        if (result.lambda_solved.deferred_local_callables.contains(source_key)) return;
+        if (result.lambdasolved.deferred_local_callables.contains(source_key)) return;
 
-        try self.putTracked(.deferred_local_callables, &result.lambda_solved.deferred_local_callables, source_key, DeferredLocalCallable{
+        try self.putTracked(.deferred_local_callables, &result.lambdasolved.deferred_local_callables, source_key, DeferredLocalCallable{
             .pattern_idx = pattern_idx,
             .cir_expr = expr_idx,
             .module_idx = module_idx,
@@ -1889,14 +1911,14 @@ pub const Pass = struct {
             );
             return;
         }
-        try self.recordExprCallableInstSetWithRoot(
+        try self.recordExprLambdaSetWithRoot(
             result,
             self.currentSourceContext(),
             module_idx,
             expr_idx,
             callable_inst_ids.items,
         );
-        try self.recordContextPatternCallableInstSetForSourceContext(
+        try self.recordContextPatternLambdaSetForSourceContext(
             result,
             self.currentSourceContext(),
             module_idx,
@@ -2021,7 +2043,7 @@ pub const Pass = struct {
             if (self.getValueExprCallableInstInCurrentContext(result, module_idx, expr_idx) == null and
                 self.getValueExprCallableInstsInCurrentContext(result, module_idx, expr_idx) == null)
             {
-                if (try self.materializeCallableExprCallableInstInContext(
+                if (try self.realizeExprExactCallableInSourceContext(
                     result,
                     self.currentSourceContext(),
                     module_idx,
@@ -2127,7 +2149,7 @@ pub const Pass = struct {
         expr_idx: CIR.Expr.Idx,
         callable_inst_id: CallableInstId,
     ) Allocator.Error!void {
-        try self.mergeExprCallableInstSetWithRoot(
+        try self.mergeExprLambdaSetWithRoot(
             result,
             source_context,
             module_idx,
@@ -2135,10 +2157,10 @@ pub const Pass = struct {
             callable_inst_id,
         );
         try self.ensureRecordedCallableInstsScanned(result, &.{callable_inst_id});
-        try self.syncExprCallableInstExactFromSet(result, source_context, module_idx, expr_idx);
+        try self.finalizeExprCallablePlanFromLambdaSet(result, source_context, module_idx, expr_idx);
     }
 
-    fn recordExprCallableInstSet(
+    fn recordExprLambdaSet(
         self: *Pass,
         result: *Result,
         context_callable_inst: CallableInstId,
@@ -2146,7 +2168,7 @@ pub const Pass = struct {
         expr_idx: CIR.Expr.Idx,
         callable_inst_ids: []const CallableInstId,
     ) Allocator.Error!void {
-        return self.recordExprCallableInstSetWithRoot(
+        return self.recordExprLambdaSetWithRoot(
             result,
             callableInstSourceContext(context_callable_inst),
             module_idx,
@@ -2155,7 +2177,7 @@ pub const Pass = struct {
         );
     }
 
-    fn recordExprCallableInstSetWithRoot(
+    fn recordExprLambdaSetWithRoot(
         self: *Pass,
         result: *Result,
         source_context: SourceContext,
@@ -2166,7 +2188,7 @@ pub const Pass = struct {
         if (callable_inst_ids.len == 0) unreachable;
 
         for (callable_inst_ids) |callable_inst_id| {
-            try self.mergeExprCallableInstSetWithRoot(
+            try self.mergeExprLambdaSetWithRoot(
                 result,
                 source_context,
                 module_idx,
@@ -2175,7 +2197,7 @@ pub const Pass = struct {
             );
         }
         try self.ensureRecordedCallableInstsScanned(result, callable_inst_ids);
-        try self.syncExprCallableInstExactFromSet(result, source_context, module_idx, expr_idx);
+        try self.finalizeExprCallablePlanFromLambdaSet(result, source_context, module_idx, expr_idx);
     }
 
     fn resolveExprMonotypeIfMonomorphizableResolved(
@@ -2349,8 +2371,8 @@ pub const Pass = struct {
         };
     }
 
-    fn captureValuePlanExactCallableInst(plan: CaptureValuePlan) ?CallableInstId {
-        return plan.exact_callable_inst;
+    fn captureFieldExactCallableInst(field: CaptureField) ?CallableInstId {
+        return field.exact_callable_inst;
     }
 
     fn callableInstCaptureGraphReaches(
@@ -2366,16 +2388,9 @@ pub const Pass = struct {
         const entry = try visited.getOrPut(self.allocator, from_key);
         if (entry.found_existing) return false;
 
-        const runtime_closure = self.runtimeClosureExprForCallableInst(result, from_callable_inst_id) orelse return false;
-        for (runtime_closure.module_env.store.sliceCaptures(runtime_closure.closure.captures)) |capture_idx| {
-            const capture = runtime_closure.module_env.store.getCapture(capture_idx);
-            const capture_plan = result.getClosureCaptureValuePlan(
-                from_callable_inst_id,
-                runtime_closure.module_idx,
-                runtime_closure.expr_idx,
-                capture.pattern_idx,
-            ) orelse continue;
-            const capture_callable_inst_id = captureValuePlanExactCallableInst(capture_plan) orelse continue;
+        const callable_def = result.getCallableDefForInst(from_callable_inst_id);
+        for (result.getCaptureFields(callable_def.captures)) |capture_field| {
+            const capture_callable_inst_id = captureFieldExactCallableInst(capture_field) orelse continue;
             if (try self.callableInstCaptureGraphReaches(
                 result,
                 capture_callable_inst_id,
@@ -2405,50 +2420,62 @@ pub const Pass = struct {
         );
     }
 
-    fn computeCallableInstRuntimeValue(
+    fn updateCallableDefRuntimeValue(
         self: *Pass,
         result: *Result,
         callable_inst_id: CallableInstId,
-    ) Allocator.Error!LambdaSpecialize.RuntimeValue {
-        const runtime_closure = self.runtimeClosureExprForCallableInst(result, callable_inst_id) orelse return .direct_lambda;
+        source_expr_idx: CIR.Expr.Idx,
+        capture_fields: []const CaptureField,
+    ) Allocator.Error!void {
+        var runtime_field_monotypes = std.ArrayList(Monotype.Idx).empty;
+        defer runtime_field_monotypes.deinit(self.allocator);
+        const callable_def = &result.program.callable_defs.items[@intFromEnum(result.getCallableInst(callable_inst_id).callable_def)];
 
-        var field_monotypes = std.ArrayList(Monotype.Idx).empty;
-        defer field_monotypes.deinit(self.allocator);
-
-        for (runtime_closure.module_env.store.sliceCaptures(runtime_closure.closure.captures)) |capture_idx| {
-            const capture = runtime_closure.module_env.store.getCapture(capture_idx);
-            const capture_plan = result.getClosureCaptureValuePlan(
-                callable_inst_id,
-                runtime_closure.module_idx,
-                runtime_closure.expr_idx,
-                capture.pattern_idx,
-            ) orelse continue;
-            switch (capture_plan.storage) {
+        for (capture_fields) |capture_field| {
+            switch (capture_field.storage) {
                 .runtime_field => |runtime_field| {
-                    const field_monotype = if (runtime_field.field_monotype.module_idx == runtime_closure.module_idx)
+                    const field_monotype = if (runtime_field.field_monotype.module_idx == callable_def.module_idx)
                         runtime_field.field_monotype.idx
                     else
                         try self.remapMonotypeBetweenModules(
                             result,
                             runtime_field.field_monotype.idx,
                             runtime_field.field_monotype.module_idx,
-                            runtime_closure.module_idx,
+                            callable_def.module_idx,
                         );
-                    try field_monotypes.append(self.allocator, field_monotype);
+                    try runtime_field_monotypes.append(self.allocator, field_monotype);
                 },
                 .callable_only, .recursive_member => {},
             }
         }
 
-        if (field_monotypes.items.len == 0) return .direct_lambda;
+        callable_def.source_expr = source_expr_idx;
+        callable_def.callable_kind = if (runtime_field_monotypes.items.len == 0) .direct else .closure;
 
-        const field_span = try result.context_mono.monotype_store.addIdxSpan(self.allocator, field_monotypes.items);
-        return .{ .closure = .{
-            .capture_tuple_monotype = resolvedMonotype(
-                try result.context_mono.monotype_store.addMonotype(self.allocator, .{ .tuple = .{ .elems = field_span } }),
-                runtime_closure.module_idx,
-            ),
-        } };
+        const capture_span: CaptureFieldSpan = if (capture_fields.len == 0)
+            .empty()
+        else blk: {
+            const start: u32 = @intCast(result.program.capture_fields.items.len);
+            try result.program.capture_fields.appendSlice(self.allocator, capture_fields);
+            break :blk .{
+                .start = start,
+                .len = @intCast(capture_fields.len),
+            };
+        };
+        callable_def.captures = capture_span;
+
+        result.lambdamono.callable_insts.items[@intFromEnum(callable_inst_id)].runtime_value =
+            if (runtime_field_monotypes.items.len == 0)
+                .direct_lambda
+            else blk: {
+                const field_span = try result.context_mono.monotype_store.addIdxSpan(self.allocator, runtime_field_monotypes.items);
+                break :blk .{ .closure = .{
+                    .capture_tuple_monotype = resolvedMonotype(
+                        try result.context_mono.monotype_store.addMonotype(self.allocator, .{ .tuple = .{ .elems = field_span } }),
+                        callable_def.module_idx,
+                    ),
+                } };
+            };
     }
 
     fn closureCaptureAnalysisCallableInst(
@@ -2535,7 +2562,7 @@ pub const Pass = struct {
         };
     }
 
-    fn recordClosureCaptureFactsForCallableInst(
+    fn finalizeCallableDefForCallableInst(
         self: *Pass,
         result: *Result,
         enclosing_source_context: SourceContext,
@@ -2545,10 +2572,11 @@ pub const Pass = struct {
         closure_callable_inst_id: CallableInstId,
     ) Allocator.Error!void {
         const module_env = self.all_module_envs[module_idx];
+        var capture_fields = std.ArrayList(CaptureField).empty;
+        defer capture_fields.deinit(self.allocator);
 
         for (module_env.store.sliceCaptures(closure_expr.captures)) |capture_idx| {
             const capture = module_env.store.getCapture(capture_idx);
-            const key = Result.contextCaptureKey(closure_callable_inst_id, module_idx, closure_expr_idx, capture.pattern_idx);
             const capture_value_source = self.captureValueSourceForClosurePattern(
                 result,
                 module_env,
@@ -2588,7 +2616,7 @@ pub const Pass = struct {
             else
                 null;
 
-            const capture_storage: LambdaSpecialize.CaptureStorage = blk: {
+            const capture_storage: Lambdamono.CaptureStorage = blk: {
                 if (exact_capture_callable_inst) |capture_callable_inst_id| {
                     const capture_template = result.getCallableTemplate(
                         result.getCallableInst(capture_callable_inst_id).template,
@@ -2624,13 +2652,21 @@ pub const Pass = struct {
                 } };
             };
 
-            try self.putTracked(.closure_capture_value_plans, &result.lambda_specialize.closure_capture_value_plans, key, CaptureValuePlan{
+            try capture_fields.append(self.allocator, .{
+                .pattern_idx = capture.pattern_idx,
                 .local_monotype = capture_mono,
                 .exact_callable_inst = exact_capture_callable_inst,
                 .source = capture_value_source,
                 .storage = capture_storage,
             });
         }
+
+        try self.updateCallableDefRuntimeValue(
+            result,
+            closure_callable_inst_id,
+            closure_expr_idx,
+            capture_fields.items,
+        );
     }
 
     fn scanCirExprChildren(self: *Pass, result: *Result, module_idx: u32, expr_idx: CIR.Expr.Idx, expr: CIR.Expr) Allocator.Error!void {
@@ -2818,7 +2854,7 @@ pub const Pass = struct {
                 if (!self.suppress_direct_call_resolution) {
                     try self.resolveDirectCallSite(result, module_idx, expr_idx, call_expr);
                     if (self.getCallSiteCallableInstInCurrentContext(result, module_idx, expr_idx) == null and
-                        result.getCallSiteCallableInsts(
+                        result.getCallSiteLambdaSetMembers(
                             self.currentSourceContext(),
                             module_idx,
                             expr_idx,
@@ -2834,7 +2870,7 @@ pub const Pass = struct {
                 try self.scanCirExprSpan(result, module_idx, arg_exprs);
                 if (self.active_bindings != null) {
                     if (self.getCallSiteCallableInstInCurrentContext(result, module_idx, expr_idx) == null and
-                        result.getCallSiteCallableInsts(
+                        result.getCallSiteLambdaSetMembers(
                             self.currentSourceContext(),
                             module_idx,
                             expr_idx,
@@ -2975,7 +3011,7 @@ pub const Pass = struct {
 
         if (source_callable_insts.items.len == 0) return;
 
-        try self.recordLookupExprCallableInstSetWithRoot(
+        try self.recordLookupExprLambdaSetWithRoot(
             result,
             self.currentSourceContext(),
             lookup_module_idx,
@@ -2983,7 +3019,7 @@ pub const Pass = struct {
             source_callable_insts.items,
         );
         if (maybe_pattern_idx) |pattern_idx| {
-            try self.recordContextPatternCallableInstSetForSourceContext(
+            try self.recordContextPatternLambdaSetForSourceContext(
                 result,
                 self.currentSourceContext(),
                 lookup_module_idx,
@@ -2993,7 +3029,7 @@ pub const Pass = struct {
         }
     }
 
-    fn syncExprCallableInstExactFromSet(
+    fn finalizeExprCallablePlanFromLambdaSet(
         self: *Pass,
         result: *Result,
         source_context: SourceContext,
@@ -3001,13 +3037,13 @@ pub const Pass = struct {
         expr_idx: CIR.Expr.Idx,
     ) Allocator.Error!void {
         const key = self.resultExprKeyForSourceContext(source_context, module_idx, expr_idx);
-        const set_id = result.lambda_specialize.expr_callable_inst_sets.get(key) orelse {
-            self.removeTracked(.expr_callable_insts, &result.lambda_specialize.expr_callable_insts, key);
+        const set_id = result.lambdamono.expr_lambda_sets.get(key) orelse {
+            self.removeTracked(.expr_callable_insts, &result.lambdamono.expr_callable_insts, key);
             return;
         };
-        const members = result.getCallableInstSetMembers(result.getCallableInstSet(set_id).members);
+        const members = result.getLambdaSetMembers(result.getLambdaSet(set_id).members);
         if (members.len == 1) {
-            try self.putTracked(.expr_callable_insts, &result.lambda_specialize.expr_callable_insts, key, members[0]);
+            try self.putTracked(.expr_callable_insts, &result.lambdamono.expr_callable_insts, key, members[0]);
             const callable_inst = result.getCallableInst(members[0]).*;
             try self.recordExprMonotypeForSourceContext(
                 result,
@@ -3018,7 +3054,7 @@ pub const Pass = struct {
                 callable_inst.fn_monotype_module_idx,
             );
         } else {
-            self.removeTracked(.expr_callable_insts, &result.lambda_specialize.expr_callable_insts, key);
+            self.removeTracked(.expr_callable_insts, &result.lambdamono.expr_callable_insts, key);
         }
     }
 
@@ -3332,7 +3368,7 @@ pub const Pass = struct {
                     callable_inst_ids,
                     &visiting,
                 );
-                try self.recordCallSiteCallableInstSet(
+                try self.recordCallSiteLambdaSet(
                     result,
                     self.currentSourceContext(),
                     module_idx,
@@ -3357,7 +3393,7 @@ pub const Pass = struct {
             if (!(templateRequiresConcreteOwnerCallableInst(result, template_id) and
                 !sourceContextHasCallableInst(self.currentSourceContext())))
             {
-                switch (try self.inferDirectCallCallableInst(result, module_idx, call_expr_idx, call_expr, template_id)) {
+                switch (try self.specializeDirectCallExactCallable(result, module_idx, call_expr_idx, call_expr, template_id)) {
                     .resolved => |callable_inst_id| {
                         try self.finalizeResolvedDirectCallCallableInst(
                             result,
@@ -3428,7 +3464,7 @@ pub const Pass = struct {
         {
             return;
         }
-        const callable_inst_id = resolved: switch (try self.inferDirectCallCallableInst(result, module_idx, call_expr_idx, call_expr, template_id)) {
+        const callable_inst_id = resolved: switch (try self.specializeDirectCallExactCallable(result, module_idx, call_expr_idx, call_expr, template_id)) {
             .resolved => |callable_inst_id| break :resolved callable_inst_id,
             .blocked => {
                 return;
@@ -3714,17 +3750,17 @@ pub const Pass = struct {
                 );
             }
 
-            const members = result.getCallableInstSetMembers(
-                result.getCallableInstSet(spec.callable_inst_set_id).members,
+            const members = result.getLambdaSetMembers(
+                result.getLambdaSet(spec.lambda_set_id).members,
             );
             if (members.len == 0) {
                 std.debug.panic(
-                    "Pipeline: callable param spec for callable inst {d} param {d} had an empty callable-inst set",
+                    "Pipeline: callable param spec for callable inst {d} param {d} had an empty lambda set",
                     .{ @intFromEnum(callable_inst_id), spec.param_index },
                 );
             }
 
-            try self.recordContextPatternCallableInstSet(
+            try self.recordContextPatternLambdaSet(
                 result,
                 callable_inst_id,
                 template.module_idx,
@@ -4079,7 +4115,7 @@ pub const Pass = struct {
         } });
     }
 
-    fn inferDirectCallCallableInst(
+    fn specializeDirectCallExactCallable(
         self: *Pass,
         result: *Result,
         module_idx: u32,
@@ -4325,26 +4361,26 @@ pub const Pass = struct {
         switch (result.context_mono.monotype_store.getMonotype(monotype)) {
             .func => {
                 if (self.getValueExprCallableInstsForSourceContext(result, source_context, module_idx, expr_idx)) |callable_inst_ids| {
-                    const callable_inst_set_id = try self.internCallableInstSet(result, callable_inst_ids);
+                    const lambda_set_id = try self.internLambdaSet(result, callable_inst_ids);
                     try self.appendCallableParamSpecEntry(result, out, .{
                         .param_index = param_index,
                         .projections = try self.addCallableParamProjectionEntries(result, projections.items),
-                        .callable_inst_set_id = callable_inst_set_id,
+                        .lambda_set_id = lambda_set_id,
                     });
                     return true;
                 }
 
                 if (self.getValueExprCallableInstForSourceContext(result, source_context, module_idx, expr_idx)) |callable_inst_id| {
-                    const callable_inst_set_id = try self.internCallableInstSet(result, &.{callable_inst_id});
+                    const lambda_set_id = try self.internLambdaSet(result, &.{callable_inst_id});
                     try self.appendCallableParamSpecEntry(result, out, .{
                         .param_index = param_index,
                         .projections = try self.addCallableParamProjectionEntries(result, projections.items),
-                        .callable_inst_set_id = callable_inst_set_id,
+                        .lambda_set_id = lambda_set_id,
                     });
                     return true;
                 }
 
-                if (try self.materializeCallableExprCallableInstForFnMonotypeInContext(
+                if (try self.realizeExprExactCallableFromFnMonotypeInSourceContext(
                     result,
                     source_context,
                     module_idx,
@@ -4352,11 +4388,11 @@ pub const Pass = struct {
                     monotype,
                     monotype_module_idx,
                 )) |callable_inst_id| {
-                    const callable_inst_set_id = try self.internCallableInstSet(result, &.{callable_inst_id});
+                    const lambda_set_id = try self.internLambdaSet(result, &.{callable_inst_id});
                     try self.appendCallableParamSpecEntry(result, out, .{
                         .param_index = param_index,
                         .projections = try self.addCallableParamProjectionEntries(result, projections.items),
-                        .callable_inst_set_id = callable_inst_set_id,
+                        .lambda_set_id = lambda_set_id,
                     });
                     return true;
                 }
@@ -4367,21 +4403,21 @@ pub const Pass = struct {
                 try self.scanCirValueExpr(result, module_idx, expr_idx);
 
                 if (self.getValueExprCallableInstsForSourceContext(result, source_context, module_idx, expr_idx)) |callable_inst_ids| {
-                    const callable_inst_set_id = try self.internCallableInstSet(result, callable_inst_ids);
+                    const lambda_set_id = try self.internLambdaSet(result, callable_inst_ids);
                     try self.appendCallableParamSpecEntry(result, out, .{
                         .param_index = param_index,
                         .projections = try self.addCallableParamProjectionEntries(result, projections.items),
-                        .callable_inst_set_id = callable_inst_set_id,
+                        .lambda_set_id = lambda_set_id,
                     });
                     return true;
                 }
 
                 if (self.getValueExprCallableInstForSourceContext(result, source_context, module_idx, expr_idx)) |callable_inst_id| {
-                    const callable_inst_set_id = try self.internCallableInstSet(result, &.{callable_inst_id});
+                    const lambda_set_id = try self.internLambdaSet(result, &.{callable_inst_id});
                     try self.appendCallableParamSpecEntry(result, out, .{
                         .param_index = param_index,
                         .projections = try self.addCallableParamProjectionEntries(result, projections.items),
-                        .callable_inst_set_id = callable_inst_set_id,
+                        .lambda_set_id = lambda_set_id,
                     });
                     return true;
                 }
@@ -5601,7 +5637,7 @@ pub const Pass = struct {
             return;
         }
 
-        try self.recordExprCallableInstSetWithRoot(
+        try self.recordExprLambdaSetWithRoot(
             result,
             source_context,
             module_idx,
@@ -5648,7 +5684,7 @@ pub const Pass = struct {
 
         const module_env = self.all_module_envs[module_idx];
         if (callableKind(module_env.store.getExpr(expr_idx)) != null) {
-            if (try self.materializeCallableExprCallableInstInContext(
+            if (try self.realizeExprExactCallableInSourceContext(
                 result,
                 source_context,
                 module_idx,
@@ -5734,14 +5770,14 @@ pub const Pass = struct {
                 if (self.getCallLowLevelOp(module_env, call_expr.func) != null) return;
 
                 if (result.getCallSiteCallableInst(source_context, module_idx, expr_idx) == null and
-                    result.getCallSiteCallableInsts(source_context, module_idx, expr_idx) == null)
+                    result.getCallSiteLambdaSetMembers(source_context, module_idx, expr_idx) == null)
                 {
                     try self.pushSourceContext(source_context);
                     defer self.popSourceContext();
                     try self.resolveDirectCallSite(result, module_idx, expr_idx, call_expr);
                 }
 
-                if (result.getCallSiteCallableInsts(source_context, module_idx, expr_idx)) |callee_callable_inst_ids| {
+                if (result.getCallSiteLambdaSetMembers(source_context, module_idx, expr_idx)) |callee_callable_inst_ids| {
                     for (callee_callable_inst_ids) |callee_callable_inst_id| {
                         try self.recordCallResultCallableInstsFromCallableInst(
                             result,
@@ -5788,7 +5824,7 @@ pub const Pass = struct {
         }
     }
 
-    fn materializeCallableExprCallableInstInContext(
+    fn realizeExprExactCallableInSourceContext(
         self: *Pass,
         result: *Result,
         source_context: SourceContext,
@@ -5860,7 +5896,7 @@ pub const Pass = struct {
         return callable_inst_id;
     }
 
-    fn materializeCallableExprCallableInstForFnMonotypeInContext(
+    fn realizeExprExactCallableFromFnMonotypeInSourceContext(
         self: *Pass,
         result: *Result,
         source_context: SourceContext,
@@ -5964,7 +6000,7 @@ pub const Pass = struct {
         }
     }
 
-    fn inferDispatchCallableInst(
+    fn specializeDispatchExactCallable(
         self: *Pass,
         result: *Result,
         module_idx: u32,
@@ -6690,8 +6726,8 @@ pub const Pass = struct {
                 }
             }
 
-            if (try self.inferDispatchCallableInst(result, module_idx, expr_idx, expr, template_id)) |inferred| {
-                break :blk inferred;
+            if (try self.specializeDispatchExactCallable(result, module_idx, expr_idx, expr, template_id)) |exact_callable_inst| {
+                break :blk exact_callable_inst;
             }
 
             const fn_monotype = try self.resolveTypeVarMonotypeIfExactResolved(result, module_idx, resolved_target.fn_var);
@@ -6898,7 +6934,7 @@ pub const Pass = struct {
             method_info,
             receiver_monotype.idx,
         ) orelse return null;
-        return try self.inferDispatchCallableInst(result, module_idx, expr_idx, expr, method_info.template_id);
+        return try self.specializeDispatchExactCallable(result, module_idx, expr_idx, expr, method_info.template_id);
     }
 
     fn resolveAssociatedMethodDispatchTargetForTypeVar(
@@ -6952,7 +6988,7 @@ pub const Pass = struct {
             method_info,
             receiver_monotype,
         ) orelse return null;
-        return try self.inferDispatchCallableInst(result, module_idx, expr_idx, expr, method_info.template_id);
+        return try self.specializeDispatchExactCallable(result, module_idx, expr_idx, expr, method_info.template_id);
     }
 
     fn resolveAssociatedMethodDispatchTargetForMonotype(
@@ -7423,7 +7459,7 @@ pub const Pass = struct {
                 if (callable_inst_ids.len == 1) {
                     break :blk callable_inst_ids[0];
                 }
-                try self.recordLookupExprCallableInstSetWithRoot(
+                try self.recordLookupExprLambdaSetWithRoot(
                     result,
                     self.currentSourceContext(),
                     module_idx,
@@ -7459,7 +7495,7 @@ pub const Pass = struct {
             else
                 try self.ensureCallableInstUnscanned(result, template_id, desired_fn_monotype.idx, desired_fn_monotype.module_idx);
         };
-        try self.recordLookupExprCallableInstSetWithRoot(
+        try self.recordLookupExprLambdaSetWithRoot(
             result,
             self.currentSourceContext(),
             module_idx,
@@ -7467,7 +7503,7 @@ pub const Pass = struct {
             &.{callable_inst_id},
         );
         if (module_env.store.getExpr(expr_idx) == .e_lookup_local) {
-            try self.recordContextPatternCallableInstSetForSourceContext(
+            try self.recordContextPatternLambdaSetForSourceContext(
                 result,
                 self.currentSourceContext(),
                 module_idx,
@@ -7517,13 +7553,13 @@ pub const Pass = struct {
         );
     }
 
-    fn internCallableInstSet(
+    fn internLambdaSet(
         self: *Pass,
         result: *Result,
         members: []const CallableInstId,
-    ) Allocator.Error!CallableInstSetId {
-        for (result.lambda_specialize.callable_inst_sets.items, 0..) |existing_set, idx| {
-            const existing_members = result.getCallableInstSetMembers(existing_set.members);
+    ) Allocator.Error!LambdaSetId {
+        for (result.lambdamono.lambda_sets.items, 0..) |existing_set, idx| {
+            const existing_members = result.getLambdaSetMembers(existing_set.members);
             if (existing_members.len != members.len) continue;
 
             var matches = true;
@@ -7536,23 +7572,23 @@ pub const Pass = struct {
             if (matches) return @enumFromInt(idx);
         }
 
-        const span: CallableInstSetSpan = if (members.len == 0)
-            CallableInstSetSpan.empty()
+        const span: LambdaSetSpan = if (members.len == 0)
+            LambdaSetSpan.empty()
         else blk: {
-            const start: u32 = @intCast(result.lambda_specialize.callable_inst_set_entries.items.len);
-            try result.lambda_specialize.callable_inst_set_entries.appendSlice(self.allocator, members);
+            const start: u32 = @intCast(result.lambdamono.lambda_set_entries.items.len);
+            try result.lambdamono.lambda_set_entries.appendSlice(self.allocator, members);
             break :blk .{
                 .start = start,
                 .len = @intCast(members.len),
             };
         };
 
-        const set_id: CallableInstSetId = @enumFromInt(result.lambda_specialize.callable_inst_sets.items.len);
-        try self.appendTracked(.callable_inst_sets, &result.lambda_specialize.callable_inst_sets, CallableInstSet{ .members = span });
+        const set_id: LambdaSetId = @enumFromInt(result.lambdamono.lambda_sets.items.len);
+        try self.appendTracked(.lambda_sets, &result.lambdamono.lambda_sets, LambdaSet{ .members = span });
         return set_id;
     }
 
-    fn mergeContextPatternCallableInstSet(
+    fn mergeContextPatternLambdaSet(
         self: *Pass,
         result: *Result,
         context_callable_inst: CallableInstId,
@@ -7560,7 +7596,7 @@ pub const Pass = struct {
         pattern_idx: CIR.Pattern.Idx,
         callable_inst_id: CallableInstId,
     ) Allocator.Error!void {
-        return self.mergeContextPatternCallableInstSetForSourceContext(
+        return self.mergeContextPatternLambdaSetForSourceContext(
             result,
             callableInstSourceContext(context_callable_inst),
             module_idx,
@@ -7569,7 +7605,7 @@ pub const Pass = struct {
         );
     }
 
-    fn mergeContextPatternCallableInstSetForSourceContext(
+    fn mergeContextPatternLambdaSetForSourceContext(
         self: *Pass,
         result: *Result,
         source_context: SourceContext,
@@ -7578,13 +7614,13 @@ pub const Pass = struct {
         callable_inst_id: CallableInstId,
     ) Allocator.Error!void {
         const key = self.resultPatternKeyForSourceContext(source_context, module_idx, pattern_idx);
-        const existing_set_id = result.lambda_specialize.context_pattern_callable_inst_sets.get(key);
+        const existing_set_id = result.lambdamono.context_pattern_lambda_sets.get(key);
 
         var merged = std.ArrayList(CallableInstId).empty;
         defer merged.deinit(self.allocator);
 
         if (existing_set_id) |set_id| {
-            try merged.appendSlice(self.allocator, result.getCallableInstSetMembers(result.getCallableInstSet(set_id).members));
+            try merged.appendSlice(self.allocator, result.getLambdaSetMembers(result.getLambdaSet(set_id).members));
         }
 
         for (merged.items) |existing_callable_inst_id| {
@@ -7602,11 +7638,11 @@ pub const Pass = struct {
             }.lessThan,
         );
 
-        const set_id = try self.internCallableInstSet(result, merged.items);
-        try self.putTracked(.context_pattern_callable_inst_sets, &result.lambda_specialize.context_pattern_callable_inst_sets, key, set_id);
+        const set_id = try self.internLambdaSet(result, merged.items);
+        try self.putTracked(.context_pattern_lambda_sets, &result.lambdamono.context_pattern_lambda_sets, key, set_id);
     }
 
-    fn mergeExprCallableInstSet(
+    fn mergeExprLambdaSet(
         self: *Pass,
         result: *Result,
         context_callable_inst: CallableInstId,
@@ -7614,7 +7650,7 @@ pub const Pass = struct {
         expr_idx: CIR.Expr.Idx,
         callable_inst_id: CallableInstId,
     ) Allocator.Error!void {
-        return self.mergeExprCallableInstSetWithRoot(
+        return self.mergeExprLambdaSetWithRoot(
             result,
             callableInstSourceContext(context_callable_inst),
             module_idx,
@@ -7623,7 +7659,7 @@ pub const Pass = struct {
         );
     }
 
-    fn mergeExprCallableInstSetWithRoot(
+    fn mergeExprLambdaSetWithRoot(
         self: *Pass,
         result: *Result,
         source_context: SourceContext,
@@ -7632,13 +7668,13 @@ pub const Pass = struct {
         callable_inst_id: CallableInstId,
     ) Allocator.Error!void {
         const key = self.resultExprKeyForSourceContext(source_context, module_idx, expr_idx);
-        const existing_set_id = result.lambda_specialize.expr_callable_inst_sets.get(key);
+        const existing_set_id = result.lambdamono.expr_lambda_sets.get(key);
 
         var merged = std.ArrayList(CallableInstId).empty;
         defer merged.deinit(self.allocator);
 
         if (existing_set_id) |set_id| {
-            try merged.appendSlice(self.allocator, result.getCallableInstSetMembers(result.getCallableInstSet(set_id).members));
+            try merged.appendSlice(self.allocator, result.getLambdaSetMembers(result.getLambdaSet(set_id).members));
         }
 
         for (merged.items) |existing_callable_inst_id| {
@@ -7656,11 +7692,11 @@ pub const Pass = struct {
             }.lessThan,
         );
 
-        const set_id = try self.internCallableInstSet(result, merged.items);
-        try self.putTracked(.expr_callable_inst_sets, &result.lambda_specialize.expr_callable_inst_sets, key, set_id);
+        const set_id = try self.internLambdaSet(result, merged.items);
+        try self.putTracked(.expr_lambda_sets, &result.lambdamono.expr_lambda_sets, key, set_id);
     }
 
-    fn mergeLookupExprCallableInstSet(
+    fn mergeLookupExprLambdaSet(
         self: *Pass,
         result: *Result,
         context_callable_inst: CallableInstId,
@@ -7668,7 +7704,7 @@ pub const Pass = struct {
         expr_idx: CIR.Expr.Idx,
         callable_inst_id: CallableInstId,
     ) Allocator.Error!void {
-        return self.mergeLookupExprCallableInstSetForSourceContext(
+        return self.mergeLookupExprLambdaSetForSourceContext(
             result,
             callableInstSourceContext(context_callable_inst),
             module_idx,
@@ -7677,7 +7713,7 @@ pub const Pass = struct {
         );
     }
 
-    fn mergeLookupExprCallableInstSetForSourceContext(
+    fn mergeLookupExprLambdaSetForSourceContext(
         self: *Pass,
         result: *Result,
         source_context: SourceContext,
@@ -7686,13 +7722,13 @@ pub const Pass = struct {
         callable_inst_id: CallableInstId,
     ) Allocator.Error!void {
         const key = self.resultExprKeyForSourceContext(source_context, module_idx, expr_idx);
-        const existing_set_id = result.lambda_specialize.lookup_expr_callable_inst_sets.get(key);
+        const existing_set_id = result.lambdamono.lookup_expr_lambda_sets.get(key);
 
         var merged = std.ArrayList(CallableInstId).empty;
         defer merged.deinit(self.allocator);
 
         if (existing_set_id) |set_id| {
-            try merged.appendSlice(self.allocator, result.getCallableInstSetMembers(result.getCallableInstSet(set_id).members));
+            try merged.appendSlice(self.allocator, result.getLambdaSetMembers(result.getLambdaSet(set_id).members));
         }
 
         for (merged.items) |existing_callable_inst_id| {
@@ -7710,11 +7746,11 @@ pub const Pass = struct {
             }.lessThan,
         );
 
-        const set_id = try self.internCallableInstSet(result, merged.items);
-        try self.putTracked(.lookup_expr_callable_inst_sets, &result.lambda_specialize.lookup_expr_callable_inst_sets, key, set_id);
+        const set_id = try self.internLambdaSet(result, merged.items);
+        try self.putTracked(.lookup_expr_lambda_sets, &result.lambdamono.lookup_expr_lambda_sets, key, set_id);
     }
 
-    fn mergeCallSiteCallableInstSet(
+    fn mergeCallSiteLambdaSet(
         self: *Pass,
         result: *Result,
         context_callable_inst: CallableInstId,
@@ -7722,7 +7758,7 @@ pub const Pass = struct {
         expr_idx: CIR.Expr.Idx,
         callable_inst_id: CallableInstId,
     ) Allocator.Error!void {
-        return self.mergeCallSiteCallableInstSetForSourceContext(
+        return self.mergeCallSiteLambdaSetForSourceContext(
             result,
             callableInstSourceContext(context_callable_inst),
             module_idx,
@@ -7731,7 +7767,7 @@ pub const Pass = struct {
         );
     }
 
-    fn mergeCallSiteCallableInstSetForSourceContext(
+    fn mergeCallSiteLambdaSetForSourceContext(
         self: *Pass,
         result: *Result,
         source_context: SourceContext,
@@ -7740,13 +7776,13 @@ pub const Pass = struct {
         callable_inst_id: CallableInstId,
     ) Allocator.Error!void {
         const key = self.resultExprKeyForSourceContext(source_context, module_idx, expr_idx);
-        const existing_set_id = result.lambda_specialize.call_site_callable_inst_sets.get(key);
+        const existing_set_id = result.lambdamono.call_site_lambda_sets.get(key);
 
         var merged = std.ArrayList(CallableInstId).empty;
         defer merged.deinit(self.allocator);
 
         if (existing_set_id) |set_id| {
-            try merged.appendSlice(self.allocator, result.getCallableInstSetMembers(result.getCallableInstSet(set_id).members));
+            try merged.appendSlice(self.allocator, result.getLambdaSetMembers(result.getLambdaSet(set_id).members));
         }
 
         for (merged.items) |existing_callable_inst_id| {
@@ -7764,11 +7800,11 @@ pub const Pass = struct {
             }.lessThan,
         );
 
-        const set_id = try self.internCallableInstSet(result, merged.items);
-        try self.putTracked(.call_site_callable_inst_sets, &result.lambda_specialize.call_site_callable_inst_sets, key, set_id);
+        const set_id = try self.internLambdaSet(result, merged.items);
+        try self.putTracked(.call_site_lambda_sets, &result.lambdamono.call_site_lambda_sets, key, set_id);
     }
 
-    fn recordCallSiteCallableInstSet(
+    fn recordCallSiteLambdaSet(
         self: *Pass,
         result: *Result,
         source_context: SourceContext,
@@ -7779,13 +7815,13 @@ pub const Pass = struct {
         if (callable_inst_ids.len == 0) unreachable;
 
         for (callable_inst_ids) |callable_inst_id| {
-            try self.mergeCallSiteCallableInstSetForSourceContext(result, source_context, module_idx, expr_idx, callable_inst_id);
+            try self.mergeCallSiteLambdaSetForSourceContext(result, source_context, module_idx, expr_idx, callable_inst_id);
         }
         try self.ensureRecordedCallableInstsScanned(result, callable_inst_ids);
-        try self.syncCallSiteCallableInstExactFromSet(result, source_context, module_idx, expr_idx);
+        try self.finalizeCallSiteCallablePlanFromLambdaSet(result, source_context, module_idx, expr_idx);
     }
 
-    fn syncCallSiteCallableInstExactFromSet(
+    fn finalizeCallSiteCallablePlanFromLambdaSet(
         self: *Pass,
         result: *Result,
         source_context: SourceContext,
@@ -7793,15 +7829,15 @@ pub const Pass = struct {
         expr_idx: CIR.Expr.Idx,
     ) Allocator.Error!void {
         const key = self.resultExprKeyForSourceContext(source_context, module_idx, expr_idx);
-        const set_id = result.lambda_specialize.call_site_callable_inst_sets.get(key) orelse {
-            self.removeTracked(.call_site_callable_insts, &result.lambda_specialize.call_site_callable_insts, key);
+        const set_id = result.lambdamono.call_site_lambda_sets.get(key) orelse {
+            self.removeTracked(.call_site_callable_insts, &result.lambdamono.call_site_callable_insts, key);
             return;
         };
-        const members = result.getCallableInstSetMembers(result.getCallableInstSet(set_id).members);
+        const members = result.getLambdaSetMembers(result.getLambdaSet(set_id).members);
         if (members.len == 1) {
-            try self.putTracked(.call_site_callable_insts, &result.lambda_specialize.call_site_callable_insts, key, members[0]);
+            try self.putTracked(.call_site_callable_insts, &result.lambdamono.call_site_callable_insts, key, members[0]);
         } else {
-            self.removeTracked(.call_site_callable_insts, &result.lambda_specialize.call_site_callable_insts, key);
+            self.removeTracked(.call_site_callable_insts, &result.lambdamono.call_site_callable_insts, key);
         }
     }
 
@@ -7823,7 +7859,7 @@ pub const Pass = struct {
         expr_idx: CIR.Expr.Idx,
         callable_inst_id: CallableInstId,
     ) Allocator.Error!void {
-        return self.recordCallSiteCallableInstSet(result, source_context, module_idx, expr_idx, &.{callable_inst_id});
+        return self.recordCallSiteLambdaSet(result, source_context, module_idx, expr_idx, &.{callable_inst_id});
     }
 
     fn recordContextPatternCallableInstForSourceContext(
@@ -7834,14 +7870,14 @@ pub const Pass = struct {
         pattern_idx: CIR.Pattern.Idx,
         callable_inst_id: CallableInstId,
     ) Allocator.Error!void {
-        try self.mergeContextPatternCallableInstSetForSourceContext(
+        try self.mergeContextPatternLambdaSetForSourceContext(
             result,
             source_context,
             module_idx,
             pattern_idx,
             callable_inst_id,
         );
-        try self.syncContextPatternCallableInstExactFromSet(result, source_context, module_idx, pattern_idx);
+        try self.finalizeContextPatternCallablePlanFromLambdaSet(result, source_context, module_idx, pattern_idx);
     }
 
     fn recordContextPatternCallableInst(
@@ -7861,7 +7897,7 @@ pub const Pass = struct {
         );
     }
 
-    fn recordContextPatternCallableInstSet(
+    fn recordContextPatternLambdaSet(
         self: *Pass,
         result: *Result,
         context_callable_inst: CallableInstId,
@@ -7869,7 +7905,7 @@ pub const Pass = struct {
         pattern_idx: CIR.Pattern.Idx,
         callable_inst_ids: []const CallableInstId,
     ) Allocator.Error!void {
-        return self.recordContextPatternCallableInstSetForSourceContext(
+        return self.recordContextPatternLambdaSetForSourceContext(
             result,
             callableInstSourceContext(context_callable_inst),
             module_idx,
@@ -7878,7 +7914,7 @@ pub const Pass = struct {
         );
     }
 
-    fn recordContextPatternCallableInstSetForSourceContext(
+    fn recordContextPatternLambdaSetForSourceContext(
         self: *Pass,
         result: *Result,
         source_context: SourceContext,
@@ -7889,13 +7925,13 @@ pub const Pass = struct {
         if (callable_inst_ids.len == 0) unreachable;
 
         for (callable_inst_ids) |callable_inst_id| {
-            try self.mergeContextPatternCallableInstSetForSourceContext(result, source_context, module_idx, pattern_idx, callable_inst_id);
+            try self.mergeContextPatternLambdaSetForSourceContext(result, source_context, module_idx, pattern_idx, callable_inst_id);
         }
         try self.ensureRecordedCallableInstsScanned(result, callable_inst_ids);
-        try self.syncContextPatternCallableInstExactFromSet(result, source_context, module_idx, pattern_idx);
+        try self.finalizeContextPatternCallablePlanFromLambdaSet(result, source_context, module_idx, pattern_idx);
     }
 
-    fn syncContextPatternCallableInstExactFromSet(
+    fn finalizeContextPatternCallablePlanFromLambdaSet(
         self: *Pass,
         result: *Result,
         source_context: SourceContext,
@@ -7903,15 +7939,15 @@ pub const Pass = struct {
         pattern_idx: CIR.Pattern.Idx,
     ) Allocator.Error!void {
         const key = self.resultPatternKeyForSourceContext(source_context, module_idx, pattern_idx);
-        const set_id = result.lambda_specialize.context_pattern_callable_inst_sets.get(key) orelse {
-            self.removeTracked(.context_pattern_callable_insts, &result.lambda_specialize.context_pattern_callable_insts, key);
+        const set_id = result.lambdamono.context_pattern_lambda_sets.get(key) orelse {
+            self.removeTracked(.context_pattern_callable_insts, &result.lambdamono.context_pattern_callable_insts, key);
             return;
         };
-        const members = result.getCallableInstSetMembers(result.getCallableInstSet(set_id).members);
+        const members = result.getLambdaSetMembers(result.getLambdaSet(set_id).members);
         if (members.len == 1) {
-            try self.putTracked(.context_pattern_callable_insts, &result.lambda_specialize.context_pattern_callable_insts, key, members[0]);
+            try self.putTracked(.context_pattern_callable_insts, &result.lambdamono.context_pattern_callable_insts, key, members[0]);
         } else {
-            self.removeTracked(.context_pattern_callable_insts, &result.lambda_specialize.context_pattern_callable_insts, key);
+            self.removeTracked(.context_pattern_callable_insts, &result.lambdamono.context_pattern_callable_insts, key);
         }
     }
 
@@ -7923,14 +7959,14 @@ pub const Pass = struct {
         expr_idx: CIR.Expr.Idx,
         callable_inst_id: CallableInstId,
     ) Allocator.Error!void {
-        try self.mergeLookupExprCallableInstSetForSourceContext(
+        try self.mergeLookupExprLambdaSetForSourceContext(
             result,
             source_context,
             module_idx,
             expr_idx,
             callable_inst_id,
         );
-        try self.syncLookupExprCallableInstExactFromSet(result, source_context, module_idx, expr_idx);
+        try self.finalizeLookupExprCallablePlanFromLambdaSet(result, source_context, module_idx, expr_idx);
     }
 
     fn recordLookupExprCallableInst(
@@ -7950,7 +7986,7 @@ pub const Pass = struct {
         );
     }
 
-    fn recordLookupExprCallableInstSet(
+    fn recordLookupExprLambdaSet(
         self: *Pass,
         result: *Result,
         context_callable_inst: CallableInstId,
@@ -7958,7 +7994,7 @@ pub const Pass = struct {
         expr_idx: CIR.Expr.Idx,
         callable_inst_ids: []const CallableInstId,
     ) Allocator.Error!void {
-        return self.recordLookupExprCallableInstSetWithRoot(
+        return self.recordLookupExprLambdaSetWithRoot(
             result,
             callableInstSourceContext(context_callable_inst),
             module_idx,
@@ -7967,7 +8003,7 @@ pub const Pass = struct {
         );
     }
 
-    fn recordLookupExprCallableInstSetWithRoot(
+    fn recordLookupExprLambdaSetWithRoot(
         self: *Pass,
         result: *Result,
         source_context: SourceContext,
@@ -7978,13 +8014,13 @@ pub const Pass = struct {
         if (callable_inst_ids.len == 0) unreachable;
 
         for (callable_inst_ids) |callable_inst_id| {
-            try self.mergeLookupExprCallableInstSetForSourceContext(result, source_context, module_idx, expr_idx, callable_inst_id);
+            try self.mergeLookupExprLambdaSetForSourceContext(result, source_context, module_idx, expr_idx, callable_inst_id);
         }
         try self.ensureRecordedCallableInstsScanned(result, callable_inst_ids);
-        try self.syncLookupExprCallableInstExactFromSet(result, source_context, module_idx, expr_idx);
+        try self.finalizeLookupExprCallablePlanFromLambdaSet(result, source_context, module_idx, expr_idx);
     }
 
-    fn syncLookupExprCallableInstExactFromSet(
+    fn finalizeLookupExprCallablePlanFromLambdaSet(
         self: *Pass,
         result: *Result,
         source_context: SourceContext,
@@ -7992,13 +8028,13 @@ pub const Pass = struct {
         expr_idx: CIR.Expr.Idx,
     ) Allocator.Error!void {
         const key = self.resultExprKeyForSourceContext(source_context, module_idx, expr_idx);
-        const set_id = result.lambda_specialize.lookup_expr_callable_inst_sets.get(key) orelse {
-            self.removeTracked(.lookup_expr_callable_insts, &result.lambda_specialize.lookup_expr_callable_insts, key);
+        const set_id = result.lambdamono.lookup_expr_lambda_sets.get(key) orelse {
+            self.removeTracked(.lookup_expr_callable_insts, &result.lambdamono.lookup_expr_callable_insts, key);
             return;
         };
-        const members = result.getCallableInstSetMembers(result.getCallableInstSet(set_id).members);
+        const members = result.getLambdaSetMembers(result.getLambdaSet(set_id).members);
         if (members.len == 1) {
-            try self.putTracked(.lookup_expr_callable_insts, &result.lambda_specialize.lookup_expr_callable_insts, key, members[0]);
+            try self.putTracked(.lookup_expr_callable_insts, &result.lambdamono.lookup_expr_callable_insts, key, members[0]);
             const callable_inst = result.getCallableInst(members[0]).*;
             try self.recordExprMonotypeForSourceContext(
                 result,
@@ -8009,7 +8045,7 @@ pub const Pass = struct {
                 callable_inst.fn_monotype_module_idx,
             );
         } else {
-            self.removeTracked(.lookup_expr_callable_insts, &result.lambda_specialize.lookup_expr_callable_insts, key);
+            self.removeTracked(.lookup_expr_callable_insts, &result.lambdamono.lookup_expr_callable_insts, key);
         }
     }
 
@@ -9401,7 +9437,7 @@ pub const Pass = struct {
         try self.scanModule(result, target_module_idx);
 
         const key = packExternalDefSourceKey(target_module_idx, target_node_idx);
-        if (result.lambda_solved.source_exprs.get(key)) |source| return source;
+        if (result.lambdasolved.source_exprs.get(key)) |source| return source;
 
         const target_env = self.all_module_envs[target_module_idx];
         if (!target_env.store.isDefNode(target_node_idx)) return null;
@@ -9825,7 +9861,7 @@ pub const Pass = struct {
         }
     }
 
-    fn exactDemandedTemplateCallableInstIfSingleton(
+    fn singletonDemandedTemplateCallableInst(
         self: *Pass,
         result: *Result,
         template_id: CallableTemplateId,
@@ -9857,7 +9893,7 @@ pub const Pass = struct {
         switch (expr) {
             .e_lambda, .e_closure, .e_hosted_lambda => {
                 const template_id = (try self.resolveExprCallableTemplate(result, module_idx, expr_idx)) orelse return;
-                if (try self.exactDemandedTemplateCallableInstIfSingleton(
+                if (try self.singletonDemandedTemplateCallableInst(
                     result,
                     template_id,
                     callable_inst_ids,
@@ -9871,7 +9907,7 @@ pub const Pass = struct {
                         callable_inst_id,
                     );
                 } else if (matching_callable_insts.items.len != 0) {
-                    try self.recordExprCallableInstSetWithRoot(
+                    try self.recordExprLambdaSetWithRoot(
                         result,
                         self.currentSourceContext(),
                         module_idx,
@@ -9882,7 +9918,7 @@ pub const Pass = struct {
             },
             .e_lookup_local => |lookup| {
                 if (result.getLocalCallableTemplate(module_idx, lookup.pattern_idx)) |template_id| {
-                    if (try self.exactDemandedTemplateCallableInstIfSingleton(
+                    if (try self.singletonDemandedTemplateCallableInst(
                         result,
                         template_id,
                         callable_inst_ids,
@@ -9904,7 +9940,7 @@ pub const Pass = struct {
                         );
                         return;
                     } else if (matching_callable_insts.items.len != 0) {
-                        try self.recordLookupExprCallableInstSetWithRoot(
+                        try self.recordLookupExprLambdaSetWithRoot(
                             result,
                             self.currentSourceContext(),
                             module_idx,
@@ -9936,7 +9972,7 @@ pub const Pass = struct {
             .e_lookup_external => |lookup| {
                 const target_module_idx = self.resolveImportedModuleIdx(module_env, lookup.module_idx) orelse return;
                 if (result.getExternalCallableTemplate(target_module_idx, lookup.target_node_idx)) |template_id| {
-                    if (try self.exactDemandedTemplateCallableInstIfSingleton(
+                    if (try self.singletonDemandedTemplateCallableInst(
                         result,
                         template_id,
                         callable_inst_ids,
@@ -9951,7 +9987,7 @@ pub const Pass = struct {
                         );
                         return;
                     } else if (matching_callable_insts.items.len != 0) {
-                        try self.recordLookupExprCallableInstSetWithRoot(
+                        try self.recordLookupExprLambdaSetWithRoot(
                             result,
                             self.currentSourceContext(),
                             module_idx,
@@ -9975,7 +10011,7 @@ pub const Pass = struct {
                 const target = self.resolveRequiredLookupTarget(module_env, lookup) orelse return;
                 const target_node_idx: u16 = @intCast(@intFromEnum(target.def_idx));
                 if (result.getExternalCallableTemplate(target.module_idx, target_node_idx)) |template_id| {
-                    if (try self.exactDemandedTemplateCallableInstIfSingleton(
+                    if (try self.singletonDemandedTemplateCallableInst(
                         result,
                         template_id,
                         callable_inst_ids,
@@ -9990,7 +10026,7 @@ pub const Pass = struct {
                         );
                         return;
                     } else if (matching_callable_insts.items.len != 0) {
-                        try self.recordLookupExprCallableInstSetWithRoot(
+                        try self.recordLookupExprLambdaSetWithRoot(
                             result,
                             self.currentSourceContext(),
                             module_idx,
@@ -10170,7 +10206,7 @@ pub const Pass = struct {
             return;
         }
 
-        try self.recordExprCallableInstSetWithRoot(
+        try self.recordExprLambdaSetWithRoot(
             result,
             self.currentSourceContext(),
             module_idx,
@@ -10466,7 +10502,7 @@ pub const Pass = struct {
         else
             TypeSubstId.none;
 
-        for (result.lambda_specialize.callable_insts.items, 0..) |existing_callable_inst, idx| {
+        for (result.lambdamono.callable_insts.items, 0..) |existing_callable_inst, idx| {
             if (existing_callable_inst.template != template_id) continue;
             if (existing_callable_inst.fn_monotype_module_idx != canonical_fn_monotype_module_idx) continue;
             if (existing_callable_inst.defining_context_callable_inst != defining_context_callable_inst) continue;
@@ -10491,14 +10527,25 @@ pub const Pass = struct {
         }
 
         const callable_param_spec_span = try self.addCallableParamSpecEntries(result, callable_param_specs);
-        const callable_inst_id: CallableInstId = @enumFromInt(result.lambda_specialize.callable_insts.items.len);
-        try self.appendTracked(.callable_insts, &result.lambda_specialize.callable_insts, CallableInst{
+        const callable_def_id: CallableDefId = @enumFromInt(result.program.callable_defs.items.len);
+        try result.program.callable_defs.append(self.allocator, .{
+            .source_member = .none,
+            .module_idx = template.module_idx,
+            .source_expr = template.cir_expr,
+            .fn_monotype = resolvedMonotype(canonical_fn_monotype, canonical_fn_monotype_module_idx),
+            .captures = .empty(),
+            .callable_kind = .direct,
+            .source_region = template.source_region,
+        });
+        const callable_inst_id: CallableInstId = @enumFromInt(result.lambdamono.callable_insts.items.len);
+        try self.appendTracked(.callable_insts, &result.lambdamono.callable_insts, CallableInst{
             .template = template_id,
             .subst = subst_id,
             .fn_monotype = canonical_fn_monotype,
             .fn_monotype_module_idx = canonical_fn_monotype_module_idx,
             .defining_context_callable_inst = defining_context_callable_inst,
             .callable_param_specs = callable_param_spec_span,
+            .callable_def = callable_def_id,
             .runtime_value = .direct_lambda,
         });
         if (scan_body) {
@@ -10514,8 +10561,8 @@ pub const Pass = struct {
     ) Allocator.Error!CallableParamSpecSpan {
         if (entries.len == 0) return .empty();
 
-        const start: u32 = @intCast(result.lambda_specialize.callable_param_spec_entries.items.len);
-        try result.lambda_specialize.callable_param_spec_entries.appendSlice(self.allocator, entries);
+        const start: u32 = @intCast(result.lambdamono.callable_param_spec_entries.items.len);
+        try result.lambdamono.callable_param_spec_entries.appendSlice(self.allocator, entries);
         return .{
             .start = start,
             .len = @intCast(entries.len),
@@ -10529,8 +10576,8 @@ pub const Pass = struct {
     ) Allocator.Error!CallableParamProjectionSpan {
         if (entries.len == 0) return .empty();
 
-        const start: u32 = @intCast(result.lambda_specialize.callable_param_projection_entries.items.len);
-        try result.lambda_specialize.callable_param_projection_entries.appendSlice(self.allocator, entries);
+        const start: u32 = @intCast(result.lambdamono.callable_param_projection_entries.items.len);
+        try result.lambdamono.callable_param_projection_entries.appendSlice(self.allocator, entries);
         return .{
             .start = start,
             .len = @intCast(entries.len),
@@ -10545,7 +10592,7 @@ pub const Pass = struct {
     ) Allocator.Error!void {
         for (out.items) |existing| {
             if (existing.param_index != entry.param_index) continue;
-            if (existing.callable_inst_set_id != entry.callable_inst_set_id) continue;
+            if (existing.lambda_set_id != entry.lambda_set_id) continue;
             if (!callableParamProjectionsEqual(
                 result.getCallableParamProjectionEntries(existing.projections),
                 result.getCallableParamProjectionEntries(entry.projections),
@@ -10635,7 +10682,7 @@ pub const Pass = struct {
                 result.getCallableParamProjectionEntries(lhs_entry.projections),
                 result.getCallableParamProjectionEntries(rhs_entry.projections),
             )) return false;
-            if (lhs_entry.callable_inst_set_id != rhs_entry.callable_inst_set_id) return false;
+            if (lhs_entry.lambda_set_id != rhs_entry.lambda_set_id) return false;
         }
         return true;
     }
@@ -10733,17 +10780,6 @@ pub const Pass = struct {
                             closure_expr_idx,
                             closure,
                         );
-                        try self.recordClosureCaptureFactsForCallableInst(
-                            result,
-                            if (defining_context_callable_inst) |parent_callable_inst_id|
-                                callableInstSourceContext(parent_callable_inst_id)
-                            else
-                                .{ .template_expr = .{ .module_idx = template.module_idx, .expr_idx = closure_expr_idx } },
-                            template.module_idx,
-                            closure_expr_idx,
-                            closure,
-                            callable_inst_id,
-                        );
                     }
                 },
                 .e_closure => |closure_expr| {
@@ -10760,17 +10796,6 @@ pub const Pass = struct {
                         template.module_idx,
                         template.cir_expr,
                         closure_expr,
-                    );
-                    try self.recordClosureCaptureFactsForCallableInst(
-                        result,
-                        if (defining_context_callable_inst) |parent_callable_inst_id|
-                            callableInstSourceContext(parent_callable_inst_id)
-                        else
-                            .{ .template_expr = .{ .module_idx = template.module_idx, .expr_idx = template.cir_expr } },
-                        template.module_idx,
-                        template.cir_expr,
-                        closure_expr,
-                        callable_inst_id,
                     );
                 },
                 .e_hosted_lambda => |hosted_expr| try self.scanCirValueExpr(result, template.module_idx, hosted_expr.body),
@@ -10800,8 +10825,21 @@ pub const Pass = struct {
             );
         }
 
-        result.lambda_specialize.callable_insts.items[@intFromEnum(callable_inst_id)].runtime_value =
-            try self.computeCallableInstRuntimeValue(result, callable_inst_id);
+        if (self.runtimeClosureExprForCallableInst(result, callable_inst_id)) |runtime_closure| {
+            try self.finalizeCallableDefForCallableInst(
+                result,
+                if (defining_context_callable_inst) |parent_callable_inst_id|
+                    callableInstSourceContext(parent_callable_inst_id)
+                else
+                    .{ .template_expr = .{ .module_idx = template.module_idx, .expr_idx = runtime_closure.expr_idx } },
+                runtime_closure.module_idx,
+                runtime_closure.expr_idx,
+                runtime_closure.closure,
+                callable_inst_id,
+            );
+        } else {
+            try self.updateCallableDefRuntimeValue(result, callable_inst_id, template.cir_expr, &.{});
+        }
 
         if (self.scratch_context_expr_monotypes_depth == 0) {
             try self.completed_callable_scans.put(self.allocator, callable_inst_key, {});

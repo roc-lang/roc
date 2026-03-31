@@ -186,6 +186,7 @@ pub const LambdaSet = struct {
     members: LambdaSetMemberSpan,
 };
 
+pub const SourceContext = cm.SourceContext;
 pub const ContextExprKey = cm.ContextExprKey;
 pub const ContextPatternKey = cm.ContextPatternKey;
 
@@ -264,5 +265,62 @@ pub const Result = struct {
         pattern_idx: CIR.Pattern.Idx,
     ) ?ExprSource {
         return self.source_exprs.get(packLocalPatternSourceKey(module_idx, pattern_idx));
+    }
+
+    pub fn getLambdaSet(self: *const Result, lambda_set_id: LambdaSetId) *const LambdaSet {
+        return &self.lambda_sets.items[@intFromEnum(lambda_set_id)];
+    }
+
+    pub fn getLambdaSetMember(self: *const Result, member_id: LambdaSetMemberId) *const LambdaSetMember {
+        return &self.lambda_set_members.items[@intFromEnum(member_id)];
+    }
+
+    pub fn getLambdaSetMembers(self: *const Result, span: LambdaSetMemberSpan) []const LambdaSetMemberId {
+        if (span.len == 0) return &.{};
+        return self.lambda_set_member_entries.items[span.start..][0..span.len];
+    }
+
+    pub fn getExprLambdaSetMembers(
+        self: *const Result,
+        source_context: SourceContext,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) ?[]const LambdaSetMemberId {
+        const key = cm.Result.contextExprKey(source_context, module_idx, expr_idx);
+        const set_id = self.expr_lambda_sets.get(key) orelse return null;
+        return self.getLambdaSetMembers(self.getLambdaSet(set_id).members);
+    }
+
+    pub fn getCallSiteLambdaSetMembers(
+        self: *const Result,
+        source_context: SourceContext,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) ?[]const LambdaSetMemberId {
+        const key = cm.Result.contextExprKey(source_context, module_idx, expr_idx);
+        const set_id = self.call_site_lambda_sets.get(key) orelse return null;
+        return self.getLambdaSetMembers(self.getLambdaSet(set_id).members);
+    }
+
+    pub fn getLookupExprLambdaSetMembers(
+        self: *const Result,
+        source_context: SourceContext,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) ?[]const LambdaSetMemberId {
+        const key = cm.Result.contextExprKey(source_context, module_idx, expr_idx);
+        const set_id = self.lookup_expr_lambda_sets.get(key) orelse return null;
+        return self.getLambdaSetMembers(self.getLambdaSet(set_id).members);
+    }
+
+    pub fn getContextPatternLambdaSetMembers(
+        self: *const Result,
+        source_context: SourceContext,
+        module_idx: u32,
+        pattern_idx: CIR.Pattern.Idx,
+    ) ?[]const LambdaSetMemberId {
+        const key = cm.Result.contextPatternKey(source_context, module_idx, pattern_idx);
+        const set_id = self.context_pattern_lambda_sets.get(key) orelse return null;
+        return self.getLambdaSetMembers(self.getLambdaSet(set_id).members);
     }
 };

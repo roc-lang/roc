@@ -1,8 +1,7 @@
 //! Shared statement-only lowering pipeline used by eval backends.
 //!
 //! Phase order:
-//! CoreCIR -> ContextMono -> LambdaSolved -> LambdaSpecialize ->
-//! SpecializedCIR -> MIR -> LIR -> RC.
+//! CoreCIR -> ContextMono -> Lambdasolved -> Lambdamono -> MIR -> LIR -> RC.
 //!
 //! This module owns the shared layout store and exposes proc-root lowering
 //! results for the staged explicit architecture.
@@ -23,7 +22,7 @@ const CIR = can.CIR;
 const LirStore = lir.LirStore;
 const LirProcSpecId = lir.LirProcSpecId;
 const MIR = mir.MIR;
-const LambdaSpecialize = corecir.LambdaSpecialize;
+const Lambdamono = corecir.Lambdamono;
 const Pipeline = corecir.Pipeline;
 
 /// Find the index of a module environment in the all-module-env slice.
