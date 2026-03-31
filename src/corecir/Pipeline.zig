@@ -141,10 +141,10 @@ const TemplateBodyCompletionKey = struct {
 
 const ContextPatternKey = ContextMono.ContextPatternKey;
 const ProgramExprFacts = struct {
-    callable_value: ?CallableValue,
-    call_site: ?CallSite,
-    dispatch_target: ?DispatchExprTarget,
-    lookup_resolution: ?LookupResolution,
+    callable_value: CallableValue = .none,
+    call_site: CallSite = .none,
+    dispatch_target: Lambdamono.DispatchTargetResolution = .none,
+    lookup_resolution: LookupResolution = .none,
 };
 
 fn finalizeSolvedCallableValue(
@@ -1813,7 +1813,13 @@ pub const Pass = struct {
 
         const child_expr_span = try self.appendProgramExprChildren(&result.lambdamono, child_exprs.items);
         const child_stmt_span = try self.appendProgramStmtChildren(&result.lambdamono, child_stmts.items);
-        const monotype = try self.resolveExprMonotypeResolvedForSourceContext(result, source_context, module_idx, expr_idx);
+        const monotype = try self.finalizeProgramExprMonotype(
+            result,
+            source_context,
+            module_idx,
+            expr_idx,
+            child_exprs.items,
+        );
         const facts = try self.programExprFacts(result, source_context, module_idx, expr_idx);
         const expr_id: Lambdamono.ExprId = @enumFromInt(result.lambdamono.exprs.items.len);
         try result.lambdamono.exprs.append(self.allocator, .{
@@ -1823,13 +1829,10 @@ pub const Pass = struct {
             .monotype = monotype,
             .child_exprs = child_expr_span,
             .child_stmts = child_stmt_span,
-            .callable_value = facts.callable_value orelse .none,
-            .call_site = facts.call_site orelse .none,
-            .dispatch_target = if (facts.dispatch_target) |dispatch_target|
-                .{ .target = dispatch_target }
-            else
-                .none,
-            .lookup_resolution = facts.lookup_resolution orelse .none,
+            .callable_value = facts.callable_value,
+            .call_site = facts.call_site,
+            .dispatch_target = facts.dispatch_target,
+            .lookup_resolution = facts.lookup_resolution,
         });
         try result.lambdamono.expr_ids_by_key.put(self.allocator, key, expr_id);
         return expr_id;
@@ -1914,12 +1917,7 @@ pub const Pass = struct {
     ) Allocator.Error!ProgramExprFacts {
         const module_env = self.all_module_envs[module_idx];
         const expr = module_env.store.getExpr(expr_idx);
-        var facts: ProgramExprFacts = .{
-            .callable_value = @as(?CallableValue, null),
-            .call_site = @as(?CallSite, null),
-            .dispatch_target = @as(?DispatchExprTarget, null),
-            .lookup_resolution = @as(?LookupResolution, null),
-        };
+        var facts: ProgramExprFacts = .{};
 
         if (self.readExprCallableValue(result, source_context, module_idx, expr_idx)) |solved_value| {
             facts.callable_value = try finalizeSolvedCallableValue(self, result, solved_value);
@@ -1927,7 +1925,9 @@ pub const Pass = struct {
         if (self.readExprCallSite(result, source_context, module_idx, expr_idx)) |solved_call| {
             facts.call_site = try finalizeSolvedCall(self, result, solved_call);
         }
-        facts.dispatch_target = result.context_mono.getDispatchExprTarget(source_context, module_idx, expr_idx);
+        if (result.context_mono.getDispatchExprTarget(source_context, module_idx, expr_idx)) |dispatch_target| {
+            facts.dispatch_target = .{ .target = dispatch_target };
+        }
         facts.lookup_resolution = switch (expr) {
             .e_lookup_local => |lookup| blk: {
                 if (findDefByPattern(module_env, lookup.pattern_idx)) |def_idx| {
@@ -1943,26 +1943,290 @@ pub const Pass = struct {
                         .expr_idx = source.expr_idx,
                     } };
                 }
-                break :blk null;
+                break :blk .none;
             },
             .e_lookup_external => |lookup| blk: {
-                const target_module_idx = self.resolveImportedModuleIdx(module_env, lookup.module_idx) orelse break :blk null;
-                if (!self.all_module_envs[target_module_idx].store.isDefNode(lookup.target_node_idx)) break :blk null;
+                const target_module_idx = self.resolveImportedModuleIdx(module_env, lookup.module_idx) orelse break :blk .none;
+                if (!self.all_module_envs[target_module_idx].store.isDefNode(lookup.target_node_idx)) break :blk .none;
                 break :blk .{ .def = .{
                     .module_idx = target_module_idx,
                     .def_idx = @enumFromInt(lookup.target_node_idx),
                 } };
             },
             .e_lookup_required => |lookup| blk: {
-                const target = self.resolveRequiredLookupTarget(module_env, lookup) orelse break :blk null;
+                const target = self.resolveRequiredLookupTarget(module_env, lookup) orelse break :blk .none;
                 break :blk .{ .def = .{
                     .module_idx = target.module_idx,
                     .def_idx = target.def_idx,
                 } };
             },
-            else => null,
+            else => .none,
         };
         return facts;
+    }
+
+    fn finalizeProgramExprMonotype(
+        self: *Pass,
+        result: *Result,
+        source_context: SourceContext,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+        child_expr_ids: []const Lambdamono.ExprId,
+    ) Allocator.Error!ResolvedMonotype {
+        const resolved = try self.resolveExprMonotypeResolvedForSourceContext(
+            result,
+            source_context,
+            module_idx,
+            expr_idx,
+        );
+        if (!resolved.isNone()) return resolved;
+
+        if (try self.explicitSourceDefaultMonotype(result, module_idx, expr_idx)) |defaulted| {
+            return defaulted;
+        }
+
+        return self.deriveStructuredProgramExprMonotype(
+            result,
+            source_context,
+            module_idx,
+            expr_idx,
+            child_expr_ids,
+        );
+    }
+
+    fn explicitSourceDefaultMonotype(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) Allocator.Error!?ResolvedMonotype {
+        const module_env = self.all_module_envs[module_idx];
+        return switch (module_env.store.getExpr(expr_idx)) {
+            .e_num, .e_dec, .e_dec_small, .e_empty_list => blk: {
+                const resolved = try self.resolveTypeVarMonotypeDefaultedResolved(
+                    result,
+                    module_idx,
+                    ModuleEnv.varFrom(expr_idx),
+                );
+                if (resolved.isNone()) break :blk null;
+                break :blk resolved;
+            },
+            else => null,
+        };
+    }
+
+    fn childProgramExprMonotype(
+        self: *Pass,
+        result: *Result,
+        child_expr_id: Lambdamono.ExprId,
+    ) ResolvedMonotype {
+        _ = self;
+        return result.lambdamono.getExpr(child_expr_id).monotype;
+    }
+
+    fn deriveStructuredProgramExprMonotype(
+        self: *Pass,
+        result: *Result,
+        source_context: SourceContext,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+        child_expr_ids: []const Lambdamono.ExprId,
+    ) Allocator.Error!ResolvedMonotype {
+        _ = source_context;
+        const module_env = self.all_module_envs[module_idx];
+        const expr = module_env.store.getExpr(expr_idx);
+
+        return switch (expr) {
+            .e_block => if (child_expr_ids.len == 0)
+                resolvedMonotype(.none, module_idx)
+            else
+                self.childProgramExprMonotype(result, child_expr_ids[child_expr_ids.len - 1]),
+            .e_dbg, .e_expect, .e_return, .e_nominal, .e_nominal_external => if (child_expr_ids.len == 0)
+                resolvedMonotype(.none, module_idx)
+            else
+                self.childProgramExprMonotype(result, child_expr_ids[0]),
+            .e_empty_record => resolvedMonotype(result.context_mono.monotype_store.unit_idx, module_idx),
+            .e_tuple => blk: {
+                if (child_expr_ids.len == 0) {
+                    break :blk resolvedMonotype(result.context_mono.monotype_store.unit_idx, module_idx);
+                }
+
+                var elems = std.ArrayList(Monotype.Idx).empty;
+                defer elems.deinit(self.allocator);
+                for (child_expr_ids) |child_expr_id| {
+                    const child_mono = self.childProgramExprMonotype(result, child_expr_id);
+                    if (child_mono.isNone()) break :blk resolvedMonotype(.none, module_idx);
+                    try elems.append(self.allocator, child_mono.idx);
+                }
+                const elem_span = try result.context_mono.monotype_store.addIdxSpan(self.allocator, elems.items);
+                break :blk resolvedMonotype(
+                    try result.context_mono.monotype_store.addMonotype(self.allocator, .{
+                        .tuple = .{ .elems = elem_span },
+                    }),
+                    module_idx,
+                );
+            },
+            .e_list => blk: {
+                if (child_expr_ids.len == 0) break :blk resolvedMonotype(.none, module_idx);
+                const elem_mono = self.childProgramExprMonotype(result, child_expr_ids[0]);
+                if (elem_mono.isNone()) break :blk resolvedMonotype(.none, module_idx);
+                for (child_expr_ids[1..]) |child_expr_id| {
+                    const next_mono = self.childProgramExprMonotype(result, child_expr_id);
+                    if (next_mono.isNone()) break :blk resolvedMonotype(.none, module_idx);
+                    if (!try self.monotypesStructurallyEqualAcrossModules(
+                        result,
+                        elem_mono.idx,
+                        elem_mono.module_idx,
+                        next_mono.idx,
+                        next_mono.module_idx,
+                    )) {
+                        std.debug.panic(
+                            "Pipeline invariant violated: list expr {d} in module {d} had non-uniform child monotypes during lambdamono finalization",
+                            .{ @intFromEnum(expr_idx), module_idx },
+                        );
+                    }
+                }
+                const elem_idx = if (elem_mono.module_idx == module_idx)
+                    elem_mono.idx
+                else
+                    try self.remapMonotypeBetweenModules(
+                        result,
+                        elem_mono.idx,
+                        elem_mono.module_idx,
+                        module_idx,
+                    );
+                break :blk resolvedMonotype(
+                    try result.context_mono.monotype_store.addMonotype(self.allocator, .{
+                        .list = .{ .elem = elem_idx },
+                    }),
+                    module_idx,
+                );
+            },
+            .e_record => |record_expr| blk: {
+                var fields = std.ArrayList(Monotype.Field).empty;
+                defer fields.deinit(self.allocator);
+
+                var child_index: usize = 0;
+                for (module_env.store.sliceRecordFields(record_expr.fields)) |field_idx| {
+                    const field = module_env.store.getRecordField(field_idx);
+                    const child_mono = self.childProgramExprMonotype(result, child_expr_ids[child_index]);
+                    child_index += 1;
+                    if (child_mono.isNone()) break :blk resolvedMonotype(.none, module_idx);
+                    const field_mono = if (child_mono.module_idx == module_idx)
+                        child_mono.idx
+                    else
+                        try self.remapMonotypeBetweenModules(
+                            result,
+                            child_mono.idx,
+                            child_mono.module_idx,
+                            module_idx,
+                        );
+
+                    var replaced = false;
+                    for (fields.items) |*existing| {
+                        if (existing.name.eql(.{ .module_idx = module_idx, .ident = field.label })) {
+                            existing.type_idx = field_mono;
+                            replaced = true;
+                            break;
+                        }
+                    }
+                    if (!replaced) {
+                        try fields.append(self.allocator, .{
+                            .name = .{ .module_idx = module_idx, .ident = field.label },
+                            .type_idx = field_mono,
+                        });
+                    }
+                }
+
+                if (record_expr.ext) |_| {
+                    const ext_mono = self.childProgramExprMonotype(result, child_expr_ids[child_index]);
+                    if (ext_mono.isNone()) break :blk resolvedMonotype(.none, module_idx);
+                    const normalized_ext = if (ext_mono.module_idx == module_idx)
+                        ext_mono.idx
+                    else
+                        try self.remapMonotypeBetweenModules(
+                            result,
+                            ext_mono.idx,
+                            ext_mono.module_idx,
+                            module_idx,
+                        );
+                    switch (result.context_mono.monotype_store.getMonotype(normalized_ext)) {
+                        .unit => {},
+                        .record => |ext_record| {
+                            for (result.context_mono.monotype_store.getFields(ext_record.fields)) |ext_field| {
+                                var exists = false;
+                                for (fields.items) |existing| {
+                                    if (existing.name.eql(ext_field.name)) {
+                                        exists = true;
+                                        break;
+                                    }
+                                }
+                                if (!exists) try fields.append(self.allocator, ext_field);
+                            }
+                        },
+                        else => std.debug.panic(
+                            "Pipeline invariant violated: record ext expr {d} in module {d} finalized to non-record monotype",
+                            .{ @intFromEnum(expr_idx), module_idx },
+                        ),
+                    }
+                }
+
+                if (fields.items.len == 0) {
+                    break :blk resolvedMonotype(result.context_mono.monotype_store.unit_idx, module_idx);
+                }
+
+                std.mem.sort(Monotype.Field, fields.items, self.all_module_envs, Monotype.Field.sortByNameAsc);
+                const field_span = try result.context_mono.monotype_store.addFields(self.allocator, fields.items);
+                break :blk resolvedMonotype(
+                    try result.context_mono.monotype_store.addMonotype(self.allocator, .{
+                        .record = .{ .fields = field_span },
+                    }),
+                    module_idx,
+                );
+            },
+            .e_zero_argument_tag => |tag_expr| blk: {
+                const payload_span = Monotype.Span.empty();
+                const tag_span = try result.context_mono.monotype_store.addTags(self.allocator, &.{.{
+                    .name = .{ .module_idx = module_idx, .ident = tag_expr.name },
+                    .payloads = payload_span,
+                }});
+                break :blk resolvedMonotype(
+                    try result.context_mono.monotype_store.addMonotype(self.allocator, .{
+                        .tag_union = .{ .tags = tag_span },
+                    }),
+                    module_idx,
+                );
+            },
+            .e_tag => |tag_expr| blk: {
+                var payloads = std.ArrayList(Monotype.Idx).empty;
+                defer payloads.deinit(self.allocator);
+                for (child_expr_ids) |child_expr_id| {
+                    const child_mono = self.childProgramExprMonotype(result, child_expr_id);
+                    if (child_mono.isNone()) break :blk resolvedMonotype(.none, module_idx);
+                    try payloads.append(self.allocator, if (child_mono.module_idx == module_idx)
+                        child_mono.idx
+                    else
+                        try self.remapMonotypeBetweenModules(
+                            result,
+                            child_mono.idx,
+                            child_mono.module_idx,
+                            module_idx,
+                        ));
+                }
+                const payload_span = try result.context_mono.monotype_store.addIdxSpan(self.allocator, payloads.items);
+                const tag_span = try result.context_mono.monotype_store.addTags(self.allocator, &.{.{
+                    .name = .{ .module_idx = module_idx, .ident = tag_expr.name },
+                    .payloads = payload_span,
+                }});
+                break :blk resolvedMonotype(
+                    try result.context_mono.monotype_store.addMonotype(self.allocator, .{
+                        .tag_union = .{ .tags = tag_span },
+                    }),
+                    module_idx,
+                );
+            },
+            else => resolvedMonotype(.none, module_idx),
+        };
     }
 
     fn primeAllModules(self: *Pass, result: *Result) Allocator.Error!void {
@@ -2688,19 +2952,23 @@ pub const Pass = struct {
         pattern_idx: CIR.Pattern.Idx,
         expr_idx: CIR.Expr.Idx,
     ) Allocator.Error!void {
-        var visiting: std.AutoHashMapUnmanaged(ContextExprVisitKey, void) = .empty;
-        defer visiting.deinit(self.allocator);
-        var callable_inst_ids = std.ArrayList(CallableInstId).empty;
-        defer callable_inst_ids.deinit(self.allocator);
+        if (try self.resolveExprCallableTemplate(result, module_idx, expr_idx)) |template_id| {
+            try self.materializeLookupExprCallableValue(result, module_idx, expr_idx, template_id);
+        } else {
+            var visiting: std.AutoHashMapUnmanaged(ContextExprVisitKey, void) = .empty;
+            defer visiting.deinit(self.allocator);
+            var callable_inst_ids = std.ArrayList(CallableInstId).empty;
+            defer callable_inst_ids.deinit(self.allocator);
 
-        try self.appendExprCallableMembers(
-            result,
-            self.currentSourceContext(),
-            module_idx,
-            expr_idx,
-            &visiting,
-            &callable_inst_ids,
-        );
+            try self.appendExprCallableMembers(
+                result,
+                self.currentSourceContext(),
+                module_idx,
+                expr_idx,
+                &visiting,
+                &callable_inst_ids,
+            );
+        }
 
         const callable_value = self.getValueExprSolvedCallableValueForSourceContext(
             result,
@@ -6608,14 +6876,23 @@ pub const Pass = struct {
                 }
                 return;
             },
-            .e_closure, .e_lambda, .e_hosted_lambda => std.debug.panic(
-                "Pipeline invariant violated: callable-capable expr {d} ({s}) in module {d} reached structured callable realization without explicit lambdamono callable semantics",
-                .{
-                    @intFromEnum(expr_idx),
-                    @tagName(module_env.store.getExpr(expr_idx)),
+            .e_closure, .e_lambda, .e_hosted_lambda => {
+                const template_id = (try self.resolveExprCallableTemplateWithVisited(
+                    result,
                     module_idx,
-                },
-            ),
+                    expr_idx,
+                    visiting,
+                )) orelse std.debug.panic(
+                    "Pipeline invariant violated: callable-capable expr {d} ({s}) in module {d} reached structured callable realization without a registered callable template",
+                    .{
+                        @intFromEnum(expr_idx),
+                        @tagName(module_env.store.getExpr(expr_idx)),
+                        module_idx,
+                    },
+                );
+                try self.materializeLookupExprCallableValue(result, module_idx, expr_idx, template_id);
+                return;
+            },
             else => {},
         }
 
@@ -8953,13 +9230,14 @@ pub const Pass = struct {
         _ = try self.ensureCallableInst(result, template_id, fn_monotype, source_module_idx);
     }
 
-    fn resolveTypeVarMonotypeWithBindings(
+    fn resolveTypeVarMonotypeWithBindingsUsingPolicy(
         self: *Pass,
         result: *Result,
         module_idx: u32,
         store_types: *const types.Store,
         var_: types.Var,
         bindings: *std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
+        policy: Monotype.TypeVarResolutionPolicy,
     ) Allocator.Error!Monotype.Idx {
         var exact_specializations = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
         defer exact_specializations.deinit();
@@ -9000,14 +9278,43 @@ pub const Pass = struct {
         scratches.module_env = module_env;
         scratches.module_idx = module_idx;
         scratches.all_module_envs = self.all_module_envs;
-        return result.context_mono.monotype_store.fromTypeVarExact(
-            self.allocator,
+        return switch (policy) {
+            .exact => result.context_mono.monotype_store.fromTypeVarExact(
+                self.allocator,
+                store_types,
+                var_,
+                module_env.idents,
+                &exact_specializations,
+                &nominal_cycle_breakers,
+                &scratches,
+            ),
+            .defaulted => result.context_mono.monotype_store.fromTypeVar(
+                self.allocator,
+                store_types,
+                var_,
+                module_env.idents,
+                &exact_specializations,
+                &nominal_cycle_breakers,
+                &scratches,
+            ),
+        };
+    }
+
+    fn resolveTypeVarMonotypeWithBindings(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        store_types: *const types.Store,
+        var_: types.Var,
+        bindings: *std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
+    ) Allocator.Error!Monotype.Idx {
+        return self.resolveTypeVarMonotypeWithBindingsUsingPolicy(
+            result,
+            module_idx,
             store_types,
             var_,
-            module_env.idents,
-            &exact_specializations,
-            &nominal_cycle_breakers,
-            &scratches,
+            bindings,
+            .exact,
         );
     }
 
@@ -9453,12 +9760,13 @@ pub const Pass = struct {
         }
     }
 
-    fn monotypeFromTypeVarInStore(
+    fn monotypeFromTypeVarInStoreWithPolicy(
         self: *Pass,
         result: *Result,
         module_idx: u32,
         store_types: *const types.Store,
         var_: types.Var,
+        policy: Monotype.TypeVarResolutionPolicy,
     ) Allocator.Error!Monotype.Idx {
         var specializations = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
         defer specializations.deinit();
@@ -9477,15 +9785,41 @@ pub const Pass = struct {
         scratches.module_env = module_env;
         scratches.module_idx = module_idx;
         scratches.all_module_envs = self.all_module_envs;
+        return switch (policy) {
+            .exact => result.context_mono.monotype_store.fromTypeVarExact(
+                self.allocator,
+                store_types,
+                var_,
+                module_env.idents,
+                &specializations,
+                &nominal_cycle_breakers,
+                &scratches,
+            ),
+            .defaulted => result.context_mono.monotype_store.fromTypeVar(
+                self.allocator,
+                store_types,
+                var_,
+                module_env.idents,
+                &specializations,
+                &nominal_cycle_breakers,
+                &scratches,
+            ),
+        };
+    }
 
-        return result.context_mono.monotype_store.fromTypeVarExact(
-            self.allocator,
+    fn monotypeFromTypeVarInStore(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        store_types: *const types.Store,
+        var_: types.Var,
+    ) Allocator.Error!Monotype.Idx {
+        return self.monotypeFromTypeVarInStoreWithPolicy(
+            result,
+            module_idx,
             store_types,
             var_,
-            module_env.idents,
-            &specializations,
-            &nominal_cycle_breakers,
-            &scratches,
+            .exact,
         );
     }
 
@@ -12513,7 +12847,14 @@ pub const Pass = struct {
             }
         }
 
-        return self.resolveTypeVarMonotypeResolved(result, module_idx, ModuleEnv.varFrom(expr_idx));
+        const resolved = try self.resolveTypeVarMonotypeResolved(result, module_idx, ModuleEnv.varFrom(expr_idx));
+        if (!resolved.isNone()) return resolved;
+
+        if (try self.explicitSourceDefaultMonotype(result, module_idx, expr_idx)) |defaulted| {
+            return defaulted;
+        }
+
+        return resolved;
     }
 
     fn resolveExprMonotypeIfFullyBound(
@@ -12642,6 +12983,34 @@ pub const Pass = struct {
             return resolvedMonotype(mono, module_idx);
         }
         const mono = try self.monotypeFromTypeVarInStore(result, module_idx, &self.all_module_envs[module_idx].types, var_);
+        return resolvedMonotype(mono, module_idx);
+    }
+
+    fn resolveTypeVarMonotypeDefaultedResolved(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        var_: types.Var,
+    ) Allocator.Error!ResolvedMonotype {
+        if (self.active_bindings) |bindings| {
+            const mono = try self.resolveTypeVarMonotypeWithBindingsUsingPolicy(
+                result,
+                module_idx,
+                &self.all_module_envs[module_idx].types,
+                var_,
+                bindings,
+                .defaulted,
+            );
+            return resolvedMonotype(mono, module_idx);
+        }
+
+        const mono = try self.monotypeFromTypeVarInStoreWithPolicy(
+            result,
+            module_idx,
+            &self.all_module_envs[module_idx].types,
+            var_,
+            .defaulted,
+        );
         return resolvedMonotype(mono, module_idx);
     }
 

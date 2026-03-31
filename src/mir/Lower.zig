@@ -2751,6 +2751,7 @@ fn lowerLookupLocalIntoWithExactCallableInst(
     }
 
     if (lookup_resolution) |resolution| switch (resolution) {
+        .none => unreachable,
         .def => |target_def| {
             const def = self.all_module_envs[target_def.module_idx].store.getDef(target_def.def_idx);
             const symbol = try self.lookupSymbolForPattern(target_def.module_idx, def.pattern);
@@ -2912,6 +2913,10 @@ fn lowerLookupExternalIntoWithExactCallableInst(
         "statement-only MIR invariant violated: external lookup expr {d} had no specialized lookup resolution",
         .{@intFromEnum(expr_idx)},
     )) {
+        .none => std.debug.panic(
+            "statement-only MIR invariant violated: external lookup expr {d} carried lookup-resolution '.none'",
+            .{@intFromEnum(expr_idx)},
+        ),
         .def => |target_def| target_def,
         .expr => |source_expr_ref| std.debug.panic(
             "statement-only MIR invariant violated: external lookup expr {d} unexpectedly specialized to source expr {d} in module {d}",
@@ -2970,6 +2975,10 @@ fn lowerLookupRequiredIntoWithExactCallableInst(
         "statement-only MIR invariant violated: required lookup expr {d} had no specialized lookup resolution",
         .{@intFromEnum(expr_idx)},
     )) {
+        .none => std.debug.panic(
+            "statement-only MIR invariant violated: required lookup expr {d} carried lookup-resolution '.none'",
+            .{@intFromEnum(expr_idx)},
+        ),
         .def => |target_def| target_def,
         .expr => |source_expr_ref| std.debug.panic(
             "statement-only MIR invariant violated: required lookup expr {d} unexpectedly specialized to source expr {d} in module {d}",
@@ -6043,6 +6052,7 @@ fn debugAssertNoUnitPrimPatternBinding(
         .e_call => |call_expr| blk: {
             const resolution = self.lookupProgramExprLookupResolution(call_expr.func) orelse break :blk std.math.maxInt(u32);
             break :blk switch (resolution) {
+                .none => std.math.maxInt(u32),
                 .expr => |source_expr_ref| @intFromEnum(source_expr_ref.expr_idx),
                 .def => std.math.maxInt(u32),
             };

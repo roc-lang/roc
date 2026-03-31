@@ -32,7 +32,7 @@ fn hasNumeralConstraint(types_store: *const types.Store, constraints: StaticDisp
     return false;
 }
 
-const TypeVarResolutionPolicy = enum {
+pub const TypeVarResolutionPolicy = enum {
     exact,
     defaulted,
 };
@@ -644,16 +644,12 @@ pub const Store = struct {
                             .flex => {
                                 if (findNamedRowExtensionMonotype(scratches, ext_var, types_store)) |specialized| {
                                     try self.appendSpecializedRecordFields(specialized, scratch_top, scratches);
-                                } else if (policy == .exact) {
-                                    return .none;
                                 }
                                 break :rows; // Open record — treat as closed with collected fields
                             },
                             .rigid => {
                                 if (findNamedRowExtensionMonotype(scratches, ext_var, types_store)) |specialized| {
                                     try self.appendSpecializedRecordFields(specialized, scratch_top, scratches);
-                                } else if (policy == .exact) {
-                                    return .none;
                                 }
                                 break :rows; // Rigid record — treat as closed with collected fields
                             },
@@ -679,7 +675,6 @@ pub const Store = struct {
                 return try self.addMonotype(allocator, .{ .record = .{ .fields = field_span } });
             },
             .record_unbound => |fields_range| {
-                if (policy == .exact) return .none;
                 // Extensible record — treat like a closed record with the known fields
                 const fields_slice = types_store.getRecordFieldsSlice(fields_range);
                 const names = fields_slice.items(.name);
@@ -767,16 +762,12 @@ pub const Store = struct {
                             .flex => {
                                 if (findNamedRowExtensionMonotype(scratches, ext_var, types_store)) |specialized| {
                                     try self.appendSpecializedTagUnionTags(specialized, scratches);
-                                } else if (policy == .exact) {
-                                    return .none;
                                 }
                                 break :rows; // Open tag union — treat as closed with collected tags
                             },
                             .rigid => {
                                 if (findNamedRowExtensionMonotype(scratches, ext_var, types_store)) |specialized| {
                                     try self.appendSpecializedTagUnionTags(specialized, scratches);
-                                } else if (policy == .exact) {
-                                    return .none;
                                 }
                                 break :rows; // Rigid tag union — treat as closed with collected tags
                             },
