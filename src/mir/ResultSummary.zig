@@ -406,6 +406,23 @@ const Analyzer = struct {
         return self.mir_store.monotype_store.getMonotype(self.mir_store.getLocal(local_id).monotype) == .func;
     }
 
+    fn runtimeOriginForAliasedLocal(
+        self: *Analyzer,
+        env: *const LocalOriginMap,
+        local_id: MIR.LocalId,
+    ) Origin {
+        if (!self.localMonotypeIsFunc(local_id)) {
+            return self.originForLocal(env, local_id);
+        }
+
+        const resolved = self.resolveCallableForLocal(local_id);
+        if (!resolved.requires_hidden_capture) {
+            return .fresh;
+        }
+
+        return self.originForLocal(env, local_id);
+    }
+
     fn monotypeMayContainCallable(self: *const Analyzer, mono_idx: Monotype.Idx) bool {
         return switch (self.mir_store.monotype_store.getMonotype(mono_idx)) {
             .func => true,
@@ -539,17 +556,14 @@ const Analyzer = struct {
             },
             .assign_ref => |assign| {
                 const origin = switch (assign.op) {
-                    .local => |source| if (self.localMonotypeIsFunc(source))
-                        .fresh
-                    else
-                        self.originForLocal(env, source),
+                    .local => |source| self.runtimeOriginForAliasedLocal(env, source),
                     .discriminant => .fresh,
                     .field => |field| blk: {
                         const source_origin = self.originForLocal(env, field.source);
                         const projections = try self.singleProjectionSpan(.{ .field = @intCast(field.field_idx) });
                         break :blk switch (field.ownership) {
                             .borrow => try self.borrowOrigin(source_origin, region, projections),
-                            .move => try self.aliasOrigin(source_origin, projections),
+                            .move => try self.borrowOrigin(source_origin, region, projections),
                         };
                     },
                     .tag_payload => |payload| blk: {
@@ -557,7 +571,7 @@ const Analyzer = struct {
                         const projections = try self.singleProjectionSpan(.{ .tag_payload = @intCast(payload.payload_idx) });
                         break :blk switch (payload.ownership) {
                             .borrow => try self.borrowOrigin(source_origin, region, projections),
-                            .move => try self.aliasOrigin(source_origin, projections),
+                            .move => try self.borrowOrigin(source_origin, region, projections),
                         };
                     },
                     .nominal => |nominal| try self.aliasOrigin(
@@ -790,8 +804,9 @@ const Analyzer = struct {
         }
 
         if (lambda.captures_param) |captures_param| {
-            try env.put(localKey(captures_param), .{ .alias_of_param = .{
+            try env.put(localKey(captures_param), .{ .borrow_of_param = .{
                 .param_index = @intCast(visible_params.len),
+                .region = .body,
             } });
         }
 

@@ -401,15 +401,6 @@ fn ensureLocalUsable(
     owner_id: u64,
 ) Allocator.Error!void {
     if (store.getLocalDefOpt(local) == null) {
-        std.debug.print(
-            "DebugVerifyMir missing local def: stmt={d} stmt_tag={s} local={d}\n",
-            .{
-                @intFromEnum(stmt_id),
-                @tagName(store.getCFStmt(stmt_id)),
-                @intFromEnum(local),
-            },
-        );
-        dumpStmtWindow(store, stmt_id, 8);
         std.debug.panic(
             "DebugVerifyMir invariant violated: stmt {d} in {s} {d} uses local {d} with no recorded local definition",
             .{ @intFromEnum(stmt_id), owner_kind, owner_id, @intFromEnum(local) },

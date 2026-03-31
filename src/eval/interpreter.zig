@@ -531,7 +531,6 @@ pub const Interpreter = struct {
         for (params, args) |param, arg| {
             frame.setLocal(param, arg);
         }
-
         const outcome = try self.execStmtChain(&frame, proc_spec.body, null);
         return switch (outcome) {
             .returned => |value| blk: {

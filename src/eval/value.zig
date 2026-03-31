@@ -57,7 +57,13 @@ pub const Value = struct {
     /// Copy `size` bytes from `src` into this value.
     pub fn copyFrom(self: Value, src: Value, size: usize) void {
         if (size > 0) {
-            @memcpy(self.ptr[0..size], src.ptr[0..size]);
+            const dest = self.ptr[0..size];
+            const source = src.ptr[0..size];
+            if (@intFromPtr(dest.ptr) <= @intFromPtr(source.ptr)) {
+                std.mem.copyForwards(u8, dest, source);
+            } else {
+                std.mem.copyBackwards(u8, dest, source);
+            }
         }
     }
 

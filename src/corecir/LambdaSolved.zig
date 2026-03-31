@@ -59,6 +59,11 @@ pub const CallableTemplateKind = enum {
     hosted_lambda,
 };
 
+pub const ExternalDefSource = struct {
+    module_idx: u32,
+    def_idx: CIR.Def.Idx,
+};
+
 pub const CallableTemplate = struct {
     source_key: u64,
     module_idx: u32,
@@ -67,6 +72,7 @@ pub const CallableTemplate = struct {
     binding_pattern: ?CIR.Pattern.Idx = null,
     kind: CallableTemplateKind = .top_level_def,
     lexical_owner_template: CallableTemplateId = .none,
+    external_def: ?ExternalDefSource = null,
     source_region: Region = Region.zero(),
 };
 
@@ -197,10 +203,8 @@ pub const Result = struct {
     call_site_lambda_sets: std.AutoHashMapUnmanaged(ContextExprKey, LambdaSetId),
     lookup_expr_lambda_sets: std.AutoHashMapUnmanaged(ContextExprKey, LambdaSetId),
     context_pattern_lambda_sets: std.AutoHashMapUnmanaged(ContextPatternKey, LambdaSetId),
-    root_module_idx: u32,
-    root_source_expr_idx: ?CIR.Expr.Idx,
 
-    pub fn init(root_module_idx: u32, root_source_expr_idx: ?CIR.Expr.Idx) Result {
+    pub fn init() Result {
         return .{
             .callable_templates = .empty,
             .source_exprs = .empty,
@@ -215,8 +219,6 @@ pub const Result = struct {
             .call_site_lambda_sets = .empty,
             .lookup_expr_lambda_sets = .empty,
             .context_pattern_lambda_sets = .empty,
-            .root_module_idx = root_module_idx,
-            .root_source_expr_idx = root_source_expr_idx,
         };
     }
 

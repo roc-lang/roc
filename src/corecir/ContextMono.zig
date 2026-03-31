@@ -13,12 +13,16 @@ const CIR = can.CIR;
 
 pub const ContextId = enum(u32) {
     _,
+};
 
-    pub const none: ContextId = @enumFromInt(std.math.maxInt(u32));
+pub const RootExprContext = struct {
+    module_idx: u32,
+    expr_idx: CIR.Expr.Idx,
+};
 
-    pub fn isNone(self: ContextId) bool {
-        return self == none;
-    }
+pub const SourceContext = union(enum) {
+    callable_inst: ContextId,
+    root_expr: RootExprContext,
 };
 
 pub const BoundTypeVarKey = struct {
@@ -65,14 +69,17 @@ pub const TypeSubst = struct {
 };
 
 pub const ContextExprKey = struct {
-    context_id_raw: u32,
-    root_source_expr_raw: u32,
+    source_context_kind: enum(u1) { callable_inst, root_expr },
+    source_context_module_idx: u32,
+    source_context_raw: u32,
     module_idx: u32,
     expr_raw: u32,
 };
 
 pub const ContextPatternKey = struct {
-    context_id_raw: u32,
+    source_context_kind: enum(u1) { callable_inst, root_expr },
+    source_context_module_idx: u32,
+    source_context_raw: u32,
     module_idx: u32,
     pattern_raw: u32,
 };
@@ -89,10 +96,8 @@ pub const Result = struct {
     context_expr_monotypes: std.AutoHashMapUnmanaged(ContextExprKey, ResolvedMonotype),
     context_pattern_monotypes: std.AutoHashMapUnmanaged(ContextPatternKey, ResolvedMonotype),
     resolved_dispatch_targets: std.AutoHashMapUnmanaged(ContextExprKey, DispatchExprTarget),
-    root_module_idx: u32,
-    root_source_expr_idx: ?CIR.Expr.Idx,
 
-    pub fn init(allocator: Allocator, root_module_idx: u32, root_source_expr_idx: ?CIR.Expr.Idx) !Result {
+    pub fn init(allocator: Allocator) !Result {
         return .{
             .monotype_store = try Monotype.Store.init(allocator),
             .subst_entries = .empty,
@@ -100,8 +105,6 @@ pub const Result = struct {
             .context_expr_monotypes = .empty,
             .context_pattern_monotypes = .empty,
             .resolved_dispatch_targets = .empty,
-            .root_module_idx = root_module_idx,
-            .root_source_expr_idx = root_source_expr_idx,
         };
     }
 
@@ -114,76 +117,69 @@ pub const Result = struct {
         self.resolved_dispatch_targets.deinit(allocator);
     }
 
-    pub fn contextExprKey(
-        context_id: ContextId,
-        root_source_expr_context: ?CIR.Expr.Idx,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-    ) ContextExprKey {
-        return .{
-            .context_id_raw = @intFromEnum(context_id),
-            .root_source_expr_raw = if (context_id.isNone() and root_source_expr_context != null)
-                @intFromEnum(root_source_expr_context.?)
-            else
-                std.math.maxInt(u32),
-            .module_idx = module_idx,
-            .expr_raw = @intFromEnum(expr_idx),
+    pub fn contextExprKey(source_context: SourceContext, module_idx: u32, expr_idx: CIR.Expr.Idx) ContextExprKey {
+        return switch (source_context) {
+            .callable_inst => |context_id| .{
+                .source_context_kind = .callable_inst,
+                .source_context_module_idx = std.math.maxInt(u32),
+                .source_context_raw = @intFromEnum(context_id),
+                .module_idx = module_idx,
+                .expr_raw = @intFromEnum(expr_idx),
+            },
+            .root_expr => |root| .{
+                .source_context_kind = .root_expr,
+                .source_context_module_idx = root.module_idx,
+                .source_context_raw = @intFromEnum(root.expr_idx),
+                .module_idx = module_idx,
+                .expr_raw = @intFromEnum(expr_idx),
+            },
         };
     }
 
-    pub fn contextPatternKey(
-        context_id: ContextId,
-        module_idx: u32,
-        pattern_idx: CIR.Pattern.Idx,
-    ) ContextPatternKey {
-        return .{
-            .context_id_raw = @intFromEnum(context_id),
-            .module_idx = module_idx,
-            .pattern_raw = @intFromEnum(pattern_idx),
+    pub fn contextPatternKey(source_context: SourceContext, module_idx: u32, pattern_idx: CIR.Pattern.Idx) ContextPatternKey {
+        return switch (source_context) {
+            .callable_inst => |context_id| .{
+                .source_context_kind = .callable_inst,
+                .source_context_module_idx = std.math.maxInt(u32),
+                .source_context_raw = @intFromEnum(context_id),
+                .module_idx = module_idx,
+                .pattern_raw = @intFromEnum(pattern_idx),
+            },
+            .root_expr => |root| .{
+                .source_context_kind = .root_expr,
+                .source_context_module_idx = root.module_idx,
+                .source_context_raw = @intFromEnum(root.expr_idx),
+                .module_idx = module_idx,
+                .pattern_raw = @intFromEnum(pattern_idx),
+            },
         };
     }
 
     pub fn getExprMonotype(
         self: *const Result,
-        context_id: ContextId,
-        root_source_expr_context: ?CIR.Expr.Idx,
+        source_context: SourceContext,
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?ResolvedMonotype {
-        return self.context_expr_monotypes.get(contextExprKey(
-            context_id,
-            root_source_expr_context,
-            module_idx,
-            expr_idx,
-        ));
+        return self.context_expr_monotypes.get(contextExprKey(source_context, module_idx, expr_idx));
     }
 
     pub fn getContextPatternMonotype(
         self: *const Result,
-        context_id: ContextId,
+        source_context: SourceContext,
         module_idx: u32,
         pattern_idx: CIR.Pattern.Idx,
     ) ?ResolvedMonotype {
-        return self.context_pattern_monotypes.get(contextPatternKey(
-            context_id,
-            module_idx,
-            pattern_idx,
-        ));
+        return self.context_pattern_monotypes.get(contextPatternKey(source_context, module_idx, pattern_idx));
     }
 
     pub fn getDispatchExprTarget(
         self: *const Result,
-        context_id: ContextId,
-        root_source_expr_context: ?CIR.Expr.Idx,
+        source_context: SourceContext,
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?DispatchExprTarget {
-        return self.resolved_dispatch_targets.get(contextExprKey(
-            context_id,
-            root_source_expr_context,
-            module_idx,
-            expr_idx,
-        ));
+        return self.resolved_dispatch_targets.get(contextExprKey(source_context, module_idx, expr_idx));
     }
 
     pub fn getTypeSubst(self: *const Result, subst_id: TypeSubstId) *const TypeSubst {

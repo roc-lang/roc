@@ -5833,14 +5833,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const lhs_base = try self.ensureRecordOnStack(lhs_loc, total_size);
             const rhs_base = try self.ensureRecordOnStack(rhs_loc, total_size);
 
-            // Check if any variant contains refcounted data (strings, lists, etc.)
-            const tu_info = ls.getTagUnionInfo(stored_layout);
-            if (!tu_info.contains_refcounted) {
-                // Fast path: no heap types, raw byte comparison is correct
-                return self.generateTagUnionBytewiseComparison(lhs_base, rhs_base, total_size, op);
-            }
-
-            // Slow path: compare discriminants first, then dispatch payload comparison
+            // Compare discriminants first, then dispatch payload comparison.
+            // Raw bytewise equality is not sound here because padding/unused bytes
+            // inside non-refcounted tag unions are not guaranteed to be canonicalized.
             const result_reg = try self.allocTempGeneral();
             const disc_offset: i32 = @intCast(tu_data.discriminant_offset);
             const disc_size = tu_data.discriminant_size;
@@ -6066,16 +6061,33 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // Small field: compare as single register value
                 const lhs_reg = try self.allocTempGeneral();
                 const rhs_reg = try self.allocTempGeneral();
-                try self.codegen.emitLoadStack(.w64, lhs_reg, lhs_off);
-                try self.codegen.emitLoadStack(.w64, rhs_reg, rhs_off);
-
-                if (field_size < 8) {
-                    const mask: u64 = (@as(u64, 1) << @intCast(field_size * 8)) - 1;
-                    const mask_reg = try self.allocTempGeneral();
-                    try self.codegen.emitLoadImm(mask_reg, @bitCast(mask));
-                    try self.emitAndRegs(.w64, lhs_reg, lhs_reg, mask_reg);
-                    try self.emitAndRegs(.w64, rhs_reg, rhs_reg, mask_reg);
-                    self.codegen.freeGeneral(mask_reg);
+                switch (field_size) {
+                    1 => {
+                        try self.emitLoadStackW8(lhs_reg, lhs_off);
+                        try self.emitLoadStackW8(rhs_reg, rhs_off);
+                    },
+                    2 => {
+                        try self.emitLoadStackW16(lhs_reg, lhs_off);
+                        try self.emitLoadStackW16(rhs_reg, rhs_off);
+                    },
+                    4 => {
+                        try self.codegen.emitLoadStack(.w32, lhs_reg, lhs_off);
+                        try self.codegen.emitLoadStack(.w32, rhs_reg, rhs_off);
+                    },
+                    8 => {
+                        try self.codegen.emitLoadStack(.w64, lhs_reg, lhs_off);
+                        try self.codegen.emitLoadStack(.w64, rhs_reg, rhs_off);
+                    },
+                    else => {
+                        const mask: u64 = (@as(u64, 1) << @intCast(field_size * 8)) - 1;
+                        const mask_reg = try self.allocTempGeneral();
+                        try self.codegen.emitLoadStack(.w64, lhs_reg, lhs_off);
+                        try self.codegen.emitLoadStack(.w64, rhs_reg, rhs_off);
+                        try self.codegen.emitLoadImm(mask_reg, @bitCast(mask));
+                        try self.emitAndRegs(.w64, lhs_reg, lhs_reg, mask_reg);
+                        try self.emitAndRegs(.w64, rhs_reg, rhs_reg, mask_reg);
+                        self.codegen.freeGeneral(mask_reg);
+                    },
                 }
 
                 try self.emitCmpReg(lhs_reg, rhs_reg);

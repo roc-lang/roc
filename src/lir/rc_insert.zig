@@ -45,6 +45,11 @@ const AliasSource = struct {
     forwards_ownership: bool,
 };
 
+const OwnedInputSpan = struct {
+    start: u32,
+    len: u16,
+};
+
 const LocalDefinitionKind = union(enum) {
     proc_param,
     join_param,
@@ -62,7 +67,10 @@ pub const RcInsertPass = struct {
     direct_use_summaries: std.AutoHashMap(u64, UseSummary),
     direct_forwarding_alias_borrows: std.AutoHashMap(u64, u32),
     local_alias_sources: std.AutoHashMap(u64, AliasSource),
+    local_owned_input_spans: std.AutoHashMap(u64, OwnedInputSpan),
+    owned_input_locals: std.ArrayListUnmanaged(LocalId),
     local_definition_kinds: std.AutoHashMap(u64, LocalDefinitionKind),
+    owned_proc_params: std.AutoHashMap(u64, void),
     promoted_fresh_join_params: std.AutoHashMap(u64, void),
     owning_join_params: std.AutoHashMap(u64, void),
     active_join_params: std.AutoHashMap(u32, LIR.LocalSpan),
@@ -79,7 +87,10 @@ pub const RcInsertPass = struct {
             .direct_use_summaries = std.AutoHashMap(u64, UseSummary).init(allocator),
             .direct_forwarding_alias_borrows = std.AutoHashMap(u64, u32).init(allocator),
             .local_alias_sources = std.AutoHashMap(u64, AliasSource).init(allocator),
+            .local_owned_input_spans = std.AutoHashMap(u64, OwnedInputSpan).init(allocator),
+            .owned_input_locals = .empty,
             .local_definition_kinds = std.AutoHashMap(u64, LocalDefinitionKind).init(allocator),
+            .owned_proc_params = std.AutoHashMap(u64, void).init(allocator),
             .promoted_fresh_join_params = std.AutoHashMap(u64, void).init(allocator),
             .owning_join_params = std.AutoHashMap(u64, void).init(allocator),
             .active_join_params = std.AutoHashMap(u32, LIR.LocalSpan).init(allocator),
@@ -94,7 +105,10 @@ pub const RcInsertPass = struct {
         self.direct_use_summaries.deinit();
         self.direct_forwarding_alias_borrows.deinit();
         self.local_alias_sources.deinit();
+        self.local_owned_input_spans.deinit();
+        self.owned_input_locals.deinit(self.allocator);
         self.local_definition_kinds.deinit();
+        self.owned_proc_params.deinit();
         self.promoted_fresh_join_params.deinit();
         self.owning_join_params.deinit();
         self.active_join_params.deinit();
@@ -114,7 +128,11 @@ pub const RcInsertPass = struct {
         self.clearAnalysisState();
 
         const proc = self.store.getProcSpec(proc_id);
-        try self.recordProcParamDefinitions(proc.args);
+        const proc_param_use_kinds = if (@intFromEnum(proc_id) < self.proc_param_use_kinds.items.len)
+            self.proc_param_use_kinds.items[@intFromEnum(proc_id)]
+        else
+            &.{};
+        try self.recordProcParamDefinitions(proc.args, proc_param_use_kinds);
         try self.countUsesInStmt(proc.body);
         try self.collectAliasSemanticsInStmt(proc.body);
         try self.inferJoinParamAliasSources(proc.body);
@@ -136,7 +154,10 @@ pub const RcInsertPass = struct {
         self.direct_use_summaries.clearRetainingCapacity();
         self.direct_forwarding_alias_borrows.clearRetainingCapacity();
         self.local_alias_sources.clearRetainingCapacity();
+        self.local_owned_input_spans.clearRetainingCapacity();
+        self.owned_input_locals.clearRetainingCapacity();
         self.local_definition_kinds.clearRetainingCapacity();
+        self.owned_proc_params.clearRetainingCapacity();
         self.promoted_fresh_join_params.clearRetainingCapacity();
         self.owning_join_params.clearRetainingCapacity();
         self.active_join_params.clearRetainingCapacity();
@@ -195,7 +216,7 @@ pub const RcInsertPass = struct {
             if (proc_ptr.result_contract != .fresh) continue;
 
             self.clearAnalysisState();
-            try self.recordProcParamDefinitions(proc_ptr.args);
+            try self.recordProcParamDefinitions(proc_ptr.args, &.{});
             try self.collectAliasSemanticsInStmt(proc_ptr.body);
             try self.inferJoinParamAliasSources(proc_ptr.body);
             try self.markFreshReturnJoinParamsInStmt(proc_ptr.body);
@@ -225,7 +246,7 @@ pub const RcInsertPass = struct {
             .{@intFromEnum(current)},
         );
         return switch (def_kind) {
-            .proc_param => false,
+            .proc_param => self.owned_proc_params.contains(localKey(current)),
             .join_param => self.promoted_fresh_join_params.contains(localKey(current)) or
                 self.owning_join_params.contains(localKey(current)),
             .stmt_result => |semantics| semantics == .fresh,
@@ -395,6 +416,60 @@ pub const RcInsertPass = struct {
         const source = self.local_alias_sources.get(localKey(local)) orelse return local;
         if (!source.forwards_ownership) return null;
         return @enumFromInt(@as(u32, @intCast(source.owner_key)));
+    }
+
+    fn ownershipRootForConsumedValue(self: *const RcInsertPass, local: LocalId) ?LocalId {
+        if (!self.layoutNeedsRc(self.localLayout(local))) return null;
+
+        var current = local;
+        var steps: u32 = 0;
+        while (self.local_alias_sources.get(localKey(current))) |source| {
+            if (!source.forwards_ownership) return null;
+            current = @enumFromInt(@as(u32, @intCast(source.owner_key)));
+            steps += 1;
+            if (builtin.mode == .Debug and steps > 1024) {
+                std.debug.panic(
+                    "RcInsertPass invariant violated: consumed-value ownership root walk did not converge for local {d}",
+                    .{@intFromEnum(local)},
+                );
+            }
+        }
+
+        return current;
+    }
+
+    fn recordOwnedInputRoots(self: *RcInsertPass, target: LocalId, inputs: []const LocalId) Allocator.Error!void {
+        if (!self.layoutNeedsRc(self.localLayout(target))) return;
+
+        const start = @as(u32, @intCast(self.owned_input_locals.items.len));
+        var added: u16 = 0;
+        for (inputs) |input| {
+            const root = self.ownershipRootForConsumedValue(input) orelse continue;
+
+            var seen = false;
+            for (self.owned_input_locals.items[start..]) |existing| {
+                if (existing == root) {
+                    seen = true;
+                    break;
+                }
+            }
+            if (seen) continue;
+
+            try self.owned_input_locals.append(self.allocator, root);
+            added += 1;
+        }
+
+        if (added == 0) return;
+        try self.local_owned_input_spans.put(localKey(target), .{
+            .start = start,
+            .len = added,
+        });
+    }
+
+    fn ownedInputRoots(self: *const RcInsertPass, local: LocalId) []const LocalId {
+        const span = self.local_owned_input_spans.get(localKey(local)) orelse return &.{};
+        const start: usize = span.start;
+        return self.owned_input_locals.items[start..][0..span.len];
     }
 
     fn markOwningJoinParamsInStmt(self: *RcInsertPass, stmt_id: CFStmtId, changed: *bool) Allocator.Error!void {
@@ -1111,9 +1186,24 @@ pub const RcInsertPass = struct {
         gop.value_ptr.* = kind;
     }
 
-    fn recordProcParamDefinitions(self: *RcInsertPass, params_span: LIR.LocalSpan) Allocator.Error!void {
-        for (self.store.getLocalSpan(params_span)) |param| {
+    fn recordProcParamDefinitions(
+        self: *RcInsertPass,
+        params_span: LIR.LocalSpan,
+        param_use_kinds: []const UseKind,
+    ) Allocator.Error!void {
+        const params = self.store.getLocalSpan(params_span);
+        if (builtin.mode == .Debug and param_use_kinds.len != 0 and params.len != param_use_kinds.len) {
+            std.debug.panic(
+                "RcInsertPass invariant violated: proc params span had {d} params but ownership table provided {d} kinds",
+                .{ params.len, param_use_kinds.len },
+            );
+        }
+
+        for (params, 0..) |param, i| {
             try self.recordLocalDefinition(param, .proc_param);
+            if (param_use_kinds.len != 0 and param_use_kinds[i] == .consume) {
+                try self.owned_proc_params.put(localKey(param), {});
+            }
         }
     }
 
@@ -1355,6 +1445,7 @@ pub const RcInsertPass = struct {
                 try self.recordStmtDefinition(assign.target, assign.result);
                 if (self.layoutNeedsRc(self.localLayout(assign.target))) {
                     try self.recordAliasSemantics(assign.target, assign.result);
+                    try self.recordOwnedInputRoots(assign.target, self.store.getLocalSpan(assign.elems));
                 }
                 try self.collectAliasSemanticsInStmt(assign.next);
             },
@@ -1362,6 +1453,7 @@ pub const RcInsertPass = struct {
                 try self.recordStmtDefinition(assign.target, assign.result);
                 if (self.layoutNeedsRc(self.localLayout(assign.target))) {
                     try self.recordAliasSemantics(assign.target, assign.result);
+                    try self.recordOwnedInputRoots(assign.target, self.store.getLocalSpan(assign.fields));
                 }
                 try self.collectAliasSemanticsInStmt(assign.next);
             },
@@ -1369,6 +1461,7 @@ pub const RcInsertPass = struct {
                 try self.recordStmtDefinition(assign.target, assign.result);
                 if (self.layoutNeedsRc(self.localLayout(assign.target))) {
                     try self.recordAliasSemantics(assign.target, assign.result);
+                    try self.recordOwnedInputRoots(assign.target, self.store.getLocalSpan(assign.args));
                 }
                 try self.collectAliasSemanticsInStmt(assign.next);
             },
@@ -1572,21 +1665,29 @@ pub const RcInsertPass = struct {
     }
 
     fn localForwardsOwnership(self: *const RcInsertPass, value: LocalId, owner: LocalId) bool {
-        var current = value;
-        var steps: u32 = 0;
-        while (true) {
-            if (current == owner) return true;
-            const source = self.local_alias_sources.get(localKey(current)) orelse return false;
-            if (!source.forwards_ownership) return false;
-            current = @enumFromInt(@as(u32, @intCast(source.owner_key)));
-            steps += 1;
-            if (builtin.mode == .Debug and steps > 1024) {
-                std.debug.panic(
-                    "RcInsertPass invariant violated: alias chain did not converge while checking ownership forwarding for local {d}",
-                    .{@intFromEnum(value)},
-                );
-            }
+        return self.localForwardsOwnershipRec(value, owner, 0);
+    }
+
+    fn localForwardsOwnershipRec(self: *const RcInsertPass, value: LocalId, owner: LocalId, depth: u32) bool {
+        if (value == owner) return true;
+        if (builtin.mode == .Debug and depth > 1024) {
+            std.debug.panic(
+                "RcInsertPass invariant violated: ownership forwarding walk did not converge while checking whether local {d} forwards ownership of {d}",
+                .{ @intFromEnum(value), @intFromEnum(owner) },
+            );
         }
+
+        if (self.local_alias_sources.get(localKey(value))) |source| {
+            if (!source.forwards_ownership) return false;
+            const alias_owner: LocalId = @enumFromInt(@as(u32, @intCast(source.owner_key)));
+            if (self.localForwardsOwnershipRec(alias_owner, owner, depth + 1)) return true;
+        }
+
+        for (self.ownedInputRoots(value)) |input_root| {
+            if (self.localForwardsOwnershipRec(input_root, owner, depth + 1)) return true;
+        }
+
+        return false;
     }
 
     fn localConsumeIncrefCount(self: *const RcInsertPass, value: LocalId, consume_uses: u32) u32 {
@@ -1970,11 +2071,11 @@ pub const RcInsertPass = struct {
         }
 
         if (self.layoutNeedsRc(target_layout) and use_count == 0 and resultIsFresh(stmt)) {
-            const free_stmt = try self.store.addCFStmt(.{ .free = .{
+            const decref_stmt = try self.store.addCFStmt(.{ .decref = .{
                 .value = target,
                 .next = next,
             } });
-            return try self.rebuildAssignStmt(stmt, free_stmt);
+            return try self.rebuildAssignStmt(stmt, decref_stmt);
         }
 
         return try self.rebuildAssignStmt(stmt, next);

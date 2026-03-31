@@ -199,6 +199,11 @@ const ContextExprResolution = union(enum) {
     source: ContextExprSource,
 };
 
+const CallResultCallableInstKey = struct {
+    context_expr: ContextExprKey,
+    callee_callable_inst_raw: u32,
+};
+
 const RequiredLookupTarget = struct {
     module_idx: u32,
     def_idx: CIR.Def.Idx,
@@ -463,6 +468,7 @@ pub const Pass = struct {
     visited_modules: std.AutoHashMapUnmanaged(u32, void),
     visited_exprs: std.AutoHashMapUnmanaged(u64, void),
     in_progress_value_defs: std.AutoHashMapUnmanaged(ContextExprKey, void),
+    in_progress_call_result_callable_insts: std.AutoHashMapUnmanaged(CallResultCallableInstKey, void),
     in_progress_callable_scans: std.AutoHashMapUnmanaged(u32, void),
     completed_callable_scans: std.AutoHashMapUnmanaged(u32, void),
     in_progress_template_body_completions: std.AutoHashMapUnmanaged(TemplateBodyCompletionKey, void),
@@ -498,6 +504,7 @@ pub const Pass = struct {
             .visited_modules = .empty,
             .visited_exprs = .empty,
             .in_progress_value_defs = .empty,
+            .in_progress_call_result_callable_insts = .empty,
             .in_progress_callable_scans = .empty,
             .completed_callable_scans = .empty,
             .in_progress_template_body_completions = .empty,
@@ -839,6 +846,7 @@ pub const Pass = struct {
         self.visited_modules.deinit(self.allocator);
         self.visited_exprs.deinit(self.allocator);
         self.in_progress_value_defs.deinit(self.allocator);
+        self.in_progress_call_result_callable_insts.deinit(self.allocator);
         self.in_progress_callable_scans.deinit(self.allocator);
         self.completed_callable_scans.deinit(self.allocator);
         self.in_progress_template_body_completions.deinit(self.allocator);
@@ -933,6 +941,7 @@ pub const Pass = struct {
 
             self.visited_exprs.clearRetainingCapacity();
             self.in_progress_value_defs.clearRetainingCapacity();
+            self.in_progress_call_result_callable_insts.clearRetainingCapacity();
             self.completed_callable_scans.clearRetainingCapacity();
 
             const mutation_revision_before = self.mutation_revision;
@@ -1373,8 +1382,9 @@ pub const Pass = struct {
                     packLocalPatternSourceKey(module_idx, decl.pattern),
                 )) |_| {
                     try self.registerDeferredLocalCallable(result, module_idx, decl.pattern, decl.expr);
-                    try self.scanCirExpr(result, module_idx, decl.expr);
+                    try self.scanCirValueExpr(result, module_idx, decl.expr);
                     try self.bindPatternCallableValueCallableInsts(result, module_idx, decl.pattern, decl.expr);
+                    try self.bindCurrentPatternFromExprIfExact(result, module_idx, decl.pattern, decl.expr);
                 } else {
                     try self.scanCirExpr(result, module_idx, decl.expr);
                     try self.bindPatternCallableValueCallableInsts(result, module_idx, decl.pattern, decl.expr);
@@ -1396,8 +1406,9 @@ pub const Pass = struct {
                     packLocalPatternSourceKey(module_idx, var_decl.pattern_idx),
                 )) |_| {
                     try self.registerDeferredLocalCallable(result, module_idx, var_decl.pattern_idx, var_decl.expr);
-                    try self.scanCirExpr(result, module_idx, var_decl.expr);
+                    try self.scanCirValueExpr(result, module_idx, var_decl.expr);
                     try self.bindPatternCallableValueCallableInsts(result, module_idx, var_decl.pattern_idx, var_decl.expr);
+                    try self.bindCurrentPatternFromExprIfExact(result, module_idx, var_decl.pattern_idx, var_decl.expr);
                 } else {
                     try self.scanCirExpr(result, module_idx, var_decl.expr);
                     try self.bindPatternCallableValueCallableInsts(result, module_idx, var_decl.pattern_idx, var_decl.expr);
@@ -1488,6 +1499,45 @@ pub const Pass = struct {
         );
 
         if (callable_inst_ids.items.len == 0) return;
+        if (callable_inst_ids.items.len == 1) {
+            const callable_inst_id = callable_inst_ids.items[0];
+            const callable_inst = result.getCallableInst(callable_inst_id);
+            try self.recordContextPatternCallableInst(
+                result,
+                self.active_callable_inst_context,
+                module_idx,
+                pattern_idx,
+                callable_inst_id,
+            );
+            try self.recordExprCallableInst(
+                result,
+                self.active_callable_inst_context,
+                module_idx,
+                expr_idx,
+                callable_inst_id,
+            );
+            try self.bindCurrentPatternFromResolvedMonotype(
+                result,
+                module_idx,
+                pattern_idx,
+                resolvedMonotype(callable_inst.fn_monotype, callable_inst.fn_monotype_module_idx),
+            );
+            try self.recordCurrentExprMonotype(
+                result,
+                module_idx,
+                expr_idx,
+                callable_inst.fn_monotype,
+                callable_inst.fn_monotype_module_idx,
+            );
+            return;
+        }
+        try self.recordExprCallableInstSet(
+            result,
+            self.active_callable_inst_context,
+            module_idx,
+            expr_idx,
+            callable_inst_ids.items,
+        );
         try self.recordContextPatternCallableInstSet(
             result,
             self.active_callable_inst_context,
@@ -1822,7 +1872,8 @@ pub const Pass = struct {
         if (self.active_iteration_expr_monotypes) |iteration_map| {
             if (iteration_map.get(key)) |resolved| return resolved;
             if (!self.active_callable_inst_context.isNone() and
-                key.context_id_raw == @intFromEnum(self.active_callable_inst_context))
+                key.source_context_kind == .callable_inst and
+                key.source_context_raw == @intFromEnum(self.active_callable_inst_context))
             {
                 return null;
             }
@@ -2926,6 +2977,13 @@ pub const Pass = struct {
             self.active_callable_inst_context,
             module_idx,
             call_expr_idx,
+            callable_inst_id,
+        );
+        try self.recordExprCallableInst(
+            result,
+            self.active_callable_inst_context,
+            module_idx,
+            call_expr.func,
             callable_inst_id,
         );
         switch (callee_expr) {
@@ -4888,6 +4946,18 @@ pub const Pass = struct {
         call_expr_idx: CIR.Expr.Idx,
         callee_callable_inst_id: CallableInstId,
     ) Allocator.Error!void {
+        const in_progress_key = CallResultCallableInstKey{
+            .context_expr = Result.contextExprKey(
+                self.sourceContextFor(context_callable_inst),
+                module_idx,
+                call_expr_idx,
+            ),
+            .callee_callable_inst_raw = @intFromEnum(callee_callable_inst_id),
+        };
+        if (self.in_progress_call_result_callable_insts.contains(in_progress_key)) return;
+        try self.in_progress_call_result_callable_insts.put(self.allocator, in_progress_key, {});
+        defer _ = self.in_progress_call_result_callable_insts.remove(in_progress_key);
+
         const callee_callable_inst = result.getCallableInst(callee_callable_inst_id);
         const template = result.getCallableTemplate(callee_callable_inst.template);
         const boundary = self.callableBoundaryInfo(template.module_idx, template.cir_expr) orelse return;

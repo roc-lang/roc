@@ -269,7 +269,9 @@ noinline fn executeAndFormat(
 
     // Execute with result pointer
     var result_buf: [512]u8 align(16) = undefined;
-    try dev_eval.callWithCrashProtection(executable, @ptrCast(&result_buf));
+    dev_eval.callWithCrashProtection(executable, @ptrCast(&result_buf)) catch |err| {
+        return err;
+    };
 
     // Result is always a Str (expression was wrapped in Str.inspect)
     const roc_str: *const builtins.str.RocStr = @ptrCast(@alignCast(&result_buf));

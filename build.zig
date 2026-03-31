@@ -1731,7 +1731,7 @@ fn createAndRunBuiltinCompiler(
             .root_source_file = b.path("src/build/builtin_compiler/main.zig"),
             .target = b.graph.host, // this runs at build time on the *host* machine!
             .optimize = .Debug, // No need to optimize - only compiles builtin modules
-            // Note: libc linking is handled by add_tracy below (required when tracy is enabled)
+            .link_libc = true,
         }),
     });
     configureBackend(builtin_compiler_exe, b.graph.host);
@@ -2534,6 +2534,7 @@ pub fn build(b: *std.Build) void {
     }));
     builtins_bc_obj.root_module.omit_frame_pointer = true;
     builtins_bc_obj.root_module.stack_check = false;
+    builtins_bc_obj.root_module.link_libc = true;
     builtins_bc_obj.use_llvm = true;
     builtins_bc_obj.bundle_compiler_rt = true;
     _ = builtins_bc_obj.getEmittedBin();

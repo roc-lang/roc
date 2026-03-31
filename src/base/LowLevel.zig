@@ -440,7 +440,7 @@ pub const LowLevel = enum {
             .str_split_on => &.{ .borrow, .borrow },
             .str_to_utf8 => &.{.borrow},
             .str_drop_prefix, .str_drop_suffix => &.{ .borrow, .borrow },
-            .str_from_utf8, .str_from_utf8_lossy => &.{.consume},
+            .str_from_utf8, .str_from_utf8_lossy => &.{.borrow},
             .str_inspect => &.{.borrow},
 
             .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str => &.{.borrow},

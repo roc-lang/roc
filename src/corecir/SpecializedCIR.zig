@@ -54,15 +54,11 @@ pub const CallableDef = struct {
 pub const Program = struct {
     callable_defs: std.ArrayListUnmanaged(CallableDef),
     capture_fields: std.ArrayListUnmanaged(CaptureField),
-    root_module_idx: u32,
-    root_source_expr_idx: ?CIR.Expr.Idx,
 
-    pub fn init(root_module_idx: u32, root_source_expr_idx: ?CIR.Expr.Idx) Program {
+    pub fn init() Program {
         return .{
             .callable_defs = .empty,
             .capture_fields = .empty,
-            .root_module_idx = root_module_idx,
-            .root_source_expr_idx = root_source_expr_idx,
         };
     }
 

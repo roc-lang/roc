@@ -11,9 +11,8 @@
 //!
 //!   1. **Interpreter** — walks the LIR directly.
 //!   2. **Dev backend** — lowers LIR to native machine code.
-//!   3. **WASM backend** — lowers LIR to WebAssembly, runs via bytebox.
-//!   4. **LLVM backend** — currently a loud TODO panic until statement-only
-//!      LLVM code generation is implemented.
+//!   3. **WASM backend** — currently not implemented for statement-only LIR.
+//!   4. **LLVM backend** — currently not implemented for statement-only LIR.
 //!
 //! ALL backends run via Str.inspect and must produce identical output strings.
 //! This catches bugs where a backend produces a value of the right type but
@@ -273,6 +272,8 @@ const BackendDetail = struct {
 
 const NUM_BACKENDS = 4; // interpreter, dev, wasm, llvm
 const BACKEND_NAMES = [NUM_BACKENDS][]const u8{ "interpreter", "dev", "wasm", "llvm" };
+const WASM_BACKEND_IMPLEMENTED = false;
+const LLVM_BACKEND_IMPLEMENTED = false;
 
 const TestOutcome = struct {
     status: Status,
@@ -683,7 +684,7 @@ fn runValueTest(allocator: std.mem.Allocator, src: []const u8, expected: TestCas
     const skips = if (comptime coverage_mode)
         [NUM_BACKENDS]bool{ skip.interpreter, true, true, true }
     else
-        [NUM_BACKENDS]bool{ skip.interpreter, skip.dev, skip.wasm, true }; // llvm always not_implemented for now
+        [NUM_BACKENDS]bool{ skip.interpreter, skip.dev, skip.wasm, false };
 
     const eval_fns = [NUM_BACKENDS]BackendEvalFn{
         helpers.lirInterpreterInspectedStr,
@@ -697,7 +698,8 @@ fn runValueTest(allocator: std.mem.Allocator, src: []const u8, expected: TestCas
     var any_failure = false;
 
     for (0..NUM_BACKENDS) |i| {
-        if (i == 3) continue; // llvm: not_implemented
+        if (i == 2 and !WASM_BACKEND_IMPLEMENTED) continue;
+        if (i == 3 and !LLVM_BACKEND_IMPLEMENTED) continue;
         if (skips[i]) {
             backends[i] = .{ .status = .skip };
             continue;
@@ -952,7 +954,8 @@ fn printHelp() void {
         \\Runs eval tests across backends (interpreter, dev, wasm, llvm) in parallel
         \\and compares results via Str.inspect. Each backend evaluation runs in
         \\a forked child process for crash isolation.
-        \\(LLVM backend is currently a loud TODO panic until statement-only LLVM codegen is implemented.)
+        \\(WASM and LLVM backends are currently marked NOT_IMPLEMENTED until
+        \\ statement-only code generation is implemented for each.)
         \\
         \\USAGE:
         \\  zig build test-eval               Run with defaults.
