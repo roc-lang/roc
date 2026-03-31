@@ -87,7 +87,7 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
                 const arg_pattern_idx = try env.addPattern(.{ .assign = .{ .ident = arg_ident } }, def_region);
                 try env.store.scratch.?.patterns.append(arg_pattern_idx);
             }
-            const args_span = CIR.Pattern.Span{ .span = .{ .start = @intCast(patterns_start), .len = @intCast(num_args) } };
+            const args_span = try env.store.patternSpanFrom(patterns_start);
 
             // Create an e_crash body that crashes when the function is called in the interpreter.
             // This is a placeholder - hosted functions are provided by the platform's native code,

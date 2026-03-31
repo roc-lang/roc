@@ -13617,7 +13617,7 @@ fn injectEchoPlatform(self: *Self) std.mem.Allocator.Error!void {
     const arg_pattern_idx = try self.env.addPattern(.{ .assign = .{ .ident = arg_ident } }, synthetic_region);
     const patterns_start = self.env.store.scratchTop("patterns");
     try self.env.store.scratch.?.patterns.append(arg_pattern_idx);
-    const args_span = CIR.Pattern.Span{ .span = .{ .start = @intCast(patterns_start), .len = 1 } };
+    const args_span = try self.env.store.patternSpanFrom(patterns_start);
 
     // Create a crash body placeholder (never executed — hosted fn ptr is called at runtime)
     const crash_msg = try self.env.insertString("echo! is a hosted function");
