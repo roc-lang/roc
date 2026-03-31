@@ -4728,13 +4728,25 @@ pub const Pass = struct {
 
         if (actual_args.items.len != fn_mono.args.len) unreachable;
 
+        // During template-binding completion (scratch context), dispatch
+        // inference may operate with incomplete bindings because direct call
+        // resolution is suppressed. This can produce proc inst monotypes
+        // with unit-defaulted type variables that conflict with the
+        // template's actual types. Tolerate such binding mismatches rather
+        // than treating them as binding probe failures.
+        const in_scratch_context = self.scratch_context_expr_monotypes_depth != 0;
+
         for (actual_args.items, 0..) |arg_expr_idx, i| {
             const param_mono = result.monotype_store.getIdxSpanItem(fn_mono.args, i);
+            const saved_probe_failed = self.binding_probe_failed;
             try self.bindCurrentExprTypeRoot(result, module_idx, arg_expr_idx, param_mono, proc_inst.fn_monotype_module_idx);
+            if (in_scratch_context) self.binding_probe_failed = saved_probe_failed;
             try self.recordCurrentExprMonotype(result, module_idx, arg_expr_idx, param_mono, proc_inst.fn_monotype_module_idx);
         }
 
+        const saved_probe_failed = self.binding_probe_failed;
         try self.bindCurrentExprTypeRoot(result, module_idx, expr_idx, fn_mono.ret, proc_inst.fn_monotype_module_idx);
+        if (in_scratch_context) self.binding_probe_failed = saved_probe_failed;
         try self.recordCurrentExprMonotype(result, module_idx, expr_idx, fn_mono.ret, proc_inst.fn_monotype_module_idx);
     }
 
@@ -9992,6 +10004,15 @@ pub const Pass = struct {
     ) void {
         if (self.binding_probe_mode) {
             self.binding_probe_failed = true;
+            return;
+        }
+        // During template-binding completion (scratch context), dispatch
+        // inference may operate with incomplete bindings because direct call
+        // resolution is suppressed. This can produce proc inst monotypes
+        // with unit-defaulted type variables that conflict with the
+        // template's actual types. Tolerate such binding mismatches rather
+        // than treating them as a compiler bug.
+        if (self.scratch_context_expr_monotypes_depth != 0) {
             return;
         }
         if (std.debug.runtime_safety) {
