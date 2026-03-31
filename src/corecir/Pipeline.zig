@@ -549,32 +549,38 @@ pub const Pass = struct {
         _ = self.source_context_stack.pop();
     }
 
-    fn currentCallableInstContext(self: *const Pass) ?CallableInstId {
+    fn requireCurrentCallableInstContext(self: *const Pass) CallableInstId {
         return switch (self.currentSourceContext()) {
             .callable_inst => |context_id| @enumFromInt(@intFromEnum(context_id)),
-            .root_expr, .provenance_expr, .template_expr => null,
+            .root_expr, .provenance_expr, .template_expr => std.debug.panic(
+                "Pipeline invariant violated: operation required callable-inst context but active source context was {s}",
+                .{@tagName(self.currentSourceContext())},
+            ),
         };
-    }
-
-    fn callableInstFromSourceContext(source_context: SourceContext) ?CallableInstId {
-        return switch (source_context) {
-            .callable_inst => |context_id| @enumFromInt(@intFromEnum(context_id)),
-            .root_expr, .provenance_expr, .template_expr => null,
-        };
-    }
-
-    fn requireCurrentCallableInstContext(self: *const Pass) CallableInstId {
-        return self.currentCallableInstContext() orelse std.debug.panic(
-            "Pipeline invariant violated: operation required callable-inst context but active source context was {s}",
-            .{@tagName(self.currentSourceContext())},
-        );
     }
 
     fn currentCallableInstRawForDebug(self: *const Pass) u32 {
-        return if (self.currentCallableInstContext()) |callable_inst_id|
-            @intFromEnum(callable_inst_id)
-        else
-            std.math.maxInt(u32);
+        return switch (self.currentSourceContext()) {
+            .callable_inst => |context_id| @intFromEnum(@as(CallableInstId, @enumFromInt(@intFromEnum(context_id)))),
+            .root_expr, .provenance_expr, .template_expr => std.math.maxInt(u32),
+        };
+    }
+
+    fn sourceContextHasCallableInst(source_context: SourceContext) bool {
+        return switch (source_context) {
+            .callable_inst => true,
+            .root_expr, .provenance_expr, .template_expr => false,
+        };
+    }
+
+    fn requireSourceContextCallableInst(source_context: SourceContext) CallableInstId {
+        return switch (source_context) {
+            .callable_inst => |context_id| @enumFromInt(@intFromEnum(context_id)),
+            .root_expr, .provenance_expr, .template_expr => std.debug.panic(
+                "Pipeline invariant violated: source context {s} did not carry a callable inst",
+                .{@tagName(source_context)},
+            ),
+        };
     }
 
     fn templateContextForSourceContext(
@@ -965,7 +971,8 @@ pub const Pass = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?[]const CallableInstId {
-        const resolved_context_callable_inst = callableInstFromSourceContext(source_context) orelse return null;
+        if (!sourceContextHasCallableInst(source_context)) return null;
+        const resolved_context_callable_inst = requireSourceContextCallableInst(source_context);
 
         var projections = std.ArrayListUnmanaged(CallableParamProjection).empty;
         defer projections.deinit(self.allocator);
@@ -1031,8 +1038,16 @@ pub const Pass = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?CallableInstId {
-        if (callableInstFromSourceContext(source_context)) |context_callable_inst| {
-            return self.getValueExprCallableInstInContext(result, context_callable_inst, module_idx, expr_idx);
+        switch (source_context) {
+            .callable_inst => |context_id| {
+                return self.getValueExprCallableInstInContext(
+                    result,
+                    @enumFromInt(@intFromEnum(context_id)),
+                    module_idx,
+                    expr_idx,
+                );
+            },
+            .root_expr, .provenance_expr, .template_expr => {},
         }
 
         const module_env = self.all_module_envs[module_idx];
@@ -1063,8 +1078,16 @@ pub const Pass = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?[]const CallableInstId {
-        if (callableInstFromSourceContext(source_context)) |context_callable_inst| {
-            return self.getValueExprCallableInstsInContext(result, context_callable_inst, module_idx, expr_idx);
+        switch (source_context) {
+            .callable_inst => |context_id| {
+                return self.getValueExprCallableInstsInContext(
+                    result,
+                    @enumFromInt(@intFromEnum(context_id)),
+                    module_idx,
+                    expr_idx,
+                );
+            },
+            .root_expr, .provenance_expr, .template_expr => {},
         }
 
         const module_env = self.all_module_envs[module_idx];
@@ -1949,7 +1972,7 @@ pub const Pass = struct {
             );
             if (materialize_if_callable) {
                 try self.materializeDemandedExprCallableInst(result, module_idx, expr_idx, template_id);
-                if (self.active_bindings == null and self.currentCallableInstContext() == null) {
+                if (self.active_bindings == null and !sourceContextHasCallableInst(self.currentSourceContext())) {
                     return;
                 }
             }
@@ -2019,7 +2042,7 @@ pub const Pass = struct {
         template_id: CallableTemplateId,
     ) Allocator.Error!void {
         if (templateRequiresConcreteOwnerCallableInst(result, template_id) and
-            self.currentCallableInstContext() == null)
+            !sourceContextHasCallableInst(self.currentSourceContext()))
         {
             return;
         }
@@ -2187,7 +2210,7 @@ pub const Pass = struct {
         const key = self.currentResultExprKey(module_idx, expr_idx);
         if (self.active_iteration_expr_monotypes) |iteration_map| {
             if (iteration_map.get(key)) |resolved| return resolved;
-            if (self.currentCallableInstContext() != null and
+            if (sourceContextHasCallableInst(self.currentSourceContext()) and
                 key.source_context_kind == .callable_inst and
                 key.source_context_raw == self.currentCallableInstRawForDebug())
             {
@@ -2413,7 +2436,10 @@ pub const Pass = struct {
         enclosing_source_context: SourceContext,
         closure_callable_inst_id: CallableInstId,
     ) CallableInstId {
-        return callableInstFromSourceContext(enclosing_source_context) orelse closure_callable_inst_id;
+        return switch (enclosing_source_context) {
+            .callable_inst => |context_id| @enumFromInt(@intFromEnum(context_id)),
+            .root_expr, .provenance_expr, .template_expr => closure_callable_inst_id,
+        };
     }
 
     fn captureValueSourceForClosurePattern(
@@ -3047,15 +3073,16 @@ pub const Pass = struct {
     ) Allocator.Error!ResolvedMonotype {
         var bindings = std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype).init(self.allocator);
         defer bindings.deinit();
-        const callable_inst_id = callableInstFromSourceContext(source_context);
-
         const saved_bindings = self.active_bindings;
         defer self.active_bindings = saved_bindings;
-        if (callable_inst_id) |inst_id| {
-            try self.seedBindingsForCallableInst(result, inst_id, &bindings);
-            self.active_bindings = &bindings;
-        } else {
-            self.active_bindings = null;
+        switch (source_context) {
+            .callable_inst => |context_id| {
+                try self.seedBindingsForCallableInst(result, @enumFromInt(@intFromEnum(context_id)), &bindings);
+                self.active_bindings = &bindings;
+            },
+            .root_expr, .provenance_expr, .template_expr => {
+                self.active_bindings = null;
+            },
         }
 
         try self.pushSourceContext(source_context);
@@ -3077,15 +3104,16 @@ pub const Pass = struct {
     ) Allocator.Error!ResolvedMonotype {
         var bindings = std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype).init(self.allocator);
         defer bindings.deinit();
-        const callable_inst_id = callableInstFromSourceContext(source_context);
-
         const saved_bindings = self.active_bindings;
         defer self.active_bindings = saved_bindings;
-        if (callable_inst_id) |inst_id| {
-            try self.seedBindingsForCallableInst(result, inst_id, &bindings);
-            self.active_bindings = &bindings;
-        } else {
-            self.active_bindings = null;
+        switch (source_context) {
+            .callable_inst => |context_id| {
+                try self.seedBindingsForCallableInst(result, @enumFromInt(@intFromEnum(context_id)), &bindings);
+                self.active_bindings = &bindings;
+            },
+            .root_expr, .provenance_expr, .template_expr => {
+                self.active_bindings = null;
+            },
         }
 
         try self.pushSourceContext(source_context);
@@ -3103,14 +3131,15 @@ pub const Pass = struct {
         closure_expr: CIR.Expr.Closure,
     ) Allocator.Error!void {
         const module_env = self.all_module_envs[module_idx];
-        const source_context_callable_inst = callableInstFromSourceContext(source_context);
         try self.pushSourceContext(source_context);
         defer self.popSourceContext();
 
-        const current_template = if (source_context_callable_inst) |inst_id|
-            result.getCallableTemplate(result.getCallableInst(inst_id).template).*
-        else
-            null;
+        const current_template = switch (source_context) {
+            .callable_inst => |context_id| result.getCallableTemplate(
+                result.getCallableInst(@enumFromInt(@intFromEnum(context_id))).template,
+            ).*,
+            .root_expr, .provenance_expr, .template_expr => null,
+        };
 
         for (module_env.store.sliceCaptures(closure_expr.captures)) |capture_idx| {
             const capture = module_env.store.getCapture(capture_idx);
@@ -3379,7 +3408,7 @@ pub const Pass = struct {
 
         if (resolved_template_id) |template_id| {
             if (!(templateRequiresConcreteOwnerCallableInst(result, template_id) and
-                self.currentCallableInstContext() == null))
+                !sourceContextHasCallableInst(self.currentSourceContext())))
             {
                 switch (try self.inferDirectCallCallableInst(result, module_idx, call_expr_idx, call_expr, template_id)) {
                     .resolved => |callable_inst_id| {
@@ -3414,7 +3443,7 @@ pub const Pass = struct {
                             desired_fn_monotype.idx,
                             desired_fn_monotype.module_idx,
                         );
-                    } else if (std.debug.runtime_safety and self.currentCallableInstContext() == null) {
+                    } else if (std.debug.runtime_safety and !sourceContextHasCallableInst(self.currentSourceContext())) {
                         if (!self.visited_exprs.contains(self.currentResultExprKey(module_idx, callee_expr_idx))) {
                             return;
                         }
@@ -3448,7 +3477,7 @@ pub const Pass = struct {
             }
         };
         if (templateRequiresConcreteOwnerCallableInst(result, template_id) and
-            self.currentCallableInstContext() == null)
+            !sourceContextHasCallableInst(self.currentSourceContext()))
         {
             return;
         }
@@ -3582,7 +3611,7 @@ pub const Pass = struct {
             const maybe_template_id = try self.lookupDirectCalleeTemplate(result, module_idx, arg_expr_idx);
             const template_id = maybe_template_id orelse continue;
             const template = result.getCallableTemplate(template_id);
-            if (self.active_bindings != null and self.currentCallableInstContext() == null and template.kind == .closure) {
+            if (self.active_bindings != null and !sourceContextHasCallableInst(self.currentSourceContext()) and template.kind == .closure) {
                 // During template-binding completion, a closure's callable identity is not
                 // meaningful until the enclosing callable instantiation exists. Defer that
                 // assignment to the later concrete callable-context scan.
@@ -4987,7 +5016,7 @@ pub const Pass = struct {
         const actual_template_id = (try self.resolveExprCallableTemplate(result, actual_module_idx, arg_expr_idx)) orelse return null;
         const actual_template = result.getCallableTemplate(actual_template_id).*;
         if (templateRequiresConcreteOwnerCallableInst(result, actual_template_id) and
-            self.currentCallableInstContext() == null)
+            !sourceContextHasCallableInst(self.currentSourceContext()))
         {
             return null;
         }
@@ -5522,7 +5551,10 @@ pub const Pass = struct {
         if (callable_inst_ids.items.len == 1) {
             try self.recordExprCallableInst(
                 result,
-                callableInstFromSourceContext(source_context) orelse callee_callable_inst_id,
+                switch (source_context) {
+                    .callable_inst => |context_id| @enumFromInt(@intFromEnum(context_id)),
+                    .root_expr, .provenance_expr, .template_expr => callee_callable_inst_id,
+                },
                 module_idx,
                 call_expr_idx,
                 callable_inst_ids.items[0],
@@ -5532,7 +5564,10 @@ pub const Pass = struct {
 
         try self.recordExprCallableInstSet(
             result,
-            callableInstFromSourceContext(source_context) orelse callee_callable_inst_id,
+            switch (source_context) {
+                .callable_inst => |context_id| @enumFromInt(@intFromEnum(context_id)),
+                .root_expr, .provenance_expr, .template_expr => callee_callable_inst_id,
+            },
             module_idx,
             call_expr_idx,
             callable_inst_ids.items,
@@ -5725,8 +5760,7 @@ pub const Pass = struct {
         expr_idx: CIR.Expr.Idx,
     ) Allocator.Error!?CallableInstId {
         const template_id = (try self.resolveExprCallableTemplate(result, module_idx, expr_idx)) orelse return null;
-        const context_callable_inst = callableInstFromSourceContext(source_context);
-        if (templateRequiresConcreteOwnerCallableInst(result, template_id) and context_callable_inst == null) {
+        if (templateRequiresConcreteOwnerCallableInst(result, template_id) and !sourceContextHasCallableInst(source_context)) {
             return null;
         }
 
@@ -6456,14 +6490,8 @@ pub const Pass = struct {
             .e_dot_access => |dot_expr| blk: {
                 if (dot_expr.args == null) return;
                 if (dotCallUsesRuntimeReceiver(module_env, dot_expr.receiver)) {
-                    const receiver_monotype = try self.resolveExprMonotypeIfExactResolved(result, module_idx, dot_expr.receiver);
-                    break :blk try self.resolveDispatchTargetForDotCall(
-                        result,
-                        module_idx,
-                        expr_idx,
-                        dot_expr.field_name,
-                        receiver_monotype.idx,
-                    );
+                    _ = try self.resolveExprMonotypeIfExactResolved(result, module_idx, dot_expr.receiver);
+                    break :blk try self.resolveDispatchTargetForExpr(result, module_idx, expr_idx, dot_expr.field_name);
                 }
                 break :blk try self.resolveDispatchTargetForExpr(result, module_idx, expr_idx, dot_expr.field_name);
             },
@@ -6817,14 +6845,7 @@ pub const Pass = struct {
         method_name: Ident.Idx,
     ) Allocator.Error!?types.StaticDispatchConstraint {
         const module_env = self.all_module_envs[module_idx];
-
-        var resolved_match: ?types.StaticDispatchConstraint = null;
-        var unresolved_match: ?types.StaticDispatchConstraint = null;
-        var first_unresolved: ?types.StaticDispatchConstraint = null;
-        var unresolved_count: u32 = 0;
-        var ambiguous_resolved_targets = false;
-        var unique_unresolved = std.ArrayList(types.StaticDispatchConstraint).empty;
-        defer unique_unresolved.deinit(self.allocator);
+        var matched: ?types.StaticDispatchConstraint = null;
 
         for (module_env.types.sliceAllStaticDispatchConstraints()) |constraint| {
             if (constraint.source_expr_idx != @intFromEnum(expr_idx)) continue;
@@ -6847,44 +6868,24 @@ pub const Pass = struct {
                     continue;
                 }
                 if (!try self.resolvedDispatchTargetMatchesInvocationSignature(result, module_idx, expr_idx, candidate)) continue;
+            } else {
+                const fn_monotype = try self.resolveTypeVarMonotypeIfMonomorphizableResolved(result, module_idx, constraint.fn_var);
+                if (fn_monotype.isNone()) continue;
+            }
 
-                if (resolved_match) |existing| {
-                    if (std.debug.runtime_safety and
-                        (!existing.resolved_target.origin_module.eql(constraint.resolved_target.origin_module) or
-                            !existing.resolved_target.method_ident.eql(constraint.resolved_target.method_ident)))
-                    {
-                        ambiguous_resolved_targets = true;
-                        resolved_match = null;
-                        continue;
-                    }
+            if (matched) |existing| {
+                if (!staticDispatchConstraintsEqual(existing, constraint)) {
+                    std.debug.panic(
+                        "Pipeline invariant violated: dispatch expr={d} method='{s}' had multiple distinct matching constraints",
+                        .{ @intFromEnum(expr_idx), module_env.getIdent(method_name) },
+                    );
                 }
-                if (resolved_match == null) resolved_match = constraint;
                 continue;
             }
-
-            var seen_unresolved = false;
-            for (unique_unresolved.items) |existing| {
-                if (staticDispatchConstraintsEqual(existing, constraint)) {
-                    seen_unresolved = true;
-                    break;
-                }
-            }
-            if (!seen_unresolved) {
-                if (first_unresolved == null) first_unresolved = constraint;
-                unresolved_count += 1;
-                try unique_unresolved.append(self.allocator, constraint);
-            }
-
-            const fn_monotype = try self.resolveTypeVarMonotypeIfMonomorphizableResolved(result, module_idx, constraint.fn_var);
-            if (fn_monotype.isNone()) continue;
-            if (unresolved_match == null) unresolved_match = constraint;
+            matched = constraint;
         }
 
-        if (ambiguous_resolved_targets) {
-            return unresolved_match orelse if (unresolved_count == 1) first_unresolved else null;
-        }
-
-        return resolved_match orelse unresolved_match orelse if (unresolved_count == 1) first_unresolved else null;
+        return matched;
     }
 
     fn lookupDispatchConstraintForAssociatedMethod(
@@ -6898,13 +6899,7 @@ pub const Pass = struct {
     ) Allocator.Error!?types.StaticDispatchConstraint {
         const module_env = self.all_module_envs[module_idx];
         const target_method_text = method_info.target_env.getIdent(method_info.qualified_method_ident);
-
-        var resolved_match: ?types.StaticDispatchConstraint = null;
-        var unresolved_match: ?types.StaticDispatchConstraint = null;
-        var first_unresolved: ?types.StaticDispatchConstraint = null;
-        var unresolved_count: u32 = 0;
-        var unique_unresolved = std.ArrayList(types.StaticDispatchConstraint).empty;
-        defer unique_unresolved.deinit(self.allocator);
+        var matched: ?types.StaticDispatchConstraint = null;
 
         for (module_env.types.sliceAllStaticDispatchConstraints()) |constraint| {
             if (constraint.source_expr_idx != @intFromEnum(expr_idx)) continue;
@@ -6914,49 +6909,40 @@ pub const Pass = struct {
                 const target_module_idx = self.findModuleForOriginMaybe(module_env, constraint.resolved_target.origin_module) orelse continue;
                 if (target_module_idx != method_info.module_idx) continue;
                 if (!std.mem.eql(u8, module_env.getIdent(constraint.resolved_target.method_ident), target_method_text)) continue;
+            } else {
+                if (receiver_monotype.isNone()) continue;
 
-                if (resolved_match == null) resolved_match = constraint;
-                continue;
+                const fn_monotype = try self.resolveTypeVarMonotypeIfMonomorphizableResolved(result, module_idx, constraint.fn_var);
+                if (fn_monotype.isNone()) continue;
+
+                const mono = result.context_mono.monotype_store.getMonotype(fn_monotype.idx);
+                if (mono != .func) continue;
+
+                const fn_args = result.context_mono.monotype_store.getIdxSpan(mono.func.args);
+                if (fn_args.len == 0) continue;
+
+                if (!try self.monotypeDispatchCompatible(
+                    result,
+                    fn_args[0],
+                    module_idx,
+                    receiver_monotype,
+                    fn_monotype.module_idx,
+                )) continue;
             }
 
-            var seen_unresolved = false;
-            for (unique_unresolved.items) |existing| {
-                if (staticDispatchConstraintsEqual(existing, constraint)) {
-                    seen_unresolved = true;
-                    break;
+            if (matched) |existing| {
+                if (!staticDispatchConstraintsEqual(existing, constraint)) {
+                    std.debug.panic(
+                        "Pipeline invariant violated: associated dispatch expr={d} method='{s}' had multiple distinct matching constraints",
+                        .{ @intFromEnum(expr_idx), module_env.getIdent(method_name) },
+                    );
                 }
-            }
-            if (!seen_unresolved) {
-                if (first_unresolved == null) first_unresolved = constraint;
-                unresolved_count += 1;
-                try unique_unresolved.append(self.allocator, constraint);
-            }
-            if (receiver_monotype.isNone()) {
-                if (unresolved_match == null) unresolved_match = constraint;
                 continue;
             }
-
-            const fn_monotype = try self.resolveTypeVarMonotypeIfMonomorphizableResolved(result, module_idx, constraint.fn_var);
-            if (fn_monotype.isNone()) continue;
-
-            const mono = result.context_mono.monotype_store.getMonotype(fn_monotype.idx);
-            if (mono != .func) continue;
-
-            const fn_args = result.context_mono.monotype_store.getIdxSpan(mono.func.args);
-            if (fn_args.len == 0) continue;
-
-            if (!try self.monotypeDispatchCompatible(
-                result,
-                fn_args[0],
-                module_idx,
-                receiver_monotype,
-                fn_monotype.module_idx,
-            )) continue;
-
-            if (unresolved_match == null) unresolved_match = constraint;
+            matched = constraint;
         }
 
-        return resolved_match orelse unresolved_match orelse if (unresolved_count == 1) first_unresolved else null;
+        return matched;
     }
 
     fn staticDispatchConstraintsEqual(
@@ -7003,108 +6989,41 @@ pub const Pass = struct {
         };
 
         const desired_func_monotype = try self.resolveTypeVarMonotypeIfMonomorphizableResolved(result, module_idx, constraint.fn_var);
-
-        return blk: {
-            if (!constraint.resolved_target.isNone() and
-                self.resolvedTargetIsUsable(module_env, method_name, constraint.resolved_target))
-            {
-                const target_module_idx = self.findModuleForOriginMaybe(module_env, constraint.resolved_target.origin_module).?;
-                const candidate = ResolvedDispatchTarget{
-                    .origin = constraint.resolved_target.origin_module,
-                    .method_ident = constraint.resolved_target.method_ident,
-                    .fn_var = constraint.fn_var,
-                    .module_idx = target_module_idx,
-                };
-                if (try self.resolvedDispatchTargetMatchesMonotype(result, module_idx, candidate, desired_func_monotype.idx) and
-                    try self.resolvedDispatchTargetMatchesInvocationSignature(result, module_idx, expr_idx, candidate))
-                {
-                    break :blk candidate;
-                }
-            }
-
-            break :blk try self.resolveUnresolvedTypeVarDispatchTarget(
-                result,
-                module_idx,
-                expr_idx,
-                method_name,
-                constraint,
-                desired_func_monotype,
+        if (constraint.resolved_target.isNone()) {
+            std.debug.panic(
+                "Pipeline invariant violated: dispatch expr={d} method='{s}' reached specialization without an exact resolved target",
+                .{ @intFromEnum(expr_idx), module_env.getIdent(method_name) },
             );
-        };
-    }
-
-    fn resolveDispatchTargetForDotCall(
-        self: *Pass,
-        result: *Result,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-        method_name: Ident.Idx,
-        receiver_monotype: Monotype.Idx,
-    ) Allocator.Error!ResolvedDispatchTarget {
-        const module_env = self.all_module_envs[module_idx];
-
-        var first_candidate: ?ResolvedDispatchTarget = null;
-        var unresolved_match: ?ResolvedDispatchTarget = null;
-        var resolved_match: ?ResolvedDispatchTarget = null;
-
-        for (module_env.types.sliceAllStaticDispatchConstraints()) |constraint| {
-            if (constraint.source_expr_idx != @intFromEnum(expr_idx)) continue;
-            if (!constraint.fn_name.eql(method_name)) continue;
-
-            const maybe_candidate: ?ResolvedDispatchTarget = blk: {
-                if (!constraint.resolved_target.isNone() and
-                    self.resolvedTargetIsUsable(module_env, method_name, constraint.resolved_target))
-                {
-                    const target_module_idx = self.findModuleForOriginMaybe(module_env, constraint.resolved_target.origin_module).?;
-                    break :blk ResolvedDispatchTarget{
-                        .origin = constraint.resolved_target.origin_module,
-                        .method_ident = constraint.resolved_target.method_ident,
-                        .fn_var = constraint.fn_var,
-                        .module_idx = target_module_idx,
-                    };
-                }
-                break :blk null;
-            };
-            const candidate = maybe_candidate orelse continue;
-
-            const fn_mono = try self.resolveTypeVarMonotypeIfExactResolved(result, module_idx, constraint.fn_var);
-            if (!try self.resolvedDispatchTargetMatchesMonotype(result, module_idx, candidate, fn_mono.idx)) continue;
-
-            if (first_candidate == null) first_candidate = candidate;
-
-            if (fn_mono.isNone()) {
-                if (!constraint.resolved_target.isNone()) {
-                    if (resolved_match == null) resolved_match = candidate;
-                } else if (unresolved_match == null) {
-                    unresolved_match = candidate;
-                }
-                continue;
-            }
-
-            const mono = result.context_mono.monotype_store.getMonotype(fn_mono.idx);
-            if (mono != .func) continue;
-            const fn_args = result.context_mono.monotype_store.getIdxSpan(mono.func.args);
-            const compatible = if (fn_args.len == 0)
-                true
-            else
-                try self.monotypeDispatchCompatible(result, fn_args[0], module_idx, receiver_monotype, module_idx);
-            if (!compatible) continue;
-
-            if (!constraint.resolved_target.isNone()) {
-                if (resolved_match == null) resolved_match = candidate;
-            } else if (unresolved_match == null) {
-                unresolved_match = candidate;
-            }
+        }
+        if (!self.resolvedTargetIsUsable(module_env, method_name, constraint.resolved_target)) {
+            std.debug.panic(
+                "Pipeline invariant violated: dispatch expr={d} method='{s}' resolved to an unusable target",
+                .{ @intFromEnum(expr_idx), module_env.getIdent(method_name) },
+            );
         }
 
-        return if (resolved_match) |target|
-            target
-        else if (unresolved_match) |target|
-            target
-        else if (first_candidate) |target|
-            target
-        else
-            try self.resolveDispatchTargetForExpr(result, module_idx, expr_idx, method_name);
+        const target_module_idx = self.findModuleForOriginMaybe(module_env, constraint.resolved_target.origin_module).?;
+        const candidate = ResolvedDispatchTarget{
+            .origin = constraint.resolved_target.origin_module,
+            .method_ident = constraint.resolved_target.method_ident,
+            .fn_var = constraint.fn_var,
+            .module_idx = target_module_idx,
+        };
+        if (!desired_func_monotype.isNone() and
+            !try self.resolvedDispatchTargetMatchesMonotype(result, module_idx, candidate, desired_func_monotype.idx))
+        {
+            std.debug.panic(
+                "Pipeline invariant violated: dispatch expr={d} method='{s}' resolved target did not match the exact function monotype",
+                .{ @intFromEnum(expr_idx), module_env.getIdent(method_name) },
+            );
+        }
+        if (!try self.resolvedDispatchTargetMatchesInvocationSignature(result, module_idx, expr_idx, candidate)) {
+            std.debug.panic(
+                "Pipeline invariant violated: dispatch expr={d} method='{s}' resolved target did not match the invocation signature",
+                .{ @intFromEnum(expr_idx), module_env.getIdent(method_name) },
+            );
+        }
+        return candidate;
     }
 
     fn monotypeDispatchCompatible(
@@ -7204,89 +7123,6 @@ pub const Pass = struct {
             actual_ret.idx,
             actual_ret.module_idx,
         );
-    }
-
-    fn resolveUnresolvedTypeVarDispatchTarget(
-        self: *Pass,
-        result: *Result,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-        method_name: Ident.Idx,
-        constraint: types.StaticDispatchConstraint,
-        desired_func_monotype: ResolvedMonotype,
-    ) Allocator.Error!ResolvedDispatchTarget {
-        const module_env = self.all_module_envs[module_idx];
-        const method_name_text = module_env.getIdent(method_name);
-        var found_target: ?ResolvedDispatchTarget = null;
-
-        for (self.all_module_envs, 0..) |candidate_env, candidate_module_idx_usize| {
-            const candidate_module_idx: u32 = @intCast(candidate_module_idx_usize);
-            const defs = candidate_env.store.sliceDefs(candidate_env.all_defs);
-            for (defs) |def_idx| {
-                const def = candidate_env.store.getDef(def_idx);
-                const pattern = candidate_env.store.getPattern(def.pattern);
-                if (pattern != .assign) continue;
-
-                const method_ident = pattern.assign.ident;
-                const full_name = candidate_env.getIdent(method_ident);
-                if (!identMatchesMethodName(full_name, method_name_text)) continue;
-                if (candidate_env.getExposedNodeIndexById(method_ident) == null) continue;
-
-                const candidate_expr = candidate_env.store.getExpr(def.expr);
-                if (callableKind(candidate_expr) == null) continue;
-                const candidate_origin_name = candidate_env.getIdent(candidate_env.qualified_module_ident);
-                const mapped_origin = module_env.common.findIdent(candidate_origin_name) orelse module_env.qualified_module_ident;
-
-                const candidate_target = ResolvedDispatchTarget{
-                    .origin = mapped_origin,
-                    .method_ident = method_ident,
-                    .fn_var = constraint.fn_var,
-                    .module_idx = candidate_module_idx,
-                };
-                if (!desired_func_monotype.isNone() and
-                    !try self.resolvedDispatchTargetMatchesMonotype(result, module_idx, candidate_target, desired_func_monotype.idx))
-                {
-                    continue;
-                }
-                if (!try self.resolvedDispatchTargetMatchesInvocationSignature(result, module_idx, expr_idx, candidate_target)) continue;
-
-                if (found_target) |existing| {
-                    const existing_method_text = self.dispatchTargetMethodText(module_env, existing) orelse {
-                        if (std.debug.runtime_safety) {
-                            std.debug.panic(
-                                "Pipeline: existing candidate method ident {d} unreadable",
-                                .{existing.method_ident.idx},
-                            );
-                        }
-                        unreachable;
-                    };
-                    if (std.debug.runtime_safety and
-                        ((existing.module_idx orelse std.math.maxInt(u32)) != (candidate_target.module_idx orelse std.math.maxInt(u32)) or
-                            !std.mem.eql(u8, existing_method_text, candidate_env.getIdent(method_ident))))
-                    {
-                        std.debug.panic(
-                            "Pipeline: ambiguous dispatch for method '{s}' expr={d}",
-                            .{
-                                method_name_text,
-                                @intFromEnum(expr_idx),
-                            },
-                        );
-                    }
-                    continue;
-                }
-                found_target = candidate_target;
-            }
-        }
-
-        return found_target orelse {
-            if (std.debug.runtime_safety) {
-                std.debug.panic(
-                    "Pipeline: no candidate for method '{s}' expr={d}",
-                    .{ method_name_text, @intFromEnum(expr_idx) },
-                );
-            }
-            unreachable;
-        };
     }
 
     fn resolveLookupExprCallableInst(
@@ -10401,30 +10237,21 @@ pub const Pass = struct {
             .top_level_def, .lambda, .hosted_lambda => return null,
             .closure => {
                 const lexical_owner_template = template.lexical_owner_template orelse return null;
-                if (self.currentCallableInstContext() == null) {
-                    if (std.debug.runtime_safety) {
-                        std.debug.panic(
-                            "Pipeline: closure template expr={d} requires lexical owner template={d} but no active callable inst is available",
-                            .{
-                                @intFromEnum(template.cir_expr),
-                                @intFromEnum(lexical_owner_template),
-                            },
-                        );
-                    }
-                    unreachable;
-                }
-
-                var current = self.currentCallableInstContext() orelse {
-                    if (std.debug.runtime_safety) {
-                        std.debug.panic(
-                            "Pipeline: closure template expr={d} required an active callable inst to resolve lexical owner template={d}",
-                            .{
-                                @intFromEnum(template.cir_expr),
-                                @intFromEnum(lexical_owner_template),
-                            },
-                        );
-                    }
-                    unreachable;
+                var current = switch (self.currentSourceContext()) {
+                    .callable_inst => |context_id| @enumFromInt(@intFromEnum(context_id)),
+                    .root_expr, .provenance_expr, .template_expr => {
+                        if (std.debug.runtime_safety) {
+                            std.debug.panic(
+                                "Pipeline: closure template expr={d} requires lexical owner template={d} but active source context was {s}",
+                                .{
+                                    @intFromEnum(template.cir_expr),
+                                    @intFromEnum(lexical_owner_template),
+                                    @tagName(self.currentSourceContext()),
+                                },
+                            );
+                        }
+                        unreachable;
+                    },
                 };
                 while (true) {
                     const current_callable_inst = result.getCallableInst(current);
