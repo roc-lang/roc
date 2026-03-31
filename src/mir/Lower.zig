@@ -4601,12 +4601,13 @@ fn lookupReusableCaptureLocal(
 
 fn lowerLookupExternalInto(
     self: *Self,
-    _expr_idx: CIR.Expr.Idx,
+    expr_idx: CIR.Expr.Idx,
     module_env: *const ModuleEnv,
     lookup: anytype,
     target: MIR.LocalId,
     next: MIR.CFStmtId,
 ) Allocator.Error!MIR.CFStmtId {
+    _ = expr_idx;
     const target_module_idx = self.resolveImportedModuleIdx(module_env, lookup.module_idx) orelse unreachable;
     if (!self.all_module_envs[target_module_idx].store.isDefNode(lookup.target_node_idx)) {
         std.debug.panic(
@@ -4621,12 +4622,13 @@ fn lowerLookupExternalInto(
 
 fn lowerLookupRequiredInto(
     self: *Self,
-    _expr_idx: CIR.Expr.Idx,
+    expr_idx: CIR.Expr.Idx,
     module_env: *const ModuleEnv,
     lookup: anytype,
     target: MIR.LocalId,
     next: MIR.CFStmtId,
 ) Allocator.Error!MIR.CFStmtId {
+    _ = expr_idx;
     const target_lookup = self.resolveRequiredLookupTarget(module_env, lookup) orelse std.debug.panic(
         "statement-only MIR TODO: required lookup could not be resolved to an app export",
         .{},
@@ -10079,11 +10081,11 @@ fn lowerCirExprInto(
                 break :blk try self.lowerCirExprInto(closure_expr_idx, target, next);
             }
 
-            const callable_inst_id = (try self.lookupPipelinedValueExprCallableInstForMonotype(
+            const callable_inst_id = (try self.resolveBestExactCallableInstForExpr(
                 expr_idx,
                 monotype,
                 self.current_module_idx,
-            )) orelse self.lookupPipelinedValueExprCallableInst(expr_idx);
+            ));
             _ = lambda;
             const resolved_callable_inst_id = callable_inst_id orelse std.debug.panic(
                 "statement-only MIR invariant violated: lambda expr {d} lacked an exact callable specialization in context callable_inst={d} root_source_expr={d}",
@@ -10100,11 +10102,11 @@ fn lowerCirExprInto(
             );
         },
         .e_closure => |closure| blk: {
-            const closure_callable_inst_id = (try self.lookupPipelinedValueExprCallableInstForMonotype(
+            const closure_callable_inst_id = (try self.resolveBestExactCallableInstForExpr(
                 expr_idx,
                 monotype,
                 self.current_module_idx,
-            )) orelse self.lookupPipelinedValueExprCallableInst(expr_idx);
+            ));
             const callable_inst_id = closure_callable_inst_id orelse std.debug.panic(
                 "statement-only MIR invariant violated: closure expr {d} lacked an exact callable specialization in context callable_inst={d} root_source_expr={d}",
                 .{
