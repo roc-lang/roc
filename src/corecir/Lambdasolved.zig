@@ -68,6 +68,7 @@ pub const CallableTemplate = struct {
     source_key: u64,
     module_idx: u32,
     cir_expr: CIR.Expr.Idx,
+    runtime_expr: CIR.Expr.Idx,
     type_root: types.Var,
     binding_pattern: ?CIR.Pattern.Idx = null,
     kind: CallableTemplateKind = .top_level_def,
