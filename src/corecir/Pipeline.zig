@@ -114,6 +114,11 @@ const ProgramExprFacts = struct {
     lookup_resolution: ?LookupResolution,
 };
 
+const BindingMode = enum {
+    strict,
+    compatibility,
+};
+
 fn callableSourceNamespace(source_key: u64) CallableSourceNamespace {
     return @enumFromInt(@as(u2, @intCast(source_key >> 62)));
 }
@@ -511,8 +516,6 @@ pub const Pass = struct {
     active_iteration_expr_monotypes: ?*std.AutoHashMapUnmanaged(ContextExprKey, ResolvedMonotype),
     active_iteration_pattern_monotypes: ?*std.AutoHashMapUnmanaged(ContextPatternKey, ResolvedMonotype),
     source_context_stack: std.ArrayListUnmanaged(SourceContext),
-    binding_probe_mode: bool,
-    binding_probe_failed: bool,
 
     pub fn init(
         allocator: Allocator,
@@ -545,8 +548,6 @@ pub const Pass = struct {
             .active_iteration_expr_monotypes = null,
             .active_iteration_pattern_monotypes = null,
             .source_context_stack = .empty,
-            .binding_probe_mode = false,
-            .binding_probe_failed = false,
         };
     }
 
@@ -4547,13 +4548,13 @@ pub const Pass = struct {
         };
     }
 
-    fn completeTemplateBindingsFromBody(
+    fn tryCompleteTemplateBindingsFromBody(
         self: *Pass,
         result: *Result,
         template: CallableTemplate,
         bindings: *std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
         source_context: SourceContext,
-    ) Allocator.Error!void {
+    ) Allocator.Error!bool {
         const completion_key = TemplateBodyCompletionKey{
             .template_source_key = template.source_key,
             .source_context_kind = switch (source_context) {
@@ -4570,7 +4571,7 @@ pub const Pass = struct {
             },
         };
         if (self.in_progress_template_body_completions.contains(completion_key)) {
-            return;
+            return true;
         }
         try self.in_progress_template_body_completions.put(self.allocator, completion_key, {});
         defer _ = self.in_progress_template_body_completions.remove(completion_key);
@@ -4613,7 +4614,7 @@ pub const Pass = struct {
             const bindings_before = bindings.count();
             const mutation_revision_before = self.mutation_revision;
 
-            try self.seedTemplateBodyBindingsFromCurrentBindings(result, template, bindings);
+            if (!try self.trySeedTemplateBodyBindingsFromCurrentBindings(result, template, bindings)) return false;
 
             switch (expr) {
                 .e_lambda => |lambda_expr| try self.scanCirValueExprWithoutDirectCallResolution(result, template.module_idx, lambda_expr.body),
@@ -4631,10 +4632,10 @@ pub const Pass = struct {
                     );
                 },
                 .e_hosted_lambda => |hosted_expr| try self.scanCirValueExprWithoutDirectCallResolution(result, template.module_idx, hosted_expr.body),
-                else => return,
+                else => return true,
             }
 
-            try self.bindTemplateBodyResultFromExactExpr(result, template, bindings);
+            if (!try self.tryBindTemplateBodyResultFromExactExpr(result, template, bindings)) return false;
 
             if (bindings.count() == bindings_before and
                 self.mutation_revision == mutation_revision_before)
@@ -4642,24 +4643,26 @@ pub const Pass = struct {
                 break;
             }
         }
+
+        return true;
     }
 
-    fn bindTemplateBodyResultFromExactExpr(
+    fn tryBindTemplateBodyResultFromExactExpr(
         self: *Pass,
         result: *Result,
         template: CallableTemplate,
         bindings: *std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
-    ) Allocator.Error!void {
+    ) Allocator.Error!bool {
         const module_env = self.all_module_envs[template.module_idx];
-        const boundary = self.callableBoundaryInfo(template.module_idx, template.cir_expr) orelse return;
-        const resolved_func = resolveFuncTypeInStore(&module_env.types, template.type_root) orelse return;
+        const boundary = self.callableBoundaryInfo(template.module_idx, template.cir_expr) orelse return true;
+        const resolved_func = resolveFuncTypeInStore(&module_env.types, template.type_root) orelse return true;
         const body_mono = try self.resolveExprMonotypeResolved(result, template.module_idx, boundary.body_expr);
-        if (body_mono.isNone()) return;
+        if (body_mono.isNone()) return true;
 
         var ordered_entries = std.ArrayList(TypeSubstEntry).empty;
         defer ordered_entries.deinit(self.allocator);
 
-        try self.bindTypeVarMonotypes(
+        if (!try self.tryBindTypeVarMonotypes(
             result,
             template.module_idx,
             &module_env.types,
@@ -4668,8 +4671,8 @@ pub const Pass = struct {
             ModuleEnv.varFrom(boundary.body_expr),
             body_mono.idx,
             body_mono.module_idx,
-        );
-        try self.bindTypeVarMonotypes(
+        )) return false;
+        if (!try self.tryBindTypeVarMonotypes(
             result,
             template.module_idx,
             &module_env.types,
@@ -4678,7 +4681,9 @@ pub const Pass = struct {
             resolved_func.func.ret,
             body_mono.idx,
             body_mono.module_idx,
-        );
+        )) return false;
+
+        return true;
     }
 
     fn resolveDirectCallFnMonotype(
@@ -4770,15 +4775,6 @@ pub const Pass = struct {
             return .none;
         }
 
-        const saved_binding_probe_mode = self.binding_probe_mode;
-        const saved_binding_probe_failed = self.binding_probe_failed;
-        self.binding_probe_mode = true;
-        self.binding_probe_failed = false;
-        defer {
-            self.binding_probe_mode = saved_binding_probe_mode;
-            self.binding_probe_failed = saved_binding_probe_failed;
-        }
-
         const template = result.getCallableTemplate(template_id).*;
         const template_env = self.all_module_envs[template.module_idx];
         const template_types = &template_env.types;
@@ -4805,15 +4801,14 @@ pub const Pass = struct {
         defer ordered_entries.deinit(self.allocator);
 
         if (!exact_desired_fn_monotype.isNone()) {
-            try self.seedTemplateBindingsFromFnMonotype(result, template, exact_desired_fn_monotype, &callee_bindings);
-            if (self.binding_probe_failed) return .none;
+            if (!try self.trySeedTemplateBindingsFromFnMonotype(result, template, exact_desired_fn_monotype, &callee_bindings)) return .none;
         }
 
         if (resolveFuncTypeInStore(template_types, template.type_root)) |resolved_func| {
             const ret_mono = try self.resolveExprMonotypeResolved(result, module_idx, call_expr_idx);
             if (!ret_mono.isNone()) {
                 if (self.callableBoundaryInfo(template.module_idx, template.cir_expr)) |boundary| {
-                    try self.bindTypeVarMonotypes(
+                    if (!try self.tryBindTypeVarMonotypes(
                         result,
                         template.module_idx,
                         template_types,
@@ -4822,8 +4817,7 @@ pub const Pass = struct {
                         ModuleEnv.varFrom(boundary.body_expr),
                         ret_mono.idx,
                         ret_mono.module_idx,
-                    );
-                    if (self.binding_probe_failed) return .none;
+                    )) return .none;
                 }
                 var seen: std.AutoHashMapUnmanaged(types.Var, void) = .empty;
                 defer seen.deinit(self.allocator);
@@ -4836,7 +4830,7 @@ pub const Pass = struct {
                     &callee_bindings,
                     &seen,
                 )) {
-                    try self.bindTypeVarMonotypes(
+                    if (!try self.tryBindTypeVarMonotypes(
                         result,
                         template.module_idx,
                         template_types,
@@ -4845,8 +4839,7 @@ pub const Pass = struct {
                         resolved_func.func.ret,
                         ret_mono.idx,
                         ret_mono.module_idx,
-                    );
-                    if (self.binding_probe_failed) return .none;
+                    )) return .none;
                 }
             }
 
@@ -4865,7 +4858,7 @@ pub const Pass = struct {
                 unreachable;
             }
 
-            try self.bindTemplateParamsFromActualArgs(
+            if (!try self.tryBindTemplateParamsFromActualArgs(
                 result,
                 module_idx,
                 template,
@@ -4875,17 +4868,15 @@ pub const Pass = struct {
                 &callee_bindings,
                 &ordered_entries,
                 true,
-            );
-            if (self.binding_probe_failed) return .none;
+            )) return .none;
         }
 
-        try self.completeTemplateBindingsFromBody(
+        if (!try self.tryCompleteTemplateBindingsFromBody(
             result,
             template,
             &callee_bindings,
             defining_source_context,
-        );
-        if (self.binding_probe_failed) return .none;
+        )) return .none;
 
         var seen: std.AutoHashMapUnmanaged(types.Var, void) = .empty;
         defer seen.deinit(self.allocator);
@@ -5115,15 +5106,7 @@ pub const Pass = struct {
         fn_monotype_module_idx: u32,
         defining_source_context: SourceContext,
     ) Allocator.Error!bool {
-        const saved_binding_probe_mode = self.binding_probe_mode;
-        const saved_binding_probe_failed = self.binding_probe_failed;
         _ = template_id;
-        self.binding_probe_mode = true;
-        self.binding_probe_failed = false;
-        defer {
-            self.binding_probe_mode = saved_binding_probe_mode;
-            self.binding_probe_failed = saved_binding_probe_failed;
-        }
 
         var iteration_expr_monotypes: std.AutoHashMapUnmanaged(ContextExprKey, ResolvedMonotype) = .empty;
         defer iteration_expr_monotypes.deinit(self.allocator);
@@ -5143,7 +5126,7 @@ pub const Pass = struct {
         var signature_bindings = std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype).init(self.allocator);
         defer signature_bindings.deinit();
 
-        try self.seedCallableBodyBindingsFromSignature(
+        if (!try self.trySeedCallableBodyBindingsFromSignature(
             result,
             template.module_idx,
             template.cir_expr,
@@ -5151,9 +5134,9 @@ pub const Pass = struct {
             fn_monotype,
             fn_monotype_module_idx,
             &signature_bindings,
-        );
+        )) return false;
 
-        return !self.binding_probe_failed;
+        return true;
     }
 
     fn directCallContainsErrorType(
@@ -5529,7 +5512,7 @@ pub const Pass = struct {
         }
     }
 
-    fn bindTemplateParamsFromActualArgs(
+    fn tryBindTemplateParamsFromActualArgs(
         self: *Pass,
         result: *Result,
         actual_module_idx: u32,
@@ -5540,7 +5523,7 @@ pub const Pass = struct {
         bindings: *std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
         ordered_entries: *std.ArrayList(TypeSubstEntry),
         skip_fully_bound_params: bool,
-    ) Allocator.Error!void {
+    ) Allocator.Error!bool {
         if (param_vars.len != actual_args.len) unreachable;
 
         var deferred_actuals = std.ArrayList(usize).empty;
@@ -5558,7 +5541,7 @@ pub const Pass = struct {
                     param_var,
                     bindings,
                 )) |callable_mono| {
-                    try self.bindTemplateParamActualMonotype(
+                    if (!try self.tryBindTemplateParamActualMonotype(
                         result,
                         template,
                         template_types,
@@ -5567,7 +5550,7 @@ pub const Pass = struct {
                         param_var,
                         callable_mono,
                         skip_fully_bound_params,
-                    );
+                    )) return false;
                     continue;
                 }
 
@@ -5584,7 +5567,7 @@ pub const Pass = struct {
             );
             const exact_arg_mono = try self.resolveExprMonotypeResolved(result, actual_module_idx, arg_expr_idx);
             if (!exact_arg_mono.isNone()) {
-                try self.bindTemplateParamActualMonotype(
+                if (!try self.tryBindTemplateParamActualMonotype(
                     result,
                     template,
                     template_types,
@@ -5593,12 +5576,12 @@ pub const Pass = struct {
                     param_var,
                     exact_arg_mono,
                     skip_fully_bound_params,
-                );
+                )) return false;
                 continue;
             }
 
             if (expected_param_mono) |bound_param_mono| {
-                try self.bindTemplateParamActualMonotype(
+                if (!try self.tryBindTemplateParamActualMonotype(
                     result,
                     template,
                     template_types,
@@ -5607,7 +5590,7 @@ pub const Pass = struct {
                     param_var,
                     bound_param_mono,
                     skip_fully_bound_params,
-                );
+                )) return false;
                 continue;
             }
 
@@ -5628,7 +5611,7 @@ pub const Pass = struct {
                     param_var,
                     bindings,
                 )) |callable_mono| {
-                    try self.bindTemplateParamActualMonotype(
+                    if (!try self.tryBindTemplateParamActualMonotype(
                         result,
                         template,
                         template_types,
@@ -5637,7 +5620,7 @@ pub const Pass = struct {
                         param_var,
                         callable_mono,
                         skip_fully_bound_params,
-                    );
+                    )) return false;
                 }
                 continue;
             }
@@ -5658,7 +5641,7 @@ pub const Pass = struct {
             else
                 try self.requireFullyBoundExprMonotype(result, actual_module_idx, arg_expr_idx);
 
-            try self.bindTemplateParamActualMonotype(
+            if (!try self.tryBindTemplateParamActualMonotype(
                 result,
                 template,
                 template_types,
@@ -5667,8 +5650,10 @@ pub const Pass = struct {
                 param_var,
                 arg_mono,
                 skip_fully_bound_params,
-            );
+            )) return false;
         }
+
+        return true;
     }
 
     fn inferCallableActualFromCallerParam(
@@ -5708,7 +5693,7 @@ pub const Pass = struct {
                 caller_arg_var,
                 caller_bindings,
             )) |caller_arg_mono| {
-                try self.bindTypeVarMonotypes(
+                if (!try self.tryBindTypeVarMonotypes(
                     result,
                     actual_template.module_idx,
                     actual_template_types,
@@ -5717,7 +5702,7 @@ pub const Pass = struct {
                     actual_arg_var,
                     caller_arg_mono.idx,
                     caller_arg_mono.module_idx,
-                );
+                )) return null;
             }
         }
 
@@ -5728,7 +5713,7 @@ pub const Pass = struct {
             caller_func.func.ret,
             caller_bindings,
         )) |caller_ret_mono| {
-            try self.bindTypeVarMonotypes(
+            if (!try self.tryBindTypeVarMonotypes(
                 result,
                 actual_template.module_idx,
                 actual_template_types,
@@ -5737,16 +5722,16 @@ pub const Pass = struct {
                 actual_func.func.ret,
                 caller_ret_mono.idx,
                 caller_ret_mono.module_idx,
-            );
+            )) return null;
         }
 
         const defining_source_context = self.resolveTemplateDefiningSourceContext(result, actual_template);
-        try self.completeTemplateBindingsFromBody(
+        if (!try self.tryCompleteTemplateBindingsFromBody(
             result,
             actual_template,
             &actual_bindings,
             defining_source_context,
-        );
+        )) return null;
 
         if ((try self.resolveTemplateTypeVarIfFullyBoundWithBindings(
             result,
@@ -5761,7 +5746,7 @@ pub const Pass = struct {
         return null;
     }
 
-    fn bindTemplateParamActualMonotype(
+    fn tryBindTemplateParamActualMonotype(
         self: *Pass,
         result: *Result,
         template: CallableTemplate,
@@ -5771,8 +5756,8 @@ pub const Pass = struct {
         param_var: types.Var,
         arg_mono: ResolvedMonotype,
         skip_fully_bound_params: bool,
-    ) Allocator.Error!void {
-        if (arg_mono.isNone()) return;
+    ) Allocator.Error!bool {
+        if (arg_mono.isNone()) return true;
 
         if (skip_fully_bound_params) {
             var seen: std.AutoHashMapUnmanaged(types.Var, void) = .empty;
@@ -5786,11 +5771,11 @@ pub const Pass = struct {
                 bindings,
                 &seen,
             )) {
-                return;
+                return true;
             }
         }
 
-        try self.bindTypeVarMonotypes(
+        return self.tryBindTypeVarMonotypes(
             result,
             template.module_idx,
             template_types,
@@ -6458,14 +6443,6 @@ pub const Pass = struct {
         expr: CIR.Expr,
         template_id: CallableTemplateId,
     ) Allocator.Error!?CallableInstId {
-        const saved_binding_probe_mode = self.binding_probe_mode;
-        const saved_binding_probe_failed = self.binding_probe_failed;
-        self.binding_probe_mode = true;
-        self.binding_probe_failed = false;
-        defer {
-            self.binding_probe_mode = saved_binding_probe_mode;
-            self.binding_probe_failed = saved_binding_probe_failed;
-        }
         const template = result.getCallableTemplate(template_id).*;
         const template_env = self.all_module_envs[template.module_idx];
         const template_types = &template_env.types;
@@ -6495,9 +6472,8 @@ pub const Pass = struct {
             module_idx,
         );
         if (!exact_desired_fn_monotype.isNone()) {
-            try self.seedTemplateBindingsFromFnMonotype(result, template, exact_desired_fn_monotype, &callee_bindings);
+            if (!try self.trySeedTemplateBindingsFromFnMonotype(result, template, exact_desired_fn_monotype, &callee_bindings)) return null;
         }
-        if (self.binding_probe_failed) return null;
 
         if (resolveFuncTypeInStore(template_types, template.type_root)) |resolved_func| {
             const param_vars = template_types.sliceVars(resolved_func.func.args);
@@ -6518,7 +6494,7 @@ pub const Pass = struct {
             const ret_mono = try self.resolveExprMonotypeResolved(result, module_idx, expr_idx);
             if (!ret_mono.isNone()) {
                 if (self.callableBoundaryInfo(template.module_idx, template.cir_expr)) |boundary| {
-                    try self.bindTypeVarMonotypes(
+                    if (!try self.tryBindTypeVarMonotypes(
                         result,
                         template.module_idx,
                         template_types,
@@ -6527,10 +6503,9 @@ pub const Pass = struct {
                         ModuleEnv.varFrom(boundary.body_expr),
                         ret_mono.idx,
                         ret_mono.module_idx,
-                    );
-                    if (self.binding_probe_failed) return null;
+                    )) return null;
                 }
-                try self.bindTypeVarMonotypes(
+                if (!try self.tryBindTypeVarMonotypes(
                     result,
                     template.module_idx,
                     template_types,
@@ -6539,11 +6514,10 @@ pub const Pass = struct {
                     resolved_func.func.ret,
                     ret_mono.idx,
                     ret_mono.module_idx,
-                );
-                if (self.binding_probe_failed) return null;
+                )) return null;
             }
 
-            try self.bindTemplateParamsFromActualArgs(
+            if (!try self.tryBindTemplateParamsFromActualArgs(
                 result,
                 module_idx,
                 template,
@@ -6553,27 +6527,24 @@ pub const Pass = struct {
                 &callee_bindings,
                 &ordered_entries,
                 true,
-            );
-            if (self.binding_probe_failed) return null;
+            )) return null;
         }
 
-        try self.seedTemplateBoundaryBindingsFromActuals(
+        if (!try self.trySeedTemplateBoundaryBindingsFromActuals(
             result,
             module_idx,
             template,
             actual_args.items,
             try self.resolveExprMonotypeResolved(result, module_idx, expr_idx),
             &callee_bindings,
-        );
-        if (self.binding_probe_failed) return null;
+        )) return null;
 
-        try self.completeTemplateBindingsFromBody(
+        if (!try self.tryCompleteTemplateBindingsFromBody(
             result,
             template,
             &callee_bindings,
             defining_source_context,
-        );
-        if (self.binding_probe_failed) return null;
+        )) return null;
 
         var seen: std.AutoHashMapUnmanaged(types.Var, void) = .empty;
         defer seen.deinit(self.allocator);
@@ -10750,11 +10721,57 @@ pub const Pass = struct {
         fn_monotype_module_idx: u32,
         bindings: *std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
     ) Allocator.Error!void {
+        const ok = try self.seedCallableBodyBindingsFromSignatureMode(
+            result,
+            module_idx,
+            callable_expr_idx,
+            source_context,
+            fn_monotype,
+            fn_monotype_module_idx,
+            bindings,
+            .strict,
+        );
+        if (!ok) unreachable;
+    }
+
+    fn trySeedCallableBodyBindingsFromSignature(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        callable_expr_idx: CIR.Expr.Idx,
+        source_context: SourceContext,
+        fn_monotype: Monotype.Idx,
+        fn_monotype_module_idx: u32,
+        bindings: *std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
+    ) Allocator.Error!bool {
+        return self.seedCallableBodyBindingsFromSignatureMode(
+            result,
+            module_idx,
+            callable_expr_idx,
+            source_context,
+            fn_monotype,
+            fn_monotype_module_idx,
+            bindings,
+            .compatibility,
+        );
+    }
+
+    fn seedCallableBodyBindingsFromSignatureMode(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        callable_expr_idx: CIR.Expr.Idx,
+        source_context: SourceContext,
+        fn_monotype: Monotype.Idx,
+        fn_monotype_module_idx: u32,
+        bindings: *std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
+        comptime mode: BindingMode,
+    ) Allocator.Error!bool {
         const module_env = self.all_module_envs[module_idx];
         const callable_expr = module_env.store.getExpr(callable_expr_idx);
         const fn_mono = switch (result.context_mono.monotype_store.getMonotype(fn_monotype)) {
             .func => |func| func,
-            else => return,
+            else => return true,
         };
         const CallableBoundary = struct {
             arg_patterns: []const CIR.Pattern.Idx,
@@ -10768,7 +10785,7 @@ pub const Pass = struct {
             },
             .e_closure => |closure_expr| blk: {
                 const lambda_expr = module_env.store.getExpr(closure_expr.lambda_idx);
-                if (lambda_expr != .e_lambda) return;
+                if (lambda_expr != .e_lambda) return true;
                 break :blk .{
                     .arg_patterns = module_env.store.slicePatterns(lambda_expr.e_lambda.args),
                     .body_expr = lambda_expr.e_lambda.body,
@@ -10778,10 +10795,11 @@ pub const Pass = struct {
                 .arg_patterns = module_env.store.slicePatterns(hosted_expr.args),
                 .body_expr = hosted_expr.body,
             },
-            else => return,
+            else => return true,
         };
 
         if (boundary.arg_patterns.len != fn_mono.args.len) {
+            if (mode == .compatibility) return false;
             if (std.debug.runtime_safety) {
                 std.debug.panic(
                     "Pipeline: callable signature arity mismatch for expr {d} (patterns={d}, monos={d})",
@@ -10798,7 +10816,7 @@ pub const Pass = struct {
         var ordered_entries = std.ArrayList(TypeSubstEntry).empty;
         defer ordered_entries.deinit(self.allocator);
 
-        try self.bindTypeVarMonotypes(
+        if (!try self.bindTypeVarMonotypesMode(
             result,
             module_idx,
             &module_env.types,
@@ -10807,7 +10825,8 @@ pub const Pass = struct {
             ModuleEnv.varFrom(callable_expr_idx),
             fn_monotype,
             fn_monotype_module_idx,
-        );
+            mode,
+        )) return false;
 
         for (boundary.arg_patterns, 0..) |pattern_idx, i| {
             const param_mono = result.context_mono.monotype_store.getIdxSpanItem(fn_mono.args, i);
@@ -10816,7 +10835,7 @@ pub const Pass = struct {
                 self.resultPatternKeyForSourceContext(source_context, module_idx, pattern_idx),
                 resolvedMonotype(param_mono, fn_monotype_module_idx),
             );
-            try self.bindTypeVarMonotypes(
+            if (!try self.bindTypeVarMonotypesMode(
                 result,
                 module_idx,
                 &module_env.types,
@@ -10825,9 +10844,10 @@ pub const Pass = struct {
                 ModuleEnv.varFrom(pattern_idx),
                 param_mono,
                 fn_monotype_module_idx,
-            );
+                mode,
+            )) return false;
         }
-        try self.bindTypeVarMonotypes(
+        if (!try self.bindTypeVarMonotypesMode(
             result,
             module_idx,
             &module_env.types,
@@ -10836,18 +10856,21 @@ pub const Pass = struct {
             ModuleEnv.varFrom(boundary.body_expr),
             fn_mono.ret,
             fn_monotype_module_idx,
-        );
+            mode,
+        )) return false;
+
+        return true;
     }
 
-    fn seedTemplateBodyBindingsFromCurrentBindings(
+    fn trySeedTemplateBodyBindingsFromCurrentBindings(
         self: *Pass,
         result: *Result,
         template: CallableTemplate,
         bindings: *std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
-    ) Allocator.Error!void {
+    ) Allocator.Error!bool {
         const module_env = self.all_module_envs[template.module_idx];
-        const boundary = self.callableBoundaryInfo(template.module_idx, template.cir_expr) orelse return;
-        const resolved_func = resolveFuncTypeInStore(&module_env.types, template.type_root) orelse return;
+        const boundary = self.callableBoundaryInfo(template.module_idx, template.cir_expr) orelse return true;
+        const resolved_func = resolveFuncTypeInStore(&module_env.types, template.type_root) orelse return true;
 
         var ordered_entries = std.ArrayList(TypeSubstEntry).empty;
         defer ordered_entries.deinit(self.allocator);
@@ -10859,7 +10882,7 @@ pub const Pass = struct {
             template.type_root,
             bindings,
         )) |fn_mono| {
-            try self.bindTypeVarMonotypes(
+            if (!try self.tryBindTypeVarMonotypes(
                 result,
                 template.module_idx,
                 &module_env.types,
@@ -10868,7 +10891,7 @@ pub const Pass = struct {
                 ModuleEnv.varFrom(template.cir_expr),
                 fn_mono.idx,
                 fn_mono.module_idx,
-            );
+            )) return false;
         }
 
         const param_vars = module_env.types.sliceVars(resolved_func.func.args);
@@ -10894,7 +10917,7 @@ pub const Pass = struct {
                 param_var,
                 bindings,
             )) |param_mono| {
-                try self.bindTypeVarMonotypes(
+                if (!try self.tryBindTypeVarMonotypes(
                     result,
                     template.module_idx,
                     &module_env.types,
@@ -10903,7 +10926,7 @@ pub const Pass = struct {
                     ModuleEnv.varFrom(pattern_idx),
                     param_mono.idx,
                     param_mono.module_idx,
-                );
+                )) return false;
             }
         }
 
@@ -10914,7 +10937,7 @@ pub const Pass = struct {
             resolved_func.func.ret,
             bindings,
         )) |ret_mono| {
-            try self.bindTypeVarMonotypes(
+            if (!try self.tryBindTypeVarMonotypes(
                 result,
                 template.module_idx,
                 &module_env.types,
@@ -10923,8 +10946,10 @@ pub const Pass = struct {
                 ModuleEnv.varFrom(boundary.body_expr),
                 ret_mono.idx,
                 ret_mono.module_idx,
-            );
+            )) return false;
         }
+
+        return true;
     }
 
     fn resolveTemplateTypeVarIfFullyBoundWithBindings(
@@ -10960,7 +10985,7 @@ pub const Pass = struct {
         return resolvedMonotype(mono, module_idx);
     }
 
-    fn seedTemplateBoundaryBindingsFromActuals(
+    fn trySeedTemplateBoundaryBindingsFromActuals(
         self: *Pass,
         result: *Result,
         actual_module_idx: u32,
@@ -10968,11 +10993,11 @@ pub const Pass = struct {
         actual_args: []const CIR.Expr.Idx,
         ret_mono: ResolvedMonotype,
         bindings: *std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
-    ) Allocator.Error!void {
+    ) Allocator.Error!bool {
         const module_env = self.all_module_envs[template.module_idx];
-        const boundary = self.callableBoundaryInfo(template.module_idx, template.cir_expr) orelse return;
+        const boundary = self.callableBoundaryInfo(template.module_idx, template.cir_expr) orelse return true;
 
-        if (boundary.arg_patterns.len != actual_args.len) return;
+        if (boundary.arg_patterns.len != actual_args.len) return true;
 
         var ordered_entries = std.ArrayList(TypeSubstEntry).empty;
         defer ordered_entries.deinit(self.allocator);
@@ -10981,7 +11006,7 @@ pub const Pass = struct {
             const arg_mono = try self.resolveExprMonotypeResolved(result, actual_module_idx, arg_expr_idx);
             if (arg_mono.isNone()) continue;
 
-            try self.bindTypeVarMonotypes(
+            if (!try self.tryBindTypeVarMonotypes(
                 result,
                 template.module_idx,
                 &module_env.types,
@@ -10990,11 +11015,11 @@ pub const Pass = struct {
                 ModuleEnv.varFrom(pattern_idx),
                 arg_mono.idx,
                 arg_mono.module_idx,
-            );
+            )) return false;
         }
 
         if (!ret_mono.isNone()) {
-            try self.bindTypeVarMonotypes(
+            if (!try self.tryBindTypeVarMonotypes(
                 result,
                 template.module_idx,
                 &module_env.types,
@@ -11003,44 +11028,36 @@ pub const Pass = struct {
                 ModuleEnv.varFrom(boundary.body_expr),
                 ret_mono.idx,
                 ret_mono.module_idx,
-            );
+            )) return false;
         }
+
+        return true;
     }
 
-    fn seedTemplateBindingsFromFnMonotype(
+    fn trySeedTemplateBindingsFromFnMonotype(
         self: *Pass,
         result: *Result,
         template: CallableTemplate,
         fn_monotype: ResolvedMonotype,
         bindings: *std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
-    ) Allocator.Error!void {
-        if (fn_monotype.isNone()) return;
+    ) Allocator.Error!bool {
+        if (fn_monotype.isNone()) return true;
 
         const module_env = self.all_module_envs[template.module_idx];
-        const boundary = self.callableBoundaryInfo(template.module_idx, template.cir_expr) orelse return;
+        const boundary = self.callableBoundaryInfo(template.module_idx, template.cir_expr) orelse return true;
         const fn_mono = switch (result.context_mono.monotype_store.getMonotype(fn_monotype.idx)) {
             .func => |func| func,
-            else => return,
+            else => return true,
         };
 
         if (boundary.arg_patterns.len != fn_mono.args.len) {
-            if (std.debug.runtime_safety) {
-                std.debug.panic(
-                    "Pipeline: template fn-monotype arity mismatch for expr {d} (patterns={d}, monos={d})",
-                    .{
-                        @intFromEnum(template.cir_expr),
-                        boundary.arg_patterns.len,
-                        fn_mono.args.len,
-                    },
-                );
-            }
-            unreachable;
+            return false;
         }
 
         var ordered_entries = std.ArrayList(TypeSubstEntry).empty;
         defer ordered_entries.deinit(self.allocator);
 
-        try self.bindTypeVarMonotypes(
+        if (!try self.tryBindTypeVarMonotypes(
             result,
             template.module_idx,
             &module_env.types,
@@ -11049,11 +11066,11 @@ pub const Pass = struct {
             template.type_root,
             fn_monotype.idx,
             fn_monotype.module_idx,
-        );
+        )) return false;
 
         for (boundary.arg_patterns, 0..) |pattern_idx, i| {
             const param_mono = result.context_mono.monotype_store.getIdxSpanItem(fn_mono.args, i);
-            try self.bindTypeVarMonotypes(
+            if (!try self.tryBindTypeVarMonotypes(
                 result,
                 template.module_idx,
                 &module_env.types,
@@ -11062,10 +11079,10 @@ pub const Pass = struct {
                 ModuleEnv.varFrom(pattern_idx),
                 param_mono,
                 fn_monotype.module_idx,
-            );
+            )) return false;
         }
 
-        try self.bindTypeVarMonotypes(
+        if (!try self.tryBindTypeVarMonotypes(
             result,
             template.module_idx,
             &module_env.types,
@@ -11074,7 +11091,9 @@ pub const Pass = struct {
             ModuleEnv.varFrom(boundary.body_expr),
             fn_mono.ret,
             fn_monotype.module_idx,
-        );
+        )) return false;
+
+        return true;
     }
 
     fn ensureTypeSubst(
@@ -11327,9 +11346,10 @@ pub const Pass = struct {
         mono_fields: []const Monotype.Field,
         seen_indices: []const u32,
         mono_module_idx: u32,
-    ) Allocator.Error!void {
+        comptime mode: BindingMode,
+    ) Allocator.Error!bool {
         const tail_mono = try self.remainingRecordTailMonotype(result, mono_fields, seen_indices);
-        try self.bindTypeVarMonotypes(
+        return self.bindTypeVarMonotypesMode(
             result,
             template_module_idx,
             template_types,
@@ -11338,6 +11358,7 @@ pub const Pass = struct {
             ext_var,
             tail_mono,
             mono_module_idx,
+            mode,
         );
     }
 
@@ -11352,9 +11373,10 @@ pub const Pass = struct {
         mono_tags: []const Monotype.Tag,
         seen_indices: []const u32,
         mono_module_idx: u32,
-    ) Allocator.Error!void {
+        comptime mode: BindingMode,
+    ) Allocator.Error!bool {
         const tail_mono = try self.remainingTagUnionTailMonotype(result, mono_tags, seen_indices);
-        try self.bindTypeVarMonotypes(
+        return self.bindTypeVarMonotypesMode(
             result,
             template_module_idx,
             template_types,
@@ -11363,6 +11385,7 @@ pub const Pass = struct {
             ext_var,
             tail_mono,
             mono_module_idx,
+            mode,
         );
     }
 
@@ -11377,7 +11400,8 @@ pub const Pass = struct {
         payload_vars: []const types.Var,
         mono_tags: Monotype.TagSpan,
         mono_module_idx: u32,
-    ) Allocator.Error!void {
+        comptime mode: BindingMode,
+    ) Allocator.Error!bool {
         var tag_i: usize = 0;
         while (tag_i < mono_tags.len) : (tag_i += 1) {
             const mono_tag = result.context_mono.monotype_store.getTagItem(mono_tags, tag_i);
@@ -11389,6 +11413,7 @@ pub const Pass = struct {
             )) continue;
 
             if (payload_vars.len != mono_tag.payloads.len) {
+                if (mode == .compatibility) return false;
                 if (std.debug.runtime_safety) {
                     std.debug.panic(
                         "Pipeline: payload arity mismatch for tag '{s}'",
@@ -11400,7 +11425,7 @@ pub const Pass = struct {
 
             for (payload_vars, 0..) |payload_var, i| {
                 const mono_payload = result.context_mono.monotype_store.getIdxSpanItem(mono_tag.payloads, i);
-                try self.bindTypeVarMonotypes(
+                if (!try self.bindTypeVarMonotypesMode(
                     result,
                     template_module_idx,
                     template_types,
@@ -11409,11 +11434,13 @@ pub const Pass = struct {
                     payload_var,
                     mono_payload,
                     mono_module_idx,
-                );
+                    mode,
+                )) return false;
             }
-            return;
+            return true;
         }
 
+        if (mode == .compatibility) return false;
         if (std.debug.runtime_safety) {
             std.debug.panic(
                 "Pipeline: tag '{s}' missing from monotype",
@@ -11434,8 +11461,57 @@ pub const Pass = struct {
         monotype: Monotype.Idx,
         mono_module_idx: u32,
     ) Allocator.Error!void {
-        if (self.binding_probe_mode and self.binding_probe_failed) return;
-        if (monotype.isNone()) return;
+        const ok = try self.bindTypeVarMonotypesMode(
+            result,
+            template_module_idx,
+            template_types,
+            bindings,
+            ordered_entries,
+            type_var,
+            monotype,
+            mono_module_idx,
+            .strict,
+        );
+        if (!ok) unreachable;
+    }
+
+    fn tryBindTypeVarMonotypes(
+        self: *Pass,
+        result: *Result,
+        template_module_idx: u32,
+        template_types: *const types.Store,
+        bindings: *std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
+        ordered_entries: *std.ArrayList(TypeSubstEntry),
+        type_var: types.Var,
+        monotype: Monotype.Idx,
+        mono_module_idx: u32,
+    ) Allocator.Error!bool {
+        return self.bindTypeVarMonotypesMode(
+            result,
+            template_module_idx,
+            template_types,
+            bindings,
+            ordered_entries,
+            type_var,
+            monotype,
+            mono_module_idx,
+            .compatibility,
+        );
+    }
+
+    fn bindTypeVarMonotypesMode(
+        self: *Pass,
+        result: *Result,
+        template_module_idx: u32,
+        template_types: *const types.Store,
+        bindings: *std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
+        ordered_entries: *std.ArrayList(TypeSubstEntry),
+        type_var: types.Var,
+        monotype: Monotype.Idx,
+        mono_module_idx: u32,
+        comptime mode: BindingMode,
+    ) Allocator.Error!bool {
+        if (monotype.isNone()) return true;
         const normalized_mono = if (mono_module_idx == template_module_idx)
             monotype
         else
@@ -11447,6 +11523,7 @@ pub const Pass = struct {
             if (existing.module_idx != resolved_mono.module_idx or
                 !try self.monotypesStructurallyEqual(result, existing.idx, resolved_mono.idx))
             {
+                if (mode == .compatibility) return false;
                 if (std.debug.runtime_safety) {
                     const context_template = self.activeCallableTemplate(result);
                     std.debug.panic(
@@ -11469,7 +11546,7 @@ pub const Pass = struct {
                 }
                 unreachable;
             }
-            return;
+            return true;
         }
 
         const resolved = template_types.resolveVar(type_var);
@@ -11482,23 +11559,26 @@ pub const Pass = struct {
                     .monotype = resolved_mono,
                 });
             },
-            .alias => |alias| try self.bindTypeVarMonotypes(
-                result,
-                template_module_idx,
-                template_types,
-                bindings,
-                ordered_entries,
-                template_types.getAliasBackingVar(alias),
-                normalized_mono,
-                template_module_idx,
-            ),
+            .alias => |alias| {
+                if (!try self.bindTypeVarMonotypesMode(
+                    result,
+                    template_module_idx,
+                    template_types,
+                    bindings,
+                    ordered_entries,
+                    template_types.getAliasBackingVar(alias),
+                    normalized_mono,
+                    template_module_idx,
+                    mode,
+                )) return false;
+            },
             .structure => |flat_type| {
                 try bindings.put(resolved_key, resolved_mono);
                 try ordered_entries.append(self.allocator, .{
                     .key = resolved_key,
                     .monotype = resolved_mono,
                 });
-                try self.bindFlatTypeMonotypes(
+                if (!try self.bindFlatTypeMonotypesMode(
                     result,
                     template_module_idx,
                     template_types,
@@ -11507,10 +11587,13 @@ pub const Pass = struct {
                     flat_type,
                     normalized_mono,
                     template_module_idx,
-                );
+                    mode,
+                )) return false;
             },
             .err => {},
         }
+
+        return true;
     }
 
     fn bindFlatTypeMonotypes(
@@ -11524,8 +11607,33 @@ pub const Pass = struct {
         monotype: Monotype.Idx,
         mono_module_idx: u32,
     ) Allocator.Error!void {
-        if (self.binding_probe_mode and self.binding_probe_failed) return;
-        if (monotype.isNone()) return;
+        const ok = try self.bindFlatTypeMonotypesMode(
+            result,
+            template_module_idx,
+            template_types,
+            bindings,
+            ordered_entries,
+            flat_type,
+            monotype,
+            mono_module_idx,
+            .strict,
+        );
+        if (!ok) unreachable;
+    }
+
+    fn bindFlatTypeMonotypesMode(
+        self: *Pass,
+        result: *Result,
+        template_module_idx: u32,
+        template_types: *const types.Store,
+        bindings: *std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
+        ordered_entries: *std.ArrayList(TypeSubstEntry),
+        flat_type: types.FlatType,
+        monotype: Monotype.Idx,
+        mono_module_idx: u32,
+        comptime mode: BindingMode,
+    ) Allocator.Error!bool {
+        if (monotype.isNone()) return true;
 
         const mono = result.context_mono.monotype_store.getMonotype(monotype);
         const common_idents = ModuleEnv.CommonIdents.find(&self.all_module_envs[template_module_idx].common);
@@ -11535,8 +11643,7 @@ pub const Pass = struct {
                 const mfunc = switch (mono) {
                     .func => |mfunc| mfunc,
                     else => {
-                        self.bindFlatTypeMismatch(flat_type, mono, template_module_idx, mono_module_idx, monotype);
-                        return;
+                        return self.bindFlatTypeMismatch(mode, flat_type, mono, template_module_idx, mono_module_idx, monotype);
                     },
                 };
 
@@ -11545,7 +11652,7 @@ pub const Pass = struct {
 
                 for (type_args, 0..) |arg_var, i| {
                     const mono_arg = result.context_mono.monotype_store.getIdxSpanItem(mfunc.args, i);
-                    try self.bindTypeVarMonotypes(
+                    if (!try self.bindTypeVarMonotypesMode(
                         result,
                         template_module_idx,
                         template_types,
@@ -11554,9 +11661,10 @@ pub const Pass = struct {
                         arg_var,
                         mono_arg,
                         mono_module_idx,
-                    );
+                        mode,
+                    )) return false;
                 }
-                try self.bindTypeVarMonotypes(
+                if (!try self.bindTypeVarMonotypesMode(
                     result,
                     template_module_idx,
                     template_types,
@@ -11565,7 +11673,8 @@ pub const Pass = struct {
                     func.ret,
                     mfunc.ret,
                     mono_module_idx,
-                );
+                    mode,
+                )) return false;
             },
             .nominal_type => |nominal| {
                 const ident = nominal.ident.ident_idx;
@@ -11575,13 +11684,12 @@ pub const Pass = struct {
                     const mlist = switch (mono) {
                         .list => |mlist| mlist,
                         else => {
-                            self.bindFlatTypeMismatch(flat_type, mono, template_module_idx, mono_module_idx, monotype);
-                            return;
+                            return self.bindFlatTypeMismatch(mode, flat_type, mono, template_module_idx, mono_module_idx, monotype);
                         },
                     };
                     const type_args = template_types.sliceNominalArgs(nominal);
                     if (type_args.len != 1) unreachable;
-                    try self.bindTypeVarMonotypes(
+                    if (!try self.bindTypeVarMonotypesMode(
                         result,
                         template_module_idx,
                         template_types,
@@ -11590,21 +11698,21 @@ pub const Pass = struct {
                         type_args[0],
                         mlist.elem,
                         mono_module_idx,
-                    );
-                    return;
+                        mode,
+                    )) return false;
+                    return true;
                 }
 
                 if (origin.eql(common_idents.builtin_module) and ident.eql(common_idents.box)) {
                     const mbox = switch (mono) {
                         .box => |mbox| mbox,
                         else => {
-                            self.bindFlatTypeMismatch(flat_type, mono, template_module_idx, mono_module_idx, monotype);
-                            return;
+                            return self.bindFlatTypeMismatch(mode, flat_type, mono, template_module_idx, mono_module_idx, monotype);
                         },
                     };
                     const type_args = template_types.sliceNominalArgs(nominal);
                     if (type_args.len != 1) unreachable;
-                    try self.bindTypeVarMonotypes(
+                    if (!try self.bindTypeVarMonotypesMode(
                         result,
                         template_module_idx,
                         template_types,
@@ -11613,22 +11721,22 @@ pub const Pass = struct {
                         type_args[0],
                         mbox.inner,
                         mono_module_idx,
-                    );
-                    return;
+                        mode,
+                    )) return false;
+                    return true;
                 }
 
                 if (origin.eql(common_idents.builtin_module) and builtinPrimForNominal(ident, common_idents) != null) {
                     switch (mono) {
                         .prim => {},
                         else => {
-                            self.bindFlatTypeMismatch(flat_type, mono, template_module_idx, mono_module_idx, monotype);
-                            return;
+                            return self.bindFlatTypeMismatch(mode, flat_type, mono, template_module_idx, mono_module_idx, monotype);
                         },
                     }
-                    return;
+                    return true;
                 }
 
-                try self.bindTypeVarMonotypes(
+                if (!try self.bindTypeVarMonotypesMode(
                     result,
                     template_module_idx,
                     template_types,
@@ -11637,40 +11745,18 @@ pub const Pass = struct {
                     template_types.getNominalBackingVar(nominal),
                     monotype,
                     mono_module_idx,
-                );
+                    mode,
+                )) return false;
             },
             .record => |record| {
                 const mrec = switch (mono) {
                     .record => |mrec| mrec,
                     .unit => {
-                        if (flatRecordRepresentsEmpty(template_types, record)) return;
-                        if (builtin.mode == .Debug) {
-                            std.debug.panic(
-                                "Pipeline invariant violated: non-empty template record matched unit monotype (template_module={d}, mono_module={d}, active_callable_inst={d}, monotype={d})",
-                                .{
-                                    template_module_idx,
-                                    mono_module_idx,
-                                    self.currentCallableInstRawForDebug(),
-                                    @intFromEnum(monotype),
-                                },
-                            );
-                        }
-                        unreachable;
+                        if (flatRecordRepresentsEmpty(template_types, record)) return true;
+                        return self.bindFlatTypeMismatch(mode, flat_type, mono, template_module_idx, mono_module_idx, monotype);
                     },
                     else => {
-                        if (builtin.mode == .Debug) {
-                            std.debug.panic(
-                                "Pipeline invariant violated: expected record monotype for template record, got {s} (template_module={d}, mono_module={d}, active_callable_inst={d}, monotype={d})",
-                                .{
-                                    @tagName(mono),
-                                    template_module_idx,
-                                    mono_module_idx,
-                                    self.currentCallableInstRawForDebug(),
-                                    @intFromEnum(monotype),
-                                },
-                            );
-                        }
-                        unreachable;
+                        return self.bindFlatTypeMismatch(mode, flat_type, mono, template_module_idx, mono_module_idx, monotype);
                     },
                 };
                 var seen_field_indices: std.ArrayListUnmanaged(u32) = .empty;
@@ -11691,7 +11777,7 @@ pub const Pass = struct {
                         );
                         try appendSeenIndex(self.allocator, &seen_field_indices, field_idx);
                         const mono_field = result.context_mono.monotype_store.getFieldItem(mrec.fields, field_idx);
-                        try self.bindTypeVarMonotypes(
+                        if (!try self.bindTypeVarMonotypesMode(
                             result,
                             template_module_idx,
                             template_types,
@@ -11700,7 +11786,8 @@ pub const Pass = struct {
                             field_var,
                             mono_field.type_idx,
                             mono_module_idx,
-                        );
+                            mode,
+                        )) return false;
                     }
 
                     var ext_var = current_row.ext;
@@ -11730,7 +11817,7 @@ pub const Pass = struct {
                                         );
                                         try appendSeenIndex(self.allocator, &seen_field_indices, field_idx);
                                         const mono_field = result.context_mono.monotype_store.getFieldItem(mrec.fields, field_idx);
-                                        try self.bindTypeVarMonotypes(
+                                        if (!try self.bindTypeVarMonotypesMode(
                                             result,
                                             template_module_idx,
                                             template_types,
@@ -11739,18 +11826,18 @@ pub const Pass = struct {
                                             field_var,
                                             mono_field.type_idx,
                                             mono_module_idx,
-                                        );
+                                            mode,
+                                        )) return false;
                                     }
                                     break :rows;
                                 },
                                 .empty_record => break :rows,
                                 else => {
-                                    self.bindFlatTypeMismatch(flat_type, mono, template_module_idx, mono_module_idx, monotype);
-                                    return;
+                                    return self.bindFlatTypeMismatch(mode, flat_type, mono, template_module_idx, mono_module_idx, monotype);
                                 },
                             },
                             .flex, .rigid => {
-                                try self.bindRecordRowTail(
+                                if (!try self.bindRecordRowTail(
                                     result,
                                     template_module_idx,
                                     template_types,
@@ -11760,29 +11847,27 @@ pub const Pass = struct {
                                     result.context_mono.monotype_store.getFields(mrec.fields),
                                     seen_field_indices.items,
                                     mono_module_idx,
-                                );
+                                    mode,
+                                )) return false;
                                 break :rows;
                             },
                             .err => {
-                                self.bindFlatTypeErrorTail(flat_type, template_module_idx, mono_module_idx, monotype);
-                                return;
+                                return self.bindFlatTypeErrorTail(mode, flat_type, template_module_idx, mono_module_idx, monotype);
                             },
                         }
                     }
-                    return;
+                    return true;
                 }
             },
             .record_unbound => |fields_range| {
                 const mrec = switch (mono) {
                     .record => |mrec| mrec,
                     .unit => {
-                        if (template_types.getRecordFieldsSlice(fields_range).len == 0) return;
-                        self.bindFlatTypeMismatch(flat_type, mono, template_module_idx, mono_module_idx, monotype);
-                        return;
+                        if (template_types.getRecordFieldsSlice(fields_range).len == 0) return true;
+                        return self.bindFlatTypeMismatch(mode, flat_type, mono, template_module_idx, mono_module_idx, monotype);
                     },
                     else => {
-                        self.bindFlatTypeMismatch(flat_type, mono, template_module_idx, mono_module_idx, monotype);
-                        return;
+                        return self.bindFlatTypeMismatch(mode, flat_type, mono, template_module_idx, mono_module_idx, monotype);
                     },
                 };
                 const fields_slice = template_types.getRecordFieldsSlice(fields_range);
@@ -11797,7 +11882,7 @@ pub const Pass = struct {
                         mrec.fields,
                     );
                     const mono_field = result.context_mono.monotype_store.getFieldItem(mrec.fields, field_idx);
-                    try self.bindTypeVarMonotypes(
+                    if (!try self.bindTypeVarMonotypesMode(
                         result,
                         template_module_idx,
                         template_types,
@@ -11806,22 +11891,22 @@ pub const Pass = struct {
                         field_var,
                         mono_field.type_idx,
                         mono_module_idx,
-                    );
+                        mode,
+                    )) return false;
                 }
             },
             .tuple => |tuple| {
                 const mtup = switch (mono) {
                     .tuple => |mtup| mtup,
                     else => {
-                        self.bindFlatTypeMismatch(flat_type, mono, template_module_idx, mono_module_idx, monotype);
-                        return;
+                        return self.bindFlatTypeMismatch(mode, flat_type, mono, template_module_idx, mono_module_idx, monotype);
                     },
                 };
                 const elem_vars = template_types.sliceVars(tuple.elems);
                 if (elem_vars.len != mtup.elems.len) unreachable;
                 for (elem_vars, 0..) |elem_var, i| {
                     const elem_mono = result.context_mono.monotype_store.getIdxSpanItem(mtup.elems, i);
-                    try self.bindTypeVarMonotypes(
+                    if (!try self.bindTypeVarMonotypesMode(
                         result,
                         template_module_idx,
                         template_types,
@@ -11830,15 +11915,15 @@ pub const Pass = struct {
                         elem_var,
                         elem_mono,
                         mono_module_idx,
-                    );
+                        mode,
+                    )) return false;
                 }
             },
             .tag_union => |tag_union| {
                 const mtag = switch (mono) {
                     .tag_union => |mtag| mtag,
                     else => {
-                        self.bindFlatTypeMismatch(flat_type, mono, template_module_idx, mono_module_idx, monotype);
-                        return;
+                        return self.bindFlatTypeMismatch(mode, flat_type, mono, template_module_idx, mono_module_idx, monotype);
                     },
                 };
                 var seen_tag_indices: std.ArrayListUnmanaged(u32) = .empty;
@@ -11858,7 +11943,7 @@ pub const Pass = struct {
                             mtag.tags,
                         );
                         try appendSeenIndex(self.allocator, &seen_tag_indices, tag_idx);
-                        try self.bindTagPayloadsByName(
+                        if (!try self.bindTagPayloadsByName(
                             result,
                             template_module_idx,
                             template_types,
@@ -11868,7 +11953,8 @@ pub const Pass = struct {
                             template_types.sliceVars(args_range),
                             mtag.tags,
                             mono_module_idx,
-                        );
+                            mode,
+                        )) return false;
                     }
 
                     var ext_var = current_row.ext;
@@ -11886,12 +11972,11 @@ pub const Pass = struct {
                                 },
                                 .empty_tag_union => break :rows,
                                 else => {
-                                    self.bindFlatTypeMismatch(flat_type, mono, template_module_idx, mono_module_idx, monotype);
-                                    return;
+                                    return self.bindFlatTypeMismatch(mode, flat_type, mono, template_module_idx, mono_module_idx, monotype);
                                 },
                             },
                             .flex, .rigid => {
-                                try self.bindTagUnionRowTail(
+                                if (!try self.bindTagUnionRowTail(
                                     result,
                                     template_module_idx,
                                     template_types,
@@ -11901,12 +11986,12 @@ pub const Pass = struct {
                                     result.context_mono.monotype_store.getTags(mtag.tags),
                                     seen_tag_indices.items,
                                     mono_module_idx,
-                                );
+                                    mode,
+                                )) return false;
                                 break :rows;
                             },
                             .err => {
-                                self.bindFlatTypeErrorTail(flat_type, template_module_idx, mono_module_idx, monotype);
-                                return;
+                                return self.bindFlatTypeErrorTail(mode, flat_type, template_module_idx, mono_module_idx, monotype);
                             },
                         }
                     }
@@ -11915,35 +12000,33 @@ pub const Pass = struct {
             .empty_record => switch (mono) {
                 .unit, .record => {},
                 else => {
-                    self.bindFlatTypeMismatch(flat_type, mono, template_module_idx, mono_module_idx, monotype);
-                    return;
+                    return self.bindFlatTypeMismatch(mode, flat_type, mono, template_module_idx, mono_module_idx, monotype);
                 },
             },
             .empty_tag_union => switch (mono) {
                 .tag_union => {},
                 else => {
-                    self.bindFlatTypeMismatch(flat_type, mono, template_module_idx, mono_module_idx, monotype);
-                    return;
+                    return self.bindFlatTypeMismatch(mode, flat_type, mono, template_module_idx, mono_module_idx, monotype);
                 },
             },
         }
+
+        return true;
     }
 
     fn bindFlatTypeMismatch(
         self: *Pass,
+        comptime mode: BindingMode,
         flat_type: types.FlatType,
         mono: Monotype.Monotype,
         template_module_idx: u32,
         mono_module_idx: u32,
         monotype: Monotype.Idx,
-    ) void {
-        if (self.binding_probe_mode) {
-            self.binding_probe_failed = true;
-            return;
-        }
+    ) bool {
+        if (mode == .compatibility) return false;
         if (std.debug.runtime_safety) {
             std.debug.panic(
-                "Pipeline bindFlatTypeMonotypes mismatch: flat_type={s} mono={s} template_module={d} mono_module={d} active_callable_inst={d} monotype={d} probe_mode={}",
+                "Pipeline bindFlatTypeMonotypes mismatch: flat_type={s} mono={s} template_module={d} mono_module={d} active_callable_inst={d} monotype={d}",
                 .{
                     @tagName(flat_type),
                     @tagName(mono),
@@ -11951,7 +12034,6 @@ pub const Pass = struct {
                     mono_module_idx,
                     self.currentCallableInstRawForDebug(),
                     @intFromEnum(monotype),
-                    self.binding_probe_mode,
                 },
             );
         }
@@ -11960,25 +12042,22 @@ pub const Pass = struct {
 
     fn bindFlatTypeErrorTail(
         self: *Pass,
+        comptime mode: BindingMode,
         flat_type: types.FlatType,
         template_module_idx: u32,
         mono_module_idx: u32,
         monotype: Monotype.Idx,
-    ) void {
-        if (self.binding_probe_mode) {
-            self.binding_probe_failed = true;
-            return;
-        }
+    ) bool {
+        if (mode == .compatibility) return false;
         if (std.debug.runtime_safety) {
             std.debug.panic(
-                "Pipeline bindFlatTypeMonotypes hit err tail: flat_type={s} template_module={d} mono_module={d} active_callable_inst={d} monotype={d} probe_mode={}",
+                "Pipeline bindFlatTypeMonotypes hit err tail: flat_type={s} template_module={d} mono_module={d} active_callable_inst={d} monotype={d}",
                 .{
                     @tagName(flat_type),
                     template_module_idx,
                     mono_module_idx,
                     self.currentCallableInstRawForDebug(),
                     @intFromEnum(monotype),
-                    self.binding_probe_mode,
                 },
             );
         }
