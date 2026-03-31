@@ -335,15 +335,6 @@ pub const WasmEvaluator = struct {
             return error.RuntimeError;
         };
 
-        // Debug: dump wasm bytes to file for inspection
-        if (gen_result.wasm_bytes.len > 0) {
-            const dump_file = std.fs.cwd().createFile("/tmp/roc_debug.wasm", .{}) catch null;
-            if (dump_file) |f| {
-                _ = f.write(gen_result.wasm_bytes) catch {};
-                f.close();
-            }
-        }
-
         return WasmCodeResult{
             .wasm_bytes = gen_result.wasm_bytes,
             .result_layout = gen_result.result_layout,

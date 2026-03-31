@@ -896,7 +896,6 @@ pub fn mergeModule(self: *Self, source: *const Self) !MergeResult {
     // --- 2. Compute function index mapping ---
     // Source defined functions start at source.import_fn_count in source's index space.
     // In self, they'll be appended after existing defined functions.
-    const self_defined_base = self.importCount() + @as(u32, @intCast(self.func_type_indices.items.len));
     const source_defined_count: u32 = @intCast(source.func_type_indices.items.len);
 
     // func_remap: maps source global function index → self global function index.
@@ -907,6 +906,8 @@ pub fn mergeModule(self: *Self, source: *const Self) !MergeResult {
     defer gpa.free(func_remap);
 
     // Remap source imports → self imports (by name match).
+    // NOTE: This loop may add new imports to self, changing importCount().
+    // We must compute self_defined_base AFTER this loop completes.
     for (source.imports.items, 0..) |src_imp, src_idx| {
         // Find matching import in self by field_name.
         var matched: ?u32 = null;
@@ -923,6 +924,10 @@ pub fn mergeModule(self: *Self, source: *const Self) !MergeResult {
             continue;
         };
     }
+
+    // Compute defined function base AFTER imports are finalized,
+    // since addImport above may have increased importCount().
+    const self_defined_base = self.importCount() + @as(u32, @intCast(self.func_type_indices.items.len));
 
     // Remap source defined functions → new indices in self.
     for (0..source_defined_count) |i| {

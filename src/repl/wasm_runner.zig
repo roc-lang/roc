@@ -40,19 +40,10 @@ pub fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, ex
     defer arena_impl.deinit();
     const arena = arena_impl.allocator();
 
-    var module_def = bytebox.createModuleDefinition(arena, .{}) catch |err| {
-        std.debug.print("wasm createModuleDefinition failed: {}\n", .{err});
-        return error.WasmExecFailed;
-    };
-    module_def.decode(wasm_result.wasm_bytes) catch |err| {
-        std.debug.print("wasm decode failed: {}\n", .{err});
-        return error.WasmExecFailed;
-    };
+    var module_def = bytebox.createModuleDefinition(arena, .{}) catch return error.WasmExecFailed;
+    module_def.decode(wasm_result.wasm_bytes) catch return error.WasmExecFailed;
 
-    var module_instance = bytebox.createModuleInstance(.Stack, module_def, std.heap.page_allocator) catch |err| {
-        std.debug.print("wasm createModuleInstance failed: {}\n", .{err});
-        return error.WasmExecFailed;
-    };
+    var module_instance = bytebox.createModuleInstance(.Stack, module_def, std.heap.page_allocator) catch return error.WasmExecFailed;
     defer module_instance.destroy();
 
     if (wasm_result.has_imports) {
@@ -63,6 +54,10 @@ pub fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, ex
         env_imports.addHostFunction("roc_dec_to_str", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{.I32}, hostDecToStr, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_str_eq", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{.I32}, hostStrEq, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_list_eq", &[_]bytebox.ValType{ .I32, .I32, .I32 }, &[_]bytebox.ValType{.I32}, hostListEq, null) catch return error.WasmExecFailed;
+
+        // Compiler-rt intrinsics needed by merged builtins
+        env_imports.addHostFunction("__multi3", &[_]bytebox.ValType{ .I32, .I64, .I64, .I64, .I64 }, &[_]bytebox.ValType{}, hostMulti3, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("__muloti4", &[_]bytebox.ValType{ .I32, .I64, .I64, .I64, .I64, .I32 }, &[_]bytebox.ValType{}, hostMuloti4, null) catch return error.WasmExecFailed;
 
         env_imports.addHostFunction("roc_alloc", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{}, hostRocAlloc, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_dealloc", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{}, hostRocDealloc, null) catch return error.WasmExecFailed;
@@ -125,15 +120,9 @@ pub fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, ex
         env_imports.addHostFunction("roc_list_reverse", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostListReverse, null) catch return error.WasmExecFailed;
 
         const imports = [_]bytebox.ModuleImportPackage{env_imports};
-        module_instance.instantiate(.{ .stack_size = 1024 * 256, .imports = &imports }) catch |err| {
-            std.debug.print("wasm instantiate (with imports) failed: {}\n", .{err});
-            return error.WasmExecFailed;
-        };
+        module_instance.instantiate(.{ .stack_size = 1024 * 256, .imports = &imports }) catch return error.WasmExecFailed;
     } else {
-        module_instance.instantiate(.{ .stack_size = 1024 * 256 }) catch |err| {
-            std.debug.print("wasm instantiate (no imports) failed: {}\n", .{err});
-            return error.WasmExecFailed;
-        };
+        module_instance.instantiate(.{ .stack_size = 1024 * 256 }) catch return error.WasmExecFailed;
     }
 
     const handle = module_instance.getFunctionHandle("main") catch return error.WasmExecFailed;
@@ -1101,4 +1090,43 @@ fn writeFloatParseResult(comptime T: type, buffer: []u8, out_ptr: usize, disc_of
     const value_bytes = std.mem.asBytes(&r.value);
     @memcpy(buffer[out_ptr..][0..value_bytes.len], value_bytes);
     buffer[out_ptr + disc_offset] = 1 - r.errorcode;
+}
+
+// --- Compiler-rt intrinsics ---
+
+/// __multi3: 128-bit signed multiply. result_ptr = a * b (truncating to 128 bits).
+fn hostMulti3(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    const buffer = module.store.getMemory(0).buffer();
+    const result_ptr: usize = @intCast(params[0].I32);
+    const a_lo: u64 = @bitCast(params[1].I64);
+    const a_hi: u64 = @bitCast(params[2].I64);
+    const b_lo: u64 = @bitCast(params[3].I64);
+    const b_hi: u64 = @bitCast(params[4].I64);
+    const a: i128 = @bitCast(@as(u128, a_hi) << 64 | @as(u128, a_lo));
+    const b: i128 = @bitCast(@as(u128, b_hi) << 64 | @as(u128, b_lo));
+    const result = i128h.mul_i128(a, b);
+    const result_u128: u128 = @bitCast(result);
+    std.mem.writeInt(u64, buffer[result_ptr..][0..8], @truncate(result_u128), .little);
+    std.mem.writeInt(u64, buffer[result_ptr + 8 ..][0..8], @truncate(result_u128 >> 64), .little);
+}
+
+/// __muloti4: 128-bit signed multiply with overflow detection.
+fn hostMuloti4(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    const buffer = module.store.getMemory(0).buffer();
+    const result_ptr: usize = @intCast(params[0].I32);
+    const a_lo: u64 = @bitCast(params[1].I64);
+    const a_hi: u64 = @bitCast(params[2].I64);
+    const b_lo: u64 = @bitCast(params[3].I64);
+    const b_hi: u64 = @bitCast(params[4].I64);
+    const overflow_ptr: usize = @intCast(params[5].I32);
+    const a: i128 = @bitCast(@as(u128, a_hi) << 64 | @as(u128, a_lo));
+    const b: i128 = @bitCast(@as(u128, b_hi) << 64 | @as(u128, b_lo));
+    // Use widening multiply to detect overflow
+    const result = i128h.mul_i128(a, b);
+    // Overflow if result / b != a (when b != 0)
+    const overflow: i32 = if (b != 0 and @divTrunc(result, b) != a) 1 else 0;
+    const result_u128: u128 = @bitCast(result);
+    std.mem.writeInt(u64, buffer[result_ptr..][0..8], @truncate(result_u128), .little);
+    std.mem.writeInt(u64, buffer[result_ptr + 8 ..][0..8], @truncate(result_u128 >> 64), .little);
+    std.mem.writeInt(i32, buffer[overflow_ptr..][0..4], overflow, .little);
 }
