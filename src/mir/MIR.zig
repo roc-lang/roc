@@ -21,7 +21,7 @@
 const std = @import("std");
 const base = @import("base");
 const builtins = @import("builtins");
-const Monotype = @import("Monotype.zig");
+const Monotype = @import("corecir").Monotype;
 
 const Ident = base.Ident;
 const StringLiteral = base.StringLiteral;
@@ -166,6 +166,12 @@ pub const LocalSpan = extern struct {
 };
 
 /// One reference-producing MIR operation.
+pub const ProjectionOwnership = enum {
+    borrow,
+    move,
+};
+
+/// One reference-producing MIR operation.
 pub const RefOp = union(enum) {
     local: LocalId,
     discriminant: struct {
@@ -174,11 +180,13 @@ pub const RefOp = union(enum) {
     field: struct {
         source: LocalId,
         field_idx: u32,
+        ownership: ProjectionOwnership = .borrow,
     },
     tag_payload: struct {
         source: LocalId,
         payload_idx: u32,
         tag_discriminant: u32,
+        ownership: ProjectionOwnership = .borrow,
     },
     nominal: struct {
         backing: LocalId,

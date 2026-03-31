@@ -11,7 +11,7 @@
 const std = @import("std");
 
 const MIR = @import("MIR.zig");
-const Monotype = @import("Monotype.zig");
+const Monotype = @import("corecir").Monotype;
 
 const Allocator = std.mem.Allocator;
 
@@ -442,24 +442,10 @@ const Analyzer = struct {
     }
 
     fn resolveCallableForLocal(self: *Analyzer, local_id: MIR.LocalId) CallableResolution {
-        if (self.mir_store.getLocal(local_id).exact_callable) |exact_callable| {
-            return exact_callable;
-        }
-
-        return switch (self.mir_store.getLocalDef(local_id)) {
-            .lambda => |lambda_id| .{
-                .lambda = lambda_id,
-                .requires_hidden_capture = false,
-            },
-            .closure => |closure| .{
-                .lambda = closure.lambda,
-                .requires_hidden_capture = true,
-            },
-            else => std.debug.panic(
-                "ResultSummary invariant violated: function-valued local {d} lacked explicit exact callable metadata during result summary",
-                .{@intFromEnum(local_id)},
-            ),
-        };
+        return self.mir_store.getLocal(local_id).exact_callable orelse std.debug.panic(
+            "ResultSummary invariant violated: function-valued local {d} lacked explicit exact callable metadata during result summary",
+            .{@intFromEnum(local_id)},
+        );
     }
 
     fn collectReturnedCallable(
@@ -558,16 +544,22 @@ const Analyzer = struct {
                     else
                         self.originForLocal(env, source),
                     .discriminant => .fresh,
-                    .field => |field| try self.borrowOrigin(
-                        self.originForLocal(env, field.source),
-                        region,
-                        try self.singleProjectionSpan(.{ .field = @intCast(field.field_idx) }),
-                    ),
-                    .tag_payload => |payload| try self.borrowOrigin(
-                        self.originForLocal(env, payload.source),
-                        region,
-                        try self.singleProjectionSpan(.{ .tag_payload = @intCast(payload.payload_idx) }),
-                    ),
+                    .field => |field| blk: {
+                        const source_origin = self.originForLocal(env, field.source);
+                        const projections = try self.singleProjectionSpan(.{ .field = @intCast(field.field_idx) });
+                        break :blk switch (field.ownership) {
+                            .borrow => try self.borrowOrigin(source_origin, region, projections),
+                            .move => try self.aliasOrigin(source_origin, projections),
+                        };
+                    },
+                    .tag_payload => |payload| blk: {
+                        const source_origin = self.originForLocal(env, payload.source);
+                        const projections = try self.singleProjectionSpan(.{ .tag_payload = @intCast(payload.payload_idx) });
+                        break :blk switch (payload.ownership) {
+                            .borrow => try self.borrowOrigin(source_origin, region, projections),
+                            .move => try self.aliasOrigin(source_origin, projections),
+                        };
+                    },
                     .nominal => |nominal| try self.aliasOrigin(
                         self.originForLocal(env, nominal.backing),
                         try self.singleProjectionSpan(.nominal),
@@ -967,27 +959,14 @@ pub fn build(
 fn resolveReachableCalleeLambda(
     mir_store: *const MIR.Store,
     local_id: MIR.LocalId,
-) ?MIR.LambdaId {
-    if (mir_store.getLocal(local_id).exact_callable) |exact_callable| {
-        return exact_callable.lambda;
-    }
-
-    return switch (mir_store.getLocalDef(local_id)) {
-        .lambda => |lambda_id| lambda_id,
-        .closure => |closure| closure.lambda,
-        .param,
-        .captures_param,
-        .join_param,
-        => std.debug.panic(
+) MIR.LambdaId {
+    return if (mir_store.getLocal(local_id).exact_callable) |exact_callable|
+        exact_callable.lambda
+    else
+        std.debug.panic(
             "ResultSummary invariant violated: reachable function-valued local {d} lacked explicit exact callable metadata",
             .{@intFromEnum(local_id)},
-        ),
-        .symbol => |symbol| std.debug.panic(
-            "ResultSummary invariant violated: function-valued symbol {d} survived strongest-form MIR callable lowering",
-            .{symbol.raw()},
-        ),
-        else => null,
-    };
+        );
 }
 
 fn collectReachableLambda(
@@ -1048,7 +1027,8 @@ fn collectReachableFromStmt(
         .assign_call => |stmt| {
             if (stmt.exact_lambda) |lambda_id| {
                 try collectReachableLambda(allocator, mir_store, lambda_id, reachable_lambdas, reachable_consts, visited_stmts);
-            } else if (resolveReachableCalleeLambda(mir_store, stmt.callee)) |lambda_id| {
+            } else {
+                const lambda_id = resolveReachableCalleeLambda(mir_store, stmt.callee);
                 try collectReachableLambda(allocator, mir_store, lambda_id, reachable_lambdas, reachable_consts, visited_stmts);
             }
             try collectReachableFromStmt(allocator, mir_store, current_lambda, stmt.next, reachable_lambdas, reachable_consts, visited_stmts);

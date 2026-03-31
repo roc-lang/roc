@@ -3,8 +3,8 @@
 
 const std = @import("std");
 const base = @import("base");
+const corecir = @import("corecir");
 const types = @import("types");
-const mir = @import("mir");
 const layout = @import("layout.zig");
 const layout_graph_ = @import("graph.zig");
 const layout_store_ = @import("store.zig");
@@ -92,19 +92,19 @@ fn expectTypeAndMonotypeResolversAgree(
     type_layout_resolver.setOverrideTypesStore(&lt.type_store);
     const type_layout_idx = try type_layout_resolver.resolve(0, type_var, &lt.type_scope, null);
 
-    var mono_store = try mir.Monotype.Store.init(allocator);
+    var mono_store = try corecir.Monotype.Store.init(allocator);
     defer mono_store.deinit(allocator);
 
-    var scratches = try mir.Monotype.Store.Scratches.init(allocator);
+    var scratches = try corecir.Monotype.Store.Scratches.init(allocator);
     defer scratches.deinit();
     scratches.ident_store = lt.module_env.getIdentStoreConst();
     scratches.module_env = &lt.module_env;
     scratches.module_idx = 0;
     scratches.all_module_envs = &lt.module_env_ptr;
 
-    var specializations = std.AutoHashMap(types.Var, mir.Monotype.Idx).init(allocator);
+    var specializations = std.AutoHashMap(types.Var, corecir.Monotype.Idx).init(allocator);
     defer specializations.deinit();
-    var nominal_cycle_breakers = std.AutoHashMap(types.Var, mir.Monotype.Idx).init(allocator);
+    var nominal_cycle_breakers = std.AutoHashMap(types.Var, corecir.Monotype.Idx).init(allocator);
     defer nominal_cycle_breakers.deinit();
 
     const mono_idx = try mono_store.fromTypeVar(

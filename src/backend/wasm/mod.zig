@@ -1,8 +1,7 @@
-//! WebAssembly code generation backend.
+//! WebAssembly backend surface for statement-only LIR.
 //!
-//! Generates wasm bytecode from Mono IR. Unlike the dev backend (which uses
-//! a register-based code generator), the wasm backend is a standalone
-//! code generator since wasm is a stack machine.
+//! The active wasm code generator must consume strongest-form LIR directly.
+//! The old expression-era backend has been removed.
 
 pub const WasmModule = @import("WasmModule.zig");
 pub const WasmCodeGen = @import("WasmCodeGen.zig");

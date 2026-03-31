@@ -4,7 +4,7 @@
 //! and then consumed by downstream lowering passes like MIR -> LIR.
 
 const MIR = @import("MIR.zig");
-const Monotype = @import("Monotype.zig");
+const Monotype = @import("corecir").Monotype;
 const ResultSummary = @import("ResultSummary.zig");
 const ModuleEnv = @import("can").ModuleEnv;
 const Ident = @import("base").Ident;

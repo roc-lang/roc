@@ -1,11 +1,11 @@
 //! Resolves MIR monotypes into canonical ordinary-data layouts through the shared layout store.
 
 const std = @import("std");
+const corecir = @import("corecir");
 const layout = @import("layout.zig");
 const graph_mod = @import("graph.zig");
-const mir = @import("mir");
 
-const Monotype = mir.Monotype;
+const Monotype = corecir.Monotype;
 const Store = @import("store.zig").Store;
 const LayoutGraph = graph_mod.Graph;
 const GraphField = graph_mod.Field;

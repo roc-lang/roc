@@ -9,6 +9,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const base = @import("base");
+const corecir = @import("corecir");
 const layout = @import("layout");
 const mir_mod = @import("mir");
 
@@ -21,7 +22,7 @@ const LirStore = @import("LirStore.zig");
 const DebugVerifyLir = @import("DebugVerifyLir.zig");
 
 const Allocator = std.mem.Allocator;
-const MirMonotypeIdx = mir_mod.Monotype.Idx;
+const MirMonotypeIdx = corecir.Monotype.Idx;
 
 const CFStmtId = LIR.CFStmtId;
 const JoinPointId = LIR.JoinPointId;
@@ -282,9 +283,7 @@ fn runtimeValueLayoutFromMirMonotype(self: *Self, monotype: MirMonotypeIdx) Allo
 }
 
 fn runtimeCallableValueLayoutFromMirLocal(self: *Self, local_id: MIR.LocalId) Allocator.Error!?layout.Idx {
-    const resolved = self.resolveCallableValue(local_id) catch |err| switch (err) {
-        error.OutOfMemory => return err,
-    };
+    const resolved = self.resolveCallableValue(local_id);
     return try self.runtimeLambdaValueLayout(resolved.lambda);
 }
 
@@ -334,41 +333,14 @@ fn mergeLoweredOrigins(left: LoweredOrigin, right: LoweredOrigin) LoweredOrigin 
     return .fresh;
 }
 
-fn resolveCallableValue(self: *Self, local_id: MIR.LocalId) Allocator.Error!ResolvedCallable {
-    if (self.mir_store.getLocal(local_id).exact_callable) |exact_callable| {
-        return .{
-            .lambda = exact_callable.lambda,
-            .captures_local = if (exact_callable.requires_hidden_capture) local_id else null,
-        };
-    }
-
-    return switch (self.mir_store.getLocalDef(local_id)) {
-        .lambda => |lambda_id| .{
-            .lambda = lambda_id,
-            .captures_local = null,
-        },
-        .closure => |closure| .{
-            .lambda = closure.lambda,
-            .captures_local = local_id,
-        },
-        .param,
-        .captures_param,
-        .join_param,
-        => std.debug.panic(
-            "MirToLir invariant violated: function-valued local {d} lacked explicit exact callable metadata",
-            .{@intFromEnum(local_id)},
-        ),
-        .symbol => |symbol| std.debug.panic(
-            "MirToLir invariant violated: function-valued symbol {d} survived strongest-form MIR callable lowering",
-            .{symbol.raw()},
-        ),
-        else => std.debug.panic(
-            "MirToLir invariant violated: local {d} was used as a callable value but local_def={s}",
-            .{
-                @intFromEnum(local_id),
-                @tagName(self.mir_store.getLocalDef(local_id)),
-            },
-        ),
+fn resolveCallableValue(self: *Self, local_id: MIR.LocalId) ResolvedCallable {
+    const exact_callable = self.mir_store.getLocal(local_id).exact_callable orelse std.debug.panic(
+        "MirToLir invariant violated: function-valued local {d} lacked explicit exact callable metadata",
+        .{@intFromEnum(local_id)},
+    );
+    return .{
+        .lambda = exact_callable.lambda,
+        .captures_local = if (exact_callable.requires_hidden_capture) local_id else null,
     };
 }
 
@@ -800,18 +772,27 @@ fn loweredOriginToResultSemantics(origin: LoweredOrigin) ResultSemantics {
     };
 }
 
-fn projectedBorrowResultSemantics(
+fn projectedResultSemantics(
     self: *Self,
     source: MIR.LocalId,
     extra_projections: LIR.RefProjectionSpan,
+    ownership: MIR.ProjectionOwnership,
 ) Allocator.Error!ResultSemantics {
     var visited = std.AutoHashMap(u32, void).init(self.allocator);
     defer visited.deinit();
 
     const source_origin = try self.resolveMirLocalOrigin(source, &visited);
-    return loweredOriginToResultSemantics(
-        try self.borrowOrigin(source_origin, self.current_borrow_region, extra_projections),
-    );
+    return switch (ownership) {
+        .borrow => loweredOriginToResultSemantics(
+            try self.borrowOrigin(source_origin, self.current_borrow_region, extra_projections),
+        ),
+        .move => switch (source_origin) {
+            .fresh => aliasSemantics(try self.mapMirLocal(source), extra_projections),
+            else => loweredOriginToResultSemantics(
+                try self.aliasOrigin(source_origin, extra_projections),
+            ),
+        },
+    };
 }
 
 fn lowerSummaryCallResultOrigin(
@@ -897,16 +878,34 @@ fn resolveMirLocalOrigin(
                 try self.resolveMirLocalOrigin(nominal.backing, visited),
                 try self.singleProjectionSpan(.nominal),
             ),
-            .field => |field| try self.borrowOrigin(
-                try self.resolveMirLocalOrigin(field.source, visited),
-                self.current_borrow_region,
-                try self.singleProjectionSpan(.{ .field = @intCast(field.field_idx) }),
-            ),
-            .tag_payload => |payload| try self.borrowOrigin(
-                try self.resolveMirLocalOrigin(payload.source, visited),
-                self.current_borrow_region,
-                try self.singleProjectionSpan(.{ .tag_payload = @intCast(payload.payload_idx) }),
-            ),
+            .field => |field| blk: {
+                const source_origin = try self.resolveMirLocalOrigin(field.source, visited);
+                const projections = try self.singleProjectionSpan(.{ .field = @intCast(field.field_idx) });
+                break :blk switch (field.ownership) {
+                    .borrow => try self.borrowOrigin(source_origin, self.current_borrow_region, projections),
+                    .move => switch (source_origin) {
+                        .fresh => .{ .alias_of_local = .{
+                            .owner = self.existingMappedMirLocal(field.source),
+                            .projections = projections,
+                        } },
+                        else => try self.aliasOrigin(source_origin, projections),
+                    },
+                };
+            },
+            .tag_payload => |payload| blk: {
+                const source_origin = try self.resolveMirLocalOrigin(payload.source, visited);
+                const projections = try self.singleProjectionSpan(.{ .tag_payload = @intCast(payload.payload_idx) });
+                break :blk switch (payload.ownership) {
+                    .borrow => try self.borrowOrigin(source_origin, self.current_borrow_region, projections),
+                    .move => switch (source_origin) {
+                        .fresh => .{ .alias_of_local = .{
+                            .owner = self.existingMappedMirLocal(payload.source),
+                            .projections = projections,
+                        } },
+                        else => try self.aliasOrigin(source_origin, projections),
+                    },
+                };
+            },
             .discriminant => .fresh,
         },
         .call => |call_result| blk: {
@@ -915,7 +914,7 @@ fn resolveMirLocalOrigin(
                     .lambda = lambda_id,
                     .captures_local = if (call_result.exact_requires_hidden_capture) call_result.callee else null,
                 }
-            else try self.resolveCallableValue(call_result.callee);
+            else self.resolveCallableValue(call_result.callee);
 
             const visible_args = self.mir_store.getLocalSpan(call_result.args);
             const arg_count = visible_args.len + @intFromBool(resolved.captures_local != null);
@@ -1429,7 +1428,7 @@ fn internMirStringLiteral(
 fn tagDiscriminantForMonotypeName(
     self: *Self,
     target_mono: MirMonotypeIdx,
-    tag_name: mir_mod.Monotype.Name,
+    tag_name: corecir.Monotype.Name,
 ) u16 {
     const mono = self.mir_store.monotype_store.getMonotype(target_mono);
     const tags = switch (mono) {
@@ -1541,9 +1540,10 @@ fn lowerStmt(self: *Self, stmt_id: MIR.CFStmtId) Allocator.Error!CFStmtId {
                 ),
                 .field => |field| try self.emitAssignRef(
                     target_binding.target,
-                    try self.projectedBorrowResultSemantics(
+                    try self.projectedResultSemantics(
                         field.source,
                         try self.singleProjectionSpan(.{ .field = @intCast(field.field_idx) }),
+                        field.ownership,
                     ),
                     .{ .field = .{
                         .source = try self.mapMirLocal(field.source),
@@ -1553,9 +1553,10 @@ fn lowerStmt(self: *Self, stmt_id: MIR.CFStmtId) Allocator.Error!CFStmtId {
                 ),
                 .tag_payload => |payload| try self.emitAssignRef(
                     target_binding.target,
-                    try self.projectedBorrowResultSemantics(
+                    try self.projectedResultSemantics(
                         payload.source,
                         try self.singleProjectionSpan(.{ .tag_payload = @intCast(payload.payload_idx) }),
+                        payload.ownership,
                     ),
                     .{ .tag_payload = .{
                         .source = try self.mapMirLocal(payload.source),
@@ -1777,7 +1778,7 @@ fn lowerDirectLambdaCall(
             .captures_local = if (exact_requires_hidden_capture) callee_mir else null,
         }
     else
-        try self.resolveCallableValue(callee_mir);
+        self.resolveCallableValue(callee_mir);
     const lambda = self.mir_store.getLambda(resolved.lambda);
     if (resolved.captures_local == null and lambda.captures_param != null) {
         std.debug.panic(
@@ -1954,9 +1955,10 @@ fn lowerEntrypointCallableStmt(
                     ),
                     .field => |field| try self.emitAssignRef(
                         target_binding.target,
-                        try self.projectedBorrowResultSemantics(
+                        try self.projectedResultSemantics(
                             field.source,
                             try self.singleProjectionSpan(.{ .field = @intCast(field.field_idx) }),
+                            field.ownership,
                         ),
                         .{ .field = .{
                             .source = try self.mapMirLocal(field.source),
@@ -1966,9 +1968,10 @@ fn lowerEntrypointCallableStmt(
                     ),
                     .tag_payload => |payload| try self.emitAssignRef(
                         target_binding.target,
-                        try self.projectedBorrowResultSemantics(
+                        try self.projectedResultSemantics(
                             payload.source,
                             try self.singleProjectionSpan(.{ .tag_payload = @intCast(payload.payload_idx) }),
+                            payload.ownership,
                         ),
                         .{ .tag_payload = .{
                             .source = try self.mapMirLocal(payload.source),
@@ -2244,7 +2247,7 @@ fn lowerEntrypointCallableStmt(
             .result_contract = .no_return,
         },
         .ret => |ret_stmt| try self.emitEntrypointCall(
-            try self.resolveCallableValue(ret_stmt.value),
+            self.resolveCallableValue(ret_stmt.value),
             arg_locals,
             target,
             next,
