@@ -4664,6 +4664,36 @@ pub const Pass = struct {
         );
         if (fn_monotype.isNone()) return null;
 
+        // During template-binding completion, dispatch inference may operate
+        // with incomplete bindings (direct call resolution is suppressed),
+        // producing a fn_monotype whose parameter types have unit-defaulted
+        // type variables. Verify the inferred parameter types are consistent
+        // with any already-recorded monotypes for the actual arguments. If
+        // they conflict, the inference is based on incomplete information and
+        // should be deferred.
+        if (self.scratch_context_expr_monotypes_depth != 0) {
+            const fn_mono = switch (result.monotype_store.getMonotype(fn_monotype)) {
+                .func => |func| func,
+                else => return null,
+            };
+            const fn_args = result.monotype_store.getIdxSpan(fn_mono.args);
+            if (fn_args.len == actual_args.items.len) {
+                for (actual_args.items, fn_args) |arg_expr_idx, param_mono| {
+                    if (self.lookupCurrentExprMonotype(result, module_idx, arg_expr_idx)) |existing| {
+                        if (!try self.monotypesStructurallyEqualAcrossModules(
+                            result,
+                            existing.idx,
+                            existing.module_idx,
+                            param_mono,
+                            template.module_idx,
+                        )) {
+                            return null;
+                        }
+                    }
+                }
+            }
+        }
+
         if (!try self.procSignatureAcceptsFnMonotype(
             result,
             template_id,
@@ -4779,6 +4809,17 @@ pub const Pass = struct {
                 resolved.idx,
                 resolved.module_idx,
             )) {
+                return;
+            }
+
+            // During template-binding completion (scratch context), dispatch
+            // inference may operate with incomplete bindings because direct call
+            // resolution is suppressed. This can produce provisional monotypes
+            // with unit-defaulted type variables that conflict with a more
+            // concrete type already recorded in a prior fixed-point iteration.
+            // In that case, keep the existing (more informed) monotype rather
+            // than treating the conflict as a compiler bug.
+            if (self.scratch_context_expr_monotypes_depth != 0) {
                 return;
             }
 
