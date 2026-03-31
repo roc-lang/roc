@@ -1032,6 +1032,7 @@ const RocValue = @import("values").RocValue;
 /// The result type is Str but the CIR type variable is left unresolved; the MIR lowerer
 /// overrides the monotype to Str for str_inspect ops.
 fn wrapInStrInspect(module_env: *ModuleEnv, inner_expr: can.CIR.Expr.Idx) !can.CIR.Expr.Idx {
+    try module_env.store.ensureScratch();
     const top = module_env.store.scratchExprTop();
     try module_env.store.addScratchExpr(inner_expr);
     const args_span = try module_env.store.exprSpanFrom(top);

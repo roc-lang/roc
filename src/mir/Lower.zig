@@ -934,7 +934,7 @@ fn lookupLoweredCallableLambdaCache(
     return self.lowered_callable_lambdas.get(makeCallableCacheKey(self, expr_idx, fn_monotype));
 }
 
-fn lookupPipelinedExprMonotype(self: *const Self, expr_idx: CIR.Expr.Idx) ?Pipeline.ResolvedMonotype {
+fn lookupProgramExprMonotype(self: *const Self, expr_idx: CIR.Expr.Idx) ?Pipeline.ResolvedMonotype {
     return self.callable_pipeline.getExprMonotype(
         self.currentSourceContext(),
         self.current_module_idx,
@@ -942,7 +942,7 @@ fn lookupPipelinedExprMonotype(self: *const Self, expr_idx: CIR.Expr.Idx) ?Pipel
     );
 }
 
-fn lookupPipelinedPatternMonotype(self: *const Self, pattern_idx: CIR.Pattern.Idx) ?Pipeline.ResolvedMonotype {
+fn lookupProgramPatternMonotype(self: *const Self, pattern_idx: CIR.Pattern.Idx) ?Pipeline.ResolvedMonotype {
     if (self.callable_pipeline.getContextPatternMonotype(
         self.currentSourceContext(),
         self.current_module_idx,
@@ -951,7 +951,7 @@ fn lookupPipelinedPatternMonotype(self: *const Self, pattern_idx: CIR.Pattern.Id
         return resolved;
     }
 
-    if (self.lookupPipelinedPatternCallableValue(pattern_idx)) |callable_value| {
+    if (self.lookupProgramPatternCallableValue(pattern_idx)) |callable_value| {
         return self.callable_pipeline.getCallableValueMonotype(callable_value);
     }
 
@@ -966,7 +966,7 @@ fn lookupPipelinedPatternMonotype(self: *const Self, pattern_idx: CIR.Pattern.Id
     return null;
 }
 
-fn lookupPipelinedPatternCallableValue(self: *const Self, pattern_idx: CIR.Pattern.Idx) ?Pipeline.CallableValue {
+fn lookupProgramPatternCallableValue(self: *const Self, pattern_idx: CIR.Pattern.Idx) ?Pipeline.CallableValue {
     switch (self.currentSourceContext()) {
         .callable_inst => |callable_inst_context| {
             const callable_inst_id: Pipeline.CallableInstId = @enumFromInt(@intFromEnum(callable_inst_context));
@@ -983,7 +983,7 @@ fn lookupPipelinedPatternCallableValue(self: *const Self, pattern_idx: CIR.Patte
     }
 }
 
-fn lookupPipelinedExprCallableValue(self: *const Self, expr_idx: CIR.Expr.Idx) ?Pipeline.CallableValue {
+fn lookupProgramExprCallableValue(self: *const Self, expr_idx: CIR.Expr.Idx) ?Pipeline.CallableValue {
     return self.callable_pipeline.getExprCallableValue(
         self.currentSourceContext(),
         self.current_module_idx,
@@ -991,7 +991,7 @@ fn lookupPipelinedExprCallableValue(self: *const Self, expr_idx: CIR.Expr.Idx) ?
     );
 }
 
-fn lookupPipelinedLookupResolution(
+fn lookupProgramExprLookupResolution(
     self: *const Self,
     expr_idx: CIR.Expr.Idx,
 ) ?Pipeline.LookupResolution {
@@ -1033,7 +1033,7 @@ fn exactCallableInstIfCallableValueDirect(
     };
 }
 
-fn lookupPipelinedExprCallDispatch(self: *const Self, expr_idx: CIR.Expr.Idx) ?Pipeline.CallDispatch {
+fn lookupProgramExprCallDispatch(self: *const Self, expr_idx: CIR.Expr.Idx) ?Pipeline.CallDispatch {
     return self.callable_pipeline.getExprCallDispatch(
         self.currentSourceContext(),
         self.current_module_idx,
@@ -1072,7 +1072,7 @@ fn exactCallableInstIfCallDispatchDirect(
     };
 }
 
-fn lookupPipelinedDispatchTarget(
+fn lookupProgramExprDispatchTarget(
     self: *const Self,
     expr_idx: CIR.Expr.Idx,
 ) ?Pipeline.DispatchExprTarget {
@@ -2006,7 +2006,7 @@ fn seedExactCallablePatternLocal(
     }
 
     const callable_inst_id = requireExactCallableInstFromCallableValue(
-        self.lookupPipelinedPatternCallableValue(pattern_idx),
+        self.lookupProgramPatternCallableValue(pattern_idx),
         "function-valued pattern local {d} for pattern {d} lacked an exact callable specialization in context callable_inst={d}",
         .{
             @intFromEnum(local),
@@ -2708,7 +2708,7 @@ fn lowerLookupLocalIntoWithExactCallableInst(
     next: MIR.CFStmtId,
     exact_callable_inst_override: ?Pipeline.CallableInstId,
 ) Allocator.Error!MIR.CFStmtId {
-    const lookup_resolution = self.lookupPipelinedLookupResolution(expr_idx);
+    const lookup_resolution = self.lookupProgramExprLookupResolution(expr_idx);
     const skipped_callable_backed = self.isSkippedCallableBackedBindingPattern(
         self.current_module_idx,
         lookup.pattern_idx,
@@ -2745,7 +2745,7 @@ fn lowerLookupLocalIntoWithExactCallableInst(
             const target_monotype = self.store.getLocal(target).monotype;
             const exact_callable_inst = if (self.store.monotype_store.getMonotype(target_monotype) == .func)
                 exact_callable_inst_override orelse requireExactCallableInstFromCallableValue(
-                    self.lookupPipelinedExprCallableValue(expr_idx),
+                    self.lookupProgramExprCallableValue(expr_idx),
                     "local top-level def lookup expr {d} lacked an exact callable specialization",
                     .{@intFromEnum(expr_idx)},
                 )
@@ -2893,7 +2893,7 @@ fn lowerLookupExternalIntoWithExactCallableInst(
 ) Allocator.Error!MIR.CFStmtId {
     _ = module_env;
     _ = lookup;
-    const target_def = switch (self.lookupPipelinedLookupResolution(expr_idx) orelse std.debug.panic(
+    const target_def = switch (self.lookupProgramExprLookupResolution(expr_idx) orelse std.debug.panic(
         "statement-only MIR invariant violated: external lookup expr {d} had no specialized lookup resolution",
         .{@intFromEnum(expr_idx)},
     )) {
@@ -2911,7 +2911,7 @@ fn lowerLookupExternalIntoWithExactCallableInst(
     const target_monotype = self.store.getLocal(target).monotype;
     const exact_callable_inst = if (self.store.monotype_store.getMonotype(target_monotype) == .func)
         exact_callable_inst_override orelse requireExactCallableInstFromCallableValue(
-            self.lookupPipelinedExprCallableValue(expr_idx),
+            self.lookupProgramExprCallableValue(expr_idx),
             "external lookup expr {d} in module {d} targeting module {d} node {d} ('{s}') lacked an exact callable specialization (source_context={s} callable_inst={d} root_expr={d})",
             .{
                 @intFromEnum(expr_idx),
@@ -2951,7 +2951,7 @@ fn lowerLookupRequiredIntoWithExactCallableInst(
 ) Allocator.Error!MIR.CFStmtId {
     _ = module_env;
     _ = lookup;
-    const target_def = switch (self.lookupPipelinedLookupResolution(expr_idx) orelse std.debug.panic(
+    const target_def = switch (self.lookupProgramExprLookupResolution(expr_idx) orelse std.debug.panic(
         "statement-only MIR invariant violated: required lookup expr {d} had no specialized lookup resolution",
         .{@intFromEnum(expr_idx)},
     )) {
@@ -2970,7 +2970,7 @@ fn lowerLookupRequiredIntoWithExactCallableInst(
     const target_monotype = self.store.getLocal(target).monotype;
     const exact_callable_inst = if (self.store.monotype_store.getMonotype(target_monotype) == .func)
         exact_callable_inst_override orelse requireExactCallableInstFromCallableValue(
-            self.lookupPipelinedExprCallableValue(expr_idx),
+            self.lookupProgramExprCallableValue(expr_idx),
             "required lookup expr {d} lacked an exact callable specialization",
             .{@intFromEnum(expr_idx)},
         )
@@ -4092,7 +4092,7 @@ fn lowerResolvedDispatchTargetCallInto(
     };
     const target_monotype = self.store.getLocal(target).monotype;
     const exact_result_callable_inst_id = if (self.store.monotype_store.getMonotype(target_monotype) == .func)
-        exactCallableInstIfCallableValueDirect(self.lookupPipelinedExprCallableValue(result_expr_idx))
+        exactCallableInstIfCallableValueDirect(self.lookupProgramExprCallableValue(result_expr_idx))
     else
         null;
     if (exact_result_callable_inst_id) |callable_inst_id| {
@@ -4173,7 +4173,7 @@ fn lowerCallInto(
     const top = self.scratch_local_ids.top();
     defer self.scratch_local_ids.clearFrom(top);
 
-    const exact_callable_inst_id = exactCallableInstIfCallDispatchDirect(self.lookupPipelinedExprCallDispatch(call_expr_idx));
+    const exact_callable_inst_id = exactCallableInstIfCallDispatchDirect(self.lookupProgramExprCallDispatch(call_expr_idx));
     const callee_monotype = if (exact_callable_inst_id) |callable_inst_id| blk: {
         const callable_inst = self.callable_pipeline.lambdamono.getCallableInst(callable_inst_id);
         break :blk try self.importMonotypeFromStore(
@@ -4222,7 +4222,7 @@ fn lowerCallInto(
 
     const target_monotype = self.store.getLocal(target).monotype;
     const exact_result_callable_inst_id = if (self.store.monotype_store.getMonotype(target_monotype) == .func)
-        exactCallableInstIfCallableValueDirect(self.lookupPipelinedExprCallableValue(call_expr_idx))
+        exactCallableInstIfCallableValueDirect(self.lookupProgramExprCallableValue(call_expr_idx))
     else
         null;
     if (exact_result_callable_inst_id) |callable_inst_id| {
@@ -4495,7 +4495,7 @@ fn lowerDotAccessInto(
             };
         }
 
-        if (self.lookupPipelinedDispatchTarget(expr_idx)) |dispatch_target| {
+        if (self.lookupProgramExprDispatchTarget(expr_idx)) |dispatch_target| {
             return self.lowerResolvedDispatchTargetCallInto(
                 dispatch_target,
                 expr_idx,
@@ -4528,7 +4528,7 @@ fn lowerDotAccessInto(
     const receiver_local = try self.freshSyntheticLocal(receiver_mono, false);
     const target_monotype = self.store.getLocal(target).monotype;
     if (self.store.monotype_store.getMonotype(target_monotype) == .func) {
-        if (exactCallableInstIfCallableValueDirect(self.lookupPipelinedExprCallableValue(expr_idx))) |callable_inst_id| {
+        if (exactCallableInstIfCallableValueDirect(self.lookupProgramExprCallableValue(expr_idx))) |callable_inst_id| {
             try self.bindExactCallableLocal(target, callable_inst_id);
         } else {
             std.debug.panic(
@@ -4572,7 +4572,7 @@ fn lowerTupleAccessInto(
     const tuple_local = try self.freshSyntheticLocal(tuple_mono, false);
     const target_monotype = self.store.getLocal(target).monotype;
     if (self.store.monotype_store.getMonotype(target_monotype) == .func) {
-        if (exactCallableInstIfCallableValueDirect(self.lookupPipelinedExprCallableValue(expr_idx))) |callable_inst_id| {
+        if (exactCallableInstIfCallableValueDirect(self.lookupProgramExprCallableValue(expr_idx))) |callable_inst_id| {
             try self.bindExactCallableLocal(target, callable_inst_id);
         } else {
             std.debug.panic(
@@ -6033,7 +6033,7 @@ fn debugAssertNoUnitPrimPatternBinding(
     };
     const call_func_source_expr: u32 = switch (expr) {
         .e_call => |call_expr| blk: {
-            const resolution = self.lookupPipelinedLookupResolution(call_expr.func) orelse break :blk std.math.maxInt(u32);
+            const resolution = self.lookupProgramExprLookupResolution(call_expr.func) orelse break :blk std.math.maxInt(u32);
             break :blk switch (resolution) {
                 .expr => |source_expr_id| @intFromEnum(self.callable_pipeline.getProgramExpr(source_expr_id).source_expr),
                 .def => std.math.maxInt(u32),
@@ -6041,9 +6041,9 @@ fn debugAssertNoUnitPrimPatternBinding(
         },
         else => std.math.maxInt(u32),
     };
-    const has_pipelined_expr_mono = self.lookupPipelinedExprMonotype(expr_idx) != null;
+    const has_program_expr_mono = self.lookupProgramExprMonotype(expr_idx) != null;
     const maybe_callsite_inst = switch (expr) {
-        .e_call => exactCallableInstIfCallDispatchDirect(self.lookupPipelinedExprCallDispatch(expr_idx)),
+        .e_call => exactCallableInstIfCallDispatchDirect(self.lookupProgramExprCallDispatch(expr_idx)),
         else => null,
     };
     const callsite_template_expr: u32 = if (maybe_callsite_inst) |callsite_inst|
@@ -6083,7 +6083,7 @@ fn debugAssertNoUnitPrimPatternBinding(
     } else "none";
 
     std.debug.panic(
-        "predeclareTrivialBlockStmtPatterns({s}): unit source monotype would bind builtin prim pattern module={d} stmt={d} pattern={d} expr={d} resolved_root={d} expr_tag={s} call_func_expr={d} call_func_tag={s} call_func_pattern={d} call_func_source_expr={d} low_level={s} has_pipelined_expr_mono={} callsite_inst={d} callsite_template_expr={d} callsite_template_body_expr={d} callsite_template_body_tag={s} callsite_callable_kind={s} callsite_fn_monotype={s} callsite_ret_monotype={s} callable_inst={d} root_source_expr={d}",
+        "predeclareTrivialBlockStmtPatterns({s}): unit source monotype would bind builtin prim pattern module={d} stmt={d} pattern={d} expr={d} resolved_root={d} expr_tag={s} call_func_expr={d} call_func_tag={s} call_func_pattern={d} call_func_source_expr={d} low_level={s} has_program_expr_mono={} callsite_inst={d} callsite_template_expr={d} callsite_template_body_expr={d} callsite_template_body_tag={s} callsite_callable_kind={s} callsite_fn_monotype={s} callsite_ret_monotype={s} callable_inst={d} root_source_expr={d}",
         .{
             stmt_kind,
             self.current_module_idx,
@@ -6097,7 +6097,7 @@ fn debugAssertNoUnitPrimPatternBinding(
             call_func_pattern,
             call_func_source_expr,
             if (maybe_low_level) |op| @tagName(op) else "none",
-            has_pipelined_expr_mono,
+            has_program_expr_mono,
             if (maybe_callsite_inst) |callsite_inst| @intFromEnum(callsite_inst) else std.math.maxInt(u32),
             callsite_template_expr,
             callsite_template_body_expr,
@@ -7312,7 +7312,7 @@ fn lowerCirExprInto(
         .e_lambda => |lambda| blk: {
             _ = lambda;
             const resolved_callable_inst_id = requireExactCallableInstFromCallableValue(
-                self.lookupPipelinedExprCallableValue(expr_idx),
+                self.lookupProgramExprCallableValue(expr_idx),
                 "lambda expr {d} lacked an exact callable specialization in context callable_inst={d} root_source_expr={d}",
                 .{
                     @intFromEnum(expr_idx),
@@ -7328,7 +7328,7 @@ fn lowerCirExprInto(
         },
         .e_closure => |closure| blk: {
             const callable_inst_id = requireExactCallableInstFromCallableValue(
-                self.lookupPipelinedExprCallableValue(expr_idx),
+                self.lookupProgramExprCallableValue(expr_idx),
                 "closure expr {d} lacked an exact callable specialization in context callable_inst={d} root_source_expr={d}",
                 .{
                     @intFromEnum(expr_idx),
@@ -7448,7 +7448,7 @@ fn lowerCirExprInto(
             break :blk try self.lowerCirExprInto(return_expr.expr, value_local, ret_stmt);
         },
         .e_type_var_dispatch => |dispatch_expr| blk: {
-            const dispatch_target = self.lookupPipelinedDispatchTarget(expr_idx) orelse std.debug.panic(
+            const dispatch_target = self.lookupProgramExprDispatchTarget(expr_idx) orelse std.debug.panic(
                 "statement-only MIR invariant violated: missing resolved dispatch target for CIR expr {d} kind=e_type_var_dispatch module={d} method={s} callable_ctx={d} root_ctx={d}",
                 .{
                     @intFromEnum(expr_idx),
@@ -8069,7 +8069,7 @@ fn monotypesStructurallyEqualRec(
 
 /// Get the exact staged monotype for a CIR expression in the active source context.
 fn resolveMonotype(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!Monotype.Idx {
-    if (self.lookupPipelinedExprMonotype(expr_idx)) |mono| {
+    if (self.lookupProgramExprMonotype(expr_idx)) |mono| {
         return self.importMonotypeFromStore(
             &self.callable_pipeline.context_mono.monotype_store,
             mono.idx,
@@ -8241,7 +8241,7 @@ fn requirePatternMonotype(
     self: *Self,
     pattern_idx: CIR.Pattern.Idx,
 ) Allocator.Error!Monotype.Idx {
-    if (self.lookupPipelinedPatternMonotype(pattern_idx)) |resolved| {
+    if (self.lookupProgramPatternMonotype(pattern_idx)) |resolved| {
         return self.importMonotypeFromStore(
             &self.callable_pipeline.context_mono.monotype_store,
             resolved.idx,

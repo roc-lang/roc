@@ -234,13 +234,6 @@ pub const CallableParamBindingSpan = extern struct {
     }
 };
 
-pub const ExprSemantics = struct {
-    callable_value: ?CallableValue = null,
-    call_dispatch: ?CallDispatch = null,
-    dispatch_target: ?ContextMono.DispatchExprTarget = null,
-    lookup_resolution: ?LookupResolution = null,
-};
-
 pub const Expr = struct {
     source_context: SourceContext,
     module_idx: u32,
@@ -248,7 +241,10 @@ pub const Expr = struct {
     monotype: ContextMono.ResolvedMonotype,
     child_exprs: ExprIdSpan = .empty(),
     child_stmts: StmtIdSpan = .empty(),
-    semantics: ExprSemantics = .{},
+    callable_value: ?CallableValue = null,
+    call_dispatch: ?CallDispatch = null,
+    dispatch_target: ?ContextMono.DispatchExprTarget = null,
+    lookup_resolution: ?LookupResolution = null,
 };
 
 pub const Stmt = struct {
@@ -267,7 +263,7 @@ pub const Program = struct {
     callable_param_spec_entries: std.ArrayListUnmanaged(CallableParamSpecEntry),
     callable_param_projection_entries: std.ArrayListUnmanaged(CallableParamProjection),
     callable_member_sets: std.ArrayListUnmanaged(CallableMemberSet),
-    singleton_callable_member_set_ids_by_callable_inst: std.AutoHashMapUnmanaged(CallableInstId, CallableMemberSetId),
+    direct_callable_member_set_ids_by_callable_inst: std.AutoHashMapUnmanaged(CallableInstId, CallableMemberSetId),
     packed_callable_ids_by_member_set: std.AutoHashMapUnmanaged(CallableMemberSetId, PackedCallableId),
     dispatch_call_ids_by_member_set: std.AutoHashMapUnmanaged(CallableMemberSetId, DispatchCallId),
     callable_param_bindings: std.ArrayListUnmanaged(CallableParamBinding),
@@ -290,7 +286,7 @@ pub const Program = struct {
             .callable_param_spec_entries = .empty,
             .callable_param_projection_entries = .empty,
             .callable_member_sets = .empty,
-            .singleton_callable_member_set_ids_by_callable_inst = .empty,
+            .direct_callable_member_set_ids_by_callable_inst = .empty,
             .packed_callable_ids_by_member_set = .empty,
             .dispatch_call_ids_by_member_set = .empty,
             .callable_param_bindings = .empty,
@@ -314,7 +310,7 @@ pub const Program = struct {
         self.callable_param_spec_entries.deinit(allocator);
         self.callable_param_projection_entries.deinit(allocator);
         self.callable_member_sets.deinit(allocator);
-        self.singleton_callable_member_set_ids_by_callable_inst.deinit(allocator);
+        self.direct_callable_member_set_ids_by_callable_inst.deinit(allocator);
         self.packed_callable_ids_by_member_set.deinit(allocator);
         self.dispatch_call_ids_by_member_set.deinit(allocator);
         self.callable_param_bindings.deinit(allocator);
@@ -358,8 +354,8 @@ pub const Program = struct {
         return self.callable_member_entries.items[member_set.members.start..][0..member_set.members.len];
     }
 
-    pub fn getSingletonCallableMemberSetMembers(self: *const Program, callable_inst_id: CallableInstId) []const CallableInstId {
-        const callable_member_set_id = self.singleton_callable_member_set_ids_by_callable_inst.get(callable_inst_id) orelse unreachable;
+    pub fn getDirectCallableMembers(self: *const Program, callable_inst_id: CallableInstId) []const CallableInstId {
+        const callable_member_set_id = self.direct_callable_member_set_ids_by_callable_inst.get(callable_inst_id) orelse unreachable;
         return self.getCallableMemberSetMembers(callable_member_set_id);
     }
 
@@ -385,26 +381,6 @@ pub const Program = struct {
 
     pub fn getExpr(self: *const Program, expr_id: ExprId) *const Expr {
         return &self.exprs.items[@intFromEnum(expr_id)];
-    }
-
-    pub fn getExprSemantics(
-        self: *const Program,
-        source_context: SourceContext,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-    ) ?*const ExprSemantics {
-        const expr_id = self.getExprId(source_context, module_idx, expr_idx) orelse return null;
-        return &self.exprs.items[@intFromEnum(expr_id)].semantics;
-    }
-
-    pub fn getExprSemanticsPtr(
-        self: *Program,
-        source_context: SourceContext,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-    ) ?*ExprSemantics {
-        const expr_id = self.getExprId(source_context, module_idx, expr_idx) orelse return null;
-        return &self.exprs.items[@intFromEnum(expr_id)].semantics;
     }
 
     pub fn getExprId(
