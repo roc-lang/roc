@@ -335,7 +335,6 @@ pub const WasmEvaluator = struct {
             return error.RuntimeError;
         };
 
-
         return WasmCodeResult{
             .wasm_bytes = gen_result.wasm_bytes,
             .result_layout = gen_result.result_layout,

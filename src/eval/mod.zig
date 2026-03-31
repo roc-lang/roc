@@ -48,6 +48,7 @@ pub const LlvmEvaluator = @import("llvm_evaluator.zig").LlvmEvaluator;
 /// WebAssembly-based evaluator for wasm code generation
 const wasm_evaluator_mod = @import("wasm_evaluator.zig");
 pub const WasmEvaluator = wasm_evaluator_mod.WasmEvaluator;
+pub const WasmCodeResult = wasm_evaluator_mod.WasmCodeResult;
 
 test "eval tests" {
     std.testing.refAllDecls(@This());

@@ -2860,9 +2860,10 @@ pub fn build(b: *std.Build) void {
             module_test.test_step.root_module.addImport("bytebox", bytebox.module("bytebox"));
         }
 
-        // Add bytebox to eval tests for wasm backend testing
+        // Add bytebox and wasm32 builtins to eval tests for wasm backend testing
         if (std.mem.eql(u8, module_test.test_step.name, "eval")) {
             module_test.test_step.root_module.addImport("bytebox", bytebox.module("bytebox"));
+            module_test.test_step.root_module.addImport("wasm32_builtins", wasm32_builtins_module);
             const compile_build_module = b.createModule(.{
                 .root_source_file = b.path("src/compile/compile_build.zig"),
             });

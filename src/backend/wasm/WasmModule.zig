@@ -2461,6 +2461,7 @@ pub fn readPaddedU32(buffer: []const u8, offset: u32) u32 {
     return result;
 }
 
+/// Overwrite a 5-byte padded LEB128 u32 at the given offset in the buffer.
 pub fn overwritePaddedU32(buffer: []u8, offset: u32, value: u32) void {
     var x = value;
     const off: usize = @intCast(offset);

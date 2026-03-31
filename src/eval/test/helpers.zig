@@ -7490,7 +7490,7 @@ const ExportKind = WasmModule.ExportKind;
 /// Generate wasm bytes for a source expression and parse the module structure.
 fn generateAndParseWasmModule(source: []const u8) !struct {
     module: WasmModule,
-    wasm_result: eval_mod.WasmEvaluator.WasmCodeResult,
+    wasm_result: eval_mod.WasmCodeResult,
     wasm_eval: eval_mod.WasmEvaluator,
     parse_resources: ParsedExprResources,
 
