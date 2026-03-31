@@ -2611,13 +2611,15 @@ pub const Pass = struct {
         if (callable_inst_ids.items.len == 1) {
             const callable_inst_id = callable_inst_ids.items[0];
             const callable_inst = result.getCallableInst(callable_inst_id);
-            try self.setCallableParamDirectValue(
-                result,
-                self.currentSourceContext(),
-                module_idx,
-                pattern_idx,
-                callable_inst_id,
-            );
+            if (sourceContextHasCallableInst(self.currentSourceContext())) {
+                try self.setCallableParamDirectValue(
+                    result,
+                    self.currentSourceContext(),
+                    module_idx,
+                    pattern_idx,
+                    callable_inst_id,
+                );
+            }
             try self.setExprDirectCallable(
                 result,
                 self.currentSourceContext(),
@@ -2647,13 +2649,15 @@ pub const Pass = struct {
             expr_idx,
             callable_inst_ids.items,
         );
-        try self.setCallableParamAlternatives(
-            result,
-            self.currentSourceContext(),
-            module_idx,
-            pattern_idx,
-            callable_inst_ids.items,
-        );
+        if (sourceContextHasCallableInst(self.currentSourceContext())) {
+            try self.setCallableParamAlternatives(
+                result,
+                self.currentSourceContext(),
+                module_idx,
+                pattern_idx,
+                callable_inst_ids.items,
+            );
+        }
     }
 
     fn scanCirExpr(self: *Pass, result: *Result, module_idx: u32, expr_idx: CIR.Expr.Idx) Allocator.Error!void {
@@ -2769,7 +2773,7 @@ pub const Pass = struct {
         }
 
         if (self.active_bindings != null or force_rescan_children) {
-            try self.scanCirExprChildren(result, module_idx, expr_idx, expr);
+            try self.scanCirExprChildren(result, module_idx, expr_idx, expr, resolve_direct_calls);
             try self.completeCurrentExprMonotype(result, module_idx, expr_idx);
             return;
         }
@@ -2778,7 +2782,7 @@ pub const Pass = struct {
         if (self.visited_exprs.contains(visit_key)) return;
         try self.visited_exprs.put(self.allocator, visit_key, {});
 
-        try self.scanCirExprChildren(result, module_idx, expr_idx, expr);
+        try self.scanCirExprChildren(result, module_idx, expr_idx, expr, resolve_direct_calls);
 
         if (materialize_if_callable and callableKind(expr) == null) {
             if (self.getValueExprCallableInstInCurrentContext(result, module_idx, expr_idx) == null and
@@ -3336,7 +3340,14 @@ pub const Pass = struct {
         );
     }
 
-    fn scanCirExprChildren(self: *Pass, result: *Result, module_idx: u32, expr_idx: CIR.Expr.Idx, expr: CIR.Expr) Allocator.Error!void {
+    fn scanCirExprChildren(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+        expr: CIR.Expr,
+        resolve_direct_calls: bool,
+    ) Allocator.Error!void {
         const module_env = self.all_module_envs[module_idx];
 
         switch (expr) {
@@ -4202,12 +4213,15 @@ pub const Pass = struct {
         const arg_exprs = module_env.store.sliceExpr(call_expr.args);
         try self.prepareCallableArgsForCallableInst(result, module_idx, arg_exprs, callable_inst_id);
         try self.scanCallableInst(result, callable_inst_id);
-        try self.recordCallResultCallableInstsFromCallableInst(
+        var visiting: std.AutoHashMapUnmanaged(ContextExprVisitKey, void) = .empty;
+        defer visiting.deinit(self.allocator);
+        try self.recordCallResultCallableAlternativesFromCallee(
             result,
             self.currentSourceContext(),
             module_idx,
             call_expr_idx,
             callable_inst_id,
+            &visiting,
         );
         try self.ensureCallableArgCallableInstsScanned(result, module_idx, call_expr.args);
         try self.recordCurrentExprMonotype(
@@ -6298,22 +6312,24 @@ pub const Pass = struct {
         defer callable_inst_ids.deinit(self.allocator);
         switch (module_env.store.getExpr(expr_idx)) {
             .e_lookup_local => |lookup| {
-                if (result.getLookupResolution(source_context, module_idx, expr_idx)) |resolution| switch (resolution) {
-                    .expr => |source_expr_id| {
-                        const source_expr = result.getProgramExpr(source_expr_id);
-                        try self.copyExprCallableAlternatives(
-                            result,
-                            source_context,
-                            module_idx,
-                            expr_idx,
-                            lookup.pattern_idx,
-                            source_expr.source_context,
-                            source_expr.module_idx,
-                            source_expr.source_expr,
-                            visiting,
-                        );
-                    },
-                    .def => {},
+                if (result.getLookupResolution(source_context, module_idx, expr_idx)) |resolution| {
+                    switch (resolution) {
+                        .expr => |source_expr_id| {
+                            const source_expr = result.getProgramExpr(source_expr_id);
+                            try self.copyExprCallableAlternatives(
+                                result,
+                                source_context,
+                                module_idx,
+                                expr_idx,
+                                lookup.pattern_idx,
+                                source_expr.source_context,
+                                source_expr.module_idx,
+                                source_expr.source_expr,
+                                visiting,
+                            );
+                        },
+                        .def => {},
+                    }
                 }
             },
             .e_if => |if_expr| {

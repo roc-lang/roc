@@ -810,6 +810,7 @@ pub const DevEvaluator = struct {
         const root_proc_id = mir_to_lir.lower(root_const_id) catch {
             return error.RuntimeError;
         };
+        try mir_to_lir.flush();
         // Run RC insertion over the full lowered proc graph before codegen.
         var rc_pass = lir.RcInsert.RcInsertPass.init(self.allocator, &lir_store, layout_store_ptr) catch return error.OutOfMemory;
         defer rc_pass.deinit();
