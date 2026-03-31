@@ -194,7 +194,7 @@ pub const WasmEvaluator = struct {
     /// subsequent addFunction/setFunctionBody calls from the codegen append
     /// correctly and encode() produces a valid module.
     fn prepareModuleWithBuiltins(self: *WasmEvaluator) Error!struct { module: WasmModule, syms: WasmModule.BuiltinSymbols } {
-        var builtins_module = WasmModule.preload(self.allocator, wasm32_builtins.bytes, true) catch
+        var builtins_module = WasmModule.preload(self.allocator, wasm32_builtins.bytes, false) catch
             return error.RuntimeError;
 
         var app_module = WasmModule.init(self.allocator);
@@ -334,6 +334,15 @@ pub const WasmEvaluator = struct {
         const gen_result = codegen.generateModule(final_expr_id, result_layout, entrypoint_name) catch {
             return error.RuntimeError;
         };
+
+        // Debug: dump wasm bytes to file for inspection
+        if (gen_result.wasm_bytes.len > 0) {
+            const dump_file = std.fs.cwd().createFile("/tmp/roc_debug.wasm", .{}) catch null;
+            if (dump_file) |f| {
+                _ = f.write(gen_result.wasm_bytes) catch {};
+                f.close();
+            }
+        }
 
         return WasmCodeResult{
             .wasm_bytes = gen_result.wasm_bytes,

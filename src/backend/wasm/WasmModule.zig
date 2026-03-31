@@ -4930,3 +4930,67 @@ test "encode — reloc.CODE section NOT present in output" {
         pos = section_end;
     }
 }
+
+test "preload + merge + encode roundtrip with real builtins" {
+    const allocator = std.testing.allocator;
+
+    // Load the pre-built wasm32 builtins object
+    const wasm32_builtins = @import("wasm32_builtins");
+    var builtins_module = try preload(allocator, wasm32_builtins.bytes, false);
+    defer builtins_module.deinit();
+
+    // Create an app module with standard RocOps imports
+    var app_module = Self.init(allocator);
+
+    const roc_ops_type_idx = try app_module.addFuncType(&.{ .i32, .i32 }, &.{});
+    for ([_][]const u8{ "roc_alloc", "roc_dealloc", "roc_realloc", "roc_dbg", "roc_expect_failed", "roc_crashed" }) |name| {
+        _ = try app_module.addImport("env", name, roc_ops_type_idx);
+    }
+
+    // Merge builtins into app module
+    _ = try app_module.mergeModule(&builtins_module);
+
+    // Populate builtin symbols
+    _ = try BuiltinSymbols.populate(&app_module);
+
+    // Resolve relocations and materialize function bodies
+    app_module.resolveCodeRelocations();
+    try app_module.materializeFuncBodies();
+
+    // Enable memory + stack pointer + table (as generateModule does)
+    app_module.enableMemory(2);
+    app_module.enableStackPointer(131072);
+    app_module.enableTable();
+    app_module.addExport("memory", .memory, 0) catch unreachable;
+
+    // Add RocCall function: (i32, i32, i32) -> void
+    const roc_call_type_idx = try app_module.addFuncType(&.{ .i32, .i32, .i32 }, &.{});
+    const roc_call_fn_idx = try app_module.addFunction(roc_call_type_idx);
+    const roc_call_body = [_]u8{ 0x00, Op.end };
+    app_module.setFunctionBody(roc_call_fn_idx, &roc_call_body);
+    app_module.addExport("roc__main_for_host_1_exposed", .func, roc_call_fn_idx) catch unreachable;
+
+    // Add eval wrapper: (i32) -> i32
+    const eval_type_idx = try app_module.addFuncType(&.{.i32}, &.{.i32});
+    const eval_fn_idx = try app_module.addFunction(eval_type_idx);
+    const eval_body = [_]u8{ 0x00, Op.i32_const, 42, Op.end };
+    app_module.setFunctionBody(eval_fn_idx, &eval_body);
+    app_module.addExport("main", .func, eval_fn_idx) catch unreachable;
+
+    // Encode the module
+    const encoded = try app_module.encode(allocator);
+    defer allocator.free(encoded);
+    app_module.deinit();
+
+    // Verify bytebox can decode it
+    const bytebox = @import("bytebox");
+    var arena_impl = std.heap.ArenaAllocator.init(allocator);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var module_def = try bytebox.createModuleDefinition(arena, .{});
+    module_def.decode(encoded) catch |err| {
+        std.debug.print("bytebox decode failed: {}\n", .{err});
+        return err;
+    };
+}

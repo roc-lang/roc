@@ -40,10 +40,19 @@ pub fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, ex
     defer arena_impl.deinit();
     const arena = arena_impl.allocator();
 
-    var module_def = bytebox.createModuleDefinition(arena, .{}) catch return error.WasmExecFailed;
-    module_def.decode(wasm_result.wasm_bytes) catch return error.WasmExecFailed;
+    var module_def = bytebox.createModuleDefinition(arena, .{}) catch |err| {
+        std.debug.print("wasm createModuleDefinition failed: {}\n", .{err});
+        return error.WasmExecFailed;
+    };
+    module_def.decode(wasm_result.wasm_bytes) catch |err| {
+        std.debug.print("wasm decode failed: {}\n", .{err});
+        return error.WasmExecFailed;
+    };
 
-    var module_instance = bytebox.createModuleInstance(.Stack, module_def, std.heap.page_allocator) catch return error.WasmExecFailed;
+    var module_instance = bytebox.createModuleInstance(.Stack, module_def, std.heap.page_allocator) catch |err| {
+        std.debug.print("wasm createModuleInstance failed: {}\n", .{err});
+        return error.WasmExecFailed;
+    };
     defer module_instance.destroy();
 
     if (wasm_result.has_imports) {
@@ -116,9 +125,15 @@ pub fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, ex
         env_imports.addHostFunction("roc_list_reverse", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostListReverse, null) catch return error.WasmExecFailed;
 
         const imports = [_]bytebox.ModuleImportPackage{env_imports};
-        module_instance.instantiate(.{ .stack_size = 1024 * 256, .imports = &imports }) catch return error.WasmExecFailed;
+        module_instance.instantiate(.{ .stack_size = 1024 * 256, .imports = &imports }) catch |err| {
+            std.debug.print("wasm instantiate (with imports) failed: {}\n", .{err});
+            return error.WasmExecFailed;
+        };
     } else {
-        module_instance.instantiate(.{ .stack_size = 1024 * 256 }) catch return error.WasmExecFailed;
+        module_instance.instantiate(.{ .stack_size = 1024 * 256 }) catch |err| {
+            std.debug.print("wasm instantiate (no imports) failed: {}\n", .{err});
+            return error.WasmExecFailed;
+        };
     }
 
     const handle = module_instance.getFunctionHandle("main") catch return error.WasmExecFailed;
