@@ -128,10 +128,6 @@ pub const RootExprId = enum(u32) {
     _,
 };
 
-pub const ValuePlanId = enum(u32) {
-    _,
-};
-
 pub const ValuePlan = union(enum) {
     direct: CallableInstId,
     packed_fn: PackedFnId,
@@ -216,45 +212,32 @@ pub const CallableDef = struct {
     module_idx: u32,
     source_expr: CIR.Expr.Idx,
     fn_monotype: ContextMono.ResolvedMonotype,
-    param_value_plan_entries: CallableParamValuePlanSpan = .empty(),
+    param_bindings: CallableParamBindingSpan = .empty(),
     captures: CaptureFieldSpan = .empty(),
     source_region: Region,
 };
 
-pub const ValuePlanSpan = extern struct {
-    start: u32,
-    len: u16,
-
-    pub fn empty() ValuePlanSpan {
-        return .{ .start = 0, .len = 0 };
-    }
-
-    pub fn isEmpty(self: ValuePlanSpan) bool {
-        return self.len == 0;
-    }
-};
-
-pub const CallableParamValuePlanEntry = struct {
+pub const CallableParamBinding = struct {
     pattern_idx: CIR.Pattern.Idx,
-    plan: ValuePlanId,
+    value: ValuePlan,
 };
 
-pub const CallableParamValuePlanSpan = extern struct {
+pub const CallableParamBindingSpan = extern struct {
     start: u32,
     len: u16,
 
-    pub fn empty() CallableParamValuePlanSpan {
+    pub fn empty() CallableParamBindingSpan {
         return .{ .start = 0, .len = 0 };
     }
 
-    pub fn isEmpty(self: CallableParamValuePlanSpan) bool {
+    pub fn isEmpty(self: CallableParamBindingSpan) bool {
         return self.len == 0;
     }
 };
 
 pub const ExprSemantics = struct {
-    value_plan: ?ValuePlanId = null,
-    call_plan: ?CallPlan = null,
+    value: ?ValuePlan = null,
+    call: ?CallPlan = null,
     dispatch_target: ?ContextMono.DispatchExprTarget = null,
     lookup_resolution: ?LookupResolution = null,
 };
@@ -283,12 +266,10 @@ pub const Program = struct {
     callable_param_spec_entries: std.ArrayListUnmanaged(CallableParamSpecEntry),
     callable_param_projection_entries: std.ArrayListUnmanaged(CallableParamProjection),
     plan_member_sets: std.ArrayListUnmanaged(PlanMemberSet),
-    plan_member_set_entries: std.ArrayListUnmanaged(CallableInstId),
     singleton_plan_member_set_ids_by_callable_inst: std.AutoHashMapUnmanaged(CallableInstId, PlanMemberSetId),
     packed_fn_ids_by_member_set: std.AutoHashMapUnmanaged(PlanMemberSetId, PackedFnId),
     indirect_call_ids_by_member_set: std.AutoHashMapUnmanaged(PlanMemberSetId, IndirectCallId),
-    value_plan_entries: std.ArrayListUnmanaged(ValuePlan),
-    callable_param_value_plan_entries: std.ArrayListUnmanaged(CallableParamValuePlanEntry),
+    callable_param_bindings: std.ArrayListUnmanaged(CallableParamBinding),
     exprs: std.ArrayListUnmanaged(Expr),
     expr_ids_by_key: std.AutoHashMapUnmanaged(ContextExprKey, ExprId),
     expr_child_entries: std.ArrayListUnmanaged(ExprId),
@@ -308,12 +289,10 @@ pub const Program = struct {
             .callable_param_spec_entries = .empty,
             .callable_param_projection_entries = .empty,
             .plan_member_sets = .empty,
-            .plan_member_set_entries = .empty,
             .singleton_plan_member_set_ids_by_callable_inst = .empty,
             .packed_fn_ids_by_member_set = .empty,
             .indirect_call_ids_by_member_set = .empty,
-            .value_plan_entries = .empty,
-            .callable_param_value_plan_entries = .empty,
+            .callable_param_bindings = .empty,
             .exprs = .empty,
             .expr_ids_by_key = .empty,
             .expr_child_entries = .empty,
@@ -334,12 +313,10 @@ pub const Program = struct {
         self.callable_param_spec_entries.deinit(allocator);
         self.callable_param_projection_entries.deinit(allocator);
         self.plan_member_sets.deinit(allocator);
-        self.plan_member_set_entries.deinit(allocator);
         self.singleton_plan_member_set_ids_by_callable_inst.deinit(allocator);
         self.packed_fn_ids_by_member_set.deinit(allocator);
         self.indirect_call_ids_by_member_set.deinit(allocator);
-        self.value_plan_entries.deinit(allocator);
-        self.callable_param_value_plan_entries.deinit(allocator);
+        self.callable_param_bindings.deinit(allocator);
         self.exprs.deinit(allocator);
         self.expr_ids_by_key.deinit(allocator);
         self.expr_child_entries.deinit(allocator);
@@ -377,7 +354,7 @@ pub const Program = struct {
     pub fn getPlanMemberSetMembers(self: *const Program, member_set_id: PlanMemberSetId) []const CallableInstId {
         const member_set = self.plan_member_sets.items[@intFromEnum(member_set_id)];
         if (member_set.members.len == 0) return &.{};
-        return self.plan_member_set_entries.items[member_set.members.start..][0..member_set.members.len];
+        return self.plan_member_entries.items[member_set.members.start..][0..member_set.members.len];
     }
 
     pub fn getSingletonPlanMemberSetMembers(self: *const Program, callable_inst_id: CallableInstId) []const CallableInstId {
@@ -385,21 +362,12 @@ pub const Program = struct {
         return self.getPlanMemberSetMembers(member_set_id);
     }
 
-    pub fn getValuePlan(self: *const Program, value_plan_id: ValuePlanId) ValuePlan {
-        return self.value_plan_entries.items[@intFromEnum(value_plan_id)];
-    }
-
-    pub fn getValuePlanEntries(self: *const Program, span: ValuePlanSpan) []const ValuePlan {
-        if (span.len == 0) return &.{};
-        return self.value_plan_entries.items[span.start..][0..span.len];
-    }
-
-    pub fn getCallableParamValuePlanEntries(
+    pub fn getCallableParamBindings(
         self: *const Program,
-        span: CallableParamValuePlanSpan,
-    ) []const CallableParamValuePlanEntry {
+        span: CallableParamBindingSpan,
+    ) []const CallableParamBinding {
         if (span.len == 0) return &.{};
-        return self.callable_param_value_plan_entries.items[span.start..][0..span.len];
+        return self.callable_param_bindings.items[span.start..][0..span.len];
     }
 
     pub fn getExpr(self: *const Program, expr_id: ExprId) *const Expr {
@@ -444,22 +412,6 @@ pub const Program = struct {
         return self.root_exprs.items[@intFromEnum(root_id)].body_expr;
     }
 
-    pub fn valuePlanFromExprSemantics(self: *const Program, expr_id: ExprId) ?ValuePlan {
-        const value_plan_id = self.getExpr(expr_id).semantics.value_plan orelse return null;
-        return self.getValuePlan(value_plan_id);
-    }
-
-    pub fn callPlanFromExprSemantics(self: *const Program, expr_id: ExprId) ?CallPlan {
-        return self.getExpr(expr_id).semantics.call_plan;
-    }
-
-    pub fn dispatchTargetFromExprSemantics(self: *const Program, expr_id: ExprId) ?ContextMono.DispatchExprTarget {
-        return self.getExpr(expr_id).semantics.dispatch_target;
-    }
-
-    pub fn lookupResolutionFromExprSemantics(self: *const Program, expr_id: ExprId) ?LookupResolution {
-        return self.getExpr(expr_id).semantics.lookup_resolution;
-    }
 };
 
 pub fn getCallableDef(program: *const Program, callable_def_id: CallableDefId) *const CallableDef {

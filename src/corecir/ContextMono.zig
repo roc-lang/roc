@@ -100,7 +100,6 @@ pub const Result = struct {
     empty_subst_id: TypeSubstId,
     context_expr_monotypes: std.AutoHashMapUnmanaged(ContextExprKey, ResolvedMonotype),
     context_pattern_monotypes: std.AutoHashMapUnmanaged(ContextPatternKey, ResolvedMonotype),
-    resolved_typevar_monotypes: std.AutoHashMapUnmanaged(BoundTypeVarKey, ResolvedMonotype),
     type_scope_monotypes: std.AutoHashMapUnmanaged(BoundTypeVarKey, ResolvedMonotype),
     resolved_dispatch_targets: std.AutoHashMapUnmanaged(ContextExprKey, DispatchExprTarget),
 
@@ -112,7 +111,6 @@ pub const Result = struct {
             .empty_subst_id = @enumFromInt(0),
             .context_expr_monotypes = .empty,
             .context_pattern_monotypes = .empty,
-            .resolved_typevar_monotypes = .empty,
             .type_scope_monotypes = .empty,
             .resolved_dispatch_targets = .empty,
         };
@@ -126,7 +124,6 @@ pub const Result = struct {
         self.substs.deinit(allocator);
         self.context_expr_monotypes.deinit(allocator);
         self.context_pattern_monotypes.deinit(allocator);
-        self.resolved_typevar_monotypes.deinit(allocator);
         self.type_scope_monotypes.deinit(allocator);
         self.resolved_dispatch_targets.deinit(allocator);
     }
