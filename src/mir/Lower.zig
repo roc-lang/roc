@@ -1014,6 +1014,10 @@ fn requireExactCallableInstFromCallableValue(
         args,
     );
     return switch (callable_value) {
+        .none => std.debug.panic(
+            "statement-only MIR invariant violated: " ++ fmt,
+            args,
+        ),
         .direct => |callable_inst_id| callable_inst_id,
         .packed_fn => |packed_fn_id| std.debug.panic(
             "statement-only MIR TODO: value lowering required direct callable specialization but encountered packed fn {d}",
@@ -1027,6 +1031,7 @@ fn exactCallableInstIfCallableValueDirect(
 ) ?Pipeline.CallableInstId {
     const callable_value = maybe_callable_value orelse return null;
     return switch (callable_value) {
+        .none => null,
         .direct => |callable_inst_id| callable_inst_id,
         .packed_fn => |packed_fn_id| std.debug.panic(
             "statement-only MIR TODO: exact callable expected but encountered packed fn {d}",
@@ -1053,6 +1058,10 @@ fn requireExactCallableInstFromCallSite(
         args,
     );
     return switch (call_site) {
+        .none => std.debug.panic(
+            "statement-only MIR invariant violated: " ++ fmt,
+            args,
+        ),
         .direct => |callable_inst_id| callable_inst_id,
         .indirect_call => |indirect_call_id| std.debug.panic(
             "statement-only MIR TODO: direct call lowering required exact callable but encountered indirect call {d}",
@@ -1066,6 +1075,7 @@ fn exactCallableInstIfCallSiteDirect(
 ) ?Pipeline.CallableInstId {
     const call_site = maybe_call_site orelse return null;
     return switch (call_site) {
+        .none => null,
         .direct => |callable_inst_id| callable_inst_id,
         .indirect_call => |indirect_call_id| std.debug.panic(
             "statement-only MIR TODO: exact call lowering expected direct call but encountered indirect call {d}",
@@ -2850,15 +2860,19 @@ fn planClosureEntryCaptureLocals(
             try entry_bound_locals.add(capture_local);
         }
 
-        if (capture_field.exact_callable_inst) |exact_callable_inst_id| {
-            try self.bindExactCallableLocal(capture_local, exact_callable_inst_id);
+        switch (capture_field.callable_value) {
+            .none => {},
+            .direct => |exact_callable_inst_id| try self.bindExactCallableLocal(capture_local, exact_callable_inst_id),
         }
 
         const planned_capture = PlannedCaptureLocal{
             .pattern_idx = capture_field.pattern_idx,
             .local = capture_local,
             .local_monotype = capture_monotype,
-            .exact_callable_inst_id = capture_field.exact_callable_inst,
+            .exact_callable_inst_id = switch (capture_field.callable_value) {
+                .none => null,
+                .direct => |callable_inst_id| callable_inst_id,
+            },
             .storage = capture_field.storage,
         };
 
@@ -3300,8 +3314,9 @@ fn appendCaptureMaterialization(
         },
         .expr => |source_expr_ref| blk: {
             const local = try self.freshSyntheticLocal(capture_monotype, false);
-            if (capture_field.exact_callable_inst) |capture_callable_inst_id| {
-                try self.bindExactCallableLocal(local, capture_callable_inst_id);
+            switch (capture_field.callable_value) {
+                .none => {},
+                .direct => |capture_callable_inst_id| try self.bindExactCallableLocal(local, capture_callable_inst_id),
             }
             try out.append(self.allocator, .{ .expr = .{
                 .local = local,

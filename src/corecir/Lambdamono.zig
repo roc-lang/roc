@@ -94,18 +94,26 @@ pub const RootExprId = enum(u32) {
 };
 
 pub const CallableValue = union(enum) {
+    none,
     direct: CallableInstId,
     packed_fn: PackedFnId,
 };
 
 pub const CallSite = union(enum) {
+    none,
     direct: CallableInstId,
     indirect_call: IndirectCallId,
 };
 
 pub const LookupResolution = union(enum) {
+    none,
     expr: ExprRef,
     def: Lambdasolved.ExternalDefSource,
+};
+
+pub const DispatchTargetResolution = union(enum) {
+    none,
+    target: ContextMono.DispatchExprTarget,
 };
 
 pub const CallableMemberSpan = extern struct {
@@ -149,6 +157,11 @@ pub const CaptureStorage = union(enum) {
     recursive_member,
 };
 
+pub const CaptureCallableValue = union(enum) {
+    none,
+    direct: CallableInstId,
+};
+
 pub const CallableDefId = enum(u32) {
     _,
 };
@@ -156,7 +169,7 @@ pub const CallableDefId = enum(u32) {
 pub const CaptureField = struct {
     pattern_idx: CIR.Pattern.Idx,
     local_monotype: ContextMono.ResolvedMonotype,
-    exact_callable_inst: ?CallableInstId = null,
+    callable_value: CaptureCallableValue = .none,
     source: CaptureValueSource,
     storage: CaptureStorage,
 };
@@ -205,10 +218,10 @@ pub const Expr = struct {
     monotype: ContextMono.ResolvedMonotype,
     child_exprs: ExprIdSpan = .empty(),
     child_stmts: StmtIdSpan = .empty(),
-    callable_value: ?CallableValue = null,
-    call_site: ?CallSite = null,
-    dispatch_target: ?ContextMono.DispatchExprTarget = null,
-    lookup_resolution: ?LookupResolution = null,
+    callable_value: CallableValue = .none,
+    call_site: CallSite = .none,
+    dispatch_target: DispatchTargetResolution = .none,
+    lookup_resolution: LookupResolution = .none,
 };
 
 pub const Stmt = struct {

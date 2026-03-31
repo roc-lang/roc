@@ -346,7 +346,11 @@ pub const Result = struct {
         expr_idx: CIR.Expr.Idx,
     ) ?CallSite {
         const expr_id = self.lambdamono.getExprId(source_context, module_idx, expr_idx) orelse return null;
-        return self.lambdamono.getExpr(expr_id).call_site;
+        return switch (self.lambdamono.getExpr(expr_id).call_site) {
+            .none => null,
+            .direct => |callable_inst_id| .{ .direct = callable_inst_id },
+            .indirect_call => |indirect_call_id| .{ .indirect_call = indirect_call_id },
+        };
     }
 
     fn getExprCallSiteMembers(
@@ -382,6 +386,7 @@ pub const Result = struct {
     ) ?CallableInstId {
         const callable_value = self.getExprCallableValue(source_context, module_idx, expr_idx) orelse return null;
         return switch (callable_value) {
+            .none => null,
             .direct => |callable_inst_id| callable_inst_id,
             .packed_fn => null,
         };
@@ -394,7 +399,11 @@ pub const Result = struct {
         expr_idx: CIR.Expr.Idx,
     ) ?CallableValue {
         const expr_id = self.lambdamono.getExprId(source_context, module_idx, expr_idx) orelse return null;
-        return self.lambdamono.getExpr(expr_id).callable_value;
+        return switch (self.lambdamono.getExpr(expr_id).callable_value) {
+            .none => null,
+            .direct => |callable_inst_id| .{ .direct = callable_inst_id },
+            .packed_fn => |packed_fn_id| .{ .packed_fn = packed_fn_id },
+        };
     }
 
     fn getExprCallableMembers(
@@ -405,6 +414,7 @@ pub const Result = struct {
     ) ?[]const CallableInstId {
         const callable_value = self.getExprCallableValue(source_context, module_idx, expr_idx) orelse return null;
         return switch (callable_value) {
+            .none => null,
             .direct => |callable_inst_id| self.lambdamono.getDirectCallableMembers(callable_inst_id),
             .packed_fn => |packed_fn_id| self.getPackedFnMembers(packed_fn_id),
         };
@@ -417,7 +427,10 @@ pub const Result = struct {
         expr_idx: CIR.Expr.Idx,
     ) ?DispatchExprTarget {
         const expr_id = self.lambdamono.getExprId(source_context, module_idx, expr_idx) orelse return null;
-        return self.lambdamono.getExpr(expr_id).dispatch_target;
+        return switch (self.lambdamono.getExpr(expr_id).dispatch_target) {
+            .none => null,
+            .target => |dispatch_target| dispatch_target,
+        };
     }
 
     pub fn getLookupResolution(
@@ -427,7 +440,11 @@ pub const Result = struct {
         expr_idx: CIR.Expr.Idx,
     ) ?Lambdamono.LookupResolution {
         const expr_id = self.lambdamono.getExprId(source_context, module_idx, expr_idx) orelse return null;
-        return self.lambdamono.getExpr(expr_id).lookup_resolution;
+        return switch (self.lambdamono.getExpr(expr_id).lookup_resolution) {
+            .none => null,
+            .expr => |expr_ref| .{ .expr = expr_ref },
+            .def => |target_def| .{ .def = target_def },
+        };
     }
 
     pub fn getProgramExprForRef(self: *const Result, expr_ref: ExprRef) *const Lambdamono.Expr {
@@ -497,6 +514,10 @@ pub const Result = struct {
         callable_value: CallableValue,
     ) ResolvedMonotype {
         return switch (callable_value) {
+            .none => std.debug.panic(
+                "Pipeline invariant violated: requested monotype for lambdamono callable value '.none'",
+                .{},
+            ),
             .direct => |callable_inst_id| blk: {
                 const callable_inst = self.getCallableInst(callable_inst_id);
                 break :blk .{
@@ -1802,10 +1823,13 @@ pub const Pass = struct {
             .monotype = monotype,
             .child_exprs = child_expr_span,
             .child_stmts = child_stmt_span,
-            .callable_value = facts.callable_value,
-            .call_site = facts.call_site,
-            .dispatch_target = facts.dispatch_target,
-            .lookup_resolution = facts.lookup_resolution,
+            .callable_value = facts.callable_value orelse .none,
+            .call_site = facts.call_site orelse .none,
+            .dispatch_target = if (facts.dispatch_target) |dispatch_target|
+                .{ .target = dispatch_target }
+            else
+                .none,
+            .lookup_resolution = facts.lookup_resolution orelse .none,
         });
         try result.lambdamono.expr_ids_by_key.put(self.allocator, key, expr_id);
         return expr_id;
@@ -3132,7 +3156,10 @@ pub const Pass = struct {
     }
 
     fn captureFieldExactCallableInst(field: CaptureField) ?CallableInstId {
-        return field.exact_callable_inst;
+        return switch (field.callable_value) {
+            .none => null,
+            .direct => |callable_inst_id| callable_inst_id,
+        };
     }
 
     fn callableInstCaptureGraphReaches(
@@ -3330,17 +3357,11 @@ pub const Pass = struct {
         capture_value_source: CaptureValueSource,
     ) Allocator.Error!ResolvedMonotype {
         return switch (capture_value_source) {
-            .expr => |capture_expr_ref| result.getExprMonotype(
+            .expr => |capture_expr_ref| self.resolveExprMonotypeResolvedForSourceContext(
+                result,
                 capture_expr_ref.source_context,
                 capture_expr_ref.module_idx,
                 capture_expr_ref.expr_idx,
-            ) orelse std.debug.panic(
-                "Pipeline invariant violated: capture expr source context {s} module={d} expr={d} had no exact monotype",
-                .{
-                    @tagName(capture_expr_ref.source_context),
-                    capture_expr_ref.module_idx,
-                    @intFromEnum(capture_expr_ref.expr_idx),
-                },
             ),
             .lexical_pattern => |lexical| self.resolvePatternMonotypeInSourceContext(
                 result,
@@ -3445,7 +3466,10 @@ pub const Pass = struct {
             try capture_fields.append(self.allocator, .{
                 .pattern_idx = capture.pattern_idx,
                 .local_monotype = capture_mono,
-                .exact_callable_inst = exact_capture_callable_inst,
+                .callable_value = if (exact_capture_callable_inst) |callable_inst_id|
+                    .{ .direct = callable_inst_id }
+                else
+                    .none,
                 .source = capture_value_source,
                 .storage = capture_storage,
             });
@@ -8976,7 +9000,7 @@ pub const Pass = struct {
         scratches.module_env = module_env;
         scratches.module_idx = module_idx;
         scratches.all_module_envs = self.all_module_envs;
-        return result.context_mono.monotype_store.fromTypeVar(
+        return result.context_mono.monotype_store.fromTypeVarExact(
             self.allocator,
             store_types,
             var_,
@@ -9454,7 +9478,7 @@ pub const Pass = struct {
         scratches.module_idx = module_idx;
         scratches.all_module_envs = self.all_module_envs;
 
-        return result.context_mono.monotype_store.fromTypeVar(
+        return result.context_mono.monotype_store.fromTypeVarExact(
             self.allocator,
             store_types,
             var_,

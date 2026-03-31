@@ -32,6 +32,11 @@ fn hasNumeralConstraint(types_store: *const types.Store, constraints: StaticDisp
     return false;
 }
 
+const TypeVarResolutionPolicy = enum {
+    exact,
+    defaulted,
+};
+
 /// Index into the Store's monotypes array.
 /// Since MIR has a 1:1 expr-to-type mapping, an Expr.Idx can be directly
 /// reinterpreted as a Monotype.Idx.
@@ -456,6 +461,51 @@ pub const Store = struct {
         nominal_cycle_breakers: *std.AutoHashMap(types.Var, Idx),
         scratches: *Scratches,
     ) Allocator.Error!Idx {
+        return self.fromTypeVarWithPolicy(
+            allocator,
+            types_store,
+            type_var,
+            common_idents,
+            specializations,
+            nominal_cycle_breakers,
+            scratches,
+            .defaulted,
+        );
+    }
+
+    pub fn fromTypeVarExact(
+        self: *Store,
+        allocator: Allocator,
+        types_store: *const types.Store,
+        type_var: types.Var,
+        common_idents: CommonIdents,
+        specializations: *const std.AutoHashMap(types.Var, Idx),
+        nominal_cycle_breakers: *std.AutoHashMap(types.Var, Idx),
+        scratches: *Scratches,
+    ) Allocator.Error!Idx {
+        return self.fromTypeVarWithPolicy(
+            allocator,
+            types_store,
+            type_var,
+            common_idents,
+            specializations,
+            nominal_cycle_breakers,
+            scratches,
+            .exact,
+        );
+    }
+
+    fn fromTypeVarWithPolicy(
+        self: *Store,
+        allocator: Allocator,
+        types_store: *const types.Store,
+        type_var: types.Var,
+        common_idents: CommonIdents,
+        specializations: *const std.AutoHashMap(types.Var, Idx),
+        nominal_cycle_breakers: *std.AutoHashMap(types.Var, Idx),
+        scratches: *Scratches,
+        policy: TypeVarResolutionPolicy,
+    ) Allocator.Error!Idx {
         const resolved = types_store.resolveVar(type_var);
 
         // Check specialization bindings first (from bindTypeVarMonotypes).
@@ -469,6 +519,7 @@ pub const Store = struct {
                 if (flex.name) |name| {
                     if (lookupNamedSpecialization(scratches, name)) |specialized| return specialized;
                 }
+                if (policy == .exact) return .none;
                 if (hasNumeralConstraint(types_store, flex.constraints))
                     return self.primIdx(.dec);
                 // Strongest-form MIR is monomorphic, but unresolved non-numeric
@@ -479,6 +530,7 @@ pub const Store = struct {
             },
             .rigid => |rigid| {
                 if (lookupNamedSpecialization(scratches, rigid.name)) |specialized| return specialized;
+                if (policy == .exact) return .none;
                 if (hasNumeralConstraint(types_store, rigid.constraints))
                     return self.primIdx(.dec);
                 return self.unit_idx;
@@ -486,10 +538,10 @@ pub const Store = struct {
             .alias => |alias| {
                 // Aliases are transparent — follow the backing var
                 const backing_var = types_store.getAliasBackingVar(alias);
-                return try self.fromTypeVar(allocator, types_store, backing_var, common_idents, specializations, nominal_cycle_breakers, scratches);
+                return try self.fromTypeVarWithPolicy(allocator, types_store, backing_var, common_idents, specializations, nominal_cycle_breakers, scratches, policy);
             },
             .structure => |flat_type| {
-                return try self.fromFlatType(allocator, types_store, resolved.var_, flat_type, common_idents, specializations, nominal_cycle_breakers, scratches);
+                return try self.fromFlatType(allocator, types_store, resolved.var_, flat_type, common_idents, specializations, nominal_cycle_breakers, scratches, policy);
             },
             .err => std.debug.panic(
                 "Monotype invariant violated: nested error type reached strongest-form MIR monotype construction",
@@ -508,10 +560,11 @@ pub const Store = struct {
         specializations: *const std.AutoHashMap(types.Var, Idx),
         nominal_cycle_breakers: *std.AutoHashMap(types.Var, Idx),
         scratches: *Scratches,
+        policy: TypeVarResolutionPolicy,
     ) Allocator.Error!Idx {
         return switch (flat_type) {
             .nominal_type => |nominal| {
-                return try self.fromNominalType(allocator, types_store, var_, nominal, common_idents, specializations, nominal_cycle_breakers, scratches);
+                return try self.fromNominalType(allocator, types_store, var_, nominal, common_idents, specializations, nominal_cycle_breakers, scratches, policy);
             },
             .empty_record => self.unit_idx,
             .empty_tag_union => try self.addMonotype(allocator, .{ .tag_union = .{ .tags = TagSpan.empty() } }),
@@ -538,7 +591,8 @@ pub const Store = struct {
                         }
                         if (seen_name) continue;
 
-                        const field_type = try self.fromTypeVar(allocator, types_store, field_var, common_idents, specializations, nominal_cycle_breakers, scratches);
+                        const field_type = try self.fromTypeVarWithPolicy(allocator, types_store, field_var, common_idents, specializations, nominal_cycle_breakers, scratches, policy);
+                        if (field_type.isNone()) return .none;
                         try scratches.fields.append(.{ .name = scopedName(scratches, name), .type_idx = field_type });
                     }
 
@@ -570,7 +624,8 @@ pub const Store = struct {
                                         }
                                         if (seen_name) continue;
 
-                                        const field_type = try self.fromTypeVar(allocator, types_store, field_var, common_idents, specializations, nominal_cycle_breakers, scratches);
+                                        const field_type = try self.fromTypeVarWithPolicy(allocator, types_store, field_var, common_idents, specializations, nominal_cycle_breakers, scratches, policy);
+                                        if (field_type.isNone()) return .none;
                                         try scratches.fields.append(.{ .name = scopedName(scratches, name), .type_idx = field_type });
                                     }
                                     break :rows;
@@ -589,12 +644,16 @@ pub const Store = struct {
                             .flex => {
                                 if (findNamedRowExtensionMonotype(scratches, ext_var, types_store)) |specialized| {
                                     try self.appendSpecializedRecordFields(specialized, scratch_top, scratches);
+                                } else if (policy == .exact) {
+                                    return .none;
                                 }
                                 break :rows; // Open record — treat as closed with collected fields
                             },
                             .rigid => {
                                 if (findNamedRowExtensionMonotype(scratches, ext_var, types_store)) |specialized| {
                                     try self.appendSpecializedRecordFields(specialized, scratch_top, scratches);
+                                } else if (policy == .exact) {
+                                    return .none;
                                 }
                                 break :rows; // Rigid record — treat as closed with collected fields
                             },
@@ -620,6 +679,7 @@ pub const Store = struct {
                 return try self.addMonotype(allocator, .{ .record = .{ .fields = field_span } });
             },
             .record_unbound => |fields_range| {
+                if (policy == .exact) return .none;
                 // Extensible record — treat like a closed record with the known fields
                 const fields_slice = types_store.getRecordFieldsSlice(fields_range);
                 const names = fields_slice.items(.name);
@@ -629,7 +689,8 @@ pub const Store = struct {
                 defer scratches.fields.clearFrom(scratch_top);
 
                 for (names, vars) |name, field_var| {
-                    const field_type = try self.fromTypeVar(allocator, types_store, field_var, common_idents, specializations, nominal_cycle_breakers, scratches);
+                    const field_type = try self.fromTypeVarWithPolicy(allocator, types_store, field_var, common_idents, specializations, nominal_cycle_breakers, scratches, policy);
+                    if (field_type.isNone()) return .none;
                     try scratches.fields.append(.{ .name = scopedName(scratches, name), .type_idx = field_type });
                 }
 
@@ -642,7 +703,8 @@ pub const Store = struct {
                 defer scratches.idxs.clearFrom(scratch_top);
 
                 for (elem_vars) |elem_var| {
-                    const elem_type = try self.fromTypeVar(allocator, types_store, elem_var, common_idents, specializations, nominal_cycle_breakers, scratches);
+                    const elem_type = try self.fromTypeVarWithPolicy(allocator, types_store, elem_var, common_idents, specializations, nominal_cycle_breakers, scratches, policy);
+                    if (elem_type.isNone()) return .none;
                     try scratches.idxs.append(elem_type);
                 }
 
@@ -668,7 +730,8 @@ pub const Store = struct {
                         defer scratches.idxs.clearFrom(idxs_top);
 
                         for (arg_vars) |arg_var| {
-                            const payload_type = try self.fromTypeVar(allocator, types_store, arg_var, common_idents, specializations, nominal_cycle_breakers, scratches);
+                            const payload_type = try self.fromTypeVarWithPolicy(allocator, types_store, arg_var, common_idents, specializations, nominal_cycle_breakers, scratches, policy);
+                            if (payload_type.isNone()) return .none;
                             try scratches.idxs.append(payload_type);
                         }
 
@@ -704,12 +767,16 @@ pub const Store = struct {
                             .flex => {
                                 if (findNamedRowExtensionMonotype(scratches, ext_var, types_store)) |specialized| {
                                     try self.appendSpecializedTagUnionTags(specialized, scratches);
+                                } else if (policy == .exact) {
+                                    return .none;
                                 }
                                 break :rows; // Open tag union — treat as closed with collected tags
                             },
                             .rigid => {
                                 if (findNamedRowExtensionMonotype(scratches, ext_var, types_store)) |specialized| {
                                     try self.appendSpecializedTagUnionTags(specialized, scratches);
+                                } else if (policy == .exact) {
+                                    return .none;
                                 }
                                 break :rows; // Rigid tag union — treat as closed with collected tags
                             },
@@ -735,9 +802,9 @@ pub const Store = struct {
                 const tag_span = try self.addTags(allocator, collected_tags);
                 return try self.addMonotype(allocator, .{ .tag_union = .{ .tags = tag_span } });
             },
-            .fn_pure => |func| try self.fromFuncType(allocator, types_store, func, false, common_idents, specializations, nominal_cycle_breakers, scratches),
-            .fn_effectful => |func| try self.fromFuncType(allocator, types_store, func, true, common_idents, specializations, nominal_cycle_breakers, scratches),
-            .fn_unbound => |func| try self.fromFuncType(allocator, types_store, func, false, common_idents, specializations, nominal_cycle_breakers, scratches),
+            .fn_pure => |func| try self.fromFuncType(allocator, types_store, func, false, common_idents, specializations, nominal_cycle_breakers, scratches, policy),
+            .fn_effectful => |func| try self.fromFuncType(allocator, types_store, func, true, common_idents, specializations, nominal_cycle_breakers, scratches, policy),
+            .fn_unbound => |func| try self.fromFuncType(allocator, types_store, func, false, common_idents, specializations, nominal_cycle_breakers, scratches, policy),
         };
     }
 
@@ -751,18 +818,21 @@ pub const Store = struct {
         specializations: *const std.AutoHashMap(types.Var, Idx),
         nominal_cycle_breakers: *std.AutoHashMap(types.Var, Idx),
         scratches: *Scratches,
+        policy: TypeVarResolutionPolicy,
     ) Allocator.Error!Idx {
         const arg_vars = types_store.sliceVars(func.args);
         const scratch_top = scratches.idxs.top();
         defer scratches.idxs.clearFrom(scratch_top);
 
         for (arg_vars) |arg_var| {
-            const arg_type = try self.fromTypeVar(allocator, types_store, arg_var, common_idents, specializations, nominal_cycle_breakers, scratches);
+            const arg_type = try self.fromTypeVarWithPolicy(allocator, types_store, arg_var, common_idents, specializations, nominal_cycle_breakers, scratches, policy);
+            if (arg_type.isNone()) return .none;
             try scratches.idxs.append(arg_type);
         }
 
         const args_span = try self.addIdxSpan(allocator, scratches.idxs.sliceFromStart(scratch_top));
-        const ret = try self.fromTypeVar(allocator, types_store, func.ret, common_idents, specializations, nominal_cycle_breakers, scratches);
+        const ret = try self.fromTypeVarWithPolicy(allocator, types_store, func.ret, common_idents, specializations, nominal_cycle_breakers, scratches, policy);
+        if (ret.isNone()) return .none;
 
         return try self.addMonotype(allocator, .{ .func = .{
             .args = args_span,
@@ -781,6 +851,7 @@ pub const Store = struct {
         specializations: *const std.AutoHashMap(types.Var, Idx),
         nominal_cycle_breakers: *std.AutoHashMap(types.Var, Idx),
         scratches: *Scratches,
+        policy: TypeVarResolutionPolicy,
     ) Allocator.Error!Idx {
         const ident = nominal.ident.ident_idx;
         const origin = nominal.origin_module;
@@ -800,7 +871,8 @@ pub const Store = struct {
             if (ident.eql(common_idents.list)) {
                 const type_args = types_store.sliceNominalArgs(nominal);
                 if (type_args.len > 0) {
-                    const elem_type = try self.fromTypeVar(allocator, types_store, type_args[0], common_idents, specializations, nominal_cycle_breakers, scratches);
+                    const elem_type = try self.fromTypeVarWithPolicy(allocator, types_store, type_args[0], common_idents, specializations, nominal_cycle_breakers, scratches, policy);
+                    if (elem_type.isNone()) return .none;
                     return try self.addMonotype(allocator, .{ .list = .{ .elem = elem_type } });
                 }
                 std.debug.panic(
@@ -813,7 +885,8 @@ pub const Store = struct {
             if (ident.eql(common_idents.box)) {
                 const type_args = types_store.sliceNominalArgs(nominal);
                 if (type_args.len > 0) {
-                    const inner_type = try self.fromTypeVar(allocator, types_store, type_args[0], common_idents, specializations, nominal_cycle_breakers, scratches);
+                    const inner_type = try self.fromTypeVarWithPolicy(allocator, types_store, type_args[0], common_idents, specializations, nominal_cycle_breakers, scratches, policy);
+                    if (inner_type.isNone()) return .none;
                     return try self.addMonotype(allocator, .{ .box = .{ .inner = inner_type } });
                 }
                 std.debug.panic(
@@ -869,11 +942,13 @@ pub const Store = struct {
             specializations,
             nominal_cycle_breakers,
             scratches,
+            policy,
         );
         defer scratches.named_specializations.clearFrom(named_specializations_top);
 
         const backing_var = types_store.getNominalBackingVar(nominal);
-        const backing_idx = try self.fromTypeVar(allocator, types_store, backing_var, common_idents, specializations, nominal_cycle_breakers, scratches);
+        const backing_idx = try self.fromTypeVarWithPolicy(allocator, types_store, backing_var, common_idents, specializations, nominal_cycle_breakers, scratches, policy);
+        if (backing_idx.isNone()) return .none;
 
         // Copy the resolved backing type's value into our placeholder slot.
         // This value-copy is safe because every field inside a Monotype is an
@@ -978,6 +1053,7 @@ pub const Store = struct {
         specializations: *const std.AutoHashMap(types.Var, Idx),
         nominal_cycle_breakers: *std.AutoHashMap(types.Var, Idx),
         scratches: *Scratches,
+        policy: TypeVarResolutionPolicy,
     ) Allocator.Error!u32 {
         const top = scratches.named_specializations.top();
 
@@ -1001,7 +1077,7 @@ pub const Store = struct {
 
         for (formal_args, actual_args) |formal_arg, actual_arg| {
             const formal_name_text = resolvedTypeVarNameText(&definition_env.types, definition_env, formal_arg) orelse continue;
-            const actual_mono = try self.fromTypeVar(
+            const actual_mono = try self.fromTypeVarWithPolicy(
                 allocator,
                 types_store,
                 actual_arg,
@@ -1009,7 +1085,9 @@ pub const Store = struct {
                 specializations,
                 nominal_cycle_breakers,
                 scratches,
+                policy,
             );
+            if (actual_mono.isNone()) return top;
             try scratches.named_specializations.append(.{
                 .name_text = formal_name_text,
                 .type_idx = actual_mono,
