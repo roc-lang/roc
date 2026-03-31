@@ -15,14 +15,24 @@ pub const ContextId = enum(u32) {
     _,
 };
 
-pub const RootExprContext = struct {
+pub const ExprContext = struct {
     module_idx: u32,
     expr_idx: CIR.Expr.Idx,
 };
 
+pub const RootExprContext = ExprContext;
+pub const ProvenanceExprContext = ExprContext;
+pub const TemplateExprContext = ExprContext;
+
 pub const SourceContext = union(enum) {
+    /// Lowering/scanning inside a specialized callable body.
     callable_inst: ContextId,
+    /// A real compilation root expression such as a top-level const body.
     root_expr: RootExprContext,
+    /// Re-entering a specific source expression as value provenance, not as a root.
+    provenance_expr: ProvenanceExprContext,
+    /// Completing/template-analyzing a callable template outside any instantiation.
+    template_expr: TemplateExprContext,
 };
 
 pub const BoundTypeVarKey = struct {
@@ -69,7 +79,7 @@ pub const TypeSubst = struct {
 };
 
 pub const ContextExprKey = struct {
-    source_context_kind: enum(u1) { callable_inst, root_expr },
+    source_context_kind: enum(u2) { callable_inst, root_expr, provenance_expr, template_expr },
     source_context_module_idx: u32,
     source_context_raw: u32,
     module_idx: u32,
@@ -77,7 +87,7 @@ pub const ContextExprKey = struct {
 };
 
 pub const ContextPatternKey = struct {
-    source_context_kind: enum(u1) { callable_inst, root_expr },
+    source_context_kind: enum(u2) { callable_inst, root_expr, provenance_expr, template_expr },
     source_context_module_idx: u32,
     source_context_raw: u32,
     module_idx: u32,
@@ -133,6 +143,20 @@ pub const Result = struct {
                 .module_idx = module_idx,
                 .expr_raw = @intFromEnum(expr_idx),
             },
+            .provenance_expr => |source| .{
+                .source_context_kind = .provenance_expr,
+                .source_context_module_idx = source.module_idx,
+                .source_context_raw = @intFromEnum(source.expr_idx),
+                .module_idx = module_idx,
+                .expr_raw = @intFromEnum(expr_idx),
+            },
+            .template_expr => |template| .{
+                .source_context_kind = .template_expr,
+                .source_context_module_idx = template.module_idx,
+                .source_context_raw = @intFromEnum(template.expr_idx),
+                .module_idx = module_idx,
+                .expr_raw = @intFromEnum(expr_idx),
+            },
         };
     }
 
@@ -149,6 +173,20 @@ pub const Result = struct {
                 .source_context_kind = .root_expr,
                 .source_context_module_idx = root.module_idx,
                 .source_context_raw = @intFromEnum(root.expr_idx),
+                .module_idx = module_idx,
+                .pattern_raw = @intFromEnum(pattern_idx),
+            },
+            .provenance_expr => |source| .{
+                .source_context_kind = .provenance_expr,
+                .source_context_module_idx = source.module_idx,
+                .source_context_raw = @intFromEnum(source.expr_idx),
+                .module_idx = module_idx,
+                .pattern_raw = @intFromEnum(pattern_idx),
+            },
+            .template_expr => |template| .{
+                .source_context_kind = .template_expr,
+                .source_context_module_idx = template.module_idx,
+                .source_context_raw = @intFromEnum(template.expr_idx),
                 .module_idx = module_idx,
                 .pattern_raw = @intFromEnum(pattern_idx),
             },

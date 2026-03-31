@@ -42,6 +42,8 @@ const BoundTypeVarKey = ContextMono.BoundTypeVarKey;
 pub const ResolvedMonotype = ContextMono.ResolvedMonotype;
 pub const SourceContext = ContextMono.SourceContext;
 pub const RootExprContext = ContextMono.RootExprContext;
+pub const ProvenanceExprContext = ContextMono.ProvenanceExprContext;
+pub const TemplateExprContext = ContextMono.TemplateExprContext;
 pub const SourceContextState = union(enum) {
     inactive,
     active: SourceContext,
@@ -552,7 +554,7 @@ pub const Pass = struct {
             .inactive => std.math.maxInt(u32),
             .active => |source_context| switch (source_context) {
                 .root_expr => |root| @intFromEnum(root.expr_idx),
-                .callable_inst => std.math.maxInt(u32),
+                .callable_inst, .provenance_expr, .template_expr => std.math.maxInt(u32),
             },
         };
     }
@@ -3350,7 +3352,7 @@ pub const Pass = struct {
 
         const saved_source_context = self.active_source_context;
         self.active_source_context = .{ .active = if (callable_inst_context.isNone())
-            .{ .root_expr = .{ .module_idx = template.module_idx, .expr_idx = template.cir_expr } }
+            .{ .template_expr = .{ .module_idx = template.module_idx, .expr_idx = template.cir_expr } }
         else
             .{ .callable_inst = @enumFromInt(@intFromEnum(callable_inst_context)) } };
         defer self.active_source_context = saved_source_context;
