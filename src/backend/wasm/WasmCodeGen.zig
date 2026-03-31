@@ -6693,7 +6693,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             const variants = ls.getTagUnionVariants(tu_data);
             for (0..variants.len) |i| {
                 const payload = variants.get(@intCast(i)).payload_layout;
-                const candidate_payload = blk: {
+                const payload_choice = blk: {
                     const payload_layout = ls.getLayout(payload);
                     if (payload_layout.tag != .struct_) break :blk payload;
 
@@ -6704,13 +6704,13 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                     break :blk fields.get(0).layout;
                 };
 
-                if (candidate_payload == .dec or candidate_payload == .f32 or candidate_payload == .f64) {
-                    ok_payload_idx = candidate_payload;
+                if (payload_choice == .dec or payload_choice == .f32 or payload_choice == .f64) {
+                    ok_payload_idx = payload_choice;
                     break;
                 }
-                const payload_layout = ls.getLayout(candidate_payload);
+                const payload_layout = ls.getLayout(payload_choice);
                 if (payload_layout.tag == .scalar) {
-                    ok_payload_idx = candidate_payload;
+                    ok_payload_idx = payload_choice;
                     break;
                 }
             }

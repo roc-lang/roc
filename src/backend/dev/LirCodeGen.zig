@@ -41,7 +41,7 @@ const rcNone = builtins.utils.rcNone;
 
 // List builtin functions - using C-compatible wrappers to avoid ABI issues
 // with 24-byte RocList struct returns on aarch64
-const copy_fallback = builtins.list.copy_fallback;
+const list_copy_builtin = builtins.list.copy_fallback;
 const RocList = builtins.list.RocList;
 
 // Additional list builtins (return RocList by value with callconv(.c))
@@ -480,13 +480,13 @@ fn wrapListConcat(out: *RocList, a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_
 /// Wrapper: listPrepend(RocList, alignment, element, element_width, ..., *RocOps) -> RocList
 fn wrapListPrepend(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, element: ?[*]u8, element_width: usize, roc_ops: *RocOps) callconv(.c) void {
     const list = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
-    out.* = listPrepend(list, alignment, element, element_width, false, null, @ptrCast(&rcNone), @ptrCast(&copy_fallback), roc_ops);
+    out.* = listPrepend(list, alignment, element, element_width, false, null, @ptrCast(&rcNone), @ptrCast(&list_copy_builtin), roc_ops);
 }
 
 /// Wrapper: listReplace for list_set
 fn wrapListReplace(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, index: u64, element: ?[*]u8, element_width: usize, out_element: ?[*]u8, roc_ops: *RocOps) callconv(.c) void {
     const list = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
-    out.* = listReplace(list, alignment, index, element, element_width, false, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), out_element, @ptrCast(&copy_fallback), roc_ops);
+    out.* = listReplace(list, alignment, index, element, element_width, false, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), out_element, @ptrCast(&list_copy_builtin), roc_ops);
 }
 
 /// Wrapper: listReserve
@@ -5157,17 +5157,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             var payload_idx: ?layout.Idx = null;
             for (0..variants.len) |i| {
                 const v_payload = variants.get(@intCast(i)).payload_layout;
-                const candidate_payload = self.unwrapSingleFieldPayloadLayout(v_payload) orelse v_payload;
-                const payload_layout = ls.getLayout(candidate_payload);
+                const payload_choice = self.unwrapSingleFieldPayloadLayout(v_payload) orelse v_payload;
+                const payload_layout = ls.getLayout(payload_choice);
                 switch (payload_layout.tag) {
                     .scalar => {
-                        payload_idx = candidate_payload;
+                        payload_idx = payload_choice;
                         break;
                     },
                     else => {},
                 }
-                if (candidate_payload == .dec) {
-                    payload_idx = candidate_payload;
+                if (payload_choice == .dec) {
+                    payload_idx = payload_choice;
                     break;
                 }
             }
@@ -6974,7 +6974,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // The offset >= 0 checks below are not defensive guards — they select the
                 // unsigned-immediate instruction encoding (STRB/STRH), which only accepts
                 // non-negative offsets. Negative offsets (valid because the stack grows down
-                // from FP) take the fallback path that computes the address in a register.
+                // from FP) use the register-addressed path instead.
                 switch (disc_size) {
                     1 => {
                         // Use strb for 1-byte store

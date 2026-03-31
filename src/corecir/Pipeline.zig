@@ -71,17 +71,46 @@ pub const TypeSubst = ContextMono.TypeSubst;
 pub const CallableInst = Lambdamono.CallableInst;
 pub const RuntimeValue = Lambdamono.RuntimeValue;
 
-/// One callable requirement originating from a higher-order parameter.
-pub const CallableParamSpecEntry = Lambdamono.CallableParamSpecEntry;
-
 /// One structural projection applied before demanding exact callables from a higher-order parameter.
-pub const CallableParamProjection = Lambdamono.CallableParamProjection;
+const CallableParamProjection = union(enum) {
+    field: Monotype.Name,
+    tuple_elem: u32,
+};
 
-/// Span of callable-parameter projections stored in the staged pipeline store.
-pub const CallableParamProjectionSpan = Lambdamono.CallableParamProjectionSpan;
+/// Span of callable-parameter projections stored in specialization-internal state.
+const CallableParamProjectionSpan = extern struct {
+    start: u32,
+    len: u16,
 
-/// Span of callable-parameter specification entries stored in the staged pipeline store.
-pub const CallableParamSpecSpan = Lambdamono.CallableParamSpecSpan;
+    pub fn empty() CallableParamProjectionSpan {
+        return .{ .start = 0, .len = 0 };
+    }
+
+    pub fn isEmpty(self: CallableParamProjectionSpan) bool {
+        return self.len == 0;
+    }
+};
+
+/// One callable requirement originating from a higher-order parameter.
+const CallableParamSpecEntry = struct {
+    param_index: u16,
+    projections: CallableParamProjectionSpan = .empty(),
+    callable_value: CallableValue,
+};
+
+/// Span of callable-parameter specification entries stored in specialization-internal state.
+const CallableParamSpecSpan = extern struct {
+    start: u32,
+    len: u16,
+
+    pub fn empty() CallableParamSpecSpan {
+        return .{ .start = 0, .len = 0 };
+    }
+
+    pub fn isEmpty(self: CallableParamSpecSpan) bool {
+        return self.len == 0;
+    }
+};
 
 pub const CaptureValueSource = Lambdamono.CaptureValueSource;
 pub const CaptureStorage = Lambdamono.CaptureStorage;
@@ -495,20 +524,6 @@ pub const Result = struct {
         return Lambdamono.getCaptureFields(&self.lambdamono, span);
     }
 
-    pub fn getCallableParamSpecEntries(
-        self: *const Result,
-        span: CallableParamSpecSpan,
-    ) []const CallableParamSpecEntry {
-        return self.lambdamono.getCallableParamSpecEntries(span);
-    }
-
-    pub fn getCallableParamProjectionEntries(
-        self: *const Result,
-        span: CallableParamProjectionSpan,
-    ) []const CallableParamProjection {
-        return self.lambdamono.getCallableParamProjectionEntries(span);
-    }
-
     pub fn getTypeSubst(self: *const Result, subst_id: TypeSubstId) *const TypeSubst {
         return self.context_mono.getTypeSubst(subst_id);
     }
@@ -559,6 +574,9 @@ pub const Pass = struct {
     in_progress_callable_scans: std.AutoHashMapUnmanaged(u32, void),
     completed_callable_scans: std.AutoHashMapUnmanaged(u32, void),
     in_progress_template_body_completions: std.AutoHashMapUnmanaged(TemplateBodyCompletionKey, void),
+    callable_param_spec_entries: std.ArrayListUnmanaged(CallableParamSpecEntry),
+    callable_param_projection_entries: std.ArrayListUnmanaged(CallableParamProjection),
+    callable_param_specs_by_inst: std.AutoHashMapUnmanaged(CallableInstId, CallableParamSpecSpan),
     program_build_state: ProgramBuildState,
     mutation_revision: u64,
     mutation_counts: [mutation_kind_count]u32,
@@ -591,6 +609,9 @@ pub const Pass = struct {
             .in_progress_callable_scans = .empty,
             .completed_callable_scans = .empty,
             .in_progress_template_body_completions = .empty,
+            .callable_param_spec_entries = .empty,
+            .callable_param_projection_entries = .empty,
+            .callable_param_specs_by_inst = .empty,
             .program_build_state = ProgramBuildState.init(),
             .mutation_revision = 0,
             .mutation_counts = [_]u32{0} ** mutation_kind_count,
@@ -803,64 +824,60 @@ pub const Pass = struct {
         };
     }
 
-    fn appendCallableParamBinding(
-        self: *Pass,
-        result: *Result,
-        callable_def: *Lambdamono.CallableDef,
-        binding: Lambdamono.CallableParamBinding,
-    ) Allocator.Error!void {
-        const bindings = result.lambdamono.getCallableParamBindings(callable_def.param_bindings);
-        for (bindings, 0..) |existing, idx| {
-            if (existing.pattern_idx != binding.pattern_idx) continue;
-            const existing_index = callable_def.param_bindings.start + @as(u32, @intCast(idx));
-            if (!std.meta.eql(result.lambdamono.callable_param_bindings.items[existing_index], binding)) {
-                result.lambdamono.callable_param_bindings.items[existing_index] = binding;
-                self.noteMutation(.program_values);
-            }
-            return;
-        }
-
-        const start = result.lambdamono.callable_param_bindings.items.len;
-        if (callable_def.param_bindings.len != 0 and
-            callable_def.param_bindings.start + callable_def.param_bindings.len != start)
-        {
-            try result.lambdamono.callable_param_bindings.appendSlice(self.allocator, bindings);
-            callable_def.param_bindings.start = @intCast(start);
-        } else if (callable_def.param_bindings.len == 0) {
-            callable_def.param_bindings.start = @intCast(start);
-        }
-
-        try result.lambdamono.callable_param_bindings.append(self.allocator, binding);
-        callable_def.param_bindings.len += 1;
-        self.noteMutation(.program_values);
-    }
-
-    fn exactCallableInstFromCallableValue(callable_value: SolvedCallableValue) ?CallableInstId {
+    fn exactCallableInstFromSolvedCallableValue(callable_value: SolvedCallableValue) ?CallableInstId {
         return switch (callable_value) {
             .direct => |callable_inst_id| callable_inst_id,
             .lambda_set => null,
         };
     }
 
-    fn callableMembersFromValue(result: *const Result, callable_value: SolvedCallableValue) []const CallableInstId {
+    fn callableMembersFromSolvedCallableValue(result: *const Result, callable_value: SolvedCallableValue) []const CallableInstId {
         return switch (callable_value) {
             .direct => |callable_inst_id| result.lambdamono.getDirectCallableMembers(callable_inst_id),
             .lambda_set => |lambda_set_id| result.lambdasolved.getLambdaSetMembers(lambda_set_id),
         };
     }
 
-    fn exactCallableInstFromCallSite(call_site: SolvedCall) ?CallableInstId {
+    fn exactCallableInstFromProgramCallableValue(callable_value: CallableValue) ?CallableInstId {
+        return switch (callable_value) {
+            .direct => |callable_inst_id| callable_inst_id,
+            .packed_fn => null,
+        };
+    }
+
+    fn callableMembersFromProgramCallableValue(result: *const Result, callable_value: CallableValue) []const CallableInstId {
+        return switch (callable_value) {
+            .direct => |callable_inst_id| result.lambdamono.getDirectCallableMembers(callable_inst_id),
+            .packed_fn => |packed_fn_id| result.getPackedFnMembers(packed_fn_id),
+        };
+    }
+
+    fn exactCallableInstFromSolvedCallSite(call_site: SolvedCall) ?CallableInstId {
         return switch (call_site) {
             .direct => |callable_inst_id| callable_inst_id,
             .lambda_set => null,
         };
     }
 
-    fn callableMembersFromCallSite(result: *const Result, call_site: SolvedCall) []const CallableInstId {
+    fn callableMembersFromSolvedCallSite(result: *const Result, call_site: SolvedCall) []const CallableInstId {
         return switch (call_site) {
             .direct => |callable_inst_id| result.lambdamono.getDirectCallableMembers(callable_inst_id),
             .lambda_set => |lambda_set_id| result.lambdasolved.getLambdaSetMembers(lambda_set_id),
         };
+    }
+
+    fn getCallableParamSpecEntries(self: *const Pass, span: CallableParamSpecSpan) []const CallableParamSpecEntry {
+        if (span.len == 0) return &.{};
+        return self.callable_param_spec_entries.items[span.start..][0..span.len];
+    }
+
+    fn getCallableParamProjectionEntries(self: *const Pass, span: CallableParamProjectionSpan) []const CallableParamProjection {
+        if (span.len == 0) return &.{};
+        return self.callable_param_projection_entries.items[span.start..][0..span.len];
+    }
+
+    fn getCallableParamSpecSpanForInst(self: *const Pass, callable_inst_id: CallableInstId) CallableParamSpecSpan {
+        return self.callable_param_specs_by_inst.get(callable_inst_id) orelse .empty();
     }
 
     fn getContextPatternMonotypeInContext(
@@ -899,7 +916,7 @@ pub const Pass = struct {
             module_idx,
             pattern_idx,
         ) orelse return null;
-        return exactCallableInstFromCallableValue(callable_value);
+        return exactCallableInstFromSolvedCallableValue(callable_value);
     }
 
     fn resolveBoundPatternCallableInstInCurrentContext(
@@ -914,7 +931,7 @@ pub const Pass = struct {
             module_idx,
             pattern_idx,
         ) orelse return null;
-        return exactCallableInstFromCallableValue(callable_value);
+        return exactCallableInstFromSolvedCallableValue(callable_value);
     }
 
     fn resolveBoundPatternCallableMembersInContext(
@@ -930,7 +947,7 @@ pub const Pass = struct {
             module_idx,
             pattern_idx,
         ) orelse return null;
-        return callableMembersFromValue(result, callable_value);
+        return callableMembersFromSolvedCallableValue(result, callable_value);
     }
 
     fn resolveBoundPatternCallableMembersInCurrentContext(
@@ -945,7 +962,7 @@ pub const Pass = struct {
             module_idx,
             pattern_idx,
         ) orelse return null;
-        return callableMembersFromValue(result, callable_value);
+        return callableMembersFromSolvedCallableValue(result, callable_value);
     }
 
     fn getExprCallableInstInContext(
@@ -961,7 +978,7 @@ pub const Pass = struct {
             module_idx,
             expr_idx,
         ) orelse return null;
-        return exactCallableInstFromCallableValue(callable_value);
+        return exactCallableInstFromSolvedCallableValue(callable_value);
     }
 
     fn getExprCallableInstInCurrentContext(
@@ -976,7 +993,7 @@ pub const Pass = struct {
             module_idx,
             expr_idx,
         ) orelse return null;
-        return exactCallableInstFromCallableValue(callable_value);
+        return exactCallableInstFromSolvedCallableValue(callable_value);
     }
 
     fn getExprCallableMembersInContext(
@@ -992,7 +1009,7 @@ pub const Pass = struct {
             module_idx,
             expr_idx,
         ) orelse return null;
-        return callableMembersFromValue(result, callable_value);
+        return callableMembersFromSolvedCallableValue(result, callable_value);
     }
 
     fn getExprCallableMembersInCurrentContext(
@@ -1007,7 +1024,7 @@ pub const Pass = struct {
             module_idx,
             expr_idx,
         ) orelse return null;
-        return callableMembersFromValue(result, callable_value);
+        return callableMembersFromSolvedCallableValue(result, callable_value);
     }
 
     fn getCallSiteCallableInstInContext(
@@ -1023,7 +1040,7 @@ pub const Pass = struct {
             module_idx,
             expr_idx,
         ) orelse return null;
-        return exactCallableInstFromCallSite(call_site);
+        return exactCallableInstFromSolvedCallSite(call_site);
     }
 
     fn getCallSiteCallableInstInCurrentContext(
@@ -1038,7 +1055,7 @@ pub const Pass = struct {
             module_idx,
             expr_idx,
         ) orelse return null;
-        return exactCallableInstFromCallSite(call_site);
+        return exactCallableInstFromSolvedCallSite(call_site);
     }
 
     fn getCallSiteCallableMembersInContext(
@@ -1054,7 +1071,7 @@ pub const Pass = struct {
             module_idx,
             expr_idx,
         ) orelse return null;
-        return callableMembersFromCallSite(result, call_site);
+        return callableMembersFromSolvedCallSite(result, call_site);
     }
 
     fn getCallSiteCallableMembersInCurrentContext(
@@ -1069,7 +1086,7 @@ pub const Pass = struct {
             module_idx,
             expr_idx,
         ) orelse return null;
-        return callableMembersFromCallSite(result, call_site);
+        return callableMembersFromSolvedCallSite(result, call_site);
     }
 
     fn getCallSiteCallableInstForSourceContext(
@@ -1080,7 +1097,7 @@ pub const Pass = struct {
         expr_idx: CIR.Expr.Idx,
     ) ?CallableInstId {
         const call_site = self.readExprCallSite(result, source_context, module_idx, expr_idx) orelse return null;
-        return exactCallableInstFromCallSite(call_site);
+        return exactCallableInstFromSolvedCallSite(call_site);
     }
 
     fn getCallSiteCallableMembersForSourceContext(
@@ -1091,7 +1108,7 @@ pub const Pass = struct {
         expr_idx: CIR.Expr.Idx,
     ) ?[]const CallableInstId {
         const call_site = self.readExprCallSite(result, source_context, module_idx, expr_idx) orelse return null;
-        return callableMembersFromCallSite(result, call_site);
+        return callableMembersFromSolvedCallSite(result, call_site);
     }
 
     fn getCallableParamSpecCallableValueForSourceContext(
@@ -1100,7 +1117,7 @@ pub const Pass = struct {
         source_context: SourceContext,
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
-    ) ?SolvedCallableValue {
+    ) ?CallableValue {
         if (!sourceContextHasCallableInst(source_context)) return null;
         const resolved_context_callable_inst = requireSourceContextCallableInst(source_context);
 
@@ -1120,10 +1137,10 @@ pub const Pass = struct {
             if (param_pattern_idx == pattern_idx) break idx;
         } else return null;
 
-        for (result.getCallableParamSpecEntries(context_callable.callable_param_specs)) |spec| {
+        for (self.getCallableParamSpecEntries(self.getCallableParamSpecSpanForInst(resolved_context_callable_inst))) |spec| {
             if (spec.param_index != param_index) continue;
             if (!self.callableParamProjectionSeqEqual(
-                result.getCallableParamProjectionEntries(spec.projections),
+                self.getCallableParamProjectionEntries(spec.projections),
                 projections.items,
             )) continue;
             return spec.callable_value;
@@ -1145,7 +1162,7 @@ pub const Pass = struct {
             module_idx,
             expr_idx,
         ) orelse return null;
-        return callableMembersFromValue(result, callable_value);
+        return callableMembersFromProgramCallableValue(result, callable_value);
     }
 
     fn getCallableParamSpecCallableValueInContext(
@@ -1154,7 +1171,7 @@ pub const Pass = struct {
         context_callable_inst: CallableInstId,
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
-    ) ?SolvedCallableValue {
+    ) ?CallableValue {
         return self.getCallableParamSpecCallableValueForSourceContext(
             result,
             callableInstSourceContext(context_callable_inst),
@@ -1168,7 +1185,7 @@ pub const Pass = struct {
         result: *const Result,
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
-    ) ?SolvedCallableValue {
+    ) ?CallableValue {
         return self.getCallableParamSpecCallableValueForSourceContext(
             result,
             self.currentSourceContext(),
@@ -1224,7 +1241,7 @@ pub const Pass = struct {
         }
 
         if (self.getCallableParamSpecCallableValueInContext(result, context_callable_inst, module_idx, expr_idx)) |callable_value| {
-            if (exactCallableInstFromCallableValue(callable_value)) |callable_inst_id| {
+            if (exactCallableInstFromProgramCallableValue(callable_value)) |callable_inst_id| {
                 return callable_inst_id;
             }
         }
@@ -1252,7 +1269,7 @@ pub const Pass = struct {
         }
 
         if (self.getCallableParamSpecCallableValueInCurrentContext(result, module_idx, expr_idx)) |callable_value| {
-            if (exactCallableInstFromCallableValue(callable_value)) |callable_inst_id| {
+            if (exactCallableInstFromProgramCallableValue(callable_value)) |callable_inst_id| {
                 return callable_inst_id;
             }
         }
@@ -1317,19 +1334,19 @@ pub const Pass = struct {
     }
 
     fn getValueExprCallableValueForSourceContext(
-        self: *const Pass,
-        result: *const Result,
+        self: *Pass,
+        result: *Result,
         source_context: SourceContext,
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
-    ) ?SolvedCallableValue {
+    ) ?CallableValue {
         const module_env = self.all_module_envs[module_idx];
         switch (module_env.store.getExpr(expr_idx)) {
             .e_lookup_local => |lookup| {
                 if (isTopLevelDefPattern(module_env, lookup.pattern_idx)) return null;
                 if (sourceContextHasCallableInst(source_context)) {
                     if (self.readCallableParamValue(result, source_context, module_idx, lookup.pattern_idx)) |callable_value| {
-                        return callable_value;
+                        return finalizeSolvedCallableValue(self, result, callable_value) catch unreachable;
                     }
                 } else if (result.getPatternSourceExpr(module_idx, lookup.pattern_idx)) |source| {
                     return self.getValueExprCallableValueForSourceContext(
@@ -1347,12 +1364,16 @@ pub const Pass = struct {
             return callable_value;
         }
 
-        return self.readExprCallableValue(result, source_context, module_idx, expr_idx);
+        if (self.readExprCallableValue(result, source_context, module_idx, expr_idx)) |callable_value| {
+            return finalizeSolvedCallableValue(self, result, callable_value) catch unreachable;
+        }
+
+        return null;
     }
 
     fn getValueExprCallableInstForSourceContext(
-        self: *const Pass,
-        result: *const Result,
+        self: *Pass,
+        result: *Result,
         source_context: SourceContext,
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
@@ -1370,7 +1391,7 @@ pub const Pass = struct {
         }
 
         if (self.getValueExprCallableValueForSourceContext(result, source_context, module_idx, expr_idx)) |callable_value| {
-            if (exactCallableInstFromCallableValue(callable_value)) |callable_inst_id| {
+            if (exactCallableInstFromProgramCallableValue(callable_value)) |callable_inst_id| {
                 return callable_inst_id;
             }
         }
@@ -1379,8 +1400,8 @@ pub const Pass = struct {
     }
 
     fn getValueExprCallableMembersForSourceContext(
-        self: *const Pass,
-        result: *const Result,
+        self: *Pass,
+        result: *Result,
         source_context: SourceContext,
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
@@ -1398,7 +1419,7 @@ pub const Pass = struct {
         }
 
         if (self.getValueExprCallableValueForSourceContext(result, source_context, module_idx, expr_idx)) |callable_value| {
-            return callableMembersFromValue(result, callable_value);
+            return callableMembersFromProgramCallableValue(result, callable_value);
         }
 
         return null;
@@ -1466,6 +1487,9 @@ pub const Pass = struct {
         self.in_progress_callable_scans.deinit(self.allocator);
         self.completed_callable_scans.deinit(self.allocator);
         self.in_progress_template_body_completions.deinit(self.allocator);
+        self.callable_param_spec_entries.deinit(self.allocator);
+        self.callable_param_projection_entries.deinit(self.allocator);
+        self.callable_param_specs_by_inst.deinit(self.allocator);
         self.program_build_state.deinit(self.allocator);
         self.source_context_stack.deinit(self.allocator);
     }
@@ -2708,14 +2732,14 @@ pub const Pass = struct {
                     callable_inst.fn_monotype_module_idx,
                 );
             },
-            .lambda_set => |lambda_set_id| {
-                const lambda_set_members = result.lambdasolved.getLambdaSetMembers(lambda_set_id);
+            .packed_fn => |packed_fn_id| {
+                const packed_members = result.getPackedFnMembers(packed_fn_id);
                 try self.setExprCallableMembers(
                     result,
                     self.currentSourceContext(),
                     module_idx,
                     expr_idx,
-                    lambda_set_members,
+                    packed_members,
                 );
                 if (sourceContextHasCallableInst(self.currentSourceContext())) {
                     try self.setCallableParamMembers(
@@ -2723,7 +2747,7 @@ pub const Pass = struct {
                         self.currentSourceContext(),
                         module_idx,
                         pattern_idx,
-                        lambda_set_members,
+                        packed_members,
                     );
                 }
             },
@@ -2926,9 +2950,6 @@ pub const Pass = struct {
         const resolved = try self.resolveExprMonotypeResolved(result, module_idx, expr_idx);
         if (resolved.isNone()) return;
         try self.recordCurrentExprMonotype(result, module_idx, expr_idx, resolved.idx, resolved.module_idx);
-        if (result.lambdamono.getExprId(self.currentSourceContext(), module_idx, expr_idx)) |expr_id| {
-            result.lambdamono.exprs.items[@intFromEnum(expr_id)].monotype = resolved;
-        }
     }
 
     fn materializeDemandedExprCallableInst(
@@ -3980,8 +4001,8 @@ pub const Pass = struct {
         }
 
         return callableParamSpecsEqual(
-            result,
-            result.getCallableParamSpecEntries(callable_inst.callable_param_specs),
+            self,
+            self.getCallableParamSpecEntries(self.getCallableParamSpecSpanForInst(callable_inst_id)),
             required_callable_param_specs,
         );
     }
@@ -4107,7 +4128,7 @@ pub const Pass = struct {
                     );
                 }
                 if (self.readExprCallSite(result, self.currentSourceContext(), module_idx, call_expr_idx)) |call_site| {
-                    if (exactCallableInstFromCallSite(call_site)) |direct_callable_inst_id| {
+                    if (exactCallableInstFromSolvedCallSite(call_site)) |direct_callable_inst_id| {
                         try self.finalizeResolvedDirectCallCallableInst(
                             result,
                             module_idx,
@@ -4468,12 +4489,12 @@ pub const Pass = struct {
                     pattern_idx,
                     callable_inst_id,
                 ),
-                .lambda_set => |lambda_set_id| try self.setCallableParamMembersInCallableContext(
+                .packed_fn => |packed_fn_id| try self.setCallableParamMembersInCallableContext(
                     result,
                     callee_callable_inst_id,
                     template.module_idx,
                     pattern_idx,
-                    result.lambdasolved.getLambdaSetMembers(lambda_set_id),
+                    result.getPackedFnMembers(packed_fn_id),
                 ),
             }
         }
@@ -4485,12 +4506,12 @@ pub const Pass = struct {
         callable_inst_id: CallableInstId,
     ) Allocator.Error!void {
         const callable_inst = result.getCallableInst(callable_inst_id);
-        if (callable_inst.callable_param_specs.isEmpty()) return;
+        if (self.getCallableParamSpecSpanForInst(callable_inst_id).isEmpty()) return;
 
         const template = result.getCallableTemplate(callable_inst.template);
         const arg_patterns = self.callableBoundaryArgPatterns(template.module_idx, template.cir_expr) orelse return;
 
-        for (result.getCallableParamSpecEntries(callable_inst.callable_param_specs)) |spec| {
+        for (self.getCallableParamSpecEntries(self.getCallableParamSpecSpanForInst(callable_inst_id))) |spec| {
             if (!spec.projections.isEmpty()) continue;
             if (spec.param_index >= arg_patterns.len) {
                 std.debug.panic(
@@ -4507,11 +4528,11 @@ pub const Pass = struct {
                     arg_patterns[spec.param_index],
                     member_callable_inst,
                 ),
-                .lambda_set => |lambda_set_id| {
-                    const lambda_set_members = result.lambdasolved.getLambdaSetMembers(lambda_set_id);
-                    if (lambda_set_members.len == 0) {
+                .packed_fn => |packed_fn_id| {
+                    const packed_members = result.getPackedFnMembers(packed_fn_id);
+                    if (packed_members.len == 0) {
                         std.debug.panic(
-                            "Pipeline: callable param spec for callable inst {d} param {d} had an empty lambda set",
+                            "Pipeline: callable param spec for callable inst {d} param {d} had an empty packed callable",
                             .{ @intFromEnum(callable_inst_id), spec.param_index },
                         );
                     }
@@ -4521,7 +4542,7 @@ pub const Pass = struct {
                         callable_inst_id,
                         template.module_idx,
                         arg_patterns[spec.param_index],
-                        lambda_set_members,
+                        packed_members,
                     );
                 },
             }
@@ -5130,9 +5151,9 @@ pub const Pass = struct {
                 );
 
                 if (self.getValueExprCallableValueForSourceContext(result, source_context, module_idx, expr_idx)) |callable_value| {
-                    try self.appendCallableParamSpecEntry(result, out, .{
+                    try self.appendCallableParamSpecEntry(out, .{
                         .param_index = param_index,
-                        .projections = try self.addCallableParamProjectionEntries(result, projections.items),
+                        .projections = try self.addCallableParamProjectionEntries(projections.items),
                         .callable_value = callable_value,
                     });
                     return true;
@@ -10624,8 +10645,8 @@ pub const Pass = struct {
             if (existing_callable_inst.fn_monotype_module_idx != canonical_fn_monotype_module_idx) continue;
             if (!std.meta.eql(existing_callable_inst.defining_source_context, defining_source_context)) continue;
             if (!callableParamSpecsEqual(
-                result,
-                result.getCallableParamSpecEntries(existing_callable_inst.callable_param_specs),
+                self,
+                self.getCallableParamSpecEntries(self.getCallableParamSpecSpanForInst(@enumFromInt(idx))),
                 callable_param_specs,
             )) continue;
             const mono_equal = try self.monotypesStructurallyEqual(
@@ -10648,7 +10669,6 @@ pub const Pass = struct {
             "Pipeline invariant violated: callable template {d} runtime expr {d} in module {d} was not callable-boundary-shaped",
             .{ @intFromEnum(template_id), @intFromEnum(template.runtime_expr), template.module_idx },
         );
-        const callable_param_spec_span = try self.addCallableParamSpecEntries(result, callable_param_specs);
         const callable_inst_id: CallableInstId = @enumFromInt(result.lambdamono.callable_insts.items.len);
         const callable_def_id: CallableDefId = @enumFromInt(result.lambdamono.callable_defs.items.len);
         try result.lambdamono.callable_defs.append(self.allocator, .{
@@ -10674,10 +10694,14 @@ pub const Pass = struct {
             .fn_monotype = canonical_fn_monotype,
             .fn_monotype_module_idx = canonical_fn_monotype_module_idx,
             .defining_source_context = defining_source_context,
-            .callable_param_specs = callable_param_spec_span,
             .callable_def = callable_def_id,
             .runtime_value = .direct_lambda,
         });
+        try self.callable_param_specs_by_inst.put(
+            self.allocator,
+            callable_inst_id,
+            try self.addCallableParamSpecEntries(callable_param_specs),
+        );
         try self.ensureDirectCallableMemberGroup(result, callable_inst_id);
         if (scan_body) {
             try self.scanCallableInst(result, callable_inst_id);
@@ -10687,13 +10711,12 @@ pub const Pass = struct {
 
     fn addCallableParamSpecEntries(
         self: *Pass,
-        result: *Result,
         entries: []const CallableParamSpecEntry,
     ) Allocator.Error!CallableParamSpecSpan {
         if (entries.len == 0) return .empty();
 
-        const start: u32 = @intCast(result.lambdamono.callable_param_spec_entries.items.len);
-        try result.lambdamono.callable_param_spec_entries.appendSlice(self.allocator, entries);
+        const start: u32 = @intCast(self.callable_param_spec_entries.items.len);
+        try self.callable_param_spec_entries.appendSlice(self.allocator, entries);
         return .{
             .start = start,
             .len = @intCast(entries.len),
@@ -10702,13 +10725,12 @@ pub const Pass = struct {
 
     fn addCallableParamProjectionEntries(
         self: *Pass,
-        result: *Result,
         entries: []const CallableParamProjection,
     ) Allocator.Error!CallableParamProjectionSpan {
         if (entries.len == 0) return .empty();
 
-        const start: u32 = @intCast(result.lambdamono.callable_param_projection_entries.items.len);
-        try result.lambdamono.callable_param_projection_entries.appendSlice(self.allocator, entries);
+        const start: u32 = @intCast(self.callable_param_projection_entries.items.len);
+        try self.callable_param_projection_entries.appendSlice(self.allocator, entries);
         return .{
             .start = start,
             .len = @intCast(entries.len),
@@ -10727,7 +10749,6 @@ pub const Pass = struct {
 
     fn appendCallableParamSpecEntry(
         self: *Pass,
-        result: *Result,
         out: *std.ArrayListUnmanaged(CallableParamSpecEntry),
         entry: CallableParamSpecEntry,
     ) Allocator.Error!void {
@@ -10735,8 +10756,8 @@ pub const Pass = struct {
             if (existing.param_index != entry.param_index) continue;
             if (!std.meta.eql(existing.callable_value, entry.callable_value)) continue;
             if (!callableParamProjectionsEqual(
-                result.getCallableParamProjectionEntries(existing.projections),
-                result.getCallableParamProjectionEntries(entry.projections),
+                self.getCallableParamProjectionEntries(existing.projections),
+                self.getCallableParamProjectionEntries(entry.projections),
             )) continue;
             return;
         }
@@ -10826,7 +10847,7 @@ pub const Pass = struct {
     }
 
     fn callableParamSpecsEqual(
-        result: *const Result,
+        self: *const Pass,
         lhs: []const CallableParamSpecEntry,
         rhs: []const CallableParamSpecEntry,
     ) bool {
@@ -10834,8 +10855,8 @@ pub const Pass = struct {
         for (lhs, rhs) |lhs_entry, rhs_entry| {
             if (lhs_entry.param_index != rhs_entry.param_index) return false;
             if (!callableParamProjectionsEqual(
-                result.getCallableParamProjectionEntries(lhs_entry.projections),
-                result.getCallableParamProjectionEntries(rhs_entry.projections),
+                self.getCallableParamProjectionEntries(lhs_entry.projections),
+                self.getCallableParamProjectionEntries(rhs_entry.projections),
             )) return false;
             if (!std.meta.eql(lhs_entry.callable_value, rhs_entry.callable_value)) return false;
         }

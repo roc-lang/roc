@@ -204,8 +204,9 @@ pattern_symbols: std.AutoHashMap(u128, MIR.LocalId),
 /// by lowering itself rather than re-derived from the original pattern node.
 explicit_pattern_local_monotypes: std.AutoHashMap(u128, Monotype.Idx),
 
-/// Specialization bindings: maps polymorphic type vars to concrete monotypes.
-/// Written by `bindTypeVarMonotypes`, read by `fromTypeVar`.
+/// Exact lowering-time monotype bindings for source type vars whose concrete
+/// runtime type has already been fixed by the staged pipeline or by explicit
+/// MIR-internal structure binding.
 type_var_seen: std.AutoHashMap(types.Var, Monotype.Idx),
 
 /// Cycle breakers for recursive nominal types (e.g. Tree := [Leaf, Node(Tree)]).

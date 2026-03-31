@@ -15,52 +15,12 @@ const CIR = can.CIR;
 /// callable semantics.
 pub const CallableInstId = Lambdasolved.CallableInstId;
 
-/// One structural projection applied before demanding executable callable
-/// specializations from a higher-order parameter.
-pub const CallableParamProjection = union(enum) {
-    field: Monotype.Name,
-    tuple_elem: u32,
-};
-
-pub const CallableParamProjectionSpan = extern struct {
-    start: u32,
-    len: u16,
-
-    pub fn empty() CallableParamProjectionSpan {
-        return .{ .start = 0, .len = 0 };
-    }
-
-    pub fn isEmpty(self: CallableParamProjectionSpan) bool {
-        return self.len == 0;
-    }
-};
-
-pub const CallableParamSpecEntry = struct {
-    param_index: u16,
-    projections: CallableParamProjectionSpan = .empty(),
-    callable_value: Lambdasolved.SolvedCallableValue,
-};
-
-pub const CallableParamSpecSpan = extern struct {
-    start: u32,
-    len: u16,
-
-    pub fn empty() CallableParamSpecSpan {
-        return .{ .start = 0, .len = 0 };
-    }
-
-    pub fn isEmpty(self: CallableParamSpecSpan) bool {
-        return self.len == 0;
-    }
-};
-
 pub const CallableInst = struct {
     template: Lambdasolved.CallableTemplateId,
     subst: ContextMono.TypeSubstId,
     fn_monotype: Monotype.Idx,
     fn_monotype_module_idx: u32,
     defining_source_context: SourceContext,
-    callable_param_specs: CallableParamSpecSpan = .empty(),
     callable_def: CallableDefId,
     runtime_value: RuntimeValue = .direct_lambda,
 };
@@ -264,8 +224,6 @@ pub const RootExpr = struct {
 
 pub const Program = struct {
     callable_insts: std.ArrayListUnmanaged(CallableInst),
-    callable_param_spec_entries: std.ArrayListUnmanaged(CallableParamSpecEntry),
-    callable_param_projection_entries: std.ArrayListUnmanaged(CallableParamProjection),
     lambda_set_member_groups: std.ArrayListUnmanaged(LambdaSetMemberGroup),
     direct_callable_member_group_ids_by_callable_inst: std.AutoHashMapUnmanaged(CallableInstId, LambdaSetMemberGroupId),
     packed_fn_ids_by_member_group: std.AutoHashMapUnmanaged(LambdaSetMemberGroupId, PackedFnId),
@@ -287,8 +245,6 @@ pub const Program = struct {
     pub fn init() Program {
         return .{
             .callable_insts = .empty,
-            .callable_param_spec_entries = .empty,
-            .callable_param_projection_entries = .empty,
             .lambda_set_member_groups = .empty,
             .direct_callable_member_group_ids_by_callable_inst = .empty,
             .packed_fn_ids_by_member_group = .empty,
@@ -311,8 +267,6 @@ pub const Program = struct {
 
     pub fn deinit(self: *Program, allocator: Allocator) void {
         self.callable_insts.deinit(allocator);
-        self.callable_param_spec_entries.deinit(allocator);
-        self.callable_param_projection_entries.deinit(allocator);
         self.lambda_set_member_groups.deinit(allocator);
         self.direct_callable_member_group_ids_by_callable_inst.deinit(allocator);
         self.packed_fn_ids_by_member_group.deinit(allocator);
@@ -334,22 +288,6 @@ pub const Program = struct {
 
     pub fn getCallableInst(self: *const Program, callable_inst_id: CallableInstId) *const CallableInst {
         return &self.callable_insts.items[@intFromEnum(callable_inst_id)];
-    }
-
-    pub fn getCallableParamSpecEntries(
-        self: *const Program,
-        span: CallableParamSpecSpan,
-    ) []const CallableParamSpecEntry {
-        if (span.len == 0) return &.{};
-        return self.callable_param_spec_entries.items[span.start..][0..span.len];
-    }
-
-    pub fn getCallableParamProjectionEntries(
-        self: *const Program,
-        span: CallableParamProjectionSpan,
-    ) []const CallableParamProjection {
-        if (span.len == 0) return &.{};
-        return self.callable_param_projection_entries.items[span.start..][0..span.len];
     }
 
     pub fn getLambdaSetMemberGroupMembers(self: *const Program, member_group_id: LambdaSetMemberGroupId) []const CallableInstId {
