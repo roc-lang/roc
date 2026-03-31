@@ -3827,8 +3827,8 @@ fn lowerResolvedCallableInstLambda(
         &self.type_var_seen,
     );
 
-    if (!callable_inst.subst.isNone()) {
-        const subst = self.callable_pipeline.context_mono.getTypeSubst(callable_inst.subst);
+    if (callable_inst.subst) |subst_id| {
+            const subst = self.callable_pipeline.context_mono.getTypeSubst(subst_id);
         for (self.callable_pipeline.context_mono.getTypeSubstEntries(subst.entries)) |entry| {
             if (builtin.mode == .Debug and entry.key.module_idx != module_idx) {
                 std.debug.panic(

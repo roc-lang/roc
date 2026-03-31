@@ -1,4 +1,4 @@
-//! Specialization from solved lambda sets to executable structured callable IR.
+//! Specialization from solved callable semantics to executable structured callable IR.
 
 const std = @import("std");
 const base = @import("base");
@@ -13,7 +13,7 @@ const Region = base.Region;
 const CIR = can.CIR;
 
 /// Identifies one executable callable specialization chosen from solved
-/// lambda-set semantics.
+/// callable semantics.
 pub const CallableInstId = enum(u32) {
     _,
 };
@@ -38,20 +38,10 @@ pub const CallableParamProjectionSpan = extern struct {
     }
 };
 
-pub const LambdaSetId = enum(u32) {
-    _,
-
-    pub const none: LambdaSetId = @enumFromInt(std.math.maxInt(u32));
-
-    pub fn isNone(self: LambdaSetId) bool {
-        return self == none;
-    }
-};
-
 pub const CallableParamSpecEntry = struct {
     param_index: u16,
     projections: CallableParamProjectionSpan = .empty(),
-    lambda_set_id: LambdaSetId,
+    member_set_id: PlanMemberSetId,
 };
 
 pub const CallableParamSpecSpan = extern struct {
@@ -69,7 +59,7 @@ pub const CallableParamSpecSpan = extern struct {
 
 pub const CallableInst = struct {
     template: Lambdasolved.CallableTemplateId,
-    subst: ContextMono.TypeSubstId,
+    subst: ?ContextMono.TypeSubstId,
     fn_monotype: Monotype.Idx,
     fn_monotype_module_idx: u32,
     defining_context_callable_inst: ?CallableInstId,
@@ -90,7 +80,7 @@ pub const PackedFnId = enum(u32) {
 };
 
 pub const PackedFn = struct {
-    lambda_set_id: LambdaSetId,
+    members: PlanMemberSpan,
 };
 
 pub const IndirectCallId = enum(u32) {
@@ -98,7 +88,7 @@ pub const IndirectCallId = enum(u32) {
 };
 
 pub const IndirectCall = struct {
-    lambda_set_id: LambdaSetId,
+    members: PlanMemberSpan,
 };
 
 pub const ValuePlan = union(enum) {
@@ -111,21 +101,25 @@ pub const CallPlan = union(enum) {
     indirect: IndirectCallId,
 };
 
-pub const LambdaSetSpan = extern struct {
+pub const PlanMemberSpan = extern struct {
     start: u32,
     len: u16,
 
-    pub fn empty() LambdaSetSpan {
+    pub fn empty() PlanMemberSpan {
         return .{ .start = 0, .len = 0 };
     }
 
-    pub fn isEmpty(self: LambdaSetSpan) bool {
+    pub fn isEmpty(self: PlanMemberSpan) bool {
         return self.len == 0;
     }
 };
 
-pub const LambdaSet = struct {
-    members: LambdaSetSpan,
+const PlanMemberSet = struct {
+    members: PlanMemberSpan,
+};
+
+pub const PlanMemberSetId = enum(u32) {
+    _,
 };
 
 pub const ContextExprKey = ContextMono.ContextExprKey;
@@ -183,7 +177,7 @@ pub const CaptureFieldSpan = extern struct {
 };
 
 pub const CallableDef = struct {
-    source_member: Lambdasolved.LambdaSetMemberId,
+    source_member: ?Lambdasolved.LambdaSetMemberId,
     module_idx: u32,
     source_expr: CIR.Expr.Idx,
     fn_monotype: ContextMono.ResolvedMonotype,
@@ -195,6 +189,7 @@ pub const CallableDef = struct {
 pub const Program = struct {
     callable_defs: std.ArrayListUnmanaged(CallableDef),
     capture_fields: std.ArrayListUnmanaged(CaptureField),
+    plan_member_entries: std.ArrayListUnmanaged(CallableInstId),
     packed_fns: std.ArrayListUnmanaged(PackedFn),
     indirect_calls: std.ArrayListUnmanaged(IndirectCall),
 
@@ -202,6 +197,7 @@ pub const Program = struct {
         return .{
             .callable_defs = .empty,
             .capture_fields = .empty,
+            .plan_member_entries = .empty,
             .packed_fns = .empty,
             .indirect_calls = .empty,
         };
@@ -210,6 +206,7 @@ pub const Program = struct {
     pub fn deinit(self: *Program, allocator: Allocator) void {
         self.callable_defs.deinit(allocator);
         self.capture_fields.deinit(allocator);
+        self.plan_member_entries.deinit(allocator);
         self.packed_fns.deinit(allocator);
         self.indirect_calls.deinit(allocator);
     }
@@ -219,36 +216,36 @@ pub const Result = struct {
     callable_insts: std.ArrayListUnmanaged(CallableInst),
     callable_param_spec_entries: std.ArrayListUnmanaged(CallableParamSpecEntry),
     callable_param_projection_entries: std.ArrayListUnmanaged(CallableParamProjection),
-    lambda_set_entries: std.ArrayListUnmanaged(CallableInstId),
-    lambda_sets: std.ArrayListUnmanaged(LambdaSet),
-    packed_fn_ids_by_lambda_set: std.AutoHashMapUnmanaged(LambdaSetId, PackedFnId),
-    indirect_call_ids_by_lambda_set: std.AutoHashMapUnmanaged(LambdaSetId, IndirectCallId),
-    expr_direct_value_plans: std.AutoHashMapUnmanaged(ContextExprKey, CallableInstId),
-    expr_lambda_sets: std.AutoHashMapUnmanaged(ContextExprKey, LambdaSetId),
-    call_site_direct_plans: std.AutoHashMapUnmanaged(ContextExprKey, CallableInstId),
-    call_site_lambda_sets: std.AutoHashMapUnmanaged(ContextExprKey, LambdaSetId),
-    lookup_expr_direct_value_plans: std.AutoHashMapUnmanaged(ContextExprKey, CallableInstId),
-    lookup_expr_lambda_sets: std.AutoHashMapUnmanaged(ContextExprKey, LambdaSetId),
-    context_pattern_direct_value_plans: std.AutoHashMapUnmanaged(ContextPatternKey, CallableInstId),
-    context_pattern_lambda_sets: std.AutoHashMapUnmanaged(ContextPatternKey, LambdaSetId),
+    plan_member_sets: std.ArrayListUnmanaged(PlanMemberSet),
+    plan_member_set_entries: std.ArrayListUnmanaged(CallableInstId),
+    packed_fn_ids_by_member_set: std.AutoHashMapUnmanaged(PlanMemberSetId, PackedFnId),
+    indirect_call_ids_by_member_set: std.AutoHashMapUnmanaged(PlanMemberSetId, IndirectCallId),
+    expr_member_sets: std.AutoHashMapUnmanaged(ContextExprKey, PlanMemberSetId),
+    call_site_member_sets: std.AutoHashMapUnmanaged(ContextExprKey, PlanMemberSetId),
+    lookup_expr_member_sets: std.AutoHashMapUnmanaged(ContextExprKey, PlanMemberSetId),
+    context_pattern_member_sets: std.AutoHashMapUnmanaged(ContextPatternKey, PlanMemberSetId),
+    expr_value_plans: std.AutoHashMapUnmanaged(ContextExprKey, ValuePlan),
+    call_site_plans: std.AutoHashMapUnmanaged(ContextExprKey, CallPlan),
+    lookup_expr_value_plans: std.AutoHashMapUnmanaged(ContextExprKey, ValuePlan),
+    context_pattern_value_plans: std.AutoHashMapUnmanaged(ContextPatternKey, ValuePlan),
 
     pub fn init() Result {
         return .{
             .callable_insts = .empty,
             .callable_param_spec_entries = .empty,
             .callable_param_projection_entries = .empty,
-            .lambda_set_entries = .empty,
-            .lambda_sets = .empty,
-            .packed_fn_ids_by_lambda_set = .empty,
-            .indirect_call_ids_by_lambda_set = .empty,
-            .expr_direct_value_plans = .empty,
-            .expr_lambda_sets = .empty,
-            .call_site_direct_plans = .empty,
-            .call_site_lambda_sets = .empty,
-            .lookup_expr_direct_value_plans = .empty,
-            .lookup_expr_lambda_sets = .empty,
-            .context_pattern_direct_value_plans = .empty,
-            .context_pattern_lambda_sets = .empty,
+            .plan_member_sets = .empty,
+            .plan_member_set_entries = .empty,
+            .packed_fn_ids_by_member_set = .empty,
+            .indirect_call_ids_by_member_set = .empty,
+            .expr_member_sets = .empty,
+            .call_site_member_sets = .empty,
+            .lookup_expr_member_sets = .empty,
+            .context_pattern_member_sets = .empty,
+            .expr_value_plans = .empty,
+            .call_site_plans = .empty,
+            .lookup_expr_value_plans = .empty,
+            .context_pattern_value_plans = .empty,
         };
     }
 
@@ -256,27 +253,18 @@ pub const Result = struct {
         self.callable_insts.deinit(allocator);
         self.callable_param_spec_entries.deinit(allocator);
         self.callable_param_projection_entries.deinit(allocator);
-        self.lambda_set_entries.deinit(allocator);
-        self.lambda_sets.deinit(allocator);
-        self.packed_fn_ids_by_lambda_set.deinit(allocator);
-        self.indirect_call_ids_by_lambda_set.deinit(allocator);
-        self.expr_direct_value_plans.deinit(allocator);
-        self.expr_lambda_sets.deinit(allocator);
-        self.call_site_direct_plans.deinit(allocator);
-        self.call_site_lambda_sets.deinit(allocator);
-        self.lookup_expr_direct_value_plans.deinit(allocator);
-        self.lookup_expr_lambda_sets.deinit(allocator);
-        self.context_pattern_direct_value_plans.deinit(allocator);
-        self.context_pattern_lambda_sets.deinit(allocator);
-    }
-
-    pub fn getLambdaSet(self: *const Result, lambda_set_id: LambdaSetId) *const LambdaSet {
-        return &self.lambda_sets.items[@intFromEnum(lambda_set_id)];
-    }
-
-    pub fn getLambdaSetMembers(self: *const Result, span: LambdaSetSpan) []const CallableInstId {
-        if (span.len == 0) return &.{};
-        return self.lambda_set_entries.items[span.start..][0..span.len];
+        self.plan_member_sets.deinit(allocator);
+        self.plan_member_set_entries.deinit(allocator);
+        self.packed_fn_ids_by_member_set.deinit(allocator);
+        self.indirect_call_ids_by_member_set.deinit(allocator);
+        self.expr_member_sets.deinit(allocator);
+        self.call_site_member_sets.deinit(allocator);
+        self.lookup_expr_member_sets.deinit(allocator);
+        self.context_pattern_member_sets.deinit(allocator);
+        self.expr_value_plans.deinit(allocator);
+        self.call_site_plans.deinit(allocator);
+        self.lookup_expr_value_plans.deinit(allocator);
+        self.context_pattern_value_plans.deinit(allocator);
     }
 
     pub fn getCallableInst(self: *const Result, callable_inst_id: CallableInstId) *const CallableInst {
@@ -299,6 +287,12 @@ pub const Result = struct {
         return self.callable_param_projection_entries.items[span.start..][0..span.len];
     }
 
+    pub fn getPlanMemberSetMembers(self: *const Result, member_set_id: PlanMemberSetId) []const CallableInstId {
+        const member_set = self.plan_member_sets.items[@intFromEnum(member_set_id)];
+        if (member_set.members.len == 0) return &.{};
+        return self.plan_member_set_entries.items[member_set.members.start..][0..member_set.members.len];
+    }
+
     pub fn getCallSiteCallableInst(
         self: *const Result,
         source_context: SourceContext,
@@ -306,7 +300,11 @@ pub const Result = struct {
         expr_idx: CIR.Expr.Idx,
     ) ?CallableInstId {
         const key = ContextMono.Result.contextExprKey(source_context, module_idx, expr_idx);
-        return self.call_site_direct_plans.get(key);
+        const plan = self.call_site_plans.get(key) orelse return null;
+        return switch (plan) {
+            .direct => |callable_inst_id| callable_inst_id,
+            .indirect => null,
+        };
     }
 
     pub fn getCallSitePlan(
@@ -316,23 +314,7 @@ pub const Result = struct {
         expr_idx: CIR.Expr.Idx,
     ) ?CallPlan {
         const key = ContextMono.Result.contextExprKey(source_context, module_idx, expr_idx);
-        if (self.call_site_direct_plans.get(key)) |callable_inst_id| return .{ .direct = callable_inst_id };
-        if (self.call_site_lambda_sets.get(key)) |lambda_set_id| {
-            const indirect_call_id = self.indirect_call_ids_by_lambda_set.get(lambda_set_id) orelse return null;
-            return .{ .indirect = indirect_call_id };
-        }
-        return null;
-    }
-
-    pub fn getCallSiteLambdaSetMembers(
-        self: *const Result,
-        source_context: SourceContext,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-    ) ?[]const CallableInstId {
-        const key = ContextMono.Result.contextExprKey(source_context, module_idx, expr_idx);
-        const set_id = self.call_site_lambda_sets.get(key) orelse return null;
-        return self.getLambdaSetMembers(self.getLambdaSet(set_id).members);
+        return self.call_site_plans.get(key);
     }
 
     pub fn getExprCallableInst(
@@ -342,7 +324,11 @@ pub const Result = struct {
         expr_idx: CIR.Expr.Idx,
     ) ?CallableInstId {
         const key = ContextMono.Result.contextExprKey(source_context, module_idx, expr_idx);
-        return self.expr_direct_value_plans.get(key);
+        const plan = self.expr_value_plans.get(key) orelse return null;
+        return switch (plan) {
+            .direct => |callable_inst_id| callable_inst_id,
+            .packed_fn => null,
+        };
     }
 
     pub fn getExprValuePlan(
@@ -352,23 +338,7 @@ pub const Result = struct {
         expr_idx: CIR.Expr.Idx,
     ) ?ValuePlan {
         const key = ContextMono.Result.contextExprKey(source_context, module_idx, expr_idx);
-        if (self.expr_direct_value_plans.get(key)) |callable_inst_id| return .{ .direct = callable_inst_id };
-        if (self.expr_lambda_sets.get(key)) |lambda_set_id| {
-            const packed_fn_id = self.packed_fn_ids_by_lambda_set.get(lambda_set_id) orelse return null;
-            return .{ .packed_fn = packed_fn_id };
-        }
-        return null;
-    }
-
-    pub fn getExprLambdaSetMembers(
-        self: *const Result,
-        source_context: SourceContext,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-    ) ?[]const CallableInstId {
-        const key = ContextMono.Result.contextExprKey(source_context, module_idx, expr_idx);
-        const set_id = self.expr_lambda_sets.get(key) orelse return null;
-        return self.getLambdaSetMembers(self.getLambdaSet(set_id).members);
+        return self.expr_value_plans.get(key);
     }
 
     pub fn getLookupExprCallableInst(
@@ -378,7 +348,11 @@ pub const Result = struct {
         expr_idx: CIR.Expr.Idx,
     ) ?CallableInstId {
         const key = ContextMono.Result.contextExprKey(source_context, module_idx, expr_idx);
-        return self.lookup_expr_direct_value_plans.get(key);
+        const plan = self.lookup_expr_value_plans.get(key) orelse return null;
+        return switch (plan) {
+            .direct => |callable_inst_id| callable_inst_id,
+            .packed_fn => null,
+        };
     }
 
     pub fn getLookupExprValuePlan(
@@ -388,23 +362,7 @@ pub const Result = struct {
         expr_idx: CIR.Expr.Idx,
     ) ?ValuePlan {
         const key = ContextMono.Result.contextExprKey(source_context, module_idx, expr_idx);
-        if (self.lookup_expr_direct_value_plans.get(key)) |callable_inst_id| return .{ .direct = callable_inst_id };
-        if (self.lookup_expr_lambda_sets.get(key)) |lambda_set_id| {
-            const packed_fn_id = self.packed_fn_ids_by_lambda_set.get(lambda_set_id) orelse return null;
-            return .{ .packed_fn = packed_fn_id };
-        }
-        return null;
-    }
-
-    pub fn getLookupExprLambdaSetMembers(
-        self: *const Result,
-        source_context: SourceContext,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-    ) ?[]const CallableInstId {
-        const key = ContextMono.Result.contextExprKey(source_context, module_idx, expr_idx);
-        const set_id = self.lookup_expr_lambda_sets.get(key) orelse return null;
-        return self.getLambdaSetMembers(self.getLambdaSet(set_id).members);
+        return self.lookup_expr_value_plans.get(key);
     }
 
     pub fn getContextPatternCallableInst(
@@ -414,7 +372,11 @@ pub const Result = struct {
         pattern_idx: CIR.Pattern.Idx,
     ) ?CallableInstId {
         const key = ContextMono.Result.contextPatternKey(source_context, module_idx, pattern_idx);
-        return self.context_pattern_direct_value_plans.get(key);
+        const plan = self.context_pattern_value_plans.get(key) orelse return null;
+        return switch (plan) {
+            .direct => |callable_inst_id| callable_inst_id,
+            .packed_fn => null,
+        };
     }
 
     pub fn getContextPatternValuePlan(
@@ -424,23 +386,7 @@ pub const Result = struct {
         pattern_idx: CIR.Pattern.Idx,
     ) ?ValuePlan {
         const key = ContextMono.Result.contextPatternKey(source_context, module_idx, pattern_idx);
-        if (self.context_pattern_direct_value_plans.get(key)) |callable_inst_id| return .{ .direct = callable_inst_id };
-        if (self.context_pattern_lambda_sets.get(key)) |lambda_set_id| {
-            const packed_fn_id = self.packed_fn_ids_by_lambda_set.get(lambda_set_id) orelse return null;
-            return .{ .packed_fn = packed_fn_id };
-        }
-        return null;
-    }
-
-    pub fn getContextPatternLambdaSetMembers(
-        self: *const Result,
-        source_context: SourceContext,
-        module_idx: u32,
-        pattern_idx: CIR.Pattern.Idx,
-    ) ?[]const CallableInstId {
-        const key = ContextMono.Result.contextPatternKey(source_context, module_idx, pattern_idx);
-        const set_id = self.context_pattern_lambda_sets.get(key) orelse return null;
-        return self.getLambdaSetMembers(self.getLambdaSet(set_id).members);
+        return self.context_pattern_value_plans.get(key);
     }
 };
 
@@ -459,4 +405,9 @@ pub fn getPackedFn(program: *const Program, packed_fn_id: PackedFnId) *const Pac
 
 pub fn getIndirectCall(program: *const Program, indirect_call_id: IndirectCallId) *const IndirectCall {
     return &program.indirect_calls.items[@intFromEnum(indirect_call_id)];
+}
+
+pub fn getPlanMembers(program: *const Program, span: PlanMemberSpan) []const CallableInstId {
+    if (span.len == 0) return &.{};
+    return program.plan_member_entries.items[span.start..][0..span.len];
 }

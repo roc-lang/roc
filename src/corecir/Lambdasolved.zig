@@ -160,7 +160,7 @@ pub const LambdaSetMember = struct {
     template: CallableTemplateId,
     context_id: cm.ContextId,
     fn_monotype: cm.ResolvedMonotype,
-    capture_plan: CapturePlanId = .none,
+    capture_plan: ?CapturePlanId = null,
     kind: SolvedCallableKind,
 };
 
