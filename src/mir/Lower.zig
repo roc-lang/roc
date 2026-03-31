@@ -1013,9 +1013,9 @@ fn requireExactCallableInstFromCallableValue(
     );
     return switch (callable_value) {
         .direct => |callable_inst_id| callable_inst_id,
-        .packed_callable => |packed_callable_id| std.debug.panic(
-            "statement-only MIR TODO: value lowering required direct callable specialization but encountered packed callable {d}",
-            .{@intFromEnum(packed_callable_id)},
+        .packed_fn => |packed_fn_id| std.debug.panic(
+            "statement-only MIR TODO: value lowering required direct callable specialization but encountered packed fn {d}",
+            .{@intFromEnum(packed_fn_id)},
         ),
     };
 }
@@ -1026,48 +1026,48 @@ fn exactCallableInstIfCallableValueDirect(
     const callable_value = maybe_callable_value orelse return null;
     return switch (callable_value) {
         .direct => |callable_inst_id| callable_inst_id,
-        .packed_callable => |packed_callable_id| std.debug.panic(
-            "statement-only MIR TODO: exact callable expected but encountered packed callable {d}",
-            .{@intFromEnum(packed_callable_id)},
+        .packed_fn => |packed_fn_id| std.debug.panic(
+            "statement-only MIR TODO: exact callable expected but encountered packed fn {d}",
+            .{@intFromEnum(packed_fn_id)},
         ),
     };
 }
 
-fn lookupProgramExprCallDispatch(self: *const Self, expr_idx: CIR.Expr.Idx) ?Pipeline.CallDispatch {
-    return self.callable_pipeline.getExprCallDispatch(
+fn lookupProgramExprCallSite(self: *const Self, expr_idx: CIR.Expr.Idx) ?Pipeline.CallSite {
+    return self.callable_pipeline.getExprCallSite(
         self.currentSourceContext(),
         self.current_module_idx,
         expr_idx,
     );
 }
 
-fn requireExactCallableInstFromCallDispatch(
-    maybe_call_dispatch: ?Pipeline.CallDispatch,
+fn requireExactCallableInstFromCallSite(
+    maybe_call_site: ?Pipeline.CallSite,
     comptime fmt: []const u8,
     args: anytype,
 ) Pipeline.CallableInstId {
-    const call_dispatch = maybe_call_dispatch orelse std.debug.panic(
+    const call_site = maybe_call_site orelse std.debug.panic(
         "statement-only MIR invariant violated: " ++ fmt,
         args,
     );
-    return switch (call_dispatch) {
+    return switch (call_site) {
         .direct => |callable_inst_id| callable_inst_id,
-        .dispatch_call => |dispatch_call_id| std.debug.panic(
-            "statement-only MIR TODO: direct call lowering required exact callable but encountered dispatch call {d}",
-            .{@intFromEnum(dispatch_call_id)},
+        .indirect_call => |indirect_call_id| std.debug.panic(
+            "statement-only MIR TODO: direct call lowering required exact callable but encountered indirect call {d}",
+            .{@intFromEnum(indirect_call_id)},
         ),
     };
 }
 
-fn exactCallableInstIfCallDispatchDirect(
-    maybe_call_dispatch: ?Pipeline.CallDispatch,
+fn exactCallableInstIfCallSiteDirect(
+    maybe_call_site: ?Pipeline.CallSite,
 ) ?Pipeline.CallableInstId {
-    const call_dispatch = maybe_call_dispatch orelse return null;
-    return switch (call_dispatch) {
+    const call_site = maybe_call_site orelse return null;
+    return switch (call_site) {
         .direct => |callable_inst_id| callable_inst_id,
-        .dispatch_call => |dispatch_call_id| std.debug.panic(
-            "statement-only MIR TODO: exact call lowering expected direct call but encountered dispatch call {d}",
-            .{@intFromEnum(dispatch_call_id)},
+        .indirect_call => |indirect_call_id| std.debug.panic(
+            "statement-only MIR TODO: exact call lowering expected direct call but encountered indirect call {d}",
+            .{@intFromEnum(indirect_call_id)},
         ),
     };
 }
@@ -4173,7 +4173,7 @@ fn lowerCallInto(
     const top = self.scratch_local_ids.top();
     defer self.scratch_local_ids.clearFrom(top);
 
-    const exact_callable_inst_id = exactCallableInstIfCallDispatchDirect(self.lookupProgramExprCallDispatch(call_expr_idx));
+    const exact_callable_inst_id = exactCallableInstIfCallSiteDirect(self.lookupProgramExprCallSite(call_expr_idx));
     const callee_monotype = if (exact_callable_inst_id) |callable_inst_id| blk: {
         const callable_inst = self.callable_pipeline.lambdamono.getCallableInst(callable_inst_id);
         break :blk try self.importMonotypeFromStore(
@@ -6043,7 +6043,7 @@ fn debugAssertNoUnitPrimPatternBinding(
     };
     const has_program_expr_mono = self.lookupProgramExprMonotype(expr_idx) != null;
     const maybe_callsite_inst = switch (expr) {
-        .e_call => exactCallableInstIfCallDispatchDirect(self.lookupProgramExprCallDispatch(expr_idx)),
+        .e_call => exactCallableInstIfCallSiteDirect(self.lookupProgramExprCallSite(expr_idx)),
         else => null,
     };
     const callsite_template_expr: u32 = if (maybe_callsite_inst) |callsite_inst|
@@ -6147,7 +6147,7 @@ fn markPatternLocalsPreludeBound(
     }
 }
 
-fn bindRepresentativePatternLocalsToAlternative(
+fn bindRepresentativePatternLocalsToBranchPattern(
     self: *Self,
     module_env: *const ModuleEnv,
     representative_pattern_idx: CIR.Pattern.Idx,
@@ -6904,7 +6904,7 @@ fn lowerMatchBranchChainInto(
                 try self.predeclarePatternLocals(module_env, branch_pattern.pattern);
                 try self.markPatternLocalsPreludeBound(module_env, branch_pattern.pattern);
                 if (representative_pattern_idx) |representative_pattern| {
-                    try self.bindRepresentativePatternLocalsToAlternative(
+                    try self.bindRepresentativePatternLocalsToBranchPattern(
                         module_env,
                         representative_pattern,
                         branch_pattern.pattern,

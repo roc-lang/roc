@@ -46,6 +46,11 @@ pub const CallableTemplateId = enum(u32) {
     _,
 };
 
+/// One monomorphic callable specialization referenced by solved lambda sets.
+pub const CallableInstId = enum(u32) {
+    _,
+};
+
 pub const CallableTemplateKind = enum {
     top_level_def,
     lambda,
@@ -88,11 +93,49 @@ pub const SourceContext = cm.SourceContext;
 pub const ContextExprKey = cm.ContextExprKey;
 pub const ContextPatternKey = cm.ContextPatternKey;
 
+pub const LambdaSetMemberSpan = extern struct {
+    start: u32,
+    len: u16,
+
+    pub fn empty() LambdaSetMemberSpan {
+        return .{ .start = 0, .len = 0 };
+    }
+
+    pub fn isEmpty(self: LambdaSetMemberSpan) bool {
+        return self.len == 0;
+    }
+};
+
+pub const LambdaSet = struct {
+    members: LambdaSetMemberSpan,
+};
+
+pub const LambdaSetId = enum(u32) {
+    _,
+};
+
+/// Solved callable semantics for a function-valued source expression or pattern.
+pub const SolvedCallableValue = union(enum) {
+    direct: CallableInstId,
+    lambda_set: LambdaSetId,
+};
+
+/// Solved call semantics for a source call site before executable lowering.
+pub const SolvedCall = union(enum) {
+    direct: CallableInstId,
+    lambda_set: LambdaSetId,
+};
+
 pub const Result = struct {
     callable_templates: std.ArrayListUnmanaged(CallableTemplate),
     source_exprs: std.AutoHashMapUnmanaged(u64, ExprSource),
     callable_template_ids_by_source: std.AutoHashMapUnmanaged(u64, CallableTemplateId),
     deferred_local_callables: std.AutoHashMapUnmanaged(u64, DeferredLocalCallable),
+    lambda_set_member_entries: std.ArrayListUnmanaged(CallableInstId),
+    lambda_sets: std.ArrayListUnmanaged(LambdaSet),
+    context_expr_callable_values: std.AutoHashMapUnmanaged(ContextExprKey, SolvedCallableValue),
+    context_expr_calls: std.AutoHashMapUnmanaged(ContextExprKey, SolvedCall),
+    context_pattern_callable_values: std.AutoHashMapUnmanaged(ContextPatternKey, SolvedCallableValue),
 
     pub fn init(allocator: Allocator) !Result {
         _ = allocator;
@@ -101,6 +144,11 @@ pub const Result = struct {
             .source_exprs = .empty,
             .callable_template_ids_by_source = .empty,
             .deferred_local_callables = .empty,
+            .lambda_set_member_entries = .empty,
+            .lambda_sets = .empty,
+            .context_expr_callable_values = .empty,
+            .context_expr_calls = .empty,
+            .context_pattern_callable_values = .empty,
         };
     }
 
@@ -109,6 +157,11 @@ pub const Result = struct {
         self.source_exprs.deinit(allocator);
         self.callable_template_ids_by_source.deinit(allocator);
         self.deferred_local_callables.deinit(allocator);
+        self.lambda_set_member_entries.deinit(allocator);
+        self.lambda_sets.deinit(allocator);
+        self.context_expr_callable_values.deinit(allocator);
+        self.context_expr_calls.deinit(allocator);
+        self.context_pattern_callable_values.deinit(allocator);
     }
 
     pub fn getCallableTemplate(self: *const Result, callable_template_id: CallableTemplateId) *const CallableTemplate {
@@ -137,6 +190,43 @@ pub const Result = struct {
         pattern_idx: CIR.Pattern.Idx,
     ) ?ExprSource {
         return self.source_exprs.get(packLocalPatternSourceKey(module_idx, pattern_idx));
+    }
+
+    pub fn getLambdaSet(self: *const Result, lambda_set_id: LambdaSetId) *const LambdaSet {
+        return &self.lambda_sets.items[@intFromEnum(lambda_set_id)];
+    }
+
+    pub fn getLambdaSetMembers(self: *const Result, lambda_set_id: LambdaSetId) []const CallableInstId {
+        const lambda_set = self.getLambdaSet(lambda_set_id);
+        if (lambda_set.members.len == 0) return &.{};
+        return self.lambda_set_member_entries.items[lambda_set.members.start..][0..lambda_set.members.len];
+    }
+
+    pub fn getExprCallableValue(
+        self: *const Result,
+        source_context: SourceContext,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) ?SolvedCallableValue {
+        return self.context_expr_callable_values.get(cm.Result.contextExprKey(source_context, module_idx, expr_idx));
+    }
+
+    pub fn getExprCall(
+        self: *const Result,
+        source_context: SourceContext,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) ?SolvedCall {
+        return self.context_expr_calls.get(cm.Result.contextExprKey(source_context, module_idx, expr_idx));
+    }
+
+    pub fn getPatternCallableValue(
+        self: *const Result,
+        source_context: SourceContext,
+        module_idx: u32,
+        pattern_idx: CIR.Pattern.Idx,
+    ) ?SolvedCallableValue {
+        return self.context_pattern_callable_values.get(cm.Result.contextPatternKey(source_context, module_idx, pattern_idx));
     }
 
 };
