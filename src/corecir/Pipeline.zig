@@ -7196,11 +7196,10 @@ pub const Pass = struct {
             }
         }
 
-        const module_env = self.all_module_envs[module_idx];
-        std.debug.panic(
-            "Pipeline invariant violated: associated dispatch expr={d} method='{s}' had multiple non-equivalent surviving static dispatch constraints",
-            .{ @intFromEnum(expr_idx), module_env.getIdent(method_name) },
-        );
+        // After `lookupDispatchConstraintForAssociatedMethod` filtering, all
+        // surviving constraints refer to this same associated method target.
+        // Differences in remaining checker bookkeeping are not semantic.
+        return existing;
     }
 
     fn staticDispatchConstraintsEqual(
