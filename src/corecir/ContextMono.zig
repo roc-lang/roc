@@ -228,17 +228,6 @@ pub const Result = struct {
         });
     }
 
-    pub fn getTypeVarMonotype(
-        self: *const Result,
-        module_idx: u32,
-        type_var: types.Var,
-    ) ?ResolvedMonotype {
-        return self.resolved_typevar_monotypes.get(.{
-            .module_idx = module_idx,
-            .type_var = type_var,
-        });
-    }
-
     pub fn getDispatchExprTarget(
         self: *const Result,
         source_context: SourceContext,

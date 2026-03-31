@@ -88,12 +88,6 @@ const ExactCallableResolution = struct {
     requires_hidden_capture: bool,
 };
 
-fn captureValuePlanExactCallableInst(
-    plan: Pipeline.CaptureValuePlan,
-) ?Pipeline.CallableInstId {
-    return plan.exact_callable_inst;
-}
-
 const LambdaEntryBindingState = struct {
     by_local: std.AutoHashMap(u32, void),
 
@@ -932,9 +926,6 @@ fn lookupPipelinedExprMonotype(self: *const Self, expr_idx: CIR.Expr.Idx) ?Pipel
         self.currentSourceContext(),
         self.current_module_idx,
         expr_idx,
-    ) orelse self.callable_pipeline.getTypeVarMonotype(
-        self.current_module_idx,
-        ModuleEnv.varFrom(expr_idx),
     );
 }
 
@@ -968,11 +959,6 @@ fn lookupPipelinedLookupCallableInst(self: *const Self, expr_idx: CIR.Expr.Idx) 
         self.current_module_idx,
         expr_idx,
     );
-}
-
-fn lookupPipelinedValueExprCallableInst(self: *const Self, expr_idx: CIR.Expr.Idx) ?Pipeline.CallableInstId {
-    if (self.lookupPipelinedExprCallableInst(expr_idx)) |callable_inst_id| return callable_inst_id;
-    return self.lookupPipelinedLookupCallableInst(expr_idx);
 }
 
 fn requireExactCallableInst(
@@ -8094,21 +8080,9 @@ fn monotypesStructurallyEqualRec(
     };
 }
 
-/// Get the monotype for a CIR expression (via its type var).
+/// Get the exact staged monotype for a CIR expression in the active source context.
 fn resolveMonotype(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!Monotype.Idx {
     if (self.lookupPipelinedExprMonotype(expr_idx)) |mono| {
-        return self.importMonotypeFromStore(
-            &self.callable_pipeline.context_mono.monotype_store,
-            mono.idx,
-            mono.module_idx,
-            self.current_module_idx,
-        );
-    }
-
-    if (self.callable_pipeline.getTypeVarMonotype(
-        self.current_module_idx,
-        ModuleEnv.varFrom(expr_idx),
-    )) |mono| {
         return self.importMonotypeFromStore(
             &self.callable_pipeline.context_mono.monotype_store,
             mono.idx,
@@ -8276,18 +8250,6 @@ fn requirePatternMonotype(
     pattern_idx: CIR.Pattern.Idx,
 ) Allocator.Error!Monotype.Idx {
     if (self.lookupPipelinedPatternMonotype(pattern_idx)) |resolved| {
-        return self.importMonotypeFromStore(
-            &self.callable_pipeline.context_mono.monotype_store,
-            resolved.idx,
-            resolved.module_idx,
-            self.current_module_idx,
-        );
-    }
-
-    if (self.callable_pipeline.getTypeVarMonotype(
-        self.current_module_idx,
-        ModuleEnv.varFrom(pattern_idx),
-    )) |resolved| {
         return self.importMonotypeFromStore(
             &self.callable_pipeline.context_mono.monotype_store,
             resolved.idx,
