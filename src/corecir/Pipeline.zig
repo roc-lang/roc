@@ -4739,22 +4739,22 @@ pub const Pass = struct {
             resolved_mono,
         );
 
-        const bindings = self.active_bindings orelse return;
         const module_env = self.all_module_envs[module_idx];
+        if (self.active_bindings) |bindings| {
+            var ordered_entries = std.ArrayList(TypeSubstEntry).empty;
+            defer ordered_entries.deinit(self.allocator);
 
-        var ordered_entries = std.ArrayList(TypeSubstEntry).empty;
-        defer ordered_entries.deinit(self.allocator);
-
-        try self.bindTypeVarMonotypes(
-            result,
-            module_idx,
-            &module_env.types,
-            bindings,
-            &ordered_entries,
-            ModuleEnv.varFrom(pattern_idx),
-            resolved_mono.idx,
-            resolved_mono.module_idx,
-        );
+            try self.bindTypeVarMonotypes(
+                result,
+                module_idx,
+                &module_env.types,
+                bindings,
+                &ordered_entries,
+                ModuleEnv.varFrom(pattern_idx),
+                resolved_mono.idx,
+                resolved_mono.module_idx,
+            );
+        }
 
         const pattern = module_env.store.getPattern(pattern_idx);
         switch (pattern) {
