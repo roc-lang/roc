@@ -1706,11 +1706,21 @@ pub const Pass = struct {
                     try self.registerDeferredLocalCallable(result, module_idx, decl.pattern, decl.expr);
                     try self.scanCirValueExpr(result, module_idx, decl.expr);
                     try self.bindPatternCallableValueCallableInsts(result, module_idx, decl.pattern, decl.expr);
-                    try self.bindCurrentPatternFromExprIfExact(result, module_idx, decl.pattern, decl.expr);
+                    try self.bindCurrentPatternFromResolvedMonotype(
+                        result,
+                        module_idx,
+                        decl.pattern,
+                        try self.requireExactResolvedExprMonotype(result, module_idx, decl.expr),
+                    );
                 } else {
                     try self.scanCirExpr(result, module_idx, decl.expr);
                     try self.bindPatternCallableValueCallableInsts(result, module_idx, decl.pattern, decl.expr);
-                    try self.bindCurrentPatternFromExprIfExact(result, module_idx, decl.pattern, decl.expr);
+                    try self.bindCurrentPatternFromResolvedMonotype(
+                        result,
+                        module_idx,
+                        decl.pattern,
+                        try self.requireExactResolvedExprMonotype(result, module_idx, decl.expr),
+                    );
                 }
             },
             .s_var => |var_decl| {
@@ -1730,17 +1740,32 @@ pub const Pass = struct {
                     try self.registerDeferredLocalCallable(result, module_idx, var_decl.pattern_idx, var_decl.expr);
                     try self.scanCirValueExpr(result, module_idx, var_decl.expr);
                     try self.bindPatternCallableValueCallableInsts(result, module_idx, var_decl.pattern_idx, var_decl.expr);
-                    try self.bindCurrentPatternFromExprIfExact(result, module_idx, var_decl.pattern_idx, var_decl.expr);
+                    try self.bindCurrentPatternFromResolvedMonotype(
+                        result,
+                        module_idx,
+                        var_decl.pattern_idx,
+                        try self.requireExactResolvedExprMonotype(result, module_idx, var_decl.expr),
+                    );
                 } else {
                     try self.scanCirExpr(result, module_idx, var_decl.expr);
                     try self.bindPatternCallableValueCallableInsts(result, module_idx, var_decl.pattern_idx, var_decl.expr);
-                    try self.bindCurrentPatternFromExprIfExact(result, module_idx, var_decl.pattern_idx, var_decl.expr);
+                    try self.bindCurrentPatternFromResolvedMonotype(
+                        result,
+                        module_idx,
+                        var_decl.pattern_idx,
+                        try self.requireExactResolvedExprMonotype(result, module_idx, var_decl.expr),
+                    );
                 }
             },
             .s_reassign => |reassign| {
                 try self.propagatePatternDemandToExpr(result, module_idx, reassign.pattern_idx, reassign.expr);
                 try self.scanCirExpr(result, module_idx, reassign.expr);
-                try self.bindCurrentPatternFromExprIfExact(result, module_idx, reassign.pattern_idx, reassign.expr);
+                try self.bindCurrentPatternFromResolvedMonotype(
+                    result,
+                    module_idx,
+                    reassign.pattern_idx,
+                    try self.requireExactResolvedExprMonotype(result, module_idx, reassign.expr),
+                );
             },
             .s_dbg => |dbg_stmt| try self.scanCirValueExpr(result, module_idx, dbg_stmt.expr),
             .s_expr => |expr_stmt| try self.scanCirValueExpr(result, module_idx, expr_stmt.expr),
@@ -2743,6 +2768,7 @@ pub const Pass = struct {
             },
             .e_match => |match_expr| {
                 try self.scanCirExpr(result, module_idx, match_expr.cond);
+                const cond_mono = try self.requireExactResolvedExprMonotype(result, module_idx, match_expr.cond);
 
                 const branches = module_env.store.sliceMatchBranches(match_expr.branches);
                 for (branches) |branch_idx| {
@@ -2753,11 +2779,11 @@ pub const Pass = struct {
                             .module_idx = module_idx,
                             .expr_idx = match_expr.cond,
                         });
-                        try self.bindCurrentPatternFromExprIfExact(
+                        try self.bindCurrentPatternFromResolvedMonotype(
                             result,
                             module_idx,
                             branch_pattern.pattern,
-                            match_expr.cond,
+                            cond_mono,
                         );
                     }
                     try self.propagateDemandedValueResultMonotypeToChild(result, module_idx, expr_idx, branch.value);
@@ -3343,7 +3369,9 @@ pub const Pass = struct {
                         );
                         return;
                     },
-                    .blocked => return,
+                    .blocked => {
+                        return;
+                    },
                     .none => {},
                 }
             }
@@ -3402,7 +3430,9 @@ pub const Pass = struct {
         }
         const callable_inst_id = resolved: switch (try self.inferDirectCallCallableInst(result, module_idx, call_expr_idx, call_expr, template_id)) {
             .resolved => |callable_inst_id| break :resolved callable_inst_id,
-            .blocked => return,
+            .blocked => {
+                return;
+            },
             .none => {
                 if (desired_fn_monotype.isNone() and std.debug.runtime_safety) {
                     const template = result.getCallableTemplate(template_id);
@@ -4665,29 +4695,34 @@ pub const Pass = struct {
         }
     }
 
-    fn bindCurrentPatternFromExprIfExact(
+    fn requireExactResolvedExprMonotype(
         self: *Pass,
         result: *Result,
         module_idx: u32,
-        pattern_idx: CIR.Pattern.Idx,
         expr_idx: CIR.Expr.Idx,
-    ) Allocator.Error!void {
-        const module_env = self.all_module_envs[module_idx];
-        const expr_mono = switch (module_env.store.getExpr(expr_idx)) {
-            .e_lookup_local => |lookup| blk: {
-                const source_mono = try self.resolveTypeVarMonotypeIfExactResolved(
-                    result,
-                    module_idx,
-                    ModuleEnv.varFrom(lookup.pattern_idx),
-                );
-                if (!source_mono.isNone()) break :blk source_mono;
-                break :blk try self.resolveExprMonotypeIfExactResolved(result, module_idx, expr_idx);
-            },
-            else => try self.resolveExprMonotypeIfExactResolved(result, module_idx, expr_idx),
-        };
-        if (expr_mono.isNone()) return;
+    ) Allocator.Error!ResolvedMonotype {
+        const resolved = try self.resolveExprMonotypeIfExactResolved(result, module_idx, expr_idx);
+        if (!resolved.isNone()) return resolved;
 
-        try self.bindCurrentPatternFromResolvedMonotype(result, module_idx, pattern_idx, expr_mono);
+        std.debug.panic(
+            "Pipeline invariant violated: missing exact monotype for expr {d} ({s}) in module {d} under source context {s}/{d}/{d}",
+            .{
+                @intFromEnum(expr_idx),
+                @tagName(self.all_module_envs[module_idx].store.getExpr(expr_idx)),
+                module_idx,
+                @tagName(self.currentSourceContext()),
+                switch (self.currentSourceContext()) {
+                    .callable_inst => |context_id| @intFromEnum(@as(CallableInstId, @enumFromInt(@intFromEnum(context_id)))),
+                    .root_expr, .provenance_expr, .template_expr => std.math.maxInt(u32),
+                },
+                switch (self.currentSourceContext()) {
+                    .root_expr => |root| @intFromEnum(root.expr_idx),
+                    .provenance_expr => |source| @intFromEnum(source.expr_idx),
+                    .template_expr => |template_ctx| @intFromEnum(template_ctx.expr_idx),
+                    .callable_inst => std.math.maxInt(u32),
+                },
+            },
+        );
     }
 
     fn bindCurrentPatternFromResolvedMonotype(
