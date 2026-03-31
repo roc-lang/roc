@@ -125,7 +125,7 @@ const LambdaEntryBindingState = struct {
 const CaptureMaterialization = union(enum) {
     expr: struct {
         local: MIR.LocalId,
-        expr_id: Pipeline.ExprId,
+        expr_ref: Pipeline.ExprRef,
     },
 };
 
@@ -214,8 +214,9 @@ type_var_seen: std.AutoHashMap(types.Var, Monotype.Idx),
 nominal_cycle_breakers: std.AutoHashMap(types.Var, Monotype.Idx),
 
 /// Cache for callable bodies already lowered for callable instances chosen by callable_pipeline.
-/// The callable value itself is rebuilt per use-site scope because captures are
-/// context-sensitive, but the lowered lambda body is unique per callable inst.
+/// Closure values are materialized from explicit specialization-owned capture
+/// sources in the current lowering scope, but the lowered lambda body is unique
+/// per callable inst.
 lowered_callable_insts: std.AutoHashMap(u32, MIR.LambdaId),
 
 /// Cache for direct statement-lowered lambda expressions keyed by the full
@@ -453,11 +454,11 @@ fn activeCallableDef(self: *const Self) ?*const Pipeline.CallableDef {
 }
 
 fn callableDefRuntimeExpr(self: *const Self, callable_def: *const Pipeline.CallableDef) *const corecir.Lambdamono.Expr {
-    return self.callable_pipeline.getProgramExpr(callable_def.runtime_expr);
+    return self.callable_pipeline.getProgramExprForRef(callable_def.runtime_expr);
 }
 
 fn callableDefBodyExpr(self: *const Self, callable_def: *const Pipeline.CallableDef) *const corecir.Lambdamono.Expr {
-    return self.callable_pipeline.getProgramExpr(callable_def.body_expr);
+    return self.callable_pipeline.getProgramExprForRef(callable_def.body_expr);
 }
 
 fn callableRuntimeValueKindText(runtime_value: Pipeline.RuntimeValue) []const u8 {
@@ -2760,21 +2761,20 @@ fn lowerLookupLocalIntoWithExactCallableInst(
                 exact_callable_inst,
             );
         },
-        .expr => |source_expr_id| {
-            const source_program_expr = self.callable_pipeline.getProgramExpr(source_expr_id);
-            if (source_program_expr.module_idx == self.current_module_idx and source_program_expr.source_expr == expr_idx) {
+        .expr => |source_expr_ref| {
+            if (source_expr_ref.module_idx == self.current_module_idx and source_expr_ref.expr_idx == expr_idx) {
                 std.debug.panic(
                     "statement-only MIR invariant violated: local lookup expr {d} resolved to itself as a pattern source",
                     .{@intFromEnum(expr_idx)},
                 );
             }
             if (exact_callable_inst_override) |callable_inst_id| {
-                const source_module_env = self.all_module_envs[source_program_expr.module_idx];
-                if (directCallableDefinitionExpr(source_module_env, source_program_expr.source_expr) != null) {
+                const source_module_env = self.all_module_envs[source_expr_ref.module_idx];
+                if (directCallableDefinitionExpr(source_module_env, source_expr_ref.expr_idx) != null) {
                     return self.lowerResolvedCallableInstValueInto(callable_inst_id, target, next);
                 }
             }
-            return self.lowerCapturedSourceExprInto(source_expr_id, target, next);
+            return self.lowerCapturedSourceExprInto(source_expr_ref, target, next);
         },
     };
 
@@ -2898,12 +2898,12 @@ fn lowerLookupExternalIntoWithExactCallableInst(
         .{@intFromEnum(expr_idx)},
     )) {
         .def => |target_def| target_def,
-        .expr => |source_expr_id| std.debug.panic(
+        .expr => |source_expr_ref| std.debug.panic(
             "statement-only MIR invariant violated: external lookup expr {d} unexpectedly specialized to source expr {d} in module {d}",
             .{
                 @intFromEnum(expr_idx),
-                @intFromEnum(self.callable_pipeline.getProgramExpr(source_expr_id).source_expr),
-                self.callable_pipeline.getProgramExpr(source_expr_id).module_idx,
+                @intFromEnum(source_expr_ref.expr_idx),
+                source_expr_ref.module_idx,
             },
         ),
     };
@@ -2956,12 +2956,12 @@ fn lowerLookupRequiredIntoWithExactCallableInst(
         .{@intFromEnum(expr_idx)},
     )) {
         .def => |target_def| target_def,
-        .expr => |source_expr_id| std.debug.panic(
+        .expr => |source_expr_ref| std.debug.panic(
             "statement-only MIR invariant violated: required lookup expr {d} unexpectedly specialized to source expr {d} in module {d}",
             .{
                 @intFromEnum(expr_idx),
-                @intFromEnum(self.callable_pipeline.getProgramExpr(source_expr_id).source_expr),
-                self.callable_pipeline.getProgramExpr(source_expr_id).module_idx,
+                @intFromEnum(source_expr_ref.expr_idx),
+                source_expr_ref.module_idx,
             },
         ),
     };
@@ -3297,14 +3297,14 @@ fn appendCaptureMaterialization(
                 },
             );
         },
-        .expr => |source_expr_id| blk: {
+        .expr => |source_expr_ref| blk: {
             const local = try self.freshSyntheticLocal(capture_monotype, false);
             if (capture_field.exact_callable_inst) |capture_callable_inst_id| {
                 try self.bindExactCallableLocal(local, capture_callable_inst_id);
             }
             try out.append(self.allocator, .{ .expr = .{
                 .local = local,
-                .expr_id = source_expr_id,
+                .expr_ref = source_expr_ref,
             } });
             break :blk local;
         },
@@ -3737,7 +3737,7 @@ fn lowerResolvedCallableInstValueInto(
         switch (capture_materializations.items[i]) {
             .expr => |materialization| {
                 current = try self.lowerCapturedSourceExprInto(
-                    materialization.expr_id,
+                    materialization.expr_ref,
                     materialization.local,
                     current,
                 );
@@ -3750,34 +3750,32 @@ fn lowerResolvedCallableInstValueInto(
 
 fn lowerCapturedSourceExprInto(
     self: *Self,
-    source_expr_id: Pipeline.ExprId,
+    source_expr_ref: Pipeline.ExprRef,
     target: MIR.LocalId,
     next: MIR.CFStmtId,
 ) Allocator.Error!MIR.CFStmtId {
-    const source_program_expr = self.callable_pipeline.getProgramExpr(source_expr_id);
-
-    const restore_source_context = !std.meta.eql(self.currentSourceContext(), source_program_expr.source_context);
+    const restore_source_context = !std.meta.eql(self.currentSourceContext(), source_expr_ref.source_context);
     if (restore_source_context) {
-        try self.pushSourceContext(source_program_expr.source_context);
+        try self.pushSourceContext(source_expr_ref.source_context);
         defer self.popSourceContext();
     }
 
-    if (source_program_expr.module_idx == self.current_module_idx) {
-        return self.lowerCirExprInto(source_program_expr.source_expr, target, next);
+    if (source_expr_ref.module_idx == self.current_module_idx) {
+        return self.lowerCirExprInto(source_expr_ref.expr_idx, target, next);
     }
 
-    const module_env = self.all_module_envs[source_program_expr.module_idx];
+    const module_env = self.all_module_envs[source_expr_ref.module_idx];
     const saved_module_idx = self.current_module_idx;
     const saved_types_store = self.types_store;
     const saved_ident_store = self.mono_scratches.ident_store;
     const saved_module_env = self.mono_scratches.module_env;
     const saved_mono_module_idx = self.mono_scratches.module_idx;
 
-    self.current_module_idx = source_program_expr.module_idx;
+    self.current_module_idx = source_expr_ref.module_idx;
     self.types_store = &module_env.types;
     self.mono_scratches.ident_store = module_env.getIdentStoreConst();
     self.mono_scratches.module_env = module_env;
-    self.mono_scratches.module_idx = source_program_expr.module_idx;
+    self.mono_scratches.module_idx = source_expr_ref.module_idx;
     defer {
         self.current_module_idx = saved_module_idx;
         self.types_store = saved_types_store;
@@ -3787,12 +3785,12 @@ fn lowerCapturedSourceExprInto(
     }
 
     try self.refreshTargetLocalMonotypeFromExprIntoModule(
-        source_program_expr.source_expr,
-        source_program_expr.module_idx,
+        source_expr_ref.expr_idx,
+        source_expr_ref.module_idx,
         saved_module_idx,
         target,
     );
-    return self.lowerCirExprInto(source_program_expr.source_expr, target, next);
+    return self.lowerCirExprInto(source_expr_ref.expr_idx, target, next);
 }
 
 fn resolveExprMonotypeInModule(
@@ -4046,19 +4044,13 @@ fn lowerResolvedDispatchTargetCallInto(
         actual_arg_exprs.items,
         callee_effectful,
     );
-    const target_env = self.all_module_envs[dispatch_target.module_idx];
-    const target_def = target_env.store.getDef(dispatch_target.def_idx);
-    const exact_dispatch_callable_inst = requireExactCallableInstFromCallableValue(
-        self.callable_pipeline.getExprCallableValue(
-            self.currentSourceContext(),
-            dispatch_target.module_idx,
-            target_def.expr,
-        ),
-        "resolved dispatch target module={d} def={d} expr={d} has no exact callable inst in context={d} root_expr={d}",
+    const exact_dispatch_callable_inst = requireExactCallableInstFromCallSite(
+        self.lookupProgramExprCallSite(result_expr_idx),
+        "resolved dispatch expr {d} target module={d} def={d} had no exact call-site callable in context={d} root_expr={d}",
         .{
+            @intFromEnum(result_expr_idx),
             dispatch_target.module_idx,
             @intFromEnum(dispatch_target.def_idx),
-            @intFromEnum(target_def.expr),
             self.currentCallableInstRawForDebug(),
             self.currentRootExprRawForDebug(),
         },
@@ -6035,7 +6027,7 @@ fn debugAssertNoUnitPrimPatternBinding(
         .e_call => |call_expr| blk: {
             const resolution = self.lookupProgramExprLookupResolution(call_expr.func) orelse break :blk std.math.maxInt(u32);
             break :blk switch (resolution) {
-                .expr => |source_expr_id| @intFromEnum(self.callable_pipeline.getProgramExpr(source_expr_id).source_expr),
+                .expr => |source_expr_ref| @intFromEnum(source_expr_ref.expr_idx),
                 .def => std.math.maxInt(u32),
             };
         },

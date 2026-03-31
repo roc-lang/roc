@@ -93,6 +93,12 @@ pub const ExprId = enum(u32) {
     _,
 };
 
+pub const ExprRef = struct {
+    source_context: SourceContext,
+    module_idx: u32,
+    expr_idx: CIR.Expr.Idx,
+};
+
 pub const ExprIdSpan = extern struct {
     start: u32,
     len: u16,
@@ -138,7 +144,7 @@ pub const CallSite = union(enum) {
 };
 
 pub const LookupResolution = union(enum) {
-    expr: ExprId,
+    expr: ExprRef,
     def: Lambdasolved.ExternalDefSource,
 };
 
@@ -172,7 +178,7 @@ pub const CaptureValueSource = union(enum) {
         module_idx: u32,
         pattern_idx: CIR.Pattern.Idx,
     },
-    expr: ExprId,
+    expr: ExprRef,
 };
 
 pub const CaptureStorage = union(enum) {
@@ -206,8 +212,8 @@ pub const CaptureFieldSpan = extern struct {
 
 pub const CallableDef = struct {
     module_idx: u32,
-    runtime_expr: ExprId,
-    body_expr: ExprId,
+    runtime_expr: ExprRef,
+    body_expr: ExprRef,
     fn_monotype: ContextMono.ResolvedMonotype,
     param_bindings: CallableParamBindingSpan = .empty(),
     captures: CaptureFieldSpan = .empty(),
