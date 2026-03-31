@@ -80,6 +80,7 @@ pub const PackedCallableId = enum(u32) {
 
 pub const PackedCallable = struct {
     members: CallableMemberSpan,
+    fn_monotype: ContextMono.ResolvedMonotype,
 };
 
 pub const DispatchCallId = enum(u32) {
@@ -453,7 +454,6 @@ pub const Program = struct {
         const root_id = self.root_expr_ids_by_key.get(key) orelse return self.getExprId(source_context, module_idx, expr_idx);
         return self.root_exprs.items[@intFromEnum(root_id)].body_expr;
     }
-
 };
 
 pub fn getCallableDef(program: *const Program, callable_def_id: CallableDefId) *const CallableDef {

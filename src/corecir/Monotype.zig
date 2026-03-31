@@ -1038,9 +1038,9 @@ pub const Store = struct {
         origin_module: Ident.Idx,
     ) ?*const ModuleEnv {
         const origin_name = source_env.getIdent(origin_module);
-        for (all_module_envs) |candidate_env| {
-            const candidate_name = candidate_env.getIdent(candidate_env.qualified_module_ident);
-            if (std.mem.eql(u8, origin_name, candidate_name)) return candidate_env;
+        for (all_module_envs) |module_env_entry| {
+            const origin_module_name = module_env_entry.getIdent(module_env_entry.qualified_module_ident);
+            if (std.mem.eql(u8, origin_name, origin_module_name)) return module_env_entry;
         }
         return null;
     }

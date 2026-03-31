@@ -627,9 +627,9 @@ fn resolveImportedModuleIdx(self: *Self, caller_env: *const ModuleEnv, import_id
     const import_name = caller_env.common.getString(caller_env.imports.imports.items.items[import_pos]);
     const base_name = identLastSegment(import_name);
 
-    for (self.all_module_envs, 0..) |candidate_env, module_idx| {
-        if (std.mem.eql(u8, candidate_env.module_name, import_name) or
-            std.mem.eql(u8, candidate_env.module_name, base_name))
+    for (self.all_module_envs, 0..) |module_env_entry, module_idx| {
+        if (std.mem.eql(u8, module_env_entry.module_name, import_name) or
+            std.mem.eql(u8, module_env_entry.module_name, base_name))
         {
             @constCast(&caller_env.imports).setResolvedModule(import_idx, @intCast(module_idx));
             return @intCast(module_idx);
@@ -927,23 +927,11 @@ fn lookupLoweredCallableLambdaCache(
 }
 
 fn lookupPipelinedExprMonotype(self: *const Self, expr_idx: CIR.Expr.Idx) ?Pipeline.ResolvedMonotype {
-    if (self.callable_pipeline.getExprMonotype(
+    return self.callable_pipeline.getExprMonotype(
         self.currentSourceContext(),
         self.current_module_idx,
         expr_idx,
-    )) |resolved| {
-        return resolved;
-    }
-
-    if (exactCallableInstIfCallableValueDirect(self.lookupPipelinedExprCallableValue(expr_idx))) |callable_inst_id| {
-        const callable_inst = self.callable_pipeline.getCallableInst(callable_inst_id);
-        return .{
-            .idx = callable_inst.fn_monotype,
-            .module_idx = callable_inst.fn_monotype_module_idx,
-        };
-    }
-
-    return null;
+    );
 }
 
 fn lookupPipelinedPatternMonotype(self: *const Self, pattern_idx: CIR.Pattern.Idx) ?Pipeline.ResolvedMonotype {
@@ -956,16 +944,7 @@ fn lookupPipelinedPatternMonotype(self: *const Self, pattern_idx: CIR.Pattern.Id
     }
 
     if (self.lookupPipelinedPatternCallableValue(pattern_idx)) |callable_value| {
-        switch (callable_value) {
-            .direct => |callable_inst_id| {
-                const callable_inst = self.callable_pipeline.getCallableInst(callable_inst_id);
-                return .{
-                    .idx = callable_inst.fn_monotype,
-                    .module_idx = callable_inst.fn_monotype_module_idx,
-                };
-            },
-            .packed_callable => {},
-        }
+        return self.callable_pipeline.getCallableValueMonotype(callable_value);
     }
 
     if (self.callable_pipeline.getPatternSourceExpr(self.current_module_idx, pattern_idx)) |source| {
@@ -2744,6 +2723,10 @@ fn lowerLookupLocalIntoWithExactCallableInst(
     } else null;
 
     if (usable_source_local) |source| {
+        if (exact_callable_inst_override) |callable_inst_id| {
+            try self.bindExactCallableLocal(target, callable_inst_id);
+            return self.lowerRefInto(target, .{ .local = source }, next);
+        }
         return self.lowerLocalAliasInto(target, source, next);
     }
 
@@ -3757,11 +3740,11 @@ fn lowerCapturedSourceExprInto(
     switch (self.currentSourceContext()) {
         .callable_inst => {},
         .root_expr, .provenance_expr, .template_expr => {
-        try self.pushSourceContext(.{ .provenance_expr = .{
-            .module_idx = source.module_idx,
-            .expr_idx = source.expr_idx,
-        } });
-        defer self.popSourceContext();
+            try self.pushSourceContext(.{ .provenance_expr = .{
+                .module_idx = source.module_idx,
+                .expr_idx = source.expr_idx,
+            } });
+            defer self.popSourceContext();
         },
     }
 
