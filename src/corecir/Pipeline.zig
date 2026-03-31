@@ -1985,12 +1985,23 @@ pub const Pass = struct {
             return defaulted;
         }
 
-        return self.deriveStructuredProgramExprMonotype(
+        const derived = try self.deriveStructuredProgramExprMonotype(
             result,
             source_context,
             module_idx,
             expr_idx,
             child_expr_ids,
+        );
+        if (!derived.isNone()) return derived;
+
+        std.debug.panic(
+            "Pipeline invariant violated: missing finalized source monotype for expr {d} ({s}) in module {d} under source context {s}",
+            .{
+                @intFromEnum(expr_idx),
+                @tagName(self.all_module_envs[module_idx].store.getExpr(expr_idx)),
+                module_idx,
+                @tagName(source_context),
+            },
         );
     }
 
@@ -2046,185 +2057,6 @@ pub const Pass = struct {
             else
                 self.childProgramExprMonotype(result, child_expr_ids[0]),
             .e_empty_record => resolvedMonotype(result.context_mono.monotype_store.unit_idx, module_idx),
-            .e_tuple => blk: {
-                if (child_expr_ids.len == 0) {
-                    break :blk resolvedMonotype(result.context_mono.monotype_store.unit_idx, module_idx);
-                }
-
-                var elems = std.ArrayList(Monotype.Idx).empty;
-                defer elems.deinit(self.allocator);
-                for (child_expr_ids) |child_expr_id| {
-                    const child_mono = self.childProgramExprMonotype(result, child_expr_id);
-                    if (child_mono.isNone()) break :blk resolvedMonotype(.none, module_idx);
-                    try elems.append(self.allocator, child_mono.idx);
-                }
-                const elem_span = try result.context_mono.monotype_store.addIdxSpan(self.allocator, elems.items);
-                break :blk resolvedMonotype(
-                    try result.context_mono.monotype_store.addMonotype(self.allocator, .{
-                        .tuple = .{ .elems = elem_span },
-                    }),
-                    module_idx,
-                );
-            },
-            .e_list => blk: {
-                if (child_expr_ids.len == 0) break :blk resolvedMonotype(.none, module_idx);
-                const elem_mono = self.childProgramExprMonotype(result, child_expr_ids[0]);
-                if (elem_mono.isNone()) break :blk resolvedMonotype(.none, module_idx);
-                for (child_expr_ids[1..]) |child_expr_id| {
-                    const next_mono = self.childProgramExprMonotype(result, child_expr_id);
-                    if (next_mono.isNone()) break :blk resolvedMonotype(.none, module_idx);
-                    if (!try self.monotypesStructurallyEqualAcrossModules(
-                        result,
-                        elem_mono.idx,
-                        elem_mono.module_idx,
-                        next_mono.idx,
-                        next_mono.module_idx,
-                    )) {
-                        std.debug.panic(
-                            "Pipeline invariant violated: list expr {d} in module {d} had non-uniform child monotypes during lambdamono finalization",
-                            .{ @intFromEnum(expr_idx), module_idx },
-                        );
-                    }
-                }
-                const elem_idx = if (elem_mono.module_idx == module_idx)
-                    elem_mono.idx
-                else
-                    try self.remapMonotypeBetweenModules(
-                        result,
-                        elem_mono.idx,
-                        elem_mono.module_idx,
-                        module_idx,
-                    );
-                break :blk resolvedMonotype(
-                    try result.context_mono.monotype_store.addMonotype(self.allocator, .{
-                        .list = .{ .elem = elem_idx },
-                    }),
-                    module_idx,
-                );
-            },
-            .e_record => |record_expr| blk: {
-                var fields = std.ArrayList(Monotype.Field).empty;
-                defer fields.deinit(self.allocator);
-
-                var child_index: usize = 0;
-                for (module_env.store.sliceRecordFields(record_expr.fields)) |field_idx| {
-                    const field = module_env.store.getRecordField(field_idx);
-                    const child_mono = self.childProgramExprMonotype(result, child_expr_ids[child_index]);
-                    child_index += 1;
-                    if (child_mono.isNone()) break :blk resolvedMonotype(.none, module_idx);
-                    const field_mono = if (child_mono.module_idx == module_idx)
-                        child_mono.idx
-                    else
-                        try self.remapMonotypeBetweenModules(
-                            result,
-                            child_mono.idx,
-                            child_mono.module_idx,
-                            module_idx,
-                        );
-
-                    var replaced = false;
-                    for (fields.items) |*existing| {
-                        if (existing.name.eql(.{ .module_idx = module_idx, .ident = field.label })) {
-                            existing.type_idx = field_mono;
-                            replaced = true;
-                            break;
-                        }
-                    }
-                    if (!replaced) {
-                        try fields.append(self.allocator, .{
-                            .name = .{ .module_idx = module_idx, .ident = field.label },
-                            .type_idx = field_mono,
-                        });
-                    }
-                }
-
-                if (record_expr.ext) |_| {
-                    const ext_mono = self.childProgramExprMonotype(result, child_expr_ids[child_index]);
-                    if (ext_mono.isNone()) break :blk resolvedMonotype(.none, module_idx);
-                    const normalized_ext = if (ext_mono.module_idx == module_idx)
-                        ext_mono.idx
-                    else
-                        try self.remapMonotypeBetweenModules(
-                            result,
-                            ext_mono.idx,
-                            ext_mono.module_idx,
-                            module_idx,
-                        );
-                    switch (result.context_mono.monotype_store.getMonotype(normalized_ext)) {
-                        .unit => {},
-                        .record => |ext_record| {
-                            for (result.context_mono.monotype_store.getFields(ext_record.fields)) |ext_field| {
-                                var exists = false;
-                                for (fields.items) |existing| {
-                                    if (existing.name.eql(ext_field.name)) {
-                                        exists = true;
-                                        break;
-                                    }
-                                }
-                                if (!exists) try fields.append(self.allocator, ext_field);
-                            }
-                        },
-                        else => std.debug.panic(
-                            "Pipeline invariant violated: record ext expr {d} in module {d} finalized to non-record monotype",
-                            .{ @intFromEnum(expr_idx), module_idx },
-                        ),
-                    }
-                }
-
-                if (fields.items.len == 0) {
-                    break :blk resolvedMonotype(result.context_mono.monotype_store.unit_idx, module_idx);
-                }
-
-                std.mem.sort(Monotype.Field, fields.items, self.all_module_envs, Monotype.Field.sortByNameAsc);
-                const field_span = try result.context_mono.monotype_store.addFields(self.allocator, fields.items);
-                break :blk resolvedMonotype(
-                    try result.context_mono.monotype_store.addMonotype(self.allocator, .{
-                        .record = .{ .fields = field_span },
-                    }),
-                    module_idx,
-                );
-            },
-            .e_zero_argument_tag => |tag_expr| blk: {
-                const payload_span = Monotype.Span.empty();
-                const tag_span = try result.context_mono.monotype_store.addTags(self.allocator, &.{.{
-                    .name = .{ .module_idx = module_idx, .ident = tag_expr.name },
-                    .payloads = payload_span,
-                }});
-                break :blk resolvedMonotype(
-                    try result.context_mono.monotype_store.addMonotype(self.allocator, .{
-                        .tag_union = .{ .tags = tag_span },
-                    }),
-                    module_idx,
-                );
-            },
-            .e_tag => |tag_expr| blk: {
-                var payloads = std.ArrayList(Monotype.Idx).empty;
-                defer payloads.deinit(self.allocator);
-                for (child_expr_ids) |child_expr_id| {
-                    const child_mono = self.childProgramExprMonotype(result, child_expr_id);
-                    if (child_mono.isNone()) break :blk resolvedMonotype(.none, module_idx);
-                    try payloads.append(self.allocator, if (child_mono.module_idx == module_idx)
-                        child_mono.idx
-                    else
-                        try self.remapMonotypeBetweenModules(
-                            result,
-                            child_mono.idx,
-                            child_mono.module_idx,
-                            module_idx,
-                        ));
-                }
-                const payload_span = try result.context_mono.monotype_store.addIdxSpan(self.allocator, payloads.items);
-                const tag_span = try result.context_mono.monotype_store.addTags(self.allocator, &.{.{
-                    .name = .{ .module_idx = module_idx, .ident = tag_expr.name },
-                    .payloads = payload_span,
-                }});
-                break :blk resolvedMonotype(
-                    try result.context_mono.monotype_store.addMonotype(self.allocator, .{
-                        .tag_union = .{ .tags = tag_span },
-                    }),
-                    module_idx,
-                );
-            },
             else => resolvedMonotype(.none, module_idx),
         };
     }
@@ -3135,6 +2967,18 @@ pub const Pass = struct {
         try self.pushSourceContext(source_context);
         defer self.popSourceContext();
         try self.scanDemandedValueDefExpr(result, module_idx, expr_idx);
+    }
+
+    fn scanForcedCirValueExprInSourceContext(
+        self: *Pass,
+        result: *Result,
+        source_context: SourceContext,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) Allocator.Error!void {
+        try self.pushSourceContext(source_context);
+        defer self.popSourceContext();
+        try self.scanForcedCirValueExpr(result, module_idx, expr_idx);
     }
 
     fn resolveRequiredLookupTarget(
@@ -6848,12 +6692,28 @@ pub const Pass = struct {
             .e_call => |call_expr| {
                 if (self.getCallLowLevelOp(module_env, call_expr.func) != null) return;
 
-                const callee_callable_inst_ids = self.getCallSiteCallableMembersForSourceContext(
+                var callee_callable_inst_ids = self.getCallSiteCallableMembersForSourceContext(
                     result,
                     source_context,
                     module_idx,
                     expr_idx,
-                ) orelse {
+                );
+                if (callee_callable_inst_ids == null) {
+                    try self.scanForcedCirValueExprInSourceContext(
+                        result,
+                        source_context,
+                        module_idx,
+                        expr_idx,
+                    );
+                    callee_callable_inst_ids = self.getCallSiteCallableMembersForSourceContext(
+                        result,
+                        source_context,
+                        module_idx,
+                        expr_idx,
+                    );
+                }
+
+                const resolved_callee_callable_inst_ids = callee_callable_inst_ids orelse {
                     std.debug.panic(
                         "Pipeline invariant violated: callable-valued call expr {d} in module {d} had no explicit solved call-site members in source context {s}",
                         .{
@@ -6864,7 +6724,7 @@ pub const Pass = struct {
                     );
                 };
 
-                for (callee_callable_inst_ids) |callee_callable_inst_id| {
+                for (resolved_callee_callable_inst_ids) |callee_callable_inst_id| {
                     try self.recordCallResultCallableMembersFromCallee(
                         result,
                         source_context,
