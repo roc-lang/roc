@@ -84,68 +84,6 @@ pub const ExprSource = struct {
     expr_idx: CIR.Expr.Idx,
 };
 
-pub const CapturePlanId = enum(u32) {
-    _,
-};
-
-pub const LambdaSetMemberId = enum(u32) {
-    _,
-};
-
-pub const CaptureSource = union(enum) {
-    lexical_pattern: struct {
-        module_idx: u32,
-        pattern_idx: CIR.Pattern.Idx,
-    },
-    parent_capture: struct {
-        capture_plan: CapturePlanId,
-        capture_index: u16,
-    },
-    top_level_def: struct {
-        module_idx: u32,
-        def_idx: CIR.Def.Idx,
-    },
-    source_expr: struct {
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-    },
-    exact_callable: struct {
-        member: LambdaSetMemberId,
-    },
-};
-
-pub const CaptureEntry = struct {
-    source: CaptureSource,
-    monotype: cm.ResolvedMonotype,
-};
-
-pub const CaptureEntrySpan = extern struct {
-    start: u32,
-    len: u16,
-
-    pub fn empty() CaptureEntrySpan {
-        return .{ .start = 0, .len = 0 };
-    }
-};
-
-pub const CapturePlan = struct {
-    entries: CaptureEntrySpan,
-};
-
-pub const SolvedCallableKind = enum {
-    direct,
-    closure,
-    hosted,
-};
-
-pub const LambdaSetMember = struct {
-    template: CallableTemplateId,
-    source_context: SourceContext,
-    fn_monotype: cm.ResolvedMonotype,
-    capture_plan: CapturePlanId,
-    kind: SolvedCallableKind,
-};
-
 pub const SourceContext = cm.SourceContext;
 pub const ContextExprKey = cm.ContextExprKey;
 pub const ContextPatternKey = cm.ContextPatternKey;
@@ -155,24 +93,15 @@ pub const Result = struct {
     source_exprs: std.AutoHashMapUnmanaged(u64, ExprSource),
     callable_template_ids_by_source: std.AutoHashMapUnmanaged(u64, CallableTemplateId),
     deferred_local_callables: std.AutoHashMapUnmanaged(u64, DeferredLocalCallable),
-    capture_entries: std.ArrayListUnmanaged(CaptureEntry),
-    capture_plans: std.ArrayListUnmanaged(CapturePlan),
-    empty_capture_plan_id: CapturePlanId,
-    lambda_set_members: std.ArrayListUnmanaged(LambdaSetMember),
 
     pub fn init(allocator: Allocator) !Result {
-        var result: Result = .{
+        _ = allocator;
+        return .{
             .callable_templates = .empty,
             .source_exprs = .empty,
             .callable_template_ids_by_source = .empty,
             .deferred_local_callables = .empty,
-            .capture_entries = .empty,
-            .capture_plans = .empty,
-            .empty_capture_plan_id = @enumFromInt(0),
-            .lambda_set_members = .empty,
         };
-        try result.capture_plans.append(allocator, .{ .entries = CaptureEntrySpan.empty() });
-        return result;
     }
 
     pub fn deinit(self: *Result, allocator: Allocator) void {
@@ -180,9 +109,6 @@ pub const Result = struct {
         self.source_exprs.deinit(allocator);
         self.callable_template_ids_by_source.deinit(allocator);
         self.deferred_local_callables.deinit(allocator);
-        self.capture_entries.deinit(allocator);
-        self.capture_plans.deinit(allocator);
-        self.lambda_set_members.deinit(allocator);
     }
 
     pub fn getCallableTemplate(self: *const Result, callable_template_id: CallableTemplateId) *const CallableTemplate {
@@ -213,20 +139,4 @@ pub const Result = struct {
         return self.source_exprs.get(packLocalPatternSourceKey(module_idx, pattern_idx));
     }
 
-    pub fn getEmptyCapturePlanId(self: *const Result) CapturePlanId {
-        return self.empty_capture_plan_id;
-    }
-
-    pub fn getCapturePlan(self: *const Result, capture_plan_id: CapturePlanId) *const CapturePlan {
-        return &self.capture_plans.items[@intFromEnum(capture_plan_id)];
-    }
-
-    pub fn getCaptureEntries(self: *const Result, span: CaptureEntrySpan) []const CaptureEntry {
-        if (span.len == 0) return &.{};
-        return self.capture_entries.items[span.start..][0..span.len];
-    }
-
-    pub fn getLambdaSetMember(self: *const Result, member_id: LambdaSetMemberId) *const LambdaSetMember {
-        return &self.lambda_set_members.items[@intFromEnum(member_id)];
-    }
 };

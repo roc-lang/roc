@@ -57,7 +57,6 @@ pub const CallableTemplateKind = Lambdasolved.CallableTemplateKind;
 /// A semantic callable body that can later be instantiated monomorphically.
 pub const CallableTemplate = Lambdasolved.CallableTemplate;
 pub const ExternalDefSource = Lambdasolved.ExternalDefSource;
-pub const LambdaSetMemberId = Lambdasolved.LambdaSetMemberId;
 
 /// Records a block-local polymorphic callable that is materialized on demand.
 pub const DeferredLocalCallable = Lambdasolved.DeferredLocalCallable;
@@ -3056,142 +3055,11 @@ pub const Pass = struct {
         );
     }
 
-    fn solvedCallableKindForRuntimeValue(
-        template_kind: CallableTemplateKind,
-        runtime_value: Lambdamono.RuntimeValue,
-    ) Lambdasolved.SolvedCallableKind {
-        if (template_kind == .hosted_lambda) return .hosted;
-        return switch (runtime_value) {
-            .direct_lambda => .direct,
-            .closure => .closure,
-        };
-    }
-
     fn templateSourceContext(template: CallableTemplate) SourceContext {
         return .{ .template_expr = .{
             .module_idx = template.module_idx,
             .expr_idx = template.runtime_expr,
         } };
-    }
-
-    fn ensureCapturePlan(
-        self: *Pass,
-        result: *Result,
-        entries: []const Lambdasolved.CaptureEntry,
-    ) Allocator.Error!Lambdasolved.CapturePlanId {
-        if (entries.len == 0) return result.lambdasolved.getEmptyCapturePlanId();
-
-        for (result.lambdasolved.capture_plans.items, 0..) |existing_plan, idx| {
-            const existing_entries = result.lambdasolved.getCaptureEntries(existing_plan.entries);
-            if (existing_entries.len != entries.len) continue;
-            if (std.meta.eql(existing_entries, entries)) return @enumFromInt(idx);
-        }
-
-        const start: u32 = @intCast(result.lambdasolved.capture_entries.items.len);
-        try result.lambdasolved.capture_entries.appendSlice(self.allocator, entries);
-        const plan_id: Lambdasolved.CapturePlanId = @enumFromInt(result.lambdasolved.capture_plans.items.len);
-        try result.lambdasolved.capture_plans.append(self.allocator, .{
-            .entries = .{ .start = start, .len = @intCast(entries.len) },
-        });
-        return plan_id;
-    }
-
-    fn ensureCallableSourceMember(
-        self: *Pass,
-        result: *Result,
-        source_context: SourceContext,
-        template_id: CallableTemplateId,
-        fn_monotype: ResolvedMonotype,
-        capture_plan: Lambdasolved.CapturePlanId,
-        kind: Lambdasolved.SolvedCallableKind,
-    ) Allocator.Error!Lambdasolved.LambdaSetMemberId {
-        for (result.lambdasolved.lambda_set_members.items, 0..) |existing, idx| {
-            if (existing.template != template_id) continue;
-            if (!std.meta.eql(existing.source_context, source_context)) continue;
-            if (existing.capture_plan != capture_plan) continue;
-            if (existing.kind != kind) continue;
-            if (existing.fn_monotype.module_idx != fn_monotype.module_idx) continue;
-            if (!try self.monotypesStructurallyEqual(
-                result,
-                existing.fn_monotype.idx,
-                fn_monotype.idx,
-            )) continue;
-            return @enumFromInt(idx);
-        }
-
-        const member_id: Lambdasolved.LambdaSetMemberId = @enumFromInt(result.lambdasolved.lambda_set_members.items.len);
-        try result.lambdasolved.lambda_set_members.append(self.allocator, .{
-            .template = template_id,
-            .source_context = source_context,
-            .fn_monotype = fn_monotype,
-            .capture_plan = capture_plan,
-            .kind = kind,
-        });
-        return member_id;
-    }
-
-    fn captureSourceForField(
-        self: *Pass,
-        result: *const Result,
-        capture_field: CaptureField,
-    ) Lambdasolved.CaptureSource {
-        _ = self;
-        return switch (capture_field.storage) {
-            .recursive_member => .{ .exact_callable = .{
-                .member = result.getCallableDefForInst(capture_field.exact_callable_inst.?).source_member,
-            } },
-            .runtime_field, .callable_only => switch (capture_field.source) {
-                .lexical_pattern => |lexical| .{ .lexical_pattern = .{
-                    .module_idx = lexical.module_idx,
-                    .pattern_idx = lexical.pattern_idx,
-                } },
-                .expr => |expr_id| .{ .source_expr = .{
-                    .module_idx = result.getProgramExpr(expr_id).module_idx,
-                    .expr_idx = result.getProgramExpr(expr_id).source_expr,
-                } },
-            },
-        };
-    }
-
-    fn updateCallableSourceMember(
-        self: *Pass,
-        result: *Result,
-        callable_inst_id: CallableInstId,
-        capture_fields: []const CaptureField,
-    ) Allocator.Error!void {
-        const callable_inst = result.getCallableInst(callable_inst_id).*;
-        const template = result.getCallableTemplate(callable_inst.template).*;
-        const callable_def = &result.lambdamono.callable_defs.items[@intFromEnum(callable_inst.callable_def)];
-        const member_source_context = callable_inst.defining_source_context;
-
-        var capture_entries = std.ArrayList(Lambdasolved.CaptureEntry).empty;
-        defer capture_entries.deinit(self.allocator);
-        for (capture_fields) |capture_field| {
-            try capture_entries.append(self.allocator, .{
-                .source = self.captureSourceForField(result, capture_field),
-                .monotype = capture_field.local_monotype,
-            });
-        }
-
-        if (result.lambdamono.callable_inst_ids_by_source_member.get(callable_def.source_member)) |mapped| {
-            if (mapped == callable_inst_id) {
-                _ = result.lambdamono.callable_inst_ids_by_source_member.remove(callable_def.source_member);
-            }
-        }
-
-        callable_def.source_member = try self.ensureCallableSourceMember(
-            result,
-            member_source_context,
-            callable_inst.template,
-            resolvedMonotype(callable_inst.fn_monotype, callable_inst.fn_monotype_module_idx),
-            try self.ensureCapturePlan(result, capture_entries.items),
-            solvedCallableKindForRuntimeValue(template.kind, callable_inst.runtime_value),
-        );
-        try result.lambdamono.callable_inst_ids_by_source_member.put(
-            self.allocator,
-            callable_def.source_member,
-            callable_inst_id,
-        );
     }
 
     fn updateCallableDefRuntimeValue(
@@ -3252,7 +3120,6 @@ pub const Pass = struct {
                 } };
             };
 
-        try self.updateCallableSourceMember(result, callable_inst_id, capture_fields);
     }
 
     fn closureCaptureAnalysisCallableInst(
@@ -10757,38 +10624,6 @@ pub const Pass = struct {
         );
     }
 
-    fn ensureCallableInstForSourceMember(
-        self: *Pass,
-        result: *Result,
-        source_member: Lambdasolved.LambdaSetMemberId,
-    ) Allocator.Error!CallableInstId {
-        if (result.lambdamono.getCallableInstForSourceMember(source_member)) |existing| return existing;
-
-        const member = result.lambdasolved.getLambdaSetMember(source_member).*;
-
-        try self.pushSourceContext(member.source_context);
-        defer self.popSourceContext();
-
-        const callable_inst_id = try self.ensureCallableInst(
-            result,
-            member.template,
-            member.fn_monotype.idx,
-            member.fn_monotype.module_idx,
-        );
-        const callable_def = result.getCallableDefForInst(callable_inst_id);
-        if (callable_def.source_member != source_member) {
-            std.debug.panic(
-                "Pipeline invariant violated: source member {d} materialized callable inst {d} with mismatched source member {d}",
-                .{
-                    @intFromEnum(source_member),
-                    @intFromEnum(callable_inst_id),
-                    @intFromEnum(callable_def.source_member),
-                },
-            );
-        }
-        return callable_inst_id;
-    }
-
     fn ensureCallableInstWithScan(
         self: *Pass,
         result: *Result,
@@ -10843,17 +10678,7 @@ pub const Pass = struct {
         const callable_param_spec_span = try self.addCallableParamSpecEntries(result, callable_param_specs);
         const callable_inst_id: CallableInstId = @enumFromInt(result.lambdamono.callable_insts.items.len);
         const callable_def_id: CallableDefId = @enumFromInt(result.lambdamono.callable_defs.items.len);
-        const member_source_context = defining_source_context;
-        const source_member = try self.ensureCallableSourceMember(
-            result,
-            member_source_context,
-            template_id,
-            resolvedMonotype(canonical_fn_monotype, canonical_fn_monotype_module_idx),
-            result.lambdasolved.getEmptyCapturePlanId(),
-            solvedCallableKindForRuntimeValue(template.kind, .direct_lambda),
-        );
         try result.lambdamono.callable_defs.append(self.allocator, .{
-            .source_member = source_member,
             .module_idx = template.module_idx,
             .runtime_expr = try self.ensureProgramExpr(
                 result,
@@ -10882,11 +10707,6 @@ pub const Pass = struct {
             .callable_def = callable_def_id,
             .runtime_value = .direct_lambda,
         });
-        try result.lambdamono.callable_inst_ids_by_source_member.put(
-            self.allocator,
-            source_member,
-            callable_inst_id,
-        );
         try self.ensureSingletonCallableMemberSet(result, callable_inst_id);
         if (scan_body) {
             try self.scanCallableInst(result, callable_inst_id);
