@@ -40,7 +40,7 @@ pub const CallableParamProjectionSpan = extern struct {
 pub const CallableParamSpecEntry = struct {
     param_index: u16,
     projections: CallableParamProjectionSpan = .empty(),
-    member_set_id: PlanMemberSetId,
+    callable_member_set_id: CallableMemberSetId,
 };
 
 pub const CallableParamSpecSpan = extern struct {
@@ -74,20 +74,20 @@ pub const RuntimeValue = union(enum) {
     },
 };
 
-pub const PackedFnId = enum(u32) {
+pub const PackedCallableId = enum(u32) {
     _,
 };
 
-pub const PackedFn = struct {
-    members: PlanMemberSpan,
+pub const PackedCallable = struct {
+    members: CallableMemberSpan,
 };
 
-pub const IndirectCallId = enum(u32) {
+pub const DispatchCallId = enum(u32) {
     _,
 };
 
-pub const IndirectCall = struct {
-    members: PlanMemberSpan,
+pub const DispatchCall = struct {
+    members: CallableMemberSpan,
 };
 
 pub const ExprId = enum(u32) {
@@ -128,14 +128,14 @@ pub const RootExprId = enum(u32) {
     _,
 };
 
-pub const ValuePlan = union(enum) {
+pub const CallableValue = union(enum) {
     direct: CallableInstId,
-    packed_fn: PackedFnId,
+    packed_callable: PackedCallableId,
 };
 
-pub const CallPlan = union(enum) {
+pub const CallDispatch = union(enum) {
     direct: CallableInstId,
-    indirect: IndirectCallId,
+    dispatch_call: DispatchCallId,
 };
 
 pub const LookupResolution = union(enum) {
@@ -143,24 +143,24 @@ pub const LookupResolution = union(enum) {
     def: Lambdasolved.ExternalDefSource,
 };
 
-pub const PlanMemberSpan = extern struct {
+pub const CallableMemberSpan = extern struct {
     start: u32,
     len: u16,
 
-    pub fn empty() PlanMemberSpan {
+    pub fn empty() CallableMemberSpan {
         return .{ .start = 0, .len = 0 };
     }
 
-    pub fn isEmpty(self: PlanMemberSpan) bool {
+    pub fn isEmpty(self: CallableMemberSpan) bool {
         return self.len == 0;
     }
 };
 
-const PlanMemberSet = struct {
-    members: PlanMemberSpan,
+const CallableMemberSet = struct {
+    members: CallableMemberSpan,
 };
 
-pub const PlanMemberSetId = enum(u32) {
+pub const CallableMemberSetId = enum(u32) {
     _,
 };
 
@@ -219,7 +219,7 @@ pub const CallableDef = struct {
 
 pub const CallableParamBinding = struct {
     pattern_idx: CIR.Pattern.Idx,
-    value: ValuePlan,
+    callable_value: CallableValue,
 };
 
 pub const CallableParamBindingSpan = extern struct {
@@ -236,8 +236,8 @@ pub const CallableParamBindingSpan = extern struct {
 };
 
 pub const ExprSemantics = struct {
-    value: ?ValuePlan = null,
-    call: ?CallPlan = null,
+    callable_value: ?CallableValue = null,
+    call_dispatch: ?CallDispatch = null,
     dispatch_target: ?ContextMono.DispatchExprTarget = null,
     lookup_resolution: ?LookupResolution = null,
 };
@@ -265,10 +265,10 @@ pub const Program = struct {
     callable_insts: std.ArrayListUnmanaged(CallableInst),
     callable_param_spec_entries: std.ArrayListUnmanaged(CallableParamSpecEntry),
     callable_param_projection_entries: std.ArrayListUnmanaged(CallableParamProjection),
-    plan_member_sets: std.ArrayListUnmanaged(PlanMemberSet),
-    singleton_plan_member_set_ids_by_callable_inst: std.AutoHashMapUnmanaged(CallableInstId, PlanMemberSetId),
-    packed_fn_ids_by_member_set: std.AutoHashMapUnmanaged(PlanMemberSetId, PackedFnId),
-    indirect_call_ids_by_member_set: std.AutoHashMapUnmanaged(PlanMemberSetId, IndirectCallId),
+    callable_member_sets: std.ArrayListUnmanaged(CallableMemberSet),
+    singleton_callable_member_set_ids_by_callable_inst: std.AutoHashMapUnmanaged(CallableInstId, CallableMemberSetId),
+    packed_callable_ids_by_member_set: std.AutoHashMapUnmanaged(CallableMemberSetId, PackedCallableId),
+    dispatch_call_ids_by_member_set: std.AutoHashMapUnmanaged(CallableMemberSetId, DispatchCallId),
     callable_param_bindings: std.ArrayListUnmanaged(CallableParamBinding),
     exprs: std.ArrayListUnmanaged(Expr),
     expr_ids_by_key: std.AutoHashMapUnmanaged(ContextExprKey, ExprId),
@@ -279,19 +279,19 @@ pub const Program = struct {
     root_expr_ids_by_key: std.AutoHashMapUnmanaged(ContextExprKey, RootExprId),
     callable_defs: std.ArrayListUnmanaged(CallableDef),
     capture_fields: std.ArrayListUnmanaged(CaptureField),
-    plan_member_entries: std.ArrayListUnmanaged(CallableInstId),
-    packed_fns: std.ArrayListUnmanaged(PackedFn),
-    indirect_calls: std.ArrayListUnmanaged(IndirectCall),
+    callable_member_entries: std.ArrayListUnmanaged(CallableInstId),
+    packed_callables: std.ArrayListUnmanaged(PackedCallable),
+    dispatch_calls: std.ArrayListUnmanaged(DispatchCall),
 
     pub fn init() Program {
         return .{
             .callable_insts = .empty,
             .callable_param_spec_entries = .empty,
             .callable_param_projection_entries = .empty,
-            .plan_member_sets = .empty,
-            .singleton_plan_member_set_ids_by_callable_inst = .empty,
-            .packed_fn_ids_by_member_set = .empty,
-            .indirect_call_ids_by_member_set = .empty,
+            .callable_member_sets = .empty,
+            .singleton_callable_member_set_ids_by_callable_inst = .empty,
+            .packed_callable_ids_by_member_set = .empty,
+            .dispatch_call_ids_by_member_set = .empty,
             .callable_param_bindings = .empty,
             .exprs = .empty,
             .expr_ids_by_key = .empty,
@@ -302,9 +302,9 @@ pub const Program = struct {
             .root_expr_ids_by_key = .empty,
             .callable_defs = .empty,
             .capture_fields = .empty,
-            .plan_member_entries = .empty,
-            .packed_fns = .empty,
-            .indirect_calls = .empty,
+            .callable_member_entries = .empty,
+            .packed_callables = .empty,
+            .dispatch_calls = .empty,
         };
     }
 
@@ -312,10 +312,10 @@ pub const Program = struct {
         self.callable_insts.deinit(allocator);
         self.callable_param_spec_entries.deinit(allocator);
         self.callable_param_projection_entries.deinit(allocator);
-        self.plan_member_sets.deinit(allocator);
-        self.singleton_plan_member_set_ids_by_callable_inst.deinit(allocator);
-        self.packed_fn_ids_by_member_set.deinit(allocator);
-        self.indirect_call_ids_by_member_set.deinit(allocator);
+        self.callable_member_sets.deinit(allocator);
+        self.singleton_callable_member_set_ids_by_callable_inst.deinit(allocator);
+        self.packed_callable_ids_by_member_set.deinit(allocator);
+        self.dispatch_call_ids_by_member_set.deinit(allocator);
         self.callable_param_bindings.deinit(allocator);
         self.exprs.deinit(allocator);
         self.expr_ids_by_key.deinit(allocator);
@@ -326,9 +326,9 @@ pub const Program = struct {
         self.root_expr_ids_by_key.deinit(allocator);
         self.callable_defs.deinit(allocator);
         self.capture_fields.deinit(allocator);
-        self.plan_member_entries.deinit(allocator);
-        self.packed_fns.deinit(allocator);
-        self.indirect_calls.deinit(allocator);
+        self.callable_member_entries.deinit(allocator);
+        self.packed_callables.deinit(allocator);
+        self.dispatch_calls.deinit(allocator);
     }
 
     pub fn getCallableInst(self: *const Program, callable_inst_id: CallableInstId) *const CallableInst {
@@ -351,15 +351,15 @@ pub const Program = struct {
         return self.callable_param_projection_entries.items[span.start..][0..span.len];
     }
 
-    pub fn getPlanMemberSetMembers(self: *const Program, member_set_id: PlanMemberSetId) []const CallableInstId {
-        const member_set = self.plan_member_sets.items[@intFromEnum(member_set_id)];
+    pub fn getCallableMemberSetMembers(self: *const Program, callable_member_set_id: CallableMemberSetId) []const CallableInstId {
+        const member_set = self.callable_member_sets.items[@intFromEnum(callable_member_set_id)];
         if (member_set.members.len == 0) return &.{};
-        return self.plan_member_entries.items[member_set.members.start..][0..member_set.members.len];
+        return self.callable_member_entries.items[member_set.members.start..][0..member_set.members.len];
     }
 
-    pub fn getSingletonPlanMemberSetMembers(self: *const Program, callable_inst_id: CallableInstId) []const CallableInstId {
-        const member_set_id = self.singleton_plan_member_set_ids_by_callable_inst.get(callable_inst_id) orelse unreachable;
-        return self.getPlanMemberSetMembers(member_set_id);
+    pub fn getSingletonCallableMemberSetMembers(self: *const Program, callable_inst_id: CallableInstId) []const CallableInstId {
+        const callable_member_set_id = self.singleton_callable_member_set_ids_by_callable_inst.get(callable_inst_id) orelse unreachable;
+        return self.getCallableMemberSetMembers(callable_member_set_id);
     }
 
     pub fn getCallableParamBindings(
@@ -370,8 +370,40 @@ pub const Program = struct {
         return self.callable_param_bindings.items[span.start..][0..span.len];
     }
 
+    pub fn getCallableParamBindingValue(
+        self: *const Program,
+        callable_def_id: CallableDefId,
+        pattern_idx: CIR.Pattern.Idx,
+    ) ?CallableValue {
+        const callable_def = getCallableDef(self, callable_def_id);
+        for (self.getCallableParamBindings(callable_def.param_bindings)) |binding| {
+            if (binding.pattern_idx == pattern_idx) return binding.callable_value;
+        }
+        return null;
+    }
+
     pub fn getExpr(self: *const Program, expr_id: ExprId) *const Expr {
         return &self.exprs.items[@intFromEnum(expr_id)];
+    }
+
+    pub fn getExprSemantics(
+        self: *const Program,
+        source_context: SourceContext,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) ?*const ExprSemantics {
+        const expr_id = self.getExprId(source_context, module_idx, expr_idx) orelse return null;
+        return &self.exprs.items[@intFromEnum(expr_id)].semantics;
+    }
+
+    pub fn getExprSemanticsPtr(
+        self: *Program,
+        source_context: SourceContext,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) ?*ExprSemantics {
+        const expr_id = self.getExprId(source_context, module_idx, expr_idx) orelse return null;
+        return &self.exprs.items[@intFromEnum(expr_id)].semantics;
     }
 
     pub fn getExprId(
@@ -423,15 +455,15 @@ pub fn getCaptureFields(program: *const Program, span: CaptureFieldSpan) []const
     return program.capture_fields.items[span.start..][0..span.len];
 }
 
-pub fn getPackedFn(program: *const Program, packed_fn_id: PackedFnId) *const PackedFn {
-    return &program.packed_fns.items[@intFromEnum(packed_fn_id)];
+pub fn getPackedCallable(program: *const Program, packed_callable_id: PackedCallableId) *const PackedCallable {
+    return &program.packed_callables.items[@intFromEnum(packed_callable_id)];
 }
 
-pub fn getIndirectCall(program: *const Program, indirect_call_id: IndirectCallId) *const IndirectCall {
-    return &program.indirect_calls.items[@intFromEnum(indirect_call_id)];
+pub fn getDispatchCall(program: *const Program, dispatch_call_id: DispatchCallId) *const DispatchCall {
+    return &program.dispatch_calls.items[@intFromEnum(dispatch_call_id)];
 }
 
-pub fn getPlanMembers(program: *const Program, span: PlanMemberSpan) []const CallableInstId {
+pub fn getCallableMembers(program: *const Program, span: CallableMemberSpan) []const CallableInstId {
     if (span.len == 0) return &.{};
-    return program.plan_member_entries.items[span.start..][0..span.len];
+    return program.callable_member_entries.items[span.start..][0..span.len];
 }
