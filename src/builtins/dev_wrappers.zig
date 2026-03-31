@@ -1197,9 +1197,7 @@ pub fn roc_builtins_float_from_str(
 
 /// Compare two lists of flat (non-refcounted) elements for equality.
 /// Elements are compared byte-by-byte using the element width.
-pub fn roc_builtins_list_eq(a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize, elem_width: usize) callconv(.c) bool {
-    _ = a_cap;
-    _ = b_cap;
+pub fn roc_builtins_list_eq(a_bytes: ?[*]u8, a_len: usize, _: usize, b_bytes: ?[*]u8, b_len: usize, _: usize, elem_width: usize) callconv(.c) bool {
     if (a_len != b_len) return false;
     if (a_len == 0) return true;
     if (a_bytes == b_bytes) return true;
@@ -1209,9 +1207,7 @@ pub fn roc_builtins_list_eq(a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes
 }
 
 /// Compare two lists of strings for equality.
-pub fn roc_builtins_list_str_eq(a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize) callconv(.c) bool {
-    _ = a_cap;
-    _ = b_cap;
+pub fn roc_builtins_list_str_eq(a_bytes: ?[*]u8, a_len: usize, _: usize, b_bytes: ?[*]u8, b_len: usize, _: usize) callconv(.c) bool {
     if (a_len != b_len) return false;
     if (a_len == 0) return true;
     if (a_bytes == b_bytes) return true;
@@ -1227,9 +1223,7 @@ pub fn roc_builtins_list_str_eq(a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_b
 }
 
 /// Compare two lists of lists for equality (inner elements are flat).
-pub fn roc_builtins_list_list_eq(a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize, inner_elem_width: usize) callconv(.c) bool {
-    _ = a_cap;
-    _ = b_cap;
+pub fn roc_builtins_list_list_eq(a_bytes: ?[*]u8, a_len: usize, _: usize, b_bytes: ?[*]u8, b_len: usize, _: usize, inner_elem_width: usize) callconv(.c) bool {
     if (a_len != b_len) return false;
     if (a_len == 0) return true;
     if (a_bytes == b_bytes) return true;
@@ -1250,8 +1244,7 @@ pub fn roc_builtins_list_list_eq(a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_
 }
 
 /// Reverse a list of flat elements.
-pub fn roc_builtins_list_reverse(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, elem_width: usize, alignment: u32, roc_ops: *RocOps) callconv(.c) void {
-    _ = list_cap;
+pub fn roc_builtins_list_reverse(out: *RocList, list_bytes: ?[*]u8, list_len: usize, _: usize, elem_width: usize, alignment: u32, roc_ops: *RocOps) callconv(.c) void {
     if (list_len == 0 or elem_width == 0) {
         out.* = RocList{ .bytes = null, .length = 0, .capacity_or_alloc_ptr = 0 };
         return;

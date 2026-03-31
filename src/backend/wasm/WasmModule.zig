@@ -971,9 +971,6 @@ pub fn mergeModule(self: *Self, source: *const Self) !MergeResult {
     const symbol_remap = try gpa.alloc(u32, source_sym_count);
     errdefer gpa.free(symbol_remap);
 
-    // Track which __stack_pointer global we resolved to.
-    const self_stack_pointer_sym = self.linking.findSymbolByName("__stack_pointer", self.imports.items, self.global_imports.items, self.table_imports.items);
-
     for (source.linking.symbol_table.items, 0..) |src_sym, src_sym_idx| {
         const src_name = src_sym.resolveName(source.imports.items, source.global_imports.items, source.table_imports.items);
 
@@ -1166,9 +1163,6 @@ pub fn mergeModule(self: *Self, source: *const Self) !MergeResult {
             },
         }
     }
-
-    // Suppress unused local warning.
-    _ = self_stack_pointer_sym;
 
     return .{
         .symbol_remap = symbol_remap,
@@ -1392,8 +1386,7 @@ pub fn eliminateDeadCode(self: *Self, called_fns: []const bool) !void {
     var fn_index: u32 = 0;
     var eliminated_import_count: u32 = 0;
     var write_idx: usize = 0;
-    for (self.imports.items, 0..) |imp, i| {
-        _ = i;
+    for (self.imports.items) |imp| {
         if (fn_index < import_count and live_flags[fn_index]) {
             live_import_fns.appendAssumeCapacity(fn_index);
             self.imports.items[write_idx] = imp;
@@ -2908,7 +2901,10 @@ test "preload — parses reloc.CODE section entries" {
     switch (entry) {
         .index => |idx| {
             try std.testing.expectEqual(WasmLinking.IndexRelocType.function_index_leb, idx.type_id);
-            try std.testing.expectEqual(@as(u32, 2), idx.offset);
+            // Original binary offset was 2 (relative to code section body start,
+            // including fn count LEB128). preload adjusts by subtracting the fn
+            // count LEB size (1 byte), so the stored offset is 1.
+            try std.testing.expectEqual(@as(u32, 1), idx.offset);
             try std.testing.expectEqual(@as(u32, 0), idx.symbol_index);
         },
         .offset => unreachable,
