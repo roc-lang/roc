@@ -25,9 +25,9 @@ jobs:
 
       - run: rm rust-toolchain.toml
 
-      - run: cargo install typos-cli --version 1.32.0
+      - run: cargo install typos-cli --version 1.44.0
 
-      - name: Check spelling with typos-cli 1.32.0
+      - name: do spell check with typos-cli 1.44.0
         run: typos
 
   markdown-link-check:

@@ -104,10 +104,12 @@ pub const HumanIndex = struct {
         const suffix = switch (n % 100) {
             11, 12, 13 => "th",
             else => switch (n % 10) {
+                // spellchecker:off
                 1 => "st",
                 2 => "nd",
                 3 => "rd",
                 else => "th",
+                // spellchecker:on
             },
         };
         return std.fmt.allocPrint(allocator, "{d}{s}", .{ n, suffix });

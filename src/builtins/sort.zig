@@ -3551,7 +3551,7 @@ test "cross_merge" {
     const src_ptr = @as([*]u8, @ptrCast(&src[0]));
     const dest_ptr = @as([*]u8, @ptrCast(&dest[0]));
 
-    // Opitimal case, ordered but swapped
+    // Optimal case, ordered but swapped
     for (0..32) |i| {
         src[i] = @intCast(i + 33);
     }
