@@ -12,8 +12,8 @@ const layout = @import("layout");
 const lir = @import("lir");
 const LIR = lir.LIR;
 const LirStore = lir.LirStore;
-const LocalRef = LIR.LocalId;
-const LocalRefSpan = LIR.LocalSpan;
+const ValueLocalId = LIR.LocalId;
+const ValueLocalSpan = LIR.LocalSpan;
 const RefOp = LIR.RefOp;
 const WasmModule = @import("WasmModule.zig");
 const WasmLayout = @import("WasmLayout.zig");
@@ -65,7 +65,7 @@ roc_ops_local: u32 = 0,
 proc_return_local: u32 = 0,
 /// CFStmt block nesting depth (for br targets in proc compilation).
 cf_depth: u32 = 0,
-/// Expression-level structured control depth (for break_expr branch depths).
+/// Expression-level structured control depth (for loop break branch depths).
 expr_control_depth: u32 = 0,
 /// Whether we're currently generating code inside a proc body.
 in_proc: bool = false,
@@ -75,7 +75,7 @@ join_point_depths: std.AutoHashMap(u32, u32),
 join_point_param_locals: std.AutoHashMap(u32, []u32),
 /// Map from JoinPointId → state local selecting remainder or join body.
 join_point_state_locals: std.AutoHashMap(u32, u32),
-/// Stack of expression-level loop exit label depths for lowering break_expr.
+/// Stack of expression-level loop exit label depths for lowering loop break.
 loop_break_target_depths: std.ArrayList(u32),
 /// Wasm function index for imported roc_dec_mul host function.
 dec_mul_import: ?u32 = null,
@@ -557,7 +557,7 @@ fn encodeLocalsDecl(self: *Self, func_body: *std.ArrayList(u8), skip_count: u32)
 }
 
 /// Generate wasm instructions for an already-bound local value.
-fn generateExpr(self: *Self, value: LocalRef) Allocator.Error!void {
+fn emitValueLocal(self: *Self, value: ValueLocalId) Allocator.Error!void {
     const local_info = self.storage.getLocalInfo(value) orelse {
         if (builtin.mode == .Debug) {
             std.debug.panic(
@@ -570,11 +570,11 @@ fn generateExpr(self: *Self, value: LocalRef) Allocator.Error!void {
 
     try self.emitLocalGet(local_info.idx);
 
-    const expected_vt = self.resolveValType(self.exprLayoutIdx(value));
+    const expected_vt = self.resolveValType(self.valueLayoutIdx(value));
     if (local_info.val_type != expected_vt) {
         try self.emitConversion(local_info.val_type, expected_vt);
     }
-    try self.emitCanonicalizeScalarForLayout(self.exprLayoutIdx(value));
+    try self.emitCanonicalizeScalarForLayout(self.valueLayoutIdx(value));
 }
 
 fn emitRcForValueLocal(
@@ -1166,30 +1166,30 @@ fn emitBoxRc(self: *Self, comptime kind: RcOpKind, box_ptr_local: u32, box_layou
     }
 }
 
-/// Generate a cascading if/else chain from LirIfBranch array + final_else.
-fn generateIfChain(self: *Self, branches: []const LIR.LirIfBranch, final_else: LocalRef, bt: BlockType) Allocator.Error!void {
+/// Generate a cascading if/else chain from IfBranch array + final_else.
+fn generateIfChain(self: *Self, branches: []const LIR.IfBranch, final_else: ValueLocalId, bt: BlockType) Allocator.Error!void {
     if (branches.len == 0) {
         // No branches — just generate the else expression
-        try self.generateExpr(final_else);
+        try self.emitValueLocal(final_else);
         return;
     }
 
     // Generate first branch condition
-    try self.generateExpr(branches[0].cond);
+    try self.emitValueLocal(branches[0].cond);
     // if (block_type)
     self.body.append(self.allocator, Op.@"if") catch return error.OutOfMemory;
     self.body.append(self.allocator, @intFromEnum(bt)) catch return error.OutOfMemory;
     self.pushExprControlFrame();
     defer self.popExprControlFrame();
     // then body
-    try self.generateExpr(branches[0].body);
+    try self.emitValueLocal(branches[0].body);
     // else
     self.body.append(self.allocator, Op.@"else") catch return error.OutOfMemory;
     // Remaining branches become nested if/else, or just the final_else
     if (branches.len > 1) {
         try self.generateIfChain(branches[1..], final_else, bt);
     } else {
-        try self.generateExpr(final_else);
+        try self.emitValueLocal(final_else);
     }
     // end
     self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
@@ -1203,7 +1203,7 @@ fn isUnsignedLayout(layout_idx: layout.Idx) bool {
     };
 }
 
-fn getOrAllocTypedLocal(self: *Self, local_id: LocalRef, val_type: ValType) Allocator.Error!u32 {
+fn getOrAllocTypedLocal(self: *Self, local_id: ValueLocalId, val_type: ValType) Allocator.Error!u32 {
     if (self.storage.getLocalInfo(local_id)) |info| {
         if (info.val_type == val_type) {
             return info.idx;
@@ -1213,7 +1213,7 @@ fn getOrAllocTypedLocal(self: *Self, local_id: LocalRef, val_type: ValType) Allo
     return self.storage.allocLocal(local_id, val_type);
 }
 
-fn recordProcLocal(locals: *std.AutoHashMap(u64, void), local: LocalRef) Allocator.Error!void {
+fn recordProcLocal(locals: *std.AutoHashMap(u64, void), local: ValueLocalId) Allocator.Error!void {
     _ = try locals.getOrPut(@intFromEnum(local));
 }
 
@@ -1332,9 +1332,9 @@ fn prebindProcLocals(self: *Self, proc: LirProcSpec) Allocator.Error!void {
 
     var it = locals.iterator();
     while (it.next()) |entry| {
-        const local_id: LocalRef = @enumFromInt(@as(u32, @intCast(entry.key_ptr.*)));
+        const local_id: ValueLocalId = @enumFromInt(@as(u32, @intCast(entry.key_ptr.*)));
         if (self.storage.getLocal(local_id) != null) continue;
-        const vt = self.exprValType(local_id);
+        const vt = self.valueValType(local_id);
         _ = try self.storage.allocLocal(local_id, vt);
     }
 }
@@ -1349,13 +1349,13 @@ fn popExprControlFrame(self: *Self) void {
     self.expr_control_depth -= 1;
 }
 
-fn exprLayoutIdx(self: *Self, value: LocalRef) layout.Idx {
+fn valueLayoutIdx(self: *Self, value: ValueLocalId) layout.Idx {
     return self.store.getLocal(value).layout_idx;
 }
 
 /// Infer the wasm ValType that an explicit local value will push onto the stack.
-fn exprValType(self: *Self, value: LocalRef) ValType {
-    return self.resolveValType(self.exprLayoutIdx(value));
+fn valueValType(self: *Self, value: ValueLocalId) ValType {
+    return self.resolveValType(self.valueLayoutIdx(value));
 }
 
 fn emitCanonicalizeScalarForLayout(self: *Self, layout_idx: layout.Idx) Allocator.Error!void {
@@ -1379,17 +1379,17 @@ fn emitCanonicalizeScalarForLayout(self: *Self, layout_idx: layout.Idx) Allocato
 }
 
 /// Get the byte size of the value a local produces.
-fn exprByteSize(self: *Self, value: LocalRef) u32 {
-    return self.layoutByteSize(self.exprLayoutIdx(value));
+fn valueByteSize(self: *Self, value: ValueLocalId) u32 {
+    return self.layoutByteSize(self.valueLayoutIdx(value));
 }
 
 /// Check if a local produces a composite value (stored in stack memory).
-fn isCompositeExpr(self: *const Self, value: LocalRef) bool {
+fn isCompositeValue(self: *const Self, value: ValueLocalId) bool {
     return self.isCompositeLayout(self.store.getLocal(value).layout_idx);
 }
 
 /// Explicit local bindings are already stabilized in the caller's frame.
-fn exprNeedsCompositeCallStabilization(_: *const Self, _: LocalRef) bool {
+fn valueNeedsCompositeCallStabilization(_: *const Self, _: ValueLocalId) bool {
     return false;
 }
 
@@ -1405,10 +1405,10 @@ fn isCompositeLayout(self: *const Self, layout_idx: layout.Idx) bool {
 /// Generate structural equality comparison for two composite values (records, tuples, tag unions).
 /// Uses layout-aware comparison for fields containing heap types (strings, lists).
 /// Leaves an i32 (bool) on the stack: 1 for equal, 0 for not equal.
-fn generateStructuralEq(self: *Self, lhs: LocalRef, rhs: LocalRef, negate: bool) Allocator.Error!void {
+fn generateStructuralEq(self: *Self, lhs: ValueLocalId, rhs: ValueLocalId, negate: bool) Allocator.Error!void {
     // Check for string/list type via layout
     {
-        const lay_idx = self.exprLayoutIdx(lhs);
+        const lay_idx = self.valueLayoutIdx(lhs);
         if (lay_idx == .str) {
             try self.generateStrEq(lhs, rhs, negate);
             return;
@@ -1422,17 +1422,17 @@ fn generateStructuralEq(self: *Self, lhs: LocalRef, rhs: LocalRef, negate: bool)
     }
 
     // Generate both operand expressions — each pushes an i32 pointer
-    try self.generateExpr(lhs);
+    try self.emitValueLocal(lhs);
     const lhs_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalSet(lhs_local);
 
-    try self.generateExpr(rhs);
+    try self.emitValueLocal(rhs);
     const rhs_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalSet(rhs_local);
 
     // Try layout-aware comparison for records/tuples/tag unions containing heap types
     {
-        const lay_idx = self.exprLayoutIdx(lhs);
+        const lay_idx = self.valueLayoutIdx(lhs);
         const ls = self.getLayoutStore();
         const l = ls.getLayout(lay_idx);
         switch (l.tag) {
@@ -1459,7 +1459,7 @@ fn generateStructuralEq(self: *Self, lhs: LocalRef, rhs: LocalRef, negate: bool)
     }
 
     // Fallback: bytewise comparison for types without heap-allocated fields
-    const byte_size = self.exprByteSize(lhs);
+    const byte_size = self.valueByteSize(lhs);
     try self.emitBytewiseEq(lhs_local, rhs_local, byte_size);
 
     if (negate) {
@@ -2120,7 +2120,7 @@ fn stabilizeCompositeResult(self: *Self, size: u32) Allocator.Error!u32 {
 
 /// Generate composite (i128/Dec) numeric operations via LowLevel ops.
 /// Both operands are i32 pointers to 16-byte values in linear memory.
-fn generateCompositeNumericOp(self: *Self, op: anytype, args: []const LocalRef, ret_layout: layout.Idx, operand_layout: layout.Idx) Allocator.Error!void {
+fn generateCompositeNumericOp(self: *Self, op: anytype, args: []const ValueLocalId, ret_layout: layout.Idx, operand_layout: layout.Idx) Allocator.Error!void {
     // For comparison ops like num_is_eq, check for structural equality first
     if (op == .num_is_eq) {
         try self.generateStructuralEq(args[0], args[1], false);
@@ -2128,11 +2128,11 @@ fn generateCompositeNumericOp(self: *Self, op: anytype, args: []const LocalRef, 
     }
 
     // Generate operand pointers and stabilize them
-    try self.generateExpr(args[0]);
+    try self.emitValueLocal(args[0]);
     const lhs_local = try self.stabilizeCompositeResult(16);
 
     if (args.len > 1) {
-        try self.generateExpr(args[1]);
+        try self.emitValueLocal(args[1]);
         const rhs_local = try self.stabilizeCompositeResult(16);
 
         switch (op) {
@@ -2212,7 +2212,7 @@ fn generateCompositeNumericOp(self: *Self, op: anytype, args: []const LocalRef, 
             .num_negate => try self.generateCompositeI128Negate(args[0], ret_layout),
             .num_abs => {
                 if (operand_layout == .u128) {
-                    try self.generateExpr(args[0]);
+                    try self.emitValueLocal(args[0]);
                 } else {
                     try self.generateCompositeI128Abs(args[0]);
                 }
@@ -2429,14 +2429,14 @@ fn emitI128Sub(self: *Self, lhs_local: u32, rhs_local: u32) Allocator.Error!void
 /// Emit i128/u128 shift operation. LHS is composite (16 bytes), RHS is U8 (i32 on wasm stack).
 /// Uses wasm structured if/else to handle shift amounts >= 64.
 /// Pushes an i32 pointer to the 16-byte result on the wasm stack.
-fn generateI128Shift(self: *Self, op: anytype, args: []const LocalRef) Allocator.Error!void {
+fn generateI128Shift(self: *Self, op: anytype, args: []const ValueLocalId) Allocator.Error!void {
     const result_offset = try self.allocStackMemory(16, 8);
     const result_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitFpOffset(result_offset);
     try self.emitLocalSet(result_local);
 
     // Load LHS low and high words into locals
-    try self.generateExpr(args[0]);
+    try self.emitValueLocal(args[0]);
     const lhs_local = try self.stabilizeCompositeResult(16);
 
     const a_low = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
@@ -2450,7 +2450,7 @@ fn generateI128Shift(self: *Self, op: anytype, args: []const LocalRef) Allocator
     try self.emitLocalSet(a_high);
 
     // Load shift amount (U8 -> i32 on wasm stack) and extend to i64
-    try self.generateExpr(args[1]);
+    try self.emitValueLocal(args[1]);
     const shift_local = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
     self.body.append(self.allocator, Op.i64_extend_i32_u) catch return error.OutOfMemory;
     try self.emitLocalSet(shift_local);
@@ -2886,8 +2886,8 @@ fn emitI128CompareWithSignedness(self: *Self, lhs_local: u32, rhs_local: u32, cm
 /// Emit i128 bitwise operation (AND, OR, XOR) on both halves.
 /// Result is a pointer to 16-byte stack memory.
 /// Generate i128/Dec negation: result = -value (two's complement)
-fn generateCompositeI128Negate(self: *Self, expr: LocalRef, _: layout.Idx) Allocator.Error!void {
-    try self.generateExpr(expr);
+fn generateCompositeI128Negate(self: *Self, expr: ValueLocalId, _: layout.Idx) Allocator.Error!void {
+    try self.emitValueLocal(expr);
     const src_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
     WasmModule.leb128WriteU32(self.allocator, &self.body, src_local) catch return error.OutOfMemory;
@@ -2964,8 +2964,8 @@ fn emitCompositeI128NegateFromLocal(self: *Self, src_local: u32) Allocator.Error
     WasmModule.leb128WriteU32(self.allocator, &self.body, result_local) catch return error.OutOfMemory;
 }
 
-fn generateCompositeI128Abs(self: *Self, expr: LocalRef) Allocator.Error!void {
-    try self.generateExpr(expr);
+fn generateCompositeI128Abs(self: *Self, expr: ValueLocalId) Allocator.Error!void {
+    try self.emitValueLocal(expr);
     const src_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
     WasmModule.leb128WriteU32(self.allocator, &self.body, src_local) catch return error.OutOfMemory;
@@ -4235,7 +4235,7 @@ fn generateCFStmt(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
             );
         },
         .assign_ref => |assign| {
-            try self.generateRefOp(assign.op, self.exprLayoutIdx(assign.target));
+            try self.generateRefOp(assign.op, self.valueLayoutIdx(assign.target));
             try self.bindAssignedLocal(assign.target);
             try self.generateCFStmt(assign.next);
         },
@@ -4248,7 +4248,7 @@ fn generateCFStmt(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
             try self.generateCall(.{
                 .proc = assign.proc,
                 .args = assign.args,
-                .ret_layout = self.exprLayoutIdx(assign.target),
+                .ret_layout = self.valueLayoutIdx(assign.target),
             });
             try self.bindAssignedLocal(assign.target);
             try self.generateCFStmt(assign.next);
@@ -4257,7 +4257,7 @@ fn generateCFStmt(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
             try self.generateLowLevel(.{
                 .op = assign.op,
                 .args = assign.args,
-                .ret_layout = self.exprLayoutIdx(assign.target),
+                .ret_layout = self.valueLayoutIdx(assign.target),
             });
             try self.bindAssignedLocal(assign.target);
             try self.generateCFStmt(assign.next);
@@ -4265,7 +4265,7 @@ fn generateCFStmt(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
         .assign_list => |assign| {
             try self.generateList(.{
                 .elems = assign.elems,
-                .elem_layout = self.listElemLayout(self.exprLayoutIdx(assign.target)),
+                .elem_layout = self.listElemLayout(self.valueLayoutIdx(assign.target)),
             });
             try self.bindAssignedLocal(assign.target);
             try self.generateCFStmt(assign.next);
@@ -4273,14 +4273,14 @@ fn generateCFStmt(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
         .assign_struct => |assign| {
             try self.generateStruct(.{
                 .fields = assign.fields,
-                .struct_layout = self.exprLayoutIdx(assign.target),
+                .struct_layout = self.valueLayoutIdx(assign.target),
             });
             try self.bindAssignedLocal(assign.target);
             try self.generateCFStmt(assign.next);
         },
         .assign_tag => |assign| {
             try self.generateTag(.{
-                .union_layout = self.exprLayoutIdx(assign.target),
+                .union_layout = self.valueLayoutIdx(assign.target),
                 .discriminant = assign.discriminant,
                 .args = assign.args,
             });
@@ -4292,8 +4292,8 @@ fn generateCFStmt(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
             try self.generateCFStmt(debug_stmt.next);
         },
         .expect => |expect_stmt| {
-            const condition_vt = self.exprValType(expect_stmt.condition);
-            try self.generateExpr(expect_stmt.condition);
+            const condition_vt = self.valueValType(expect_stmt.condition);
+            try self.emitValueLocal(expect_stmt.condition);
             switch (condition_vt) {
                 .i32 => {},
                 .i64 => {
@@ -4319,15 +4319,15 @@ fn generateCFStmt(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
             try self.generateCFStmt(expect_stmt.next);
         },
         .ret => |r| {
-            try self.generateExpr(r.value);
+            try self.emitValueLocal(r.value);
             try self.emitLocalSet(self.proc_return_local);
             self.body.append(self.allocator, Op.br) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, self.cf_depth - 1) catch return error.OutOfMemory;
         },
         .switch_stmt => |sw| {
-            const cond_vt = self.exprValType(sw.cond);
+            const cond_vt = self.valueValType(sw.cond);
             const cond_local = self.storage.allocAnonymousLocal(cond_vt) catch return error.OutOfMemory;
-            try self.generateExpr(sw.cond);
+            try self.emitValueLocal(sw.cond);
             try self.emitLocalSet(cond_local);
 
             const branches = self.store.getCFSwitchBranches(sw.branches);
@@ -4369,7 +4369,7 @@ fn generateCFStmt(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
             var param_locals = self.allocator.alloc(u32, jp_params.len) catch return error.OutOfMemory;
 
             for (jp_params, 0..) |param, i| {
-                const vt = self.exprValType(param);
+                const vt = self.valueValType(param);
                 const local_idx = self.getOrAllocTypedLocal(param, vt) catch return error.OutOfMemory;
                 param_locals[i] = local_idx;
             }
@@ -4429,8 +4429,8 @@ fn generateCFStmt(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
             defer self.allocator.free(temp_locals);
 
             for (args, 0..) |arg, i| {
-                try self.generateExpr(arg);
-                const vt = self.exprValType(arg);
+                try self.emitValueLocal(arg);
+                const vt = self.valueValType(arg);
                 const tmp = self.storage.allocAnonymousLocal(vt) catch return error.OutOfMemory;
                 try self.emitLocalSet(tmp);
                 temp_locals[i] = tmp;
@@ -4585,15 +4585,15 @@ fn emitRocStaticStringCall(self: *Self, table_offset: u32, msg: []const u8) Allo
     try self.emitRocOpsCall(args_slot, table_offset);
 }
 
-fn emitRocDbg(self: *Self, message: LocalRef) Allocator.Error!void {
-    if (self.exprLayoutIdx(message) != .str) {
+fn emitRocDbg(self: *Self, message: ValueLocalId) Allocator.Error!void {
+    if (self.valueLayoutIdx(message) != .str) {
         std.debug.panic(
             "WasmCodeGen invariant violated: debug local {d} did not have Str layout",
             .{@intFromEnum(message)},
         );
     }
 
-    try self.generateExpr(message);
+    try self.emitValueLocal(message);
     const str_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalSet(str_local);
 
@@ -4637,18 +4637,18 @@ fn generateI128Literal(self: *Self, value: i128) Allocator.Error!void {
     try self.emitFpOffset(base_offset);
 }
 
-fn bindAssignedLocal(self: *Self, target: LocalRef) Allocator.Error!void {
-    const vt = self.exprValType(target);
+fn bindAssignedLocal(self: *Self, target: ValueLocalId) Allocator.Error!void {
+    const vt = self.valueValType(target);
     const local_idx = self.getOrAllocTypedLocal(target, vt) catch return error.OutOfMemory;
     try self.emitLocalSet(local_idx);
 }
 
 fn generateRefOp(self: *Self, op: RefOp, target_layout: layout.Idx) Allocator.Error!void {
     switch (op) {
-        .local => |local| try self.generateExpr(local),
+        .local => |local| try self.emitValueLocal(local),
         .discriminant => |disc| {
             const ls = self.getLayoutStore();
-            const source_layout_idx = self.exprLayoutIdx(disc.source);
+            const source_layout_idx = self.valueLayoutIdx(disc.source);
             const source_layout = ls.getLayout(source_layout_idx);
             const target_vt = self.resolveValType(target_layout);
             const source_vt: ValType = switch (source_layout.tag) {
@@ -4656,10 +4656,10 @@ fn generateRefOp(self: *Self, op: RefOp, target_layout: layout.Idx) Allocator.Er
                     const tu_data = ls.getTagUnionData(source_layout.data.tag_union.idx);
                     const tu_size = ls.layoutSize(source_layout);
                     if (tu_size <= 4 and tu_data.discriminant_offset == 0) {
-                        try self.generateExpr(disc.source);
-                        break :blk self.exprValType(disc.source);
+                        try self.emitValueLocal(disc.source);
+                        break :blk self.valueValType(disc.source);
                     } else {
-                        try self.generateExpr(disc.source);
+                        try self.emitValueLocal(disc.source);
                         try self.emitLoadBySize(tu_data.discriminant_size, @intCast(tu_data.discriminant_offset));
                         break :blk .i32;
                     }
@@ -4673,13 +4673,13 @@ fn generateRefOp(self: *Self, op: RefOp, target_layout: layout.Idx) Allocator.Er
                         );
                     }
                     const tu_data = ls.getTagUnionData(inner_layout.data.tag_union.idx);
-                    try self.generateExpr(disc.source);
+                    try self.emitValueLocal(disc.source);
                     try self.emitLoadBySize(tu_data.discriminant_size, @intCast(tu_data.discriminant_offset));
                     break :blk .i32;
                 },
                 else => blk: {
-                    try self.generateExpr(disc.source);
-                    break :blk self.exprValType(disc.source);
+                    try self.emitValueLocal(disc.source);
+                    break :blk self.valueValType(disc.source);
                 },
             };
 
@@ -4708,14 +4708,14 @@ fn generateRefOp(self: *Self, op: RefOp, target_layout: layout.Idx) Allocator.Er
         },
         .field => |field| try self.generateStructAccess(.{
             .struct_expr = field.source,
-            .struct_layout = self.exprLayoutIdx(field.source),
+            .struct_layout = self.valueLayoutIdx(field.source),
             .field_idx = field.field_idx,
             .field_layout = target_layout,
         }),
         .tag_payload => |payload| {
-            try self.generateExpr(payload.source);
+            try self.emitValueLocal(payload.source);
             const ls = self.getLayoutStore();
-            const source_layout = self.exprLayoutIdx(payload.source);
+            const source_layout = self.valueLayoutIdx(payload.source);
             const union_layout = ls.getLayout(source_layout);
             const payload_layout_idx = switch (union_layout.tag) {
                 .tag_union => blk: {
@@ -4748,20 +4748,20 @@ fn generateRefOp(self: *Self, op: RefOp, target_layout: layout.Idx) Allocator.Er
                 try self.emitLoadOpForLayout(target_layout, 0);
             }
         },
-        .nominal => |nom| try self.generateExpr(nom.backing_ref),
+        .nominal => |nom| try self.emitValueLocal(nom.backing_ref),
     }
 }
 
 fn generateRcStmt(
     self: *Self,
     comptime kind: RcOpKind,
-    value: LocalRef,
+    value: ValueLocalId,
     inc_count: u16,
 ) Allocator.Error!void {
-    try self.generateExpr(value);
-    const value_local = self.storage.allocAnonymousLocal(self.exprValType(value)) catch return error.OutOfMemory;
+    try self.emitValueLocal(value);
+    const value_local = self.storage.allocAnonymousLocal(self.valueValType(value)) catch return error.OutOfMemory;
     try self.emitLocalSet(value_local);
-    try self.emitRcForValueLocal(kind, value_local, self.exprValType(value), self.exprLayoutIdx(value), inc_count);
+    try self.emitRcForValueLocal(kind, value_local, self.valueValType(value), self.valueLayoutIdx(value), inc_count);
 }
 
 fn listElemLayout(self: *Self, list_layout_idx: layout.Idx) layout.Idx {
@@ -4815,10 +4815,10 @@ fn emitCall(self: *Self, func_idx: u32) Allocator.Error!void {
 }
 
 /// Generate call arguments (helper to avoid duplication).
-fn generateCallArgs(self: *Self, args: LocalRefSpan) Allocator.Error!void {
+fn generateCallArgs(self: *Self, args: ValueLocalSpan) Allocator.Error!void {
     const arg_refs = self.store.getLocalSpan(args);
     for (arg_refs) |arg| {
-        try self.generateExpr(arg);
+        try self.emitValueLocal(arg);
     }
 }
 
@@ -5186,7 +5186,7 @@ fn generateStruct(self: *Self, r: anytype) Allocator.Error!void {
         const field_vt = WasmLayout.resultValTypeWithStore(field_layout_idx, ls);
 
         // Generate the field expression
-        try self.generateExpr(field_expr_id);
+        try self.emitValueLocal(field_expr_id);
 
         // Composite field expressions can return pointers into callee-owned stack
         // frames. Stabilize by copying bytes into this frame before saving pointer.
@@ -5205,7 +5205,7 @@ fn generateStruct(self: *Self, r: anytype) Allocator.Error!void {
 
         // Convert type if needed (for primitives)
         if (!is_composite) {
-            const expr_vt = self.exprValType(field_expr_id);
+            const expr_vt = self.valueValType(field_expr_id);
             try self.emitConversion(expr_vt, field_vt);
         }
 
@@ -5250,7 +5250,7 @@ fn generateStructAccess(self: *Self, sa: anytype) Allocator.Error!void {
     const ls = self.getLayoutStore();
 
     // Generate the struct expression → pushes i32 pointer
-    try self.generateExpr(sa.struct_expr);
+    try self.emitValueLocal(sa.struct_expr);
     const struct_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalSet(struct_ptr);
 
@@ -5305,7 +5305,7 @@ fn generateTag(self: *Self, t: anytype) Allocator.Error!void {
         // contain control flow like early returns that need to execute.
         const small_args = self.store.getLocalSpan(t.args);
         for (small_args) |arg_expr_id| {
-            try self.generateExpr(arg_expr_id);
+            try self.emitValueLocal(arg_expr_id);
             self.body.append(self.allocator, Op.drop) catch return error.OutOfMemory;
         }
         self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
@@ -5327,9 +5327,9 @@ fn generateTag(self: *Self, t: anytype) Allocator.Error!void {
     const args = self.store.getLocalSpan(t.args);
     var payload_offset: u32 = 0;
     for (args) |arg_expr_id| {
-        const arg_byte_size = self.exprByteSize(arg_expr_id);
-        try self.generateExpr(arg_expr_id);
-        if (self.isCompositeExpr(arg_expr_id)) {
+        const arg_byte_size = self.valueByteSize(arg_expr_id);
+        try self.emitValueLocal(arg_expr_id);
+        if (self.isCompositeValue(arg_expr_id)) {
             // Composite types (Str, List, records, etc.) produce a pointer on
             // the stack. Copy the full data from the source to the tag union.
             const src_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -5337,7 +5337,7 @@ fn generateTag(self: *Self, t: anytype) Allocator.Error!void {
             WasmModule.leb128WriteU32(self.allocator, &self.body, src_local) catch return error.OutOfMemory;
             try self.emitMemCopy(base_local, payload_offset, src_local, arg_byte_size);
         } else {
-            const arg_vt = self.exprValType(arg_expr_id);
+            const arg_vt = self.valueValType(arg_expr_id);
             try self.emitStoreToMemSized(base_local, payload_offset, arg_vt, arg_byte_size);
         }
         payload_offset += arg_byte_size;
@@ -5403,7 +5403,7 @@ fn generateList(self: *Self, l: anytype) Allocator.Error!void {
     // Store each element
     const elem_vt = WasmLayout.resultValTypeWithStore(l.elem_layout, ls);
     for (elems, 0..) |elem_expr_id, i| {
-        try self.generateExpr(elem_expr_id);
+        try self.emitValueLocal(elem_expr_id);
 
         const offset = @as(u32, @intCast(i)) * elem_size;
         if (self.isCompositeLayout(l.elem_layout) and elem_size > 0) {
@@ -5414,7 +5414,7 @@ fn generateList(self: *Self, l: anytype) Allocator.Error!void {
             try self.emitMemCopy(data_base, offset, src_local, elem_size);
         } else {
             // Primitive element — store directly
-            const expr_vt = self.exprValType(elem_expr_id);
+            const expr_vt = self.valueValType(elem_expr_id);
             try self.emitConversion(expr_vt, elem_vt);
             try self.emitStoreToMemSized(data_base, offset, elem_vt, elem_size);
         }
@@ -5471,36 +5471,36 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
 
         .bool_not => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             self.body.append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
         },
 
         // Safe integer widenings (no-op or single instruction)
         .u8_to_i16, .u8_to_i32, .u8_to_u16, .u8_to_u32 => {
             // u8 is already i32 in wasm, and widening to larger types is a no-op
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             // If arg produces i64 (e.g. from i64_literal), wrap to i32
-            if (self.exprValType(args[0]) == .i64) {
+            if (self.valueValType(args[0]) == .i64) {
                 self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
             }
         },
         .i8_to_i16, .i8_to_i32 => {
             // i8 is i32 in wasm, sign-extend from 8 bits
-            try self.generateExpr(args[0]);
-            if (self.exprValType(args[0]) == .i64) {
+            try self.emitValueLocal(args[0]);
+            if (self.valueValType(args[0]) == .i64) {
                 self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
             }
             self.body.append(self.allocator, Op.i32_extend8_s) catch return error.OutOfMemory;
         },
         .u16_to_i32, .u16_to_u32 => {
-            try self.generateExpr(args[0]);
-            if (self.exprValType(args[0]) == .i64) {
+            try self.emitValueLocal(args[0]);
+            if (self.valueValType(args[0]) == .i64) {
                 self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
             }
         },
         .i16_to_i32 => {
-            try self.generateExpr(args[0]);
-            if (self.exprValType(args[0]) == .i64) {
+            try self.emitValueLocal(args[0]);
+            if (self.valueValType(args[0]) == .i64) {
                 self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
             }
             self.body.append(self.allocator, Op.i32_extend16_s) catch return error.OutOfMemory;
@@ -5514,8 +5514,8 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         .u32_to_i64,
         .u32_to_u64,
         => {
-            try self.generateExpr(args[0]);
-            const arg_vt = self.exprValType(args[0]);
+            try self.emitValueLocal(args[0]);
+            const arg_vt = self.valueValType(args[0]);
             if (arg_vt == .i64) {
                 // Already i64 — no extension needed
                 return;
@@ -5523,8 +5523,8 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             self.body.append(self.allocator, Op.i64_extend_i32_u) catch return error.OutOfMemory;
         },
         .i8_to_i64, .i16_to_i64, .i32_to_i64 => {
-            try self.generateExpr(args[0]);
-            const arg_vt = self.exprValType(args[0]);
+            try self.emitValueLocal(args[0]);
+            const arg_vt = self.valueValType(args[0]);
             if (arg_vt == .i64) {
                 // Already i64 — no extension needed
                 return;
@@ -5534,7 +5534,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
 
         // Narrowing/wrapping conversions
         .i64_to_i32_wrap, .u64_to_u32_wrap, .u64_to_i32_wrap, .i64_to_u32_wrap => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
         },
         .i32_to_i8_wrap,
@@ -5550,9 +5550,9 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         .i16_to_u8_wrap,
         .u32_to_i8_wrap,
         => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             // May need to wrap i64 to i32 first
-            const arg_vt = self.exprValType(args[0]);
+            const arg_vt = self.valueValType(args[0]);
             if (arg_vt == .i64) {
                 self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
             }
@@ -5570,8 +5570,8 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         .u64_to_i16_wrap,
         .u32_to_i16_wrap,
         => {
-            try self.generateExpr(args[0]);
-            const arg_vt = self.exprValType(args[0]);
+            try self.emitValueLocal(args[0]);
+            const arg_vt = self.valueValType(args[0]);
             if (arg_vt == .i64) {
                 self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
             }
@@ -5588,24 +5588,24 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         .i16_to_u16_wrap,
         => {
             // Same representation in wasm (both i32), no-op
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
         },
         .i64_to_u64_wrap, .u64_to_i64_wrap => {
             // Same representation in wasm (both i64), no-op
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
         },
 
         // Signed sub-i32 to unsigned wider wrapping (needs sign extension)
         .i8_to_u32_wrap => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             self.body.append(self.allocator, Op.i32_extend8_s) catch return error.OutOfMemory;
         },
         .i16_to_u32_wrap => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             self.body.append(self.allocator, Op.i32_extend16_s) catch return error.OutOfMemory;
         },
         .i8_to_u16_wrap => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             // Sign-extend from 8 bits then mask to 16 bits
             self.body.append(self.allocator, Op.i32_extend8_s) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
@@ -5613,32 +5613,32 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             self.body.append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
         },
         .i8_to_u64_wrap => {
-            try self.generateExpr(args[0]);
-            if (self.exprValType(args[0]) == .i64) {
+            try self.emitValueLocal(args[0]);
+            if (self.valueValType(args[0]) == .i64) {
                 self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
             }
             self.body.append(self.allocator, Op.i32_extend8_s) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.i64_extend_i32_s) catch return error.OutOfMemory;
         },
         .i16_to_u64_wrap => {
-            try self.generateExpr(args[0]);
-            if (self.exprValType(args[0]) == .i64) {
+            try self.emitValueLocal(args[0]);
+            if (self.valueValType(args[0]) == .i64) {
                 self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
             }
             self.body.append(self.allocator, Op.i32_extend16_s) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.i64_extend_i32_s) catch return error.OutOfMemory;
         },
         .i32_to_u64_wrap => {
-            try self.generateExpr(args[0]);
-            if (self.exprValType(args[0]) == .i64) {
+            try self.emitValueLocal(args[0]);
+            if (self.valueValType(args[0]) == .i64) {
                 self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
             }
             self.body.append(self.allocator, Op.i64_extend_i32_s) catch return error.OutOfMemory;
         },
         .i32_to_u128_wrap => {
             // Signed i32→u128 wrap: sign-extend to i64, then to i128
-            try self.generateExpr(args[0]);
-            if (self.exprValType(args[0]) == .i64) {
+            try self.emitValueLocal(args[0]);
+            if (self.valueValType(args[0]) == .i64) {
                 // Already i64
             } else {
                 self.body.append(self.allocator, Op.i64_extend_i32_s) catch return error.OutOfMemory;
@@ -5647,7 +5647,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
         .i32_to_u64_try => {
             // Signed i32 → unsigned u64: check >= 0, then sign-extend to i64
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const r = try self.emitIntTryResult(.i32, 8, 8);
             // Check: val >= 0
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
@@ -5676,9 +5676,9 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
         .i32_to_u128_try => {
             // Signed i32 → unsigned u128: check >= 0, then sign-extend to i128
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             // Sign-extend to i64 first
-            if (self.exprValType(args[0]) != .i64) {
+            if (self.valueValType(args[0]) != .i64) {
                 self.body.append(self.allocator, Op.i64_extend_i32_s) catch return error.OutOfMemory;
             }
             try self.emitIntToI128(true);
@@ -5687,97 +5687,97 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
 
         // Float conversions
         .f32_to_f64 => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             self.body.append(self.allocator, Op.f64_promote_f32) catch return error.OutOfMemory;
         },
         .f64_to_f32_wrap => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             self.body.append(self.allocator, Op.f32_demote_f64) catch return error.OutOfMemory;
         },
 
         // Int to float
         .i32_to_f32, .i8_to_f32, .i16_to_f32 => {
-            try self.generateExpr(args[0]);
-            if (self.exprValType(args[0]) == .i64) {
+            try self.emitValueLocal(args[0]);
+            if (self.valueValType(args[0]) == .i64) {
                 self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
             }
             self.body.append(self.allocator, Op.f32_convert_i32_s) catch return error.OutOfMemory;
         },
         .u32_to_f32, .u8_to_f32, .u16_to_f32 => {
-            try self.generateExpr(args[0]);
-            if (self.exprValType(args[0]) == .i64) {
+            try self.emitValueLocal(args[0]);
+            if (self.valueValType(args[0]) == .i64) {
                 self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
             }
             self.body.append(self.allocator, Op.f32_convert_i32_u) catch return error.OutOfMemory;
         },
         .i32_to_f64, .i8_to_f64, .i16_to_f64 => {
-            try self.generateExpr(args[0]);
-            if (self.exprValType(args[0]) == .i64) {
+            try self.emitValueLocal(args[0]);
+            if (self.valueValType(args[0]) == .i64) {
                 self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
             }
             self.body.append(self.allocator, Op.f64_convert_i32_s) catch return error.OutOfMemory;
         },
         .u32_to_f64, .u8_to_f64, .u16_to_f64 => {
-            try self.generateExpr(args[0]);
-            if (self.exprValType(args[0]) == .i64) {
+            try self.emitValueLocal(args[0]);
+            if (self.valueValType(args[0]) == .i64) {
                 self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
             }
             self.body.append(self.allocator, Op.f64_convert_i32_u) catch return error.OutOfMemory;
         },
         .i64_to_f32 => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             self.body.append(self.allocator, Op.f32_convert_i64_s) catch return error.OutOfMemory;
         },
         .u64_to_f32 => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             self.body.append(self.allocator, Op.f32_convert_i64_u) catch return error.OutOfMemory;
         },
         .i64_to_f64 => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             self.body.append(self.allocator, Op.f64_convert_i64_s) catch return error.OutOfMemory;
         },
         .u64_to_f64 => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             self.body.append(self.allocator, Op.f64_convert_i64_u) catch return error.OutOfMemory;
         },
 
         // Float to int (truncating)
         .f32_to_i32_trunc, .f32_to_i8_trunc, .f32_to_i16_trunc => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             self.body.append(self.allocator, Op.i32_trunc_f32_s) catch return error.OutOfMemory;
         },
         .f32_to_u32_trunc, .f32_to_u8_trunc, .f32_to_u16_trunc => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             self.body.append(self.allocator, Op.i32_trunc_f32_u) catch return error.OutOfMemory;
         },
         .f64_to_i32_trunc, .f64_to_i8_trunc, .f64_to_i16_trunc => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             self.body.append(self.allocator, Op.i32_trunc_f64_s) catch return error.OutOfMemory;
         },
         .f64_to_u32_trunc, .f64_to_u8_trunc, .f64_to_u16_trunc => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             self.body.append(self.allocator, Op.i32_trunc_f64_u) catch return error.OutOfMemory;
         },
         .f32_to_i64_trunc => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             self.body.append(self.allocator, Op.i64_trunc_f32_s) catch return error.OutOfMemory;
         },
         .f32_to_u64_trunc => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             self.body.append(self.allocator, Op.i64_trunc_f32_u) catch return error.OutOfMemory;
         },
         .f64_to_i64_trunc => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             self.body.append(self.allocator, Op.i64_trunc_f64_s) catch return error.OutOfMemory;
         },
         .f64_to_u64_trunc => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             self.body.append(self.allocator, Op.i64_trunc_f64_u) catch return error.OutOfMemory;
         },
 
         // Float math functions (direct wasm opcodes)
         .num_sqrt => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const vt = self.resolveValType(ll.ret_layout);
             const wasm_op: u8 = switch (vt) {
                 .f32 => Op.f32_sqrt,
@@ -5787,7 +5787,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             self.body.append(self.allocator, wasm_op) catch return error.OutOfMemory;
         },
         .num_floor => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const vt = self.resolveValType(ll.ret_layout);
             const wasm_op: u8 = switch (vt) {
                 .f32 => Op.f32_floor,
@@ -5797,7 +5797,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             self.body.append(self.allocator, wasm_op) catch return error.OutOfMemory;
         },
         .num_ceiling => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const vt = self.resolveValType(ll.ret_layout);
             const wasm_op: u8 = switch (vt) {
                 .f32 => Op.f32_ceil,
@@ -5807,7 +5807,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             self.body.append(self.allocator, wasm_op) catch return error.OutOfMemory;
         },
         .num_round => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const vt = self.resolveValType(ll.ret_layout);
             const wasm_op: u8 = switch (vt) {
                 .f32 => Op.f32_nearest,
@@ -5825,7 +5825,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         // List operations
         .list_len => {
             // Load length from RocList struct (offset 4)
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             try self.emitLoadOp(.i32, 4);
             // list_len returns U64 in Roc, but we store it as i32 on wasm32
             // If ret_layout expects i64, extend
@@ -5840,7 +5840,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             const ls = self.getLayoutStore();
 
             // Get element layout from the list type
-            const list_layout_idx = self.exprLayoutIdx(args[0]);
+            const list_layout_idx = self.valueLayoutIdx(args[0]);
             const list_layout = ls.getLayout(list_layout_idx);
             const elem_layout_idx = switch (list_layout.tag) {
                 .list => list_layout.data.list,
@@ -5851,14 +5851,14 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             const elem_is_composite = self.isCompositeLayout(elem_layout_idx);
 
             // Generate list expression and save pointer
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const list_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             try self.emitLocalSet(list_local);
 
             // Generate index as i32
             const index_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            try self.generateExpr(args[1]);
-            if (self.exprValType(args[1]) == .i64) {
+            try self.emitValueLocal(args[1]);
+            if (self.valueValType(args[1]) == .i64) {
                 self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
             }
             try self.emitLocalSet(index_local);
@@ -5911,7 +5911,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         // List element access operations (no heap allocation needed)
         .list_first => {
             // list_first(list) -> elem  (loads first element)
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             // Load elements_ptr from RocList (offset 0)
             try self.emitLoadOp(.i32, 0);
             // Load first element from elements_ptr
@@ -5925,7 +5925,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
         .list_last => {
             // list_last(list) -> elem  (loads last element)
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const list_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, list_local) catch return error.OutOfMemory;
@@ -5962,13 +5962,13 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             // list_drop_first(list, count) -> list
             // Returns a RocList with adjusted elements_ptr and length
             // No allocation needed — returns a view
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const list_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, list_local) catch return error.OutOfMemory;
 
-            try self.generateExpr(args[1]);
-            if (self.exprValType(args[1]) == .i64) {
+            try self.emitValueLocal(args[1]);
+            if (self.valueValType(args[1]) == .i64) {
                 self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
             }
             const count_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -6027,13 +6027,13 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         .list_drop_last => {
             // list_drop_last(list, count) -> list
             // Returns a RocList with adjusted length (pointer stays same)
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const list_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, list_local) catch return error.OutOfMemory;
 
-            try self.generateExpr(args[1]);
-            if (self.exprValType(args[1]) == .i64) {
+            try self.emitValueLocal(args[1]);
+            if (self.valueValType(args[1]) == .i64) {
                 self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
             }
             const count_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -6081,13 +6081,13 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         .list_take_first => {
             // list_take_first(list, count) -> list
             // Same as list but with length = min(count, len)
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const list_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, list_local) catch return error.OutOfMemory;
 
-            try self.generateExpr(args[1]);
-            if (self.exprValType(args[1]) == .i64) {
+            try self.emitValueLocal(args[1]);
+            if (self.valueValType(args[1]) == .i64) {
                 self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
             }
             const count_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -6141,13 +6141,13 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             // list_take_last(list, count) -> list
             // elements_ptr += (len - min(count, len)) * elem_size
             // length = min(count, len)
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const list_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, list_local) catch return error.OutOfMemory;
 
-            try self.generateExpr(args[1]);
-            if (self.exprValType(args[1]) == .i64) {
+            try self.emitValueLocal(args[1]);
+            if (self.valueValType(args[1]) == .i64) {
                 self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
             }
             const count_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -6268,7 +6268,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             // Shared layout uses canonical alphabetical field indices for records.
             // For { start : U64, len : U64 }, that means index 0 = len and index 1 = start.
             const ls = self.getLayoutStore();
-            const record_layout_idx = self.exprLayoutIdx(args[1]);
+            const record_layout_idx = self.valueLayoutIdx(args[1]);
             const record_layout = ls.getLayout(record_layout_idx);
             const record_idx = record_layout.data.struct_.idx;
             const len_field_off = ls.getStructFieldOffsetByOriginalIndex(record_idx, 0);
@@ -6301,13 +6301,13 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             }
 
             // Generate list arg (pointer to {data_ptr, len, capacity})
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const list_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, list_local) catch return error.OutOfMemory;
 
             // Generate record arg (pointer to the config record)
-            try self.generateExpr(args[1]);
+            try self.emitValueLocal(args[1]);
             const rec_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, rec_local) catch return error.OutOfMemory;
@@ -6425,7 +6425,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
 
         .str_count_utf8_bytes => {
             // Returns the length of the string in UTF-8 bytes
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             // For SSO (byte 11 high bit set): length = byte 11 & 0x7F
             // For heap: length at offset 4
             // We use the simplified approach: load byte 11, check SSO bit
@@ -6472,10 +6472,10 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         .str_is_eq => {
             // String equality via host function (handles both SSO and heap strings)
             const import_idx = self.str_eq_import orelse unreachable;
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const a = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             try self.emitLocalSet(a);
-            try self.generateExpr(args[1]);
+            try self.emitValueLocal(args[1]);
             const b = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             try self.emitLocalSet(b);
             // Push both pointers and call host function
@@ -6486,10 +6486,10 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
         .str_concat => {
             // LowLevel str_concat: concatenate 2 strings
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const a_str = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             try self.emitLocalSet(a_str);
-            try self.generateExpr(args[1]);
+            try self.emitValueLocal(args[1]);
             const b_str = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             try self.emitLocalSet(b_str);
 
@@ -6558,7 +6558,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 .str_release_excess_capacity => self.str_release_excess_capacity_import orelse unreachable,
                 else => unreachable,
             };
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const input = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             try self.emitLocalSet(input);
             const result_offset = try self.allocStackMemory(12, 4);
@@ -6574,10 +6574,10 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 .str_drop_suffix => self.str_drop_suffix_import orelse unreachable,
                 else => unreachable,
             };
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const a = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             try self.emitLocalSet(a);
-            try self.generateExpr(args[1]);
+            try self.emitValueLocal(args[1]);
             const b = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             try self.emitLocalSet(b);
             const result_offset = try self.allocStackMemory(12, 4);
@@ -6594,10 +6594,10 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 .str_join_with => self.str_join_with_import orelse unreachable,
                 else => unreachable,
             };
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const a = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             try self.emitLocalSet(a);
-            try self.generateExpr(args[1]);
+            try self.emitValueLocal(args[1]);
             const b = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             try self.emitLocalSet(b);
             const result_offset = try self.allocStackMemory(12, 4);
@@ -6614,11 +6614,11 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 .str_reserve => self.str_reserve_import orelse unreachable,
                 else => unreachable,
             };
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const str_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             try self.emitLocalSet(str_local);
-            try self.generateExpr(args[1]);
-            const int_vt = self.exprValType(args[1]);
+            try self.emitValueLocal(args[1]);
+            const int_vt = self.valueValType(args[1]);
             if (int_vt == .i64) {
                 self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
             }
@@ -6634,8 +6634,8 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
         .str_with_capacity => {
             const import_idx = self.str_with_capacity_import orelse unreachable;
-            try self.generateExpr(args[0]);
-            const int_vt = self.exprValType(args[0]);
+            try self.emitValueLocal(args[0]);
+            const int_vt = self.valueValType(args[0]);
             if (int_vt == .i64) {
                 self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
             }
@@ -6650,10 +6650,10 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
         .str_caseless_ascii_equals => {
             const import_idx = self.str_caseless_ascii_equals_import orelse unreachable;
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const a = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             try self.emitLocalSet(a);
-            try self.generateExpr(args[1]);
+            try self.emitValueLocal(args[1]);
             const b = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             try self.emitLocalSet(b);
             try self.emitLocalGet(a);
@@ -6667,7 +6667,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             if (ret_layout_val.tag != .tag_union) unreachable;
             const tu_data = ls.getTagUnionData(ret_layout_val.data.tag_union.idx);
             const import_idx = self.str_from_utf8_import orelse unreachable;
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const input = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             try self.emitLocalSet(input);
             const result_offset = try self.allocStackMemory(tu_data.size, 4);
@@ -6716,7 +6716,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             }
             const ok_payload = ok_payload_idx orelse unreachable;
 
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const input = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             try self.emitLocalSet(input);
 
@@ -6785,7 +6785,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         .dec_to_str => try self.generateDecToStr(args[0]),
         .f32_to_str => try self.generateFloatToStr(args[0], true),
         .f64_to_str => try self.generateFloatToStr(args[0], false),
-        .num_to_str => switch (self.exprLayoutIdx(args[0])) {
+        .num_to_str => switch (self.valueLayoutIdx(args[0])) {
             .u8 => try self.generateIntToStr(args[0], 1, false),
             .i8 => try self.generateIntToStr(args[0], 1, true),
             .u16 => try self.generateIntToStr(args[0], 2, false),
@@ -6801,7 +6801,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             .f64 => try self.generateFloatToStr(args[0], false),
             else => std.debug.panic(
                 "WasmCodeGen invariant violated: num_to_str received non-numeric layout {s}",
-                .{@tagName(self.exprLayoutIdx(args[0]))},
+                .{@tagName(self.valueLayoutIdx(args[0]))},
             ),
         },
         .num_from_numeral => unreachable, // Resolved before backend codegen
@@ -6810,8 +6810,8 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         .box_box => {
             // box_box(value) -> Box value (pointer to heap-allocated copy)
             const value_expr = args[0];
-            const value_size = self.exprByteSize(value_expr);
-            const value_vt = self.exprValType(value_expr);
+            const value_size = self.valueByteSize(value_expr);
+            const value_vt = self.valueValType(value_expr);
 
             // Determine alignment (same logic as allocStackMemory)
             const alignment: u32 = if (value_size >= 8) 8 else if (value_size >= 4) 4 else if (value_size >= 2) 2 else 1;
@@ -6822,7 +6822,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.emitLocalSet(box_ptr);
 
             // Generate the value expression
-            try self.generateExpr(value_expr);
+            try self.emitValueLocal(value_expr);
 
             // Store value to box - depends on whether it's scalar or composite
             if (value_vt == .i32 and value_size > 4) {
@@ -6908,7 +6908,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             // box_unbox(box_ptr) -> value
             // Box is a transparent pointer - dereference it
             const box_expr = args[0];
-            try self.generateExpr(box_expr);
+            try self.emitValueLocal(box_expr);
 
             // Determine result type
             const result_vt = self.resolveValType(ll.ret_layout);
@@ -6928,11 +6928,11 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
 
         // Compare — returns Ordering enum (EQ=0, GT=1, LT=2)
         .compare => {
-            try self.generateExpr(args[0]);
-            try self.generateExpr(args[1]);
+            try self.emitValueLocal(args[0]);
+            try self.emitValueLocal(args[1]);
             // Determine arg type from first arg's layout
-            const arg_layout = self.exprLayoutIdx(args[0]);
-            const arg_vt = self.exprValType(args[0]);
+            const arg_layout = self.valueLayoutIdx(args[0]);
+            const arg_vt = self.valueValType(args[0]);
 
             // Determine if unsigned from layout
             const is_unsigned = switch (arg_layout) {
@@ -7045,7 +7045,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         // Layout: payload at offset 0, discriminant (1 byte) after payload. Ok=1, Err=0.
         // Narrowing i32 → smaller signed
         .i32_to_i8_try, .i16_to_i8_try, .u16_to_i8_try => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const r = try self.emitIntTryResult(.i32, 1, 1);
             // Check: val >= -128 && val <= 127
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
@@ -7067,7 +7067,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             WasmModule.leb128WriteU32(self.allocator, &self.body, r.result_local) catch return error.OutOfMemory;
         },
         .u8_to_i8_try => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const r = try self.emitIntTryResult(.i32, 1, 1);
             // u8 → i8: check val <= 127
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
@@ -7084,7 +7084,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
         // Narrowing to u8
         .i32_to_u8_try, .i16_to_u8_try, .u16_to_u8_try, .i8_to_u8_try => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const r = try self.emitIntTryResult(.i32, 1, 1);
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, r.val_local) catch return error.OutOfMemory;
@@ -7106,7 +7106,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
         // Narrowing to i16
         .i32_to_i16_try, .u32_to_i16_try => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const r = try self.emitIntTryResult(.i32, 2, 2);
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, r.val_local) catch return error.OutOfMemory;
@@ -7127,7 +7127,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             WasmModule.leb128WriteU32(self.allocator, &self.body, r.result_local) catch return error.OutOfMemory;
         },
         .u16_to_i16_try => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const r = try self.emitIntTryResult(.i32, 2, 2);
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, r.val_local) catch return error.OutOfMemory;
@@ -7143,7 +7143,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
         // Narrowing to u16
         .i32_to_u16_try, .u32_to_u16_try, .i16_to_u16_try => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const r = try self.emitIntTryResult(.i32, 2, 2);
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, r.val_local) catch return error.OutOfMemory;
@@ -7165,7 +7165,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
         // i32 <-> u32 try
         .i32_to_u32_try => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const r = try self.emitIntTryResult(.i32, 4, 4);
             // i32 → u32: check val >= 0
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
@@ -7181,7 +7181,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             WasmModule.leb128WriteU32(self.allocator, &self.body, r.result_local) catch return error.OutOfMemory;
         },
         .u32_to_i32_try => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const r = try self.emitIntTryResult(.i32, 4, 4);
             // u32 → i32: check high bit is 0 (val <= 0x7FFFFFFF)
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
@@ -7197,7 +7197,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             WasmModule.leb128WriteU32(self.allocator, &self.body, r.result_local) catch return error.OutOfMemory;
         },
         .u32_to_i8_try => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const r = try self.emitIntTryResult(.i32, 1, 1);
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, r.val_local) catch return error.OutOfMemory;
@@ -7212,7 +7212,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             WasmModule.leb128WriteU32(self.allocator, &self.body, r.result_local) catch return error.OutOfMemory;
         },
         .u32_to_u8_try => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const r = try self.emitIntTryResult(.i32, 1, 1);
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, r.val_local) catch return error.OutOfMemory;
@@ -7233,7 +7233,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         .i16_to_u32_try,
         .i16_to_u64_try,
         => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             // These are widening but signed→unsigned, so check val >= 0
             const target_is_i64 = (ll.op == .i8_to_u64_try or ll.op == .i16_to_u64_try);
             const payload_size: u32 = if (target_is_i64) 8 else if (ll.op == .i8_to_u16_try) 2 else 4;
@@ -7270,7 +7270,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
         // i64 → narrowing try conversions
         .i64_to_i8_try => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const r = try self.emitIntTryResult(.i64, 1, 1);
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, r.val_local) catch return error.OutOfMemory;
@@ -7291,7 +7291,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             WasmModule.leb128WriteU32(self.allocator, &self.body, r.result_local) catch return error.OutOfMemory;
         },
         .i64_to_i16_try => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const r = try self.emitIntTryResult(.i64, 2, 2);
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, r.val_local) catch return error.OutOfMemory;
@@ -7312,7 +7312,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             WasmModule.leb128WriteU32(self.allocator, &self.body, r.result_local) catch return error.OutOfMemory;
         },
         .i64_to_i32_try => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const r = try self.emitIntTryResult(.i64, 4, 4);
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, r.val_local) catch return error.OutOfMemory;
@@ -7333,7 +7333,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             WasmModule.leb128WriteU32(self.allocator, &self.body, r.result_local) catch return error.OutOfMemory;
         },
         .i64_to_u8_try => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const r = try self.emitIntTryResult(.i64, 1, 1);
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, r.val_local) catch return error.OutOfMemory;
@@ -7354,7 +7354,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             WasmModule.leb128WriteU32(self.allocator, &self.body, r.result_local) catch return error.OutOfMemory;
         },
         .i64_to_u16_try => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const r = try self.emitIntTryResult(.i64, 2, 2);
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, r.val_local) catch return error.OutOfMemory;
@@ -7375,7 +7375,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             WasmModule.leb128WriteU32(self.allocator, &self.body, r.result_local) catch return error.OutOfMemory;
         },
         .i64_to_u32_try => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const r = try self.emitIntTryResult(.i64, 4, 4);
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, r.val_local) catch return error.OutOfMemory;
@@ -7396,7 +7396,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             WasmModule.leb128WriteU32(self.allocator, &self.body, r.result_local) catch return error.OutOfMemory;
         },
         .i64_to_u64_try => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const r = try self.emitIntTryResult(.i64, 8, 8);
             // i64 → u64: check val >= 0
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
@@ -7413,7 +7413,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
         // u64 → narrowing try conversions
         .u64_to_i8_try => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const r = try self.emitIntTryResult(.i64, 1, 1);
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, r.val_local) catch return error.OutOfMemory;
@@ -7428,7 +7428,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             WasmModule.leb128WriteU32(self.allocator, &self.body, r.result_local) catch return error.OutOfMemory;
         },
         .u64_to_i16_try => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const r = try self.emitIntTryResult(.i64, 2, 2);
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, r.val_local) catch return error.OutOfMemory;
@@ -7443,7 +7443,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             WasmModule.leb128WriteU32(self.allocator, &self.body, r.result_local) catch return error.OutOfMemory;
         },
         .u64_to_i32_try => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const r = try self.emitIntTryResult(.i64, 4, 4);
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, r.val_local) catch return error.OutOfMemory;
@@ -7458,7 +7458,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             WasmModule.leb128WriteU32(self.allocator, &self.body, r.result_local) catch return error.OutOfMemory;
         },
         .u64_to_i64_try => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const r = try self.emitIntTryResult(.i64, 8, 8);
             // u64 → i64: check high bit is 0
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
@@ -7474,7 +7474,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             WasmModule.leb128WriteU32(self.allocator, &self.body, r.result_local) catch return error.OutOfMemory;
         },
         .u64_to_u8_try => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const r = try self.emitIntTryResult(.i64, 1, 1);
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, r.val_local) catch return error.OutOfMemory;
@@ -7489,7 +7489,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             WasmModule.leb128WriteU32(self.allocator, &self.body, r.result_local) catch return error.OutOfMemory;
         },
         .u64_to_u16_try => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const r = try self.emitIntTryResult(.i64, 2, 2);
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, r.val_local) catch return error.OutOfMemory;
@@ -7504,7 +7504,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             WasmModule.leb128WriteU32(self.allocator, &self.body, r.result_local) catch return error.OutOfMemory;
         },
         .u64_to_u32_try => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const r = try self.emitIntTryResult(.i64, 4, 4);
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, r.val_local) catch return error.OutOfMemory;
@@ -7520,85 +7520,85 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
         // 128-bit try conversions: narrowing from i128/u128 to smaller types
         .i128_to_i8_try => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             try self.emitI128TryNarrow(1, true, true);
         },
         .i128_to_i16_try => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             try self.emitI128TryNarrow(2, true, true);
         },
         .i128_to_i32_try => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             try self.emitI128TryNarrow(4, true, true);
         },
         .i128_to_i64_try => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             try self.emitI128TryNarrow(8, true, true);
         },
         .i128_to_u8_try => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             try self.emitI128TryNarrow(1, true, false);
         },
         .i128_to_u16_try => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             try self.emitI128TryNarrow(2, true, false);
         },
         .i128_to_u32_try => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             try self.emitI128TryNarrow(4, true, false);
         },
         .i128_to_u64_try => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             try self.emitI128TryNarrow(8, true, false);
         },
         .i128_to_u128_try => {
             // i128 → u128: check >= 0 (high word sign bit)
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             try self.emitI128TryToU128(true);
         },
         .u128_to_i8_try => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             try self.emitI128TryNarrow(1, false, true);
         },
         .u128_to_i16_try => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             try self.emitI128TryNarrow(2, false, true);
         },
         .u128_to_i32_try => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             try self.emitI128TryNarrow(4, false, true);
         },
         .u128_to_i64_try => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             try self.emitI128TryNarrow(8, false, true);
         },
         .u128_to_i128_try => {
             // u128 → i128: check high bit not set (value < 2^127)
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             try self.emitI128TryToI128();
         },
         .u128_to_u8_try => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             try self.emitI128TryNarrow(1, false, false);
         },
         .u128_to_u16_try => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             try self.emitI128TryNarrow(2, false, false);
         },
         .u128_to_u32_try => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             try self.emitI128TryNarrow(4, false, false);
         },
         .u128_to_u64_try => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             try self.emitI128TryNarrow(8, false, false);
         },
         // Widening signed→unsigned try: check >= 0
         .i8_to_u128_try, .i16_to_u128_try, .i64_to_u128_try => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             // Source is a small signed int (i32 or i64 on wasm stack)
             // Convert to i128, then check >= 0
-            const src_vt = self.exprValType(args[0]);
+            const src_vt = self.valueValType(args[0]);
             if (src_vt == .i32) {
                 self.body.append(self.allocator, Op.i64_extend_i32_s) catch return error.OutOfMemory;
             }
@@ -7617,7 +7617,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         .u32_to_u128,
         => {
             // Unsigned i32→i128: zero-extend i32 to i64, then to i128
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             self.body.append(self.allocator, Op.i64_extend_i32_u) catch return error.OutOfMemory;
             try self.emitIntToI128(false);
         },
@@ -7625,7 +7625,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         .u64_to_u128,
         => {
             // Unsigned i64→i128: value is already i64
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             try self.emitIntToI128(false);
         },
         .i8_to_i128,
@@ -7633,28 +7633,28 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         .i32_to_i128,
         => {
             // Signed i32→i128: sign-extend i32 to i64, then to i128
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             self.body.append(self.allocator, Op.i64_extend_i32_s) catch return error.OutOfMemory;
             try self.emitIntToI128(true);
         },
         .i64_to_i128,
         => {
             // Signed i64→i128: value is already i64
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             try self.emitIntToI128(true);
         },
         .i8_to_u128_wrap,
         .i16_to_u128_wrap,
         => {
             // Signed i32→u128 wrap: sign-extend to i64, then i128
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             self.body.append(self.allocator, Op.i64_extend_i32_s) catch return error.OutOfMemory;
             try self.emitIntToI128(true);
         },
         .i64_to_u128_wrap,
         => {
             // Signed i64→u128 wrap: already i64, sign-extend to i128
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             try self.emitIntToI128(true);
         },
         // i128/u128 truncation to smaller types (load low word, mask)
@@ -7663,7 +7663,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         .u128_to_i8_wrap,
         .u128_to_u8_wrap,
         => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             // Load low i64, wrap to i32, mask to 8 bits
             try self.emitLoadOp(.i64, 0);
             self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
@@ -7676,7 +7676,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         .u128_to_i16_wrap,
         .u128_to_u16_wrap,
         => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             try self.emitLoadOp(.i64, 0);
             self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
@@ -7688,7 +7688,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         .u128_to_i32_wrap,
         .u128_to_u32_wrap,
         => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             try self.emitLoadOp(.i64, 0);
             self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
         },
@@ -7697,19 +7697,19 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         .u128_to_i64_wrap,
         .u128_to_u64_wrap,
         => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             try self.emitLoadOp(.i64, 0);
         },
         .u128_to_i128_wrap,
         .i128_to_u128_wrap,
         => {
             // Same representation — just pass through (pointer stays the same)
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
         },
         // i128/u128 → float conversions
         .i128_to_f64 => {
             // Approximate: convert low u64 to f64 + high i64 * 2^64
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const src = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, src) catch return error.OutOfMemory;
@@ -7731,7 +7731,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
         .u128_to_f64 => {
             // Same as i128 but high word is unsigned
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const src = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, src) catch return error.OutOfMemory;
@@ -7750,7 +7750,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
         .i128_to_f32 => {
             // Convert via f64 then demote
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const src = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, src) catch return error.OutOfMemory;
@@ -7769,7 +7769,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             self.body.append(self.allocator, Op.f32_demote_f64) catch return error.OutOfMemory;
         },
         .u128_to_f32 => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const src = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, src) catch return error.OutOfMemory;
@@ -7789,7 +7789,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
         // float → i128/u128 truncating conversions
         .f64_to_i128_trunc => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const val = self.storage.allocAnonymousLocal(.f64) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, val) catch return error.OutOfMemory;
@@ -7801,7 +7801,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.emitF64ToI128(val, result_local, true);
         },
         .f64_to_u128_trunc => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const val = self.storage.allocAnonymousLocal(.f64) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, val) catch return error.OutOfMemory;
@@ -7814,7 +7814,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
         .f32_to_i128_trunc => {
             // Promote f32 to f64, then use f64_to_i128 logic
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             self.body.append(self.allocator, Op.f64_promote_f32) catch return error.OutOfMemory;
             const val = self.storage.allocAnonymousLocal(.f64) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
@@ -7827,7 +7827,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.emitF64ToI128(val, result_local, true);
         },
         .f32_to_u128_trunc => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             self.body.append(self.allocator, Op.f64_promote_f32) catch return error.OutOfMemory;
             const val = self.storage.allocAnonymousLocal(.f64) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
@@ -7845,7 +7845,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             const import_idx = if (is_signed) self.i128_to_dec_import else self.u128_to_dec_import;
 
             // Generate the 128-bit value (pointer to 16 bytes in stack memory)
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const val_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             try self.emitLocalSet(val_ptr);
 
@@ -7878,7 +7878,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         // Decimal conversions: int → Dec (multiply by 10^18)
         .u8_to_dec, .u16_to_dec, .u32_to_dec => {
             // Unsigned small int → Dec: zero-extend to i64, multiply by 10^18
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const val = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.i64_extend_i32_u) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
@@ -7892,7 +7892,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
         .u64_to_dec => {
             // u64 → Dec: already i64
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const val = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, val) catch return error.OutOfMemory;
@@ -7905,7 +7905,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
         .i8_to_dec, .i16_to_dec, .i32_to_dec => {
             // Signed small int → Dec: sign-extend to i64, multiply by 10^18
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const val = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.i64_extend_i32_s) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
@@ -7919,7 +7919,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
         .i64_to_dec => {
             // i64 → Dec: already i64
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const val = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, val) catch return error.OutOfMemory;
@@ -7943,7 +7943,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         .dec_to_u8_trunc,
         => {
             // Get pointer to Dec value (i128)
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const dec_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             try self.emitLocalSet(dec_local);
 
@@ -7990,7 +7990,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
         .dec_to_i128_trunc, .dec_to_u128_trunc => {
             // Dec → i128/u128: divide i128 by 10^18 using host function
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const dec_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             try self.emitLocalSet(dec_local);
 
@@ -8012,7 +8012,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
         .dec_to_f64 => {
             // Dec → f64: load i128 as i64 (low word), convert to f64, divide by 10^18.0
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             try self.emitLoadOp(.i64, 0);
             self.body.append(self.allocator, Op.f64_convert_i64_s) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.f64_const) catch return error.OutOfMemory;
@@ -8023,7 +8023,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
         .dec_to_f32_wrap => {
             // Dec → f32: same approach as f64, then demote
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             try self.emitLoadOp(.i64, 0);
             self.body.append(self.allocator, Op.f64_convert_i64_s) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.f64_const) catch return error.OutOfMemory;
@@ -8044,7 +8044,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         .dec_to_u32_try_unsafe,
         .dec_to_u64_try_unsafe,
         => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             // Dec value is a pointer to 16-byte i128
             const src = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
@@ -8154,7 +8154,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             const import_idx = if (is_signed) self.dec_to_i128_import else self.dec_to_u128_import;
 
             // Generate the Dec value (pointer to 16 bytes in stack memory)
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const val_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             try self.emitLocalSet(val_ptr);
 
@@ -8187,7 +8187,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             const import_idx = self.dec_to_f32_import orelse unreachable;
 
             // Generate the Dec value (pointer to 16 bytes in stack memory)
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const val_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             try self.emitLocalSet(val_ptr);
 
@@ -8234,59 +8234,59 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
 
         // Float try_unsafe conversions — return {val, is_int, in_range} record
         .f32_to_i8_try_unsafe, .f64_to_i8_try_unsafe => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             if (ll.op == .f32_to_i8_try_unsafe) self.body.append(self.allocator, Op.f64_promote_f32) catch return error.OutOfMemory;
             try self.emitFloatToIntTryUnsafe(1, false, -128.0, 127.0);
         },
         .f32_to_u8_try_unsafe, .f64_to_u8_try_unsafe => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             if (ll.op == .f32_to_u8_try_unsafe) self.body.append(self.allocator, Op.f64_promote_f32) catch return error.OutOfMemory;
             try self.emitFloatToIntTryUnsafe(1, false, 0.0, 255.0);
         },
         .f32_to_i16_try_unsafe, .f64_to_i16_try_unsafe => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             if (ll.op == .f32_to_i16_try_unsafe) self.body.append(self.allocator, Op.f64_promote_f32) catch return error.OutOfMemory;
             try self.emitFloatToIntTryUnsafe(2, false, -32768.0, 32767.0);
         },
         .f32_to_u16_try_unsafe, .f64_to_u16_try_unsafe => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             if (ll.op == .f32_to_u16_try_unsafe) self.body.append(self.allocator, Op.f64_promote_f32) catch return error.OutOfMemory;
             try self.emitFloatToIntTryUnsafe(2, false, 0.0, 65535.0);
         },
         .f32_to_i32_try_unsafe, .f64_to_i32_try_unsafe => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             if (ll.op == .f32_to_i32_try_unsafe) self.body.append(self.allocator, Op.f64_promote_f32) catch return error.OutOfMemory;
             try self.emitFloatToIntTryUnsafe(4, false, -2147483648.0, 2147483647.0);
         },
         .f32_to_u32_try_unsafe, .f64_to_u32_try_unsafe => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             if (ll.op == .f32_to_u32_try_unsafe) self.body.append(self.allocator, Op.f64_promote_f32) catch return error.OutOfMemory;
             try self.emitFloatToIntTryUnsafe(4, false, 0.0, 4294967295.0);
         },
         .f32_to_i64_try_unsafe, .f64_to_i64_try_unsafe => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             if (ll.op == .f32_to_i64_try_unsafe) self.body.append(self.allocator, Op.f64_promote_f32) catch return error.OutOfMemory;
             try self.emitFloatToIntTryUnsafe(8, true, @as(f64, @floatFromInt(@as(i64, std.math.minInt(i64)))), @as(f64, @floatFromInt(@as(i64, std.math.maxInt(i64)))));
         },
         .f32_to_u64_try_unsafe, .f64_to_u64_try_unsafe => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             if (ll.op == .f32_to_u64_try_unsafe) self.body.append(self.allocator, Op.f64_promote_f32) catch return error.OutOfMemory;
             try self.emitFloatToIntTryUnsafe(8, true, 0.0, @as(f64, @floatFromInt(@as(u64, std.math.maxInt(u64)))));
         },
         // 128-bit float try_unsafe: return {val: i128, is_int: bool, in_range: bool}
         .f32_to_i128_try_unsafe, .f64_to_i128_try_unsafe => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             if (ll.op == .f32_to_i128_try_unsafe) self.body.append(self.allocator, Op.f64_promote_f32) catch return error.OutOfMemory;
             try self.emitFloatToI128TryUnsafe(true);
         },
         .f32_to_u128_try_unsafe, .f64_to_u128_try_unsafe => {
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             if (ll.op == .f32_to_u128_try_unsafe) self.body.append(self.allocator, Op.f64_promote_f32) catch return error.OutOfMemory;
             try self.emitFloatToI128TryUnsafe(false);
         },
         .f64_to_f32_try_unsafe => {
             // Returns {val: F32, success: Bool} — 8 bytes
-            try self.generateExpr(args[0]);
+            try self.emitValueLocal(args[0]);
             const val = self.storage.allocAnonymousLocal(.f64) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.local_tee) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, val) catch return error.OutOfMemory;
@@ -8364,7 +8364,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
 
 /// Generate numeric low-level operations (num_add, num_sub, etc.)
 /// Handles both scalar and composite (i128/Dec) types.
-fn generateNumericLowLevel(self: *Self, op: anytype, args: []const LocalRef, ret_layout: layout.Idx) Allocator.Error!void {
+fn generateNumericLowLevel(self: *Self, op: anytype, args: []const ValueLocalId, ret_layout: layout.Idx) Allocator.Error!void {
     // For comparison ops, the operand type determines composite-ness, not ret_layout (which is bool)
     const use_operand_layout = switch (op) {
         .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_abs_diff => true,
@@ -8372,13 +8372,13 @@ fn generateNumericLowLevel(self: *Self, op: anytype, args: []const LocalRef, ret
     };
 
     // Check for composite types (i128/Dec)
-    const check_layout = if (use_operand_layout) self.exprLayoutIdx(args[0]) else ret_layout;
+    const check_layout = if (use_operand_layout) self.valueLayoutIdx(args[0]) else ret_layout;
     const is_shift = op == .num_shift_left_by or op == .num_shift_right_by or op == .num_shift_right_zf_by;
-    if (!is_shift and (self.isCompositeExpr(args[0]) or self.isCompositeLayout(check_layout))) {
+    if (!is_shift and (self.isCompositeValue(args[0]) or self.isCompositeLayout(check_layout))) {
         return self.generateCompositeNumericOp(op, args, ret_layout, check_layout);
     }
     // I128/U128 shifts: LHS is composite but RHS is U8 — needs dedicated handling.
-    if (is_shift and (self.isCompositeExpr(args[0]) or self.isCompositeLayout(check_layout))) {
+    if (is_shift and (self.isCompositeValue(args[0]) or self.isCompositeLayout(check_layout))) {
         return self.generateI128Shift(op, args);
     }
 
@@ -8387,12 +8387,12 @@ fn generateNumericLowLevel(self: *Self, op: anytype, args: []const LocalRef, ret
         return self.generateCompositeI128Negate(args[0], ret_layout);
     }
 
-    const vt = if (use_operand_layout) self.exprValType(args[0]) else self.resolveValType(ret_layout);
+    const vt = if (use_operand_layout) self.valueValType(args[0]) else self.resolveValType(ret_layout);
 
     switch (op) {
         .num_plus => {
-            try self.generateExpr(args[0]);
-            try self.generateExpr(args[1]);
+            try self.emitValueLocal(args[0]);
+            try self.emitValueLocal(args[1]);
             const wasm_op: u8 = switch (vt) {
                 .i32 => Op.i32_add,
                 .i64 => Op.i64_add,
@@ -8402,8 +8402,8 @@ fn generateNumericLowLevel(self: *Self, op: anytype, args: []const LocalRef, ret
             self.body.append(self.allocator, wasm_op) catch return error.OutOfMemory;
         },
         .num_minus => {
-            try self.generateExpr(args[0]);
-            try self.generateExpr(args[1]);
+            try self.emitValueLocal(args[0]);
+            try self.emitValueLocal(args[1]);
             const wasm_op: u8 = switch (vt) {
                 .i32 => Op.i32_sub,
                 .i64 => Op.i64_sub,
@@ -8413,8 +8413,8 @@ fn generateNumericLowLevel(self: *Self, op: anytype, args: []const LocalRef, ret
             self.body.append(self.allocator, wasm_op) catch return error.OutOfMemory;
         },
         .num_times => {
-            try self.generateExpr(args[0]);
-            try self.generateExpr(args[1]);
+            try self.emitValueLocal(args[0]);
+            try self.emitValueLocal(args[1]);
             const wasm_op: u8 = switch (vt) {
                 .i32 => Op.i32_mul,
                 .i64 => Op.i64_mul,
@@ -8424,8 +8424,8 @@ fn generateNumericLowLevel(self: *Self, op: anytype, args: []const LocalRef, ret
             self.body.append(self.allocator, wasm_op) catch return error.OutOfMemory;
         },
         .num_div_by => {
-            try self.generateExpr(args[0]);
-            try self.generateExpr(args[1]);
+            try self.emitValueLocal(args[0]);
+            try self.emitValueLocal(args[1]);
             const is_unsigned = isUnsignedLayout(ret_layout);
             const wasm_op: u8 = switch (vt) {
                 .i32 => if (is_unsigned) Op.i32_div_u else Op.i32_div_s,
@@ -8436,8 +8436,8 @@ fn generateNumericLowLevel(self: *Self, op: anytype, args: []const LocalRef, ret
             self.body.append(self.allocator, wasm_op) catch return error.OutOfMemory;
         },
         .num_div_trunc_by => {
-            try self.generateExpr(args[0]);
-            try self.generateExpr(args[1]);
+            try self.emitValueLocal(args[0]);
+            try self.emitValueLocal(args[1]);
             const is_unsigned = isUnsignedLayout(ret_layout);
             const wasm_op: u8 = switch (vt) {
                 .i32 => if (is_unsigned) Op.i32_div_u else Op.i32_div_s,
@@ -8448,8 +8448,8 @@ fn generateNumericLowLevel(self: *Self, op: anytype, args: []const LocalRef, ret
             self.body.append(self.allocator, wasm_op) catch return error.OutOfMemory;
         },
         .num_rem_by => {
-            try self.generateExpr(args[0]);
-            try self.generateExpr(args[1]);
+            try self.emitValueLocal(args[0]);
+            try self.emitValueLocal(args[1]);
             const is_unsigned = isUnsignedLayout(ret_layout);
             switch (vt) {
                 .i32 => self.body.append(self.allocator, if (is_unsigned) Op.i32_rem_u else Op.i32_rem_s) catch return error.OutOfMemory,
@@ -8462,34 +8462,34 @@ fn generateNumericLowLevel(self: *Self, op: anytype, args: []const LocalRef, ret
                 .i32 => {
                     self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
                     WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
-                    try self.generateExpr(args[0]);
+                    try self.emitValueLocal(args[0]);
                     self.body.append(self.allocator, Op.i32_sub) catch return error.OutOfMemory;
                 },
                 .i64 => {
                     self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
                     WasmModule.leb128WriteI64(self.allocator, &self.body, 0) catch return error.OutOfMemory;
-                    try self.generateExpr(args[0]);
+                    try self.emitValueLocal(args[0]);
                     self.body.append(self.allocator, Op.i64_sub) catch return error.OutOfMemory;
                 },
                 .f32 => {
-                    try self.generateExpr(args[0]);
+                    try self.emitValueLocal(args[0]);
                     self.body.append(self.allocator, Op.f32_neg) catch return error.OutOfMemory;
                 },
                 .f64 => {
-                    try self.generateExpr(args[0]);
+                    try self.emitValueLocal(args[0]);
                     self.body.append(self.allocator, Op.f64_neg) catch return error.OutOfMemory;
                 },
             }
         },
         .num_is_eq => {
             // Check for structural equality (strings, lists, records, etc.)
-            const lay_idx = self.exprLayoutIdx(args[0]);
+            const lay_idx = self.valueLayoutIdx(args[0]);
             if (lay_idx == .str or self.isCompositeLayout(lay_idx)) {
                 try self.generateStructuralEq(args[0], args[1], false);
                 return;
             }
-            try self.generateExpr(args[0]);
-            try self.generateExpr(args[1]);
+            try self.emitValueLocal(args[0]);
+            try self.emitValueLocal(args[1]);
             const wasm_op: u8 = switch (vt) {
                 .i32 => Op.i32_eq,
                 .i64 => Op.i64_eq,
@@ -8499,9 +8499,9 @@ fn generateNumericLowLevel(self: *Self, op: anytype, args: []const LocalRef, ret
             self.body.append(self.allocator, wasm_op) catch return error.OutOfMemory;
         },
         .num_is_gt => {
-            try self.generateExpr(args[0]);
-            try self.generateExpr(args[1]);
-            const is_unsigned = isUnsignedLayout(self.exprLayoutIdx(args[0]));
+            try self.emitValueLocal(args[0]);
+            try self.emitValueLocal(args[1]);
+            const is_unsigned = isUnsignedLayout(self.valueLayoutIdx(args[0]));
             const wasm_op: u8 = switch (vt) {
                 .i32 => if (is_unsigned) Op.i32_gt_u else Op.i32_gt_s,
                 .i64 => if (is_unsigned) Op.i64_gt_u else Op.i64_gt_s,
@@ -8511,9 +8511,9 @@ fn generateNumericLowLevel(self: *Self, op: anytype, args: []const LocalRef, ret
             self.body.append(self.allocator, wasm_op) catch return error.OutOfMemory;
         },
         .num_is_gte => {
-            try self.generateExpr(args[0]);
-            try self.generateExpr(args[1]);
-            const is_unsigned = isUnsignedLayout(self.exprLayoutIdx(args[0]));
+            try self.emitValueLocal(args[0]);
+            try self.emitValueLocal(args[1]);
+            const is_unsigned = isUnsignedLayout(self.valueLayoutIdx(args[0]));
             const wasm_op: u8 = switch (vt) {
                 .i32 => if (is_unsigned) Op.i32_ge_u else Op.i32_ge_s,
                 .i64 => if (is_unsigned) Op.i64_ge_u else Op.i64_ge_s,
@@ -8523,9 +8523,9 @@ fn generateNumericLowLevel(self: *Self, op: anytype, args: []const LocalRef, ret
             self.body.append(self.allocator, wasm_op) catch return error.OutOfMemory;
         },
         .num_is_lt => {
-            try self.generateExpr(args[0]);
-            try self.generateExpr(args[1]);
-            const is_unsigned = isUnsignedLayout(self.exprLayoutIdx(args[0]));
+            try self.emitValueLocal(args[0]);
+            try self.emitValueLocal(args[1]);
+            const is_unsigned = isUnsignedLayout(self.valueLayoutIdx(args[0]));
             const wasm_op: u8 = switch (vt) {
                 .i32 => if (is_unsigned) Op.i32_lt_u else Op.i32_lt_s,
                 .i64 => if (is_unsigned) Op.i64_lt_u else Op.i64_lt_s,
@@ -8535,9 +8535,9 @@ fn generateNumericLowLevel(self: *Self, op: anytype, args: []const LocalRef, ret
             self.body.append(self.allocator, wasm_op) catch return error.OutOfMemory;
         },
         .num_is_lte => {
-            try self.generateExpr(args[0]);
-            try self.generateExpr(args[1]);
-            const is_unsigned = isUnsignedLayout(self.exprLayoutIdx(args[0]));
+            try self.emitValueLocal(args[0]);
+            try self.emitValueLocal(args[1]);
+            const is_unsigned = isUnsignedLayout(self.valueLayoutIdx(args[0]));
             const wasm_op: u8 = switch (vt) {
                 .i32 => if (is_unsigned) Op.i32_le_u else Op.i32_le_s,
                 .i64 => if (is_unsigned) Op.i64_le_u else Op.i64_le_s,
@@ -8549,16 +8549,16 @@ fn generateNumericLowLevel(self: *Self, op: anytype, args: []const LocalRef, ret
         .num_abs => {
             switch (vt) {
                 .f32 => {
-                    try self.generateExpr(args[0]);
+                    try self.emitValueLocal(args[0]);
                     self.body.append(self.allocator, Op.f32_abs) catch return error.OutOfMemory;
                 },
                 .f64 => {
-                    try self.generateExpr(args[0]);
+                    try self.emitValueLocal(args[0]);
                     self.body.append(self.allocator, Op.f64_abs) catch return error.OutOfMemory;
                 },
                 .i32 => {
                     // abs(x) = select(x, -x, x >= 0)
-                    try self.generateExpr(args[0]);
+                    try self.emitValueLocal(args[0]);
                     const temp = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
                     self.body.append(self.allocator, Op.local_tee) catch return error.OutOfMemory;
                     WasmModule.leb128WriteU32(self.allocator, &self.body, temp) catch return error.OutOfMemory;
@@ -8578,7 +8578,7 @@ fn generateNumericLowLevel(self: *Self, op: anytype, args: []const LocalRef, ret
                     self.body.append(self.allocator, Op.select) catch return error.OutOfMemory;
                 },
                 .i64 => {
-                    try self.generateExpr(args[0]);
+                    try self.emitValueLocal(args[0]);
                     const temp = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
                     self.body.append(self.allocator, Op.local_tee) catch return error.OutOfMemory;
                     WasmModule.leb128WriteU32(self.allocator, &self.body, temp) catch return error.OutOfMemory;
@@ -8597,8 +8597,8 @@ fn generateNumericLowLevel(self: *Self, op: anytype, args: []const LocalRef, ret
             }
         },
         .num_mod_by => {
-            try self.generateExpr(args[0]);
-            try self.generateExpr(args[1]);
+            try self.emitValueLocal(args[0]);
+            try self.emitValueLocal(args[1]);
             switch (vt) {
                 .i32 => {
                     const import_idx = self.i32_mod_by_import orelse unreachable;
@@ -8614,14 +8614,14 @@ fn generateNumericLowLevel(self: *Self, op: anytype, args: []const LocalRef, ret
             }
         },
         .num_abs_diff => {
-            const is_unsigned = isUnsignedLayout(self.exprLayoutIdx(args[0]));
+            const is_unsigned = isUnsignedLayout(self.valueLayoutIdx(args[0]));
             switch (vt) {
                 .i32 => {
-                    try self.generateExpr(args[0]);
+                    try self.emitValueLocal(args[0]);
                     const lhs = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
                     self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
                     WasmModule.leb128WriteU32(self.allocator, &self.body, lhs) catch return error.OutOfMemory;
-                    try self.generateExpr(args[1]);
+                    try self.emitValueLocal(args[1]);
                     const rhs = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
                     self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
                     WasmModule.leb128WriteU32(self.allocator, &self.body, rhs) catch return error.OutOfMemory;
@@ -8647,11 +8647,11 @@ fn generateNumericLowLevel(self: *Self, op: anytype, args: []const LocalRef, ret
                     self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
                 },
                 .i64 => {
-                    try self.generateExpr(args[0]);
+                    try self.emitValueLocal(args[0]);
                     const lhs = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
                     self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
                     WasmModule.leb128WriteU32(self.allocator, &self.body, lhs) catch return error.OutOfMemory;
-                    try self.generateExpr(args[1]);
+                    try self.emitValueLocal(args[1]);
                     const rhs = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
                     self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
                     WasmModule.leb128WriteU32(self.allocator, &self.body, rhs) catch return error.OutOfMemory;
@@ -8677,22 +8677,22 @@ fn generateNumericLowLevel(self: *Self, op: anytype, args: []const LocalRef, ret
                     self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
                 },
                 .f32 => {
-                    try self.generateExpr(args[0]);
-                    try self.generateExpr(args[1]);
+                    try self.emitValueLocal(args[0]);
+                    try self.emitValueLocal(args[1]);
                     self.body.append(self.allocator, Op.f32_sub) catch return error.OutOfMemory;
                     self.body.append(self.allocator, Op.f32_abs) catch return error.OutOfMemory;
                 },
                 .f64 => {
-                    try self.generateExpr(args[0]);
-                    try self.generateExpr(args[1]);
+                    try self.emitValueLocal(args[0]);
+                    try self.emitValueLocal(args[1]);
                     self.body.append(self.allocator, Op.f64_sub) catch return error.OutOfMemory;
                     self.body.append(self.allocator, Op.f64_abs) catch return error.OutOfMemory;
                 },
             }
         },
         .num_shift_left_by => {
-            try self.generateExpr(args[0]);
-            try self.generateExpr(args[1]);
+            try self.emitValueLocal(args[0]);
+            try self.emitValueLocal(args[1]);
             // WASM shift instructions require both operands to have the same type.
             // The shift amount (args[1]) is always U8 (i32), so extend it for i64 shifts.
             if (vt == .i64) self.body.append(self.allocator, Op.i64_extend_i32_u) catch return error.OutOfMemory;
@@ -8704,8 +8704,8 @@ fn generateNumericLowLevel(self: *Self, op: anytype, args: []const LocalRef, ret
             self.body.append(self.allocator, wasm_op) catch return error.OutOfMemory;
         },
         .num_shift_right_by => {
-            try self.generateExpr(args[0]);
-            try self.generateExpr(args[1]);
+            try self.emitValueLocal(args[0]);
+            try self.emitValueLocal(args[1]);
             if (vt == .i64) self.body.append(self.allocator, Op.i64_extend_i32_u) catch return error.OutOfMemory;
             const wasm_op: u8 = switch (vt) {
                 .i32 => Op.i32_shr_s,
@@ -8715,8 +8715,8 @@ fn generateNumericLowLevel(self: *Self, op: anytype, args: []const LocalRef, ret
             self.body.append(self.allocator, wasm_op) catch return error.OutOfMemory;
         },
         .num_shift_right_zf_by => {
-            try self.generateExpr(args[0]);
-            try self.generateExpr(args[1]);
+            try self.emitValueLocal(args[0]);
+            try self.emitValueLocal(args[1]);
             if (vt == .i64) self.body.append(self.allocator, Op.i64_extend_i32_u) catch return error.OutOfMemory;
             const wasm_op: u8 = switch (vt) {
                 .i32 => Op.i32_shr_u,
@@ -8731,15 +8731,15 @@ fn generateNumericLowLevel(self: *Self, op: anytype, args: []const LocalRef, ret
 
 /// Generate string equality comparison using roc_str_eq host function.
 /// Both lhs and rhs should produce i32 pointers to 12-byte RocStr values.
-fn generateStrEq(self: *Self, lhs: LocalRef, rhs: LocalRef, negate: bool) Allocator.Error!void {
+fn generateStrEq(self: *Self, lhs: ValueLocalId, rhs: ValueLocalId, negate: bool) Allocator.Error!void {
     const import_idx = self.str_eq_import orelse unreachable;
 
     // Generate both string expressions, store to locals
-    try self.generateExpr(lhs);
+    try self.emitValueLocal(lhs);
     const lhs_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalSet(lhs_local);
 
-    try self.generateExpr(rhs);
+    try self.emitValueLocal(rhs);
     const rhs_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalSet(rhs_local);
 
@@ -8757,7 +8757,7 @@ fn generateStrEq(self: *Self, lhs: LocalRef, rhs: LocalRef, negate: bool) Alloca
 
 /// Generate list equality comparison using roc_list_eq host function.
 /// Both lhs and rhs should produce i32 pointers to 12-byte RocList values.
-fn generateListEq(self: *Self, lhs: LocalRef, rhs: LocalRef, list_layout_idx: layout.Idx, negate: bool) Allocator.Error!void {
+fn generateListEq(self: *Self, lhs: ValueLocalId, rhs: ValueLocalId, list_layout_idx: layout.Idx, negate: bool) Allocator.Error!void {
     const ls = self.getLayoutStore();
     const list_layout = ls.getLayout(list_layout_idx);
     std.debug.assert(list_layout.tag == .list);
@@ -8767,13 +8767,13 @@ fn generateListEq(self: *Self, lhs: LocalRef, rhs: LocalRef, list_layout_idx: la
 
 /// Generate list equality with a known element layout.
 /// Supports all element types including strings and nested lists.
-fn generateListEqWithElemLayout(self: *Self, lhs: LocalRef, rhs: LocalRef, elem_layout: layout.Idx, negate: bool) Allocator.Error!void {
+fn generateListEqWithElemLayout(self: *Self, lhs: ValueLocalId, rhs: ValueLocalId, elem_layout: layout.Idx, negate: bool) Allocator.Error!void {
     // Generate both list expressions, store to locals
-    try self.generateExpr(lhs);
+    try self.emitValueLocal(lhs);
     const lhs_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalSet(lhs_local);
 
-    try self.generateExpr(rhs);
+    try self.emitValueLocal(rhs);
     const rhs_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalSet(rhs_local);
 
@@ -9077,12 +9077,12 @@ fn buildHeapRocStr(self: *Self, ptr_local: u32, len_local: u32) Allocator.Error!
 
 fn emitNormalizedIntParts(
     self: *Self,
-    value: LocalRef,
+    value: ValueLocalId,
     int_width_bytes: u8,
     is_signed: bool,
 ) Allocator.Error!struct { low: u32, high: u32 } {
     if (int_width_bytes == 16) {
-        try self.generateExpr(value);
+        try self.emitValueLocal(value);
         const value_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
         try self.emitLocalSet(value_ptr);
 
@@ -9099,9 +9099,9 @@ fn emitNormalizedIntParts(
         return .{ .low = low, .high = high };
     }
 
-    const value_vt = self.exprValType(value);
+    const value_vt = self.valueValType(value);
     if (value_vt == .i64) {
-        try self.generateExpr(value);
+        try self.emitValueLocal(value);
         const raw = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
         try self.emitLocalSet(raw);
 
@@ -9141,7 +9141,7 @@ fn emitNormalizedIntParts(
         return .{ .low = low, .high = high };
     }
 
-    try self.generateExpr(value);
+    try self.emitValueLocal(value);
     const raw = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalSet(raw);
 
@@ -9187,7 +9187,7 @@ fn emitNormalizedIntParts(
     return .{ .low = low, .high = high };
 }
 
-fn generateIntToStr(self: *Self, value: LocalRef, int_width_bytes: u8, is_signed: bool) Allocator.Error!void {
+fn generateIntToStr(self: *Self, value: ValueLocalId, int_width_bytes: u8, is_signed: bool) Allocator.Error!void {
     const import_idx = self.int_to_str_import orelse unreachable;
     const parts = try self.emitNormalizedIntParts(value, int_width_bytes, is_signed);
     const buf_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -9209,10 +9209,10 @@ fn generateIntToStr(self: *Self, value: LocalRef, int_width_bytes: u8, is_signed
     try self.buildHeapRocStr(buf_ptr, len_local);
 }
 
-fn generateDecToStr(self: *Self, value: LocalRef) Allocator.Error!void {
+fn generateDecToStr(self: *Self, value: ValueLocalId) Allocator.Error!void {
     const import_idx = self.dec_to_str_import orelse unreachable;
 
-    try self.generateExpr(value);
+    try self.emitValueLocal(value);
     const dec_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalSet(dec_ptr);
 
@@ -9230,18 +9230,18 @@ fn generateDecToStr(self: *Self, value: LocalRef) Allocator.Error!void {
     try self.buildHeapRocStr(buf_ptr, len_local);
 }
 
-fn generateFloatToStr(self: *Self, value: LocalRef, is_f32: bool) Allocator.Error!void {
+fn generateFloatToStr(self: *Self, value: ValueLocalId, is_f32: bool) Allocator.Error!void {
     const import_idx = self.float_to_str_import orelse unreachable;
 
     if (is_f32) {
-        try self.generateExpr(value);
+        try self.emitValueLocal(value);
         const raw_f32 = self.storage.allocAnonymousLocal(.f32) catch return error.OutOfMemory;
         try self.emitLocalSet(raw_f32);
         try self.emitLocalGet(raw_f32);
         self.body.append(self.allocator, Op.i32_reinterpret_f32) catch return error.OutOfMemory;
         self.body.append(self.allocator, Op.i64_extend_i32_u) catch return error.OutOfMemory;
     } else {
-        try self.generateExpr(value);
+        try self.emitValueLocal(value);
         const raw_f64 = self.storage.allocAnonymousLocal(.f64) catch return error.OutOfMemory;
         try self.emitLocalSet(raw_f64);
         try self.emitLocalGet(raw_f64);
@@ -9267,10 +9267,10 @@ fn generateFloatToStr(self: *Self, value: LocalRef, is_f32: bool) Allocator.Erro
     try self.buildHeapRocStr(buf_ptr, len_local);
 }
 
-fn generateStrEscapeAndQuote(self: *Self, value: LocalRef) Allocator.Error!void {
+fn generateStrEscapeAndQuote(self: *Self, value: ValueLocalId) Allocator.Error!void {
     const import_idx = self.str_escape_and_quote_import orelse unreachable;
 
-    try self.generateExpr(value);
+    try self.emitValueLocal(value);
     const str_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalSet(str_ptr);
 
@@ -9285,9 +9285,9 @@ fn generateStrEscapeAndQuote(self: *Self, value: LocalRef) Allocator.Error!void 
 /// Generate str_to_utf8: convert RocStr to RocList(U8).
 /// SSO strings have their bytes copied to heap memory.
 /// Non-SSO strings share the same layout, so the 12 bytes are copied directly.
-fn generateStrToUtf8(self: *Self, str_arg: LocalRef) Allocator.Error!void {
+fn generateStrToUtf8(self: *Self, str_arg: ValueLocalId) Allocator.Error!void {
     // Generate the string expression (produces i32 pointer to 12-byte RocStr)
-    try self.generateExpr(str_arg);
+    try self.emitValueLocal(str_arg);
     const str_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalSet(str_ptr);
 
@@ -9366,9 +9366,9 @@ fn generateStrToUtf8(self: *Self, str_arg: LocalRef) Allocator.Error!void {
 /// Generate str_from_utf8_lossy: convert RocList(U8) to RocStr.
 /// Short lists (len <= 11) produce SSO strings.
 /// Longer lists share the same layout, so the 12 bytes are copied directly.
-fn generateStrFromUtf8Lossy(self: *Self, list_arg: LocalRef) Allocator.Error!void {
+fn generateStrFromUtf8Lossy(self: *Self, list_arg: ValueLocalId) Allocator.Error!void {
     // Generate the list expression (produces i32 pointer to 12-byte RocList)
-    try self.generateExpr(list_arg);
+    try self.emitValueLocal(list_arg);
     const list_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalSet(list_ptr);
 
@@ -9502,10 +9502,10 @@ const StrSearchMode = enum { contains, starts_with, ends_with };
 /// Compares bytes using a nested loop (naive O(n*m) search).
 fn generateLLStrSearch(self: *Self, args: anytype, mode: StrSearchMode) Allocator.Error!void {
     // Generate both string args
-    try self.generateExpr(args[0]);
+    try self.emitValueLocal(args[0]);
     const a_str = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalSet(a_str);
-    try self.generateExpr(args[1]);
+    try self.emitValueLocal(args[1]);
     const b_str = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalSet(b_str);
 
@@ -9752,7 +9752,7 @@ fn generateLLListAppend(self: *Self, args: anytype, ret_layout: layout.Idx) Allo
     };
     const import_idx = self.list_append_unsafe_import orelse unreachable;
 
-    try self.generateExpr(args[0]);
+    try self.emitValueLocal(args[0]);
     const list_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalSet(list_ptr);
 
@@ -9764,9 +9764,9 @@ fn generateLLListAppend(self: *Self, args: anytype, ret_layout: layout.Idx) Allo
     } else {
         const target_is_composite = self.isCompositeLayout(elem_layout_idx);
         if (target_is_composite) {
-            try self.generateExpr(args[1]);
+            try self.emitValueLocal(args[1]);
 
-            if (self.exprNeedsCompositeCallStabilization(args[1])) {
+            if (self.valueNeedsCompositeCallStabilization(args[1])) {
                 const src_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
                 try self.emitLocalSet(src_local);
                 const dst_offset = try self.allocStackMemory(elem_size, elem_align);
@@ -9778,8 +9778,8 @@ fn generateLLListAppend(self: *Self, args: anytype, ret_layout: layout.Idx) Allo
             }
         } else {
             const elem_vt = self.resolveValType(elem_layout_idx);
-            try self.generateExpr(args[1]);
-            try self.emitConversion(self.exprValType(args[1]), elem_vt);
+            try self.emitValueLocal(args[1]);
+            try self.emitConversion(self.valueValType(args[1]), elem_vt);
             const elem_val = self.storage.allocAnonymousLocal(elem_vt) catch return error.OutOfMemory;
             try self.emitLocalSet(elem_val);
 
@@ -9812,10 +9812,10 @@ fn generateLLListPrepend(self: *Self, args: anytype, ret_layout: layout.Idx) All
     const elem_align = self.getListElemAlign(ret_layout);
 
     // Generate list and element
-    try self.generateExpr(args[0]);
+    try self.emitValueLocal(args[0]);
     const list_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalSet(list_ptr);
-    try self.generateExpr(args[1]);
+    try self.emitValueLocal(args[1]);
     const prepend_elem_vt: ValType = if (elem_size <= 4) .i32 else if (elem_size <= 8) .i64 else .i32;
     const elem_val = self.storage.allocAnonymousLocal(prepend_elem_vt) catch return error.OutOfMemory;
     try self.emitLocalSet(elem_val);
@@ -9902,10 +9902,10 @@ fn generateLLListConcat(self: *Self, args: anytype, ret_layout: layout.Idx) Allo
     const elem_align = self.getListElemAlign(ret_layout);
 
     // Generate both lists
-    try self.generateExpr(args[0]);
+    try self.emitValueLocal(args[0]);
     const a_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalSet(a_ptr);
-    try self.generateExpr(args[1]);
+    try self.emitValueLocal(args[1]);
     const b_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalSet(b_ptr);
 
@@ -9987,14 +9987,14 @@ fn generateLLListConcat(self: *Self, args: anytype, ret_layout: layout.Idx) Allo
 fn generateLLListReverse(self: *Self, args: anytype, ret_layout: layout.Idx) Allocator.Error!void {
     const elem_size = self.getListElemSize(ret_layout);
     if (elem_size == 0) {
-        try self.generateExpr(args[0]);
+        try self.emitValueLocal(args[0]);
         return;
     }
 
     const import_idx = self.list_reverse_import orelse unreachable;
     const elem_align = self.getListElemAlign(ret_layout);
 
-    try self.generateExpr(args[0]);
+    try self.emitValueLocal(args[0]);
     const list_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalSet(list_ptr);
 
@@ -10062,8 +10062,8 @@ fn generateLLListWithCapacity(self: *Self, args: anytype, ret_layout: layout.Idx
     const elem_align = self.getListElemAlign(ret_layout);
 
     // Generate capacity arg (may be i64 from MonoIR layout; convert to i32 for wasm32)
-    try self.generateExpr(args[0]);
-    try self.emitConversion(self.exprValType(args[0]), .i32);
+    try self.emitValueLocal(args[0]);
+    try self.emitConversion(self.valueValType(args[0]), .i32);
     const cap = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalSet(cap);
 
@@ -10094,18 +10094,18 @@ fn generateLLListSet(self: *Self, args: anytype, ret_layout: layout.Idx) Allocat
     const elem_align = self.getListElemAlign(ret_layout);
 
     // Generate list arg
-    try self.generateExpr(args[0]);
+    try self.emitValueLocal(args[0]);
     const list_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalSet(list_ptr);
 
     // Generate index arg (may be i64 from MonoIR; convert to i32 for wasm32)
-    try self.generateExpr(args[1]);
-    try self.emitConversion(self.exprValType(args[1]), .i32);
+    try self.emitValueLocal(args[1]);
+    try self.emitConversion(self.valueValType(args[1]), .i32);
     const index = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalSet(index);
 
     // Generate element arg
-    try self.generateExpr(args[2]);
+    try self.emitValueLocal(args[2]);
     const set_elem_vt: ValType = if (elem_size <= 4) .i32 else if (elem_size <= 8) .i64 else .i32;
     const elem_val = self.storage.allocAnonymousLocal(set_elem_vt) catch return error.OutOfMemory;
     try self.emitLocalSet(elem_val);
@@ -10173,13 +10173,13 @@ fn generateLLListReserve(self: *Self, args: anytype, ret_layout: layout.Idx) All
     const elem_align = self.getListElemAlign(ret_layout);
 
     // Generate list arg
-    try self.generateExpr(args[0]);
+    try self.emitValueLocal(args[0]);
     const list_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalSet(list_ptr);
 
     // Generate additional capacity arg (may be i64 from MonoIR; convert to i32 for wasm32)
-    try self.generateExpr(args[1]);
-    try self.emitConversion(self.exprValType(args[1]), .i32);
+    try self.emitValueLocal(args[1]);
+    try self.emitConversion(self.valueValType(args[1]), .i32);
     const additional = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalSet(additional);
 
@@ -10240,7 +10240,7 @@ fn generateLLListReleaseExcessCapacity(self: *Self, args: anytype, ret_layout: l
     const elem_align = self.getListElemAlign(ret_layout);
 
     // Generate list arg
-    try self.generateExpr(args[0]);
+    try self.emitValueLocal(args[0]);
     const list_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalSet(list_ptr);
 
@@ -10288,7 +10288,7 @@ fn generateLLListSplitFirst(self: *Self, args: anytype, ret_layout: layout.Idx) 
     const elem_size = self.getListElemSize(ret_layout);
     const elem_align = self.getListElemAlign(ret_layout);
     // Generate list arg
-    try self.generateExpr(args[0]);
+    try self.emitValueLocal(args[0]);
     const list_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalSet(list_ptr);
 
@@ -10354,7 +10354,7 @@ fn generateLLListSplitFirst(self: *Self, args: anytype, ret_layout: layout.Idx) 
     try self.emitLocalSet(rest_len);
 
     const encoded_cap = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitPrepareListSliceMetadata(list_ptr, self.listContainsRefcounted(self.exprLayoutIdx(args[0])), encoded_cap);
+    try self.emitPrepareListSliceMetadata(list_ptr, self.listContainsRefcounted(self.valueLayoutIdx(args[0])), encoded_cap);
 
     // Store rest list in result struct
     const rest_base = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -10384,7 +10384,7 @@ fn generateLLListSplitLast(self: *Self, args: anytype, ret_layout: layout.Idx) A
     const elem_align = self.getListElemAlign(ret_layout);
 
     // Generate list arg
-    try self.generateExpr(args[0]);
+    try self.emitValueLocal(args[0]);
     const list_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalSet(list_ptr);
 

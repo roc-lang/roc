@@ -4263,7 +4263,7 @@ fn processDevObjectSnapshot(
     defer mir_lower.deinit();
 
     if (app_module_idx) |resolved_app_module_idx| {
-        try mir_lower.setTypeScope(platform_module_idx, &platform_type_scope, resolved_app_module_idx);
+        try mir_lower.setTypeScope(platform_module_idx, &platform_type_scope);
     }
 
     // Use provides entries from build pipeline (centralized in CompiledModuleInfo)

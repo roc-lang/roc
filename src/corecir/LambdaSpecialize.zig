@@ -15,12 +15,6 @@ const CIR = can.CIR;
 /// lambda-set semantics.
 pub const CallableInstId = enum(u32) {
     _,
-
-    pub const none: CallableInstId = @enumFromInt(std.math.maxInt(u32));
-
-    pub fn isNone(self: CallableInstId) bool {
-        return self == none;
-    }
 };
 
 /// One structural projection applied before demanding executable callable
@@ -77,7 +71,7 @@ pub const CallableInst = struct {
     subst: ContextMono.TypeSubstId,
     fn_monotype: Monotype.Idx,
     fn_monotype_module_idx: u32,
-    defining_context_callable_inst: CallableInstId,
+    defining_context_callable_inst: ?CallableInstId,
     callable_param_specs: CallableParamSpecSpan = .empty(),
 };
 
@@ -109,6 +103,31 @@ pub const ContextCaptureKey = struct {
     pattern_raw: u32,
 };
 
+pub const CaptureValueSource = union(enum) {
+    lexical_pattern: struct {
+        module_idx: u32,
+        pattern_idx: CIR.Pattern.Idx,
+    },
+    source_expr: struct {
+        source: LambdaSolved.ExprSource,
+    },
+};
+
+pub const CaptureStorage = union(enum) {
+    runtime_field: struct {
+        field_monotype: ContextMono.ResolvedMonotype,
+    },
+    callable_only,
+    recursive_member,
+};
+
+pub const CaptureValuePlan = struct {
+    local_monotype: ContextMono.ResolvedMonotype,
+    exact_callable_inst: ?CallableInstId = null,
+    source: CaptureValueSource,
+    storage: CaptureStorage,
+};
+
 pub const Result = struct {
     callable_insts: std.ArrayListUnmanaged(CallableInst),
     callable_param_spec_entries: std.ArrayListUnmanaged(CallableParamSpecEntry),
@@ -121,8 +140,7 @@ pub const Result = struct {
     call_site_callable_inst_sets: std.AutoHashMapUnmanaged(ContextExprKey, CallableInstSetId),
     lookup_expr_callable_insts: std.AutoHashMapUnmanaged(ContextExprKey, CallableInstId),
     lookup_expr_callable_inst_sets: std.AutoHashMapUnmanaged(ContextExprKey, CallableInstSetId),
-    closure_capture_monotypes: std.AutoHashMapUnmanaged(ContextCaptureKey, ContextMono.ResolvedMonotype),
-    closure_capture_callable_insts: std.AutoHashMapUnmanaged(ContextCaptureKey, CallableInstId),
+    closure_capture_value_plans: std.AutoHashMapUnmanaged(ContextCaptureKey, CaptureValuePlan),
     context_pattern_callable_insts: std.AutoHashMapUnmanaged(ContextPatternKey, CallableInstId),
     context_pattern_callable_inst_sets: std.AutoHashMapUnmanaged(ContextPatternKey, CallableInstSetId),
 
@@ -139,8 +157,7 @@ pub const Result = struct {
             .call_site_callable_inst_sets = .empty,
             .lookup_expr_callable_insts = .empty,
             .lookup_expr_callable_inst_sets = .empty,
-            .closure_capture_monotypes = .empty,
-            .closure_capture_callable_insts = .empty,
+            .closure_capture_value_plans = .empty,
             .context_pattern_callable_insts = .empty,
             .context_pattern_callable_inst_sets = .empty,
         };
@@ -158,8 +175,7 @@ pub const Result = struct {
         self.call_site_callable_inst_sets.deinit(allocator);
         self.lookup_expr_callable_insts.deinit(allocator);
         self.lookup_expr_callable_inst_sets.deinit(allocator);
-        self.closure_capture_monotypes.deinit(allocator);
-        self.closure_capture_callable_insts.deinit(allocator);
+        self.closure_capture_value_plans.deinit(allocator);
         self.context_pattern_callable_insts.deinit(allocator);
         self.context_pattern_callable_inst_sets.deinit(allocator);
     }
@@ -214,9 +230,7 @@ pub const Result = struct {
         expr_idx: CIR.Expr.Idx,
     ) ?CallableInstId {
         const key = ContextMono.Result.contextExprKey(source_context, module_idx, expr_idx);
-        const callable_inst_id = self.call_site_callable_insts.get(key) orelse return null;
-        if (callable_inst_id.isNone()) return null;
-        return callable_inst_id;
+        return self.call_site_callable_insts.get(key);
     }
 
     pub fn getCallSiteCallableInsts(
@@ -237,9 +251,7 @@ pub const Result = struct {
         expr_idx: CIR.Expr.Idx,
     ) ?CallableInstId {
         const key = ContextMono.Result.contextExprKey(source_context, module_idx, expr_idx);
-        const callable_inst_id = self.expr_callable_insts.get(key) orelse return null;
-        if (callable_inst_id.isNone()) return null;
-        return callable_inst_id;
+        return self.expr_callable_insts.get(key);
     }
 
     pub fn getExprCallableInsts(
@@ -260,9 +272,7 @@ pub const Result = struct {
         expr_idx: CIR.Expr.Idx,
     ) ?CallableInstId {
         const key = ContextMono.Result.contextExprKey(source_context, module_idx, expr_idx);
-        const callable_inst_id = self.lookup_expr_callable_insts.get(key) orelse return null;
-        if (callable_inst_id.isNone()) return null;
-        return callable_inst_id;
+        return self.lookup_expr_callable_insts.get(key);
     }
 
     pub fn getLookupExprCallableInsts(
@@ -276,29 +286,14 @@ pub const Result = struct {
         return self.getCallableInstSetMembers(self.getCallableInstSet(set_id).members);
     }
 
-    pub fn getClosureCaptureCallableInst(
+    pub fn getClosureCaptureValuePlan(
         self: *const Result,
         closure_callable_inst: CallableInstId,
         module_idx: u32,
         closure_expr_idx: CIR.Expr.Idx,
         pattern_idx: CIR.Pattern.Idx,
-    ) ?CallableInstId {
-        return self.closure_capture_callable_insts.get(contextCaptureKey(
-            closure_callable_inst,
-            module_idx,
-            closure_expr_idx,
-            pattern_idx,
-        ));
-    }
-
-    pub fn getClosureCaptureMonotype(
-        self: *const Result,
-        closure_callable_inst: CallableInstId,
-        module_idx: u32,
-        closure_expr_idx: CIR.Expr.Idx,
-        pattern_idx: CIR.Pattern.Idx,
-    ) ?ContextMono.ResolvedMonotype {
-        return self.closure_capture_monotypes.get(contextCaptureKey(
+    ) ?CaptureValuePlan {
+        return self.closure_capture_value_plans.get(contextCaptureKey(
             closure_callable_inst,
             module_idx,
             closure_expr_idx,
@@ -313,9 +308,7 @@ pub const Result = struct {
         pattern_idx: CIR.Pattern.Idx,
     ) ?CallableInstId {
         const key = ContextMono.Result.contextPatternKey(source_context, module_idx, pattern_idx);
-        const callable_inst_id = self.context_pattern_callable_insts.get(key) orelse return null;
-        if (callable_inst_id.isNone()) return null;
-        return callable_inst_id;
+        return self.context_pattern_callable_insts.get(key);
     }
 
     pub fn getContextPatternCallableInsts(

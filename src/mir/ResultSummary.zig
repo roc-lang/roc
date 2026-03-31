@@ -415,7 +415,7 @@ const Analyzer = struct {
             return self.originForLocal(env, local_id);
         }
 
-        const resolved = self.resolveCallableForLocal(local_id);
+        const resolved = self.requireExactCallableForLocal(local_id);
         if (!resolved.requires_hidden_capture) {
             return .fresh;
         }
@@ -458,7 +458,7 @@ const Analyzer = struct {
         };
     }
 
-    fn resolveCallableForLocal(self: *Analyzer, local_id: MIR.LocalId) CallableResolution {
+    fn requireExactCallableForLocal(self: *Analyzer, local_id: MIR.LocalId) CallableResolution {
         return self.mir_store.getLocal(local_id).exact_callable orelse std.debug.panic(
             "ResultSummary invariant violated: function-valued local {d} lacked explicit exact callable metadata during result summary",
             .{@intFromEnum(local_id)},
@@ -500,7 +500,7 @@ const Analyzer = struct {
             },
             .ret => |ret_stmt| {
                 if (!self.localMonotypeIsFunc(ret_stmt.value)) return;
-                const resolved = self.resolveCallableForLocal(ret_stmt.value);
+                const resolved = self.requireExactCallableForLocal(ret_stmt.value);
                 if (out.*) |current| {
                     if (current.lambda != resolved.lambda or current.requires_hidden_capture != resolved.requires_hidden_capture) {
                         std.debug.panic(
@@ -601,7 +601,7 @@ const Analyzer = struct {
                         .requires_hidden_capture = assign.exact_requires_hidden_capture,
                     }
                 else
-                    self.resolveCallableForLocal(assign.callee);
+                    self.requireExactCallableForLocal(assign.callee);
 
                 const args = self.mir_store.getLocalSpan(assign.args);
                 const arg_origins = try self.allocator.alloc(Origin, args.len + @intFromBool(callee.requires_hidden_capture));

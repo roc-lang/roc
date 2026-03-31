@@ -4300,7 +4300,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     defer mir_lower.deinit();
 
     if (app_module_idx) |resolved_app_module_idx| {
-        try mir_lower.setTypeScope(platform_module_idx, &platform_type_scope, resolved_app_module_idx);
+        try mir_lower.setTypeScope(platform_module_idx, &platform_type_scope);
     }
 
     // Find and lower entrypoint expressions from platform module

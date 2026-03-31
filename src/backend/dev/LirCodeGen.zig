@@ -1206,13 +1206,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return @intFromEnum(local);
         }
 
-        fn exprLayout(self: *Self, local: LocalId) layout.Idx {
+        fn valueLayout(self: *Self, local: LocalId) layout.Idx {
             return self.localLayout(local);
         }
 
         /// Generate code for a local reference. The result is ALWAYS in a stable location.
-        fn generateExpr(self: *Self, local: LocalId) Allocator.Error!ValueLocation {
-            const loc = try self.generateExprRaw(local);
+        fn emitValueLocal(self: *Self, local: LocalId) Allocator.Error!ValueLocation {
+            const loc = try self.emitValueLocalRaw(local);
             return self.stabilize(loc);
         }
 
@@ -1236,7 +1236,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Generate code for a local reference (raw — may return bare register locations).
-        fn generateExprRaw(self: *Self, local: LocalId) Allocator.Error!ValueLocation {
+        fn emitValueLocalRaw(self: *Self, local: LocalId) Allocator.Error!ValueLocation {
             return try self.generateLookup(local);
         }
 
@@ -1248,7 +1248,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .list_len => {
                     // List is a (ptr, len, capacity) triple - length is at offset 8
                     std.debug.assert(args.len >= 1);
-                    const list_loc = try self.generateExpr(args[0]);
+                    const list_loc = try self.emitValueLocal(args[0]);
 
                     // Get base offset from either stack or list_stack location
                     const base_offset: i32 = switch (list_loc) {
@@ -1279,7 +1279,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const roc_ops_reg = self.roc_ops_reg orelse {
                         unreachable;
                     };
-                    const capacity_loc = try self.generateExpr(args[0]);
+                    const capacity_loc = try self.emitValueLocal(args[0]);
 
                     // Get element layout from return type (which is List(elem))
                     const ls = self.layout_store;
@@ -1346,10 +1346,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     };
 
                     // Generate list argument (must be on stack - 24 bytes)
-                    const list_loc = try self.generateExpr(args[0]);
+                    const list_loc = try self.emitValueLocal(args[0]);
 
                     // Generate element value
-                    const elem_loc = try self.generateExpr(args[1]);
+                    const elem_loc = try self.emitValueLocal(args[1]);
                     const ret_layout_val = ls.getLayout(ll.ret_layout);
                     if (builtin.mode == .Debug and ret_layout_val.tag != .list and ret_layout_val.tag != .list_of_zst) {
                         std.debug.panic(
@@ -1358,7 +1358,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         );
                     }
                     if (builtin.mode == .Debug) {
-                        const list_layout_idx = self.exprLayout(args[0]);
+                        const list_layout_idx = self.valueLayout(args[0]);
                         const list_layout_val = ls.getLayout(list_layout_idx);
                         switch (list_layout_val.tag) {
                             .list => {},
@@ -1471,8 +1471,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .list_get_unsafe => {
                     // list_get_unsafe(list, index) -> element
                     std.debug.assert(args.len >= 2);
-                    const list_loc = try self.generateExpr(args[0]);
-                    const index_loc = try self.generateExpr(args[1]);
+                    const list_loc = try self.emitValueLocal(args[0]);
+                    const index_loc = try self.emitValueLocal(args[1]);
 
                     // Get base offset of list struct
                     const list_base: i32 = switch (list_loc) {
@@ -1482,7 +1482,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     };
 
                     const ls = self.layout_store;
-                    const list_layout_idx = self.exprLayout(args[0]);
+                    const list_layout_idx = self.valueLayout(args[0]);
                     const list_layout_val = ls.getLayout(list_layout_idx);
                     const list_elem_layout: layout.Idx = switch (list_layout_val.tag) {
                         .list => list_layout_val.data.list,
@@ -1597,8 +1597,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .list_concat => {
                     // list_concat(list_a, list_b) -> List
                     if (args.len != 2) unreachable;
-                    const list_a_loc = try self.generateExpr(args[0]);
-                    const list_b_loc = try self.generateExpr(args[1]);
+                    const list_a_loc = try self.emitValueLocal(args[0]);
+                    const list_b_loc = try self.emitValueLocal(args[1]);
 
                     const ls = self.layout_store;
                     const roc_ops_reg = self.roc_ops_reg orelse unreachable;
@@ -1642,8 +1642,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .list_prepend => {
                     // list_prepend(list, element) -> List
                     if (args.len != 2) unreachable;
-                    const list_loc = try self.generateExpr(args[0]);
-                    const elem_loc = try self.generateExpr(args[1]);
+                    const list_loc = try self.emitValueLocal(args[0]);
+                    const elem_loc = try self.emitValueLocal(args[1]);
 
                     const ls = self.layout_store;
                     const roc_ops_reg = self.roc_ops_reg orelse unreachable;
@@ -1685,29 +1685,29 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .list_drop_first => {
                     // list_drop_first(list, n) -> List  (sublist from index n to end)
                     if (args.len != 2) unreachable;
-                    const list_loc = try self.generateExpr(args[0]);
-                    const n_loc = try self.generateExpr(args[1]);
+                    const list_loc = try self.emitValueLocal(args[0]);
+                    const n_loc = try self.emitValueLocal(args[1]);
                     return try self.callListSublist(ll, list_loc, n_loc, .drop_first);
                 },
                 .list_drop_last => {
                     // list_drop_last(list, n) -> List  (sublist from 0 with len - n)
                     if (args.len != 2) unreachable;
-                    const list_loc = try self.generateExpr(args[0]);
-                    const n_loc = try self.generateExpr(args[1]);
+                    const list_loc = try self.emitValueLocal(args[0]);
+                    const n_loc = try self.emitValueLocal(args[1]);
                     return try self.callListSublist(ll, list_loc, n_loc, .drop_last);
                 },
                 .list_take_first => {
                     // list_take_first(list, n) -> List  (sublist from 0 with n elements)
                     if (args.len != 2) unreachable;
-                    const list_loc = try self.generateExpr(args[0]);
-                    const n_loc = try self.generateExpr(args[1]);
+                    const list_loc = try self.emitValueLocal(args[0]);
+                    const n_loc = try self.emitValueLocal(args[1]);
                     return try self.callListSublist(ll, list_loc, n_loc, .take_first);
                 },
                 .list_take_last => {
                     // list_take_last(list, n) -> List  (sublist from len - n to end)
                     if (args.len != 2) unreachable;
-                    const list_loc = try self.generateExpr(args[0]);
-                    const n_loc = try self.generateExpr(args[1]);
+                    const list_loc = try self.emitValueLocal(args[0]);
+                    const n_loc = try self.emitValueLocal(args[1]);
                     return try self.callListSublist(ll, list_loc, n_loc, .take_last);
                 },
                 // Safe integer widening (signed source -> larger signed target)
@@ -1719,7 +1719,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .i32_to_i64,
                 => {
                     std.debug.assert(args.len >= 1);
-                    const src_loc = try self.generateExpr(args[0]);
+                    const src_loc = try self.emitValueLocal(args[0]);
                     const src_reg = try self.ensureInGeneralReg(src_loc);
                     // Sign-extend: shift left to put sign bit at bit 63, then arithmetic shift right
                     const src_bits: u8 = switch (ll.op) {
@@ -1749,7 +1749,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .u32_to_u64,
                 => {
                     std.debug.assert(args.len >= 1);
-                    const src_loc = try self.generateExpr(args[0]);
+                    const src_loc = try self.emitValueLocal(args[0]);
                     const src_reg = try self.ensureInGeneralReg(src_loc);
                     // Zero-extend: mask off upper bits
                     const src_bits: u8 = switch (ll.op) {
@@ -1805,7 +1805,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .i64_to_u64_wrap,
                 => {
                     std.debug.assert(args.len >= 1);
-                    const src_loc = try self.generateExpr(args[0]);
+                    const src_loc = try self.emitValueLocal(args[0]);
                     const src_reg = try self.ensureInGeneralReg(src_loc);
                     // Truncation: just mask the relevant bits
                     const dst_bits: u8 = switch (ll.op) {
@@ -1838,7 +1838,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .i64_to_f64,
                 => {
                     if (args.len < 1) unreachable;
-                    const src_loc = try self.generateExpr(args[0]);
+                    const src_loc = try self.emitValueLocal(args[0]);
                     const src_reg = try self.ensureInGeneralReg(src_loc);
 
                     // Sign-extend source to 64 bits
@@ -1877,7 +1877,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .u32_to_f64,
                 => {
                     if (args.len < 1) unreachable;
-                    const src_loc = try self.generateExpr(args[0]);
+                    const src_loc = try self.emitValueLocal(args[0]);
                     const src_reg = try self.ensureInGeneralReg(src_loc);
 
                     // Zero-extend source to 64 bits
@@ -1908,7 +1908,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .u64_to_f64,
                 => {
                     if (args.len < 1) unreachable;
-                    const src_loc = try self.generateExpr(args[0]);
+                    const src_loc = try self.emitValueLocal(args[0]);
                     const src_reg = try self.ensureInGeneralReg(src_loc);
                     const freg = self.codegen.allocFloat() orelse unreachable;
 
@@ -1972,7 +1972,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .f64_to_f32_wrap,
                 => {
                     if (args.len < 1) unreachable;
-                    const src_loc = try self.generateExpr(args[0]);
+                    const src_loc = try self.emitValueLocal(args[0]);
                     return .{ .float_reg = try self.ensureInFloatReg(src_loc) };
                 },
 
@@ -1991,7 +1991,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .f64_to_i64_trunc,
                 => {
                     if (args.len < 1) unreachable;
-                    const src_loc = try self.generateExpr(args[0]);
+                    const src_loc = try self.emitValueLocal(args[0]);
                     const freg = try self.ensureInFloatReg(src_loc);
 
                     const dst_reg = self.codegen.allocGeneral() orelse unreachable;
@@ -2035,7 +2035,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .f64_to_u64_trunc,
                 => {
                     if (args.len < 1) unreachable;
-                    const src_loc = try self.generateExpr(args[0]);
+                    const src_loc = try self.emitValueLocal(args[0]);
                     const freg = try self.ensureInFloatReg(src_loc);
 
                     const dst_reg = self.codegen.allocGeneral() orelse unreachable;
@@ -2088,7 +2088,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .i64_to_u128_wrap,
                 => {
                     if (args.len < 1) unreachable;
-                    const src_loc = try self.generateExpr(args[0]);
+                    const src_loc = try self.emitValueLocal(args[0]);
                     const src_reg = try self.ensureInGeneralReg(src_loc);
 
                     const is_signed = switch (ll.op) {
@@ -2161,7 +2161,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .i128_to_u128_wrap,
                 => {
                     if (args.len < 1) unreachable;
-                    const src_loc = try self.generateExpr(args[0]);
+                    const src_loc = try self.emitValueLocal(args[0]);
                     const src_signedness: std.builtin.Signedness = switch (ll.op) {
                         .i128_to_i8_wrap, .i128_to_i16_wrap, .i128_to_i32_wrap, .i128_to_i64_wrap, .i128_to_u8_wrap, .i128_to_u16_wrap, .i128_to_u32_wrap, .i128_to_u64_wrap, .i128_to_u128_wrap => .signed,
                         else => .unsigned,
@@ -2206,7 +2206,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .u64_to_dec,
                 => {
                     if (args.len < 1) unreachable;
-                    const src_loc = try self.generateExpr(args[0]);
+                    const src_loc = try self.emitValueLocal(args[0]);
                     const src_reg = try self.ensureInGeneralReg(src_loc);
 
                     // Zero-extend source to 64 bits
@@ -2233,7 +2233,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .i64_to_dec,
                 => {
                     if (args.len < 1) unreachable;
-                    const src_loc = try self.generateExpr(args[0]);
+                    const src_loc = try self.emitValueLocal(args[0]);
                     const src_reg = try self.ensureInGeneralReg(src_loc);
 
                     // Sign-extend source to 64 bits
@@ -2266,7 +2266,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .dec_to_u64_trunc,
                 => {
                     if (args.len < 1) unreachable;
-                    const src_loc = try self.generateExpr(args[0]);
+                    const src_loc = try self.emitValueLocal(args[0]);
                     const parts = try self.getI128Parts(src_loc, .signed); // Dec is signed i128
 
                     // Call roc_builtins_dec_to_i64_trunc(low, high) -> i64
@@ -2301,7 +2301,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // ── Dec to i128 truncating ──
                 .dec_to_i128_trunc => {
                     if (args.len < 1) unreachable;
-                    const src_loc = try self.generateExpr(args[0]);
+                    const src_loc = try self.emitValueLocal(args[0]);
                     const parts = try self.getI128Parts(src_loc, .signed); // Dec is signed i128
                     const fn_addr = @intFromPtr(&dev_wrappers.roc_builtins_dec_to_i64_trunc);
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
@@ -2322,7 +2322,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // ── Dec to u128 truncating ──
                 .dec_to_u128_trunc => {
                     if (args.len < 1) unreachable;
-                    const src_loc = try self.generateExpr(args[0]);
+                    const src_loc = try self.emitValueLocal(args[0]);
                     const parts = try self.getI128Parts(src_loc, .signed); // Dec is signed i128
                     const fn_addr = @intFromPtr(&dev_wrappers.roc_builtins_dec_to_i64_trunc);
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
@@ -2342,14 +2342,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // ── Dec to float conversions ──
                 .dec_to_f64 => {
                     if (args.len < 1) unreachable;
-                    const src_loc = try self.generateExpr(args[0]);
+                    const src_loc = try self.emitValueLocal(args[0]);
                     const parts = try self.getI128Parts(src_loc, .signed); // Dec is signed i128
                     return try self.callI128PartsToF64(parts, @intFromPtr(&dev_wrappers.roc_builtins_dec_to_f64), .dec_to_f64);
                 },
                 .dec_to_f32_wrap => {
                     // Dec to f32: convert to f64 first (f32 narrowing happens at store)
                     if (args.len < 1) unreachable;
-                    const src_loc = try self.generateExpr(args[0]);
+                    const src_loc = try self.emitValueLocal(args[0]);
                     const parts = try self.getI128Parts(src_loc, .signed); // Dec is signed i128
                     return try self.callI128PartsToF64(parts, @intFromPtr(&dev_wrappers.roc_builtins_dec_to_f64), .dec_to_f64);
                 },
@@ -2359,7 +2359,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .i128_to_f64,
                 => {
                     if (args.len < 1) unreachable;
-                    const src_loc = try self.generateExpr(args[0]);
+                    const src_loc = try self.emitValueLocal(args[0]);
                     const parts = try self.getI128Parts(src_loc, .signed);
                     return try self.callI128PartsToF64(parts, @intFromPtr(&dev_wrappers.roc_builtins_i128_to_f64), .i128_to_f64);
                 },
@@ -2367,7 +2367,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .u128_to_f64,
                 => {
                     if (args.len < 1) unreachable;
-                    const src_loc = try self.generateExpr(args[0]);
+                    const src_loc = try self.emitValueLocal(args[0]);
                     const parts = try self.getI128Parts(src_loc, .unsigned);
                     return try self.callI128PartsToF64(parts, @intFromPtr(&dev_wrappers.roc_builtins_u128_to_f64), .u128_to_f64);
                 },
@@ -2377,7 +2377,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .f64_to_i128_trunc,
                 => {
                     if (args.len < 1) unreachable;
-                    const src_loc = try self.generateExpr(args[0]);
+                    const src_loc = try self.emitValueLocal(args[0]);
                     const freg = try self.ensureInFloatReg(src_loc);
                     return try self.callF64ToI128(freg, @intFromPtr(&dev_wrappers.roc_builtins_f64_to_i128_trunc), .f64_to_i128_trunc);
                 },
@@ -2385,7 +2385,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .f64_to_u128_trunc,
                 => {
                     if (args.len < 1) unreachable;
-                    const src_loc = try self.generateExpr(args[0]);
+                    const src_loc = try self.emitValueLocal(args[0]);
                     const freg = try self.ensureInFloatReg(src_loc);
                     return try self.callF64ToI128(freg, @intFromPtr(&dev_wrappers.roc_builtins_f64_to_u128_trunc), .f64_to_u128_trunc);
                 },
@@ -2395,14 +2395,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .str_to_utf8 => {
                     // str_to_utf8(str) -> List(U8)
                     if (args.len != 1) unreachable;
-                    const str_loc = try self.generateExpr(args[0]);
+                    const str_loc = try self.emitValueLocal(args[0]);
                     const str_off = try self.ensureOnStack(str_loc, roc_str_size);
                     return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrToUtf8), .str_to_utf8, .list);
                 },
                 .str_is_eq => {
                     if (args.len != 2) unreachable;
-                    const a_loc = try self.generateExpr(args[0]);
-                    const b_loc = try self.generateExpr(args[1]);
+                    const a_loc = try self.emitValueLocal(args[0]);
+                    const b_loc = try self.emitValueLocal(args[1]);
                     const a_off = try self.ensureOnStack(a_loc, roc_str_size);
                     const b_off = try self.ensureOnStack(b_loc, roc_str_size);
                     const eq_loc = try self.callStr2ToScalar(a_off, b_off, @intFromPtr(&wrapStrEqual), .str_equal);
@@ -2411,8 +2411,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 .str_concat => {
                     if (args.len != 2) unreachable;
-                    const a_loc = try self.generateExpr(args[0]);
-                    const b_loc = try self.generateExpr(args[1]);
+                    const a_loc = try self.emitValueLocal(args[0]);
+                    const b_loc = try self.emitValueLocal(args[1]);
                     if (builtin.mode == .Debug and (a_loc != .stack_str or b_loc != .stack_str)) {
                         std.debug.panic(
                             "LIR/codegen invariant violated: str_concat expects stack_str args, got lhs={s} rhs={s}",
@@ -2425,38 +2425,38 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 .str_contains => {
                     if (args.len != 2) unreachable;
-                    const a_loc = try self.generateExpr(args[0]);
-                    const b_loc = try self.generateExpr(args[1]);
+                    const a_loc = try self.emitValueLocal(args[0]);
+                    const b_loc = try self.emitValueLocal(args[1]);
                     const a_off = try self.ensureOnStack(a_loc, roc_str_size);
                     const b_off = try self.ensureOnStack(b_loc, roc_str_size);
                     return try self.callStr2ToScalar(a_off, b_off, @intFromPtr(&wrapStrContains), .str_contains);
                 },
                 .str_starts_with => {
                     if (args.len != 2) unreachable;
-                    const a_loc = try self.generateExpr(args[0]);
-                    const b_loc = try self.generateExpr(args[1]);
+                    const a_loc = try self.emitValueLocal(args[0]);
+                    const b_loc = try self.emitValueLocal(args[1]);
                     const a_off = try self.ensureOnStack(a_loc, roc_str_size);
                     const b_off = try self.ensureOnStack(b_loc, roc_str_size);
                     return try self.callStr2ToScalar(a_off, b_off, @intFromPtr(&wrapStrStartsWith), .str_starts_with);
                 },
                 .str_ends_with => {
                     if (args.len != 2) unreachable;
-                    const a_loc = try self.generateExpr(args[0]);
-                    const b_loc = try self.generateExpr(args[1]);
+                    const a_loc = try self.emitValueLocal(args[0]);
+                    const b_loc = try self.emitValueLocal(args[1]);
                     const a_off = try self.ensureOnStack(a_loc, roc_str_size);
                     const b_off = try self.ensureOnStack(b_loc, roc_str_size);
                     return try self.callStr2ToScalar(a_off, b_off, @intFromPtr(&wrapStrEndsWith), .str_ends_with);
                 },
                 .str_count_utf8_bytes => {
                     if (args.len != 1) unreachable;
-                    const str_loc = try self.generateExpr(args[0]);
+                    const str_loc = try self.emitValueLocal(args[0]);
                     const str_off = try self.ensureOnStack(str_loc, roc_str_size);
                     return try self.callStr1ToScalar(str_off, @intFromPtr(&wrapStrCountUtf8Bytes), .str_count_utf8_bytes);
                 },
                 .str_caseless_ascii_equals => {
                     if (args.len != 2) unreachable;
-                    const a_loc = try self.generateExpr(args[0]);
-                    const b_loc = try self.generateExpr(args[1]);
+                    const a_loc = try self.emitValueLocal(args[0]);
+                    const b_loc = try self.emitValueLocal(args[1]);
                     const a_off = try self.ensureOnStack(a_loc, roc_str_size);
                     const b_off = try self.ensureOnStack(b_loc, roc_str_size);
                     return try self.callStr2ToScalar(a_off, b_off, @intFromPtr(&wrapStrCaselessAsciiEquals), .str_caseless_ascii_equals);
@@ -2464,35 +2464,35 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .str_repeat => {
                     // str_repeat(str, count) -> Str
                     if (args.len != 2) unreachable;
-                    const str_loc = try self.generateExpr(args[0]);
-                    const count_loc = try self.generateExpr(args[1]);
+                    const str_loc = try self.emitValueLocal(args[0]);
+                    const count_loc = try self.emitValueLocal(args[1]);
                     const str_off = try self.ensureOnStack(str_loc, roc_str_size);
                     const count_off = try self.ensureOnStack(count_loc, 8);
                     return try self.callStr1U64RocOpsToStr(str_off, count_off, @intFromPtr(&wrapStrRepeat), .str_repeat);
                 },
                 .str_trim => {
                     if (args.len != 1) unreachable;
-                    const str_loc = try self.generateExpr(args[0]);
+                    const str_loc = try self.emitValueLocal(args[0]);
                     const str_off = try self.ensureOnStack(str_loc, roc_str_size);
                     return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrTrim), .str_trim, .str);
                 },
                 .str_trim_start => {
                     if (args.len != 1) unreachable;
-                    const str_loc = try self.generateExpr(args[0]);
+                    const str_loc = try self.emitValueLocal(args[0]);
                     const str_off = try self.ensureOnStack(str_loc, roc_str_size);
                     return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrTrimStart), .str_trim_start, .str);
                 },
                 .str_trim_end => {
                     if (args.len != 1) unreachable;
-                    const str_loc = try self.generateExpr(args[0]);
+                    const str_loc = try self.emitValueLocal(args[0]);
                     const str_off = try self.ensureOnStack(str_loc, roc_str_size);
                     return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrTrimEnd), .str_trim_end, .str);
                 },
                 .str_split_on => {
                     // str_split(str, delimiter) -> List(Str)
                     if (args.len != 2) unreachable;
-                    const a_loc = try self.generateExpr(args[0]);
-                    const b_loc = try self.generateExpr(args[1]);
+                    const a_loc = try self.emitValueLocal(args[0]);
+                    const b_loc = try self.emitValueLocal(args[1]);
                     const a_off = try self.ensureOnStack(a_loc, roc_str_size);
                     const b_off = try self.ensureOnStack(b_loc, roc_str_size);
                     return try self.callStr2RocOpsToResult(a_off, b_off, @intFromPtr(&wrapStrSplit), .str_split, .list);
@@ -2500,8 +2500,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .str_join_with => {
                     // str_join_with(list, separator) -> Str
                     if (args.len != 2) unreachable;
-                    const list_loc = try self.generateExpr(args[0]);
-                    const sep_loc = try self.generateExpr(args[1]);
+                    const list_loc = try self.emitValueLocal(args[0]);
+                    const sep_loc = try self.emitValueLocal(args[1]);
                     const list_off = try self.ensureOnStack(list_loc, roc_list_size);
                     const sep_off = try self.ensureOnStack(sep_loc, roc_str_size);
                     return try self.callStr2RocOpsToResult(list_off, sep_off, @intFromPtr(&wrapStrJoinWith), .str_join_with, .str);
@@ -2509,22 +2509,22 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .str_reserve => {
                     // str_reserve(str, spare) -> Str
                     if (args.len != 2) unreachable;
-                    const str_loc = try self.generateExpr(args[0]);
-                    const spare_loc = try self.generateExpr(args[1]);
+                    const str_loc = try self.emitValueLocal(args[0]);
+                    const spare_loc = try self.emitValueLocal(args[1]);
                     const str_off = try self.ensureOnStack(str_loc, roc_str_size);
                     const spare_off = try self.ensureOnStack(spare_loc, 8);
                     return try self.callStr1U64RocOpsToStr(str_off, spare_off, @intFromPtr(&wrapStrReserve), .str_reserve);
                 },
                 .str_release_excess_capacity => {
                     if (args.len != 1) unreachable;
-                    const str_loc = try self.generateExpr(args[0]);
+                    const str_loc = try self.emitValueLocal(args[0]);
                     const str_off = try self.ensureOnStack(str_loc, roc_str_size);
                     return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrReleaseExcessCapacity), .str_release_excess_capacity, .str);
                 },
                 .str_with_capacity => {
                     // str_with_capacity(capacity) -> Str
                     if (args.len != 1) unreachable;
-                    const cap_loc = try self.generateExpr(args[0]);
+                    const cap_loc = try self.emitValueLocal(args[0]);
                     const roc_ops_reg = self.roc_ops_reg orelse unreachable;
                     const result_offset = self.codegen.allocStackSlot(roc_str_size);
                     const fn_addr: usize = @intFromPtr(&wrapStrWithCapacity);
@@ -2543,36 +2543,36 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 .str_drop_prefix => {
                     if (args.len != 2) unreachable;
-                    const a_loc = try self.generateExpr(args[0]);
-                    const b_loc = try self.generateExpr(args[1]);
+                    const a_loc = try self.emitValueLocal(args[0]);
+                    const b_loc = try self.emitValueLocal(args[1]);
                     const a_off = try self.ensureOnStack(a_loc, roc_str_size);
                     const b_off = try self.ensureOnStack(b_loc, roc_str_size);
                     return try self.callStr2RocOpsToResult(a_off, b_off, @intFromPtr(&wrapStrDropPrefix), .str_drop_prefix, .str);
                 },
                 .str_drop_suffix => {
                     if (args.len != 2) unreachable;
-                    const a_loc = try self.generateExpr(args[0]);
-                    const b_loc = try self.generateExpr(args[1]);
+                    const a_loc = try self.emitValueLocal(args[0]);
+                    const b_loc = try self.emitValueLocal(args[1]);
                     const a_off = try self.ensureOnStack(a_loc, roc_str_size);
                     const b_off = try self.ensureOnStack(b_loc, roc_str_size);
                     return try self.callStr2RocOpsToResult(a_off, b_off, @intFromPtr(&wrapStrDropSuffix), .str_drop_suffix, .str);
                 },
                 .str_with_ascii_lowercased => {
                     if (args.len != 1) unreachable;
-                    const str_loc = try self.generateExpr(args[0]);
+                    const str_loc = try self.emitValueLocal(args[0]);
                     const str_off = try self.ensureOnStack(str_loc, roc_str_size);
                     return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrWithAsciiLowercased), .str_with_ascii_lowercased, .str);
                 },
                 .str_with_ascii_uppercased => {
                     if (args.len != 1) unreachable;
-                    const str_loc = try self.generateExpr(args[0]);
+                    const str_loc = try self.emitValueLocal(args[0]);
                     const str_off = try self.ensureOnStack(str_loc, roc_str_size);
                     return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrWithAsciiUppercased), .str_with_ascii_uppercased, .str);
                 },
                 .str_from_utf8_lossy => {
                     // str_from_utf8_lossy(list) -> Str
                     if (args.len != 1) unreachable;
-                    const list_loc = try self.generateExpr(args[0]);
+                    const list_loc = try self.emitValueLocal(args[0]);
                     const list_off = try self.ensureOnStack(list_loc, roc_list_size);
                     return try self.callStr1RocOpsToResult(list_off, @intFromPtr(&wrapStrFromUtf8Lossy), .str_from_utf8_lossy, .str);
                 },
@@ -2581,7 +2581,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // The C builtin returns FromUtf8Try {byte_index: u64, string: RocStr, is_ok: bool, problem_code: u8}
                     // We must convert it to the Roc tag union layout.
                     if (args.len != 1) unreachable;
-                    const list_loc = try self.generateExpr(args[0]);
+                    const list_loc = try self.emitValueLocal(args[0]);
                     const list_off = try self.ensureOnStack(list_loc, roc_list_size);
 
                     const roc_ops_reg = self.roc_ops_reg orelse unreachable;
@@ -2663,9 +2663,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .list_set => {
                     // list_set(list, index, element) -> List
                     if (args.len != 3) unreachable;
-                    const list_loc = try self.generateExpr(args[0]);
-                    const index_loc = try self.generateExpr(args[1]);
-                    const elem_loc = try self.generateExpr(args[2]);
+                    const list_loc = try self.emitValueLocal(args[0]);
+                    const index_loc = try self.emitValueLocal(args[1]);
+                    const elem_loc = try self.emitValueLocal(args[2]);
 
                     const ls = self.layout_store;
                     const roc_ops_reg = self.roc_ops_reg orelse unreachable;
@@ -2712,13 +2712,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .list_first => {
                     // list_first(list) -> element  (same as list_get at index 0)
                     if (args.len != 1) unreachable;
-                    const list_loc = try self.generateExpr(args[0]);
+                    const list_loc = try self.emitValueLocal(args[0]);
                     return try self.listGetAtConstIndex(list_loc, 0, ll.ret_layout);
                 },
                 .list_last => {
                     // list_last(list) -> element  (same as list_get at index len-1)
                     if (args.len != 1) unreachable;
-                    const list_loc = try self.generateExpr(args[0]);
+                    const list_loc = try self.emitValueLocal(args[0]);
                     return try self.listGetAtLastIndex(list_loc, ll.ret_layout);
                 },
                 .list_reverse => {
@@ -2727,32 +2727,32 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // Actually reverse needs a proper implementation. For now use sublist(0, len) and reverse.
                     // Simplest correct approach: allocate new list, copy elements in reverse order
                     if (args.len != 1) unreachable;
-                    const list_loc = try self.generateExpr(args[0]);
+                    const list_loc = try self.emitValueLocal(args[0]);
                     return try self.generateListReverse(list_loc, ll);
                 },
                 .list_reserve => {
                     // list_reserve(list, spare) -> List
                     if (args.len != 2) unreachable;
-                    const list_loc = try self.generateExpr(args[0]);
-                    const spare_loc = try self.generateExpr(args[1]);
+                    const list_loc = try self.emitValueLocal(args[0]);
+                    const spare_loc = try self.emitValueLocal(args[1]);
                     return try self.callListReserveOp(list_loc, spare_loc, ll);
                 },
                 .list_release_excess_capacity => {
                     // list_release_excess_capacity(list) -> List
                     if (args.len != 1) unreachable;
-                    const list_loc = try self.generateExpr(args[0]);
+                    const list_loc = try self.emitValueLocal(args[0]);
                     return try self.callListReleaseExcessCapOp(list_loc, ll);
                 },
                 .list_split_first => {
                     // list_split_first(list) -> {first: elem, rest: List}
                     if (args.len != 1) unreachable;
-                    const list_loc = try self.generateExpr(args[0]);
+                    const list_loc = try self.emitValueLocal(args[0]);
                     return try self.callListSplitOp(ll, list_loc, .first);
                 },
                 .list_split_last => {
                     // list_split_last(list) -> {rest: List, last: elem}
                     if (args.len != 1) unreachable;
-                    const list_loc = try self.generateExpr(args[0]);
+                    const list_loc = try self.emitValueLocal(args[0]);
                     return try self.callListSplitOp(ll, list_loc, .last);
                 },
 
@@ -2872,23 +2872,23 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .list_sublist => {
                     // list_sublist(list, {start, len}) -> List
                     if (args.len != 2) unreachable;
-                    const record_layout_idx = self.exprLayout(args[1]);
-                    const list_loc = try self.generateExpr(args[0]);
-                    const record_loc = try self.generateExpr(args[1]);
+                    const record_layout_idx = self.valueLayout(args[1]);
+                    const list_loc = try self.emitValueLocal(args[0]);
+                    const record_loc = try self.emitValueLocal(args[1]);
                     return try self.callListSublistFromRecord(ll, list_loc, record_loc, record_layout_idx);
                 },
                 .num_abs => {
                     // Absolute value: classify signedness from the operand layout.
                     // The result layout is not authoritative here because numeric methods
                     // can return a different signedness than their operand.
-                    const val_loc = try self.generateExpr(args[0]);
-                    return try self.generateNumAbs(val_loc, self.exprLayout(args[0]));
+                    const val_loc = try self.emitValueLocal(args[0]);
+                    return try self.generateNumAbs(val_loc, self.valueLayout(args[0]));
                 },
                 .num_abs_diff => {
                     // |a - b|: compare and subtract in the correct order to avoid wrap/overflow
-                    const arg_layout = self.exprLayout(args[0]);
-                    const a_loc = try self.generateExpr(args[0]);
-                    const b_loc = try self.generateExpr(args[1]);
+                    const arg_layout = self.valueLayout(args[0]);
+                    const a_loc = try self.emitValueLocal(args[0]);
+                    const b_loc = try self.emitValueLocal(args[1]);
                     return try self.generateAbsDiff(a_loc, b_loc, ll.ret_layout, arg_layout);
                 },
 
@@ -2909,21 +2909,21 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .num_is_lt,
                 .num_is_lte,
                 => {
-                    const lhs_loc = try self.generateExpr(args[0]);
-                    const rhs_loc = try self.generateExpr(args[1]);
+                    const lhs_loc = try self.emitValueLocal(args[0]);
+                    const rhs_loc = try self.emitValueLocal(args[1]);
 
                     // For numeric/comparison ops, operand layout comes from arguments.
                     // Return layout can be Bool for comparisons, so don't key operand
                     // behavior off `ll.ret_layout`.
                     const operand_layout =
-                        self.exprLayout(args[0]);
+                        self.valueLayout(args[0]);
 
                     // With ANF, operands are always lookups or literals, so we
                     // dispatch structural equality purely by layout.
                     if (ll.op == .num_is_eq) {
                         {
                             const ls = self.layout_store;
-                            const layout_idx = self.exprLayout(args[0]);
+                            const layout_idx = self.valueLayout(args[0]);
                             const stored_layout = ls.getLayout(layout_idx);
                             if (stored_layout.tag == .struct_)
                                 return self.generateStructComparisonByLayout(lhs_loc, rhs_loc, layout_idx, .num_is_eq);
@@ -2961,7 +2961,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
 
                 .num_negate => {
-                    const inner_loc = try self.generateExpr(args[0]);
+                    const inner_loc = try self.emitValueLocal(args[0]);
                     const is_float = ll.ret_layout == .f32 or ll.ret_layout == .f64;
                     const is_i128 = ll.ret_layout == .i128 or ll.ret_layout == .u128 or ll.ret_layout == .dec;
 
@@ -3007,7 +3007,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
 
                 .bool_not => {
-                    const inner_loc = try self.generateExpr(args[0]);
+                    const inner_loc = try self.emitValueLocal(args[0]);
                     const src_reg = try self.ensureInGeneralReg(inner_loc);
                     const result_reg = try self.allocTempGeneral();
                     try self.emitCmpImm(src_reg, 0);
@@ -3017,60 +3017,60 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
 
                 .u8_to_str => {
-                    const value_loc = try self.generateExpr(args[0]);
+                    const value_loc = try self.emitValueLocal(args[0]);
                     return self.callIntToStr(value_loc, 1, false);
                 },
                 .i8_to_str => {
-                    const value_loc = try self.generateExpr(args[0]);
+                    const value_loc = try self.emitValueLocal(args[0]);
                     return self.callIntToStr(value_loc, 1, true);
                 },
                 .u16_to_str => {
-                    const value_loc = try self.generateExpr(args[0]);
+                    const value_loc = try self.emitValueLocal(args[0]);
                     return self.callIntToStr(value_loc, 2, false);
                 },
                 .i16_to_str => {
-                    const value_loc = try self.generateExpr(args[0]);
+                    const value_loc = try self.emitValueLocal(args[0]);
                     return self.callIntToStr(value_loc, 2, true);
                 },
                 .u32_to_str => {
-                    const value_loc = try self.generateExpr(args[0]);
+                    const value_loc = try self.emitValueLocal(args[0]);
                     return self.callIntToStr(value_loc, 4, false);
                 },
                 .i32_to_str => {
-                    const value_loc = try self.generateExpr(args[0]);
+                    const value_loc = try self.emitValueLocal(args[0]);
                     return self.callIntToStr(value_loc, 4, true);
                 },
                 .u64_to_str => {
-                    const value_loc = try self.generateExpr(args[0]);
+                    const value_loc = try self.emitValueLocal(args[0]);
                     return self.callIntToStr(value_loc, 8, false);
                 },
                 .i64_to_str => {
-                    const value_loc = try self.generateExpr(args[0]);
+                    const value_loc = try self.emitValueLocal(args[0]);
                     return self.callIntToStr(value_loc, 8, true);
                 },
                 .u128_to_str => {
-                    const value_loc = try self.generateExpr(args[0]);
+                    const value_loc = try self.emitValueLocal(args[0]);
                     return self.callIntToStr(value_loc, 16, false);
                 },
                 .i128_to_str => {
-                    const value_loc = try self.generateExpr(args[0]);
+                    const value_loc = try self.emitValueLocal(args[0]);
                     return self.callIntToStr(value_loc, 16, true);
                 },
                 .dec_to_str => {
-                    const value_loc = try self.generateExpr(args[0]);
+                    const value_loc = try self.emitValueLocal(args[0]);
                     return self.callDecToStr(value_loc);
                 },
                 .f32_to_str => {
-                    const value_loc = try self.generateExpr(args[0]);
+                    const value_loc = try self.emitValueLocal(args[0]);
                     return self.callFloatToStr(value_loc, true);
                 },
                 .f64_to_str => {
-                    const value_loc = try self.generateExpr(args[0]);
+                    const value_loc = try self.emitValueLocal(args[0]);
                     return self.callFloatToStr(value_loc, false);
                 },
                 .str_inspect => {
                     if (args.len != 1) unreachable;
-                    const str_loc = try self.generateExpr(args[0]);
+                    const str_loc = try self.emitValueLocal(args[0]);
                     const str_off = try self.ensureOnStack(str_loc, roc_str_size);
                     return self.callStr1RocOpsToResult(
                         str_off,
@@ -3080,8 +3080,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     );
                 },
                 .num_to_str => {
-                    const value_loc = try self.generateExpr(args[0]);
-                    return switch (self.exprLayout(args[0])) {
+                    const value_loc = try self.emitValueLocal(args[0]);
+                    return switch (self.valueLayout(args[0])) {
                         .u8 => self.callIntToStr(value_loc, 1, false),
                         .i8 => self.callIntToStr(value_loc, 1, true),
                         .u16 => self.callIntToStr(value_loc, 2, false),
@@ -3097,7 +3097,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .f64 => self.callFloatToStr(value_loc, false),
                         else => std.debug.panic(
                             "LirCodeGen invariant violated: num_to_str received non-numeric layout {s}",
-                            .{@tagName(self.exprLayout(args[0]))},
+                            .{@tagName(self.valueLayout(args[0]))},
                         ),
                     };
                 },
@@ -3123,7 +3123,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     if (ret_layout_data.tag == .box_of_zst) {
                         // Boxing a ZST: evaluate the expression (for side effects) but
                         // return a null-like pointer since there's no data to store.
-                        _ = try self.generateExpr(args[0]);
+                        _ = try self.emitValueLocal(args[0]);
                         const reg = try self.allocTempGeneral();
                         try self.codegen.emitLoadImm(reg, 0);
                         return .{ .general_reg = reg };
@@ -3135,7 +3135,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     // Handle ZST element even when layout tag is .box (not .box_of_zst)
                     if (elem_size == 0) {
-                        _ = try self.generateExpr(args[0]);
+                        _ = try self.emitValueLocal(args[0]);
                         const reg = try self.allocTempGeneral();
                         try self.codegen.emitLoadImm(reg, 0);
                         return .{ .general_reg = reg };
@@ -3157,7 +3157,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.emitStore(.w64, frame_ptr, heap_ptr_slot, ret_reg_0);
 
                     // Generate the value expression
-                    const value_loc = try self.generateExpr(args[0]);
+                    const value_loc = try self.emitValueLocal(args[0]);
 
                     // Copy value to heap
                     const heap_ptr = try self.allocTempGeneral();
@@ -3175,13 +3175,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // Box.unbox(box) -> value: dereference the box pointer
                     const ls = self.layout_store;
                     // The argument is the Box — get its layout to find element info
-                    const box_arg_layout = self.exprLayout(args[0]);
+                    const box_arg_layout = self.valueLayout(args[0]);
                     const box_layout_data = ls.getLayout(box_arg_layout);
 
                     if (box_layout_data.tag == .box_of_zst) {
                         // Unboxing a ZST: evaluate the box expression (for side effects)
                         // but return a ZST (no data).
-                        _ = try self.generateExpr(args[0]);
+                        _ = try self.emitValueLocal(args[0]);
                         return .{ .immediate_i64 = 0 };
                     }
 
@@ -3190,14 +3190,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     // Handle ZST element even when layout tag is .box (not .box_of_zst)
                     if (elem_size == 0) {
-                        _ = try self.generateExpr(args[0]);
+                        _ = try self.emitValueLocal(args[0]);
                         return .{ .immediate_i64 = 0 };
                     }
                     const elem_layout_idx = box_info.elem_layout_idx;
                     const elem_layout_data = box_info.elem_layout;
 
                     // Generate the box pointer expression
-                    const box_loc = try self.generateExpr(args[0]);
+                    const box_loc = try self.emitValueLocal(args[0]);
                     const box_reg = try self.ensureInGeneralReg(box_loc);
 
                     // Copy from heap to stack
@@ -4446,7 +4446,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         fn generateRefOp(self: *Self, op: lir.RefOp, target_layout: layout.Idx) Allocator.Error!ValueLocation {
             return switch (op) {
-                .local => |local| try self.generateExpr(local),
+                .local => |local| try self.emitValueLocal(local),
                 .discriminant => |disc| try self.generateDiscriminantAccess(.{
                     .source = disc.source,
                     .target_layout = target_layout,
@@ -4462,7 +4462,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .tag_discriminant = payload.tag_discriminant,
                     .target_layout = target_layout,
                 }),
-                .nominal => |nominal| try self.generateExpr(nominal.backing_ref),
+                .nominal => |nominal| try self.emitValueLocal(nominal.backing_ref),
             };
         }
 
@@ -5016,7 +5016,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Generate a checked integer conversion returning Ok(value) | Err(OutOfRange).
         fn generateIntTryConversion(self: *Self, ll: anytype, args: []const LocalId) Allocator.Error!ValueLocation {
             if (args.len != 1) unreachable;
-            const src_loc = try self.generateExpr(args[0]);
+            const src_loc = try self.emitValueLocal(args[0]);
 
             const ls = self.layout_store;
             const ret_layout_val = ls.getLayout(ll.ret_layout);
@@ -5138,7 +5138,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Dispatches to the appropriate C wrapper based on the target numeric type.
         fn generateNumFromStr(self: *Self, ll: anytype, args: []const LocalId) Allocator.Error!ValueLocation {
             if (args.len != 1) unreachable;
-            const str_loc = try self.generateExpr(args[0]);
+            const str_loc = try self.emitValueLocal(args[0]);
             const str_off = try self.ensureOnStack(str_loc, roc_str_size);
 
             const ls = self.layout_store;
@@ -5296,7 +5296,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Generate a float/dec try_unsafe conversion returning a record.
         fn generateFloatDecTryUnsafeConversion(self: *Self, ll: anytype, args: []const LocalId) Allocator.Error!ValueLocation {
             if (args.len != 1) unreachable;
-            const src_loc = try self.generateExpr(args[0]);
+            const src_loc = try self.emitValueLocal(args[0]);
 
             const ls = self.layout_store;
             const ret_layout_val = ls.getLayout(ll.ret_layout);
@@ -8028,7 +8028,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Generate code for struct field access (records and tuples).
         fn generateStructAccess(self: *Self, access: anytype) Allocator.Error!ValueLocation {
             const ls = self.layout_store;
-            const struct_loc = try self.generateExpr(access.source);
+            const struct_loc = try self.emitValueLocal(access.source);
             const source_layout_idx = self.localLayout(access.source);
             const struct_layout = ls.getLayout(source_layout_idx);
             if (struct_layout.tag != .struct_) {
@@ -8084,7 +8084,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Generate code for tag payload access.
         fn generateTagPayloadAccess(self: *Self, tpa: anytype) Allocator.Error!ValueLocation {
             const ls = self.layout_store;
-            const raw_value_loc = try self.generateExpr(tpa.source);
+            const raw_value_loc = try self.emitValueLocal(tpa.source);
             const source_layout_idx = self.localLayout(tpa.source);
             const union_layout = ls.getLayout(source_layout_idx);
             const payload_layout_idx = switch (union_layout.tag) {
@@ -8154,7 +8154,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Generate code for explicit tag-discriminant access.
         fn generateDiscriminantAccess(self: *Self, disc: anytype) Allocator.Error!ValueLocation {
             const ls = self.layout_store;
-            const raw_value_loc = try self.generateExpr(disc.source);
+            const raw_value_loc = try self.emitValueLocal(disc.source);
             const source_layout_idx = self.localLayout(disc.source);
             const source_layout = ls.getLayout(source_layout_idx);
 
@@ -8248,7 +8248,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitStore(.w64, frame_ptr, heap_ptr_slot, ret_reg_0);
 
             for (elems, 0..) |elem_id, i| {
-                const elem_loc = self.coerceImmediateToLayout(try self.generateExpr(elem_id), elem_layout_idx);
+                const elem_loc = self.coerceImmediateToLayout(try self.emitValueLocal(elem_id), elem_layout_idx);
                 const elem_heap_offset: i32 = @intCast(@as(usize, i) * @as(usize, elem_size));
 
                 if (elem_size == 0) continue;
@@ -8316,7 +8316,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const field_offset = ls.getStructFieldOffsetByOriginalIndex(struct_layout.data.struct_.idx, @intCast(i));
                 const field_size = ls.getStructFieldSizeByOriginalIndex(struct_layout.data.struct_.idx, @intCast(i));
                 const field_layout_idx = ls.getStructFieldLayoutByOriginalIndex(struct_layout.data.struct_.idx, @intCast(i));
-                const field_loc = self.coerceImmediateToLayout(try self.generateExpr(field_expr_id), field_layout_idx);
+                const field_loc = self.coerceImmediateToLayout(try self.emitValueLocal(field_expr_id), field_layout_idx);
                 const field_base = base_offset + @as(i32, @intCast(field_offset));
                 try self.copyBytesToStackOffset(field_base, field_loc, field_size);
             }
@@ -8376,7 +8376,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (union_layout.tag == .scalar or union_layout.tag == .zst) {
                 const arg_exprs = self.store.getLocalSpan(tag.args);
                 for (arg_exprs) |arg_expr_id| {
-                    _ = try self.generateExpr(arg_expr_id);
+                    _ = try self.emitValueLocal(arg_expr_id);
                 }
                 return .{ .immediate_i64 = tag.discriminant };
             }
@@ -8408,8 +8408,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .discriminant = tag.discriminant,
                 });
             } else if (arg_exprs.len == 1) {
-                const arg_layout_idx = variant_payload_layout orelse self.exprLayout(arg_exprs[0]);
-                const arg_loc = self.coerceImmediateToLayout(try self.generateExpr(arg_exprs[0]), arg_layout_idx);
+                const arg_layout_idx = variant_payload_layout orelse self.valueLayout(arg_exprs[0]);
+                const arg_loc = self.coerceImmediateToLayout(try self.emitValueLocal(arg_exprs[0]), arg_layout_idx);
                 const payload_size: u32 = if (variant_payload_layout) |pl| blk: {
                     const pl_val = ls.getLayout(pl);
                     break :blk ls.layoutSizeAlign(pl_val).size;
@@ -8425,8 +8425,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const elem_layout_idx = if (payload_tuple) |tuple_idx|
                         ls.getStructFieldLayoutByOriginalIndex(tuple_idx, @intCast(arg_i))
                     else
-                        self.exprLayout(arg_expr_id);
-                    const arg_loc = self.coerceImmediateToLayout(try self.generateExpr(arg_expr_id), elem_layout_idx);
+                        self.valueLayout(arg_expr_id);
+                    const arg_loc = self.coerceImmediateToLayout(try self.emitValueLocal(arg_expr_id), elem_layout_idx);
                     const elem_offset: i32 = if (payload_tuple) |tuple_idx|
                         @intCast(ls.getStructFieldOffsetByOriginalIndex(tuple_idx, @intCast(arg_i)))
                     else
@@ -8471,7 +8471,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             defer self.allocator.free(arg_layouts);
 
             for (arg_refs, 0..) |arg_ref, i| {
-                arg_locs[i] = try self.generateExpr(arg_ref);
+                arg_locs[i] = try self.emitValueLocal(arg_ref);
                 arg_layouts[i] = self.localLayout(arg_ref);
             }
 
@@ -10223,7 +10223,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         fn generateRcOperandValue(self: *Self, local: LocalId, _: layout.Idx) Allocator.Error!ValueLocation {
-            return self.generateExpr(local);
+            return self.emitValueLocal(local);
         }
 
         /// Generate code for incref operation.
@@ -11528,7 +11528,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
 
                 .debug => |debug_stmt| {
-                    const msg_loc = try self.generateExpr(debug_stmt.message);
+                    const msg_loc = try self.emitValueLocal(debug_stmt.message);
                     const msg_offset = switch (msg_loc) {
                         .stack_str => |offset| offset,
                         else => std.debug.panic(
@@ -11541,7 +11541,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
 
                 .expect => |expect_stmt| {
-                    const cond_loc = try self.generateExpr(expect_stmt.condition);
+                    const cond_loc = try self.emitValueLocal(expect_stmt.condition);
                     const cond_reg = try self.ensureInGeneralReg(cond_loc);
                     try self.emitCmpImm(cond_reg, 0);
                     const skip_patch = try self.emitJumpIfNotEqual();
@@ -11581,7 +11581,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     defer arg_locs.deinit(self.allocator);
 
                     for (args) |arg| {
-                        const loc = try self.generateExpr(arg);
+                        const loc = try self.emitValueLocal(arg);
                         try arg_locs.append(self.allocator, loc);
                     }
 
@@ -11596,9 +11596,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
 
                 .ret => |r| {
-                    const value_loc = try self.generateExpr(r.value);
+                    const value_loc = try self.emitValueLocal(r.value);
                     if (value_loc == .noreturn) return;
-                    const ret_layout = self.exprLayout(r.value);
+                    const ret_layout = self.valueLayout(r.value);
                     const preserved_return_loc = self.normalizeResultLocForLayout(value_loc, ret_layout);
 
                     if (self.ret_ptr_slot) |ret_slot| {
@@ -12350,7 +12350,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Generate code for a switch statement
         fn generateSwitchStmt(self: *Self, sw: anytype) Allocator.Error!void {
             // Evaluate condition
-            const cond_loc = try self.generateExpr(sw.cond);
+            const cond_loc = try self.emitValueLocal(sw.cond);
             const cond_reg = try self.ensureInGeneralReg(cond_loc);
 
             const branches = self.store.getCFSwitchBranches(sw.branches);

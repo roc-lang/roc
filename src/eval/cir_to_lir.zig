@@ -283,7 +283,7 @@ pub const LirProgram = struct {
         defer mir_lower.deinit();
 
         if (maybe_type_scope) |type_scope| {
-            mir_lower.setTypeScope(module_idx, type_scope, app_module_idx orelse return error.RuntimeError) catch return error.OutOfMemory;
+            mir_lower.setTypeScope(module_idx, type_scope) catch return error.OutOfMemory;
         }
 
         const root_const_id = mir_lower.lowerRootConst(expr_idx) catch return error.RuntimeError;
@@ -373,7 +373,7 @@ pub const LirProgram = struct {
         defer mir_lower.deinit();
 
         if (type_scope) |ts| {
-            mir_lower.setTypeScope(module_idx, ts, app_module_idx orelse return error.RuntimeError) catch return error.OutOfMemory;
+            mir_lower.setTypeScope(module_idx, ts) catch return error.OutOfMemory;
         }
 
         const root_const_id = mir_lower.lowerRootConst(expr_idx) catch return error.RuntimeError;

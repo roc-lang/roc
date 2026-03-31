@@ -105,6 +105,7 @@ pub const Result = struct {
     substs: std.ArrayListUnmanaged(TypeSubst),
     context_expr_monotypes: std.AutoHashMapUnmanaged(ContextExprKey, ResolvedMonotype),
     context_pattern_monotypes: std.AutoHashMapUnmanaged(ContextPatternKey, ResolvedMonotype),
+    type_scope_monotypes: std.AutoHashMapUnmanaged(BoundTypeVarKey, ResolvedMonotype),
     resolved_dispatch_targets: std.AutoHashMapUnmanaged(ContextExprKey, DispatchExprTarget),
 
     pub fn init(allocator: Allocator) !Result {
@@ -114,6 +115,7 @@ pub const Result = struct {
             .substs = .empty,
             .context_expr_monotypes = .empty,
             .context_pattern_monotypes = .empty,
+            .type_scope_monotypes = .empty,
             .resolved_dispatch_targets = .empty,
         };
     }
@@ -124,6 +126,7 @@ pub const Result = struct {
         self.substs.deinit(allocator);
         self.context_expr_monotypes.deinit(allocator);
         self.context_pattern_monotypes.deinit(allocator);
+        self.type_scope_monotypes.deinit(allocator);
         self.resolved_dispatch_targets.deinit(allocator);
     }
 
@@ -209,6 +212,17 @@ pub const Result = struct {
         pattern_idx: CIR.Pattern.Idx,
     ) ?ResolvedMonotype {
         return self.context_pattern_monotypes.get(contextPatternKey(source_context, module_idx, pattern_idx));
+    }
+
+    pub fn getTypeScopeMonotype(
+        self: *const Result,
+        module_idx: u32,
+        type_var: types.Var,
+    ) ?ResolvedMonotype {
+        return self.type_scope_monotypes.get(.{
+            .module_idx = module_idx,
+            .type_var = type_var,
+        });
     }
 
     pub fn getDispatchExprTarget(

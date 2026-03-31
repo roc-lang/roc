@@ -294,7 +294,7 @@ fn runtimeValueLayoutFromMirMonotype(self: *Self, monotype: MirMonotypeIdx) Allo
 }
 
 fn runtimeCallableValueLayoutFromMirLocal(self: *Self, local_id: MIR.LocalId) Allocator.Error!?layout.Idx {
-    const resolved = self.resolveCallableValue(local_id);
+    const resolved = self.requireExactCallableValue(local_id);
     return try self.runtimeLambdaValueLayout(resolved.lambda);
 }
 
@@ -344,7 +344,7 @@ fn mergeLoweredOrigins(left: LoweredOrigin, right: LoweredOrigin) LoweredOrigin 
     return .fresh;
 }
 
-fn resolveCallableValue(self: *Self, local_id: MIR.LocalId) ResolvedCallable {
+fn requireExactCallableValue(self: *Self, local_id: MIR.LocalId) ResolvedCallable {
     const exact_callable = self.mir_store.getLocal(local_id).exact_callable orelse std.debug.panic(
         "MirToLir invariant violated: function-valued local {d} lacked explicit exact callable metadata",
         .{@intFromEnum(local_id)},
@@ -998,7 +998,7 @@ fn resolveMirLocalOrigin(
                     .lambda = lambda_id,
                     .captures_local = if (call_result.exact_requires_hidden_capture) call_result.callee else null,
                 }
-            else self.resolveCallableValue(call_result.callee);
+            else self.requireExactCallableValue(call_result.callee);
 
             const visible_args = self.mir_store.getLocalSpan(call_result.args);
             const arg_count = visible_args.len + @intFromBool(resolved.captures_local != null);
@@ -1871,7 +1871,7 @@ fn lowerDirectLambdaCall(
             .captures_local = if (exact_requires_hidden_capture) callee_mir else null,
         }
     else
-        self.resolveCallableValue(callee_mir);
+        self.requireExactCallableValue(callee_mir);
     const lambda = self.mir_store.getLambda(resolved.lambda);
     if (resolved.captures_local == null and lambda.captures_param != null) {
         std.debug.panic(
@@ -2352,7 +2352,7 @@ fn lowerEntrypointCallableStmt(
             .result_contract = .no_return,
         },
         .ret => |ret_stmt| try self.emitEntrypointCall(
-            self.resolveCallableValue(ret_stmt.value),
+            self.requireExactCallableValue(ret_stmt.value),
             arg_locals,
             target,
             next,

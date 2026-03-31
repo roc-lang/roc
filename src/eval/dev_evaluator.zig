@@ -789,7 +789,7 @@ pub const DevEvaluator = struct {
         defer mir_lower.deinit();
 
         if (platform_type_scope) |*ts| {
-            mir_lower.setTypeScope(module_idx, ts, app_module_idx.?) catch return error.OutOfMemory;
+            mir_lower.setTypeScope(module_idx, ts) catch return error.OutOfMemory;
         }
 
         const root_const_id = mir_lower.lowerRootConst(expr_idx) catch {
@@ -950,7 +950,7 @@ pub const DevEvaluator = struct {
         defer mir_lower.deinit();
 
         if (platform_type_scope) |*ts| {
-            mir_lower.setTypeScope(module_idx, ts, app_module_idx.?) catch return error.OutOfMemory;
+            mir_lower.setTypeScope(module_idx, ts) catch return error.OutOfMemory;
         }
 
         const root_const_id = mir_lower.lowerRootConst(expr_idx) catch {

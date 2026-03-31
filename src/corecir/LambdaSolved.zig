@@ -71,7 +71,7 @@ pub const CallableTemplate = struct {
     type_root: types.Var,
     binding_pattern: ?CIR.Pattern.Idx = null,
     kind: CallableTemplateKind = .top_level_def,
-    lexical_owner_template: CallableTemplateId = .none,
+    lexical_owner_template: ?CallableTemplateId = null,
     external_def: ?ExternalDefSource = null,
     source_region: Region = Region.zero(),
 };
