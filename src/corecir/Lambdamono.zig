@@ -40,7 +40,7 @@ pub const CallableParamProjectionSpan = extern struct {
 pub const CallableParamSpecEntry = struct {
     param_index: u16,
     projections: CallableParamProjectionSpan = .empty(),
-    callable_member_set_id: CallableMemberSetId,
+    callable_alternative_group_id: CallableAlternativeGroupId,
 };
 
 pub const CallableParamSpecSpan = extern struct {
@@ -79,7 +79,7 @@ pub const PackedCallableId = enum(u32) {
 };
 
 pub const PackedCallable = struct {
-    members: CallableMemberSpan,
+    alternatives: CallableAlternativeSpan,
     fn_monotype: ContextMono.ResolvedMonotype,
 };
 
@@ -88,7 +88,7 @@ pub const DispatchCallId = enum(u32) {
 };
 
 pub const DispatchCall = struct {
-    members: CallableMemberSpan,
+    alternatives: CallableAlternativeSpan,
 };
 
 pub const ExprId = enum(u32) {
@@ -144,24 +144,24 @@ pub const LookupResolution = union(enum) {
     def: Lambdasolved.ExternalDefSource,
 };
 
-pub const CallableMemberSpan = extern struct {
+pub const CallableAlternativeSpan = extern struct {
     start: u32,
     len: u16,
 
-    pub fn empty() CallableMemberSpan {
+    pub fn empty() CallableAlternativeSpan {
         return .{ .start = 0, .len = 0 };
     }
 
-    pub fn isEmpty(self: CallableMemberSpan) bool {
+    pub fn isEmpty(self: CallableAlternativeSpan) bool {
         return self.len == 0;
     }
 };
 
-const CallableMemberSet = struct {
-    members: CallableMemberSpan,
+const CallableAlternativeGroup = struct {
+    alternatives: CallableAlternativeSpan,
 };
 
-pub const CallableMemberSetId = enum(u32) {
+pub const CallableAlternativeGroupId = enum(u32) {
     _,
 };
 
@@ -262,10 +262,10 @@ pub const Program = struct {
     callable_insts: std.ArrayListUnmanaged(CallableInst),
     callable_param_spec_entries: std.ArrayListUnmanaged(CallableParamSpecEntry),
     callable_param_projection_entries: std.ArrayListUnmanaged(CallableParamProjection),
-    callable_member_sets: std.ArrayListUnmanaged(CallableMemberSet),
-    direct_callable_member_set_ids_by_callable_inst: std.AutoHashMapUnmanaged(CallableInstId, CallableMemberSetId),
-    packed_callable_ids_by_member_set: std.AutoHashMapUnmanaged(CallableMemberSetId, PackedCallableId),
-    dispatch_call_ids_by_member_set: std.AutoHashMapUnmanaged(CallableMemberSetId, DispatchCallId),
+    callable_alternative_groups: std.ArrayListUnmanaged(CallableAlternativeGroup),
+    direct_callable_alternative_group_ids_by_callable_inst: std.AutoHashMapUnmanaged(CallableInstId, CallableAlternativeGroupId),
+    packed_callable_ids_by_alternative_group: std.AutoHashMapUnmanaged(CallableAlternativeGroupId, PackedCallableId),
+    dispatch_call_ids_by_alternative_group: std.AutoHashMapUnmanaged(CallableAlternativeGroupId, DispatchCallId),
     callable_param_bindings: std.ArrayListUnmanaged(CallableParamBinding),
     exprs: std.ArrayListUnmanaged(Expr),
     expr_ids_by_key: std.AutoHashMapUnmanaged(ContextExprKey, ExprId),
@@ -276,7 +276,7 @@ pub const Program = struct {
     root_expr_ids_by_key: std.AutoHashMapUnmanaged(ContextExprKey, RootExprId),
     callable_defs: std.ArrayListUnmanaged(CallableDef),
     capture_fields: std.ArrayListUnmanaged(CaptureField),
-    callable_member_entries: std.ArrayListUnmanaged(CallableInstId),
+    callable_alternative_entries: std.ArrayListUnmanaged(CallableInstId),
     packed_callables: std.ArrayListUnmanaged(PackedCallable),
     dispatch_calls: std.ArrayListUnmanaged(DispatchCall),
 
@@ -285,10 +285,10 @@ pub const Program = struct {
             .callable_insts = .empty,
             .callable_param_spec_entries = .empty,
             .callable_param_projection_entries = .empty,
-            .callable_member_sets = .empty,
-            .direct_callable_member_set_ids_by_callable_inst = .empty,
-            .packed_callable_ids_by_member_set = .empty,
-            .dispatch_call_ids_by_member_set = .empty,
+            .callable_alternative_groups = .empty,
+            .direct_callable_alternative_group_ids_by_callable_inst = .empty,
+            .packed_callable_ids_by_alternative_group = .empty,
+            .dispatch_call_ids_by_alternative_group = .empty,
             .callable_param_bindings = .empty,
             .exprs = .empty,
             .expr_ids_by_key = .empty,
@@ -299,7 +299,7 @@ pub const Program = struct {
             .root_expr_ids_by_key = .empty,
             .callable_defs = .empty,
             .capture_fields = .empty,
-            .callable_member_entries = .empty,
+            .callable_alternative_entries = .empty,
             .packed_callables = .empty,
             .dispatch_calls = .empty,
         };
@@ -309,10 +309,10 @@ pub const Program = struct {
         self.callable_insts.deinit(allocator);
         self.callable_param_spec_entries.deinit(allocator);
         self.callable_param_projection_entries.deinit(allocator);
-        self.callable_member_sets.deinit(allocator);
-        self.direct_callable_member_set_ids_by_callable_inst.deinit(allocator);
-        self.packed_callable_ids_by_member_set.deinit(allocator);
-        self.dispatch_call_ids_by_member_set.deinit(allocator);
+        self.callable_alternative_groups.deinit(allocator);
+        self.direct_callable_alternative_group_ids_by_callable_inst.deinit(allocator);
+        self.packed_callable_ids_by_alternative_group.deinit(allocator);
+        self.dispatch_call_ids_by_alternative_group.deinit(allocator);
         self.callable_param_bindings.deinit(allocator);
         self.exprs.deinit(allocator);
         self.expr_ids_by_key.deinit(allocator);
@@ -323,7 +323,7 @@ pub const Program = struct {
         self.root_expr_ids_by_key.deinit(allocator);
         self.callable_defs.deinit(allocator);
         self.capture_fields.deinit(allocator);
-        self.callable_member_entries.deinit(allocator);
+        self.callable_alternative_entries.deinit(allocator);
         self.packed_callables.deinit(allocator);
         self.dispatch_calls.deinit(allocator);
     }
@@ -348,15 +348,15 @@ pub const Program = struct {
         return self.callable_param_projection_entries.items[span.start..][0..span.len];
     }
 
-    pub fn getCallableMemberSetMembers(self: *const Program, callable_member_set_id: CallableMemberSetId) []const CallableInstId {
-        const member_set = self.callable_member_sets.items[@intFromEnum(callable_member_set_id)];
-        if (member_set.members.len == 0) return &.{};
-        return self.callable_member_entries.items[member_set.members.start..][0..member_set.members.len];
+    pub fn getCallableAlternativeGroupAlternatives(self: *const Program, callable_alternative_group_id: CallableAlternativeGroupId) []const CallableInstId {
+        const group = self.callable_alternative_groups.items[@intFromEnum(callable_alternative_group_id)];
+        if (group.alternatives.len == 0) return &.{};
+        return self.callable_alternative_entries.items[group.alternatives.start..][0..group.alternatives.len];
     }
 
-    pub fn getDirectCallableMembers(self: *const Program, callable_inst_id: CallableInstId) []const CallableInstId {
-        const callable_member_set_id = self.direct_callable_member_set_ids_by_callable_inst.get(callable_inst_id) orelse unreachable;
-        return self.getCallableMemberSetMembers(callable_member_set_id);
+    pub fn getDirectCallableAlternatives(self: *const Program, callable_inst_id: CallableInstId) []const CallableInstId {
+        const callable_alternative_group_id = self.direct_callable_alternative_group_ids_by_callable_inst.get(callable_inst_id) orelse unreachable;
+        return self.getCallableAlternativeGroupAlternatives(callable_alternative_group_id);
     }
 
     pub fn getCallableParamBindings(
@@ -439,7 +439,7 @@ pub fn getDispatchCall(program: *const Program, dispatch_call_id: DispatchCallId
     return &program.dispatch_calls.items[@intFromEnum(dispatch_call_id)];
 }
 
-pub fn getCallableMembers(program: *const Program, span: CallableMemberSpan) []const CallableInstId {
+pub fn getCallableAlternatives(program: *const Program, span: CallableAlternativeSpan) []const CallableInstId {
     if (span.len == 0) return &.{};
-    return program.callable_member_entries.items[span.start..][0..span.len];
+    return program.callable_alternative_entries.items[span.start..][0..span.len];
 }
