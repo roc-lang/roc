@@ -1,13 +1,11 @@
 [files]
 extend-exclude = [
     ".git/",
-    "design/language/Abilities.md",
     "src/snapshots/fuzz_crash",
     "crates/vendor/",
     "authors",
     "crates",
     "examples/static-site-gen/input/",
-    "COPYRIGHT",
     "crates/compiler/checkmate/www/package-lock.json",
     "src/build/zig_llvm.h",
     "test/snapshots/",
@@ -27,16 +25,15 @@ extend-ignore-re = [
 ]
 
 [default.extend-words]
-typ = "typ"
-ba = "ba"
+ANF = "ANF" # A-normal form
+ba = "ba" # Binop apply
+caf = "caf" # Part of the word "café"
+clos = "clos" # Closure
+ful = "ful" # Suffix, as in "effectful"
+rela = "rela" # Relative
+SEH = "SEH" # Structured Exception Handling
+ser = "ser" # Part of the word "serializing"
 sigfault = "sigfault"
-nd = "nd"
-SEH = "SEH"
-caf = "caf"
-setp = "setp"
-clos = "clos"
-Clos = "Clos"
-ANF = "ANF"
-anf = "anf"
-Anf = "Anf"
-rela = "rela"
+
+[default.extend-identifiers]
+CMOVcc = "CMOVcc"

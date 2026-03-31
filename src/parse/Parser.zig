@@ -3015,7 +3015,7 @@ pub fn parseMultiLineStringExpr(self: *Parser) Error!AST.Expr.Idx {
                 });
             },
             else => {
-                // Multi lins strings just end
+                // Multi line strings just end
                 break;
             },
         }
