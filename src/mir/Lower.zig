@@ -123,9 +123,9 @@ const LambdaEntryBindingState = struct {
 };
 
 const CaptureMaterialization = union(enum) {
-    source_expr: struct {
+    expr: struct {
         local: MIR.LocalId,
-        source: Pipeline.ExprSource,
+        expr_id: Pipeline.ExprId,
     },
 };
 
@@ -450,6 +450,14 @@ fn activeCallableDef(self: *const Self) ?*const Pipeline.CallableDef {
         .root_expr, .provenance_expr, .template_expr => return null,
     };
     return self.callable_pipeline.getCallableDefForInst(callable_inst_id);
+}
+
+fn callableDefRuntimeExpr(self: *const Self, callable_def: *const Pipeline.CallableDef) *const corecir.Lambdamono.Expr {
+    return self.callable_pipeline.getProgramExpr(callable_def.runtime_expr);
+}
+
+fn callableDefBodyExpr(self: *const Self, callable_def: *const Pipeline.CallableDef) *const corecir.Lambdamono.Expr {
+    return self.callable_pipeline.getProgramExpr(callable_def.body_expr);
 }
 
 fn callableRuntimeValueKindText(runtime_value: Pipeline.RuntimeValue) []const u8 {
@@ -2752,20 +2760,21 @@ fn lowerLookupLocalIntoWithExactCallableInst(
                 exact_callable_inst,
             );
         },
-        .source_expr => |source| {
-            if (source.module_idx == self.current_module_idx and source.expr_idx == expr_idx) {
+        .expr => |source_expr_id| {
+            const source_program_expr = self.callable_pipeline.getProgramExpr(source_expr_id);
+            if (source_program_expr.module_idx == self.current_module_idx and source_program_expr.source_expr == expr_idx) {
                 std.debug.panic(
                     "statement-only MIR invariant violated: local lookup expr {d} resolved to itself as a pattern source",
                     .{@intFromEnum(expr_idx)},
                 );
             }
             if (exact_callable_inst_override) |callable_inst_id| {
-                const source_module_env = self.all_module_envs[source.module_idx];
-                if (directCallableDefinitionExpr(source_module_env, source.expr_idx) != null) {
+                const source_module_env = self.all_module_envs[source_program_expr.module_idx];
+                if (directCallableDefinitionExpr(source_module_env, source_program_expr.source_expr) != null) {
                     return self.lowerResolvedCallableInstValueInto(callable_inst_id, target, next);
                 }
             }
-            return self.lowerCapturedSourceExprInto(source, target, next);
+            return self.lowerCapturedSourceExprInto(source_expr_id, target, next);
         },
     };
 
@@ -2798,7 +2807,7 @@ fn lowerLookupLocalIntoWithExactCallableInst(
                 has_root_local,
                 self.currentCallableInstRawForDebug(),
                 active_callable_kind,
-                if (active_callable_def) |callable_def| @intFromEnum(callable_def.source_expr) else std.math.maxInt(u32),
+                if (active_callable_def) |callable_def| @intFromEnum(self.callableDefRuntimeExpr(callable_def).source_expr) else std.math.maxInt(u32),
             },
         );
     }
@@ -2889,9 +2898,13 @@ fn lowerLookupExternalIntoWithExactCallableInst(
         .{@intFromEnum(expr_idx)},
     )) {
         .def => |target_def| target_def,
-        .source_expr => |source| std.debug.panic(
+        .expr => |source_expr_id| std.debug.panic(
             "statement-only MIR invariant violated: external lookup expr {d} unexpectedly specialized to source expr {d} in module {d}",
-            .{ @intFromEnum(expr_idx), @intFromEnum(source.expr_idx), source.module_idx },
+            .{
+                @intFromEnum(expr_idx),
+                @intFromEnum(self.callable_pipeline.getProgramExpr(source_expr_id).source_expr),
+                self.callable_pipeline.getProgramExpr(source_expr_id).module_idx,
+            },
         ),
     };
     const symbol = try self.internExternalDefSymbol(target_def.module_idx, @intCast(@intFromEnum(target_def.def_idx)));
@@ -2943,9 +2956,13 @@ fn lowerLookupRequiredIntoWithExactCallableInst(
         .{@intFromEnum(expr_idx)},
     )) {
         .def => |target_def| target_def,
-        .source_expr => |source| std.debug.panic(
+        .expr => |source_expr_id| std.debug.panic(
             "statement-only MIR invariant violated: required lookup expr {d} unexpectedly specialized to source expr {d} in module {d}",
-            .{ @intFromEnum(expr_idx), @intFromEnum(source.expr_idx), source.module_idx },
+            .{
+                @intFromEnum(expr_idx),
+                @intFromEnum(self.callable_pipeline.getProgramExpr(source_expr_id).source_expr),
+                self.callable_pipeline.getProgramExpr(source_expr_id).module_idx,
+            },
         ),
     };
     const def = self.all_module_envs[target_def.module_idx].store.getDef(target_def.def_idx);
@@ -3280,14 +3297,14 @@ fn appendCaptureMaterialization(
                 },
             );
         },
-        .source_expr => |source| blk: {
+        .expr => |source_expr_id| blk: {
             const local = try self.freshSyntheticLocal(capture_monotype, false);
             if (capture_field.exact_callable_inst) |capture_callable_inst_id| {
                 try self.bindExactCallableLocal(local, capture_callable_inst_id);
             }
-            try out.append(self.allocator, .{ .source_expr = .{
+            try out.append(self.allocator, .{ .expr = .{
                 .local = local,
-                .source = source.source,
+                .expr_id = source_expr_id,
             } });
             break :blk local;
         },
@@ -3718,9 +3735,9 @@ fn lowerResolvedCallableInstValueInto(
     while (i > 0) {
         i -= 1;
         switch (capture_materializations.items[i]) {
-            .source_expr => |materialization| {
+            .expr => |materialization| {
                 current = try self.lowerCapturedSourceExprInto(
-                    materialization.source,
+                    materialization.expr_id,
                     materialization.local,
                     current,
                 );
@@ -3733,37 +3750,34 @@ fn lowerResolvedCallableInstValueInto(
 
 fn lowerCapturedSourceExprInto(
     self: *Self,
-    source: Pipeline.ExprSource,
+    source_expr_id: Pipeline.ExprId,
     target: MIR.LocalId,
     next: MIR.CFStmtId,
 ) Allocator.Error!MIR.CFStmtId {
-    switch (self.currentSourceContext()) {
-        .callable_inst => {},
-        .root_expr, .provenance_expr, .template_expr => {
-            try self.pushSourceContext(.{ .provenance_expr = .{
-                .module_idx = source.module_idx,
-                .expr_idx = source.expr_idx,
-            } });
-            defer self.popSourceContext();
-        },
+    const source_program_expr = self.callable_pipeline.getProgramExpr(source_expr_id);
+
+    const restore_source_context = !std.meta.eql(self.currentSourceContext(), source_program_expr.source_context);
+    if (restore_source_context) {
+        try self.pushSourceContext(source_program_expr.source_context);
+        defer self.popSourceContext();
     }
 
-    if (source.module_idx == self.current_module_idx) {
-        return self.lowerCirExprInto(source.expr_idx, target, next);
+    if (source_program_expr.module_idx == self.current_module_idx) {
+        return self.lowerCirExprInto(source_program_expr.source_expr, target, next);
     }
 
-    const module_env = self.all_module_envs[source.module_idx];
+    const module_env = self.all_module_envs[source_program_expr.module_idx];
     const saved_module_idx = self.current_module_idx;
     const saved_types_store = self.types_store;
     const saved_ident_store = self.mono_scratches.ident_store;
     const saved_module_env = self.mono_scratches.module_env;
     const saved_mono_module_idx = self.mono_scratches.module_idx;
 
-    self.current_module_idx = source.module_idx;
+    self.current_module_idx = source_program_expr.module_idx;
     self.types_store = &module_env.types;
     self.mono_scratches.ident_store = module_env.getIdentStoreConst();
     self.mono_scratches.module_env = module_env;
-    self.mono_scratches.module_idx = source.module_idx;
+    self.mono_scratches.module_idx = source_program_expr.module_idx;
     defer {
         self.current_module_idx = saved_module_idx;
         self.types_store = saved_types_store;
@@ -3773,12 +3787,12 @@ fn lowerCapturedSourceExprInto(
     }
 
     try self.refreshTargetLocalMonotypeFromExprIntoModule(
-        source.expr_idx,
-        source.module_idx,
+        source_program_expr.source_expr,
+        source_program_expr.module_idx,
         saved_module_idx,
         target,
     );
-    return self.lowerCirExprInto(source.expr_idx, target, next);
+    return self.lowerCirExprInto(source_program_expr.source_expr, target, next);
 }
 
 fn resolveExprMonotypeInModule(
@@ -3855,9 +3869,10 @@ fn lowerResolvedCallableInstLambda(
 
     const callable_inst = self.callable_pipeline.lambdamono.getCallableInst(callable_inst_id);
     const callable_def = self.callable_pipeline.getCallableDef(callable_inst.callable_def);
+    const runtime_program_expr = self.callableDefRuntimeExpr(callable_def);
     const module_idx = callable_def.module_idx;
     const module_env = self.all_module_envs[module_idx];
-    const callable_source_expr = module_env.store.getExpr(callable_def.source_expr);
+    const callable_source_expr = module_env.store.getExpr(runtime_program_expr.source_expr);
     const fn_monotype = try self.importMonotypeFromStore(
         &self.callable_pipeline.context_mono.monotype_store,
         callable_inst.fn_monotype,
@@ -3933,7 +3948,7 @@ fn lowerResolvedCallableInstLambda(
     const lambda_id = switch (callable_source_expr) {
         .e_closure => |closure| try self.lowerReservedTrivialClosureLambda(
             module_env,
-            callable_def.source_expr,
+            runtime_program_expr.source_expr,
             closure,
             callable_def,
             fn_monotype,
@@ -3942,14 +3957,14 @@ fn lowerResolvedCallableInstLambda(
         ),
         .e_lambda => |lambda| try self.lowerLambdaInto(
             module_env,
-            callable_def.source_expr,
+            runtime_program_expr.source_expr,
             lambda,
             fn_monotype,
             reserved_lambda,
         ),
         .e_hosted_lambda => |hosted| try self.lowerLambdaInto(
             module_env,
-            callable_def.source_expr,
+            runtime_program_expr.source_expr,
             .{
                 .args = hosted.args,
                 .body = hosted.body,
@@ -6020,7 +6035,7 @@ fn debugAssertNoUnitPrimPatternBinding(
         .e_call => |call_expr| blk: {
             const resolution = self.lookupPipelinedLookupResolution(call_expr.func) orelse break :blk std.math.maxInt(u32);
             break :blk switch (resolution) {
-                .source_expr => |source| @intFromEnum(source.expr_idx),
+                .expr => |source_expr_id| @intFromEnum(self.callable_pipeline.getProgramExpr(source_expr_id).source_expr),
                 .def => std.math.maxInt(u32),
             };
         },
@@ -6032,40 +6047,23 @@ fn debugAssertNoUnitPrimPatternBinding(
         else => null,
     };
     const callsite_template_expr: u32 = if (maybe_callsite_inst) |callsite_inst|
-        @intFromEnum(self.callable_pipeline.getCallableDefForInst(callsite_inst).source_expr)
+        @intFromEnum(self.callableDefRuntimeExpr(self.callable_pipeline.getCallableDefForInst(callsite_inst)).source_expr)
     else
         std.math.maxInt(u32);
     const callsite_template_body_expr: u32 = if (maybe_callsite_inst) |callsite_inst| blk: {
         const callable_def = self.callable_pipeline.getCallableDefForInst(callsite_inst);
         const template_env = self.all_module_envs[callable_def.module_idx];
-        break :blk switch (template_env.store.getExpr(callable_def.source_expr)) {
-            .e_lambda => |lambda_expr| @intFromEnum(lambda_expr.body),
-            .e_hosted_lambda => |hosted_expr| @intFromEnum(hosted_expr.body),
-            .e_closure => |closure_expr| blk2: {
-                const lambda_expr = template_env.store.getExpr(closure_expr.lambda_idx);
-                break :blk2 switch (lambda_expr) {
-                    .e_lambda => |lambda| @intFromEnum(lambda.body),
-                    else => std.math.maxInt(u32),
-                };
-            },
+        const runtime_expr = self.callableDefRuntimeExpr(callable_def);
+        const body_expr = self.callableDefBodyExpr(callable_def);
+        break :blk switch (template_env.store.getExpr(runtime_expr.source_expr)) {
+            .e_lambda, .e_hosted_lambda, .e_closure => @intFromEnum(body_expr.source_expr),
             else => std.math.maxInt(u32),
         };
     } else std.math.maxInt(u32);
     const callsite_template_body_tag: []const u8 = if (maybe_callsite_inst) |callsite_inst| blk: {
         const callable_def = self.callable_pipeline.getCallableDefForInst(callsite_inst);
         const template_env = self.all_module_envs[callable_def.module_idx];
-        break :blk switch (template_env.store.getExpr(callable_def.source_expr)) {
-            .e_lambda => |lambda_expr| @tagName(template_env.store.getExpr(lambda_expr.body)),
-            .e_hosted_lambda => |hosted_expr| @tagName(template_env.store.getExpr(hosted_expr.body)),
-            .e_closure => |closure_expr| blk2: {
-                const lambda_expr = template_env.store.getExpr(closure_expr.lambda_idx);
-                break :blk2 switch (lambda_expr) {
-                    .e_lambda => |lambda| @tagName(template_env.store.getExpr(lambda.body)),
-                    else => "unknown",
-                };
-            },
-            else => "none",
-        };
+        break :blk @tagName(template_env.store.getExpr(self.callableDefBodyExpr(callable_def).source_expr));
     } else "none";
     const callsite_callable_kind: []const u8 = if (maybe_callsite_inst) |callsite_inst|
         callableRuntimeValueKindText(self.callable_pipeline.getCallableInst(callsite_inst).runtime_value)
@@ -8409,7 +8407,7 @@ fn bindTypeVarMonotypes(self: *Self, type_var: types.Var, monotype: Monotype.Idx
                     self.store.monotype_store.getMonotype(monotype),
                     self.currentCallableInstRawForDebug(),
                     self.currentRootExprRawForDebug(),
-                    if (active_callable_def) |callable_def| @intFromEnum(callable_def.source_expr) else std.math.maxInt(u32),
+                    if (active_callable_def) |callable_def| @intFromEnum(self.callableDefRuntimeExpr(callable_def).source_expr) else std.math.maxInt(u32),
                     active_callable_kind,
                     context_region,
                 },

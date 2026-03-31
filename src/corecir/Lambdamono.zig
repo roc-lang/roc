@@ -61,7 +61,7 @@ pub const CallableInst = struct {
     subst: ContextMono.TypeSubstId,
     fn_monotype: Monotype.Idx,
     fn_monotype_module_idx: u32,
-    defining_context_callable_inst: ?CallableInstId,
+    defining_source_context: SourceContext,
     callable_param_specs: CallableParamSpecSpan = .empty(),
     callable_def: CallableDefId,
     runtime_value: RuntimeValue = .direct_lambda,
@@ -140,7 +140,7 @@ pub const CallDispatch = union(enum) {
 };
 
 pub const LookupResolution = union(enum) {
-    source_expr: Lambdasolved.ExprSource,
+    expr: ExprId,
     def: Lambdasolved.ExternalDefSource,
 };
 
@@ -174,9 +174,7 @@ pub const CaptureValueSource = union(enum) {
         module_idx: u32,
         pattern_idx: CIR.Pattern.Idx,
     },
-    source_expr: struct {
-        source: Lambdasolved.ExprSource,
-    },
+    expr: ExprId,
 };
 
 pub const CaptureStorage = union(enum) {
@@ -211,7 +209,8 @@ pub const CaptureFieldSpan = extern struct {
 pub const CallableDef = struct {
     source_member: Lambdasolved.LambdaSetMemberId,
     module_idx: u32,
-    source_expr: CIR.Expr.Idx,
+    runtime_expr: ExprId,
+    body_expr: ExprId,
     fn_monotype: ContextMono.ResolvedMonotype,
     param_bindings: CallableParamBindingSpan = .empty(),
     captures: CaptureFieldSpan = .empty(),
@@ -244,8 +243,10 @@ pub const ExprSemantics = struct {
 };
 
 pub const Expr = struct {
+    source_context: SourceContext,
     module_idx: u32,
     source_expr: CIR.Expr.Idx,
+    monotype: ContextMono.ResolvedMonotype,
     child_exprs: ExprIdSpan = .empty(),
     child_stmts: StmtIdSpan = .empty(),
     semantics: ExprSemantics = .{},
