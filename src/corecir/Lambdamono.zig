@@ -263,6 +263,7 @@ pub const RootExpr = struct {
 
 pub const Program = struct {
     callable_insts: std.ArrayListUnmanaged(CallableInst),
+    callable_inst_ids_by_source_member: std.AutoHashMapUnmanaged(Lambdasolved.LambdaSetMemberId, CallableInstId),
     callable_param_spec_entries: std.ArrayListUnmanaged(CallableParamSpecEntry),
     callable_param_projection_entries: std.ArrayListUnmanaged(CallableParamProjection),
     callable_member_sets: std.ArrayListUnmanaged(CallableMemberSet),
@@ -286,6 +287,7 @@ pub const Program = struct {
     pub fn init() Program {
         return .{
             .callable_insts = .empty,
+            .callable_inst_ids_by_source_member = .empty,
             .callable_param_spec_entries = .empty,
             .callable_param_projection_entries = .empty,
             .callable_member_sets = .empty,
@@ -310,6 +312,7 @@ pub const Program = struct {
 
     pub fn deinit(self: *Program, allocator: Allocator) void {
         self.callable_insts.deinit(allocator);
+        self.callable_inst_ids_by_source_member.deinit(allocator);
         self.callable_param_spec_entries.deinit(allocator);
         self.callable_param_projection_entries.deinit(allocator);
         self.callable_member_sets.deinit(allocator);
@@ -333,6 +336,13 @@ pub const Program = struct {
 
     pub fn getCallableInst(self: *const Program, callable_inst_id: CallableInstId) *const CallableInst {
         return &self.callable_insts.items[@intFromEnum(callable_inst_id)];
+    }
+
+    pub fn getCallableInstForSourceMember(
+        self: *const Program,
+        source_member: Lambdasolved.LambdaSetMemberId,
+    ) ?CallableInstId {
+        return self.callable_inst_ids_by_source_member.get(source_member);
     }
 
     pub fn getCallableParamSpecEntries(

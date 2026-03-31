@@ -57,6 +57,7 @@ pub const CallableTemplateKind = Lambdasolved.CallableTemplateKind;
 /// A semantic callable body that can later be instantiated monomorphically.
 pub const CallableTemplate = Lambdasolved.CallableTemplate;
 pub const ExternalDefSource = Lambdasolved.ExternalDefSource;
+pub const LambdaSetMemberId = Lambdasolved.LambdaSetMemberId;
 
 /// Records a block-local polymorphic callable that is materialized on demand.
 pub const DeferredLocalCallable = Lambdasolved.DeferredLocalCallable;
@@ -2511,19 +2512,22 @@ pub const Pass = struct {
     ) Allocator.Error!void {
         var visiting: std.AutoHashMapUnmanaged(u64, void) = .empty;
         defer visiting.deinit(self.allocator);
+        var source_member_ids = std.ArrayList(LambdaSetMemberId).empty;
+        defer source_member_ids.deinit(self.allocator);
         var callable_inst_ids = std.ArrayList(CallableInstId).empty;
         defer callable_inst_ids.deinit(self.allocator);
 
-        try self.collectValueExprCallableMembersInContext(
+        try self.collectValueExprSourceMembersInContext(
             result,
             self.currentSourceContext(),
             module_idx,
             expr_idx,
             &visiting,
-            &callable_inst_ids,
+            &source_member_ids,
         );
 
-        if (callable_inst_ids.items.len == 0) return;
+        if (source_member_ids.items.len == 0) return;
+        try self.materializeSourceMembers(result, source_member_ids.items, &callable_inst_ids);
         if (callable_inst_ids.items.len == 1) {
             const callable_inst_id = callable_inst_ids.items[0];
             const callable_inst = result.getCallableInst(callable_inst_id);
@@ -2979,6 +2983,19 @@ pub const Pass = struct {
         };
     }
 
+    fn sourceMemberContext(
+        template: CallableTemplate,
+        defining_context_callable_inst: ?CallableInstId,
+    ) SourceContext {
+        return if (defining_context_callable_inst) |context_callable_inst|
+            callableInstSourceContext(context_callable_inst)
+        else
+            .{ .template_expr = .{
+                .module_idx = template.module_idx,
+                .expr_idx = template.runtime_expr,
+            } };
+    }
+
     fn ensureCapturePlan(
         self: *Pass,
         result: *Result,
@@ -3004,7 +3021,7 @@ pub const Pass = struct {
     fn ensureCallableSourceMember(
         self: *Pass,
         result: *Result,
-        context_id: ContextId,
+        source_context: SourceContext,
         template_id: CallableTemplateId,
         fn_monotype: ResolvedMonotype,
         capture_plan: Lambdasolved.CapturePlanId,
@@ -3012,7 +3029,7 @@ pub const Pass = struct {
     ) Allocator.Error!Lambdasolved.LambdaSetMemberId {
         for (result.lambdasolved.lambda_set_members.items, 0..) |existing, idx| {
             if (existing.template != template_id) continue;
-            if (existing.context_id != context_id) continue;
+            if (!std.meta.eql(existing.source_context, source_context)) continue;
             if (existing.capture_plan != capture_plan) continue;
             if (existing.kind != kind) continue;
             if (existing.fn_monotype.module_idx != fn_monotype.module_idx) continue;
@@ -3027,7 +3044,7 @@ pub const Pass = struct {
         const member_id: Lambdasolved.LambdaSetMemberId = @enumFromInt(result.lambdasolved.lambda_set_members.items.len);
         try result.lambdasolved.lambda_set_members.append(self.allocator, .{
             .template = template_id,
-            .context_id = context_id,
+            .source_context = source_context,
             .fn_monotype = fn_monotype,
             .capture_plan = capture_plan,
             .kind = kind,
@@ -3067,6 +3084,7 @@ pub const Pass = struct {
         const callable_inst = result.getCallableInst(callable_inst_id).*;
         const template = result.getCallableTemplate(callable_inst.template).*;
         const callable_def = &result.lambdamono.callable_defs.items[@intFromEnum(callable_inst.callable_def)];
+        const member_source_context = sourceMemberContext(template, callable_inst.defining_context_callable_inst);
 
         var capture_entries = std.ArrayList(Lambdasolved.CaptureEntry).empty;
         defer capture_entries.deinit(self.allocator);
@@ -3077,13 +3095,24 @@ pub const Pass = struct {
             });
         }
 
+        if (result.lambdamono.callable_inst_ids_by_source_member.get(callable_def.source_member)) |mapped| {
+            if (mapped == callable_inst_id) {
+                _ = result.lambdamono.callable_inst_ids_by_source_member.remove(callable_def.source_member);
+            }
+        }
+
         callable_def.source_member = try self.ensureCallableSourceMember(
             result,
-            @enumFromInt(@intFromEnum(callable_inst_id)),
+            member_source_context,
             callable_inst.template,
             resolvedMonotype(callable_inst.fn_monotype, callable_inst.fn_monotype_module_idx),
             try self.ensureCapturePlan(result, capture_entries.items),
             solvedCallableKindForRuntimeValue(template.kind, callable_inst.runtime_value),
+        );
+        try result.lambdamono.callable_inst_ids_by_source_member.put(
+            self.allocator,
+            callable_def.source_member,
+            callable_inst_id,
         );
     }
 
@@ -3377,11 +3406,14 @@ pub const Pass = struct {
                     if (self.resolveBoundPatternCallableMembersInCurrentContext(result, module_idx, lookup.pattern_idx)) |callable_inst_ids| {
                         var visiting: std.AutoHashMapUnmanaged(u64, void) = .empty;
                         defer visiting.deinit(self.allocator);
-                        try self.propagateDemandedCallableInstsToValueExpr(
+                        var source_member_ids = std.ArrayList(LambdaSetMemberId).empty;
+                        defer source_member_ids.deinit(self.allocator);
+                        try self.appendCallableInstSourceMembers(result, &source_member_ids, callable_inst_ids);
+                        try self.propagateDemandedSourceMembersToValueExpr(
                             result,
                             source.module_idx,
                             source.expr_idx,
-                            callable_inst_ids,
+                            source_member_ids.items,
                             &visiting,
                         );
                     }
@@ -3674,34 +3706,35 @@ pub const Pass = struct {
     ) Allocator.Error!void {
         var visiting: std.AutoHashMapUnmanaged(u64, void) = .empty;
         defer visiting.deinit(self.allocator);
-        var source_callable_insts = std.ArrayList(CallableInstId).empty;
-        defer source_callable_insts.deinit(self.allocator);
+        var source_members = std.ArrayList(LambdaSetMemberId).empty;
+        defer source_members.deinit(self.allocator);
 
-        try self.collectValueExprCallableMembersInContext(
+        try self.collectValueExprSourceMembersInContext(
             result,
             self.currentSourceContext(),
             source_module_idx,
             source_expr_idx,
             &visiting,
-            &source_callable_insts,
+            &source_members,
         );
 
-        if (source_callable_insts.items.len == 0) return;
-
-        try self.installExprCallableValue(
+        if (source_members.items.len == 0) return;
+        try self.installDemandedExprCallableValueFromSourceMembers(
             result,
-            self.currentSourceContext(),
             lookup_module_idx,
             lookup_expr_idx,
-            source_callable_insts.items,
+            source_members.items,
         );
         if (maybe_pattern_idx) |pattern_idx| {
+            var materialized_callable_insts = std.ArrayList(CallableInstId).empty;
+            defer materialized_callable_insts.deinit(self.allocator);
+            try self.materializeSourceMembers(result, source_members.items, &materialized_callable_insts);
             try self.installCallableParamValue(
                 result,
                 self.currentSourceContext(),
                 lookup_module_idx,
                 pattern_idx,
-                source_callable_insts.items,
+                materialized_callable_insts.items,
             );
         }
     }
@@ -4007,11 +4040,14 @@ pub const Pass = struct {
             if (all_satisfy) {
                 var visiting: std.AutoHashMapUnmanaged(u64, void) = .empty;
                 defer visiting.deinit(self.allocator);
-                try self.propagateDemandedCallableInstsToValueExpr(
+                var source_member_ids = std.ArrayList(LambdaSetMemberId).empty;
+                defer source_member_ids.deinit(self.allocator);
+                try self.appendCallableInstSourceMembers(result, &source_member_ids, callable_inst_ids);
+                try self.propagateDemandedSourceMembersToValueExpr(
                     result,
                     module_idx,
                     callee_expr_idx,
-                    callable_inst_ids,
+                    source_member_ids.items,
                     &visiting,
                 );
                 try self.installExprCallDispatch(
@@ -5015,23 +5051,6 @@ pub const Pass = struct {
                 }
 
                 if (self.getValueExprCallableInstForSourceContext(result, source_context, module_idx, expr_idx)) |callable_inst_id| {
-                    const callable_member_set_id = try self.internCallableMemberSet(result, &.{callable_inst_id});
-                    try self.appendCallableParamSpecEntry(result, out, .{
-                        .param_index = param_index,
-                        .projections = try self.addCallableParamProjectionEntries(result, projections.items),
-                        .callable_member_set_id = callable_member_set_id,
-                    });
-                    return true;
-                }
-
-                if (try self.materializeExprDirectCallableFromFnMonotypeInSourceContext(
-                    result,
-                    source_context,
-                    module_idx,
-                    expr_idx,
-                    monotype,
-                    monotype_module_idx,
-                )) |callable_inst_id| {
                     const callable_member_set_id = try self.internCallableMemberSet(result, &.{callable_inst_id});
                     try self.appendCallableParamSpecEntry(result, out, .{
                         .param_index = param_index,
@@ -6242,47 +6261,36 @@ pub const Pass = struct {
 
         var visiting: std.AutoHashMapUnmanaged(u64, void) = .empty;
         defer visiting.deinit(self.allocator);
-        var callable_inst_ids = std.ArrayList(CallableInstId).empty;
-        defer callable_inst_ids.deinit(self.allocator);
+        var source_member_ids = std.ArrayList(LambdaSetMemberId).empty;
+        defer source_member_ids.deinit(self.allocator);
 
-        try self.collectValueExprCallableMembersInContext(
+        try self.collectValueExprSourceMembersInContext(
             result,
             callableInstSourceContext(callee_callable_inst_id),
             template.module_idx,
             boundary.body_expr,
             &visiting,
-            &callable_inst_ids,
+            &source_member_ids,
         );
 
-        if (callable_inst_ids.items.len == 0) return;
-        if (callable_inst_ids.items.len == 1) {
-            try self.installExprDirectCallable(
-                result,
-                source_context,
-                module_idx,
-                call_expr_idx,
-                callable_inst_ids.items[0],
-            );
-            return;
-        }
-
-        try self.installExprCallableValue(
+        try self.pushSourceContext(source_context);
+        defer self.popSourceContext();
+        try self.installDemandedExprCallableValueFromSourceMembers(
             result,
-            source_context,
             module_idx,
             call_expr_idx,
-            callable_inst_ids.items,
+            source_member_ids.items,
         );
     }
 
-    fn collectValueExprCallableMembersInContext(
+    fn collectValueExprSourceMembersInContext(
         self: *Pass,
         result: *Result,
         source_context: SourceContext,
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
         visiting: *std.AutoHashMapUnmanaged(u64, void),
-        out: *std.ArrayList(CallableInstId),
+        out: *std.ArrayList(LambdaSetMemberId),
     ) Allocator.Error!void {
         const visit_key = exprVisitKey(module_idx, expr_idx);
         if (visiting.contains(visit_key)) return;
@@ -6290,24 +6298,12 @@ pub const Pass = struct {
         defer _ = visiting.remove(visit_key);
 
         if (self.getValueExprCallableMembersForSourceContext(result, source_context, module_idx, expr_idx)) |callable_inst_ids| {
-            for (callable_inst_ids) |callable_inst_id| {
-                var seen = false;
-                for (out.items) |existing| {
-                    if (existing == callable_inst_id) {
-                        seen = true;
-                        break;
-                    }
-                }
-                if (!seen) try out.append(self.allocator, callable_inst_id);
-            }
+            try self.appendCallableInstSourceMembers(result, out, callable_inst_ids);
             return;
         }
 
         if (self.getValueExprCallableInstForSourceContext(result, source_context, module_idx, expr_idx)) |callable_inst_id| {
-            for (out.items) |existing| {
-                if (existing == callable_inst_id) return;
-            }
-            try out.append(self.allocator, callable_inst_id);
+            try self.appendUniqueSourceMembers(out, &.{sourceMemberForCallableInst(result, callable_inst_id)});
             return;
         }
 
@@ -6319,10 +6315,7 @@ pub const Pass = struct {
                 module_idx,
                 expr_idx,
             )) |callable_inst_id| {
-                for (out.items) |existing| {
-                    if (existing == callable_inst_id) return;
-                }
-                try out.append(self.allocator, callable_inst_id);
+                try self.appendUniqueSourceMembers(out, &.{sourceMemberForCallableInst(result, callable_inst_id)});
                 return;
             }
         }
@@ -6330,7 +6323,7 @@ pub const Pass = struct {
         switch (module_env.store.getExpr(expr_idx)) {
             .e_lookup_local => |lookup| {
                 if (result.getPatternSourceExpr(module_idx, lookup.pattern_idx)) |source| {
-                    try self.collectValueExprCallableMembersInContext(
+                    try self.collectValueExprSourceMembersInContext(
                         result,
                         source_context,
                         source.module_idx,
@@ -6343,22 +6336,22 @@ pub const Pass = struct {
             .e_if => |if_expr| {
                 for (module_env.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
                     const branch = module_env.store.getIfBranch(branch_idx);
-                    try self.collectValueExprCallableMembersInContext(result, source_context, module_idx, branch.body, visiting, out);
+                    try self.collectValueExprSourceMembersInContext(result, source_context, module_idx, branch.body, visiting, out);
                 }
-                try self.collectValueExprCallableMembersInContext(result, source_context, module_idx, if_expr.final_else, visiting, out);
+                try self.collectValueExprSourceMembersInContext(result, source_context, module_idx, if_expr.final_else, visiting, out);
             },
             .e_match => |match_expr| {
                 for (module_env.store.sliceMatchBranches(match_expr.branches)) |branch_idx| {
                     const branch = module_env.store.getMatchBranch(branch_idx);
-                    try self.collectValueExprCallableMembersInContext(result, source_context, module_idx, branch.value, visiting, out);
+                    try self.collectValueExprSourceMembersInContext(result, source_context, module_idx, branch.value, visiting, out);
                 }
             },
-            .e_block => |block_expr| try self.collectValueExprCallableMembersInContext(result, source_context, module_idx, block_expr.final_expr, visiting, out),
-            .e_dbg => |dbg_expr| try self.collectValueExprCallableMembersInContext(result, source_context, module_idx, dbg_expr.expr, visiting, out),
-            .e_expect => |expect_expr| try self.collectValueExprCallableMembersInContext(result, source_context, module_idx, expect_expr.body, visiting, out),
-            .e_return => |return_expr| try self.collectValueExprCallableMembersInContext(result, source_context, module_idx, return_expr.expr, visiting, out),
-            .e_nominal => |nominal_expr| try self.collectValueExprCallableMembersInContext(result, source_context, module_idx, nominal_expr.backing_expr, visiting, out),
-            .e_nominal_external => |nominal_expr| try self.collectValueExprCallableMembersInContext(result, source_context, module_idx, nominal_expr.backing_expr, visiting, out),
+            .e_block => |block_expr| try self.collectValueExprSourceMembersInContext(result, source_context, module_idx, block_expr.final_expr, visiting, out),
+            .e_dbg => |dbg_expr| try self.collectValueExprSourceMembersInContext(result, source_context, module_idx, dbg_expr.expr, visiting, out),
+            .e_expect => |expect_expr| try self.collectValueExprSourceMembersInContext(result, source_context, module_idx, expect_expr.body, visiting, out),
+            .e_return => |return_expr| try self.collectValueExprSourceMembersInContext(result, source_context, module_idx, return_expr.expr, visiting, out),
+            .e_nominal => |nominal_expr| try self.collectValueExprSourceMembersInContext(result, source_context, module_idx, nominal_expr.backing_expr, visiting, out),
+            .e_nominal_external => |nominal_expr| try self.collectValueExprSourceMembersInContext(result, source_context, module_idx, nominal_expr.backing_expr, visiting, out),
             .e_dot_access => |dot_expr| {
                 if (dot_expr.args != null) return;
                 const field_expr = try self.resolveRecordFieldExpr(
@@ -6369,7 +6362,7 @@ pub const Pass = struct {
                     dot_expr.field_name,
                     visiting,
                 ) orelse return;
-                try self.collectValueExprCallableMembersInContext(
+                try self.collectValueExprSourceMembersInContext(
                     result,
                     source_context,
                     field_expr.module_idx,
@@ -6386,7 +6379,7 @@ pub const Pass = struct {
                     tuple_access.elem_index,
                     visiting,
                 ) orelse return;
-                try self.collectValueExprCallableMembersInContext(
+                try self.collectValueExprSourceMembersInContext(
                     result,
                     source_context,
                     elem_expr.module_idx,
@@ -6429,24 +6422,12 @@ pub const Pass = struct {
                 }
 
                 if (self.getValueExprCallableMembersForSourceContext(result, source_context, module_idx, expr_idx)) |callable_inst_ids| {
-                    for (callable_inst_ids) |callable_inst_id| {
-                        var seen = false;
-                        for (out.items) |existing| {
-                            if (existing == callable_inst_id) {
-                                seen = true;
-                                break;
-                            }
-                        }
-                        if (!seen) try out.append(self.allocator, callable_inst_id);
-                    }
+                    try self.appendCallableInstSourceMembers(result, out, callable_inst_ids);
                     return;
                 }
 
                 if (self.getValueExprCallableInstForSourceContext(result, source_context, module_idx, expr_idx)) |callable_inst_id| {
-                    for (out.items) |existing| {
-                        if (existing == callable_inst_id) return;
-                    }
-                    try out.append(self.allocator, callable_inst_id);
+                    try self.appendUniqueSourceMembers(out, &.{sourceMemberForCallableInst(result, callable_inst_id)});
                 }
             },
             else => {},
@@ -6485,82 +6466,6 @@ pub const Pass = struct {
         }
 
         const callable_inst_id = try self.ensureCallableInst(result, template_id, fn_monotype.idx, fn_monotype.module_idx);
-        try self.installExprDirectCallable(
-            result,
-            source_context,
-            module_idx,
-            expr_idx,
-            callable_inst_id,
-        );
-        switch (self.all_module_envs[module_idx].store.getExpr(expr_idx)) {
-            .e_lookup_local => |lookup| {
-                try self.installExprDirectCallable(
-                    result,
-                    source_context,
-                    module_idx,
-                    expr_idx,
-                    callable_inst_id,
-                );
-                try self.installCallableParamDirectValue(
-                    result,
-                    source_context,
-                    module_idx,
-                    lookup.pattern_idx,
-                    callable_inst_id,
-                );
-                try self.propagateLookupSourceExprCallableValue(result, module_idx, expr_idx, callable_inst_id);
-            },
-            .e_lookup_external, .e_lookup_required => {
-                try self.installExprDirectCallable(
-                    result,
-                    source_context,
-                    module_idx,
-                    expr_idx,
-                    callable_inst_id,
-                );
-                try self.propagateLookupSourceExprCallableValue(result, module_idx, expr_idx, callable_inst_id);
-            },
-            else => {},
-        }
-        return callable_inst_id;
-    }
-
-    fn materializeExprDirectCallableFromFnMonotypeInSourceContext(
-        self: *Pass,
-        result: *Result,
-        source_context: SourceContext,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-        fn_monotype: Monotype.Idx,
-        fn_monotype_module_idx: u32,
-    ) Allocator.Error!?CallableInstId {
-        const template_id = (try self.resolveExprCallableTemplate(result, module_idx, expr_idx)) orelse return null;
-        if (templateRequiresConcreteOwnerCallableInst(result, template_id) and !sourceContextHasCallableInst(source_context)) {
-            return null;
-        }
-
-        try self.pushSourceContext(source_context);
-        defer self.popSourceContext();
-
-        const template = result.getCallableTemplate(template_id).*;
-        const defining_context_callable_inst = self.resolveTemplateDefiningContextCallableInst(result, template);
-        if (!try self.procSignatureAcceptsFnMonotype(
-            result,
-            template_id,
-            template,
-            fn_monotype,
-            fn_monotype_module_idx,
-            defining_context_callable_inst,
-        )) {
-            return null;
-        }
-
-        const callable_inst_id = try self.ensureCallableInst(
-            result,
-            template_id,
-            fn_monotype,
-            fn_monotype_module_idx,
-        );
         try self.installExprDirectCallable(
             result,
             source_context,
@@ -8197,6 +8102,38 @@ pub const Pass = struct {
             } else {
                 try merged.append(self.allocator, callable_inst_id);
             }
+        }
+    }
+
+    fn appendUniqueSourceMembers(
+        self: *Pass,
+        merged: *std.ArrayList(LambdaSetMemberId),
+        member_ids: []const LambdaSetMemberId,
+    ) Allocator.Error!void {
+        for (member_ids) |member_id| {
+            for (merged.items) |existing_member_id| {
+                if (existing_member_id == member_id) break;
+            } else {
+                try merged.append(self.allocator, member_id);
+            }
+        }
+    }
+
+    fn sourceMemberForCallableInst(
+        result: *const Result,
+        callable_inst_id: CallableInstId,
+    ) LambdaSetMemberId {
+        return result.getCallableDefForInst(callable_inst_id).source_member;
+    }
+
+    fn appendCallableInstSourceMembers(
+        self: *Pass,
+        result: *const Result,
+        merged: *std.ArrayList(LambdaSetMemberId),
+        callable_inst_ids: []const CallableInstId,
+    ) Allocator.Error!void {
+        for (callable_inst_ids) |callable_inst_id| {
+            try self.appendUniqueSourceMembers(merged, &.{sourceMemberForCallableInst(result, callable_inst_id)});
         }
     }
 
@@ -10086,7 +10023,10 @@ pub const Pass = struct {
         defer _ = visiting.remove(visit_key);
 
         if (self.getCallableParamSpecCallableInstsInCurrentContext(result, module_idx, expr_idx)) |callable_inst_ids| {
-            if (uniformTemplateFromCallableInsts(result, callable_inst_ids)) |template_id| {
+            var source_member_ids = std.ArrayList(LambdaSetMemberId).empty;
+            defer source_member_ids.deinit(self.allocator);
+            try self.appendCallableInstSourceMembers(result, &source_member_ids, callable_inst_ids);
+            if (uniformTemplateFromSourceMembers(result, source_member_ids.items)) |template_id| {
                 return template_id;
             }
         }
@@ -10162,14 +10102,14 @@ pub const Pass = struct {
         return resolved;
     }
 
-    fn uniformTemplateFromCallableInsts(
+    fn uniformTemplateFromSourceMembers(
         result: *const Result,
-        callable_inst_ids: []const CallableInstId,
+        source_member_ids: []const LambdaSetMemberId,
     ) ?CallableTemplateId {
-        if (callable_inst_ids.len == 0) return null;
-        const template_id = result.getCallableInst(callable_inst_ids[0]).template;
-        for (callable_inst_ids[1..]) |callable_inst_id| {
-            if (result.getCallableInst(callable_inst_id).template != template_id) return null;
+        if (source_member_ids.len == 0) return null;
+        const template_id = result.lambdasolved.getLambdaSetMember(source_member_ids[0]).template;
+        for (source_member_ids[1..]) |source_member_id| {
+            if (result.lambdasolved.getLambdaSetMember(source_member_id).template != template_id) return null;
         }
         return template_id;
     }
@@ -10199,38 +10139,84 @@ pub const Pass = struct {
         };
     }
 
-    fn collectCompatibleDemandedCallableInstsForTemplate(
+    fn projectDemandedSourceMembersToTemplate(
         self: *Pass,
         result: *Result,
         template_id: CallableTemplateId,
-        callable_inst_ids: []const CallableInstId,
-        out: *std.ArrayList(CallableInstId),
+        source_member_ids: []const LambdaSetMemberId,
+        out: *std.ArrayList(LambdaSetMemberId),
     ) Allocator.Error!void {
         out.clearRetainingCapacity();
-        for (callable_inst_ids) |callable_inst_id| {
-            if (result.getCallableInst(callable_inst_id).template != template_id) continue;
-            try out.append(self.allocator, callable_inst_id);
+        for (source_member_ids) |source_member_id| {
+            if (result.lambdasolved.getLambdaSetMember(source_member_id).template != template_id) continue;
+            try self.appendUniqueSourceMembers(out, &.{source_member_id});
         }
     }
 
-    fn uniqueDemandedTemplateCallableInst(
+    fn materializeSourceMembers(
         self: *Pass,
         result: *Result,
-        template_id: CallableTemplateId,
-        callable_inst_ids: []const CallableInstId,
-        template_demanded: *std.ArrayList(CallableInstId),
-    ) Allocator.Error!?CallableInstId {
-        try self.collectCompatibleDemandedCallableInstsForTemplate(result, template_id, callable_inst_ids, template_demanded);
-        if (template_demanded.items.len == 0) return null;
-        return if (template_demanded.items.len == 1) template_demanded.items[0] else null;
+        source_member_ids: []const LambdaSetMemberId,
+        out: *std.ArrayList(CallableInstId),
+    ) Allocator.Error!void {
+        out.clearRetainingCapacity();
+        for (source_member_ids) |source_member_id| {
+            const callable_inst_id = try self.ensureCallableInstForSourceMember(result, source_member_id);
+            try self.appendUniqueCallableInsts(out, &.{callable_inst_id});
+        }
     }
 
-    fn propagateDemandedCallableInstsToValueExpr(
+    fn installProjectedDemandedTemplateValue(
         self: *Pass,
         result: *Result,
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
-        callable_inst_ids: []const CallableInstId,
+        maybe_pattern_idx: ?CIR.Pattern.Idx,
+        template_id: CallableTemplateId,
+        demanded_source_members: []const LambdaSetMemberId,
+        projected_source_members: *std.ArrayList(LambdaSetMemberId),
+        materialized_callable_insts: *std.ArrayList(CallableInstId),
+    ) Allocator.Error!bool {
+        try self.projectDemandedSourceMembersToTemplate(
+            result,
+            template_id,
+            demanded_source_members,
+            projected_source_members,
+        );
+        if (projected_source_members.items.len == 0) return false;
+
+        try self.materializeSourceMembers(
+            result,
+            projected_source_members.items,
+            materialized_callable_insts,
+        );
+        if (materialized_callable_insts.items.len == 0) return false;
+
+        try self.installExprCallableValue(
+            result,
+            self.currentSourceContext(),
+            module_idx,
+            expr_idx,
+            materialized_callable_insts.items,
+        );
+        if (maybe_pattern_idx) |pattern_idx| {
+            try self.installCallableParamValue(
+                result,
+                self.currentSourceContext(),
+                module_idx,
+                pattern_idx,
+                materialized_callable_insts.items,
+            );
+        }
+        return true;
+    }
+
+    fn propagateDemandedSourceMembersToValueExpr(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+        source_member_ids: []const LambdaSetMemberId,
         visiting: *std.AutoHashMapUnmanaged(u64, void),
     ) Allocator.Error!void {
         const visit_key = exprVisitKey(module_idx, expr_idx);
@@ -10240,122 +10226,69 @@ pub const Pass = struct {
 
         const module_env = self.all_module_envs[module_idx];
         const expr = module_env.store.getExpr(expr_idx);
-        var template_demanded_callable_insts = std.ArrayList(CallableInstId).empty;
-        defer template_demanded_callable_insts.deinit(self.allocator);
+        var projected_source_members = std.ArrayList(LambdaSetMemberId).empty;
+        defer projected_source_members.deinit(self.allocator);
+        var materialized_callable_insts = std.ArrayList(CallableInstId).empty;
+        defer materialized_callable_insts.deinit(self.allocator);
         switch (expr) {
             .e_lambda, .e_closure, .e_hosted_lambda => {
                 const template_id = (try self.resolveExprCallableTemplate(result, module_idx, expr_idx)) orelse return;
-                if (try self.uniqueDemandedTemplateCallableInst(
+                if (try self.installProjectedDemandedTemplateValue(
                     result,
+                    module_idx,
+                    expr_idx,
+                    null,
                     template_id,
-                    callable_inst_ids,
-                    &template_demanded_callable_insts,
-                )) |callable_inst_id| {
-                    try self.installExprDirectCallable(
-                        result,
-                        self.currentSourceContext(),
-                        module_idx,
-                        expr_idx,
-                        callable_inst_id,
-                    );
-                } else if (template_demanded_callable_insts.items.len != 0) {
-                    try self.installExprCallableValue(
-                        result,
-                        self.currentSourceContext(),
-                        module_idx,
-                        expr_idx,
-                        template_demanded_callable_insts.items,
-                    );
-                } else return;
+                    source_member_ids,
+                    &projected_source_members,
+                    &materialized_callable_insts,
+                )) return;
+                return;
             },
             .e_lookup_local => |lookup| {
                 if (result.getLocalCallableTemplate(module_idx, lookup.pattern_idx)) |template_id| {
-                    if (try self.uniqueDemandedTemplateCallableInst(
+                    if (try self.installProjectedDemandedTemplateValue(
                         result,
+                        module_idx,
+                        expr_idx,
+                        lookup.pattern_idx,
                         template_id,
-                        callable_inst_ids,
-                        &template_demanded_callable_insts,
-                    )) |callable_inst_id| {
-                        try self.installExprDirectCallable(
-                            result,
-                            self.currentSourceContext(),
-                            module_idx,
-                            expr_idx,
-                            callable_inst_id,
-                        );
-                        try self.installCallableParamDirectValue(
-                            result,
-                            self.currentSourceContext(),
-                            module_idx,
-                            lookup.pattern_idx,
-                            callable_inst_id,
-                        );
-                        return;
-                    } else if (template_demanded_callable_insts.items.len != 0) {
-                        try self.installExprCallableValue(
-                            result,
-                            self.currentSourceContext(),
-                            module_idx,
-                            expr_idx,
-                            template_demanded_callable_insts.items,
-                        );
-                        for (template_demanded_callable_insts.items) |callable_inst_id| {
-                            try self.installCallableParamDirectValue(
-                                result,
-                                self.currentSourceContext(),
-                                module_idx,
-                                lookup.pattern_idx,
-                                callable_inst_id,
-                            );
-                        }
-                        return;
-                    }
+                        source_member_ids,
+                        &projected_source_members,
+                        &materialized_callable_insts,
+                    )) return;
                 }
 
                 const source = result.getPatternSourceExpr(module_idx, lookup.pattern_idx) orelse return;
-                try self.propagateDemandedCallableInstsToValueExpr(
+                try self.propagateDemandedSourceMembersToValueExpr(
                     result,
                     source.module_idx,
                     source.expr_idx,
-                    callable_inst_ids,
+                    source_member_ids,
                     visiting,
                 );
             },
             .e_lookup_external => |lookup| {
                 const target_module_idx = self.resolveImportedModuleIdx(module_env, lookup.module_idx) orelse return;
                 if (result.getExternalCallableTemplate(target_module_idx, lookup.target_node_idx)) |template_id| {
-                    if (try self.uniqueDemandedTemplateCallableInst(
+                    if (try self.installProjectedDemandedTemplateValue(
                         result,
+                        module_idx,
+                        expr_idx,
+                        null,
                         template_id,
-                        callable_inst_ids,
-                        &template_demanded_callable_insts,
-                    )) |callable_inst_id| {
-                        try self.installExprDirectCallable(
-                            result,
-                            self.currentSourceContext(),
-                            module_idx,
-                            expr_idx,
-                            callable_inst_id,
-                        );
-                        return;
-                    } else if (template_demanded_callable_insts.items.len != 0) {
-                        try self.installExprCallableValue(
-                            result,
-                            self.currentSourceContext(),
-                            module_idx,
-                            expr_idx,
-                            template_demanded_callable_insts.items,
-                        );
-                        return;
-                    }
+                        source_member_ids,
+                        &projected_source_members,
+                        &materialized_callable_insts,
+                    )) return;
                 }
 
                 const source = try self.resolveExternalDefSourceExpr(result, target_module_idx, lookup.target_node_idx) orelse return;
-                try self.propagateDemandedCallableInstsToValueExpr(
+                try self.propagateDemandedSourceMembersToValueExpr(
                     result,
                     source.module_idx,
                     source.expr_idx,
-                    callable_inst_ids,
+                    source_member_ids,
                     visiting,
                 );
             },
@@ -10363,84 +10296,70 @@ pub const Pass = struct {
                 const target = self.resolveRequiredLookupTarget(module_env, lookup) orelse return;
                 const target_node_idx: u16 = @intCast(@intFromEnum(target.def_idx));
                 if (result.getExternalCallableTemplate(target.module_idx, target_node_idx)) |template_id| {
-                    if (try self.uniqueDemandedTemplateCallableInst(
+                    if (try self.installProjectedDemandedTemplateValue(
                         result,
+                        module_idx,
+                        expr_idx,
+                        null,
                         template_id,
-                        callable_inst_ids,
-                        &template_demanded_callable_insts,
-                    )) |callable_inst_id| {
-                        try self.installExprDirectCallable(
-                            result,
-                            self.currentSourceContext(),
-                            module_idx,
-                            expr_idx,
-                            callable_inst_id,
-                        );
-                        return;
-                    } else if (template_demanded_callable_insts.items.len != 0) {
-                        try self.installExprCallableValue(
-                            result,
-                            self.currentSourceContext(),
-                            module_idx,
-                            expr_idx,
-                            template_demanded_callable_insts.items,
-                        );
-                        return;
-                    }
+                        source_member_ids,
+                        &projected_source_members,
+                        &materialized_callable_insts,
+                    )) return;
                 }
 
                 const source = try self.resolveExternalDefSourceExpr(result, target.module_idx, target_node_idx) orelse return;
-                try self.propagateDemandedCallableInstsToValueExpr(
+                try self.propagateDemandedSourceMembersToValueExpr(
                     result,
                     source.module_idx,
                     source.expr_idx,
-                    callable_inst_ids,
+                    source_member_ids,
                     visiting,
                 );
             },
             .e_if => |if_expr| {
-                try self.installDemandedExprCallableValue(result, module_idx, expr_idx, callable_inst_ids);
+                try self.installDemandedExprCallableValueFromSourceMembers(result, module_idx, expr_idx, source_member_ids);
                 for (module_env.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
                     const branch = module_env.store.getIfBranch(branch_idx);
-                    try self.propagateDemandedCallableInstsToValueExpr(result, module_idx, branch.body, callable_inst_ids, visiting);
+                    try self.propagateDemandedSourceMembersToValueExpr(result, module_idx, branch.body, source_member_ids, visiting);
                 }
-                try self.propagateDemandedCallableInstsToValueExpr(result, module_idx, if_expr.final_else, callable_inst_ids, visiting);
+                try self.propagateDemandedSourceMembersToValueExpr(result, module_idx, if_expr.final_else, source_member_ids, visiting);
             },
             .e_match => |match_expr| {
-                try self.installDemandedExprCallableValue(result, module_idx, expr_idx, callable_inst_ids);
+                try self.installDemandedExprCallableValueFromSourceMembers(result, module_idx, expr_idx, source_member_ids);
                 for (module_env.store.sliceMatchBranches(match_expr.branches)) |branch_idx| {
                     const branch = module_env.store.getMatchBranch(branch_idx);
-                    try self.propagateDemandedCallableInstsToValueExpr(result, module_idx, branch.value, callable_inst_ids, visiting);
+                    try self.propagateDemandedSourceMembersToValueExpr(result, module_idx, branch.value, source_member_ids, visiting);
                 }
             },
             .e_block => |block_expr| {
-                try self.installDemandedExprCallableValue(result, module_idx, expr_idx, callable_inst_ids);
-                try self.propagateDemandedCallableInstsToValueExpr(result, module_idx, block_expr.final_expr, callable_inst_ids, visiting);
+                try self.installDemandedExprCallableValueFromSourceMembers(result, module_idx, expr_idx, source_member_ids);
+                try self.propagateDemandedSourceMembersToValueExpr(result, module_idx, block_expr.final_expr, source_member_ids, visiting);
             },
             .e_dbg => |dbg_expr| {
-                try self.installDemandedExprCallableValue(result, module_idx, expr_idx, callable_inst_ids);
-                try self.propagateDemandedCallableInstsToValueExpr(result, module_idx, dbg_expr.expr, callable_inst_ids, visiting);
+                try self.installDemandedExprCallableValueFromSourceMembers(result, module_idx, expr_idx, source_member_ids);
+                try self.propagateDemandedSourceMembersToValueExpr(result, module_idx, dbg_expr.expr, source_member_ids, visiting);
             },
             .e_expect => |expect_expr| {
-                try self.installDemandedExprCallableValue(result, module_idx, expr_idx, callable_inst_ids);
-                try self.propagateDemandedCallableInstsToValueExpr(result, module_idx, expect_expr.body, callable_inst_ids, visiting);
+                try self.installDemandedExprCallableValueFromSourceMembers(result, module_idx, expr_idx, source_member_ids);
+                try self.propagateDemandedSourceMembersToValueExpr(result, module_idx, expect_expr.body, source_member_ids, visiting);
             },
             .e_return => |return_expr| {
-                try self.installDemandedExprCallableValue(result, module_idx, expr_idx, callable_inst_ids);
-                try self.propagateDemandedCallableInstsToValueExpr(result, module_idx, return_expr.expr, callable_inst_ids, visiting);
+                try self.installDemandedExprCallableValueFromSourceMembers(result, module_idx, expr_idx, source_member_ids);
+                try self.propagateDemandedSourceMembersToValueExpr(result, module_idx, return_expr.expr, source_member_ids, visiting);
             },
             .e_nominal => |nominal_expr| {
-                try self.installDemandedExprCallableValue(result, module_idx, expr_idx, callable_inst_ids);
-                try self.propagateDemandedCallableInstsToValueExpr(result, module_idx, nominal_expr.backing_expr, callable_inst_ids, visiting);
+                try self.installDemandedExprCallableValueFromSourceMembers(result, module_idx, expr_idx, source_member_ids);
+                try self.propagateDemandedSourceMembersToValueExpr(result, module_idx, nominal_expr.backing_expr, source_member_ids, visiting);
             },
             .e_nominal_external => |nominal_expr| {
-                try self.installDemandedExprCallableValue(result, module_idx, expr_idx, callable_inst_ids);
-                try self.propagateDemandedCallableInstsToValueExpr(result, module_idx, nominal_expr.backing_expr, callable_inst_ids, visiting);
+                try self.installDemandedExprCallableValueFromSourceMembers(result, module_idx, expr_idx, source_member_ids);
+                try self.propagateDemandedSourceMembersToValueExpr(result, module_idx, nominal_expr.backing_expr, source_member_ids, visiting);
             },
             .e_call => |call_expr| {
                 if (self.getCallLowLevelOp(module_env, call_expr.func) != null) return;
 
-                try self.installDemandedExprCallableValue(result, module_idx, expr_idx, callable_inst_ids);
+                try self.installDemandedExprCallableValueFromSourceMembers(result, module_idx, expr_idx, source_member_ids);
 
                 if (self.getCallSiteCallableInstInCurrentContext(result, module_idx, expr_idx) == null and
                     self.getCallSiteCallableInstsInCurrentContext(result, module_idx, expr_idx) == null)
@@ -10463,11 +10382,11 @@ pub const Pass = struct {
                         {
                             try self.pushSourceContext(callableInstSourceContext(callee_callable_inst_id));
                             defer self.popSourceContext();
-                            try self.propagateDemandedCallableInstsToValueExpr(
+                            try self.propagateDemandedSourceMembersToValueExpr(
                                 result,
                                 callee_template.module_idx,
                                 boundary.body_expr,
-                                callable_inst_ids,
+                                source_member_ids,
                                 visiting,
                             );
                         }
@@ -10489,11 +10408,11 @@ pub const Pass = struct {
                     {
                         try self.pushSourceContext(callableInstSourceContext(callee_callable_inst_id));
                         defer self.popSourceContext();
-                        try self.propagateDemandedCallableInstsToValueExpr(
+                        try self.propagateDemandedSourceMembersToValueExpr(
                             result,
                             callee_template.module_idx,
                             boundary.body_expr,
-                            callable_inst_ids,
+                            source_member_ids,
                             visiting,
                         );
                     }
@@ -10501,7 +10420,7 @@ pub const Pass = struct {
             },
             .e_dot_access => |dot_expr| {
                 if (dot_expr.args != null) return;
-                try self.installDemandedExprCallableValue(result, module_idx, expr_idx, callable_inst_ids);
+                try self.installDemandedExprCallableValueFromSourceMembers(result, module_idx, expr_idx, source_member_ids);
                 const field_expr = try self.resolveRecordFieldExpr(
                     result,
                     module_idx,
@@ -10510,16 +10429,16 @@ pub const Pass = struct {
                     dot_expr.field_name,
                     visiting,
                 ) orelse return;
-                try self.propagateDemandedCallableInstsToValueExpr(
+                try self.propagateDemandedSourceMembersToValueExpr(
                     result,
                     field_expr.module_idx,
                     field_expr.expr_idx,
-                    callable_inst_ids,
+                    source_member_ids,
                     visiting,
                 );
             },
             .e_tuple_access => |tuple_access| {
-                try self.installDemandedExprCallableValue(result, module_idx, expr_idx, callable_inst_ids);
+                try self.installDemandedExprCallableValueFromSourceMembers(result, module_idx, expr_idx, source_member_ids);
                 const elem_expr = try self.resolveTupleElemExpr(
                     result,
                     module_idx,
@@ -10527,11 +10446,11 @@ pub const Pass = struct {
                     tuple_access.elem_index,
                     visiting,
                 ) orelse return;
-                try self.propagateDemandedCallableInstsToValueExpr(
+                try self.propagateDemandedSourceMembersToValueExpr(
                     result,
                     elem_expr.module_idx,
                     elem_expr.expr_idx,
-                    callable_inst_ids,
+                    source_member_ids,
                     visiting,
                 );
             },
@@ -10539,31 +10458,23 @@ pub const Pass = struct {
         }
     }
 
-    fn installDemandedExprCallableValue(
+    fn installDemandedExprCallableValueFromSourceMembers(
         self: *Pass,
         result: *Result,
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
-        callable_inst_ids: []const CallableInstId,
+        source_member_ids: []const LambdaSetMemberId,
     ) Allocator.Error!void {
-        if (callable_inst_ids.len == 0) return;
-        if (callable_inst_ids.len == 1) {
-            try self.installExprDirectCallable(
-                result,
-                self.currentSourceContext(),
-                module_idx,
-                expr_idx,
-                callable_inst_ids[0],
-            );
-            return;
-        }
-
+        if (source_member_ids.len == 0) return;
+        var callable_inst_ids = std.ArrayList(CallableInstId).empty;
+        defer callable_inst_ids.deinit(self.allocator);
+        try self.materializeSourceMembers(result, source_member_ids, &callable_inst_ids);
         try self.installExprCallableValue(
             result,
             self.currentSourceContext(),
             module_idx,
             expr_idx,
-            callable_inst_ids,
+            callable_inst_ids.items,
         );
     }
 
@@ -10828,6 +10739,38 @@ pub const Pass = struct {
         );
     }
 
+    fn ensureCallableInstForSourceMember(
+        self: *Pass,
+        result: *Result,
+        source_member: Lambdasolved.LambdaSetMemberId,
+    ) Allocator.Error!CallableInstId {
+        if (result.lambdamono.getCallableInstForSourceMember(source_member)) |existing| return existing;
+
+        const member = result.lambdasolved.getLambdaSetMember(source_member).*;
+
+        try self.pushSourceContext(member.source_context);
+        defer self.popSourceContext();
+
+        const callable_inst_id = try self.ensureCallableInst(
+            result,
+            member.template,
+            member.fn_monotype.idx,
+            member.fn_monotype.module_idx,
+        );
+        const callable_def = result.getCallableDefForInst(callable_inst_id);
+        if (callable_def.source_member != source_member) {
+            std.debug.panic(
+                "Pipeline invariant violated: source member {d} materialized callable inst {d} with mismatched source member {d}",
+                .{
+                    @intFromEnum(source_member),
+                    @intFromEnum(callable_inst_id),
+                    @intFromEnum(callable_def.source_member),
+                },
+            );
+        }
+        return callable_inst_id;
+    }
+
     fn ensureCallableInstWithScan(
         self: *Pass,
         result: *Result,
@@ -10882,15 +10825,17 @@ pub const Pass = struct {
         const callable_param_spec_span = try self.addCallableParamSpecEntries(result, callable_param_specs);
         const callable_inst_id: CallableInstId = @enumFromInt(result.lambdamono.callable_insts.items.len);
         const callable_def_id: CallableDefId = @enumFromInt(result.lambdamono.callable_defs.items.len);
+        const member_source_context = sourceMemberContext(template.*, defining_context_callable_inst);
+        const source_member = try self.ensureCallableSourceMember(
+            result,
+            member_source_context,
+            template_id,
+            resolvedMonotype(canonical_fn_monotype, canonical_fn_monotype_module_idx),
+            result.lambdasolved.getEmptyCapturePlanId(),
+            solvedCallableKindForRuntimeValue(template.kind, .direct_lambda),
+        );
         try result.lambdamono.callable_defs.append(self.allocator, .{
-            .source_member = try self.ensureCallableSourceMember(
-                result,
-                @enumFromInt(@intFromEnum(callable_inst_id)),
-                template_id,
-                resolvedMonotype(canonical_fn_monotype, canonical_fn_monotype_module_idx),
-                result.lambdasolved.getEmptyCapturePlanId(),
-                solvedCallableKindForRuntimeValue(template.kind, .direct_lambda),
-            ),
+            .source_member = source_member,
             .module_idx = template.module_idx,
             .source_expr = template.runtime_expr,
             .fn_monotype = resolvedMonotype(canonical_fn_monotype, canonical_fn_monotype_module_idx),
@@ -10908,6 +10853,11 @@ pub const Pass = struct {
             .callable_def = callable_def_id,
             .runtime_value = .direct_lambda,
         });
+        try result.lambdamono.callable_inst_ids_by_source_member.put(
+            self.allocator,
+            source_member,
+            callable_inst_id,
+        );
         try self.ensureSingletonCallableMemberSet(result, callable_inst_id);
         if (scan_body) {
             try self.scanCallableInst(result, callable_inst_id);

@@ -140,7 +140,7 @@ pub const SolvedCallableKind = enum {
 
 pub const LambdaSetMember = struct {
     template: CallableTemplateId,
-    context_id: cm.ContextId,
+    source_context: SourceContext,
     fn_monotype: cm.ResolvedMonotype,
     capture_plan: CapturePlanId,
     kind: SolvedCallableKind,
