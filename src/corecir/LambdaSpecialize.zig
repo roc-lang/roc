@@ -73,6 +73,14 @@ pub const CallableInst = struct {
     fn_monotype_module_idx: u32,
     defining_context_callable_inst: ?CallableInstId,
     callable_param_specs: CallableParamSpecSpan = .empty(),
+    runtime_value: RuntimeValue = .direct_lambda,
+};
+
+pub const RuntimeValue = union(enum) {
+    direct_lambda,
+    closure: struct {
+        capture_tuple_monotype: ContextMono.ResolvedMonotype,
+    },
 };
 
 pub const CallableInstSetSpan = extern struct {

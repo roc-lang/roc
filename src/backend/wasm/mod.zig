@@ -1,7 +1,6 @@
 //! WebAssembly backend surface for statement-only LIR.
 //!
-//! The active wasm code generator must consume strongest-form LIR directly.
-//! The old expression-era backend has been removed.
+//! The active wasm code generator consumes strongest-form LIR directly.
 
 pub const WasmModule = @import("WasmModule.zig");
 pub const WasmCodeGen = @import("WasmCodeGen.zig");

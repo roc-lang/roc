@@ -65,8 +65,8 @@ roc_ops_local: u32 = 0,
 proc_return_local: u32 = 0,
 /// CFStmt block nesting depth (for br targets in proc compilation).
 cf_depth: u32 = 0,
-/// Expression-level structured control depth (for loop break branch depths).
-expr_control_depth: u32 = 0,
+/// Structured control depth used for loop-break branch depths.
+structured_control_depth: u32 = 0,
 /// Whether we're currently generating code inside a proc body.
 in_proc: bool = false,
 /// Map from JoinPointId → loop depth (for jump → br targeting).
@@ -75,7 +75,7 @@ join_point_depths: std.AutoHashMap(u32, u32),
 join_point_param_locals: std.AutoHashMap(u32, []u32),
 /// Map from JoinPointId → state local selecting remainder or join body.
 join_point_state_locals: std.AutoHashMap(u32, u32),
-/// Stack of expression-level loop exit label depths for lowering loop break.
+/// Stack of loop-exit label depths for lowering explicit LIR breaks.
 loop_break_target_depths: std.ArrayList(u32),
 /// Wasm function index for imported roc_dec_mul host function.
 dec_mul_import: ?u32 = null,
@@ -415,7 +415,7 @@ pub fn generateModule(self: *Self, root_proc_id: LIR.LirProcSpecId, result_layou
     // Add function
     const func_idx = self.module.addFunction(type_idx) catch return error.OutOfMemory;
 
-    // Generate the expression body into self.body
+    // Generate the proc body into self.body
     self.body.clearRetainingCapacity();
     self.storage.reset();
     self.stack_frame_size = 0;
@@ -1169,7 +1169,7 @@ fn emitBoxRc(self: *Self, comptime kind: RcOpKind, box_ptr_local: u32, box_layou
 /// Generate a cascading if/else chain from IfBranch array + final_else.
 fn generateIfChain(self: *Self, branches: []const LIR.IfBranch, final_else: ValueLocalId, bt: BlockType) Allocator.Error!void {
     if (branches.len == 0) {
-        // No branches — just generate the else expression
+        // No branches remain; emit the final else value directly.
         try self.emitValueLocal(final_else);
         return;
     }
@@ -1179,8 +1179,8 @@ fn generateIfChain(self: *Self, branches: []const LIR.IfBranch, final_else: Valu
     // if (block_type)
     self.body.append(self.allocator, Op.@"if") catch return error.OutOfMemory;
     self.body.append(self.allocator, @intFromEnum(bt)) catch return error.OutOfMemory;
-    self.pushExprControlFrame();
-    defer self.popExprControlFrame();
+    self.pushStructuredControlFrame();
+    defer self.popStructuredControlFrame();
     // then body
     try self.emitValueLocal(branches[0].body);
     // else
@@ -1195,7 +1195,7 @@ fn generateIfChain(self: *Self, branches: []const LIR.IfBranch, final_else: Valu
     self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
 }
 
-/// Generate a match expression (pattern matching).
+/// Helper predicates for statement-oriented control lowering.
 fn isUnsignedLayout(layout_idx: layout.Idx) bool {
     return switch (layout_idx) {
         .u8, .u16, .u32, .u64, .u128 => true,
@@ -1340,13 +1340,13 @@ fn prebindProcLocals(self: *Self, proc: LirProcSpec) Allocator.Error!void {
 }
 
 /// Convert a ValType to the corresponding BlockType for structured control flow.
-fn pushExprControlFrame(self: *Self) void {
-    self.expr_control_depth += 1;
+fn pushStructuredControlFrame(self: *Self) void {
+    self.structured_control_depth += 1;
 }
 
-fn popExprControlFrame(self: *Self) void {
-    std.debug.assert(self.expr_control_depth > 0);
-    self.expr_control_depth -= 1;
+fn popStructuredControlFrame(self: *Self) void {
+    std.debug.assert(self.structured_control_depth > 0);
+    self.structured_control_depth -= 1;
 }
 
 fn valueLayoutIdx(self: *Self, value: ValueLocalId) layout.Idx {

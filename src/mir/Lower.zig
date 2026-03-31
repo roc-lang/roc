@@ -257,12 +257,6 @@ in_progress_callable_insts: std.AutoHashMap(u32, MIR.LambdaId),
 /// fully lowered yet but already need stable lambda ids.
 reserved_callable_insts: std.AutoHashMap(u32, MIR.LambdaId),
 
-/// Memoized answer for whether a callable inst lowers to a runtime closure value.
-callable_inst_produces_closure_value: std.AutoHashMap(u32, bool),
-
-/// Recursion guard for closure-value analysis across mutually recursive callable insts.
-in_progress_closure_value_callables: std.AutoHashMap(u32, void),
-
 /// Binding patterns whose callable identity is satisfied by explicit exact-callable
 /// lowering rather than ordinary value binding locals.
 skipped_callable_backed_binding_patterns: std.AutoHashMap(u64, void),
@@ -325,8 +319,6 @@ pub fn init(
         .current_body_local_floor = 0,
         .in_progress_callable_insts = std.AutoHashMap(u32, MIR.LambdaId).init(allocator),
         .reserved_callable_insts = std.AutoHashMap(u32, MIR.LambdaId).init(allocator),
-        .callable_inst_produces_closure_value = std.AutoHashMap(u32, bool).init(allocator),
-        .in_progress_closure_value_callables = std.AutoHashMap(u32, void).init(allocator),
         .skipped_callable_backed_binding_patterns = std.AutoHashMap(u64, void).init(allocator),
         .source_context_stack = .empty,
         .current_lambda_entry_bound_locals = null,
@@ -360,8 +352,6 @@ pub fn deinit(self: *Self) void {
     self.pattern_scope_parents.deinit();
     self.in_progress_callable_insts.deinit();
     self.reserved_callable_insts.deinit();
-    self.callable_inst_produces_closure_value.deinit();
-    self.in_progress_closure_value_callables.deinit();
     self.skipped_callable_backed_binding_patterns.deinit();
     self.source_context_stack.deinit(self.allocator);
     self.scratch_local_ids.deinit();
@@ -443,29 +433,28 @@ fn popSourceContext(self: *Self) void {
     _ = self.source_context_stack.pop();
 }
 
-fn currentCallableInstContext(self: *const Self) ?Pipeline.CallableInstId {
+fn requireCurrentCallableInstContext(self: *const Self) Pipeline.CallableInstId {
     return switch (self.currentSourceContext()) {
         .callable_inst => |context_id| @enumFromInt(@intFromEnum(context_id)),
-        .root_expr, .provenance_expr, .template_expr => null,
+        .root_expr, .provenance_expr, .template_expr => std.debug.panic(
+            "Lower invariant violated: operation required callable-inst context but active source context was {s}",
+            .{@tagName(self.currentSourceContext())},
+        ),
     };
 }
 
-fn requireCurrentCallableInstContext(self: *const Self) Pipeline.CallableInstId {
-    return self.currentCallableInstContext() orelse std.debug.panic(
-        "Lower invariant violated: operation required callable-inst context but active source context was {s}",
-        .{@tagName(self.currentSourceContext())},
-    );
-}
-
 fn currentCallableInstRawForDebug(self: *const Self) u32 {
-    return if (self.currentCallableInstContext()) |callable_inst_id|
-        @intFromEnum(callable_inst_id)
-    else
-        std.math.maxInt(u32);
+    return switch (self.currentSourceContext()) {
+        .callable_inst => |context_id| @intFromEnum(@as(Pipeline.CallableInstId, @enumFromInt(@intFromEnum(context_id)))),
+        .root_expr, .provenance_expr, .template_expr => std.math.maxInt(u32),
+    };
 }
 
 fn activeCallableTemplate(self: *const Self) ?Pipeline.CallableTemplate {
-    const callable_inst_id = self.currentCallableInstContext() orelse return null;
+    const callable_inst_id = switch (self.currentSourceContext()) {
+        .callable_inst => |context_id| @as(Pipeline.CallableInstId, @enumFromInt(@intFromEnum(context_id))),
+        .root_expr, .provenance_expr, .template_expr => return null,
+    };
     return self.callable_pipeline.lambda_solved.getCallableTemplate(
         self.callable_pipeline.lambda_specialize.getCallableInst(callable_inst_id).template,
     ).*;
@@ -942,6 +931,9 @@ fn lookupPipelinedExprMonotype(self: *const Self, expr_idx: CIR.Expr.Idx) ?Pipel
         self.currentSourceContext(),
         self.current_module_idx,
         expr_idx,
+    ) orelse self.callable_pipeline.getTypeVarMonotype(
+        self.current_module_idx,
+        ModuleEnv.varFrom(expr_idx),
     );
 }
 
@@ -949,19 +941,6 @@ fn lookupPipelinedPatternMonotype(self: *const Self, pattern_idx: CIR.Pattern.Id
     return self.callable_pipeline.getContextPatternMonotype(
         self.currentSourceContext(),
         self.current_module_idx,
-        pattern_idx,
-    );
-}
-
-fn lookupPipelinedPatternCallableInstInContext(
-    self: *const Self,
-    context_callable_inst: Pipeline.CallableInstId,
-    module_idx: u32,
-    pattern_idx: CIR.Pattern.Idx,
-) ?Pipeline.CallableInstId {
-    return self.callable_pipeline.getContextPatternCallableInst(
-        callableInstSourceContext(context_callable_inst),
-        module_idx,
         pattern_idx,
     );
 }
@@ -1004,439 +983,6 @@ fn requireExactCallableInst(
         "statement-only MIR invariant violated: " ++ fmt,
         args,
     );
-}
-
-const CallableExprVisitKey = struct {
-    source_context_kind: enum(u2) { callable_inst, root_expr, provenance_expr, template_expr },
-    source_context_module_idx: u32,
-    source_context_raw: u32,
-    module_idx: u32,
-    expr_raw: u32,
-};
-
-const CallableExprSource = struct {
-    source_context: Pipeline.SourceContext,
-    module_idx: u32,
-    expr_idx: CIR.Expr.Idx,
-};
-
-fn callableExprVisitKey(
-    source_context: Pipeline.SourceContext,
-    module_idx: u32,
-    expr_idx: CIR.Expr.Idx,
-) CallableExprVisitKey {
-    return .{
-        .source_context_kind = switch (source_context) {
-            .callable_inst => .callable_inst,
-            .root_expr => .root_expr,
-            .provenance_expr => .provenance_expr,
-            .template_expr => .template_expr,
-        },
-        .source_context_module_idx = switch (source_context) {
-            .callable_inst => std.math.maxInt(u32),
-            .root_expr => |root| root.module_idx,
-            .provenance_expr => |source| source.module_idx,
-            .template_expr => |template| template.module_idx,
-        },
-        .source_context_raw = switch (source_context) {
-            .callable_inst => |callable_inst| @intFromEnum(@as(Pipeline.CallableInstId, @enumFromInt(@intFromEnum(callable_inst)))),
-            .root_expr => |root| @intFromEnum(root.expr_idx),
-            .provenance_expr => |source| @intFromEnum(source.expr_idx),
-            .template_expr => |template| @intFromEnum(template.expr_idx),
-        },
-        .module_idx = module_idx,
-        .expr_raw = @intFromEnum(expr_idx),
-    };
-}
-
-fn lookupPipelinedExprCallableInstInContext(
-    self: *const Self,
-    context_callable_inst: Pipeline.CallableInstId,
-    module_idx: u32,
-    expr_idx: CIR.Expr.Idx,
-) ?Pipeline.CallableInstId {
-    return self.callable_pipeline.getExprCallableInst(
-        callableInstSourceContext(context_callable_inst),
-        module_idx,
-        expr_idx,
-    );
-}
-
-fn lookupPipelinedLookupCallableInstInContext(
-    self: *const Self,
-    context_callable_inst: Pipeline.CallableInstId,
-    module_idx: u32,
-    expr_idx: CIR.Expr.Idx,
-) ?Pipeline.CallableInstId {
-    return self.callable_pipeline.getLookupExprCallableInst(
-        callableInstSourceContext(context_callable_inst),
-        module_idx,
-        expr_idx,
-    );
-}
-
-fn lookupPipelinedValueExprCallableInstInContext(
-    self: *const Self,
-    context_callable_inst: Pipeline.CallableInstId,
-    module_idx: u32,
-    expr_idx: CIR.Expr.Idx,
-) ?Pipeline.CallableInstId {
-    if (lookupPipelinedExprCallableInstInContext(self, context_callable_inst, module_idx, expr_idx)) |callable_inst_id| {
-        return callable_inst_id;
-    }
-    return lookupPipelinedLookupCallableInstInContext(self, context_callable_inst, module_idx, expr_idx);
-}
-
-fn lookupPipelinedCallSiteCallableInstInContext(
-    self: *const Self,
-    context_callable_inst: Pipeline.CallableInstId,
-    module_idx: u32,
-    expr_idx: CIR.Expr.Idx,
-) ?Pipeline.CallableInstId {
-    return self.callable_pipeline.getCallSiteCallableInst(
-        callableInstSourceContext(context_callable_inst),
-        module_idx,
-        expr_idx,
-    );
-}
-
-fn lookupPipelinedCallSiteCallableInstsInContext(
-    self: *const Self,
-    context_callable_inst: Pipeline.CallableInstId,
-    module_idx: u32,
-    expr_idx: CIR.Expr.Idx,
-) ?[]const Pipeline.CallableInstId {
-    return self.callable_pipeline.getCallSiteCallableInsts(
-        callableInstSourceContext(context_callable_inst),
-        module_idx,
-        expr_idx,
-    );
-}
-
-fn callableBoundaryBodyExpr(
-    self: *const Self,
-    module_idx: u32,
-    callable_expr_idx: CIR.Expr.Idx,
-) ?CIR.Expr.Idx {
-    const module_env = self.all_module_envs[module_idx];
-    return switch (module_env.store.getExpr(callable_expr_idx)) {
-        .e_lambda => |lambda_expr| lambda_expr.body,
-        .e_closure => |closure_expr| blk: {
-            const lambda_expr = module_env.store.getExpr(closure_expr.lambda_idx);
-            if (lambda_expr != .e_lambda) break :blk null;
-            break :blk lambda_expr.e_lambda.body;
-        },
-        .e_hosted_lambda => |hosted_expr| hosted_expr.body,
-        else => null,
-    };
-}
-
-fn resolveRecordFieldSourceExprInContext(
-    self: *Self,
-    source_context: Pipeline.SourceContext,
-    module_idx: u32,
-    expr_idx: CIR.Expr.Idx,
-    field_name: Monotype.Name,
-    visiting: *std.AutoHashMapUnmanaged(CallableExprVisitKey, void),
-) ?CallableExprSource {
-    const visit_key = callableExprVisitKey(source_context, module_idx, expr_idx);
-    if (visiting.contains(visit_key)) return null;
-    visiting.put(self.allocator, visit_key, {}) catch return null;
-    defer _ = visiting.remove(visit_key);
-
-    const module_env = self.all_module_envs[module_idx];
-    return switch (module_env.store.getExpr(expr_idx)) {
-        .e_record => |record| blk: {
-            for (module_env.store.sliceRecordFields(record.fields)) |field_idx| {
-                const field = module_env.store.getRecordField(field_idx);
-                if (!self.identsStructurallyEqual(field.name, field_name)) continue;
-                break :blk .{
-                    .source_context = source_context,
-                    .module_idx = module_idx,
-                    .expr_idx = field.value,
-                };
-            }
-
-            if (record.ext) |ext_expr| {
-                break :blk self.resolveRecordFieldSourceExprInContext(
-                    source_context,
-                    module_idx,
-                    ext_expr,
-                    field_name,
-                    visiting,
-                );
-            }
-
-            break :blk null;
-        },
-        .e_lookup_local => |lookup| blk: {
-            if (self.callable_pipeline.lambda_solved.getPatternSourceExpr(module_idx, lookup.pattern_idx)) |source| {
-                break :blk self.resolveRecordFieldSourceExprInContext(
-                    source_context,
-                    source.module_idx,
-                    source.expr_idx,
-                    field_name,
-                    visiting,
-                );
-            }
-            if (findDefByPattern(module_env, lookup.pattern_idx)) |def_idx| {
-                break :blk self.resolveRecordFieldSourceExprInContext(
-                    source_context,
-                    module_idx,
-                    module_env.store.getDef(def_idx).expr,
-                    field_name,
-                    visiting,
-                );
-            }
-            break :blk null;
-        },
-        .e_lookup_external => |lookup| blk: {
-            const target_module_idx = self.resolveImportedModuleIdx(module_env, lookup.module_idx) orelse break :blk null;
-            if (!self.all_module_envs[target_module_idx].store.isDefNode(lookup.target_node_idx)) break :blk null;
-            const def_idx: CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
-            break :blk self.resolveRecordFieldSourceExprInContext(
-                .{ .root_expr = .{ .module_idx = target_module_idx, .expr_idx = self.all_module_envs[target_module_idx].store.getDef(def_idx).expr } },
-                target_module_idx,
-                self.all_module_envs[target_module_idx].store.getDef(def_idx).expr,
-                field_name,
-                visiting,
-            );
-        },
-        .e_lookup_required => |lookup| blk: {
-            const target = self.resolveRequiredLookupTarget(module_env, lookup) orelse break :blk null;
-            break :blk self.resolveRecordFieldSourceExprInContext(
-                .{ .root_expr = .{ .module_idx = target.module_idx, .expr_idx = self.all_module_envs[target.module_idx].store.getDef(target.def_idx).expr } },
-                target.module_idx,
-                self.all_module_envs[target.module_idx].store.getDef(target.def_idx).expr,
-                field_name,
-                visiting,
-            );
-        },
-        .e_block => |block| self.resolveRecordFieldSourceExprInContext(source_context, module_idx, block.final_expr, field_name, visiting),
-        .e_dbg => |dbg_expr| self.resolveRecordFieldSourceExprInContext(source_context, module_idx, dbg_expr.expr, field_name, visiting),
-        .e_expect => |expect_expr| self.resolveRecordFieldSourceExprInContext(source_context, module_idx, expect_expr.body, field_name, visiting),
-        .e_return => |return_expr| self.resolveRecordFieldSourceExprInContext(source_context, module_idx, return_expr.expr, field_name, visiting),
-        .e_nominal => |nominal_expr| self.resolveRecordFieldSourceExprInContext(source_context, module_idx, nominal_expr.backing_expr, field_name, visiting),
-        .e_nominal_external => |nominal_expr| self.resolveRecordFieldSourceExprInContext(source_context, module_idx, nominal_expr.backing_expr, field_name, visiting),
-        .e_call => |call_expr| blk: {
-            if (self.getCallLowLevelOp(module_env, call_expr.func) != null) break :blk null;
-
-            if (lookupPipelinedCallSiteCallableInstsInContext(
-                self,
-                switch (source_context) {
-                    .callable_inst => |context_id| @enumFromInt(@intFromEnum(context_id)),
-                    .root_expr, .provenance_expr, .template_expr => break :blk null,
-                },
-                module_idx,
-                expr_idx,
-            )) |callable_inst_ids| {
-                if (callable_inst_ids.len != 1) {
-                    std.debug.panic(
-                        "statement-only MIR TODO: exact callable matching through projected call-result record fields with ambiguous callee instantiations is not implemented yet",
-                        .{},
-                    );
-                }
-            }
-
-            const callee_callable_inst_id = lookupPipelinedCallSiteCallableInstInContext(
-                self,
-                switch (source_context) {
-                    .callable_inst => |context_id| @enumFromInt(@intFromEnum(context_id)),
-                    .root_expr, .provenance_expr, .template_expr => break :blk null,
-                },
-                module_idx,
-                expr_idx,
-            ) orelse break :blk null;
-            const callee_callable_inst = self.callable_pipeline.lambda_specialize.getCallableInst(callee_callable_inst_id);
-            const callee_template = self.callable_pipeline.lambda_solved.getCallableTemplate(callee_callable_inst.template);
-            const body_expr = self.callableBoundaryBodyExpr(callee_template.module_idx, callee_template.cir_expr) orelse break :blk null;
-            break :blk self.resolveRecordFieldSourceExprInContext(
-                callableInstSourceContext(callee_callable_inst_id),
-                callee_template.module_idx,
-                body_expr,
-                field_name,
-                visiting,
-            );
-        },
-        else => null,
-    };
-}
-
-fn resolveTupleElemSourceExprInContext(
-    self: *Self,
-    source_context: Pipeline.SourceContext,
-    module_idx: u32,
-    expr_idx: CIR.Expr.Idx,
-    elem_idx: u32,
-    visiting: *std.AutoHashMapUnmanaged(CallableExprVisitKey, void),
-) ?CallableExprSource {
-    const visit_key = callableExprVisitKey(source_context, module_idx, expr_idx);
-    if (visiting.contains(visit_key)) return null;
-    visiting.put(self.allocator, visit_key, {}) catch return null;
-    defer _ = visiting.remove(visit_key);
-
-    const module_env = self.all_module_envs[module_idx];
-    return switch (module_env.store.getExpr(expr_idx)) {
-        .e_tuple => |tuple_expr| blk: {
-            const elems = module_env.store.sliceExpr(tuple_expr.elems);
-            if (elem_idx >= elems.len) break :blk null;
-            break :blk .{
-                .source_context = source_context,
-                .module_idx = module_idx,
-                .expr_idx = elems[elem_idx],
-            };
-        },
-        .e_lookup_local => |lookup| blk: {
-            if (self.callable_pipeline.lambda_solved.getPatternSourceExpr(module_idx, lookup.pattern_idx)) |source| {
-                break :blk self.resolveTupleElemSourceExprInContext(
-                    source_context,
-                    source.module_idx,
-                    source.expr_idx,
-                    elem_idx,
-                    visiting,
-                );
-            }
-            if (findDefByPattern(module_env, lookup.pattern_idx)) |def_idx| {
-                break :blk self.resolveTupleElemSourceExprInContext(
-                    source_context,
-                    module_idx,
-                    module_env.store.getDef(def_idx).expr,
-                    elem_idx,
-                    visiting,
-                );
-            }
-            break :blk null;
-        },
-        .e_lookup_external => |lookup| blk: {
-            const target_module_idx = self.resolveImportedModuleIdx(module_env, lookup.module_idx) orelse break :blk null;
-            if (!self.all_module_envs[target_module_idx].store.isDefNode(lookup.target_node_idx)) break :blk null;
-            const def_idx: CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
-            break :blk self.resolveTupleElemSourceExprInContext(
-                .{ .root_expr = .{ .module_idx = target_module_idx, .expr_idx = self.all_module_envs[target_module_idx].store.getDef(def_idx).expr } },
-                target_module_idx,
-                self.all_module_envs[target_module_idx].store.getDef(def_idx).expr,
-                elem_idx,
-                visiting,
-            );
-        },
-        .e_lookup_required => |lookup| blk: {
-            const target = self.resolveRequiredLookupTarget(module_env, lookup) orelse break :blk null;
-            break :blk self.resolveTupleElemSourceExprInContext(
-                .{ .root_expr = .{ .module_idx = target.module_idx, .expr_idx = self.all_module_envs[target.module_idx].store.getDef(target.def_idx).expr } },
-                target.module_idx,
-                self.all_module_envs[target.module_idx].store.getDef(target.def_idx).expr,
-                elem_idx,
-                visiting,
-            );
-        },
-        .e_block => |block| self.resolveTupleElemSourceExprInContext(source_context, module_idx, block.final_expr, elem_idx, visiting),
-        .e_dbg => |dbg_expr| self.resolveTupleElemSourceExprInContext(source_context, module_idx, dbg_expr.expr, elem_idx, visiting),
-        .e_expect => |expect_expr| self.resolveTupleElemSourceExprInContext(source_context, module_idx, expect_expr.body, elem_idx, visiting),
-        .e_return => |return_expr| self.resolveTupleElemSourceExprInContext(source_context, module_idx, return_expr.expr, elem_idx, visiting),
-        .e_nominal => |nominal_expr| self.resolveTupleElemSourceExprInContext(source_context, module_idx, nominal_expr.backing_expr, elem_idx, visiting),
-        .e_nominal_external => |nominal_expr| self.resolveTupleElemSourceExprInContext(source_context, module_idx, nominal_expr.backing_expr, elem_idx, visiting),
-        .e_call => |call_expr| blk: {
-            if (self.getCallLowLevelOp(module_env, call_expr.func) != null) break :blk null;
-
-            if (lookupPipelinedCallSiteCallableInstsInContext(
-                self,
-                switch (source_context) {
-                    .callable_inst => |context_id| @enumFromInt(@intFromEnum(context_id)),
-                    .root_expr, .provenance_expr, .template_expr => break :blk null,
-                },
-                module_idx,
-                expr_idx,
-            )) |callable_inst_ids| {
-                if (callable_inst_ids.len != 1) {
-                    std.debug.panic(
-                        "statement-only MIR TODO: exact callable matching through projected call-result tuple elements with ambiguous callee instantiations is not implemented yet",
-                        .{},
-                    );
-                }
-            }
-
-            const callee_callable_inst_id = lookupPipelinedCallSiteCallableInstInContext(
-                self,
-                switch (source_context) {
-                    .callable_inst => |context_id| @enumFromInt(@intFromEnum(context_id)),
-                    .root_expr, .provenance_expr, .template_expr => break :blk null,
-                },
-                module_idx,
-                expr_idx,
-            ) orelse break :blk null;
-            const callee_callable_inst = self.callable_pipeline.lambda_specialize.getCallableInst(callee_callable_inst_id);
-            const callee_template = self.callable_pipeline.lambda_solved.getCallableTemplate(callee_callable_inst.template);
-            const body_expr = self.callableBoundaryBodyExpr(callee_template.module_idx, callee_template.cir_expr) orelse break :blk null;
-            break :blk self.resolveTupleElemSourceExprInContext(
-                callableInstSourceContext(callee_callable_inst_id),
-                callee_template.module_idx,
-                body_expr,
-                elem_idx,
-                visiting,
-            );
-        },
-        else => null,
-    };
-}
-
-fn resolveProjectedSourceExactCallableInst(
-    self: *Self,
-    source: CallableExprSource,
-) Allocator.Error!?Pipeline.CallableInstId {
-    return lookupPipelinedValueExprCallableInstInContext(
-        self,
-        switch (source.source_context) {
-            .callable_inst => |context_id| @enumFromInt(@intFromEnum(context_id)),
-            .root_expr, .provenance_expr, .template_expr => return self.callable_pipeline.getExprCallableInst(
-                source.source_context,
-                source.module_idx,
-                source.expr_idx,
-            ) orelse self.callable_pipeline.getLookupExprCallableInst(
-                source.source_context,
-                source.module_idx,
-                source.expr_idx,
-            ),
-        },
-        source.module_idx,
-        source.expr_idx,
-    );
-}
-
-fn resolveRecordFieldExactCallableInst(
-    self: *Self,
-    receiver_expr_idx: CIR.Expr.Idx,
-    field_name: Monotype.Name,
-) Allocator.Error!?Pipeline.CallableInstId {
-    var visiting: std.AutoHashMapUnmanaged(CallableExprVisitKey, void) = .empty;
-    defer visiting.deinit(self.allocator);
-
-    const source = self.resolveRecordFieldSourceExprInContext(
-        self.currentSourceContext(),
-        self.current_module_idx,
-        receiver_expr_idx,
-        field_name,
-        &visiting,
-    ) orelse return null;
-    return try self.resolveProjectedSourceExactCallableInst(source);
-}
-
-fn resolveTupleElemExactCallableInst(
-    self: *Self,
-    tuple_expr_idx: CIR.Expr.Idx,
-    elem_idx: u32,
-) Allocator.Error!?Pipeline.CallableInstId {
-    var visiting: std.AutoHashMapUnmanaged(CallableExprVisitKey, void) = .empty;
-    defer visiting.deinit(self.allocator);
-
-    const source = self.resolveTupleElemSourceExprInContext(
-        self.currentSourceContext(),
-        self.current_module_idx,
-        tuple_expr_idx,
-        elem_idx,
-        &visiting,
-    ) orelse return null;
-
-    return self.resolveProjectedSourceExactCallableInst(source);
 }
 
 fn lookupPipelinedCallSiteCallableInst(self: *const Self, expr_idx: CIR.Expr.Idx) ?Pipeline.CallableInstId {
@@ -3174,7 +2720,7 @@ fn planClosureEntryCaptureLocals(
     self: *Self,
     module_env: *const ModuleEnv,
     closure_expr_idx: CIR.Expr.Idx,
-    captures: []const CIR.Capture.Idx,
+    captures: []const CIR.Expr.Capture.Idx,
     callable_inst_id: Pipeline.CallableInstId,
     entry_scope: u64,
 ) Allocator.Error!PlannedCaptureLocals {
@@ -3890,7 +3436,7 @@ fn lowerReservedTrivialClosureLambda(
         const recursive_capture = recursive_captures.items[recursive_i];
         const member_lambda = try self.lowerResolvedCallableInstLambda(recursive_capture.callable_inst_id);
         try self.bindExactLambdaLocal(recursive_capture.local, member_lambda);
-        body = if (!(try self.callableInstProducesClosureValue(recursive_capture.callable_inst_id)))
+        body = if (!self.callableInstRequiresHiddenCapture(recursive_capture.callable_inst_id))
             try self.store.addCFStmt(self.allocator, .{ .assign_lambda = .{
                 .target = recursive_capture.local,
                 .lambda = member_lambda,
@@ -3963,55 +3509,6 @@ fn lowerReservedTrivialClosureLambda(
     return reserved_lambda;
 }
 
-fn callableInstProducesClosureValue(
-    self: *Self,
-    callable_inst_id: Pipeline.CallableInstId,
-) Allocator.Error!bool {
-    if (self.lowered_callable_insts.get(@intFromEnum(callable_inst_id))) |lambda_id| {
-        return self.store.getLambdaAnyState(lambda_id).captures_param != null;
-    }
-
-    const callable_key = @intFromEnum(callable_inst_id);
-    if (self.callable_inst_produces_closure_value.get(callable_key)) |cached| {
-        return cached;
-    }
-
-    const in_progress = try self.in_progress_closure_value_callables.getOrPut(callable_key);
-    if (in_progress.found_existing) {
-        std.debug.panic(
-            "statement-only MIR invariant violated: recursive closure-value resolution for callable inst {d}",
-            .{@intFromEnum(callable_inst_id)},
-        );
-    }
-    defer std.debug.assert(self.in_progress_closure_value_callables.remove(callable_key));
-
-    const callable_inst = self.callable_pipeline.lambda_specialize.getCallableInst(callable_inst_id);
-    const template = self.callable_pipeline.lambda_solved.getCallableTemplate(callable_inst.template);
-    const runtime_closure = self.runtimeClosureExprForCallableInst(callable_inst_id) orelse {
-        try self.callable_inst_produces_closure_value.put(callable_key, false);
-        return false;
-    };
-    var produces_closure = false;
-    for (runtime_closure.module_env.store.sliceCaptures(runtime_closure.closure.captures)) |capture_idx| {
-        const capture = runtime_closure.module_env.store.getCapture(capture_idx);
-        const capture_plan = self.callable_pipeline.getClosureCaptureValuePlan(
-            callable_inst_id,
-            template.module_idx,
-            runtime_closure.expr_idx,
-            capture.pattern_idx,
-        ) orelse continue;
-        switch (capture_plan.storage) {
-            .runtime_field => {
-                produces_closure = true;
-                break;
-            },
-            .callable_only, .recursive_member => {},
-        }
-    }
-    try self.callable_inst_produces_closure_value.put(callable_key, produces_closure);
-    return produces_closure;
-}
-
 const RuntimeClosureExpr = struct {
     module_env: *const ModuleEnv,
     expr_idx: CIR.Expr.Idx,
@@ -4067,7 +3564,7 @@ fn lowerResolvedCallableInstValueInto(
 ) Allocator.Error!MIR.CFStmtId {
     const lambda_id = try self.lowerResolvedCallableInstLambda(callable_inst_id);
     try self.bindExactCallableLocal(target, callable_inst_id);
-    if (!(try self.callableInstProducesClosureValue(callable_inst_id))) {
+    if (!self.callableInstRequiresHiddenCapture(callable_inst_id)) {
         return self.store.addCFStmt(self.allocator, .{ .assign_lambda = .{
             .target = target,
             .lambda = lambda_id,
@@ -4182,12 +3679,15 @@ fn lowerCapturedSourceExprInto(
     target: MIR.LocalId,
     next: MIR.CFStmtId,
 ) Allocator.Error!MIR.CFStmtId {
-    if (self.currentCallableInstContext() == null) {
+    switch (self.currentSourceContext()) {
+        .callable_inst => {},
+        .root_expr, .provenance_expr, .template_expr => {
         try self.pushSourceContext(.{ .provenance_expr = .{
             .module_idx = source.module_idx,
             .expr_idx = source.expr_idx,
         } });
         defer self.popSourceContext();
+        },
     }
 
     if (source.module_idx == self.current_module_idx) {
@@ -4476,8 +3976,8 @@ fn lowerResolvedDispatchTargetCallInto(
     const target_env = self.all_module_envs[dispatch_target.module_idx];
     const target_def = target_env.store.getDef(dispatch_target.def_idx);
     const exact_dispatch_callable_inst = requireExactCallableInst(
-        self.lookupPipelinedExprCallableInstInContext(
-            self.requireCurrentCallableInstContext(),
+        self.callable_pipeline.getExprCallableInst(
+            self.currentSourceContext(),
             dispatch_target.module_idx,
             target_def.expr,
         ),
@@ -4515,7 +4015,7 @@ fn lowerResolvedDispatchTargetCallInto(
 
     const exact_call = ExactCallableResolution{
         .lambda = try self.lowerResolvedCallableInstLambda(exact_dispatch_callable_inst),
-        .requires_hidden_capture = try self.callableInstProducesClosureValue(exact_dispatch_callable_inst),
+        .requires_hidden_capture = self.callableInstRequiresHiddenCapture(exact_dispatch_callable_inst),
     };
     const target_monotype = self.store.getLocal(target).monotype;
     const exact_result_callable_inst_id = if (self.store.monotype_store.getMonotype(target_monotype) == .func)
@@ -4615,7 +4115,7 @@ fn lowerCallInto(
     else
         null;
     const exact_call_requires_hidden_capture = if (exact_callable_inst_id) |callable_inst_id|
-        try self.callableInstProducesClosureValue(callable_inst_id)
+        self.callableInstRequiresHiddenCapture(callable_inst_id)
     else
         false;
     const callee_local = try self.freshSyntheticLocal(callee_monotype, false);
@@ -4941,10 +4441,7 @@ fn lowerDotAccessInto(
     const receiver_local = try self.freshSyntheticLocal(receiver_mono, false);
     const target_monotype = self.store.getLocal(target).monotype;
     if (self.store.monotype_store.getMonotype(target_monotype) == .func) {
-        if (try self.resolveRecordFieldExactCallableInst(
-            da.receiver,
-            .{ .module_idx = self.current_module_idx, .ident = da.field_name },
-        )) |callable_inst_id| {
+        if (self.lookupPipelinedExprCallableInst(expr_idx)) |callable_inst_id| {
             try self.bindExactCallableLocal(target, callable_inst_id);
         } else {
             std.debug.panic(
@@ -4988,10 +4485,7 @@ fn lowerTupleAccessInto(
     const tuple_local = try self.freshSyntheticLocal(tuple_mono, false);
     const target_monotype = self.store.getLocal(target).monotype;
     if (self.store.monotype_store.getMonotype(target_monotype) == .func) {
-        if (try self.resolveTupleElemExactCallableInst(
-            tuple_access.tuple,
-            tuple_access.elem_index,
-        )) |callable_inst_id| {
+        if (self.lookupPipelinedExprCallableInst(expr_idx)) |callable_inst_id| {
             try self.bindExactCallableLocal(target, callable_inst_id);
         } else {
             std.debug.panic(
@@ -5070,7 +4564,17 @@ fn bindExactCallableLocal(
     try self.refreshLocalMonotypeFromCallableInst(local_id, callable_inst_id);
     self.store.getLocalPtr(local_id).exact_callable = .{
         .lambda = lambda_id,
-        .requires_hidden_capture = self.store.getLambdaAnyState(lambda_id).captures_param != null,
+        .requires_hidden_capture = self.callableInstRequiresHiddenCapture(callable_inst_id),
+    };
+}
+
+fn callableInstRequiresHiddenCapture(
+    self: *const Self,
+    callable_inst_id: Pipeline.CallableInstId,
+) bool {
+    return switch (self.callable_pipeline.lambda_specialize.getCallableInst(callable_inst_id).runtime_value) {
+        .direct_lambda => false,
+        .closure => true,
     };
 }
 
@@ -8531,10 +8035,25 @@ fn resolveMonotype(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!Monotype
         );
     }
 
+    if (self.callable_pipeline.getTypeVarMonotype(
+        self.current_module_idx,
+        ModuleEnv.varFrom(expr_idx),
+    )) |mono| {
+        return self.importMonotypeFromStore(
+            &self.callable_pipeline.context_mono.monotype_store,
+            mono.idx,
+            mono.module_idx,
+            self.current_module_idx,
+        );
+    }
+
+    const module_env = self.all_module_envs[self.current_module_idx];
+    const expr = module_env.store.getExpr(expr_idx);
     std.debug.panic(
-        "statement-only MIR invariant violated: missing exact monotype for expr {d} in module {d} callable_inst={d} root_source_expr={d}",
+        "statement-only MIR invariant violated: missing exact monotype for expr {d} kind={s} in module {d} callable_inst={d} root_source_expr={d}",
         .{
             @intFromEnum(expr_idx),
+            @tagName(expr),
             self.current_module_idx,
             self.currentCallableInstRawForDebug(),
             self.currentRootExprRawForDebug(),
@@ -8686,8 +8205,6 @@ fn requirePatternMonotype(
     self: *Self,
     pattern_idx: CIR.Pattern.Idx,
 ) Allocator.Error!Monotype.Idx {
-    const module_env = self.all_module_envs[self.current_module_idx];
-
     if (self.lookupPipelinedPatternMonotype(pattern_idx)) |resolved| {
         return self.importMonotypeFromStore(
             &self.callable_pipeline.context_mono.monotype_store,
@@ -8697,18 +8214,16 @@ fn requirePatternMonotype(
         );
     }
 
-    if (self.callable_pipeline.lambda_solved.getPatternSourceExpr(self.current_module_idx, pattern_idx)) |source| {
-        const monotype = try self.resolveExprMonotypeInModule(source.module_idx, source.expr_idx);
-        return monotype;
-    }
-
-    const resolved_pattern_var = self.types_store.resolveVar(ModuleEnv.varFrom(pattern_idx)).var_;
-    if (self.type_var_seen.get(resolved_pattern_var)) |bound| {
-        return bound;
-    }
-
-    if (findDefByPattern(module_env, pattern_idx)) |def_idx| {
-        return self.resolveExprMonotypeInModule(self.current_module_idx, module_env.store.getDef(def_idx).expr);
+    if (self.callable_pipeline.getTypeVarMonotype(
+        self.current_module_idx,
+        ModuleEnv.varFrom(pattern_idx),
+    )) |resolved| {
+        return self.importMonotypeFromStore(
+            &self.callable_pipeline.context_mono.monotype_store,
+            resolved.idx,
+            resolved.module_idx,
+            self.current_module_idx,
+        );
     }
 
     std.debug.panic(
