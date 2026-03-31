@@ -37,7 +37,7 @@ pub const PackedFnId = enum(u32) {
 };
 
 pub const PackedFn = struct {
-    members: LambdaSetMemberSpan,
+    members: CallableMemberSpan,
     fn_monotype: ContextMono.ResolvedMonotype,
 };
 
@@ -46,7 +46,7 @@ pub const IndirectCallId = enum(u32) {
 };
 
 pub const IndirectCall = struct {
-    members: LambdaSetMemberSpan,
+    members: CallableMemberSpan,
 };
 
 pub const ExprId = enum(u32) {
@@ -108,24 +108,24 @@ pub const LookupResolution = union(enum) {
     def: Lambdasolved.ExternalDefSource,
 };
 
-pub const LambdaSetMemberSpan = extern struct {
+pub const CallableMemberSpan = extern struct {
     start: u32,
     len: u16,
 
-    pub fn empty() LambdaSetMemberSpan {
+    pub fn empty() CallableMemberSpan {
         return .{ .start = 0, .len = 0 };
     }
 
-    pub fn isEmpty(self: LambdaSetMemberSpan) bool {
+    pub fn isEmpty(self: CallableMemberSpan) bool {
         return self.len == 0;
     }
 };
 
-const LambdaSetMemberGroup = struct {
-    members: LambdaSetMemberSpan,
+const CallableMemberGroup = struct {
+    members: CallableMemberSpan,
 };
 
-pub const LambdaSetMemberGroupId = enum(u32) {
+pub const CallableMemberGroupId = enum(u32) {
     _,
 };
 
@@ -224,10 +224,10 @@ pub const RootExpr = struct {
 
 pub const Program = struct {
     callable_insts: std.ArrayListUnmanaged(CallableInst),
-    lambda_set_member_groups: std.ArrayListUnmanaged(LambdaSetMemberGroup),
-    direct_callable_member_group_ids_by_callable_inst: std.AutoHashMapUnmanaged(CallableInstId, LambdaSetMemberGroupId),
-    packed_fn_ids_by_member_group: std.AutoHashMapUnmanaged(LambdaSetMemberGroupId, PackedFnId),
-    indirect_call_ids_by_member_group: std.AutoHashMapUnmanaged(LambdaSetMemberGroupId, IndirectCallId),
+    callable_member_groups: std.ArrayListUnmanaged(CallableMemberGroup),
+    direct_callable_member_group_ids_by_callable_inst: std.AutoHashMapUnmanaged(CallableInstId, CallableMemberGroupId),
+    packed_fn_ids_by_member_group: std.AutoHashMapUnmanaged(CallableMemberGroupId, PackedFnId),
+    indirect_call_ids_by_member_group: std.AutoHashMapUnmanaged(CallableMemberGroupId, IndirectCallId),
     callable_param_bindings: std.ArrayListUnmanaged(CallableParamBinding),
     exprs: std.ArrayListUnmanaged(Expr),
     expr_ids_by_key: std.AutoHashMapUnmanaged(ContextExprKey, ExprId),
@@ -238,14 +238,14 @@ pub const Program = struct {
     root_expr_ids_by_key: std.AutoHashMapUnmanaged(ContextExprKey, RootExprId),
     callable_defs: std.ArrayListUnmanaged(CallableDef),
     capture_fields: std.ArrayListUnmanaged(CaptureField),
-    lambda_set_member_entries: std.ArrayListUnmanaged(CallableInstId),
+    callable_member_entries: std.ArrayListUnmanaged(CallableInstId),
     packed_fns: std.ArrayListUnmanaged(PackedFn),
     indirect_calls: std.ArrayListUnmanaged(IndirectCall),
 
     pub fn init() Program {
         return .{
             .callable_insts = .empty,
-            .lambda_set_member_groups = .empty,
+            .callable_member_groups = .empty,
             .direct_callable_member_group_ids_by_callable_inst = .empty,
             .packed_fn_ids_by_member_group = .empty,
             .indirect_call_ids_by_member_group = .empty,
@@ -259,7 +259,7 @@ pub const Program = struct {
             .root_expr_ids_by_key = .empty,
             .callable_defs = .empty,
             .capture_fields = .empty,
-            .lambda_set_member_entries = .empty,
+            .callable_member_entries = .empty,
             .packed_fns = .empty,
             .indirect_calls = .empty,
         };
@@ -267,7 +267,7 @@ pub const Program = struct {
 
     pub fn deinit(self: *Program, allocator: Allocator) void {
         self.callable_insts.deinit(allocator);
-        self.lambda_set_member_groups.deinit(allocator);
+        self.callable_member_groups.deinit(allocator);
         self.direct_callable_member_group_ids_by_callable_inst.deinit(allocator);
         self.packed_fn_ids_by_member_group.deinit(allocator);
         self.indirect_call_ids_by_member_group.deinit(allocator);
@@ -281,7 +281,7 @@ pub const Program = struct {
         self.root_expr_ids_by_key.deinit(allocator);
         self.callable_defs.deinit(allocator);
         self.capture_fields.deinit(allocator);
-        self.lambda_set_member_entries.deinit(allocator);
+        self.callable_member_entries.deinit(allocator);
         self.packed_fns.deinit(allocator);
         self.indirect_calls.deinit(allocator);
     }
@@ -290,15 +290,15 @@ pub const Program = struct {
         return &self.callable_insts.items[@intFromEnum(callable_inst_id)];
     }
 
-    pub fn getLambdaSetMemberGroupMembers(self: *const Program, member_group_id: LambdaSetMemberGroupId) []const CallableInstId {
-        const group = self.lambda_set_member_groups.items[@intFromEnum(member_group_id)];
+    pub fn getCallableMemberGroupMembers(self: *const Program, member_group_id: CallableMemberGroupId) []const CallableInstId {
+        const group = self.callable_member_groups.items[@intFromEnum(member_group_id)];
         if (group.members.len == 0) return &.{};
-        return self.lambda_set_member_entries.items[group.members.start..][0..group.members.len];
+        return self.callable_member_entries.items[group.members.start..][0..group.members.len];
     }
 
     pub fn getDirectCallableMembers(self: *const Program, callable_inst_id: CallableInstId) []const CallableInstId {
         const member_group_id = self.direct_callable_member_group_ids_by_callable_inst.get(callable_inst_id) orelse unreachable;
-        return self.getLambdaSetMemberGroupMembers(member_group_id);
+        return self.getCallableMemberGroupMembers(member_group_id);
     }
 
     pub fn getCallableParamBindings(
@@ -381,7 +381,7 @@ pub fn getIndirectCall(program: *const Program, indirect_call_id: IndirectCallId
     return &program.indirect_calls.items[@intFromEnum(indirect_call_id)];
 }
 
-pub fn getLambdaSetMembers(program: *const Program, span: LambdaSetMemberSpan) []const CallableInstId {
+pub fn getCallableMembers(program: *const Program, span: CallableMemberSpan) []const CallableInstId {
     if (span.len == 0) return &.{};
-    return program.lambda_set_member_entries.items[span.start..][0..span.len];
+    return program.callable_member_entries.items[span.start..][0..span.len];
 }
