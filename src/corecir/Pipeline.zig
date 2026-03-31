@@ -7098,11 +7098,10 @@ pub const Pass = struct {
             }
         }
 
-        if (existing_target_usable != candidate_target_usable) {
-            return if (candidate_target_usable) candidate else existing;
-        }
-        if (existing_exact.isNone() and !candidate_exact.isNone()) return candidate;
-        return existing;
+        std.debug.panic(
+            "Pipeline invariant violated: dispatch expr={d} method='{s}' had multiple non-equivalent surviving static dispatch constraints",
+            .{ @intFromEnum(expr_idx), module_env.getIdent(method_name) },
+        );
     }
 
     fn lookupDispatchConstraintForAssociatedMethod(
@@ -7195,11 +7194,13 @@ pub const Pass = struct {
                     .{ @intFromEnum(expr_idx), module_env.getIdent(method_name) },
                 );
             }
-            return existing;
         }
 
-        if (existing_exact.isNone() and !candidate_exact.isNone()) return candidate;
-        return existing;
+        const module_env = self.all_module_envs[module_idx];
+        std.debug.panic(
+            "Pipeline invariant violated: associated dispatch expr={d} method='{s}' had multiple non-equivalent surviving static dispatch constraints",
+            .{ @intFromEnum(expr_idx), module_env.getIdent(method_name) },
+        );
     }
 
     fn staticDispatchConstraintsEqual(
@@ -7587,16 +7588,8 @@ pub const Pass = struct {
             try merged.appendSlice(self.allocator, result.getCallableInstSetMembers(result.getCallableInstSet(set_id).members));
         }
 
-        var i: usize = 0;
-        while (i < merged.items.len) {
-            const existing_callable_inst_id = merged.items[i];
-            if (try self.callableInstsShareSemanticFamily(result, existing_callable_inst_id, callable_inst_id)) {
-                if (existing_callable_inst_id == callable_inst_id) return;
-                if (@intFromEnum(existing_callable_inst_id) > @intFromEnum(callable_inst_id)) return;
-                _ = merged.swapRemove(i);
-                continue;
-            }
-            i += 1;
+        for (merged.items) |existing_callable_inst_id| {
+            if (existing_callable_inst_id == callable_inst_id) return;
         }
         try merged.append(self.allocator, callable_inst_id);
         std.mem.sortUnstable(
@@ -7649,16 +7642,8 @@ pub const Pass = struct {
             try merged.appendSlice(self.allocator, result.getCallableInstSetMembers(result.getCallableInstSet(set_id).members));
         }
 
-        var i: usize = 0;
-        while (i < merged.items.len) {
-            const existing_callable_inst_id = merged.items[i];
-            if (try self.callableInstsShareSemanticFamily(result, existing_callable_inst_id, callable_inst_id)) {
-                if (existing_callable_inst_id == callable_inst_id) return;
-                if (@intFromEnum(existing_callable_inst_id) > @intFromEnum(callable_inst_id)) return;
-                _ = merged.swapRemove(i);
-                continue;
-            }
-            i += 1;
+        for (merged.items) |existing_callable_inst_id| {
+            if (existing_callable_inst_id == callable_inst_id) return;
         }
         try merged.append(self.allocator, callable_inst_id);
         std.mem.sortUnstable(
@@ -7711,16 +7696,8 @@ pub const Pass = struct {
             try merged.appendSlice(self.allocator, result.getCallableInstSetMembers(result.getCallableInstSet(set_id).members));
         }
 
-        var i: usize = 0;
-        while (i < merged.items.len) {
-            const existing_callable_inst_id = merged.items[i];
-            if (try self.callableInstsShareSemanticFamily(result, existing_callable_inst_id, callable_inst_id)) {
-                if (existing_callable_inst_id == callable_inst_id) return;
-                if (@intFromEnum(existing_callable_inst_id) > @intFromEnum(callable_inst_id)) return;
-                _ = merged.swapRemove(i);
-                continue;
-            }
-            i += 1;
+        for (merged.items) |existing_callable_inst_id| {
+            if (existing_callable_inst_id == callable_inst_id) return;
         }
         try merged.append(self.allocator, callable_inst_id);
         std.mem.sortUnstable(
@@ -7773,16 +7750,8 @@ pub const Pass = struct {
             try merged.appendSlice(self.allocator, result.getCallableInstSetMembers(result.getCallableInstSet(set_id).members));
         }
 
-        var i: usize = 0;
-        while (i < merged.items.len) {
-            const existing_callable_inst_id = merged.items[i];
-            if (try self.callableInstsShareSemanticFamily(result, existing_callable_inst_id, callable_inst_id)) {
-                if (existing_callable_inst_id == callable_inst_id) return;
-                if (@intFromEnum(existing_callable_inst_id) > @intFromEnum(callable_inst_id)) return;
-                _ = merged.swapRemove(i);
-                continue;
-            }
-            i += 1;
+        for (merged.items) |existing_callable_inst_id| {
+            if (existing_callable_inst_id == callable_inst_id) return;
         }
         try merged.append(self.allocator, callable_inst_id);
         std.mem.sortUnstable(
@@ -7845,38 +7814,6 @@ pub const Pass = struct {
         for (callable_inst_ids) |callable_inst_id| {
             try self.scanCallableInst(result, callable_inst_id);
         }
-    }
-
-    fn callableInstsShareSemanticFamily(
-        self: *Pass,
-        result: *const Result,
-        lhs_id: CallableInstId,
-        rhs_id: CallableInstId,
-    ) Allocator.Error!bool {
-        if (lhs_id == rhs_id) return true;
-
-        const lhs = result.getCallableInst(lhs_id);
-        const rhs = result.getCallableInst(rhs_id);
-        // Callable insts are interned monotonically as fixed-point scans discover
-        // stricter specializations. For the same template under the same
-        // defining callable context, later callable-inst ids represent the current
-        // specialization state and older ids are stale approximations. Higher-order
-        // callable parameter requirements are part of that semantic identity and
-        // must not be collapsed across distinct exact callable sets.
-        return lhs.template == rhs.template and
-            lhs.defining_context_callable_inst == rhs.defining_context_callable_inst and
-            try self.monotypesStructurallyEqualAcrossModules(
-                result,
-                lhs.fn_monotype,
-                lhs.fn_monotype_module_idx,
-                rhs.fn_monotype,
-                rhs.fn_monotype_module_idx,
-            ) and
-            callableParamSpecsEqual(
-                result,
-                result.getCallableParamSpecEntries(lhs.callable_param_specs),
-                result.getCallableParamSpecEntries(rhs.callable_param_specs),
-            );
     }
 
     fn recordCallSiteCallableInst(
@@ -10514,22 +10451,36 @@ pub const Pass = struct {
         scan_body: bool,
     ) Allocator.Error!CallableInstId {
         const template = result.getCallableTemplate(template_id);
+        const canonical_fn_monotype = if (fn_monotype_module_idx == template.module_idx)
+            fn_monotype
+        else
+            try self.remapMonotypeBetweenModules(
+                result,
+                fn_monotype,
+                fn_monotype_module_idx,
+                template.module_idx,
+            );
+        const canonical_fn_monotype_module_idx = template.module_idx;
         const defining_context_callable_inst = self.resolveTemplateDefiningContextCallableInst(result, template.*);
         const subst_id = if (self.all_module_envs[template.module_idx].types.needsInstantiation(template.type_root))
-            try self.ensureTypeSubst(result, template.*, fn_monotype, fn_monotype_module_idx)
+            try self.ensureTypeSubst(result, template.*, canonical_fn_monotype, canonical_fn_monotype_module_idx)
         else
             TypeSubstId.none;
 
         for (result.lambda_specialize.callable_insts.items, 0..) |existing_callable_inst, idx| {
             if (existing_callable_inst.template != template_id) continue;
-            if (existing_callable_inst.fn_monotype_module_idx != fn_monotype_module_idx) continue;
+            if (existing_callable_inst.fn_monotype_module_idx != canonical_fn_monotype_module_idx) continue;
             if (existing_callable_inst.defining_context_callable_inst != defining_context_callable_inst) continue;
             if (!callableParamSpecsEqual(
                 result,
                 result.getCallableParamSpecEntries(existing_callable_inst.callable_param_specs),
                 callable_param_specs,
             )) continue;
-            const mono_equal = try self.monotypesStructurallyEqual(result, existing_callable_inst.fn_monotype, fn_monotype);
+            const mono_equal = try self.monotypesStructurallyEqual(
+                result,
+                existing_callable_inst.fn_monotype,
+                canonical_fn_monotype,
+            );
             if (mono_equal) {
                 if (existing_callable_inst.subst != subst_id) continue;
                 const existing_id: CallableInstId = @enumFromInt(idx);
@@ -10545,8 +10496,8 @@ pub const Pass = struct {
         try self.appendTracked(.callable_insts, &result.lambda_specialize.callable_insts, CallableInst{
             .template = template_id,
             .subst = subst_id,
-            .fn_monotype = fn_monotype,
-            .fn_monotype_module_idx = fn_monotype_module_idx,
+            .fn_monotype = canonical_fn_monotype,
+            .fn_monotype_module_idx = canonical_fn_monotype_module_idx,
             .defining_context_callable_inst = defining_context_callable_inst,
             .callable_param_specs = callable_param_spec_span,
             .runtime_value = .direct_lambda,
