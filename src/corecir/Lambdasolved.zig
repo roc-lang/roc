@@ -44,12 +44,6 @@ pub fn packExprSourceKey(module_idx: u32, expr_idx: CIR.Expr.Idx) u64 {
 
 pub const CallableTemplateId = enum(u32) {
     _,
-
-    pub const none: CallableTemplateId = @enumFromInt(std.math.maxInt(u32));
-
-    pub fn isNone(self: CallableTemplateId) bool {
-        return self == none;
-    }
 };
 
 pub const CallableTemplateKind = enum {
@@ -92,22 +86,10 @@ pub const ExprSource = struct {
 
 pub const CapturePlanId = enum(u32) {
     _,
-
-    pub const none: CapturePlanId = @enumFromInt(std.math.maxInt(u32));
-
-    pub fn isNone(self: CapturePlanId) bool {
-        return self == none;
-    }
 };
 
 pub const LambdaSetMemberId = enum(u32) {
     _,
-
-    pub const none: LambdaSetMemberId = @enumFromInt(std.math.maxInt(u32));
-
-    pub fn isNone(self: LambdaSetMemberId) bool {
-        return self == none;
-    }
 };
 
 pub const CaptureSource = union(enum) {
@@ -160,31 +142,8 @@ pub const LambdaSetMember = struct {
     template: CallableTemplateId,
     context_id: cm.ContextId,
     fn_monotype: cm.ResolvedMonotype,
-    capture_plan: ?CapturePlanId = null,
+    capture_plan: CapturePlanId,
     kind: SolvedCallableKind,
-};
-
-pub const LambdaSetId = enum(u32) {
-    _,
-
-    pub const none: LambdaSetId = @enumFromInt(std.math.maxInt(u32));
-
-    pub fn isNone(self: LambdaSetId) bool {
-        return self == none;
-    }
-};
-
-pub const LambdaSetMemberSpan = extern struct {
-    start: u32,
-    len: u16,
-
-    pub fn empty() LambdaSetMemberSpan {
-        return .{ .start = 0, .len = 0 };
-    }
-};
-
-pub const LambdaSet = struct {
-    members: LambdaSetMemberSpan,
 };
 
 pub const SourceContext = cm.SourceContext;
@@ -198,30 +157,22 @@ pub const Result = struct {
     deferred_local_callables: std.AutoHashMapUnmanaged(u64, DeferredLocalCallable),
     capture_entries: std.ArrayListUnmanaged(CaptureEntry),
     capture_plans: std.ArrayListUnmanaged(CapturePlan),
+    empty_capture_plan_id: CapturePlanId,
     lambda_set_members: std.ArrayListUnmanaged(LambdaSetMember),
-    lambda_set_member_entries: std.ArrayListUnmanaged(LambdaSetMemberId),
-    lambda_sets: std.ArrayListUnmanaged(LambdaSet),
-    expr_lambda_sets: std.AutoHashMapUnmanaged(ContextExprKey, LambdaSetId),
-    call_site_lambda_sets: std.AutoHashMapUnmanaged(ContextExprKey, LambdaSetId),
-    lookup_expr_lambda_sets: std.AutoHashMapUnmanaged(ContextExprKey, LambdaSetId),
-    context_pattern_lambda_sets: std.AutoHashMapUnmanaged(ContextPatternKey, LambdaSetId),
 
-    pub fn init() Result {
-        return .{
+    pub fn init(allocator: Allocator) !Result {
+        var result: Result = .{
             .callable_templates = .empty,
             .source_exprs = .empty,
             .callable_template_ids_by_source = .empty,
             .deferred_local_callables = .empty,
             .capture_entries = .empty,
             .capture_plans = .empty,
+            .empty_capture_plan_id = @enumFromInt(0),
             .lambda_set_members = .empty,
-            .lambda_set_member_entries = .empty,
-            .lambda_sets = .empty,
-            .expr_lambda_sets = .empty,
-            .call_site_lambda_sets = .empty,
-            .lookup_expr_lambda_sets = .empty,
-            .context_pattern_lambda_sets = .empty,
         };
+        try result.capture_plans.append(allocator, .{ .entries = CaptureEntrySpan.empty() });
+        return result;
     }
 
     pub fn deinit(self: *Result, allocator: Allocator) void {
@@ -232,12 +183,6 @@ pub const Result = struct {
         self.capture_entries.deinit(allocator);
         self.capture_plans.deinit(allocator);
         self.lambda_set_members.deinit(allocator);
-        self.lambda_set_member_entries.deinit(allocator);
-        self.lambda_sets.deinit(allocator);
-        self.expr_lambda_sets.deinit(allocator);
-        self.call_site_lambda_sets.deinit(allocator);
-        self.lookup_expr_lambda_sets.deinit(allocator);
-        self.context_pattern_lambda_sets.deinit(allocator);
     }
 
     pub fn getCallableTemplate(self: *const Result, callable_template_id: CallableTemplateId) *const CallableTemplate {
@@ -268,60 +213,20 @@ pub const Result = struct {
         return self.source_exprs.get(packLocalPatternSourceKey(module_idx, pattern_idx));
     }
 
-    pub fn getLambdaSet(self: *const Result, lambda_set_id: LambdaSetId) *const LambdaSet {
-        return &self.lambda_sets.items[@intFromEnum(lambda_set_id)];
+    pub fn getEmptyCapturePlanId(self: *const Result) CapturePlanId {
+        return self.empty_capture_plan_id;
+    }
+
+    pub fn getCapturePlan(self: *const Result, capture_plan_id: CapturePlanId) *const CapturePlan {
+        return &self.capture_plans.items[@intFromEnum(capture_plan_id)];
+    }
+
+    pub fn getCaptureEntries(self: *const Result, span: CaptureEntrySpan) []const CaptureEntry {
+        if (span.len == 0) return &.{};
+        return self.capture_entries.items[span.start..][0..span.len];
     }
 
     pub fn getLambdaSetMember(self: *const Result, member_id: LambdaSetMemberId) *const LambdaSetMember {
         return &self.lambda_set_members.items[@intFromEnum(member_id)];
-    }
-
-    pub fn getLambdaSetMembers(self: *const Result, span: LambdaSetMemberSpan) []const LambdaSetMemberId {
-        if (span.len == 0) return &.{};
-        return self.lambda_set_member_entries.items[span.start..][0..span.len];
-    }
-
-    pub fn getExprLambdaSetMembers(
-        self: *const Result,
-        source_context: SourceContext,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-    ) ?[]const LambdaSetMemberId {
-        const key = cm.Result.contextExprKey(source_context, module_idx, expr_idx);
-        const set_id = self.expr_lambda_sets.get(key) orelse return null;
-        return self.getLambdaSetMembers(self.getLambdaSet(set_id).members);
-    }
-
-    pub fn getCallSiteLambdaSetMembers(
-        self: *const Result,
-        source_context: SourceContext,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-    ) ?[]const LambdaSetMemberId {
-        const key = cm.Result.contextExprKey(source_context, module_idx, expr_idx);
-        const set_id = self.call_site_lambda_sets.get(key) orelse return null;
-        return self.getLambdaSetMembers(self.getLambdaSet(set_id).members);
-    }
-
-    pub fn getLookupExprLambdaSetMembers(
-        self: *const Result,
-        source_context: SourceContext,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-    ) ?[]const LambdaSetMemberId {
-        const key = cm.Result.contextExprKey(source_context, module_idx, expr_idx);
-        const set_id = self.lookup_expr_lambda_sets.get(key) orelse return null;
-        return self.getLambdaSetMembers(self.getLambdaSet(set_id).members);
-    }
-
-    pub fn getContextPatternLambdaSetMembers(
-        self: *const Result,
-        source_context: SourceContext,
-        module_idx: u32,
-        pattern_idx: CIR.Pattern.Idx,
-    ) ?[]const LambdaSetMemberId {
-        const key = cm.Result.contextPatternKey(source_context, module_idx, pattern_idx);
-        const set_id = self.context_pattern_lambda_sets.get(key) orelse return null;
-        return self.getLambdaSetMembers(self.getLambdaSet(set_id).members);
     }
 };

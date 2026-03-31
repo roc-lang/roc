@@ -143,7 +143,7 @@ const MutationKind = enum(u8) {
     callable_template_ids_by_source,
     source_exprs,
     deferred_local_callables,
-    expr_value_plans,
+    expr_value_sites,
     context_expr_monotypes,
     context_pattern_monotypes,
     resolved_typevar_monotypes,
@@ -153,13 +153,9 @@ const MutationKind = enum(u8) {
     packed_fn_ids_by_member_set,
     indirect_calls,
     indirect_call_ids_by_member_set,
-    context_pattern_member_sets,
-    expr_member_sets,
-    lookup_expr_member_sets,
-    call_site_member_sets,
-    context_pattern_value_plans,
-    call_site_plans,
-    lookup_expr_value_plans,
+    context_pattern_value_sites,
+    call_sites,
+    lookup_expr_value_sites,
     callable_insts,
     substs,
 };
@@ -212,23 +208,20 @@ const RequiredLookupTarget = struct {
 pub const Result = struct {
     context_mono: ContextMono.Result,
     lambdasolved: Lambdasolved.Result,
-    lambdamono: Lambdamono.Result,
-    program: Lambdamono.Program,
+    lambdamono: Lambdamono.Program,
 
     pub fn init(allocator: Allocator) !Result {
         return .{
             .context_mono = try ContextMono.Result.init(allocator),
-            .lambdasolved = Lambdasolved.Result.init(),
-            .lambdamono = Lambdamono.Result.init(),
-            .program = Lambdamono.Program.init(),
+            .lambdasolved = try Lambdasolved.Result.init(allocator),
+            .lambdamono = Lambdamono.Program.init(),
         };
     }
 
     pub fn deinit(self: *Result, allocator: Allocator) void {
-        self.program.deinit(allocator);
+        self.lambdamono.deinit(allocator);
         self.context_mono.deinit(allocator);
         self.lambdasolved.deinit(allocator);
-        self.lambdamono.deinit(allocator);
     }
 
     pub fn callSiteKey(module_idx: u32, expr_idx: CIR.Expr.Idx) u64 {
@@ -275,9 +268,11 @@ pub const Result = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?[]const CallableInstId {
-        const key = ContextMono.Result.contextExprKey(source_context, module_idx, expr_idx);
-        const member_set_id = self.lambdamono.call_site_member_sets.get(key) orelse return null;
-        return self.lambdamono.getPlanMemberSetMembers(member_set_id);
+        const plan = self.lambdamono.getCallSitePlan(source_context, module_idx, expr_idx) orelse return null;
+        return switch (plan) {
+            .direct => |callable_inst_id| self.lambdamono.getSingletonPlanMemberSetMembers(callable_inst_id),
+            .indirect => |indirect_call_id| self.getIndirectCallMembers(indirect_call_id),
+        };
     }
 
     pub fn getExprMonotype(
@@ -313,9 +308,11 @@ pub const Result = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?[]const CallableInstId {
-        const key = ContextMono.Result.contextExprKey(source_context, module_idx, expr_idx);
-        const member_set_id = self.lambdamono.expr_member_sets.get(key) orelse return null;
-        return self.lambdamono.getPlanMemberSetMembers(member_set_id);
+        const plan = self.lambdamono.getExprValuePlan(source_context, module_idx, expr_idx) orelse return null;
+        return switch (plan) {
+            .direct => |callable_inst_id| self.lambdamono.getSingletonPlanMemberSetMembers(callable_inst_id),
+            .packed_fn => |packed_fn_id| self.getPackedFnMembers(packed_fn_id),
+        };
     }
 
     pub fn getDispatchExprTarget(
@@ -351,9 +348,11 @@ pub const Result = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?[]const CallableInstId {
-        const key = ContextMono.Result.contextExprKey(source_context, module_idx, expr_idx);
-        const member_set_id = self.lambdamono.lookup_expr_member_sets.get(key) orelse return null;
-        return self.lambdamono.getPlanMemberSetMembers(member_set_id);
+        const plan = self.lambdamono.getLookupExprValuePlan(source_context, module_idx, expr_idx) orelse return null;
+        return switch (plan) {
+            .direct => |callable_inst_id| self.lambdamono.getSingletonPlanMemberSetMembers(callable_inst_id),
+            .packed_fn => |packed_fn_id| self.getPackedFnMembers(packed_fn_id),
+        };
     }
 
     fn getContextPatternCallableInst(
@@ -389,9 +388,11 @@ pub const Result = struct {
         module_idx: u32,
         pattern_idx: CIR.Pattern.Idx,
     ) ?[]const CallableInstId {
-        const key = ContextMono.Result.contextPatternKey(source_context, module_idx, pattern_idx);
-        const member_set_id = self.lambdamono.context_pattern_member_sets.get(key) orelse return null;
-        return self.lambdamono.getPlanMemberSetMembers(member_set_id);
+        const plan = self.lambdamono.getContextPatternValuePlan(source_context, module_idx, pattern_idx) orelse return null;
+        return switch (plan) {
+            .direct => |callable_inst_id| self.lambdamono.getSingletonPlanMemberSetMembers(callable_inst_id),
+            .packed_fn => |packed_fn_id| self.getPackedFnMembers(packed_fn_id),
+        };
     }
 
     pub fn getCallableTemplate(self: *const Result, callable_template_id: CallableTemplateId) *const CallableTemplate {
@@ -403,7 +404,7 @@ pub const Result = struct {
     }
 
     pub fn getCallableDef(self: *const Result, callable_def_id: CallableDefId) *const CallableDef {
-        return Lambdamono.getCallableDef(&self.program, callable_def_id);
+        return Lambdamono.getCallableDef(&self.lambdamono, callable_def_id);
     }
 
     pub fn getCallableDefForInst(self: *const Result, callable_inst_id: CallableInstId) *const CallableDef {
@@ -411,23 +412,23 @@ pub const Result = struct {
     }
 
     pub fn getPackedFn(self: *const Result, packed_fn_id: PackedFnId) *const PackedFn {
-        return Lambdamono.getPackedFn(&self.program, packed_fn_id);
+        return Lambdamono.getPackedFn(&self.lambdamono, packed_fn_id);
     }
 
     pub fn getIndirectCall(self: *const Result, indirect_call_id: IndirectCallId) *const IndirectCall {
-        return Lambdamono.getIndirectCall(&self.program, indirect_call_id);
+        return Lambdamono.getIndirectCall(&self.lambdamono, indirect_call_id);
     }
 
     pub fn getPackedFnMembers(self: *const Result, packed_fn_id: PackedFnId) []const CallableInstId {
-        return Lambdamono.getPlanMembers(&self.program, self.getPackedFn(packed_fn_id).members);
+        return Lambdamono.getPlanMembers(&self.lambdamono, self.getPackedFn(packed_fn_id).members);
     }
 
     pub fn getIndirectCallMembers(self: *const Result, indirect_call_id: IndirectCallId) []const CallableInstId {
-        return Lambdamono.getPlanMembers(&self.program, self.getIndirectCall(indirect_call_id).members);
+        return Lambdamono.getPlanMembers(&self.lambdamono, self.getIndirectCall(indirect_call_id).members);
     }
 
     pub fn getCaptureFields(self: *const Result, span: CaptureFieldSpan) []const CaptureField {
-        return Lambdamono.getCaptureFields(&self.program, span);
+        return Lambdamono.getCaptureFields(&self.lambdamono, span);
     }
 
     pub fn getCallableParamSpecEntries(
@@ -1262,19 +1263,19 @@ pub const Pass = struct {
             iterations += 1;
             if (std.debug.runtime_safety and iterations > 32) {
                 std.debug.panic(
-                    "Pipeline: root fixed point did not converge (module={d}, contextualize_roots={}, revision={d}, templates={d}, callable_insts={d}, expr_value_plans={d}, call_site_plans={d}, lookup_value_plans={d}, context_monos={d}, context_pattern_monos={d}, context_pattern_value_plans={d}, mutation_counts={any})",
+                    "Pipeline: root fixed point did not converge (module={d}, contextualize_roots={}, revision={d}, templates={d}, callable_insts={d}, expr_value_sites={d}, call_sites={d}, lookup_value_sites={d}, context_monos={d}, context_pattern_monos={d}, context_pattern_value_sites={d}, mutation_counts={any})",
                     .{
                         self.current_module_idx,
                         contextualize_roots,
                         self.mutation_revision,
                         result.lambdasolved.callable_templates.items.len,
                         result.lambdamono.callable_insts.items.len,
-                        result.lambdamono.expr_value_plans.count(),
-                        result.lambdamono.call_site_plans.count(),
-                        result.lambdamono.lookup_expr_value_plans.count(),
+                        result.lambdamono.expr_value_sites.items.len,
+                        result.lambdamono.call_sites.items.len,
+                        result.lambdamono.lookup_expr_value_sites.items.len,
                         result.context_mono.context_expr_monotypes.count(),
                         result.context_mono.context_pattern_monotypes.count(),
-                        result.lambdamono.context_pattern_value_plans.count(),
+                        result.lambdamono.context_pattern_value_sites.items.len,
                         self.mutation_counts,
                     },
                 );
@@ -1331,6 +1332,130 @@ pub const Pass = struct {
         const typed_value: @TypeOf(list.items[0]) = value;
         try list.append(self.allocator, typed_value);
         self.noteMutation(kind);
+    }
+
+    fn upsertExprValueSite(
+        self: *Pass,
+        program: *Lambdamono.Program,
+        key: ContextExprKey,
+        plan: ValuePlan,
+    ) Allocator.Error!void {
+        if (program.expr_value_site_ids_by_key.get(key)) |site_id| {
+            const site = &program.expr_value_sites.items[@intFromEnum(site_id)];
+            if (!std.meta.eql(site.plan, plan)) {
+                site.plan = plan;
+                self.noteMutation(.expr_value_sites);
+            }
+            return;
+        }
+
+        const site_id: Lambdamono.ExprValueSiteId = @enumFromInt(program.expr_value_sites.items.len);
+        try program.expr_value_sites.append(self.allocator, .{ .key = key, .plan = plan });
+        try program.expr_value_site_ids_by_key.put(self.allocator, key, site_id);
+        self.noteMutation(.expr_value_sites);
+    }
+
+    fn removeExprValueSite(
+        self: *Pass,
+        program: *Lambdamono.Program,
+        key: ContextExprKey,
+    ) void {
+        if (program.expr_value_site_ids_by_key.remove(key)) {
+            self.noteMutation(.expr_value_sites);
+        }
+    }
+
+    fn upsertLookupExprValueSite(
+        self: *Pass,
+        program: *Lambdamono.Program,
+        key: ContextExprKey,
+        plan: ValuePlan,
+    ) Allocator.Error!void {
+        if (program.lookup_expr_value_site_ids_by_key.get(key)) |site_id| {
+            const site = &program.lookup_expr_value_sites.items[@intFromEnum(site_id)];
+            if (!std.meta.eql(site.plan, plan)) {
+                site.plan = plan;
+                self.noteMutation(.lookup_expr_value_sites);
+            }
+            return;
+        }
+
+        const site_id: Lambdamono.LookupExprValueSiteId = @enumFromInt(program.lookup_expr_value_sites.items.len);
+        try program.lookup_expr_value_sites.append(self.allocator, .{ .key = key, .plan = plan });
+        try program.lookup_expr_value_site_ids_by_key.put(self.allocator, key, site_id);
+        self.noteMutation(.lookup_expr_value_sites);
+    }
+
+    fn removeLookupExprValueSite(
+        self: *Pass,
+        program: *Lambdamono.Program,
+        key: ContextExprKey,
+    ) void {
+        if (program.lookup_expr_value_site_ids_by_key.remove(key)) {
+            self.noteMutation(.lookup_expr_value_sites);
+        }
+    }
+
+    fn upsertContextPatternValueSite(
+        self: *Pass,
+        program: *Lambdamono.Program,
+        key: ContextPatternKey,
+        plan: ValuePlan,
+    ) Allocator.Error!void {
+        if (program.context_pattern_value_site_ids_by_key.get(key)) |site_id| {
+            const site = &program.context_pattern_value_sites.items[@intFromEnum(site_id)];
+            if (!std.meta.eql(site.plan, plan)) {
+                site.plan = plan;
+                self.noteMutation(.context_pattern_value_sites);
+            }
+            return;
+        }
+
+        const site_id: Lambdamono.ContextPatternValueSiteId = @enumFromInt(program.context_pattern_value_sites.items.len);
+        try program.context_pattern_value_sites.append(self.allocator, .{ .key = key, .plan = plan });
+        try program.context_pattern_value_site_ids_by_key.put(self.allocator, key, site_id);
+        self.noteMutation(.context_pattern_value_sites);
+    }
+
+    fn removeContextPatternValueSite(
+        self: *Pass,
+        program: *Lambdamono.Program,
+        key: ContextPatternKey,
+    ) void {
+        if (program.context_pattern_value_site_ids_by_key.remove(key)) {
+            self.noteMutation(.context_pattern_value_sites);
+        }
+    }
+
+    fn upsertCallSite(
+        self: *Pass,
+        program: *Lambdamono.Program,
+        key: ContextExprKey,
+        plan: CallPlan,
+    ) Allocator.Error!void {
+        if (program.call_site_ids_by_key.get(key)) |site_id| {
+            const site = &program.call_sites.items[@intFromEnum(site_id)];
+            if (!std.meta.eql(site.plan, plan)) {
+                site.plan = plan;
+                self.noteMutation(.call_sites);
+            }
+            return;
+        }
+
+        const site_id: Lambdamono.CallSiteId = @enumFromInt(program.call_sites.items.len);
+        try program.call_sites.append(self.allocator, .{ .key = key, .plan = plan });
+        try program.call_site_ids_by_key.put(self.allocator, key, site_id);
+        self.noteMutation(.call_sites);
+    }
+
+    fn removeCallSite(
+        self: *Pass,
+        program: *Lambdamono.Program,
+        key: ContextExprKey,
+    ) void {
+        if (program.call_site_ids_by_key.remove(key)) {
+            self.noteMutation(.call_sites);
+        }
     }
 
     fn scanSeedModules(self: *Pass, result: *Result) Allocator.Error!void {
@@ -2168,15 +2293,13 @@ pub const Pass = struct {
         expr_idx: CIR.Expr.Idx,
         callable_inst_id: CallableInstId,
     ) Allocator.Error!void {
-        try self.mergeExprPlanMembersWithRoot(
+        return self.recordExprPlanMembersWithRoot(
             result,
             source_context,
             module_idx,
             expr_idx,
-            callable_inst_id,
+            &.{callable_inst_id},
         );
-        try self.ensureRecordedCallableInstsScanned(result, &.{callable_inst_id});
-        try self.finalizeExprCallablePlanFromPlanMembers(result, source_context, module_idx, expr_idx);
     }
 
     fn recordExprPlanMembers(
@@ -2206,17 +2329,35 @@ pub const Pass = struct {
     ) Allocator.Error!void {
         if (callable_inst_ids.len == 0) unreachable;
 
-        for (callable_inst_ids) |callable_inst_id| {
-            try self.mergeExprPlanMembersWithRoot(
+        var merged = std.ArrayList(CallableInstId).empty;
+        defer merged.deinit(self.allocator);
+        if (result.getExprValuePlan(source_context, module_idx, expr_idx)) |existing_plan| {
+            try self.existingValuePlanMembers(result, existing_plan, &merged);
+        }
+        try self.appendUniqueCallableInsts(&merged, callable_inst_ids);
+        std.mem.sortUnstable(CallableInstId, merged.items, {}, struct {
+            fn lessThan(_: void, lhs: CallableInstId, rhs: CallableInstId) bool {
+                return @intFromEnum(lhs) < @intFromEnum(rhs);
+            }
+        }.lessThan);
+        try self.ensureRecordedCallableInstsScanned(result, callable_inst_ids);
+        const key = self.resultExprKeyForSourceContext(source_context, module_idx, expr_idx);
+        if (merged.items.len == 1) {
+            try self.upsertExprValueSite(&result.lambdamono, key, .{ .direct = merged.items[0] });
+            const callable_inst = result.getCallableInst(merged.items[0]).*;
+            try self.recordExprMonotypeForSourceContext(
                 result,
                 source_context,
                 module_idx,
                 expr_idx,
-                callable_inst_id,
+                callable_inst.fn_monotype,
+                callable_inst.fn_monotype_module_idx,
             );
+        } else {
+            const member_set_id = try self.internPlanMemberSet(result, merged.items);
+            const packed_fn_id = try self.ensurePackedFn(result, member_set_id);
+            try self.upsertExprValueSite(&result.lambdamono, key, .{ .packed_fn = packed_fn_id });
         }
-        try self.ensureRecordedCallableInstsScanned(result, callable_inst_ids);
-        try self.finalizeExprCallablePlanFromPlanMembers(result, source_context, module_idx, expr_idx);
     }
 
     fn lookupCurrentExprMonotype(
@@ -2327,6 +2468,118 @@ pub const Pass = struct {
         );
     }
 
+    fn solvedCallableKindForRuntimeValue(
+        template_kind: CallableTemplateKind,
+        callable_kind: RuntimeCallableKind,
+    ) Lambdasolved.SolvedCallableKind {
+        if (template_kind == .hosted_lambda) return .hosted;
+        return switch (callable_kind) {
+            .direct => .direct,
+            .closure => .closure,
+        };
+    }
+
+    fn ensureCapturePlan(
+        self: *Pass,
+        result: *Result,
+        entries: []const Lambdasolved.CaptureEntry,
+    ) Allocator.Error!Lambdasolved.CapturePlanId {
+        if (entries.len == 0) return result.lambdasolved.getEmptyCapturePlanId();
+
+        for (result.lambdasolved.capture_plans.items, 0..) |existing_plan, idx| {
+            const existing_entries = result.lambdasolved.getCaptureEntries(existing_plan.entries);
+            if (existing_entries.len != entries.len) continue;
+            if (std.meta.eql(existing_entries, entries)) return @enumFromInt(idx);
+        }
+
+        const start: u32 = @intCast(result.lambdasolved.capture_entries.items.len);
+        try result.lambdasolved.capture_entries.appendSlice(self.allocator, entries);
+        const plan_id: Lambdasolved.CapturePlanId = @enumFromInt(result.lambdasolved.capture_plans.items.len);
+        try result.lambdasolved.capture_plans.append(self.allocator, .{
+            .entries = .{ .start = start, .len = @intCast(entries.len) },
+        });
+        return plan_id;
+    }
+
+    fn ensureCallableSourceMember(
+        self: *Pass,
+        result: *Result,
+        context_id: ContextId,
+        template_id: CallableTemplateId,
+        fn_monotype: ResolvedMonotype,
+        capture_plan: Lambdasolved.CapturePlanId,
+        kind: Lambdasolved.SolvedCallableKind,
+    ) Allocator.Error!Lambdasolved.LambdaSetMemberId {
+        for (result.lambdasolved.lambda_set_members.items, 0..) |existing, idx| {
+            if (existing.template != template_id) continue;
+            if (existing.context_id != context_id) continue;
+            if (existing.capture_plan != capture_plan) continue;
+            if (existing.kind != kind) continue;
+            if (existing.fn_monotype.module_idx != fn_monotype.module_idx) continue;
+            if (!try self.monotypesStructurallyEqual(
+                result,
+                existing.fn_monotype.idx,
+                fn_monotype.idx,
+            )) continue;
+            return @enumFromInt(idx);
+        }
+
+        const member_id: Lambdasolved.LambdaSetMemberId = @enumFromInt(result.lambdasolved.lambda_set_members.items.len);
+        try result.lambdasolved.lambda_set_members.append(self.allocator, .{
+            .template = template_id,
+            .context_id = context_id,
+            .fn_monotype = fn_monotype,
+            .capture_plan = capture_plan,
+            .kind = kind,
+        });
+        return member_id;
+    }
+
+    fn captureSourceForField(
+        self: *Pass,
+        result: *const Result,
+        capture_field: CaptureField,
+    ) Lambdasolved.CaptureSource {
+        return switch (capture_field.storage) {
+            .recursive_member => .{ .exact_callable = .{
+                .member = result.getCallableDefForInst(capture_field.exact_callable_inst.?).source_member,
+            } },
+            .runtime_field, .callable_only => switch (capture_field.source) {
+                .lexical_pattern => |lexical| .{ .lexical_pattern = lexical },
+                .source_expr => |source| .{ .source_expr = source.source },
+            },
+        };
+    }
+
+    fn updateCallableSourceMember(
+        self: *Pass,
+        result: *Result,
+        callable_inst_id: CallableInstId,
+        capture_fields: []const CaptureField,
+    ) Allocator.Error!void {
+        const callable_inst = result.getCallableInst(callable_inst_id).*;
+        const template = result.getCallableTemplate(callable_inst.template).*;
+        const callable_def = &result.lambdamono.callable_defs.items[@intFromEnum(callable_inst.callable_def)];
+
+        var capture_entries = std.ArrayList(Lambdasolved.CaptureEntry).empty;
+        defer capture_entries.deinit(self.allocator);
+        for (capture_fields) |capture_field| {
+            try capture_entries.append(self.allocator, .{
+                .source = self.captureSourceForField(result, capture_field),
+                .monotype = capture_field.local_monotype,
+            });
+        }
+
+        callable_def.source_member = try self.ensureCallableSourceMember(
+            result,
+            @enumFromInt(@intFromEnum(callable_inst_id)),
+            callable_inst.template,
+            resolvedMonotype(callable_inst.fn_monotype, callable_inst.fn_monotype_module_idx),
+            try self.ensureCapturePlan(result, capture_entries.items),
+            solvedCallableKindForRuntimeValue(template.kind, callable_def.callable_kind),
+        );
+    }
+
     fn updateCallableDefRuntimeValue(
         self: *Pass,
         result: *Result,
@@ -2336,7 +2589,7 @@ pub const Pass = struct {
     ) Allocator.Error!void {
         var runtime_field_monotypes = std.ArrayList(Monotype.Idx).empty;
         defer runtime_field_monotypes.deinit(self.allocator);
-        const callable_def = &result.program.callable_defs.items[@intFromEnum(result.getCallableInst(callable_inst_id).callable_def)];
+        const callable_def = &result.lambdamono.callable_defs.items[@intFromEnum(result.getCallableInst(callable_inst_id).callable_def)];
 
         for (capture_fields) |capture_field| {
             switch (capture_field.storage) {
@@ -2362,8 +2615,8 @@ pub const Pass = struct {
         const capture_span: CaptureFieldSpan = if (capture_fields.len == 0)
             .empty()
         else blk: {
-            const start: u32 = @intCast(result.program.capture_fields.items.len);
-            try result.program.capture_fields.appendSlice(self.allocator, capture_fields);
+            const start: u32 = @intCast(result.lambdamono.capture_fields.items.len);
+            try result.lambdamono.capture_fields.appendSlice(self.allocator, capture_fields);
             break :blk .{
                 .start = start,
                 .len = @intCast(capture_fields.len),
@@ -2383,6 +2636,8 @@ pub const Pass = struct {
                     ),
                 } };
             };
+
+        try self.updateCallableSourceMember(result, callable_inst_id, capture_fields);
     }
 
     fn closureCaptureAnalysisCallableInst(
@@ -2947,36 +3202,6 @@ pub const Pass = struct {
                 pattern_idx,
                 source_callable_insts.items,
             );
-        }
-    }
-
-    fn finalizeExprCallablePlanFromPlanMembers(
-        self: *Pass,
-        result: *Result,
-        source_context: SourceContext,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-    ) Allocator.Error!void {
-        const key = self.resultExprKeyForSourceContext(source_context, module_idx, expr_idx);
-        const set_id = result.lambdamono.expr_member_sets.get(key) orelse {
-            self.removeTracked(.expr_value_plans, &result.lambdamono.expr_value_plans, key);
-            return;
-        };
-        const members = result.lambdamono.getPlanMemberSetMembers(set_id);
-        if (members.len == 1) {
-            try self.putTracked(.expr_value_plans, &result.lambdamono.expr_value_plans, key, ValuePlan{ .direct = members[0] });
-            const callable_inst = result.getCallableInst(members[0]).*;
-            try self.recordExprMonotypeForSourceContext(
-                result,
-                source_context,
-                module_idx,
-                expr_idx,
-                callable_inst.fn_monotype,
-                callable_inst.fn_monotype_module_idx,
-            );
-        } else {
-            self.removeTracked(.expr_value_plans, &result.lambdamono.expr_value_plans, key);
-            _ = try self.ensurePackedFn(result, set_id);
         }
     }
 
@@ -7484,8 +7709,8 @@ pub const Pass = struct {
         const span: Lambdamono.PlanMemberSpan = if (members.len == 0)
             Lambdamono.PlanMemberSpan.empty()
         else blk: {
-            const start: u32 = @intCast(result.program.plan_member_entries.items.len);
-            try result.program.plan_member_entries.appendSlice(self.allocator, members);
+            const start: u32 = @intCast(result.lambdamono.plan_member_entries.items.len);
+            try result.lambdamono.plan_member_entries.appendSlice(self.allocator, members);
             break :blk .{
                 .start = start,
                 .len = @intCast(members.len),
@@ -7497,220 +7722,44 @@ pub const Pass = struct {
         return set_id;
     }
 
-    fn mergeContextPatternPlanMembers(
+    fn appendUniqueCallableInsts(
         self: *Pass,
-        result: *Result,
-        context_callable_inst: CallableInstId,
-        module_idx: u32,
-        pattern_idx: CIR.Pattern.Idx,
-        callable_inst_id: CallableInstId,
+        merged: *std.ArrayList(CallableInstId),
+        callable_inst_ids: []const CallableInstId,
     ) Allocator.Error!void {
-        return self.mergeContextPatternPlanMembersForSourceContext(
-            result,
-            callableInstSourceContext(context_callable_inst),
-            module_idx,
-            pattern_idx,
-            callable_inst_id,
-        );
+        for (callable_inst_ids) |callable_inst_id| {
+            for (merged.items) |existing_callable_inst_id| {
+                if (existing_callable_inst_id == callable_inst_id) break;
+            } else {
+                try merged.append(self.allocator, callable_inst_id);
+            }
+        }
     }
 
-    fn mergeContextPatternPlanMembersForSourceContext(
+    fn existingValuePlanMembers(
         self: *Pass,
-        result: *Result,
-        source_context: SourceContext,
-        module_idx: u32,
-        pattern_idx: CIR.Pattern.Idx,
-        callable_inst_id: CallableInstId,
+        result: *const Result,
+        plan: ValuePlan,
+        merged: *std.ArrayList(CallableInstId),
     ) Allocator.Error!void {
-        const key = self.resultPatternKeyForSourceContext(source_context, module_idx, pattern_idx);
-        const existing_set_id = result.lambdamono.context_pattern_member_sets.get(key);
-
-        var merged = std.ArrayList(CallableInstId).empty;
-        defer merged.deinit(self.allocator);
-
-        if (existing_set_id) |set_id| {
-            try merged.appendSlice(self.allocator, result.lambdamono.getPlanMemberSetMembers(set_id));
+        _ = self;
+        switch (plan) {
+            .direct => |callable_inst_id| try merged.append(self.allocator, callable_inst_id),
+            .packed_fn => |packed_fn_id| try merged.appendSlice(self.allocator, result.getPackedFnMembers(packed_fn_id)),
         }
-
-        for (merged.items) |existing_callable_inst_id| {
-            if (existing_callable_inst_id == callable_inst_id) return;
-        }
-        try merged.append(self.allocator, callable_inst_id);
-        std.mem.sortUnstable(
-            CallableInstId,
-            merged.items,
-            {},
-            struct {
-                fn lessThan(_: void, lhs: CallableInstId, rhs: CallableInstId) bool {
-                    return @intFromEnum(lhs) < @intFromEnum(rhs);
-                }
-            }.lessThan,
-        );
-
-        const set_id = try self.internPlanMemberSet(result, merged.items);
-        try self.putTracked(.context_pattern_member_sets, &result.lambdamono.context_pattern_member_sets, key, set_id);
     }
 
-    fn mergeExprPlanMembers(
+    fn existingCallPlanMembers(
         self: *Pass,
-        result: *Result,
-        context_callable_inst: CallableInstId,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-        callable_inst_id: CallableInstId,
+        result: *const Result,
+        plan: CallPlan,
+        merged: *std.ArrayList(CallableInstId),
     ) Allocator.Error!void {
-        return self.mergeExprPlanMembersWithRoot(
-            result,
-            callableInstSourceContext(context_callable_inst),
-            module_idx,
-            expr_idx,
-            callable_inst_id,
-        );
-    }
-
-    fn mergeExprPlanMembersWithRoot(
-        self: *Pass,
-        result: *Result,
-        source_context: SourceContext,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-        callable_inst_id: CallableInstId,
-    ) Allocator.Error!void {
-        const key = self.resultExprKeyForSourceContext(source_context, module_idx, expr_idx);
-        const existing_set_id = result.lambdamono.expr_member_sets.get(key);
-
-        var merged = std.ArrayList(CallableInstId).empty;
-        defer merged.deinit(self.allocator);
-
-        if (existing_set_id) |set_id| {
-            try merged.appendSlice(self.allocator, result.lambdamono.getPlanMemberSetMembers(set_id));
+        _ = self;
+        switch (plan) {
+            .direct => |callable_inst_id| try merged.append(self.allocator, callable_inst_id),
+            .indirect => |indirect_call_id| try merged.appendSlice(self.allocator, result.getIndirectCallMembers(indirect_call_id)),
         }
-
-        for (merged.items) |existing_callable_inst_id| {
-            if (existing_callable_inst_id == callable_inst_id) return;
-        }
-        try merged.append(self.allocator, callable_inst_id);
-        std.mem.sortUnstable(
-            CallableInstId,
-            merged.items,
-            {},
-            struct {
-                fn lessThan(_: void, lhs: CallableInstId, rhs: CallableInstId) bool {
-                    return @intFromEnum(lhs) < @intFromEnum(rhs);
-                }
-            }.lessThan,
-        );
-
-        const set_id = try self.internPlanMemberSet(result, merged.items);
-        try self.putTracked(.expr_member_sets, &result.lambdamono.expr_member_sets, key, set_id);
-    }
-
-    fn mergeLookupExprPlanMembers(
-        self: *Pass,
-        result: *Result,
-        context_callable_inst: CallableInstId,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-        callable_inst_id: CallableInstId,
-    ) Allocator.Error!void {
-        return self.mergeLookupExprPlanMembersForSourceContext(
-            result,
-            callableInstSourceContext(context_callable_inst),
-            module_idx,
-            expr_idx,
-            callable_inst_id,
-        );
-    }
-
-    fn mergeLookupExprPlanMembersForSourceContext(
-        self: *Pass,
-        result: *Result,
-        source_context: SourceContext,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-        callable_inst_id: CallableInstId,
-    ) Allocator.Error!void {
-        const key = self.resultExprKeyForSourceContext(source_context, module_idx, expr_idx);
-        const existing_set_id = result.lambdamono.lookup_expr_member_sets.get(key);
-
-        var merged = std.ArrayList(CallableInstId).empty;
-        defer merged.deinit(self.allocator);
-
-        if (existing_set_id) |set_id| {
-            try merged.appendSlice(self.allocator, result.lambdamono.getPlanMemberSetMembers(set_id));
-        }
-
-        for (merged.items) |existing_callable_inst_id| {
-            if (existing_callable_inst_id == callable_inst_id) return;
-        }
-        try merged.append(self.allocator, callable_inst_id);
-        std.mem.sortUnstable(
-            CallableInstId,
-            merged.items,
-            {},
-            struct {
-                fn lessThan(_: void, lhs: CallableInstId, rhs: CallableInstId) bool {
-                    return @intFromEnum(lhs) < @intFromEnum(rhs);
-                }
-            }.lessThan,
-        );
-
-        const set_id = try self.internPlanMemberSet(result, merged.items);
-        try self.putTracked(.lookup_expr_member_sets, &result.lambdamono.lookup_expr_member_sets, key, set_id);
-    }
-
-    fn mergeCallSitePlanMembers(
-        self: *Pass,
-        result: *Result,
-        context_callable_inst: CallableInstId,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-        callable_inst_id: CallableInstId,
-    ) Allocator.Error!void {
-        return self.mergeCallSitePlanMembersForSourceContext(
-            result,
-            callableInstSourceContext(context_callable_inst),
-            module_idx,
-            expr_idx,
-            callable_inst_id,
-        );
-    }
-
-    fn mergeCallSitePlanMembersForSourceContext(
-        self: *Pass,
-        result: *Result,
-        source_context: SourceContext,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-        callable_inst_id: CallableInstId,
-    ) Allocator.Error!void {
-        const key = self.resultExprKeyForSourceContext(source_context, module_idx, expr_idx);
-        const existing_set_id = result.lambdamono.call_site_member_sets.get(key);
-
-        var merged = std.ArrayList(CallableInstId).empty;
-        defer merged.deinit(self.allocator);
-
-        if (existing_set_id) |set_id| {
-            try merged.appendSlice(self.allocator, result.lambdamono.getPlanMemberSetMembers(set_id));
-        }
-
-        for (merged.items) |existing_callable_inst_id| {
-            if (existing_callable_inst_id == callable_inst_id) return;
-        }
-        try merged.append(self.allocator, callable_inst_id);
-        std.mem.sortUnstable(
-            CallableInstId,
-            merged.items,
-            {},
-            struct {
-                fn lessThan(_: void, lhs: CallableInstId, rhs: CallableInstId) bool {
-                    return @intFromEnum(lhs) < @intFromEnum(rhs);
-                }
-            }.lessThan,
-        );
-
-        const set_id = try self.internPlanMemberSet(result, merged.items);
-        try self.putTracked(.call_site_member_sets, &result.lambdamono.call_site_member_sets, key, set_id);
     }
 
     fn recordCallSitePlanMembers(
@@ -7723,31 +7772,25 @@ pub const Pass = struct {
     ) Allocator.Error!void {
         if (callable_inst_ids.len == 0) unreachable;
 
-        for (callable_inst_ids) |callable_inst_id| {
-            try self.mergeCallSitePlanMembersForSourceContext(result, source_context, module_idx, expr_idx, callable_inst_id);
+        var merged = std.ArrayList(CallableInstId).empty;
+        defer merged.deinit(self.allocator);
+        if (result.getCallSitePlan(source_context, module_idx, expr_idx)) |existing_plan| {
+            try self.existingCallPlanMembers(result, existing_plan, &merged);
         }
+        try self.appendUniqueCallableInsts(&merged, callable_inst_ids);
+        std.mem.sortUnstable(CallableInstId, merged.items, {}, struct {
+            fn lessThan(_: void, lhs: CallableInstId, rhs: CallableInstId) bool {
+                return @intFromEnum(lhs) < @intFromEnum(rhs);
+            }
+        }.lessThan);
         try self.ensureRecordedCallableInstsScanned(result, callable_inst_ids);
-        try self.finalizeCallSiteCallablePlanFromPlanMembers(result, source_context, module_idx, expr_idx);
-    }
-
-    fn finalizeCallSiteCallablePlanFromPlanMembers(
-        self: *Pass,
-        result: *Result,
-        source_context: SourceContext,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-    ) Allocator.Error!void {
         const key = self.resultExprKeyForSourceContext(source_context, module_idx, expr_idx);
-        const set_id = result.lambdamono.call_site_member_sets.get(key) orelse {
-            self.removeTracked(.call_site_plans, &result.lambdamono.call_site_plans, key);
-            return;
-        };
-        const members = result.lambdamono.getPlanMemberSetMembers(set_id);
-        if (members.len == 1) {
-            try self.putTracked(.call_site_plans, &result.lambdamono.call_site_plans, key, CallPlan{ .direct = members[0] });
+        if (merged.items.len == 1) {
+            try self.upsertCallSite(&result.lambdamono, key, .{ .direct = merged.items[0] });
         } else {
-            self.removeTracked(.call_site_plans, &result.lambdamono.call_site_plans, key);
-            _ = try self.ensureIndirectCall(result, set_id);
+            const member_set_id = try self.internPlanMemberSet(result, merged.items);
+            const indirect_call_id = try self.ensureIndirectCall(result, member_set_id);
+            try self.upsertCallSite(&result.lambdamono, key, .{ .indirect = indirect_call_id });
         }
     }
 
@@ -7780,14 +7823,13 @@ pub const Pass = struct {
         pattern_idx: CIR.Pattern.Idx,
         callable_inst_id: CallableInstId,
     ) Allocator.Error!void {
-        try self.mergeContextPatternPlanMembersForSourceContext(
+        return self.recordContextPatternPlanMembersForSourceContext(
             result,
             source_context,
             module_idx,
             pattern_idx,
-            callable_inst_id,
+            &.{callable_inst_id},
         );
-        try self.finalizeContextPatternCallablePlanFromPlanMembers(result, source_context, module_idx, pattern_idx);
     }
 
     fn recordContextPatternCallableInst(
@@ -7834,31 +7876,25 @@ pub const Pass = struct {
     ) Allocator.Error!void {
         if (callable_inst_ids.len == 0) unreachable;
 
-        for (callable_inst_ids) |callable_inst_id| {
-            try self.mergeContextPatternPlanMembersForSourceContext(result, source_context, module_idx, pattern_idx, callable_inst_id);
+        var merged = std.ArrayList(CallableInstId).empty;
+        defer merged.deinit(self.allocator);
+        if (result.getContextPatternValuePlan(source_context, module_idx, pattern_idx)) |existing_plan| {
+            try self.existingValuePlanMembers(result, existing_plan, &merged);
         }
+        try self.appendUniqueCallableInsts(&merged, callable_inst_ids);
+        std.mem.sortUnstable(CallableInstId, merged.items, {}, struct {
+            fn lessThan(_: void, lhs: CallableInstId, rhs: CallableInstId) bool {
+                return @intFromEnum(lhs) < @intFromEnum(rhs);
+            }
+        }.lessThan);
         try self.ensureRecordedCallableInstsScanned(result, callable_inst_ids);
-        try self.finalizeContextPatternCallablePlanFromPlanMembers(result, source_context, module_idx, pattern_idx);
-    }
-
-    fn finalizeContextPatternCallablePlanFromPlanMembers(
-        self: *Pass,
-        result: *Result,
-        source_context: SourceContext,
-        module_idx: u32,
-        pattern_idx: CIR.Pattern.Idx,
-    ) Allocator.Error!void {
         const key = self.resultPatternKeyForSourceContext(source_context, module_idx, pattern_idx);
-        const set_id = result.lambdamono.context_pattern_member_sets.get(key) orelse {
-            self.removeTracked(.context_pattern_value_plans, &result.lambdamono.context_pattern_value_plans, key);
-            return;
-        };
-        const members = result.lambdamono.getPlanMemberSetMembers(set_id);
-        if (members.len == 1) {
-            try self.putTracked(.context_pattern_value_plans, &result.lambdamono.context_pattern_value_plans, key, ValuePlan{ .direct = members[0] });
+        if (merged.items.len == 1) {
+            try self.upsertContextPatternValueSite(&result.lambdamono, key, .{ .direct = merged.items[0] });
         } else {
-            self.removeTracked(.context_pattern_value_plans, &result.lambdamono.context_pattern_value_plans, key);
-            _ = try self.ensurePackedFn(result, set_id);
+            const member_set_id = try self.internPlanMemberSet(result, merged.items);
+            const packed_fn_id = try self.ensurePackedFn(result, member_set_id);
+            try self.upsertContextPatternValueSite(&result.lambdamono, key, .{ .packed_fn = packed_fn_id });
         }
     }
 
@@ -7870,14 +7906,13 @@ pub const Pass = struct {
         expr_idx: CIR.Expr.Idx,
         callable_inst_id: CallableInstId,
     ) Allocator.Error!void {
-        try self.mergeLookupExprPlanMembersForSourceContext(
+        return self.recordLookupExprPlanMembersWithRoot(
             result,
             source_context,
             module_idx,
             expr_idx,
-            callable_inst_id,
+            &.{callable_inst_id},
         );
-        try self.finalizeLookupExprCallablePlanFromPlanMembers(result, source_context, module_idx, expr_idx);
     }
 
     fn recordLookupExprCallableInst(
@@ -7924,29 +7959,22 @@ pub const Pass = struct {
     ) Allocator.Error!void {
         if (callable_inst_ids.len == 0) unreachable;
 
-        for (callable_inst_ids) |callable_inst_id| {
-            try self.mergeLookupExprPlanMembersForSourceContext(result, source_context, module_idx, expr_idx, callable_inst_id);
+        var merged = std.ArrayList(CallableInstId).empty;
+        defer merged.deinit(self.allocator);
+        if (result.getLookupExprValuePlan(source_context, module_idx, expr_idx)) |existing_plan| {
+            try self.existingValuePlanMembers(result, existing_plan, &merged);
         }
+        try self.appendUniqueCallableInsts(&merged, callable_inst_ids);
+        std.mem.sortUnstable(CallableInstId, merged.items, {}, struct {
+            fn lessThan(_: void, lhs: CallableInstId, rhs: CallableInstId) bool {
+                return @intFromEnum(lhs) < @intFromEnum(rhs);
+            }
+        }.lessThan);
         try self.ensureRecordedCallableInstsScanned(result, callable_inst_ids);
-        try self.finalizeLookupExprCallablePlanFromPlanMembers(result, source_context, module_idx, expr_idx);
-    }
-
-    fn finalizeLookupExprCallablePlanFromPlanMembers(
-        self: *Pass,
-        result: *Result,
-        source_context: SourceContext,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-    ) Allocator.Error!void {
         const key = self.resultExprKeyForSourceContext(source_context, module_idx, expr_idx);
-        const set_id = result.lambdamono.lookup_expr_member_sets.get(key) orelse {
-            self.removeTracked(.lookup_expr_value_plans, &result.lambdamono.lookup_expr_value_plans, key);
-            return;
-        };
-        const members = result.lambdamono.getPlanMemberSetMembers(set_id);
-        if (members.len == 1) {
-            try self.putTracked(.lookup_expr_value_plans, &result.lambdamono.lookup_expr_value_plans, key, ValuePlan{ .direct = members[0] });
-            const callable_inst = result.getCallableInst(members[0]).*;
+        if (merged.items.len == 1) {
+            try self.upsertLookupExprValueSite(&result.lambdamono, key, .{ .direct = merged.items[0] });
+            const callable_inst = result.getCallableInst(merged.items[0]).*;
             try self.recordExprMonotypeForSourceContext(
                 result,
                 source_context,
@@ -7956,8 +7984,9 @@ pub const Pass = struct {
                 callable_inst.fn_monotype_module_idx,
             );
         } else {
-            self.removeTracked(.lookup_expr_value_plans, &result.lambdamono.lookup_expr_value_plans, key);
-            _ = try self.ensurePackedFn(result, set_id);
+            const member_set_id = try self.internPlanMemberSet(result, merged.items);
+            const packed_fn_id = try self.ensurePackedFn(result, member_set_id);
+            try self.upsertLookupExprValueSite(&result.lambdamono, key, .{ .packed_fn = packed_fn_id });
         }
     }
 
@@ -7968,8 +7997,8 @@ pub const Pass = struct {
     ) Allocator.Error!PackedFnId {
         if (result.lambdamono.packed_fn_ids_by_member_set.get(member_set_id)) |existing| return existing;
 
-        const packed_fn_id: PackedFnId = @enumFromInt(result.program.packed_fns.items.len);
-        try self.appendTracked(.packed_fns, &result.program.packed_fns, .{
+        const packed_fn_id: PackedFnId = @enumFromInt(result.lambdamono.packed_fns.items.len);
+        try self.appendTracked(.packed_fns, &result.lambdamono.packed_fns, .{
             .members = result.lambdamono.plan_member_sets.items[@intFromEnum(member_set_id)].members,
         });
         try self.putTracked(
@@ -7988,8 +8017,8 @@ pub const Pass = struct {
     ) Allocator.Error!IndirectCallId {
         if (result.lambdamono.indirect_call_ids_by_member_set.get(member_set_id)) |existing| return existing;
 
-        const indirect_call_id: IndirectCallId = @enumFromInt(result.program.indirect_calls.items.len);
-        try self.appendTracked(.indirect_calls, &result.program.indirect_calls, .{
+        const indirect_call_id: IndirectCallId = @enumFromInt(result.lambdamono.indirect_calls.items.len);
+        try self.appendTracked(.indirect_calls, &result.lambdamono.indirect_calls, .{
             .members = result.lambdamono.plan_member_sets.items[@intFromEnum(member_set_id)].members,
         });
         try self.putTracked(
@@ -10452,7 +10481,7 @@ pub const Pass = struct {
         const subst_id = if (self.all_module_envs[template.module_idx].types.needsInstantiation(template.type_root))
             try self.ensureTypeSubst(result, template.*, canonical_fn_monotype, canonical_fn_monotype_module_idx)
         else
-            null;
+            result.context_mono.getEmptyTypeSubstId();
 
         for (result.lambdamono.callable_insts.items, 0..) |existing_callable_inst, idx| {
             if (existing_callable_inst.template != template_id) continue;
@@ -10471,6 +10500,7 @@ pub const Pass = struct {
             if (mono_equal) {
                 if (existing_callable_inst.subst != subst_id) continue;
                 const existing_id: CallableInstId = @enumFromInt(idx);
+                try self.ensureSingletonPlanMemberSet(result, existing_id);
                 if (scan_body) {
                     try self.scanCallableInst(result, existing_id);
                 }
@@ -10479,9 +10509,17 @@ pub const Pass = struct {
         }
 
         const callable_param_spec_span = try self.addCallableParamSpecEntries(result, callable_param_specs);
-        const callable_def_id: CallableDefId = @enumFromInt(result.program.callable_defs.items.len);
-        try result.program.callable_defs.append(self.allocator, .{
-            .source_member = null,
+        const callable_inst_id: CallableInstId = @enumFromInt(result.lambdamono.callable_insts.items.len);
+        const callable_def_id: CallableDefId = @enumFromInt(result.lambdamono.callable_defs.items.len);
+        try result.lambdamono.callable_defs.append(self.allocator, .{
+            .source_member = try self.ensureCallableSourceMember(
+                result,
+                @enumFromInt(@intFromEnum(callable_inst_id)),
+                template_id,
+                resolvedMonotype(canonical_fn_monotype, canonical_fn_monotype_module_idx),
+                result.lambdasolved.getEmptyCapturePlanId(),
+                solvedCallableKindForRuntimeValue(template.kind, .direct),
+            ),
             .module_idx = template.module_idx,
             .source_expr = template.cir_expr,
             .fn_monotype = resolvedMonotype(canonical_fn_monotype, canonical_fn_monotype_module_idx),
@@ -10489,7 +10527,6 @@ pub const Pass = struct {
             .callable_kind = .direct,
             .source_region = template.source_region,
         });
-        const callable_inst_id: CallableInstId = @enumFromInt(result.lambdamono.callable_insts.items.len);
         try self.appendTracked(.callable_insts, &result.lambdamono.callable_insts, CallableInst{
             .template = template_id,
             .subst = subst_id,
@@ -10500,6 +10537,7 @@ pub const Pass = struct {
             .callable_def = callable_def_id,
             .runtime_value = .direct_lambda,
         });
+        try self.ensureSingletonPlanMemberSet(result, callable_inst_id);
         if (scan_body) {
             try self.scanCallableInst(result, callable_inst_id);
         }
@@ -10534,6 +10572,16 @@ pub const Pass = struct {
             .start = start,
             .len = @intCast(entries.len),
         };
+    }
+
+    fn ensureSingletonPlanMemberSet(
+        self: *Pass,
+        result: *Result,
+        callable_inst_id: CallableInstId,
+    ) Allocator.Error!void {
+        if (result.lambdamono.singleton_plan_member_set_ids_by_callable_inst.contains(callable_inst_id)) return;
+        const member_set_id = try self.internPlanMemberSet(result, &.{callable_inst_id});
+        try result.lambdamono.singleton_plan_member_set_ids_by_callable_inst.put(self.allocator, callable_inst_id, member_set_id);
     }
 
     fn appendCallableParamSpecEntry(

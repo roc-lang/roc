@@ -66,12 +66,6 @@ pub const TypeSubstSpan = extern struct {
 
 pub const TypeSubstId = enum(u32) {
     _,
-
-    pub const none: TypeSubstId = @enumFromInt(std.math.maxInt(u32));
-
-    pub fn isNone(self: TypeSubstId) bool {
-        return self == none;
-    }
 };
 
 pub const TypeSubst = struct {
@@ -103,6 +97,7 @@ pub const Result = struct {
     monotype_store: Monotype.Store,
     subst_entries: std.ArrayListUnmanaged(TypeSubstEntry),
     substs: std.ArrayListUnmanaged(TypeSubst),
+    empty_subst_id: TypeSubstId,
     context_expr_monotypes: std.AutoHashMapUnmanaged(ContextExprKey, ResolvedMonotype),
     context_pattern_monotypes: std.AutoHashMapUnmanaged(ContextPatternKey, ResolvedMonotype),
     resolved_typevar_monotypes: std.AutoHashMapUnmanaged(BoundTypeVarKey, ResolvedMonotype),
@@ -110,16 +105,19 @@ pub const Result = struct {
     resolved_dispatch_targets: std.AutoHashMapUnmanaged(ContextExprKey, DispatchExprTarget),
 
     pub fn init(allocator: Allocator) !Result {
-        return .{
+        var result: Result = .{
             .monotype_store = try Monotype.Store.init(allocator),
             .subst_entries = .empty,
             .substs = .empty,
+            .empty_subst_id = @enumFromInt(0),
             .context_expr_monotypes = .empty,
             .context_pattern_monotypes = .empty,
             .resolved_typevar_monotypes = .empty,
             .type_scope_monotypes = .empty,
             .resolved_dispatch_targets = .empty,
         };
+        try result.substs.append(allocator, .{ .entries = TypeSubstSpan.empty() });
+        return result;
     }
 
     pub fn deinit(self: *Result, allocator: Allocator) void {
@@ -239,6 +237,10 @@ pub const Result = struct {
 
     pub fn getTypeSubst(self: *const Result, subst_id: TypeSubstId) *const TypeSubst {
         return &self.substs.items[@intFromEnum(subst_id)];
+    }
+
+    pub fn getEmptyTypeSubstId(self: *const Result) TypeSubstId {
+        return self.empty_subst_id;
     }
 
     pub fn getTypeSubstEntries(self: *const Result, span: TypeSubstSpan) []const TypeSubstEntry {
