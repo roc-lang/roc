@@ -651,12 +651,7 @@ fn getCallLowLevelOp(self: *Self, caller_env: *const ModuleEnv, func_expr_idx: C
 fn getLocalLowLevelOp(module_env: *const ModuleEnv, pattern_idx: CIR.Pattern.Idx) ?CIR.Expr.LowLevel {
     const def_idx = findDefByPattern(module_env, pattern_idx) orelse return null;
     const def = module_env.store.getDef(def_idx);
-    const def_expr = module_env.store.getExpr(def.expr);
-    if (def_expr == .e_lambda) {
-        const body_expr = module_env.store.getExpr(def_expr.e_lambda.body);
-        if (body_expr == .e_run_low_level) return body_expr.e_run_low_level.op;
-    }
-    return null;
+    return exprLowLevelOp(module_env.store.getExpr(def.expr), module_env);
 }
 
 fn findDefByPattern(module_env: *const ModuleEnv, pattern_idx: CIR.Pattern.Idx) ?CIR.Def.Idx {
@@ -677,11 +672,17 @@ fn getExternalLowLevelOp(
     if (!ext_env.store.isDefNode(lookup.target_node_idx)) return null;
     const def_idx: CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
     const def = ext_env.store.getDef(def_idx);
-    const def_expr = ext_env.store.getExpr(def.expr);
-    if (def_expr == .e_lambda) {
-        const body_expr = ext_env.store.getExpr(def_expr.e_lambda.body);
-        if (body_expr == .e_run_low_level) return body_expr.e_run_low_level.op;
-    }
+    return exprLowLevelOp(ext_env.store.getExpr(def.expr), ext_env);
+}
+
+fn exprLowLevelOp(expr: CIR.Expr, module_env: *const ModuleEnv) ?CIR.Expr.LowLevel {
+    const body_expr_idx = switch (expr) {
+        .e_lambda => |lambda_expr| lambda_expr.body,
+        .e_hosted_lambda => |hosted_expr| hosted_expr.body,
+        else => return null,
+    };
+    const body_expr = module_env.store.getExpr(body_expr_idx);
+    if (body_expr == .e_run_low_level) return body_expr.e_run_low_level.op;
     return null;
 }
 
@@ -1016,6 +1017,17 @@ fn identTextForCompare(self: *const Self, ident: Ident.Idx) ?[]const u8 {
         }
     }
 
+    return null;
+}
+
+fn exposedNameForNode(self: *const Self, module_idx: u32, node_idx: u16) ?[]const u8 {
+    const module_env = self.all_module_envs[module_idx];
+    var exposed_items = module_env.common.exposed_items;
+    exposed_items.ensureSorted(module_env.gpa);
+    for (exposed_items.items.entries.items) |entry| {
+        if (entry.value != node_idx) continue;
+        return module_env.getIdent(@bitCast(entry.key));
+    }
     return null;
 }
 
@@ -2607,6 +2619,17 @@ fn lowerLookupLocalInto(
     target: MIR.LocalId,
     next: MIR.CFStmtId,
 ) Allocator.Error!MIR.CFStmtId {
+    return self.lowerLookupLocalIntoWithExactCallableInst(expr_idx, lookup, target, next, null);
+}
+
+fn lowerLookupLocalIntoWithExactCallableInst(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+    lookup: anytype,
+    target: MIR.LocalId,
+    next: MIR.CFStmtId,
+    exact_callable_inst_override: ?Pipeline.CallableInstId,
+) Allocator.Error!MIR.CFStmtId {
     const pattern_source_expr = self.callable_pipeline.lambda_solved.getPatternSourceExpr(
         self.current_module_idx,
         lookup.pattern_idx,
@@ -2640,7 +2663,7 @@ fn lowerLookupLocalInto(
         const symbol = try self.lookupSymbolForPattern(self.current_module_idx, lookup.pattern_idx);
         const target_monotype = self.store.getLocal(target).monotype;
         const exact_callable_inst = if (self.store.monotype_store.getMonotype(target_monotype) == .func)
-            requireExactCallableInst(
+            exact_callable_inst_override orelse requireExactCallableInst(
                 self.lookupPipelinedLookupCallableInst(expr_idx),
                 "local top-level def lookup expr {d} lacked an exact callable specialization",
                 .{@intFromEnum(expr_idx)},
@@ -2791,6 +2814,18 @@ fn lowerLookupExternalInto(
     target: MIR.LocalId,
     next: MIR.CFStmtId,
 ) Allocator.Error!MIR.CFStmtId {
+    return self.lowerLookupExternalIntoWithExactCallableInst(expr_idx, module_env, lookup, target, next, null);
+}
+
+fn lowerLookupExternalIntoWithExactCallableInst(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+    module_env: *const ModuleEnv,
+    lookup: anytype,
+    target: MIR.LocalId,
+    next: MIR.CFStmtId,
+    exact_callable_inst_override: ?Pipeline.CallableInstId,
+) Allocator.Error!MIR.CFStmtId {
     const target_module_idx = self.resolveImportedModuleIdx(module_env, lookup.module_idx) orelse unreachable;
     if (!self.all_module_envs[target_module_idx].store.isDefNode(lookup.target_node_idx)) {
         std.debug.panic(
@@ -2802,10 +2837,19 @@ fn lowerLookupExternalInto(
     const symbol = try self.internExternalDefSymbol(target_module_idx, lookup.target_node_idx);
     const target_monotype = self.store.getLocal(target).monotype;
     const exact_callable_inst = if (self.store.monotype_store.getMonotype(target_monotype) == .func)
-        requireExactCallableInst(
+        exact_callable_inst_override orelse requireExactCallableInst(
             self.lookupPipelinedLookupCallableInst(expr_idx),
-            "external lookup expr {d} lacked an exact callable specialization",
-            .{@intFromEnum(expr_idx)},
+            "external lookup expr {d} in module {d} targeting module {d} node {d} ('{s}') lacked an exact callable specialization (source_context={s} callable_inst={d} root_expr={d})",
+            .{
+                @intFromEnum(expr_idx),
+                self.current_module_idx,
+                target_module_idx,
+                lookup.target_node_idx,
+                self.exposedNameForNode(target_module_idx, lookup.target_node_idx) orelse "<unknown>",
+                @tagName(self.currentSourceContext()),
+                self.currentCallableInstRawForDebug(),
+                self.currentRootExprRawForDebug(),
+            },
         )
     else
         null;
@@ -2820,6 +2864,18 @@ fn lowerLookupRequiredInto(
     target: MIR.LocalId,
     next: MIR.CFStmtId,
 ) Allocator.Error!MIR.CFStmtId {
+    return self.lowerLookupRequiredIntoWithExactCallableInst(expr_idx, module_env, lookup, target, next, null);
+}
+
+fn lowerLookupRequiredIntoWithExactCallableInst(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+    module_env: *const ModuleEnv,
+    lookup: anytype,
+    target: MIR.LocalId,
+    next: MIR.CFStmtId,
+    exact_callable_inst_override: ?Pipeline.CallableInstId,
+) Allocator.Error!MIR.CFStmtId {
     const target_lookup = self.resolveRequiredLookupTarget(module_env, lookup) orelse std.debug.panic(
         "statement-only MIR TODO: required lookup could not be resolved to an app export",
         .{},
@@ -2828,7 +2884,7 @@ fn lowerLookupRequiredInto(
     const symbol = try self.lookupSymbolForPattern(target_lookup.module_idx, def.pattern);
     const target_monotype = self.store.getLocal(target).monotype;
     const exact_callable_inst = if (self.store.monotype_store.getMonotype(target_monotype) == .func)
-        requireExactCallableInst(
+        exact_callable_inst_override orelse requireExactCallableInst(
             self.lookupPipelinedLookupCallableInst(expr_idx),
             "required lookup expr {d} lacked an exact callable specialization",
             .{@intFromEnum(expr_idx)},
@@ -4030,7 +4086,7 @@ fn lowerResolvedDispatchTargetCallInto(
             .{@intFromEnum(result_expr_idx)},
         );
     } else {
-        try self.refreshCallTargetMonotypeFromCallee(target, self.store.getLocal(callee_local).monotype);
+        try self.refreshCallTargetMonotypeFromCallee(target, callee_monotype);
     }
 
     std.mem.reverse(MIR.LocalId, self.scratch_local_ids.items.items[top..]);
@@ -4131,7 +4187,21 @@ fn lowerCallInto(
         lowered_next = try self.lowerCirExprInto(arg_idx, arg_local, lowered_next);
     }
 
-    lowered_next = try self.lowerCirExprInto(call.func, callee_local, lowered_next);
+    lowered_next = switch (module_env.store.getExpr(call.func)) {
+        .e_lookup_local => |lookup| if (exact_callable_inst_id) |callable_inst_id|
+            try self.lowerLookupLocalIntoWithExactCallableInst(call.func, lookup, callee_local, lowered_next, callable_inst_id)
+        else
+            try self.lowerLookupLocalInto(call.func, lookup, callee_local, lowered_next),
+        .e_lookup_external => |lookup| if (exact_callable_inst_id) |callable_inst_id|
+            try self.lowerLookupExternalIntoWithExactCallableInst(call.func, module_env, lookup, callee_local, lowered_next, callable_inst_id)
+        else
+            try self.lowerLookupExternalInto(call.func, module_env, lookup, callee_local, lowered_next),
+        .e_lookup_required => |lookup| if (exact_callable_inst_id) |callable_inst_id|
+            try self.lowerLookupRequiredIntoWithExactCallableInst(call.func, module_env, lookup, callee_local, lowered_next, callable_inst_id)
+        else
+            try self.lowerLookupRequiredInto(call.func, module_env, lookup, callee_local, lowered_next),
+        else => try self.lowerCirExprInto(call.func, callee_local, lowered_next),
+    };
 
     const target_monotype = self.store.getLocal(target).monotype;
     const exact_result_callable_inst_id = if (self.store.monotype_store.getMonotype(target_monotype) == .func)
@@ -4146,7 +4216,7 @@ fn lowerCallInto(
             .{@intFromEnum(call_expr_idx)},
         );
     } else {
-        try self.refreshCallTargetMonotypeFromCallee(target, self.store.getLocal(callee_local).monotype);
+        try self.refreshCallTargetMonotypeFromCallee(target, callee_monotype);
     }
 
     std.mem.reverse(MIR.LocalId, self.scratch_local_ids.items.items[top..]);
@@ -8227,9 +8297,10 @@ fn requirePatternMonotype(
     }
 
     std.debug.panic(
-        "statement-only MIR invariant violated: missing exact monotype for pattern {d} in module {d} scope={d} callable_inst={d} root_source_expr={d}",
+        "statement-only MIR invariant violated: missing exact monotype for pattern {d} kind={s} in module {d} scope={d} callable_inst={d} root_source_expr={d}",
         .{
             @intFromEnum(pattern_idx),
+            @tagName(self.all_module_envs[self.current_module_idx].store.getPattern(pattern_idx)),
             self.current_module_idx,
             self.current_pattern_scope,
             self.currentCallableInstRawForDebug(),

@@ -1889,14 +1889,19 @@ fn lowerDirectLambdaCall(
     const callee_ret_layout = self.loweredProcRetLayout(lowered_proc);
     const target_layout = self.lir_store.getLocal(lowered_target).layout_idx;
     if (callee_ret_layout != target_layout) {
+        const target_mono = self.mir_store.getLocal(target).monotype;
+        const lambda_ret_mono = lambda.ret_monotype;
         std.debug.panic(
-            "MirToLir invariant violated: direct call result layout mismatch target_local={d} target_mono={d} target_layout={d} callee_local={d} lambda={d} callee_ret_layout={d}",
+            "MirToLir invariant violated: direct call result layout mismatch target_local={d} target_mono={d} target_mono_value={any} target_layout={d} callee_local={d} lambda={d} lambda_ret_mono={d} lambda_ret_mono_value={any} callee_ret_layout={d}",
             .{
                 @intFromEnum(target),
-                @intFromEnum(self.mir_store.getLocal(target).monotype),
+                @intFromEnum(target_mono),
+                self.mir_store.monotype_store.getMonotype(target_mono),
                 @intFromEnum(target_layout),
                 @intFromEnum(callee_mir),
                 @intFromEnum(resolved.lambda),
+                @intFromEnum(lambda_ret_mono),
+                self.mir_store.monotype_store.getMonotype(lambda_ret_mono),
                 @intFromEnum(callee_ret_layout),
             },
         );
