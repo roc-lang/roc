@@ -65,6 +65,7 @@ pub const TypeSubst = ContextMono.TypeSubst;
 
 /// One concrete instantiation of a semantic callable template.
 pub const CallableInst = Lambdamono.CallableInst;
+pub const RuntimeValue = Lambdamono.RuntimeValue;
 
 /// One callable requirement originating from a higher-order parameter.
 pub const CallableParamSpecEntry = Lambdamono.CallableParamSpecEntry;
@@ -1595,7 +1596,6 @@ pub const Pass = struct {
                 ),
             };
             const callable_def = &result.lambdamono.callable_defs.items[@intFromEnum(callable_inst.callable_def)];
-            callable_def.arg_patterns = boundary.arg_patterns;
             _ = try self.ensureProgramExpr(
                 result,
                 build_state,
@@ -3060,11 +3060,11 @@ pub const Pass = struct {
 
     fn solvedCallableKindForRuntimeValue(
         template_kind: CallableTemplateKind,
-        callable_kind: RuntimeCallableKind,
+        runtime_value: Lambdamono.RuntimeValue,
     ) Lambdasolved.SolvedCallableKind {
         if (template_kind == .hosted_lambda) return .hosted;
-        return switch (callable_kind) {
-            .direct => .direct,
+        return switch (runtime_value) {
+            .direct_lambda => .direct,
             .closure => .closure,
         };
     }
@@ -3166,7 +3166,7 @@ pub const Pass = struct {
             callable_inst.template,
             resolvedMonotype(callable_inst.fn_monotype, callable_inst.fn_monotype_module_idx),
             try self.ensureCapturePlan(result, capture_entries.items),
-            solvedCallableKindForRuntimeValue(template.kind, callable_def.callable_kind),
+            solvedCallableKindForRuntimeValue(template.kind, callable_inst.runtime_value),
         );
     }
 
@@ -3200,7 +3200,6 @@ pub const Pass = struct {
         }
 
         callable_def.source_expr = source_expr_idx;
-        callable_def.callable_kind = if (runtime_field_monotypes.items.len == 0) .direct else .closure;
 
         const capture_span: CaptureFieldSpan = if (capture_fields.len == 0)
             .empty()
@@ -11109,7 +11108,6 @@ pub const Pass = struct {
             .fn_monotype = resolvedMonotype(canonical_fn_monotype, canonical_fn_monotype_module_idx),
             .param_value_plan_entries = .empty(),
             .captures = .empty(),
-            .callable_kind = .direct,
             .source_region = template.source_region,
         });
         try self.appendTracked(.callable_insts, &result.lambdamono.callable_insts, CallableInst{

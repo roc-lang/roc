@@ -452,6 +452,13 @@ fn activeCallableDef(self: *const Self) ?*const Pipeline.CallableDef {
     return self.callable_pipeline.getCallableDefForInst(callable_inst_id);
 }
 
+fn callableRuntimeValueKindText(runtime_value: Pipeline.RuntimeValue) []const u8 {
+    return switch (runtime_value) {
+        .direct_lambda => "direct",
+        .closure => "closure",
+    };
+}
+
 fn currentRootExprRawForDebug(self: *const Self) u32 {
     if (self.source_context_stack.items.len == 0) return std.math.maxInt(u32);
     return switch (self.currentSourceContext()) {
@@ -2748,6 +2755,12 @@ fn lowerLookupLocalIntoWithExactCallableInst(
             lookup.pattern_idx,
         ) != null;
         const active_callable_def = self.activeCallableDef();
+        const active_callable_kind = switch (self.currentSourceContext()) {
+            .callable_inst => |context_id| callableRuntimeValueKindText(
+                self.callable_pipeline.getCallableInst(@enumFromInt(@intFromEnum(context_id))).runtime_value,
+            ),
+            .root_expr, .provenance_expr, .template_expr => "none",
+        };
         std.debug.panic(
             "statement-only MIR invariant violated: local lookup pattern {d} ({s}:{s}) in scope={d} had no in-scope local or specialized lookup resolution, root_local={any}, callable_inst={d}, callable_kind={s}, callable_expr={d}",
             .{
@@ -2757,7 +2770,7 @@ fn lowerLookupLocalIntoWithExactCallableInst(
                 self.current_pattern_scope,
                 has_root_local,
                 self.currentCallableInstRawForDebug(),
-                if (active_callable_def) |callable_def| @tagName(callable_def.callable_kind) else "none",
+                active_callable_kind,
                 if (active_callable_def) |callable_def| @intFromEnum(callable_def.source_expr) else std.math.maxInt(u32),
             },
         );
@@ -5986,10 +5999,10 @@ fn debugAssertNoUnitPrimPatternBinding(
             else => "none",
         };
     } else "none";
-    const callsite_callable_kind: []const u8 = if (maybe_callsite_inst) |callsite_inst| blk: {
-        const callable_def = self.callable_pipeline.getCallableDefForInst(callsite_inst);
-        break :blk @tagName(callable_def.callable_kind);
-    } else "none";
+    const callsite_callable_kind: []const u8 = if (maybe_callsite_inst) |callsite_inst|
+        callableRuntimeValueKindText(self.callable_pipeline.getCallableInst(callsite_inst).runtime_value)
+    else
+        "none";
     const callsite_fn_monotype: []const u8 = if (maybe_callsite_inst) |callsite_inst| blk: {
         const callable_inst = self.callable_pipeline.lambdamono.getCallableInst(callsite_inst);
         break :blk @tagName(self.callable_pipeline.context_mono.monotype_store.getMonotype(callable_inst.fn_monotype));
@@ -8294,6 +8307,12 @@ fn bindTypeVarMonotypes(self: *Self, type_var: types.Var, monotype: Monotype.Idx
     if (self.type_var_seen.get(resolved.var_)) |existing| {
         if (!(try self.monotypesStructurallyEqual(existing, monotype))) {
             const active_callable_def = self.activeCallableDef();
+            const active_callable_kind = switch (self.currentSourceContext()) {
+                .callable_inst => |context_id| callableRuntimeValueKindText(
+                    self.callable_pipeline.getCallableInst(@enumFromInt(@intFromEnum(context_id))).runtime_value,
+                ),
+                .root_expr, .provenance_expr, .template_expr => "none",
+            };
             const context_region = if (active_callable_def) |callable_def|
                 callable_def.source_region
             else
@@ -8313,7 +8332,7 @@ fn bindTypeVarMonotypes(self: *Self, type_var: types.Var, monotype: Monotype.Idx
                     self.currentCallableInstRawForDebug(),
                     self.currentRootExprRawForDebug(),
                     if (active_callable_def) |callable_def| @intFromEnum(callable_def.source_expr) else std.math.maxInt(u32),
-                    if (active_callable_def) |callable_def| @tagName(callable_def.callable_kind) else "none",
+                    active_callable_kind,
                     context_region,
                 },
             );

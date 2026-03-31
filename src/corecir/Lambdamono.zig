@@ -194,11 +194,6 @@ pub const CallableDefId = enum(u32) {
     _,
 };
 
-pub const RuntimeCallableKind = enum {
-    direct,
-    closure,
-};
-
 pub const CaptureField = struct {
     pattern_idx: CIR.Pattern.Idx,
     local_monotype: ContextMono.ResolvedMonotype,
@@ -221,10 +216,8 @@ pub const CallableDef = struct {
     module_idx: u32,
     source_expr: CIR.Expr.Idx,
     fn_monotype: ContextMono.ResolvedMonotype,
-    arg_patterns: CIR.Pattern.Span = base.DataSpan.empty().as(CIR.Pattern.Span),
     param_value_plan_entries: CallableParamValuePlanSpan = .empty(),
     captures: CaptureFieldSpan = .empty(),
-    callable_kind: RuntimeCallableKind,
     source_region: Region,
 };
 
