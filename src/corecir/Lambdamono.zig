@@ -90,19 +90,45 @@ pub const IndirectCall = struct {
     members: PlanMemberSpan,
 };
 
-pub const ExprValueSiteId = enum(u32) {
+pub const ExprId = enum(u32) {
     _,
 };
 
-pub const LookupExprValueSiteId = enum(u32) {
+pub const ExprIdSpan = extern struct {
+    start: u32,
+    len: u16,
+
+    pub fn empty() ExprIdSpan {
+        return .{ .start = 0, .len = 0 };
+    }
+
+    pub fn isEmpty(self: ExprIdSpan) bool {
+        return self.len == 0;
+    }
+};
+
+pub const StmtId = enum(u32) {
     _,
 };
 
-pub const ContextPatternValueSiteId = enum(u32) {
+pub const StmtIdSpan = extern struct {
+    start: u32,
+    len: u16,
+
+    pub fn empty() StmtIdSpan {
+        return .{ .start = 0, .len = 0 };
+    }
+
+    pub fn isEmpty(self: StmtIdSpan) bool {
+        return self.len == 0;
+    }
+};
+
+pub const RootExprId = enum(u32) {
     _,
 };
 
-pub const CallSiteId = enum(u32) {
+pub const ValuePlanId = enum(u32) {
     _,
 };
 
@@ -114,6 +140,11 @@ pub const ValuePlan = union(enum) {
 pub const CallPlan = union(enum) {
     direct: CallableInstId,
     indirect: IndirectCallId,
+};
+
+pub const LookupResolution = union(enum) {
+    source_expr: Lambdasolved.ExprSource,
+    def: Lambdasolved.ExternalDefSource,
 };
 
 pub const PlanMemberSpan = extern struct {
@@ -190,29 +221,68 @@ pub const CallableDef = struct {
     module_idx: u32,
     source_expr: CIR.Expr.Idx,
     fn_monotype: ContextMono.ResolvedMonotype,
+    arg_patterns: CIR.Pattern.Span = base.DataSpan.empty().as(CIR.Pattern.Span),
+    param_value_plan_entries: CallableParamValuePlanSpan = .empty(),
     captures: CaptureFieldSpan = .empty(),
     callable_kind: RuntimeCallableKind,
     source_region: Region,
 };
 
-pub const ExprValueSite = struct {
-    key: ContextExprKey,
-    plan: ValuePlan,
+pub const ValuePlanSpan = extern struct {
+    start: u32,
+    len: u16,
+
+    pub fn empty() ValuePlanSpan {
+        return .{ .start = 0, .len = 0 };
+    }
+
+    pub fn isEmpty(self: ValuePlanSpan) bool {
+        return self.len == 0;
+    }
 };
 
-pub const LookupExprValueSite = struct {
-    key: ContextExprKey,
-    plan: ValuePlan,
+pub const CallableParamValuePlanEntry = struct {
+    pattern_idx: CIR.Pattern.Idx,
+    plan: ValuePlanId,
 };
 
-pub const ContextPatternValueSite = struct {
-    key: ContextPatternKey,
-    plan: ValuePlan,
+pub const CallableParamValuePlanSpan = extern struct {
+    start: u32,
+    len: u16,
+
+    pub fn empty() CallableParamValuePlanSpan {
+        return .{ .start = 0, .len = 0 };
+    }
+
+    pub fn isEmpty(self: CallableParamValuePlanSpan) bool {
+        return self.len == 0;
+    }
 };
 
-pub const CallSite = struct {
+pub const ExprSemantics = struct {
+    value_plan: ?ValuePlanId = null,
+    call_plan: ?CallPlan = null,
+    dispatch_target: ?ContextMono.DispatchExprTarget = null,
+    lookup_resolution: ?LookupResolution = null,
+};
+
+pub const Expr = struct {
+    module_idx: u32,
+    source_expr: CIR.Expr.Idx,
+    child_exprs: ExprIdSpan = .empty(),
+    child_stmts: StmtIdSpan = .empty(),
+    semantics: ExprSemantics = .{},
+};
+
+pub const Stmt = struct {
+    module_idx: u32,
+    source_stmt: CIR.Statement.Idx,
+    child_exprs: ExprIdSpan = .empty(),
+};
+
+pub const RootExpr = struct {
     key: ContextExprKey,
-    plan: CallPlan,
+    body_expr: ExprId,
 };
 
 pub const Program = struct {
@@ -224,14 +294,15 @@ pub const Program = struct {
     singleton_plan_member_set_ids_by_callable_inst: std.AutoHashMapUnmanaged(CallableInstId, PlanMemberSetId),
     packed_fn_ids_by_member_set: std.AutoHashMapUnmanaged(PlanMemberSetId, PackedFnId),
     indirect_call_ids_by_member_set: std.AutoHashMapUnmanaged(PlanMemberSetId, IndirectCallId),
-    expr_value_sites: std.ArrayListUnmanaged(ExprValueSite),
-    expr_value_site_ids_by_key: std.AutoHashMapUnmanaged(ContextExprKey, ExprValueSiteId),
-    lookup_expr_value_sites: std.ArrayListUnmanaged(LookupExprValueSite),
-    lookup_expr_value_site_ids_by_key: std.AutoHashMapUnmanaged(ContextExprKey, LookupExprValueSiteId),
-    context_pattern_value_sites: std.ArrayListUnmanaged(ContextPatternValueSite),
-    context_pattern_value_site_ids_by_key: std.AutoHashMapUnmanaged(ContextPatternKey, ContextPatternValueSiteId),
-    call_sites: std.ArrayListUnmanaged(CallSite),
-    call_site_ids_by_key: std.AutoHashMapUnmanaged(ContextExprKey, CallSiteId),
+    value_plan_entries: std.ArrayListUnmanaged(ValuePlan),
+    callable_param_value_plan_entries: std.ArrayListUnmanaged(CallableParamValuePlanEntry),
+    exprs: std.ArrayListUnmanaged(Expr),
+    expr_ids_by_key: std.AutoHashMapUnmanaged(ContextExprKey, ExprId),
+    expr_child_entries: std.ArrayListUnmanaged(ExprId),
+    stmts: std.ArrayListUnmanaged(Stmt),
+    stmt_child_entries: std.ArrayListUnmanaged(StmtId),
+    root_exprs: std.ArrayListUnmanaged(RootExpr),
+    root_expr_ids_by_key: std.AutoHashMapUnmanaged(ContextExprKey, RootExprId),
     callable_defs: std.ArrayListUnmanaged(CallableDef),
     capture_fields: std.ArrayListUnmanaged(CaptureField),
     plan_member_entries: std.ArrayListUnmanaged(CallableInstId),
@@ -248,14 +319,15 @@ pub const Program = struct {
             .singleton_plan_member_set_ids_by_callable_inst = .empty,
             .packed_fn_ids_by_member_set = .empty,
             .indirect_call_ids_by_member_set = .empty,
-            .expr_value_sites = .empty,
-            .expr_value_site_ids_by_key = .empty,
-            .lookup_expr_value_sites = .empty,
-            .lookup_expr_value_site_ids_by_key = .empty,
-            .context_pattern_value_sites = .empty,
-            .context_pattern_value_site_ids_by_key = .empty,
-            .call_sites = .empty,
-            .call_site_ids_by_key = .empty,
+            .value_plan_entries = .empty,
+            .callable_param_value_plan_entries = .empty,
+            .exprs = .empty,
+            .expr_ids_by_key = .empty,
+            .expr_child_entries = .empty,
+            .stmts = .empty,
+            .stmt_child_entries = .empty,
+            .root_exprs = .empty,
+            .root_expr_ids_by_key = .empty,
             .callable_defs = .empty,
             .capture_fields = .empty,
             .plan_member_entries = .empty,
@@ -273,14 +345,15 @@ pub const Program = struct {
         self.singleton_plan_member_set_ids_by_callable_inst.deinit(allocator);
         self.packed_fn_ids_by_member_set.deinit(allocator);
         self.indirect_call_ids_by_member_set.deinit(allocator);
-        self.expr_value_sites.deinit(allocator);
-        self.expr_value_site_ids_by_key.deinit(allocator);
-        self.lookup_expr_value_sites.deinit(allocator);
-        self.lookup_expr_value_site_ids_by_key.deinit(allocator);
-        self.context_pattern_value_sites.deinit(allocator);
-        self.context_pattern_value_site_ids_by_key.deinit(allocator);
-        self.call_sites.deinit(allocator);
-        self.call_site_ids_by_key.deinit(allocator);
+        self.value_plan_entries.deinit(allocator);
+        self.callable_param_value_plan_entries.deinit(allocator);
+        self.exprs.deinit(allocator);
+        self.expr_ids_by_key.deinit(allocator);
+        self.expr_child_entries.deinit(allocator);
+        self.stmts.deinit(allocator);
+        self.stmt_child_entries.deinit(allocator);
+        self.root_exprs.deinit(allocator);
+        self.root_expr_ids_by_key.deinit(allocator);
         self.callable_defs.deinit(allocator);
         self.capture_fields.deinit(allocator);
         self.plan_member_entries.deinit(allocator);
@@ -319,108 +392,80 @@ pub const Program = struct {
         return self.getPlanMemberSetMembers(member_set_id);
     }
 
-    pub fn getCallSiteCallableInst(
+    pub fn getValuePlan(self: *const Program, value_plan_id: ValuePlanId) ValuePlan {
+        return self.value_plan_entries.items[@intFromEnum(value_plan_id)];
+    }
+
+    pub fn getValuePlanEntries(self: *const Program, span: ValuePlanSpan) []const ValuePlan {
+        if (span.len == 0) return &.{};
+        return self.value_plan_entries.items[span.start..][0..span.len];
+    }
+
+    pub fn getCallableParamValuePlanEntries(
+        self: *const Program,
+        span: CallableParamValuePlanSpan,
+    ) []const CallableParamValuePlanEntry {
+        if (span.len == 0) return &.{};
+        return self.callable_param_value_plan_entries.items[span.start..][0..span.len];
+    }
+
+    pub fn getExpr(self: *const Program, expr_id: ExprId) *const Expr {
+        return &self.exprs.items[@intFromEnum(expr_id)];
+    }
+
+    pub fn getExprId(
         self: *const Program,
         source_context: SourceContext,
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
-    ) ?CallableInstId {
+    ) ?ExprId {
+        return self.expr_ids_by_key.get(ContextMono.Result.contextExprKey(source_context, module_idx, expr_idx));
+    }
+
+    pub fn getExprChildren(self: *const Program, span: ExprIdSpan) []const ExprId {
+        if (span.len == 0) return &.{};
+        return self.expr_child_entries.items[span.start..][0..span.len];
+    }
+
+    pub fn getExprChild(self: *const Program, expr_id: ExprId, index: usize) ExprId {
+        return self.getExprChildren(self.getExpr(expr_id).child_exprs)[index];
+    }
+
+    pub fn getStmt(self: *const Program, stmt_id: StmtId) *const Stmt {
+        return &self.stmts.items[@intFromEnum(stmt_id)];
+    }
+
+    pub fn getStmtChildren(self: *const Program, span: ExprIdSpan) []const ExprId {
+        if (span.len == 0) return &.{};
+        return self.expr_child_entries.items[span.start..][0..span.len];
+    }
+
+    pub fn getBlockStmtChildren(self: *const Program, span: StmtIdSpan) []const StmtId {
+        if (span.len == 0) return &.{};
+        return self.stmt_child_entries.items[span.start..][0..span.len];
+    }
+
+    pub fn getRootExpr(self: *const Program, source_context: SourceContext, module_idx: u32, expr_idx: CIR.Expr.Idx) ?ExprId {
         const key = ContextMono.Result.contextExprKey(source_context, module_idx, expr_idx);
-        const site_id = self.call_site_ids_by_key.get(key) orelse return null;
-        const plan = self.call_sites.items[@intFromEnum(site_id)].plan;
-        return switch (plan) {
-            .direct => |callable_inst_id| callable_inst_id,
-            .indirect => null,
-        };
+        const root_id = self.root_expr_ids_by_key.get(key) orelse return self.getExprId(source_context, module_idx, expr_idx);
+        return self.root_exprs.items[@intFromEnum(root_id)].body_expr;
     }
 
-    pub fn getCallSitePlan(
-        self: *const Program,
-        source_context: SourceContext,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-    ) ?CallPlan {
-        const key = ContextMono.Result.contextExprKey(source_context, module_idx, expr_idx);
-        const site_id = self.call_site_ids_by_key.get(key) orelse return null;
-        return self.call_sites.items[@intFromEnum(site_id)].plan;
+    pub fn valuePlanFromExprSemantics(self: *const Program, expr_id: ExprId) ?ValuePlan {
+        const value_plan_id = self.getExpr(expr_id).semantics.value_plan orelse return null;
+        return self.getValuePlan(value_plan_id);
     }
 
-    pub fn getExprCallableInst(
-        self: *const Program,
-        source_context: SourceContext,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-    ) ?CallableInstId {
-        const key = ContextMono.Result.contextExprKey(source_context, module_idx, expr_idx);
-        const site_id = self.expr_value_site_ids_by_key.get(key) orelse return null;
-        const plan = self.expr_value_sites.items[@intFromEnum(site_id)].plan;
-        return switch (plan) {
-            .direct => |callable_inst_id| callable_inst_id,
-            .packed_fn => null,
-        };
+    pub fn callPlanFromExprSemantics(self: *const Program, expr_id: ExprId) ?CallPlan {
+        return self.getExpr(expr_id).semantics.call_plan;
     }
 
-    pub fn getExprValuePlan(
-        self: *const Program,
-        source_context: SourceContext,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-    ) ?ValuePlan {
-        const key = ContextMono.Result.contextExprKey(source_context, module_idx, expr_idx);
-        const site_id = self.expr_value_site_ids_by_key.get(key) orelse return null;
-        return self.expr_value_sites.items[@intFromEnum(site_id)].plan;
+    pub fn dispatchTargetFromExprSemantics(self: *const Program, expr_id: ExprId) ?ContextMono.DispatchExprTarget {
+        return self.getExpr(expr_id).semantics.dispatch_target;
     }
 
-    pub fn getLookupExprCallableInst(
-        self: *const Program,
-        source_context: SourceContext,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-    ) ?CallableInstId {
-        const key = ContextMono.Result.contextExprKey(source_context, module_idx, expr_idx);
-        const site_id = self.lookup_expr_value_site_ids_by_key.get(key) orelse return null;
-        const plan = self.lookup_expr_value_sites.items[@intFromEnum(site_id)].plan;
-        return switch (plan) {
-            .direct => |callable_inst_id| callable_inst_id,
-            .packed_fn => null,
-        };
-    }
-
-    pub fn getLookupExprValuePlan(
-        self: *const Program,
-        source_context: SourceContext,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-    ) ?ValuePlan {
-        const key = ContextMono.Result.contextExprKey(source_context, module_idx, expr_idx);
-        const site_id = self.lookup_expr_value_site_ids_by_key.get(key) orelse return null;
-        return self.lookup_expr_value_sites.items[@intFromEnum(site_id)].plan;
-    }
-
-    pub fn getContextPatternCallableInst(
-        self: *const Program,
-        source_context: SourceContext,
-        module_idx: u32,
-        pattern_idx: CIR.Pattern.Idx,
-    ) ?CallableInstId {
-        const key = ContextMono.Result.contextPatternKey(source_context, module_idx, pattern_idx);
-        const site_id = self.context_pattern_value_site_ids_by_key.get(key) orelse return null;
-        const plan = self.context_pattern_value_sites.items[@intFromEnum(site_id)].plan;
-        return switch (plan) {
-            .direct => |callable_inst_id| callable_inst_id,
-            .packed_fn => null,
-        };
-    }
-
-    pub fn getContextPatternValuePlan(
-        self: *const Program,
-        source_context: SourceContext,
-        module_idx: u32,
-        pattern_idx: CIR.Pattern.Idx,
-    ) ?ValuePlan {
-        const key = ContextMono.Result.contextPatternKey(source_context, module_idx, pattern_idx);
-        const site_id = self.context_pattern_value_site_ids_by_key.get(key) orelse return null;
-        return self.context_pattern_value_sites.items[@intFromEnum(site_id)].plan;
+    pub fn lookupResolutionFromExprSemantics(self: *const Program, expr_id: ExprId) ?LookupResolution {
+        return self.getExpr(expr_id).semantics.lookup_resolution;
     }
 };
 
