@@ -927,11 +927,31 @@ fn lookupLoweredCallableLambdaCache(
 }
 
 fn lookupPipelinedExprMonotype(self: *const Self, expr_idx: CIR.Expr.Idx) ?Pipeline.ResolvedMonotype {
-    return self.callable_pipeline.getExprMonotype(
+    if (self.callable_pipeline.getExprMonotype(
         self.currentSourceContext(),
         self.current_module_idx,
         expr_idx,
-    );
+    )) |resolved| {
+        return resolved;
+    }
+
+    if (exactCallableInstIfValuePlanDirect(self.lookupPipelinedExprValue(expr_idx))) |callable_inst_id| {
+        const callable_inst = self.callable_pipeline.getCallableInst(callable_inst_id);
+        return .{
+            .idx = callable_inst.fn_monotype,
+            .module_idx = callable_inst.fn_monotype_module_idx,
+        };
+    }
+
+    if (exactCallableInstIfValuePlanDirect(self.lookupPipelinedLookupValue(expr_idx))) |callable_inst_id| {
+        const callable_inst = self.callable_pipeline.getCallableInst(callable_inst_id);
+        return .{
+            .idx = callable_inst.fn_monotype,
+            .module_idx = callable_inst.fn_monotype_module_idx,
+        };
+    }
+
+    return null;
 }
 
 fn lookupPipelinedPatternMonotype(self: *const Self, pattern_idx: CIR.Pattern.Idx) ?Pipeline.ResolvedMonotype {
@@ -2763,6 +2783,12 @@ fn lowerLookupLocalIntoWithExactCallableInst(
                     .{@intFromEnum(expr_idx)},
                 );
             }
+            if (exact_callable_inst_override) |callable_inst_id| {
+                const source_module_env = self.all_module_envs[source.module_idx];
+                if (directCallableDefinitionExpr(source_module_env, source.expr_idx) != null) {
+                    return self.lowerResolvedCallableInstValueInto(callable_inst_id, target, next);
+                }
+            }
             return self.lowerCapturedSourceExprInto(source, target, next);
         },
     };
@@ -3046,12 +3072,22 @@ fn materializeTopLevelDefInto(
         }
     }
 
-    try self.refreshTargetLocalMonotypeFromExprIntoModule(
-        def.expr,
-        module_idx,
-        saved_module_idx,
-        target,
-    );
+    if (exact_callable_inst) |callable_inst_id| {
+        const callable_inst = self.callable_pipeline.getCallableInst(callable_inst_id);
+        self.store.getLocalPtr(target).monotype = try self.importMonotypeFromStore(
+            &self.callable_pipeline.context_mono.monotype_store,
+            callable_inst.fn_monotype,
+            callable_inst.fn_monotype_module_idx,
+            saved_module_idx,
+        );
+    } else {
+        try self.refreshTargetLocalMonotypeFromExprIntoModule(
+            def.expr,
+            module_idx,
+            saved_module_idx,
+            target,
+        );
+    }
 
     const target_monotype = self.store.getLocal(target).monotype;
     if (self.store.monotype_store.getMonotype(target_monotype) == .func) {
@@ -3115,7 +3151,7 @@ fn lowerLambdaInto(
     defer self.current_lambda_entry_bound_locals = saved_lambda_entry_bound_locals;
 
     const param_patterns = module_env.store.slicePatterns(lambda.args);
-    const params = try self.lowerLambdaParamLocals(module_env, lambda.args);
+    const params = try self.lowerLambdaParamLocals(module_env, lambda.args, fn_monotype);
     var stable_param_locals = try std.ArrayList(MIR.LocalId).initCapacity(self.allocator, self.store.getLocalSpan(params).len);
     defer stable_param_locals.deinit(self.allocator);
     stable_param_locals.appendSliceAssumeCapacity(self.store.getLocalSpan(params));
@@ -3183,15 +3219,30 @@ fn lowerLambdaParamLocals(
     self: *Self,
     module_env: *const ModuleEnv,
     span: CIR.Pattern.Span,
+    fn_monotype: Monotype.Idx,
 ) Allocator.Error!MIR.LocalSpan {
     const cir_ids = module_env.store.slicePatterns(span);
     if (cir_ids.len == 0) return MIR.LocalSpan.empty();
 
+    const fn_mono = switch (self.store.monotype_store.getMonotype(fn_monotype)) {
+        .func => |func| func,
+        else => std.debug.panic(
+            "statement-only MIR invariant violated: lambda params expected function monotype {d}, found {s}",
+            .{ @intFromEnum(fn_monotype), @tagName(self.store.monotype_store.getMonotype(fn_monotype)) },
+        ),
+    };
+    const param_monotypes = self.store.monotype_store.getIdxSpan(fn_mono.args);
+    if (builtin.mode == .Debug and cir_ids.len != param_monotypes.len) {
+        std.debug.panic(
+            "statement-only MIR invariant violated: lambda param arity mismatch (patterns={d}, monotypes={d})",
+            .{ cir_ids.len, param_monotypes.len },
+        );
+    }
+
     const scratch_top = self.scratch_local_ids.top();
     defer self.scratch_local_ids.clearFrom(scratch_top);
 
-    for (cir_ids) |pattern_idx| {
-        const monotype = try self.requirePatternMonotype(pattern_idx);
+    for (cir_ids, param_monotypes) |pattern_idx, monotype| {
         try self.bindPatternMonotypes(module_env, pattern_idx, monotype);
         const param_reassignable = switch (module_env.store.getPattern(pattern_idx)) {
             .assign => |assign_pattern| assign_pattern.ident.attributes.reassignable,
@@ -3366,7 +3417,7 @@ fn lowerReservedTrivialClosureLambda(
     defer self.current_lambda_entry_bound_locals = saved_lambda_entry_bound_locals;
 
     const param_patterns = module_env.store.slicePatterns(lambda_expr.e_lambda.args);
-    const params = try self.lowerLambdaParamLocals(module_env, lambda_expr.e_lambda.args);
+    const params = try self.lowerLambdaParamLocals(module_env, lambda_expr.e_lambda.args, fn_monotype);
     var stable_param_locals = try std.ArrayList(MIR.LocalId).initCapacity(self.allocator, self.store.getLocalSpan(params).len);
     defer stable_param_locals.deinit(self.allocator);
     stable_param_locals.appendSliceAssumeCapacity(self.store.getLocalSpan(params));
@@ -4968,18 +5019,13 @@ fn lowerPatternBindingInto(
             }
         }
     }
-    const source_mono = try self.resolveMonotype(expr_idx);
-    if (self.store.monotype_store.getMonotype(source_mono) == .func and
-        exprIsDirectCallableDefinition(module_env, expr_idx))
-    {
-        try self.bindPatternMonotypes(module_env, pattern_idx, source_mono);
-        if (mark_reassignable) {
-            self.setPatternLocalsReassignable(module_env, pattern_idx, true);
-        }
+    if (directCallableDefinitionExpr(module_env, expr_idx) != null) {
         try self.markSkippedCallableBackedBindingPatterns(module_env, pattern_idx);
         self.current_pattern_scope = rhs_pattern_scope;
         return next;
     }
+
+    const source_mono = try self.resolveMonotype(expr_idx);
 
     const source_local = if (continuation_scope == rhs_pattern_scope)
         if (self.directPatternBindingTargetLocal(module_env, pattern_idx)) |existing_local|
@@ -5106,7 +5152,7 @@ fn markDirectCallableBackedBindingIfNeeded(
     expr_idx: CIR.Expr.Idx,
     source_mono: Monotype.Idx,
 ) Allocator.Error!void {
-    if (!exprIsDirectCallableDefinition(module_env, expr_idx)) return;
+    if (directCallableDefinitionExpr(module_env, expr_idx) == null) return;
 
     if (builtin.mode == .Debug) {
         if (self.store.monotype_store.getMonotype(source_mono) != .func) {
@@ -5125,13 +5171,19 @@ fn markDirectCallableBackedBindingIfNeeded(
     try self.markSkippedCallableBackedBindingPatterns(module_env, pattern_idx);
 }
 
-fn exprIsDirectCallableDefinition(
+fn directCallableDefinitionExpr(
     module_env: *const ModuleEnv,
     expr_idx: CIR.Expr.Idx,
-) bool {
+) ?CIR.Expr.Idx {
     return switch (module_env.store.getExpr(expr_idx)) {
-        .e_lambda, .e_closure, .e_hosted_lambda => true,
-        else => false,
+        .e_lambda, .e_closure, .e_hosted_lambda => expr_idx,
+        .e_block => |block| directCallableDefinitionExpr(module_env, block.final_expr),
+        .e_dbg => |dbg_expr| directCallableDefinitionExpr(module_env, dbg_expr.expr),
+        .e_expect => |expect_expr| directCallableDefinitionExpr(module_env, expect_expr.body),
+        .e_return => |return_expr| directCallableDefinitionExpr(module_env, return_expr.expr),
+        .e_nominal => |nominal_expr| directCallableDefinitionExpr(module_env, nominal_expr.backing_expr),
+        .e_nominal_external => |nominal_expr| directCallableDefinitionExpr(module_env, nominal_expr.backing_expr),
+        else => null,
     };
 }
 
@@ -5780,12 +5832,17 @@ fn predeclareTrivialBlockStmtPatterns(
                     );
                 }
             }
-            try self.predeclarePatternLocals(module_env, decl.pattern);
+            if (directCallableDefinitionExpr(module_env, decl.expr) != null) {
+                try self.markSkippedCallableBackedBindingPatterns(module_env, decl.pattern);
+                return;
+            }
+
             const source_mono = try self.resolveMonotype(decl.expr);
             if (builtin.mode == .Debug) {
                 try self.debugAssertNoUnitPrimPatternBinding(module_env, decl.pattern, decl.expr, source_mono, stmt_idx, "s_decl");
             }
             try self.bindPatternMonotypes(module_env, decl.pattern, source_mono);
+            try self.predeclarePatternLocals(module_env, decl.pattern);
             try self.markDirectCallableBackedBindingIfNeeded(
                 module_env,
                 decl.pattern,
@@ -5811,13 +5868,18 @@ fn predeclareTrivialBlockStmtPatterns(
                     );
                 }
             }
-            try self.predeclarePatternLocals(module_env, var_decl.pattern_idx);
-            self.setPatternLocalsReassignable(module_env, var_decl.pattern_idx, true);
+            if (directCallableDefinitionExpr(module_env, var_decl.expr) != null) {
+                try self.markSkippedCallableBackedBindingPatterns(module_env, var_decl.pattern_idx);
+                return;
+            }
+
             const source_mono = try self.resolveMonotype(var_decl.expr);
             if (builtin.mode == .Debug) {
                 try self.debugAssertNoUnitPrimPatternBinding(module_env, var_decl.pattern_idx, var_decl.expr, source_mono, stmt_idx, "s_var");
             }
             try self.bindPatternMonotypes(module_env, var_decl.pattern_idx, source_mono);
+            try self.predeclarePatternLocals(module_env, var_decl.pattern_idx);
+            self.setPatternLocalsReassignable(module_env, var_decl.pattern_idx, true);
             try self.markDirectCallableBackedBindingIfNeeded(
                 module_env,
                 var_decl.pattern_idx,
@@ -5843,13 +5905,18 @@ fn predeclareTrivialBlockStmtPatterns(
                     );
                 }
             }
-            try self.predeclarePatternLocals(module_env, reassign.pattern_idx);
-            self.setPatternLocalsReassignable(module_env, reassign.pattern_idx, true);
+            if (directCallableDefinitionExpr(module_env, reassign.expr) != null) {
+                try self.markSkippedCallableBackedBindingPatterns(module_env, reassign.pattern_idx);
+                return;
+            }
+
             const source_mono = try self.resolveMonotype(reassign.expr);
             if (builtin.mode == .Debug) {
                 try self.debugAssertNoUnitPrimPatternBinding(module_env, reassign.pattern_idx, reassign.expr, source_mono, stmt_idx, "s_reassign");
             }
             try self.bindPatternMonotypes(module_env, reassign.pattern_idx, source_mono);
+            try self.predeclarePatternLocals(module_env, reassign.pattern_idx);
+            self.setPatternLocalsReassignable(module_env, reassign.pattern_idx, true);
             try self.markDirectCallableBackedBindingIfNeeded(
                 module_env,
                 reassign.pattern_idx,
@@ -8037,6 +8104,11 @@ fn resolveMonotype(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!Monotype
         );
     }
 
+    const resolved_var = self.types_store.resolveVar(ModuleEnv.varFrom(expr_idx)).var_;
+    if (self.type_var_seen.get(resolved_var)) |monotype| {
+        return monotype;
+    }
+
     const module_env = self.all_module_envs[self.current_module_idx];
     const expr = module_env.store.getExpr(expr_idx);
     std.debug.panic(
@@ -8202,6 +8274,11 @@ fn requirePatternMonotype(
             resolved.module_idx,
             self.current_module_idx,
         );
+    }
+
+    const resolved_var = self.types_store.resolveVar(ModuleEnv.varFrom(pattern_idx)).var_;
+    if (self.type_var_seen.get(resolved_var)) |monotype| {
+        return monotype;
     }
 
     std.debug.panic(
