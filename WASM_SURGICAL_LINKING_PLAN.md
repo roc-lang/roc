@@ -17,7 +17,9 @@
 | 10 | Dead Code Elimination | Done |
 | 11 | Serialization Updates | Done |
 | 12 | CLI Integration — `roc build --target=wasm32` | Done |
-| 13 | PIC Support & Eval Builtins | In Progress |
+| 13 | PIC Support & Eval Builtins | Done |
+| 14 | Rebase & Integration Fixes | Done |
+| 15 | Remaining Test Failures | In Progress |
 
 ## Overview
 
@@ -2196,20 +2198,131 @@ alignment, element_width, and elements_refcounted.
 headers (for isUnique checks, reallocation, etc.). Fix: call
 `roc_builtins_allocate_with_refcount` from `generateList` instead of raw heap alloc.
 
-### Remaining Work
+---
 
-4 eval tests still fail with TrapUnreachable inside merged builtins:
-- `str_split`, `str_join_with` — crash in `strJoinWithC` or `strSplitOn`
-- `str_from_utf8` — crash in `roc_builtins_str_from_utf8`
+## Phase 14: Rebase & Integration Fixes — Done
 
-Key finding: even with the builtin wrapper returning an empty string (completely
-bypassing all builtin logic), the crash persists. This means the TrapUnreachable
-is NOT inside the merged builtins but in the APP-GENERATED wasm code. The crash
-likely happens in the codegen's list-of-strings creation path or in how the
-expression tree is evaluated before calling the builtin. The `list of strings
-length` test passes (creating the same list), so the issue is specific to the
-expression structure when combined with str_join_with/str_split/str_from_utf8
-call sites.
+### What
+
+Rebased the 24-commit surgical-wasm branch from `lir-interpreter` onto `origin/main`,
+resolving conflicts and fixing post-rebase issues.
+
+### Changes
+
+**Rebase** (2026-03-31): Rebased all 24 commits from `01701f9ed5` to HEAD onto
+`origin/main` (`902f567ccf`), dropping the lir-interpreter branch history. Resolved
+merge conflicts in `build.zig`, `wasm_evaluator.zig`, `WasmCodeGen.zig` across 6
+conflict rounds.
+
+**Post-rebase fixups**:
+- Removed dead `generateI128Shift` and `emitI128DivByConst` functions (were from the
+  lir-interpreter branch, superseded by host-call based i128 ops)
+- Added missing `dec_to_*_trunc` variants to `generateLowLevel` switch (main added
+  these enum variants; our branch had a consolidated handler that only listed
+  `dec_to_i64_trunc`)
+- Exported `WasmCodeResult` from `eval/mod.zig` (it moved from inside `WasmEvaluator`
+  to module level during our refactor)
+- Wired `wasm32_builtins` module import for eval test step in `build.zig`
+- Migrated regression tests from `eval_tests.zig` (which didn't exist on main) to
+  `eval_test.zig`
+
+**`mergeModule` func_remap offset bug** (critical fix):
+`self_defined_base` was computed BEFORE the import remapping loop, but that loop can
+add new imports via `addImport()` which increases `importCount()`. All defined function
+indices in `func_remap` were off by the number of new imports added during merge. This
+caused every `call` instruction in merged builtins to reference the wrong function,
+producing hundreds of type mismatch errors in the encoded module.
+Fix: compute `self_defined_base` AFTER the import loop completes.
+Location: `WasmModule.zig` `mergeModule()`, ~line 899.
+
+**Compiler-rt host functions**:
+The wasm32 `roc_builtins.o` imports `__multi3` (128-bit multiply) and `__muloti4`
+(128-bit multiply with overflow) from the Zig compiler-rt. These are function imports
+in the `.o` file (not defined functions), so `mergeModule` correctly propagates them as
+imports in the final module. Added host implementations in `wasm_runner.zig` using the
+existing `compiler_rt_128.mul_i128` function.
+
+**`preload` require_relocatable flag**: Changed from `true` to `false` for the eval
+pipeline. The wasm32 builtins object is a valid relocatable module but may not pass
+all strict validation checks (e.g. missing reloc sections for some targets). The merge
+pipeline only needs the linking section and reloc entries, not strict validation.
+
+**reloc.CODE offset test**: Fixed expected offset from 2 to 1 — `preload` adjusts
+reloc offsets by subtracting the code section's function count LEB128 size (1 byte).
+
+**Unused variable suppressions**: Removed 9 `_ = variable;` patterns (replaced with
+`_` parameter names or deleted unused lookups) to pass the codebase lint check.
+
+### Results
+
+- Repl tests: **38/40 pass** (up from 11/40 before fixes)
+- Build + lints + snapshots: all pass
+- Remaining 2 repl failures: `Str.from_utf8` tests (TrapUnreachable, pre-existing)
+
+---
+
+## Phase 15: Remaining Test Failures — In Progress
+
+### Status
+
+**Repl**: 38/40 passing. 2 failures:
+- `Str.from_utf8 Ok` — TrapUnreachable
+- `Str.from_utf8 ok_or` — TrapUnreachable
+
+**Eval**: needs full count after rebase (was ~687/1249 before the mergeModule fix;
+expected to be significantly improved now).
+
+### Known Issues
+
+#### 1. `Str.from_utf8` TrapUnreachable (2 repl tests, likely several eval tests)
+
+The `Str.from_utf8` builtin crashes with `TrapUnreachable` during execution. Prior
+investigation showed this is NOT in the merged builtins code — even a no-op wrapper
+still crashes. The issue is in the app-generated wasm code at the call site.
+
+**Hypothesis**: The codegen emits incorrect argument marshalling for builtins that
+take `List U8` and return a tagged union (`Result Str _`). The list-of-bytes creation
+works (tested independently), so the issue is likely in how the result struct is read
+back after the call, or in the tagged union layout assumptions.
+
+**Files to investigate**:
+- `WasmCodeGen.zig` — `generateBuiltinCall` for `str_from_utf8`
+- The LIR lowering of `Str.from_utf8` — check that the result layout matches what
+  the wasm ABI expects
+
+#### 2. Eval test wasm comparison failures
+
+The eval test suite runs each expression through both the dev evaluator (interpreter)
+and the wasm evaluator, comparing results. Wasm failures cause the test to fail even
+if the interpreter result is correct. After the `mergeModule` fix, many of these should
+now pass. A full test run is needed to get the updated count.
+
+**Action items**:
+- Run `zig build test -- --test-filter="eval"` to get updated pass count
+- Categorize remaining failures by error type (TrapUnreachable vs wrong result vs
+  WasmExecFailed)
+
+#### 3. Compiler-rt imports from builtins
+
+The wasm32 `roc_builtins.o` imports `__multi3` and `__muloti4` from compiler-rt.
+Currently handled by host function implementations in `wasm_runner.zig`. For the
+CLI `roc build` path (Phase 12), these will need to be resolved differently — either
+by bundling compiler-rt into the builtins object for wasm32 only, or by providing
+them through the host platform's object.
+
+**Background**: The builtins are compiled with `bundle_compiler_rt = false` to avoid
+conflicts with other targets. The `compiler_rt_128.zig` module has `is_wasm` guards
+that decompose 128-bit ops into 64-bit ops for wasm32, but some code paths (likely
+in `num.zig` overflow handling or `dec.zig` multiplication) still use native `*`
+on i128 which Zig lowers to `__multi3`.
+
+**Options**:
+1. Set `bundle_compiler_rt = true` for wasm32 only in `build.zig` (simplest, may
+   conflict if host also bundles it)
+2. Find and fix the remaining i128 multiplication sites that bypass the `is_wasm`
+   guards (cleanest, ensures no compiler-rt dependency)
+3. Have the surgical linker provide these as defined functions during merge (most
+   robust for the CLI path)
 
 ---
 
@@ -2470,6 +2583,12 @@ WASM since padded LEB128 is a valid encoding of any value).
    Also fixed `init_funcs` parsing in `WasmLinking.zig` (was previously skipped).
    All 9 planned tests passing.
 
+1e. **Phase 14 completed** (2026-03-31):
+   Rebased onto origin/main, fixed critical `mergeModule` func_remap offset bug (defined
+   function indices were off by the count of imports added during merge), added compiler-rt
+   host functions for `__multi3`/`__muloti4`, and various post-rebase cleanups. Repl tests
+   went from 11/40 to 38/40.
+
 2. **Host module authoring guidance**: What exact compilation flags do we want to support and
    document for platform authors producing relocatable `host.wasm` artifacts?
    We should publish one blessed example, ideally based on the existing WASM test platform.
@@ -2477,3 +2596,10 @@ WASM since padded LEB128 is a valid encoding of any value).
 3. **COMDAT groups**: The linking section can contain COMDAT metadata. The old Rust compiler
    parsed but did not semantically use it. We should preserve that behavior: parse enough to
    keep symbol-table indices correct, but defer any COMDAT-aware deduplication logic.
+
+4. **Compiler-rt dependency**: The wasm32 `roc_builtins.o` currently imports `__multi3` and
+   `__muloti4` from compiler-rt. The builtins codebase has `is_wasm` guards in
+   `compiler_rt_128.zig` that decompose most i128 ops into 64-bit ops for wasm32, but some
+   code paths still trigger native i128 multiply (likely in `num.zig` overflow detection or
+   `dec.zig`). Ideally these should be found and fixed so the builtins have zero compiler-rt
+   imports on wasm32, matching the approach used for all other targets.
