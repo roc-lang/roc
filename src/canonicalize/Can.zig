@@ -5857,7 +5857,7 @@ pub fn canonicalizeExpr(
                 var bound_vars_view = self.scratch_bound_vars.setViewFrom(bound_vars_top);
                 defer bound_vars_view.deinit();
                 for (body_free_vars_slice) |fv| {
-                    if (!self.scratch_captures.contains(fv) and !bound_vars_view.contains(fv) and !self.isGloballyResolvablePattern(fv)) {
+                    if (!self.scratch_captures.containsFrom(captures_top, fv) and !bound_vars_view.contains(fv) and !self.isGloballyResolvablePattern(fv)) {
                         try self.scratch_captures.append(fv);
                     }
                 }
