@@ -1,6 +1,6 @@
 platform ""
     requires {} { main! : () => Str }
-    exposes []
+    exposes [Stdout]
     packages {}
     provides { main_for_host!: "main" }
     targets: {
@@ -9,6 +9,8 @@ platform ""
             wasm32: ["host.wasm", app],
         }
     }
+
+import Stdout
 
 main_for_host! : () => Str
 main_for_host! = main!

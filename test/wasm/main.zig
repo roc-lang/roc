@@ -86,6 +86,16 @@ const HostContext = struct {
         const msg = self.readString(ptr, len);
         std.debug.print("[EXPECT FAILED] {s}\n", .{msg});
     }
+
+    /// Called by Stdout.line! hosted effect
+    pub fn echo(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+        _ = module;
+        const self: *HostContext = @ptrCast(@alignCast(ctx));
+        const ptr = params[0].I32;
+        const len = params[1].I32;
+        const msg = self.readString(ptr, len);
+        std.debug.print("{s}\n", .{msg});
+    }
 };
 
 // Global context for host imports (needed because bytebox stores pointer, not value)
@@ -113,6 +123,7 @@ fn setupWasm(gpa: std.mem.Allocator, arena: std.mem.Allocator, wasm_path: []cons
     try env_imports.addHostFunction("roc_panic", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{}, HostContext.roc_panic, &global_host_context);
     try env_imports.addHostFunction("roc_dbg", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{}, HostContext.roc_dbg, &global_host_context);
     try env_imports.addHostFunction("roc_expect_failed", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{}, HostContext.roc_expect_failed, &global_host_context);
+    try env_imports.addHostFunction("echo", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{}, HostContext.echo, &global_host_context);
 
     // Use a reasonable stack for the interpreter (256KB - same as playground tests)
     const imports = [_]bytebox.ModuleImportPackage{env_imports};

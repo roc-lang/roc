@@ -33,6 +33,7 @@ const env_imports = struct {
     extern "env" fn roc_panic(ptr: [*]const u8, len: usize) noreturn;
     extern "env" fn roc_dbg(ptr: [*]const u8, len: usize) void;
     extern "env" fn roc_expect_failed(ptr: [*]const u8, len: usize) void;
+    extern "env" fn echo(ptr: [*]const u8, len: usize) void;
 };
 
 // Use Zig's standard WASM allocator for proper memory management
@@ -185,14 +186,22 @@ fn roc_crashed(crash_args: *const RocCrashed, _: *anyopaque) callconv(.c) noretu
     env_imports.roc_panic(crash_args.utf8_bytes, crash_args.len);
 }
 
+// Hosted function: Stdout.line! (index 0)
+// Follows RocCall ABI: (ops, ret_ptr, args_ptr)
+fn hostedStdoutLine(_: *anyopaque, _: *anyopaque, args: *const extern struct { str: RocStr }) callconv(.c) void {
+    const s = args.str.asSlice();
+    env_imports.echo(s.ptr, s.len);
+}
+
+const hosted_function_ptrs = [_]builtins.host_abi.HostedFn{
+    builtins.host_abi.hostedFn(&hostedStdoutLine), // Stdout.line! (index 0)
+};
+
 // External Roc entrypoint
 extern fn roc__main(ops: *RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
 
 // Dummy env for RocOps (not used in WASM)
 var dummy_env: u8 = 0;
-
-// Empty hosted functions array (this platform has no hosted effects)
-const empty_hosted_fns = [_]builtins.host_abi.HostedFn{};
 
 // Store the last result for wasm_result_len()
 var last_result: RocStr = undefined;
@@ -209,8 +218,8 @@ export fn wasm_main() [*]const u8 {
         .roc_expect_failed = roc_expect_failed,
         .roc_crashed = roc_crashed,
         .hosted_fns = .{
-            .count = 0,
-            .fns = @constCast(&empty_hosted_fns),
+            .count = hosted_function_ptrs.len,
+            .fns = @constCast(&hosted_function_ptrs),
         },
     };
 

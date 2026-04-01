@@ -85,6 +85,11 @@
                     const msg = decodeString(wasmModule.exports.memory, ptr, len);
                     log(`[EXPECT FAILED] ${msg}`);
                     document.getElementById('debug').textContent += `Expect failed: ${msg}\n`;
+                },
+                echo: (ptr, len) => {
+                    const msg = decodeString(wasmModule.exports.memory, ptr, len);
+                    console.log(msg);
+                    document.getElementById('debug').textContent += msg + '\n';
                 }
             }
         };

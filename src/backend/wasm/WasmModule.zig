@@ -943,6 +943,7 @@ pub fn mergeModule(self: *Self, source: *const Self) !MergeResult {
     // Remap source imports → self imports (by name match).
     // NOTE: This loop may add new imports to self, changing importCount().
     // We must compute self_defined_base AFTER this loop completes.
+    const old_import_count = self.importCount();
     for (source.imports.items, 0..) |src_imp, src_idx| {
         // Find matching import in self by field_name.
         var matched: ?u32 = null;
@@ -958,6 +959,30 @@ pub fn mergeModule(self: *Self, source: *const Self) !MergeResult {
             func_remap[src_idx] = try self.addImport(src_imp.module_name, src_imp.field_name, remapped_type);
             continue;
         };
+    }
+
+    // If new imports were added, all existing defined function indices in self
+    // shift up by the number of new imports. Update symbol table, element section,
+    // and exports to reflect the new indices.
+    const new_import_count = self.importCount();
+    const import_delta = new_import_count - old_import_count;
+    if (import_delta > 0) {
+        // Shift defined function symbols.
+        for (self.linking.symbol_table.items) |*sym| {
+            if (sym.isFunction() and !sym.isUndefined() and sym.index >= old_import_count) {
+                sym.index += import_delta;
+            }
+        }
+        // Shift element section entries (table func indices).
+        for (self.table_func_indices.items) |*fi| {
+            if (fi.* >= old_import_count) fi.* += import_delta;
+        }
+        // Shift export entries referencing defined functions.
+        for (self.exports.items) |*exp| {
+            if (exp.kind == .func and exp.idx >= old_import_count) {
+                exp.idx += import_delta;
+            }
+        }
     }
 
     // Compute defined function base AFTER imports are finalized,
@@ -1222,6 +1247,9 @@ pub fn mergeModule(self: *Self, source: *const Self) !MergeResult {
         }
     }
 
+    // Update import_fn_count to reflect any new imports added during merge.
+    self.import_fn_count = @intCast(self.imports.items.len);
+
     return .{
         .symbol_remap = symbol_remap,
         .allocator = gpa,
@@ -1317,6 +1345,28 @@ pub fn resolveCodeRelocations(self: *Self) void {
 
 /// Resolve all data relocations in place.
 pub fn resolveDataRelocations(self: *Self) void {
+    // First pass: ensure functions referenced by table_index_* relocations
+    // are present in the element section. This is needed because data segments
+    // can store function pointers (e.g. hosted_function_ptrs) which need valid
+    // table indices, and the functions must be in the table for call_indirect.
+    for (self.reloc_data.entries.items) |entry| {
+        switch (entry) {
+            .index => |idx| {
+                if (idx.type_id == .table_index_i32 or
+                    idx.type_id == .table_index_sleb or
+                    idx.type_id == .table_index_rel_sleb)
+                {
+                    const sym = self.linking.symbol_table.items[idx.symbol_index];
+                    if (sym.isFunction()) {
+                        _ = self.ensureTableElement(sym.index) catch continue;
+                    }
+                }
+            },
+            .offset => {},
+        }
+    }
+
+    // Second pass: patch data bytes with resolved values.
     for (self.reloc_data.entries.items) |entry| {
         const segment_idx = switch (entry) {
             .index => |idx| idx.data_segment_index,
@@ -1678,6 +1728,35 @@ fn traceLiveFunctions(
 /// The __stack_pointer global import is handled implicitly: it exists in the
 /// symbol table for relocation resolution and will become a defined global
 /// during `finalizeMemoryAndTable()`.
+/// Promote globally-visible, defined function symbols from the linking section
+/// to actual WASM exports. In relocatable objects, `export fn` in Zig generates
+/// symbols with `binding=global vis=default`, but no Export section exists.
+/// This must be called after preload so that the surgical linker pipeline can
+/// see and preserve these exports.
+pub fn exportGlobalSymbols(self: *Self) void {
+    for (self.linking.symbol_table.items) |sym| {
+        if (sym.kind != .function or sym.isUndefined() or sym.isLocal()) continue;
+        if ((sym.flags & WasmLinking.SymFlag.VISIBILITY_HIDDEN) != 0) continue;
+        const name = sym.name orelse continue;
+        // Skip roc__ symbols (handled by linkHostToAppCalls).
+        if (std.mem.startsWith(u8, name, "roc__")) continue;
+        // Avoid duplicate exports.
+        var already_exported = false;
+        for (self.exports.items) |exp| {
+            if (exp.kind == .func and std.mem.eql(u8, exp.name, name)) {
+                already_exported = true;
+                break;
+            }
+        }
+        if (!already_exported) {
+            self.addExport(name, .func, sym.index) catch {};
+        }
+    }
+}
+
+/// No-op: memory and table imports are already stored in separate lists
+/// during parsing (has_memory, has_table flags). This method only asserts
+/// that the host module declared memory.
 pub fn removeMemoryAndTableImports(self: *Self) void {
     // The parser separates function imports from memory/table/global imports.
     // Non-function imports are NOT in self.imports, so import_fn_count is correct.

@@ -4479,7 +4479,8 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
             return error.NativeCompilationFailed;
         };
 
-        // Step 3: Remove memory and table imports
+        // Step 3: Export global host symbols and remove memory/table imports
+        host_module.exportGlobalSymbols();
         host_module.removeMemoryAndTableImports();
 
         // Step 4: Merge builtins
@@ -4488,12 +4489,13 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
             std.log.err("Failed to parse builtins WASM module: {}", .{err});
             return error.NativeCompilationFailed;
         };
+        defer builtins_module.deinit();
 
-        _ = host_module.mergeModule(&builtins_module) catch |err| {
+        var merge_result = host_module.mergeModule(&builtins_module) catch |err| {
             std.log.err("Failed to merge builtins into host module: {}", .{err});
             return error.NativeCompilationFailed;
         };
-
+        merge_result.deinit();
         // Step 5: Build BuiltinSymbols lookup
         const builtin_syms = WasmModule.BuiltinSymbols.populate(&host_module) catch |err| {
             std.log.err("Failed to populate builtin symbols: {}", .{err});
