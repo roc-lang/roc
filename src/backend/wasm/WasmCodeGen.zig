@@ -222,6 +222,9 @@ fn resolveExistingRocOpsCallback(self: *Self, name: []const u8) !u32 {
     return error.MissingRocOpsCallback;
 }
 
+/// Bind existing RocOps callback functions from the host module into the funcref table.
+/// Used when the module was prepared with `initWithHostModule` and already contains
+/// the callback symbols — no new imports are added.
 pub fn registerRocOpsFromModule(self: *Self) !void {
     // Register type indices for call_indirect type checking
     self.roc_ops_type_idx = try self.module.addFuncType(
@@ -250,6 +253,7 @@ pub fn registerRocOpsFromModule(self: *Self) !void {
     }
 }
 
+/// Errors that can occur during wasm module generation.
 pub const GenerateError = Allocator.Error || error{MissingRocOpsCallback};
 
 /// Result of generating a wasm module
