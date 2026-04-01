@@ -786,6 +786,14 @@ fn lookupProgramExprCallableValue(session: LowerSession, expr_idx: CIR.Expr.Idx)
     );
 }
 
+fn lookupProgramExprIntroCallableInst(session: LowerSession, expr_idx: CIR.Expr.Idx) ?Pipeline.CallableInstId {
+    return session.lower.callable_pipeline.getExprIntroCallableInst(
+        session.source_context,
+        session.lower.current_module_idx,
+        expr_idx,
+    );
+}
+
 fn lookupProgramExprLookupResolution(
     session: LowerSession,
     expr_idx: CIR.Expr.Idx,
@@ -4687,6 +4695,42 @@ fn packedCallableTagName(
     );
 }
 
+fn lowerPackedCallableIntroInto(
+    self: *Self,
+    packed_fn: Pipeline.PackedFn,
+    callable_inst_id: Pipeline.CallableInstId,
+    target: MIR.LocalId,
+    next: MIR.CFStmtId,
+) Allocator.Error!MIR.CFStmtId {
+    self.clearExactCallableLocal(target);
+    const tag_name = try self.packedCallableTagName(packed_fn, callable_inst_id);
+    const payload_resolved = self.callable_pipeline.getCallableInstRuntimeMonotype(callable_inst_id);
+    const payload_mono = try self.importMonotypeFromStore(
+        &self.callable_pipeline.context_mono.monotype_store,
+        payload_resolved.idx,
+        payload_resolved.module_idx,
+        self.current_module_idx,
+    );
+
+    if (payload_mono == self.store.monotype_store.unit_idx) {
+        return self.store.addCFStmt(self.allocator, .{ .assign_tag = .{
+            .target = target,
+            .name = tag_name,
+            .args = MIR.LocalSpan.empty(),
+            .next = next,
+        } });
+    }
+
+    const payload_local = try self.freshSyntheticLocal(payload_mono, false);
+    const tag_stmt = try self.store.addCFStmt(self.allocator, .{ .assign_tag = .{
+        .target = target,
+        .name = tag_name,
+        .args = try self.store.addLocalSpan(self.allocator, &.{payload_local}),
+        .next = next,
+    } });
+    return self.lowerResolvedCallableInstValueInto(callable_inst_id, payload_local, tag_stmt);
+}
+
 fn lowerPackedCallablePayloadInto(
     self: *Self,
     packed_fn: Pipeline.PackedFn,
@@ -7462,47 +7506,57 @@ fn lowerCirExprInto(
         .e_lookup_required => |lookup| self.lowerLookupRequiredInto(session, expr_idx, module_env, lookup, target, next),
         .e_lambda => |lambda| blk: {
             _ = lambda;
-            const resolved_callable_inst_id = switch (lookupProgramExprCallableValue(session, expr_idx) orelse std.debug.panic(
+            const callable_value = lookupProgramExprCallableValue(session, expr_idx) orelse std.debug.panic(
                 "statement-only MIR invariant violated: lambda expr {d} lacked callable-value specialization in context callable_inst={d} root_source_expr={d}",
                 .{
                     @intFromEnum(expr_idx),
                     session.callableInstRawForDebug(),
                     session.rootExprRawForDebug(),
                 },
-            )) {
-                .direct => |callable_inst_id| callable_inst_id,
-                .packed_fn => std.debug.panic(
-                    "statement-only MIR invariant violated: lambda expr {d} specialized to packed callable semantics",
-                    .{@intFromEnum(expr_idx)},
+            );
+            break :blk switch (callable_value) {
+                .direct => |callable_inst_id| try self.lowerResolvedCallableInstValueInto(
+                    callable_inst_id,
+                    target,
+                    next,
+                ),
+                .packed_fn => |packed_fn| try self.lowerPackedCallableIntroInto(
+                    packed_fn,
+                    lookupProgramExprIntroCallableInst(session, expr_idx) orelse std.debug.panic(
+                        "statement-only MIR invariant violated: lambda expr {d} specialized to packed callable semantics without explicit intro callable inst",
+                        .{@intFromEnum(expr_idx)},
+                    ),
+                    target,
+                    next,
                 ),
             };
-            break :blk try self.lowerResolvedCallableInstValueInto(
-                resolved_callable_inst_id,
-                target,
-                next,
-            );
         },
         .e_closure => |closure| blk: {
-            const callable_inst_id = switch (lookupProgramExprCallableValue(session, expr_idx) orelse std.debug.panic(
+            const callable_value = lookupProgramExprCallableValue(session, expr_idx) orelse std.debug.panic(
                 "statement-only MIR invariant violated: closure expr {d} lacked callable-value specialization in context callable_inst={d} root_source_expr={d}",
                 .{
                     @intFromEnum(expr_idx),
                     session.callableInstRawForDebug(),
                     session.rootExprRawForDebug(),
                 },
-            )) {
-                .direct => |resolved_callable_inst_id| resolved_callable_inst_id,
-                .packed_fn => std.debug.panic(
-                    "statement-only MIR invariant violated: closure expr {d} specialized to packed callable semantics",
-                    .{@intFromEnum(expr_idx)},
+            );
+            _ = closure;
+            break :blk switch (callable_value) {
+                .direct => |callable_inst_id| try self.lowerResolvedCallableInstValueInto(
+                    callable_inst_id,
+                    target,
+                    next,
+                ),
+                .packed_fn => |packed_fn| try self.lowerPackedCallableIntroInto(
+                    packed_fn,
+                    lookupProgramExprIntroCallableInst(session, expr_idx) orelse std.debug.panic(
+                        "statement-only MIR invariant violated: closure expr {d} specialized to packed callable semantics without explicit intro callable inst",
+                        .{@intFromEnum(expr_idx)},
+                    ),
+                    target,
+                    next,
                 ),
             };
-            _ = closure;
-            break :blk try self.lowerResolvedCallableInstValueInto(
-                callable_inst_id,
-                target,
-                next,
-            );
         },
         .e_block => |block| blk: {
             const lowered = try self.lowerBlockExprIntoWithExitScope(session, block, target, next);

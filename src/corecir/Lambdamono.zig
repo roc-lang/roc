@@ -147,18 +147,14 @@ pub const ExprTemplateSemantics = union(enum) {
     template: Lambdasolved.CallableTemplateId,
 };
 
+pub const ExprCallableIntro = union(enum) {
+    non_intro,
+    callable_inst: CallableInstId,
+};
+
 pub const ExprBuildState = enum {
     reserved,
     finalized,
-};
-
-pub const ExprSemantics = struct {
-    template_semantics: ExprTemplateSemantics = .not_template,
-    callable_semantics: ExprCallableSemantics = .ordinary,
-    call_semantics: ExprCallSemantics = .not_call,
-    value_origin: ExprValueOrigin = .self_value,
-    dispatch_semantics: ExprDispatchSemantics = .not_dispatch,
-    lookup_semantics: ExprLookupSemantics = .not_lookup,
 };
 
 pub const CallableParamProjection = ValueProjection.Projection;
@@ -302,6 +298,7 @@ pub const Expr = struct {
     monotype: ContextMono.ResolvedMonotype,
     child_exprs: ExprIdSpan = .empty(),
     child_stmts: StmtIdSpan = .empty(),
+    callable_intro: ExprCallableIntro = .non_intro,
     template_semantics: ExprTemplateSemantics = .not_template,
     callable_semantics: ExprCallableSemantics,
     call_semantics: ExprCallSemantics,

@@ -310,6 +310,19 @@ pub const Result = struct {
         };
     }
 
+    pub fn getExprIntroCallableInst(
+        self: *const Result,
+        source_context: SourceContext,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) ?CallableInstId {
+        const expr_id = self.lambdamono.getExprId(source_context, module_idx, expr_idx) orelse return null;
+        return switch (self.lambdamono.getExpr(expr_id).callable_intro) {
+            .non_intro => null,
+            .callable_inst => |callable_inst_id| callable_inst_id,
+        };
+    }
+
     pub fn getDispatchExprTarget(
         self: *const Result,
         source_context: SourceContext,
@@ -504,6 +517,58 @@ pub const Result = struct {
         return switch (self.lambdamono.getExpr(expr_id).template_semantics) {
             .not_template => null,
             .template => |template_id| template_id,
+        };
+    }
+
+    pub fn getExprCallableValue(
+        self: *const Result,
+        source_context: SourceContext,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) ?CallableValue {
+        const expr_id = self.lambdamono.getExprId(source_context, module_idx, expr_idx) orelse return null;
+        return switch (self.lambdamono.getExpr(expr_id).callable_semantics) {
+            .ordinary => null,
+            .callable => |callable_value| callable_value,
+        };
+    }
+
+    pub fn getExprCallSite(
+        self: *const Result,
+        source_context: SourceContext,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) ?CallSite {
+        const expr_id = self.lambdamono.getExprId(source_context, module_idx, expr_idx) orelse return null;
+        return switch (self.lambdamono.getExpr(expr_id).call_semantics) {
+            .not_call => null,
+            .call => |call_site| call_site,
+        };
+    }
+
+    pub fn getExprLookupResolution(
+        self: *const Result,
+        source_context: SourceContext,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) ?LookupResolution {
+        const expr_id = self.lambdamono.getExprId(source_context, module_idx, expr_idx) orelse return null;
+        return switch (self.lambdamono.getExpr(expr_id).lookup_semantics) {
+            .not_lookup => null,
+            .lookup => |lookup_resolution| lookup_resolution,
+        };
+    }
+
+    pub fn getExprDispatchTarget(
+        self: *const Result,
+        source_context: SourceContext,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) ?DispatchExprTarget {
+        const expr_id = self.lambdamono.getExprId(source_context, module_idx, expr_idx) orelse return null;
+        return switch (self.lambdamono.getExpr(expr_id).dispatch_semantics) {
+            .not_dispatch => null,
+            .dispatch => |dispatch_target| dispatch_target,
         };
     }
 
@@ -1726,24 +1791,14 @@ pub const Pass = struct {
 
         const child_expr_span = try self.appendProgramExprChildren(&result.lambdamono, child_exprs.items);
         const child_stmt_span = try self.appendProgramStmtChildren(&result.lambdamono, child_stmts.items);
-        const semantics = self.readExprSemantics(result, source_context, module_idx, expr_idx);
-        const callable_value = switch (semantics.callable_semantics) {
-            .ordinary => null,
-            .callable => |value| value,
-        };
-        const call_site = switch (semantics.call_semantics) {
-            .not_call => null,
-            .call => |call| call,
-        };
-        const value_origin = semantics.value_origin;
-        const dispatch_target = switch (semantics.dispatch_semantics) {
-            .not_dispatch => null,
-            .dispatch => |dispatch| dispatch,
-        };
-        const lookup_resolution = switch (semantics.lookup_semantics) {
-            .not_lookup => null,
-            .lookup => |resolved_lookup| resolved_lookup,
-        };
+        const callable_value = result.getExprCallableValue(source_context, module_idx, expr_idx);
+        const call_site = result.getExprCallSite(source_context, module_idx, expr_idx);
+        const value_origin = if (result.getExprValueOrigin(source_context, module_idx, expr_idx)) |origin|
+            Lambdamono.ExprValueOrigin{ .expr = origin }
+        else
+            .self_value;
+        const dispatch_target = result.getExprDispatchTarget(source_context, module_idx, expr_idx);
+        const lookup_resolution = result.getExprLookupResolution(source_context, module_idx, expr_idx);
         var monotype = resolvedMonotype(.none, module_idx);
         if (callable_value) |expr_callable_value| {
             monotype = result.getCallableValueMonotype(expr_callable_value);
@@ -1893,6 +1948,7 @@ pub const Pass = struct {
                 .monotype = resolvedMonotype(.none, module_idx),
                 .child_exprs = .empty(),
                 .child_stmts = .empty(),
+                .callable_intro = .non_intro,
                 .template_semantics = .not_template,
                 .callable_semantics = .ordinary,
                 .call_semantics = .not_call,
@@ -1904,25 +1960,6 @@ pub const Pass = struct {
             break :blk new_expr_id;
         };
         return &result.lambdamono.exprs.items[@intFromEnum(expr_id)];
-    }
-
-    fn readExprSemantics(
-        self: *const Pass,
-        result: *const Result,
-        source_context: SourceContext,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-    ) Lambdamono.ExprSemantics {
-        const expr_id = result.lambdamono.getExprId(source_context, module_idx, expr_idx) orelse return .{};
-        const expr = result.lambdamono.getExpr(expr_id);
-        return .{
-            .template_semantics = expr.template_semantics,
-            .callable_semantics = expr.callable_semantics,
-            .call_semantics = expr.call_semantics,
-            .value_origin = expr.value_origin,
-            .dispatch_semantics = expr.dispatch_semantics,
-            .lookup_semantics = expr.lookup_semantics,
-        };
     }
 
     fn ensureProgramPatternBinding(
@@ -2216,11 +2253,8 @@ pub const Pass = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?CallableValue {
-        const semantics = self.readExprSemantics(result, source_context, module_idx, expr_idx);
-        return switch (semantics.callable_semantics) {
-            .ordinary => null,
-            .callable => |callable_value| callable_value,
-        };
+        _ = self;
+        return result.getExprCallableValue(source_context, module_idx, expr_idx);
     }
 
     fn readCallableParamValue(
@@ -2264,11 +2298,8 @@ pub const Pass = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?CallSite {
-        const semantics = self.readExprSemantics(result, source_context, module_idx, expr_idx);
-        return switch (semantics.call_semantics) {
-            .not_call => null,
-            .call => |call_site| call_site,
-        };
+        _ = self;
+        return result.getExprCallSite(source_context, module_idx, expr_idx);
     }
 
     fn writeExprValueOrigin(
@@ -2280,12 +2311,11 @@ pub const Pass = struct {
         expr_ref: ExprRef,
     ) Allocator.Error!void {
         const canonical_ref = try self.canonicalizeExprValueOrigin(result, expr_ref);
-        const source_template_semantics = self.readExprSemantics(
-            result,
+        const source_template_id = result.getExprTemplateId(
             canonical_ref.source_context,
             canonical_ref.module_idx,
             canonical_ref.expr_idx,
-        ).template_semantics;
+        );
         const semantics = try self.ensureProgramExprSemantics(result, source_context, module_idx, expr_idx);
         const next_origin: Lambdamono.ExprValueOrigin = .{ .expr = canonical_ref };
         if (!std.meta.eql(semantics.value_origin, next_origin)) {
@@ -2293,16 +2323,13 @@ pub const Pass = struct {
             self.noteMutation(.source_value_provenance);
             try self.requeueActiveScanUnits();
         }
-        switch (source_template_semantics) {
-            .template => |template_id| {
-                const next_template_semantics: Lambdamono.ExprTemplateSemantics = .{ .template = template_id };
-                if (!std.meta.eql(semantics.template_semantics, next_template_semantics)) {
-                    semantics.template_semantics = next_template_semantics;
-                    self.noteMutation(.expr_semantics);
-                    try self.requeueActiveScanUnits();
-                }
-            },
-            .not_template => {},
+        if (source_template_id) |template_id| {
+            const next_template_semantics: Lambdamono.ExprTemplateSemantics = .{ .template = template_id };
+            if (!std.meta.eql(semantics.template_semantics, next_template_semantics)) {
+                semantics.template_semantics = next_template_semantics;
+                self.noteMutation(.expr_semantics);
+                try self.requeueActiveScanUnits();
+            }
         }
     }
 
@@ -3305,6 +3332,15 @@ pub const Pass = struct {
             expr_idx,
             callable_inst.template,
         );
+        if (callableKind(self.all_module_envs[module_idx].store.getExpr(expr_idx)) != null) {
+            const semantics = try self.ensureProgramExprSemantics(result, source_context, module_idx, expr_idx);
+            const next_intro: Lambdamono.ExprCallableIntro = .{ .callable_inst = callable_inst_id };
+            if (!std.meta.eql(semantics.callable_intro, next_intro)) {
+                semantics.callable_intro = next_intro;
+                self.noteMutation(.expr_semantics);
+                try self.requeueActiveScanUnits();
+            }
+        }
         try self.writeExprCallableValue(
             result,
             source_context,
