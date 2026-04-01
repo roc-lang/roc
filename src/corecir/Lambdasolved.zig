@@ -63,6 +63,16 @@ pub const ExternalDefSource = struct {
     def_idx: CIR.Def.Idx,
 };
 
+pub const CallableTemplateBinding = union(enum) {
+    anonymous,
+    pattern: CIR.Pattern.Idx,
+};
+
+pub const CallableTemplateOwner = union(enum) {
+    root_scope,
+    lexical_template: CallableTemplateId,
+};
+
 pub const CallableTemplate = struct {
     source_key: u64,
     module_idx: u32,
@@ -71,10 +81,9 @@ pub const CallableTemplate = struct {
     arg_patterns: CIR.Pattern.Span,
     body_expr: CIR.Expr.Idx,
     type_root: types.Var,
-    binding_pattern: ?CIR.Pattern.Idx = null,
-    kind: CallableTemplateKind = .top_level_def,
-    lexical_owner_template: ?CallableTemplateId = null,
-    external_def: ?ExternalDefSource = null,
+    binding: CallableTemplateBinding,
+    kind: CallableTemplateKind,
+    owner: CallableTemplateOwner,
     source_region: Region = Region.zero(),
 };
 
@@ -84,25 +93,19 @@ pub const ContextPatternKey = cm.ContextPatternKey;
 
 pub const Result = struct {
     callable_templates: std.ArrayListUnmanaged(CallableTemplate),
-    local_callable_template_ids: std.AutoHashMapUnmanaged(u64, CallableTemplateId),
-    external_callable_template_ids: std.AutoHashMapUnmanaged(u64, CallableTemplateId),
-    expr_callable_template_ids: std.AutoHashMapUnmanaged(u64, CallableTemplateId),
+    callable_template_ids_by_source: std.AutoHashMapUnmanaged(u64, CallableTemplateId),
 
     pub fn init(allocator: Allocator) !Result {
         _ = allocator;
         return .{
             .callable_templates = .empty,
-            .local_callable_template_ids = .empty,
-            .external_callable_template_ids = .empty,
-            .expr_callable_template_ids = .empty,
+            .callable_template_ids_by_source = .empty,
         };
     }
 
     pub fn deinit(self: *Result, allocator: Allocator) void {
         self.callable_templates.deinit(allocator);
-        self.local_callable_template_ids.deinit(allocator);
-        self.external_callable_template_ids.deinit(allocator);
-        self.expr_callable_template_ids.deinit(allocator);
+        self.callable_template_ids_by_source.deinit(allocator);
     }
 
     pub fn getCallableTemplate(self: *const Result, callable_template_id: CallableTemplateId) *const CallableTemplate {
@@ -110,15 +113,11 @@ pub const Result = struct {
     }
 
     pub fn getLocalCallableTemplate(self: *const Result, module_idx: u32, pattern_idx: CIR.Pattern.Idx) ?CallableTemplateId {
-        return self.local_callable_template_ids.get(packLocalPatternSourceKey(module_idx, pattern_idx));
+        return self.callable_template_ids_by_source.get(packLocalPatternSourceKey(module_idx, pattern_idx));
     }
 
     pub fn getExternalCallableTemplate(self: *const Result, module_idx: u32, def_node_idx: u16) ?CallableTemplateId {
-        return self.external_callable_template_ids.get(packExternalDefSourceKey(module_idx, def_node_idx));
-    }
-
-    pub fn getExprCallableTemplate(self: *const Result, module_idx: u32, expr_idx: CIR.Expr.Idx) ?CallableTemplateId {
-        return self.expr_callable_template_ids.get(packExprSourceKey(module_idx, expr_idx));
+        return self.callable_template_ids_by_source.get(packExternalDefSourceKey(module_idx, def_node_idx));
     }
 
 };

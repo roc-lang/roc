@@ -80,9 +80,7 @@ pub const CaptureField = Lambdamono.CaptureField;
 pub const CaptureFieldSpan = Lambdamono.CaptureFieldSpan;
 pub const CallableDef = Lambdamono.CallableDef;
 pub const CallableDefId = Lambdamono.CallableDefId;
-pub const PackedFnId = Lambdamono.PackedFnId;
 pub const PackedFn = Lambdamono.PackedFn;
-pub const IndirectCallId = Lambdamono.IndirectCallId;
 pub const IndirectCall = Lambdamono.IndirectCall;
 pub const CallableValue = Lambdamono.CallableValue;
 pub const CallSite = Lambdamono.CallSite;
@@ -107,7 +105,7 @@ fn callableValueMonotype(result: *const Result, callable_value: CallableValue) R
                 .module_idx = callable_inst.fn_monotype_module_idx,
             };
         },
-        .packed_fn => |packed_fn_id| result.getPackedFn(packed_fn_id).fn_monotype,
+        .packed_fn => |packed_fn| packed_fn.fn_monotype,
     };
 }
 
@@ -146,8 +144,7 @@ const MutationKind = enum(u8) {
     context_pattern_monotypes,
     context_type_var_monotypes,
     context_dispatch_targets,
-    packed_fns,
-    indirect_calls,
+    callable_variant_groups,
     callable_insts,
     substs,
 };
@@ -399,17 +396,13 @@ pub const Result = struct {
         return self.lambdamono.getPatternCallableValue(source_context, module_idx, pattern_idx);
     }
 
-    pub fn getPackedFn(self: *const Result, packed_fn_id: PackedFnId) *const PackedFn {
-        return Lambdamono.getPackedFn(&self.lambdamono, packed_fn_id);
-    }
-
     pub fn getCallableValueMonotype(
         self: *const Result,
         callable_value: CallableValue,
     ) ResolvedMonotype {
         return switch (callable_value) {
             .direct => |callable_inst_id| self.getCallableInstRuntimeMonotype(callable_inst_id),
-            .packed_fn => |packed_fn_id| self.getPackedFn(packed_fn_id).runtime_monotype,
+            .packed_fn => |packed_fn| packed_fn.runtime_monotype,
         };
     }
 
@@ -427,31 +420,26 @@ pub const Result = struct {
         };
     }
 
-    pub fn getIndirectCall(self: *const Result, indirect_call_id: IndirectCallId) *const IndirectCall {
-        return Lambdamono.getIndirectCall(&self.lambdamono, indirect_call_id);
+    pub fn getPackedFnVariants(self: *const Result, packed_fn: PackedFn) []const CallableInstId {
+        return self.lambdamono.getCallableVariantGroupVariants(packed_fn.variant_group);
     }
 
-    pub fn getPackedFnVariants(self: *const Result, packed_fn_id: PackedFnId) []const CallableInstId {
-        return Lambdamono.getCallableVariants(&self.lambdamono, self.getPackedFn(packed_fn_id).variants);
-    }
-
-    pub fn getIndirectCallVariants(self: *const Result, indirect_call_id: IndirectCallId) []const CallableInstId {
-        return Lambdamono.getCallableVariants(&self.lambdamono, self.getIndirectCall(indirect_call_id).variants);
+    pub fn getIndirectCallVariants(self: *const Result, indirect_call: IndirectCall) []const CallableInstId {
+        return self.lambdamono.getCallableVariantGroupVariants(indirect_call.variant_group);
     }
 
     pub fn getPackedFnTagName(
         self: *const Result,
-        packed_fn_id: PackedFnId,
+        packed_fn: PackedFn,
         callable_inst_id: CallableInstId,
     ) Monotype.Name {
-        const packed_fn = self.getPackedFn(packed_fn_id);
         const module_env = self.all_module_envs[packed_fn.runtime_monotype.module_idx];
 
         var name_buf: [32]u8 = undefined;
         const name_text = std.fmt.bufPrint(&name_buf, "__roc_fn_{d:0>10}", .{@intFromEnum(callable_inst_id)}) catch unreachable;
         const ident = module_env.common.findIdent(name_text) orelse std.debug.panic(
             "Pipeline invariant violated: packed fn {d} missing tag name for callable inst {d} in module {d}",
-            .{ @intFromEnum(packed_fn_id), @intFromEnum(callable_inst_id), packed_fn.runtime_monotype.module_idx },
+            .{ @intFromEnum(packed_fn.variant_group), @intFromEnum(callable_inst_id), packed_fn.runtime_monotype.module_idx },
         );
         return .{
             .module_idx = packed_fn.runtime_monotype.module_idx,
@@ -477,10 +465,6 @@ pub const Result = struct {
 
     fn getExternalCallableTemplate(self: *const Result, module_idx: u32, def_node_idx: u16) ?CallableTemplateId {
         return self.lambdasolved.getExternalCallableTemplate(module_idx, def_node_idx);
-    }
-
-    fn getExprCallableTemplate(self: *const Result, module_idx: u32, expr_idx: CIR.Expr.Idx) ?CallableTemplateId {
-        return self.lambdasolved.getExprCallableTemplate(module_idx, expr_idx);
     }
 
     pub fn getContextPatternSourceExpr(
@@ -636,21 +620,42 @@ pub const Pass = struct {
     }
 
     fn templateContextForSourceContext(
-        _: *const Pass,
+        self: *const Pass,
         result: *const Result,
         source_context: SourceContext,
     ) ?CallableTemplateId {
         return switch (source_context) {
             .callable_inst => |context_id| result.getCallableInst(@enumFromInt(@intFromEnum(context_id))).template,
-            .template_expr => |template_ctx| result.getExprCallableTemplate(
+            .template_expr => |template_ctx| switch (self.readExprSemantics(
+                result,
+                source_context,
                 template_ctx.module_idx,
                 template_ctx.expr_idx,
-            ) orelse std.debug.panic(
+            ).template_semantics) {
+                .template => |template_id| template_id,
+                .not_template => std.debug.panic(
                 "Pipeline invariant violated: template source context module={d} expr={d} had no registered callable template",
                 .{ template_ctx.module_idx, @intFromEnum(template_ctx.expr_idx) },
             ),
-            .root_expr => |root_ctx| result.getExprCallableTemplate(root_ctx.module_idx, root_ctx.expr_idx),
-            .provenance_expr => |provenance_ctx| result.getExprCallableTemplate(provenance_ctx.module_idx, provenance_ctx.expr_idx),
+            },
+            .root_expr => |root_ctx| switch (self.readExprSemantics(
+                result,
+                source_context,
+                root_ctx.module_idx,
+                root_ctx.expr_idx,
+            ).template_semantics) {
+                .template => |template_id| template_id,
+                .not_template => null,
+            },
+            .provenance_expr => |provenance_ctx| switch (self.readExprSemantics(
+                result,
+                source_context,
+                provenance_ctx.module_idx,
+                provenance_ctx.expr_idx,
+            ).template_semantics) {
+                .template => |template_id| template_id,
+                .not_template => null,
+            },
         };
     }
 
@@ -792,7 +797,7 @@ pub const Pass = struct {
     fn callableAlternativesFromValue(result: *const Result, callable_value: CallableValue) []const CallableInstId {
         return switch (callable_value) {
             .direct => |callable_inst_id| result.lambdamono.getDirectCallableVariants(callable_inst_id),
-            .packed_fn => |packed_fn_id| result.getPackedFnVariants(packed_fn_id),
+            .packed_fn => |packed_fn| result.getPackedFnVariants(packed_fn),
         };
     }
 
@@ -806,7 +811,7 @@ pub const Pass = struct {
     fn callableAlternativesFromCallSite(result: *const Result, call_site: CallSite) []const CallableInstId {
         return switch (call_site) {
             .direct => |callable_inst_id| result.lambdamono.getDirectCallableVariants(callable_inst_id),
-            .indirect_call => |indirect_call_id| result.getIndirectCallVariants(indirect_call_id),
+            .indirect_call => |indirect_call| result.getIndirectCallVariants(indirect_call),
         };
     }
 
@@ -1904,6 +1909,22 @@ pub const Pass = struct {
         };
     }
 
+    fn writeExprTemplateSemantics(
+        self: *Pass,
+        result: *Result,
+        source_context: SourceContext,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+        template_id: CallableTemplateId,
+    ) Allocator.Error!void {
+        const semantics = try self.ensureProgramExprSemantics(result, source_context, module_idx, expr_idx);
+        const next_semantics: Lambdamono.ExprTemplateSemantics = .{ .template = template_id };
+        if (!std.meta.eql(semantics.template_semantics, next_semantics)) {
+            semantics.template_semantics = next_semantics;
+            self.noteMutation(.expr_semantics);
+        }
+    }
+
     fn readContextPatternSourceExpr(
         self: *const Pass,
         source_context: SourceContext,
@@ -2145,11 +2166,27 @@ pub const Pass = struct {
         expr_ref: ExprRef,
     ) Allocator.Error!void {
         const canonical_ref = try self.canonicalizeExprValueOrigin(expr_ref);
+        const source_template_semantics = self.readExprSemantics(
+            result,
+            canonical_ref.source_context,
+            canonical_ref.module_idx,
+            canonical_ref.expr_idx,
+        ).template_semantics;
         const semantics = try self.ensureProgramExprSemantics(result, source_context, module_idx, expr_idx);
         const next_origin: Lambdamono.ExprValueOrigin = .{ .expr = canonical_ref };
         if (!std.meta.eql(semantics.value_origin, next_origin)) {
             semantics.value_origin = next_origin;
             self.noteMutation(.source_value_provenance);
+        }
+        switch (source_template_semantics) {
+            .template => |template_id| {
+                const next_template_semantics: Lambdamono.ExprTemplateSemantics = .{ .template = template_id };
+                if (!std.meta.eql(semantics.template_semantics, next_template_semantics)) {
+                    semantics.template_semantics = next_template_semantics;
+                    self.noteMutation(.expr_semantics);
+                }
+            },
+            .not_template => {},
         }
     }
 
@@ -2264,6 +2301,7 @@ pub const Pass = struct {
     fn registerCallableTemplate(
         self: *Pass,
         result: *Result,
+        owner_source_context: ?SourceContext,
         source_key: u64,
         module_idx: u32,
         cir_expr: CIR.Expr.Idx,
@@ -2272,17 +2310,23 @@ pub const Pass = struct {
         kind: CallableTemplateKind,
         source_region: Region,
     ) Allocator.Error!CallableTemplateId {
-        const existing = result.lambdasolved.expr_callable_template_ids.get(source_key);
+        const existing = result.lambdasolved.callable_template_ids_by_source.get(source_key);
         if (existing) |template_id| return template_id;
         const boundary = self.callableBoundaryInfo(module_idx, cir_expr) orelse std.debug.panic(
             "Pipeline invariant violated: registering callable template for non-callable boundary expr {d} in module {d}",
             .{ @intFromEnum(cir_expr), module_idx },
         );
 
-        const lexical_owner_template: ?CallableTemplateId = if (kind == .closure)
-            self.currentTemplateContext(result)
+        const owner: Lambdasolved.CallableTemplateOwner = if (kind == .closure)
+            if (owner_source_context) |source_context|
+                if (self.templateContextForSourceContext(result, source_context)) |template_id|
+                    .{ .lexical_template = template_id }
+                else
+                    .root_scope
+            else
+                .root_scope
         else
-            null;
+            .root_scope;
 
         const callable_template_id: CallableTemplateId = @enumFromInt(result.lambdasolved.callable_templates.items.len);
         try self.appendTracked(.callable_templates, &result.lambdasolved.callable_templates, CallableTemplate{
@@ -2293,15 +2337,17 @@ pub const Pass = struct {
             .arg_patterns = boundary.arg_patterns,
             .body_expr = boundary.body_expr,
             .type_root = type_root,
-            .binding_pattern = binding_pattern,
+            .binding = if (binding_pattern) |pattern_idx|
+                .{ .pattern = pattern_idx }
+            else
+                .anonymous,
             .kind = kind,
-            .lexical_owner_template = lexical_owner_template,
-            .external_def = externalDefSourceFromSourceKey(source_key),
+            .owner = owner,
             .source_region = source_region,
         });
         try self.putTracked(
             .callable_template_aliases,
-            &result.lambdasolved.expr_callable_template_ids,
+            &result.lambdasolved.callable_template_ids_by_source,
             source_key,
             callable_template_id,
         );
@@ -2333,11 +2379,7 @@ pub const Pass = struct {
         source_key: u64,
         template_id: CallableTemplateId,
     ) Allocator.Error!void {
-        const existing = switch (callableSourceNamespace(source_key)) {
-            .local_pattern => result.lambdasolved.local_callable_template_ids.get(source_key),
-            .external_def => result.lambdasolved.external_callable_template_ids.get(source_key),
-            .expr => result.lambdasolved.expr_callable_template_ids.get(source_key),
-        };
+        const existing = result.lambdasolved.callable_template_ids_by_source.get(source_key);
         if (existing) |existing_template_id| {
             if (existing_template_id != template_id) {
                 if (std.debug.runtime_safety) {
@@ -2351,49 +2393,12 @@ pub const Pass = struct {
             return;
         }
 
-        if (externalDefSourceFromSourceKey(source_key)) |external_def| {
-            const template = &result.lambdasolved.callable_templates.items[@intFromEnum(template_id)];
-            if (template.external_def) |existing| {
-                if (existing.module_idx != external_def.module_idx or existing.def_idx != external_def.def_idx) {
-                    if (std.debug.runtime_safety) {
-                        std.debug.panic(
-                            "Pipeline: conflicting external-def aliases for callable template {d} (existing={d}:{d}, new={d}:{d})",
-                            .{
-                                @intFromEnum(template_id),
-                                existing.module_idx,
-                                @intFromEnum(existing.def_idx),
-                                external_def.module_idx,
-                                @intFromEnum(external_def.def_idx),
-                            },
-                        );
-                    }
-                    unreachable;
-                }
-            } else {
-                template.external_def = external_def;
-            }
-        }
-
-        switch (callableSourceNamespace(source_key)) {
-            .local_pattern => try self.putTracked(
-                .callable_template_aliases,
-                &result.lambdasolved.local_callable_template_ids,
-                source_key,
-                template_id,
-            ),
-            .external_def => try self.putTracked(
-                .callable_template_aliases,
-                &result.lambdasolved.external_callable_template_ids,
-                source_key,
-                template_id,
-            ),
-            .expr => try self.putTracked(
-                .callable_template_aliases,
-                &result.lambdasolved.expr_callable_template_ids,
-                source_key,
-                template_id,
-            ),
-        }
+        try self.putTracked(
+            .callable_template_aliases,
+            &result.lambdasolved.callable_template_ids_by_source,
+            source_key,
+            template_id,
+        );
     }
 
     fn recordContextPatternSourceExpr(
@@ -2499,6 +2504,7 @@ pub const Pass = struct {
     ) Allocator.Error!CallableTemplateId {
         const template_id = try self.registerCallableTemplate(
             result,
+            null,
             packExprSourceKey(module_idx, expr_idx),
             module_idx,
             expr_idx,
@@ -2936,6 +2942,8 @@ pub const Pass = struct {
         try self.in_progress_value_defs.put(self.allocator, key, {});
         defer _ = self.in_progress_value_defs.remove(key);
 
+        try self.scanForcedCirValueExpr(result, thread, module_idx, expr_idx);
+
         if (try self.resolveExprCallableTemplate(result, thread.requireSourceContext(), module_idx, expr_idx)) |template_id| {
             try self.materializeDemandedExprCallableInst(result, thread, module_idx, expr_idx, template_id);
             if (self.getExprCallableValueForThread(result, thread, module_idx, expr_idx)) |callable_value| {
@@ -2943,8 +2951,6 @@ pub const Pass = struct {
             }
             return;
         }
-
-        try self.scanForcedCirValueExpr(result, thread, module_idx, expr_idx);
     }
 
     fn scanDemandedValueDefExprInSourceContext(
@@ -3031,6 +3037,7 @@ pub const Pass = struct {
         if (callableKind(expr)) |kind| {
             const template_id = try self.registerCallableTemplate(
                 result,
+                thread.requireSourceContext(),
                 packExprSourceKey(module_idx, expr_idx),
                 module_idx,
                 expr_idx,
@@ -3038,6 +3045,13 @@ pub const Pass = struct {
                 null,
                 kind,
                 module_env.store.getExprRegion(expr_idx),
+            );
+            try self.writeExprTemplateSemantics(
+                result,
+                thread.requireSourceContext(),
+                module_idx,
+                expr_idx,
+                template_id,
             );
             if (materialize_if_callable) {
                 try self.materializeDemandedExprCallableInst(result, thread, module_idx, expr_idx, template_id);
@@ -3134,7 +3148,7 @@ pub const Pass = struct {
         template_id: CallableTemplateId,
     ) bool {
         const template = result.getCallableTemplate(template_id);
-        return template.kind == .closure and template.lexical_owner_template != null;
+        return template.kind == .closure and template.owner == .lexical_template;
     }
 
     fn setExprDirectCallableInCallableContext(
@@ -3656,8 +3670,8 @@ pub const Pass = struct {
                             const capture_template = result.getCallableTemplate(
                                 result.getCallableInst(capture_callable_inst_id).template,
                             );
-                            if (capture_template.binding_pattern) |binding_pattern| {
-                                if (binding_pattern == capture.pattern_idx and
+                            switch (capture_template.binding) {
+                                .pattern => |binding_pattern| if (binding_pattern == capture.pattern_idx and
                                     try self.callableInstSharesRecursiveEnvironment(
                                         result,
                                         closure_callable_inst_id,
@@ -3665,7 +3679,8 @@ pub const Pass = struct {
                                     ))
                                 {
                                     break :blk .recursive_member;
-                                }
+                                },
+                                .anonymous => {},
                             }
                         },
                         .packed_fn => {},
@@ -3684,8 +3699,8 @@ pub const Pass = struct {
                                 .field_monotype = closure_value.capture_tuple_monotype,
                             } },
                         },
-                        .packed_fn => |packed_fn_id| break :blk .{ .runtime_field = .{
-                            .field_monotype = result.getPackedFn(packed_fn_id).runtime_monotype,
+                        .packed_fn => |packed_fn| break :blk .{ .runtime_field = .{
+                            .field_monotype = packed_fn.runtime_monotype,
                         } },
                     }
                 }
@@ -4098,6 +4113,7 @@ pub const Pass = struct {
                 if (lambda_expr == .e_lambda) {
                     const lambda_template_id = try self.registerCallableTemplate(
                         result,
+                        thread.requireSourceContext(),
                         packExprSourceKey(module_idx, closure_expr.lambda_idx),
                         module_idx,
                         closure_expr.lambda_idx,
@@ -4356,8 +4372,10 @@ pub const Pass = struct {
             if (current_template) |template| {
                 if (template.module_idx == module_idx and
                     template.cir_expr == closure_expr_idx and
-                    template.binding_pattern != null and
-                    template.binding_pattern.? == capture.pattern_idx)
+                    switch (template.binding) {
+                        .pattern => |binding_pattern| binding_pattern == capture.pattern_idx,
+                        .anonymous => false,
+                    })
                 {
                     continue;
                 }
@@ -4686,13 +4704,13 @@ pub const Pass = struct {
             if (desired_fn_monotype.isNone() and std.debug.runtime_safety) {
                 const template = result.getCallableTemplate(template_id);
                 const template_env = self.all_module_envs[template.module_idx];
-                const binding_name = if (template.binding_pattern) |binding_pattern|
-                    switch (template_env.store.getPattern(binding_pattern)) {
+                const binding_name = switch (template.binding) {
+                    .pattern => |binding_pattern| switch (template_env.store.getPattern(binding_pattern)) {
                         .assign => |assign_pat| template_env.getIdent(assign_pat.ident),
                         else => "<non-assign>",
-                    }
-                else
-                    "<anonymous>";
+                    },
+                    .anonymous => "<anonymous>",
+                };
                 std.debug.panic(
                     "Pipeline unresolved direct callee '{s}' template={d} kind={s} template_module={d} template_expr={d} call_module={d} call_expr={d} context={d} root_source_expr={d}",
                     .{
@@ -6283,11 +6301,11 @@ pub const Pass = struct {
                 break;
             },
             .e_closure, .e_lambda, .e_hosted_lambda => {
-                const template_id = (try self.resolveExprCallableTemplateWithVisited(
+                const template_id = (try self.resolveExprCallableTemplate(
                     result,
+                    source_context,
                     module_idx,
                     expr_idx,
-                    visiting,
                 )) orelse std.debug.panic(
                     "Pipeline invariant violated: callable-capable expr {d} ({s}) in module {d} reached structured callable realization without a registered callable template",
                     .{
@@ -7182,7 +7200,7 @@ pub const Pass = struct {
         _ = self;
         const callable_inst = result.getCallableInst(callable_inst_id);
         const template = result.getCallableTemplate(callable_inst.template);
-        const external_def = template.external_def orelse return null;
+        const external_def = externalDefSourceFromSourceKey(template.source_key) orelse return null;
         return .{
             .module_idx = external_def.module_idx,
             .def_idx = external_def.def_idx,
@@ -8031,7 +8049,7 @@ pub const Pass = struct {
 
         const set_id: Lambdamono.CallableVariantGroupId = @enumFromInt(result.lambdamono.callable_variant_groups.items.len);
         const new_set: @TypeOf(result.lambdamono.callable_variant_groups.items[0]) = .{ .variants = span };
-        try self.appendTracked(.packed_fns, &result.lambdamono.callable_variant_groups, new_set);
+        try self.appendTracked(.callable_variant_groups, &result.lambdamono.callable_variant_groups, new_set);
         return set_id;
     }
 
@@ -8137,29 +8155,18 @@ pub const Pass = struct {
         self: *Pass,
         result: *Result,
         callable_inst_ids: []const CallableInstId,
-    ) Allocator.Error!PackedFnId {
+    ) Allocator.Error!PackedFn {
         const variant_group_id = try self.internCallableVariantGroup(
             result,
             callable_inst_ids,
         );
-        if (result.lambdamono.packed_fn_ids_by_variant_group.get(variant_group_id)) |existing| return existing;
-
         const fn_monotype = try self.requireUniformPackedCallableFnMonotype(result, callable_inst_ids);
         const runtime_monotype = try self.buildPackedFnRuntimeMonotype(result, callable_inst_ids);
-        const packed_fn_id: PackedFnId = @enumFromInt(result.lambdamono.packed_fns.items.len);
-        const packed_fn: @TypeOf(result.lambdamono.packed_fns.items[0]) = .{
-            .variants = result.lambdamono.callable_variant_groups.items[@intFromEnum(variant_group_id)].variants,
+        return .{
+            .variant_group = variant_group_id,
             .fn_monotype = fn_monotype,
             .runtime_monotype = runtime_monotype,
         };
-        try self.appendTracked(.packed_fns, &result.lambdamono.packed_fns, packed_fn);
-        try self.putTracked(
-            .packed_fns,
-            &result.lambdamono.packed_fn_ids_by_variant_group,
-            variant_group_id,
-            packed_fn_id,
-        );
-        return packed_fn_id;
     }
 
     fn packedCallableTagName(
@@ -8245,25 +8252,14 @@ pub const Pass = struct {
         self: *Pass,
         result: *Result,
         callable_inst_ids: []const CallableInstId,
-    ) Allocator.Error!IndirectCallId {
+    ) Allocator.Error!IndirectCall {
         const variant_group_id = try self.internCallableVariantGroup(
             result,
             callable_inst_ids,
         );
-        if (result.lambdamono.indirect_call_ids_by_variant_group.get(variant_group_id)) |existing| return existing;
-
-        const indirect_call_id: IndirectCallId = @enumFromInt(result.lambdamono.indirect_calls.items.len);
-        const indirect_call: @TypeOf(result.lambdamono.indirect_calls.items[0]) = .{
-            .variants = result.lambdamono.callable_variant_groups.items[@intFromEnum(variant_group_id)].variants,
+        return .{
+            .variant_group = variant_group_id,
         };
-        try self.appendTracked(.indirect_calls, &result.lambdamono.indirect_calls, indirect_call);
-        try self.putTracked(
-            .indirect_calls,
-            &result.lambdamono.indirect_call_ids_by_variant_group,
-            variant_group_id,
-            indirect_call_id,
-        );
-        return indirect_call_id;
     }
 
     fn lookupResolvedDispatchTemplate(
@@ -9543,69 +9539,16 @@ pub const Pass = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) Allocator.Error!?CallableTemplateId {
-        var visiting: std.AutoHashMapUnmanaged(ContextExprVisitKey, void) = .empty;
-        defer visiting.deinit(self.allocator);
-        return self.resolveExprCallableTemplateWithVisited(result, source_context, module_idx, expr_idx, &visiting);
-    }
-
-    fn resolveExprCallableTemplateWithVisited(
-        self: *Pass,
-        result: *Result,
-        source_context: SourceContext,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-        visiting: *std.AutoHashMapUnmanaged(ContextExprVisitKey, void),
-    ) Allocator.Error!?CallableTemplateId {
-        const visit_key = contextExprVisitKey(source_context, module_idx, expr_idx);
-        if (visiting.contains(visit_key)) return null;
-        try visiting.put(self.allocator, visit_key, {});
-        defer _ = visiting.remove(visit_key);
-
         if (self.getCallableParamSpecCallableValueForSourceContext(result, source_context, module_idx, expr_idx)) |callable_value| {
             if (exactCallableInstFromCallableValue(callable_value)) |callable_inst_id| {
                 return result.getCallableInst(callable_inst_id).template;
             }
         }
 
-        if (self.readExprValueOrigin(result, source_context, module_idx, expr_idx)) |source| {
-            if (source.projections.isEmpty() and
-                !(source.source_context == source_context and
-                source.module_idx == module_idx and
-                source.expr_idx == expr_idx))
-            {
-                return try self.resolveExprCallableTemplateWithVisited(
-                    result,
-                    source.source_context,
-                    source.module_idx,
-                    source.expr_idx,
-                    visiting,
-                );
-            }
-        }
-
-        const module_env = self.all_module_envs[module_idx];
-        const expr = module_env.store.getExpr(expr_idx);
-        const resolved = switch (expr) {
-            .e_lambda, .e_closure, .e_hosted_lambda => blk: {
-                if (result.getExprCallableTemplate(module_idx, expr_idx)) |template_id| {
-                    break :blk template_id;
-                }
-
-                const kind = callableKind(expr) orelse unreachable;
-                break :blk try self.registerCallableTemplate(
-                    result,
-                    packExprSourceKey(module_idx, expr_idx),
-                    module_idx,
-                    expr_idx,
-                    ModuleEnv.varFrom(expr_idx),
-                    null,
-                    kind,
-                    module_env.store.getExprRegion(expr_idx),
-                );
-            },
-            else => null,
+        return switch (self.readExprSemantics(result, source_context, module_idx, expr_idx).template_semantics) {
+            .not_template => null,
+            .template => |template_id| template_id,
         };
-        return resolved;
     }
 
     fn callUsesAnnotationOnlyIntrinsic(
@@ -9892,12 +9835,9 @@ pub const Pass = struct {
         switch (template.kind) {
             .top_level_def, .lambda, .hosted_lambda => return templateSourceContext(template),
             .closure => {
-                const lexical_owner_template = template.lexical_owner_template orelse switch (active_source_context) {
-                    .root_expr, .provenance_expr, .template_expr => return active_source_context,
-                    .callable_inst => std.debug.panic(
-                        "Pipeline: closure template expr={d} under callable-inst source context had no lexical owner template",
-                        .{@intFromEnum(template.cir_expr)},
-                    ),
+                const lexical_owner_template = switch (template.owner) {
+                    .root_scope => return active_source_context,
+                    .lexical_template => |owner| owner,
                 };
                 if (self.templateContextForSourceContext(result, active_source_context)) |active_template| {
                     if (active_template == lexical_owner_template) {
@@ -10013,19 +9953,22 @@ pub const Pass = struct {
         const thread = SemanticThread{
             .source_context = callableInstSourceContext(callable_inst_id),
         };
-        if (template.binding_pattern) |binding_pattern| {
-            try self.mergeTrackedContextPatternMonotype(
-                result,
-                self.resultPatternKey(callable_inst_id, template.module_idx, binding_pattern),
-                resolvedMonotype(callable_inst.fn_monotype, callable_inst.fn_monotype_module_idx),
-            );
-            try self.setCallableParamDirectValueInCallableContext(
-                result,
-                callable_inst_id,
-                template.module_idx,
-                binding_pattern,
-                callable_inst_id,
-            );
+        switch (template.binding) {
+            .pattern => |binding_pattern| {
+                try self.mergeTrackedContextPatternMonotype(
+                    result,
+                    self.resultPatternKey(callable_inst_id, template.module_idx, binding_pattern),
+                    resolvedMonotype(callable_inst.fn_monotype, callable_inst.fn_monotype_module_idx),
+                );
+                try self.setCallableParamDirectValueInCallableContext(
+                    result,
+                    callable_inst_id,
+                    template.module_idx,
+                    binding_pattern,
+                    callable_inst_id,
+                );
+            },
+            .anonymous => {},
         }
 
         var iterations: u32 = 0;

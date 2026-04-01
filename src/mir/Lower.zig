@@ -3924,7 +3924,7 @@ fn lowerResolvedDispatchTargetCallInto(
                     .entry = call_stmt,
                     .callee_local = callee_local,
                 },
-                .packed_fn => |packed_fn_id| blk2: {
+                .packed_fn => |packed_fn| blk2: {
                     const payload_resolved = self.callable_pipeline.getCallableInstRuntimeMonotype(exact_dispatch_callable_inst);
                     const payload_mono = try self.importMonotypeFromStore(
                         &self.callable_pipeline.context_mono.monotype_store,
@@ -3935,7 +3935,7 @@ fn lowerResolvedDispatchTargetCallInto(
                     const payload_local = try self.freshSyntheticLocal(payload_mono, false);
                     break :blk2 .{
                         .entry = try self.lowerPackedCallablePayloadInto(
-                            packed_fn_id,
+                            packed_fn,
                             exact_dispatch_callable_inst,
                             callee_local,
                             payload_local,
@@ -3966,14 +3966,14 @@ fn lowerResolvedDispatchTargetCallInto(
                     .non_callable,
             );
         },
-        .indirect_call => |indirect_call_id| blk: {
-            const packed_fn_id = switch (target_callable_value orelse std.debug.panic(
+        .indirect_call => |indirect_call| blk: {
+            const packed_fn = switch (target_callable_value orelse std.debug.panic(
                 "statement-only MIR invariant violated: resolved dispatch expr {d} target module={d} def={d} specialized to indirect call {d} without target callable value",
                 .{
                     @intFromEnum(result_expr_idx),
                     dispatch_target.module_idx,
                     @intFromEnum(dispatch_target.def_idx),
-                    @intFromEnum(indirect_call_id),
+                    @intFromEnum(indirect_call.variant_group),
                 },
             )) {
                 .packed_fn => |packed| packed,
@@ -3983,7 +3983,7 @@ fn lowerResolvedDispatchTargetCallInto(
                         @intFromEnum(result_expr_idx),
                         dispatch_target.module_idx,
                         @intFromEnum(dispatch_target.def_idx),
-                        @intFromEnum(indirect_call_id),
+                        @intFromEnum(indirect_call.variant_group),
                         @intFromEnum(target_def.expr),
                         @intFromEnum(callable_inst_id),
                     },
@@ -3992,8 +3992,8 @@ fn lowerResolvedDispatchTargetCallInto(
             const call_entry = try self.lowerIndirectCallInto(
                 session,
                 result_expr_idx,
-                packed_fn_id,
-                indirect_call_id,
+                packed_fn,
+                indirect_call,
                 callee_local,
                 args,
                 target,
@@ -4027,18 +4027,18 @@ fn lowerIndirectCallInto(
     self: *Self,
     session: LowerSession,
     call_expr_idx: CIR.Expr.Idx,
-    packed_fn_id: Pipeline.PackedFnId,
-    indirect_call_id: Pipeline.IndirectCallId,
+    packed_fn: Pipeline.PackedFn,
+    indirect_call: Pipeline.IndirectCall,
     callee_local: MIR.LocalId,
     args: MIR.LocalSpan,
     target: MIR.LocalId,
     next: MIR.CFStmtId,
 ) Allocator.Error!MIR.CFStmtId {
-    const variants = self.callable_pipeline.getIndirectCallVariants(indirect_call_id);
+    const variants = self.callable_pipeline.getIndirectCallVariants(indirect_call);
     if (variants.len == 0) {
         std.debug.panic(
             "statement-only MIR invariant violated: indirect call {d} had no variants",
-            .{@intFromEnum(indirect_call_id)},
+            .{@intFromEnum(indirect_call.variant_group)},
         );
     }
 
@@ -4059,7 +4059,7 @@ fn lowerIndirectCallInto(
         null;
 
     const default_branch = try self.lowerIndirectCallBranchInto(
-        packed_fn_id,
+        packed_fn,
         variants[0],
         callee_local,
         args,
@@ -4074,12 +4074,12 @@ fn lowerIndirectCallInto(
             .value = self.tagDiscriminantForMonotypeName(
                 self.store.getLocal(callee_local).monotype,
                 try self.packedCallableTagName(
-                    packed_fn_id,
+                    packed_fn,
                     variant_callable_inst_id,
                 ),
             ),
             .body = try self.lowerIndirectCallBranchInto(
-                packed_fn_id,
+                packed_fn,
                 variant_callable_inst_id,
                 callee_local,
                 args,
@@ -4109,7 +4109,7 @@ fn lowerIndirectCallInto(
 
 fn lowerIndirectCallBranchInto(
     self: *Self,
-    packed_fn_id: Pipeline.PackedFnId,
+    packed_fn: Pipeline.PackedFn,
     variant_callable_inst_id: Pipeline.CallableInstId,
     packed_callee_local: MIR.LocalId,
     args: MIR.LocalSpan,
@@ -4147,7 +4147,7 @@ fn lowerIndirectCallBranchInto(
     } });
 
     return self.lowerPackedCallablePayloadInto(
-        packed_fn_id,
+        packed_fn,
         variant_callable_inst_id,
         packed_callee_local,
         callee_payload_local,
@@ -4256,8 +4256,8 @@ fn lowerCallInto(
                 else => try self.lowerCirExprInto(session, call.func, callee_local, lowered_next),
             };
         },
-        .indirect_call => |indirect_call_id| {
-            const packed_fn_id = switch (callable_value) {
+        .indirect_call => |indirect_call| {
+            const packed_fn = switch (callable_value) {
                 .packed_fn => |packed| packed,
                 .direct => std.debug.panic(
                     "statement-only MIR invariant violated: indirect call expr {d} had direct callable value semantics",
@@ -4273,8 +4273,8 @@ fn lowerCallInto(
             const call_entry = try self.lowerIndirectCallInto(
                 session,
                 call_expr_idx,
-                packed_fn_id,
-                indirect_call_id,
+                packed_fn,
+                indirect_call,
                 callee_local,
                 args,
                 target,
@@ -4676,10 +4676,10 @@ fn bindExactCallableLocal(
 
 fn packedCallableTagName(
     self: *Self,
-    packed_fn_id: Pipeline.PackedFnId,
+    packed_fn: Pipeline.PackedFn,
     callable_inst_id: Pipeline.CallableInstId,
 ) Allocator.Error!Monotype.Name {
-    const source_name = self.callable_pipeline.getPackedFnTagName(packed_fn_id, callable_inst_id);
+    const source_name = self.callable_pipeline.getPackedFnTagName(packed_fn, callable_inst_id);
     return self.remapMonotypeNameBetweenModules(
         source_name,
         source_name.module_idx,
@@ -4689,7 +4689,7 @@ fn packedCallableTagName(
 
 fn lowerPackedCallablePayloadInto(
     self: *Self,
-    packed_fn_id: Pipeline.PackedFnId,
+    packed_fn: Pipeline.PackedFn,
     callable_inst_id: Pipeline.CallableInstId,
     packed_value_local: MIR.LocalId,
     payload_local: MIR.LocalId,
@@ -4700,7 +4700,7 @@ fn lowerPackedCallablePayloadInto(
         return self.lowerUnitLocalInto(payload_local, next);
     }
 
-    const tag_name = try self.packedCallableTagName(packed_fn_id, callable_inst_id);
+    const tag_name = try self.packedCallableTagName(packed_fn, callable_inst_id);
     return self.lowerRefInto(payload_local, .{ .tag_payload = .{
         .source = packed_value_local,
         .payload_idx = 0,
@@ -4744,7 +4744,7 @@ fn lowerDirectCallTargetInto(
             .entry = next,
             .callee_local = lowered_callee_local,
         },
-        .packed_fn => |packed_fn_id| blk: {
+        .packed_fn => |packed_fn| blk: {
             const payload_resolved = self.callable_pipeline.getCallableInstRuntimeMonotype(exact_callable_inst_id);
             const payload_mono = try self.importMonotypeFromStore(
                 &self.callable_pipeline.context_mono.monotype_store,
@@ -4755,7 +4755,7 @@ fn lowerDirectCallTargetInto(
             const payload_local = try self.freshSyntheticLocal(payload_mono, false);
             break :blk .{
                 .entry = try self.lowerPackedCallablePayloadInto(
-                    packed_fn_id,
+                    packed_fn,
                     exact_callable_inst_id,
                     lowered_callee_local,
                     payload_local,

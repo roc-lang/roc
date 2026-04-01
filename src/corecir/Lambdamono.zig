@@ -34,22 +34,14 @@ pub const RuntimeValue = union(enum) {
     },
 };
 
-pub const PackedFnId = enum(u32) {
-    _,
-};
-
 pub const PackedFn = struct {
-    variants: CallableVariantSpan,
+    variant_group: CallableVariantGroupId,
     fn_monotype: ContextMono.ResolvedMonotype,
     runtime_monotype: ContextMono.ResolvedMonotype,
 };
 
-pub const IndirectCallId = enum(u32) {
-    _,
-};
-
 pub const IndirectCall = struct {
-    variants: CallableVariantSpan,
+    variant_group: CallableVariantGroupId,
 };
 
 pub const ExprId = enum(u32) {
@@ -112,12 +104,12 @@ pub const RootExprId = enum(u32) {
 
 pub const CallableValue = union(enum) {
     direct: CallableInstId,
-    packed_fn: PackedFnId,
+    packed_fn: PackedFn,
 };
 
 pub const CallSite = union(enum) {
     direct: CallableInstId,
-    indirect_call: IndirectCallId,
+    indirect_call: IndirectCall,
 };
 
 pub const ExprCallableSemantics = union(enum) {
@@ -150,7 +142,13 @@ pub const ExprDispatchSemantics = union(enum) {
     dispatch: ContextMono.DispatchExprTarget,
 };
 
+pub const ExprTemplateSemantics = union(enum) {
+    not_template,
+    template: Lambdasolved.CallableTemplateId,
+};
+
 pub const ExprSemantics = struct {
+    template_semantics: ExprTemplateSemantics = .not_template,
     callable_semantics: ExprCallableSemantics = .ordinary,
     call_semantics: ExprCallSemantics = .not_call,
     value_origin: ExprValueOrigin = .self_value,
@@ -320,8 +318,6 @@ pub const Program = struct {
     callable_insts: std.ArrayListUnmanaged(CallableInst),
     callable_variant_groups: std.ArrayListUnmanaged(CallableVariantGroup),
     direct_callable_variant_group_ids_by_callable_inst: std.AutoHashMapUnmanaged(CallableInstId, CallableVariantGroupId),
-    packed_fn_ids_by_variant_group: std.AutoHashMapUnmanaged(CallableVariantGroupId, PackedFnId),
-    indirect_call_ids_by_variant_group: std.AutoHashMapUnmanaged(CallableVariantGroupId, IndirectCallId),
     callable_param_spec_entries: std.ArrayListUnmanaged(CallableParamSpecEntry),
     value_projection_entries: std.ArrayListUnmanaged(CallableParamProjection),
     pattern_entries: std.ArrayListUnmanaged(CIR.Pattern.Idx),
@@ -338,16 +334,12 @@ pub const Program = struct {
     callable_defs: std.ArrayListUnmanaged(CallableDef),
     capture_fields: std.ArrayListUnmanaged(CaptureField),
     callable_variant_entries: std.ArrayListUnmanaged(CallableInstId),
-    packed_fns: std.ArrayListUnmanaged(PackedFn),
-    indirect_calls: std.ArrayListUnmanaged(IndirectCall),
 
     pub fn init() Program {
         return .{
             .callable_insts = .empty,
             .callable_variant_groups = .empty,
             .direct_callable_variant_group_ids_by_callable_inst = .empty,
-            .packed_fn_ids_by_variant_group = .empty,
-            .indirect_call_ids_by_variant_group = .empty,
             .callable_param_spec_entries = .empty,
             .value_projection_entries = .empty,
             .pattern_entries = .empty,
@@ -364,8 +356,6 @@ pub const Program = struct {
             .callable_defs = .empty,
             .capture_fields = .empty,
             .callable_variant_entries = .empty,
-            .packed_fns = .empty,
-            .indirect_calls = .empty,
         };
     }
 
@@ -373,8 +363,6 @@ pub const Program = struct {
         self.callable_insts.deinit(allocator);
         self.callable_variant_groups.deinit(allocator);
         self.direct_callable_variant_group_ids_by_callable_inst.deinit(allocator);
-        self.packed_fn_ids_by_variant_group.deinit(allocator);
-        self.indirect_call_ids_by_variant_group.deinit(allocator);
         self.callable_param_spec_entries.deinit(allocator);
         self.value_projection_entries.deinit(allocator);
         self.pattern_entries.deinit(allocator);
@@ -391,8 +379,6 @@ pub const Program = struct {
         self.callable_defs.deinit(allocator);
         self.capture_fields.deinit(allocator);
         self.callable_variant_entries.deinit(allocator);
-        self.packed_fns.deinit(allocator);
-        self.indirect_calls.deinit(allocator);
     }
 
     pub fn getCallableInst(self: *const Program, callable_inst_id: CallableInstId) *const CallableInst {
@@ -527,14 +513,6 @@ pub fn getCallableDef(program: *const Program, callable_def_id: CallableDefId) *
 pub fn getCaptureFields(program: *const Program, span: CaptureFieldSpan) []const CaptureField {
     if (span.len == 0) return &.{};
     return program.capture_fields.items[span.start..][0..span.len];
-}
-
-pub fn getPackedFn(program: *const Program, packed_fn_id: PackedFnId) *const PackedFn {
-    return &program.packed_fns.items[@intFromEnum(packed_fn_id)];
-}
-
-pub fn getIndirectCall(program: *const Program, indirect_call_id: IndirectCallId) *const IndirectCall {
-    return &program.indirect_calls.items[@intFromEnum(indirect_call_id)];
 }
 
 pub fn getCallableVariants(program: *const Program, span: CallableVariantSpan) []const CallableInstId {
