@@ -2354,10 +2354,28 @@ pub fn build(b: *std.Build) void {
     roc_modules.eval.addImport("bytebox", bytebox.module("bytebox"));
     roc_modules.lsp.addImport("compiled_builtins", compiled_builtins_module);
 
-    // Embed the pre-built wasm32 builtins object so the eval/REPL pipeline can
+    // Build wasm32 builtins object at build time so the eval/REPL pipeline can
     // merge real compiled builtins into WASM modules (instead of using host imports).
+    const wasm32_resolved_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding, .abi = .none });
+    const wasm32_builtins_obj = b.addObject(.{
+        .name = "roc_builtins_wasm32_eval",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/builtins/static_lib.zig"),
+            .target = wasm32_resolved_target,
+            .optimize = optimize,
+            .strip = strip,
+            .omit_frame_pointer = omit_frame_pointer,
+            .pic = true,
+        }),
+    });
+    wasm32_builtins_obj.root_module.addImport("tracy", b.addModule("tracy_stub_wasm32_eval", .{
+        .root_source_file = b.path("src/builtins/tracy_stub.zig"),
+    }));
+    wasm32_builtins_obj.bundle_compiler_rt = false;
+    configureBackend(wasm32_builtins_obj, wasm32_resolved_target);
+
     const wasm32_builtins_files = b.addWriteFiles();
-    _ = wasm32_builtins_files.addCopyFile(b.path("src/cli/targets/wasm32/roc_builtins.o"), "roc_builtins.o");
+    _ = wasm32_builtins_files.addCopyFile(wasm32_builtins_obj.getEmittedBin(), "roc_builtins.o");
     const wasm32_builtins_module = b.createModule(.{
         .root_source_file = wasm32_builtins_files.add("wasm32_builtins.zig",
             \\pub const bytes = @embedFile("roc_builtins.o");
