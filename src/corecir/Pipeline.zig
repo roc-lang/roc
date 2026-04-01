@@ -563,12 +563,13 @@ pub const Result = struct {
         return self.lambdasolved.getExprCallableTemplate(module_idx, expr_idx);
     }
 
-    pub fn getPatternSourceExpr(
+    pub fn getContextPatternSourceExpr(
         self: *const Result,
+        source_context: SourceContext,
         module_idx: u32,
         pattern_idx: CIR.Pattern.Idx,
     ) ?ExprSource {
-        return self.lambdasolved.getPatternSourceExpr(module_idx, pattern_idx);
+        return self.lambdasolved.getContextPatternSourceExpr(source_context, module_idx, pattern_idx);
     }
 
     pub fn getExprSourceExpr(
@@ -2071,7 +2072,14 @@ pub const Pass = struct {
 
         for (defs) |def_idx| {
             const def = module_env.store.getDef(def_idx);
-            try self.recordPatternSourceExpr(result, module_idx, def.pattern, .{
+            try self.recordContextPatternSourceExpr(result, .{ .root_expr = .{
+                .module_idx = module_idx,
+                .expr_idx = def.expr,
+            } }, module_idx, def.pattern, .{
+                .source_context = .{ .root_expr = .{
+                    .module_idx = module_idx,
+                    .expr_idx = def.expr,
+                } },
                 .module_idx = module_idx,
                 .expr_idx = def.expr,
             });
@@ -2231,7 +2239,10 @@ pub const Pass = struct {
     ) Allocator.Error!void {
         const existing = switch (callableSourceNamespace(source_key)) {
             .expr => result.lambdasolved.expr_source_exprs.get(source_key),
-            .local_pattern => result.lambdasolved.pattern_source_exprs.get(source_key),
+            .local_pattern => std.debug.panic(
+                "Pipeline invariant violated: local-pattern source provenance must be recorded with explicit source context, not via unscoped source key {d}",
+                .{source_key},
+            ),
             .external_def => result.lambdasolved.external_def_source_exprs.get(source_key),
         };
         if (existing) |existing_source| {
@@ -2264,11 +2275,9 @@ pub const Pass = struct {
                 source_key,
                 source,
             ),
-            .local_pattern => try self.putTracked(
-                .source_value_provenance,
-                &result.lambdasolved.pattern_source_exprs,
-                source_key,
-                source,
+            .local_pattern => std.debug.panic(
+                "Pipeline invariant violated: local-pattern source provenance must be recorded with explicit source context, not via unscoped source key {d}",
+                .{source_key},
             ),
             .external_def => try self.putTracked(
                 .source_value_provenance,
@@ -2279,16 +2288,18 @@ pub const Pass = struct {
         }
     }
 
-    fn recordPatternSourceExpr(
+    fn recordContextPatternSourceExpr(
         self: *Pass,
         result: *Result,
+        source_context: SourceContext,
         module_idx: u32,
         pattern_idx: CIR.Pattern.Idx,
         source: ExprSource,
     ) Allocator.Error!void {
-        try self.recordSourceExpr(
-            result,
-            packLocalPatternSourceKey(module_idx, pattern_idx),
+        try self.putTracked(
+            .source_value_provenance,
+            &result.lambdasolved.context_pattern_source_exprs,
+            Result.contextPatternKey(source_context, module_idx, pattern_idx),
             source,
         );
 
@@ -2304,13 +2315,13 @@ pub const Pass = struct {
             .str_literal,
             .runtime_error,
             => {},
-            .as => |as_pat| try self.recordPatternSourceExpr(result, module_idx, as_pat.pattern, source),
-            .nominal => |nominal_pat| try self.recordPatternSourceExpr(result, module_idx, nominal_pat.backing_pattern, source),
-            .nominal_external => |nominal_pat| try self.recordPatternSourceExpr(result, module_idx, nominal_pat.backing_pattern, source),
+            .as => |as_pat| try self.recordContextPatternSourceExpr(result, source_context, module_idx, as_pat.pattern, source),
+            .nominal => |nominal_pat| try self.recordContextPatternSourceExpr(result, source_context, module_idx, nominal_pat.backing_pattern, source),
+            .nominal_external => |nominal_pat| try self.recordContextPatternSourceExpr(result, source_context, module_idx, nominal_pat.backing_pattern, source),
             .tuple => |tuple_pat| {
                 for (module_env.store.slicePatterns(tuple_pat.patterns), 0..) |elem_pattern_idx, elem_index| {
                     const elem_source = try self.extendExprSource(result, source, .{ .tuple_elem = @intCast(elem_index) });
-                    try self.recordPatternSourceExpr(result, module_idx, elem_pattern_idx, elem_source);
+                    try self.recordContextPatternSourceExpr(result, source_context, module_idx, elem_pattern_idx, elem_source);
                 }
             },
             .applied_tag => |tag_pat| {
@@ -2322,7 +2333,7 @@ pub const Pass = struct {
                         },
                         .payload_index = @intCast(arg_index),
                     } });
-                    try self.recordPatternSourceExpr(result, module_idx, arg_pattern_idx, arg_source);
+                    try self.recordContextPatternSourceExpr(result, source_context, module_idx, arg_pattern_idx, arg_source);
                 }
             },
             .record_destructure => |record_pat| {
@@ -2334,7 +2345,7 @@ pub const Pass = struct {
                                 .module_idx = module_idx,
                                 .ident = destruct.label,
                             } });
-                            try self.recordPatternSourceExpr(result, module_idx, sub_pattern_idx, field_source);
+                            try self.recordContextPatternSourceExpr(result, source_context, module_idx, sub_pattern_idx, field_source);
                         },
                         .Rest => {},
                     }
@@ -2343,7 +2354,7 @@ pub const Pass = struct {
             .list => |list_pat| {
                 for (module_env.store.slicePatterns(list_pat.patterns), 0..) |elem_pattern_idx, elem_index| {
                     const elem_source = try self.extendExprSource(result, source, .{ .list_elem = @intCast(elem_index) });
-                    try self.recordPatternSourceExpr(result, module_idx, elem_pattern_idx, elem_source);
+                    try self.recordContextPatternSourceExpr(result, source_context, module_idx, elem_pattern_idx, elem_source);
                 }
             },
         }
@@ -2485,8 +2496,9 @@ pub const Pass = struct {
 
         switch (stmt) {
             .s_decl => |decl| {
-                try self.recordPatternSourceExpr(
+                try self.recordContextPatternSourceExpr(
                     result,
+                    thread.requireSourceContext(),
                     module_idx,
                     decl.pattern,
                     exprSourceInContext(thread.requireSourceContext(), module_idx, decl.expr),
@@ -2518,8 +2530,9 @@ pub const Pass = struct {
                 }
             },
             .s_var => |var_decl| {
-                try self.recordPatternSourceExpr(
+                try self.recordContextPatternSourceExpr(
                     result,
+                    thread.requireSourceContext(),
                     module_idx,
                     var_decl.pattern_idx,
                     exprSourceInContext(thread.requireSourceContext(), module_idx, var_decl.expr),
@@ -3353,11 +3366,10 @@ pub const Pass = struct {
         module_idx: u32,
         pattern_idx: CIR.Pattern.Idx,
     ) Allocator.Error!?CaptureValueSource {
-        _ = source_context;
         if (findDefByPattern(module_env, pattern_idx) != null) {
             return null;
         }
-        if (result.getPatternSourceExpr(module_idx, pattern_idx)) |source| {
+        if (result.getContextPatternSourceExpr(source_context, module_idx, pattern_idx)) |source| {
             return .{ .expr = try self.materializeExprRefFromSource(result, source) };
         }
         return .{ .lexical_pattern = .{
@@ -3662,7 +3674,7 @@ pub const Pass = struct {
             .e_anno_only,
             => {},
             .e_lookup_local => |lookup| {
-                if (result.getPatternSourceExpr(module_idx, lookup.pattern_idx)) |source| {
+                if (result.getContextPatternSourceExpr(thread.requireSourceContext(), module_idx, lookup.pattern_idx)) |source| {
                     try self.recordExprSourceExpr(result, module_idx, expr_idx, source);
                 }
                 const is_top_level_def = isTopLevelDefPattern(module_env, lookup.pattern_idx);
@@ -3859,7 +3871,8 @@ pub const Pass = struct {
                     const branch = module_env.store.getMatchBranch(branch_idx);
                     for (module_env.store.sliceMatchBranchPatterns(branch.patterns)) |branch_pattern_idx| {
                         const branch_pattern = module_env.store.getMatchBranchPattern(branch_pattern_idx);
-                        try self.recordPatternSourceExpr(result, module_idx, branch_pattern.pattern, .{
+                        try self.recordContextPatternSourceExpr(result, thread.requireSourceContext(), module_idx, branch_pattern.pattern, .{
+                            .source_context = thread.requireSourceContext(),
                             .module_idx = module_idx,
                             .expr_idx = match_expr.cond,
                         });
