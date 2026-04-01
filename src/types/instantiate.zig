@@ -42,6 +42,7 @@ pub const Instantiator = struct {
     current_rank: Rank,
     rigid_behavior: RigidBehavior,
     rank_behavior: RankBehavior = .respect_rank,
+    polarity: ?types_mod.Polarity = null,
 
     /// Controls whether to respect rank when deciding what to instantiate
     pub const RankBehavior = enum {
@@ -93,6 +94,26 @@ pub const Instantiator = struct {
 
         switch (resolved.desc.content) {
             .rigid => |rigid| {
+                // Handle polarity_deferred rigids: resolve based on polarity context
+                if (rigid.name == .polarity_deferred) {
+                    if (self.polarity) |pol| {
+                        const fresh_content: Content = switch (pol) {
+                            .pos => .{ .rigid = Rigid.initPolarityOpen() },
+                            .neg, .in_opaque => .{ .structure = .empty_tag_union },
+                            .in_alias => .{ .rigid = Rigid.initPolarityDeferred() },
+                        };
+                        const fresh_var = try self.store.freshFromContentWithRank(fresh_content, self.current_rank);
+                        try self.var_map.put(resolved_var, fresh_var);
+                        return fresh_var;
+                    } else {
+                        // Deferred rigids must always be instantiated with polarity context.
+                        std.debug.assert(false);
+                        const fresh_var = try self.store.freshFromContentWithRank(.err, self.current_rank);
+                        try self.var_map.put(resolved_var, fresh_var);
+                        return fresh_var;
+                    }
+                }
+
                 // If this var is rigid, then create a new var depending on the
                 // provided behavior
                 const fresh_type: enum { flex, rigid } = blk: {

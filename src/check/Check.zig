@@ -658,6 +658,7 @@ fn instantiateVarWithSubs(
     var_to_instantiate: Var,
     subs: *std.AutoHashMapUnmanaged(Ident.Idx, Var),
     env: *Env,
+    polarity: ?types_mod.Polarity,
     region_behavior: InstantiateRegionBehavior,
 ) std.mem.Allocator.Error!Var {
     const trace = tracy.trace(@src());
@@ -670,6 +671,29 @@ fn instantiateVarWithSubs(
 
         .current_rank = env.rank(),
         .rigid_behavior = .{ .substitute_rigids = subs },
+        .polarity = polarity,
+    };
+    return self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior);
+}
+
+fn instantiateVarWithPolarity(
+    self: *Self,
+    var_to_instantiate: Var,
+    env: *Env,
+    polarity: types_mod.Polarity,
+    region_behavior: InstantiateRegionBehavior,
+) std.mem.Allocator.Error!Var {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    var instantiate_ctx = Instantiator{
+        .store = self.types,
+        .idents = self.cir.getIdentStoreConst(),
+        .var_map = &self.var_map,
+
+        .current_rank = env.rank(),
+        .rigid_behavior = .fresh_flex,
+        .polarity = polarity,
     };
     return self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior);
 }
@@ -2505,15 +2529,30 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                     if (is_for_clause_alias) {
                         _ = try self.unify(anno_var, local_decl_var, env);
                     } else {
-                        const instantiated_var = try self.instantiateVar(local_decl_var, env, .{ .explicit = anno_region });
+                        const polarity: types_mod.Polarity = switch (ctx) {
+                            .annotation => |pol| pol,
+                            .type_decl => |decl| switch (decl.type_) {
+                                .alias => .in_alias,
+                                .nominal => .in_opaque,
+                            },
+                        };
+                        const instantiated_var = try self.instantiateVarWithPolarity(local_decl_var, env, polarity, .{ .explicit = anno_region });
                         _ = try self.unify(anno_var, instantiated_var, env);
                     }
                 },
                 .external => |ext| {
                     if (try self.resolveVarFromExternal(ext.module_idx, ext.target_node_idx)) |ext_ref| {
-                        const ext_instantiated_var = try self.instantiateVar(
+                        const polarity: types_mod.Polarity = switch (ctx) {
+                            .annotation => |pol| pol,
+                            .type_decl => |decl| switch (decl.type_) {
+                                .alias => .in_alias,
+                                .nominal => .in_opaque,
+                            },
+                        };
+                        const ext_instantiated_var = try self.instantiateVarWithPolarity(
                             ext_ref.local_var,
                             env,
+                            polarity,
                             .{ .explicit = anno_region },
                         );
                         _ = try self.unify(anno_var, ext_instantiated_var, env);
@@ -2649,10 +2688,18 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                     // Then instantiate the variable, substituting the rigid
                     // variables in the definition with the applied args from
                     // the annotation
+                    const polarity: ?types_mod.Polarity = switch (ctx) {
+                        .annotation => |pol| pol,
+                        .type_decl => |decl| switch (decl.type_) {
+                            .alias => .in_alias,
+                            .nominal => .in_opaque,
+                        },
+                    };
                     const instantiated_var = try self.instantiateVarWithSubs(
                         decl_var,
                         &self.rigid_var_substitutions,
                         env,
+                        polarity,
                         .{ .explicit = anno_region },
                     );
                     _ = try self.unify(anno_var, instantiated_var, env);
@@ -2725,10 +2772,18 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                         // Then instantiate the variable, substituting the rigid
                         // variables in the definition with the applied args from
                         // the annotation
+                        const polarity: ?types_mod.Polarity = switch (ctx) {
+                            .annotation => |pol| pol,
+                            .type_decl => |decl| switch (decl.type_) {
+                                .alias => .in_alias,
+                                .nominal => .in_opaque,
+                            },
+                        };
                         const instantiated_var = try self.instantiateVarWithSubs(
                             ext_ref.local_var,
                             &self.rigid_var_substitutions,
                             env,
+                            polarity,
                             .{ .explicit = anno_region },
                         );
                         _ = try self.unify(anno_var, instantiated_var, env);
@@ -2827,8 +2882,8 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                     };
                     break :inner_blk switch (polarity) {
                         .pos => try self.freshFromContent(.{ .rigid = types_mod.Rigid.initPolarityOpen() }, env, anno_region),
-                        // TODO(Task 7): Change in_alias to use polarity_deferred after instantiateVarWithPolarity is implemented
-                        .neg, .in_opaque, .in_alias => try self.freshFromContent(.{ .structure = .empty_tag_union }, env, anno_region),
+                        .neg, .in_opaque => try self.freshFromContent(.{ .structure = .empty_tag_union }, env, anno_region),
+                        .in_alias => try self.freshFromContent(.{ .rigid = types_mod.Rigid.initPolarityDeferred() }, env, anno_region),
                     };
                 }
             };

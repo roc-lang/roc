@@ -652,7 +652,7 @@ test "check type - tag union - tag typo" {
         \\
         \\It has the type:
         \\
-        \\    [Greeen, ..]
+        \\    [Blue, Greeen, Green, Red, ..]
         \\
         \\But the annotation say it should be:
         \\
@@ -6172,4 +6172,29 @@ test "check type - polarity - basic pos open return" {
         \\foo = |_| Ok(1)
     ;
     try checkTypesModule(source, .{ .pass = .{ .def = "foo" } }, "Str -> [Err(Str), Ok(U64), ..]");
+}
+
+test "check type - polarity - alias in pos resolves to open" {
+    const source =
+        \\MyResult(a) : [Ok(a), Err(Str)]
+        \\
+        \\foo : Str -> MyResult(U64)
+        \\foo = |_| Ok(1)
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "foo" } }, "Str -> MyResult(U64)");
+}
+
+test "check type - polarity - alias in neg resolves to closed" {
+    const source =
+        \\MyResult(a) : [Ok(a), Err(Str)]
+        \\
+        \\bar : MyResult(U64) -> Bool
+        \\bar = |result| {
+        \\    match(result) {
+        \\        Ok(_) => True
+        \\        Err(_) => False
+        \\    }
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "bar" } }, "MyResult(U64) -> Bool");
 }
