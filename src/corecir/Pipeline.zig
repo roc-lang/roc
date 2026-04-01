@@ -3907,6 +3907,7 @@ pub const Pass = struct {
                     if (low_level_op == .str_inspect and arg_exprs.len != 0) {
                         try self.resolveStrInspectHelperCallableInstsForTypeVar(
                             result,
+                            thread,
                             module_idx,
                             ModuleEnv.varFrom(arg_exprs[0]),
                         );
@@ -4100,6 +4101,7 @@ pub const Pass = struct {
                 if (run_low_level.op == .str_inspect and args.len != 0) {
                     try self.resolveStrInspectHelperCallableInstsForTypeVar(
                         result,
+                        thread,
                         module_idx,
                         ModuleEnv.varFrom(args[0]),
                     );
@@ -4368,6 +4370,7 @@ pub const Pass = struct {
             if (low_level_op == .str_inspect and arg_exprs.len != 0) {
                 try self.resolveStrInspectHelperCallableInstsForTypeVar(
                     result,
+                    thread,
                     module_idx,
                     ModuleEnv.varFrom(arg_exprs[0]),
                 );
@@ -7296,6 +7299,7 @@ pub const Pass = struct {
             }
             associated_target = try self.resolveAssociatedMethodDispatchTargetForTypeVar(
                 result,
+                thread,
                 module_idx,
                 expr_idx,
                 ModuleEnv.varFrom(binop_expr.lhs),
@@ -7317,6 +7321,7 @@ pub const Pass = struct {
                 }
                 associated_target = try self.resolveAssociatedMethodDispatchTargetForMonotype(
                     result,
+                    thread,
                     module_idx,
                     expr_idx,
                     lhs_monotype.idx,
@@ -7345,6 +7350,7 @@ pub const Pass = struct {
                 }
                 associated_target = try self.resolveAssociatedMethodDispatchTargetForTypeVar(
                     result,
+                    thread,
                     module_idx,
                     expr_idx,
                     ModuleEnv.varFrom(dot_expr.receiver),
@@ -7366,6 +7372,7 @@ pub const Pass = struct {
                     }
                     associated_target = try self.resolveAssociatedMethodDispatchTargetForMonotype(
                         result,
+                        thread,
                         module_idx,
                         expr_idx,
                         receiver_monotype.idx,
@@ -7392,6 +7399,7 @@ pub const Pass = struct {
             }
             associated_target = try self.resolveAssociatedMethodDispatchTargetForTypeVar(
                 result,
+                thread,
                 module_idx,
                 expr_idx,
                 ModuleEnv.varFrom(alias_stmt.type_var_anno),
@@ -7413,6 +7421,7 @@ pub const Pass = struct {
                 }
                 associated_target = try self.resolveAssociatedMethodDispatchTargetForMonotype(
                     result,
+                    thread,
                     module_idx,
                     expr_idx,
                     alias_monotype.idx,
@@ -7465,7 +7474,7 @@ pub const Pass = struct {
         };
         const callable_inst_id = blk: {
             if (thread.bindings() == null) {
-                const fn_monotype = try self.resolveTypeVarMonotypeResolved(result, module_idx, resolved_target.fn_var);
+                const fn_monotype = try self.resolveTypeVarMonotypeResolved(result, thread, module_idx, resolved_target.fn_var);
                 if (!fn_monotype.isNone()) {
                     break :blk try self.registerCallableInst(result, thread.requireSourceContext(), template_id, fn_monotype.idx, fn_monotype.module_idx);
                 }
@@ -7475,7 +7484,7 @@ pub const Pass = struct {
                 break :blk exact_callable_inst;
             }
 
-            const fn_monotype = try self.resolveTypeVarMonotypeResolved(result, module_idx, resolved_target.fn_var);
+            const fn_monotype = try self.resolveTypeVarMonotypeResolved(result, thread, module_idx, resolved_target.fn_var);
             if (!fn_monotype.isNone()) {
                 break :blk try self.registerCallableInst(result, thread.requireSourceContext(), template_id, fn_monotype.idx, fn_monotype.module_idx);
             }
@@ -7590,6 +7599,7 @@ pub const Pass = struct {
             if (receiver_monotype.isNone()) {
                 return self.dispatchHandledAsPrimitiveToStrIntrinsic(
                     result,
+                    thread,
                     module_idx,
                     expr_idx,
                     dot_expr.field_name,
@@ -7604,7 +7614,7 @@ pub const Pass = struct {
 
         const receiver_monotype = try self.resolveExprMonotype(result, thread, module_idx, dot_expr.receiver);
         if (receiver_monotype.isNone()) {
-            const eq_constraint = try self.exactStaticDispatchConstraintForExpr(result, module_idx, expr_idx, module_env.idents.is_eq);
+            const eq_constraint = try self.exactStaticDispatchConstraintForExpr(result, thread, module_idx, expr_idx, module_env.idents.is_eq);
             const constraint_resolved = if (eq_constraint) |constraint|
                 !constraint.resolved_target.isNone() and self.resolvedTargetIsUsable(module_env, module_env.idents.is_eq, constraint.resolved_target)
             else
@@ -7642,6 +7652,7 @@ pub const Pass = struct {
     fn dispatchHandledAsPrimitiveToStrIntrinsic(
         self: *Pass,
         result: *Result,
+        thread: SemanticThread,
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
         method_name: Ident.Idx,
@@ -7659,7 +7670,7 @@ pub const Pass = struct {
                 return false;
             }
 
-            const fn_monotype = try self.resolveTypeVarMonotypeResolved(result, module_idx, constraint.fn_var);
+            const fn_monotype = try self.resolveTypeVarMonotypeResolved(result, thread, module_idx, constraint.fn_var);
             if (fn_monotype.isNone()) return false;
 
             const fn_mono = switch (result.context_mono.monotype_store.getMonotype(fn_monotype.idx)) {
@@ -7700,7 +7711,7 @@ pub const Pass = struct {
         const module_env = self.all_module_envs[module_idx];
         const lhs_monotype = try self.resolveExprMonotype(result, thread, module_idx, binop_expr.lhs);
         if (lhs_monotype.isNone()) {
-            const eq_constraint = try self.exactStaticDispatchConstraintForExpr(result, module_idx, expr_idx, module_env.idents.is_eq);
+            const eq_constraint = try self.exactStaticDispatchConstraintForExpr(result, thread, module_idx, expr_idx, module_env.idents.is_eq);
             const constraint_resolved = if (eq_constraint) |constraint|
                 !constraint.resolved_target.isNone() and self.resolvedTargetIsUsable(module_env, module_env.idents.is_eq, constraint.resolved_target)
             else
@@ -7767,9 +7778,10 @@ pub const Pass = struct {
         const module_env = self.all_module_envs[module_idx];
         const receiver_nominal = resolveNominalTypeInStore(&module_env.types, receiver_type_var) orelse return null;
         const method_info = try self.lookupAssociatedMethodTemplate(result, module_idx, receiver_nominal, method_ident) orelse return null;
-        const receiver_monotype = try self.resolveTypeVarMonotypeResolved(result, module_idx, receiver_type_var);
+        const receiver_monotype = try self.resolveTypeVarMonotypeResolved(result, thread, module_idx, receiver_type_var);
         _ = try self.exactAssociatedMethodDispatchConstraint(
             result,
+            thread,
             module_idx,
             expr_idx,
             method_ident,
@@ -7782,6 +7794,7 @@ pub const Pass = struct {
     fn resolveAssociatedMethodDispatchTargetForTypeVar(
         self: *Pass,
         result: *Result,
+        thread: SemanticThread,
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
         receiver_type_var: types.Var,
@@ -7790,9 +7803,10 @@ pub const Pass = struct {
         const module_env = self.all_module_envs[module_idx];
         const receiver_nominal = resolveNominalTypeInStore(&module_env.types, receiver_type_var) orelse return null;
         const method_info = try self.lookupAssociatedMethodTemplate(result, module_idx, receiver_nominal, method_ident) orelse return null;
-        const receiver_monotype = try self.resolveTypeVarMonotypeResolved(result, module_idx, receiver_type_var);
+        const receiver_monotype = try self.resolveTypeVarMonotypeResolved(result, thread, module_idx, receiver_type_var);
         const constraint = try self.exactAssociatedMethodDispatchConstraint(
             result,
+            thread,
             module_idx,
             expr_idx,
             method_ident,
@@ -7825,6 +7839,7 @@ pub const Pass = struct {
         ) orelse return null;
         _ = try self.exactAssociatedMethodDispatchConstraint(
             result,
+            thread,
             module_idx,
             expr_idx,
             method_ident,
@@ -7837,6 +7852,7 @@ pub const Pass = struct {
     fn resolveAssociatedMethodDispatchTargetForMonotype(
         self: *Pass,
         result: *Result,
+        thread: SemanticThread,
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
         receiver_monotype: Monotype.Idx,
@@ -7850,6 +7866,7 @@ pub const Pass = struct {
         ) orelse return null;
         const constraint = try self.exactAssociatedMethodDispatchConstraint(
             result,
+            thread,
             module_idx,
             expr_idx,
             method_ident,
@@ -7881,6 +7898,7 @@ pub const Pass = struct {
     fn exactStaticDispatchConstraintForExpr(
         self: *Pass,
         result: *Result,
+        thread: SemanticThread,
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
         method_name: Ident.Idx,
@@ -7902,7 +7920,7 @@ pub const Pass = struct {
                     .fn_var = constraint.fn_var,
                     .module_idx = target_module_idx,
                 };
-                const fn_monotype = try self.resolveTypeVarMonotypeResolved(result, module_idx, constraint.fn_var);
+                const fn_monotype = try self.resolveTypeVarMonotypeResolved(result, thread, module_idx, constraint.fn_var);
                 if (!fn_monotype.isNone() and
                     !try self.resolvedDispatchTargetMatchesMonotype(result, module_idx, resolved_target, fn_monotype.idx))
                 {
@@ -7910,13 +7928,13 @@ pub const Pass = struct {
                 }
                 if (!try self.resolvedDispatchTargetMatchesInvocationSignature(result, module_idx, expr_idx, resolved_target)) continue;
             } else {
-                const fn_monotype = try self.resolveTypeVarMonotypeResolved(result, module_idx, constraint.fn_var);
+                const fn_monotype = try self.resolveTypeVarMonotypeResolved(result, thread, module_idx, constraint.fn_var);
                 if (fn_monotype.isNone()) continue;
             }
 
             if (matched) |existing| {
                 if (staticDispatchConstraintsEqual(existing, constraint) or
-                    try self.dispatchConstraintsEquivalent(result, module_idx, existing, constraint))
+                    try self.dispatchConstraintsEquivalent(result, thread, module_idx, existing, constraint))
                 {
                     matched = if (!existing.resolved_target.isNone())
                         existing
@@ -7925,8 +7943,8 @@ pub const Pass = struct {
                     continue;
                 }
 
-                const existing_mono = try self.resolveTypeVarMonotypeResolved(result, module_idx, existing.fn_var);
-                const next_mono = try self.resolveTypeVarMonotypeResolved(result, module_idx, constraint.fn_var);
+                const existing_mono = try self.resolveTypeVarMonotypeResolved(result, thread, module_idx, existing.fn_var);
+                const next_mono = try self.resolveTypeVarMonotypeResolved(result, thread, module_idx, constraint.fn_var);
 
                 if (!existing_mono.isNone() and !next_mono.isNone() and
                     try self.monotypesStructurallyEqualAcrossModules(
@@ -7983,6 +8001,7 @@ pub const Pass = struct {
     fn exactAssociatedMethodDispatchConstraint(
         self: *Pass,
         result: *Result,
+        thread: SemanticThread,
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
         method_name: Ident.Idx,
@@ -8004,7 +8023,7 @@ pub const Pass = struct {
             } else {
                 if (receiver_monotype.isNone()) continue;
 
-                const fn_monotype = try self.resolveTypeVarMonotypeResolved(result, module_idx, constraint.fn_var);
+                const fn_monotype = try self.resolveTypeVarMonotypeResolved(result, thread, module_idx, constraint.fn_var);
                 if (fn_monotype.isNone()) continue;
 
                 const mono = result.context_mono.monotype_store.getMonotype(fn_monotype.idx);
@@ -8024,13 +8043,13 @@ pub const Pass = struct {
 
             if (matched) |existing| {
                 if (staticDispatchConstraintsEqual(existing, constraint) or
-                    try self.dispatchConstraintsEquivalent(result, module_idx, existing, constraint))
+                    try self.dispatchConstraintsEquivalent(result, thread, module_idx, existing, constraint))
                 {
                     continue;
                 }
 
-                const existing_exact = try self.resolveTypeVarMonotypeResolved(result, module_idx, existing.fn_var);
-                const next_exact = try self.resolveTypeVarMonotypeResolved(result, module_idx, constraint.fn_var);
+                const existing_exact = try self.resolveTypeVarMonotypeResolved(result, thread, module_idx, existing.fn_var);
+                const next_exact = try self.resolveTypeVarMonotypeResolved(result, thread, module_idx, constraint.fn_var);
 
                 if (!existing_exact.isNone() and !next_exact.isNone()) {
                     if (!try self.monotypesStructurallyEqualAcrossModules(
@@ -8070,6 +8089,7 @@ pub const Pass = struct {
     fn dispatchConstraintsEquivalent(
         self: *Pass,
         result: *Result,
+        thread: SemanticThread,
         module_idx: u32,
         lhs: types.StaticDispatchConstraint,
         rhs: types.StaticDispatchConstraint,
@@ -8079,8 +8099,8 @@ pub const Pass = struct {
         if (!lhs.resolved_target.origin_module.eql(rhs.resolved_target.origin_module)) return false;
         if (!lhs.resolved_target.method_ident.eql(rhs.resolved_target.method_ident)) return false;
 
-        const lhs_mono = try self.resolveTypeVarMonotypeResolved(result, module_idx, lhs.fn_var);
-        const rhs_mono = try self.resolveTypeVarMonotypeResolved(result, module_idx, rhs.fn_var);
+        const lhs_mono = try self.resolveTypeVarMonotypeResolved(result, thread, module_idx, lhs.fn_var);
+        const rhs_mono = try self.resolveTypeVarMonotypeResolved(result, thread, module_idx, rhs.fn_var);
         if (lhs_mono.isNone() or rhs_mono.isNone()) return false;
 
         return self.monotypesStructurallyEqualAcrossModules(
@@ -8113,7 +8133,7 @@ pub const Pass = struct {
         method_name: Ident.Idx,
     ) Allocator.Error!ResolvedDispatchTarget {
         const module_env = self.all_module_envs[module_idx];
-        const constraint = try self.exactStaticDispatchConstraintForExpr(result, module_idx, expr_idx, method_name) orelse {
+        const constraint = try self.exactStaticDispatchConstraintForExpr(result, thread, module_idx, expr_idx, method_name) orelse {
             if (std.debug.runtime_safety) {
                 std.debug.panic(
                     "Pipeline: no static dispatch constraint for expr={d} method='{s}'",
@@ -9788,17 +9808,19 @@ pub const Pass = struct {
     fn resolveStrInspectHelperCallableInstsForTypeVar(
         self: *Pass,
         result: *Result,
+        thread: SemanticThread,
         module_idx: u32,
         type_var: types.Var,
     ) Allocator.Error!void {
         var visiting: std.AutoHashMapUnmanaged(types.Var, void) = .empty;
         defer visiting.deinit(self.allocator);
-        try self.resolveStrInspectHelperCallableInstsForTypeVarWithSeen(result, module_idx, type_var, &visiting);
+        try self.resolveStrInspectHelperCallableInstsForTypeVarWithSeen(result, thread, module_idx, type_var, &visiting);
     }
 
     fn resolveStrInspectHelperCallableInstsForTypeVarWithSeen(
         self: *Pass,
         result: *Result,
+        thread: SemanticThread,
         module_idx: u32,
         type_var: types.Var,
         visiting: *std.AutoHashMapUnmanaged(types.Var, void),
@@ -9826,17 +9848,17 @@ pub const Pass = struct {
                         if (ident.eql(common.list)) {
                             const type_args = module_env.types.sliceNominalArgs(nominal);
                             if (type_args.len == 1) {
-                                try self.resolveStrInspectHelperCallableInstsForTypeVarWithSeen(result, module_idx, type_args[0], visiting);
+                                try self.resolveStrInspectHelperCallableInstsForTypeVarWithSeen(result, thread, module_idx, type_args[0], visiting);
                             }
                             return;
                         }
                         if (ident.eql(common.box)) {
                             const type_args = module_env.types.sliceNominalArgs(nominal);
-                            const outer_mono = try self.resolveTypeVarMonotype(result, module_idx, resolved.var_);
+                            const outer_mono = try self.resolveTypeVarMonotype(result, thread, module_idx, resolved.var_);
                             const outer_box = result.context_mono.monotype_store.getMonotype(outer_mono).box;
                             try self.ensureBuiltinBoxUnboxCallableInst(result, module_idx, outer_mono, outer_box.inner);
                             if (type_args.len == 1) {
-                                try self.resolveStrInspectHelperCallableInstsForTypeVarWithSeen(result, module_idx, type_args[0], visiting);
+                                try self.resolveStrInspectHelperCallableInstsForTypeVarWithSeen(result, thread, module_idx, type_args[0], visiting);
                             }
                             return;
                         }
@@ -9852,7 +9874,7 @@ pub const Pass = struct {
                                     var ordered_entries = std.ArrayList(TypeSubstEntry).empty;
                                     defer ordered_entries.deinit(self.allocator);
 
-                                    const arg_mono = try self.resolveTypeVarMonotype(result, module_idx, resolved.var_);
+                                    const arg_mono = try self.resolveTypeVarMonotype(result, thread, module_idx, resolved.var_);
                                     try self.bindTypeVarMonotypes(
                                         result,
                                         method_info.module_idx,
@@ -9902,29 +9924,29 @@ pub const Pass = struct {
                     try self.resolveStrInspectHelperCallableInstsForMonotype(
                         result,
                         module_idx,
-                        try self.resolveTypeVarMonotype(result, module_idx, resolved.var_),
+                        try self.resolveTypeVarMonotype(result, thread, module_idx, resolved.var_),
                     );
                     return;
                 },
                 .record => |record| {
-                    try self.resolveStrInspectHelperCallableInstsForRecordType(result, module_idx, &module_env.types, record, visiting);
+                    try self.resolveStrInspectHelperCallableInstsForRecordType(result, thread, module_idx, &module_env.types, record, visiting);
                     return;
                 },
                 .record_unbound => |fields_range| {
                     const fields = module_env.types.getRecordFieldsSlice(fields_range);
                     for (fields.items(.var_)) |field_var| {
-                        try self.resolveStrInspectHelperCallableInstsForTypeVarWithSeen(result, module_idx, field_var, visiting);
+                        try self.resolveStrInspectHelperCallableInstsForTypeVarWithSeen(result, thread, module_idx, field_var, visiting);
                     }
                     return;
                 },
                 .tuple => |tuple| {
                     for (module_env.types.sliceVars(tuple.elems)) |elem_var| {
-                        try self.resolveStrInspectHelperCallableInstsForTypeVarWithSeen(result, module_idx, elem_var, visiting);
+                        try self.resolveStrInspectHelperCallableInstsForTypeVarWithSeen(result, thread, module_idx, elem_var, visiting);
                     }
                     return;
                 },
                 .tag_union => |tag_union| {
-                    try self.resolveStrInspectHelperCallableInstsForTagUnionType(result, module_idx, &module_env.types, tag_union, visiting);
+                    try self.resolveStrInspectHelperCallableInstsForTagUnionType(result, thread, module_idx, &module_env.types, tag_union, visiting);
                     return;
                 },
                 .empty_record, .empty_tag_union => return,
@@ -9935,13 +9957,14 @@ pub const Pass = struct {
         try self.resolveStrInspectHelperCallableInstsForMonotype(
             result,
             module_idx,
-            try self.resolveTypeVarMonotype(result, module_idx, resolved.var_),
+            try self.resolveTypeVarMonotype(result, thread, module_idx, resolved.var_),
         );
     }
 
     fn resolveStrInspectHelperCallableInstsForRecordType(
         self: *Pass,
         result: *Result,
+        thread: SemanticThread,
         module_idx: u32,
         store_types: *const types.Store,
         record: types.Record,
@@ -9952,7 +9975,7 @@ pub const Pass = struct {
         rows: while (true) {
             const fields = store_types.getRecordFieldsSlice(current_row.fields);
             for (fields.items(.var_)) |field_var| {
-                try self.resolveStrInspectHelperCallableInstsForTypeVarWithSeen(result, module_idx, field_var, visiting);
+                try self.resolveStrInspectHelperCallableInstsForTypeVarWithSeen(result, thread, module_idx, field_var, visiting);
             }
 
             var ext_var = current_row.ext;
@@ -9971,7 +9994,7 @@ pub const Pass = struct {
                         .record_unbound => |fields_range| {
                             const ext_fields = store_types.getRecordFieldsSlice(fields_range);
                             for (ext_fields.items(.var_)) |field_var| {
-                                try self.resolveStrInspectHelperCallableInstsForTypeVarWithSeen(result, module_idx, field_var, visiting);
+                                try self.resolveStrInspectHelperCallableInstsForTypeVarWithSeen(result, thread, module_idx, field_var, visiting);
                             }
                             break :rows;
                         },
@@ -9987,6 +10010,7 @@ pub const Pass = struct {
     fn resolveStrInspectHelperCallableInstsForTagUnionType(
         self: *Pass,
         result: *Result,
+        thread: SemanticThread,
         module_idx: u32,
         store_types: *const types.Store,
         tag_union: types.TagUnion,
@@ -9998,7 +10022,7 @@ pub const Pass = struct {
             const tags = store_types.getTagsSlice(current_row.tags);
             for (tags.items(.args)) |args_range| {
                 for (store_types.sliceVars(args_range)) |payload_var| {
-                    try self.resolveStrInspectHelperCallableInstsForTypeVarWithSeen(result, module_idx, payload_var, visiting);
+                    try self.resolveStrInspectHelperCallableInstsForTypeVarWithSeen(result, thread, module_idx, payload_var, visiting);
                 }
             }
 
