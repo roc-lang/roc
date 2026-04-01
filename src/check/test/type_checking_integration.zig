@@ -6182,3 +6182,11 @@ test "check type - tag union - ext hints 2" {
         \\
     );
 }
+
+test "check type - polarity - basic pos open return" {
+    const source =
+        \\foo : Str -> [Ok(U64), Err(Str)]
+        \\foo = |_| Ok(1)
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "foo" } }, "Str -> [Err(Str), Ok(U64), ..]");
+}

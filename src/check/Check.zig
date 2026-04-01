@@ -2805,13 +2805,31 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
             const tags_slice = self.scratch_tags.sliceFromStart(scratch_tags_top);
             std.mem.sort(types_mod.Tag, tags_slice, self.cir.common.getIdentStore(), comptime types_mod.Tag.sortByNameAsc);
 
-            // Process the ext if it exists. Absence means it's a closed union
+            // Process the ext based on polarity
             const ext_var = inner_blk: {
                 if (tag_union.ext) |ext_anno_idx| {
+                    // User wrote explicit extension — process as before
                     try self.generateAnnoTypeInPlace(ext_anno_idx, env, ctx);
                     break :inner_blk ModuleEnv.varFrom(ext_anno_idx);
                 } else {
-                    break :inner_blk try self.freshFromContent(.{ .structure = .empty_tag_union }, env, anno_region);
+                    // No explicit extension — use polarity to determine openness.
+                    // Empty tag union [] is always closed regardless of polarity —
+                    // it represents the bottom/never type (no possible values).
+                    if (tags_slice.len == 0) {
+                        break :inner_blk try self.freshFromContent(.{ .structure = .empty_tag_union }, env, anno_region);
+                    }
+                    const polarity: types_mod.Polarity = switch (ctx) {
+                        .annotation => |pol| pol,
+                        .type_decl => |decl| switch (decl.type_) {
+                            .alias => .in_alias,
+                            .nominal => .in_opaque,
+                        },
+                    };
+                    break :inner_blk switch (polarity) {
+                        .pos => try self.freshFromContent(.{ .rigid = types_mod.Rigid.initPolarityOpen() }, env, anno_region),
+                        // TODO(Task 7): Change in_alias to use polarity_deferred after instantiateVarWithPolarity is implemented
+                        .neg, .in_opaque, .in_alias => try self.freshFromContent(.{ .structure = .empty_tag_union }, env, anno_region),
+                    };
                 }
             };
 
