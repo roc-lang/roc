@@ -503,7 +503,7 @@ pub const Pass = struct {
     in_progress_call_result_callable_insts: std.AutoHashMapUnmanaged(CallResultCallableInstKey, void),
     in_progress_callable_scans: std.AutoHashMapUnmanaged(u32, void),
     completed_callable_scans: std.AutoHashMapUnmanaged(u32, void),
-    mutation_revision: u64,
+    change_tracker_stack: std.ArrayListUnmanaged(*bool),
     mutation_counts: [mutation_kind_count]u32,
 
     pub fn init(
@@ -525,7 +525,7 @@ pub const Pass = struct {
             .in_progress_call_result_callable_insts = .empty,
             .in_progress_callable_scans = .empty,
             .completed_callable_scans = .empty,
-            .mutation_revision = 0,
+            .change_tracker_stack = .empty,
             .mutation_counts = [_]u32{0} ** mutation_kind_count,
         };
     }
@@ -1311,12 +1311,25 @@ pub const Pass = struct {
 
         if (self.readExprValueOrigin(result, source_context, module_idx, expr_idx)) |source| {
             if (source.projections.isEmpty()) {
-                return self.getValueExprCallableValueForSourceContext(
+                if (sourceContextHasCallableInst(source.source_context)) {
+                    return self.getValueExprCallableValueInContext(
+                        result,
+                        requireSourceContextCallableInst(source.source_context),
+                        source.module_idx,
+                        source.expr_idx,
+                    );
+                }
+                if (self.getCallableParamSpecCallableValueForSourceContext(
                     result,
                     source.source_context,
                     source.module_idx,
                     source.expr_idx,
-                );
+                )) |callable_value| {
+                    return callable_value;
+                }
+                if (self.readExprCallableValue(result, source.source_context, source.module_idx, source.expr_idx)) |callable_value| {
+                    return callable_value;
+                }
             }
         }
 
@@ -1400,6 +1413,7 @@ pub const Pass = struct {
         self.in_progress_call_result_callable_insts.deinit(self.allocator);
         self.in_progress_callable_scans.deinit(self.allocator);
         self.completed_callable_scans.deinit(self.allocator);
+        self.change_tracker_stack.deinit(self.allocator);
     }
 
     fn resetRunState(self: *Pass) void {
@@ -1409,7 +1423,7 @@ pub const Pass = struct {
         self.in_progress_call_result_callable_insts.clearRetainingCapacity();
         self.in_progress_callable_scans.clearRetainingCapacity();
         self.completed_callable_scans.clearRetainingCapacity();
-        self.mutation_revision = 0;
+        self.change_tracker_stack.clearRetainingCapacity();
         self.mutation_counts = [_]u32{0} ** mutation_kind_count;
     }
 
@@ -1428,7 +1442,7 @@ pub const Pass = struct {
         try self.primeAllModules(result);
         try self.scanSeedModules(result);
         try self.scanModule(result, self.current_module_idx);
-        try self.scanRootsFixedPoint(result, &.{expr_idx});
+        try self.scanRootsUntilStable(result, &.{expr_idx});
         try self.assembleLambdamonoProgramGraph(result, &.{expr_idx});
     }
 
@@ -1447,7 +1461,7 @@ pub const Pass = struct {
         try self.primeAllModules(result);
         try self.scanSeedModules(result);
         try self.scanModule(result, self.current_module_idx);
-        try self.scanRootsFixedPoint(result, exprs);
+        try self.scanRootsUntilStable(result, exprs);
         try self.assembleLambdamonoProgramGraph(result, exprs);
     }
 
@@ -1475,7 +1489,7 @@ pub const Pass = struct {
             const def = module_env.store.getDef(def_idx);
             try root_source_exprs.append(self.allocator, def.expr);
         }
-        try self.scanRootsFixedPoint(result, root_source_exprs.items);
+        try self.scanRootsUntilStable(result, root_source_exprs.items);
         try self.assembleLambdamonoProgramGraph(result, root_source_exprs.items);
     }
 
@@ -2011,7 +2025,15 @@ pub const Pass = struct {
         }
     }
 
-    fn scanRootsFixedPoint(
+    fn pushChangeTracker(self: *Pass, tracker: *bool) Allocator.Error!void {
+        try self.change_tracker_stack.append(self.allocator, tracker);
+    }
+
+    fn popChangeTracker(self: *Pass) void {
+        _ = self.change_tracker_stack.pop();
+    }
+
+    fn scanRootsUntilStable(
         self: *Pass,
         result: *Result,
         exprs: []const CIR.Expr.Idx,
@@ -2022,10 +2044,9 @@ pub const Pass = struct {
             iterations += 1;
             if (std.debug.runtime_safety and iterations > 32) {
                 std.debug.panic(
-                    "Pipeline: root fixed point did not converge (module={d}, revision={d}, templates={d}, callable_insts={d}, program_exprs={d}, root_exprs={d}, context_monos={d}, context_pattern_monos={d}, mutation_counts={any})",
+                    "Pipeline: root stabilization did not converge (module={d}, templates={d}, callable_insts={d}, program_exprs={d}, root_exprs={d}, context_monos={d}, context_pattern_monos={d}, mutation_counts={any})",
                     .{
                         self.current_module_idx,
-                        self.mutation_revision,
                         result.lambdasolved.callable_templates.items.len,
                         result.lambdamono.callable_insts.items.len,
                         result.lambdamono.exprs.items.len,
@@ -2042,7 +2063,9 @@ pub const Pass = struct {
             self.in_progress_call_result_callable_insts.clearRetainingCapacity();
             self.completed_callable_scans.clearRetainingCapacity();
 
-            const mutation_revision_before = self.mutation_revision;
+            var changed = false;
+            try self.pushChangeTracker(&changed);
+            defer self.popChangeTracker();
             for (exprs) |expr_idx| {
                 const thread = SemanticThread.trackedThread(.{
                     .root_expr = .{
@@ -2053,15 +2076,17 @@ pub const Pass = struct {
                 try self.scanCirValueExpr(result, thread, self.current_module_idx, expr_idx);
             }
 
-            if (self.mutation_revision == mutation_revision_before) {
+            if (!changed) {
                 break;
             }
         }
     }
 
     fn noteMutation(self: *Pass, comptime kind: MutationKind) void {
-        self.mutation_revision +%= 1;
         self.mutation_counts[@intFromEnum(kind)] +%= 1;
+        for (self.change_tracker_stack.items) |tracker| {
+            tracker.* = true;
+        }
     }
 
     fn putTracked(self: *Pass, comptime kind: MutationKind, map: anytype, key: anytype, value: anytype) Allocator.Error!void {
@@ -2186,7 +2211,7 @@ pub const Pass = struct {
         expr_idx: CIR.Expr.Idx,
         expr_ref: ExprRef,
     ) Allocator.Error!void {
-        const canonical_ref = try self.canonicalizeExprValueOrigin(expr_ref);
+        const canonical_ref = try self.canonicalizeExprValueOrigin(result, expr_ref);
         const source_template_semantics = self.readExprSemantics(
             result,
             canonical_ref.source_context,
@@ -2229,6 +2254,7 @@ pub const Pass = struct {
 
     fn canonicalizeExprValueOrigin(
         self: *Pass,
+        result: *Result,
         expr_ref: ExprRef,
     ) Allocator.Error!ExprRef {
         var current = expr_ref;
@@ -2236,7 +2262,6 @@ pub const Pass = struct {
         defer visiting.deinit(self.allocator);
 
         while (self.readExprValueOrigin(result, current.source_context, current.module_idx, current.expr_idx)) |origin| {
-            if (!origin.projections.isEmpty()) break;
             const visit_key = contextExprVisitKey(current.source_context, current.module_idx, current.expr_idx);
             const gop = try visiting.getOrPut(self.allocator, visit_key);
             if (gop.found_existing) {
@@ -2249,11 +2274,16 @@ pub const Pass = struct {
                     },
                 );
             }
+            const combined_projections = try self.appendValueProjectionEntries(
+                result,
+                origin.projections,
+                result.lambdamono.getValueProjectionEntries(current.projections),
+            );
             current = .{
                 .source_context = origin.source_context,
                 .module_idx = origin.module_idx,
                 .expr_idx = origin.expr_idx,
-                .projections = .empty(),
+                .projections = combined_projections,
             };
         }
 
@@ -2766,8 +2796,6 @@ pub const Pass = struct {
         ) orelse return;
         if (pattern_mono.isNone()) return;
 
-        var visiting: std.AutoHashMapUnmanaged(ContextExprVisitKey, void) = .empty;
-        defer visiting.deinit(self.allocator);
         try self.propagateDemandedValueMonotypeToValueExpr(
             result,
             thread.requireSourceContext(),
@@ -2775,7 +2803,6 @@ pub const Pass = struct {
             expr_idx,
             pattern_mono.idx,
             pattern_mono.module_idx,
-            &visiting,
         );
     }
 
@@ -5413,8 +5440,6 @@ pub const Pass = struct {
         projections: *std.ArrayListUnmanaged(CallableParamProjection),
         out: *std.ArrayListUnmanaged(CallableParamSpecEntry),
     ) Allocator.Error!bool {
-        var demand_visiting: std.AutoHashMapUnmanaged(ContextExprVisitKey, void) = .empty;
-        defer demand_visiting.deinit(self.allocator);
         try self.propagateDemandedValueMonotypeToValueExpr(
             result,
             source_context,
@@ -5422,7 +5447,6 @@ pub const Pass = struct {
             expr_idx,
             monotype,
             monotype_module_idx,
-            &demand_visiting,
         );
 
         switch (result.context_mono.monotype_store.getMonotype(monotype)) {
@@ -5918,8 +5942,6 @@ pub const Pass = struct {
         for (arg_exprs, 0..) |arg_expr_idx, i| {
             const param_mono = result.context_mono.monotype_store.getIdxSpanItem(fn_mono.args, i);
             try self.bindCurrentExprTypeRoot(result, thread, module_idx, arg_expr_idx, param_mono, callable_inst.fn_monotype_module_idx);
-            var visiting: std.AutoHashMapUnmanaged(ContextExprVisitKey, void) = .empty;
-            defer visiting.deinit(self.allocator);
             try self.propagateDemandedValueMonotypeToValueExpr(
                 result,
                 thread.requireSourceContext(),
@@ -5927,7 +5949,6 @@ pub const Pass = struct {
                 arg_expr_idx,
                 param_mono,
                 callable_inst.fn_monotype_module_idx,
-                &visiting,
             );
         }
 
@@ -5965,8 +5986,6 @@ pub const Pass = struct {
         for (arg_exprs, 0..) |arg_expr_idx, i| {
             const param_mono = result.context_mono.monotype_store.getIdxSpanItem(fn_mono.args, i);
             try self.bindCurrentExprTypeRoot(result, thread, module_idx, arg_expr_idx, param_mono, fn_monotype_module_idx);
-            var visiting: std.AutoHashMapUnmanaged(ContextExprVisitKey, void) = .empty;
-            defer visiting.deinit(self.allocator);
             try self.propagateDemandedValueMonotypeToValueExpr(
                 result,
                 thread.requireSourceContext(),
@@ -5974,7 +5993,6 @@ pub const Pass = struct {
                 arg_expr_idx,
                 param_mono,
                 fn_monotype_module_idx,
-                &visiting,
             );
         }
 
@@ -5990,13 +6008,7 @@ pub const Pass = struct {
         expr_idx: CIR.Expr.Idx,
         monotype: Monotype.Idx,
         monotype_module_idx: u32,
-        visiting: *std.AutoHashMapUnmanaged(ContextExprVisitKey, void),
     ) Allocator.Error!void {
-        const visit_key = contextExprVisitKey(source_context, module_idx, expr_idx);
-        if (visiting.contains(visit_key)) return;
-        try visiting.put(self.allocator, visit_key, {});
-        defer _ = visiting.remove(visit_key);
-
         const module_env = self.all_module_envs[module_idx];
         const expr = module_env.store.getExpr(expr_idx);
         if (expr == .e_anno_only) return;
@@ -6016,14 +6028,13 @@ pub const Pass = struct {
                 source.module_idx == module_idx and
                 source.expr_idx == expr_idx))
             {
-                try self.propagateDemandedValueMonotypeToValueExpr(
+                try self.recordExprMonotypeForSourceContext(
                     result,
                     source.source_context,
                     source.module_idx,
                     source.expr_idx,
                     monotype,
                     monotype_module_idx,
-                    visiting,
                 );
             }
         }
@@ -6474,8 +6485,6 @@ pub const Pass = struct {
         for (actual_args.items, 0..) |arg_expr_idx, i| {
             const param_mono = result.context_mono.monotype_store.getIdxSpanItem(fn_mono.args, i);
             try self.bindCurrentExprTypeRoot(result, thread, module_idx, arg_expr_idx, param_mono, callable_inst.fn_monotype_module_idx);
-            var visiting: std.AutoHashMapUnmanaged(ContextExprVisitKey, void) = .empty;
-            defer visiting.deinit(self.allocator);
             try self.propagateDemandedValueMonotypeToValueExpr(
                 result,
                 thread.requireSourceContext(),
@@ -6483,7 +6492,6 @@ pub const Pass = struct {
                 arg_expr_idx,
                 param_mono,
                 callable_inst.fn_monotype_module_idx,
-                &visiting,
             );
         }
 
@@ -9997,14 +10005,16 @@ pub const Pass = struct {
             iterations += 1;
             if (std.debug.runtime_safety and iterations > 32) {
                 std.debug.panic(
-                    "Pipeline: callable-inst binding fixed point did not converge for callable_inst={d}",
+                    "Pipeline: callable-inst stabilization did not converge for callable_inst={d}",
                     .{
                         @intFromEnum(callable_inst_id),
                     },
                 );
             }
 
-            const mutation_revision_before = self.mutation_revision;
+            var changed = false;
+            try self.pushChangeTracker(&changed);
+            defer self.popChangeTracker();
             try self.recordCallableParamPatternFactsForCallableInst(result, callable_inst_id);
 
             try self.scanForcedCirValueExpr(result, thread, template.module_idx, template.body_expr);
@@ -10023,7 +10033,7 @@ pub const Pass = struct {
                 );
             }
 
-            if (self.mutation_revision == mutation_revision_before) {
+            if (!changed) {
                 break;
             }
         }
