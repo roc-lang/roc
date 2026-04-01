@@ -7410,17 +7410,29 @@ pub const Interpreter = struct {
         self: *Interpreter,
         binding: Binding,
         search_start: usize,
+        is_var_decl: bool,
         roc_ops: *RocOps,
     ) !void {
-        // Check if this is a var reassignment (pattern for a reassignable identifier)
-        // In that case, we need to search from 0 to update the original binding,
-        // not just from search_start (which would miss bindings from outer scopes)
+        // For s_var (initial `var $x = expr` declarations), always create a new binding.
+        // This prevents recursive calls from clobbering the outer call's var binding,
+        // since recursive calls share the same function body and thus the same pattern_idx.
+        // Var reassignments (`$x = expr`) are handled separately by the reassign_value
+        // continuation, not by this function.
+        if (is_var_decl) {
+            try self.bindings.append(binding);
+            return;
+        }
+
+        // For s_decl patterns (which may contain reassignable vars in tuple destructuring,
+        // e.g. `(word, $index) = expr`), search from 0 to find and update existing var
+        // bindings from outer scopes within the same function call. For non-reassignable
+        // patterns, only search within the current block scope (from search_start) to
+        // handle closure placeholders.
         const actual_search_start = blk: {
             const pat = self.env.store.getPattern(binding.pattern_idx);
             if (pat == .assign) {
                 const ident = pat.assign.ident;
                 if (ident.attributes.reassignable) {
-                    // This is a var ($var) - search from beginning to find outer binding
                     break :blk 0;
                 }
             }
@@ -10308,6 +10320,11 @@ pub const Interpreter = struct {
             bindings_start: usize,
             /// Expected runtime type for the final expression (propagated from caller)
             expected_rt_var: ?types.Var = null,
+            /// Whether this is from an s_var (initial `var $x = expr` declaration).
+            /// When true, upsertBinding always creates a new binding instead of
+            /// searching for an existing one — prevents recursive calls from
+            /// clobbering outer calls' var bindings.
+            is_var_decl: bool = false,
         };
 
         pub const TupleCollect = struct {
@@ -14517,7 +14534,9 @@ pub const Interpreter = struct {
                 } });
             },
             .s_var => |v| {
-                // Same as s_decl but uses pattern_idx
+                // Same as s_decl but uses pattern_idx, with is_var_decl=true
+                // so that upsertBinding always creates a new binding instead of
+                // searching for (and clobbering) an outer recursive call's binding.
                 try work_stack.push(.{ .apply_continuation = .{ .bind_decl = .{
                     .pattern = v.pattern_idx,
                     .expr_idx = v.expr,
@@ -14525,6 +14544,7 @@ pub const Interpreter = struct {
                     .final_expr = final_expr,
                     .bindings_start = bindings_start,
                     .expected_rt_var = expected_rt_var,
+                    .is_var_decl = true,
                 } } });
                 const expr_ct_var = can.ModuleEnv.varFrom(v.expr);
                 const expr_rt_var = try self.translateTypeVar(self.env, expr_ct_var);
@@ -14936,7 +14956,7 @@ pub const Interpreter = struct {
                         }) catch "[INTERP] upsertBinding\n";
                         stderr_file.writeAll(msg) catch {};
                     }
-                    try self.upsertBinding(binding, bd.bindings_start, roc_ops);
+                    try self.upsertBinding(binding, bd.bindings_start, bd.is_var_decl, roc_ops);
                 }
                 // Clear temp_binds without decref - ownership was transferred to self.bindings
                 temp_binds.clearRetainingCapacity();
