@@ -55,17 +55,18 @@ const PatternBinding = struct {
     pattern_idx: CIR.Pattern.Idx,
 };
 
-const PlannedCaptureCallableSemantics = union(enum) {
-    non_callable,
-    callable: Pipeline.CallableValue,
-};
-
-const PlannedCaptureLocal = struct {
+const PlannedRuntimeCaptureLocal = struct {
     pattern_idx: CIR.Pattern.Idx,
     local: MIR.LocalId,
     local_monotype: Monotype.Idx,
-    callable_semantics: PlannedCaptureCallableSemantics,
+    callable_value: ?Pipeline.CallableValue = null,
     storage: Pipeline.CaptureStorage,
+};
+
+const PlannedCallableCaptureLocal = struct {
+    pattern_idx: CIR.Pattern.Idx,
+    local: MIR.LocalId,
+    callable_inst_id: Pipeline.CallableInstId,
 };
 
 const TopLevelDefCallableSemantics = union(enum) {
@@ -74,9 +75,9 @@ const TopLevelDefCallableSemantics = union(enum) {
 };
 
 const PlannedCaptureLocals = struct {
-    runtime: std.ArrayList(PlannedCaptureLocal),
-    callable_only: std.ArrayList(PlannedCaptureLocal),
-    recursive: std.ArrayList(PlannedCaptureLocal),
+    runtime: std.ArrayList(PlannedRuntimeCaptureLocal),
+    callable_only: std.ArrayList(PlannedCallableCaptureLocal),
+    recursive: std.ArrayList(PlannedCallableCaptureLocal),
 
     fn init() PlannedCaptureLocals {
         return .{
@@ -2548,29 +2549,47 @@ fn planClosureEntryCaptureLocals(
             try entry_bound_locals.add(capture_local);
         }
 
-        switch (capture_field.callable_binding) {
-            .non_callable => {},
-            .callable => |callable_value| switch (callable_value) {
+        if (capture_field.callable_value) |callable_value| switch (callable_value) {
                 .direct => |callable_inst_id| try self.bindExactCallableLocal(capture_local, callable_inst_id),
                 .packed_fn => self.clearExactCallableLocal(capture_local),
-            },
         }
 
-        const planned_capture = PlannedCaptureLocal{
-            .pattern_idx = capture_field.pattern_idx,
-            .local = capture_local,
-            .local_monotype = capture_monotype,
-            .callable_semantics = switch (capture_field.callable_binding) {
-                .non_callable => .non_callable,
-                .callable => |callable_value| .{ .callable = callable_value },
-            },
-            .storage = capture_field.storage,
-        };
-
         switch (capture_field.storage) {
-            .runtime_field => try planned.runtime.append(self.allocator, planned_capture),
-            .callable_only => try planned.callable_only.append(self.allocator, planned_capture),
-            .recursive_member => try planned.recursive.append(self.allocator, planned_capture),
+            .runtime_field => try planned.runtime.append(self.allocator, .{
+                .pattern_idx = capture_field.pattern_idx,
+                .local = capture_local,
+                .local_monotype = capture_monotype,
+                .callable_value = capture_field.callable_value,
+                .storage = capture_field.storage,
+            }),
+            .callable_only => {
+                const callable_inst_id = switch (capture_field.callable_value orelse std.debug.panic(
+                    "statement-only MIR invariant violated: callable-only capture pattern {d} had no direct callable value",
+                    .{@intFromEnum(capture_field.pattern_idx)},
+                )) {
+                    .direct => |direct_callable_inst_id| direct_callable_inst_id,
+                    .packed_fn => unreachable,
+                };
+                try planned.callable_only.append(self.allocator, .{
+                    .pattern_idx = capture_field.pattern_idx,
+                    .local = capture_local,
+                    .callable_inst_id = callable_inst_id,
+                });
+            },
+            .recursive_member => {
+                const callable_inst_id = switch (capture_field.callable_value orelse std.debug.panic(
+                    "statement-only MIR invariant violated: recursive capture pattern {d} had no direct callable value",
+                    .{@intFromEnum(capture_field.pattern_idx)},
+                )) {
+                    .direct => |direct_callable_inst_id| direct_callable_inst_id,
+                    .packed_fn => unreachable,
+                };
+                try planned.recursive.append(self.allocator, .{
+                    .pattern_idx = capture_field.pattern_idx,
+                    .local = capture_local,
+                    .callable_inst_id = callable_inst_id,
+                });
+            },
         }
     }
 
@@ -2979,12 +2998,9 @@ fn appendCaptureMaterialization(
         },
         .expr => |source_expr_ref| blk: {
             const local = try self.freshSyntheticLocal(capture_monotype, false);
-            switch (capture_field.callable_binding) {
-                .non_callable => {},
-                .callable => |callable_value| switch (callable_value) {
+            if (capture_field.callable_value) |callable_value| switch (callable_value) {
                     .direct => |capture_callable_inst_id| try self.bindExactCallableLocal(local, capture_callable_inst_id),
                     .packed_fn => self.clearExactCallableLocal(local),
-                },
             }
             try out.append(self.allocator, .{ .expr = .{
                 .local = local,
@@ -3128,43 +3144,17 @@ fn lowerReservedTrivialClosureLambda(
 
     for (planned_captures.recursive.items) |capture| {
         try capture_pattern_by_local.put(@intFromEnum(capture.local), capture.pattern_idx);
-        const variant_callable_inst_id = switch (capture.callable_semantics) {
-            .non_callable => std.debug.panic(
-                "statement-only MIR invariant violated: recursive capture pattern {d} for callable_inst={d} lacked callable semantics",
-                .{ @intFromEnum(capture.pattern_idx), @intFromEnum(callable_inst_id) },
-            ),
-            .callable => |callable_value| switch (callable_value) {
-                .direct => |direct_callable_inst_id| direct_callable_inst_id,
-                .packed_fn => std.debug.panic(
-                    "statement-only MIR invariant violated: recursive capture pattern {d} for callable_inst={d} resolved to packed callable semantics",
-                    .{ @intFromEnum(capture.pattern_idx), @intFromEnum(callable_inst_id) },
-                ),
-            },
-        };
         try recursive_captures.append(self.allocator, .{
             .local = capture.local,
-            .callable_inst_id = variant_callable_inst_id,
+            .callable_inst_id = capture.callable_inst_id,
         });
     }
 
     for (planned_captures.callable_only.items) |capture| {
         try capture_pattern_by_local.put(@intFromEnum(capture.local), capture.pattern_idx);
-        const capture_callable_inst_id = switch (capture.callable_semantics) {
-            .non_callable => std.debug.panic(
-                "statement-only MIR invariant violated: callable-only capture pattern {d} for callable_inst={d} lacked callable semantics",
-                .{ @intFromEnum(capture.pattern_idx), @intFromEnum(callable_inst_id) },
-            ),
-            .callable => |callable_value| switch (callable_value) {
-                .direct => |direct_callable_inst_id| direct_callable_inst_id,
-                .packed_fn => std.debug.panic(
-                    "statement-only MIR invariant violated: callable-only capture pattern {d} for callable_inst={d} resolved to packed callable semantics",
-                    .{ @intFromEnum(capture.pattern_idx), @intFromEnum(callable_inst_id) },
-                ),
-            },
-        };
         try callable_only_captures.append(self.allocator, .{
             .local = capture.local,
-            .callable_inst_id = capture_callable_inst_id,
+            .callable_inst_id = capture.callable_inst_id,
             .lambda_id = null,
         });
     }

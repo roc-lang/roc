@@ -98,10 +98,6 @@ pub const StmtIdSpan = extern struct {
     }
 };
 
-pub const RootExprId = enum(u32) {
-    _,
-};
-
 pub const CallableValue = union(enum) {
     direct: CallableInstId,
     packed_fn: PackedFn,
@@ -113,7 +109,6 @@ pub const CallSite = union(enum) {
 };
 
 pub const ExprCallableSemantics = union(enum) {
-    ordinary,
     callable: CallableValue,
     packed_intro: struct {
         packed_fn: PackedFn,
@@ -121,29 +116,9 @@ pub const ExprCallableSemantics = union(enum) {
     },
 };
 
-pub const ExprCallSemantics = union(enum) {
-    not_call,
-    call: CallSite,
-};
-
 pub const LookupResolution = union(enum) {
     expr: ExprRef,
     def: Lambdasolved.ExternalDefSource,
-};
-
-pub const ExprLookupSemantics = union(enum) {
-    not_lookup,
-    lookup: LookupResolution,
-};
-
-pub const ExprValueOrigin = union(enum) {
-    self_value,
-    expr: ExprRef,
-};
-
-pub const ExprDispatchSemantics = union(enum) {
-    not_dispatch,
-    dispatch: ContextMono.DispatchExprTarget,
 };
 
 pub const CallableParamProjection = ValueProjection.Projection;
@@ -216,11 +191,6 @@ pub const CaptureStorage = union(enum) {
     recursive_member,
 };
 
-pub const CaptureCallableBinding = union(enum) {
-    non_callable,
-    callable: CallableValue,
-};
-
 pub const CallableDefId = enum(u32) {
     _,
 };
@@ -234,7 +204,7 @@ pub const CallableRuntimeKind = enum {
 pub const CaptureField = struct {
     pattern_idx: CIR.Pattern.Idx,
     local_monotype: ContextMono.ResolvedMonotype,
-    callable_binding: CaptureCallableBinding,
+    callable_value: ?CallableValue = null,
     source: CaptureValueSource,
     storage: CaptureStorage,
 };
@@ -263,20 +233,10 @@ pub const BindingId = enum(u32) {
     _,
 };
 
-pub const PatternCallableSemantics = union(enum) {
-    non_callable,
-    callable: CallableValue,
-};
-
-pub const PatternValueOrigin = union(enum) {
-    self_value,
-    expr: ExprRef,
-};
-
 pub const PatternBinding = struct {
     key: ContextPatternKey,
-    callable_semantics: PatternCallableSemantics,
-    origin: PatternValueOrigin,
+    callable_value: ?CallableValue = null,
+    origin: ?ExprRef = null,
 };
 
 pub const Expr = struct {
@@ -286,22 +246,17 @@ pub const Expr = struct {
     monotype: ContextMono.ResolvedMonotype,
     child_exprs: ExprIdSpan = .empty(),
     child_stmts: StmtIdSpan = .empty(),
-    callable_semantics: ExprCallableSemantics,
-    call: ExprCallSemantics,
-    origin: ExprValueOrigin,
-    dispatch: ExprDispatchSemantics,
-    lookup: ExprLookupSemantics,
+    callable: ?ExprCallableSemantics = null,
+    call: ?CallSite = null,
+    origin: ?ExprRef = null,
+    dispatch: ?ContextMono.DispatchExprTarget = null,
+    lookup: ?LookupResolution = null,
 };
 
 pub const Stmt = struct {
     module_idx: u32,
     source_stmt: CIR.Statement.Idx,
     child_exprs: ExprIdSpan = .empty(),
-};
-
-pub const RootExpr = struct {
-    key: ContextExprKey,
-    body_expr: ExprId,
 };
 
 pub const Program = struct {
@@ -319,8 +274,6 @@ pub const Program = struct {
     stmts: std.ArrayListUnmanaged(Stmt),
     stmt_ids_by_key: std.AutoHashMapUnmanaged(BuildStmtKey, StmtId),
     stmt_child_entries: std.ArrayListUnmanaged(StmtId),
-    root_exprs: std.ArrayListUnmanaged(RootExpr),
-    root_expr_ids_by_key: std.AutoHashMapUnmanaged(ContextExprKey, RootExprId),
     callable_defs: std.ArrayListUnmanaged(CallableDef),
     capture_fields: std.ArrayListUnmanaged(CaptureField),
     callable_variant_entries: std.ArrayListUnmanaged(CallableInstId),
@@ -341,8 +294,6 @@ pub const Program = struct {
             .stmts = .empty,
             .stmt_ids_by_key = .empty,
             .stmt_child_entries = .empty,
-            .root_exprs = .empty,
-            .root_expr_ids_by_key = .empty,
             .callable_defs = .empty,
             .capture_fields = .empty,
             .callable_variant_entries = .empty,
@@ -364,8 +315,6 @@ pub const Program = struct {
         self.stmts.deinit(allocator);
         self.stmt_ids_by_key.deinit(allocator);
         self.stmt_child_entries.deinit(allocator);
-        self.root_exprs.deinit(allocator);
-        self.root_expr_ids_by_key.deinit(allocator);
         self.callable_defs.deinit(allocator);
         self.capture_fields.deinit(allocator);
         self.callable_variant_entries.deinit(allocator);
@@ -429,10 +378,7 @@ pub const Program = struct {
         pattern_idx: CIR.Pattern.Idx,
     ) ?CallableValue {
         const binding = self.getPatternBinding(source_context, module_idx, pattern_idx) orelse return null;
-        return switch (binding.callable_semantics) {
-            .non_callable => null,
-            .callable => |callable_value| callable_value,
-        };
+        return binding.callable_value;
     }
 
     pub fn getPatternValueOrigin(
@@ -442,10 +388,7 @@ pub const Program = struct {
         pattern_idx: CIR.Pattern.Idx,
     ) ?ExprRef {
         const binding = self.getPatternBinding(source_context, module_idx, pattern_idx) orelse return null;
-        return switch (binding.origin) {
-            .self_value => null,
-            .expr => |expr_ref| expr_ref,
-        };
+        return binding.origin;
     }
 
     pub fn getExpr(self: *const Program, expr_id: ExprId) *const Expr {
@@ -489,11 +432,6 @@ pub const Program = struct {
         return self.stmt_child_entries.items[span.start..][0..span.len];
     }
 
-    pub fn getRootExpr(self: *const Program, source_context: SourceContext, module_idx: u32, expr_idx: CIR.Expr.Idx) ?ExprId {
-        const key = ContextMono.Result.contextExprKey(source_context, module_idx, expr_idx);
-        const root_id = self.root_expr_ids_by_key.get(key) orelse return self.getExprId(source_context, module_idx, expr_idx);
-        return self.root_exprs.items[@intFromEnum(root_id)].body_expr;
-    }
 };
 
 pub fn getCallableDef(program: *const Program, callable_def_id: CallableDefId) *const CallableDef {
