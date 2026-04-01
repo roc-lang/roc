@@ -22,7 +22,7 @@ pub const CallableInst = struct {
     fn_monotype_module_idx: u32,
     defining_source_context: SourceContext,
     callable_def: CallableDefId,
-    runtime_value: RuntimeValue = .direct_lambda,
+    runtime_value: RuntimeValue,
 };
 
 pub const RuntimeValue = union(enum) {

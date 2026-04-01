@@ -258,22 +258,42 @@ const TypeScopeContext = struct {
     scope: *const types.TypeScope,
 };
 
-const ExprMonotypeRecording = enum {
-    tracked,
-    direct_context_only,
-};
-
-const SemanticThread = struct {
+const ThreadState = struct {
     source_context: ?SourceContext = null,
     bindings: ?*std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype) = null,
     iteration_expr_monotypes: ?*std.AutoHashMapUnmanaged(ContextExprKey, ResolvedMonotype) = null,
     iteration_pattern_monotypes: ?*std.AutoHashMapUnmanaged(ContextPatternKey, ResolvedMonotype) = null,
-    expr_monotype_recording: ExprMonotypeRecording = .tracked,
-    type_scope: ?TypeScopeContext = null,
+};
+
+const SemanticThread = union(enum) {
+    tracked: ThreadState,
+    completion: ThreadState,
+
+    fn trackedThread() SemanticThread {
+        return .{ .tracked = .{} };
+    }
+
+    fn completionThread() SemanticThread {
+        return .{ .completion = .{} };
+    }
+
+    fn statePtr(self: *SemanticThread) *ThreadState {
+        return switch (self.*) {
+            .tracked => |*state| state,
+            .completion => |*state| state,
+        };
+    }
+
+    fn state(self: SemanticThread) ThreadState {
+        return switch (self) {
+            .tracked => |state| state,
+            .completion => |state| state,
+        };
+    }
 
     fn withSourceContext(self: SemanticThread, source_context: SourceContext) SemanticThread {
         var next = self;
-        next.source_context = source_context;
+        next.statePtr().source_context = source_context;
         return next;
     }
 
@@ -282,7 +302,7 @@ const SemanticThread = struct {
         bindings: ?*std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
     ) SemanticThread {
         var next = self;
-        next.bindings = bindings;
+        next.statePtr().bindings = bindings;
         return next;
     }
 
@@ -292,43 +312,31 @@ const SemanticThread = struct {
         iteration_pattern_monotypes: ?*std.AutoHashMapUnmanaged(ContextPatternKey, ResolvedMonotype),
     ) SemanticThread {
         var next = self;
-        next.iteration_expr_monotypes = iteration_expr_monotypes;
-        next.iteration_pattern_monotypes = iteration_pattern_monotypes;
-        return next;
-    }
-
-    fn withScratchExprMonotypes(self: SemanticThread) SemanticThread {
-        var next = self;
-        next.expr_monotype_recording = .direct_context_only;
-        return next;
-    }
-
-    fn withTypeScope(self: SemanticThread, type_scope: ?TypeScopeContext) SemanticThread {
-        var next = self;
-        next.type_scope = type_scope;
+        next.statePtr().iteration_expr_monotypes = iteration_expr_monotypes;
+        next.statePtr().iteration_pattern_monotypes = iteration_pattern_monotypes;
         return next;
     }
 
     fn requireSourceContext(self: SemanticThread) SourceContext {
-        return self.source_context orelse std.debug.panic(
+        return self.state().source_context orelse std.debug.panic(
             "Pipeline invariant violated: operation required an explicit source context",
             .{},
         );
     }
 
     fn hasSourceContext(self: SemanticThread) bool {
-        return self.source_context != null;
+        return self.state().source_context != null;
     }
 
     fn hasCallableInst(self: SemanticThread) bool {
-        return if (self.source_context) |source_context|
+        return if (self.state().source_context) |source_context|
             sourceContextHasCallableInst(source_context)
         else
             false;
     }
 
     fn callableInst(self: SemanticThread) ?CallableInstId {
-        const source_context = self.source_context orelse return null;
+        const source_context = self.state().source_context orelse return null;
         return sourceContextCallableInst(source_context);
     }
 
@@ -338,7 +346,7 @@ const SemanticThread = struct {
     }
 
     fn callableInstRawForDebug(self: SemanticThread) u32 {
-        const source_context = self.source_context orelse return std.math.maxInt(u32);
+        const source_context = self.state().source_context orelse return std.math.maxInt(u32);
         return switch (source_context) {
             .callable_inst => |context_id| @intFromEnum(@as(CallableInstId, @enumFromInt(@intFromEnum(context_id)))),
             .root_expr, .provenance_expr, .template_expr => std.math.maxInt(u32),
@@ -346,11 +354,34 @@ const SemanticThread = struct {
     }
 
     fn rootExprRawForDebug(self: SemanticThread) u32 {
-        const source_context = self.source_context orelse return std.math.maxInt(u32);
+        const source_context = self.state().source_context orelse return std.math.maxInt(u32);
         return switch (source_context) {
             .root_expr => |root| @intFromEnum(root.expr_idx),
             .callable_inst, .provenance_expr, .template_expr => std.math.maxInt(u32),
         };
+    }
+
+    fn bindings(self: SemanticThread) ?*std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype) {
+        return self.state().bindings;
+    }
+
+    fn iterationExprMonotypes(self: SemanticThread) ?*std.AutoHashMapUnmanaged(ContextExprKey, ResolvedMonotype) {
+        return self.state().iteration_expr_monotypes;
+    }
+
+    fn iterationPatternMonotypes(self: SemanticThread) ?*std.AutoHashMapUnmanaged(ContextPatternKey, ResolvedMonotype) {
+        return self.state().iteration_pattern_monotypes;
+    }
+
+    fn isTracked(self: SemanticThread) bool {
+        return switch (self) {
+            .tracked => true,
+            .completion => false,
+        };
+    }
+
+    fn isCompletion(self: SemanticThread) bool {
+        return !self.isTracked();
     }
 };
 
@@ -2051,7 +2082,7 @@ pub const Pass = struct {
         child_expr_ids: []const Lambdamono.ExprId,
     ) Allocator.Error!ResolvedMonotype {
         _ = child_expr_ids;
-        const thread = (SemanticThread{ .type_scope = self.default_type_scope }).withSourceContext(source_context);
+        const thread = SemanticThread.trackedThread().withSourceContext(source_context);
         const resolved = blk: {
             if (self.lookupExprMonotypeForSourceContext(result, thread, source_context, module_idx, expr_idx)) |existing| {
                 break :blk existing;
@@ -2119,7 +2150,7 @@ pub const Pass = struct {
             const mutation_revision_before = self.mutation_revision;
             for (exprs) |expr_idx| {
                 if (contextualize_roots) {
-                    const thread = (SemanticThread{ .type_scope = self.default_type_scope }).withSourceContext(.{
+                    const thread = SemanticThread.trackedThread().withSourceContext(.{
                         .root_expr = .{
                             .module_idx = self.current_module_idx,
                             .expr_idx = expr_idx,
@@ -2129,7 +2160,7 @@ pub const Pass = struct {
                 } else {
                     try self.scanCirValueExpr(
                         result,
-                        SemanticThread{ .type_scope = self.default_type_scope },
+                        SemanticThread.trackedThread(),
                         self.current_module_idx,
                         expr_idx,
                     );
@@ -2994,7 +3025,7 @@ pub const Pass = struct {
     ) Allocator.Error!void {
         try self.scanDemandedValueDefExpr(
             result,
-            (SemanticThread{ .type_scope = self.default_type_scope }).withSourceContext(source_context),
+            SemanticThread.trackedThread().withSourceContext(source_context),
             module_idx,
             expr_idx,
         );
@@ -3009,7 +3040,7 @@ pub const Pass = struct {
     ) Allocator.Error!void {
         try self.scanForcedCirValueExpr(
             result,
-            (SemanticThread{ .type_scope = self.default_type_scope }).withSourceContext(source_context),
+            SemanticThread.trackedThread().withSourceContext(source_context),
             module_idx,
             expr_idx,
         );
@@ -3079,14 +3110,14 @@ pub const Pass = struct {
             );
             if (materialize_if_callable) {
                 try self.materializeDemandedExprCallableInst(result, thread, module_idx, expr_idx, template_id);
-                if (thread.bindings == null and !thread.hasCallableInst()) {
+                if (thread.bindings() == null and !thread.hasCallableInst()) {
                     try self.completeCurrentExprMonotype(result, thread, module_idx, expr_idx);
                     return;
                 }
             }
         }
 
-        if (thread.bindings != null or force_rescan_children) {
+        if (thread.bindings() != null or force_rescan_children) {
             try self.scanCirExprChildren(result, thread, module_idx, expr_idx, expr, resolve_direct_calls);
             try self.completeCurrentExprMonotype(result, thread, module_idx, expr_idx);
             return;
@@ -3279,7 +3310,7 @@ pub const Pass = struct {
         expr_idx: CIR.Expr.Idx,
     ) ?ResolvedMonotype {
         const key = self.resultExprKeyForSourceContext(source_context, module_idx, expr_idx);
-        if (thread.iteration_expr_monotypes) |iteration_map| {
+        if (thread.iterationExprMonotypes()) |iteration_map| {
             if (iteration_map.get(key)) |resolved| return resolved;
             if (sourceContextHasCallableInst(source_context) and
                 key.source_context_kind == .callable_inst and
@@ -3525,7 +3556,7 @@ pub const Pass = struct {
         return switch (capture_value_source) {
             .expr => |capture_expr_ref| self.resolveExprMonotypeResolvedForSourceContext(
                 result,
-                (SemanticThread{ .type_scope = self.default_type_scope }).withSourceContext(capture_expr_ref.source_context),
+                SemanticThread.trackedThread().withSourceContext(capture_expr_ref.source_context),
                 capture_expr_ref.source_context,
                 capture_expr_ref.module_idx,
                 capture_expr_ref.expr_idx,
@@ -3906,7 +3937,7 @@ pub const Pass = struct {
                     try self.scanCirExprWithDirectCallResolution(result, thread, module_idx, call_expr.func, resolve_direct_calls);
                 }
                 try self.scanCirExprSpanWithDirectCallResolution(result, thread, module_idx, arg_exprs, resolve_direct_calls);
-                if (thread.bindings != null) {
+                if (thread.bindings() != null) {
                     if (self.getCallSiteCallableInstForThread(result, thread, module_idx, expr_idx) == null and
                         self.getCallSiteCallableMembersForThread(result, thread, module_idx, expr_idx) == null)
                     {
@@ -3974,7 +4005,7 @@ pub const Pass = struct {
                 try self.scanCirExprWithDirectCallResolution(result, thread, module_idx, binop_expr.lhs, resolve_direct_calls);
                 try self.scanCirExprWithDirectCallResolution(result, thread, module_idx, binop_expr.rhs, resolve_direct_calls);
                 try self.resolveDispatchExprCallableInst(result, thread, module_idx, expr_idx, expr);
-                if (thread.bindings != null) {
+                if (thread.bindings() != null) {
                     try self.scanCirExprWithDirectCallResolution(result, thread, module_idx, binop_expr.lhs, resolve_direct_calls);
                     try self.scanCirExprWithDirectCallResolution(result, thread, module_idx, binop_expr.rhs, resolve_direct_calls);
                 }
@@ -3982,7 +4013,7 @@ pub const Pass = struct {
             .e_unary_minus => |unary_expr| {
                 try self.scanCirExprWithDirectCallResolution(result, thread, module_idx, unary_expr.expr, resolve_direct_calls);
                 try self.resolveDispatchExprCallableInst(result, thread, module_idx, expr_idx, expr);
-                if (thread.bindings != null) {
+                if (thread.bindings() != null) {
                     try self.scanCirExprWithDirectCallResolution(result, thread, module_idx, unary_expr.expr, resolve_direct_calls);
                 }
             },
@@ -3992,7 +4023,7 @@ pub const Pass = struct {
                 if (dot_expr.args) |args| {
                     try self.scanCirExprSpanWithDirectCallResolution(result, thread, module_idx, module_env.store.sliceExpr(args), resolve_direct_calls);
                     try self.resolveDispatchExprCallableInst(result, thread, module_idx, expr_idx, expr);
-                    if (thread.bindings != null) {
+                    if (thread.bindings() != null) {
                         try self.scanCirExprWithDirectCallResolution(result, thread, module_idx, dot_expr.receiver, resolve_direct_calls);
                         try self.scanCirExprSpanWithDirectCallResolution(result, thread, module_idx, module_env.store.sliceExpr(args), resolve_direct_calls);
                     }
@@ -4011,7 +4042,7 @@ pub const Pass = struct {
             .e_type_var_dispatch => |dispatch_expr| {
                 try self.scanCirExprSpanWithDirectCallResolution(result, thread, module_idx, module_env.store.sliceExpr(dispatch_expr.args), resolve_direct_calls);
                 try self.resolveDispatchExprCallableInst(result, thread, module_idx, expr_idx, expr);
-                if (thread.bindings != null) {
+                if (thread.bindings() != null) {
                     try self.scanCirExprSpanWithDirectCallResolution(result, thread, module_idx, module_env.store.sliceExpr(dispatch_expr.args), resolve_direct_calls);
                 }
             },
@@ -4092,7 +4123,7 @@ pub const Pass = struct {
         var bindings = std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype).init(self.allocator);
         defer bindings.deinit();
 
-        var thread = (SemanticThread{ .type_scope = self.default_type_scope }).withSourceContext(source_context);
+        var thread = SemanticThread.trackedThread().withSourceContext(source_context);
         switch (source_context) {
             .callable_inst => |context_id| {
                 try self.seedBindingsForCallableInst(result, @enumFromInt(@intFromEnum(context_id)), &bindings);
@@ -4119,7 +4150,7 @@ pub const Pass = struct {
         var bindings = std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype).init(self.allocator);
         defer bindings.deinit();
 
-        var thread = (SemanticThread{ .type_scope = self.default_type_scope }).withSourceContext(source_context);
+        var thread = SemanticThread.trackedThread().withSourceContext(source_context);
         switch (source_context) {
             .callable_inst => |context_id| {
                 try self.seedBindingsForCallableInst(result, @enumFromInt(@intFromEnum(context_id)), &bindings);
@@ -4413,7 +4444,7 @@ pub const Pass = struct {
             switch (callee_expr) {
                 .e_lookup_local, .e_lookup_external, .e_lookup_required => {
                     if (try self.callUsesAnnotationOnlyIntrinsic(module_idx, callee_expr_idx)) return;
-                    if (thread.bindings != null and !desired_fn_monotype.isNone()) {
+                    if (thread.bindings() != null and !desired_fn_monotype.isNone()) {
                         try self.bindCurrentCallFromFnMonotype(
                             result,
                             module_idx,
@@ -4616,7 +4647,7 @@ pub const Pass = struct {
             const maybe_template_id = try self.lookupDirectCalleeTemplate(result, thread.requireSourceContext(), module_idx, arg_expr_idx);
             const template_id = maybe_template_id orelse continue;
             const template = result.getCallableTemplate(template_id);
-            if (thread.bindings != null and !thread.hasCallableInst() and template.kind == .closure) {
+            if (thread.bindings() != null and !thread.hasCallableInst() and template.kind == .closure) {
                 // During template-binding completion, a closure's callable identity is not
                 // meaningful until the enclosing callable instantiation exists. Defer that
                 // assignment to the later concrete callable-context scan.
@@ -4986,11 +5017,10 @@ pub const Pass = struct {
         defer iteration_expr_monotypes.deinit(self.allocator);
         var iteration_pattern_monotypes: std.AutoHashMapUnmanaged(ContextPatternKey, ResolvedMonotype) = .empty;
         defer iteration_pattern_monotypes.deinit(self.allocator);
-        var thread = (SemanticThread{ .type_scope = self.default_type_scope })
+        var thread = SemanticThread.completionThread()
             .withSourceContext(source_context)
             .withBindings(bindings)
-            .withIterationMonotypes(&iteration_expr_monotypes, &iteration_pattern_monotypes)
-            .withScratchExprMonotypes();
+            .withIterationMonotypes(&iteration_expr_monotypes, &iteration_pattern_monotypes);
 
         var iterations: u32 = 0;
         while (true) {
@@ -5388,7 +5418,7 @@ pub const Pass = struct {
             .func => {
                 try self.scanCirValueExpr(
                     result,
-                    (SemanticThread{ .type_scope = self.default_type_scope }).withSourceContext(source_context),
+                    SemanticThread.trackedThread().withSourceContext(source_context),
                     module_idx,
                     expr_idx,
                 );
@@ -5503,11 +5533,10 @@ pub const Pass = struct {
 
         var signature_bindings = std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype).init(self.allocator);
         defer signature_bindings.deinit();
-        const thread = (SemanticThread{ .type_scope = self.default_type_scope })
+        const thread = SemanticThread.completionThread()
             .withSourceContext(defining_source_context)
             .withBindings(&signature_bindings)
-            .withIterationMonotypes(&iteration_expr_monotypes, &iteration_pattern_monotypes)
-            .withScratchExprMonotypes();
+            .withIterationMonotypes(&iteration_expr_monotypes, &iteration_pattern_monotypes);
 
         if (!try self.trySeedCallableBodyBindingsFromSignature(
             result,
@@ -5747,7 +5776,7 @@ pub const Pass = struct {
         );
 
         const module_env = self.all_module_envs[module_idx];
-        if (thread.bindings) |bindings| {
+        if (thread.bindings()) |bindings| {
             var ordered_entries = std.ArrayList(TypeSubstEntry).empty;
             defer ordered_entries.deinit(self.allocator);
 
@@ -7072,7 +7101,7 @@ pub const Pass = struct {
         monotype: Monotype.Idx,
         monotype_module_idx: u32,
     ) Allocator.Error!void {
-        const bindings = thread.bindings orelse return;
+        const bindings = thread.bindings() orelse return;
         var ordered_entries = std.ArrayList(TypeSubstEntry).empty;
         defer ordered_entries.deinit(self.allocator);
         try self.bindTypeVarMonotypes(
@@ -7096,7 +7125,7 @@ pub const Pass = struct {
         monotype: Monotype.Idx,
         monotype_module_idx: u32,
     ) Allocator.Error!void {
-        const bindings = thread.bindings orelse return;
+        const bindings = thread.bindings() orelse return;
         const module_env = self.all_module_envs[module_idx];
         const type_root = switch (module_env.store.getExpr(expr_idx)) {
             .e_lookup_local => |lookup| ModuleEnv.varFrom(lookup.pattern_idx),
@@ -7193,10 +7222,10 @@ pub const Pass = struct {
             unreachable;
         }
 
-        if (thread.iteration_expr_monotypes) |iteration_map| {
+        if (thread.iterationExprMonotypes()) |iteration_map| {
             try iteration_map.put(self.allocator, key, resolved);
         } else {
-            if (thread.expr_monotype_recording == .direct_context_only) {
+            if (thread.isCompletion()) {
                 try result.context_mono.context_expr_monotypes.put(self.allocator, key, resolved);
             } else {
                 try self.mergeTrackedContextExprMonotype(result, key, resolved);
@@ -7227,7 +7256,7 @@ pub const Pass = struct {
         resolved: ResolvedMonotype,
         thread: SemanticThread,
     ) Allocator.Error!void {
-        if (thread.iteration_pattern_monotypes) |iteration_map| {
+        if (thread.iterationPatternMonotypes()) |iteration_map| {
             try iteration_map.put(self.allocator, key, resolved);
             return;
         }
@@ -7607,7 +7636,7 @@ pub const Pass = struct {
             unreachable;
         };
         const callable_inst_id = blk: {
-            if (thread.bindings == null) {
+            if (thread.bindings() == null) {
                 const fn_monotype = try self.resolveTypeVarMonotypeResolved(result, module_idx, resolved_target.fn_var);
                 if (!fn_monotype.isNone()) {
                     break :blk try self.ensureCallableInstUnscanned(result, thread.requireSourceContext(), template_id, fn_monotype.idx, fn_monotype.module_idx);
@@ -7637,7 +7666,7 @@ pub const Pass = struct {
         expr: CIR.Expr,
         callable_inst_id: CallableInstId,
     ) Allocator.Error!void {
-        if (thread.expr_monotype_recording == .tracked) {
+        if (thread.isTracked()) {
             const dispatch_target = self.dispatchTargetForCallableInst(result, callable_inst_id) orelse {
                 if (std.debug.runtime_safety) {
                     std.debug.panic(
@@ -7709,7 +7738,7 @@ pub const Pass = struct {
         dispatch_target: DispatchExprTarget,
         thread: SemanticThread,
     ) Allocator.Error!void {
-        if (thread.expr_monotype_recording == .direct_context_only) return;
+        if (thread.isCompletion()) return;
         try self.putTracked(
             .context_dispatch_targets,
             &result.context_mono.resolved_dispatch_targets,
@@ -7878,7 +7907,7 @@ pub const Pass = struct {
 
         var merged_bindings = std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype).init(self.allocator);
         defer merged_bindings.deinit();
-        if (thread.bindings) |bindings| {
+        if (thread.bindings()) |bindings| {
             var it = bindings.iterator();
             while (it.next()) |entry| {
                 try merged_bindings.put(entry.key_ptr.*, entry.value_ptr.*);
@@ -8479,7 +8508,7 @@ pub const Pass = struct {
         } else null;
 
         const callable_inst_id = if (existing_callable_inst_id) |callable_inst_id| blk: {
-            if (thread.expr_monotype_recording == .tracked) {
+            if (thread.isTracked()) {
                 try self.scanCallableInst(result, callable_inst_id);
             }
             break :blk callable_inst_id;
@@ -8497,7 +8526,7 @@ pub const Pass = struct {
             )) {
                 return;
             }
-            break :blk if (thread.expr_monotype_recording == .tracked)
+            break :blk if (thread.isTracked())
                 try self.ensureCallableInst(result, thread.requireSourceContext(), template_id, desired_fn_monotype.idx, desired_fn_monotype.module_idx)
             else
                 try self.ensureCallableInstUnscanned(result, thread.requireSourceContext(), template_id, desired_fn_monotype.idx, desired_fn_monotype.module_idx);
@@ -9561,16 +9590,13 @@ pub const Pass = struct {
         store_types: *const types.Store,
         bindings: *std.AutoHashMap(types.Var, Monotype.Idx),
     ) Allocator.Error!void {
-        const type_scope = self.type_scope orelse return;
-        const type_scope_module_idx = self.type_scope_module_idx orelse return;
-        const caller_module_idx = self.type_scope_caller_module_idx orelse return;
-
-        if (module_idx != type_scope_module_idx) return;
+        const type_scope_context = self.default_type_scope orelse return;
+        if (module_idx != type_scope_context.module_idx) return;
 
         const common_idents = ModuleEnv.CommonIdents.find(&self.all_module_envs[module_idx].common);
-        const caller_types = &self.all_module_envs[caller_module_idx].types;
+        const caller_types = &self.all_module_envs[type_scope_context.caller_module_idx].types;
 
-        for (type_scope.scopes.items) |*scope| {
+        for (type_scope_context.scope.scopes.items) |*scope| {
             var it = scope.iterator();
             while (it.next()) |entry| {
                 const platform_var = entry.key_ptr.*;
@@ -9580,7 +9606,7 @@ pub const Pass = struct {
                 const normalized_mono = if (caller_module_idx == module_idx)
                     caller_mono
                 else
-                    try self.remapMonotypeBetweenModules(result, caller_mono, caller_module_idx, module_idx);
+                    try self.remapMonotypeBetweenModules(result, caller_mono, type_scope_context.caller_module_idx, module_idx);
                 const type_scope_key: BoundTypeVarKey = .{
                     .module_idx = module_idx,
                     .type_var = platform_var,
@@ -9629,11 +9655,8 @@ pub const Pass = struct {
         resolved: types.store.ResolvedVarDesc,
         bindings: *std.AutoHashMap(types.Var, Monotype.Idx),
     ) Allocator.Error!void {
-        const type_scope = self.type_scope orelse return;
-        const type_scope_module_idx = self.type_scope_module_idx orelse return;
-        const caller_module_idx = self.type_scope_caller_module_idx orelse return;
-
-        if (module_idx != type_scope_module_idx) return;
+        const type_scope_context = self.default_type_scope orelse return;
+        if (module_idx != type_scope_context.module_idx) return;
         if (bindings.contains(resolved.var_)) return;
 
         const current_name = switch (resolved.desc.content) {
@@ -9643,9 +9666,9 @@ pub const Pass = struct {
         };
 
         const common_idents = ModuleEnv.CommonIdents.find(&self.all_module_envs[module_idx].common);
-        const caller_types = &self.all_module_envs[caller_module_idx].types;
+        const caller_types = &self.all_module_envs[type_scope_context.caller_module_idx].types;
 
-        for (type_scope.scopes.items) |*scope| {
+        for (type_scope_context.scope.scopes.items) |*scope| {
             var it = scope.iterator();
             while (it.next()) |entry| {
                 const platform_resolved = store_types.resolveVar(entry.key_ptr.*);
@@ -11232,7 +11255,7 @@ pub const Pass = struct {
         defer iteration_pattern_monotypes.deinit(self.allocator);
 
         try self.seedBindingsForCallableInst(result, callable_inst_id, &bindings);
-        const thread = (SemanticThread{ .type_scope = self.default_type_scope })
+        const thread = SemanticThread.trackedThread()
             .withSourceContext(callableInstSourceContext(callable_inst_id))
             .withBindings(&bindings)
             .withIterationMonotypes(&iteration_expr_monotypes, &iteration_pattern_monotypes);
@@ -11362,7 +11385,7 @@ pub const Pass = struct {
             else => unreachable,
         }
 
-        if (thread.expr_monotype_recording == .tracked) {
+        if (thread.isTracked()) {
             try self.completed_callable_scans.put(self.allocator, callable_inst_key, {});
         }
     }
@@ -12767,7 +12790,7 @@ pub const Pass = struct {
             return try solvedCallableValueMonotype(self, result, callable_value);
         }
 
-        if (thread.bindings != null) {
+        if (thread.bindings() != null) {
             const module_env = self.all_module_envs[module_idx];
             switch (module_env.store.getExpr(expr_idx)) {
                 .e_lookup_local => |lookup| {
@@ -12913,7 +12936,7 @@ pub const Pass = struct {
         module_idx: u32,
         var_: types.Var,
     ) Allocator.Error!ResolvedMonotype {
-        if (thread.bindings) |bindings| {
+        if (thread.bindings()) |bindings| {
             const mono = try self.resolveTypeVarMonotypeWithBindings(
                 result,
                 module_idx,
@@ -12934,7 +12957,7 @@ pub const Pass = struct {
         module_idx: u32,
         var_: types.Var,
     ) Allocator.Error!ResolvedMonotype {
-        const bindings = thread.bindings orelse {
+        const bindings = thread.bindings() orelse {
             const store_types = &self.all_module_envs[module_idx].types;
             var seen: std.AutoHashMapUnmanaged(types.Var, void) = .empty;
             defer seen.deinit(self.allocator);
@@ -13014,11 +13037,8 @@ pub const Pass = struct {
     ) Allocator.Error!?ResolvedMonotype {
         if (bindings.get(boundTypeVarKey(module_idx, store_types, var_))) |binding| return binding;
 
-        const type_scope = self.type_scope orelse return null;
-        const type_scope_module_idx = self.type_scope_module_idx orelse return null;
-        const caller_module_idx = self.type_scope_caller_module_idx orelse return null;
-
-        if (module_idx != type_scope_module_idx) return null;
+        const type_scope_context = self.default_type_scope orelse return null;
+        if (module_idx != type_scope_context.module_idx) return null;
 
         const resolved = store_types.resolveVar(var_);
         const current_name = switch (resolved.desc.content) {
@@ -13027,9 +13047,9 @@ pub const Pass = struct {
             else => null,
         } orelse return null;
 
-        const caller_types = &self.all_module_envs[caller_module_idx].types;
+        const caller_types = &self.all_module_envs[type_scope_context.caller_module_idx].types;
 
-        for (type_scope.scopes.items) |*scope| {
+        for (type_scope_context.scope.scopes.items) |*scope| {
             var it = scope.iterator();
             while (it.next()) |entry| {
                 const platform_resolved = store_types.resolveVar(entry.key_ptr.*);
