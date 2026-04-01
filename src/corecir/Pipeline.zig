@@ -810,34 +810,34 @@ pub const Pass = struct {
         };
     }
 
-    const CallableUnionBuilder = struct {
-        alternatives: std.ArrayList(CallableInstId),
+    const CallableVariantBuilder = struct {
+        variants: std.ArrayList(CallableInstId),
 
-        fn init() CallableUnionBuilder {
-            return .{ .alternatives = .empty };
+        fn init() CallableVariantBuilder {
+            return .{ .variants = .empty };
         }
 
-        fn deinit(self: *CallableUnionBuilder, allocator: Allocator) void {
-            self.alternatives.deinit(allocator);
+        fn deinit(self: *CallableVariantBuilder, allocator: Allocator) void {
+            self.variants.deinit(allocator);
         }
 
-        fn isEmpty(self: *const CallableUnionBuilder) bool {
-            return self.alternatives.items.len == 0;
+        fn isEmpty(self: *const CallableVariantBuilder) bool {
+            return self.variants.items.len == 0;
         }
 
         fn includeCallableInst(
-            self: *CallableUnionBuilder,
+            self: *CallableVariantBuilder,
             pass: *Pass,
             callable_inst_id: CallableInstId,
         ) Allocator.Error!void {
-            for (self.alternatives.items) |existing_callable_inst_id| {
+            for (self.variants.items) |existing_callable_inst_id| {
                 if (existing_callable_inst_id == callable_inst_id) return;
             }
-            try self.alternatives.append(pass.allocator, callable_inst_id);
+            try self.variants.append(pass.allocator, callable_inst_id);
         }
 
         fn includeCallableValue(
-            self: *CallableUnionBuilder,
+            self: *CallableVariantBuilder,
             pass: *Pass,
             result: *const Result,
             callable_value: CallableValue,
@@ -848,7 +848,7 @@ pub const Pass = struct {
         }
 
         fn includeCallSite(
-            self: *CallableUnionBuilder,
+            self: *CallableVariantBuilder,
             pass: *Pass,
             result: *const Result,
             call_site: CallSite,
@@ -859,39 +859,39 @@ pub const Pass = struct {
         }
 
         fn finishValue(
-            self: *CallableUnionBuilder,
+            self: *CallableVariantBuilder,
             pass: *Pass,
             result: *Result,
         ) Allocator.Error!?CallableValue {
-            if (self.alternatives.items.len == 0) return null;
-            std.mem.sortUnstable(CallableInstId, self.alternatives.items, {}, struct {
+            if (self.variants.items.len == 0) return null;
+            std.mem.sortUnstable(CallableInstId, self.variants.items, {}, struct {
                 fn lessThan(_: void, lhs: CallableInstId, rhs: CallableInstId) bool {
                     return @intFromEnum(lhs) < @intFromEnum(rhs);
                 }
             }.lessThan);
-            try pass.ensureRecordedCallableInstsScanned(result, self.alternatives.items);
-            if (self.alternatives.items.len == 1) {
-                return .{ .direct = self.alternatives.items[0] };
+            try pass.ensureRecordedCallableInstsScanned(result, self.variants.items);
+            if (self.variants.items.len == 1) {
+                return .{ .direct = self.variants.items[0] };
             }
-            return .{ .packed_fn = try pass.ensurePackedFnForVariants(result, self.alternatives.items) };
+            return .{ .packed_fn = try pass.ensurePackedFnForVariants(result, self.variants.items) };
         }
 
         fn finishCallSite(
-            self: *CallableUnionBuilder,
+            self: *CallableVariantBuilder,
             pass: *Pass,
             result: *Result,
         ) Allocator.Error!?CallSite {
-            if (self.alternatives.items.len == 0) return null;
-            std.mem.sortUnstable(CallableInstId, self.alternatives.items, {}, struct {
+            if (self.variants.items.len == 0) return null;
+            std.mem.sortUnstable(CallableInstId, self.variants.items, {}, struct {
                 fn lessThan(_: void, lhs: CallableInstId, rhs: CallableInstId) bool {
                     return @intFromEnum(lhs) < @intFromEnum(rhs);
                 }
             }.lessThan);
-            try pass.ensureRecordedCallableInstsScanned(result, self.alternatives.items);
-            if (self.alternatives.items.len == 1) {
-                return .{ .direct = self.alternatives.items[0] };
+            try pass.ensureRecordedCallableInstsScanned(result, self.variants.items);
+            if (self.variants.items.len == 1) {
+                return .{ .direct = self.variants.items[0] };
             }
-            return .{ .indirect_call = try pass.ensureIndirectCallForVariants(result, self.alternatives.items) };
+            return .{ .indirect_call = try pass.ensureIndirectCallForVariants(result, self.variants.items) };
         }
     };
 
@@ -2755,15 +2755,15 @@ pub const Pass = struct {
         } else {
             var visiting: std.AutoHashMapUnmanaged(ContextExprVisitKey, void) = .empty;
             defer visiting.deinit(self.allocator);
-            var union_builder = CallableUnionBuilder.init();
-            defer union_builder.deinit(self.allocator);
+            var variant_builder = CallableVariantBuilder.init();
+            defer variant_builder.deinit(self.allocator);
             try self.includeExprCallableValue(
                 result,
                 thread.requireSourceContext(),
                 module_idx,
                 expr_idx,
                 &visiting,
-                &union_builder,
+                &variant_builder,
             );
         }
 
@@ -4544,17 +4544,17 @@ pub const Pass = struct {
             if (all_satisfy) {
                 var visiting: std.AutoHashMapUnmanaged(ContextExprVisitKey, void) = .empty;
                 defer visiting.deinit(self.allocator);
-                var union_builder = CallableUnionBuilder.init();
-                defer union_builder.deinit(self.allocator);
-                var call_union = CallableUnionBuilder.init();
-                defer call_union.deinit(self.allocator);
-                try call_union.includeCallableValue(self, result, callable_value);
+                var variant_builder = CallableVariantBuilder.init();
+                defer variant_builder.deinit(self.allocator);
+                var call_variant_builder = CallableVariantBuilder.init();
+                defer call_variant_builder.deinit(self.allocator);
+                try call_variant_builder.includeCallableValue(self, result, callable_value);
                 try self.writeExprCallSite(
                     result,
                     thread.requireSourceContext(),
                     module_idx,
                     call_expr_idx,
-                    (try call_union.finishCallSite(self, result)).?,
+                    (try call_variant_builder.finishCallSite(self, result)).?,
                 );
                 for (callableAlternativesFromValue(result, callable_value)) |callable_inst_id| {
                     try self.recordCallResultCallableValueFromCallee(
@@ -4564,10 +4564,10 @@ pub const Pass = struct {
                         call_expr_idx,
                         callable_inst_id,
                         &visiting,
-                        &union_builder,
+                        &variant_builder,
                     );
                 }
-                if (try union_builder.finishValue(self, result)) |call_result_value| {
+                if (try variant_builder.finishValue(self, result)) |call_result_value| {
                     try self.setExprCallableValue(
                         result,
                         thread.requireSourceContext(),
@@ -4798,8 +4798,8 @@ pub const Pass = struct {
         );
         var visiting: std.AutoHashMapUnmanaged(ContextExprVisitKey, void) = .empty;
         defer visiting.deinit(self.allocator);
-        var union_builder = CallableUnionBuilder.init();
-        defer union_builder.deinit(self.allocator);
+        var variant_builder = CallableVariantBuilder.init();
+        defer variant_builder.deinit(self.allocator);
         try self.recordCallResultCallableValueFromCallee(
             result,
             source_context,
@@ -4807,9 +4807,9 @@ pub const Pass = struct {
             call_expr_idx,
             callable_inst_id,
             &visiting,
-            &union_builder,
+            &variant_builder,
         );
-        if (try union_builder.finishValue(self, result)) |call_result_value| {
+        if (try variant_builder.finishValue(self, result)) |call_result_value| {
             try self.setExprCallableValue(
                 result,
                 source_context,
@@ -6075,11 +6075,11 @@ pub const Pass = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
         visiting: *std.AutoHashMapUnmanaged(ContextExprVisitKey, void),
-        union_builder: *CallableUnionBuilder,
+        variant_builder: *CallableVariantBuilder,
     ) Allocator.Error!void {
         try self.realizeStructuredExprCallableSemantics(result, source_context, module_idx, expr_idx, visiting);
         if (self.getValueExprCallableValueForSourceContext(result, source_context, module_idx, expr_idx)) |callable_value| {
-            try union_builder.includeCallableValue(self, result, callable_value);
+            try variant_builder.includeCallableValue(self, result, callable_value);
         }
     }
 
@@ -6135,7 +6135,7 @@ pub const Pass = struct {
         call_expr_idx: CIR.Expr.Idx,
         callee_callable_inst_id: CallableInstId,
         visiting: *std.AutoHashMapUnmanaged(ContextExprVisitKey, void),
-        union_builder: *CallableUnionBuilder,
+        variant_builder: *CallableVariantBuilder,
     ) Allocator.Error!void {
         const callee_callable_inst = result.getCallableInst(callee_callable_inst_id);
         const callee_fn_mono = switch (result.context_mono.monotype_store.getMonotype(callee_callable_inst.fn_monotype)) {
@@ -6159,7 +6159,7 @@ pub const Pass = struct {
             callable_def.body_expr.module_idx,
             callable_def.body_expr.expr_idx,
             visiting,
-            union_builder,
+            variant_builder,
         );
     }
 
@@ -6207,20 +6207,20 @@ pub const Pass = struct {
             }
         }
 
-        var union_builder = CallableUnionBuilder.init();
-        defer union_builder.deinit(self.allocator);
+        var variant_builder = CallableVariantBuilder.init();
+        defer variant_builder.deinit(self.allocator);
         switch (expr) {
             .e_if => |if_expr| {
                 for (module_env.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
                     const branch = module_env.store.getIfBranch(branch_idx);
-                    try self.includeExprCallableValue(result, source_context, module_idx, branch.body, visiting, &union_builder);
+                    try self.includeExprCallableValue(result, source_context, module_idx, branch.body, visiting, &variant_builder);
                 }
-                try self.includeExprCallableValue(result, source_context, module_idx, if_expr.final_else, visiting, &union_builder);
+                try self.includeExprCallableValue(result, source_context, module_idx, if_expr.final_else, visiting, &variant_builder);
             },
             .e_match => |match_expr| {
                 for (module_env.store.sliceMatchBranches(match_expr.branches)) |branch_idx| {
                     const branch = module_env.store.getMatchBranch(branch_idx);
-                    try self.includeExprCallableValue(result, source_context, module_idx, branch.value, visiting, &union_builder);
+                    try self.includeExprCallableValue(result, source_context, module_idx, branch.value, visiting, &variant_builder);
                 }
             },
             .e_call => |call_expr| {
@@ -6266,7 +6266,7 @@ pub const Pass = struct {
                         expr_idx,
                         callee_callable_inst_id,
                         visiting,
-                        &union_builder,
+                        &variant_builder,
                     );
                 }
                 break;
@@ -6297,7 +6297,7 @@ pub const Pass = struct {
             else => {},
         }
 
-        if (try union_builder.finishValue(self, result)) |callable_value| {
+        if (try variant_builder.finishValue(self, result)) |callable_value| {
             try self.setExprCallableValue(
                 result,
                 source_context,
