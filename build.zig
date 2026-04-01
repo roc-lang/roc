@@ -2901,6 +2901,7 @@ pub fn build(b: *std.Build) void {
         if (std.mem.eql(u8, module_test.test_step.name, "backend")) {
             module_test.test_step.step.dependOn(wasm_host_step);
             module_test.test_step.root_module.addImport("wasm32_builtins", wasm32_builtins_module);
+            module_test.test_step.root_module.addImport("bytebox", bytebox.module("bytebox"));
         }
 
         if (std.mem.eql(u8, module_test.test_step.name, "repl")) {

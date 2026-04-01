@@ -5159,7 +5159,8 @@ test "preload + merge + encode roundtrip with real builtins" {
     }
 
     // Merge builtins into app module
-    _ = try app_module.mergeModule(&builtins_module);
+    var merge_result = try app_module.mergeModule(&builtins_module);
+    merge_result.deinit();
 
     // Populate builtin symbols
     _ = try BuiltinSymbols.populate(&app_module);
