@@ -77,6 +77,7 @@ pub const CallableTemplate = struct {
 };
 
 pub const ExprSource = struct {
+    source_context: SourceContext,
     module_idx: u32,
     expr_idx: CIR.Expr.Idx,
 };

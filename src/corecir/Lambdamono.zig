@@ -23,6 +23,7 @@ pub const CallableInst = struct {
     defining_source_context: SourceContext,
     callable_def: CallableDefId,
     runtime_value: RuntimeValue,
+    callable_param_specs: CallableParamSpecSpan = .empty(),
 };
 
 pub const RuntimeValue = union(enum) {
@@ -109,6 +110,43 @@ pub const LookupResolution = union(enum) {
     def: Lambdasolved.ExternalDefSource,
 };
 
+pub const CallableParamProjection = union(enum) {
+    field: Monotype.Name,
+    tuple_elem: u32,
+};
+
+pub const CallableParamProjectionSpan = extern struct {
+    start: u32,
+    len: u16,
+
+    pub fn empty() CallableParamProjectionSpan {
+        return .{ .start = 0, .len = 0 };
+    }
+
+    pub fn isEmpty(self: CallableParamProjectionSpan) bool {
+        return self.len == 0;
+    }
+};
+
+pub const CallableParamSpecEntry = struct {
+    param_index: u16,
+    projections: CallableParamProjectionSpan = .empty(),
+    callable_value: Lambdasolved.SolvedCallableValue,
+};
+
+pub const CallableParamSpecSpan = extern struct {
+    start: u32,
+    len: u16,
+
+    pub fn empty() CallableParamSpecSpan {
+        return .{ .start = 0, .len = 0 };
+    }
+
+    pub fn isEmpty(self: CallableParamSpecSpan) bool {
+        return self.len == 0;
+    }
+};
+
 pub const CallableMemberSpan = extern struct {
     start: u32,
     len: u16,
@@ -188,27 +226,8 @@ pub const CallableDef = struct {
     runtime_expr: ExprRef,
     body_expr: ExprRef,
     fn_monotype: ContextMono.ResolvedMonotype,
-    param_bindings: CallableParamBindingSpan = .empty(),
     captures: CaptureFieldSpan = .empty(),
     source_region: Region,
-};
-
-pub const CallableParamBinding = struct {
-    pattern_idx: CIR.Pattern.Idx,
-    callable_value: CallableValue,
-};
-
-pub const CallableParamBindingSpan = extern struct {
-    start: u32,
-    len: u16,
-
-    pub fn empty() CallableParamBindingSpan {
-        return .{ .start = 0, .len = 0 };
-    }
-
-    pub fn isEmpty(self: CallableParamBindingSpan) bool {
-        return self.len == 0;
-    }
 };
 
 pub const Expr = struct {
@@ -241,7 +260,9 @@ pub const Program = struct {
     direct_callable_member_group_ids_by_callable_inst: std.AutoHashMapUnmanaged(CallableInstId, CallableMemberGroupId),
     packed_fn_ids_by_member_group: std.AutoHashMapUnmanaged(CallableMemberGroupId, PackedFnId),
     indirect_call_ids_by_member_group: std.AutoHashMapUnmanaged(CallableMemberGroupId, IndirectCallId),
-    callable_param_bindings: std.ArrayListUnmanaged(CallableParamBinding),
+    callable_param_spec_entries: std.ArrayListUnmanaged(CallableParamSpecEntry),
+    callable_param_projection_entries: std.ArrayListUnmanaged(CallableParamProjection),
+    pattern_callable_values: std.AutoHashMapUnmanaged(ContextPatternKey, CallableValue),
     exprs: std.ArrayListUnmanaged(Expr),
     expr_ids_by_key: std.AutoHashMapUnmanaged(ContextExprKey, ExprId),
     expr_child_entries: std.ArrayListUnmanaged(ExprId),
@@ -263,7 +284,9 @@ pub const Program = struct {
             .direct_callable_member_group_ids_by_callable_inst = .empty,
             .packed_fn_ids_by_member_group = .empty,
             .indirect_call_ids_by_member_group = .empty,
-            .callable_param_bindings = .empty,
+            .callable_param_spec_entries = .empty,
+            .callable_param_projection_entries = .empty,
+            .pattern_callable_values = .empty,
             .exprs = .empty,
             .expr_ids_by_key = .empty,
             .expr_child_entries = .empty,
@@ -286,7 +309,9 @@ pub const Program = struct {
         self.direct_callable_member_group_ids_by_callable_inst.deinit(allocator);
         self.packed_fn_ids_by_member_group.deinit(allocator);
         self.indirect_call_ids_by_member_group.deinit(allocator);
-        self.callable_param_bindings.deinit(allocator);
+        self.callable_param_spec_entries.deinit(allocator);
+        self.callable_param_projection_entries.deinit(allocator);
+        self.pattern_callable_values.deinit(allocator);
         self.exprs.deinit(allocator);
         self.expr_ids_by_key.deinit(allocator);
         self.expr_child_entries.deinit(allocator);
@@ -317,24 +342,31 @@ pub const Program = struct {
         return self.getCallableMemberGroupMembers(member_group_id);
     }
 
-    pub fn getCallableParamBindings(
+    pub fn getCallableParamSpecEntries(
         self: *const Program,
-        span: CallableParamBindingSpan,
-    ) []const CallableParamBinding {
+        span: CallableParamSpecSpan,
+    ) []const CallableParamSpecEntry {
         if (span.len == 0) return &.{};
-        return self.callable_param_bindings.items[span.start..][0..span.len];
+        return self.callable_param_spec_entries.items[span.start..][0..span.len];
     }
 
-    pub fn getCallableParamBindingValue(
+    pub fn getCallableParamProjectionEntries(
         self: *const Program,
-        callable_def_id: CallableDefId,
+        span: CallableParamProjectionSpan,
+    ) []const CallableParamProjection {
+        if (span.len == 0) return &.{};
+        return self.callable_param_projection_entries.items[span.start..][0..span.len];
+    }
+
+    pub fn getPatternCallableValue(
+        self: *const Program,
+        source_context: SourceContext,
+        module_idx: u32,
         pattern_idx: CIR.Pattern.Idx,
     ) ?CallableValue {
-        const callable_def = getCallableDef(self, callable_def_id);
-        for (self.getCallableParamBindings(callable_def.param_bindings)) |binding| {
-            if (binding.pattern_idx == pattern_idx) return binding.callable_value;
-        }
-        return null;
+        return self.pattern_callable_values.get(
+            ContextMono.Result.contextPatternKey(source_context, module_idx, pattern_idx),
+        );
     }
 
     pub fn getExpr(self: *const Program, expr_id: ExprId) *const Expr {

@@ -754,44 +754,19 @@ fn lookupProgramExprMonotype(session: LowerSession, expr_idx: CIR.Expr.Idx) ?Pip
 }
 
 fn lookupProgramPatternMonotype(session: LowerSession, pattern_idx: CIR.Pattern.Idx) ?Pipeline.ResolvedMonotype {
-    if (session.lower.callable_pipeline.getContextPatternMonotype(
+    return session.lower.callable_pipeline.getContextPatternMonotype(
         session.source_context,
         session.lower.current_module_idx,
         pattern_idx,
-    )) |resolved| {
-        return resolved;
-    }
-
-    if (lookupProgramPatternCallableValue(session, pattern_idx)) |callable_value| {
-        return session.lower.callable_pipeline.getCallableValueMonotype(callable_value);
-    }
-
-    if (session.lower.callable_pipeline.getPatternSourceExpr(session.lower.current_module_idx, pattern_idx)) |source| {
-        return session.lower.callable_pipeline.getExprMonotype(
-            session.source_context,
-            source.module_idx,
-            source.expr_idx,
-        );
-    }
-
-    return null;
+    );
 }
 
 fn lookupProgramPatternCallableValue(session: LowerSession, pattern_idx: CIR.Pattern.Idx) ?Pipeline.CallableValue {
-    switch (session.source_context) {
-        .callable_inst => |callable_inst_context| {
-            const callable_inst_id: Pipeline.CallableInstId = @enumFromInt(@intFromEnum(callable_inst_context));
-            return session.lower.callable_pipeline.getCallableParamBindingValue(callable_inst_id, pattern_idx);
-        },
-        .root_expr, .provenance_expr, .template_expr => {
-            const source = session.lower.callable_pipeline.getPatternSourceExpr(session.lower.current_module_idx, pattern_idx) orelse return null;
-            return session.lower.callable_pipeline.getExprCallableValue(
-                session.source_context,
-                source.module_idx,
-                source.expr_idx,
-            );
-        },
-    }
+    return session.lower.callable_pipeline.getPatternCallableValue(
+        session.source_context,
+        session.lower.current_module_idx,
+        pattern_idx,
+    );
 }
 
 fn lookupProgramExprCallableValue(session: LowerSession, expr_idx: CIR.Expr.Idx) ?Pipeline.CallableValue {
