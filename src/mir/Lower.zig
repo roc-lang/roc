@@ -59,7 +59,7 @@ const PlannedCaptureLocal = struct {
     pattern_idx: CIR.Pattern.Idx,
     local: MIR.LocalId,
     local_monotype: Monotype.Idx,
-    exact_callable_inst_id: ?Pipeline.CallableInstId,
+    callable_value: ?Pipeline.CallableValue,
     storage: Pipeline.CaptureStorage,
 };
 
@@ -2529,16 +2529,19 @@ fn planClosureEntryCaptureLocals(
 
         switch (capture_field.callable_binding) {
             .non_callable => {},
-            .direct => |exact_callable_inst_id| try self.bindExactCallableLocal(capture_local, exact_callable_inst_id),
+            .callable => |callable_value| switch (callable_value) {
+                .direct => |callable_inst_id| try self.bindExactCallableLocal(capture_local, callable_inst_id),
+                .packed_fn => self.clearExactCallableLocal(capture_local),
+            },
         }
 
         const planned_capture = PlannedCaptureLocal{
             .pattern_idx = capture_field.pattern_idx,
             .local = capture_local,
             .local_monotype = capture_monotype,
-            .exact_callable_inst_id = switch (capture_field.callable_binding) {
+            .callable_value = switch (capture_field.callable_binding) {
                 .non_callable => null,
-                .direct => |callable_inst_id| callable_inst_id,
+                .callable => |callable_value| callable_value,
             },
             .storage = capture_field.storage,
         };
@@ -2959,7 +2962,10 @@ fn appendCaptureMaterialization(
             const local = try self.freshSyntheticLocal(capture_monotype, false);
             switch (capture_field.callable_binding) {
                 .non_callable => {},
-                .direct => |capture_callable_inst_id| try self.bindExactCallableLocal(local, capture_callable_inst_id),
+                .callable => |callable_value| switch (callable_value) {
+                    .direct => |capture_callable_inst_id| try self.bindExactCallableLocal(local, capture_callable_inst_id),
+                    .packed_fn => self.clearExactCallableLocal(local),
+                },
             }
             try out.append(self.allocator, .{ .expr = .{
                 .local = local,
@@ -3110,10 +3116,13 @@ fn lowerReservedTrivialClosureLambda(
 
     for (planned_captures.recursive.items) |capture| {
         try capture_pattern_by_local.put(@intFromEnum(capture.local), capture.pattern_idx);
-        const member_callable_inst_id = capture.exact_callable_inst_id orelse std.debug.panic(
+        const member_callable_inst_id = switch (capture.callable_value orelse std.debug.panic(
             "statement-only MIR invariant violated: recursive capture pattern {d} for callable_inst={d} lacked exact callable metadata",
             .{ @intFromEnum(capture.pattern_idx), @intFromEnum(callable_inst_id) },
-        );
+        )) {
+            .direct => |direct_callable_inst_id| direct_callable_inst_id,
+            .packed_fn => unreachable,
+        };
         try recursive_captures.append(self.allocator, .{
             .local = capture.local,
             .callable_inst_id = member_callable_inst_id,
@@ -3122,10 +3131,13 @@ fn lowerReservedTrivialClosureLambda(
 
     for (planned_captures.callable_only.items) |capture| {
         try capture_pattern_by_local.put(@intFromEnum(capture.local), capture.pattern_idx);
-        const capture_callable_inst_id = capture.exact_callable_inst_id orelse std.debug.panic(
+        const capture_callable_inst_id = switch (capture.callable_value orelse std.debug.panic(
             "statement-only MIR invariant violated: callable-only capture pattern {d} for callable_inst={d} lacked exact callable metadata",
             .{ @intFromEnum(capture.pattern_idx), @intFromEnum(callable_inst_id) },
-        );
+        )) {
+            .direct => |direct_callable_inst_id| direct_callable_inst_id,
+            .packed_fn => unreachable,
+        };
         try callable_only_captures.append(self.allocator, .{
             .local = capture.local,
             .callable_inst_id = capture_callable_inst_id,
@@ -3834,7 +3846,7 @@ fn lowerResolvedDispatchTargetCallInto(
     try actual_arg_exprs.appendSlice(self.allocator, arg_exprs);
 
     _ = try self.dispatchTargetEffectful(dispatch_target);
-    const exact_dispatch_callable_inst = switch (lookupProgramExprCallSite(session, result_expr_idx) orelse std.debug.panic(
+    const call_site = lookupProgramExprCallSite(session, result_expr_idx) orelse std.debug.panic(
         "statement-only MIR invariant violated: resolved dispatch expr {d} target module={d} def={d} had no call-site semantics in context={d} root_expr={d}",
         .{
             @intFromEnum(result_expr_idx),
@@ -3843,54 +3855,137 @@ fn lowerResolvedDispatchTargetCallInto(
             session.callableInstRawForDebug(),
             session.rootExprRawForDebug(),
         },
-    )) {
-        .direct => |callable_inst_id| callable_inst_id,
-        .indirect_call => |indirect_call_id| std.debug.panic(
-            "statement-only MIR invariant violated: resolved dispatch expr {d} expected direct callable but specialized to indirect call {d}",
-            .{ @intFromEnum(result_expr_idx), @intFromEnum(indirect_call_id) },
-        ),
+    );
+    const target_env = self.all_module_envs[dispatch_target.module_idx];
+    const target_def = target_env.store.getDef(dispatch_target.def_idx);
+    const target_def_session = self.lowerSession(.{ .root_expr = .{
+        .module_idx = dispatch_target.module_idx,
+        .expr_idx = target_def.expr,
+    } });
+    const target_callable_value = lookupProgramExprCallableValue(target_def_session, target_def.expr);
+    const callee_runtime_mono = if (target_callable_value) |callable_value|
+        self.callable_pipeline.getCallableValueMonotype(callable_value)
+    else switch (call_site) {
+        .direct => |callable_inst_id| self.callable_pipeline.getCallableInstRuntimeMonotype(callable_inst_id),
+        .indirect_call => unreachable,
     };
-    const callee_runtime_mono = self.callable_pipeline.getCallableInstRuntimeMonotype(exact_dispatch_callable_inst);
     const callee_local = try self.freshSyntheticLocal(try self.importMonotypeFromStore(
         &self.callable_pipeline.context_mono.monotype_store,
         callee_runtime_mono.idx,
         callee_runtime_mono.module_idx,
         self.current_module_idx,
     ), false);
+    const target_symbol = try self.internExternalDefSymbol(
+        dispatch_target.module_idx,
+        @intCast(@intFromEnum(dispatch_target.def_idx)),
+    );
 
-    const top = self.scratch_local_ids.top();
-    defer self.scratch_local_ids.clearFrom(top);
+    const arg_locals = try self.allocator.alloc(MIR.LocalId, actual_arg_exprs.items.len);
+    defer self.allocator.free(arg_locals);
+    for (actual_arg_exprs.items, 0..) |arg_expr_idx, i| {
+        arg_locals[i] = try self.freshSyntheticLocal(try self.resolveMonotype(session, arg_expr_idx), false);
+    }
+    const args = try self.store.addLocalSpan(self.allocator, arg_locals);
 
-    const call_stmt = try self.store.reserveCFStmt(self.allocator);
+    const callee_entry = switch (call_site) {
+        .direct => |exact_dispatch_callable_inst| blk: {
+            try self.bindCallResultExactCallableFromExpr(session, result_expr_idx, target);
+            const call_stmt = try self.store.reserveCFStmt(self.allocator);
+            const normalized = switch (target_callable_value orelse .{ .direct = exact_dispatch_callable_inst }) {
+                .direct => .{
+                    .entry = call_stmt,
+                    .callee_local = callee_local,
+                },
+                .packed_fn => |packed_fn_id| blk2: {
+                    const payload_resolved = self.callable_pipeline.getCallableInstRuntimeMonotype(exact_dispatch_callable_inst);
+                    const payload_mono = try self.importMonotypeFromStore(
+                        &self.callable_pipeline.context_mono.monotype_store,
+                        payload_resolved.idx,
+                        payload_resolved.module_idx,
+                        self.current_module_idx,
+                    );
+                    const payload_local = try self.freshSyntheticLocal(payload_mono, false);
+                    break :blk2 .{
+                        .entry = try self.lowerPackedCallablePayloadInto(
+                            packed_fn_id,
+                            exact_dispatch_callable_inst,
+                            callee_local,
+                            payload_local,
+                            call_stmt,
+                        ),
+                        .callee_local = payload_local,
+                    };
+                },
+            };
+            try self.store.finalizeCFStmt(call_stmt, .{ .assign_call = .{
+                .target = target,
+                .callee = normalized.callee_local,
+                .exact_lambda = try self.lowerResolvedCallableInstLambda(exact_dispatch_callable_inst),
+                .exact_requires_hidden_capture = self.callableInstRequiresHiddenCapture(exact_dispatch_callable_inst),
+                .args = args,
+                .next = next,
+            } });
+            break :blk try self.materializeTopLevelDefInto(
+                target_def_session,
+                dispatch_target.module_idx,
+                dispatch_target.def_idx,
+                target_symbol,
+                callee_local,
+                normalized.entry,
+                target_callable_value,
+            );
+        },
+        .indirect_call => |indirect_call_id| blk: {
+            const packed_fn_id = switch (target_callable_value orelse std.debug.panic(
+                "statement-only MIR invariant violated: resolved dispatch expr {d} target module={d} def={d} specialized to indirect call {d} without target callable value",
+                .{
+                    @intFromEnum(result_expr_idx),
+                    dispatch_target.module_idx,
+                    @intFromEnum(dispatch_target.def_idx),
+                    @intFromEnum(indirect_call_id),
+                },
+            )) {
+                .packed_fn => |packed| packed,
+                .direct => |callable_inst_id| std.debug.panic(
+                    "statement-only MIR invariant violated: resolved dispatch expr {d} target module={d} def={d} specialized to indirect call {d} but target def expr {d} remained direct callable {d}",
+                    .{
+                        @intFromEnum(result_expr_idx),
+                        dispatch_target.module_idx,
+                        @intFromEnum(dispatch_target.def_idx),
+                        @intFromEnum(indirect_call_id),
+                        @intFromEnum(target_def.expr),
+                        @intFromEnum(callable_inst_id),
+                    },
+                ),
+            };
+            const call_entry = try self.lowerIndirectCallInto(
+                session,
+                result_expr_idx,
+                packed_fn_id,
+                indirect_call_id,
+                callee_local,
+                args,
+                target,
+                next,
+            );
+            break :blk try self.materializeTopLevelDefInto(
+                target_def_session,
+                dispatch_target.module_idx,
+                dispatch_target.def_idx,
+                target_symbol,
+                callee_local,
+                call_entry,
+                target_callable_value,
+            );
+        },
+    };
 
-    var lowered_next = call_stmt;
+    var lowered_next = callee_entry;
     var i: usize = actual_arg_exprs.items.len;
     while (i > 0) {
         i -= 1;
-        const arg_expr_idx = actual_arg_exprs.items[i];
-        const arg_local = try self.freshSyntheticLocal(try self.resolveMonotype(session, arg_expr_idx), false);
-        try self.scratch_local_ids.append(arg_local);
-        lowered_next = try self.lowerCirExprInto(session, arg_expr_idx, arg_local, lowered_next);
+        lowered_next = try self.lowerCirExprInto(session, actual_arg_exprs.items[i], arg_locals[i], lowered_next);
     }
-
-    lowered_next = try self.lowerResolvedCallableInstValueInto(
-        exact_dispatch_callable_inst,
-        callee_local,
-        lowered_next,
-    );
-
-    try self.bindCallResultExactCallableFromExpr(session, result_expr_idx, target);
-
-    std.mem.reverse(MIR.LocalId, self.scratch_local_ids.items.items[top..]);
-    const args = try self.store.addLocalSpan(self.allocator, self.scratch_local_ids.items.items[top..]);
-    try self.store.finalizeCFStmt(call_stmt, .{ .assign_call = .{
-        .target = target,
-        .callee = callee_local,
-        .exact_lambda = try self.lowerResolvedCallableInstLambda(exact_dispatch_callable_inst),
-        .exact_requires_hidden_capture = self.callableInstRequiresHiddenCapture(exact_dispatch_callable_inst),
-        .args = args,
-        .next = next,
-    } });
     return lowered_next;
 }
 
@@ -7348,10 +7443,7 @@ fn lowerCirExprInto(
                 },
             )) {
                 .direct => |callable_inst_id| callable_inst_id,
-                .packed_fn => |packed_fn_id| std.debug.panic(
-                    "statement-only MIR invariant violated: lambda expr {d} specialized to packed callable {d}",
-                    .{ @intFromEnum(expr_idx), @intFromEnum(packed_fn_id) },
-                ),
+                .packed_fn => unreachable,
             };
             break :blk try self.lowerResolvedCallableInstValueInto(
                 resolved_callable_inst_id,
@@ -7369,10 +7461,7 @@ fn lowerCirExprInto(
                 },
             )) {
                 .direct => |resolved_callable_inst_id| resolved_callable_inst_id,
-                .packed_fn => |packed_fn_id| std.debug.panic(
-                    "statement-only MIR invariant violated: closure expr {d} specialized to packed callable {d}",
-                    .{ @intFromEnum(expr_idx), @intFromEnum(packed_fn_id) },
-                ),
+                .packed_fn => unreachable,
             };
             _ = closure;
             break :blk try self.lowerResolvedCallableInstValueInto(

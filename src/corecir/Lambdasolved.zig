@@ -88,9 +88,6 @@ pub const ContextPatternKey = cm.ContextPatternKey;
 
 pub const Result = struct {
     callable_templates: std.ArrayListUnmanaged(CallableTemplate),
-    expr_source_exprs: std.AutoHashMapUnmanaged(u64, ExprSource),
-    context_pattern_source_exprs: std.AutoHashMapUnmanaged(ContextPatternKey, ExprSource),
-    external_def_source_exprs: std.AutoHashMapUnmanaged(u64, ExprSource),
     local_callable_template_ids: std.AutoHashMapUnmanaged(u64, CallableTemplateId),
     external_callable_template_ids: std.AutoHashMapUnmanaged(u64, CallableTemplateId),
     expr_callable_template_ids: std.AutoHashMapUnmanaged(u64, CallableTemplateId),
@@ -99,9 +96,6 @@ pub const Result = struct {
         _ = allocator;
         return .{
             .callable_templates = .empty,
-            .expr_source_exprs = .empty,
-            .context_pattern_source_exprs = .empty,
-            .external_def_source_exprs = .empty,
             .local_callable_template_ids = .empty,
             .external_callable_template_ids = .empty,
             .expr_callable_template_ids = .empty,
@@ -110,9 +104,6 @@ pub const Result = struct {
 
     pub fn deinit(self: *Result, allocator: Allocator) void {
         self.callable_templates.deinit(allocator);
-        self.expr_source_exprs.deinit(allocator);
-        self.context_pattern_source_exprs.deinit(allocator);
-        self.external_def_source_exprs.deinit(allocator);
         self.local_callable_template_ids.deinit(allocator);
         self.external_callable_template_ids.deinit(allocator);
         self.expr_callable_template_ids.deinit(allocator);
@@ -132,35 +123,6 @@ pub const Result = struct {
 
     pub fn getExprCallableTemplate(self: *const Result, module_idx: u32, expr_idx: CIR.Expr.Idx) ?CallableTemplateId {
         return self.expr_callable_template_ids.get(packExprSourceKey(module_idx, expr_idx));
-    }
-
-    pub fn getContextPatternSourceExpr(
-        self: *const Result,
-        source_context: SourceContext,
-        module_idx: u32,
-        pattern_idx: CIR.Pattern.Idx,
-    ) ?ExprSource {
-        return self.context_pattern_source_exprs.get(.{
-            .source_context = source_context,
-            .module_idx = module_idx,
-            .pattern_idx = pattern_idx,
-        });
-    }
-
-    pub fn getExprSourceExpr(
-        self: *const Result,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-    ) ?ExprSource {
-        return self.expr_source_exprs.get(packExprSourceKey(module_idx, expr_idx));
-    }
-
-    pub fn getExternalDefSourceExpr(
-        self: *const Result,
-        module_idx: u32,
-        def_node_idx: u16,
-    ) ?ExprSource {
-        return self.external_def_source_exprs.get(packExternalDefSourceKey(module_idx, def_node_idx));
     }
 
 };

@@ -127,6 +127,11 @@ pub const ExprLookupSemantics = union(enum) {
     lookup: LookupResolution,
 };
 
+pub const ExprValueOrigin = union(enum) {
+    self_value,
+    expr: ExprRef,
+};
+
 pub const ExprDispatchSemantics = union(enum) {
     not_dispatch,
     dispatch: ContextMono.DispatchExprTarget,
@@ -204,7 +209,7 @@ pub const CaptureStorage = union(enum) {
 
 pub const CaptureCallableBinding = union(enum) {
     non_callable,
-    direct: CallableInstId,
+    callable: CallableValue,
 };
 
 pub const CallableDefId = enum(u32) {
@@ -246,6 +251,7 @@ pub const Expr = struct {
     child_stmts: StmtIdSpan = .empty(),
     callable_semantics: ExprCallableSemantics,
     call_semantics: ExprCallSemantics,
+    value_origin: ExprValueOrigin,
     dispatch_semantics: ExprDispatchSemantics,
     lookup_semantics: ExprLookupSemantics,
 };
@@ -270,6 +276,7 @@ pub const Program = struct {
     callable_param_spec_entries: std.ArrayListUnmanaged(CallableParamSpecEntry),
     value_projection_entries: std.ArrayListUnmanaged(CallableParamProjection),
     pattern_callable_values: std.AutoHashMapUnmanaged(ContextPatternKey, CallableValue),
+    pattern_value_origins: std.AutoHashMapUnmanaged(ContextPatternKey, ExprRef),
     exprs: std.ArrayListUnmanaged(Expr),
     expr_ids_by_key: std.AutoHashMapUnmanaged(ContextExprKey, ExprId),
     expr_child_entries: std.ArrayListUnmanaged(ExprId),
@@ -294,6 +301,7 @@ pub const Program = struct {
             .callable_param_spec_entries = .empty,
             .value_projection_entries = .empty,
             .pattern_callable_values = .empty,
+            .pattern_value_origins = .empty,
             .exprs = .empty,
             .expr_ids_by_key = .empty,
             .expr_child_entries = .empty,
@@ -319,6 +327,7 @@ pub const Program = struct {
         self.callable_param_spec_entries.deinit(allocator);
         self.value_projection_entries.deinit(allocator);
         self.pattern_callable_values.deinit(allocator);
+        self.pattern_value_origins.deinit(allocator);
         self.exprs.deinit(allocator);
         self.expr_ids_by_key.deinit(allocator);
         self.expr_child_entries.deinit(allocator);
@@ -380,6 +389,17 @@ pub const Program = struct {
         pattern_idx: CIR.Pattern.Idx,
     ) ?CallableValue {
         return self.pattern_callable_values.get(
+            ContextMono.Result.contextPatternKey(source_context, module_idx, pattern_idx),
+        );
+    }
+
+    pub fn getPatternValueOrigin(
+        self: *const Program,
+        source_context: SourceContext,
+        module_idx: u32,
+        pattern_idx: CIR.Pattern.Idx,
+    ) ?ExprRef {
+        return self.pattern_value_origins.get(
             ContextMono.Result.contextPatternKey(source_context, module_idx, pattern_idx),
         );
     }
