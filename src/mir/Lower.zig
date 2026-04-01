@@ -2795,7 +2795,8 @@ fn lowerLambdaInto(
     session: LowerSession,
     module_env: *const ModuleEnv,
     expr_idx: CIR.Expr.Idx,
-    lambda: CIR.Expr.Lambda,
+    arg_patterns: []const CIR.Pattern.Idx,
+    body_expr_idx: CIR.Expr.Idx,
     fn_monotype: Monotype.Idx,
     reserved_lambda: ?MIR.LambdaId,
 ) Allocator.Error!MIR.LambdaId {
@@ -2811,7 +2812,7 @@ fn lowerLambdaInto(
         try self.lowered_callable_lambdas.put(cache_key, reserved);
     }
 
-    const ret_monotype = try self.resolveMonotype(session, lambda.body);
+    const ret_monotype = try self.resolveMonotype(session, body_expr_idx);
 
     const saved_scope = self.current_pattern_scope;
     const lambda_entry_scope = self.freshStatementPatternScope();
@@ -2829,8 +2830,8 @@ fn lowerLambdaInto(
     self.current_lambda_entry_bound_locals = &lambda_entry_bound_locals;
     defer self.current_lambda_entry_bound_locals = saved_lambda_entry_bound_locals;
 
-    const param_patterns = module_env.store.slicePatterns(lambda.args);
-    const params = try self.lowerLambdaParamLocals(module_env, lambda.args, fn_monotype);
+    const param_patterns = arg_patterns;
+    const params = try self.lowerLambdaParamLocals(module_env, param_patterns, fn_monotype);
     var stable_param_locals = try std.ArrayList(MIR.LocalId).initCapacity(self.allocator, self.store.getLocalSpan(params).len);
     defer stable_param_locals.deinit(self.allocator);
     stable_param_locals.appendSliceAssumeCapacity(self.store.getLocalSpan(params));
@@ -2863,7 +2864,7 @@ fn lowerLambdaInto(
     const ret_stmt = try self.store.addCFStmt(self.allocator, .{ .ret = .{ .value = result_local } });
     const lambda_body_scope = self.freshChildPatternScope(lambda_entry_scope);
     self.current_pattern_scope = lambda_body_scope;
-    var body = try self.lowerCirExprInto(session, lambda.body, result_local, ret_stmt);
+    var body = try self.lowerCirExprInto(session, body_expr_idx, result_local, ret_stmt);
     self.current_pattern_scope = lambda_entry_scope;
 
     const captures_param_local: ?MIR.LocalId = null;
@@ -2897,10 +2898,9 @@ fn lowerLambdaInto(
 fn lowerLambdaParamLocals(
     self: *Self,
     module_env: *const ModuleEnv,
-    span: CIR.Pattern.Span,
+    cir_ids: []const CIR.Pattern.Idx,
     fn_monotype: Monotype.Idx,
 ) Allocator.Error!MIR.LocalSpan {
-    const cir_ids = module_env.store.slicePatterns(span);
     if (cir_ids.len == 0) return MIR.LocalSpan.empty();
 
     const fn_mono = switch (self.store.monotype_store.getMonotype(fn_monotype)) {
@@ -3032,7 +3032,6 @@ fn lowerReservedTrivialClosureLambda(
     session: LowerSession,
     module_env: *const ModuleEnv,
     expr_idx: CIR.Expr.Idx,
-    closure: CIR.Expr.Closure,
     callable_def: *const Pipeline.CallableDef,
     fn_monotype: Monotype.Idx,
     callable_inst_id: Pipeline.CallableInstId,
@@ -3049,15 +3048,10 @@ fn lowerReservedTrivialClosureLambda(
     }
     try self.lowered_callable_lambdas.put(cache_key, reserved_lambda);
 
-    const lambda_expr = module_env.store.getExpr(closure.lambda_idx);
-    if (lambda_expr != .e_lambda) {
-        std.debug.panic(
-            "statement-only MIR reserved closure expected lambda body expr for {d}, found {s}",
-            .{ @intFromEnum(expr_idx), @tagName(lambda_expr) },
-        );
-    }
-
-    const ret_monotype = try self.resolveMonotype(session, lambda_expr.e_lambda.body);
+    const body_program_expr = self.callableDefBodyExpr(callable_def);
+    const body_expr_idx = body_program_expr.source_expr;
+    const param_patterns = self.callable_pipeline.lambdamono.getPatternIds(callable_def.arg_patterns);
+    const ret_monotype = try self.resolveMonotype(session, body_expr_idx);
 
     const callable_inst_key = @intFromEnum(callable_inst_id);
     const already_in_progress = self.in_progress_callable_insts.get(callable_inst_key) != null;
@@ -3086,8 +3080,7 @@ fn lowerReservedTrivialClosureLambda(
     self.current_lambda_entry_bound_locals = &lambda_entry_bound_locals;
     defer self.current_lambda_entry_bound_locals = saved_lambda_entry_bound_locals;
 
-    const param_patterns = module_env.store.slicePatterns(lambda_expr.e_lambda.args);
-    const params = try self.lowerLambdaParamLocals(module_env, lambda_expr.e_lambda.args, fn_monotype);
+    const params = try self.lowerLambdaParamLocals(module_env, param_patterns, fn_monotype);
     var stable_param_locals = try std.ArrayList(MIR.LocalId).initCapacity(self.allocator, self.store.getLocalSpan(params).len);
     defer stable_param_locals.deinit(self.allocator);
     stable_param_locals.appendSliceAssumeCapacity(self.store.getLocalSpan(params));
@@ -3198,7 +3191,7 @@ fn lowerReservedTrivialClosureLambda(
     const ret_stmt = try self.store.addCFStmt(self.allocator, .{ .ret = .{ .value = result_local } });
     const lambda_body_scope = self.freshChildPatternScope(lambda_entry_scope);
     self.current_pattern_scope = lambda_body_scope;
-    var body = try self.lowerCirExprInto(session, lambda_expr.e_lambda.body, result_local, ret_stmt);
+    var body = try self.lowerCirExprInto(session, body_expr_idx, result_local, ret_stmt);
     self.current_pattern_scope = lambda_entry_scope;
 
     const nonrecursive_capture_locals = self.scratch_local_ids.sliceFromStart(capture_top);
@@ -3731,7 +3724,6 @@ fn lowerResolvedCallableInstLambda(
     const runtime_program_expr = self.callableDefRuntimeExpr(callable_def);
     const module_idx = callable_def.module_idx;
     const module_env = self.all_module_envs[module_idx];
-    const callable_source_expr = module_env.store.getExpr(runtime_program_expr.source_expr);
     const fn_monotype = try self.importMonotypeFromStore(
         &self.callable_pipeline.context_mono.monotype_store,
         callable_inst.fn_monotype,
@@ -3780,39 +3772,33 @@ fn lowerResolvedCallableInstLambda(
         }
     }
 
-    const lambda_id = switch (callable_source_expr) {
-        .e_closure => |closure| try self.lowerReservedTrivialClosureLambda(
+    const lambda_id = switch (callable_def.runtime_kind) {
+        .closure => try self.lowerReservedTrivialClosureLambda(
             session,
             module_env,
             runtime_program_expr.source_expr,
-            closure,
             callable_def,
             fn_monotype,
             callable_inst_id,
             reserved_lambda,
         ),
-        .e_lambda => |lambda| try self.lowerLambdaInto(
+        .lambda => try self.lowerLambdaInto(
             session,
             module_env,
             runtime_program_expr.source_expr,
-            lambda,
+            self.callable_pipeline.lambdamono.getPatternIds(callable_def.arg_patterns),
+            self.callableDefBodyExpr(callable_def).source_expr,
             fn_monotype,
             reserved_lambda,
         ),
-        .e_hosted_lambda => |hosted| try self.lowerLambdaInto(
+        .hosted_lambda => try self.lowerLambdaInto(
             session,
             module_env,
             runtime_program_expr.source_expr,
-            .{
-                .args = hosted.args,
-                .body = hosted.body,
-            },
+            self.callable_pipeline.lambdamono.getPatternIds(callable_def.arg_patterns),
+            self.callableDefBodyExpr(callable_def).source_expr,
             fn_monotype,
             reserved_lambda,
-        ),
-        else => std.debug.panic(
-            "statement-only MIR callable-inst lambda lowering expected callable source expr, found {s}",
-            .{@tagName(callable_source_expr)},
         ),
     };
 
@@ -6206,16 +6192,10 @@ fn debugAssertNoUnitPrimPatternBinding(
         @intFromEnum(self.callableDefRuntimeExpr(self.callable_pipeline.getCallableDefForInst(callsite_inst)).source_expr)
     else
         std.math.maxInt(u32);
-    const callsite_template_body_expr: u32 = if (maybe_callsite_inst) |callsite_inst| blk: {
-        const callable_def = self.callable_pipeline.getCallableDefForInst(callsite_inst);
-        const template_env = self.all_module_envs[callable_def.module_idx];
-        const runtime_expr = self.callableDefRuntimeExpr(callable_def);
-        const body_expr = self.callableDefBodyExpr(callable_def);
-        break :blk switch (template_env.store.getExpr(runtime_expr.source_expr)) {
-            .e_lambda, .e_hosted_lambda, .e_closure => @intFromEnum(body_expr.source_expr),
-            else => std.math.maxInt(u32),
-        };
-    } else std.math.maxInt(u32);
+    const callsite_template_body_expr: u32 = if (maybe_callsite_inst) |callsite_inst|
+        @intFromEnum(self.callableDefBodyExpr(self.callable_pipeline.getCallableDefForInst(callsite_inst)).source_expr)
+    else
+        std.math.maxInt(u32);
     const callsite_template_body_tag: []const u8 = if (maybe_callsite_inst) |callsite_inst| blk: {
         const callable_def = self.callable_pipeline.getCallableDefForInst(callsite_inst);
         const template_env = self.all_module_envs[callable_def.module_idx];

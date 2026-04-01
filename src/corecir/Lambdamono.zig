@@ -76,6 +76,19 @@ pub const ExprIdSpan = extern struct {
     }
 };
 
+pub const PatternIdSpan = extern struct {
+    start: u32,
+    len: u16,
+
+    pub fn empty() PatternIdSpan {
+        return .{ .start = 0, .len = 0 };
+    }
+
+    pub fn isEmpty(self: PatternIdSpan) bool {
+        return self.len == 0;
+    }
+};
+
 pub const StmtId = enum(u32) {
     _,
 };
@@ -224,6 +237,12 @@ pub const CallableDefId = enum(u32) {
     _,
 };
 
+pub const CallableRuntimeKind = enum {
+    lambda,
+    closure,
+    hosted_lambda,
+};
+
 pub const CaptureField = struct {
     pattern_idx: CIR.Pattern.Idx,
     local_monotype: ContextMono.ResolvedMonotype,
@@ -243,6 +262,8 @@ pub const CaptureFieldSpan = extern struct {
 
 pub const CallableDef = struct {
     module_idx: u32,
+    runtime_kind: CallableRuntimeKind,
+    arg_patterns: PatternIdSpan,
     runtime_expr: ExprRef,
     body_expr: ExprRef,
     fn_monotype: ContextMono.ResolvedMonotype,
@@ -303,6 +324,7 @@ pub const Program = struct {
     indirect_call_ids_by_variant_group: std.AutoHashMapUnmanaged(CallableVariantGroupId, IndirectCallId),
     callable_param_spec_entries: std.ArrayListUnmanaged(CallableParamSpecEntry),
     value_projection_entries: std.ArrayListUnmanaged(CallableParamProjection),
+    pattern_entries: std.ArrayListUnmanaged(CIR.Pattern.Idx),
     pattern_bindings: std.ArrayListUnmanaged(PatternBinding),
     pattern_binding_ids_by_key: std.AutoHashMapUnmanaged(ContextPatternKey, BindingId),
     exprs: std.ArrayListUnmanaged(Expr),
@@ -328,6 +350,7 @@ pub const Program = struct {
             .indirect_call_ids_by_variant_group = .empty,
             .callable_param_spec_entries = .empty,
             .value_projection_entries = .empty,
+            .pattern_entries = .empty,
             .pattern_bindings = .empty,
             .pattern_binding_ids_by_key = .empty,
             .exprs = .empty,
@@ -354,6 +377,7 @@ pub const Program = struct {
         self.indirect_call_ids_by_variant_group.deinit(allocator);
         self.callable_param_spec_entries.deinit(allocator);
         self.value_projection_entries.deinit(allocator);
+        self.pattern_entries.deinit(allocator);
         self.pattern_bindings.deinit(allocator);
         self.pattern_binding_ids_by_key.deinit(allocator);
         self.exprs.deinit(allocator);
@@ -477,6 +501,11 @@ pub const Program = struct {
     pub fn getStmtChildren(self: *const Program, span: ExprIdSpan) []const ExprId {
         if (span.len == 0) return &.{};
         return self.expr_child_entries.items[span.start..][0..span.len];
+    }
+
+    pub fn getPatternIds(self: *const Program, span: PatternIdSpan) []const CIR.Pattern.Idx {
+        if (span.len == 0) return &.{};
+        return self.pattern_entries.items[span.start..][0..span.len];
     }
 
     pub fn getBlockStmtChildren(self: *const Program, span: StmtIdSpan) []const StmtId {

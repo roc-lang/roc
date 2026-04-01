@@ -1530,12 +1530,10 @@ pub const Pass = struct {
     ) Allocator.Error!void {
         for (result.lambdamono.callable_insts.items, 0..) |callable_inst, raw_callable_inst_id| {
             const template = result.getCallableTemplate(callable_inst.template);
-            const module_env = self.all_module_envs[template.module_idx];
-            const runtime_expr = module_env.store.getExpr(template.runtime_expr);
-            switch (runtime_expr) {
-                .e_lambda, .e_closure, .e_hosted_lambda => {},
-                else => std.debug.panic(
-                    "Pipeline invariant violated: callable inst {d} runtime expr {d} in module {d} was not lambda-shaped",
+            switch (template.kind) {
+                .lambda, .closure, .hosted_lambda => {},
+                .top_level_def => std.debug.panic(
+                    "Pipeline invariant violated: callable inst {d} runtime expr {d} in module {d} retained top_level_def callable template kind after callable registration",
                     .{ raw_callable_inst_id, @intFromEnum(template.runtime_expr), template.module_idx },
                 ),
             }
@@ -2276,6 +2274,10 @@ pub const Pass = struct {
     ) Allocator.Error!CallableTemplateId {
         const existing = result.lambdasolved.expr_callable_template_ids.get(source_key);
         if (existing) |template_id| return template_id;
+        const boundary = self.callableBoundaryInfo(module_idx, cir_expr) orelse std.debug.panic(
+            "Pipeline invariant violated: registering callable template for non-callable boundary expr {d} in module {d}",
+            .{ @intFromEnum(cir_expr), module_idx },
+        );
 
         const lexical_owner_template: ?CallableTemplateId = if (kind == .closure)
             self.currentTemplateContext(result)
@@ -2288,6 +2290,8 @@ pub const Pass = struct {
             .module_idx = module_idx,
             .cir_expr = cir_expr,
             .runtime_expr = cir_expr,
+            .arg_patterns = boundary.arg_patterns,
+            .body_expr = boundary.body_expr,
             .type_root = type_root,
             .binding_pattern = binding_pattern,
             .kind = kind,
@@ -2313,7 +2317,13 @@ pub const Pass = struct {
     ) void {
         const template = &result.lambdasolved.callable_templates.items[@intFromEnum(template_id)];
         if (template.runtime_expr == runtime_expr_idx) return;
+        const boundary = self.callableBoundaryInfo(template.module_idx, runtime_expr_idx) orelse std.debug.panic(
+            "Pipeline invariant violated: runtime expr {d} for callable template {d} in module {d} was not callable-boundary-shaped",
+            .{ @intFromEnum(runtime_expr_idx), @intFromEnum(template_id), template.module_idx },
+        );
         template.runtime_expr = runtime_expr_idx;
+        template.arg_patterns = boundary.arg_patterns;
+        template.body_expr = boundary.body_expr;
         self.noteMutation(.callable_templates);
     }
 
@@ -4256,13 +4266,14 @@ pub const Pass = struct {
             else => return,
         };
         const boundary = self.callableBoundaryInfo(module_idx, callable_expr_idx) orelse return;
-        if (boundary.arg_patterns.len != fn_mono.args.len) {
+        const boundary_arg_patterns = self.all_module_envs[module_idx].store.slicePatterns(boundary.arg_patterns);
+        if (boundary_arg_patterns.len != fn_mono.args.len) {
             if (std.debug.runtime_safety) {
                 std.debug.panic(
                     "Pipeline: callable boundary arity mismatch for expr {d} (patterns={d}, monos={d})",
                     .{
                         @intFromEnum(callable_expr_idx),
-                        boundary.arg_patterns.len,
+                        boundary_arg_patterns.len,
                         fn_mono.args.len,
                     },
                 );
@@ -4287,7 +4298,7 @@ pub const Pass = struct {
             fn_monotype_module_idx,
         );
 
-        for (boundary.arg_patterns, 0..) |pattern_idx, i| {
+        for (boundary_arg_patterns, 0..) |pattern_idx, i| {
             const param_mono = result.context_mono.monotype_store.getIdxSpanItem(fn_mono.args, i);
             try self.recordTypeVarMonotypeForSourceContext(
                 result,
@@ -5137,7 +5148,7 @@ pub const Pass = struct {
     }
 
     const CallableBoundaryInfo = struct {
-        arg_patterns: []const CIR.Pattern.Idx,
+        arg_patterns: CIR.Pattern.Span,
         body_expr: CIR.Expr.Idx,
     };
 
@@ -5149,19 +5160,19 @@ pub const Pass = struct {
         const module_env = self.all_module_envs[module_idx];
         return switch (module_env.store.getExpr(callable_expr_idx)) {
             .e_lambda => |lambda_expr| .{
-                .arg_patterns = module_env.store.slicePatterns(lambda_expr.args),
+                .arg_patterns = lambda_expr.args,
                 .body_expr = lambda_expr.body,
             },
             .e_closure => |closure_expr| blk: {
                 const lambda_expr = module_env.store.getExpr(closure_expr.lambda_idx);
                 if (lambda_expr != .e_lambda) break :blk null;
                 break :blk .{
-                    .arg_patterns = module_env.store.slicePatterns(lambda_expr.e_lambda.args),
+                    .arg_patterns = lambda_expr.e_lambda.args,
                     .body_expr = lambda_expr.e_lambda.body,
                 };
             },
             .e_hosted_lambda => |hosted_expr| .{
-                .arg_patterns = module_env.store.slicePatterns(hosted_expr.args),
+                .arg_patterns = hosted_expr.args,
                 .body_expr = hosted_expr.body,
             },
             else => null,
@@ -5459,8 +5470,8 @@ pub const Pass = struct {
             .func => |func| func,
             else => return true,
         };
-        const boundary = self.callableBoundaryInfo(template.module_idx, template.cir_expr) orelse return true;
-        if (boundary.arg_patterns.len != fn_mono.args.len) return false;
+        const arg_patterns = self.all_module_envs[template.module_idx].store.slicePatterns(template.arg_patterns);
+        if (arg_patterns.len != fn_mono.args.len) return false;
         try self.seedCallableBoundaryContextMonotypes(
             result,
             defining_source_context,
@@ -9736,14 +9747,24 @@ pub const Pass = struct {
             }
         }
 
-        const boundary = self.callableBoundaryInfo(template.module_idx, template.runtime_expr) orelse std.debug.panic(
-            "Pipeline invariant violated: callable template {d} runtime expr {d} in module {d} was not callable-boundary-shaped",
-            .{ @intFromEnum(template_id), @intFromEnum(template.runtime_expr), template.module_idx },
-        );
+        const runtime_kind: Lambdamono.CallableRuntimeKind = switch (template.kind) {
+            .lambda => .lambda,
+            .closure => .closure,
+            .hosted_lambda => .hosted_lambda,
+            .top_level_def => std.debug.panic(
+                "Pipeline invariant violated: callable template {d} runtime expr {d} in module {d} had top_level_def kind at executable instantiation time",
+                .{ @intFromEnum(template_id), @intFromEnum(template.runtime_expr), template.module_idx },
+            ),
+        };
         const callable_inst_id: CallableInstId = @enumFromInt(result.lambdamono.callable_insts.items.len);
         const callable_def_id: CallableDefId = @enumFromInt(result.lambdamono.callable_defs.items.len);
         try result.lambdamono.callable_defs.append(self.allocator, .{
             .module_idx = template.module_idx,
+            .runtime_kind = runtime_kind,
+            .arg_patterns = try self.appendProgramPatternEntries(
+                &result.lambdamono,
+                self.all_module_envs[template.module_idx].store.slicePatterns(template.arg_patterns),
+            ),
             .runtime_expr = .{
                 .source_context = callableInstSourceContext(callable_inst_id),
                 .module_idx = template.module_idx,
@@ -9752,7 +9773,7 @@ pub const Pass = struct {
             .body_expr = .{
                 .source_context = callableInstSourceContext(callable_inst_id),
                 .module_idx = template.module_idx,
-                .expr_idx = boundary.body_expr,
+                .expr_idx = template.body_expr,
             },
             .fn_monotype = resolvedMonotype(canonical_fn_monotype, canonical_fn_monotype_module_idx),
             .captures = .empty(),
@@ -9784,6 +9805,19 @@ pub const Pass = struct {
         return .{
             .start = start,
             .len = @intCast(entries.len),
+        };
+    }
+
+    fn appendProgramPatternEntries(
+        self: *Pass,
+        program: *Lambdamono.Program,
+        pattern_ids: []const CIR.Pattern.Idx,
+    ) Allocator.Error!Lambdamono.PatternIdSpan {
+        const start: u32 = @intCast(program.pattern_entries.items.len);
+        try program.pattern_entries.appendSlice(self.allocator, pattern_ids);
+        return .{
+            .start = start,
+            .len = @intCast(pattern_ids.len),
         };
     }
 
@@ -10009,32 +10043,20 @@ pub const Pass = struct {
             const mutation_revision_before = self.mutation_revision;
             try self.recordCallableParamPatternFactsForCallableInst(result, callable_inst_id);
 
-            switch (module_env.store.getExpr(template.cir_expr)) {
-                .e_lambda => |lambda_expr| {
-                    try self.scanForcedCirValueExpr(result, thread, template.module_idx, lambda_expr.body);
-                },
-                .e_closure => |closure_expr| {
-                    const lambda_expr = module_env.store.getExpr(closure_expr.lambda_idx);
-                    if (lambda_expr == .e_lambda) {
-                        try self.scanForcedCirValueExpr(result, thread, template.module_idx, lambda_expr.e_lambda.body);
-                    }
-                },
-                .e_hosted_lambda => |hosted_expr| try self.scanForcedCirValueExpr(result, thread, template.module_idx, hosted_expr.body),
-                else => unreachable,
-            }
+            try self.scanForcedCirValueExpr(result, thread, template.module_idx, template.body_expr);
 
-            switch (module_env.store.getExpr(template.runtime_expr)) {
-                .e_closure => |closure_expr| {
-                    try self.scanClosureCaptureSources(
-                        result,
-                        defining_source_context,
-                        template.module_idx,
-                        template.runtime_expr,
-                        closure_expr,
-                    );
-                },
-                .e_lambda, .e_hosted_lambda => {},
-                else => unreachable,
+            if (template.kind == .closure) {
+                const closure_expr = switch (module_env.store.getExpr(template.runtime_expr)) {
+                    .e_closure => |closure| closure,
+                    else => unreachable,
+                };
+                try self.scanClosureCaptureSources(
+                    result,
+                    defining_source_context,
+                    template.module_idx,
+                    template.runtime_expr,
+                    closure_expr,
+                );
             }
 
             if (self.mutation_revision == mutation_revision_before) {
@@ -10042,8 +10064,12 @@ pub const Pass = struct {
             }
         }
 
-        switch (module_env.store.getExpr(template.runtime_expr)) {
-            .e_closure => |closure_expr| {
+        switch (template.kind) {
+            .closure => {
+                const closure_expr = switch (module_env.store.getExpr(template.runtime_expr)) {
+                    .e_closure => |closure| closure,
+                    else => unreachable,
+                };
                 try self.finalizeCallableDefForCallableInst(
                     result,
                     defining_source_context,
@@ -10053,12 +10079,7 @@ pub const Pass = struct {
                     callable_inst_id,
                 );
             },
-            .e_lambda, .e_hosted_lambda => {
-                const body_expr_idx = switch (module_env.store.getExpr(template.runtime_expr)) {
-                    .e_lambda => |lambda_expr| lambda_expr.body,
-                    .e_hosted_lambda => |hosted_expr| hosted_expr.body,
-                    else => unreachable,
-                };
+            .lambda, .hosted_lambda => {
                 try self.updateCallableDefRuntimeValue(
                     result,
                     callable_inst_id,
@@ -10070,12 +10091,12 @@ pub const Pass = struct {
                     .{
                         .source_context = callableInstSourceContext(callable_inst_id),
                         .module_idx = template.module_idx,
-                        .expr_idx = body_expr_idx,
+                        .expr_idx = template.body_expr,
                     },
                     &.{},
                 );
             },
-            else => unreachable,
+            .top_level_def => unreachable,
         }
 
         try self.completed_callable_scans.put(self.allocator, callable_inst_key, {});
