@@ -4512,6 +4512,9 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
             return error.NativeCompilationFailed;
         };
 
+        // Record host+builtin function count before app compilation for DCE seeding
+        const host_defined_fn_count = codegen.module.function_offsets.items.len;
+
         // Step 8: Compile all procedures
         codegen.compileAllProcSpecs(procs) catch |err| {
             std.log.err("WASM proc compilation failed: {}", .{err});
@@ -4578,6 +4581,17 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         for (codegen.module.exports.items) |exp| {
             if (exp.kind == .func and exp.idx < total_fns) {
                 called_fns[exp.idx] = true;
+            }
+        }
+
+        // Mark all app-compiled functions as live.
+        // App code uses direct call instructions (no relocation entries), so
+        // the DCE's relocation-based call tracing can't follow them.
+        const fn_index_min = codegen.module.import_fn_count + codegen.module.dead_import_dummy_count;
+        for (host_defined_fn_count..codegen.module.function_offsets.items.len) |i| {
+            const fn_idx = fn_index_min + @as(u32, @intCast(i));
+            if (fn_idx < total_fns) {
+                called_fns[fn_idx] = true;
             }
         }
 
