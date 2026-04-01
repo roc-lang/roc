@@ -381,7 +381,7 @@ pub const Program = struct {
         return binding.callable_value;
     }
 
-    pub fn getPatternValueOrigin(
+    pub fn getPatternOriginExpr(
         self: *const Program,
         source_context: SourceContext,
         module_idx: u32,

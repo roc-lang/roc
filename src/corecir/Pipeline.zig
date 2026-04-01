@@ -469,10 +469,10 @@ pub const Result = struct {
         module_idx: u32,
         pattern_idx: CIR.Pattern.Idx,
     ) ?ExprRef {
-        return self.lambdamono.getPatternValueOrigin(source_context, module_idx, pattern_idx);
+        return self.lambdamono.getPatternOriginExpr(source_context, module_idx, pattern_idx);
     }
 
-    pub fn getExprValueOrigin(
+    pub fn getExprOriginExpr(
         self: *const Result,
         source_context: SourceContext,
         module_idx: u32,
@@ -1315,7 +1315,7 @@ pub const Pass = struct {
             return callable_value;
         }
 
-        if (result.getExprValueOrigin(source_context, module_idx, expr_idx)) |source| {
+        if (result.getExprOriginExpr(source_context, module_idx, expr_idx)) |source| {
             if (source.projections.isEmpty()) {
                 if (sourceContextHasCallableInst(source.source_context)) {
                     return self.getValueExprCallableValueInContext(
@@ -1839,7 +1839,7 @@ pub const Pass = struct {
         return &result.lambdamono.pattern_bindings.items[@intFromEnum(binding_id)];
     }
 
-    fn writePatternValueOrigin(
+    fn writePatternOriginExpr(
         self: *Pass,
         result: *Result,
         source_context: SourceContext,
@@ -2011,7 +2011,7 @@ pub const Pass = struct {
         return result.getExprCallSite(source_context, module_idx, expr_idx);
     }
 
-    fn writeExprValueOrigin(
+    fn writeExprOriginExpr(
         self: *Pass,
         result: *Result,
         source_context: SourceContext,
@@ -2020,8 +2020,8 @@ pub const Pass = struct {
         expr_ref: ExprRef,
     ) Allocator.Error!void {
         const canonical_ref = blk: {
-            const origin = result.getExprValueOrigin(expr_ref.source_context, expr_ref.module_idx, expr_ref.expr_idx) orelse break :blk expr_ref;
-            if (result.getExprValueOrigin(origin.source_context, origin.module_idx, origin.expr_idx) != null) {
+            const origin = result.getExprOriginExpr(expr_ref.source_context, expr_ref.module_idx, expr_ref.expr_idx) orelse break :blk expr_ref;
+            if (result.getExprOriginExpr(origin.source_context, origin.module_idx, origin.expr_idx) != null) {
                 std.debug.panic(
                     "Pipeline invariant violated: expr value-origin for ctx={s} module={d} expr={d} was not canonical",
                     .{
@@ -2223,7 +2223,7 @@ pub const Pass = struct {
         pattern_idx: CIR.Pattern.Idx,
         source: ExprRef,
     ) Allocator.Error!void {
-        try self.writePatternValueOrigin(
+        try self.writePatternOriginExpr(
             result,
             source_context,
             module_idx,
@@ -2296,7 +2296,7 @@ pub const Pass = struct {
         expr_idx: CIR.Expr.Idx,
         source: ExprRef,
     ) Allocator.Error!void {
-        try self.writeExprValueOrigin(
+        try self.writeExprOriginExpr(
             result,
             source_context,
             module_idx,
@@ -3157,7 +3157,7 @@ pub const Pass = struct {
         expr_idx: CIR.Expr.Idx,
     ) ExprRef {
         _ = self;
-        if (result.getExprValueOrigin(source_context, module_idx, expr_idx)) |origin| {
+        if (result.getExprOriginExpr(source_context, module_idx, expr_idx)) |origin| {
             return origin;
         }
         return exprRefInContext(source_context, module_idx, expr_idx);
@@ -3603,7 +3603,7 @@ pub const Pass = struct {
                 if (result.getExprTemplateId(thread.requireSourceContext(), module_idx, expr_idx)) |template_id| {
                     try self.materializeLookupExprCallableValue(result, thread, module_idx, expr_idx, template_id);
                 } else if (!is_top_level_def) {
-                    if (result.getExprValueOrigin(thread.requireSourceContext(), module_idx, expr_idx)) |source| {
+                    if (result.getExprOriginExpr(thread.requireSourceContext(), module_idx, expr_idx)) |source| {
                         if (source.projections.isEmpty()) {
                             try self.scanDemandedValueDefExprInSourceContext(
                                 result,
@@ -5745,7 +5745,7 @@ pub const Pass = struct {
             monotype_module_idx,
         );
 
-        if (result.getExprValueOrigin(source_context, module_idx, expr_idx)) |source| {
+        if (result.getExprOriginExpr(source_context, module_idx, expr_idx)) |source| {
             if (source.projections.isEmpty() and
                 !(source.source_context == source_context and
                 source.module_idx == module_idx and
@@ -5791,7 +5791,7 @@ pub const Pass = struct {
             fn_monotype_module_idx,
         );
 
-        if (result.getExprValueOrigin(source_context, module_idx, expr_idx)) |source| {
+        if (result.getExprOriginExpr(source_context, module_idx, expr_idx)) |source| {
             if (source.projections.isEmpty() and
                 !(source.source_context == source_context and
                 source.module_idx == module_idx and
@@ -5966,7 +5966,7 @@ pub const Pass = struct {
 
         const module_env = self.all_module_envs[module_idx];
         const expr = module_env.store.getExpr(expr_idx);
-        if (result.getExprValueOrigin(source_context, module_idx, expr_idx)) |source| {
+        if (result.getExprOriginExpr(source_context, module_idx, expr_idx)) |source| {
             if (source.projections.isEmpty() and
                 !(source.source_context == source_context and
                 source.module_idx == module_idx and
@@ -7749,7 +7749,7 @@ pub const Pass = struct {
         lookup_expr_idx: CIR.Expr.Idx,
         callable_inst_id: CallableInstId,
     ) Allocator.Error!void {
-        const source_expr = result.getExprValueOrigin(thread.requireSourceContext(), module_idx, lookup_expr_idx) orelse return;
+        const source_expr = result.getExprOriginExpr(thread.requireSourceContext(), module_idx, lookup_expr_idx) orelse return;
         if (!source_expr.projections.isEmpty()) return;
         try self.setExprDirectCallable(
             result,
@@ -10747,7 +10747,7 @@ pub const Pass = struct {
             else => {},
         }
 
-        if (result.getExprValueOrigin(source_context, module_idx, expr_idx)) |source| {
+        if (result.getExprOriginExpr(source_context, module_idx, expr_idx)) |source| {
             var source_mono = try self.requireRecordedExprMonotypeForSourceContext(
                 result,
                 thread,
@@ -10820,7 +10820,7 @@ pub const Pass = struct {
                 )) |binding_mono| {
                     return binding_mono;
                 }
-                if (result.getExprValueOrigin(source_context, module_idx, expr_idx)) |source| {
+                if (result.getExprOriginExpr(source_context, module_idx, expr_idx)) |source| {
                     var source_mono = try self.lookupRecordedExprMonotypeIfReadyForSourceContext(
                         result,
                         thread,
