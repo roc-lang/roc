@@ -191,11 +191,6 @@ current_pattern_scope: u64,
 /// App module index (for resolving `e_lookup_required` from platform modules)
 app_module_idx: ?u32,
 
-/// Optional for-clause type substitutions for lowering platform modules
-/// against concrete app types.
-type_scope: ?*const types.TypeScope,
-type_scope_module_idx: ?u32,
-
 /// Map from ((scope_key << 64) | (module_idx << 32 | CIR.Pattern.Idx)) → MIR.LocalId.
 /// Used only to resolve CIR local lookups to the current MIR local during lowering.
 pattern_symbols: std.AutoHashMap(u128, MIR.LocalId),
@@ -203,11 +198,6 @@ pattern_symbols: std.AutoHashMap(u128, MIR.LocalId),
 /// Scope-keyed explicit monotypes for pattern locals whose runtime type is introduced
 /// by lowering itself rather than re-derived from the original pattern node.
 explicit_pattern_local_monotypes: std.AutoHashMap(u128, Monotype.Idx),
-
-/// Exact lowering-time monotype bindings for source type vars whose concrete
-/// runtime type has already been fixed by the staged pipeline or by explicit
-/// MIR-internal structure binding.
-type_var_seen: std.AutoHashMap(types.Var, Monotype.Idx),
 
 /// Cycle breakers for recursive nominal types (e.g. Tree := [Leaf, Node(Tree)]).
 /// Used only by `fromNominalType` during monotype construction; separate from
@@ -298,11 +288,8 @@ pub fn init(
         .current_module_idx = current_module_idx,
         .current_pattern_scope = 0,
         .app_module_idx = app_module_idx,
-        .type_scope = null,
-        .type_scope_module_idx = null,
         .pattern_symbols = std.AutoHashMap(u128, MIR.LocalId).init(allocator),
         .explicit_pattern_local_monotypes = std.AutoHashMap(u128, Monotype.Idx).init(allocator),
-        .type_var_seen = std.AutoHashMap(types.Var, Monotype.Idx).init(allocator),
         .nominal_cycle_breakers = std.AutoHashMap(types.Var, Monotype.Idx).init(allocator),
         .lowered_callable_insts = std.AutoHashMap(u32, MIR.LambdaId).init(allocator),
         .lowered_callable_lambdas = std.AutoHashMap(CallableCacheKey, MIR.LambdaId).init(allocator),
@@ -339,7 +326,6 @@ pub fn init(
 pub fn deinit(self: *Self) void {
     self.pattern_symbols.deinit();
     self.explicit_pattern_local_monotypes.deinit();
-    self.type_var_seen.deinit();
     self.nominal_cycle_breakers.deinit();
     self.lowered_callable_insts.deinit();
     self.lowered_callable_lambdas.deinit();
@@ -356,22 +342,6 @@ pub fn deinit(self: *Self) void {
     self.scratch_capture_locals.deinit();
     self.active_loops.deinit(self.allocator);
     self.mono_scratches.deinit();
-}
-
-/// Provide platform for-clause type substitutions for the given module so
-/// MIR monotype resolution can use the concrete caller types during lowering.
-pub fn setTypeScope(
-    self: *Self,
-    module_idx: u32,
-    type_scope: *const types.TypeScope,
-) Allocator.Error!void {
-    self.type_scope = type_scope;
-    self.type_scope_module_idx = module_idx;
-    try self.seedTypeScopeBindingsInStore(
-        self.current_module_idx,
-        self.types_store,
-        &self.type_var_seen,
-    );
 }
 
 const symbol_namespace_local: u64 = 0;
@@ -477,63 +447,6 @@ fn currentRootExprRawForDebug(self: *const Self) u32 {
     };
 }
 
-fn bindRecordUnboundFlatTypeToUnit(
-    self: *Self,
-    fields_range: types.RecordField.SafeMultiList.Range,
-) Allocator.Error!void {
-    const fields_slice = self.types_store.getRecordFieldsSlice(fields_range);
-    const field_vars = fields_slice.items(.var_);
-    for (field_vars) |field_var| {
-        try self.bindTypeVarMonotypes(field_var, self.store.monotype_store.unit_idx);
-    }
-}
-
-fn bindRecordFlatTypeToUnit(self: *Self, record: types.Record) Allocator.Error!void {
-    var current_row = record;
-
-    rows: while (true) {
-        const fields_slice = self.types_store.getRecordFieldsSlice(current_row.fields);
-        const field_vars = fields_slice.items(.var_);
-        for (field_vars) |field_var| {
-            try self.bindTypeVarMonotypes(field_var, self.store.monotype_store.unit_idx);
-        }
-
-        var ext_var = current_row.ext;
-        while (true) {
-            const ext_resolved = self.types_store.resolveVar(ext_var);
-            switch (ext_resolved.desc.content) {
-                .alias => |alias| {
-                    ext_var = self.types_store.getAliasBackingVar(alias);
-                    continue;
-                },
-                .structure => |ext_flat| switch (ext_flat) {
-                    .record => |next_row| {
-                        current_row = next_row;
-                        continue :rows;
-                    },
-                    .record_unbound => |fields_range| {
-                        try self.bindRecordUnboundFlatTypeToUnit(fields_range);
-                        return;
-                    },
-                    .empty_record => return,
-                    else => typeBindingInvariant(
-                        "bindRecordFlatTypeToUnit(record): unexpected ext flat type '{s}'",
-                        .{@tagName(ext_flat)},
-                    ),
-                },
-                .flex, .rigid => {
-                    try self.bindTypeVarMonotypes(ext_var, self.store.monotype_store.unit_idx);
-                    return;
-                },
-                .err => typeBindingInvariant(
-                    "bindRecordFlatTypeToUnit(record): error extension",
-                    .{},
-                ),
-            }
-        }
-    }
-}
-
 fn isTopLevelPattern(module_env: *const ModuleEnv, pattern_idx: CIR.Pattern.Idx) bool {
     for (module_env.store.sliceDefs(module_env.all_defs)) |def_idx| {
         const def = module_env.store.getDef(def_idx);
@@ -581,49 +494,6 @@ fn builtinPrimForNominal(ident: Ident.Idx, common: ModuleEnv.CommonIdents) ?Mono
     if (ident.eql(common.f64_type)) return .f64;
     if (ident.eql(common.dec_type)) return .dec;
     return null;
-}
-
-fn seedTypeScopeBindingsInStore(
-    self: *Self,
-    module_idx: u32,
-    store_types: *const types.Store,
-    bindings: *std.AutoHashMap(types.Var, Monotype.Idx),
-) Allocator.Error!void {
-    const type_scope = self.type_scope orelse return;
-    const type_scope_module_idx = self.type_scope_module_idx orelse return;
-
-    if (module_idx != type_scope_module_idx) return;
-
-    for (type_scope.scopes.items) |*scope| {
-        var it = scope.iterator();
-        while (it.next()) |entry| {
-            const platform_var = entry.key_ptr.*;
-            _ = entry.value_ptr.*;
-            const caller_mono = self.callable_pipeline.context_mono.getTypeScopeMonotype(module_idx, platform_var) orelse {
-                if (std.debug.runtime_safety) {
-                    std.debug.panic(
-                        "Lower: missing exact type-scope monotype for module={d} type_var={d}",
-                        .{ module_idx, @intFromEnum(platform_var) },
-                    );
-                }
-                unreachable;
-            };
-            const normalized_mono = try self.importMonotypeFromStore(
-                &self.callable_pipeline.context_mono.monotype_store,
-                caller_mono.idx,
-                caller_mono.module_idx,
-                module_idx,
-            );
-
-            const saved_bindings = self.type_var_seen;
-            self.type_var_seen = bindings.*;
-            defer self.type_var_seen = saved_bindings;
-            try self.bindTypeVarMonotypes(platform_var, normalized_mono);
-            bindings.* = self.type_var_seen;
-        }
-    }
-
-    _ = store_types;
 }
 
 fn resolveImportedModuleIdx(self: *Self, caller_env: *const ModuleEnv, import_idx: CIR.Import.Idx) ?u32 {
@@ -828,63 +698,6 @@ fn appendSeenIndex(
     try seen_indices.append(allocator, idx);
 }
 
-fn remainingRecordTailMonotype(
-    self: *Self,
-    mono_fields: []const Monotype.Field,
-    seen_indices: []const u32,
-) Allocator.Error!Monotype.Idx {
-    var remaining_fields: std.ArrayListUnmanaged(Monotype.Field) = .empty;
-    defer remaining_fields.deinit(self.allocator);
-
-    for (mono_fields, 0..) |field, field_idx| {
-        if (seenIndex(seen_indices, @intCast(field_idx))) continue;
-        try remaining_fields.append(self.allocator, field);
-    }
-
-    if (remaining_fields.items.len == 0) {
-        return self.store.monotype_store.unit_idx;
-    }
-
-    const field_span = try self.store.monotype_store.addFields(self.allocator, remaining_fields.items);
-    return try self.store.monotype_store.addMonotype(self.allocator, .{ .record = .{ .fields = field_span } });
-}
-
-fn remainingTagUnionTailMonotype(
-    self: *Self,
-    mono_tags: []const Monotype.Tag,
-    seen_indices: []const u32,
-) Allocator.Error!Monotype.Idx {
-    var remaining_tags: std.ArrayListUnmanaged(Monotype.Tag) = .empty;
-    defer remaining_tags.deinit(self.allocator);
-
-    for (mono_tags, 0..) |tag, tag_idx| {
-        if (seenIndex(seen_indices, @intCast(tag_idx))) continue;
-        try remaining_tags.append(self.allocator, tag);
-    }
-
-    const tag_span = try self.store.monotype_store.addTags(self.allocator, remaining_tags.items);
-    return try self.store.monotype_store.addMonotype(self.allocator, .{ .tag_union = .{ .tags = tag_span } });
-}
-
-fn bindRecordRowTail(
-    self: *Self,
-    ext_var: types.Var,
-    mono_fields: []const Monotype.Field,
-    seen_indices: []const u32,
-) Allocator.Error!void {
-    const tail_mono = try self.remainingRecordTailMonotype(mono_fields, seen_indices);
-    try self.bindTypeVarMonotypes(ext_var, tail_mono);
-}
-
-fn bindTagUnionRowTail(
-    self: *Self,
-    ext_var: types.Var,
-    mono_tags: []const Monotype.Tag,
-    seen_indices: []const u32,
-) Allocator.Error!void {
-    const tail_mono = try self.remainingTagUnionTailMonotype(mono_tags, seen_indices);
-    try self.bindTypeVarMonotypes(ext_var, tail_mono);
-}
 
 const CallableCacheKey = struct {
     source_context_kind: enum(u2) { callable_inst, root_expr, provenance_expr, template_expr },
@@ -1014,10 +827,6 @@ fn requireExactCallableInstFromCallableValue(
         args,
     );
     return switch (callable_value) {
-        .none => std.debug.panic(
-            "statement-only MIR invariant violated: " ++ fmt,
-            args,
-        ),
         .direct => |callable_inst_id| callable_inst_id,
         .packed_fn => |packed_fn_id| std.debug.panic(
             "statement-only MIR TODO: value lowering required direct callable specialization but encountered packed fn {d}",
@@ -1031,7 +840,6 @@ fn exactCallableInstIfCallableValueDirect(
 ) ?Pipeline.CallableInstId {
     const callable_value = maybe_callable_value orelse return null;
     return switch (callable_value) {
-        .none => null,
         .direct => |callable_inst_id| callable_inst_id,
         .packed_fn => |packed_fn_id| std.debug.panic(
             "statement-only MIR TODO: exact callable expected but encountered packed fn {d}",
@@ -1058,10 +866,6 @@ fn requireExactCallableInstFromCallSite(
         args,
     );
     return switch (call_site) {
-        .none => std.debug.panic(
-            "statement-only MIR invariant violated: " ++ fmt,
-            args,
-        ),
         .direct => |callable_inst_id| callable_inst_id,
         .indirect_call => |indirect_call_id| std.debug.panic(
             "statement-only MIR TODO: direct call lowering required exact callable but encountered indirect call {d}",
@@ -1075,7 +879,6 @@ fn exactCallableInstIfCallSiteDirect(
 ) ?Pipeline.CallableInstId {
     const call_site = maybe_call_site orelse return null;
     return switch (call_site) {
-        .none => null,
         .direct => |callable_inst_id| callable_inst_id,
         .indirect_call => |indirect_call_id| std.debug.panic(
             "statement-only MIR TODO: exact call lowering expected direct call but encountered indirect call {d}",
@@ -2751,7 +2554,6 @@ fn lowerLookupLocalIntoWithExactCallableInst(
     }
 
     if (lookup_resolution) |resolution| switch (resolution) {
-        .none => unreachable,
         .def => |target_def| {
             const def = self.all_module_envs[target_def.module_idx].store.getDef(target_def.def_idx);
             const symbol = try self.lookupSymbolForPattern(target_def.module_idx, def.pattern);
@@ -2861,8 +2663,8 @@ fn planClosureEntryCaptureLocals(
             try entry_bound_locals.add(capture_local);
         }
 
-        switch (capture_field.callable_value) {
-            .none => {},
+        switch (capture_field.callable_binding) {
+            .non_callable => {},
             .direct => |exact_callable_inst_id| try self.bindExactCallableLocal(capture_local, exact_callable_inst_id),
         }
 
@@ -2870,8 +2672,8 @@ fn planClosureEntryCaptureLocals(
             .pattern_idx = capture_field.pattern_idx,
             .local = capture_local,
             .local_monotype = capture_monotype,
-            .exact_callable_inst_id = switch (capture_field.callable_value) {
-                .none => null,
+            .exact_callable_inst_id = switch (capture_field.callable_binding) {
+                .non_callable => null,
                 .direct => |callable_inst_id| callable_inst_id,
             },
             .storage = capture_field.storage,
@@ -2913,10 +2715,6 @@ fn lowerLookupExternalIntoWithExactCallableInst(
         "statement-only MIR invariant violated: external lookup expr {d} had no specialized lookup resolution",
         .{@intFromEnum(expr_idx)},
     )) {
-        .none => std.debug.panic(
-            "statement-only MIR invariant violated: external lookup expr {d} carried lookup-resolution '.none'",
-            .{@intFromEnum(expr_idx)},
-        ),
         .def => |target_def| target_def,
         .expr => |source_expr_ref| std.debug.panic(
             "statement-only MIR invariant violated: external lookup expr {d} unexpectedly specialized to source expr {d} in module {d}",
@@ -2975,10 +2773,6 @@ fn lowerLookupRequiredIntoWithExactCallableInst(
         "statement-only MIR invariant violated: required lookup expr {d} had no specialized lookup resolution",
         .{@intFromEnum(expr_idx)},
     )) {
-        .none => std.debug.panic(
-            "statement-only MIR invariant violated: required lookup expr {d} carried lookup-resolution '.none'",
-            .{@intFromEnum(expr_idx)},
-        ),
         .def => |target_def| target_def,
         .expr => |source_expr_ref| std.debug.panic(
             "statement-only MIR invariant violated: required lookup expr {d} unexpectedly specialized to source expr {d} in module {d}",
@@ -3260,7 +3054,6 @@ fn lowerLambdaParamLocals(
     defer self.scratch_local_ids.clearFrom(scratch_top);
 
     for (cir_ids, param_monotypes) |pattern_idx, monotype| {
-        try self.bindPatternMonotypes(module_env, pattern_idx, monotype);
         const param_reassignable = switch (module_env.store.getPattern(pattern_idx)) {
             .assign => |assign_pattern| assign_pattern.ident.attributes.reassignable,
             .as => |as_pattern| as_pattern.ident.attributes.reassignable,
@@ -3323,8 +3116,8 @@ fn appendCaptureMaterialization(
         },
         .expr => |source_expr_ref| blk: {
             const local = try self.freshSyntheticLocal(capture_monotype, false);
-            switch (capture_field.callable_value) {
-                .none => {},
+            switch (capture_field.callable_binding) {
+                .non_callable => {},
                 .direct => |capture_callable_inst_id| try self.bindExactCallableLocal(local, capture_callable_inst_id),
             }
             try out.append(self.allocator, .{ .expr = .{
@@ -3913,10 +3706,8 @@ fn lowerResolvedCallableInstLambda(
     const saved_ident_store = self.mono_scratches.ident_store;
     const saved_module_env = self.mono_scratches.module_env;
     const saved_mono_module_idx = self.mono_scratches.module_idx;
-    const saved_type_var_seen = self.type_var_seen;
     const saved_nominal_cycle_breakers = self.nominal_cycle_breakers;
 
-    self.type_var_seen = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
     self.nominal_cycle_breakers = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
     try self.pushSourceContext(callableInstSourceContext(callable_inst_id));
 
@@ -3929,8 +3720,6 @@ fn lowerResolvedCallableInstLambda(
     }
 
     defer {
-        self.type_var_seen.deinit();
-        self.type_var_seen = saved_type_var_seen;
         self.nominal_cycle_breakers.deinit();
         self.nominal_cycle_breakers = saved_nominal_cycle_breakers;
         self.popSourceContext();
@@ -3940,31 +3729,6 @@ fn lowerResolvedCallableInstLambda(
             self.mono_scratches.ident_store = saved_ident_store;
             self.mono_scratches.module_env = saved_module_env;
             self.mono_scratches.module_idx = saved_mono_module_idx;
-        }
-    }
-
-    try self.seedTypeScopeBindingsInStore(
-        self.current_module_idx,
-        self.types_store,
-        &self.type_var_seen,
-    );
-
-    {
-        const subst = self.callable_pipeline.context_mono.getTypeSubst(callable_inst.subst);
-        for (self.callable_pipeline.context_mono.getTypeSubstEntries(subst.entries)) |entry| {
-            if (builtin.mode == .Debug and entry.key.module_idx != module_idx) {
-                std.debug.panic(
-                    "Lower: callable inst subst entry from module {d} imported into module {d}",
-                    .{ entry.key.module_idx, module_idx },
-                );
-            }
-            const imported_mono = try self.importMonotypeFromStore(
-                &self.callable_pipeline.context_mono.monotype_store,
-                entry.monotype.idx,
-                entry.monotype.module_idx,
-                module_idx,
-            );
-            try self.type_var_seen.put(entry.key.type_var, imported_mono);
         }
     }
 
@@ -5042,7 +4806,6 @@ fn lowerPatternBindingInto(
             try self.freshSyntheticLocal(source_mono, false)
     else
         try self.freshSyntheticLocal(source_mono, false);
-    try self.bindPatternMonotypes(module_env, pattern_idx, source_mono);
     if (mark_reassignable) {
         self.setPatternLocalsReassignable(module_env, pattern_idx, true);
     }
@@ -5217,7 +4980,6 @@ fn lowerPatternMatchLocalInto(
     on_fail: MIR.CFStmtId,
 ) Allocator.Error!MIR.CFStmtId {
     const source_mono = self.store.getLocal(source_local).monotype;
-    try self.bindPatternMonotypes(module_env, pattern_idx, source_mono);
     return switch (module_env.store.getPattern(pattern_idx)) {
         .assign => {
             const local = try self.patternToLocal(pattern_idx);
@@ -5575,7 +5337,6 @@ fn lowerForStmtInto(
             .{},
         ),
     };
-    try self.bindPatternMonotypes(module_env, for_stmt.patt, item_mono);
     const u64_mono = self.store.monotype_store.primIdx(.u64);
     const bool_mono = try self.store.monotype_store.addBoolTagUnion(
         self.allocator,
@@ -5849,7 +5610,6 @@ fn predeclareTrivialBlockStmtPatterns(
             if (builtin.mode == .Debug) {
                 try self.debugAssertNoUnitPrimPatternBinding(module_env, decl.pattern, decl.expr, source_mono, stmt_idx, "s_decl");
             }
-            try self.bindPatternMonotypes(module_env, decl.pattern, source_mono);
             try self.predeclarePatternLocals(module_env, decl.pattern);
             try self.markDirectCallableBackedBindingIfNeeded(
                 module_env,
@@ -5885,7 +5645,6 @@ fn predeclareTrivialBlockStmtPatterns(
             if (builtin.mode == .Debug) {
                 try self.debugAssertNoUnitPrimPatternBinding(module_env, var_decl.pattern_idx, var_decl.expr, source_mono, stmt_idx, "s_var");
             }
-            try self.bindPatternMonotypes(module_env, var_decl.pattern_idx, source_mono);
             try self.predeclarePatternLocals(module_env, var_decl.pattern_idx);
             self.setPatternLocalsReassignable(module_env, var_decl.pattern_idx, true);
             try self.markDirectCallableBackedBindingIfNeeded(
@@ -5922,7 +5681,6 @@ fn predeclareTrivialBlockStmtPatterns(
             if (builtin.mode == .Debug) {
                 try self.debugAssertNoUnitPrimPatternBinding(module_env, reassign.pattern_idx, reassign.expr, source_mono, stmt_idx, "s_reassign");
             }
-            try self.bindPatternMonotypes(module_env, reassign.pattern_idx, source_mono);
             try self.predeclarePatternLocals(module_env, reassign.pattern_idx);
             self.setPatternLocalsReassignable(module_env, reassign.pattern_idx, true);
             try self.markDirectCallableBackedBindingIfNeeded(
@@ -6918,7 +6676,6 @@ fn lowerMatchBranchChainInto(
                 self.current_prelude_bound_locals = &branch_prelude_bound_locals;
                 defer self.current_prelude_bound_locals = saved_prelude_bound_locals;
 
-                try self.bindPatternMonotypes(module_env, branch_pattern.pattern, cond_mono);
                 try self.predeclarePatternLocals(module_env, branch_pattern.pattern);
                 try self.markPatternLocalsPreludeBound(module_env, branch_pattern.pattern);
                 if (representative_pattern_idx) |representative_pattern| {
@@ -8096,11 +7853,6 @@ fn resolveMonotype(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!Monotype
         );
     }
 
-    const resolved_var = self.types_store.resolveVar(ModuleEnv.varFrom(expr_idx)).var_;
-    if (self.type_var_seen.get(resolved_var)) |monotype| {
-        return monotype;
-    }
-
     const module_env = self.all_module_envs[self.current_module_idx];
     const expr = module_env.store.getExpr(expr_idx);
     std.debug.panic(
@@ -8119,133 +7871,6 @@ fn currentCommonIdents(self: *const Self) ModuleEnv.CommonIdents {
     return self.all_module_envs[self.current_module_idx].idents;
 }
 
-fn bindPatternMonotypes(
-    self: *Self,
-    module_env: *const ModuleEnv,
-    pattern_idx: CIR.Pattern.Idx,
-    monotype: Monotype.Idx,
-) Allocator.Error!void {
-    if (monotype.isNone()) return;
-
-    try self.bindTypeVarMonotypes(ModuleEnv.varFrom(pattern_idx), monotype);
-    if (self.lookupExistingPatternLocalInScope(
-        self.current_module_idx,
-        self.current_pattern_scope,
-        pattern_idx,
-    )) |local| {
-        try self.refreshPatternLocalMonotype(pattern_idx, local);
-    }
-
-    const pattern = module_env.store.getPattern(pattern_idx);
-    switch (pattern) {
-        .assign,
-        .underscore,
-        .num_literal,
-        .str_literal,
-        .dec_literal,
-        .small_dec_literal,
-        .frac_f32_literal,
-        .frac_f64_literal,
-        .runtime_error,
-        => {},
-        .as => |a| {
-            try self.bindPatternMonotypes(module_env, a.pattern, monotype);
-        },
-        .nominal => |nom| {
-            try self.bindPatternMonotypes(module_env, nom.backing_pattern, monotype);
-        },
-        .nominal_external => |nom| {
-            try self.bindPatternMonotypes(module_env, nom.backing_pattern, monotype);
-        },
-        .applied_tag => |tag| {
-            const mono_tags = switch (self.store.monotype_store.getMonotype(monotype)) {
-                .tag_union => |tag_union| self.store.monotype_store.getTags(tag_union.tags),
-                else => typeBindingInvariant(
-                    "bindPatternMonotypes(applied_tag): expected tag_union monotype, found '{s}'",
-                    .{@tagName(self.store.monotype_store.getMonotype(monotype))},
-                ),
-            };
-            const tag_idx = self.tagIndexByName(tag.name, mono_tags);
-            const mono_payloads = self.store.monotype_store.getIdxSpan(mono_tags[tag_idx].payloads);
-            const payload_patterns = module_env.store.slicePatterns(tag.args);
-
-            if (builtin.mode == .Debug and payload_patterns.len != mono_payloads.len) {
-                std.debug.panic(
-                    "bindPatternMonotypes(applied_tag): payload arity mismatch for tag '{s}' (patterns={d}, monos={d})",
-                    .{ module_env.getIdent(tag.name), payload_patterns.len, mono_payloads.len },
-                );
-            }
-
-            for (payload_patterns, mono_payloads) |payload_pattern_idx, payload_mono| {
-                try self.bindPatternMonotypes(module_env, payload_pattern_idx, payload_mono);
-            }
-        },
-        .record_destructure => |record_pat| {
-            switch (self.store.monotype_store.getMonotype(monotype)) {
-                .record => |record_mono| {
-                    const mono_fields = self.store.monotype_store.getFields(record_mono.fields);
-                    for (module_env.store.sliceRecordDestructs(record_pat.destructs)) |destruct_idx| {
-                        const destruct = module_env.store.getRecordDestruct(destruct_idx);
-                        const pat_idx = destruct.kind.toPatternIdx();
-                        const field_idx = self.recordFieldIndexByName(destruct.label, mono_fields);
-                        try self.bindPatternMonotypes(module_env, pat_idx, mono_fields[field_idx].type_idx);
-                    }
-                },
-                .unit => {
-                    for (module_env.store.sliceRecordDestructs(record_pat.destructs)) |destruct_idx| {
-                        const destruct = module_env.store.getRecordDestruct(destruct_idx);
-                        try self.bindPatternMonotypes(module_env, destruct.kind.toPatternIdx(), self.store.monotype_store.unit_idx);
-                    }
-                },
-                else => typeBindingInvariant(
-                    "bindPatternMonotypes(record_destructure): expected record monotype, found '{s}'",
-                    .{@tagName(self.store.monotype_store.getMonotype(monotype))},
-                ),
-            }
-        },
-        .list => |list_pat| {
-            const elem_mono = switch (self.store.monotype_store.getMonotype(monotype)) {
-                .list => |list_mono| list_mono.elem,
-                else => typeBindingInvariant(
-                    "bindPatternMonotypes(list): expected list monotype, found '{s}'",
-                    .{@tagName(self.store.monotype_store.getMonotype(monotype))},
-                ),
-            };
-
-            for (module_env.store.slicePatterns(list_pat.patterns)) |elem_pattern_idx| {
-                try self.bindPatternMonotypes(module_env, elem_pattern_idx, elem_mono);
-            }
-
-            if (list_pat.rest_info) |rest| {
-                if (rest.pattern) |rest_pattern_idx| {
-                    try self.bindPatternMonotypes(module_env, rest_pattern_idx, monotype);
-                }
-            }
-        },
-        .tuple => |tuple_pat| {
-            const mono_elems = switch (self.store.monotype_store.getMonotype(monotype)) {
-                .tuple => |tuple_mono| self.store.monotype_store.getIdxSpan(tuple_mono.elems),
-                else => typeBindingInvariant(
-                    "bindPatternMonotypes(tuple): expected tuple monotype, found '{s}'",
-                    .{@tagName(self.store.monotype_store.getMonotype(monotype))},
-                ),
-            };
-            const elem_patterns = module_env.store.slicePatterns(tuple_pat.patterns);
-
-            if (builtin.mode == .Debug and elem_patterns.len != mono_elems.len) {
-                std.debug.panic(
-                    "bindPatternMonotypes(tuple): arity mismatch (patterns={d}, monos={d})",
-                    .{ elem_patterns.len, mono_elems.len },
-                );
-            }
-
-            for (elem_patterns, mono_elems) |elem_pattern_idx, elem_mono| {
-                try self.bindPatternMonotypes(module_env, elem_pattern_idx, elem_mono);
-            }
-        },
-    }
-}
-
 fn refreshPatternLocalMonotype(
     self: *Self,
     pattern_idx: CIR.Pattern.Idx,
@@ -8259,6 +7884,11 @@ fn requirePatternMonotype(
     self: *Self,
     pattern_idx: CIR.Pattern.Idx,
 ) Allocator.Error!Monotype.Idx {
+    const explicit_key = patternScopeKey(self.current_module_idx, self.current_pattern_scope, pattern_idx);
+    if (self.explicit_pattern_local_monotypes.get(explicit_key)) |monotype| {
+        return monotype;
+    }
+
     if (self.lookupProgramPatternMonotype(pattern_idx)) |resolved| {
         return self.importMonotypeFromStore(
             &self.callable_pipeline.context_mono.monotype_store,
@@ -8266,11 +7896,6 @@ fn requirePatternMonotype(
             resolved.module_idx,
             self.current_module_idx,
         );
-    }
-
-    const resolved_var = self.types_store.resolveVar(ModuleEnv.varFrom(pattern_idx)).var_;
-    if (self.type_var_seen.get(resolved_var)) |monotype| {
-        return monotype;
     }
 
     std.debug.panic(
@@ -8341,461 +7966,4 @@ fn resolveTagNameForMonotype(
         "tag '{s}' missing from monotype",
         .{module_env.getIdent(tag_name)},
     );
-}
-
-fn bindTagPayloadsByName(
-    self: *Self,
-    tag_name: Ident.Idx,
-    payload_vars: []const types.Var,
-    mono_tags: []const Monotype.Tag,
-) Allocator.Error!void {
-    for (mono_tags) |mono_tag| {
-        if (!self.identsTagNameEquivalent(mono_tag.name, tag_name)) continue;
-
-        const mono_payload_span = mono_tag.payloads;
-        if (payload_vars.len != mono_payload_span.len) {
-            const module_env = self.all_module_envs[self.current_module_idx];
-            typeBindingInvariant(
-                "bindFlatTypeMonotypes(tag_union): payload arity mismatch for tag '{s}'",
-                .{module_env.getIdent(tag_name)},
-            );
-        }
-        for (payload_vars, 0..) |payload_var, i| {
-            const mono_payload = self.store.monotype_store.getIdxSpan(mono_payload_span)[i];
-            try self.bindTypeVarMonotypes(payload_var, mono_payload);
-        }
-        return;
-    }
-
-    const module_env = self.all_module_envs[self.current_module_idx];
-    typeBindingInvariant(
-        "bindFlatTypeMonotypes(tag_union): tag '{s}' missing from monotype",
-        .{module_env.getIdent(tag_name)},
-    );
-}
-
-fn bindRecordFieldByName(
-    self: *Self,
-    field_name: Ident.Idx,
-    field_var: types.Var,
-    mono_fields: []const Monotype.Field,
-) Allocator.Error!void {
-    for (mono_fields) |mono_field| {
-        if (!self.identsStructurallyEqual(field_name, mono_field.name)) continue;
-        try self.bindTypeVarMonotypes(field_var, mono_field.type_idx);
-        return;
-    }
-
-    const module_env = self.all_module_envs[self.current_module_idx];
-    typeBindingInvariant(
-        "bindFlatTypeMonotypes(record_unbound): field '{s}' missing from monotype",
-        .{module_env.getIdent(field_name)},
-    );
-}
-
-/// Bind concrete monotypes to polymorphic vars for the current lowering scope.
-fn bindTypeVarMonotypes(self: *Self, type_var: types.Var, monotype: Monotype.Idx) Allocator.Error!void {
-    if (monotype.isNone()) return;
-
-    const resolved = self.types_store.resolveVar(type_var);
-    if (self.type_var_seen.get(resolved.var_)) |existing| {
-        if (!(try self.monotypesStructurallyEqual(existing, monotype))) {
-            const active_callable_def = self.activeCallableDef();
-            const active_callable_kind = switch (self.currentSourceContext()) {
-                .callable_inst => |context_id| callableRuntimeValueKindText(
-                    self.callable_pipeline.getCallableInst(@enumFromInt(@intFromEnum(context_id))).runtime_value,
-                ),
-                .root_expr, .provenance_expr, .template_expr => "none",
-            };
-            const context_region = if (active_callable_def) |callable_def|
-                callable_def.source_region
-            else
-                null;
-            const root_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(resolved.var_));
-            const root_node = self.all_module_envs[self.current_module_idx].store.nodes.get(root_node_idx);
-            typeBindingInvariant(
-                "bindTypeVarMonotypes: conflicting monotype binding for type var root {d} node_tag={s} in module {d} existing={d} existing_mono={any} new={d} new_mono={any} callable_inst={d} root_source_expr={d} template_expr={d} template_kind={s} template_region={any}",
-                .{
-                    @intFromEnum(resolved.var_),
-                    @tagName(root_node.tag),
-                    self.current_module_idx,
-                    @intFromEnum(existing),
-                    self.store.monotype_store.getMonotype(existing),
-                    @intFromEnum(monotype),
-                    self.store.monotype_store.getMonotype(monotype),
-                    self.currentCallableInstRawForDebug(),
-                    self.currentRootExprRawForDebug(),
-                    if (active_callable_def) |callable_def| @intFromEnum(self.callableDefRuntimeExpr(callable_def).source_expr) else std.math.maxInt(u32),
-                    active_callable_kind,
-                    context_region,
-                },
-            );
-        }
-        return;
-    }
-
-    switch (resolved.desc.content) {
-        .flex, .rigid => {
-            try self.type_var_seen.put(resolved.var_, monotype);
-        },
-        .alias => |alias| {
-            try self.type_var_seen.put(resolved.var_, monotype);
-            const backing_var = self.types_store.getAliasBackingVar(alias);
-            try self.bindTypeVarMonotypes(backing_var, monotype);
-        },
-        .structure => |flat_type| {
-            // Register before recursing so recursive structures short-circuit.
-            try self.type_var_seen.put(resolved.var_, monotype);
-            try self.bindFlatTypeMonotypes(resolved.var_, flat_type, monotype);
-        },
-        .err => {},
-    }
-}
-
-fn bindFlatTypeMonotypes(
-    self: *Self,
-    root_var: types.Var,
-    flat_type: types.FlatType,
-    monotype: Monotype.Idx,
-) Allocator.Error!void {
-    if (monotype.isNone()) return;
-
-    const mono = self.store.monotype_store.getMonotype(monotype);
-    switch (flat_type) {
-        .fn_pure, .fn_effectful, .fn_unbound => |func| {
-            const mfunc = switch (mono) {
-                .func => |mfunc| mfunc,
-                else => typeBindingInvariant(
-                    "bindFlatTypeMonotypes(fn): expected function monotype, found '{s}'",
-                    .{@tagName(mono)},
-                ),
-            };
-            const type_args = self.types_store.sliceVars(func.args);
-            const mono_arg_span = mfunc.args;
-            if (type_args.len != mono_arg_span.len) {
-                typeBindingInvariant(
-                    "bindFlatTypeMonotypes(fn): arity mismatch (type={d}, monotype={d})",
-                    .{ type_args.len, mono_arg_span.len },
-                );
-            }
-            for (type_args, 0..) |ta, i| {
-                const ma = self.store.monotype_store.getIdxSpan(mono_arg_span)[i];
-                try self.bindTypeVarMonotypes(ta, ma);
-            }
-            try self.bindTypeVarMonotypes(func.ret, mfunc.ret);
-        },
-        .nominal_type => |nominal| {
-            const common = self.currentCommonIdents();
-            const ident = nominal.ident.ident_idx;
-            const origin = nominal.origin_module;
-
-            if (origin.eql(common.builtin_module) and ident.eql(common.list)) {
-                const mlist = switch (mono) {
-                    .list => |mlist| mlist,
-                    else => typeBindingInvariant(
-                        "bindFlatTypeMonotypes(nominal List): expected list monotype, found '{s}'",
-                        .{@tagName(mono)},
-                    ),
-                };
-                const type_args = self.types_store.sliceNominalArgs(nominal);
-                if (type_args.len != 1) {
-                    typeBindingInvariant(
-                        "bindFlatTypeMonotypes(nominal List): expected exactly 1 type arg, found {d}",
-                        .{type_args.len},
-                    );
-                }
-                try self.bindTypeVarMonotypes(type_args[0], mlist.elem);
-                return;
-            }
-            if (origin.eql(common.builtin_module) and ident.eql(common.box)) {
-                const mbox = switch (mono) {
-                    .box => |mbox| mbox,
-                    else => typeBindingInvariant(
-                        "bindFlatTypeMonotypes(nominal Box): expected box monotype, found '{s}'",
-                        .{@tagName(mono)},
-                    ),
-                };
-                const type_args = self.types_store.sliceNominalArgs(nominal);
-                if (type_args.len != 1) {
-                    typeBindingInvariant(
-                        "bindFlatTypeMonotypes(nominal Box): expected exactly 1 type arg, found {d}",
-                        .{type_args.len},
-                    );
-                }
-                try self.bindTypeVarMonotypes(type_args[0], mbox.inner);
-                return;
-            }
-
-            if (origin.eql(common.builtin_module) and builtinPrimForNominal(ident, common) != null) {
-                const store_nodes_len = self.all_module_envs[self.current_module_idx].store.nodes.len();
-                switch (mono) {
-                    .prim => {},
-                    else => typeBindingInvariant(
-                        "bindFlatTypeMonotypes(nominal prim): expected prim monotype, found '{s}' for root_var={d} module={d} store_nodes_len={d} root_var_in_range={any} callable_inst={d} root_source_expr={d}",
-                        .{
-                            @tagName(mono),
-                            @intFromEnum(root_var),
-                            self.current_module_idx,
-                            store_nodes_len,
-                            @intFromEnum(root_var) < store_nodes_len,
-                            self.currentCallableInstRawForDebug(),
-                            self.currentRootExprRawForDebug(),
-                        },
-                    ),
-                }
-                return;
-            }
-
-            // Non-builtin nominals (and non-primitive builtin nominals) resolve by backing var.
-            const backing_var = self.types_store.getNominalBackingVar(nominal);
-            try self.bindTypeVarMonotypes(backing_var, monotype);
-        },
-        .record => |record| {
-            const mrec = switch (mono) {
-                .record => |mrec| mrec,
-                .unit => {
-                    try self.bindRecordFlatTypeToUnit(record);
-                    return;
-                },
-                else => typeBindingInvariant(
-                    "bindFlatTypeMonotypes(record): expected record monotype, found '{s}'",
-                    .{@tagName(mono)},
-                ),
-            };
-            const mono_field_span = mrec.fields;
-            // Copy mono_fields into a local owned buffer. Recursive bindTypeVarMonotypes
-            // calls below may reallocate the monotype store, invalidating any direct
-            // slice into it. Monotype.Field contains only indices (no pointers).
-            var owned_mono_fields: std.ArrayListUnmanaged(Monotype.Field) = .empty;
-            defer owned_mono_fields.deinit(self.allocator);
-            try owned_mono_fields.appendSlice(self.allocator, self.store.monotype_store.getFields(mono_field_span));
-            const mono_fields = owned_mono_fields.items;
-            var seen_field_indices: std.ArrayListUnmanaged(u32) = .empty;
-            defer seen_field_indices.deinit(self.allocator);
-
-            var current_row = record;
-            rows: while (true) {
-                const fields_slice = self.types_store.getRecordFieldsSlice(current_row.fields);
-                const field_names = fields_slice.items(.name);
-                const field_vars = fields_slice.items(.var_);
-
-                for (field_names, field_vars) |field_name, field_var| {
-                    const field_idx = self.recordFieldIndexByName(field_name, mono_fields);
-                    try appendSeenIndex(self.allocator, &seen_field_indices, field_idx);
-                    try self.bindTypeVarMonotypes(field_var, mono_fields[field_idx].type_idx);
-                }
-
-                var ext_var = current_row.ext;
-                while (true) {
-                    const ext_resolved = self.types_store.resolveVar(ext_var);
-                    switch (ext_resolved.desc.content) {
-                        .alias => |alias| {
-                            ext_var = self.types_store.getAliasBackingVar(alias);
-                            continue;
-                        },
-                        .structure => |ext_flat| switch (ext_flat) {
-                            .record => |next_row| {
-                                current_row = next_row;
-                                continue :rows;
-                            },
-                            .record_unbound => |fields_range| {
-                                const ext_fields = self.types_store.getRecordFieldsSlice(fields_range);
-                                const ext_field_names = ext_fields.items(.name);
-                                const ext_field_vars = ext_fields.items(.var_);
-                                for (ext_field_names, ext_field_vars) |field_name, field_var| {
-                                    const field_idx = self.recordFieldIndexByName(field_name, mono_fields);
-                                    try appendSeenIndex(self.allocator, &seen_field_indices, field_idx);
-                                    try self.bindTypeVarMonotypes(field_var, mono_fields[field_idx].type_idx);
-                                }
-                                break :rows;
-                            },
-                            .empty_record => break :rows,
-                            else => typeBindingInvariant(
-                                "bindFlatTypeMonotypes(record): unexpected ext flat type '{s}'",
-                                .{@tagName(ext_flat)},
-                            ),
-                        },
-                        .flex, .rigid => {
-                            try self.bindRecordRowTail(ext_var, mono_fields, seen_field_indices.items);
-                            for (mono_fields, 0..) |_, field_idx| {
-                                try appendSeenIndex(self.allocator, &seen_field_indices, @intCast(field_idx));
-                            }
-                            break :rows;
-                        },
-                        .err => typeBindingInvariant(
-                            "bindFlatTypeMonotypes(record): error extension",
-                            .{},
-                        ),
-                    }
-                }
-            }
-
-            for (mono_fields, 0..) |mono_field, field_idx| {
-                if (!seenIndex(seen_field_indices.items, @intCast(field_idx))) {
-                    typeBindingInvariant(
-                        "bindFlatTypeMonotypes(record): monotype field '{s}' missing from type row",
-                        .{mono_field.name.text(self.all_module_envs)},
-                    );
-                }
-            }
-        },
-        .record_unbound => |fields_range| {
-            const mrec = switch (mono) {
-                .record => |mrec| mrec,
-                .unit => {
-                    try self.bindRecordUnboundFlatTypeToUnit(fields_range);
-                    return;
-                },
-                else => typeBindingInvariant(
-                    "bindFlatTypeMonotypes(record_unbound): expected record monotype, found '{s}'",
-                    .{@tagName(mono)},
-                ),
-            };
-            const fields_slice = self.types_store.getRecordFieldsSlice(fields_range);
-            const field_names = fields_slice.items(.name);
-            const field_vars = fields_slice.items(.var_);
-            const mono_field_span = mrec.fields;
-
-            if (field_names.len != mono_field_span.len) {
-                typeBindingInvariant(
-                    "bindFlatTypeMonotypes(record_unbound): field count mismatch (type={d}, monotype={d})",
-                    .{ field_names.len, mono_field_span.len },
-                );
-            }
-
-            for (field_names, field_vars) |field_name, field_var| {
-                try self.bindRecordFieldByName(field_name, field_var, self.store.monotype_store.getFields(mono_field_span));
-            }
-        },
-        .tuple => |tuple| {
-            const mtuple = switch (mono) {
-                .tuple => |mtuple| mtuple,
-                else => typeBindingInvariant(
-                    "bindFlatTypeMonotypes(tuple): expected tuple monotype, found '{s}'",
-                    .{@tagName(mono)},
-                ),
-            };
-            const elem_vars = self.types_store.sliceVars(tuple.elems);
-            const mono_elem_span = mtuple.elems;
-            if (elem_vars.len != mono_elem_span.len) {
-                typeBindingInvariant(
-                    "bindFlatTypeMonotypes(tuple): arity mismatch (type={d}, monotype={d})",
-                    .{ elem_vars.len, mono_elem_span.len },
-                );
-            }
-            for (elem_vars, 0..) |ev, i| {
-                const me = self.store.monotype_store.getIdxSpan(mono_elem_span)[i];
-                try self.bindTypeVarMonotypes(ev, me);
-            }
-        },
-        .tag_union => |tag_union_row| {
-            const mono_tag_span = switch (mono) {
-                .tag_union => |mtu| mtu.tags,
-                else => typeBindingInvariant(
-                    "bindFlatTypeMonotypes(tag_union): expected tag_union monotype, found '{s}'",
-                    .{@tagName(mono)},
-                ),
-            };
-            // Copy mono_tags into a local owned buffer. Recursive bindTypeVarMonotypes
-            // calls below may reallocate the monotype store (e.g. via addTags/addMonotype
-            // in remainingTagUnionTailMonotype), which would invalidate any direct slice
-            // into the store. Monotype.Tag contains only indices (no pointers), so a
-            // value copy is safe and cheap.
-            var owned_mono_tags: std.ArrayListUnmanaged(Monotype.Tag) = .empty;
-            defer owned_mono_tags.deinit(self.allocator);
-            try owned_mono_tags.appendSlice(self.allocator, self.store.monotype_store.getTags(mono_tag_span));
-            const mono_tags = owned_mono_tags.items;
-            var seen_tag_indices: std.ArrayListUnmanaged(u32) = .empty;
-            defer seen_tag_indices.deinit(self.allocator);
-
-            var current_row = tag_union_row;
-            rows: while (true) {
-                const type_tags = self.types_store.getTagsSlice(current_row.tags);
-                const type_tag_names = type_tags.items(.name);
-                const type_tag_args = type_tags.items(.args);
-
-                for (type_tag_names, type_tag_args) |tag_name, tag_args| {
-                    const tag_idx = self.tagIndexByName(tag_name, mono_tags);
-                    try appendSeenIndex(self.allocator, &seen_tag_indices, tag_idx);
-                    const payload_vars = self.types_store.sliceVars(tag_args);
-                    try self.bindTagPayloadsByName(tag_name, payload_vars, mono_tags);
-                }
-
-                var ext_var = current_row.ext;
-                while (true) {
-                    const ext_resolved = self.types_store.resolveVar(ext_var);
-                    switch (ext_resolved.desc.content) {
-                        .alias => |alias| {
-                            ext_var = self.types_store.getAliasBackingVar(alias);
-                            continue;
-                        },
-                        .structure => |ext_flat| switch (ext_flat) {
-                            .tag_union => |next_row| {
-                                current_row = next_row;
-                                continue :rows;
-                            },
-                            .empty_tag_union => break :rows,
-                            else => typeBindingInvariant(
-                                "bindFlatTypeMonotypes(tag_union): unexpected ext flat type '{s}'",
-                                .{@tagName(ext_flat)},
-                            ),
-                        },
-                        .flex, .rigid => {
-                            try self.bindTagUnionRowTail(ext_var, mono_tags, seen_tag_indices.items);
-                            for (mono_tags, 0..) |_, tag_idx| {
-                                try appendSeenIndex(self.allocator, &seen_tag_indices, @intCast(tag_idx));
-                            }
-                            break :rows;
-                        },
-                        .err => typeBindingInvariant(
-                            "bindFlatTypeMonotypes(tag_union): error extension",
-                            .{},
-                        ),
-                    }
-                }
-            }
-
-            for (mono_tags, 0..) |mono_tag, tag_idx| {
-                if (!seenIndex(seen_tag_indices.items, @intCast(tag_idx))) {
-                    typeBindingInvariant(
-                        "bindFlatTypeMonotypes(tag_union): monotype tag '{s}' missing from type row",
-                        .{mono_tag.name.text(self.all_module_envs)},
-                    );
-                }
-            }
-        },
-        .empty_record => {
-            switch (mono) {
-                .unit => {},
-                .record => |mrec| {
-                    const fields = self.store.monotype_store.getFields(mrec.fields);
-                    if (fields.len != 0) {
-                        typeBindingInvariant(
-                            "bindFlatTypeMonotypes(empty_record): expected zero record fields, found {d}",
-                            .{fields.len},
-                        );
-                    }
-                },
-                else => typeBindingInvariant(
-                    "bindFlatTypeMonotypes(empty_record): expected unit/empty-record monotype, found '{s}'",
-                    .{@tagName(mono)},
-                ),
-            }
-        },
-        .empty_tag_union => {
-            const mono_tags = switch (mono) {
-                .tag_union => |mtu| self.store.monotype_store.getTags(mtu.tags),
-                else => typeBindingInvariant(
-                    "bindFlatTypeMonotypes(empty_tag_union): expected empty tag union monotype, found '{s}'",
-                    .{@tagName(mono)},
-                ),
-            };
-            if (mono_tags.len != 0) {
-                typeBindingInvariant(
-                    "bindFlatTypeMonotypes(empty_tag_union): expected zero tags, found {d}",
-                    .{mono_tags.len},
-                );
-            }
-        },
-    }
 }

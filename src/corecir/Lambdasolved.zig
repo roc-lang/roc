@@ -76,14 +76,6 @@ pub const CallableTemplate = struct {
     source_region: Region = Region.zero(),
 };
 
-pub const DeferredLocalCallable = struct {
-    pattern_idx: CIR.Pattern.Idx,
-    cir_expr: CIR.Expr.Idx,
-    module_idx: u32,
-    source_key: u64,
-    type_root: types.Var,
-};
-
 pub const ExprSource = struct {
     module_idx: u32,
     expr_idx: CIR.Expr.Idx,
@@ -130,7 +122,6 @@ pub const Result = struct {
     callable_templates: std.ArrayListUnmanaged(CallableTemplate),
     source_exprs: std.AutoHashMapUnmanaged(u64, ExprSource),
     callable_template_ids_by_source: std.AutoHashMapUnmanaged(u64, CallableTemplateId),
-    deferred_local_callables: std.AutoHashMapUnmanaged(u64, DeferredLocalCallable),
     lambda_set_member_entries: std.ArrayListUnmanaged(CallableInstId),
     lambda_sets: std.ArrayListUnmanaged(LambdaSet),
     context_expr_callable_values: std.AutoHashMapUnmanaged(ContextExprKey, SolvedCallableValue),
@@ -143,7 +134,6 @@ pub const Result = struct {
             .callable_templates = .empty,
             .source_exprs = .empty,
             .callable_template_ids_by_source = .empty,
-            .deferred_local_callables = .empty,
             .lambda_set_member_entries = .empty,
             .lambda_sets = .empty,
             .context_expr_callable_values = .empty,
@@ -156,7 +146,6 @@ pub const Result = struct {
         self.callable_templates.deinit(allocator);
         self.source_exprs.deinit(allocator);
         self.callable_template_ids_by_source.deinit(allocator);
-        self.deferred_local_callables.deinit(allocator);
         self.lambda_set_member_entries.deinit(allocator);
         self.lambda_sets.deinit(allocator);
         self.context_expr_callable_values.deinit(allocator);
@@ -178,10 +167,6 @@ pub const Result = struct {
 
     pub fn getExprCallableTemplate(self: *const Result, module_idx: u32, expr_idx: CIR.Expr.Idx) ?CallableTemplateId {
         return self.callable_template_ids_by_source.get(packExprSourceKey(module_idx, expr_idx));
-    }
-
-    pub fn getDeferredLocalCallable(self: *const Result, module_idx: u32, pattern_idx: CIR.Pattern.Idx) ?DeferredLocalCallable {
-        return self.deferred_local_callables.get(packLocalPatternSourceKey(module_idx, pattern_idx));
     }
 
     pub fn getPatternSourceExpr(

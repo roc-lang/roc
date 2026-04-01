@@ -281,10 +281,6 @@ pub const LirProgram = struct {
         ) catch return error.OutOfMemory;
         defer mir_lower.deinit();
 
-        if (maybe_type_scope) |type_scope| {
-            mir_lower.setTypeScope(module_idx, type_scope) catch return error.OutOfMemory;
-        }
-
         const root_const_id = mir_lower.lowerRootConst(expr_idx) catch return error.RuntimeError;
         var mir_analyses = mir.Analyses.init(
             self.allocator,
@@ -370,10 +366,6 @@ pub const LirProgram = struct {
             app_module_idx,
         ) catch return error.OutOfMemory;
         defer mir_lower.deinit();
-
-        if (type_scope) |ts| {
-            mir_lower.setTypeScope(module_idx, ts) catch return error.OutOfMemory;
-        }
 
         const root_const_id = mir_lower.lowerRootConst(expr_idx) catch return error.RuntimeError;
 

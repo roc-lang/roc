@@ -94,26 +94,38 @@ pub const RootExprId = enum(u32) {
 };
 
 pub const CallableValue = union(enum) {
-    none,
     direct: CallableInstId,
     packed_fn: PackedFnId,
 };
 
 pub const CallSite = union(enum) {
-    none,
     direct: CallableInstId,
     indirect_call: IndirectCallId,
 };
 
 pub const LookupResolution = union(enum) {
-    none,
     expr: ExprRef,
     def: Lambdasolved.ExternalDefSource,
 };
 
-pub const DispatchTargetResolution = union(enum) {
-    none,
-    target: ContextMono.DispatchExprTarget,
+pub const ExprSemantic = union(enum) {
+    callable_value: CallableValue,
+    call_site: CallSite,
+    dispatch_target: ContextMono.DispatchExprTarget,
+    lookup_resolution: LookupResolution,
+};
+
+pub const ExprSemanticSpan = extern struct {
+    start: u32,
+    len: u16,
+
+    pub fn empty() ExprSemanticSpan {
+        return .{ .start = 0, .len = 0 };
+    }
+
+    pub fn isEmpty(self: ExprSemanticSpan) bool {
+        return self.len == 0;
+    }
 };
 
 pub const CallableMemberSpan = extern struct {
@@ -157,8 +169,8 @@ pub const CaptureStorage = union(enum) {
     recursive_member,
 };
 
-pub const CaptureCallableValue = union(enum) {
-    none,
+pub const CaptureCallableBinding = union(enum) {
+    non_callable,
     direct: CallableInstId,
 };
 
@@ -169,7 +181,7 @@ pub const CallableDefId = enum(u32) {
 pub const CaptureField = struct {
     pattern_idx: CIR.Pattern.Idx,
     local_monotype: ContextMono.ResolvedMonotype,
-    callable_value: CaptureCallableValue = .none,
+    callable_binding: CaptureCallableBinding,
     source: CaptureValueSource,
     storage: CaptureStorage,
 };
@@ -218,10 +230,7 @@ pub const Expr = struct {
     monotype: ContextMono.ResolvedMonotype,
     child_exprs: ExprIdSpan = .empty(),
     child_stmts: StmtIdSpan = .empty(),
-    callable_value: CallableValue = .none,
-    call_site: CallSite = .none,
-    dispatch_target: DispatchTargetResolution = .none,
-    lookup_resolution: LookupResolution = .none,
+    semantics: ExprSemanticSpan = .empty(),
 };
 
 pub const Stmt = struct {
@@ -245,6 +254,7 @@ pub const Program = struct {
     exprs: std.ArrayListUnmanaged(Expr),
     expr_ids_by_key: std.AutoHashMapUnmanaged(ContextExprKey, ExprId),
     expr_child_entries: std.ArrayListUnmanaged(ExprId),
+    expr_semantics: std.ArrayListUnmanaged(ExprSemantic),
     stmts: std.ArrayListUnmanaged(Stmt),
     stmt_child_entries: std.ArrayListUnmanaged(StmtId),
     root_exprs: std.ArrayListUnmanaged(RootExpr),
@@ -266,6 +276,7 @@ pub const Program = struct {
             .exprs = .empty,
             .expr_ids_by_key = .empty,
             .expr_child_entries = .empty,
+            .expr_semantics = .empty,
             .stmts = .empty,
             .stmt_child_entries = .empty,
             .root_exprs = .empty,
@@ -288,6 +299,7 @@ pub const Program = struct {
         self.exprs.deinit(allocator);
         self.expr_ids_by_key.deinit(allocator);
         self.expr_child_entries.deinit(allocator);
+        self.expr_semantics.deinit(allocator);
         self.stmts.deinit(allocator);
         self.stmt_child_entries.deinit(allocator);
         self.root_exprs.deinit(allocator);
@@ -336,6 +348,11 @@ pub const Program = struct {
 
     pub fn getExpr(self: *const Program, expr_id: ExprId) *const Expr {
         return &self.exprs.items[@intFromEnum(expr_id)];
+    }
+
+    pub fn getExprSemantics(self: *const Program, span: ExprSemanticSpan) []const ExprSemantic {
+        if (span.len == 0) return &.{};
+        return self.expr_semantics.items[span.start..][0..span.len];
     }
 
     pub fn getExprId(
