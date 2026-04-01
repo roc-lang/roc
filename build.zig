@@ -78,6 +78,7 @@ fn getReleaseTargetQuery() std.Target.Query {
 const TestsSummaryStep = struct {
     step: Step,
     has_filters: bool,
+    test_filters: []const []const u8,
     forced_passes: u64,
 
     fn create(
@@ -94,6 +95,7 @@ const TestsSummaryStep = struct {
                 .makeFn = make,
             }),
             .has_filters = test_filters.len > 0,
+            .test_filters = test_filters,
             .forced_passes = @intCast(forced_passes),
         };
         return self;
@@ -101,6 +103,26 @@ const TestsSummaryStep = struct {
 
     fn addRun(self: *TestsSummaryStep, run_step: *Step) void {
         self.step.dependOn(run_step);
+    }
+
+    /// Returns the position of the last '.' within the common prefix of a and b.
+    /// Returns 0 if there is no shared dot-delimited prefix.
+    fn commonDotPrefix(a: []const u8, b: []const u8) usize {
+        const min_len = @min(a.len, b.len);
+        var last_dot: usize = 0;
+        for (0..min_len) |i| {
+            if (a[i] != b[i]) break;
+            if (a[i] == '.') last_dot = i;
+        }
+        return last_dot;
+    }
+
+    /// Returns true if the test name contains any of the user's filter strings.
+    fn matchesUserFilter(test_filters: []const []const u8, name: []const u8) bool {
+        for (test_filters) |filter| {
+            if (std.mem.indexOf(u8, name, filter) != null) return true;
+        }
+        return false;
     }
 
     fn make(step: *Step, options: Step.MakeOptions) !void {
@@ -119,6 +141,42 @@ const TestsSummaryStep = struct {
         if (self.has_filters and self.forced_passes != 0) {
             const subtract = @min(effective_passed, self.forced_passes);
             effective_passed -= subtract;
+        }
+
+        // When filters are active, print the names of all tests that matched.
+        // Consecutive tests sharing a common dot-delimited prefix are shown
+        // in a compact form to avoid visual repetition.
+        if (self.has_filters and effective_passed > 0) {
+            const max_indent = 256;
+            const spaces = [_]u8{' '} ** max_indent;
+            var prev_module: []const u8 = "";
+            var prev_name: []const u8 = "";
+
+            for (step.dependencies.items) |dependency| {
+                if (dependency.id != .run) continue;
+                const run: *std.Build.Step.Run = @fieldParentPtr("step", dependency);
+                const tm = run.cached_test_metadata orelse continue;
+                const module_name = if (run.producer) |p| p.name else "unknown";
+                for (tm.names) |name_offset| {
+                    const name = std.mem.sliceTo(tm.string_bytes[name_offset..], 0);
+                    if (name.len == 0) continue;
+                    if (!matchesUserFilter(self.test_filters, name)) continue;
+
+                    const shared_dot = if (std.mem.eql(u8, module_name, prev_module))
+                        commonDotPrefix(name, prev_name)
+                    else
+                        0;
+
+                    if (shared_dot > 0) {
+                        const indent_len = @min(2 + module_name.len + 2 + shared_dot, max_indent);
+                        std.debug.print("{s}{s}\n", .{ spaces[0..indent_len], name[shared_dot..] });
+                    } else {
+                        std.debug.print("  {s}: {s}\n", .{ module_name, name });
+                    }
+                    prev_module = module_name;
+                    prev_name = name;
+                }
+            }
         }
 
         if (effective_passed == 0) {

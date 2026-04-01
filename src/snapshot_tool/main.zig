@@ -1382,6 +1382,69 @@ fn processSnapshotContent(
         generated_reports.deinit();
     }
 
+    // Evaluate expect statements for snippet tests (same as `roc test`).
+    // Only runs when there are no compilation errors.
+    if (content.meta.node_type == .snippet) snippet_expects: {
+        const builtin_env = config.builtin_module orelse unreachable;
+        if (generated_reports.items.len > 0) break :snippet_expects;
+
+        // Resolve imports so the interpreter can look up external functions (e.g. List.first).
+        // The type checker has its own fallback for unresolved imports, but the interpreter
+        // requires them to be explicitly resolved.
+        can_ir.imports.resolveImports(can_ir, builtin_modules.items);
+
+        const TestRunner = eval_mod.TestRunner;
+        const builtin_types = eval_mod.BuiltinTypes.init(
+            config.builtin_indices,
+            builtin_env,
+            builtin_env,
+            builtin_env,
+        );
+
+        // Use an arena for the test runner so that roc heap allocations
+        // (made via testRocAlloc during interpretation) are all freed
+        // when the arena is deinited, avoiding leaks from intermediate values.
+        var eval_arena = std.heap.ArenaAllocator.init(allocator);
+        defer eval_arena.deinit();
+        const eval_allocator = eval_arena.allocator();
+
+        var test_runner = TestRunner.init(
+            eval_allocator,
+            can_ir,
+            builtin_types,
+            builtin_modules.items,
+            builtin_env,
+            &solver.import_mapping,
+        ) catch |err| {
+            std.log.err("Failed to create test runner for {s}: {}", .{ output_path, err });
+            success = false;
+            break :snippet_expects;
+        };
+        defer test_runner.deinit();
+
+        const summary = test_runner.eval_all() catch |err| {
+            std.log.err("Failed to evaluate expects in {s}: {}", .{ output_path, err });
+            success = false;
+            break :snippet_expects;
+        };
+
+        if (summary.failed > 0) {
+            std.debug.print(
+                \\
+                \\-- EXPECT FAILURES --------------------------------
+                \\
+                \\{d} expect(s) failed in {s}
+                \\({d} passed, {d} failed)
+                \\
+                \\
+            , .{
+                summary.failed, output_path,
+                summary.passed, summary.failed,
+            });
+            success = false;
+        }
+    }
+
     // Generate all sections
     // For mono tests, the order is: META, SOURCE, MONO, FORMATTED, then the rest
     // For other tests, the order is: META, SOURCE, EXPECTED, PROBLEMS, TOKENS, PARSE, FORMATTED, CANONICALIZE, TYPES

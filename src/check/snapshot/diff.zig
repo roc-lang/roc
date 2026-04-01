@@ -698,6 +698,7 @@ test "editDistance - single substitution" {
 test "editDistance - transposition" {
     // spellchecker:ignore-next-line
     try std.testing.expectEqual(@as(u32, 1), editDistance("teh", "the"));
+    // spellchecker:ignore-next-line
     try std.testing.expectEqual(@as(u32, 1), editDistance("ab", "ba"));
 }
 

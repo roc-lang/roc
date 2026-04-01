@@ -650,6 +650,7 @@ test "drop_prefix segfault regression" {
     defer allocator.free(run_result.stderr);
 
     try util.checkSuccess(run_result);
+    try testing.expectEqualStrings("000000000000000000000000\n", run_result.stdout);
 }
 
 test "drop_prefix match use-after-free regression" {

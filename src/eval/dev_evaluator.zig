@@ -721,10 +721,14 @@ pub const DevEvaluator = struct {
             env.common.idents.interner.enableRuntimeInserts(env.gpa) catch return error.OutOfMemory;
         }
 
-        // Other evaluators may have resolved this module's imports against a
-        // different module ordering. Refresh them here so CIR external lookups
-        // line up with the slice we are about to hand to MIR lowering.
-        module_env.imports.resolveImports(module_env, all_module_envs);
+        // Other evaluators may have resolved imports against a different module
+        // ordering. Refresh all modules here so CIR external lookups line up
+        // with the slice we are about to hand to MIR lowering. Monomorphize
+        // follows cross-module calls, so every module's resolved indices must
+        // be consistent with all_module_envs.
+        for (all_module_envs) |env| {
+            env.imports.resolveImports(env, all_module_envs);
+        }
 
         // Find the module index for this module
         const module_idx = findModuleEnvIdx(all_module_envs, module_env) orelse return error.ModuleEnvNotFound;
@@ -881,8 +885,11 @@ pub const DevEvaluator = struct {
             env.common.idents.interner.enableRuntimeInserts(env.gpa) catch return error.OutOfMemory;
         }
 
-        // Refresh imports for this module ordering
-        module_env.imports.resolveImports(module_env, all_module_envs);
+        // Refresh imports for all modules so cross-module lookups in
+        // Monomorphize use indices consistent with all_module_envs.
+        for (all_module_envs) |env| {
+            env.imports.resolveImports(env, all_module_envs);
+        }
 
         // Find the module index for this module
         const module_idx = findModuleEnvIdx(all_module_envs, module_env) orelse return error.ModuleEnvNotFound;

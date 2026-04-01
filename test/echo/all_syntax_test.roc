@@ -59,9 +59,7 @@ match_list_patterns = |lst| {
 		[2, .., 1] => 88
 		[1, .. as tail] => 77 + tail.len()
 		[_head, 5] => 55
-
-		# Not implemented yet:
-		# [ 99, x ] if x < 4 => 99 + x
+		[ 99, x ] if x < 4 => 99 + x
 
 		# Note: avoid overusing `_` in a match branch, in general you should
 		# try to match all cases explicitly.

@@ -5857,7 +5857,7 @@ pub fn canonicalizeExpr(
                 var bound_vars_view = self.scratch_bound_vars.setViewFrom(bound_vars_top);
                 defer bound_vars_view.deinit();
                 for (body_free_vars_slice) |fv| {
-                    if (!self.scratch_captures.contains(fv) and !bound_vars_view.contains(fv) and !self.isGloballyResolvablePattern(fv)) {
+                    if (!self.scratch_captures.containsFrom(captures_top, fv) and !bound_vars_view.contains(fv) and !self.isGloballyResolvablePattern(fv)) {
                         try self.scratch_captures.append(fv);
                     }
                 }
@@ -13617,7 +13617,7 @@ fn injectEchoPlatform(self: *Self) std.mem.Allocator.Error!void {
     const arg_pattern_idx = try self.env.addPattern(.{ .assign = .{ .ident = arg_ident } }, synthetic_region);
     const patterns_start = self.env.store.scratchTop("patterns");
     try self.env.store.scratch.?.patterns.append(arg_pattern_idx);
-    const args_span = CIR.Pattern.Span{ .span = .{ .start = @intCast(patterns_start), .len = 1 } };
+    const args_span = try self.env.store.patternSpanFrom(patterns_start);
 
     // Create a crash body placeholder (never executed — hosted fn ptr is called at runtime)
     const crash_msg = try self.env.insertString("echo! is a hosted function");

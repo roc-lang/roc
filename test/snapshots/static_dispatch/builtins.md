@@ -49,7 +49,7 @@ NO CHANGE
 		(p-assign (ident "echo!"))
 		(e-hosted-lambda (symbol "echo!")
 			(args
-				(p-underscore)))
+				(p-assign (ident "_echo_arg"))))
 		(annotation
 			(ty-fn (effectful true)
 				(ty-lookup (name "Str") (builtin))

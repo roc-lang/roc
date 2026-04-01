@@ -212,7 +212,11 @@ pub const LlvmEvaluator = struct {
             env.common.idents.interner.enableRuntimeInserts(env.gpa) catch return error.OutOfMemory;
         }
 
-        module_env.imports.resolveImports(module_env, all_module_envs);
+        // Refresh imports for all modules so cross-module lookups in
+        // Monomorphize use indices consistent with all_module_envs.
+        for (all_module_envs) |env| {
+            env.imports.resolveImports(env, all_module_envs);
+        }
 
         const module_idx = findModuleEnvIdx(all_module_envs, module_env) orelse return error.ModuleEnvNotFound;
 

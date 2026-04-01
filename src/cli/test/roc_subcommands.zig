@@ -1310,8 +1310,44 @@ test "roc test polymorphic list reverse with numeric literal does not overflow (
 }
 
 test "roc test polymorphic list reverse with numeric literal does not overflow (dev)" {
-    // TODO: dev backend compilation fails for test/cli/polymorphic_list_reverse.roc
-    return error.SkipZigTest;
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    // Calling a polymorphic function (List(a) -> List(a)) from another module
+    // with a numeric literal argument caused an integer overflow in
+    // from_numeral_flex_count during runtime unification.
+    const result = try util.runRoc(gpa, &.{ "test", "--opt=dev" }, "test/cli/polymorphic_list_reverse.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Should succeed (exit code 0), not panic
+    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+
+    // Stderr should not contain "panic" or "overflow"
+    const has_panic = std.mem.indexOf(u8, result.stderr, "panic") != null or
+        std.mem.indexOf(u8, result.stderr, "overflow") != null;
+    try testing.expect(!has_panic);
+
+    // Should report 1 passing test
+    const has_passed = std.mem.indexOf(u8, result.stdout, "passed") != null;
+    try testing.expect(has_passed);
+}
+
+test "roc test polymorphic list reverse within same module" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    // A polymorphic function with a nested lambda (e.g. fold_rev callback)
+    // must also type-check correctly when tested from within the same module,
+    // not only from an external importer.
+    const result = try util.runRoc(gpa, &.{"test"}, "test/cli/PolymorphicListReverseMod.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+
+    const has_passed = std.mem.indexOf(u8, result.stdout, "passed") != null;
+    try testing.expect(has_passed);
 }
 
 // --- Echo platform (headerless app) tests ---

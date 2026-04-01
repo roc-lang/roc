@@ -147,6 +147,12 @@ current_processing_def: ?CIR.Def.Idx = null,
 cycle_root_def: ?CIR.Def.Idx = null,
 /// True when generalization should be deferred (a dispatch cycle was detected)
 defer_generalize: bool = false,
+/// True when checking a direct call argument expression. Used to suppress
+/// generalization of standalone lambdas that are call arguments, since they
+/// don't need independent generalization (they're consumed immediately).
+/// This prevents rank pollution where inner lambda generalization pulls
+/// outer scope vars to rank 0 via Rank.min in merge.
+checking_call_arg: bool = false,
 /// Deferred def-level unifications (def_var = ptrn_var = expr_var).
 /// These must happen AFTER generalization to avoid lowering expr_var's rank
 /// before generalization can process it, but BEFORE eql constraint resolution
@@ -1776,6 +1782,40 @@ pub fn checkPlatformRequirements(
             });
         }
         // Note: If the export is not found, the canonicalizer should have already reported an error
+    }
+
+    // Process any deferred static dispatch constraints that arose from unifying
+    // platform types with app types. Without this, constraints on app expressions
+    // (e.g., method calls like `args.drop_first(1)`) whose receiver types are only
+    // resolved by platform requirements would never get their dispatch targets set,
+    // causing panics during MIR lowering.
+    //
+    // Skip entries whose constraints are all from_numeral — these are numeric literal
+    // constraints whose flex vars were unified with non-numeric platform types (e.g.,
+    // Err(1) where the platform expects Err([Exit(I32)])). They will be resolved
+    // later by finalizeNumericDefaults; processing them here would produce spurious
+    // "missing method" errors.
+    {
+        var i: usize = 0;
+        while (i < env.deferred_static_dispatch_constraints.items.items.len) {
+            const dc = env.deferred_static_dispatch_constraints.items.items[i];
+            const constraints = self.types.sliceStaticDispatchConstraints(dc.constraints);
+            var all_from_numeral = true;
+            for (constraints) |c| {
+                if (c.origin != .from_numeral) {
+                    all_from_numeral = false;
+                    break;
+                }
+            }
+            if (all_from_numeral) {
+                _ = env.deferred_static_dispatch_constraints.items.orderedRemove(i);
+            } else {
+                i += 1;
+            }
+        }
+        if (env.deferred_static_dispatch_constraints.items.items.len > 0) {
+            try self.checkStaticDispatchConstraints(&env, false);
+        }
     }
 }
 
@@ -3457,9 +3497,22 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
     const expr_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(expr_idx));
     const expr_var_raw = ModuleEnv.varFrom(expr_idx);
 
+    // Consume the checking_call_arg flag: it applies only to this immediate
+    // checkExpr call and must not propagate to recursive calls (e.g. e_closure
+    // delegating to its inner e_lambda, or nested call arguments).
+    const is_call_arg = self.checking_call_arg;
+    self.checking_call_arg = false;
+
     // Value restriction: only generalize at the inner lambda level, not the
     // outer e_closure wrapper (which delegates to e_lambda's own checkExpr).
-    const should_generalize = isFunctionDef(&self.cir.store, expr) and expr != .e_closure;
+    // Skip generalization for lambdas that are direct call arguments inside
+    // other functions — they're consumed immediately and independent
+    // generalization would pollute the enclosing function's type vars
+    // (via Rank.min in merge pulling outer-rank vars to rank 0).
+    // At the outermost rank, allow generalization so that the enclosing
+    // value's type is properly generalized for instantiation at use sites.
+    const should_generalize = isFunctionDef(&self.cir.store, expr) and expr != .e_closure and
+        (!is_call_arg or env.rank() == .outermost);
 
     // Push/pop ranks based on if we should generalize
     if (should_generalize) try env.var_pool.pushRank();
@@ -4442,6 +4495,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     // It could be effectful, e.g. `fn(mk_arg!())`
                     const call_arg_expr_idxs = self.cir.store.sliceExpr(call.args);
                     for (call_arg_expr_idxs) |call_arg_idx| {
+                        self.checking_call_arg = true;
                         does_fx = try self.checkExpr(call_arg_idx, env, .no_expectation) or does_fx;
 
                         // Check if this arg errored
@@ -4670,6 +4724,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 //                     ^  ^
                 const dispatch_arg_expr_idxs = self.cir.store.sliceExpr(dispatch_args);
                 for (dispatch_arg_expr_idxs) |dispatch_arg_expr_idx| {
+                    self.checking_call_arg = true;
                     does_fx = try self.checkExpr(dispatch_arg_expr_idx, env, .no_expectation) or does_fx;
 
                     // Check if this arg errored
@@ -4850,6 +4905,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         .e_run_low_level => |run_ll| {
             // Check each argument expression in the run_low_level node
             for (self.cir.store.exprSlice(run_ll.args)) |arg_idx| {
+                self.checking_call_arg = true;
                 does_fx = try self.checkExpr(arg_idx, env, .no_expectation) or does_fx;
             }
         },
@@ -4862,6 +4918,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             const dispatch_arg_expr_idxs = self.cir.store.exprSlice(tvd.args);
             var did_err = false;
             for (dispatch_arg_expr_idxs) |dispatch_arg_expr_idx| {
+                self.checking_call_arg = true;
                 does_fx = try self.checkExpr(dispatch_arg_expr_idx, env, .no_expectation) or does_fx;
                 did_err = did_err or (self.types.resolveVar(ModuleEnv.varFrom(dispatch_arg_expr_idx)).desc.content == .err);
             }
@@ -6337,6 +6394,12 @@ pub fn verifyNumericDefaults(self: *Self) std.mem.Allocator.Error!void {
     var env = try self.env_pool.acquire();
     defer self.env_pool.release(env);
     try self.verifyNumericDefaultsInternal(&env);
+
+    // After finalizing numeric defaults, resolve any remaining deferred
+    // static dispatch constraints (e.g., Dec.plus, Dec.to_str).
+    if (env.deferred_static_dispatch_constraints.items.items.len > 0) {
+        try self.checkStaticDispatchConstraints(&env, true);
+    }
 }
 
 fn verifyNumericDefaultsInternal(self: *Self, env: *Env) std.mem.Allocator.Error!void {
