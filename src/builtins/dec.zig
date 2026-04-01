@@ -263,7 +263,20 @@ pub const RocDec = extern struct {
         buf[position] = '.';
         position += 1;
 
-        const trailing_zeros: u6 = count_trailing_zeros_base10(num);
+        // Count trailing base-10 zeros directly from the digit characters.
+        // This avoids i128 modulo arithmetic which produces incorrect results on wasm32.
+        var trailing_zeros: u6 = 0;
+        {
+            var i = num_digits;
+            while (i > 0) {
+                i -= 1;
+                if (digit_bytes[i] == '0') {
+                    trailing_zeros += 1;
+                } else {
+                    break;
+                }
+            }
+        }
         if (trailing_zeros >= decimal_places) {
             // add just a single zero if all decimal digits are zero
             buf[position] = '0';
@@ -750,27 +763,6 @@ pub const RocDec = extern struct {
     }
 };
 
-// A number has `k` trailing zeros if `10^k` divides into it cleanly
-inline fn count_trailing_zeros_base10(input: i128) u6 {
-    if (input == 0) {
-        // this should not happen in practice
-        return 0;
-    }
-
-    var count: u6 = 0;
-    var k: i128 = 1;
-
-    while (true) {
-        if (i128h.mod_i128(input, i128h.pow10_i128(@intCast(k))) == 0) {
-            count += 1;
-            k += 1;
-        } else {
-            break;
-        }
-    }
-
-    return count;
-}
 
 fn mul_and_decimalize(a: u128, b: u128) WithOverflow(i128) {
     const answer_u256 = mul_u128(a, b);
