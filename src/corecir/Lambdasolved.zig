@@ -13,34 +13,15 @@ const Allocator = std.mem.Allocator;
 const Region = base.Region;
 const CIR = can.CIR;
 
-pub const CallableSourceNamespace = enum(u2) {
-    local_pattern = 0,
-    external_def = 1,
-    expr = 2,
+pub const ExprTemplateSource = struct {
+    module_idx: u32,
+    expr_idx: CIR.Expr.Idx,
 };
 
-pub fn packCallableSourceKey(namespace: CallableSourceNamespace, module_idx: u32, local_id: u32) u64 {
-    if (std.debug.runtime_safety) {
-        std.debug.assert(module_idx <= std.math.maxInt(u31));
-        std.debug.assert(local_id <= std.math.maxInt(u31));
-    }
-
-    return (@as(u64, @intFromEnum(namespace)) << 62) |
-        (@as(u64, module_idx) << 31) |
-        @as(u64, local_id);
-}
-
-pub fn packLocalPatternSourceKey(module_idx: u32, pattern_idx: CIR.Pattern.Idx) u64 {
-    return packCallableSourceKey(.local_pattern, module_idx, @intFromEnum(pattern_idx));
-}
-
-pub fn packExternalDefSourceKey(module_idx: u32, def_node_idx: u16) u64 {
-    return packCallableSourceKey(.external_def, module_idx, def_node_idx);
-}
-
-pub fn packExprSourceKey(module_idx: u32, expr_idx: CIR.Expr.Idx) u64 {
-    return packCallableSourceKey(.expr, module_idx, @intFromEnum(expr_idx));
-}
+pub const LocalPatternTemplateSource = struct {
+    module_idx: u32,
+    pattern_idx: CIR.Pattern.Idx,
+};
 
 pub const CallableTemplateId = enum(u32) {
     _,
@@ -63,6 +44,12 @@ pub const ExternalDefSource = struct {
     def_idx: CIR.Def.Idx,
 };
 
+pub const CallableTemplateSource = union(enum) {
+    expr: ExprTemplateSource,
+    local_pattern: LocalPatternTemplateSource,
+    external_def: ExternalDefSource,
+};
+
 pub const CallableTemplateBinding = union(enum) {
     anonymous,
     pattern: CIR.Pattern.Idx,
@@ -74,7 +61,7 @@ pub const CallableTemplateOwner = union(enum) {
 };
 
 pub const CallableTemplate = struct {
-    source_key: u64,
+    source: CallableTemplateSource,
     module_idx: u32,
     cir_expr: CIR.Expr.Idx,
     runtime_expr: CIR.Expr.Idx,
@@ -93,19 +80,25 @@ pub const ContextPatternKey = cm.ContextPatternKey;
 
 pub const Result = struct {
     callable_templates: std.ArrayListUnmanaged(CallableTemplate),
-    callable_template_ids_by_source: std.AutoHashMapUnmanaged(u64, CallableTemplateId),
+    callable_template_ids_by_expr: std.AutoHashMapUnmanaged(ExprTemplateSource, CallableTemplateId),
+    callable_template_ids_by_local_pattern: std.AutoHashMapUnmanaged(LocalPatternTemplateSource, CallableTemplateId),
+    callable_template_ids_by_external_def: std.AutoHashMapUnmanaged(ExternalDefSource, CallableTemplateId),
 
     pub fn init(allocator: Allocator) !Result {
         _ = allocator;
         return .{
             .callable_templates = .empty,
-            .callable_template_ids_by_source = .empty,
+            .callable_template_ids_by_expr = .empty,
+            .callable_template_ids_by_local_pattern = .empty,
+            .callable_template_ids_by_external_def = .empty,
         };
     }
 
     pub fn deinit(self: *Result, allocator: Allocator) void {
         self.callable_templates.deinit(allocator);
-        self.callable_template_ids_by_source.deinit(allocator);
+        self.callable_template_ids_by_expr.deinit(allocator);
+        self.callable_template_ids_by_local_pattern.deinit(allocator);
+        self.callable_template_ids_by_external_def.deinit(allocator);
     }
 
     pub fn getCallableTemplate(self: *const Result, callable_template_id: CallableTemplateId) *const CallableTemplate {
@@ -113,11 +106,24 @@ pub const Result = struct {
     }
 
     pub fn getLocalCallableTemplate(self: *const Result, module_idx: u32, pattern_idx: CIR.Pattern.Idx) ?CallableTemplateId {
-        return self.callable_template_ids_by_source.get(packLocalPatternSourceKey(module_idx, pattern_idx));
+        return self.callable_template_ids_by_local_pattern.get(.{
+            .module_idx = module_idx,
+            .pattern_idx = pattern_idx,
+        });
     }
 
     pub fn getExternalCallableTemplate(self: *const Result, module_idx: u32, def_node_idx: u16) ?CallableTemplateId {
-        return self.callable_template_ids_by_source.get(packExternalDefSourceKey(module_idx, def_node_idx));
+        return self.callable_template_ids_by_external_def.get(.{
+            .module_idx = module_idx,
+            .def_idx = @enumFromInt(def_node_idx),
+        });
+    }
+
+    pub fn getExprCallableTemplate(self: *const Result, module_idx: u32, expr_idx: CIR.Expr.Idx) ?CallableTemplateId {
+        return self.callable_template_ids_by_expr.get(.{
+            .module_idx = module_idx,
+            .expr_idx = expr_idx,
+        });
     }
 
 };
