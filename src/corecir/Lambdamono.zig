@@ -39,7 +39,7 @@ pub const PackedFnId = enum(u32) {
 };
 
 pub const PackedFn = struct {
-    members: CallableMemberSpan,
+    variants: CallableVariantSpan,
     fn_monotype: ContextMono.ResolvedMonotype,
     runtime_monotype: ContextMono.ResolvedMonotype,
 };
@@ -49,7 +49,7 @@ pub const IndirectCallId = enum(u32) {
 };
 
 pub const IndirectCall = struct {
-    members: CallableMemberSpan,
+    variants: CallableVariantSpan,
 };
 
 pub const ExprId = enum(u32) {
@@ -137,6 +137,14 @@ pub const ExprDispatchSemantics = union(enum) {
     dispatch: ContextMono.DispatchExprTarget,
 };
 
+pub const ExprSemantics = struct {
+    callable_semantics: ExprCallableSemantics = .ordinary,
+    call_semantics: ExprCallSemantics = .not_call,
+    value_origin: ExprValueOrigin = .self_value,
+    dispatch_semantics: ExprDispatchSemantics = .not_dispatch,
+    lookup_semantics: ExprLookupSemantics = .not_lookup,
+};
+
 pub const CallableParamProjection = ValueProjection.Projection;
 pub const CallableParamProjectionSpan = ValueProjection.ProjectionSpan;
 
@@ -159,24 +167,24 @@ pub const CallableParamSpecSpan = extern struct {
     }
 };
 
-pub const CallableMemberSpan = extern struct {
+pub const CallableVariantSpan = extern struct {
     start: u32,
     len: u16,
 
-    pub fn empty() CallableMemberSpan {
+    pub fn empty() CallableVariantSpan {
         return .{ .start = 0, .len = 0 };
     }
 
-    pub fn isEmpty(self: CallableMemberSpan) bool {
+    pub fn isEmpty(self: CallableVariantSpan) bool {
         return self.len == 0;
     }
 };
 
-const CallableMemberGroup = struct {
-    members: CallableMemberSpan,
+const CallableVariantGroup = struct {
+    variants: CallableVariantSpan,
 };
 
-pub const CallableMemberGroupId = enum(u32) {
+pub const CallableVariantGroupId = enum(u32) {
     _,
 };
 
@@ -242,6 +250,26 @@ pub const CallableDef = struct {
     source_region: Region,
 };
 
+pub const BindingId = enum(u32) {
+    _,
+};
+
+pub const PatternCallableSemantics = union(enum) {
+    non_callable,
+    callable: CallableValue,
+};
+
+pub const PatternValueOrigin = union(enum) {
+    self_value,
+    expr: ExprRef,
+};
+
+pub const PatternBinding = struct {
+    key: ContextPatternKey,
+    callable_semantics: PatternCallableSemantics,
+    value_origin: PatternValueOrigin,
+};
+
 pub const Expr = struct {
     source_context: SourceContext,
     module_idx: u32,
@@ -269,14 +297,15 @@ pub const RootExpr = struct {
 
 pub const Program = struct {
     callable_insts: std.ArrayListUnmanaged(CallableInst),
-    callable_member_groups: std.ArrayListUnmanaged(CallableMemberGroup),
-    direct_callable_member_group_ids_by_callable_inst: std.AutoHashMapUnmanaged(CallableInstId, CallableMemberGroupId),
-    packed_fn_ids_by_member_group: std.AutoHashMapUnmanaged(CallableMemberGroupId, PackedFnId),
-    indirect_call_ids_by_member_group: std.AutoHashMapUnmanaged(CallableMemberGroupId, IndirectCallId),
+    callable_variant_groups: std.ArrayListUnmanaged(CallableVariantGroup),
+    direct_callable_variant_group_ids_by_callable_inst: std.AutoHashMapUnmanaged(CallableInstId, CallableVariantGroupId),
+    packed_fn_ids_by_variant_group: std.AutoHashMapUnmanaged(CallableVariantGroupId, PackedFnId),
+    indirect_call_ids_by_variant_group: std.AutoHashMapUnmanaged(CallableVariantGroupId, IndirectCallId),
     callable_param_spec_entries: std.ArrayListUnmanaged(CallableParamSpecEntry),
     value_projection_entries: std.ArrayListUnmanaged(CallableParamProjection),
-    pattern_callable_values: std.AutoHashMapUnmanaged(ContextPatternKey, CallableValue),
-    pattern_value_origins: std.AutoHashMapUnmanaged(ContextPatternKey, ExprRef),
+    pattern_bindings: std.ArrayListUnmanaged(PatternBinding),
+    pattern_binding_ids_by_key: std.AutoHashMapUnmanaged(ContextPatternKey, BindingId),
+    expr_semantics_by_key: std.AutoHashMapUnmanaged(ContextExprKey, ExprSemantics),
     exprs: std.ArrayListUnmanaged(Expr),
     expr_ids_by_key: std.AutoHashMapUnmanaged(ContextExprKey, ExprId),
     expr_child_entries: std.ArrayListUnmanaged(ExprId),
@@ -287,21 +316,22 @@ pub const Program = struct {
     root_expr_ids_by_key: std.AutoHashMapUnmanaged(ContextExprKey, RootExprId),
     callable_defs: std.ArrayListUnmanaged(CallableDef),
     capture_fields: std.ArrayListUnmanaged(CaptureField),
-    callable_member_entries: std.ArrayListUnmanaged(CallableInstId),
+    callable_variant_entries: std.ArrayListUnmanaged(CallableInstId),
     packed_fns: std.ArrayListUnmanaged(PackedFn),
     indirect_calls: std.ArrayListUnmanaged(IndirectCall),
 
     pub fn init() Program {
         return .{
             .callable_insts = .empty,
-            .callable_member_groups = .empty,
-            .direct_callable_member_group_ids_by_callable_inst = .empty,
-            .packed_fn_ids_by_member_group = .empty,
-            .indirect_call_ids_by_member_group = .empty,
+            .callable_variant_groups = .empty,
+            .direct_callable_variant_group_ids_by_callable_inst = .empty,
+            .packed_fn_ids_by_variant_group = .empty,
+            .indirect_call_ids_by_variant_group = .empty,
             .callable_param_spec_entries = .empty,
             .value_projection_entries = .empty,
-            .pattern_callable_values = .empty,
-            .pattern_value_origins = .empty,
+            .pattern_bindings = .empty,
+            .pattern_binding_ids_by_key = .empty,
+            .expr_semantics_by_key = .empty,
             .exprs = .empty,
             .expr_ids_by_key = .empty,
             .expr_child_entries = .empty,
@@ -312,7 +342,7 @@ pub const Program = struct {
             .root_expr_ids_by_key = .empty,
             .callable_defs = .empty,
             .capture_fields = .empty,
-            .callable_member_entries = .empty,
+            .callable_variant_entries = .empty,
             .packed_fns = .empty,
             .indirect_calls = .empty,
         };
@@ -320,14 +350,15 @@ pub const Program = struct {
 
     pub fn deinit(self: *Program, allocator: Allocator) void {
         self.callable_insts.deinit(allocator);
-        self.callable_member_groups.deinit(allocator);
-        self.direct_callable_member_group_ids_by_callable_inst.deinit(allocator);
-        self.packed_fn_ids_by_member_group.deinit(allocator);
-        self.indirect_call_ids_by_member_group.deinit(allocator);
+        self.callable_variant_groups.deinit(allocator);
+        self.direct_callable_variant_group_ids_by_callable_inst.deinit(allocator);
+        self.packed_fn_ids_by_variant_group.deinit(allocator);
+        self.indirect_call_ids_by_variant_group.deinit(allocator);
         self.callable_param_spec_entries.deinit(allocator);
         self.value_projection_entries.deinit(allocator);
-        self.pattern_callable_values.deinit(allocator);
-        self.pattern_value_origins.deinit(allocator);
+        self.pattern_bindings.deinit(allocator);
+        self.pattern_binding_ids_by_key.deinit(allocator);
+        self.expr_semantics_by_key.deinit(allocator);
         self.exprs.deinit(allocator);
         self.expr_ids_by_key.deinit(allocator);
         self.expr_child_entries.deinit(allocator);
@@ -338,7 +369,7 @@ pub const Program = struct {
         self.root_expr_ids_by_key.deinit(allocator);
         self.callable_defs.deinit(allocator);
         self.capture_fields.deinit(allocator);
-        self.callable_member_entries.deinit(allocator);
+        self.callable_variant_entries.deinit(allocator);
         self.packed_fns.deinit(allocator);
         self.indirect_calls.deinit(allocator);
     }
@@ -347,15 +378,15 @@ pub const Program = struct {
         return &self.callable_insts.items[@intFromEnum(callable_inst_id)];
     }
 
-    pub fn getCallableMemberGroupMembers(self: *const Program, member_group_id: CallableMemberGroupId) []const CallableInstId {
-        const group = self.callable_member_groups.items[@intFromEnum(member_group_id)];
-        if (group.members.len == 0) return &.{};
-        return self.callable_member_entries.items[group.members.start..][0..group.members.len];
+    pub fn getCallableVariantGroupVariants(self: *const Program, variant_group_id: CallableVariantGroupId) []const CallableInstId {
+        const group = self.callable_variant_groups.items[@intFromEnum(variant_group_id)];
+        if (group.variants.len == 0) return &.{};
+        return self.callable_variant_entries.items[group.variants.start..][0..group.variants.len];
     }
 
-    pub fn getDirectCallableMembers(self: *const Program, callable_inst_id: CallableInstId) []const CallableInstId {
-        const member_group_id = self.direct_callable_member_group_ids_by_callable_inst.get(callable_inst_id) orelse unreachable;
-        return self.getCallableMemberGroupMembers(member_group_id);
+    pub fn getDirectCallableVariants(self: *const Program, callable_inst_id: CallableInstId) []const CallableInstId {
+        const variant_group_id = self.direct_callable_variant_group_ids_by_callable_inst.get(callable_inst_id) orelse unreachable;
+        return self.getCallableVariantGroupVariants(variant_group_id);
     }
 
     pub fn getCallableParamSpecEntries(
@@ -382,15 +413,29 @@ pub const Program = struct {
         return self.value_projection_entries.items[span.start..][0..span.len];
     }
 
+    pub fn getPatternBinding(
+        self: *const Program,
+        source_context: SourceContext,
+        module_idx: u32,
+        pattern_idx: CIR.Pattern.Idx,
+    ) ?*const PatternBinding {
+        const binding_id = self.pattern_binding_ids_by_key.get(
+            ContextMono.Result.contextPatternKey(source_context, module_idx, pattern_idx),
+        ) orelse return null;
+        return &self.pattern_bindings.items[@intFromEnum(binding_id)];
+    }
+
     pub fn getPatternCallableValue(
         self: *const Program,
         source_context: SourceContext,
         module_idx: u32,
         pattern_idx: CIR.Pattern.Idx,
     ) ?CallableValue {
-        return self.pattern_callable_values.get(
-            ContextMono.Result.contextPatternKey(source_context, module_idx, pattern_idx),
-        );
+        const binding = self.getPatternBinding(source_context, module_idx, pattern_idx) orelse return null;
+        return switch (binding.callable_semantics) {
+            .non_callable => null,
+            .callable => |callable_value| callable_value,
+        };
     }
 
     pub fn getPatternValueOrigin(
@@ -399,9 +444,11 @@ pub const Program = struct {
         module_idx: u32,
         pattern_idx: CIR.Pattern.Idx,
     ) ?ExprRef {
-        return self.pattern_value_origins.get(
-            ContextMono.Result.contextPatternKey(source_context, module_idx, pattern_idx),
-        );
+        const binding = self.getPatternBinding(source_context, module_idx, pattern_idx) orelse return null;
+        return switch (binding.value_origin) {
+            .self_value => null,
+            .expr => |expr_ref| expr_ref,
+        };
     }
 
     pub fn getExpr(self: *const Program, expr_id: ExprId) *const Expr {
@@ -415,6 +462,17 @@ pub const Program = struct {
         expr_idx: CIR.Expr.Idx,
     ) ?ExprId {
         return self.expr_ids_by_key.get(ContextMono.Result.contextExprKey(source_context, module_idx, expr_idx));
+    }
+
+    pub fn getExprSemantics(
+        self: *const Program,
+        source_context: SourceContext,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) ExprSemantics {
+        return self.expr_semantics_by_key.get(
+            ContextMono.Result.contextExprKey(source_context, module_idx, expr_idx),
+        ) orelse .{};
     }
 
     pub fn getExprChildren(self: *const Program, span: ExprIdSpan) []const ExprId {
@@ -464,7 +522,7 @@ pub fn getIndirectCall(program: *const Program, indirect_call_id: IndirectCallId
     return &program.indirect_calls.items[@intFromEnum(indirect_call_id)];
 }
 
-pub fn getCallableMembers(program: *const Program, span: CallableMemberSpan) []const CallableInstId {
+pub fn getCallableVariants(program: *const Program, span: CallableVariantSpan) []const CallableInstId {
     if (span.len == 0) return &.{};
-    return program.callable_member_entries.items[span.start..][0..span.len];
+    return program.callable_variant_entries.items[span.start..][0..span.len];
 }

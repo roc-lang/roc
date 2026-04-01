@@ -55,12 +55,22 @@ const PatternBinding = struct {
     pattern_idx: CIR.Pattern.Idx,
 };
 
+const PlannedCaptureCallableSemantics = union(enum) {
+    non_callable,
+    callable: Pipeline.CallableValue,
+};
+
 const PlannedCaptureLocal = struct {
     pattern_idx: CIR.Pattern.Idx,
     local: MIR.LocalId,
     local_monotype: Monotype.Idx,
-    callable_value: ?Pipeline.CallableValue,
+    callable_semantics: PlannedCaptureCallableSemantics,
     storage: Pipeline.CaptureStorage,
+};
+
+const TopLevelDefCallableSemantics = union(enum) {
+    non_callable,
+    callable: Pipeline.CallableValue,
 };
 
 const PlannedCaptureLocals = struct {
@@ -2442,7 +2452,10 @@ fn lowerLookupLocalInto(
                 symbol,
                 target,
                 next,
-                lookupProgramExprCallableValue(session, expr_idx),
+                if (lookupProgramExprCallableValue(session, expr_idx)) |callable_value|
+                    .{ .callable = callable_value }
+                else
+                    .non_callable,
             );
         },
         .expr => |source_expr_ref| {
@@ -2539,9 +2552,9 @@ fn planClosureEntryCaptureLocals(
             .pattern_idx = capture_field.pattern_idx,
             .local = capture_local,
             .local_monotype = capture_monotype,
-            .callable_value = switch (capture_field.callable_binding) {
-                .non_callable => null,
-                .callable => |callable_value| callable_value,
+            .callable_semantics = switch (capture_field.callable_binding) {
+                .non_callable => .non_callable,
+                .callable => |callable_value| .{ .callable = callable_value },
             },
             .storage = capture_field.storage,
         };
@@ -2589,7 +2602,10 @@ fn lowerLookupExternalInto(
         symbol,
         target,
         next,
-        lookupProgramExprCallableValue(session, expr_idx),
+        if (lookupProgramExprCallableValue(session, expr_idx)) |callable_value|
+            .{ .callable = callable_value }
+        else
+            .non_callable,
     );
 }
 
@@ -2627,7 +2643,10 @@ fn lowerLookupRequiredInto(
         symbol,
         target,
         next,
-        lookupProgramExprCallableValue(session, expr_idx),
+        if (lookupProgramExprCallableValue(session, expr_idx)) |callable_value|
+            .{ .callable = callable_value }
+        else
+            .non_callable,
     );
 }
 
@@ -2685,7 +2704,7 @@ fn materializeTopLevelDefInto(
     symbol: MIR.Symbol,
     target: MIR.LocalId,
     next: MIR.CFStmtId,
-    callable_value: ?Pipeline.CallableValue,
+    callable_semantics: TopLevelDefCallableSemantics,
 ) Allocator.Error!MIR.CFStmtId {
     const saved_module_idx = self.current_module_idx;
     const saved_types_store = self.types_store;
@@ -2713,50 +2732,54 @@ fn materializeTopLevelDefInto(
         }
     }
 
-    if (callable_value) |resolved_callable_value| switch (resolved_callable_value) {
-        .direct => |callable_inst_id| {
-            const runtime_monotype = self.callable_pipeline.getCallableInstRuntimeMonotype(callable_inst_id);
-            self.store.getLocalPtr(target).monotype = try self.importMonotypeFromStore(
-                &self.callable_pipeline.context_mono.monotype_store,
-                runtime_monotype.idx,
-                runtime_monotype.module_idx,
+    switch (callable_semantics) {
+        .callable => |resolved_callable_value| switch (resolved_callable_value) {
+            .direct => |callable_inst_id| {
+                const runtime_monotype = self.callable_pipeline.getCallableInstRuntimeMonotype(callable_inst_id);
+                self.store.getLocalPtr(target).monotype = try self.importMonotypeFromStore(
+                    &self.callable_pipeline.context_mono.monotype_store,
+                    runtime_monotype.idx,
+                    runtime_monotype.module_idx,
+                    saved_module_idx,
+                );
+            },
+            .packed_fn => try self.refreshTargetLocalMonotypeFromExprIntoModule(
+                session,
+                def.expr,
+                module_idx,
                 saved_module_idx,
-            );
+                target,
+            ),
         },
-        .packed_fn => try self.refreshTargetLocalMonotypeFromExprIntoModule(
+        .non_callable => try self.refreshTargetLocalMonotypeFromExprIntoModule(
             session,
             def.expr,
             module_idx,
             saved_module_idx,
             target,
         ),
-    } else {
-        try self.refreshTargetLocalMonotypeFromExprIntoModule(
-            session,
-            def.expr,
-            module_idx,
-            saved_module_idx,
-            target,
-        );
     }
 
-    if (callable_value) |resolved_callable_value| switch (resolved_callable_value) {
-        .direct => |resolved_callable_inst| return self.lowerResolvedCallableInstValueInto(resolved_callable_inst, target, next),
-        .packed_fn => {
-            return self.lowerCapturedSourceExprInto(
-                session,
-                .{
-                    .source_context = .{ .root_expr = .{
+    switch (callable_semantics) {
+        .callable => |resolved_callable_value| switch (resolved_callable_value) {
+            .direct => |resolved_callable_inst| return self.lowerResolvedCallableInstValueInto(resolved_callable_inst, target, next),
+            .packed_fn => {
+                return self.lowerCapturedSourceExprInto(
+                    session,
+                    .{
+                        .source_context = .{ .root_expr = .{
+                            .module_idx = module_idx,
+                            .expr_idx = def.expr,
+                        } },
                         .module_idx = module_idx,
                         .expr_idx = def.expr,
-                    } },
-                    .module_idx = module_idx,
-                    .expr_idx = def.expr,
-                },
-                target,
-                next,
-            );
+                    },
+                    target,
+                    next,
+                );
+            },
         },
+        .non_callable => {},
     }
 
     try self.ensureNamedConstDefRegistered(module_idx, def_idx, symbol);
@@ -3116,27 +3139,39 @@ fn lowerReservedTrivialClosureLambda(
 
     for (planned_captures.recursive.items) |capture| {
         try capture_pattern_by_local.put(@intFromEnum(capture.local), capture.pattern_idx);
-        const member_callable_inst_id = switch (capture.callable_value orelse std.debug.panic(
-            "statement-only MIR invariant violated: recursive capture pattern {d} for callable_inst={d} lacked exact callable metadata",
-            .{ @intFromEnum(capture.pattern_idx), @intFromEnum(callable_inst_id) },
-        )) {
-            .direct => |direct_callable_inst_id| direct_callable_inst_id,
-            .packed_fn => unreachable,
+        const variant_callable_inst_id = switch (capture.callable_semantics) {
+            .non_callable => std.debug.panic(
+                "statement-only MIR invariant violated: recursive capture pattern {d} for callable_inst={d} lacked callable semantics",
+                .{ @intFromEnum(capture.pattern_idx), @intFromEnum(callable_inst_id) },
+            ),
+            .callable => |callable_value| switch (callable_value) {
+                .direct => |direct_callable_inst_id| direct_callable_inst_id,
+                .packed_fn => std.debug.panic(
+                    "statement-only MIR invariant violated: recursive capture pattern {d} for callable_inst={d} resolved to packed callable semantics",
+                    .{ @intFromEnum(capture.pattern_idx), @intFromEnum(callable_inst_id) },
+                ),
+            },
         };
         try recursive_captures.append(self.allocator, .{
             .local = capture.local,
-            .callable_inst_id = member_callable_inst_id,
+            .callable_inst_id = variant_callable_inst_id,
         });
     }
 
     for (planned_captures.callable_only.items) |capture| {
         try capture_pattern_by_local.put(@intFromEnum(capture.local), capture.pattern_idx);
-        const capture_callable_inst_id = switch (capture.callable_value orelse std.debug.panic(
-            "statement-only MIR invariant violated: callable-only capture pattern {d} for callable_inst={d} lacked exact callable metadata",
-            .{ @intFromEnum(capture.pattern_idx), @intFromEnum(callable_inst_id) },
-        )) {
-            .direct => |direct_callable_inst_id| direct_callable_inst_id,
-            .packed_fn => unreachable,
+        const capture_callable_inst_id = switch (capture.callable_semantics) {
+            .non_callable => std.debug.panic(
+                "statement-only MIR invariant violated: callable-only capture pattern {d} for callable_inst={d} lacked callable semantics",
+                .{ @intFromEnum(capture.pattern_idx), @intFromEnum(callable_inst_id) },
+            ),
+            .callable => |callable_value| switch (callable_value) {
+                .direct => |direct_callable_inst_id| direct_callable_inst_id,
+                .packed_fn => std.debug.panic(
+                    "statement-only MIR invariant violated: callable-only capture pattern {d} for callable_inst={d} resolved to packed callable semantics",
+                    .{ @intFromEnum(capture.pattern_idx), @intFromEnum(callable_inst_id) },
+                ),
+            },
         };
         try callable_only_captures.append(self.allocator, .{
             .local = capture.local,
@@ -3867,7 +3902,14 @@ fn lowerResolvedDispatchTargetCallInto(
         self.callable_pipeline.getCallableValueMonotype(callable_value)
     else switch (call_site) {
         .direct => |callable_inst_id| self.callable_pipeline.getCallableInstRuntimeMonotype(callable_inst_id),
-        .indirect_call => unreachable,
+        .indirect_call => std.debug.panic(
+            "statement-only MIR invariant violated: resolved dispatch expr {d} target module={d} def={d} specialized to indirect call without packed callable value semantics",
+            .{
+                @intFromEnum(result_expr_idx),
+                dispatch_target.module_idx,
+                @intFromEnum(dispatch_target.def_idx),
+            },
+        ),
     };
     const callee_local = try self.freshSyntheticLocal(try self.importMonotypeFromStore(
         &self.callable_pipeline.context_mono.monotype_store,
@@ -3932,7 +3974,10 @@ fn lowerResolvedDispatchTargetCallInto(
                 target_symbol,
                 callee_local,
                 normalized.entry,
-                target_callable_value,
+                if (target_callable_value) |callable_value|
+                    .{ .callable = callable_value }
+                else
+                    .non_callable,
             );
         },
         .indirect_call => |indirect_call_id| blk: {
@@ -3975,7 +4020,10 @@ fn lowerResolvedDispatchTargetCallInto(
                 target_symbol,
                 callee_local,
                 call_entry,
-                target_callable_value,
+                if (target_callable_value) |callable_value|
+                    .{ .callable = callable_value }
+                else
+                    .non_callable,
             );
         },
     };
@@ -4000,10 +4048,10 @@ fn lowerIndirectCallInto(
     target: MIR.LocalId,
     next: MIR.CFStmtId,
 ) Allocator.Error!MIR.CFStmtId {
-    const members = self.callable_pipeline.getIndirectCallMembers(indirect_call_id);
-    if (members.len == 0) {
+    const variants = self.callable_pipeline.getIndirectCallVariants(indirect_call_id);
+    if (variants.len == 0) {
         std.debug.panic(
-            "statement-only MIR invariant violated: indirect call {d} had no members",
+            "statement-only MIR invariant violated: indirect call {d} had no variants",
             .{@intFromEnum(indirect_call_id)},
         );
     }
@@ -4013,7 +4061,7 @@ fn lowerIndirectCallInto(
     const join_id = self.freshJoinPointId();
     const join_body = try self.lowerLocalAliasInto(target, joined_result_local, next);
 
-    const switch_branches = try self.allocator.alloc(MIR.SwitchBranch, members.len - 1);
+    const switch_branches = try self.allocator.alloc(MIR.SwitchBranch, variants.len - 1);
     defer self.allocator.free(switch_branches);
 
     const exact_result_callable_inst_id = if (lookupProgramExprCallableValue(session, call_expr_idx)) |callable_value|
@@ -4026,7 +4074,7 @@ fn lowerIndirectCallInto(
 
     const default_branch = try self.lowerIndirectCallBranchInto(
         packed_fn_id,
-        members[0],
+        variants[0],
         callee_local,
         args,
         target_mono,
@@ -4035,18 +4083,18 @@ fn lowerIndirectCallInto(
         exact_result_callable_inst_id,
     );
 
-    for (members[1..], 0..) |member_callable_inst_id, i| {
+    for (variants[1..], 0..) |variant_callable_inst_id, i| {
         switch_branches[i] = .{
             .value = self.tagDiscriminantForMonotypeName(
                 self.store.getLocal(callee_local).monotype,
                 try self.packedCallableTagName(
                     packed_fn_id,
-                    member_callable_inst_id,
+                    variant_callable_inst_id,
                 ),
             ),
             .body = try self.lowerIndirectCallBranchInto(
                 packed_fn_id,
-                member_callable_inst_id,
+                variant_callable_inst_id,
                 callee_local,
                 args,
                 target_mono,
@@ -4076,7 +4124,7 @@ fn lowerIndirectCallInto(
 fn lowerIndirectCallBranchInto(
     self: *Self,
     packed_fn_id: Pipeline.PackedFnId,
-    member_callable_inst_id: Pipeline.CallableInstId,
+    variant_callable_inst_id: Pipeline.CallableInstId,
     packed_callee_local: MIR.LocalId,
     args: MIR.LocalSpan,
     target_mono: Monotype.Idx,
@@ -4084,7 +4132,7 @@ fn lowerIndirectCallBranchInto(
     join_id: MIR.JoinPointId,
     exact_result_callable_inst_id: ?Pipeline.CallableInstId,
 ) Allocator.Error!MIR.CFStmtId {
-    const payload_resolved = self.callable_pipeline.getCallableInstRuntimeMonotype(member_callable_inst_id);
+    const payload_resolved = self.callable_pipeline.getCallableInstRuntimeMonotype(variant_callable_inst_id);
     const payload_mono = try self.importMonotypeFromStore(
         &self.callable_pipeline.context_mono.monotype_store,
         payload_resolved.idx,
@@ -4106,15 +4154,15 @@ fn lowerIndirectCallBranchInto(
     const call_entry = try self.store.addCFStmt(self.allocator, .{ .assign_call = .{
         .target = branch_result_local,
         .callee = callee_payload_local,
-        .exact_lambda = try self.lowerResolvedCallableInstLambda(member_callable_inst_id),
-        .exact_requires_hidden_capture = self.callableInstRequiresHiddenCapture(member_callable_inst_id),
+        .exact_lambda = try self.lowerResolvedCallableInstLambda(variant_callable_inst_id),
+        .exact_requires_hidden_capture = self.callableInstRequiresHiddenCapture(variant_callable_inst_id),
         .args = args,
         .next = jump_stmt,
     } });
 
     return self.lowerPackedCallablePayloadInto(
         packed_fn_id,
-        member_callable_inst_id,
+        variant_callable_inst_id,
         packed_callee_local,
         callee_payload_local,
         call_entry,
@@ -7443,7 +7491,10 @@ fn lowerCirExprInto(
                 },
             )) {
                 .direct => |callable_inst_id| callable_inst_id,
-                .packed_fn => unreachable,
+                .packed_fn => std.debug.panic(
+                    "statement-only MIR invariant violated: lambda expr {d} specialized to packed callable semantics",
+                    .{@intFromEnum(expr_idx)},
+                ),
             };
             break :blk try self.lowerResolvedCallableInstValueInto(
                 resolved_callable_inst_id,
@@ -7461,7 +7512,10 @@ fn lowerCirExprInto(
                 },
             )) {
                 .direct => |resolved_callable_inst_id| resolved_callable_inst_id,
-                .packed_fn => unreachable,
+                .packed_fn => std.debug.panic(
+                    "statement-only MIR invariant violated: closure expr {d} specialized to packed callable semantics",
+                    .{@intFromEnum(expr_idx)},
+                ),
             };
             _ = closure;
             break :blk try self.lowerResolvedCallableInstValueInto(

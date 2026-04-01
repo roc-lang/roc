@@ -76,12 +76,6 @@ pub const CallableTemplate = struct {
     source_region: Region = Region.zero(),
 };
 
-pub const ExprSource = struct {
-    source_context: SourceContext,
-    module_idx: u32,
-    expr_idx: CIR.Expr.Idx,
-};
-
 pub const SourceContext = cm.SourceContext;
 pub const ContextExprKey = cm.ContextExprKey;
 pub const ContextPatternKey = cm.ContextPatternKey;
