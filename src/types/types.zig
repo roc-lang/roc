@@ -844,7 +844,22 @@ pub const Polarity = enum {
     neg,
     /// A type that appears in positive/output position
     pos,
+    /// Deferred - creates polarity_deferred rigid, resolved at alias use site
+    in_alias,
+    /// Always closed - EmptyTagUnion
+    in_opaque,
 
     pub const lhs = Polarity.neg;
     pub const rhs = Polarity.pos;
+
+    /// Flip polarity for function argument positions (standard contravariance).
+    /// in_alias and in_opaque are sticky and unaffected by flipping.
+    pub fn flip(self: Polarity) Polarity {
+        return switch (self) {
+            .pos => .neg,
+            .neg => .pos,
+            .in_alias => .in_alias,
+            .in_opaque => .in_opaque,
+        };
+    }
 };
