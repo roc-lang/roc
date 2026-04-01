@@ -47,6 +47,7 @@ pub const Problem = union(enum) {
     non_exhaustive_match: NonExhaustiveMatch,
     redundant_pattern: RedundantPattern,
     unmatchable_pattern: UnmatchablePattern,
+    unnecessary_wildcard_ext: UnnecessaryWildcardExt,
 
     pub const Idx = enum(u32) { _ };
     pub const Tag = std.meta.Tag(@This());
@@ -180,6 +181,12 @@ pub const UnmatchablePattern = struct {
     match_expr: CIR.Expr.Idx,
     num_branches: u32,
     problem_branch_index: u32,
+};
+
+/// Problem data for unnecessary wildcard extension (..) in positive position
+/// where the tag union is already implicitly open due to polarity
+pub const UnnecessaryWildcardExt = struct {
+    region: base.Region,
 };
 
 // static dispatch //

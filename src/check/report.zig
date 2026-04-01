@@ -56,6 +56,7 @@ const UnmatchablePattern = problem_mod.UnmatchablePattern;
 const TypeApplyArityMismatch = problem_mod.TypeApplyArityMismatch;
 const RecursiveAlias = problem_mod.RecursiveAlias;
 const UnsupportedAliasWhereClause = problem_mod.UnsupportedAliasWhereClause;
+const UnnecessaryWildcardExt = problem_mod.UnnecessaryWildcardExt;
 
 // Nominal type errors
 const CannotAccessOpaqueNominal = problem_mod.CannotAccessOpaqueNominal;
@@ -794,6 +795,7 @@ pub const ReportBuilder = struct {
             .non_exhaustive_match => |data| return self.buildNonExhaustiveMatchReport(data),
             .redundant_pattern => |data| return self.buildRedundantPatternReport(data),
             .unmatchable_pattern => |data| return self.buildUnmatchablePatternReport(data),
+            .unnecessary_wildcard_ext => |data| return self.buildUnnecessaryWildcardExtReport(data),
         }
     }
 
@@ -1772,6 +1774,42 @@ pub const ReportBuilder = struct {
             D.bytes("This syntax was used for abilities, which have been removed from Roc. Use method constraints like"),
             D.bytes("where [a.methodName(args) -> ret]").withAnnotation(.inline_code),
             D.bytes("instead."),
+        }, self, &report);
+
+        return report;
+    }
+
+    /// Build a report for when .. is used redundantly in a positive position
+    fn buildUnnecessaryWildcardExtReport(
+        self: *Self,
+        data: UnnecessaryWildcardExt,
+    ) !Report {
+        var report = Report.init(self.gpa, "UNNECESSARY WILDCARD EXTENSION", .warning);
+        errdefer report.deinit();
+
+        try D.renderSlice(&.{
+            D.bytes("This"),
+            D.bytes("..").withAnnotation(.inline_code),
+            D.bytes("is unnecessary:"),
+        }, self, &report);
+        try report.document.addLineBreak();
+
+        // Add source region highlighting
+        const region_info = self.module_env.calcRegionInfo(data.region);
+        try report.document.addSourceRegion(
+            region_info,
+            .warning_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        try D.renderSlice(&.{
+            D.bytes("In positive positions (like function return types), tag unions are already implicitly open."),
+            D.bytes("You can safely remove the"),
+            D.bytes("..").withAnnotation(.inline_code),
+            D.bytes("here."),
         }, self, &report);
 
         return report;

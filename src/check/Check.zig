@@ -2863,6 +2863,19 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
             // Process the ext based on polarity
             const ext_var = inner_blk: {
                 if (tag_union.ext) |ext_anno_idx| {
+                    // Check if the explicit extension is redundant in Pos position
+                    const polarity: types_mod.Polarity = switch (ctx) {
+                        .annotation => |pol| pol,
+                        .type_decl => |decl| switch (decl.type_) {
+                            .alias => .in_alias,
+                            .nominal => .in_opaque,
+                        },
+                    };
+                    if (polarity == .pos) {
+                        _ = try self.problems.appendProblem(self.gpa, .{ .unnecessary_wildcard_ext = .{
+                            .region = anno_region,
+                        } });
+                    }
                     // User wrote explicit extension — process as before
                     try self.generateAnnoTypeInPlace(ext_anno_idx, env, ctx);
                     break :inner_blk ModuleEnv.varFrom(ext_anno_idx);

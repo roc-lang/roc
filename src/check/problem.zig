@@ -47,6 +47,7 @@ pub const UnmatchablePattern = types.UnmatchablePattern;
 pub const TypeApplyArityMismatch = types.TypeApplyArityMismatch;
 pub const RecursiveAlias = types.RecursiveAlias;
 pub const UnsupportedAliasWhereClause = types.UnsupportedAliasWhereClause;
+pub const UnnecessaryWildcardExt = types.UnnecessaryWildcardExt;
 
 // Nominal type errors
 pub const CannotAccessOpaqueNominal = types.CannotAccessOpaqueNominal;
