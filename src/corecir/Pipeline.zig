@@ -307,6 +307,7 @@ pub const Result = struct {
         return switch (self.lambdamono.getExpr(expr_id).callable_semantics) {
             .ordinary => null,
             .callable => |callable_value| callable_value,
+            .packed_intro => |intro| .{ .packed_fn = intro.packed_fn },
         };
     }
 
@@ -317,9 +318,9 @@ pub const Result = struct {
         expr_idx: CIR.Expr.Idx,
     ) ?CallableInstId {
         const expr_id = self.lambdamono.getExprId(source_context, module_idx, expr_idx) orelse return null;
-        return switch (self.lambdamono.getExpr(expr_id).callable_intro) {
-            .non_intro => null,
-            .callable_inst => |callable_inst_id| callable_inst_id,
+        return switch (self.lambdamono.getExpr(expr_id).callable_semantics) {
+            .packed_intro => |intro| intro.callable_inst,
+            .ordinary, .callable => null,
         };
     }
 
@@ -530,6 +531,7 @@ pub const Result = struct {
         return switch (self.lambdamono.getExpr(expr_id).callable_semantics) {
             .ordinary => null,
             .callable => |callable_value| callable_value,
+            .packed_intro => |intro| .{ .packed_fn = intro.packed_fn },
         };
     }
 
@@ -1948,7 +1950,6 @@ pub const Pass = struct {
                 .monotype = resolvedMonotype(.none, module_idx),
                 .child_exprs = .empty(),
                 .child_stmts = .empty(),
-                .callable_intro = .non_intro,
                 .template_semantics = .not_template,
                 .callable_semantics = .ordinary,
                 .call_semantics = .not_call,
@@ -2221,7 +2222,24 @@ pub const Pass = struct {
         callable_value: CallableValue,
     ) Allocator.Error!void {
         const semantics = try self.ensureProgramExprSemantics(result, source_context, module_idx, expr_idx);
-        const next_semantics: Lambdamono.ExprCallableSemantics = .{ .callable = callable_value };
+        const next_semantics: Lambdamono.ExprCallableSemantics = switch (callable_value) {
+            .direct => .{ .callable = callable_value },
+            .packed_fn => |packed_fn| blk: {
+                if (callableKind(self.all_module_envs[module_idx].store.getExpr(expr_idx)) != null) {
+                    switch (semantics.callable_semantics) {
+                        .callable => |existing_callable_value| switch (existing_callable_value) {
+                            .direct => |callable_inst_id| break :blk .{ .packed_intro = .{
+                                .packed_fn = packed_fn,
+                                .callable_inst = callable_inst_id,
+                            } },
+                            .packed_fn => {},
+                        },
+                        .ordinary, .packed_intro => {},
+                    }
+                }
+                break :blk .{ .callable = callable_value };
+            },
+        };
         if (!std.meta.eql(semantics.callable_semantics, next_semantics)) {
             semantics.callable_semantics = next_semantics;
             self.noteMutation(.source_value_provenance);
@@ -2310,7 +2328,29 @@ pub const Pass = struct {
         expr_idx: CIR.Expr.Idx,
         expr_ref: ExprRef,
     ) Allocator.Error!void {
-        const canonical_ref = try self.canonicalizeExprValueOrigin(result, expr_ref);
+        const canonical_ref = blk: {
+            const origin = result.getExprValueOrigin(expr_ref.source_context, expr_ref.module_idx, expr_ref.expr_idx) orelse break :blk expr_ref;
+            if (result.getExprValueOrigin(origin.source_context, origin.module_idx, origin.expr_idx) != null) {
+                std.debug.panic(
+                    "Pipeline invariant violated: expr value-origin for ctx={s} module={d} expr={d} was not canonical",
+                    .{
+                        @tagName(expr_ref.source_context),
+                        expr_ref.module_idx,
+                        @intFromEnum(expr_ref.expr_idx),
+                    },
+                );
+            }
+            break :blk .{
+                .source_context = origin.source_context,
+                .module_idx = origin.module_idx,
+                .expr_idx = origin.expr_idx,
+                .projections = try self.appendValueProjectionEntries(
+                    result,
+                    origin.projections,
+                    result.lambdamono.getValueProjectionEntries(expr_ref.projections),
+                ),
+            };
+        };
         const source_template_id = result.getExprTemplateId(
             canonical_ref.source_context,
             canonical_ref.module_idx,
@@ -2348,35 +2388,6 @@ pub const Pass = struct {
             self.noteMutation(.source_value_provenance);
             try self.requeueActiveScanUnits();
         }
-    }
-
-    fn canonicalizeExprValueOrigin(
-        self: *Pass,
-        result: *Result,
-        expr_ref: ExprRef,
-    ) Allocator.Error!ExprRef {
-        const origin = result.getExprValueOrigin(expr_ref.source_context, expr_ref.module_idx, expr_ref.expr_idx) orelse return expr_ref;
-        if (result.getExprValueOrigin(origin.source_context, origin.module_idx, origin.expr_idx) != null) {
-            std.debug.panic(
-                "Pipeline invariant violated: expr value-origin for ctx={s} module={d} expr={d} was not canonical",
-                .{
-                    @tagName(expr_ref.source_context),
-                    expr_ref.module_idx,
-                    @intFromEnum(expr_ref.expr_idx),
-                },
-            );
-        }
-
-        return .{
-            .source_context = origin.source_context,
-            .module_idx = origin.module_idx,
-            .expr_idx = origin.expr_idx,
-            .projections = try self.appendValueProjectionEntries(
-                result,
-                origin.projections,
-                result.lambdamono.getValueProjectionEntries(expr_ref.projections),
-            ),
-        };
     }
 
     fn scanSeedModules(self: *Pass, result: *Result) Allocator.Error!void {
@@ -3323,15 +3334,6 @@ pub const Pass = struct {
             expr_idx,
             callable_inst.template,
         );
-        if (callableKind(self.all_module_envs[module_idx].store.getExpr(expr_idx)) != null) {
-            const semantics = try self.ensureProgramExprSemantics(result, source_context, module_idx, expr_idx);
-            const next_intro: Lambdamono.ExprCallableIntro = .{ .callable_inst = callable_inst_id };
-            if (!std.meta.eql(semantics.callable_intro, next_intro)) {
-                semantics.callable_intro = next_intro;
-                self.noteMutation(.expr_semantics);
-                try self.requeueActiveScanUnits();
-            }
-        }
         try self.writeExprCallableValue(
             result,
             source_context,

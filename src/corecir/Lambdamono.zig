@@ -115,6 +115,10 @@ pub const CallSite = union(enum) {
 pub const ExprCallableSemantics = union(enum) {
     ordinary,
     callable: CallableValue,
+    packed_intro: struct {
+        packed_fn: PackedFn,
+        callable_inst: CallableInstId,
+    },
 };
 
 pub const ExprCallSemantics = union(enum) {
@@ -145,11 +149,6 @@ pub const ExprDispatchSemantics = union(enum) {
 pub const ExprTemplateSemantics = union(enum) {
     not_template,
     template: Lambdasolved.CallableTemplateId,
-};
-
-pub const ExprCallableIntro = union(enum) {
-    non_intro,
-    callable_inst: CallableInstId,
 };
 
 pub const ExprBuildState = enum {
@@ -298,7 +297,6 @@ pub const Expr = struct {
     monotype: ContextMono.ResolvedMonotype,
     child_exprs: ExprIdSpan = .empty(),
     child_stmts: StmtIdSpan = .empty(),
-    callable_intro: ExprCallableIntro = .non_intro,
     template_semantics: ExprTemplateSemantics = .not_template,
     callable_semantics: ExprCallableSemantics,
     call_semantics: ExprCallSemantics,
