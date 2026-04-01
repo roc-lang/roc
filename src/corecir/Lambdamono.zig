@@ -138,7 +138,7 @@ pub const CallableParamProjectionSpan = ValueProjection.ProjectionSpan;
 pub const CallableParamSpecEntry = struct {
     param_index: u16,
     projections: CallableParamProjectionSpan = .empty(),
-    callable_value: Lambdasolved.SolvedCallableValue,
+    callable_value: CallableValue,
 };
 
 pub const CallableParamSpecSpan = extern struct {
@@ -270,6 +270,8 @@ pub const Program = struct {
     callable_param_spec_entries: std.ArrayListUnmanaged(CallableParamSpecEntry),
     value_projection_entries: std.ArrayListUnmanaged(CallableParamProjection),
     pattern_callable_values: std.AutoHashMapUnmanaged(ContextPatternKey, CallableValue),
+    expr_callable_values: std.AutoHashMapUnmanaged(ContextExprKey, CallableValue),
+    expr_calls: std.AutoHashMapUnmanaged(ContextExprKey, CallSite),
     exprs: std.ArrayListUnmanaged(Expr),
     expr_ids_by_key: std.AutoHashMapUnmanaged(ContextExprKey, ExprId),
     expr_child_entries: std.ArrayListUnmanaged(ExprId),
@@ -294,6 +296,8 @@ pub const Program = struct {
             .callable_param_spec_entries = .empty,
             .value_projection_entries = .empty,
             .pattern_callable_values = .empty,
+            .expr_callable_values = .empty,
+            .expr_calls = .empty,
             .exprs = .empty,
             .expr_ids_by_key = .empty,
             .expr_child_entries = .empty,
@@ -319,6 +323,8 @@ pub const Program = struct {
         self.callable_param_spec_entries.deinit(allocator);
         self.value_projection_entries.deinit(allocator);
         self.pattern_callable_values.deinit(allocator);
+        self.expr_callable_values.deinit(allocator);
+        self.expr_calls.deinit(allocator);
         self.exprs.deinit(allocator);
         self.expr_ids_by_key.deinit(allocator);
         self.expr_child_entries.deinit(allocator);
@@ -381,6 +387,28 @@ pub const Program = struct {
     ) ?CallableValue {
         return self.pattern_callable_values.get(
             ContextMono.Result.contextPatternKey(source_context, module_idx, pattern_idx),
+        );
+    }
+
+    pub fn getExprCallableValue(
+        self: *const Program,
+        source_context: SourceContext,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) ?CallableValue {
+        return self.expr_callable_values.get(
+            ContextMono.Result.contextExprKey(source_context, module_idx, expr_idx),
+        );
+    }
+
+    pub fn getExprCall(
+        self: *const Program,
+        source_context: SourceContext,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) ?CallSite {
+        return self.expr_calls.get(
+            ContextMono.Result.contextExprKey(source_context, module_idx, expr_idx),
         );
     }
 
