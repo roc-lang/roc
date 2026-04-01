@@ -95,12 +95,6 @@ pub const DispatchExprTarget = ContextMono.DispatchExprTarget;
 
 const ContextExprKey = ContextMono.ContextExprKey;
 
-const TemplateBodyCompletionKey = struct {
-    template_source_key: u64,
-    source_context_kind: enum(u2) { callable_inst, root_expr, provenance_expr, template_expr },
-    source_context_raw: u32,
-};
-
 const ContextPatternKey = ContextMono.ContextPatternKey;
 
 fn callableValueMonotype(result: *const Result, callable_value: CallableValue) ResolvedMonotype {
@@ -186,22 +180,12 @@ const BindingResolutionState = struct {
 };
 
 const SemanticThread = struct {
-    mode: enum { tracked, completion },
     source_context: SourceContext,
     resolution: ?*BindingResolutionState = null,
 
     fn trackedThread(source_context: SourceContext) SemanticThread {
-        return .{ .mode = .tracked, .source_context = source_context };
-    }
-
-    fn completionThread(
-        source_context: SourceContext,
-        resolution: *BindingResolutionState,
-    ) SemanticThread {
         return .{
-            .mode = .completion,
             .source_context = source_context,
-            .resolution = resolution,
         };
     }
 
@@ -235,13 +219,6 @@ const SemanticThread = struct {
         };
     }
 
-    fn isTracked(self: SemanticThread) bool {
-        return self.mode == .tracked;
-    }
-
-    fn isCompletion(self: SemanticThread) bool {
-        return self.mode == .completion;
-    }
 };
 
 const ContextExprVisitKey = ContextExprKey;
@@ -547,7 +524,6 @@ pub const Pass = struct {
     in_progress_call_result_callable_insts: std.AutoHashMapUnmanaged(CallResultCallableInstKey, void),
     in_progress_callable_scans: std.AutoHashMapUnmanaged(u32, void),
     completed_callable_scans: std.AutoHashMapUnmanaged(u32, void),
-    in_progress_template_body_completions: std.AutoHashMapUnmanaged(TemplateBodyCompletionKey, void),
     mutation_revision: u64,
     mutation_counts: [mutation_kind_count]u32,
 
@@ -570,7 +546,6 @@ pub const Pass = struct {
             .in_progress_call_result_callable_insts = .empty,
             .in_progress_callable_scans = .empty,
             .completed_callable_scans = .empty,
-            .in_progress_template_body_completions = .empty,
             .mutation_revision = 0,
             .mutation_counts = [_]u32{0} ** mutation_kind_count,
         };
@@ -1390,7 +1365,6 @@ pub const Pass = struct {
         self.in_progress_call_result_callable_insts.deinit(self.allocator);
         self.in_progress_callable_scans.deinit(self.allocator);
         self.completed_callable_scans.deinit(self.allocator);
-        self.in_progress_template_body_completions.deinit(self.allocator);
     }
 
     fn resetRunState(self: *Pass) void {
@@ -1400,7 +1374,6 @@ pub const Pass = struct {
         self.in_progress_call_result_callable_insts.clearRetainingCapacity();
         self.in_progress_callable_scans.clearRetainingCapacity();
         self.completed_callable_scans.clearRetainingCapacity();
-        self.in_progress_template_body_completions.clearRetainingCapacity();
         self.mutation_revision = 0;
         self.mutation_counts = [_]u32{0} ** mutation_kind_count;
     }
@@ -1421,7 +1394,7 @@ pub const Pass = struct {
         try self.scanSeedModules(result);
         try self.scanModule(result, self.current_module_idx);
         try self.scanRootsFixedPoint(result, &.{expr_idx});
-        try self.materializeLambdamonoProgram(result, &.{expr_idx});
+        try self.assembleLambdamonoProgramGraph(result, &.{expr_idx});
     }
 
     pub fn runRootSourceExprs(self: *Pass, exprs: []const CIR.Expr.Idx) Allocator.Error!Result {
@@ -1440,7 +1413,7 @@ pub const Pass = struct {
         try self.scanSeedModules(result);
         try self.scanModule(result, self.current_module_idx);
         try self.scanRootsFixedPoint(result, exprs);
-        try self.materializeLambdamonoProgram(result, exprs);
+        try self.assembleLambdamonoProgramGraph(result, exprs);
     }
 
     /// Pipeline all callables rooted in the current module.
@@ -1468,26 +1441,26 @@ pub const Pass = struct {
             try root_source_exprs.append(self.allocator, def.expr);
         }
         try self.scanRootsFixedPoint(result, root_source_exprs.items);
-        try self.materializeLambdamonoProgram(result, root_source_exprs.items);
+        try self.assembleLambdamonoProgramGraph(result, root_source_exprs.items);
     }
 
-    fn materializeLambdamonoProgram(
+    fn assembleLambdamonoProgramGraph(
         self: *Pass,
         result: *Result,
         explicit_root_exprs: []const CIR.Expr.Idx,
     ) Allocator.Error!void {
-        try self.materializeCallableDefs(result);
-        try self.materializeExplicitRoots(result, explicit_root_exprs);
-        try self.materializeDiscoveredRoots(result);
+        try self.assembleCallableDefExprGraph(result);
+        try self.registerExplicitProgramRoots(result, explicit_root_exprs);
+        try self.registerDiscoveredProgramRoots(result);
     }
 
-    fn materializeExplicitRoots(
+    fn registerExplicitProgramRoots(
         self: *Pass,
         result: *Result,
         explicit_root_exprs: []const CIR.Expr.Idx,
     ) Allocator.Error!void {
         for (explicit_root_exprs) |expr_idx| {
-            try self.materializeProgramRoot(
+            try self.registerProgramRoot(
                 result,
                 .{ .root_expr = .{ .module_idx = self.current_module_idx, .expr_idx = expr_idx } },
                 self.current_module_idx,
@@ -1496,7 +1469,7 @@ pub const Pass = struct {
         }
     }
 
-    fn materializeDiscoveredRoots(
+    fn registerDiscoveredProgramRoots(
         self: *Pass,
         result: *Result,
     ) Allocator.Error!void {
@@ -1508,7 +1481,7 @@ pub const Pass = struct {
                 .module_idx = key.source_context_module_idx,
                 .expr_idx = @enumFromInt(key.source_context_raw),
             } };
-            try self.materializeProgramRoot(
+            try self.registerProgramRoot(
                 result,
                 source_context,
                 key.module_idx,
@@ -1517,7 +1490,7 @@ pub const Pass = struct {
         }
     }
 
-    fn materializeCallableDefs(
+    fn assembleCallableDefExprGraph(
         self: *Pass,
         result: *Result,
     ) Allocator.Error!void {
@@ -1533,13 +1506,13 @@ pub const Pass = struct {
                 ),
             }
             const callable_def = &result.lambdamono.callable_defs.items[@intFromEnum(callable_inst.callable_def)];
-            _ = try self.materializeProgramExpr(
+            _ = try self.assembleProgramExprNode(
                 result,
                 callable_def.runtime_expr.source_context,
                 callable_def.runtime_expr.module_idx,
                 callable_def.runtime_expr.expr_idx,
             );
-            _ = try self.materializeProgramExpr(
+            _ = try self.assembleProgramExprNode(
                 result,
                 callable_def.body_expr.source_context,
                 callable_def.body_expr.module_idx,
@@ -1547,14 +1520,14 @@ pub const Pass = struct {
             );
             for (result.getCaptureFields(callable_def.captures)) |capture_field| {
                 switch (capture_field.source) {
-                    .expr => |expr_ref| try self.materializeProgramExprRef(result, expr_ref),
+                    .expr => |expr_ref| try self.ensureProgramExprRefNode(result, expr_ref),
                     .lexical_pattern => {},
                 }
             }
         }
     }
 
-    fn materializeProgramRoot(
+    fn registerProgramRoot(
         self: *Pass,
         result: *Result,
         source_context: SourceContext,
@@ -1563,13 +1536,13 @@ pub const Pass = struct {
     ) Allocator.Error!void {
         const key = Result.contextExprKey(source_context, module_idx, expr_idx);
         if (result.lambdamono.root_expr_ids_by_key.contains(key)) return;
-        const body_expr = try self.materializeProgramExpr(result, source_context, module_idx, expr_idx);
+        const body_expr = try self.assembleProgramExprNode(result, source_context, module_idx, expr_idx);
         const root_expr_id: Lambdamono.RootExprId = @enumFromInt(result.lambdamono.root_exprs.items.len);
         try result.lambdamono.root_exprs.append(self.allocator, .{ .key = key, .body_expr = body_expr });
         try result.lambdamono.root_expr_ids_by_key.put(self.allocator, key, root_expr_id);
     }
 
-    fn materializeProgramExpr(
+    fn assembleProgramExprNode(
         self: *Pass,
         result: *Result,
         source_context: SourceContext,
@@ -1588,99 +1561,99 @@ pub const Pass = struct {
 
         switch (expr) {
             .e_str => |str_expr| for (module_env.store.sliceExpr(str_expr.span)) |child_expr_idx| {
-                try child_exprs.append(self.allocator, try self.materializeProgramExpr(result, source_context, module_idx, child_expr_idx));
+                try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, child_expr_idx));
             },
             .e_list => |list_expr| for (module_env.store.sliceExpr(list_expr.elems)) |child_expr_idx| {
-                try child_exprs.append(self.allocator, try self.materializeProgramExpr(result, source_context, module_idx, child_expr_idx));
+                try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, child_expr_idx));
             },
             .e_tuple => |tuple_expr| for (module_env.store.sliceExpr(tuple_expr.elems)) |child_expr_idx| {
-                try child_exprs.append(self.allocator, try self.materializeProgramExpr(result, source_context, module_idx, child_expr_idx));
+                try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, child_expr_idx));
             },
             .e_match => |match_expr| {
-                try child_exprs.append(self.allocator, try self.materializeProgramExpr(result, source_context, module_idx, match_expr.cond));
+                try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, match_expr.cond));
                 for (module_env.store.sliceMatchBranches(match_expr.branches)) |branch_idx| {
                     const branch = module_env.store.getMatchBranch(branch_idx);
                     if (branch.guard) |guard_expr_idx| {
-                        try child_exprs.append(self.allocator, try self.materializeProgramExpr(result, source_context, module_idx, guard_expr_idx));
+                        try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, guard_expr_idx));
                     }
-                    try child_exprs.append(self.allocator, try self.materializeProgramExpr(result, source_context, module_idx, branch.value));
+                    try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, branch.value));
                 }
             },
             .e_if => |if_expr| {
                 for (module_env.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
                     const branch = module_env.store.getIfBranch(branch_idx);
-                    try child_exprs.append(self.allocator, try self.materializeProgramExpr(result, source_context, module_idx, branch.cond));
-                    try child_exprs.append(self.allocator, try self.materializeProgramExpr(result, source_context, module_idx, branch.body));
+                    try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, branch.cond));
+                    try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, branch.body));
                 }
-                try child_exprs.append(self.allocator, try self.materializeProgramExpr(result, source_context, module_idx, if_expr.final_else));
+                try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, if_expr.final_else));
             },
             .e_call => |call_expr| {
-                try child_exprs.append(self.allocator, try self.materializeProgramExpr(result, source_context, module_idx, call_expr.func));
+                try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, call_expr.func));
                 for (module_env.store.sliceExpr(call_expr.args)) |arg_expr_idx| {
-                    try child_exprs.append(self.allocator, try self.materializeProgramExpr(result, source_context, module_idx, arg_expr_idx));
+                    try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, arg_expr_idx));
                 }
             },
             .e_record => |record_expr| {
                 for (module_env.store.sliceRecordFields(record_expr.fields)) |field_idx| {
                     const field = module_env.store.getRecordField(field_idx);
-                    try child_exprs.append(self.allocator, try self.materializeProgramExpr(result, source_context, module_idx, field.value));
+                    try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, field.value));
                 }
                 if (record_expr.ext) |ext_expr_idx| {
-                    try child_exprs.append(self.allocator, try self.materializeProgramExpr(result, source_context, module_idx, ext_expr_idx));
+                    try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, ext_expr_idx));
                 }
             },
             .e_block => |block_expr| {
                 for (module_env.store.sliceStatements(block_expr.stmts)) |stmt_idx| {
-                    try child_stmts.append(self.allocator, try self.materializeProgramStmt(result, source_context, module_idx, stmt_idx));
+                    try child_stmts.append(self.allocator, try self.assembleProgramStmtNode(result, source_context, module_idx, stmt_idx));
                 }
-                try child_exprs.append(self.allocator, try self.materializeProgramExpr(result, source_context, module_idx, block_expr.final_expr));
+                try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, block_expr.final_expr));
             },
             .e_tag => |tag_expr| for (module_env.store.sliceExpr(tag_expr.args)) |child_expr_idx| {
-                try child_exprs.append(self.allocator, try self.materializeProgramExpr(result, source_context, module_idx, child_expr_idx));
+                try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, child_expr_idx));
             },
             .e_nominal => |nominal_expr| {
-                try child_exprs.append(self.allocator, try self.materializeProgramExpr(result, source_context, module_idx, nominal_expr.backing_expr));
+                try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, nominal_expr.backing_expr));
             },
             .e_nominal_external => |nominal_expr| {
-                try child_exprs.append(self.allocator, try self.materializeProgramExpr(result, source_context, module_idx, nominal_expr.backing_expr));
+                try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, nominal_expr.backing_expr));
             },
             .e_binop => |binop_expr| {
-                try child_exprs.append(self.allocator, try self.materializeProgramExpr(result, source_context, module_idx, binop_expr.lhs));
-                try child_exprs.append(self.allocator, try self.materializeProgramExpr(result, source_context, module_idx, binop_expr.rhs));
+                try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, binop_expr.lhs));
+                try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, binop_expr.rhs));
             },
             .e_unary_minus => |unary_expr| {
-                try child_exprs.append(self.allocator, try self.materializeProgramExpr(result, source_context, module_idx, unary_expr.expr));
+                try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, unary_expr.expr));
             },
             .e_unary_not => |unary_expr| {
-                try child_exprs.append(self.allocator, try self.materializeProgramExpr(result, source_context, module_idx, unary_expr.expr));
+                try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, unary_expr.expr));
             },
             .e_dot_access => |dot_expr| {
-                try child_exprs.append(self.allocator, try self.materializeProgramExpr(result, source_context, module_idx, dot_expr.receiver));
+                try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, dot_expr.receiver));
                 if (dot_expr.args) |args| for (module_env.store.sliceExpr(args)) |arg_expr_idx| {
-                    try child_exprs.append(self.allocator, try self.materializeProgramExpr(result, source_context, module_idx, arg_expr_idx));
+                    try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, arg_expr_idx));
                 };
             },
             .e_tuple_access => |tuple_access| {
-                try child_exprs.append(self.allocator, try self.materializeProgramExpr(result, source_context, module_idx, tuple_access.tuple));
+                try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, tuple_access.tuple));
             },
             .e_dbg => |dbg_expr| {
-                try child_exprs.append(self.allocator, try self.materializeProgramExpr(result, source_context, module_idx, dbg_expr.expr));
+                try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, dbg_expr.expr));
             },
             .e_expect => |expect_expr| {
-                try child_exprs.append(self.allocator, try self.materializeProgramExpr(result, source_context, module_idx, expect_expr.body));
+                try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, expect_expr.body));
             },
             .e_return => |return_expr| {
-                try child_exprs.append(self.allocator, try self.materializeProgramExpr(result, source_context, module_idx, return_expr.expr));
+                try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, return_expr.expr));
             },
             .e_type_var_dispatch => |dispatch_expr| for (module_env.store.sliceExpr(dispatch_expr.args)) |arg_expr_idx| {
-                try child_exprs.append(self.allocator, try self.materializeProgramExpr(result, source_context, module_idx, arg_expr_idx));
+                try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, arg_expr_idx));
             },
             .e_for => |for_expr| {
-                try child_exprs.append(self.allocator, try self.materializeProgramExpr(result, source_context, module_idx, for_expr.expr));
-                try child_exprs.append(self.allocator, try self.materializeProgramExpr(result, source_context, module_idx, for_expr.body));
+                try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, for_expr.expr));
+                try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, for_expr.body));
             },
             .e_run_low_level => |run_low_level| for (module_env.store.sliceExpr(run_low_level.args)) |arg_expr_idx| {
-                try child_exprs.append(self.allocator, try self.materializeProgramExpr(result, source_context, module_idx, arg_expr_idx));
+                try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, arg_expr_idx));
             },
             else => {},
         }
@@ -1719,11 +1692,11 @@ pub const Pass = struct {
         }
         switch (value_origin) {
             .self_value => {},
-            .expr => |expr_ref| try self.materializeProgramExprRef(result, expr_ref),
+            .expr => |expr_ref| try self.ensureProgramExprRefNode(result, expr_ref),
         }
         if (lookup_resolution) |resolved_lookup| {
             switch (resolved_lookup) {
-                .expr => |expr_ref| try self.materializeProgramExprRef(result, expr_ref),
+                .expr => |expr_ref| try self.ensureProgramExprRefNode(result, expr_ref),
                 .def => {},
             }
         }
@@ -1755,7 +1728,7 @@ pub const Pass = struct {
         return expr_id;
     }
 
-    fn materializeProgramStmt(
+    fn assembleProgramStmtNode(
         self: *Pass,
         result: *Result,
         source_context: SourceContext,
@@ -1771,21 +1744,21 @@ pub const Pass = struct {
         defer child_exprs.deinit(self.allocator);
 
         switch (stmt) {
-            .s_decl => |decl| try child_exprs.append(self.allocator, try self.materializeProgramExpr(result, source_context, module_idx, decl.expr)),
-            .s_var => |var_decl| try child_exprs.append(self.allocator, try self.materializeProgramExpr(result, source_context, module_idx, var_decl.expr)),
-            .s_reassign => |reassign| try child_exprs.append(self.allocator, try self.materializeProgramExpr(result, source_context, module_idx, reassign.expr)),
-            .s_dbg => |dbg_stmt| try child_exprs.append(self.allocator, try self.materializeProgramExpr(result, source_context, module_idx, dbg_stmt.expr)),
-            .s_expr => |expr_stmt| try child_exprs.append(self.allocator, try self.materializeProgramExpr(result, source_context, module_idx, expr_stmt.expr)),
-            .s_expect => |expect_stmt| try child_exprs.append(self.allocator, try self.materializeProgramExpr(result, source_context, module_idx, expect_stmt.body)),
+            .s_decl => |decl| try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, decl.expr)),
+            .s_var => |var_decl| try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, var_decl.expr)),
+            .s_reassign => |reassign| try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, reassign.expr)),
+            .s_dbg => |dbg_stmt| try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, dbg_stmt.expr)),
+            .s_expr => |expr_stmt| try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, expr_stmt.expr)),
+            .s_expect => |expect_stmt| try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, expect_stmt.body)),
             .s_for => |for_stmt| {
-                try child_exprs.append(self.allocator, try self.materializeProgramExpr(result, source_context, module_idx, for_stmt.expr));
-                try child_exprs.append(self.allocator, try self.materializeProgramExpr(result, source_context, module_idx, for_stmt.body));
+                try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, for_stmt.expr));
+                try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, for_stmt.body));
             },
             .s_while => |while_stmt| {
-                try child_exprs.append(self.allocator, try self.materializeProgramExpr(result, source_context, module_idx, while_stmt.cond));
-                try child_exprs.append(self.allocator, try self.materializeProgramExpr(result, source_context, module_idx, while_stmt.body));
+                try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, while_stmt.cond));
+                try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, while_stmt.body));
             },
-            .s_return => |return_stmt| try child_exprs.append(self.allocator, try self.materializeProgramExpr(result, source_context, module_idx, return_stmt.expr)),
+            .s_return => |return_stmt| try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, return_stmt.expr)),
             else => {},
         }
 
@@ -1799,12 +1772,12 @@ pub const Pass = struct {
         return stmt_id;
     }
 
-    fn materializeProgramExprRef(
+    fn ensureProgramExprRefNode(
         self: *Pass,
         result: *Result,
         expr_ref: ExprRef,
     ) Allocator.Error!void {
-        _ = try self.materializeProgramExpr(
+        _ = try self.assembleProgramExprNode(
             result,
             expr_ref.source_context,
             expr_ref.module_idx,
@@ -1936,9 +1909,6 @@ pub const Pass = struct {
         const resolved = blk: {
             if (self.lookupExprMonotypeForSourceContext(result, thread, source_context, module_idx, expr_idx)) |existing| {
                 break :blk existing;
-            }
-            if (self.intrinsicExprResultMonotype(result, module_idx, expr_idx)) |intrinsic| {
-                break :blk intrinsic;
             }
             if (self.readExprCallableValue(result, source_context, module_idx, expr_idx)) |callable_value| {
                 break :blk callableValueMonotype(result, callable_value);
@@ -4008,6 +3978,14 @@ pub const Pass = struct {
                             module_idx,
                             ModuleEnv.varFrom(arg_exprs[0]),
                         );
+                        try self.recordExprMonotypeForThread(
+                            result,
+                            thread,
+                            module_idx,
+                            expr_idx,
+                            result.context_mono.monotype_store.primIdx(.str),
+                            module_idx,
+                        );
                     }
                 }
                 try self.scanCirExprSpanWithDirectCallResolution(result, thread, module_idx, arg_exprs, resolve_direct_calls);
@@ -4203,6 +4181,14 @@ pub const Pass = struct {
                         thread,
                         module_idx,
                         ModuleEnv.varFrom(args[0]),
+                    );
+                    try self.recordExprMonotypeForThread(
+                        result,
+                        thread,
+                        module_idx,
+                        expr_idx,
+                        result.context_mono.monotype_store.primIdx(.str),
+                        module_idx,
                     );
                 }
             },
@@ -5148,147 +5134,6 @@ pub const Pass = struct {
         };
     }
 
-    fn tryCompleteTemplateBindingsFromBody(
-        self: *Pass,
-        result: *Result,
-        template: CallableTemplate,
-        bindings: *std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
-        source_context: SourceContext,
-    ) Allocator.Error!bool {
-        const completion_key = TemplateBodyCompletionKey{
-            .template_source_key = template.source_key,
-            .source_context_kind = switch (source_context) {
-                .callable_inst => .callable_inst,
-                .root_expr => .root_expr,
-                .provenance_expr => .provenance_expr,
-                .template_expr => .template_expr,
-            },
-            .source_context_raw = switch (source_context) {
-                .callable_inst => |callable_inst_id| @intFromEnum(@as(CallableInstId, @enumFromInt(@intFromEnum(callable_inst_id)))),
-                .root_expr => |root| @intFromEnum(root.expr_idx),
-                .provenance_expr => |source| @intFromEnum(source.expr_idx),
-                .template_expr => |template_ctx| @intFromEnum(template_ctx.expr_idx),
-            },
-        };
-        if (self.in_progress_template_body_completions.contains(completion_key)) {
-            return true;
-        }
-        try self.in_progress_template_body_completions.put(self.allocator, completion_key, {});
-        defer _ = self.in_progress_template_body_completions.remove(completion_key);
-
-        const module_env = self.all_module_envs[template.module_idx];
-        const expr = module_env.store.getExpr(template.cir_expr);
-
-        var iteration_expr_monotypes: std.AutoHashMapUnmanaged(ContextExprKey, ResolvedMonotype) = .empty;
-        defer iteration_expr_monotypes.deinit(self.allocator);
-        var iteration_pattern_monotypes: std.AutoHashMapUnmanaged(ContextPatternKey, ResolvedMonotype) = .empty;
-        defer iteration_pattern_monotypes.deinit(self.allocator);
-        var resolution = BindingResolutionState{
-            .bindings = bindings,
-            .iteration_expr_monotypes = &iteration_expr_monotypes,
-            .iteration_pattern_monotypes = &iteration_pattern_monotypes,
-        };
-        const thread = SemanticThread.completionThread(source_context, &resolution);
-
-        var iterations: u32 = 0;
-        while (true) {
-            iterations += 1;
-            if (std.debug.runtime_safety and iterations > 32) {
-                std.debug.panic(
-                    "Pipeline: template binding completion did not converge for template={d}",
-                    .{@intFromEnum(template.cir_expr)},
-                );
-            }
-
-            const bindings_before = bindings.count();
-            const mutation_revision_before = self.mutation_revision;
-
-            if (try self.resolveTemplateTypeVarIfFullyBoundWithBindings(
-                result,
-                template.module_idx,
-                &module_env.types,
-                template.type_root,
-                bindings,
-            )) |exact_fn_monotype| {
-                if (!try self.materializeTemplateBoundaryBindingsFromExactFnMonotype(
-                    result,
-                    template,
-                    exact_fn_monotype,
-                    bindings,
-                )) return false;
-            }
-
-            switch (expr) {
-                .e_lambda => |lambda_expr| try self.scanCirValueExprWithoutDirectCallResolution(result, thread, template.module_idx, lambda_expr.body),
-                .e_closure => |closure_expr| {
-                    const lambda_expr = module_env.store.getExpr(closure_expr.lambda_idx);
-                    if (lambda_expr == .e_lambda) {
-                        try self.scanCirValueExprWithoutDirectCallResolution(result, thread, template.module_idx, lambda_expr.e_lambda.body);
-                    }
-                    try self.scanClosureCaptureSources(
-                        result,
-                        source_context,
-                        template.module_idx,
-                        template.cir_expr,
-                        closure_expr,
-                    );
-                },
-                .e_hosted_lambda => |hosted_expr| try self.scanCirValueExprWithoutDirectCallResolution(result, thread, template.module_idx, hosted_expr.body),
-                else => return true,
-            }
-
-            if (!try self.tryBindTemplateBodyResultFromExactExpr(result, thread, template, bindings)) return false;
-
-            if (bindings.count() == bindings_before and
-                self.mutation_revision == mutation_revision_before)
-            {
-                break;
-            }
-        }
-
-        return true;
-    }
-
-    fn tryBindTemplateBodyResultFromExactExpr(
-        self: *Pass,
-        result: *Result,
-        thread: SemanticThread,
-        template: CallableTemplate,
-        bindings: *std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
-    ) Allocator.Error!bool {
-        const module_env = self.all_module_envs[template.module_idx];
-        const boundary = self.callableBoundaryInfo(template.module_idx, template.cir_expr) orelse return true;
-        const resolved_func = resolveFuncTypeInStore(&module_env.types, template.type_root) orelse return true;
-        const body_mono = try self.resolveExprMonotypeResolved(result, thread, template.module_idx, boundary.body_expr);
-        if (body_mono.isNone()) return true;
-
-        var ordered_entries = std.ArrayList(TypeSubstEntry).empty;
-        defer ordered_entries.deinit(self.allocator);
-
-        if (!try self.tryBindTypeVarMonotypes(
-            result,
-            template.module_idx,
-            &module_env.types,
-            bindings,
-            &ordered_entries,
-            ModuleEnv.varFrom(boundary.body_expr),
-            body_mono.idx,
-            body_mono.module_idx,
-        )) return false;
-        if (!try self.tryBindTypeVarMonotypes(
-            result,
-            template.module_idx,
-            &module_env.types,
-            bindings,
-            &ordered_entries,
-            resolved_func.func.ret,
-            body_mono.idx,
-            body_mono.module_idx,
-        )) return false;
-
-        return true;
-    }
-
     fn resolveDirectCallFnMonotype(
         self: *Pass,
         result: *Result,
@@ -5384,8 +5229,6 @@ pub const Pass = struct {
         }
 
         const template = result.getCallableTemplate(template_id).*;
-        const template_env = self.all_module_envs[template.module_idx];
-        const template_types = &template_env.types;
         const arg_exprs = self.all_module_envs[module_idx].store.sliceExpr(call_expr.args);
         const exact_desired_fn_monotype = resolvedMonotype(
             try self.resolveAppliedCallableFnMonotypeIfFullyBound(
@@ -5402,116 +5245,8 @@ pub const Pass = struct {
             module_idx,
         );
         const defining_source_context = self.resolveTemplateDefiningSourceContext(result, thread.requireSourceContext(), template);
-
-        var callee_bindings = std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype).init(self.allocator);
-        defer callee_bindings.deinit();
-
-        var ordered_entries = std.ArrayList(TypeSubstEntry).empty;
-        defer ordered_entries.deinit(self.allocator);
-
-        if (!exact_desired_fn_monotype.isNone()) {
-                if (!try self.materializeTemplateBoundaryBindingsFromExactFnMonotype(
-                    result,
-                    template,
-                    exact_desired_fn_monotype,
-                    &callee_bindings,
-                )) return null;
-        }
-
-        if (resolveFuncTypeInStore(template_types, template.type_root)) |resolved_func| {
-            const ret_mono = try self.resolveExprMonotypeResolved(result, thread, module_idx, call_expr_idx);
-            if (!ret_mono.isNone()) {
-                if (self.callableBoundaryInfo(template.module_idx, template.cir_expr)) |boundary| {
-                    if (!try self.tryBindTypeVarMonotypes(
-                        result,
-                        template.module_idx,
-                        template_types,
-                        &callee_bindings,
-                        &ordered_entries,
-                        ModuleEnv.varFrom(boundary.body_expr),
-                        ret_mono.idx,
-                        ret_mono.module_idx,
-                    )) return null;
-                }
-                var seen: std.AutoHashMapUnmanaged(types.Var, void) = .empty;
-                defer seen.deinit(self.allocator);
-
-                if (!try self.typeVarFullyBoundWithBindings(
-                    result,
-                    template.module_idx,
-                    template_types,
-                    resolved_func.func.ret,
-                    &callee_bindings,
-                    &seen,
-                )) {
-                    if (!try self.tryBindTypeVarMonotypes(
-                        result,
-                        template.module_idx,
-                        template_types,
-                        &callee_bindings,
-                        &ordered_entries,
-                        resolved_func.func.ret,
-                        ret_mono.idx,
-                        ret_mono.module_idx,
-                    )) return null;
-                }
-            }
-
-            const param_vars = template_types.sliceVars(resolved_func.func.args);
-            if (param_vars.len != arg_exprs.len) {
-                if (std.debug.runtime_safety) {
-                    std.debug.panic(
-                        "Pipeline: direct call template arity mismatch at expr {d} (params={d}, args={d})",
-                        .{
-                            @intFromEnum(call_expr_idx),
-                            param_vars.len,
-                            arg_exprs.len,
-                        },
-                    );
-                }
-                unreachable;
-            }
-
-            if (!try self.tryBindTemplateParamsFromActualArgs(
-                result,
-                thread,
-                module_idx,
-                template,
-                template_types,
-                param_vars,
-                arg_exprs,
-                &callee_bindings,
-                &ordered_entries,
-                true,
-            )) return null;
-        }
-
-        if (!try self.tryCompleteTemplateBindingsFromBody(
-            result,
-            template,
-            &callee_bindings,
-            defining_source_context,
-        )) return null;
-
-        var seen: std.AutoHashMapUnmanaged(types.Var, void) = .empty;
-        defer seen.deinit(self.allocator);
-        if (!try self.typeVarFullyBoundWithBindings(
-            result,
-            template.module_idx,
-            template_types,
-            template.type_root,
-            &callee_bindings,
-            &seen,
-        )) return null;
-
-        const fn_monotype = try self.resolveTypeVarMonotypeWithBindings(
-            result,
-            template.module_idx,
-            template_types,
-            template.type_root,
-            &callee_bindings,
-        );
-        if (fn_monotype.isNone()) return null;
+        if (exact_desired_fn_monotype.isNone()) return null;
+        const fn_monotype = exact_desired_fn_monotype.idx;
 
         if (!try self.procSignatureAcceptsFnMonotype(
             result,
@@ -6088,285 +5823,6 @@ pub const Pass = struct {
         }
     }
 
-    fn tryBindTemplateParamsFromActualArgs(
-        self: *Pass,
-        result: *Result,
-        thread: SemanticThread,
-        actual_module_idx: u32,
-        template: CallableTemplate,
-        template_types: *const types.Store,
-        param_vars: []const types.Var,
-        actual_args: []const CIR.Expr.Idx,
-        bindings: *std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
-        ordered_entries: *std.ArrayList(TypeSubstEntry),
-        skip_fully_bound_params: bool,
-    ) Allocator.Error!bool {
-        if (param_vars.len != actual_args.len) unreachable;
-
-        var deferred_actuals = std.ArrayList(usize).empty;
-        defer deferred_actuals.deinit(self.allocator);
-
-        for (param_vars, actual_args, 0..) |param_var, arg_expr_idx, arg_i| {
-            const callable_template = try self.resolveExprCallableTemplate(result, thread.requireSourceContext(), actual_module_idx, arg_expr_idx);
-            if (callable_template != null) {
-                if (try self.inferCallableActualFromCallerParam(
-                    result,
-                    thread,
-                    actual_module_idx,
-                    arg_expr_idx,
-                    template,
-                    template_types,
-                    param_var,
-                    bindings,
-                )) |callable_mono| {
-                    if (!try self.tryBindTemplateParamActualMonotype(
-                        result,
-                        template,
-                        template_types,
-                        bindings,
-                        ordered_entries,
-                        param_var,
-                        callable_mono,
-                        skip_fully_bound_params,
-                    )) return false;
-                    continue;
-                }
-
-                try deferred_actuals.append(self.allocator, arg_i);
-                continue;
-            }
-
-            const expected_param_mono = try self.resolveTemplateTypeVarIfFullyBoundWithBindings(
-                result,
-                template.module_idx,
-                template_types,
-                param_var,
-                bindings,
-            );
-            const exact_arg_mono = try self.resolveExprMonotypeResolved(result, thread, actual_module_idx, arg_expr_idx);
-            if (!exact_arg_mono.isNone()) {
-                if (!try self.tryBindTemplateParamActualMonotype(
-                    result,
-                    template,
-                    template_types,
-                    bindings,
-                    ordered_entries,
-                    param_var,
-                    exact_arg_mono,
-                    skip_fully_bound_params,
-                )) return false;
-                continue;
-            }
-
-            if (expected_param_mono) |bound_param_mono| {
-                if (!try self.tryBindTemplateParamActualMonotype(
-                    result,
-                    template,
-                    template_types,
-                    bindings,
-                    ordered_entries,
-                    param_var,
-                    bound_param_mono,
-                    skip_fully_bound_params,
-                )) return false;
-                continue;
-            }
-
-            try deferred_actuals.append(self.allocator, arg_i);
-        }
-
-        for (deferred_actuals.items) |arg_i| {
-            const param_var = param_vars[arg_i];
-            const arg_expr_idx = actual_args[arg_i];
-            const callable_template = try self.resolveExprCallableTemplate(result, thread.requireSourceContext(), actual_module_idx, arg_expr_idx);
-            if (callable_template != null) {
-                if (try self.inferCallableActualFromCallerParam(
-                    result,
-                    thread,
-                    actual_module_idx,
-                    arg_expr_idx,
-                    template,
-                    template_types,
-                    param_var,
-                    bindings,
-                )) |callable_mono| {
-                    if (!try self.tryBindTemplateParamActualMonotype(
-                        result,
-                        template,
-                        template_types,
-                        bindings,
-                        ordered_entries,
-                        param_var,
-                        callable_mono,
-                        skip_fully_bound_params,
-                    )) return false;
-                }
-                continue;
-            }
-
-            const exact_arg_mono = try self.resolveExprMonotypeResolved(result, thread, actual_module_idx, arg_expr_idx);
-            const bound_param_mono = try self.resolveTemplateTypeVarIfFullyBoundWithBindings(
-                result,
-                template.module_idx,
-                template_types,
-                param_var,
-                bindings,
-            );
-
-            const arg_mono = if (bound_param_mono) |bound|
-                bound
-            else if (!exact_arg_mono.isNone())
-                exact_arg_mono
-            else
-                try self.requireFullyBoundExprMonotype(result, thread, actual_module_idx, arg_expr_idx);
-
-            if (!try self.tryBindTemplateParamActualMonotype(
-                result,
-                template,
-                template_types,
-                bindings,
-                ordered_entries,
-                param_var,
-                arg_mono,
-                skip_fully_bound_params,
-            )) return false;
-        }
-
-        return true;
-    }
-
-    fn inferCallableActualFromCallerParam(
-        self: *Pass,
-        result: *Result,
-        thread: SemanticThread,
-        actual_module_idx: u32,
-        arg_expr_idx: CIR.Expr.Idx,
-        caller_template: CallableTemplate,
-        caller_template_types: *const types.Store,
-        caller_param_var: types.Var,
-        caller_bindings: *std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
-    ) Allocator.Error!?ResolvedMonotype {
-        const actual_template_id = (try self.resolveExprCallableTemplate(result, thread.requireSourceContext(), actual_module_idx, arg_expr_idx)) orelse return null;
-        const actual_template = result.getCallableTemplate(actual_template_id).*;
-        if (templateRequiresConcreteOwnerCallableInst(result, actual_template_id) and
-            !thread.hasCallableInst())
-        {
-            return null;
-        }
-        const actual_template_types = &self.all_module_envs[actual_template.module_idx].types;
-        const actual_func = resolveFuncTypeInStore(actual_template_types, actual_template.type_root) orelse return null;
-        const caller_func = resolveFuncTypeInStore(caller_template_types, caller_param_var) orelse return null;
-        const caller_arg_vars = caller_template_types.sliceVars(caller_func.func.args);
-        const actual_arg_vars = actual_template_types.sliceVars(actual_func.func.args);
-        if (caller_arg_vars.len != actual_arg_vars.len) return null;
-
-        var actual_bindings = std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype).init(self.allocator);
-        defer actual_bindings.deinit();
-        var ordered_entries = std.ArrayList(TypeSubstEntry).empty;
-        defer ordered_entries.deinit(self.allocator);
-
-        for (caller_arg_vars, actual_arg_vars) |caller_arg_var, actual_arg_var| {
-            if (try self.resolveTemplateTypeVarIfFullyBoundWithBindings(
-                result,
-                caller_template.module_idx,
-                caller_template_types,
-                caller_arg_var,
-                caller_bindings,
-            )) |caller_arg_mono| {
-                if (!try self.tryBindTypeVarMonotypes(
-                    result,
-                    actual_template.module_idx,
-                    actual_template_types,
-                    &actual_bindings,
-                    &ordered_entries,
-                    actual_arg_var,
-                    caller_arg_mono.idx,
-                    caller_arg_mono.module_idx,
-                )) return null;
-            }
-        }
-
-        if (try self.resolveTemplateTypeVarIfFullyBoundWithBindings(
-            result,
-            caller_template.module_idx,
-            caller_template_types,
-            caller_func.func.ret,
-            caller_bindings,
-        )) |caller_ret_mono| {
-            if (!try self.tryBindTypeVarMonotypes(
-                result,
-                actual_template.module_idx,
-                actual_template_types,
-                &actual_bindings,
-                &ordered_entries,
-                actual_func.func.ret,
-                caller_ret_mono.idx,
-                caller_ret_mono.module_idx,
-            )) return null;
-        }
-
-        const defining_source_context = self.resolveTemplateDefiningSourceContext(result, thread.requireSourceContext(), actual_template);
-        if (!try self.tryCompleteTemplateBindingsFromBody(
-            result,
-            actual_template,
-            &actual_bindings,
-            defining_source_context,
-        )) return null;
-
-        if ((try self.resolveTemplateTypeVarIfFullyBoundWithBindings(
-            result,
-            actual_template.module_idx,
-            actual_template_types,
-            actual_template.type_root,
-            &actual_bindings,
-        ))) |callable_mono| {
-            return callable_mono;
-        }
-
-        return null;
-    }
-
-    fn tryBindTemplateParamActualMonotype(
-        self: *Pass,
-        result: *Result,
-        template: CallableTemplate,
-        template_types: *const types.Store,
-        bindings: *std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
-        ordered_entries: *std.ArrayList(TypeSubstEntry),
-        param_var: types.Var,
-        arg_mono: ResolvedMonotype,
-        skip_fully_bound_params: bool,
-    ) Allocator.Error!bool {
-        if (arg_mono.isNone()) return true;
-
-        if (skip_fully_bound_params) {
-            var seen: std.AutoHashMapUnmanaged(types.Var, void) = .empty;
-            defer seen.deinit(self.allocator);
-
-            if (try self.typeVarFullyBoundWithBindings(
-                result,
-                template.module_idx,
-                template_types,
-                param_var,
-                bindings,
-                &seen,
-            )) {
-                return true;
-            }
-        }
-
-        return self.tryBindTypeVarMonotypes(
-            result,
-            template.module_idx,
-            template_types,
-            bindings,
-            ordered_entries,
-            param_var,
-            arg_mono.idx,
-            arg_mono.module_idx,
-        );
-    }
-
     fn bindCurrentCallFromCallableInst(
         self: *Pass,
         result: *Result,
@@ -6868,12 +6324,6 @@ pub const Pass = struct {
         const template_types = &template_env.types;
         const defining_source_context = self.resolveTemplateDefiningSourceContext(result, thread.requireSourceContext(), template);
 
-        var callee_bindings = std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype).init(self.allocator);
-        defer callee_bindings.deinit();
-
-        var ordered_entries = std.ArrayList(TypeSubstEntry).empty;
-        defer ordered_entries.deinit(self.allocator);
-
         var actual_args = std.ArrayList(CIR.Expr.Idx).empty;
         defer actual_args.deinit(self.allocator);
         try self.appendDispatchActualArgs(module_idx, expr, &actual_args);
@@ -6892,15 +6342,6 @@ pub const Pass = struct {
             ),
             module_idx,
         );
-        if (!exact_desired_fn_monotype.isNone()) {
-            if (!try self.materializeTemplateBoundaryBindingsFromExactFnMonotype(
-                result,
-                template,
-                exact_desired_fn_monotype,
-                &callee_bindings,
-            )) return null;
-        }
-
         if (resolveFuncTypeInStore(template_types, template.type_root)) |resolved_func| {
             const param_vars = template_types.sliceVars(resolved_func.func.args);
             if (param_vars.len != actual_args.items.len) {
@@ -6916,73 +6357,9 @@ pub const Pass = struct {
                 }
                 unreachable;
             }
-
-            const ret_mono = try self.resolveExprMonotypeResolved(result, thread, module_idx, expr_idx);
-            if (!ret_mono.isNone()) {
-                if (self.callableBoundaryInfo(template.module_idx, template.cir_expr)) |boundary| {
-                    if (!try self.tryBindTypeVarMonotypes(
-                        result,
-                        template.module_idx,
-                        template_types,
-                        &callee_bindings,
-                        &ordered_entries,
-                        ModuleEnv.varFrom(boundary.body_expr),
-                        ret_mono.idx,
-                        ret_mono.module_idx,
-                    )) return null;
-                }
-                if (!try self.tryBindTypeVarMonotypes(
-                    result,
-                    template.module_idx,
-                    template_types,
-                    &callee_bindings,
-                    &ordered_entries,
-                    resolved_func.func.ret,
-                    ret_mono.idx,
-                    ret_mono.module_idx,
-                )) return null;
-            }
-
-            if (!try self.tryBindTemplateParamsFromActualArgs(
-                result,
-                thread,
-                module_idx,
-                template,
-                template_types,
-                param_vars,
-                actual_args.items,
-                &callee_bindings,
-                &ordered_entries,
-                true,
-            )) return null;
         }
-
-        if (!try self.tryCompleteTemplateBindingsFromBody(
-            result,
-            template,
-            &callee_bindings,
-            defining_source_context,
-        )) return null;
-
-        var seen: std.AutoHashMapUnmanaged(types.Var, void) = .empty;
-        defer seen.deinit(self.allocator);
-        if (!try self.typeVarFullyBoundWithBindings(
-            result,
-            template.module_idx,
-            template_types,
-            template.type_root,
-            &callee_bindings,
-            &seen,
-        )) return null;
-
-        const fn_monotype = try self.resolveTypeVarMonotypeWithBindings(
-            result,
-            template.module_idx,
-            template_types,
-            template.type_root,
-            &callee_bindings,
-        );
-        if (fn_monotype.isNone()) return null;
+        if (exact_desired_fn_monotype.isNone()) return null;
+        const fn_monotype = exact_desired_fn_monotype.idx;
 
         if (!try self.procSignatureAcceptsFnMonotype(
             result,
@@ -7217,11 +6594,7 @@ pub const Pass = struct {
                 }
             }
 
-            if (active_thread.isCompletion()) {
-                try result.context_mono.context_expr_monotypes.put(self.allocator, key, resolved);
-            } else {
-                try self.mergeTrackedContextExprMonotype(result, key, resolved);
-            }
+            try self.mergeTrackedContextExprMonotype(result, key, resolved);
             return;
         }
 
@@ -7669,45 +7042,43 @@ pub const Pass = struct {
         expr: CIR.Expr,
         callable_inst_id: CallableInstId,
     ) Allocator.Error!void {
-        if (thread.isTracked()) {
-            const dispatch_target = self.dispatchTargetForCallableInst(result, callable_inst_id) orelse {
-                if (std.debug.runtime_safety) {
-                    std.debug.panic(
-                        "Pipeline: dispatch expr {d} in module {d} resolved to callable inst {d} whose template {d} has no external-def source",
-                        .{
-                            @intFromEnum(expr_idx),
-                            module_idx,
-                            @intFromEnum(callable_inst_id),
-                            @intFromEnum(result.getCallableInst(callable_inst_id).template),
-                        },
-                    );
-                }
-                unreachable;
-            };
-            try self.recordDispatchExprTarget(
-                result,
-                thread.requireSourceContext(),
-                module_idx,
-                expr_idx,
-                dispatch_target,
-            );
-            try self.setExprDirectCallSite(
-                result,
-                thread.requireSourceContext(),
-                module_idx,
-                expr_idx,
-                callable_inst_id,
-            );
-            const callable_inst = result.getCallableInst(callable_inst_id);
-            const template = result.getCallableTemplate(callable_inst.template);
-            try self.setExprDirectCallable(
-                result,
-                thread.requireSourceContext(),
-                template.module_idx,
-                template.cir_expr,
-                callable_inst_id,
-            );
-        }
+        const dispatch_target = self.dispatchTargetForCallableInst(result, callable_inst_id) orelse {
+            if (std.debug.runtime_safety) {
+                std.debug.panic(
+                    "Pipeline: dispatch expr {d} in module {d} resolved to callable inst {d} whose template {d} has no external-def source",
+                    .{
+                        @intFromEnum(expr_idx),
+                        module_idx,
+                        @intFromEnum(callable_inst_id),
+                        @intFromEnum(result.getCallableInst(callable_inst_id).template),
+                    },
+                );
+            }
+            unreachable;
+        };
+        try self.recordDispatchExprTarget(
+            result,
+            thread.requireSourceContext(),
+            module_idx,
+            expr_idx,
+            dispatch_target,
+        );
+        try self.setExprDirectCallSite(
+            result,
+            thread.requireSourceContext(),
+            module_idx,
+            expr_idx,
+            callable_inst_id,
+        );
+        const callable_inst = result.getCallableInst(callable_inst_id);
+        const template = result.getCallableTemplate(callable_inst.template);
+        try self.setExprDirectCallable(
+            result,
+            thread.requireSourceContext(),
+            template.module_idx,
+            template.cir_expr,
+            callable_inst_id,
+        );
         var actual_args = std.ArrayList(CIR.Expr.Idx).empty;
         defer actual_args.deinit(self.allocator);
         try self.appendDispatchActualArgs(module_idx, expr, &actual_args);
@@ -7741,7 +7112,6 @@ pub const Pass = struct {
         dispatch_target: DispatchExprTarget,
         thread: SemanticThread,
     ) Allocator.Error!void {
-        if (thread.isCompletion()) return;
         try self.putTracked(
             .context_dispatch_targets,
             &result.context_mono.resolved_dispatch_targets,
@@ -7934,7 +7304,6 @@ pub const Pass = struct {
         return self.resolveDispatchTargetForExpr(
             result,
             .{
-                .mode = thread.mode,
                 .source_context = thread.source_context,
                 .resolution = &merged_resolution,
             },
@@ -8492,9 +7861,7 @@ pub const Pass = struct {
         } else null;
 
         const callable_inst_id = if (existing_callable_inst_id) |callable_inst_id| blk: {
-            if (thread.isTracked()) {
-                try self.scanCallableInst(result, callable_inst_id);
-            }
+            try self.scanCallableInst(result, callable_inst_id);
             break :blk callable_inst_id;
         } else blk: {
             if (desired_fn_monotype.isNone()) return;
@@ -8510,10 +7877,7 @@ pub const Pass = struct {
             )) {
                 return;
             }
-            break :blk if (thread.isTracked())
-                try self.requireCallableInst(result, thread.requireSourceContext(), template_id, desired_fn_monotype.idx, desired_fn_monotype.module_idx)
-            else
-                try self.registerCallableInst(result, thread.requireSourceContext(), template_id, desired_fn_monotype.idx, desired_fn_monotype.module_idx);
+            break :blk try self.requireCallableInst(result, thread.requireSourceContext(), template_id, desired_fn_monotype.idx, desired_fn_monotype.module_idx);
         };
         try self.setExprDirectCallable(
             result,
@@ -10567,7 +9931,6 @@ pub const Pass = struct {
             .iteration_pattern_monotypes = &iteration_pattern_monotypes,
         };
         const thread = SemanticThread{
-            .mode = .tracked,
             .source_context = callableInstSourceContext(callable_inst_id),
             .resolution = &resolution,
         };
@@ -10697,138 +10060,7 @@ pub const Pass = struct {
             else => unreachable,
         }
 
-        if (thread.isTracked()) {
-            try self.completed_callable_scans.put(self.allocator, callable_inst_key, {});
-        }
-    }
-
-    fn materializeTemplateBoundaryBindingsFromExactFnMonotype(
-        self: *Pass,
-        result: *Result,
-        template: CallableTemplate,
-        fn_monotype: ResolvedMonotype,
-        bindings: *std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
-    ) Allocator.Error!bool {
-        if (fn_monotype.isNone()) return true;
-
-        const module_env = self.all_module_envs[template.module_idx];
-        const boundary = self.callableBoundaryInfo(template.module_idx, template.cir_expr) orelse return true;
-        const resolved_func = resolveFuncTypeInStore(&module_env.types, template.type_root) orelse return true;
-        const fn_mono = switch (result.context_mono.monotype_store.getMonotype(fn_monotype.idx)) {
-            .func => |func| func,
-            else => return true,
-        };
-
-        const param_vars = module_env.types.sliceVars(resolved_func.func.args);
-        if (boundary.arg_patterns.len != param_vars.len or boundary.arg_patterns.len != fn_mono.args.len) {
-            if (std.debug.runtime_safety) {
-                std.debug.panic(
-                    "Pipeline: template boundary arity mismatch for expr {d} (patterns={d}, vars={d}, monos={d})",
-                    .{
-                        @intFromEnum(template.cir_expr),
-                        boundary.arg_patterns.len,
-                        param_vars.len,
-                        fn_mono.args.len,
-                    },
-                );
-            }
-            unreachable;
-        }
-
-        var ordered_entries = std.ArrayList(TypeSubstEntry).empty;
-        defer ordered_entries.deinit(self.allocator);
-
-        if (!try self.tryBindTypeVarMonotypes(
-            result,
-            template.module_idx,
-            &module_env.types,
-            bindings,
-            &ordered_entries,
-            template.type_root,
-            fn_monotype.idx,
-            fn_monotype.module_idx,
-        )) return false;
-
-        for (boundary.arg_patterns, param_vars, 0..) |pattern_idx, param_var, i| {
-            const param_mono = result.context_mono.monotype_store.getIdxSpanItem(fn_mono.args, i);
-            if (!try self.tryBindTypeVarMonotypes(
-                result,
-                template.module_idx,
-                &module_env.types,
-                bindings,
-                &ordered_entries,
-                param_var,
-                param_mono,
-                fn_monotype.module_idx,
-            )) return false;
-            if (!try self.tryBindTypeVarMonotypes(
-                result,
-                template.module_idx,
-                &module_env.types,
-                bindings,
-                &ordered_entries,
-                ModuleEnv.varFrom(pattern_idx),
-                param_mono,
-                fn_monotype.module_idx,
-            )) return false;
-        }
-
-        if (!try self.tryBindTypeVarMonotypes(
-            result,
-            template.module_idx,
-            &module_env.types,
-            bindings,
-            &ordered_entries,
-            resolved_func.func.ret,
-            fn_mono.ret,
-            fn_monotype.module_idx,
-        )) return false;
-
-        if (!try self.tryBindTypeVarMonotypes(
-            result,
-            template.module_idx,
-            &module_env.types,
-            bindings,
-            &ordered_entries,
-            ModuleEnv.varFrom(boundary.body_expr),
-            fn_mono.ret,
-            fn_monotype.module_idx,
-        )) return false;
-
-        return true;
-    }
-
-    fn resolveTemplateTypeVarIfFullyBoundWithBindings(
-        self: *Pass,
-        result: *Result,
-        module_idx: u32,
-        store_types: *const types.Store,
-        type_var: types.Var,
-        bindings: *std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
-    ) Allocator.Error!?ResolvedMonotype {
-        var seen: std.AutoHashMapUnmanaged(types.Var, void) = .empty;
-        defer seen.deinit(self.allocator);
-
-        if (!try self.typeVarFullyBoundWithBindings(
-            result,
-            module_idx,
-            store_types,
-            type_var,
-            bindings,
-            &seen,
-        )) {
-            return null;
-        }
-
-        const mono = try self.resolveTypeVarMonotypeWithBindings(
-            result,
-            module_idx,
-            store_types,
-            type_var,
-            bindings,
-        );
-        if (mono.isNone()) return null;
-        return resolvedMonotype(mono, module_idx);
+        try self.completed_callable_scans.put(self.allocator, callable_inst_key, {});
     }
 
     fn ensureTypeSubst(
@@ -11838,10 +11070,6 @@ pub const Pass = struct {
             return resolved;
         }
 
-        if (self.intrinsicExprResultMonotype(result, module_idx, expr_idx)) |resolved| {
-            return resolved;
-        }
-
         if (self.readExprCallableValue(result, source_context, module_idx, expr_idx)) |callable_value| {
             return callableValueMonotype(result, callable_value);
         }
@@ -11920,10 +11148,6 @@ pub const Pass = struct {
             return resolved;
         }
 
-        if (self.intrinsicExprResultMonotype(result, module_idx, expr_idx)) |resolved| {
-            return resolved;
-        }
-
         if (self.readExprCallableValue(result, source_context, module_idx, expr_idx)) |callable_value| {
             return callableValueMonotype(result, callable_value);
         }
@@ -11972,31 +11196,6 @@ pub const Pass = struct {
         }
 
         return resolvedMonotype(.none, module_idx);
-    }
-
-    fn intrinsicExprResultMonotype(
-        self: *Pass,
-        result: *Result,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-    ) ?ResolvedMonotype {
-        const module_env = self.all_module_envs[module_idx];
-        const expr = module_env.store.getExpr(expr_idx);
-        switch (expr) {
-            .e_run_low_level => |run_low_level| {
-                if (run_low_level.op == .str_inspect) {
-                    return resolvedMonotype(result.context_mono.monotype_store.primIdx(.str), module_idx);
-                }
-            },
-            .e_call => |call_expr| {
-                const low_level_op = self.getCallLowLevelOp(module_env, call_expr.func) orelse return null;
-                if (low_level_op == .str_inspect) {
-                    return resolvedMonotype(result.context_mono.monotype_store.primIdx(.str), module_idx);
-                }
-            },
-            else => {},
-        }
-        return null;
     }
 
     fn resolveTypeVarMonotype(
