@@ -293,23 +293,8 @@ fn runtimeValueLayoutFromMirMonotype(self: *Self, monotype: MirMonotypeIdx) Allo
     return self.runtimeRepresentationLayoutIdx(resolved);
 }
 
-fn runtimeCallableValueLayoutFromMirLocal(self: *Self, local_id: MIR.LocalId) Allocator.Error!?layout.Idx {
-    const resolved = self.requireExactCallableValue(local_id);
-    return try self.runtimeLambdaValueLayout(resolved.lambda);
-}
-
 fn runtimeValueLayoutFromMirLocal(self: *Self, local_id: MIR.LocalId) Allocator.Error!layout.Idx {
-    const local = self.mir_store.getLocal(local_id);
-    if (self.mir_store.monotype_store.getMonotype(local.monotype) == .func) {
-        if (try self.runtimeCallableValueLayoutFromMirLocal(local_id)) |layout_idx| {
-            return layout_idx;
-        }
-        std.debug.panic(
-            "MirToLir invariant violated: function-valued local {d} has no exact callable layout source",
-            .{@intFromEnum(local_id)},
-        );
-    }
-    return self.runtimeValueLayoutFromMirMonotype(local.monotype);
+    return self.runtimeValueLayoutFromMirMonotype(self.mir_store.getLocal(local_id).monotype);
 }
 
 fn runtimeLambdaValueLayout(self: *Self, lambda_id: MIR.LambdaId) Allocator.Error!layout.Idx {
@@ -317,22 +302,11 @@ fn runtimeLambdaValueLayout(self: *Self, lambda_id: MIR.LambdaId) Allocator.Erro
     if (lambda.captures_param) |captures_param| {
         return self.runtimeValueLayoutFromMirLocal(captures_param);
     }
-    return self.runtimeRepresentationLayoutIdx(try self.mir_layout_resolver.resolve(lambda.fn_monotype, null));
+    return self.runtimeValueLayoutFromMirMonotype(self.mir_store.monotype_store.unit_idx);
 }
 
 fn runtimeLambdaReturnLayout(self: *Self, lambda_id: MIR.LambdaId) Allocator.Error!layout.Idx {
-    const lambda = self.mir_store.getLambda(lambda_id);
-    if (self.mir_store.monotype_store.getMonotype(lambda.ret_monotype) != .func) {
-        return self.runtimeValueLayoutFromMirMonotype(lambda.ret_monotype);
-    }
-    return switch (self.analyses.getLambdaCallableContract(lambda_id)) {
-        .no_return => std.debug.panic(
-            "MirToLir invariant violated: function-returning lambda {d} has no reachable exact callable return contract",
-            .{@intFromEnum(lambda_id)},
-        ),
-        .exact_lambda => |returned_lambda| self.runtimeLambdaValueLayout(returned_lambda),
-        .exact_closure => |returned_lambda| self.runtimeLambdaValueLayout(returned_lambda),
-    };
+    return self.runtimeValueLayoutFromMirMonotype(self.mir_store.getLambda(lambda_id).ret_monotype);
 }
 
 fn loweredOriginsEqual(left: LoweredOrigin, right: LoweredOrigin) bool {
@@ -346,7 +320,7 @@ fn mergeLoweredOrigins(left: LoweredOrigin, right: LoweredOrigin) LoweredOrigin 
 
 fn requireExactCallableValue(self: *Self, local_id: MIR.LocalId) ResolvedCallable {
     const exact_callable = self.mir_store.getLocal(local_id).exact_callable orelse std.debug.panic(
-        "MirToLir invariant violated: function-valued local {d} lacked explicit exact callable metadata",
+        "MirToLir invariant violated: callable local {d} lacked explicit exact callable metadata",
         .{@intFromEnum(local_id)},
     );
     return .{
@@ -993,12 +967,10 @@ fn resolveMirLocalOrigin(
             .discriminant => .fresh,
         },
         .call => |call_result| blk: {
-            const resolved = if (call_result.exact_lambda) |lambda_id|
-                ResolvedCallable{
-                    .lambda = lambda_id,
-                    .captures_local = if (call_result.exact_requires_hidden_capture) call_result.callee else null,
-                }
-            else self.requireExactCallableValue(call_result.callee);
+            const resolved = ResolvedCallable{
+                .lambda = call_result.exact_lambda,
+                .captures_local = if (call_result.exact_requires_hidden_capture) call_result.callee else null,
+            };
 
             const visible_args = self.mir_store.getLocalSpan(call_result.args);
             const arg_count = visible_args.len + @intFromBool(resolved.captures_local != null);
@@ -1269,13 +1241,6 @@ fn lowerMirSymbolValue(
     symbol: MIR.Symbol,
     next: CFStmtId,
 ) Allocator.Error!CFStmtId {
-    if (self.mir_store.monotype_store.getMonotype(self.mir_store.getLocal(target_mir).monotype) == .func) {
-        std.debug.panic(
-            "MirToLir invariant violated: function-valued symbol {d} survived strongest-form MIR callable lowering",
-            .{symbol.raw()},
-        );
-    }
-
     if (self.mir_store.getConstDefForSymbol(symbol)) |const_def_id| {
         const proc_id = try self.lowerConstProc(const_def_id);
         const empty_args = LirLocalSpan.empty();
@@ -1858,20 +1823,17 @@ fn lowerJoinStmt(
 fn lowerDirectLambdaCall(
     self: *Self,
     callee_mir: MIR.LocalId,
-    exact_lambda: ?MIR.LambdaId,
+    exact_lambda: MIR.LambdaId,
     exact_requires_hidden_capture: bool,
     visible_args: []const MIR.LocalId,
     target: MIR.LocalId,
     lowered_target: LirLocalId,
     next: CFStmtId,
 ) Allocator.Error!CFStmtId {
-    const resolved = if (exact_lambda) |lambda_id|
-        ResolvedCallable{
-            .lambda = lambda_id,
-            .captures_local = if (exact_requires_hidden_capture) callee_mir else null,
-        }
-    else
-        self.requireExactCallableValue(callee_mir);
+    const resolved = ResolvedCallable{
+        .lambda = exact_lambda,
+        .captures_local = if (exact_requires_hidden_capture) callee_mir else null,
+    };
     const lambda = self.mir_store.getLambda(resolved.lambda);
     if (resolved.captures_local == null and lambda.captures_param != null) {
         std.debug.panic(
@@ -2378,8 +2340,7 @@ fn lowerEntrypointProcBody(
     ret_layout: layout.Idx,
 ) Allocator.Error!LoweredEntrypointProcBody {
     const root_const = self.mir_store.getConstDef(root_const_id);
-    const root_mono = self.mir_store.monotype_store.getMonotype(root_const.monotype);
-    const must_call = arg_locals.len != 0 or root_mono == .func;
+    const must_call = arg_locals.len != 0 or self.analyses.getConstCallableContract(root_const_id) != .no_return;
 
     if (!must_call) {
         const result_contract = try self.lowerSummaryResultContract(

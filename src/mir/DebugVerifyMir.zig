@@ -71,7 +71,7 @@ pub fn verifyLambda(
                 .{ @intFromEnum(lambda_id), @intFromEnum(param) },
             ),
         }
-        try ensureFunctionLocalHasExactCallable(store, param, "lambda param", lambda_id);
+        try ensureCallableLocalInvariant(store, param, "lambda param", lambda_id);
         try env.put(localKey(param), {});
     }
 
@@ -90,7 +90,7 @@ pub fn verifyLambda(
                 .{ @intFromEnum(lambda_id), @intFromEnum(captures_param) },
             ),
         }
-        try ensureFunctionLocalHasExactCallable(store, captures_param, "lambda captures_param", lambda_id);
+        try ensureCallableLocalInvariant(store, captures_param, "lambda captures_param", lambda_id);
         try env.put(localKey(captures_param), {});
     }
 
@@ -162,33 +162,33 @@ fn verifyStmt(
     switch (store.getCFStmt(stmt_id)) {
         .assign_symbol => |assign| {
             try ensureStmtDefMatches(store, assign.target, .symbol, stmt_id, owner_kind, owner_id);
-            try ensureFunctionLocalHasExactCallable(store, assign.target, "stmt target", stmt_id);
+            try ensureCallableLocalInvariant(store, assign.target, "stmt target", stmt_id);
             try env.put(localKey(assign.target), {});
             try verifyStmt(allocator, store, assign.next, env, joins, active_joins, owner_kind, owner_id);
         },
         .assign_ref => |assign| {
             try ensureRefSourcesUsable(store, env, assign.op, stmt_id, owner_kind, owner_id);
             try ensureStmtDefMatches(store, assign.target, .ref, stmt_id, owner_kind, owner_id);
-            try ensureFunctionLocalHasExactCallable(store, assign.target, "stmt target", stmt_id);
+            try ensureCallableLocalInvariant(store, assign.target, "stmt target", stmt_id);
             try env.put(localKey(assign.target), {});
             try verifyStmt(allocator, store, assign.next, env, joins, active_joins, owner_kind, owner_id);
         },
         .assign_literal => |assign| {
             try ensureStmtDefMatches(store, assign.target, .literal, stmt_id, owner_kind, owner_id);
-            try ensureFunctionLocalHasExactCallable(store, assign.target, "stmt target", stmt_id);
+            try ensureCallableLocalInvariant(store, assign.target, "stmt target", stmt_id);
             try env.put(localKey(assign.target), {});
             try verifyStmt(allocator, store, assign.next, env, joins, active_joins, owner_kind, owner_id);
         },
         .assign_lambda => |assign| {
             try ensureStmtDefMatches(store, assign.target, .lambda, stmt_id, owner_kind, owner_id);
-            try ensureFunctionLocalHasExactCallable(store, assign.target, "stmt target", stmt_id);
+            try ensureCallableLocalInvariant(store, assign.target, "stmt target", stmt_id);
             try env.put(localKey(assign.target), {});
             try verifyStmt(allocator, store, assign.next, env, joins, active_joins, owner_kind, owner_id);
         },
         .assign_closure => |assign| {
             try ensureLocalsUsable(store, env, store.getLocalSpan(assign.captures), stmt_id, owner_kind, owner_id);
             try ensureStmtDefMatches(store, assign.target, .closure, stmt_id, owner_kind, owner_id);
-            try ensureFunctionLocalHasExactCallable(store, assign.target, "stmt target", stmt_id);
+            try ensureCallableLocalInvariant(store, assign.target, "stmt target", stmt_id);
             try env.put(localKey(assign.target), {});
             try verifyStmt(allocator, store, assign.next, env, joins, active_joins, owner_kind, owner_id);
         },
@@ -196,28 +196,28 @@ fn verifyStmt(
             try ensureLocalUsable(store, env, assign.callee, stmt_id, owner_kind, owner_id);
             try ensureLocalsUsable(store, env, store.getLocalSpan(assign.args), stmt_id, owner_kind, owner_id);
             try ensureStmtDefMatches(store, assign.target, .call, stmt_id, owner_kind, owner_id);
-            try ensureFunctionLocalHasExactCallable(store, assign.target, "stmt target", stmt_id);
+            try ensureCallableLocalInvariant(store, assign.target, "stmt target", stmt_id);
             try env.put(localKey(assign.target), {});
             try verifyStmt(allocator, store, assign.next, env, joins, active_joins, owner_kind, owner_id);
         },
         .assign_low_level => |assign| {
             try ensureLocalsUsable(store, env, store.getLocalSpan(assign.args), stmt_id, owner_kind, owner_id);
             try ensureStmtDefMatches(store, assign.target, .low_level, stmt_id, owner_kind, owner_id);
-            try ensureFunctionLocalHasExactCallable(store, assign.target, "stmt target", stmt_id);
+            try ensureCallableLocalInvariant(store, assign.target, "stmt target", stmt_id);
             try env.put(localKey(assign.target), {});
             try verifyStmt(allocator, store, assign.next, env, joins, active_joins, owner_kind, owner_id);
         },
         .assign_list => |assign| {
             try ensureLocalsUsable(store, env, store.getLocalSpan(assign.elems), stmt_id, owner_kind, owner_id);
             try ensureStmtDefMatches(store, assign.target, .list, stmt_id, owner_kind, owner_id);
-            try ensureFunctionLocalHasExactCallable(store, assign.target, "stmt target", stmt_id);
+            try ensureCallableLocalInvariant(store, assign.target, "stmt target", stmt_id);
             try env.put(localKey(assign.target), {});
             try verifyStmt(allocator, store, assign.next, env, joins, active_joins, owner_kind, owner_id);
         },
         .assign_struct => |assign| {
             try ensureLocalsUsable(store, env, store.getLocalSpan(assign.fields), stmt_id, owner_kind, owner_id);
             try ensureStmtDefMatches(store, assign.target, .struct_, stmt_id, owner_kind, owner_id);
-            try ensureFunctionLocalHasExactCallable(store, assign.target, "stmt target", stmt_id);
+            try ensureCallableLocalInvariant(store, assign.target, "stmt target", stmt_id);
             try env.put(localKey(assign.target), {});
             try verifyStmt(allocator, store, assign.next, env, joins, active_joins, owner_kind, owner_id);
         },
@@ -283,7 +283,7 @@ fn verifyStmt(
                         .{ @intFromEnum(join.id), @intFromEnum(param), owner_kind, owner_id },
                     ),
                 }
-                try ensureFunctionLocalHasExactCallable(store, param, "join param", join.id);
+                try ensureCallableLocalInvariant(store, param, "join param", join.id);
                 try body_env.put(localKey(param), {});
             }
             try verifyStmt(allocator, store, join.body, &body_env, joins, active_joins, owner_kind, owner_id);
@@ -347,18 +347,27 @@ fn ensureStmtDefMatches(
     }
 }
 
-fn ensureFunctionLocalHasExactCallable(
+fn ensureCallableLocalInvariant(
     store: *const MIR.Store,
     local: MIR.LocalId,
     context: []const u8,
     context_id: anytype,
 ) Allocator.Error!void {
-    if (store.monotype_store.getMonotype(store.getLocal(local).monotype) != .func) return;
-    if (store.getLocal(local).exact_callable != null) return;
-    std.debug.panic(
-        "DebugVerifyMir invariant violated: function-valued local {d} in {s} {d} lacked explicit exact callable metadata",
-        .{ @intFromEnum(local), context, context_id },
-    );
+    const local_data = store.getLocal(local);
+    if (store.monotype_store.getMonotype(local_data.monotype) == .func) {
+        std.debug.panic(
+            "DebugVerifyMir invariant violated: source-level func monotype survived on local {d} in {s} {d}",
+            .{ @intFromEnum(local), context, context_id },
+        );
+    }
+    const exact_callable = local_data.exact_callable orelse return;
+    const lambda = store.getLambdaAnyState(exact_callable.lambda);
+    if (exact_callable.requires_hidden_capture != (lambda.captures_param != null)) {
+        std.debug.panic(
+            "DebugVerifyMir invariant violated: local {d} in {s} {d} had exact callable metadata inconsistent with lambda {d}",
+            .{ @intFromEnum(local), context, context_id, @intFromEnum(exact_callable.lambda) },
+        );
+    }
 }
 
 fn ensureRefSourcesUsable(

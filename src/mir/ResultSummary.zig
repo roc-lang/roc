@@ -402,20 +402,14 @@ const Analyzer = struct {
         );
     }
 
-    fn localMonotypeIsFunc(self: *const Analyzer, local_id: MIR.LocalId) bool {
-        return self.mir_store.monotype_store.getMonotype(self.mir_store.getLocal(local_id).monotype) == .func;
-    }
-
     fn runtimeOriginForAliasedLocal(
         self: *Analyzer,
         env: *const LocalOriginMap,
         local_id: MIR.LocalId,
     ) Origin {
-        if (!self.localMonotypeIsFunc(local_id)) {
+        const resolved = self.mir_store.getLocal(local_id).exact_callable orelse {
             return self.originForLocal(env, local_id);
-        }
-
-        const resolved = self.requireExactCallableForLocal(local_id);
+        };
         if (!resolved.requires_hidden_capture) {
             return .fresh;
         }
@@ -458,13 +452,6 @@ const Analyzer = struct {
         };
     }
 
-    fn requireExactCallableForLocal(self: *Analyzer, local_id: MIR.LocalId) CallableResolution {
-        return self.mir_store.getLocal(local_id).exact_callable orelse std.debug.panic(
-            "ResultSummary invariant violated: function-valued local {d} lacked explicit exact callable metadata during result summary",
-            .{@intFromEnum(local_id)},
-        );
-    }
-
     fn collectReturnedCallable(
         self: *Analyzer,
         stmt_id: MIR.CFStmtId,
@@ -499,8 +486,7 @@ const Analyzer = struct {
                 try self.collectReturnedCallable(join_stmt.remainder, out);
             },
             .ret => |ret_stmt| {
-                if (!self.localMonotypeIsFunc(ret_stmt.value)) return;
-                const resolved = self.requireExactCallableForLocal(ret_stmt.value);
+                const resolved = self.mir_store.getLocal(ret_stmt.value).exact_callable orelse return;
                 if (out.*) |current| {
                     if (current.lambda != resolved.lambda or current.requires_hidden_capture != resolved.requires_hidden_capture) {
                         std.debug.panic(
@@ -595,13 +581,10 @@ const Analyzer = struct {
                 return self.analyzeStmt(env, region, accumulator, assign.next);
             },
             .assign_call => |assign| {
-                const callee = if (assign.exact_lambda) |lambda_id|
-                    CallableResolution{
-                        .lambda = lambda_id,
-                        .requires_hidden_capture = assign.exact_requires_hidden_capture,
-                    }
-                else
-                    self.requireExactCallableForLocal(assign.callee);
+                const callee = CallableResolution{
+                    .lambda = assign.exact_lambda,
+                    .requires_hidden_capture = assign.exact_requires_hidden_capture,
+                };
 
                 const args = self.mir_store.getLocalSpan(assign.args);
                 const arg_origins = try self.allocator.alloc(Origin, args.len + @intFromBool(callee.requires_hidden_capture));
@@ -971,19 +954,6 @@ pub fn build(
     return table;
 }
 
-fn resolveReachableCalleeLambda(
-    mir_store: *const MIR.Store,
-    local_id: MIR.LocalId,
-) MIR.LambdaId {
-    return if (mir_store.getLocal(local_id).exact_callable) |exact_callable|
-        exact_callable.lambda
-    else
-        std.debug.panic(
-            "ResultSummary invariant violated: reachable function-valued local {d} lacked explicit exact callable metadata",
-            .{@intFromEnum(local_id)},
-        );
-}
-
 fn collectReachableLambda(
     allocator: Allocator,
     mir_store: *const MIR.Store,
@@ -1040,12 +1010,7 @@ fn collectReachableFromStmt(
             try collectReachableFromStmt(allocator, mir_store, current_lambda, stmt.next, reachable_lambdas, reachable_consts, visited_stmts);
         },
         .assign_call => |stmt| {
-            if (stmt.exact_lambda) |lambda_id| {
-                try collectReachableLambda(allocator, mir_store, lambda_id, reachable_lambdas, reachable_consts, visited_stmts);
-            } else {
-                const lambda_id = resolveReachableCalleeLambda(mir_store, stmt.callee);
-                try collectReachableLambda(allocator, mir_store, lambda_id, reachable_lambdas, reachable_consts, visited_stmts);
-            }
+            try collectReachableLambda(allocator, mir_store, stmt.exact_lambda, reachable_lambdas, reachable_consts, visited_stmts);
             try collectReachableFromStmt(allocator, mir_store, current_lambda, stmt.next, reachable_lambdas, reachable_consts, visited_stmts);
         },
         .assign_low_level => |stmt| try collectReachableFromStmt(allocator, mir_store, current_lambda, stmt.next, reachable_lambdas, reachable_consts, visited_stmts),

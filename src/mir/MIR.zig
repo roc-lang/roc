@@ -133,8 +133,8 @@ pub const LocalDef = union(enum) {
     },
     call: struct {
         callee: LocalId,
-        exact_lambda: ?LambdaId = null,
-        exact_requires_hidden_capture: bool = false,
+        exact_lambda: LambdaId,
+        exact_requires_hidden_capture: bool,
         args: LocalSpan,
     },
     low_level: struct {
@@ -297,8 +297,8 @@ pub const CFStmt = union(enum) {
     assign_call: struct {
         target: LocalId,
         callee: LocalId,
-        exact_lambda: ?LambdaId = null,
-        exact_requires_hidden_capture: bool = false,
+        exact_lambda: LambdaId,
+        exact_requires_hidden_capture: bool,
         args: LocalSpan,
         next: CFStmtId,
     },

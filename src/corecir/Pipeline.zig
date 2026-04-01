@@ -124,7 +124,6 @@ pub const IndirectCall = Lambdamono.IndirectCall;
 pub const CallableValue = Lambdamono.CallableValue;
 pub const CallSite = Lambdamono.CallSite;
 pub const LookupResolution = Lambdamono.LookupResolution;
-pub const ExprSemantic = Lambdamono.ExprSemantic;
 pub const ExprId = Lambdamono.ExprId;
 pub const ExprRef = Lambdamono.ExprRef;
 
@@ -141,7 +140,7 @@ const TemplateBodyCompletionKey = struct {
 
 const ContextPatternKey = ContextMono.ContextPatternKey;
 
-fn finalizeSolvedCallableValue(
+fn materializeSolvedCallableValue(
     self: *Pass,
     result: *Result,
     solved_value: SolvedCallableValue,
@@ -152,7 +151,7 @@ fn finalizeSolvedCallableValue(
     };
 }
 
-fn finalizeSolvedCall(
+fn materializeSolvedCall(
     self: *Pass,
     result: *Result,
     solved_call: SolvedCall,
@@ -211,7 +210,6 @@ const MutationKind = enum(u8) {
     callable_templates,
     callable_template_ids_by_source,
     source_exprs,
-    program_values,
     context_expr_monotypes,
     context_pattern_monotypes,
     context_dispatch_targets,
@@ -259,7 +257,7 @@ const TypeScopeContext = struct {
 };
 
 const ThreadState = struct {
-    source_context: ?SourceContext = null,
+    source_context: SourceContext,
     bindings: ?*std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype) = null,
     iteration_expr_monotypes: ?*std.AutoHashMapUnmanaged(ContextExprKey, ResolvedMonotype) = null,
     iteration_pattern_monotypes: ?*std.AutoHashMapUnmanaged(ContextPatternKey, ResolvedMonotype) = null,
@@ -269,12 +267,12 @@ const SemanticThread = union(enum) {
     tracked: ThreadState,
     completion: ThreadState,
 
-    fn trackedThread() SemanticThread {
-        return .{ .tracked = .{} };
+    fn trackedThread(source_context: SourceContext) SemanticThread {
+        return .{ .tracked = .{ .source_context = source_context } };
     }
 
-    fn completionThread() SemanticThread {
-        return .{ .completion = .{} };
+    fn completionThread(source_context: SourceContext) SemanticThread {
+        return .{ .completion = .{ .source_context = source_context } };
     }
 
     fn statePtr(self: *SemanticThread) *ThreadState {
@@ -289,12 +287,6 @@ const SemanticThread = union(enum) {
             .tracked => |state| state,
             .completion => |state| state,
         };
-    }
-
-    fn withSourceContext(self: SemanticThread, source_context: SourceContext) SemanticThread {
-        var next = self;
-        next.statePtr().source_context = source_context;
-        return next;
     }
 
     fn withBindings(
@@ -318,26 +310,15 @@ const SemanticThread = union(enum) {
     }
 
     fn requireSourceContext(self: SemanticThread) SourceContext {
-        return self.state().source_context orelse std.debug.panic(
-            "Pipeline invariant violated: operation required an explicit source context",
-            .{},
-        );
-    }
-
-    fn hasSourceContext(self: SemanticThread) bool {
-        return self.state().source_context != null;
+        return self.state().source_context;
     }
 
     fn hasCallableInst(self: SemanticThread) bool {
-        return if (self.state().source_context) |source_context|
-            sourceContextHasCallableInst(source_context)
-        else
-            false;
+        return sourceContextHasCallableInst(self.state().source_context);
     }
 
     fn callableInst(self: SemanticThread) ?CallableInstId {
-        const source_context = self.state().source_context orelse return null;
-        return sourceContextCallableInst(source_context);
+        return sourceContextCallableInst(self.state().source_context);
     }
 
     fn requireCallableInst(self: SemanticThread) CallableInstId {
@@ -346,7 +327,7 @@ const SemanticThread = union(enum) {
     }
 
     fn callableInstRawForDebug(self: SemanticThread) u32 {
-        const source_context = self.state().source_context orelse return std.math.maxInt(u32);
+        const source_context = self.state().source_context;
         return switch (source_context) {
             .callable_inst => |context_id| @intFromEnum(@as(CallableInstId, @enumFromInt(@intFromEnum(context_id)))),
             .root_expr, .provenance_expr, .template_expr => std.math.maxInt(u32),
@@ -354,7 +335,7 @@ const SemanticThread = union(enum) {
     }
 
     fn rootExprRawForDebug(self: SemanticThread) u32 {
-        const source_context = self.state().source_context orelse return std.math.maxInt(u32);
+        const source_context = self.state().source_context;
         return switch (source_context) {
             .root_expr => |root| @intFromEnum(root.expr_idx),
             .callable_inst, .provenance_expr, .template_expr => std.math.maxInt(u32),
@@ -403,27 +384,7 @@ const RequiredLookupTarget = struct {
     def_idx: CIR.Def.Idx,
 };
 
-const BuildStmtKey = struct {
-    source_context_kind: enum(u2) { callable_inst, root_expr, provenance_expr, template_expr },
-    source_context_module_idx: u32,
-    source_context_raw: u32,
-    module_idx: u32,
-    stmt_raw: u32,
-};
-
-const ProgramBuildState = struct {
-    stmt_ids_by_key: std.AutoHashMapUnmanaged(BuildStmtKey, Lambdamono.StmtId),
-
-    fn init() ProgramBuildState {
-        return .{
-            .stmt_ids_by_key = .empty,
-        };
-    }
-
-    fn deinit(self: *ProgramBuildState, allocator: Allocator) void {
-        self.stmt_ids_by_key.deinit(allocator);
-    }
-};
+const BuildStmtKey = Lambdamono.BuildStmtKey;
 
 /// Output of the staged CoreCIR/context-mono/lambda-specialization pipeline.
 pub const Result = struct {
@@ -472,26 +433,7 @@ pub const Result = struct {
         expr_idx: CIR.Expr.Idx,
     ) ?CallSite {
         const expr_id = self.lambdamono.getExprId(source_context, module_idx, expr_idx) orelse return null;
-        for (self.lambdamono.getExprSemantics(self.lambdamono.getExpr(expr_id).semantics)) |semantic| {
-            switch (semantic) {
-                .call_site => |call_site| return call_site,
-                else => {},
-            }
-        }
-        return null;
-    }
-
-    fn getExprCallSiteMembers(
-        self: *const Result,
-        source_context: SourceContext,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-    ) ?[]const CallableInstId {
-        const call_site = self.getExprCallSite(source_context, module_idx, expr_idx) orelse return null;
-        return switch (call_site) {
-            .direct => |callable_inst_id| self.lambdamono.getDirectCallableMembers(callable_inst_id),
-            .indirect_call => |indirect_call_id| self.getIndirectCallMembers(indirect_call_id),
-        };
+        return self.lambdamono.getExpr(expr_id).call_site;
     }
 
     pub fn getExprMonotype(
@@ -506,19 +448,6 @@ pub const Result = struct {
         return null;
     }
 
-    fn getExprCallableInst(
-        self: *const Result,
-        source_context: SourceContext,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-    ) ?CallableInstId {
-        const callable_value = self.getExprCallableValue(source_context, module_idx, expr_idx) orelse return null;
-        return switch (callable_value) {
-            .direct => |callable_inst_id| callable_inst_id,
-            .packed_fn => null,
-        };
-    }
-
     pub fn getExprCallableValue(
         self: *const Result,
         source_context: SourceContext,
@@ -526,26 +455,7 @@ pub const Result = struct {
         expr_idx: CIR.Expr.Idx,
     ) ?CallableValue {
         const expr_id = self.lambdamono.getExprId(source_context, module_idx, expr_idx) orelse return null;
-        for (self.lambdamono.getExprSemantics(self.lambdamono.getExpr(expr_id).semantics)) |semantic| {
-            switch (semantic) {
-                .callable_value => |callable_value| return callable_value,
-                else => {},
-            }
-        }
-        return null;
-    }
-
-    fn getExprCallableMembers(
-        self: *const Result,
-        source_context: SourceContext,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-    ) ?[]const CallableInstId {
-        const callable_value = self.getExprCallableValue(source_context, module_idx, expr_idx) orelse return null;
-        return switch (callable_value) {
-            .direct => |callable_inst_id| self.lambdamono.getDirectCallableMembers(callable_inst_id),
-            .packed_fn => |packed_fn_id| self.getPackedFnMembers(packed_fn_id),
-        };
+        return self.lambdamono.getExpr(expr_id).callable_value;
     }
 
     pub fn getDispatchExprTarget(
@@ -555,13 +465,7 @@ pub const Result = struct {
         expr_idx: CIR.Expr.Idx,
     ) ?DispatchExprTarget {
         const expr_id = self.lambdamono.getExprId(source_context, module_idx, expr_idx) orelse return null;
-        for (self.lambdamono.getExprSemantics(self.lambdamono.getExpr(expr_id).semantics)) |semantic| {
-            switch (semantic) {
-                .dispatch_target => |dispatch_target| return dispatch_target,
-                else => {},
-            }
-        }
-        return null;
+        return self.lambdamono.getExpr(expr_id).dispatch_target;
     }
 
     pub fn getLookupResolution(
@@ -571,13 +475,7 @@ pub const Result = struct {
         expr_idx: CIR.Expr.Idx,
     ) ?Lambdamono.LookupResolution {
         const expr_id = self.lambdamono.getExprId(source_context, module_idx, expr_idx) orelse return null;
-        for (self.lambdamono.getExprSemantics(self.lambdamono.getExpr(expr_id).semantics)) |semantic| {
-            switch (semantic) {
-                .lookup_resolution => |lookup_resolution| return lookup_resolution,
-                else => {},
-            }
-        }
-        return null;
+        return self.lambdamono.getExpr(expr_id).lookup_resolution;
     }
 
     pub fn getProgramExprForRef(self: *const Result, expr_ref: ExprRef) *const Lambdamono.Expr {
@@ -602,16 +500,17 @@ pub const Result = struct {
         module_idx: u32,
         pattern_idx: CIR.Pattern.Idx,
     ) ?ResolvedMonotype {
-        if (self.context_mono.getContextPatternMonotype(source_context, module_idx, pattern_idx)) |resolved| {
-            return resolved;
+        switch (source_context) {
+            .callable_inst => |context_id| {
+                const callable_inst_id: CallableInstId = @enumFromInt(@intFromEnum(context_id));
+                if (self.getCallableParamBindingValue(callable_inst_id, pattern_idx)) |callable_value| {
+                    return self.getCallableValueMonotype(callable_value);
+                }
+            },
+            .root_expr, .provenance_expr, .template_expr => {},
         }
 
-        const callable_inst_id = switch (source_context) {
-            .callable_inst => |context_id| @as(CallableInstId, @enumFromInt(@intFromEnum(context_id))),
-            .root_expr, .provenance_expr, .template_expr => return null,
-        };
-        const callable_value = self.getCallableParamBindingValue(callable_inst_id, pattern_idx) orelse return null;
-        return self.getCallableValueMonotype(callable_value);
+        return self.context_mono.getContextPatternMonotype(source_context, module_idx, pattern_idx);
     }
 
     fn getCallableTemplate(self: *const Result, callable_template_id: CallableTemplateId) *const CallableTemplate {
@@ -647,14 +546,22 @@ pub const Result = struct {
         callable_value: CallableValue,
     ) ResolvedMonotype {
         return switch (callable_value) {
-            .direct => |callable_inst_id| blk: {
-                const callable_inst = self.getCallableInst(callable_inst_id);
-                break :blk .{
-                    .idx = callable_inst.fn_monotype,
-                    .module_idx = callable_inst.fn_monotype_module_idx,
-                };
+            .direct => |callable_inst_id| self.getCallableInstRuntimeMonotype(callable_inst_id),
+            .packed_fn => |packed_fn_id| self.getPackedFn(packed_fn_id).runtime_monotype,
+        };
+    }
+
+    pub fn getCallableInstRuntimeMonotype(
+        self: *const Result,
+        callable_inst_id: CallableInstId,
+    ) ResolvedMonotype {
+        const callable_inst = self.getCallableInst(callable_inst_id);
+        return switch (callable_inst.runtime_value) {
+            .direct_lambda => .{
+                .idx = self.context_mono.monotype_store.unit_idx,
+                .module_idx = callable_inst.fn_monotype_module_idx,
             },
-            .packed_fn => |packed_fn_id| self.getPackedFn(packed_fn_id).fn_monotype,
+            .closure => |closure| closure.capture_tuple_monotype,
         };
     }
 
@@ -668,6 +575,26 @@ pub const Result = struct {
 
     pub fn getIndirectCallMembers(self: *const Result, indirect_call_id: IndirectCallId) []const CallableInstId {
         return Lambdamono.getCallableMembers(&self.lambdamono, self.getIndirectCall(indirect_call_id).members);
+    }
+
+    pub fn getPackedFnTagName(
+        self: *const Result,
+        packed_fn_id: PackedFnId,
+        callable_inst_id: CallableInstId,
+    ) Monotype.Name {
+        const packed_fn = self.getPackedFn(packed_fn_id);
+        const module_env = self.all_module_envs[packed_fn.runtime_monotype.module_idx];
+
+        var name_buf: [32]u8 = undefined;
+        const name_text = std.fmt.bufPrint(&name_buf, "__roc_fn_{d:0>10}", .{@intFromEnum(callable_inst_id)}) catch unreachable;
+        const ident = module_env.common.findIdent(name_text) orelse std.debug.panic(
+            "Pipeline invariant violated: packed fn {d} missing tag name for callable inst {d} in module {d}",
+            .{ @intFromEnum(packed_fn_id), @intFromEnum(callable_inst_id), packed_fn.runtime_monotype.module_idx },
+        );
+        return .{
+            .module_idx = packed_fn.runtime_monotype.module_idx,
+            .ident = ident,
+        };
     }
 
     pub fn getCaptureFields(self: *const Result, span: CaptureFieldSpan) []const CaptureField {
@@ -721,7 +648,6 @@ pub const Pass = struct {
     callable_param_spec_entries: std.ArrayListUnmanaged(CallableParamSpecEntry),
     callable_param_projection_entries: std.ArrayListUnmanaged(CallableParamProjection),
     callable_param_specs_by_inst: std.AutoHashMapUnmanaged(CallableInstId, CallableParamSpecSpan),
-    program_build_state: ProgramBuildState,
     mutation_revision: u64,
     mutation_counts: [mutation_kind_count]u32,
 
@@ -750,7 +676,6 @@ pub const Pass = struct {
             .callable_param_spec_entries = .empty,
             .callable_param_projection_entries = .empty,
             .callable_param_specs_by_inst = .empty,
-            .program_build_state = ProgramBuildState.init(),
             .mutation_revision = 0,
             .mutation_counts = [_]u32{0} ** mutation_kind_count,
         };
@@ -808,8 +733,7 @@ pub const Pass = struct {
         result: *const Result,
         thread: SemanticThread,
     ) ?CallableTemplateId {
-        const source_context = thread.source_context orelse return null;
-        return self.templateContextForSourceContext(result, source_context);
+        return self.templateContextForSourceContext(result, thread.requireSourceContext());
     }
 
     fn activeCallableTemplateForThread(
@@ -977,8 +901,7 @@ pub const Pass = struct {
         module_idx: u32,
         pattern_idx: CIR.Pattern.Idx,
     ) ?ResolvedMonotype {
-        const source_context = thread.source_context orelse return null;
-        return result.getContextPatternMonotype(source_context, module_idx, pattern_idx);
+        return result.getContextPatternMonotype(thread.requireSourceContext(), module_idx, pattern_idx);
     }
 
     fn resolveBoundPatternCallableInstInContext(
@@ -1004,10 +927,9 @@ pub const Pass = struct {
         module_idx: u32,
         pattern_idx: CIR.Pattern.Idx,
     ) ?CallableInstId {
-        const source_context = thread.source_context orelse return null;
         const callable_value = self.readCallableParamValue(
             result,
-            source_context,
+            thread.requireSourceContext(),
             module_idx,
             pattern_idx,
         ) orelse return null;
@@ -1037,10 +959,9 @@ pub const Pass = struct {
         module_idx: u32,
         pattern_idx: CIR.Pattern.Idx,
     ) ?[]const CallableInstId {
-        const source_context = thread.source_context orelse return null;
         const callable_value = self.readCallableParamValue(
             result,
-            source_context,
+            thread.requireSourceContext(),
             module_idx,
             pattern_idx,
         ) orelse return null;
@@ -1070,10 +991,9 @@ pub const Pass = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?CallableInstId {
-        const source_context = thread.source_context orelse return null;
         const callable_value = self.readExprCallableValue(
             result,
-            source_context,
+            thread.requireSourceContext(),
             module_idx,
             expr_idx,
         ) orelse return null;
@@ -1103,10 +1023,9 @@ pub const Pass = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?[]const CallableInstId {
-        const source_context = thread.source_context orelse return null;
         const callable_value = self.readExprCallableValue(
             result,
-            source_context,
+            thread.requireSourceContext(),
             module_idx,
             expr_idx,
         ) orelse return null;
@@ -1136,10 +1055,9 @@ pub const Pass = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?CallableInstId {
-        const source_context = thread.source_context orelse return null;
         const call_site = self.readExprCallSite(
             result,
-            source_context,
+            thread.requireSourceContext(),
             module_idx,
             expr_idx,
         ) orelse return null;
@@ -1169,10 +1087,9 @@ pub const Pass = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?[]const CallableInstId {
-        const source_context = thread.source_context orelse return null;
         const call_site = self.readExprCallSite(
             result,
-            source_context,
+            thread.requireSourceContext(),
             module_idx,
             expr_idx,
         ) orelse return null;
@@ -1277,10 +1194,9 @@ pub const Pass = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?SolvedCallableValue {
-        const source_context = thread.source_context orelse return null;
         return self.getCallableParamSpecSolvedCallableValueForSourceContext(
             result,
-            source_context,
+            thread.requireSourceContext(),
             module_idx,
             expr_idx,
         );
@@ -1308,10 +1224,9 @@ pub const Pass = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?[]const CallableInstId {
-        const source_context = thread.source_context orelse return null;
         return self.getCallableParamSpecCallableMembersForSourceContext(
             result,
-            source_context,
+            thread.requireSourceContext(),
             module_idx,
             expr_idx,
         );
@@ -1586,7 +1501,6 @@ pub const Pass = struct {
         self.callable_param_spec_entries.deinit(self.allocator);
         self.callable_param_projection_entries.deinit(self.allocator);
         self.callable_param_specs_by_inst.deinit(self.allocator);
-        self.program_build_state.deinit(self.allocator);
     }
 
     pub fn runRootSourceExpr(self: *Pass, expr_idx: CIR.Expr.Idx) Allocator.Error!Result {
@@ -1595,8 +1509,8 @@ pub const Pass = struct {
         try self.primeAllModules(&result);
         try self.scanSeedModules(&result);
         try self.scanModule(&result, self.current_module_idx);
-        try self.scanRootsFixedPoint(&result, &.{expr_idx}, true);
-        try self.finalizeLambdamonoProgram(&result, &.{expr_idx});
+        try self.scanRootsFixedPoint(&result, &.{expr_idx});
+        try self.buildLambdamonoProgram(&result, &.{expr_idx});
 
         return result;
     }
@@ -1607,8 +1521,8 @@ pub const Pass = struct {
         try self.primeAllModules(&result);
         try self.scanSeedModules(&result);
         try self.scanModule(&result, self.current_module_idx);
-        try self.scanRootsFixedPoint(&result, exprs, true);
-        try self.finalizeLambdamonoProgram(&result, exprs);
+        try self.scanRootsFixedPoint(&result, exprs);
+        try self.buildLambdamonoProgram(&result, exprs);
 
         return result;
     }
@@ -1629,29 +1543,29 @@ pub const Pass = struct {
             const def = module_env.store.getDef(def_idx);
             try root_source_exprs.append(self.allocator, def.expr);
         }
-        try self.scanRootsFixedPoint(&result, root_source_exprs.items, true);
-        try self.finalizeLambdamonoProgram(&result, root_source_exprs.items);
+        try self.scanRootsFixedPoint(&result, root_source_exprs.items);
+        try self.buildLambdamonoProgram(&result, root_source_exprs.items);
 
         return result;
     }
 
-    fn finalizeLambdamonoProgram(
+    fn buildLambdamonoProgram(
         self: *Pass,
         result: *Result,
         explicit_root_exprs: []const CIR.Expr.Idx,
     ) Allocator.Error!void {
-        try self.populateLambdamonoCallableBodies(result);
-        try self.populateExplicitRootExprs(result, explicit_root_exprs);
-        try self.populateVisitedRootExprs(result);
+        try self.buildCallableBodies(result);
+        try self.buildExplicitRootExprs(result, explicit_root_exprs);
+        try self.buildVisitedRootExprs(result);
     }
 
-    fn populateExplicitRootExprs(
+    fn buildExplicitRootExprs(
         self: *Pass,
         result: *Result,
         explicit_root_exprs: []const CIR.Expr.Idx,
     ) Allocator.Error!void {
         for (explicit_root_exprs) |expr_idx| {
-            try self.ensureProgramRootExpr(
+            try self.buildProgramRootExpr(
                 result,
                 .{ .root_expr = .{ .module_idx = self.current_module_idx, .expr_idx = expr_idx } },
                 self.current_module_idx,
@@ -1660,7 +1574,7 @@ pub const Pass = struct {
         }
     }
 
-    fn populateVisitedRootExprs(
+    fn buildVisitedRootExprs(
         self: *Pass,
         result: *Result,
     ) Allocator.Error!void {
@@ -1672,7 +1586,7 @@ pub const Pass = struct {
                 .module_idx = key.source_context_module_idx,
                 .expr_idx = @enumFromInt(key.source_context_raw),
             } };
-            try self.ensureProgramRootExpr(
+            try self.buildProgramRootExpr(
                 result,
                 source_context,
                 key.module_idx,
@@ -1681,7 +1595,7 @@ pub const Pass = struct {
         }
     }
 
-    fn populateLambdamonoCallableBodies(
+    fn buildCallableBodies(
         self: *Pass,
         result: *Result,
     ) Allocator.Error!void {
@@ -1718,13 +1632,13 @@ pub const Pass = struct {
                 ),
             };
             const callable_def = &result.lambdamono.callable_defs.items[@intFromEnum(callable_inst.callable_def)];
-            _ = try self.ensureProgramExpr(
+            _ = try self.buildProgramExpr(
                 result,
                 callable_def.runtime_expr.source_context,
                 callable_def.runtime_expr.module_idx,
                 callable_def.runtime_expr.expr_idx,
             );
-            _ = try self.ensureProgramExpr(
+            _ = try self.buildProgramExpr(
                 result,
                 callable_def.body_expr.source_context,
                 callable_def.body_expr.module_idx,
@@ -1756,7 +1670,7 @@ pub const Pass = struct {
             ) orelse continue;
             try result.lambdamono.callable_param_bindings.append(self.allocator, .{
                 .pattern_idx = pattern_idx,
-                .callable_value = try finalizeSolvedCallableValue(self, result, callable_value),
+                .callable_value = try materializeSolvedCallableValue(self, result, callable_value),
             });
         }
         return .{
@@ -1765,7 +1679,7 @@ pub const Pass = struct {
         };
     }
 
-    fn ensureProgramRootExpr(
+    fn buildProgramRootExpr(
         self: *Pass,
         result: *Result,
         source_context: SourceContext,
@@ -1774,13 +1688,13 @@ pub const Pass = struct {
     ) Allocator.Error!void {
         const key = Result.contextExprKey(source_context, module_idx, expr_idx);
         if (result.lambdamono.root_expr_ids_by_key.contains(key)) return;
-        const body_expr = try self.ensureProgramExpr(result, source_context, module_idx, expr_idx);
+        const body_expr = try self.buildProgramExpr(result, source_context, module_idx, expr_idx);
         const root_expr_id: Lambdamono.RootExprId = @enumFromInt(result.lambdamono.root_exprs.items.len);
         try result.lambdamono.root_exprs.append(self.allocator, .{ .key = key, .body_expr = body_expr });
         try result.lambdamono.root_expr_ids_by_key.put(self.allocator, key, root_expr_id);
     }
 
-    fn ensureProgramExpr(
+    fn buildProgramExpr(
         self: *Pass,
         result: *Result,
         source_context: SourceContext,
@@ -1799,234 +1713,114 @@ pub const Pass = struct {
 
         switch (expr) {
             .e_str => |str_expr| for (module_env.store.sliceExpr(str_expr.span)) |child_expr_idx| {
-                try child_exprs.append(self.allocator, try self.ensureProgramExpr(result, source_context, module_idx, child_expr_idx));
+                try child_exprs.append(self.allocator, try self.buildProgramExpr(result, source_context, module_idx, child_expr_idx));
             },
             .e_list => |list_expr| for (module_env.store.sliceExpr(list_expr.elems)) |child_expr_idx| {
-                try child_exprs.append(self.allocator, try self.ensureProgramExpr(result, source_context, module_idx, child_expr_idx));
+                try child_exprs.append(self.allocator, try self.buildProgramExpr(result, source_context, module_idx, child_expr_idx));
             },
             .e_tuple => |tuple_expr| for (module_env.store.sliceExpr(tuple_expr.elems)) |child_expr_idx| {
-                try child_exprs.append(self.allocator, try self.ensureProgramExpr(result, source_context, module_idx, child_expr_idx));
+                try child_exprs.append(self.allocator, try self.buildProgramExpr(result, source_context, module_idx, child_expr_idx));
             },
             .e_match => |match_expr| {
-                try child_exprs.append(self.allocator, try self.ensureProgramExpr(result, source_context, module_idx, match_expr.cond));
+                try child_exprs.append(self.allocator, try self.buildProgramExpr(result, source_context, module_idx, match_expr.cond));
                 for (module_env.store.sliceMatchBranches(match_expr.branches)) |branch_idx| {
                     const branch = module_env.store.getMatchBranch(branch_idx);
                     if (branch.guard) |guard_expr_idx| {
-                        try child_exprs.append(self.allocator, try self.ensureProgramExpr(result, source_context, module_idx, guard_expr_idx));
+                        try child_exprs.append(self.allocator, try self.buildProgramExpr(result, source_context, module_idx, guard_expr_idx));
                     }
-                    try child_exprs.append(self.allocator, try self.ensureProgramExpr(result, source_context, module_idx, branch.value));
+                    try child_exprs.append(self.allocator, try self.buildProgramExpr(result, source_context, module_idx, branch.value));
                 }
             },
             .e_if => |if_expr| {
                 for (module_env.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
                     const branch = module_env.store.getIfBranch(branch_idx);
-                    try child_exprs.append(self.allocator, try self.ensureProgramExpr(result, source_context, module_idx, branch.cond));
-                    try child_exprs.append(self.allocator, try self.ensureProgramExpr(result, source_context, module_idx, branch.body));
+                    try child_exprs.append(self.allocator, try self.buildProgramExpr(result, source_context, module_idx, branch.cond));
+                    try child_exprs.append(self.allocator, try self.buildProgramExpr(result, source_context, module_idx, branch.body));
                 }
-                try child_exprs.append(self.allocator, try self.ensureProgramExpr(result, source_context, module_idx, if_expr.final_else));
+                try child_exprs.append(self.allocator, try self.buildProgramExpr(result, source_context, module_idx, if_expr.final_else));
             },
             .e_call => |call_expr| {
-                try child_exprs.append(self.allocator, try self.ensureProgramExpr(result, source_context, module_idx, call_expr.func));
+                try child_exprs.append(self.allocator, try self.buildProgramExpr(result, source_context, module_idx, call_expr.func));
                 for (module_env.store.sliceExpr(call_expr.args)) |arg_expr_idx| {
-                    try child_exprs.append(self.allocator, try self.ensureProgramExpr(result, source_context, module_idx, arg_expr_idx));
+                    try child_exprs.append(self.allocator, try self.buildProgramExpr(result, source_context, module_idx, arg_expr_idx));
                 }
             },
             .e_record => |record_expr| {
                 for (module_env.store.sliceRecordFields(record_expr.fields)) |field_idx| {
                     const field = module_env.store.getRecordField(field_idx);
-                    try child_exprs.append(self.allocator, try self.ensureProgramExpr(result, source_context, module_idx, field.value));
+                    try child_exprs.append(self.allocator, try self.buildProgramExpr(result, source_context, module_idx, field.value));
                 }
                 if (record_expr.ext) |ext_expr_idx| {
-                    try child_exprs.append(self.allocator, try self.ensureProgramExpr(result, source_context, module_idx, ext_expr_idx));
+                    try child_exprs.append(self.allocator, try self.buildProgramExpr(result, source_context, module_idx, ext_expr_idx));
                 }
             },
             .e_block => |block_expr| {
                 for (module_env.store.sliceStatements(block_expr.stmts)) |stmt_idx| {
-                    try child_stmts.append(self.allocator, try self.ensureProgramStmt(result, source_context, module_idx, stmt_idx));
+                    try child_stmts.append(self.allocator, try self.buildProgramStmt(result, source_context, module_idx, stmt_idx));
                 }
-                try child_exprs.append(self.allocator, try self.ensureProgramExpr(result, source_context, module_idx, block_expr.final_expr));
+                try child_exprs.append(self.allocator, try self.buildProgramExpr(result, source_context, module_idx, block_expr.final_expr));
             },
             .e_tag => |tag_expr| for (module_env.store.sliceExpr(tag_expr.args)) |child_expr_idx| {
-                try child_exprs.append(self.allocator, try self.ensureProgramExpr(result, source_context, module_idx, child_expr_idx));
+                try child_exprs.append(self.allocator, try self.buildProgramExpr(result, source_context, module_idx, child_expr_idx));
             },
             .e_nominal => |nominal_expr| {
-                try child_exprs.append(self.allocator, try self.ensureProgramExpr(result, source_context, module_idx, nominal_expr.backing_expr));
+                try child_exprs.append(self.allocator, try self.buildProgramExpr(result, source_context, module_idx, nominal_expr.backing_expr));
             },
             .e_nominal_external => |nominal_expr| {
-                try child_exprs.append(self.allocator, try self.ensureProgramExpr(result, source_context, module_idx, nominal_expr.backing_expr));
+                try child_exprs.append(self.allocator, try self.buildProgramExpr(result, source_context, module_idx, nominal_expr.backing_expr));
             },
             .e_binop => |binop_expr| {
-                try child_exprs.append(self.allocator, try self.ensureProgramExpr(result, source_context, module_idx, binop_expr.lhs));
-                try child_exprs.append(self.allocator, try self.ensureProgramExpr(result, source_context, module_idx, binop_expr.rhs));
+                try child_exprs.append(self.allocator, try self.buildProgramExpr(result, source_context, module_idx, binop_expr.lhs));
+                try child_exprs.append(self.allocator, try self.buildProgramExpr(result, source_context, module_idx, binop_expr.rhs));
             },
             .e_unary_minus => |unary_expr| {
-                try child_exprs.append(self.allocator, try self.ensureProgramExpr(result, source_context, module_idx, unary_expr.expr));
+                try child_exprs.append(self.allocator, try self.buildProgramExpr(result, source_context, module_idx, unary_expr.expr));
             },
             .e_unary_not => |unary_expr| {
-                try child_exprs.append(self.allocator, try self.ensureProgramExpr(result, source_context, module_idx, unary_expr.expr));
+                try child_exprs.append(self.allocator, try self.buildProgramExpr(result, source_context, module_idx, unary_expr.expr));
             },
             .e_dot_access => |dot_expr| {
-                try child_exprs.append(self.allocator, try self.ensureProgramExpr(result, source_context, module_idx, dot_expr.receiver));
+                try child_exprs.append(self.allocator, try self.buildProgramExpr(result, source_context, module_idx, dot_expr.receiver));
                 if (dot_expr.args) |args| for (module_env.store.sliceExpr(args)) |arg_expr_idx| {
-                    try child_exprs.append(self.allocator, try self.ensureProgramExpr(result, source_context, module_idx, arg_expr_idx));
+                    try child_exprs.append(self.allocator, try self.buildProgramExpr(result, source_context, module_idx, arg_expr_idx));
                 };
             },
             .e_tuple_access => |tuple_access| {
-                try child_exprs.append(self.allocator, try self.ensureProgramExpr(result, source_context, module_idx, tuple_access.tuple));
+                try child_exprs.append(self.allocator, try self.buildProgramExpr(result, source_context, module_idx, tuple_access.tuple));
             },
             .e_dbg => |dbg_expr| {
-                try child_exprs.append(self.allocator, try self.ensureProgramExpr(result, source_context, module_idx, dbg_expr.expr));
+                try child_exprs.append(self.allocator, try self.buildProgramExpr(result, source_context, module_idx, dbg_expr.expr));
             },
             .e_expect => |expect_expr| {
-                try child_exprs.append(self.allocator, try self.ensureProgramExpr(result, source_context, module_idx, expect_expr.body));
+                try child_exprs.append(self.allocator, try self.buildProgramExpr(result, source_context, module_idx, expect_expr.body));
             },
             .e_return => |return_expr| {
-                try child_exprs.append(self.allocator, try self.ensureProgramExpr(result, source_context, module_idx, return_expr.expr));
+                try child_exprs.append(self.allocator, try self.buildProgramExpr(result, source_context, module_idx, return_expr.expr));
             },
             .e_type_var_dispatch => |dispatch_expr| for (module_env.store.sliceExpr(dispatch_expr.args)) |arg_expr_idx| {
-                try child_exprs.append(self.allocator, try self.ensureProgramExpr(result, source_context, module_idx, arg_expr_idx));
+                try child_exprs.append(self.allocator, try self.buildProgramExpr(result, source_context, module_idx, arg_expr_idx));
             },
             .e_for => |for_expr| {
-                try child_exprs.append(self.allocator, try self.ensureProgramExpr(result, source_context, module_idx, for_expr.expr));
-                try child_exprs.append(self.allocator, try self.ensureProgramExpr(result, source_context, module_idx, for_expr.body));
+                try child_exprs.append(self.allocator, try self.buildProgramExpr(result, source_context, module_idx, for_expr.expr));
+                try child_exprs.append(self.allocator, try self.buildProgramExpr(result, source_context, module_idx, for_expr.body));
             },
             .e_run_low_level => |run_low_level| for (module_env.store.sliceExpr(run_low_level.args)) |arg_expr_idx| {
-                try child_exprs.append(self.allocator, try self.ensureProgramExpr(result, source_context, module_idx, arg_expr_idx));
+                try child_exprs.append(self.allocator, try self.buildProgramExpr(result, source_context, module_idx, arg_expr_idx));
             },
             else => {},
         }
 
         const child_expr_span = try self.appendProgramExprChildren(&result.lambdamono, child_exprs.items);
         const child_stmt_span = try self.appendProgramStmtChildren(&result.lambdamono, child_stmts.items);
-        const monotype = try self.finalizeProgramExprMonotype(
-            result,
-            source_context,
-            module_idx,
-            expr_idx,
-            child_exprs.items,
-        );
-        const semantics = try self.appendProgramExprSemantics(
-            &result.lambdamono,
-            result,
-            source_context,
-            module_idx,
-            expr_idx,
-        );
-        const expr_id: Lambdamono.ExprId = @enumFromInt(result.lambdamono.exprs.items.len);
-        try result.lambdamono.exprs.append(self.allocator, .{
-            .source_context = source_context,
-            .module_idx = module_idx,
-            .source_expr = expr_idx,
-            .monotype = monotype,
-            .child_exprs = child_expr_span,
-            .child_stmts = child_stmt_span,
-            .semantics = semantics,
-        });
-        try result.lambdamono.expr_ids_by_key.put(self.allocator, key, expr_id);
-        return expr_id;
-    }
-
-    fn ensureProgramStmt(
-        self: *Pass,
-        result: *Result,
-        source_context: SourceContext,
-        module_idx: u32,
-        stmt_idx: CIR.Statement.Idx,
-    ) Allocator.Error!Lambdamono.StmtId {
-        const key = self.buildStmtKey(source_context, module_idx, stmt_idx);
-        if (self.program_build_state.stmt_ids_by_key.get(key)) |existing| return existing;
-
-        const module_env = self.all_module_envs[module_idx];
-        const stmt = module_env.store.getStatement(stmt_idx);
-        var child_exprs = std.ArrayList(Lambdamono.ExprId).empty;
-        defer child_exprs.deinit(self.allocator);
-
-        switch (stmt) {
-            .s_decl => |decl| try child_exprs.append(self.allocator, try self.ensureProgramExpr(result, source_context, module_idx, decl.expr)),
-            .s_var => |var_decl| try child_exprs.append(self.allocator, try self.ensureProgramExpr(result, source_context, module_idx, var_decl.expr)),
-            .s_reassign => |reassign| try child_exprs.append(self.allocator, try self.ensureProgramExpr(result, source_context, module_idx, reassign.expr)),
-            .s_dbg => |dbg_stmt| try child_exprs.append(self.allocator, try self.ensureProgramExpr(result, source_context, module_idx, dbg_stmt.expr)),
-            .s_expr => |expr_stmt| try child_exprs.append(self.allocator, try self.ensureProgramExpr(result, source_context, module_idx, expr_stmt.expr)),
-            .s_expect => |expect_stmt| try child_exprs.append(self.allocator, try self.ensureProgramExpr(result, source_context, module_idx, expect_stmt.body)),
-            .s_for => |for_stmt| {
-                try child_exprs.append(self.allocator, try self.ensureProgramExpr(result, source_context, module_idx, for_stmt.expr));
-                try child_exprs.append(self.allocator, try self.ensureProgramExpr(result, source_context, module_idx, for_stmt.body));
-            },
-            .s_while => |while_stmt| {
-                try child_exprs.append(self.allocator, try self.ensureProgramExpr(result, source_context, module_idx, while_stmt.cond));
-                try child_exprs.append(self.allocator, try self.ensureProgramExpr(result, source_context, module_idx, while_stmt.body));
-            },
-            .s_return => |return_stmt| try child_exprs.append(self.allocator, try self.ensureProgramExpr(result, source_context, module_idx, return_stmt.expr)),
-            else => {},
-        }
-
-        const stmt_id: Lambdamono.StmtId = @enumFromInt(result.lambdamono.stmts.items.len);
-        try result.lambdamono.stmts.append(self.allocator, .{
-            .module_idx = module_idx,
-            .source_stmt = stmt_idx,
-            .child_exprs = try self.appendProgramExprChildren(&result.lambdamono, child_exprs.items),
-        });
-        try self.program_build_state.stmt_ids_by_key.put(self.allocator, key, stmt_id);
-        return stmt_id;
-    }
-
-    fn appendProgramExprChildren(
-        self: *Pass,
-        program: *Lambdamono.Program,
-        child_exprs: []const Lambdamono.ExprId,
-    ) Allocator.Error!Lambdamono.ExprIdSpan {
-        const start: u32 = @intCast(program.expr_child_entries.items.len);
-        try program.expr_child_entries.appendSlice(self.allocator, child_exprs);
-        return .{
-            .start = start,
-            .len = @intCast(child_exprs.len),
-        };
-    }
-
-    fn appendProgramStmtChildren(
-        self: *Pass,
-        program: *Lambdamono.Program,
-        child_stmts: []const Lambdamono.StmtId,
-    ) Allocator.Error!Lambdamono.StmtIdSpan {
-        const start: u32 = @intCast(program.stmt_child_entries.items.len);
-        try program.stmt_child_entries.appendSlice(self.allocator, child_stmts);
-        return .{
-            .start = start,
-            .len = @intCast(child_stmts.len),
-        };
-    }
-
-    fn appendProgramExprSemantics(
-        self: *Pass,
-        program: *Lambdamono.Program,
-        result: *Result,
-        source_context: SourceContext,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-    ) Allocator.Error!Lambdamono.ExprSemanticSpan {
-        const module_env = self.all_module_envs[module_idx];
-        const expr = module_env.store.getExpr(expr_idx);
-        const start: u32 = @intCast(program.expr_semantics.items.len);
-        var count: u16 = 0;
-
-        if (self.readExprCallableValue(result, source_context, module_idx, expr_idx)) |solved_value| {
-            try program.expr_semantics.append(self.allocator, .{
-                .callable_value = try finalizeSolvedCallableValue(self, result, solved_value),
-            });
-            count += 1;
-        }
-        if (self.readExprCallSite(result, source_context, module_idx, expr_idx)) |solved_call| {
-            try program.expr_semantics.append(self.allocator, .{
-                .call_site = try finalizeSolvedCall(self, result, solved_call),
-            });
-            count += 1;
-        }
-        if (result.context_mono.getDispatchExprTarget(source_context, module_idx, expr_idx)) |dispatch_target| {
-            try program.expr_semantics.append(self.allocator, .{
-                .dispatch_target = dispatch_target,
-            });
-            count += 1;
-        }
+        const callable_value = if (self.readExprCallableValue(result, source_context, module_idx, expr_idx)) |solved_value|
+            try materializeSolvedCallableValue(self, result, solved_value)
+        else
+            null;
+        const call_site = if (self.readExprCallSite(result, source_context, module_idx, expr_idx)) |solved_call|
+            try materializeSolvedCall(self, result, solved_call)
+        else
+            null;
+        const dispatch_target = result.context_mono.getDispatchExprTarget(source_context, module_idx, expr_idx);
         const lookup_resolution = switch (expr) {
             .e_lookup_local => |lookup| blk: {
                 if (findDefByPattern(module_env, lookup.pattern_idx)) |def_idx| {
@@ -2061,19 +1855,107 @@ pub const Pass = struct {
             },
             else => null,
         };
-        if (lookup_resolution) |resolved_lookup| {
-            try program.expr_semantics.append(self.allocator, .{
-                .lookup_resolution = resolved_lookup,
-            });
-            count += 1;
+        var monotype = resolvedMonotype(.none, module_idx);
+        if (callable_value) |expr_callable_value| {
+            monotype = result.getCallableValueMonotype(expr_callable_value);
         }
+        if (monotype.isNone()) {
+            monotype = try self.requireProgramExprMonotype(
+                result,
+                source_context,
+                module_idx,
+                expr_idx,
+                child_exprs.items,
+            );
+        }
+        const expr_id: Lambdamono.ExprId = @enumFromInt(result.lambdamono.exprs.items.len);
+        try result.lambdamono.exprs.append(self.allocator, .{
+            .source_context = source_context,
+            .module_idx = module_idx,
+            .source_expr = expr_idx,
+            .monotype = monotype,
+            .child_exprs = child_expr_span,
+            .child_stmts = child_stmt_span,
+            .callable_value = callable_value,
+            .call_site = call_site,
+            .dispatch_target = dispatch_target,
+            .lookup_resolution = lookup_resolution,
+        });
+        try result.lambdamono.expr_ids_by_key.put(self.allocator, key, expr_id);
+        return expr_id;
+    }
+
+    fn buildProgramStmt(
+        self: *Pass,
+        result: *Result,
+        source_context: SourceContext,
+        module_idx: u32,
+        stmt_idx: CIR.Statement.Idx,
+    ) Allocator.Error!Lambdamono.StmtId {
+        const key = self.buildStmtKey(source_context, module_idx, stmt_idx);
+        if (result.lambdamono.stmt_ids_by_key.get(key)) |existing| return existing;
+
+        const module_env = self.all_module_envs[module_idx];
+        const stmt = module_env.store.getStatement(stmt_idx);
+        var child_exprs = std.ArrayList(Lambdamono.ExprId).empty;
+        defer child_exprs.deinit(self.allocator);
+
+        switch (stmt) {
+            .s_decl => |decl| try child_exprs.append(self.allocator, try self.buildProgramExpr(result, source_context, module_idx, decl.expr)),
+            .s_var => |var_decl| try child_exprs.append(self.allocator, try self.buildProgramExpr(result, source_context, module_idx, var_decl.expr)),
+            .s_reassign => |reassign| try child_exprs.append(self.allocator, try self.buildProgramExpr(result, source_context, module_idx, reassign.expr)),
+            .s_dbg => |dbg_stmt| try child_exprs.append(self.allocator, try self.buildProgramExpr(result, source_context, module_idx, dbg_stmt.expr)),
+            .s_expr => |expr_stmt| try child_exprs.append(self.allocator, try self.buildProgramExpr(result, source_context, module_idx, expr_stmt.expr)),
+            .s_expect => |expect_stmt| try child_exprs.append(self.allocator, try self.buildProgramExpr(result, source_context, module_idx, expect_stmt.body)),
+            .s_for => |for_stmt| {
+                try child_exprs.append(self.allocator, try self.buildProgramExpr(result, source_context, module_idx, for_stmt.expr));
+                try child_exprs.append(self.allocator, try self.buildProgramExpr(result, source_context, module_idx, for_stmt.body));
+            },
+            .s_while => |while_stmt| {
+                try child_exprs.append(self.allocator, try self.buildProgramExpr(result, source_context, module_idx, while_stmt.cond));
+                try child_exprs.append(self.allocator, try self.buildProgramExpr(result, source_context, module_idx, while_stmt.body));
+            },
+            .s_return => |return_stmt| try child_exprs.append(self.allocator, try self.buildProgramExpr(result, source_context, module_idx, return_stmt.expr)),
+            else => {},
+        }
+
+        const stmt_id: Lambdamono.StmtId = @enumFromInt(result.lambdamono.stmts.items.len);
+        try result.lambdamono.stmts.append(self.allocator, .{
+            .module_idx = module_idx,
+            .source_stmt = stmt_idx,
+            .child_exprs = try self.appendProgramExprChildren(&result.lambdamono, child_exprs.items),
+        });
+        try result.lambdamono.stmt_ids_by_key.put(self.allocator, key, stmt_id);
+        return stmt_id;
+    }
+
+    fn appendProgramExprChildren(
+        self: *Pass,
+        program: *Lambdamono.Program,
+        child_exprs: []const Lambdamono.ExprId,
+    ) Allocator.Error!Lambdamono.ExprIdSpan {
+        const start: u32 = @intCast(program.expr_child_entries.items.len);
+        try program.expr_child_entries.appendSlice(self.allocator, child_exprs);
         return .{
             .start = start,
-            .len = count,
+            .len = @intCast(child_exprs.len),
         };
     }
 
-    fn finalizeProgramExprMonotype(
+    fn appendProgramStmtChildren(
+        self: *Pass,
+        program: *Lambdamono.Program,
+        child_stmts: []const Lambdamono.StmtId,
+    ) Allocator.Error!Lambdamono.StmtIdSpan {
+        const start: u32 = @intCast(program.stmt_child_entries.items.len);
+        try program.stmt_child_entries.appendSlice(self.allocator, child_stmts);
+        return .{
+            .start = start,
+            .len = @intCast(child_stmts.len),
+        };
+    }
+
+    fn requireProgramExprMonotype(
         self: *Pass,
         result: *Result,
         source_context: SourceContext,
@@ -2082,7 +1964,7 @@ pub const Pass = struct {
         child_expr_ids: []const Lambdamono.ExprId,
     ) Allocator.Error!ResolvedMonotype {
         _ = child_expr_ids;
-        const thread = SemanticThread.trackedThread().withSourceContext(source_context);
+        const thread = SemanticThread.trackedThread(source_context);
         const resolved = blk: {
             if (self.lookupExprMonotypeForSourceContext(result, thread, source_context, module_idx, expr_idx)) |existing| {
                 break :blk existing;
@@ -2118,7 +2000,6 @@ pub const Pass = struct {
         self: *Pass,
         result: *Result,
         exprs: []const CIR.Expr.Idx,
-        contextualize_roots: bool,
     ) Allocator.Error!void {
         var iterations: u32 = 0;
 
@@ -2126,10 +2007,9 @@ pub const Pass = struct {
             iterations += 1;
             if (std.debug.runtime_safety and iterations > 32) {
                 std.debug.panic(
-                    "Pipeline: root fixed point did not converge (module={d}, contextualize_roots={}, revision={d}, templates={d}, callable_insts={d}, program_exprs={d}, root_exprs={d}, context_monos={d}, context_pattern_monos={d}, mutation_counts={any})",
+                    "Pipeline: root fixed point did not converge (module={d}, revision={d}, templates={d}, callable_insts={d}, program_exprs={d}, root_exprs={d}, context_monos={d}, context_pattern_monos={d}, mutation_counts={any})",
                     .{
                         self.current_module_idx,
-                        contextualize_roots,
                         self.mutation_revision,
                         result.lambdasolved.callable_templates.items.len,
                         result.lambdamono.callable_insts.items.len,
@@ -2149,22 +2029,13 @@ pub const Pass = struct {
 
             const mutation_revision_before = self.mutation_revision;
             for (exprs) |expr_idx| {
-                if (contextualize_roots) {
-                    const thread = SemanticThread.trackedThread().withSourceContext(.{
-                        .root_expr = .{
-                            .module_idx = self.current_module_idx,
-                            .expr_idx = expr_idx,
-                        },
-                    });
-                    try self.scanCirValueExpr(result, thread, self.current_module_idx, expr_idx);
-                } else {
-                    try self.scanCirValueExpr(
-                        result,
-                        SemanticThread.trackedThread(),
-                        self.current_module_idx,
-                        expr_idx,
-                    );
-                }
+                const thread = SemanticThread.trackedThread(.{
+                    .root_expr = .{
+                        .module_idx = self.current_module_idx,
+                        .expr_idx = expr_idx,
+                    },
+                });
+                try self.scanCirValueExpr(result, thread, self.current_module_idx, expr_idx);
             }
 
             if (self.mutation_revision == mutation_revision_before) {
@@ -3025,7 +2896,7 @@ pub const Pass = struct {
     ) Allocator.Error!void {
         try self.scanDemandedValueDefExpr(
             result,
-            SemanticThread.trackedThread().withSourceContext(source_context),
+            SemanticThread.trackedThread(source_context),
             module_idx,
             expr_idx,
         );
@@ -3040,7 +2911,7 @@ pub const Pass = struct {
     ) Allocator.Error!void {
         try self.scanForcedCirValueExpr(
             result,
-            SemanticThread.trackedThread().withSourceContext(source_context),
+            SemanticThread.trackedThread(source_context),
             module_idx,
             expr_idx,
         );
@@ -3190,7 +3061,7 @@ pub const Pass = struct {
         );
         if (fn_monotype.isNone()) return;
 
-        const callable_inst_id = try self.ensureCallableInst(result, source_context, template_id, fn_monotype.idx, fn_monotype.module_idx);
+        const callable_inst_id = try self.requireCallableInst(result, source_context, template_id, fn_monotype.idx, fn_monotype.module_idx);
         try self.setExprDirectCallable(
             result,
             source_context,
@@ -3297,8 +3168,7 @@ pub const Pass = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?ResolvedMonotype {
-        const source_context = thread.source_context orelse return null;
-        return self.lookupExprMonotypeForSourceContext(result, thread, source_context, module_idx, expr_idx);
+        return self.lookupExprMonotypeForSourceContext(result, thread, thread.requireSourceContext(), module_idx, expr_idx);
     }
 
     fn lookupExprMonotypeForSourceContext(
@@ -3556,7 +3426,7 @@ pub const Pass = struct {
         return switch (capture_value_source) {
             .expr => |capture_expr_ref| self.resolveExprMonotypeResolvedForSourceContext(
                 result,
-                SemanticThread.trackedThread().withSourceContext(capture_expr_ref.source_context),
+                SemanticThread.trackedThread(capture_expr_ref.source_context),
                 capture_expr_ref.source_context,
                 capture_expr_ref.module_idx,
                 capture_expr_ref.expr_idx,
@@ -4123,7 +3993,7 @@ pub const Pass = struct {
         var bindings = std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype).init(self.allocator);
         defer bindings.deinit();
 
-        var thread = SemanticThread.trackedThread().withSourceContext(source_context);
+        var thread = SemanticThread.trackedThread(source_context);
         switch (source_context) {
             .callable_inst => |context_id| {
                 try self.seedBindingsForCallableInst(result, @enumFromInt(@intFromEnum(context_id)), &bindings);
@@ -4150,7 +4020,7 @@ pub const Pass = struct {
         var bindings = std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype).init(self.allocator);
         defer bindings.deinit();
 
-        var thread = SemanticThread.trackedThread().withSourceContext(source_context);
+        var thread = SemanticThread.trackedThread(source_context);
         switch (source_context) {
             .callable_inst => |context_id| {
                 try self.seedBindingsForCallableInst(result, @enumFromInt(@intFromEnum(context_id)), &bindings);
@@ -4653,7 +4523,7 @@ pub const Pass = struct {
                 // assignment to the later concrete callable-context scan.
                 continue;
             }
-            const callable_inst_id = try self.ensureCallableInstUnscanned(result, thread.requireSourceContext(), template_id, param_mono, fn_monotype_module_idx);
+            const callable_inst_id = try self.registerCallableInst(result, thread.requireSourceContext(), template_id, param_mono, fn_monotype_module_idx);
 
             try self.setExprDirectCallable(
                 result,
@@ -5017,8 +4887,7 @@ pub const Pass = struct {
         defer iteration_expr_monotypes.deinit(self.allocator);
         var iteration_pattern_monotypes: std.AutoHashMapUnmanaged(ContextPatternKey, ResolvedMonotype) = .empty;
         defer iteration_pattern_monotypes.deinit(self.allocator);
-        var thread = SemanticThread.completionThread()
-            .withSourceContext(source_context)
+        var thread = SemanticThread.completionThread(source_context)
             .withBindings(bindings)
             .withIterationMonotypes(&iteration_expr_monotypes, &iteration_pattern_monotypes);
 
@@ -5343,7 +5212,7 @@ pub const Pass = struct {
         );
         if (!callable_param_specs_complete) return .blocked;
 
-        return .{ .resolved = try self.ensureCallableInstUnscannedWithCallableParamSpecs(
+        return .{ .resolved = try self.registerCallableInstWithCallableParamSpecs(
             result,
             thread.requireSourceContext(),
             template_id,
@@ -5418,7 +5287,7 @@ pub const Pass = struct {
             .func => {
                 try self.scanCirValueExpr(
                     result,
-                    SemanticThread.trackedThread().withSourceContext(source_context),
+                    SemanticThread.trackedThread(source_context),
                     module_idx,
                     expr_idx,
                 );
@@ -5533,8 +5402,7 @@ pub const Pass = struct {
 
         var signature_bindings = std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype).init(self.allocator);
         defer signature_bindings.deinit();
-        const thread = SemanticThread.completionThread()
-            .withSourceContext(defining_source_context)
+        const thread = SemanticThread.completionThread(defining_source_context)
             .withBindings(&signature_bindings)
             .withIterationMonotypes(&iteration_expr_monotypes, &iteration_pattern_monotypes);
 
@@ -7047,7 +6915,7 @@ pub const Pass = struct {
             defining_source_context,
         )) return null;
 
-        const callable_inst_id = try self.ensureCallableInstUnscanned(result, thread.requireSourceContext(), template_id, fn_monotype, template.module_idx);
+        const callable_inst_id = try self.registerCallableInst(result, thread.requireSourceContext(), template_id, fn_monotype, template.module_idx);
         return callable_inst_id;
     }
 
@@ -7639,7 +7507,7 @@ pub const Pass = struct {
             if (thread.bindings() == null) {
                 const fn_monotype = try self.resolveTypeVarMonotypeResolved(result, module_idx, resolved_target.fn_var);
                 if (!fn_monotype.isNone()) {
-                    break :blk try self.ensureCallableInstUnscanned(result, thread.requireSourceContext(), template_id, fn_monotype.idx, fn_monotype.module_idx);
+                    break :blk try self.registerCallableInst(result, thread.requireSourceContext(), template_id, fn_monotype.idx, fn_monotype.module_idx);
                 }
             }
 
@@ -7649,7 +7517,7 @@ pub const Pass = struct {
 
             const fn_monotype = try self.resolveTypeVarMonotypeResolved(result, module_idx, resolved_target.fn_var);
             if (!fn_monotype.isNone()) {
-                break :blk try self.ensureCallableInstUnscanned(result, thread.requireSourceContext(), template_id, fn_monotype.idx, fn_monotype.module_idx);
+                break :blk try self.registerCallableInst(result, thread.requireSourceContext(), template_id, fn_monotype.idx, fn_monotype.module_idx);
             }
 
             return;
@@ -8527,9 +8395,9 @@ pub const Pass = struct {
                 return;
             }
             break :blk if (thread.isTracked())
-                try self.ensureCallableInst(result, thread.requireSourceContext(), template_id, desired_fn_monotype.idx, desired_fn_monotype.module_idx)
+                try self.requireCallableInst(result, thread.requireSourceContext(), template_id, desired_fn_monotype.idx, desired_fn_monotype.module_idx)
             else
-                try self.ensureCallableInstUnscanned(result, thread.requireSourceContext(), template_id, desired_fn_monotype.idx, desired_fn_monotype.module_idx);
+                try self.registerCallableInst(result, thread.requireSourceContext(), template_id, desired_fn_monotype.idx, desired_fn_monotype.module_idx);
         };
         try self.setExprDirectCallable(
             result,
@@ -8849,10 +8717,15 @@ pub const Pass = struct {
             result,
             result.lambdasolved.getLambdaSetMembers(lambda_set_id),
         );
+        const runtime_monotype = try self.buildPackedFnRuntimeMonotype(
+            result,
+            result.lambdasolved.getLambdaSetMembers(lambda_set_id),
+        );
         const packed_fn_id: PackedFnId = @enumFromInt(result.lambdamono.packed_fns.items.len);
         const packed_fn: @TypeOf(result.lambdamono.packed_fns.items[0]) = .{
             .members = result.lambdamono.callable_member_groups.items[@intFromEnum(member_group_id)].members,
             .fn_monotype = fn_monotype,
+            .runtime_monotype = runtime_monotype,
         };
         try self.appendTracked(.packed_fns, &result.lambdamono.packed_fns, packed_fn);
         try self.putTracked(
@@ -8862,6 +8735,55 @@ pub const Pass = struct {
             packed_fn_id,
         );
         return packed_fn_id;
+    }
+
+    fn packedCallableTagName(
+        self: *Pass,
+        module_idx: u32,
+        callable_inst_id: CallableInstId,
+    ) Allocator.Error!Monotype.Name {
+        var name_buf: [32]u8 = undefined;
+        const name_text = try std.fmt.bufPrint(&name_buf, "__roc_fn_{d:0>10}", .{@intFromEnum(callable_inst_id)});
+        const module_env = self.all_module_envs[module_idx];
+        const ident = module_env.common.findIdent(name_text) orelse
+            try module_env.common.insertIdent(self.allocator, Ident.for_text(name_text));
+        return .{
+            .module_idx = module_idx,
+            .ident = ident,
+        };
+    }
+
+    fn buildPackedFnRuntimeMonotype(
+        self: *Pass,
+        result: *Result,
+        callable_inst_ids: []const CallableInstId,
+    ) Allocator.Error!ResolvedMonotype {
+        if (callable_inst_ids.len == 0) unreachable;
+
+        var tags = std.ArrayList(Monotype.Tag).empty;
+        defer tags.deinit(self.allocator);
+
+        const monotype_module_idx = self.current_module_idx;
+        for (callable_inst_ids) |callable_inst_id| {
+            const payload_mono = result.getCallableInstRuntimeMonotype(callable_inst_id);
+            const payloads = if (payload_mono.isNone() or payload_mono.idx == result.context_mono.monotype_store.unit_idx)
+                Monotype.Span.empty()
+            else
+                try result.context_mono.monotype_store.addIdxSpan(self.allocator, &.{payload_mono.idx});
+            try tags.append(self.allocator, .{
+                .name = try self.packedCallableTagName(monotype_module_idx, callable_inst_id),
+                .payloads = payloads,
+            });
+        }
+
+        std.mem.sortUnstable(Monotype.Tag, tags.items, self.all_module_envs, Monotype.Tag.sortByNameAsc);
+        const tag_span = try result.context_mono.monotype_store.addTags(self.allocator, tags.items);
+        return .{
+            .idx = try result.context_mono.monotype_store.addMonotype(self.allocator, .{
+                .tag_union = .{ .tags = tag_span },
+            }),
+            .module_idx = monotype_module_idx,
+        };
     }
 
     fn requireLambdaSetFnMonotype(
@@ -9232,7 +9154,7 @@ pub const Pass = struct {
             .effectful = false,
         } });
 
-        _ = try self.ensureCallableInst(result, templateSourceContext(result.getCallableTemplate(template_id).*) , template_id, fn_monotype, source_module_idx);
+        _ = try self.requireCallableInst(result, templateSourceContext(result.getCallableTemplate(template_id).*) , template_id, fn_monotype, source_module_idx);
     }
 
     fn resolveTypeVarMonotypeWithBindings(
@@ -10084,7 +10006,7 @@ pub const Pass = struct {
                                         &bindings,
                                     );
                                     if (!method_func_mono.isNone()) {
-                                        _ = try self.ensureCallableInst(
+                                        _ = try self.requireCallableInst(
                                             result,
                                             templateSourceContext(result.getCallableTemplate(method_info.template_id).*),
                                             method_info.template_id,
@@ -10937,7 +10859,7 @@ pub const Pass = struct {
         return self.resolveExprCallableTemplate(result, source_context, module_idx, callee_expr_idx);
     }
 
-    fn ensureCallableInst(
+    fn requireCallableInst(
         self: *Pass,
         result: *Result,
         defining_source_context: SourceContext,
@@ -10945,10 +10867,19 @@ pub const Pass = struct {
         fn_monotype: Monotype.Idx,
         fn_monotype_module_idx: u32,
     ) Allocator.Error!CallableInstId {
-        return self.ensureCallableInstWithScan(result, defining_source_context, template_id, fn_monotype, fn_monotype_module_idx, &.{}, true);
+        const callable_inst_id = try self.ensureCallableInstRecord(
+            result,
+            defining_source_context,
+            template_id,
+            fn_monotype,
+            fn_monotype_module_idx,
+            &.{},
+        );
+        try self.scanCallableInst(result, callable_inst_id);
+        return callable_inst_id;
     }
 
-    fn ensureCallableInstUnscanned(
+    fn registerCallableInst(
         self: *Pass,
         result: *Result,
         defining_source_context: SourceContext,
@@ -10956,10 +10887,17 @@ pub const Pass = struct {
         fn_monotype: Monotype.Idx,
         fn_monotype_module_idx: u32,
     ) Allocator.Error!CallableInstId {
-        return self.ensureCallableInstWithScan(result, defining_source_context, template_id, fn_monotype, fn_monotype_module_idx, &.{}, false);
+        return self.ensureCallableInstRecord(
+            result,
+            defining_source_context,
+            template_id,
+            fn_monotype,
+            fn_monotype_module_idx,
+            &.{},
+        );
     }
 
-    fn ensureCallableInstUnscannedWithCallableParamSpecs(
+    fn registerCallableInstWithCallableParamSpecs(
         self: *Pass,
         result: *Result,
         defining_source_context: SourceContext,
@@ -10968,18 +10906,17 @@ pub const Pass = struct {
         fn_monotype_module_idx: u32,
         callable_param_specs: []const CallableParamSpecEntry,
     ) Allocator.Error!CallableInstId {
-        return self.ensureCallableInstWithScan(
+        return self.ensureCallableInstRecord(
             result,
             defining_source_context,
             template_id,
             fn_monotype,
             fn_monotype_module_idx,
             callable_param_specs,
-            false,
         );
     }
 
-    fn ensureCallableInstWithScan(
+    fn ensureCallableInstRecord(
         self: *Pass,
         result: *Result,
         defining_source_context: SourceContext,
@@ -10987,7 +10924,6 @@ pub const Pass = struct {
         fn_monotype: Monotype.Idx,
         fn_monotype_module_idx: u32,
         callable_param_specs: []const CallableParamSpecEntry,
-        scan_body: bool,
     ) Allocator.Error!CallableInstId {
         const template = result.getCallableTemplate(template_id);
         const canonical_fn_monotype = if (fn_monotype_module_idx == template.module_idx)
@@ -11023,9 +10959,6 @@ pub const Pass = struct {
                 if (existing_callable_inst.subst != subst_id) continue;
                 const existing_id: CallableInstId = @enumFromInt(idx);
                 try self.ensureDirectCallableMemberGroup(result, existing_id);
-                if (scan_body) {
-                    try self.scanCallableInst(result, existing_id);
-                }
                 return existing_id;
             }
         }
@@ -11068,9 +11001,6 @@ pub const Pass = struct {
             try self.addCallableParamSpecEntries(callable_param_specs),
         );
         try self.ensureDirectCallableMemberGroup(result, callable_inst_id);
-        if (scan_body) {
-            try self.scanCallableInst(result, callable_inst_id);
-        }
         return callable_inst_id;
     }
 
@@ -11255,8 +11185,7 @@ pub const Pass = struct {
         defer iteration_pattern_monotypes.deinit(self.allocator);
 
         try self.seedBindingsForCallableInst(result, callable_inst_id, &bindings);
-        const thread = SemanticThread.trackedThread()
-            .withSourceContext(callableInstSourceContext(callable_inst_id))
+        const thread = SemanticThread.trackedThread(callableInstSourceContext(callable_inst_id))
             .withBindings(&bindings)
             .withIterationMonotypes(&iteration_expr_monotypes, &iteration_pattern_monotypes);
         if (template.binding_pattern) |binding_pattern| {
