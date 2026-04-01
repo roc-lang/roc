@@ -5976,13 +5976,12 @@ test "check type - exhaustive match close with value reuse - no static dispatch"
 }
 
 test "check type - annotation keeps tag union open despite exhaustive match" {
-    // The function annotation declares an open return type [Red, ..].
+    // Return types are implicitly open in positive position (polarity).
     // Even though the caller matches exhaustively without a wildcard,
-    // the rigid ext var from the annotation prevents closing.
-    // Each call site gets an instantiation with the rigid ext var,
-    // so the value can still be used at a broader type.
+    // the return type remains open due to polarity.
+    // Each call site gets an open type, so the value can be used at a broader type.
     const source =
-        \\make : {} -> [Red, ..]
+        \\make : {} -> [Red]
         \\make = |{}| Red
         \\
         \\accept_broad = |color| {
@@ -6033,12 +6032,12 @@ test "check type - annotated open arg not closed by exhaustive match in body" {
 }
 
 test "check type - annotated open return type preserved after caller exhaustive match" {
-    // Static dispatch method annotated with open return type.
-    // Caller matches exhaustively then reuses the value — the annotation
-    // prevents closing, so the second use at a broader type succeeds.
+    // Static dispatch method with return type implicitly open due to polarity.
+    // Caller matches exhaustively then reuses the value — polarity keeps the type open,
+    // so the second use at a broader type succeeds.
     const source =
         \\Maker := [Maker].{
-        \\  get : Maker -> [Red, ..]
+        \\  get : Maker -> [Red]
         \\  get = |_maker| Red
         \\}
         \\
@@ -6165,11 +6164,10 @@ test "check type - tag union - ext hints 1" {
         \\bar : [A, B] -> [X, Y]
         \\bar = |_| X
         \\
-        \\foo : [A, B] -> [X, Y, ..]
+        \\foo : [A, B] -> [X, Y]
         \\foo = |tag| bar(tag)
     ;
-    // With polarity, [X, Y] in return (positive) position is now open [X, Y, ..],
-    // which matches the [X, Y, ..] annotation on foo's return type.
+    // With polarity, [X, Y] in return (positive) position is implicitly open [X, Y, ..].
     try checkTypesModule(source, .{ .pass = .{ .def = "foo" } }, "[A, B] -> [X, Y, ..]");
 }
 
