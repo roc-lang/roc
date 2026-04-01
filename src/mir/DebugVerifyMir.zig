@@ -360,7 +360,7 @@ fn ensureCallableLocalInvariant(
             .{ @intFromEnum(local), context, context_id },
         );
     }
-    const exact_callable = local_data.exact_callable orelse return;
+    const exact_callable = store.getLocalExactCallable(local) orelse return;
     const lambda = store.getLambdaAnyState(exact_callable.lambda);
     if (exact_callable.requires_hidden_capture != (lambda.captures_param != null)) {
         std.debug.panic(

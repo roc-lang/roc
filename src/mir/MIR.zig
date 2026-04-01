@@ -107,11 +107,10 @@ pub const ExactCallable = struct {
 pub const Local = struct {
     monotype: Monotype.Idx,
     reassignable: bool = false,
-    exact_callable: ?ExactCallable = null,
 };
 
 /// One canonical definition for a MIR local.
-pub const LocalDef = union(enum) {
+pub const LocalDefKind = union(enum) {
     param: struct {
         lambda: LambdaId,
         index: u16,
@@ -147,6 +146,12 @@ pub const LocalDef = union(enum) {
         name: Monotype.Name,
         args: LocalSpan,
     },
+};
+
+/// Canonical semantic record for one MIR local.
+pub const LocalDef = struct {
+    kind: ?LocalDefKind = null,
+    exact_callable: ?ExactCallable = null,
 };
 
 /// Span of LocalId values stored in Store.local_ids.
@@ -373,7 +378,7 @@ pub const Store = struct {
     cf_stmt_states: std.ArrayListUnmanaged(EntryState),
     switch_branches: std.ArrayListUnmanaged(SwitchBranch),
     locals: std.ArrayListUnmanaged(Local),
-    local_defs: std.ArrayListUnmanaged(?LocalDef),
+    local_defs: std.ArrayListUnmanaged(LocalDef),
     local_ids: std.ArrayListUnmanaged(LocalId),
     lambdas: std.ArrayListUnmanaged(Lambda),
     lambda_states: std.ArrayListUnmanaged(EntryState),
@@ -430,7 +435,7 @@ pub const Store = struct {
     pub fn addLocal(self: *Store, allocator: Allocator, local: Local) Allocator.Error!LocalId {
         const idx: u32 = @intCast(self.locals.items.len);
         try self.locals.append(allocator, local);
-        try self.local_defs.append(allocator, null);
+        try self.local_defs.append(allocator, .{});
         return @enumFromInt(idx);
     }
 
@@ -445,16 +450,24 @@ pub const Store = struct {
     }
 
     /// Returns the canonical definition for one MIR local.
-    pub fn getLocalDef(self: *const Store, id: LocalId) LocalDef {
-        return self.local_defs.items[@intFromEnum(id)] orelse std.debug.panic(
+    pub fn getLocalDef(self: *const Store, id: LocalId) LocalDefKind {
+        return self.local_defs.items[@intFromEnum(id)].kind orelse std.debug.panic(
             "MIR local {d} has no recorded local definition",
             .{@intFromEnum(id)},
         );
     }
 
     /// Returns the canonical definition for one MIR local if it was recorded.
-    pub fn getLocalDefOpt(self: *const Store, id: LocalId) ?LocalDef {
+    pub fn getLocalDefOpt(self: *const Store, id: LocalId) ?LocalDefKind {
+        return self.local_defs.items[@intFromEnum(id)].kind;
+    }
+
+    pub fn getLocalDefRecord(self: *const Store, id: LocalId) LocalDef {
         return self.local_defs.items[@intFromEnum(id)];
+    }
+
+    pub fn getLocalDefRecordPtr(self: *Store, id: LocalId) *LocalDef {
+        return &self.local_defs.items[@intFromEnum(id)];
     }
 
     /// Stores a local-id slice and returns its span.
@@ -626,20 +639,28 @@ pub const Store = struct {
         return self.const_defs_by_symbol.get(symbol.raw());
     }
 
-    fn recordLocalDef(self: *Store, local: LocalId, def: LocalDef) Allocator.Error!void {
+    pub fn setLocalExactCallable(self: *Store, local: LocalId, exact_callable: ?ExactCallable) void {
+        self.local_defs.items[@intFromEnum(local)].exact_callable = exact_callable;
+    }
+
+    pub fn getLocalExactCallable(self: *const Store, local: LocalId) ?ExactCallable {
+        return self.local_defs.items[@intFromEnum(local)].exact_callable;
+    }
+
+    fn recordLocalDef(self: *Store, local: LocalId, def: LocalDefKind) Allocator.Error!void {
         const slot = &self.local_defs.items[@intFromEnum(local)];
-        if (slot.* != null) {
-            if (std.meta.eql(slot.*.?, def)) return;
+        if (slot.kind) |existing| {
+            if (std.meta.eql(existing, def)) return;
             std.debug.panic(
                 "MIR local {d} received multiple recorded definitions; existing={s} new={s}",
                 .{
                     @intFromEnum(local),
-                    @tagName(slot.*.?),
+                    @tagName(existing),
                     @tagName(def),
                 },
             );
         }
-        slot.* = def;
+        slot.kind = def;
     }
 
     fn assertCFStmtFinalized(self: *const Store, id: CFStmtId) void {

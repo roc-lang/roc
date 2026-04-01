@@ -319,7 +319,7 @@ fn mergeLoweredOrigins(left: LoweredOrigin, right: LoweredOrigin) LoweredOrigin 
 }
 
 fn requireExactCallableValue(self: *Self, local_id: MIR.LocalId) ResolvedCallable {
-    const exact_callable = self.mir_store.getLocal(local_id).exact_callable orelse std.debug.panic(
+    const exact_callable = self.mir_store.getLocalExactCallable(local_id) orelse std.debug.panic(
         "MirToLir invariant violated: callable local {d} lacked explicit exact callable metadata",
         .{@intFromEnum(local_id)},
     );

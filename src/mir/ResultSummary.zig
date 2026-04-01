@@ -407,7 +407,7 @@ const Analyzer = struct {
         env: *const LocalOriginMap,
         local_id: MIR.LocalId,
     ) Origin {
-        const resolved = self.mir_store.getLocal(local_id).exact_callable orelse {
+        const resolved = self.mir_store.getLocalExactCallable(local_id) orelse {
             return self.originForLocal(env, local_id);
         };
         if (!resolved.requires_hidden_capture) {
@@ -486,7 +486,7 @@ const Analyzer = struct {
                 try self.collectReturnedCallable(join_stmt.remainder, out);
             },
             .ret => |ret_stmt| {
-                const resolved = self.mir_store.getLocal(ret_stmt.value).exact_callable orelse return;
+                const resolved = self.mir_store.getLocalExactCallable(ret_stmt.value) orelse return;
                 if (out.*) |current| {
                     if (current.lambda != resolved.lambda or current.requires_hidden_capture != resolved.requires_hidden_capture) {
                         std.debug.panic(

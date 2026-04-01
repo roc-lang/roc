@@ -1662,7 +1662,7 @@ fn lowerLocalAliasInto(
 }
 
 fn clearExactCallableLocal(self: *Self, local_id: MIR.LocalId) void {
-    self.store.getLocalPtr(local_id).exact_callable = null;
+    self.store.setLocalExactCallable(local_id, null);
 }
 
 fn exactCallableResolutionsEqual(
@@ -1677,7 +1677,7 @@ fn resolveExactCallableResolutionForLocal(
     self: *Self,
     local_id: MIR.LocalId,
 ) Allocator.Error!?ExactCallableResolution {
-    if (self.store.getLocal(local_id).exact_callable) |exact_callable| {
+    if (self.store.getLocalExactCallable(local_id)) |exact_callable| {
         return .{
             .lambda = exact_callable.lambda,
             .requires_hidden_capture = exact_callable.requires_hidden_capture,
@@ -1694,7 +1694,7 @@ fn mergeExactCallableJoinIncoming(
 ) Allocator.Error!void {
     const source_resolution = try self.resolveExactCallableResolutionForLocal(source_local) orelse return;
 
-    if (self.store.getLocal(dest_local).exact_callable) |existing| {
+    if (self.store.getLocalExactCallable(dest_local)) |existing| {
         const existing_resolution = ExactCallableResolution{
             .lambda = existing.lambda,
             .requires_hidden_capture = existing.requires_hidden_capture,
@@ -4669,10 +4669,10 @@ fn bindExactLambdaLocal(
         self.store.getLocal(captures_param).monotype
     else
         self.store.monotype_store.unit_idx;
-    self.store.getLocalPtr(local_id).exact_callable = .{
+    self.store.setLocalExactCallable(local_id, .{
         .lambda = lambda_id,
         .requires_hidden_capture = lambda.captures_param != null,
-    };
+    });
 }
 
 fn bindExactCallableLocal(
@@ -4682,10 +4682,10 @@ fn bindExactCallableLocal(
 ) Allocator.Error!void {
     const lambda_id = try self.lowerResolvedCallableInstLambda(callable_inst_id);
     try self.refreshLocalMonotypeFromCallableInst(local_id, callable_inst_id);
-    self.store.getLocalPtr(local_id).exact_callable = .{
+    self.store.setLocalExactCallable(local_id, .{
         .lambda = lambda_id,
         .requires_hidden_capture = self.callableInstRequiresHiddenCapture(callable_inst_id),
-    };
+    });
 }
 
 fn packedCallableTagName(
