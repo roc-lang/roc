@@ -61,6 +61,9 @@ pub const RelocationEntry = union(enum) {
         type_id: IndexRelocType,
         offset: u32, // byte offset within the target section body
         symbol_index: u32, // index into the linking section's symbol table
+        /// For reloc.DATA entries, the data segment this site belongs to after normalization.
+        /// `maxInt(u32)` means "not normalized / not applicable".
+        data_segment_index: u32 = std.math.maxInt(u32),
     },
 
     /// Offset relocations: the value at `offset` is a memory address.
@@ -70,6 +73,9 @@ pub const RelocationEntry = union(enum) {
         offset: u32,
         symbol_index: u32,
         addend: i32,
+        /// For reloc.DATA entries, the data segment this site belongs to after normalization.
+        /// `maxInt(u32)` means "not normalized / not applicable".
+        data_segment_index: u32 = std.math.maxInt(u32),
     },
 
     pub fn getSymbolIndex(self: RelocationEntry) u32 {

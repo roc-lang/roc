@@ -219,9 +219,9 @@ pub const WasmEvaluator = struct {
         const syms = WasmModule.BuiltinSymbols.populate(&app_module) catch
             return error.RuntimeError;
 
-        // Resolve all builtin-to-builtin relocations in code_bytes,
+        // Resolve all builtin-to-builtin relocations,
         // then materialize into func_bodies so encode() can serialize them.
-        app_module.resolveCodeRelocations();
+        app_module.resolveRelocations();
         app_module.materializeFuncBodies() catch
             return error.RuntimeError;
 

@@ -2075,9 +2075,10 @@ without invoking `wasm-ld`.
   used them as function indices in `call` instructions. Fixed to return `sym.index` (the
   actual function index) from the symbol table entry.
 
-- **RocOps from existing imports**: Instead of adding new `roc_alloc` etc. imports (which
-  would duplicate those from the host/builtins), `registerRocOpsFromModule()` finds the
-  existing imports and adds them to the funcref table.
+- **Canonical RocOps callbacks**: Eval-style modules reuse existing `roc_alloc`/`roc_dbg`/
+  etc. imports, while host modules bind their locally-defined RocOps callback functions
+  (the implementations assigned into `host_abi.RocOps`) into the funcref table without
+  mutating the import section.
 
 - **Entrypoint wrappers**: Each entrypoint is compiled as a regular LIR proc via
   `compileAllProcSpecs`. A thin RocCall wrapper reads args from `args_ptr`, calls the
@@ -2105,14 +2106,20 @@ It must contain `linking` and `reloc.*` custom sections.
 
 ### Remaining Work (not blocking Phase 12)
 
-- **Eval integration**: The eval/REPL pipeline (`src/eval/wasm_evaluator.zig`) still uses
-  `undefined` for `BuiltinSymbols`. It should be updated to merge `roc_builtins.o` and
-  populate real `BuiltinSymbols` so eval tests can call builtins. This could use a
-  precompiled eval shim as the host module and run the same surgical linking pipeline.
+- **Broader verification**: The surgical linking pipeline is wired into the CLI and eval
+  path now, but the full wasm verification story still needs to be hardened:
+  - rerun the full eval/REPL test suite after the latest linker fixes and update the
+    recorded pass/fail status
+  - make the end-to-end wasm build/test harness self-contained in CI (`test-backend`,
+    `test-wasm-static-lib`, bytebox/runner integration)
+  - add at least one true end-to-end test that compiles a Roc program via
+    `roc build --target=wasm32` and executes the emitted `.wasm`
 
-- **End-to-end integration tests**: Tests that compile a real Roc program through the
-  full `roc build --target=wasm32` pipeline and verify the output `.wasm` runs correctly
-  (via bytebox or `wasmtime`). These require a working test platform with a `host.wasm`.
+- **Hosted effects coverage**: `generateHostedCall()` exists and the RocOps layout has
+  slots for hosted functions, but the current wasm test platform still uses
+  `hosted_fns.count = 0`. We need one wasm host/platform test that exposes a non-empty
+  hosted-function table and proves `call_indirect` through `host_abi.RocOps.hosted_fns`
+  works end-to-end.
 
 ### Rust Reference
 
@@ -2123,7 +2130,7 @@ It must contain `linking` and `reloc.*` custom sections.
 
 ---
 
-## Phase 13: PIC Support & Eval Builtins — In Progress
+## Phase 13: PIC Support & Eval Builtins — Done
 
 ### What
 
@@ -2133,8 +2140,15 @@ import reimplementations.
 
 ### Status
 
-**1286 of 1306 eval tests passing** (4 remaining failures in str_split, str_join_with,
-str_from_utf8 — all crash with TrapUnreachable inside merged builtins).
+Implementation is in place:
+- PIC imports/globals/tables are handled during preload/merge
+- eval now merges real `roc_builtins.o` and resolves relocations
+- `reloc.DATA` is normalized, merged, and resolved before encoding
+- wasm host RocOps callbacks use canonical `host_abi` callback symbols instead of
+  late import insertion
+
+The remaining work is now primarily broader verification and end-to-end coverage,
+captured below in Appendix C.
 
 ### Root Causes Fixed
 
@@ -2182,8 +2196,8 @@ numeric conversions, list operations).
 - **prepareModuleWithBuiltins**: Creates a fresh module, adds RocOps imports (so the
   import count is correct before merge), merges builtins, populates `BuiltinSymbols`,
   resolves relocations, and materializes `func_bodies`.
-- **generateModule**: Uses `registerRocOpsFromModule` (finds existing imports) when
-  the module already has imports, instead of `registerRocOpsImports` (adds new ones).
+- **generateModule**: Reuses existing RocOps imports when the module was prepared with
+  them up front, instead of adding imports after builtins have already been merged.
 
 ### Root Causes Fixed (continued)
 
@@ -2197,6 +2211,37 @@ alignment, element_width, and elements_refcounted.
 `emitHeapAllocConst` (raw roc_alloc), but builtins expect data pointers with refcount
 headers (for isUnique checks, reallocation, etc.). Fix: call
 `roc_builtins_allocate_with_refcount` from `generateList` instead of raw heap alloc.
+
+### Integration Gaps Found During Review (2026-04-01)
+
+These are not theoretical cleanup items; they were found while diffing this branch
+ against `origin/main` and checking the current wasm platform artifact.
+
+**`reloc.DATA` was merged but never resolved**: `roc_builtins.o` contains a real
+`reloc.DATA` section. The linker already preserved those entries through preload and
+`mergeModule()`, but only `reloc.CODE` was ever patched before the final module was
+encoded. Fix: record each parsed data segment's byte range within the original data
+section body, normalize `reloc.DATA` entries to `(segment_index, in_segment_offset)`,
+carry that remap through `mergeModule()`, and resolve data relocations before encode.
+
+**Host RocOps registration was mutating function indices after preload**:
+`registerRocOpsFromModule()` was allowed to add imports when the current module already
+contained defined functions from a preloaded host object or merged builtins. That
+violates the `WasmModule.addImport()` invariant that imports must be finalized before
+defined functions exist, and it corrupts every downstream function index. The current
+wasm test platform also does not expose RocOps callbacks as imports: it builds a
+`RocOps` struct from local callback functions and only imports `roc_dbg`,
+`roc_expect_failed`, and `roc_panic`. Fix: expose canonical host-ABI callback symbols in
+the wasm host module, bind those existing callback functions into the table without
+adding imports, and keep eval-style modules on a separate "reuse existing imports"
+path instead of introducing a callback/import fallback.
+
+**Builtin-import verification was stricter than the current platform contract**:
+`verifyNoBuiltinImports()` only allowed the 6 RocOps callback names, but the current
+platform legitimately imports `env.roc_panic` and uses it behind the local
+`roc_crashed` wrapper. Verification runs before DCE, so rejecting `roc_panic` here is
+a false failure against the current platform. Fix: treat `roc_panic` as an allowed
+platform import at verification time.
 
 ---
 
@@ -2595,6 +2640,28 @@ WASM since padded LEB128 is a valid encoding of any value).
    function indices were off by the count of imports added during merge), added compiler-rt
    host functions for `__multi3`/`__muloti4`, and various post-rebase cleanups. Repl tests
    went from 11/40 to 38/40.
+
+1f. **Current follow-up completed** (2026-04-01):
+   Three post-integration issues found during review were fixed:
+   - `reloc.DATA` entries are now normalized, remapped during merge, and resolved into
+     final data bytes before encoding
+   - host-side RocOps registration no longer adds late imports; host modules expose
+     canonical `host_abi` callback functions and bind those existing callbacks into the table
+   - `verifyNoBuiltinImports()` now allows the platform's legitimate `roc_panic` import
+
+1g. **Remaining work to call surgical WASM complete**:
+   - **Full eval/regression rerun**: rerun the full eval/REPL suites after the latest fixes,
+     update the recorded pass rate, and fix any remaining builtin/runtime failures if they
+     still exist
+   - **End-to-end wasm harness**: make the wasm integration tests self-contained and green.
+     In the current checkout, `zig build test-backend` is blocked by a missing `bytebox`
+     test-module import and `zig build test-wasm-static-lib` expects `test/wasm/app.wasm`
+     to already exist
+   - **Hosted effects coverage**: add a wasm platform/test with a non-empty hosted function
+     table so `generateHostedCall()` is exercised end-to-end instead of only by local/unit
+     coverage
+   - **Status cleanup**: keep this document's recorded status synchronized with actual
+     verification results instead of leaving stale “in progress” or old pass-count notes
 
 2. **Host module authoring guidance**: What exact compilation flags do we want to support and
    document for platform authors producing relocatable `host.wasm` artifacts?

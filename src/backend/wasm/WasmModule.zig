@@ -280,7 +280,10 @@ pub const DefinedGlobal = struct {
 /// A data segment placed in linear memory
 const DataSegment = struct {
     offset: u32, // offset in linear memory
-    data: []const u8, // bytes to place
+    data: []u8, // bytes to place
+    /// Byte offset of this segment's payload within the original data section body.
+    /// Used to normalize reloc.DATA entries during preload.
+    section_offset: u32 = 0,
 };
 
 /// An imported function
@@ -558,6 +561,7 @@ pub fn addDataSegment(self: *Self, data: []const u8, align_bytes: u32) !u32 {
     try self.data_segments.append(self.allocator, .{
         .offset = offset,
         .data = data_copy,
+        .section_offset = 0,
     });
     self.data_offset += @intCast(data.len);
     return offset;
@@ -616,6 +620,37 @@ pub fn findImportFuncIdx(self: *const Self, module_name: []const u8, field_name:
         }
     }
     return null;
+}
+
+/// Find a function index by its resolved symbol/import name.
+pub fn findFunctionIdxByName(self: *const Self, name: []const u8) ?u32 {
+    if (self.linking.findSymbolByName(name, self.imports.items, self.global_imports.items, self.table_imports.items)) |sym_idx| {
+        const sym = self.linking.symbol_table.items[sym_idx];
+        if (sym.kind == .function) return sym.index;
+    }
+
+    for (self.imports.items, 0..) |imp, i| {
+        if (std.mem.eql(u8, imp.field_name, name)) return @intCast(i);
+    }
+
+    return null;
+}
+
+/// Find a defined function whose resolved name ends with `suffix`.
+/// This intentionally ignores undefined/imported symbols so host callback lookups
+/// do not accidentally bind raw platform imports like `roc_dbg`.
+pub fn findFunctionIdxBySuffix(self: *const Self, suffix: []const u8) ?u32 {
+    for (self.linking.symbol_table.items) |sym| {
+        if (sym.kind != .function or sym.isUndefined()) continue;
+        const sym_name = sym.resolveName(self.imports.items, self.global_imports.items, self.table_imports.items) orelse continue;
+        if (std.mem.endsWith(u8, sym_name, suffix)) return sym.index;
+    }
+    return null;
+}
+
+/// Find or append a function in the element section.
+pub fn ensureTableElement(self: *Self, func_idx: u32) !u32 {
+    return self.findTableIndex(func_idx) orelse try self.addTableElement(func_idx);
 }
 
 // --- Surgical Linking ---
@@ -952,6 +987,9 @@ pub fn mergeModule(self: *Self, source: *const Self) !MergeResult {
     // data_remap: maps source segment index → new data base address.
     const data_remap = try gpa.alloc(u32, source.data_segments.items.len);
     defer gpa.free(data_remap);
+    // data_segment_remap: maps source segment index → new segment index in self.data_segments.
+    const data_segment_remap = try gpa.alloc(u32, source.data_segments.items.len);
+    defer gpa.free(data_segment_remap);
 
     for (source.data_segments.items, 0..) |src_ds, i| {
         // Find alignment from segment info if available, default to 1.
@@ -959,6 +997,7 @@ pub fn mergeModule(self: *Self, source: *const Self) !MergeResult {
             @as(u32, 1) << @intCast(source.linking.segment_info.items[i].alignment)
         else
             1;
+        data_segment_remap[i] = @intCast(self.data_segments.items.len);
         const new_offset = try self.addDataSegment(src_ds.data, alignment);
         data_remap[i] = new_offset;
     }
@@ -1030,11 +1069,15 @@ pub fn mergeModule(self: *Self, source: *const Self) !MergeResult {
                         data_remap[src_sym.index] + src_sym.data_offset
                     else
                         src_sym.data_offset;
+                    const new_segment_idx = if (src_sym.index < data_segment_remap.len)
+                        data_segment_remap[src_sym.index]
+                    else
+                        src_sym.index;
                     try self.linking.symbol_table.append(gpa, .{
                         .kind = .data,
                         .flags = src_sym.flags,
                         .name = src_sym.name,
-                        .index = src_sym.index, // segment index (not remapped — data_offset is absolute)
+                        .index = new_segment_idx,
                         .data_offset = new_offset,
                         .data_size = src_sym.data_size,
                     });
@@ -1150,20 +1193,30 @@ pub fn mergeModule(self: *Self, source: *const Self) !MergeResult {
     for (source.reloc_data.entries.items) |src_entry| {
         switch (src_entry) {
             .index => |idx| {
+                const remapped_segment_idx = if (idx.data_segment_index < data_segment_remap.len)
+                    data_segment_remap[idx.data_segment_index]
+                else
+                    idx.data_segment_index;
                 try self.reloc_data.entries.append(gpa, .{
                     .index = .{
                         .type_id = idx.type_id,
-                        .offset = idx.offset, // data offsets are segment-relative
+                        .offset = idx.offset,
                         .symbol_index = symbol_remap[idx.symbol_index],
+                        .data_segment_index = remapped_segment_idx,
                     },
                 });
             },
             .offset => |off| {
+                const remapped_segment_idx = if (off.data_segment_index < data_segment_remap.len)
+                    data_segment_remap[off.data_segment_index]
+                else
+                    off.data_segment_index;
                 try self.reloc_data.entries.append(gpa, .{ .offset = .{
                     .type_id = off.type_id,
                     .offset = off.offset,
                     .symbol_index = symbol_remap[off.symbol_index],
                     .addend = off.addend,
+                    .data_segment_index = remapped_segment_idx,
                 } });
             },
         }
@@ -1184,86 +1237,103 @@ fn findTableIndex(self: *const Self, func_idx: u32) ?u32 {
     return null;
 }
 
+fn patchResolvedRelocation(self: *const Self, target_bytes: []u8, entry: WasmLinking.RelocationEntry, patch_offset: u32) void {
+    const sym = self.linking.symbol_table.items[entry.getSymbolIndex()];
+    switch (entry) {
+        .index => |idx| {
+            const value = sym.index;
+            switch (idx.type_id) {
+                .type_index_leb => {
+                    // type_index_leb relocations are normally resolved during merge
+                    // (when the type_remap is available). If one survives, use the
+                    // resolved symbol index directly.
+                    overwritePaddedU32(target_bytes, patch_offset, value);
+                },
+                .function_index_leb,
+                .global_index_leb,
+                .event_index_leb,
+                .table_number_leb,
+                => overwritePaddedU32(target_bytes, patch_offset, value),
+                .table_index_sleb,
+                .table_index_rel_sleb,
+                => {
+                    const table_idx = self.findTableIndex(value) orelse value;
+                    overwritePaddedI32(target_bytes, patch_offset, @intCast(table_idx));
+                },
+                .table_index_i32 => {
+                    const table_idx = self.findTableIndex(value) orelse value;
+                    const off: usize = @intCast(patch_offset);
+                    std.mem.writeInt(u32, target_bytes[off..][0..4], table_idx, .little);
+                },
+                .global_index_i32 => {
+                    const off: usize = @intCast(patch_offset);
+                    std.mem.writeInt(u32, target_bytes[off..][0..4], value, .little);
+                },
+            }
+        },
+        .offset => |off| {
+            // For data symbols, the resolved address is the data_offset.
+            // For others, use the symbol's index as the base address.
+            const base: i64 = if (sym.kind == .data)
+                @intCast(sym.data_offset)
+            else
+                @intCast(sym.index);
+            const patched = base + @as(i64, off.addend);
+            switch (off.type_id) {
+                .memory_addr_leb => overwritePaddedU32(
+                    target_bytes,
+                    patch_offset,
+                    @intCast(patched),
+                ),
+                .memory_addr_sleb,
+                .memory_addr_rel_sleb,
+                => overwritePaddedI32(
+                    target_bytes,
+                    patch_offset,
+                    @intCast(patched),
+                ),
+                .memory_addr_i32,
+                .function_offset_i32,
+                .section_offset_i32,
+                => {
+                    const o: usize = @intCast(patch_offset);
+                    std.mem.writeInt(u32, target_bytes[o..][0..4], @intCast(patched), .little);
+                },
+            }
+        },
+    }
+}
+
 /// Resolve all code relocations in place.
 ///
 /// For each relocation entry in `reloc_code`, look up the symbol's resolved
 /// value (function index, global index, or memory address) and patch the
 /// corresponding site in `code_bytes`.
-///
-/// This must be called after all merging and linking is complete, before
-/// converting code_bytes into func_bodies for encoding.
 pub fn resolveCodeRelocations(self: *Self) void {
     for (self.reloc_code.entries.items) |entry| {
-        const sym = self.linking.symbol_table.items[entry.getSymbolIndex()];
-        switch (entry) {
-            .index => |idx| {
-                // The resolved value is the symbol's index (function index, type index, etc.).
-                const value = sym.index;
-                switch (idx.type_id) {
-                    .type_index_leb => {
-                        // type_index_leb relocations are resolved during merge
-                        // (when the type_remap is available). If we get here, it's
-                        // a non-merged module — use the symbol index directly.
-                        overwritePaddedU32(self.code_bytes.items, idx.offset, value);
-                    },
-                    .function_index_leb,
-                    .global_index_leb,
-                    .event_index_leb,
-                    .table_number_leb,
-                    => overwritePaddedU32(self.code_bytes.items, idx.offset, value),
-                    .table_index_sleb,
-                    .table_index_rel_sleb,
-                    => {
-                        const table_idx = self.findTableIndex(value) orelse value;
-                        overwritePaddedI32(
-                            self.code_bytes.items,
-                            idx.offset,
-                            @intCast(table_idx),
-                        );
-                    },
-                    .table_index_i32 => {
-                        const table_idx = self.findTableIndex(value) orelse value;
-                        const off: usize = @intCast(idx.offset);
-                        std.mem.writeInt(u32, self.code_bytes.items[off..][0..4], table_idx, .little);
-                    },
-                    .global_index_i32 => {
-                        const off: usize = @intCast(idx.offset);
-                        std.mem.writeInt(u32, self.code_bytes.items[off..][0..4], value, .little);
-                    },
-                }
-            },
-            .offset => |off| {
-                // For data symbols, the resolved address is the data_offset.
-                // For others, use the symbol's index as the base address.
-                const base: i64 = if (sym.kind == .data)
-                    @intCast(sym.data_offset)
-                else
-                    @intCast(sym.index);
-                const patched = base + @as(i64, off.addend);
-                switch (off.type_id) {
-                    .memory_addr_leb => overwritePaddedU32(
-                        self.code_bytes.items,
-                        off.offset,
-                        @intCast(patched),
-                    ),
-                    .memory_addr_sleb,
-                    .memory_addr_rel_sleb,
-                    => overwritePaddedI32(
-                        self.code_bytes.items,
-                        off.offset,
-                        @intCast(patched),
-                    ),
-                    .memory_addr_i32,
-                    .function_offset_i32,
-                    .section_offset_i32,
-                    => {
-                        const o: usize = @intCast(off.offset);
-                        std.mem.writeInt(u32, self.code_bytes.items[o..][0..4], @intCast(patched), .little);
-                    },
-                }
-            },
-        }
+        self.patchResolvedRelocation(self.code_bytes.items, entry, entry.getOffset());
     }
+}
+
+/// Resolve all data relocations in place.
+pub fn resolveDataRelocations(self: *Self) void {
+    for (self.reloc_data.entries.items) |entry| {
+        const segment_idx = switch (entry) {
+            .index => |idx| idx.data_segment_index,
+            .offset => |off| off.data_segment_index,
+        };
+        std.debug.assert(segment_idx != std.math.maxInt(u32));
+        std.debug.assert(segment_idx < self.data_segments.items.len);
+
+        const segment = &self.data_segments.items[segment_idx];
+        self.patchResolvedRelocation(segment.data, entry, entry.getOffset());
+    }
+}
+
+/// Resolve both code and data relocations in place.
+pub fn resolveRelocations(self: *Self) void {
+    self.resolveCodeRelocations();
+    self.resolveDataRelocations();
 }
 
 /// Transfer function bodies added via setFunctionBody into the code_bytes
@@ -1295,7 +1365,7 @@ pub fn transferAppFunctions(self: *Self) !void {
 
 /// Convert code_bytes + function_offsets into func_bodies for encoding.
 ///
-/// After `resolveCodeRelocations()` has patched all call sites, this method
+/// After `resolveRelocations()` has patched all relocation sites, this method
 /// splits the contiguous code_bytes buffer into individual function bodies
 /// (skipping dummy functions from dead_import_dummy_count) and populates
 /// func_bodies so that `encode()` can emit them.
@@ -1334,7 +1404,8 @@ pub fn materializeFuncBodies(self: *Self) !void {
 // --- Phase 8e: Verification ---
 
 /// Verify that no stale builtin roc_* imports remain in the final module.
-/// After Phase 8 rewrite, only the 6 RocOps callback functions should be imported.
+/// `roc_panic` is also tolerated because current host platforms still import it
+/// behind the `roc_crashed` wrapper, and verification runs before DCE.
 pub fn verifyNoBuiltinImports(self: *const Self) !void {
     const allowed = [_][]const u8{
         "roc_alloc",
@@ -1343,6 +1414,7 @@ pub fn verifyNoBuiltinImports(self: *const Self) !void {
         "roc_dbg",
         "roc_expect_failed",
         "roc_crashed",
+        "roc_panic",
     };
     for (self.imports.items) |imp| {
         var is_allowed = false;
@@ -1365,7 +1437,7 @@ pub fn verifyNoBuiltinImports(self: *const Self) !void {
 /// entirely (so the host page doesn't need to provide dummy JS functions),
 /// and `dead_import_dummy_count` is incremented accordingly.
 ///
-/// This must be called AFTER `resolveCodeRelocations()` has patched all
+/// This must be called AFTER `resolveRelocations()` has patched all
 /// relocation sites but BEFORE `materializeFuncBodies()`.
 ///
 /// `called_fns` is a bitset of function indices that are directly called
@@ -1717,6 +1789,8 @@ pub fn preload(allocator: Allocator, bytes: []const u8, require_relocatable: boo
         module.code_section_fn_count_leb_size = 0;
     }
 
+    try module.normalizeDataRelocations();
+
     // Validate relocatable requirements
     if (require_relocatable) {
         if (module.linking.symbol_table.items.len == 0)
@@ -1729,6 +1803,35 @@ pub fn preload(allocator: Allocator, bytes: []const u8, require_relocatable: boo
 
     module.import_fn_count = @intCast(module.imports.items.len);
     return module;
+}
+
+fn normalizeDataRelocations(self: *Self) ParseError!void {
+    for (self.reloc_data.entries.items) |*entry| {
+        const raw_offset = entry.getOffset();
+        var matched = false;
+
+        for (self.data_segments.items, 0..) |segment, seg_idx| {
+            const seg_start = segment.section_offset;
+            const seg_end = seg_start + @as(u32, @intCast(segment.data.len));
+            if (raw_offset < seg_start or raw_offset >= seg_end) continue;
+
+            const in_segment_offset = raw_offset - seg_start;
+            switch (entry.*) {
+                .index => |*idx| {
+                    idx.offset = in_segment_offset;
+                    idx.data_segment_index = @intCast(seg_idx);
+                },
+                .offset => |*off| {
+                    off.offset = in_segment_offset;
+                    off.data_segment_index = @intCast(seg_idx);
+                },
+            }
+            matched = true;
+            break;
+        }
+
+        if (!matched) return error.InvalidSection;
+    }
 }
 
 /// Check if the byte at cursor matches the expected section ID.
@@ -1979,6 +2082,7 @@ fn parseCodeSection(self: *Self, bytes: []const u8, cursor: *usize) ParseError!v
 fn parseDataSection_(self: *Self, bytes: []const u8, cursor: *usize) ParseError!void {
     const section_size = try beginSection(bytes, cursor, .data_section) orelse return;
     const section_end = cursor.* + section_size;
+    const section_body_start = cursor.*;
     const count = try readU32(bytes, cursor);
 
     for (0..count) |_| {
@@ -1998,6 +2102,7 @@ fn parseDataSection_(self: *Self, bytes: []const u8, cursor: *usize) ParseError!
             try self.data_segments.append(self.allocator, .{
                 .offset = 0,
                 .data = data_copy,
+                .section_offset = @intCast(data_start - section_body_start),
             });
         } else {
             // Active segment — parse init expression: i32.const <offset> end
@@ -2013,6 +2118,7 @@ fn parseDataSection_(self: *Self, bytes: []const u8, cursor: *usize) ParseError!
             try self.data_segments.append(self.allocator, .{
                 .offset = offset,
                 .data = data_copy,
+                .section_offset = @intCast(data_start - section_body_start),
             });
             if (offset + data_len > self.data_offset) {
                 self.data_offset = offset + data_len;
@@ -3777,6 +3883,41 @@ test "function table — hosted functions added to table with correct indices" {
     try std.testing.expectEqual(@as(u32, 4), module.table_func_indices.items[4]); // hosted_fn_2
 }
 
+test "findFunctionIdxBySuffix — ignores imported symbols and finds defined host callback" {
+    const allocator = std.testing.allocator;
+    var module = Self.init(allocator);
+    defer module.deinit();
+
+    const type_idx = try module.addFuncType(&.{ .i32, .i32 }, &.{});
+    _ = try module.addImport("env", "roc_dbg", type_idx);
+    module.import_fn_count = 1;
+
+    const callback_idx = try module.addFunction(type_idx);
+    try module.linking.symbol_table.appendSlice(allocator, &.{
+        .{ .kind = .function, .flags = WasmLinking.SymFlag.UNDEFINED, .name = null, .index = 0 },
+        .{ .kind = .function, .flags = 0, .name = "host.roc_dbg", .index = callback_idx },
+    });
+
+    try std.testing.expectEqual(callback_idx, module.findFunctionIdxBySuffix("roc_dbg").?);
+}
+
+test "ensureTableElement — reuses existing table entry" {
+    const allocator = std.testing.allocator;
+    var module = Self.init(allocator);
+    defer module.deinit();
+
+    const type_idx = try module.addFuncType(&.{ .i32, .i32 }, &.{});
+    module.enableTable();
+
+    const func_idx = try module.addFunction(type_idx);
+    const first = try module.ensureTableElement(func_idx);
+    const second = try module.ensureTableElement(func_idx);
+
+    try std.testing.expectEqual(@as(u32, 0), first);
+    try std.testing.expectEqual(first, second);
+    try std.testing.expectEqual(@as(usize, 1), module.table_func_indices.items.len);
+}
+
 // --- mergeModule tests ---
 
 /// Build a "host" module for merge testing.
@@ -3923,6 +4064,36 @@ fn buildMergeBuiltinsModule(allocator: Allocator) !Self {
     return module;
 }
 
+fn buildMergeDataRelocModule(allocator: Allocator) !Self {
+    var module = Self.init(allocator);
+    errdefer module.deinit();
+    module.data_offset = 0;
+
+    // Segment 0: relocation patch site (4-byte placeholder)
+    _ = try module.addDataSegment(&[_]u8{ 0, 0, 0, 0 }, 4);
+    // Segment 1: relocation target
+    _ = try module.addDataSegment("DATA", 4);
+
+    try module.linking.symbol_table.append(allocator, .{
+        .kind = .data,
+        .flags = 0,
+        .name = ".rodata.target",
+        .index = 1,
+        .data_offset = 0, // offset within segment 1 before merge
+        .data_size = 4,
+    });
+
+    try module.reloc_data.entries.append(allocator, .{ .offset = .{
+        .type_id = .memory_addr_i32,
+        .offset = 0,
+        .symbol_index = 0,
+        .addend = 0,
+        .data_segment_index = 0,
+    } });
+
+    return module;
+}
+
 test "mergeModule — type deduplication: identical signatures share index" {
     const allocator = std.testing.allocator;
     var host = try buildMergeHostModule(allocator);
@@ -4057,6 +4228,30 @@ test "mergeModule — data segment merged with adjusted offset" {
 
     // Offset should be >= host's data_offset (1024 default)
     try std.testing.expect(new_ds.offset >= 1024);
+}
+
+test "mergeModule + resolveDataRelocations — patches merged data segment bytes" {
+    const allocator = std.testing.allocator;
+    var host = try buildMergeHostModule(allocator);
+    defer host.deinit();
+    var source = try buildMergeDataRelocModule(allocator);
+    defer source.deinit();
+
+    _ = try host.addDataSegment("HOST", 4);
+
+    var result = try host.mergeModule(&source);
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(usize, 3), host.data_segments.items.len);
+    try std.testing.expectEqual(@as(usize, 1), host.reloc_data.entries.items.len);
+
+    host.resolveDataRelocations();
+
+    const patch_segment = host.data_segments.items[1];
+    const target_segment = host.data_segments.items[2];
+    const patched = std.mem.readInt(u32, patch_segment.data[0..4], .little);
+
+    try std.testing.expectEqual(target_segment.offset, patched);
 }
 
 test "mergeModule — element section entries remapped and appended" {
@@ -4319,6 +4514,17 @@ test "verifyNoBuiltinImports — allows non-roc imports" {
     _ = try module.addFuncType(&.{ .i32, .i32 }, &.{});
     _ = try module.addImport("env", "roc_alloc", 0);
     _ = try module.addImport("env", "custom_platform_fn", 0); // non-roc import is fine
+
+    try module.verifyNoBuiltinImports();
+}
+
+test "verifyNoBuiltinImports — allows roc_panic platform import" {
+    const allocator = std.testing.allocator;
+    var module = Self.init(allocator);
+    defer module.deinit();
+
+    _ = try module.addFuncType(&.{ .i32, .i32 }, &.{});
+    _ = try module.addImport("env", "roc_panic", 0);
 
     try module.verifyNoBuiltinImports();
 }
@@ -4959,7 +5165,7 @@ test "preload + merge + encode roundtrip with real builtins" {
     _ = try BuiltinSymbols.populate(&app_module);
 
     // Resolve relocations and materialize function bodies
-    app_module.resolveCodeRelocations();
+    app_module.resolveRelocations();
     try app_module.materializeFuncBodies();
 
     // Enable memory + stack pointer + table (as generateModule does)

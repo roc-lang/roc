@@ -17,6 +17,7 @@ const LirExprId = LIR.LirExprId;
 const LirPattern = LIR.LirPattern;
 const Symbol = LIR.Symbol;
 const WasmModule = @import("WasmModule.zig");
+const WasmLinking = @import("WasmLinking.zig");
 const WasmLayout = @import("WasmLayout.zig");
 const Storage = @import("Storage.zig");
 const Op = WasmModule.Op;
@@ -184,9 +185,43 @@ fn registerRocOpsImports(self: *Self) !void {
     self.roc_crashed_table_idx = try self.module.addTableElement(roc_crashed_idx);
 }
 
-/// Find existing RocOps callback imports in the host module (after builtins merge)
-/// and register them in the funcref table for call_indirect.
-/// Used with `initWithHostModule` when the module already has roc_* imports.
+/// Reuse RocOps imports that already exist in the current module and ensure
+/// they have table entries for call_indirect.
+fn bindExistingRocOpsImports(self: *Self) !void {
+    self.roc_ops_type_idx = try self.module.addFuncType(
+        &.{ .i32, .i32 },
+        &.{},
+    );
+    self.roc_call_type_idx = try self.module.addFuncType(
+        &.{ .i32, .i32, .i32 },
+        &.{},
+    );
+
+    self.module.enableTable();
+
+    const names = [_]struct { name: []const u8, field: *u32 }{
+        .{ .name = "roc_alloc", .field = &self.roc_alloc_table_idx },
+        .{ .name = "roc_dealloc", .field = &self.roc_dealloc_table_idx },
+        .{ .name = "roc_realloc", .field = &self.roc_realloc_table_idx },
+        .{ .name = "roc_dbg", .field = &self.roc_dbg_table_idx },
+        .{ .name = "roc_expect_failed", .field = &self.roc_expect_failed_table_idx },
+        .{ .name = "roc_crashed", .field = &self.roc_crashed_table_idx },
+    };
+
+    for (names) |entry| {
+        const func_idx = self.module.findImportFuncIdx("env", entry.name) orelse
+            return error.MissingRocOpsCallback;
+        entry.field.* = try self.module.ensureTableElement(func_idx);
+    }
+}
+
+/// Find the host module's canonical RocOps callback functions and register
+/// them in the funcref table for call_indirect.
+fn resolveExistingRocOpsCallback(self: *Self, name: []const u8) !u32 {
+    if (self.module.findFunctionIdxBySuffix(name)) |func_idx| return func_idx;
+    return error.MissingRocOpsCallback;
+}
+
 pub fn registerRocOpsFromModule(self: *Self) !void {
     // Register type indices for call_indirect type checking
     self.roc_ops_type_idx = try self.module.addFuncType(
@@ -200,7 +235,6 @@ pub fn registerRocOpsFromModule(self: *Self) !void {
 
     self.module.enableTable();
 
-    // For each RocOps callback, find the existing import or add a new one.
     const names = [_]struct { name: []const u8, field: *u32 }{
         .{ .name = "roc_alloc", .field = &self.roc_alloc_table_idx },
         .{ .name = "roc_dealloc", .field = &self.roc_dealloc_table_idx },
@@ -211,11 +245,12 @@ pub fn registerRocOpsFromModule(self: *Self) !void {
     };
 
     for (names) |entry| {
-        const func_idx = self.module.findImportFuncIdx("env", entry.name) orelse
-            try self.module.addImport("env", entry.name, self.roc_ops_type_idx);
-        entry.field.* = try self.module.addTableElement(func_idx);
+        const func_idx = try self.resolveExistingRocOpsCallback(entry.name);
+        entry.field.* = try self.module.ensureTableElement(func_idx);
     }
 }
+
+pub const GenerateError = Allocator.Error || error{MissingRocOpsCallback};
 
 /// Result of generating a wasm module
 pub const GenerateResult = struct {
@@ -234,15 +269,15 @@ pub const GenerateResult = struct {
 /// - `main`: Eval wrapper `(i32 env_ptr) → result_vt`
 ///   Backward-compatible shim for the eval/REPL pipeline. Builds a RocOps struct, calls
 ///   the RocCall function, and returns the result on the wasm stack.
-pub fn generateModule(self: *Self, expr_id: LirExprId, result_layout: layout.Idx, entrypoint_name: []const u8) Allocator.Error!GenerateResult {
+pub fn generateModule(self: *Self, expr_id: LirExprId, result_layout: layout.Idx, entrypoint_name: []const u8) GenerateError!GenerateResult {
     // Register RocOps callback imports (roc_alloc, etc.) — these stay as imports
     // because they come from the host platform, not from builtins.
-    // If the module already has imports (e.g. from merged builtins), find existing
-    // RocOps imports instead of adding new ones.
+    // Eval prepares its module with canonical RocOps imports up front; reuse them
+    // rather than mutating the import section after builtins have been merged.
     if (self.module.importCount() > 0) {
-        self.registerRocOpsFromModule() catch return error.OutOfMemory;
+        try self.bindExistingRocOpsImports();
     } else {
-        self.registerRocOpsImports() catch return error.OutOfMemory;
+        try self.registerRocOpsImports();
     }
 
     // Compile any procedures (recursive functions) before the main expression
@@ -12752,6 +12787,78 @@ fn generateLLListSplitFirst(self: *Self, args: anytype, ret_layout: layout.Idx) 
 
     // Push result pointer
     try self.emitLocalGet(result_ptr);
+}
+
+test "registerRocOpsFromModule — reuses canonical host callbacks and existing table entries" {
+    const allocator = std.testing.allocator;
+
+    var callback_indices = [_]u32{0} ** 6;
+    const module = blk: {
+        var m = WasmModule.init(allocator);
+        errdefer m.deinit();
+
+        const roc_ops_type = try m.addFuncType(&.{ .i32, .i32 }, &.{});
+
+        _ = try m.addImport("env", "roc__main", roc_ops_type);
+        _ = try m.addImport("env", "roc_dbg", roc_ops_type);
+        _ = try m.addImport("env", "roc_expect_failed", roc_ops_type);
+        _ = try m.addImport("env", "roc_panic", roc_ops_type);
+        m.import_fn_count = @intCast(m.imports.items.len);
+
+        try m.linking.symbol_table.appendSlice(allocator, &.{
+            .{ .kind = .function, .flags = WasmLinking.SymFlag.UNDEFINED, .name = null, .index = 0 },
+            .{ .kind = .function, .flags = WasmLinking.SymFlag.UNDEFINED, .name = null, .index = 1 },
+            .{ .kind = .function, .flags = WasmLinking.SymFlag.UNDEFINED, .name = null, .index = 2 },
+            .{ .kind = .function, .flags = WasmLinking.SymFlag.UNDEFINED, .name = null, .index = 3 },
+        });
+
+        m.enableTable();
+
+        const callback_names = [_][]const u8{
+            "host.roc_alloc",
+            "host.roc_dealloc",
+            "host.roc_realloc",
+            "host.roc_dbg",
+            "host.roc_expect_failed",
+            "host.roc_crashed",
+        };
+
+        for (callback_names, 0..) |name, i| {
+            const func_idx = try m.addFunction(roc_ops_type);
+            callback_indices[i] = func_idx;
+            try m.linking.symbol_table.append(allocator, .{
+                .kind = .function,
+                .flags = 0,
+                .name = name,
+                .index = func_idx,
+            });
+            _ = try m.addTableElement(func_idx);
+        }
+
+        break :blk m;
+    };
+
+    var codegen = Self.initWithHostModule(allocator, undefined, undefined, module, undefined);
+    defer codegen.deinit();
+
+    try std.testing.expectEqual(@as(usize, 4), codegen.module.imports.items.len);
+    try std.testing.expectEqual(@as(usize, 6), codegen.module.table_func_indices.items.len);
+
+    try codegen.registerRocOpsFromModule();
+
+    try std.testing.expectEqual(@as(usize, 4), codegen.module.imports.items.len);
+    try std.testing.expectEqual(@as(usize, 6), codegen.module.table_func_indices.items.len);
+
+    try std.testing.expectEqual(@as(u32, 0), codegen.roc_alloc_table_idx);
+    try std.testing.expectEqual(@as(u32, 1), codegen.roc_dealloc_table_idx);
+    try std.testing.expectEqual(@as(u32, 2), codegen.roc_realloc_table_idx);
+    try std.testing.expectEqual(@as(u32, 3), codegen.roc_dbg_table_idx);
+    try std.testing.expectEqual(@as(u32, 4), codegen.roc_expect_failed_table_idx);
+    try std.testing.expectEqual(@as(u32, 5), codegen.roc_crashed_table_idx);
+
+    try std.testing.expectEqual(callback_indices[3], codegen.module.table_func_indices.items[3]);
+    try std.testing.expectEqual(callback_indices[4], codegen.module.table_func_indices.items[4]);
+    try std.testing.expectEqual(callback_indices[5], codegen.module.table_func_indices.items[5]);
 }
 
 /// Generate list_split_last: split list into rest and last element

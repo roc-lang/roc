@@ -4504,9 +4504,9 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         var codegen = WasmCodeGen.initWithHostModule(ctx.gpa, &lir_store, &layout_store, host_module, builtin_syms);
         defer codegen.deinit();
 
-        // Step 7: Register RocOps callbacks from module imports
+        // Step 7: Register RocOps callbacks from the host module
         codegen.registerRocOpsFromModule() catch |err| {
-            std.log.err("Failed to register RocOps imports: {}", .{err});
+            std.log.err("Failed to register RocOps callbacks: {}", .{err});
             return error.NativeCompilationFailed;
         };
 
@@ -4550,8 +4550,8 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
             return error.NativeCompilationFailed;
         };
 
-        // Step 12: Resolve code relocations (patches builtin call sites)
-        codegen.module.resolveCodeRelocations();
+        // Step 12: Resolve relocations (patches builtin call sites and data references)
+        codegen.module.resolveRelocations();
 
         // Step 13: Finalize memory and table
         const wasm_stack_bytes: u32 = 1024 * 1024; // 1MB stack

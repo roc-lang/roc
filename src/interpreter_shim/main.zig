@@ -73,7 +73,7 @@ var tracy_allocator: tracy.TracyAllocator(null) = undefined;
 var wrapped_allocator: std.mem.Allocator = undefined;
 var allocator_initialized: bool = false;
 
-// Wasm32 allocator - uses roc_alloc from host
+// Wasm32 allocator - uses the host module's raw allocation exports
 const wasm_allocator = if (is_wasm32) std.mem.Allocator{
     .ptr = undefined,
     .vtable = &.{
@@ -86,9 +86,9 @@ const wasm_allocator = if (is_wasm32) std.mem.Allocator{
 
 // Wasm32 allocator vtable implementation
 fn wasmAlloc(_: *anyopaque, len: usize, alignment: std.mem.Alignment, _: usize) ?[*]u8 {
-    // Pass the actual requested alignment to roc_alloc
+    // Pass the actual requested alignment to roc_alloc_raw
     const align_bytes: u32 = @intCast(alignment.toByteUnits());
-    const ptr = roc_alloc(len, align_bytes);
+    const ptr = roc_alloc_raw(len, align_bytes);
     return if (ptr) |p| @ptrCast(p) else null;
 }
 
@@ -102,13 +102,13 @@ fn wasmRemap(_: *anyopaque, _: []u8, _: std.mem.Alignment, _: usize, _: usize) ?
 
 fn wasmFree(_: *anyopaque, buf: []u8, alignment: std.mem.Alignment, _: usize) void {
     const align_bytes: u32 = @intCast(alignment.toByteUnits());
-    roc_dealloc(@ptrCast(buf.ptr), align_bytes);
+    roc_dealloc_raw(@ptrCast(buf.ptr), align_bytes);
 }
 
 // Host-provided allocation functions (for wasm32)
-extern fn roc_alloc(size: usize, alignment: u32) callconv(.c) ?*anyopaque;
-extern fn roc_realloc(ptr: *anyopaque, new_size: usize, old_size: usize, alignment: u32) callconv(.c) ?*anyopaque;
-extern fn roc_dealloc(ptr: *anyopaque, alignment: u32) callconv(.c) void;
+extern fn roc_alloc_raw(size: usize, alignment: u32) callconv(.c) ?*anyopaque;
+extern fn roc_realloc_raw(ptr: *anyopaque, new_size: usize, old_size: usize, alignment: u32) callconv(.c) ?*anyopaque;
+extern fn roc_dealloc_raw(ptr: *anyopaque, alignment: u32) callconv(.c) void;
 
 // Static empty import mapping for shim (no type name resolution needed)
 // Lazy-initialized to use the properly wrapped allocator
