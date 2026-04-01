@@ -244,10 +244,10 @@ pub const Expr = struct {
     monotype: ContextMono.ResolvedMonotype,
     child_exprs: ExprIdSpan = .empty(),
     child_stmts: StmtIdSpan = .empty(),
-    callable_semantics: ExprCallableSemantics = .ordinary,
-    call_semantics: ExprCallSemantics = .not_call,
-    dispatch_semantics: ExprDispatchSemantics = .not_dispatch,
-    lookup_semantics: ExprLookupSemantics = .not_lookup,
+    callable_semantics: ExprCallableSemantics,
+    call_semantics: ExprCallSemantics,
+    dispatch_semantics: ExprDispatchSemantics,
+    lookup_semantics: ExprLookupSemantics,
 };
 
 pub const Stmt = struct {

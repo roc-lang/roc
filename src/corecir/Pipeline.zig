@@ -5012,7 +5012,20 @@ pub const Pass = struct {
             const bindings_before = bindings.count();
             const mutation_revision_before = self.mutation_revision;
 
-            if (!try self.trySeedTemplateBodyBindingsFromCurrentBindings(result, template, bindings)) return false;
+            if (try self.resolveTemplateTypeVarIfFullyBoundWithBindings(
+                result,
+                template.module_idx,
+                &module_env.types,
+                template.type_root,
+                bindings,
+            )) |exact_fn_monotype| {
+                if (!try self.materializeTemplateBoundaryBindingsFromExactFnMonotype(
+                    result,
+                    template,
+                    exact_fn_monotype,
+                    bindings,
+                )) return false;
+            }
 
             switch (expr) {
                 .e_lambda => |lambda_expr| try self.scanCirValueExprWithoutDirectCallResolution(result, thread, template.module_idx, lambda_expr.body),
@@ -5200,7 +5213,12 @@ pub const Pass = struct {
         defer ordered_entries.deinit(self.allocator);
 
         if (!exact_desired_fn_monotype.isNone()) {
-            if (!try self.trySeedTemplateBindingsFromFnMonotype(result, template, exact_desired_fn_monotype, &callee_bindings)) return .none;
+            if (!try self.materializeTemplateBoundaryBindingsFromExactFnMonotype(
+                result,
+                template,
+                exact_desired_fn_monotype,
+                &callee_bindings,
+            )) return .none;
         }
 
         if (resolveFuncTypeInStore(template_types, template.type_root)) |resolved_func| {
@@ -5502,29 +5520,20 @@ pub const Pass = struct {
         defining_source_context: SourceContext,
     ) Allocator.Error!bool {
         _ = template_id;
-
-        var iteration_expr_monotypes: std.AutoHashMapUnmanaged(ContextExprKey, ResolvedMonotype) = .empty;
-        defer iteration_expr_monotypes.deinit(self.allocator);
-        var iteration_pattern_monotypes: std.AutoHashMapUnmanaged(ContextPatternKey, ResolvedMonotype) = .empty;
-        defer iteration_pattern_monotypes.deinit(self.allocator);
-
-        var signature_bindings = std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype).init(self.allocator);
-        defer signature_bindings.deinit();
-        const thread = SemanticThread.completionThread(defining_source_context)
-            .withBindings(&signature_bindings)
-            .withIterationMonotypes(&iteration_expr_monotypes, &iteration_pattern_monotypes);
-
-        if (!try self.trySeedCallableBodyBindingsFromSignature(
+        const fn_mono = switch (result.context_mono.monotype_store.getMonotype(fn_monotype)) {
+            .func => |func| func,
+            else => return true,
+        };
+        const boundary = self.callableBoundaryInfo(template.module_idx, template.cir_expr) orelse return true;
+        if (boundary.arg_patterns.len != fn_mono.args.len) return false;
+        try self.recordCallableBoundaryContextMonotypes(
             result,
-            thread,
+            defining_source_context,
             template.module_idx,
             template.cir_expr,
-            defining_source_context,
             fn_monotype,
             fn_monotype_module_idx,
-            &signature_bindings,
-        )) return false;
-
+        );
         return true;
     }
 
@@ -6912,7 +6921,12 @@ pub const Pass = struct {
             module_idx,
         );
         if (!exact_desired_fn_monotype.isNone()) {
-            if (!try self.trySeedTemplateBindingsFromFnMonotype(result, template, exact_desired_fn_monotype, &callee_bindings)) return null;
+            if (!try self.materializeTemplateBoundaryBindingsFromExactFnMonotype(
+                result,
+                template,
+                exact_desired_fn_monotype,
+                &callee_bindings,
+            )) return null;
         }
 
         if (resolveFuncTypeInStore(template_types, template.type_root)) |resolved_func| {
@@ -6971,19 +6985,8 @@ pub const Pass = struct {
             )) return null;
         }
 
-        if (!try self.trySeedTemplateBoundaryBindingsFromActuals(
-            result,
-            thread,
-            module_idx,
-            template,
-            actual_args.items,
-            try self.resolveExprMonotypeResolved(result, thread, module_idx, expr_idx),
-            &callee_bindings,
-        )) return null;
-
         if (!try self.tryCompleteTemplateBindingsFromBody(
             result,
-            thread,
             template,
             &callee_bindings,
             defining_source_context,
@@ -7747,7 +7750,7 @@ pub const Pass = struct {
 
         const receiver_monotype = try self.resolveExprMonotype(result, thread, module_idx, dot_expr.receiver);
         if (receiver_monotype.isNone()) {
-            const eq_constraint = try self.canonicalDispatchConstraintForExpr(result, module_idx, expr_idx, module_env.idents.is_eq);
+            const eq_constraint = try self.exactStaticDispatchConstraintForExpr(result, module_idx, expr_idx, module_env.idents.is_eq);
             const constraint_resolved = if (eq_constraint) |constraint|
                 !constraint.resolved_target.isNone() and self.resolvedTargetIsUsable(module_env, module_env.idents.is_eq, constraint.resolved_target)
             else
@@ -7843,7 +7846,7 @@ pub const Pass = struct {
         const module_env = self.all_module_envs[module_idx];
         const lhs_monotype = try self.resolveExprMonotype(result, thread, module_idx, binop_expr.lhs);
         if (lhs_monotype.isNone()) {
-            const eq_constraint = try self.canonicalDispatchConstraintForExpr(result, module_idx, expr_idx, module_env.idents.is_eq);
+            const eq_constraint = try self.exactStaticDispatchConstraintForExpr(result, module_idx, expr_idx, module_env.idents.is_eq);
             const constraint_resolved = if (eq_constraint) |constraint|
                 !constraint.resolved_target.isNone() and self.resolvedTargetIsUsable(module_env, module_env.idents.is_eq, constraint.resolved_target)
             else
@@ -7911,7 +7914,7 @@ pub const Pass = struct {
         const receiver_nominal = resolveNominalTypeInStore(&module_env.types, receiver_type_var) orelse return null;
         const method_info = try self.lookupAssociatedMethodTemplate(result, module_idx, receiver_nominal, method_ident) orelse return null;
         const receiver_monotype = try self.resolveTypeVarMonotypeResolved(result, module_idx, receiver_type_var);
-        _ = try self.canonicalAssociatedMethodDispatchConstraint(
+        _ = try self.exactAssociatedMethodDispatchConstraint(
             result,
             module_idx,
             expr_idx,
@@ -7934,7 +7937,7 @@ pub const Pass = struct {
         const receiver_nominal = resolveNominalTypeInStore(&module_env.types, receiver_type_var) orelse return null;
         const method_info = try self.lookupAssociatedMethodTemplate(result, module_idx, receiver_nominal, method_ident) orelse return null;
         const receiver_monotype = try self.resolveTypeVarMonotypeResolved(result, module_idx, receiver_type_var);
-        const constraint = try self.canonicalAssociatedMethodDispatchConstraint(
+        const constraint = try self.exactAssociatedMethodDispatchConstraint(
             result,
             module_idx,
             expr_idx,
@@ -7966,7 +7969,7 @@ pub const Pass = struct {
             receiver_monotype,
             method_ident,
         ) orelse return null;
-        _ = try self.canonicalAssociatedMethodDispatchConstraint(
+        _ = try self.exactAssociatedMethodDispatchConstraint(
             result,
             module_idx,
             expr_idx,
@@ -7991,7 +7994,7 @@ pub const Pass = struct {
             receiver_monotype,
             method_ident,
         ) orelse return null;
-        const constraint = try self.canonicalAssociatedMethodDispatchConstraint(
+        const constraint = try self.exactAssociatedMethodDispatchConstraint(
             result,
             module_idx,
             expr_idx,
@@ -8021,7 +8024,7 @@ pub const Pass = struct {
         );
     }
 
-    fn canonicalDispatchConstraintForExpr(
+    fn exactStaticDispatchConstraintForExpr(
         self: *Pass,
         result: *Result,
         module_idx: u32,
@@ -8057,93 +8060,73 @@ pub const Pass = struct {
                 if (fn_monotype.isNone()) continue;
             }
 
-            matched = if (matched) |existing|
-                try self.mergeEquivalentDispatchConstraintForExpr(
-                    result,
-                    module_idx,
-                    expr_idx,
-                    method_name,
-                    existing,
-                    constraint,
-                )
-            else
-                constraint;
+            if (matched) |existing| {
+                if (staticDispatchConstraintsEqual(existing, constraint) or
+                    try self.dispatchConstraintsEquivalent(result, module_idx, existing, constraint))
+                {
+                    matched = if (!existing.resolved_target.isNone())
+                        existing
+                    else
+                        constraint;
+                    continue;
+                }
+
+                const existing_mono = try self.resolveTypeVarMonotypeResolved(result, module_idx, existing.fn_var);
+                const next_mono = try self.resolveTypeVarMonotypeResolved(result, module_idx, constraint.fn_var);
+
+                if (!existing_mono.isNone() and !next_mono.isNone() and
+                    try self.monotypesStructurallyEqualAcrossModules(
+                        result,
+                        existing_mono.idx,
+                        existing_mono.module_idx,
+                        next_mono.idx,
+                        next_mono.module_idx,
+                    ))
+                {
+                    const existing_target_usable = !existing.resolved_target.isNone() and
+                        self.resolvedTargetIsUsable(module_env, method_name, existing.resolved_target);
+                    const next_target_usable = !constraint.resolved_target.isNone() and
+                        self.resolvedTargetIsUsable(module_env, method_name, constraint.resolved_target);
+
+                    if (existing_target_usable and next_target_usable and
+                        !existing.resolved_target.origin_module.eql(constraint.resolved_target.origin_module))
+                    {
+                        std.debug.panic(
+                            "Pipeline invariant violated: dispatch expr={d} method='{s}' had conflicting resolved targets for the same function monotype",
+                            .{ @intFromEnum(expr_idx), module_env.getIdent(method_name) },
+                        );
+                    }
+
+                    matched = if (existing_target_usable) existing else if (next_target_usable) constraint else existing;
+                    continue;
+                }
+
+                std.debug.panic(
+                    "Pipeline invariant violated: dispatch expr={d} method='{s}' had multiple non-equivalent surviving static dispatch constraints (existing_var={d} existing_mono={d}@{d} existing_shape={any} existing_target={any} next_var={d} next_mono={d}@{d} next_shape={any} next_target={any})",
+                    .{
+                        @intFromEnum(expr_idx),
+                        module_env.getIdent(method_name),
+                        @intFromEnum(existing.fn_var),
+                        @intFromEnum(existing_mono.idx),
+                        existing_mono.module_idx,
+                        result.context_mono.monotype_store.getMonotype(existing_mono.idx),
+                        existing.resolved_target,
+                        @intFromEnum(constraint.fn_var),
+                        @intFromEnum(next_mono.idx),
+                        next_mono.module_idx,
+                        result.context_mono.monotype_store.getMonotype(next_mono.idx),
+                        constraint.resolved_target,
+                    },
+                );
+            } else {
+                matched = constraint;
+            }
         }
 
         return matched;
     }
 
-    fn mergeEquivalentDispatchConstraintForExpr(
-        self: *Pass,
-        result: *Result,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-        method_name: Ident.Idx,
-        existing: types.StaticDispatchConstraint,
-        next_constraint: types.StaticDispatchConstraint,
-    ) Allocator.Error!types.StaticDispatchConstraint {
-        if (staticDispatchConstraintsEqual(existing, next_constraint) or
-            try self.dispatchConstraintsEquivalent(result, module_idx, existing, next_constraint))
-        {
-            return if (!existing.resolved_target.isNone())
-                existing
-            else
-                next_constraint;
-        }
-
-        const existing_mono = try self.resolveTypeVarMonotypeResolved(result, module_idx, existing.fn_var);
-        const next_mono = try self.resolveTypeVarMonotypeResolved(result, module_idx, next_constraint.fn_var);
-
-        if (!existing_mono.isNone() and !next_mono.isNone() and
-            try self.monotypesStructurallyEqualAcrossModules(
-                result,
-                existing_mono.idx,
-                existing_mono.module_idx,
-                next_mono.idx,
-                next_mono.module_idx,
-            ))
-        {
-            const module_env = self.all_module_envs[module_idx];
-            const existing_target_usable = !existing.resolved_target.isNone() and
-                self.resolvedTargetIsUsable(module_env, method_name, existing.resolved_target);
-            const next_target_usable = !next_constraint.resolved_target.isNone() and
-                self.resolvedTargetIsUsable(module_env, method_name, next_constraint.resolved_target);
-
-            if (existing_target_usable and next_target_usable and
-                !existing.resolved_target.origin_module.eql(next_constraint.resolved_target.origin_module))
-            {
-                std.debug.panic(
-                    "Pipeline invariant violated: dispatch expr={d} method='{s}' had conflicting resolved targets for the same function monotype",
-                    .{ @intFromEnum(expr_idx), module_env.getIdent(method_name) },
-                );
-            }
-
-            if (existing_target_usable) return existing;
-            if (next_target_usable) return next_constraint;
-            return existing;
-        }
-
-        const module_env = self.all_module_envs[module_idx];
-        std.debug.panic(
-            "Pipeline invariant violated: dispatch expr={d} method='{s}' had multiple non-equivalent surviving static dispatch constraints (existing_var={d} existing_mono={d}@{d} existing_shape={any} existing_target={any} next_var={d} next_mono={d}@{d} next_shape={any} next_target={any})",
-            .{
-                @intFromEnum(expr_idx),
-                module_env.getIdent(method_name),
-                @intFromEnum(existing.fn_var),
-                @intFromEnum(existing_mono.idx),
-                existing_mono.module_idx,
-                result.context_mono.monotype_store.getMonotype(existing_mono.idx),
-                existing.resolved_target,
-                @intFromEnum(next_constraint.fn_var),
-                @intFromEnum(next_mono.idx),
-                next_mono.module_idx,
-                result.context_mono.monotype_store.getMonotype(next_mono.idx),
-                next_constraint.resolved_target,
-            },
-        );
-    }
-
-    fn canonicalAssociatedMethodDispatchConstraint(
+    fn exactAssociatedMethodDispatchConstraint(
         self: *Pass,
         result: *Result,
         module_idx: u32,
@@ -8185,60 +8168,36 @@ pub const Pass = struct {
                 )) continue;
             }
 
-            matched = if (matched) |existing|
-                try self.mergeEquivalentAssociatedMethodDispatchConstraint(
-                    result,
-                    module_idx,
-                    expr_idx,
-                    method_name,
-                    existing,
-                    constraint,
-                )
-            else
-                constraint;
-        }
+            if (matched) |existing| {
+                if (staticDispatchConstraintsEqual(existing, constraint) or
+                    try self.dispatchConstraintsEquivalent(result, module_idx, existing, constraint))
+                {
+                    continue;
+                }
 
-        return matched;
-    }
+                const existing_exact = try self.resolveTypeVarMonotypeResolved(result, module_idx, existing.fn_var);
+                const next_exact = try self.resolveTypeVarMonotypeResolved(result, module_idx, constraint.fn_var);
 
-    fn mergeEquivalentAssociatedMethodDispatchConstraint(
-        self: *Pass,
-        result: *Result,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-        method_name: Ident.Idx,
-        existing: types.StaticDispatchConstraint,
-        next_constraint: types.StaticDispatchConstraint,
-    ) Allocator.Error!types.StaticDispatchConstraint {
-        if (staticDispatchConstraintsEqual(existing, next_constraint) or
-            try self.dispatchConstraintsEquivalent(result, module_idx, existing, next_constraint))
-        {
-            return existing;
-        }
-
-        const existing_exact = try self.resolveTypeVarMonotypeResolved(result, module_idx, existing.fn_var);
-        const next_exact = try self.resolveTypeVarMonotypeResolved(result, module_idx, next_constraint.fn_var);
-
-        if (!existing_exact.isNone() and !next_exact.isNone()) {
-            if (!try self.monotypesStructurallyEqualAcrossModules(
-                result,
-                existing_exact.idx,
-                existing_exact.module_idx,
-                next_exact.idx,
-                next_exact.module_idx,
-            )) {
-                const module_env = self.all_module_envs[module_idx];
-                std.debug.panic(
-                    "Pipeline invariant violated: associated dispatch expr={d} method='{s}' had conflicting exact function monotypes",
-                    .{ @intFromEnum(expr_idx), module_env.getIdent(method_name) },
-                );
+                if (!existing_exact.isNone() and !next_exact.isNone()) {
+                    if (!try self.monotypesStructurallyEqualAcrossModules(
+                        result,
+                        existing_exact.idx,
+                        existing_exact.module_idx,
+                        next_exact.idx,
+                        next_exact.module_idx,
+                    )) {
+                        std.debug.panic(
+                            "Pipeline invariant violated: associated dispatch expr={d} method='{s}' had conflicting exact function monotypes",
+                            .{ @intFromEnum(expr_idx), module_env.getIdent(method_name) },
+                        );
+                    }
+                }
+            } else {
+                matched = constraint;
             }
         }
 
-        // After `canonicalAssociatedMethodDispatchConstraint` filtering, all
-        // surviving constraints refer to this same associated method target.
-        // Differences in remaining checker bookkeeping are not semantic.
-        return existing;
+        return matched;
     }
 
     fn staticDispatchConstraintsEqual(
@@ -8300,7 +8259,7 @@ pub const Pass = struct {
         method_name: Ident.Idx,
     ) Allocator.Error!ResolvedDispatchTarget {
         const module_env = self.all_module_envs[module_idx];
-        const constraint = try self.canonicalDispatchConstraintForExpr(result, module_idx, expr_idx, method_name) orelse {
+        const constraint = try self.exactStaticDispatchConstraintForExpr(result, module_idx, expr_idx, method_name) orelse {
             if (std.debug.runtime_safety) {
                 std.debug.panic(
                     "Pipeline: no static dispatch constraint for expr={d} method='{s}'",
@@ -11351,101 +11310,32 @@ pub const Pass = struct {
         }
     }
 
-    fn seedCallableBodyBindingsFromSignature(
+    fn materializeTemplateBoundaryBindingsFromExactFnMonotype(
         self: *Pass,
         result: *Result,
-        module_idx: u32,
-        callable_expr_idx: CIR.Expr.Idx,
-        source_context: SourceContext,
-        fn_monotype: Monotype.Idx,
-        fn_monotype_module_idx: u32,
-        bindings: *std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
-    ) Allocator.Error!void {
-        const ok = try self.seedCallableBodyBindingsFromSignatureMode(
-            result,
-            module_idx,
-            callable_expr_idx,
-            source_context,
-            fn_monotype,
-            fn_monotype_module_idx,
-            bindings,
-            false,
-        );
-        if (!ok) unreachable;
-    }
-
-    fn trySeedCallableBodyBindingsFromSignature(
-        self: *Pass,
-        result: *Result,
-        module_idx: u32,
-        callable_expr_idx: CIR.Expr.Idx,
-        source_context: SourceContext,
-        fn_monotype: Monotype.Idx,
-        fn_monotype_module_idx: u32,
+        template: CallableTemplate,
+        fn_monotype: ResolvedMonotype,
         bindings: *std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
     ) Allocator.Error!bool {
-        return self.seedCallableBodyBindingsFromSignatureMode(
-            result,
-            module_idx,
-            callable_expr_idx,
-            source_context,
-            fn_monotype,
-            fn_monotype_module_idx,
-            bindings,
-            true,
-        );
-    }
+        if (fn_monotype.isNone()) return true;
 
-    fn seedCallableBodyBindingsFromSignatureMode(
-        self: *Pass,
-        result: *Result,
-        module_idx: u32,
-        callable_expr_idx: CIR.Expr.Idx,
-        source_context: SourceContext,
-        fn_monotype: Monotype.Idx,
-        fn_monotype_module_idx: u32,
-        bindings: *std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
-        comptime allow_failure: bool,
-    ) Allocator.Error!bool {
-        const module_env = self.all_module_envs[module_idx];
-        const callable_expr = module_env.store.getExpr(callable_expr_idx);
-        const fn_mono = switch (result.context_mono.monotype_store.getMonotype(fn_monotype)) {
+        const module_env = self.all_module_envs[template.module_idx];
+        const boundary = self.callableBoundaryInfo(template.module_idx, template.cir_expr) orelse return true;
+        const resolved_func = resolveFuncTypeInStore(&module_env.types, template.type_root) orelse return true;
+        const fn_mono = switch (result.context_mono.monotype_store.getMonotype(fn_monotype.idx)) {
             .func => |func| func,
             else => return true,
         };
-        const CallableBoundary = struct {
-            arg_patterns: []const CIR.Pattern.Idx,
-            body_expr: CIR.Expr.Idx,
-        };
 
-        const boundary: CallableBoundary = switch (callable_expr) {
-            .e_lambda => |lambda_expr| .{
-                .arg_patterns = module_env.store.slicePatterns(lambda_expr.args),
-                .body_expr = lambda_expr.body,
-            },
-            .e_closure => |closure_expr| blk: {
-                const lambda_expr = module_env.store.getExpr(closure_expr.lambda_idx);
-                if (lambda_expr != .e_lambda) return true;
-                break :blk .{
-                    .arg_patterns = module_env.store.slicePatterns(lambda_expr.e_lambda.args),
-                    .body_expr = lambda_expr.e_lambda.body,
-                };
-            },
-            .e_hosted_lambda => |hosted_expr| .{
-                .arg_patterns = module_env.store.slicePatterns(hosted_expr.args),
-                .body_expr = hosted_expr.body,
-            },
-            else => return true,
-        };
-
-        if (boundary.arg_patterns.len != fn_mono.args.len) {
-            if (allow_failure) return false;
+        const param_vars = module_env.types.sliceVars(resolved_func.func.args);
+        if (boundary.arg_patterns.len != param_vars.len or boundary.arg_patterns.len != fn_mono.args.len) {
             if (std.debug.runtime_safety) {
                 std.debug.panic(
-                    "Pipeline: callable signature arity mismatch for expr {d} (patterns={d}, monos={d})",
+                    "Pipeline: template boundary arity mismatch for expr {d} (patterns={d}, vars={d}, monos={d})",
                     .{
-                        @intFromEnum(callable_expr_idx),
+                        @intFromEnum(template.cir_expr),
                         boundary.arg_patterns.len,
+                        param_vars.len,
                         fn_mono.args.len,
                     },
                 );
@@ -11456,138 +11346,62 @@ pub const Pass = struct {
         var ordered_entries = std.ArrayList(TypeSubstEntry).empty;
         defer ordered_entries.deinit(self.allocator);
 
-        if (!try self.bindTypeVarMonotypesMode(
+        if (!try self.tryBindTypeVarMonotypes(
             result,
-            module_idx,
+            template.module_idx,
             &module_env.types,
             bindings,
             &ordered_entries,
-            ModuleEnv.varFrom(callable_expr_idx),
-            fn_monotype,
-            fn_monotype_module_idx,
-            allow_failure,
+            template.type_root,
+            fn_monotype.idx,
+            fn_monotype.module_idx,
         )) return false;
 
-        for (boundary.arg_patterns, 0..) |pattern_idx, i| {
+        for (boundary.arg_patterns, param_vars, 0..) |pattern_idx, param_var, i| {
             const param_mono = result.context_mono.monotype_store.getIdxSpanItem(fn_mono.args, i);
-            try self.mergeTrackedContextPatternMonotype(
+            if (!try self.tryBindTypeVarMonotypes(
                 result,
-                self.resultPatternKeyForSourceContext(source_context, module_idx, pattern_idx),
-                resolvedMonotype(param_mono, fn_monotype_module_idx),
-            );
-            if (!try self.bindTypeVarMonotypesMode(
+                template.module_idx,
+                &module_env.types,
+                bindings,
+                &ordered_entries,
+                param_var,
+                param_mono,
+                fn_monotype.module_idx,
+            )) return false;
+            if (!try self.tryBindTypeVarMonotypes(
                 result,
-                module_idx,
+                template.module_idx,
                 &module_env.types,
                 bindings,
                 &ordered_entries,
                 ModuleEnv.varFrom(pattern_idx),
                 param_mono,
-                fn_monotype_module_idx,
-                allow_failure,
+                fn_monotype.module_idx,
             )) return false;
         }
-        if (!try self.bindTypeVarMonotypesMode(
+
+        if (!try self.tryBindTypeVarMonotypes(
             result,
-            module_idx,
+            template.module_idx,
+            &module_env.types,
+            bindings,
+            &ordered_entries,
+            resolved_func.func.ret,
+            fn_mono.ret,
+            fn_monotype.module_idx,
+        )) return false;
+
+        if (!try self.tryBindTypeVarMonotypes(
+            result,
+            template.module_idx,
             &module_env.types,
             bindings,
             &ordered_entries,
             ModuleEnv.varFrom(boundary.body_expr),
             fn_mono.ret,
-            fn_monotype_module_idx,
-            allow_failure,
+            fn_monotype.module_idx,
         )) return false;
-
-        return true;
-    }
-
-    fn trySeedTemplateBodyBindingsFromCurrentBindings(
-        self: *Pass,
-        result: *Result,
-        template: CallableTemplate,
-        bindings: *std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
-    ) Allocator.Error!bool {
-        const module_env = self.all_module_envs[template.module_idx];
-        const boundary = self.callableBoundaryInfo(template.module_idx, template.cir_expr) orelse return true;
-        const resolved_func = resolveFuncTypeInStore(&module_env.types, template.type_root) orelse return true;
-
-        var ordered_entries = std.ArrayList(TypeSubstEntry).empty;
-        defer ordered_entries.deinit(self.allocator);
-
-        if (try self.resolveTemplateTypeVarIfFullyBoundWithBindings(
-            result,
-            template.module_idx,
-            &module_env.types,
-            template.type_root,
-            bindings,
-        )) |fn_mono| {
-            if (!try self.tryBindTypeVarMonotypes(
-                result,
-                template.module_idx,
-                &module_env.types,
-                bindings,
-                &ordered_entries,
-                ModuleEnv.varFrom(template.cir_expr),
-                fn_mono.idx,
-                fn_mono.module_idx,
-            )) return false;
-        }
-
-        const param_vars = module_env.types.sliceVars(resolved_func.func.args);
-        if (boundary.arg_patterns.len != param_vars.len) {
-            if (std.debug.runtime_safety) {
-                std.debug.panic(
-                    "Pipeline: template boundary arity mismatch for expr {d} (patterns={d}, vars={d})",
-                    .{
-                        @intFromEnum(template.cir_expr),
-                        boundary.arg_patterns.len,
-                        param_vars.len,
-                    },
-                );
-            }
-            unreachable;
-        }
-
-        for (boundary.arg_patterns, param_vars) |pattern_idx, param_var| {
-            if (try self.resolveTemplateTypeVarIfFullyBoundWithBindings(
-                result,
-                template.module_idx,
-                &module_env.types,
-                param_var,
-                bindings,
-            )) |param_mono| {
-                if (!try self.tryBindTypeVarMonotypes(
-                    result,
-                    template.module_idx,
-                    &module_env.types,
-                    bindings,
-                    &ordered_entries,
-                    ModuleEnv.varFrom(pattern_idx),
-                    param_mono.idx,
-                    param_mono.module_idx,
-                )) return false;
-            }
-        }
-
-        if (try self.resolveTemplateTypeVarIfFullyBoundWithBindings(
-            result,
-            template.module_idx,
-            &module_env.types,
-            resolved_func.func.ret,
-            bindings,
-        )) |ret_mono| {
-            if (!try self.tryBindTypeVarMonotypes(
-                result,
-                template.module_idx,
-                &module_env.types,
-                bindings,
-                &ordered_entries,
-                ModuleEnv.varFrom(boundary.body_expr),
-                ret_mono.idx,
-                ret_mono.module_idx,
-            )) return false;
-        }
 
         return true;
     }
@@ -11623,117 +11437,6 @@ pub const Pass = struct {
         );
         if (mono.isNone()) return null;
         return resolvedMonotype(mono, module_idx);
-    }
-
-    fn trySeedTemplateBoundaryBindingsFromActuals(
-        self: *Pass,
-        result: *Result,
-        actual_module_idx: u32,
-        template: CallableTemplate,
-        actual_args: []const CIR.Expr.Idx,
-        ret_mono: ResolvedMonotype,
-        bindings: *std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
-    ) Allocator.Error!bool {
-        const module_env = self.all_module_envs[template.module_idx];
-        const boundary = self.callableBoundaryInfo(template.module_idx, template.cir_expr) orelse return true;
-
-        if (boundary.arg_patterns.len != actual_args.len) return true;
-
-        var ordered_entries = std.ArrayList(TypeSubstEntry).empty;
-        defer ordered_entries.deinit(self.allocator);
-
-        for (boundary.arg_patterns, actual_args) |pattern_idx, arg_expr_idx| {
-            const arg_mono = try self.resolveExprMonotypeResolved(result, actual_module_idx, arg_expr_idx);
-            if (arg_mono.isNone()) continue;
-
-            if (!try self.tryBindTypeVarMonotypes(
-                result,
-                template.module_idx,
-                &module_env.types,
-                bindings,
-                &ordered_entries,
-                ModuleEnv.varFrom(pattern_idx),
-                arg_mono.idx,
-                arg_mono.module_idx,
-            )) return false;
-        }
-
-        if (!ret_mono.isNone()) {
-            if (!try self.tryBindTypeVarMonotypes(
-                result,
-                template.module_idx,
-                &module_env.types,
-                bindings,
-                &ordered_entries,
-                ModuleEnv.varFrom(boundary.body_expr),
-                ret_mono.idx,
-                ret_mono.module_idx,
-            )) return false;
-        }
-
-        return true;
-    }
-
-    fn trySeedTemplateBindingsFromFnMonotype(
-        self: *Pass,
-        result: *Result,
-        template: CallableTemplate,
-        fn_monotype: ResolvedMonotype,
-        bindings: *std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
-    ) Allocator.Error!bool {
-        if (fn_monotype.isNone()) return true;
-
-        const module_env = self.all_module_envs[template.module_idx];
-        const boundary = self.callableBoundaryInfo(template.module_idx, template.cir_expr) orelse return true;
-        const fn_mono = switch (result.context_mono.monotype_store.getMonotype(fn_monotype.idx)) {
-            .func => |func| func,
-            else => return true,
-        };
-
-        if (boundary.arg_patterns.len != fn_mono.args.len) {
-            return false;
-        }
-
-        var ordered_entries = std.ArrayList(TypeSubstEntry).empty;
-        defer ordered_entries.deinit(self.allocator);
-
-        if (!try self.tryBindTypeVarMonotypes(
-            result,
-            template.module_idx,
-            &module_env.types,
-            bindings,
-            &ordered_entries,
-            template.type_root,
-            fn_monotype.idx,
-            fn_monotype.module_idx,
-        )) return false;
-
-        for (boundary.arg_patterns, 0..) |pattern_idx, i| {
-            const param_mono = result.context_mono.monotype_store.getIdxSpanItem(fn_mono.args, i);
-            if (!try self.tryBindTypeVarMonotypes(
-                result,
-                template.module_idx,
-                &module_env.types,
-                bindings,
-                &ordered_entries,
-                ModuleEnv.varFrom(pattern_idx),
-                param_mono,
-                fn_monotype.module_idx,
-            )) return false;
-        }
-
-        if (!try self.tryBindTypeVarMonotypes(
-            result,
-            template.module_idx,
-            &module_env.types,
-            bindings,
-            &ordered_entries,
-            ModuleEnv.varFrom(boundary.body_expr),
-            fn_mono.ret,
-            fn_monotype.module_idx,
-        )) return false;
-
-        return true;
     }
 
     fn ensureTypeSubst(
