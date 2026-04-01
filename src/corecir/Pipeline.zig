@@ -443,7 +443,7 @@ pub const Result = struct {
     }
 
     pub fn getIndirectCallVariants(self: *const Result, indirect_call: IndirectCall) []const CallableInstId {
-        return self.lambdamono.getCallableVariantGroupVariants(indirect_call.variant_group);
+        return self.lambdamono.getCallableVariantGroupVariants(indirect_call.packed_fn.variant_group);
     }
 
     pub fn getPackedFnTagName(
@@ -2355,37 +2355,28 @@ pub const Pass = struct {
         result: *Result,
         expr_ref: ExprRef,
     ) Allocator.Error!ExprRef {
-        var current = expr_ref;
-        var visiting: std.AutoHashMapUnmanaged(ContextExprVisitKey, void) = .empty;
-        defer visiting.deinit(self.allocator);
-
-        while (result.getExprValueOrigin(current.source_context, current.module_idx, current.expr_idx)) |origin| {
-            const visit_key = contextExprVisitKey(current.source_context, current.module_idx, current.expr_idx);
-            const gop = try visiting.getOrPut(self.allocator, visit_key);
-            if (gop.found_existing) {
-                std.debug.panic(
-                    "Pipeline invariant violated: expr value-origin cycle at ctx={s} module={d} expr={d}",
-                    .{
-                        @tagName(current.source_context),
-                        current.module_idx,
-                        @intFromEnum(current.expr_idx),
-                    },
-                );
-            }
-            const combined_projections = try self.appendValueProjectionEntries(
-                result,
-                origin.projections,
-                result.lambdamono.getValueProjectionEntries(current.projections),
+        const origin = result.getExprValueOrigin(expr_ref.source_context, expr_ref.module_idx, expr_ref.expr_idx) orelse return expr_ref;
+        if (result.getExprValueOrigin(origin.source_context, origin.module_idx, origin.expr_idx) != null) {
+            std.debug.panic(
+                "Pipeline invariant violated: expr value-origin for ctx={s} module={d} expr={d} was not canonical",
+                .{
+                    @tagName(expr_ref.source_context),
+                    expr_ref.module_idx,
+                    @intFromEnum(expr_ref.expr_idx),
+                },
             );
-            current = .{
-                .source_context = origin.source_context,
-                .module_idx = origin.module_idx,
-                .expr_idx = origin.expr_idx,
-                .projections = combined_projections,
-            };
         }
 
-        return current;
+        return .{
+            .source_context = origin.source_context,
+            .module_idx = origin.module_idx,
+            .expr_idx = origin.expr_idx,
+            .projections = try self.appendValueProjectionEntries(
+                result,
+                origin.projections,
+                result.lambdamono.getValueProjectionEntries(expr_ref.projections),
+            ),
+        };
     }
 
     fn scanSeedModules(self: *Pass, result: *Result) Allocator.Error!void {
@@ -8398,12 +8389,8 @@ pub const Pass = struct {
         result: *Result,
         callable_inst_ids: []const CallableInstId,
     ) Allocator.Error!IndirectCall {
-        const variant_group_id = try self.internCallableVariantGroup(
-            result,
-            callable_inst_ids,
-        );
         return .{
-            .variant_group = variant_group_id,
+            .packed_fn = try self.ensurePackedFnForVariants(result, callable_inst_ids),
         };
     }
 

@@ -2751,13 +2751,15 @@ fn materializeTopLevelDefInto(
                     saved_module_idx,
                 );
             },
-            .packed_fn => try self.refreshTargetLocalMonotypeFromExprIntoModule(
-                session,
-                def.expr,
-                module_idx,
-                saved_module_idx,
-                target,
-            ),
+            .packed_fn => |packed_fn| {
+                const runtime_monotype = self.callable_pipeline.getCallableValueMonotype(.{ .packed_fn = packed_fn });
+                self.store.getLocalPtr(target).monotype = try self.importMonotypeFromStore(
+                    &self.callable_pipeline.context_mono.monotype_store,
+                    runtime_monotype.idx,
+                    runtime_monotype.module_idx,
+                    saved_module_idx,
+                );
+            },
         },
         .non_callable => try self.refreshTargetLocalMonotypeFromExprIntoModule(
             session,
@@ -2771,21 +2773,7 @@ fn materializeTopLevelDefInto(
     switch (callable_semantics) {
         .callable => |resolved_callable_value| switch (resolved_callable_value) {
             .direct => |resolved_callable_inst| return self.lowerResolvedCallableInstValueInto(resolved_callable_inst, target, next),
-            .packed_fn => {
-                return self.lowerCapturedSourceExprInto(
-                    session,
-                    .{
-                        .source_context = .{ .root_expr = .{
-                            .module_idx = module_idx,
-                            .expr_idx = def.expr,
-                        } },
-                        .module_idx = module_idx,
-                        .expr_idx = def.expr,
-                    },
-                    target,
-                    next,
-                );
-            },
+            .packed_fn => |packed_fn| return self.lowerExprAsPackedCallableInto(session, def.expr, packed_fn, target, next),
         },
         .non_callable => {},
     }
@@ -3892,18 +3880,12 @@ fn lowerResolvedDispatchTargetCallInto(
         .expr_idx = target_def.expr,
     } });
     const target_callable_value = lookupProgramExprCallableValue(target_def_session, target_def.expr);
-    const callee_runtime_mono = if (target_callable_value) |callable_value|
-        self.callable_pipeline.getCallableValueMonotype(callable_value)
-    else switch (call_site) {
-        .direct => |callable_inst_id| self.callable_pipeline.getCallableInstRuntimeMonotype(callable_inst_id),
-        .indirect_call => std.debug.panic(
-            "statement-only MIR invariant violated: resolved dispatch expr {d} target module={d} def={d} specialized to indirect call without packed callable value semantics",
-            .{
-                @intFromEnum(result_expr_idx),
-                dispatch_target.module_idx,
-                @intFromEnum(dispatch_target.def_idx),
-            },
-        ),
+    const callee_runtime_mono = switch (call_site) {
+        .direct => |callable_inst_id| if (target_callable_value) |callable_value|
+            self.callable_pipeline.getCallableValueMonotype(callable_value)
+        else
+            self.callable_pipeline.getCallableInstRuntimeMonotype(callable_inst_id),
+        .indirect_call => |indirect_call| indirect_call.packed_fn.runtime_monotype,
     };
     const callee_local = try self.freshSyntheticLocal(try self.importMonotypeFromStore(
         &self.callable_pipeline.context_mono.monotype_store,
@@ -3975,32 +3957,10 @@ fn lowerResolvedDispatchTargetCallInto(
             );
         },
         .indirect_call => |indirect_call| blk: {
-            const packed_fn = switch (target_callable_value orelse std.debug.panic(
-                "statement-only MIR invariant violated: resolved dispatch expr {d} target module={d} def={d} specialized to indirect call {d} without target callable value",
-                .{
-                    @intFromEnum(result_expr_idx),
-                    dispatch_target.module_idx,
-                    @intFromEnum(dispatch_target.def_idx),
-                    @intFromEnum(indirect_call.variant_group),
-                },
-            )) {
-                .packed_fn => |packed| packed,
-                .direct => |callable_inst_id| std.debug.panic(
-                    "statement-only MIR invariant violated: resolved dispatch expr {d} target module={d} def={d} specialized to indirect call {d} but target def expr {d} remained direct callable {d}",
-                    .{
-                        @intFromEnum(result_expr_idx),
-                        dispatch_target.module_idx,
-                        @intFromEnum(dispatch_target.def_idx),
-                        @intFromEnum(indirect_call.variant_group),
-                        @intFromEnum(target_def.expr),
-                        @intFromEnum(callable_inst_id),
-                    },
-                ),
-            };
+            const packed_fn = indirect_call.packed_fn;
             const call_entry = try self.lowerIndirectCallInto(
                 session,
                 result_expr_idx,
-                packed_fn,
                 indirect_call,
                 callee_local,
                 args,
@@ -4014,10 +3974,7 @@ fn lowerResolvedDispatchTargetCallInto(
                 target_symbol,
                 callee_local,
                 call_entry,
-                if (target_callable_value) |callable_value|
-                    .{ .callable = callable_value }
-                else
-                    .non_callable,
+                .{ .callable = .{ .packed_fn = packed_fn } },
             );
         },
     };
@@ -4035,18 +3992,18 @@ fn lowerIndirectCallInto(
     self: *Self,
     session: LowerSession,
     call_expr_idx: CIR.Expr.Idx,
-    packed_fn: Pipeline.PackedFn,
     indirect_call: Pipeline.IndirectCall,
     callee_local: MIR.LocalId,
     args: MIR.LocalSpan,
     target: MIR.LocalId,
     next: MIR.CFStmtId,
 ) Allocator.Error!MIR.CFStmtId {
+    const packed_fn = indirect_call.packed_fn;
     const variants = self.callable_pipeline.getIndirectCallVariants(indirect_call);
     if (variants.len == 0) {
         std.debug.panic(
             "statement-only MIR invariant violated: indirect call {d} had no variants",
-            .{@intFromEnum(indirect_call.variant_group)},
+            .{@intFromEnum(indirect_call.packed_fn.variant_group)},
         );
     }
 
@@ -4218,10 +4175,6 @@ fn lowerCallInto(
         "statement-only MIR invariant violated: call expr {d} had no specialized call-site semantics",
         .{@intFromEnum(call_expr_idx)},
     );
-    const callable_value = lookupProgramExprCallableValue(session, call.func) orelse std.debug.panic(
-        "statement-only MIR invariant violated: call callee expr {d} had no callable value semantics",
-        .{@intFromEnum(call.func)},
-    );
     const cir_args = module_env.store.sliceExpr(call.args);
     const callee_monotype = try self.resolveMonotype(session, call.func);
     const callee_local = try self.freshSyntheticLocal(callee_monotype, false);
@@ -4265,13 +4218,6 @@ fn lowerCallInto(
             };
         },
         .indirect_call => |indirect_call| {
-            const packed_fn = switch (callable_value) {
-                .packed_fn => |packed| packed,
-                .direct => std.debug.panic(
-                    "statement-only MIR invariant violated: indirect call expr {d} had direct callable value semantics",
-                    .{@intFromEnum(call_expr_idx)},
-                ),
-            };
             const arg_locals = try self.allocator.alloc(MIR.LocalId, cir_args.len);
             defer self.allocator.free(arg_locals);
             for (cir_args, 0..) |arg_idx, i| {
@@ -4281,7 +4227,6 @@ fn lowerCallInto(
             const call_entry = try self.lowerIndirectCallInto(
                 session,
                 call_expr_idx,
-                packed_fn,
                 indirect_call,
                 callee_local,
                 args,
@@ -4295,12 +4240,13 @@ fn lowerCallInto(
                 i -= 1;
                 lowered_next = try self.lowerCirExprInto(session, cir_args[i], arg_locals[i], lowered_next);
             }
-            return switch (module_env.store.getExpr(call.func)) {
-                .e_lookup_local => |lookup| try self.lowerLookupLocalInto(session, call.func, lookup, callee_local, lowered_next),
-                .e_lookup_external => |lookup| try self.lowerLookupExternalInto(session, call.func, module_env, lookup, callee_local, lowered_next),
-                .e_lookup_required => |lookup| try self.lowerLookupRequiredInto(session, call.func, module_env, lookup, callee_local, lowered_next),
-                else => try self.lowerCirExprInto(session, call.func, callee_local, lowered_next),
-            };
+            return self.lowerExprAsPackedCallableInto(
+                session,
+                call.func,
+                indirect_call.packed_fn,
+                callee_local,
+                lowered_next,
+            );
         },
     }
 }
@@ -4729,6 +4675,38 @@ fn lowerPackedCallableIntroInto(
         .next = next,
     } });
     return self.lowerResolvedCallableInstValueInto(callable_inst_id, payload_local, tag_stmt);
+}
+
+fn lowerExprAsPackedCallableInto(
+    self: *Self,
+    session: LowerSession,
+    expr_idx: CIR.Expr.Idx,
+    packed_fn: Pipeline.PackedFn,
+    target: MIR.LocalId,
+    next: MIR.CFStmtId,
+) Allocator.Error!MIR.CFStmtId {
+    const callable_value = lookupProgramExprCallableValue(session, expr_idx) orelse std.debug.panic(
+        "statement-only MIR invariant violated: expr {d} was required to lower as packed callable but had no callable-value semantics",
+        .{@intFromEnum(expr_idx)},
+    );
+
+    return switch (callable_value) {
+        .direct => |callable_inst_id| self.lowerPackedCallableIntroInto(
+            packed_fn,
+            callable_inst_id,
+            target,
+            next,
+        ),
+        .packed_fn => |existing_packed_fn| blk: {
+            if (builtin.mode == .Debug and !std.meta.eql(existing_packed_fn, packed_fn)) {
+                std.debug.panic(
+                    "statement-only MIR invariant violated: expr {d} packed callable semantics mismatched required indirect-call shape",
+                    .{@intFromEnum(expr_idx)},
+                );
+            }
+            break :blk self.lowerCirExprInto(session, expr_idx, target, next);
+        },
+    };
 }
 
 fn lowerPackedCallablePayloadInto(

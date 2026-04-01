@@ -41,7 +41,7 @@ pub const PackedFn = struct {
 };
 
 pub const IndirectCall = struct {
-    variant_group: CallableVariantGroupId,
+    packed_fn: PackedFn,
 };
 
 pub const ExprId = enum(u32) {
