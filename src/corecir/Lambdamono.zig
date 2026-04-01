@@ -147,6 +147,11 @@ pub const ExprTemplateSemantics = union(enum) {
     template: Lambdasolved.CallableTemplateId,
 };
 
+pub const ExprBuildState = enum {
+    reserved,
+    finalized,
+};
+
 pub const ExprSemantics = struct {
     template_semantics: ExprTemplateSemantics = .not_template,
     callable_semantics: ExprCallableSemantics = .ordinary,
@@ -290,12 +295,14 @@ pub const PatternBinding = struct {
 };
 
 pub const Expr = struct {
+    state: ExprBuildState = .reserved,
     source_context: SourceContext,
     module_idx: u32,
     source_expr: CIR.Expr.Idx,
     monotype: ContextMono.ResolvedMonotype,
     child_exprs: ExprIdSpan = .empty(),
     child_stmts: StmtIdSpan = .empty(),
+    template_semantics: ExprTemplateSemantics = .not_template,
     callable_semantics: ExprCallableSemantics,
     call_semantics: ExprCallSemantics,
     value_origin: ExprValueOrigin,

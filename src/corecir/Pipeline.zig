@@ -503,7 +503,6 @@ pub const Pass = struct {
     in_progress_call_result_callable_insts: std.AutoHashMapUnmanaged(CallResultCallableInstKey, void),
     in_progress_callable_scans: std.AutoHashMapUnmanaged(u32, void),
     completed_callable_scans: std.AutoHashMapUnmanaged(u32, void),
-    expr_build_semantics_by_key: std.AutoHashMapUnmanaged(ContextExprKey, Lambdamono.ExprSemantics),
     mutation_revision: u64,
     mutation_counts: [mutation_kind_count]u32,
 
@@ -526,7 +525,6 @@ pub const Pass = struct {
             .in_progress_call_result_callable_insts = .empty,
             .in_progress_callable_scans = .empty,
             .completed_callable_scans = .empty,
-            .expr_build_semantics_by_key = .empty,
             .mutation_revision = 0,
             .mutation_counts = [_]u32{0} ** mutation_kind_count,
         };
@@ -1402,7 +1400,6 @@ pub const Pass = struct {
         self.in_progress_call_result_callable_insts.deinit(self.allocator);
         self.in_progress_callable_scans.deinit(self.allocator);
         self.completed_callable_scans.deinit(self.allocator);
-        self.expr_build_semantics_by_key.deinit(self.allocator);
     }
 
     fn resetRunState(self: *Pass) void {
@@ -1412,7 +1409,6 @@ pub const Pass = struct {
         self.in_progress_call_result_callable_insts.clearRetainingCapacity();
         self.in_progress_callable_scans.clearRetainingCapacity();
         self.completed_callable_scans.clearRetainingCapacity();
-        self.expr_build_semantics_by_key.clearRetainingCapacity();
         self.mutation_revision = 0;
         self.mutation_counts = [_]u32{0} ** mutation_kind_count;
     }
@@ -1587,7 +1583,11 @@ pub const Pass = struct {
         expr_idx: CIR.Expr.Idx,
     ) Allocator.Error!Lambdamono.ExprId {
         const key = Result.contextExprKey(source_context, module_idx, expr_idx);
-        if (result.lambdamono.expr_ids_by_key.get(key)) |existing| return existing;
+        const expr_id = result.lambdamono.expr_ids_by_key.get(key) orelse blk: {
+            _ = try self.ensureProgramExprSemantics(result, source_context, module_idx, expr_idx);
+            break :blk result.lambdamono.expr_ids_by_key.get(key).?;
+        };
+        if (result.lambdamono.getExpr(expr_id).state == .finalized) return expr_id;
 
         const module_env = self.all_module_envs[module_idx];
         const expr = module_env.store.getExpr(expr_idx);
@@ -1738,30 +1738,28 @@ pub const Pass = struct {
             }
         }
 
-        const expr_id: Lambdamono.ExprId = @enumFromInt(result.lambdamono.exprs.items.len);
-        try result.lambdamono.exprs.append(self.allocator, .{
-            .source_context = source_context,
-            .module_idx = module_idx,
-            .source_expr = expr_idx,
-            .monotype = monotype,
-            .child_exprs = child_expr_span,
-            .child_stmts = child_stmt_span,
-            .callable_semantics = if (callable_value) |expr_callable_value|
-                .{ .callable = expr_callable_value }
-            else
-                .ordinary,
-            .call_semantics = if (call_site) |expr_call_site|
-                .{ .call = expr_call_site }
-            else
-                .not_call,
-            .value_origin = value_origin,
-            .dispatch_semantics = if (dispatch_target) |resolved_dispatch_target|
-                .{ .dispatch = resolved_dispatch_target }
-            else
-                .not_dispatch,
-            .lookup_semantics = semantics.lookup_semantics,
-        });
-        try result.lambdamono.expr_ids_by_key.put(self.allocator, key, expr_id);
+        const program_expr = &result.lambdamono.exprs.items[@intFromEnum(expr_id)];
+        program_expr.state = .finalized;
+        program_expr.source_context = source_context;
+        program_expr.module_idx = module_idx;
+        program_expr.source_expr = expr_idx;
+        program_expr.monotype = monotype;
+        program_expr.child_exprs = child_expr_span;
+        program_expr.child_stmts = child_stmt_span;
+        program_expr.callable_semantics = if (callable_value) |expr_callable_value|
+            .{ .callable = expr_callable_value }
+        else
+            .ordinary;
+        program_expr.call_semantics = if (call_site) |expr_call_site|
+            .{ .call = expr_call_site }
+        else
+            .not_call;
+        program_expr.value_origin = value_origin;
+        program_expr.dispatch_semantics = if (dispatch_target) |resolved_dispatch_target|
+            .{ .dispatch = resolved_dispatch_target }
+        else
+            .not_dispatch;
+        program_expr.lookup_semantics = semantics.lookup_semantics;
         return expr_id;
     }
 
@@ -1854,12 +1852,29 @@ pub const Pass = struct {
         source_context: SourceContext,
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
-    ) Allocator.Error!*Lambdamono.ExprSemantics {
-        _ = result;
+    ) Allocator.Error!*Lambdamono.Expr {
         const key = Result.contextExprKey(source_context, module_idx, expr_idx);
-        const gop = try self.expr_build_semantics_by_key.getOrPut(self.allocator, key);
-        if (!gop.found_existing) gop.value_ptr.* = .{};
-        return gop.value_ptr;
+        const expr_id = result.lambdamono.expr_ids_by_key.get(key) orelse blk: {
+            const new_expr_id: Lambdamono.ExprId = @enumFromInt(result.lambdamono.exprs.items.len);
+            try result.lambdamono.exprs.append(self.allocator, .{
+                .state = .reserved,
+                .source_context = source_context,
+                .module_idx = module_idx,
+                .source_expr = expr_idx,
+                .monotype = resolvedMonotype(.none, module_idx),
+                .child_exprs = .empty(),
+                .child_stmts = .empty(),
+                .template_semantics = .not_template,
+                .callable_semantics = .ordinary,
+                .call_semantics = .not_call,
+                .value_origin = .self_value,
+                .dispatch_semantics = .not_dispatch,
+                .lookup_semantics = .not_lookup,
+            });
+            try result.lambdamono.expr_ids_by_key.put(self.allocator, key, new_expr_id);
+            break :blk new_expr_id;
+        };
+        return &result.lambdamono.exprs.items[@intFromEnum(expr_id)];
     }
 
     fn readExprSemantics(
@@ -1869,10 +1884,16 @@ pub const Pass = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) Lambdamono.ExprSemantics {
-        _ = result;
-        return self.expr_build_semantics_by_key.get(
-            Result.contextExprKey(source_context, module_idx, expr_idx),
-        ) orelse .{};
+        const expr_id = result.lambdamono.getExprId(source_context, module_idx, expr_idx) orelse return .{};
+        const expr = result.lambdamono.getExpr(expr_id);
+        return .{
+            .template_semantics = expr.template_semantics,
+            .callable_semantics = expr.callable_semantics,
+            .call_semantics = expr.call_semantics,
+            .value_origin = expr.value_origin,
+            .dispatch_semantics = expr.dispatch_semantics,
+            .lookup_semantics = expr.lookup_semantics,
+        };
     }
 
     fn ensureProgramPatternBinding(
