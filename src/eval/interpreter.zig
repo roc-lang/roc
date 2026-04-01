@@ -902,10 +902,15 @@ pub const Interpreter = struct {
                 resolved = self.runtime_types.resolveVar(substituted_var);
             } else if (resolved.desc.content == .rigid) {
                 const rigid_name = resolved.desc.content.rigid.name;
-                if (self.rigid_name_subst.get(rigid_name.idx)) |substituted_var| {
-                    resolved = self.runtime_types.resolveVar(substituted_var);
+                if (rigid_name == .name) {
+                    if (self.rigid_name_subst.get(rigid_name.name.idx)) |substituted_var| {
+                        resolved = self.runtime_types.resolveVar(substituted_var);
+                    } else {
+                        // No more substitutions available
+                        break;
+                    }
                 } else {
-                    // No more substitutions available
+                    // Polarity rigid, no more substitutions
                     break;
                 }
             } else {
@@ -8742,8 +8747,12 @@ pub const Interpreter = struct {
             const rigid_name = resolved.desc.content.rigid.name;
             if (self.rigid_subst.get(resolved.var_)) |substituted_var| {
                 resolved = self.runtime_types.resolveVar(substituted_var);
-            } else if (self.rigid_name_subst.get(rigid_name.idx)) |substituted_var| {
-                resolved = self.runtime_types.resolveVar(substituted_var);
+            } else if (rigid_name == .name) {
+                if (self.rigid_name_subst.get(rigid_name.name.idx)) |substituted_var| {
+                    resolved = self.runtime_types.resolveVar(substituted_var);
+                } else {
+                    break;
+                }
             } else {
                 break;
             }
@@ -9692,11 +9701,13 @@ pub const Interpreter = struct {
                         const sub_resolved = module.types.resolveVar(substitute_var);
                         if (sub_resolved.desc.content == .rigid) {
                             const sub_rigid = sub_resolved.desc.content.rigid;
-                            const sub_name_str = module.getIdent(sub_rigid.name);
-                            const sub_rt_name = try self.runtime_layout_store.getMutableEnv().?.insertIdent(base_pkg.Ident.for_text(sub_name_str));
-                            if (self.rigid_name_subst.get(sub_rt_name.idx)) |for_clause_var| {
-                                // Use the for-clause mapping instead
-                                break :blk for_clause_var;
+                            if (sub_rigid.name == .name) {
+                                const sub_name_str = module.getIdent(sub_rigid.name.name);
+                                const sub_rt_name = try self.runtime_layout_store.getMutableEnv().?.insertIdent(base_pkg.Ident.for_text(sub_name_str));
+                                if (self.rigid_name_subst.get(sub_rt_name.idx)) |for_clause_var| {
+                                    // Use the for-clause mapping instead
+                                    break :blk for_clause_var;
+                                }
                             }
                         }
                         // Translate the substitute type instead of the rigid
@@ -9704,8 +9715,14 @@ pub const Interpreter = struct {
                     }
 
                     // Translate the rigid's name from source module's ident store to runtime ident store
-                    const source_name_str = module.getIdent(rigid.name);
-                    const rt_name = try self.runtime_layout_store.getMutableEnv().?.insertIdent(base_pkg.Ident.for_text(source_name_str));
+                    const rt_rigid_name: types.Rigid.Name = switch (rigid.name) {
+                        .name => |ident_idx| blk_name: {
+                            const source_name_str = module.getIdent(ident_idx);
+                            break :blk_name .{ .name = try self.runtime_layout_store.getMutableEnv().?.insertIdent(base_pkg.Ident.for_text(source_name_str)) };
+                        },
+                        .polarity_open => .polarity_open,
+                        .polarity_deferred => .polarity_deferred,
+                    };
 
                     // Translate static dispatch constraints if present
                     const rt_rigid = if (rigid.constraints.len() > 0) blk_rigid: {
@@ -9728,11 +9745,11 @@ pub const Interpreter = struct {
 
                         const rt_constraints_range = try self.runtime_types.appendStaticDispatchConstraints(rt_constraints.items);
                         break :blk_rigid types.Rigid{
-                            .name = rt_name,
+                            .name = rt_rigid_name,
                             .constraints = rt_constraints_range,
                         };
                     } else types.Rigid{
-                        .name = rt_name,
+                        .name = rt_rigid_name,
                         .constraints = types.StaticDispatchConstraint.SafeList.Range.empty(),
                     };
 
@@ -9741,15 +9758,17 @@ pub const Interpreter = struct {
 
                     // If there's a for-clause mapping for this rigid name, add it to empty_scope
                     // so the layout store can find it during Box/List layout computation
-                    if (self.rigid_name_subst.get(rt_name.idx)) |concrete_rt_var| {
-                        // Don't add if it would create a cycle in rigid_subst
-                        if (!self.wouldCreateRigidSubstCycle(rt_rigid_var, concrete_rt_var)) {
-                            // Mapping found! Add to empty_scope and rigid_subst
-                            if (self.empty_scope.scopes.items.len == 0) {
-                                try self.empty_scope.scopes.append(types.VarMap.init(self.allocator));
+                    if (rt_rigid_name == .name) {
+                        if (self.rigid_name_subst.get(rt_rigid_name.name.idx)) |concrete_rt_var| {
+                            // Don't add if it would create a cycle in rigid_subst
+                            if (!self.wouldCreateRigidSubstCycle(rt_rigid_var, concrete_rt_var)) {
+                                // Mapping found! Add to empty_scope and rigid_subst
+                                if (self.empty_scope.scopes.items.len == 0) {
+                                    try self.empty_scope.scopes.append(types.VarMap.init(self.allocator));
+                                }
+                                try self.empty_scope.scopes.items[0].put(rt_rigid_var, concrete_rt_var);
+                                try self.rigid_subst.put(rt_rigid_var, concrete_rt_var);
                             }
-                            try self.empty_scope.scopes.items[0].put(rt_rigid_var, concrete_rt_var);
-                            try self.rigid_subst.put(rt_rigid_var, concrete_rt_var);
                         }
                     }
 
@@ -20444,7 +20463,9 @@ test "interpreter: translateTypeVar for rigid var" {
     const rt_var = try interp.translateTypeVar(&env, ct_rigid);
     const resolved = interp.runtime_types.resolveVar(rt_var);
     try std.testing.expect(resolved.desc.content == .rigid);
-    try std.testing.expectEqual(name_a, resolved.desc.content.rigid.name);
+    const rigid_name = resolved.desc.content.rigid.name;
+    try std.testing.expect(rigid_name == .name);
+    try std.testing.expectEqual(name_a, rigid_name.name);
 }
 
 // RED: translating a flex var with static dispatch constraints should preserve constraints

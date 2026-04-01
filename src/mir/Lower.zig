@@ -1543,7 +1543,7 @@ fn bindNamedTypeScopeMatchInStore(
     if (bindings.contains(resolved.var_)) return;
 
     const current_name = switch (resolved.desc.content) {
-        .rigid => |rigid| rigid.name,
+        .rigid => |rigid| if (rigid.name == .name) rigid.name.name else return,
         .flex => |flex| flex.name orelse return,
         else => return,
     };
@@ -1556,7 +1556,7 @@ fn bindNamedTypeScopeMatchInStore(
         while (it.next()) |entry| {
             const platform_resolved = store_types.resolveVar(entry.key_ptr.*);
             const platform_name = switch (platform_resolved.desc.content) {
-                .rigid => |rigid| rigid.name,
+                .rigid => |rigid| if (rigid.name == .name) rigid.name.name else continue,
                 .flex => |flex| flex.name orelse continue,
                 else => continue,
             };

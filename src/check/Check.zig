@@ -2426,7 +2426,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
             const static_dispatch_constraints_range = StaticDispatchConstraint.SafeList.Range{ .start = @enumFromInt(static_dispatch_constraints_start), .count = @intCast(static_dispatch_constraints_end - static_dispatch_constraints_start) };
 
             try self.unifyWith(anno_var, .{ .rigid = Rigid{
-                .name = rigid.name,
+                .name = .{ .name = rigid.name },
                 .constraints = static_dispatch_constraints_range,
             } }, env);
         },
@@ -2639,7 +2639,11 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                         std.debug.assert(decl_arg_resolved == .rigid);
                         const decl_arg_rigid = decl_arg_resolved.rigid;
 
-                        try self.rigid_var_substitutions.put(self.gpa, decl_arg_rigid.name, anno_arg_var);
+                        const decl_arg_name = switch (decl_arg_rigid.name) {
+                            .name => |ident_idx| ident_idx,
+                            .polarity_open, .polarity_deferred => unreachable,
+                        };
+                        try self.rigid_var_substitutions.put(self.gpa, decl_arg_name, anno_arg_var);
                     }
 
                     // Then instantiate the variable, substituting the rigid
@@ -2711,7 +2715,11 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                             std.debug.assert(decl_arg_resolved == .rigid);
                             const decl_arg_rigid = decl_arg_resolved.rigid;
 
-                            try self.rigid_var_substitutions.put(self.gpa, decl_arg_rigid.name, anno_arg_var);
+                            const decl_arg_name = switch (decl_arg_rigid.name) {
+                                .name => |ident_idx| ident_idx,
+                                .polarity_open, .polarity_deferred => unreachable,
+                            };
+                            try self.rigid_var_substitutions.put(self.gpa, decl_arg_name, anno_arg_var);
                         }
 
                         // Then instantiate the variable, substituting the rigid

@@ -1243,7 +1243,10 @@ fn extractDocTypeInner(
             return try allocDocType(gpa, .{ .type_var = var_name });
         },
         .rigid => |rigid| {
-            const var_name = idents.getText(rigid.name);
+            const var_name = switch (rigid.name) {
+                .name => |ident_idx| idents.getText(ident_idx),
+                .polarity_open, .polarity_deferred => "",
+            };
 
             // Collect constraints for where clause
             const constraints = types.sliceStaticDispatchConstraints(rigid.constraints);
@@ -1471,7 +1474,10 @@ fn extractRecord(
                 break;
             },
             .rigid => |rigid| {
-                const var_name = idents.getText(rigid.name);
+                const var_name = switch (rigid.name) {
+                    .name => |ident_idx| idents.getText(ident_idx),
+                    .polarity_open, .polarity_deferred => "",
+                };
 
                 const constraints = types.sliceStaticDispatchConstraints(rigid.constraints);
                 for (constraints) |constraint| {
@@ -1637,12 +1643,16 @@ fn extractTagUnion(
             }
         },
         .rigid => |rigid| {
-            ext_type = try allocDocType(gpa, .{ .type_var = try gpa.dupe(u8, idents.getText(rigid.name)) });
+            const var_name = switch (rigid.name) {
+                .name => |ident_idx| idents.getText(ident_idx),
+                .polarity_open, .polarity_deferred => "",
+            };
+            ext_type = try allocDocType(gpa, .{ .type_var = try gpa.dupe(u8, var_name) });
 
             const constraints = types.sliceStaticDispatchConstraints(rigid.constraints);
             for (constraints) |constraint| {
                 try ctx.constraints_list.append(gpa, .{
-                    .dispatcher_name = idents.getText(rigid.name),
+                    .dispatcher_name = var_name,
                     .fn_name_text = idents.getText(constraint.fn_name),
                     .fn_var = constraint.fn_var,
                 });

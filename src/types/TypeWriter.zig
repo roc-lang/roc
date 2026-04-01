@@ -420,7 +420,16 @@ fn writeVarWithContext(self: *TypeWriter, writer: *ByteWrite, var_: Var, context
                 }
             },
             .rigid => |rigid| {
-                _ = try writer.write(self.getIdent(rigid.name));
+                switch (rigid.name) {
+                    .name => |ident_idx| {
+                        _ = try writer.write(self.getIdent(ident_idx));
+                    },
+                    .polarity_open => {},
+                    .polarity_deferred => {
+                        std.debug.assert(false);
+                        _ = try writer.write("<unresolved>");
+                    },
+                }
 
                 // Useful in debugging to see if a var is rigid or not
                 // _ = try writer.print("[r-{}]", .{var_});
@@ -643,7 +652,14 @@ fn writeRecord(self: *TypeWriter, writer: *ByteWrite, record: Record, root_var: 
         .rigid => |rigid| {
             if (num_fields > 0) _ = try writer.write(", ");
             _ = try writer.write("..");
-            const name = self.getIdent(rigid.name);
+            const name = switch (rigid.name) {
+                .name => |ident_idx| self.getIdent(ident_idx),
+                .polarity_open => "",
+                .polarity_deferred => blk: {
+                    std.debug.assert(false);
+                    break :blk "<unresolved>";
+                },
+            };
             // Suppress internal names (e.g. #open_ext_0 from anonymous `..`)
             if (name.len == 0 or name[0] != '#') {
                 _ = try writer.write(name);
@@ -868,7 +884,14 @@ fn writeTagUnion(self: *TypeWriter, writer: *ByteWrite, tag_union: TagUnion, roo
         .rigid => |rigid| {
             if (num_tags > 0) _ = try writer.write(", ");
             _ = try writer.write("..");
-            const name = self.getIdent(rigid.name);
+            const name = switch (rigid.name) {
+                .name => |ident_idx| self.getIdent(ident_idx),
+                .polarity_open => "",
+                .polarity_deferred => blk: {
+                    std.debug.assert(false);
+                    break :blk "<unresolved>";
+                },
+            };
             // Suppress internal names (e.g. #open_ext_0 from anonymous `..`)
             if (name.len == 0 or name[0] != '#') {
                 _ = try writer.write(name);

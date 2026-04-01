@@ -108,14 +108,25 @@ pub const Instantiator = struct {
                             // we just return it.
 
                             const existing_var = inner_blk: {
-                                if (rigid_subs.get(rigid.name)) |existing_flex| {
-                                    break :inner_blk existing_flex;
-                                } else {
-                                    std.debug.assert(false);
-                                    break :inner_blk try self.store.freshFromContentWithRank(
-                                        .err,
-                                        self.current_rank,
-                                    );
+                                switch (rigid.name) {
+                                    .name => |ident_idx| {
+                                        if (rigid_subs.get(ident_idx)) |existing_flex| {
+                                            break :inner_blk existing_flex;
+                                        } else {
+                                            std.debug.assert(false);
+                                            break :inner_blk try self.store.freshFromContentWithRank(
+                                                .err,
+                                                self.current_rank,
+                                            );
+                                        }
+                                    },
+                                    .polarity_open, .polarity_deferred => {
+                                        std.debug.assert(false);
+                                        break :inner_blk try self.store.freshFromContentWithRank(
+                                            .err,
+                                            self.current_rank,
+                                        );
+                                    },
                                 }
                             };
 
@@ -137,7 +148,11 @@ pub const Instantiator = struct {
 
                 // Copy the rigid var's constraints
                 const fresh_content = switch (fresh_type) {
-                    .flex => Content{ .flex = Flex{ .name = rigid.name, .constraints = fresh_constraints } },
+                    .flex => Content{ .flex = Flex{ .name = switch (rigid.name) {
+                        .name => |ident_idx| ident_idx,
+                        .polarity_open => null,
+                        .polarity_deferred => unreachable,
+                    }, .constraints = fresh_constraints } },
                     .rigid => Content{ .rigid = Rigid{ .name = rigid.name, .constraints = fresh_constraints } },
                 };
 

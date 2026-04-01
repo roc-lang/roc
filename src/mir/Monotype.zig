@@ -491,7 +491,9 @@ pub const Store = struct {
                 return self.unit_idx;
             },
             .rigid => |rigid| {
-                if (lookupNamedSpecialization(scratches, rigid.name)) |specialized| return specialized;
+                if (rigid.name == .name) {
+                    if (lookupNamedSpecialization(scratches, rigid.name.name)) |specialized| return specialized;
+                }
                 if (hasNumeralConstraint(types_store, rigid.constraints))
                     return self.primIdx(.dec);
                 // See the unresolved flex branch above. The same monomorphic-MIR
@@ -916,7 +918,7 @@ pub const Store = struct {
         const resolved = types_store.resolveVar(ext_var);
         return switch (resolved.desc.content) {
             .flex => |flex| if (flex.name) |name| lookupNamedSpecialization(scratches, name) else null,
-            .rigid => |rigid| lookupNamedSpecialization(scratches, rigid.name),
+            .rigid => |rigid| if (rigid.name == .name) lookupNamedSpecialization(scratches, rigid.name.name) else null,
             else => null,
         };
     }
@@ -1037,7 +1039,7 @@ pub const Store = struct {
     ) ?[]const u8 {
         const resolved = types_store.resolveVar(var_);
         return switch (resolved.desc.content) {
-            .rigid => |rigid| module_env.getIdent(rigid.name),
+            .rigid => |rigid| if (rigid.name == .name) module_env.getIdent(rigid.name.name) else null,
             .flex => |flex| if (flex.name) |name| module_env.getIdent(name) else null,
             else => null,
         };

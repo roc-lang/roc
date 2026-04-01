@@ -664,7 +664,10 @@ fn gatherTagsFromUnion(
                 break;
             },
             .rigid => |rigid| {
-                ext = TagExt{ .rigid = rigid.name };
+                ext = switch (rigid.name) {
+                    .name => |ident_idx| TagExt{ .rigid = ident_idx },
+                    .polarity_open, .polarity_deferred => TagExt.other,
+                };
                 break;
             },
             .err, .recursive => {

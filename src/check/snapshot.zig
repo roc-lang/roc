@@ -43,7 +43,7 @@ pub const SnapshotFlex = struct {
 
 /// A snapshotted rigid (bound) type variable with name and constraints.
 pub const SnapshotRigid = struct {
-    name: Ident.Idx,
+    name: types.Rigid.Name,
     constraints: SnapshotStaticDispatchConstraintSafeList.Range,
 };
 
@@ -273,7 +273,10 @@ pub const Store = struct {
         if (has_seen_var) {
             const recursive_name: ?Ident.Idx = switch (resolved.desc.content) {
                 .flex => |flex| flex.name,
-                .rigid => |rigid| rigid.name,
+                .rigid => |rigid| switch (rigid.name) {
+                    .name => |ident_idx| ident_idx,
+                    .polarity_open, .polarity_deferred => null,
+                },
                 .alias => |alias| alias.ident.ident_idx,
                 .structure => |flat_type| switch (flat_type) {
                     .nominal_type => |nominal| nominal.ident.ident_idx,

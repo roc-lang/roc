@@ -130,8 +130,14 @@ fn copyRigid(
     allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!Rigid {
     // Translate the type name ident
-    const name_bytes = source_idents.getText(source_rigid.name);
-    const translated_name = try dest_idents.insert(allocator, base.Ident.for_text(name_bytes));
+    const translated_name: Rigid.Name = switch (source_rigid.name) {
+        .name => |ident_idx| blk: {
+            const name_bytes = source_idents.getText(ident_idx);
+            break :blk .{ .name = try dest_idents.insert(allocator, base.Ident.for_text(name_bytes)) };
+        },
+        .polarity_open => .polarity_open,
+        .polarity_deferred => .polarity_deferred,
+    };
 
     // Copy the constraints
     const dest_constraints_range = try copyStaticDispatchConstraints(
