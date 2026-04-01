@@ -3096,6 +3096,26 @@ pub const Pass = struct {
         bindings: *std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
         proc_inst_context: ProcInstId,
     ) Allocator.Error!void {
+        // If the template's type root is already fully bound with the current
+        // bindings, the body scan cannot discover additional bindings needed for
+        // proc instance creation. The proc instance's own scan in scanProcInst
+        // will handle body-level type resolution.
+        {
+            const template_types = &self.all_module_envs[template.module_idx].types;
+            var seen: std.AutoHashMapUnmanaged(types.Var, void) = .empty;
+            defer seen.deinit(self.allocator);
+            if (try self.typeVarFullyBoundWithBindings(
+                result,
+                template.module_idx,
+                template_types,
+                template.type_root,
+                bindings,
+                &seen,
+            )) {
+                return;
+            }
+        }
+
         const completion_key = TemplateBodyCompletionKey{
             .template_source_key = template.source_key,
             .context_proc_inst_raw = @intFromEnum(proc_inst_context),
@@ -4664,6 +4684,36 @@ pub const Pass = struct {
         );
         if (fn_monotype.isNone()) return null;
 
+        // During template-binding completion, dispatch inference may operate
+        // with incomplete bindings (direct call resolution is suppressed),
+        // producing a fn_monotype whose parameter types have unit-defaulted
+        // type variables. Verify the inferred parameter types are consistent
+        // with any already-recorded monotypes for the actual arguments. If
+        // they conflict, the inference is based on incomplete information and
+        // should be deferred.
+        if (self.scratch_context_expr_monotypes_depth != 0) {
+            const fn_mono = switch (result.monotype_store.getMonotype(fn_monotype)) {
+                .func => |func| func,
+                else => return null,
+            };
+            const fn_args = result.monotype_store.getIdxSpan(fn_mono.args);
+            if (fn_args.len == actual_args.items.len) {
+                for (actual_args.items, fn_args) |arg_expr_idx, param_mono| {
+                    if (self.lookupCurrentExprMonotype(result, module_idx, arg_expr_idx)) |existing| {
+                        if (!try self.monotypesStructurallyEqualAcrossModules(
+                            result,
+                            existing.idx,
+                            existing.module_idx,
+                            param_mono,
+                            template.module_idx,
+                        )) {
+                            return null;
+                        }
+                    }
+                }
+            }
+        }
+
         if (!try self.procSignatureAcceptsFnMonotype(
             result,
             template_id,
@@ -4698,13 +4748,25 @@ pub const Pass = struct {
 
         if (actual_args.items.len != fn_mono.args.len) unreachable;
 
+        // During template-binding completion (scratch context), dispatch
+        // inference may operate with incomplete bindings because direct call
+        // resolution is suppressed. This can produce proc inst monotypes
+        // with unit-defaulted type variables that conflict with the
+        // template's actual types. Tolerate such binding mismatches rather
+        // than treating them as binding probe failures.
+        const in_scratch_context = self.scratch_context_expr_monotypes_depth != 0;
+
         for (actual_args.items, 0..) |arg_expr_idx, i| {
             const param_mono = result.monotype_store.getIdxSpanItem(fn_mono.args, i);
+            const saved_probe_failed = self.binding_probe_failed;
             try self.bindCurrentExprTypeRoot(result, module_idx, arg_expr_idx, param_mono, proc_inst.fn_monotype_module_idx);
+            if (in_scratch_context) self.binding_probe_failed = saved_probe_failed;
             try self.recordCurrentExprMonotype(result, module_idx, arg_expr_idx, param_mono, proc_inst.fn_monotype_module_idx);
         }
 
+        const saved_probe_failed = self.binding_probe_failed;
         try self.bindCurrentExprTypeRoot(result, module_idx, expr_idx, fn_mono.ret, proc_inst.fn_monotype_module_idx);
+        if (in_scratch_context) self.binding_probe_failed = saved_probe_failed;
         try self.recordCurrentExprMonotype(result, module_idx, expr_idx, fn_mono.ret, proc_inst.fn_monotype_module_idx);
     }
 
@@ -4779,6 +4841,17 @@ pub const Pass = struct {
                 resolved.idx,
                 resolved.module_idx,
             )) {
+                return;
+            }
+
+            // During template-binding completion (scratch context), dispatch
+            // inference may operate with incomplete bindings because direct call
+            // resolution is suppressed. This can produce provisional monotypes
+            // with unit-defaulted type variables that conflict with a more
+            // concrete type already recorded in a prior fixed-point iteration.
+            // In that case, keep the existing (more informed) monotype rather
+            // than treating the conflict as a compiler bug.
+            if (self.scratch_context_expr_monotypes_depth != 0) {
                 return;
             }
 
@@ -9951,6 +10024,15 @@ pub const Pass = struct {
     ) void {
         if (self.binding_probe_mode) {
             self.binding_probe_failed = true;
+            return;
+        }
+        // During template-binding completion (scratch context), dispatch
+        // inference may operate with incomplete bindings because direct call
+        // resolution is suppressed. This can produce proc inst monotypes
+        // with unit-defaulted type variables that conflict with the
+        // template's actual types. Tolerate such binding mismatches rather
+        // than treating them as a compiler bug.
+        if (self.scratch_context_expr_monotypes_depth != 0) {
             return;
         }
         if (std.debug.runtime_safety) {
