@@ -6235,3 +6235,61 @@ test "check type - polarity - alias in neg resolves to closed" {
     ;
     try checkTypesModule(source, .{ .pass = .{ .def = "bar" } }, "MyResult(U64) -> Bool");
 }
+
+test "check type - polarity - basic neg closed arg" {
+    const source =
+        \\foo : [A, B] -> Str
+        \\foo = |tag|
+        \\    match tag {
+        \\        A => "a"
+        \\        B => "b"
+        \\    }
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "foo" } }, "[A, B] -> Str");
+}
+
+test "check type - polarity - higher order flip" {
+    const source =
+        \\foo : ([A, B] -> [X, Y]) -> Str
+        \\foo = |callback|
+        \\    match callback(A) {
+        \\        X => "x"
+        \\        Y => "y"
+        \\    }
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "foo" } }, "([A, B, ..] -> [X, Y]) -> Str");
+}
+
+test "check type - polarity - opaque always closed" {
+    const source =
+        \\MyColor := [Red, Green, Blue]
+        \\
+        \\foo : Str -> MyColor
+        \\foo = |_| MyColor.Red
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "foo" } }, "Str -> MyColor");
+}
+
+test "check type - polarity - undeclared tag fails" {
+    const source =
+        \\sneaky : Str -> [Ok(U64), Err(Str)]
+        \\sneaky = |s| Bad(s)
+    ;
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+}
+
+test "check type - polarity - user facing pos return elided" {
+    const source =
+        \\foo : Str -> [Ok(U64), Err(Str)]
+        \\foo = |_| Ok(1)
+    ;
+    try checkTypesModuleUserFacing(source, .{ .pass = .{ .def = "foo" } }, "Str -> [Err(Str), Ok(U64)]");
+}
+
+test "check type - polarity - user facing neg arg with flex ext shown" {
+    const source =
+        \\foo : [A, B, ..] -> Str
+        \\foo = |_| "hello"
+    ;
+    try checkTypesModuleUserFacing(source, .{ .pass = .{ .def = "foo" } }, "[A, B, ..] -> Str");
+}
