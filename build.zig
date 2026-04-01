@@ -2897,9 +2897,10 @@ pub fn build(b: *std.Build) void {
             );
         }
 
-        // Backend tests need the wasm host object built (for real-module parsing tests)
+        // Backend tests need the wasm host object and builtins for WASM linking tests
         if (std.mem.eql(u8, module_test.test_step.name, "backend")) {
             module_test.test_step.step.dependOn(wasm_host_step);
+            module_test.test_step.root_module.addImport("wasm32_builtins", wasm32_builtins_module);
         }
 
         if (std.mem.eql(u8, module_test.test_step.name, "repl")) {

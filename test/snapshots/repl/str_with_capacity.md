@@ -9,11 +9,5 @@ type=repl
 » Str.with_capacity(10)
 » Str.with_capacity(100)
 ~~~
-# OUTPUT
-""
----
-""
----
-""
 # PROBLEMS
 NIL

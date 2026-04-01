@@ -756,6 +756,14 @@ pub fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, ex
             return error.WasmExecFailed;
         };
 
+        // Compiler-rt intrinsics needed by merged builtins
+        env_imports.addHostFunction("__multi3", &[_]bytebox.ValType{ .I32, .I64, .I64, .I64, .I64 }, &[_]bytebox.ValType{}, hostMulti3, null) catch {
+            return error.WasmExecFailed;
+        };
+        env_imports.addHostFunction("__muloti4", &[_]bytebox.ValType{ .I32, .I64, .I64, .I64, .I64, .I32 }, &[_]bytebox.ValType{}, hostMuloti4, null) catch {
+            return error.WasmExecFailed;
+        };
+
         // i128/u128 division and modulo: (lhs_ptr, rhs_ptr, result_ptr) -> void
         env_imports.addHostFunction(
             "roc_i128_div_s",
@@ -1834,6 +1842,41 @@ fn hostRocCrashed(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]co
         const msg = buffer[msg_ptr..][0..msg_len];
         std.debug.print("Roc crashed: {s}\n", .{msg});
     }
+}
+
+/// __multi3: 128-bit signed multiply. result_ptr = a * b (truncating to 128 bits).
+fn hostMulti3(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    const buffer = module.store.getMemory(0).buffer();
+    const result_ptr: usize = @intCast(params[0].I32);
+    const a_lo: u64 = @bitCast(params[1].I64);
+    const a_hi: u64 = @bitCast(params[2].I64);
+    const b_lo: u64 = @bitCast(params[3].I64);
+    const b_hi: u64 = @bitCast(params[4].I64);
+    const a: i128 = @bitCast(@as(u128, a_hi) << 64 | @as(u128, a_lo));
+    const b: i128 = @bitCast(@as(u128, b_hi) << 64 | @as(u128, b_lo));
+    const result = i128h.mul_i128(a, b);
+    const result_u128: u128 = @bitCast(result);
+    std.mem.writeInt(u64, buffer[result_ptr..][0..8], @truncate(result_u128), .little);
+    std.mem.writeInt(u64, buffer[result_ptr + 8 ..][0..8], @truncate(result_u128 >> 64), .little);
+}
+
+/// __muloti4: 128-bit signed multiply with overflow detection.
+fn hostMuloti4(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    const buffer = module.store.getMemory(0).buffer();
+    const result_ptr: usize = @intCast(params[0].I32);
+    const a_lo: u64 = @bitCast(params[1].I64);
+    const a_hi: u64 = @bitCast(params[2].I64);
+    const b_lo: u64 = @bitCast(params[3].I64);
+    const b_hi: u64 = @bitCast(params[4].I64);
+    const overflow_ptr: usize = @intCast(params[5].I32);
+    const a: i128 = @bitCast(@as(u128, a_hi) << 64 | @as(u128, a_lo));
+    const b: i128 = @bitCast(@as(u128, b_hi) << 64 | @as(u128, b_lo));
+    const result = i128h.mul_i128(a, b);
+    const overflow: i32 = if (b != 0 and @divTrunc(result, b) != a) 1 else 0;
+    const result_u128: u128 = @bitCast(result);
+    std.mem.writeInt(u64, buffer[result_ptr..][0..8], @truncate(result_u128), .little);
+    std.mem.writeInt(u64, buffer[result_ptr + 8 ..][0..8], @truncate(result_u128 >> 64), .little);
+    std.mem.writeInt(i32, buffer[overflow_ptr..][0..4], overflow, .little);
 }
 
 // --- String operation host function helpers ---

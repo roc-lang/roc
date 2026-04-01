@@ -196,6 +196,7 @@ pub const WasmEvaluator = struct {
     fn prepareModuleWithBuiltins(self: *WasmEvaluator) Error!struct { module: WasmModule, syms: WasmModule.BuiltinSymbols } {
         var builtins_module = WasmModule.preload(self.allocator, wasm32_builtins.bytes, false) catch
             return error.RuntimeError;
+        defer builtins_module.deinit();
 
         var app_module = WasmModule.init(self.allocator);
 
@@ -211,8 +212,9 @@ pub const WasmEvaluator = struct {
             _ = app_module.addImport("env", name, roc_ops_type_idx) catch return error.RuntimeError;
         }
 
-        _ = app_module.mergeModule(&builtins_module) catch
+        var merge_result = app_module.mergeModule(&builtins_module) catch
             return error.RuntimeError;
+        merge_result.deinit();
 
         const syms = WasmModule.BuiltinSymbols.populate(&app_module) catch
             return error.RuntimeError;

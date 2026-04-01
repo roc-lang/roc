@@ -19,7 +19,7 @@
 | 12 | CLI Integration — `roc build --target=wasm32` | Done |
 | 13 | PIC Support & Eval Builtins | Done |
 | 14 | Rebase & Integration Fixes | Done |
-| 15 | Remaining Test Failures | In Progress |
+| 15 | Remaining Test Failures | Done |
 
 ## Overview
 
@@ -2261,68 +2261,75 @@ reloc offsets by subtracting the code section's function count LEB128 size (1 by
 
 ---
 
-## Phase 15: Remaining Test Failures — In Progress
+## Phase 15: Remaining Test Failures — Done
 
 ### Status
 
-**Repl**: 38/40 passing. 2 failures:
-- `Str.from_utf8 Ok` — TrapUnreachable
-- `Str.from_utf8 ok_or` — TrapUnreachable
+**Repl**: 40/40 passing.
+**Eval**: 1249/1249 passing (full suite).
 
-**Eval**: needs full count after rebase (was ~687/1249 before the mergeModule fix;
-expected to be significantly improved now).
+### Fixes Applied
 
-### Known Issues
+#### 1. `Str.from_utf8` FromUtf8Try ↔ tag union layout mismatch (FIXED)
 
-#### 1. `Str.from_utf8` TrapUnreachable (2 repl tests, likely several eval tests)
+The C builtin `roc_builtins_str_from_utf8` writes its result in `FromUtf8Try` layout
+(byte_index@0, string@8, is_ok@20, problem_code@21 on wasm32), but the codegen
+was writing this directly into the Roc tag union buffer without conversion. The Roc
+tag union has a different layout (Ok: Str@0, disc@disc_offset; Err: byte_index@0,
+problem@8, disc@disc_offset).
 
-The `Str.from_utf8` builtin crashes with `TrapUnreachable` during execution. Prior
-investigation showed this is NOT in the merged builtins code — even a no-op wrapper
-still crashes. The issue is in the app-generated wasm code at the call site.
+**Fix**: Added conversion code in the `str_from_utf8` codegen (WasmCodeGen.zig) that
+calls the C builtin into a temporary 24-byte buffer, then reads `is_ok` and copies
+the appropriate fields into the tag union result buffer:
+- Ok: copy RocStr (12 bytes) from raw+8 to result+0, set disc=1
+- Err: copy byte_index (8 bytes) from raw+0, problem_code from raw+21 to result+8, set disc=0
 
-**Hypothesis**: The codegen emits incorrect argument marshalling for builtins that
-take `List U8` and return a tagged union (`Result Str _`). The list-of-bytes creation
-works (tested independently), so the issue is likely in how the result struct is read
-back after the call, or in the tagged union layout assumptions.
+#### 2. WASM stack frame alignment (FIXED)
 
-**Files to investigate**:
-- `WasmCodeGen.zig` — `generateBuiltinCall` for `str_from_utf8`
-- The LIR lowering of `Str.from_utf8` — check that the result layout matches what
-  the wasm ABI expects
+The WASM codegen's `emitStackPrologue` did not round the stack frame size to 8-byte
+alignment. When a function's accumulated `stack_frame_size` was not a multiple of 8,
+the frame pointer (obtained by subtracting from an 8-byte-aligned stack pointer)
+would be misaligned. This caused `@alignCast` assertions in builtins that cast output
+pointers to structs containing u64 fields (like `FromUtf8Try`).
 
-#### 2. Eval test wasm comparison failures
+**Fix**: Round `stack_frame_size` up to 8-byte alignment in `emitStackPrologue`:
+`self.stack_frame_size = (self.stack_frame_size + 7) & ~@as(u32, 7);`
 
-The eval test suite runs each expression through both the dev evaluator (interpreter)
-and the wasm evaluator, comparing results. Wasm failures cause the test to fail even
-if the interpreter result is correct. After the `mergeModule` fix, many of these should
-now pass. A full test run is needed to get the updated count.
+#### 3. Missing `transferAppFunctions()` before encode (FIXED)
 
-**Action items**:
-- Run `zig build test -- --test-filter="eval"` to get updated pass count
-- Categorize remaining failures by error type (TrapUnreachable vs wrong result vs
-  WasmExecFailed)
+App function bodies added via `setFunctionBody` (RocCall entrypoint, eval wrapper)
+were not transferred into `code_bytes` before `encode()`. This meant
+`function_offsets` had no entries for app functions, causing `materializeFuncBodies`
+to go out of bounds during encoding — resulting in tests hanging.
 
-#### 3. Compiler-rt imports from builtins
+**Fix**: Call `self.module.transferAppFunctions()` after all `setFunctionBody` calls
+and before `encode()` in `WasmCodeGen.generateModule`.
+
+#### 4. RocOps struct at address 0 causes null pointer trap (FIXED)
+
+The eval wrapper placed the RocOps struct at WASM linear memory address 0. When
+builtins cast `roc_ops` pointers to Zig optional pointers (`?*anyopaque`), address 0
+is treated as `null`. In `strDecref` (called during `list.decref` for
+`Str.join_with` and `Str.split_on`), the null context check hit an explicit
+`unreachable`, causing `TrapUnreachable`.
+
+**Fix**: Allocate the RocOps struct in the eval wrapper's stack frame (at a non-zero
+address) instead of at memory offset 0.
+
+#### 5. Memory leaks in eval pipeline (FIXED)
+
+- `builtins_module` from `WasmModule.preload` was not freed after merge. Added
+  `defer builtins_module.deinit()`.
+- `MergeResult.symbol_remap` from `mergeModule` was discarded. Changed to call
+  `merge_result.deinit()`.
+
+### Known Limitation: Compiler-rt imports
 
 The wasm32 `roc_builtins.o` imports `__multi3` and `__muloti4` from compiler-rt.
-Currently handled by host function implementations in `wasm_runner.zig`. For the
-CLI `roc build` path (Phase 12), these will need to be resolved differently — either
+Currently handled by host function implementations in `helpers.zig`. For the
+CLI `roc build` path, these will need to be resolved differently — either
 by bundling compiler-rt into the builtins object for wasm32 only, or by providing
 them through the host platform's object.
-
-**Background**: The builtins are compiled with `bundle_compiler_rt = false` to avoid
-conflicts with other targets. The `compiler_rt_128.zig` module has `is_wasm` guards
-that decompose 128-bit ops into 64-bit ops for wasm32, but some code paths (likely
-in `num.zig` overflow handling or `dec.zig` multiplication) still use native `*`
-on i128 which Zig lowers to `__multi3`.
-
-**Options**:
-1. Set `bundle_compiler_rt = true` for wasm32 only in `build.zig` (simplest, may
-   conflict if host also bundles it)
-2. Find and fix the remaining i128 multiplication sites that bypass the `is_wasm`
-   guards (cleanest, ensures no compiler-rt dependency)
-3. Have the surgical linker provide these as defined functions during merge (most
-   robust for the CLI path)
 
 ---
 

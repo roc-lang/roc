@@ -333,6 +333,10 @@ pub fn generateModule(self: *Self, expr_id: LirExprId, result_layout: layout.Idx
     self.module.setFunctionBody(eval_func_idx, eval_body.items) catch return error.OutOfMemory;
     self.module.addExport("main", .func, eval_func_idx) catch return error.OutOfMemory;
 
+    // Transfer app function bodies into code_bytes so that
+    // function_offsets is populated before encode/materializeFuncBodies.
+    self.module.transferAppFunctions() catch return error.OutOfMemory;
+
     // Encode the module
     const wasm_bytes = self.module.encode(self.allocator) catch return error.OutOfMemory;
 
@@ -396,6 +400,11 @@ fn emitStoreResultToRetPtr(self: *Self, ret_ptr_local: u32, result_vt: ValType, 
 
 /// Emit the stack frame allocation prologue into a function body buffer.
 fn emitStackPrologue(self: *Self, func_body: *std.ArrayList(u8)) Allocator.Error!void {
+    // Round up frame size to 8-byte alignment to ensure the frame pointer
+    // maintains 8-byte alignment (required by builtins that use @alignCast
+    // on stack-allocated pointers, e.g. FromUtf8Try with u64 fields).
+    self.stack_frame_size = (self.stack_frame_size + 7) & ~@as(u32, 7);
+
     // global.get $__stack_pointer (global 0)
     func_body.append(self.allocator, Op.global_get) catch return error.OutOfMemory;
     WasmModule.leb128WriteU32(self.allocator, func_body, 0) catch return error.OutOfMemory;
@@ -445,18 +454,26 @@ fn emitEvalWrapper(
     //   Local 0: env_ptr (parameter)
     //   Local 1: fp (frame pointer)
     //   Local 2: ret_buf_ptr
+    //   Local 3: roc_ops_ptr
     const eval_env_ptr_local: u32 = 0;
     const eval_fp_local: u32 = 1;
     const eval_ret_buf_local: u32 = 2;
+    const eval_roc_ops_local: u32 = 3;
 
-    // Locals declaration: 2 locals of type i32 (fp + ret_buf_ptr)
+    // Locals declaration: 3 locals of type i32 (fp + ret_buf_ptr + roc_ops_ptr)
     WasmModule.leb128WriteU32(self.allocator, eval_body, 1) catch return error.OutOfMemory; // 1 group
-    WasmModule.leb128WriteU32(self.allocator, eval_body, 2) catch return error.OutOfMemory; // 2 locals
+    WasmModule.leb128WriteU32(self.allocator, eval_body, 3) catch return error.OutOfMemory; // 3 locals
     eval_body.append(self.allocator, @intFromEnum(ValType.i32)) catch return error.OutOfMemory;
 
-    // Stack frame size: return buffer (aligned up to 8 bytes)
+    // Stack frame layout (grows downward from stack pointer):
+    //   [ret_buf: ret_buf_size bytes, aligned to 8]
+    //   [roc_ops: 36 bytes, aligned to 4]
+    // The RocOps struct MUST be at a non-zero address because builtins cast
+    // roc_ops pointers to ?*anyopaque, and Zig treats address 0 as null.
     const ret_buf_size = if (result_byte_size > 0) result_byte_size else 8;
-    const eval_frame_size: u32 = (ret_buf_size + 7) & ~@as(u32, 7);
+    const ret_buf_aligned: u32 = (ret_buf_size + 7) & ~@as(u32, 7);
+    const roc_ops_size: u32 = WasmRocOps.total_size; // 36 bytes
+    const eval_frame_size: u32 = ret_buf_aligned + ((roc_ops_size + 7) & ~@as(u32, 7));
 
     // Prologue: allocate stack frame
     // global.get $__stack_pointer
@@ -480,24 +497,35 @@ fn emitEvalWrapper(
     eval_body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
     WasmModule.leb128WriteU32(self.allocator, eval_body, eval_ret_buf_local) catch return error.OutOfMemory;
 
-    // Build RocOps struct at memory offset 0 (36 bytes on wasm32)
-    // Write env pointer
-    try self.emitI32StoreToBody(eval_body, WasmRocOps.env_ptr, eval_env_ptr_local, null);
-    // Write RocOps callback table indices
-    try self.emitI32StoreConstToBody(eval_body, WasmRocOps.roc_alloc_table_idx, self.roc_alloc_table_idx);
-    try self.emitI32StoreConstToBody(eval_body, WasmRocOps.roc_dealloc_table_idx, self.roc_dealloc_table_idx);
-    try self.emitI32StoreConstToBody(eval_body, WasmRocOps.roc_realloc_table_idx, self.roc_realloc_table_idx);
-    try self.emitI32StoreConstToBody(eval_body, WasmRocOps.roc_dbg_table_idx, self.roc_dbg_table_idx);
-    try self.emitI32StoreConstToBody(eval_body, WasmRocOps.roc_expect_failed_table_idx, self.roc_expect_failed_table_idx);
-    try self.emitI32StoreConstToBody(eval_body, WasmRocOps.roc_crashed_table_idx, self.roc_crashed_table_idx);
-    // No hosted functions in standalone eval mode
-    try self.emitI32StoreConstToBody(eval_body, WasmRocOps.hosted_fns_count, 0);
-    try self.emitI32StoreConstToBody(eval_body, WasmRocOps.hosted_fns_ptr, 0);
-
-    // Call RocCall function: <entrypoint>(roc_ops_ptr=0, ret_buf, args_ptr=0)
-    // arg 0: roc_ops_ptr = 0 (RocOps struct is at memory offset 0)
+    // roc_ops_ptr = fp + ret_buf_aligned (RocOps struct after return buffer)
+    // The RocOps struct MUST be at a non-zero address because builtins cast
+    // roc_ops pointers to ?*anyopaque, and Zig treats address 0 as null.
+    eval_body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+    WasmModule.leb128WriteU32(self.allocator, eval_body, eval_fp_local) catch return error.OutOfMemory;
     eval_body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-    WasmModule.leb128WriteI32(self.allocator, eval_body, 0) catch return error.OutOfMemory;
+    WasmModule.leb128WriteI32(self.allocator, eval_body, @intCast(ret_buf_aligned)) catch return error.OutOfMemory;
+    eval_body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+    eval_body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
+    WasmModule.leb128WriteU32(self.allocator, eval_body, eval_roc_ops_local) catch return error.OutOfMemory;
+
+    // Build RocOps struct in the stack frame (at roc_ops_ptr)
+    // Write env pointer
+    try self.emitI32StoreToBody(eval_body, WasmRocOps.env_ptr, eval_env_ptr_local, eval_roc_ops_local);
+    // Write RocOps callback table indices
+    try self.emitI32StoreConstToBody(eval_body, WasmRocOps.roc_alloc_table_idx, self.roc_alloc_table_idx, eval_roc_ops_local);
+    try self.emitI32StoreConstToBody(eval_body, WasmRocOps.roc_dealloc_table_idx, self.roc_dealloc_table_idx, eval_roc_ops_local);
+    try self.emitI32StoreConstToBody(eval_body, WasmRocOps.roc_realloc_table_idx, self.roc_realloc_table_idx, eval_roc_ops_local);
+    try self.emitI32StoreConstToBody(eval_body, WasmRocOps.roc_dbg_table_idx, self.roc_dbg_table_idx, eval_roc_ops_local);
+    try self.emitI32StoreConstToBody(eval_body, WasmRocOps.roc_expect_failed_table_idx, self.roc_expect_failed_table_idx, eval_roc_ops_local);
+    try self.emitI32StoreConstToBody(eval_body, WasmRocOps.roc_crashed_table_idx, self.roc_crashed_table_idx, eval_roc_ops_local);
+    // No hosted functions in standalone eval mode
+    try self.emitI32StoreConstToBody(eval_body, WasmRocOps.hosted_fns_count, 0, eval_roc_ops_local);
+    try self.emitI32StoreConstToBody(eval_body, WasmRocOps.hosted_fns_ptr, 0, eval_roc_ops_local);
+
+    // Call RocCall function: <entrypoint>(roc_ops_ptr, ret_buf, args_ptr=0)
+    // arg 0: roc_ops_ptr (non-zero stack address)
+    eval_body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+    WasmModule.leb128WriteU32(self.allocator, eval_body, eval_roc_ops_local) catch return error.OutOfMemory;
     // arg 1: ret_buf_ptr
     eval_body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
     WasmModule.leb128WriteU32(self.allocator, eval_body, eval_ret_buf_local) catch return error.OutOfMemory;
@@ -4801,10 +4829,15 @@ fn emitHeapAllocConst(self: *Self, size: u32, alignment: u32) Allocator.Error!vo
 
 /// Emit i32.store to a func_body buffer: stores a local's value at memory offset 0 + field_offset.
 /// Used during main() prologue to build the RocOps struct.
-fn emitI32StoreToBody(self: *Self, func_body: *std.ArrayList(u8), field_offset: u32, local_idx: u32, _: ?void) Allocator.Error!void {
-    // i32.const 0  (base address of RocOps struct)
-    func_body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-    WasmModule.leb128WriteI32(self.allocator, func_body, 0) catch return error.OutOfMemory;
+fn emitI32StoreToBody(self: *Self, func_body: *std.ArrayList(u8), field_offset: u32, local_idx: u32, base_local: ?u32) Allocator.Error!void {
+    // base address: local.get $base_local or i32.const 0
+    if (base_local) |bl| {
+        func_body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+        WasmModule.leb128WriteU32(self.allocator, func_body, bl) catch return error.OutOfMemory;
+    } else {
+        func_body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+        WasmModule.leb128WriteI32(self.allocator, func_body, 0) catch return error.OutOfMemory;
+    }
     // local.get $local_idx
     func_body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
     WasmModule.leb128WriteU32(self.allocator, func_body, local_idx) catch return error.OutOfMemory;
@@ -4814,12 +4847,17 @@ fn emitI32StoreToBody(self: *Self, func_body: *std.ArrayList(u8), field_offset: 
     WasmModule.leb128WriteU32(self.allocator, func_body, field_offset) catch return error.OutOfMemory;
 }
 
-/// Emit i32.store to a func_body buffer: stores a constant value at memory offset 0 + field_offset.
+/// Emit i32.store to a func_body buffer: stores a constant value at base_local + field_offset.
 /// Used during main() prologue to build the RocOps struct.
-fn emitI32StoreConstToBody(self: *Self, func_body: *std.ArrayList(u8), field_offset: u32, value: u32) Allocator.Error!void {
-    // i32.const 0  (base address of RocOps struct)
-    func_body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-    WasmModule.leb128WriteI32(self.allocator, func_body, 0) catch return error.OutOfMemory;
+fn emitI32StoreConstToBody(self: *Self, func_body: *std.ArrayList(u8), field_offset: u32, value: u32, base_local: ?u32) Allocator.Error!void {
+    // base address: local.get $base_local or i32.const 0
+    if (base_local) |bl| {
+        func_body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+        WasmModule.leb128WriteU32(self.allocator, func_body, bl) catch return error.OutOfMemory;
+    } else {
+        func_body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+        WasmModule.leb128WriteI32(self.allocator, func_body, 0) catch return error.OutOfMemory;
+    }
     // i32.const value
     func_body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
     WasmModule.leb128WriteI32(self.allocator, func_body, @intCast(value)) catch return error.OutOfMemory;
@@ -8478,19 +8516,89 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.emitCallBuiltin(import_idx);
         },
         .str_from_utf8 => {
+            // str_from_utf8(List U8) -> Result Str [BadUtf8 {byte_index: U64, problem: Utf8ByteProblem}]
+            //
+            // The C builtin writes FromUtf8Try layout (wasm32):
+            //   byte_index: u64 @0, string: RocStr @8 (12 bytes), is_ok: bool @20, problem_code: u8 @21
+            // The Roc tag union layout is:
+            //   Ok(1): Str (12 bytes) @0, discriminant @disc_offset
+            //   Err(0): byte_index: u64 @0, problem: u8 @8, discriminant @disc_offset
+            //
+            // We call the builtin into a temp buffer, then convert to tag union layout.
             const ls = self.getLayoutStore();
             const ret_layout_val = ls.getLayout(ll.ret_layout);
             if (ret_layout_val.tag != .tag_union) unreachable;
             const tu_data = ls.getTagUnionData(ret_layout_val.data.tag_union.idx);
+            const disc_offset: u32 = tu_data.discriminant_offset;
+            const disc_size: u32 = tu_data.discriminant_size;
             const import_idx = self.builtin_syms.str_from_utf8;
+
             try self.generateExpr(args[0]);
             const input = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             try self.emitLocalSet(input);
-            const result_local = try self.allocStackResultPtr(tu_data.size, self.layoutByteAlign(ll.ret_layout));
-            try self.emitLocalGet(result_local);
+
+            // Allocate temp buffer for FromUtf8Try (24 bytes on wasm32)
+            const raw_local = try self.allocStackResultPtr(24, 8);
+
+            // Call: roc_builtins_str_from_utf8(raw_ptr, list_bytes, list_len, list_cap, roc_ops)
+            try self.emitLocalGet(raw_local);
             try self.emitPtrLenCapArgs(input);
             try self.emitLocalGet(self.roc_ops_local);
             try self.emitCallBuiltin(import_idx);
+
+            // Allocate tag union result buffer
+            const result_local = try self.allocStackResultPtr(tu_data.size, self.layoutByteAlign(ll.ret_layout));
+
+            // Read is_ok from raw buffer (offset 20 on wasm32)
+            try self.emitLocalGet(raw_local);
+            try self.emitLoadOpSized(.i32, 1, 20);
+
+            // if (is_ok)
+            self.code_builder.code.append(self.allocator, Op.@"if") catch return error.OutOfMemory;
+            self.code_builder.code.append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
+
+            // OK branch: copy RocStr (12 bytes) from raw+8 to result+0
+            // Copy bytes ptr (4 bytes)
+            try self.emitLocalGet(result_local);
+            try self.emitLocalGet(raw_local);
+            try self.emitLoadOp(.i32, 8);
+            try self.emitStoreOp(.i32, 0);
+            // Copy length (4 bytes)
+            try self.emitLocalGet(result_local);
+            try self.emitLocalGet(raw_local);
+            try self.emitLoadOp(.i32, 12);
+            try self.emitStoreOp(.i32, 4);
+            // Copy capacity (4 bytes)
+            try self.emitLocalGet(result_local);
+            try self.emitLocalGet(raw_local);
+            try self.emitLoadOp(.i32, 16);
+            try self.emitStoreOp(.i32, 8);
+            // Write discriminant = 1 (Ok)
+            try self.emitLocalGet(result_local);
+            self.code_builder.code.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI32(self.allocator, &self.code_builder.code, 1) catch return error.OutOfMemory;
+            try self.emitStoreOpSized(.i32, disc_size, disc_offset);
+
+            self.code_builder.code.append(self.allocator, Op.@"else") catch return error.OutOfMemory;
+
+            // ERR branch: copy byte_index (8 bytes) from raw+0 to result+0
+            try self.emitLocalGet(result_local);
+            try self.emitLocalGet(raw_local);
+            try self.emitLoadOp(.i64, 0);
+            try self.emitStoreOp(.i64, 0);
+            // Copy problem_code (1 byte) from raw+21 to result+8
+            try self.emitLocalGet(result_local);
+            try self.emitLocalGet(raw_local);
+            try self.emitLoadOpSized(.i32, 1, 21);
+            try self.emitStoreOpSized(.i32, 1, 8);
+            // Write discriminant = 0 (Err)
+            try self.emitLocalGet(result_local);
+            self.code_builder.code.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI32(self.allocator, &self.code_builder.code, 0) catch return error.OutOfMemory;
+            try self.emitStoreOpSized(.i32, disc_size, disc_offset);
+
+            self.code_builder.code.append(self.allocator, Op.end) catch return error.OutOfMemory;
+
             try self.emitLocalGet(result_local);
         },
         .num_from_str => {
