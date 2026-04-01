@@ -595,6 +595,8 @@ pub const Pass = struct {
     in_progress_callable_scans: std.AutoHashMapUnmanaged(u32, void),
     completed_callable_scans: std.AutoHashMapUnmanaged(u32, void),
     in_progress_template_body_completions: std.AutoHashMapUnmanaged(TemplateBodyCompletionKey, void),
+    staged_expr_callable_values: std.AutoHashMapUnmanaged(ContextExprKey, CallableValue),
+    staged_expr_calls: std.AutoHashMapUnmanaged(ContextExprKey, CallSite),
     mutation_revision: u64,
     mutation_counts: [mutation_kind_count]u32,
 
@@ -620,6 +622,8 @@ pub const Pass = struct {
             .in_progress_callable_scans = .empty,
             .completed_callable_scans = .empty,
             .in_progress_template_body_completions = .empty,
+            .staged_expr_callable_values = .empty,
+            .staged_expr_calls = .empty,
             .mutation_revision = 0,
             .mutation_counts = [_]u32{0} ** mutation_kind_count,
         };
@@ -1430,6 +1434,8 @@ pub const Pass = struct {
         self.in_progress_callable_scans.deinit(self.allocator);
         self.completed_callable_scans.deinit(self.allocator);
         self.in_progress_template_body_completions.deinit(self.allocator);
+        self.staged_expr_callable_values.deinit(self.allocator);
+        self.staged_expr_calls.deinit(self.allocator);
     }
 
     pub fn runRootSourceExpr(self: *Pass, expr_idx: CIR.Expr.Idx) Allocator.Error!Result {
@@ -1958,7 +1964,7 @@ pub const Pass = struct {
     ) Allocator.Error!void {
         try self.putTracked(
             .program_values,
-            &result.lambdamono.expr_callable_values,
+            &self.staged_expr_callable_values,
             Result.contextExprKey(source_context, module_idx, expr_idx),
             callable_value,
         );
@@ -1987,7 +1993,8 @@ pub const Pass = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?CallableValue {
-        return result.lambdamono.getExprCallableValue(source_context, module_idx, expr_idx);
+        _ = result;
+        return self.staged_expr_callable_values.get(Result.contextExprKey(source_context, module_idx, expr_idx));
     }
 
     fn readCallableParamValue(
@@ -2014,7 +2021,7 @@ pub const Pass = struct {
     ) Allocator.Error!void {
         try self.putTracked(
             .program_calls,
-            &result.lambdamono.expr_calls,
+            &self.staged_expr_calls,
             Result.contextExprKey(source_context, module_idx, expr_idx),
             call_site,
         );
@@ -2027,7 +2034,8 @@ pub const Pass = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?CallSite {
-        return result.lambdamono.getExprCall(source_context, module_idx, expr_idx);
+        _ = result;
+        return self.staged_expr_calls.get(Result.contextExprKey(source_context, module_idx, expr_idx));
     }
 
     fn scanSeedModules(self: *Pass, result: *Result) Allocator.Error!void {
@@ -2599,11 +2607,11 @@ pub const Pass = struct {
         pattern_idx: CIR.Pattern.Idx,
         expr_idx: CIR.Expr.Idx,
     ) Allocator.Error!void {
-        const pattern_mono = try self.resolveTypeVarMonotypeResolved(
-            result,
+        const pattern_mono = result.context_mono.getContextPatternMonotype(
+            thread.requireSourceContext(),
             module_idx,
-            ModuleEnv.varFrom(pattern_idx),
-        );
+            pattern_idx,
+        ) orelse return;
         if (pattern_mono.isNone()) return;
 
         var visiting: std.AutoHashMapUnmanaged(ContextExprVisitKey, void) = .empty;
@@ -3243,7 +3251,7 @@ pub const Pass = struct {
         source: ExprSource,
         projection: CallableParamProjection,
     ) Allocator.Error!ExprSource {
-        return (try self.projectConcreteExprSource(result, source, projection)) orelse std.debug.panic(
+        return (try self.projectExprSourceNow(result, source, projection)) orelse std.debug.panic(
             "Pipeline invariant violated: could not project expr source {d}:{d} with projection kind {s}",
             .{
                 source.module_idx,
@@ -3338,13 +3346,14 @@ pub const Pass = struct {
     }
 
     fn captureValueSourceForClosurePattern(
-        _: *Pass,
+        self: *Pass,
         result: *Result,
         source_context: SourceContext,
         module_env: *const ModuleEnv,
         module_idx: u32,
         pattern_idx: CIR.Pattern.Idx,
     ) Allocator.Error!?CaptureValueSource {
+        _ = source_context;
         if (findDefByPattern(module_env, pattern_idx) != null) {
             return null;
         }
@@ -4210,14 +4219,22 @@ pub const Pass = struct {
                 }
             }
 
-            const source = result.getPatternSourceExpr(module_idx, capture.pattern_idx) orelse continue;
-
-            try self.scanDemandedValueDefExprInSourceContext(
+            const capture_source = (try self.captureValueSourceForClosurePattern(
                 result,
-                source.source_context,
-                source.module_idx,
-                source.expr_idx,
-            );
+                source_context,
+                module_env,
+                module_idx,
+                capture.pattern_idx,
+            )) orelse continue;
+            switch (capture_source) {
+                .expr => |expr_ref| try self.scanDemandedValueDefExprInSourceContext(
+                    result,
+                    expr_ref.source_context,
+                    expr_ref.module_idx,
+                    expr_ref.expr_idx,
+                ),
+                .lexical_pattern => {},
+            }
         }
     }
 
@@ -6334,7 +6351,7 @@ pub const Pass = struct {
         );
 
         if (result.getExprSourceExpr(module_idx, expr_idx)) |source| {
-            const concrete_source = (try self.resolveConcreteExprSource(result, source, visiting)) orelse return;
+            const concrete_source = (try self.resolveAliasedExprSource(result, source, visiting)) orelse return;
             if (!(concrete_source.source_context == source_context and
                 concrete_source.module_idx == module_idx and
                 concrete_source.expr_idx == expr_idx))
@@ -6380,7 +6397,7 @@ pub const Pass = struct {
         );
 
         if (result.getExprSourceExpr(module_idx, expr_idx)) |source| {
-            const concrete_source = (try self.resolveConcreteExprSource(result, source, visiting)) orelse return;
+            const concrete_source = (try self.resolveAliasedExprSource(result, source, visiting)) orelse return;
             if (!(concrete_source.source_context == source_context and
                 concrete_source.module_idx == module_idx and
                 concrete_source.expr_idx == expr_idx))
@@ -6561,7 +6578,7 @@ pub const Pass = struct {
         const module_env = self.all_module_envs[module_idx];
         const expr = module_env.store.getExpr(expr_idx);
         if (result.getExprSourceExpr(module_idx, expr_idx)) |source| {
-            const concrete_source = (try self.resolveConcreteExprSource(result, source, visiting)) orelse return;
+            const concrete_source = (try self.resolveAliasedExprSource(result, source, visiting)) orelse return;
             if (!(concrete_source.source_context == source_context and
                 concrete_source.module_idx == module_idx and
                 concrete_source.expr_idx == expr_idx))
@@ -10071,7 +10088,7 @@ pub const Pass = struct {
         }
 
         if (result.getExprSourceExpr(module_idx, expr_idx)) |source| {
-            const concrete_source = (try self.resolveConcreteExprSource(result, source, visiting)) orelse return null;
+            const concrete_source = (try self.resolveAliasedExprSource(result, source, visiting)) orelse return null;
             if (!(concrete_source.source_context == source_context and
                 concrete_source.module_idx == module_idx and
                 concrete_source.expr_idx == expr_idx))
@@ -10136,7 +10153,7 @@ pub const Pass = struct {
         };
     }
 
-    fn resolveConcreteExprSource(
+    fn resolveAliasedExprSource(
         self: *Pass,
         result: *Result,
         source: ExprSource,
@@ -10148,13 +10165,13 @@ pub const Pass = struct {
         defer _ = visiting.remove(visit_key);
 
         if (result.getExprSourceExpr(source.module_idx, source.expr_idx)) |aliased| {
-            return (try self.resolveConcreteExprSource(result, aliased, visiting)) orelse return null;
+            return (try self.resolveAliasedExprSource(result, aliased, visiting)) orelse return null;
         }
 
         return exprSourceInContext(source.source_context, source.module_idx, source.expr_idx);
     }
 
-    fn projectConcreteExprSource(
+    fn projectExprSourceNow(
         self: *Pass,
         result: *Result,
         source: ExprSource,
