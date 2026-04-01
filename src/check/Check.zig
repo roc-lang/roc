@@ -1544,7 +1544,7 @@ fn processRequiresTypes(self: *Self, env: *Env) std.mem.Allocator.Error!void {
         // Then, generate the type for the actual required type
         //   { [Model : model] for main : { init : model, ... } }
         //                                ^^^^^^^^^^^^^^^^^^^^^^
-        try self.generateAnnoTypeInPlace(required_type.type_anno, env, .annotation);
+        try self.generateAnnoTypeInPlace(required_type.type_anno, env, .{ .annotation = .pos });
     }
 }
 
@@ -2223,7 +2223,7 @@ fn generateStandaloneTypeAnno(
 
     // Generate the type from the annotation
     const anno_var: Var = ModuleEnv.varFrom(type_anno.anno);
-    try self.generateAnnoTypeInPlace(type_anno.anno, env, .annotation);
+    try self.generateAnnoTypeInPlace(type_anno.anno, env, .{ .annotation = .pos });
 
     // Unify the statement variable with the generated annotation type
     _ = try self.unify(stmt_var, anno_var, env);
@@ -2280,7 +2280,7 @@ const OutVar = enum {
 
 /// The context use for free var generation
 const GenTypeAnnoCtx = union(enum) {
-    annotation,
+    annotation: types_mod.Polarity,
     type_decl: struct {
         idx: CIR.Statement.Idx,
         name: Ident.Idx,
@@ -2315,7 +2315,7 @@ fn generateAnnotationType(self: *Self, annotation_idx: CIR.Annotation.Idx, env: 
     }
 
     // Then, generate the type for the annotation
-    try self.generateAnnoTypeInPlace(annotation.anno, env, .annotation);
+    try self.generateAnnoTypeInPlace(annotation.anno, env, .{ .annotation = .pos });
 
     // Redirect the root annotation to inner annotation
     _ = try self.unify(annotation_var, ModuleEnv.varFrom(annotation.anno), env);
@@ -2332,18 +2332,18 @@ fn generateStaticDispatchConstraintFromWhere(self: *Self, where_idx: CIR.WhereCl
     switch (where) {
         .w_method => |method| {
             // Generate type of the thing dispatch receiver
-            try self.generateAnnoTypeInPlace(method.var_, env, .annotation);
+            try self.generateAnnoTypeInPlace(method.var_, env, .{ .annotation = .pos });
             const method_var = ModuleEnv.varFrom(method.var_);
 
             // Generate the arguments
             const args_anno_slice = self.cir.store.sliceTypeAnnos(method.args);
             for (args_anno_slice) |arg_anno_idx| {
-                try self.generateAnnoTypeInPlace(arg_anno_idx, env, .annotation);
+                try self.generateAnnoTypeInPlace(arg_anno_idx, env, .{ .annotation = .pos });
             }
             const anno_arg_vars: []Var = @ptrCast(args_anno_slice);
 
             // Generate return type
-            try self.generateAnnoTypeInPlace(method.ret, env, .annotation);
+            try self.generateAnnoTypeInPlace(method.ret, env, .{ .annotation = .pos });
             const ret_var = ModuleEnv.varFrom(method.ret);
 
             // Create the function var
@@ -2410,7 +2410,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
         .rigid_var => |rigid| {
             const static_dispatch_constraints_start = self.types.static_dispatch_constraints.len();
             switch (ctx) {
-                .annotation => {
+                .annotation => |_| {
                     // If this an annotation, then check all where constraints
                     // and see if any reference this rigid var
                     for (self.scratch_static_dispatch_constraints.items.items) |scratch_constraint| {
@@ -2489,7 +2489,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                                 return;
                             }
                         },
-                        .annotation => {
+                        .annotation => |_| {
                             // Otherwise, we're in an annotation and this cannot
                             // be recursive
                         },
@@ -2589,7 +2589,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                                 return;
                             }
                         },
-                        .annotation => {
+                        .annotation => |_| {
                             // Otherwise, we're in an annotation and this cannot
                             // be recursive
                         },
@@ -2746,12 +2746,18 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
             }
         },
         .@"fn" => |func| {
+            // Args: flip polarity (standard contravariance)
+            const arg_ctx: GenTypeAnnoCtx = switch (ctx) {
+                .annotation => |pol| .{ .annotation = pol.flip() },
+                .type_decl => ctx, // sticky in_alias/in_opaque
+            };
             const args_anno_slice = self.cir.store.sliceTypeAnnos(func.args);
             for (args_anno_slice) |arg_anno_idx| {
-                try self.generateAnnoTypeInPlace(arg_anno_idx, env, ctx);
+                try self.generateAnnoTypeInPlace(arg_anno_idx, env, arg_ctx);
             }
             const args_var_slice: []Var = @ptrCast(args_anno_slice);
 
+            // Return: preserve parent polarity
             try self.generateAnnoTypeInPlace(func.ret, env, ctx);
 
             const fn_type = inner_blk: {
