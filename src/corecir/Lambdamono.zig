@@ -276,7 +276,7 @@ pub const PatternValueOrigin = union(enum) {
 pub const PatternBinding = struct {
     key: ContextPatternKey,
     callable_semantics: PatternCallableSemantics,
-    value_origin: PatternValueOrigin,
+    origin: PatternValueOrigin,
 };
 
 pub const Expr = struct {
@@ -287,10 +287,10 @@ pub const Expr = struct {
     child_exprs: ExprIdSpan = .empty(),
     child_stmts: StmtIdSpan = .empty(),
     callable_semantics: ExprCallableSemantics,
-    call_semantics: ExprCallSemantics,
-    value_origin: ExprValueOrigin,
-    dispatch_semantics: ExprDispatchSemantics,
-    lookup_semantics: ExprLookupSemantics,
+    call: ExprCallSemantics,
+    origin: ExprValueOrigin,
+    dispatch: ExprDispatchSemantics,
+    lookup: ExprLookupSemantics,
 };
 
 pub const Stmt = struct {
@@ -442,7 +442,7 @@ pub const Program = struct {
         pattern_idx: CIR.Pattern.Idx,
     ) ?ExprRef {
         const binding = self.getPatternBinding(source_context, module_idx, pattern_idx) orelse return null;
-        return switch (binding.value_origin) {
+        return switch (binding.origin) {
             .self_value => null,
             .expr => |expr_ref| expr_ref,
         };
