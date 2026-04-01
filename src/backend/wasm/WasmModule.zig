@@ -1870,6 +1870,17 @@ pub fn preload(allocator: Allocator, bytes: []const u8, require_relocatable: boo
 
     try module.normalizeDataRelocations();
 
+    // Convert data symbol offsets from (segment-relative) to absolute memory addresses.
+    // The linking section stores data_offset as the offset within the segment, but
+    // resolveCodeRelocations uses data_offset as the absolute address in linear memory.
+    for (module.linking.symbol_table.items) |*sym| {
+        if (sym.kind == .data and !sym.isUndefined()) {
+            if (sym.index < module.data_segments.items.len) {
+                sym.data_offset += module.data_segments.items[sym.index].offset;
+            }
+        }
+    }
+
     // Validate relocatable requirements
     if (require_relocatable) {
         if (module.linking.symbol_table.items.len == 0)
