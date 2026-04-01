@@ -3096,6 +3096,26 @@ pub const Pass = struct {
         bindings: *std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
         proc_inst_context: ProcInstId,
     ) Allocator.Error!void {
+        // If the template's type root is already fully bound with the current
+        // bindings, the body scan cannot discover additional bindings needed for
+        // proc instance creation. The proc instance's own scan in scanProcInst
+        // will handle body-level type resolution.
+        {
+            const template_types = &self.all_module_envs[template.module_idx].types;
+            var seen: std.AutoHashMapUnmanaged(types.Var, void) = .empty;
+            defer seen.deinit(self.allocator);
+            if (try self.typeVarFullyBoundWithBindings(
+                result,
+                template.module_idx,
+                template_types,
+                template.type_root,
+                bindings,
+                &seen,
+            )) {
+                return;
+            }
+        }
+
         const completion_key = TemplateBodyCompletionKey{
             .template_source_key = template.source_key,
             .context_proc_inst_raw = @intFromEnum(proc_inst_context),
