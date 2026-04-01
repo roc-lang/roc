@@ -163,6 +163,11 @@ const LoweredExprWithScope = struct {
     exit_scope: u64,
 };
 
+const PatternBindingRecord = struct {
+    local: MIR.LocalId,
+    explicit_monotype: ?Monotype.Idx = null,
+};
+
 // --- Fields ---
 
 allocator: Allocator,
@@ -191,13 +196,9 @@ current_pattern_scope: u64,
 /// App module index (for resolving `e_lookup_required` from platform modules)
 app_module_idx: ?u32,
 
-/// Map from ((scope_key << 64) | (module_idx << 32 | CIR.Pattern.Idx)) → MIR.LocalId.
+/// Map from ((scope_key << 64) | (module_idx << 32 | CIR.Pattern.Idx)) → lowering binding.
 /// Used only to resolve CIR local lookups to the current MIR local during lowering.
-pattern_symbols: std.AutoHashMap(u128, MIR.LocalId),
-
-/// Scope-keyed explicit monotypes for pattern locals whose runtime type is introduced
-/// by lowering itself rather than re-derived from the original pattern node.
-explicit_pattern_local_monotypes: std.AutoHashMap(u128, Monotype.Idx),
+pattern_bindings: std.AutoHashMap(u128, PatternBindingRecord),
 
 /// Cycle breakers for recursive nominal types (e.g. Tree := [Leaf, Node(Tree)]).
 /// Used only by `fromNominalType` during monotype construction; separate from
@@ -285,8 +286,7 @@ pub fn init(
         .current_module_idx = current_module_idx,
         .current_pattern_scope = 0,
         .app_module_idx = app_module_idx,
-        .pattern_symbols = std.AutoHashMap(u128, MIR.LocalId).init(allocator),
-        .explicit_pattern_local_monotypes = std.AutoHashMap(u128, Monotype.Idx).init(allocator),
+        .pattern_bindings = std.AutoHashMap(u128, PatternBindingRecord).init(allocator),
         .nominal_cycle_breakers = std.AutoHashMap(types.Var, Monotype.Idx).init(allocator),
         .lowered_callable_insts = std.AutoHashMap(u32, MIR.LambdaId).init(allocator),
         .lowered_callable_lambdas = std.AutoHashMap(CallableCacheKey, MIR.LambdaId).init(allocator),
@@ -320,8 +320,7 @@ pub fn init(
 }
 
 pub fn deinit(self: *Self) void {
-    self.pattern_symbols.deinit();
-    self.explicit_pattern_local_monotypes.deinit();
+    self.pattern_bindings.deinit();
     self.nominal_cycle_breakers.deinit();
     self.lowered_callable_insts.deinit();
     self.lowered_callable_lambdas.deinit();
@@ -2954,10 +2953,9 @@ fn lowerLambdaParamLocals(
         switch (module_env.store.getPattern(pattern_idx)) {
             .assign, .as => {
                 try self.bindPatternLocalInCurrentScope(pattern_idx, param_local);
-                try self.explicit_pattern_local_monotypes.put(
-                    patternScopeKey(self.current_module_idx, self.current_pattern_scope, pattern_idx),
-                    monotype,
-                );
+                const key = patternScopeKey(self.current_module_idx, self.current_pattern_scope, pattern_idx);
+                const binding = self.pattern_bindings.getPtr(key) orelse unreachable;
+                binding.explicit_monotype = monotype;
             },
             else => {},
         }
@@ -6057,10 +6055,11 @@ fn bindRepresentativePatternLocalsToBranchPattern(
             try self.bindPatternLocalInCurrentScope(rep_binding.pattern_idx, alt_local);
 
             const alt_key = patternScopeKey(self.current_module_idx, self.current_pattern_scope, alt_binding.pattern_idx);
-            if (self.explicit_pattern_local_monotypes.get(alt_key)) |monotype| {
+            if (self.pattern_bindings.get(alt_key)) |binding| if (binding.explicit_monotype) |monotype| {
                 const rep_key = patternScopeKey(self.current_module_idx, self.current_pattern_scope, rep_binding.pattern_idx);
-                try self.explicit_pattern_local_monotypes.put(rep_key, monotype);
-            }
+                const rep_binding_state = self.pattern_bindings.getPtr(rep_key) orelse unreachable;
+                rep_binding_state.explicit_monotype = monotype;
+            };
 
             break;
         }
@@ -7377,12 +7376,11 @@ fn lowerCirExprInto(
 fn patternToLocal(self: *Self, session: LowerSession, pattern_idx: CIR.Pattern.Idx) Allocator.Error!MIR.LocalId {
     const key = patternScopeKey(self.current_module_idx, self.current_pattern_scope, pattern_idx);
 
-    if (self.pattern_symbols.get(key)) |existing| {
-        if (self.explicit_pattern_local_monotypes.get(key)) |monotype| {
-            self.store.getLocalPtr(existing).monotype = monotype;
-            return existing;
+    if (self.pattern_bindings.get(key)) |binding| {
+        if (binding.explicit_monotype) |monotype| {
+            self.store.getLocalPtr(binding.local).monotype = monotype;
         }
-        return existing;
+        return binding.local;
     }
 
     const module_env = self.all_module_envs[self.current_module_idx];
@@ -7415,7 +7413,7 @@ fn patternToLocal(self: *Self, session: LowerSession, pattern_idx: CIR.Pattern.I
         .monotype = monotype,
         .reassignable = ident_idx.attributes.reassignable,
     });
-    try self.pattern_symbols.put(key, local);
+    try self.pattern_bindings.put(key, .{ .local = local });
     return local;
 }
 
@@ -7426,10 +7424,10 @@ fn patternToLocalWithMonotype(
 ) Allocator.Error!MIR.LocalId {
     const key = patternScopeKey(self.current_module_idx, self.current_pattern_scope, pattern_idx);
 
-    if (self.pattern_symbols.get(key)) |existing| {
-        self.store.getLocalPtr(existing).monotype = monotype;
-        try self.explicit_pattern_local_monotypes.put(key, monotype);
-        return existing;
+    if (self.pattern_bindings.getPtr(key)) |binding| {
+        self.store.getLocalPtr(binding.local).monotype = monotype;
+        binding.explicit_monotype = monotype;
+        return binding.local;
     }
 
     const module_env = self.all_module_envs[self.current_module_idx];
@@ -7461,8 +7459,7 @@ fn patternToLocalWithMonotype(
         .monotype = monotype,
         .reassignable = ident_idx.attributes.reassignable,
     });
-    try self.pattern_symbols.put(key, local);
-    try self.explicit_pattern_local_monotypes.put(key, monotype);
+    try self.pattern_bindings.put(key, .{ .local = local, .explicit_monotype = monotype });
     return local;
 }
 
@@ -7515,9 +7512,9 @@ fn lookupExistingPatternLocalAtScope(
         pattern_idx,
     ) orelse return null;
     const key = patternScopeKey(self.current_module_idx, pattern_scope, pattern_idx);
-    if (self.explicit_pattern_local_monotypes.get(key)) |monotype| {
+    if (self.pattern_bindings.get(key)) |binding| if (binding.explicit_monotype) |monotype| {
         self.store.getLocalPtr(local).monotype = monotype;
-    }
+    };
     return local;
 }
 
@@ -7527,7 +7524,7 @@ fn bindPatternLocalInCurrentScope(
     local: MIR.LocalId,
 ) Allocator.Error!void {
     const key = patternScopeKey(self.current_module_idx, self.current_pattern_scope, pattern_idx);
-    try self.pattern_symbols.put(key, local);
+    try self.pattern_bindings.put(key, .{ .local = local });
 }
 
 fn patternScopeKey(module_idx: u32, pattern_scope: u64, pattern_idx: CIR.Pattern.Idx) u128 {
@@ -7562,7 +7559,7 @@ fn lookupExistingPatternLocalInScope(
 ) ?MIR.LocalId {
     const base_key: u64 = (@as(u64, module_idx) << 32) | @intFromEnum(pattern_idx);
     const key: u128 = (@as(u128, pattern_scope) << 64) | @as(u128, base_key);
-    return self.pattern_symbols.get(key);
+    return if (self.pattern_bindings.get(key)) |binding| binding.local else null;
 }
 
 fn lookupExistingPatternLocalInAncestorScopes(
@@ -7615,9 +7612,9 @@ fn lookupExistingPatternLocalInAncestorScopesWithScope(
         if (self.lookupExistingPatternLocalInScope(module_idx, scope, pattern_idx)) |local| {
             if (module_idx == self.current_module_idx) {
                 const key = patternScopeKey(module_idx, scope, pattern_idx);
-                if (self.explicit_pattern_local_monotypes.get(key)) |monotype| {
+                if (self.pattern_bindings.get(key)) |binding| if (binding.explicit_monotype) |monotype| {
                     self.store.getLocalPtr(local).monotype = monotype;
-                }
+                };
             }
             return .{
                 .scope = scope,
@@ -7671,7 +7668,7 @@ fn currentVisibleReassignableBindings(self: *Self) Allocator.Error![]VisiblePatt
 
     var scope = self.current_pattern_scope;
     while (true) {
-        var it = self.pattern_symbols.iterator();
+        var it = self.pattern_bindings.iterator();
         while (it.next()) |entry| {
             const packed_key = entry.key_ptr.*;
             const entry_scope: u64 = @truncate(packed_key >> 64);
@@ -7682,7 +7679,7 @@ fn currentVisibleReassignableBindings(self: *Self) Allocator.Error![]VisiblePatt
             if (entry_module_idx != self.current_module_idx) continue;
             if (seen_patterns.contains(base_key)) continue;
 
-            const local = entry.value_ptr.*;
+            const local = entry.value_ptr.*.local;
             if (@intFromEnum(local) < self.current_body_local_floor) continue;
             if (!self.store.getLocal(local).reassignable) continue;
 
@@ -8002,9 +7999,9 @@ fn requirePatternMonotype(
     pattern_idx: CIR.Pattern.Idx,
 ) Allocator.Error!Monotype.Idx {
     const explicit_key = patternScopeKey(self.current_module_idx, self.current_pattern_scope, pattern_idx);
-    if (self.explicit_pattern_local_monotypes.get(explicit_key)) |monotype| {
+    if (self.pattern_bindings.get(explicit_key)) |binding| if (binding.explicit_monotype) |monotype| {
         return monotype;
-    }
+    };
 
     if (lookupProgramPatternMonotype(session, pattern_idx)) |resolved| {
         return self.importMonotypeFromStore(

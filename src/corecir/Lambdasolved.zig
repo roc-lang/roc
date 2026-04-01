@@ -121,8 +121,11 @@ pub const SolvedCall = union(enum) {
 
 pub const Result = struct {
     callable_templates: std.ArrayListUnmanaged(CallableTemplate),
-    source_exprs: std.AutoHashMapUnmanaged(u64, ExprSource),
-    callable_template_ids_by_source: std.AutoHashMapUnmanaged(u64, CallableTemplateId),
+    pattern_source_exprs: std.AutoHashMapUnmanaged(u64, ExprSource),
+    external_def_source_exprs: std.AutoHashMapUnmanaged(u64, ExprSource),
+    local_callable_template_ids: std.AutoHashMapUnmanaged(u64, CallableTemplateId),
+    external_callable_template_ids: std.AutoHashMapUnmanaged(u64, CallableTemplateId),
+    expr_callable_template_ids: std.AutoHashMapUnmanaged(u64, CallableTemplateId),
     lambda_set_member_entries: std.ArrayListUnmanaged(CallableInstId),
     lambda_sets: std.ArrayListUnmanaged(LambdaSet),
     context_expr_callable_values: std.AutoHashMapUnmanaged(ContextExprKey, SolvedCallableValue),
@@ -133,8 +136,11 @@ pub const Result = struct {
         _ = allocator;
         return .{
             .callable_templates = .empty,
-            .source_exprs = .empty,
-            .callable_template_ids_by_source = .empty,
+            .pattern_source_exprs = .empty,
+            .external_def_source_exprs = .empty,
+            .local_callable_template_ids = .empty,
+            .external_callable_template_ids = .empty,
+            .expr_callable_template_ids = .empty,
             .lambda_set_member_entries = .empty,
             .lambda_sets = .empty,
             .context_expr_callable_values = .empty,
@@ -145,8 +151,11 @@ pub const Result = struct {
 
     pub fn deinit(self: *Result, allocator: Allocator) void {
         self.callable_templates.deinit(allocator);
-        self.source_exprs.deinit(allocator);
-        self.callable_template_ids_by_source.deinit(allocator);
+        self.pattern_source_exprs.deinit(allocator);
+        self.external_def_source_exprs.deinit(allocator);
+        self.local_callable_template_ids.deinit(allocator);
+        self.external_callable_template_ids.deinit(allocator);
+        self.expr_callable_template_ids.deinit(allocator);
         self.lambda_set_member_entries.deinit(allocator);
         self.lambda_sets.deinit(allocator);
         self.context_expr_callable_values.deinit(allocator);
@@ -159,15 +168,15 @@ pub const Result = struct {
     }
 
     pub fn getLocalCallableTemplate(self: *const Result, module_idx: u32, pattern_idx: CIR.Pattern.Idx) ?CallableTemplateId {
-        return self.callable_template_ids_by_source.get(packLocalPatternSourceKey(module_idx, pattern_idx));
+        return self.local_callable_template_ids.get(packLocalPatternSourceKey(module_idx, pattern_idx));
     }
 
     pub fn getExternalCallableTemplate(self: *const Result, module_idx: u32, def_node_idx: u16) ?CallableTemplateId {
-        return self.callable_template_ids_by_source.get(packExternalDefSourceKey(module_idx, def_node_idx));
+        return self.external_callable_template_ids.get(packExternalDefSourceKey(module_idx, def_node_idx));
     }
 
     pub fn getExprCallableTemplate(self: *const Result, module_idx: u32, expr_idx: CIR.Expr.Idx) ?CallableTemplateId {
-        return self.callable_template_ids_by_source.get(packExprSourceKey(module_idx, expr_idx));
+        return self.expr_callable_template_ids.get(packExprSourceKey(module_idx, expr_idx));
     }
 
     pub fn getPatternSourceExpr(
@@ -175,7 +184,15 @@ pub const Result = struct {
         module_idx: u32,
         pattern_idx: CIR.Pattern.Idx,
     ) ?ExprSource {
-        return self.source_exprs.get(packLocalPatternSourceKey(module_idx, pattern_idx));
+        return self.pattern_source_exprs.get(packLocalPatternSourceKey(module_idx, pattern_idx));
+    }
+
+    pub fn getExternalDefSourceExpr(
+        self: *const Result,
+        module_idx: u32,
+        def_node_idx: u16,
+    ) ?ExprSource {
+        return self.external_def_source_exprs.get(packExternalDefSourceKey(module_idx, def_node_idx));
     }
 
     pub fn getLambdaSet(self: *const Result, lambda_set_id: LambdaSetId) *const LambdaSet {

@@ -172,8 +172,8 @@ fn externalDefSourceFromSourceKey(source_key: u64) ?ExternalDefSource {
 
 const MutationKind = enum(u8) {
     callable_templates,
-    callable_template_ids_by_source,
-    source_exprs,
+    callable_template_aliases,
+    source_value_provenance,
     context_expr_monotypes,
     context_pattern_monotypes,
     context_dispatch_targets,
@@ -2104,7 +2104,8 @@ pub const Pass = struct {
         kind: CallableTemplateKind,
         source_region: Region,
     ) Allocator.Error!CallableTemplateId {
-        if (result.lambdasolved.callable_template_ids_by_source.get(source_key)) |existing| return existing;
+        const existing = result.lambdasolved.expr_callable_template_ids.get(source_key);
+        if (existing) |template_id| return template_id;
 
         const lexical_owner_template: ?CallableTemplateId = if (kind == .closure)
             self.currentTemplateContext(result)
@@ -2124,7 +2125,12 @@ pub const Pass = struct {
             .external_def = externalDefSourceFromSourceKey(source_key),
             .source_region = source_region,
         });
-        try self.putTracked(.callable_template_ids_by_source, &result.lambdasolved.callable_template_ids_by_source, source_key, callable_template_id);
+        try self.putTracked(
+            .callable_template_aliases,
+            &result.lambdasolved.expr_callable_template_ids,
+            source_key,
+            callable_template_id,
+        );
 
         return callable_template_id;
     }
@@ -2147,12 +2153,17 @@ pub const Pass = struct {
         source_key: u64,
         template_id: CallableTemplateId,
     ) Allocator.Error!void {
-        if (result.lambdasolved.callable_template_ids_by_source.get(source_key)) |existing| {
-            if (existing != template_id) {
+        const existing = switch (callableSourceNamespace(source_key)) {
+            .local_pattern => result.lambdasolved.local_callable_template_ids.get(source_key),
+            .external_def => result.lambdasolved.external_callable_template_ids.get(source_key),
+            .expr => result.lambdasolved.expr_callable_template_ids.get(source_key),
+        };
+        if (existing) |existing_template_id| {
+            if (existing_template_id != template_id) {
                 if (std.debug.runtime_safety) {
                     std.debug.panic(
                         "Pipeline: conflicting callable template aliases for source key {d} (existing={d}, new={d})",
-                        .{ source_key, @intFromEnum(existing), @intFromEnum(template_id) },
+                        .{ source_key, @intFromEnum(existing_template_id), @intFromEnum(template_id) },
                     );
                 }
                 unreachable;
@@ -2183,7 +2194,26 @@ pub const Pass = struct {
             }
         }
 
-        try self.putTracked(.callable_template_ids_by_source, &result.lambdasolved.callable_template_ids_by_source, source_key, template_id);
+        switch (callableSourceNamespace(source_key)) {
+            .local_pattern => try self.putTracked(
+                .callable_template_aliases,
+                &result.lambdasolved.local_callable_template_ids,
+                source_key,
+                template_id,
+            ),
+            .external_def => try self.putTracked(
+                .callable_template_aliases,
+                &result.lambdasolved.external_callable_template_ids,
+                source_key,
+                template_id,
+            ),
+            .expr => try self.putTracked(
+                .callable_template_aliases,
+                &result.lambdasolved.expr_callable_template_ids,
+                source_key,
+                template_id,
+            ),
+        }
     }
 
     fn recordSourceExpr(
@@ -2194,16 +2224,24 @@ pub const Pass = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) Allocator.Error!void {
-        if (result.lambdasolved.source_exprs.get(source_key)) |existing| {
-            if (!std.meta.eql(existing.source_context, source_context) or existing.module_idx != module_idx or existing.expr_idx != expr_idx) {
+        const existing = switch (callableSourceNamespace(source_key)) {
+            .local_pattern => result.lambdasolved.pattern_source_exprs.get(source_key),
+            .external_def => result.lambdasolved.external_def_source_exprs.get(source_key),
+            .expr => std.debug.panic(
+                "Pipeline invariant violated: attempted to record source expr provenance for expr source key {d}",
+                .{source_key},
+            ),
+        };
+        if (existing) |existing_source| {
+            if (!std.meta.eql(existing_source.source_context, source_context) or existing_source.module_idx != module_idx or existing_source.expr_idx != expr_idx) {
                 if (std.debug.runtime_safety) {
                     std.debug.panic(
                         "Pipeline: conflicting source exprs for source key {d} (existing_ctx={s} existing={d}:{d}, new_ctx={s} new={d}:{d})",
                         .{
                             source_key,
-                            @tagName(existing.source_context),
-                            existing.module_idx,
-                            @intFromEnum(existing.expr_idx),
+                            @tagName(existing_source.source_context),
+                            existing_source.module_idx,
+                            @intFromEnum(existing_source.expr_idx),
                             @tagName(source_context),
                             module_idx,
                             @intFromEnum(expr_idx),
@@ -2215,11 +2253,26 @@ pub const Pass = struct {
             return;
         }
 
-        try self.putTracked(.source_exprs, &result.lambdasolved.source_exprs, source_key, ExprSource{
+        const source = ExprSource{
             .source_context = source_context,
             .module_idx = module_idx,
             .expr_idx = expr_idx,
-        });
+        };
+        switch (callableSourceNamespace(source_key)) {
+            .local_pattern => try self.putTracked(
+                .source_value_provenance,
+                &result.lambdasolved.pattern_source_exprs,
+                source_key,
+                source,
+            ),
+            .external_def => try self.putTracked(
+                .source_value_provenance,
+                &result.lambdasolved.external_def_source_exprs,
+                source_key,
+                source,
+            ),
+            .expr => unreachable,
+        }
     }
 
     fn recordPatternSourceExpr(
@@ -10109,7 +10162,7 @@ pub const Pass = struct {
         try self.scanModule(result, target_module_idx);
 
         const key = packExternalDefSourceKey(target_module_idx, target_node_idx);
-        if (result.lambdasolved.source_exprs.get(key)) |source| return source;
+        if (result.lambdasolved.external_def_source_exprs.get(key)) |source| return source;
 
         const target_env = self.all_module_envs[target_module_idx];
         if (!target_env.store.isDefNode(target_node_idx)) return null;
