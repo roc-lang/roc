@@ -493,6 +493,38 @@ pub const Result = struct {
             .expr => |expr_ref| expr_ref,
         };
     }
+
+    pub fn getExprTemplateId(
+        self: *const Result,
+        source_context: SourceContext,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) ?CallableTemplateId {
+        const expr_id = self.lambdamono.getExprId(source_context, module_idx, expr_idx) orelse return null;
+        return switch (self.lambdamono.getExpr(expr_id).template_semantics) {
+            .not_template => null,
+            .template => |template_id| template_id,
+        };
+    }
+
+    pub fn getSourceContextTemplateId(
+        self: *const Result,
+        source_context: SourceContext,
+    ) ?CallableTemplateId {
+        return switch (source_context) {
+            .callable_inst => |context_id| self.getCallableInst(@enumFromInt(@intFromEnum(context_id))).template,
+            .template_expr => |template_ctx| self.getExprTemplateId(
+                source_context,
+                template_ctx.module_idx,
+                template_ctx.expr_idx,
+            ) orelse std.debug.panic(
+                "Pipeline invariant violated: template source context module={d} expr={d} had no registered callable template",
+                .{ template_ctx.module_idx, @intFromEnum(template_ctx.expr_idx) },
+            ),
+            .root_expr => |root_ctx| self.getExprTemplateId(source_context, root_ctx.module_idx, root_ctx.expr_idx),
+            .provenance_expr => |provenance_ctx| self.getExprTemplateId(source_context, provenance_ctx.module_idx, provenance_ctx.expr_idx),
+        };
+    }
 };
 
 /// Pipelines callable templates into explicit callable instantiations.
@@ -634,60 +666,13 @@ pub const Pass = struct {
         };
     }
 
-    fn templateContextForSourceContext(
-        self: *const Pass,
-        result: *const Result,
-        source_context: SourceContext,
-    ) ?CallableTemplateId {
-        return switch (source_context) {
-            .callable_inst => |context_id| result.getCallableInst(@enumFromInt(@intFromEnum(context_id))).template,
-            .template_expr => |template_ctx| switch (self.readExprSemantics(
-                result,
-                source_context,
-                template_ctx.module_idx,
-                template_ctx.expr_idx,
-            ).template_semantics) {
-                .template => |template_id| template_id,
-                .not_template => std.debug.panic(
-                "Pipeline invariant violated: template source context module={d} expr={d} had no registered callable template",
-                .{ template_ctx.module_idx, @intFromEnum(template_ctx.expr_idx) },
-            ),
-            },
-            .root_expr => |root_ctx| switch (self.readExprSemantics(
-                result,
-                source_context,
-                root_ctx.module_idx,
-                root_ctx.expr_idx,
-            ).template_semantics) {
-                .template => |template_id| template_id,
-                .not_template => null,
-            },
-            .provenance_expr => |provenance_ctx| switch (self.readExprSemantics(
-                result,
-                source_context,
-                provenance_ctx.module_idx,
-                provenance_ctx.expr_idx,
-            ).template_semantics) {
-                .template => |template_id| template_id,
-                .not_template => null,
-            },
-        };
-    }
-
-    fn templateContextForThread(
-        self: *const Pass,
-        result: *const Result,
-        thread: SemanticThread,
-    ) ?CallableTemplateId {
-        return self.templateContextForSourceContext(result, thread.requireSourceContext());
-    }
-
     fn activeCallableTemplateForThread(
         self: *const Pass,
         result: *const Result,
         thread: SemanticThread,
     ) ?CallableTemplate {
-        const template_id = self.templateContextForThread(result, thread) orelse return null;
+        _ = self;
+        const template_id = result.getSourceContextTemplateId(thread.requireSourceContext()) orelse return null;
         return result.getCallableTemplate(template_id).*;
     }
 
@@ -2456,7 +2441,7 @@ pub const Pass = struct {
 
         const owner: Lambdasolved.CallableTemplateOwner = if (kind == .closure)
             if (owner_source_context) |source_context|
-                if (self.templateContextForSourceContext(result, source_context)) |template_id|
+                if (result.getSourceContextTemplateId(source_context)) |template_id|
                     .{ .lexical_template = template_id }
                 else
                     .root_scope
@@ -2901,7 +2886,7 @@ pub const Pass = struct {
         pattern_idx: CIR.Pattern.Idx,
         expr_idx: CIR.Expr.Idx,
     ) Allocator.Error!void {
-        if (self.readExprTemplateId(result, thread.requireSourceContext(), module_idx, expr_idx)) |template_id| {
+        if (result.getExprTemplateId(thread.requireSourceContext(), module_idx, expr_idx)) |template_id| {
             try self.materializeLookupExprCallableValue(result, thread, module_idx, expr_idx, template_id);
         } else {
             var visiting: std.AutoHashMapUnmanaged(ContextExprVisitKey, void) = .empty;
@@ -3079,7 +3064,7 @@ pub const Pass = struct {
 
         try self.scanForcedCirValueExpr(result, thread, module_idx, expr_idx);
 
-        if (self.readExprTemplateId(result, thread.requireSourceContext(), module_idx, expr_idx)) |template_id| {
+        if (result.getExprTemplateId(thread.requireSourceContext(), module_idx, expr_idx)) |template_id| {
             try self.materializeDemandedExprCallableInst(result, thread, module_idx, expr_idx, template_id);
             if (self.getExprCallableValueForThread(result, thread, module_idx, expr_idx)) |callable_value| {
                 try self.ensureRecordedCallableInstsScanned(result, callableAlternativesFromValue(result, callable_value));
@@ -3948,7 +3933,7 @@ pub const Pass = struct {
                         );
                     }
                 }
-                if (self.readExprTemplateId(result, thread.requireSourceContext(), module_idx, expr_idx)) |template_id| {
+                if (result.getExprTemplateId(thread.requireSourceContext(), module_idx, expr_idx)) |template_id| {
                     try self.materializeLookupExprCallableValue(result, thread, module_idx, expr_idx, template_id);
                 } else if (!is_top_level_def) {
                     if (result.getExprValueOrigin(thread.requireSourceContext(), module_idx, expr_idx)) |source| {
@@ -4016,7 +4001,7 @@ pub const Pass = struct {
                     def.pattern,
                     packExternalDefSourceKey(target_module_idx, lookup.target_node_idx),
                 );
-                if (self.readExprTemplateId(result, thread.requireSourceContext(), module_idx, expr_idx)) |template_id| {
+                if (result.getExprTemplateId(thread.requireSourceContext(), module_idx, expr_idx)) |template_id| {
                     try self.materializeLookupExprCallableValue(result, thread, module_idx, expr_idx, template_id);
                 } else {
                     try self.scanDemandedValueDefExprInSourceContext(
@@ -4084,7 +4069,7 @@ pub const Pass = struct {
                     def.pattern,
                     packExternalDefSourceKey(target.module_idx, target_node_idx),
                 );
-                if (self.readExprTemplateId(result, thread.requireSourceContext(), module_idx, expr_idx)) |template_id| {
+                if (result.getExprTemplateId(thread.requireSourceContext(), module_idx, expr_idx)) |template_id| {
                     try self.materializeLookupExprCallableValue(result, thread, module_idx, expr_idx, template_id);
                 } else {
                     try self.scanDemandedValueDefExprInSourceContext(
@@ -4634,7 +4619,7 @@ pub const Pass = struct {
                 desired_fn_monotype.module_idx,
             );
         }
-        const resolved_template_id = self.lookupDirectCalleeTemplate(result, thread.requireSourceContext(), module_idx, callee_expr_idx);
+        const resolved_template_id = result.getExprTemplateId(thread.requireSourceContext(), module_idx, callee_expr_idx);
         if (resolved_template_id == null and !desired_fn_monotype.isNone()) {
             var visiting: std.AutoHashMapUnmanaged(ContextExprVisitKey, void) = .empty;
             defer visiting.deinit(self.allocator);
@@ -5014,7 +4999,7 @@ pub const Pass = struct {
 
         for (arg_exprs, 0..) |arg_expr_idx, i| {
             const param_mono = result.context_mono.monotype_store.getIdxSpanItem(param_monos, i);
-            const maybe_template_id = self.lookupDirectCalleeTemplate(result, thread.requireSourceContext(), module_idx, arg_expr_idx);
+            const maybe_template_id = result.getExprTemplateId(thread.requireSourceContext(), module_idx, arg_expr_idx);
             const template_id = maybe_template_id orelse continue;
             const template = result.getCallableTemplate(template_id);
             if (!thread.hasCallableInst() and template.kind == .closure) {
@@ -6427,12 +6412,11 @@ pub const Pass = struct {
                 break;
             },
             .e_closure, .e_lambda, .e_hosted_lambda => {
-                const template_id = (self.readExprTemplateId(
-                    result,
+                const template_id = result.getExprTemplateId(
                     source_context,
                     module_idx,
                     expr_idx,
-                )) orelse std.debug.panic(
+                ) orelse std.debug.panic(
                     "Pipeline invariant violated: callable-capable expr {d} ({s}) in module {d} reached structured callable realization without a registered callable template",
                     .{
                         @intFromEnum(expr_idx),
@@ -6757,7 +6741,7 @@ pub const Pass = struct {
                 const source = module_env.getSourceAll();
                 const snippet_start = @min(expr_region.start.offset, source.len);
                 const snippet_end = @min(expr_region.end.offset, source.len);
-                const context_template = self.templateContextForSourceContext(result, source_context);
+                const context_template = result.getSourceContextTemplateId(source_context);
                 std.debug.panic(
                     "Pipeline: conflicting exact expr monotypes for ctx={s} module={d} module_name={s} expr={d} kind={s} region={any} snippet=\"{s}\" existing={d}@{d} existing_mono={any} new={d}@{d} new_mono={any} template_expr={d}",
                     .{
@@ -9657,19 +9641,6 @@ pub const Pass = struct {
         }
     }
 
-    fn readExprTemplateId(
-        self: *Pass,
-        result: *Result,
-        source_context: SourceContext,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-    ) ?CallableTemplateId {
-        return switch (self.readExprSemantics(result, source_context, module_idx, expr_idx).template_semantics) {
-            .not_template => null,
-            .template => |template_id| template_id,
-        };
-    }
-
     fn callUsesAnnotationOnlyIntrinsic(
         self: *Pass,
         module_idx: u32,
@@ -9693,16 +9664,6 @@ pub const Pass = struct {
             },
             else => false,
         };
-    }
-
-    fn lookupDirectCalleeTemplate(
-        self: *Pass,
-        result: *Result,
-        source_context: SourceContext,
-        module_idx: u32,
-        callee_expr_idx: CIR.Expr.Idx,
-    ) ?CallableTemplateId {
-        return self.readExprTemplateId(result, source_context, module_idx, callee_expr_idx);
     }
 
     fn requireCallableInst(
@@ -9958,7 +9919,7 @@ pub const Pass = struct {
                     .root_scope => return active_source_context,
                     .lexical_template => |owner| owner,
                 };
-                if (self.templateContextForSourceContext(result, active_source_context)) |active_template| {
+                if (result.getSourceContextTemplateId(active_source_context)) |active_template| {
                     if (active_template == lexical_owner_template) {
                         switch (active_source_context) {
                             .root_expr, .provenance_expr, .template_expr => return active_source_context,
