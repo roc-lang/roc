@@ -463,9 +463,26 @@ const Unifier = struct {
                 try self.recordDeferredConstraint(vars, b_flex.constraints);
                 self.merge(vars, .{ .rigid = a_rigid });
             },
-            .rigid => return error.TypeMismatch,
+            .rigid => |b_rigid| {
+                // Two polarity_open rigids can unify (e.g., when separate values
+                // with inferred open extensions are combined in a list).
+                if (a_rigid.name == .polarity_open and b_rigid.name == .polarity_open) {
+                    self.merge(vars, .{ .rigid = a_rigid });
+                } else {
+                    return error.TypeMismatch;
+                }
+            },
             .alias => return error.TypeMismatch,
-            .structure => return error.TypeMismatch,
+            .structure => |b_flat_type| {
+                // A polarity_open rigid extension can unify with empty_tag_union
+                // (closing the open extension). This allows values annotated in
+                // positive position to be passed to closed negative-position params.
+                if (a_rigid.name == .polarity_open and b_flat_type == .empty_tag_union) {
+                    self.merge(vars, Content{ .structure = .empty_tag_union });
+                } else {
+                    return error.TypeMismatch;
+                }
+            },
             .err => self.merge(vars, .err),
         }
     }
@@ -597,7 +614,15 @@ const Unifier = struct {
                 try self.recordDeferredConstraint(vars, b_flex.constraints);
                 self.merge(vars, Content{ .structure = a_flat_type });
             },
-            .rigid => return error.TypeMismatch,
+            .rigid => |b_rigid| {
+                // A polarity_open rigid extension can unify with empty_tag_union
+                // (closing the open extension). Symmetric case of unifyRigid.
+                if (b_rigid.name == .polarity_open and a_flat_type == .empty_tag_union) {
+                    self.merge(vars, Content{ .structure = .empty_tag_union });
+                } else {
+                    return error.TypeMismatch;
+                }
+            },
             .alias => |b_alias| {
                 // When unifying an alias with a concrete structure, we
                 // want to preserve the alias for display while ensuring the
