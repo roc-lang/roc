@@ -328,12 +328,6 @@ const SemanticThread = union(enum) {
 
 const ContextExprVisitKey = ContextExprKey;
 
-const ContextExprResolution = union(enum) {
-    none,
-    blocked,
-    source: ExprSource,
-};
-
 const CallResultCallableInstKey = struct {
     context_expr: ContextExprKey,
     callee_callable_inst_raw: u32,
@@ -605,6 +599,14 @@ pub const Result = struct {
         pattern_idx: CIR.Pattern.Idx,
     ) ?ExprSource {
         return self.lambdasolved.getPatternSourceExpr(module_idx, pattern_idx);
+    }
+
+    pub fn getExprSourceExpr(
+        self: *const Result,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) ?ExprSource {
+        return self.lambdasolved.getExprSourceExpr(module_idx, expr_idx);
     }
 };
 
@@ -2256,12 +2258,9 @@ pub const Pass = struct {
         source: ExprSource,
     ) Allocator.Error!void {
         const existing = switch (callableSourceNamespace(source_key)) {
+            .expr => result.lambdasolved.expr_source_exprs.get(source_key),
             .local_pattern => result.lambdasolved.pattern_source_exprs.get(source_key),
             .external_def => result.lambdasolved.external_def_source_exprs.get(source_key),
-            .expr => std.debug.panic(
-                "Pipeline invariant violated: attempted to record source expr provenance for expr source key {d}",
-                .{source_key},
-            ),
         };
         if (existing) |existing_source| {
             if (!std.meta.eql(existing_source.source_context, source.source_context) or
@@ -2288,6 +2287,12 @@ pub const Pass = struct {
             return;
         }
         switch (callableSourceNamespace(source_key)) {
+            .expr => try self.putTracked(
+                .source_value_provenance,
+                &result.lambdasolved.expr_source_exprs,
+                source_key,
+                source,
+            ),
             .local_pattern => try self.putTracked(
                 .source_value_provenance,
                 &result.lambdasolved.pattern_source_exprs,
@@ -2300,7 +2305,6 @@ pub const Pass = struct {
                 source_key,
                 source,
             ),
-            .expr => unreachable,
         }
     }
 
@@ -2372,6 +2376,20 @@ pub const Pass = struct {
                 }
             },
         }
+    }
+
+    fn recordExprSourceExpr(
+        self: *Pass,
+        result: *Result,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+        source: ExprSource,
+    ) Allocator.Error!void {
+        try self.recordSourceExpr(
+            result,
+            packExprSourceKey(module_idx, expr_idx),
+            source,
+        );
     }
 
     fn registerCallableDefTemplate(
@@ -3245,6 +3263,17 @@ pub const Pass = struct {
         };
     }
 
+    fn exprSourceAliasOrSelf(
+        self: *const Pass,
+        result: *const Result,
+        source_context: SourceContext,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) ExprSource {
+        _ = self;
+        return result.getExprSourceExpr(module_idx, expr_idx) orelse exprSourceInContext(source_context, module_idx, expr_idx);
+    }
+
     fn addSolvedValueProjectionEntries(
         self: *Pass,
         result: *Result,
@@ -3696,6 +3725,9 @@ pub const Pass = struct {
             .e_anno_only,
             => {},
             .e_lookup_local => |lookup| {
+                if (result.getPatternSourceExpr(module_idx, lookup.pattern_idx)) |source| {
+                    try self.recordExprSourceExpr(result, module_idx, expr_idx, source);
+                }
                 const is_top_level_def = isTopLevelDefPattern(module_env, lookup.pattern_idx);
                 if (!is_top_level_def) {
                     if (self.resolveBoundPatternCallableInstForThread(result, thread, module_idx, lookup.pattern_idx)) |callable_inst_id| {
@@ -3754,6 +3786,19 @@ pub const Pass = struct {
                         .expr_idx = def.expr,
                     },
                 );
+                try self.recordExprSourceExpr(
+                    result,
+                    module_idx,
+                    expr_idx,
+                    .{
+                        .source_context = .{ .root_expr = .{
+                            .module_idx = target_module_idx,
+                            .expr_idx = def.expr,
+                        } },
+                        .module_idx = target_module_idx,
+                        .expr_idx = def.expr,
+                    },
+                );
                 _ = try self.registerCallableBackedDefTemplate(
                     result,
                     target_module_idx,
@@ -3801,6 +3846,19 @@ pub const Pass = struct {
                 try self.recordSourceExpr(
                     result,
                     packExternalDefSourceKey(target.module_idx, target_node_idx),
+                    .{
+                        .source_context = .{ .root_expr = .{
+                            .module_idx = target.module_idx,
+                            .expr_idx = def.expr,
+                        } },
+                        .module_idx = target.module_idx,
+                        .expr_idx = def.expr,
+                    },
+                );
+                try self.recordExprSourceExpr(
+                    result,
+                    module_idx,
+                    expr_idx,
                     .{
                         .source_context = .{ .root_expr = .{
                             .module_idx = target.module_idx,
@@ -3956,10 +4014,32 @@ pub const Pass = struct {
                 }
                 try self.propagateDemandedValueResultMonotypeToChild(result, thread, module_idx, expr_idx, block_expr.final_expr);
                 try self.scanCirValueExprWithDirectCallResolution(result, thread, module_idx, block_expr.final_expr, resolve_direct_calls);
+                try self.recordExprSourceExpr(
+                    result,
+                    module_idx,
+                    expr_idx,
+                    self.exprSourceAliasOrSelf(result, thread.requireSourceContext(), module_idx, block_expr.final_expr),
+                );
             },
             .e_tag => |tag_expr| try self.scanCirValueExprSpanWithDirectCallResolution(result, thread, module_idx, module_env.store.sliceExpr(tag_expr.args), resolve_direct_calls),
-            .e_nominal => |nominal_expr| try self.scanCirValueExprWithDirectCallResolution(result, thread, module_idx, nominal_expr.backing_expr, resolve_direct_calls),
-            .e_nominal_external => |nominal_expr| try self.scanCirValueExprWithDirectCallResolution(result, thread, module_idx, nominal_expr.backing_expr, resolve_direct_calls),
+            .e_nominal => |nominal_expr| {
+                try self.scanCirValueExprWithDirectCallResolution(result, thread, module_idx, nominal_expr.backing_expr, resolve_direct_calls);
+                try self.recordExprSourceExpr(
+                    result,
+                    module_idx,
+                    expr_idx,
+                    self.exprSourceAliasOrSelf(result, thread.requireSourceContext(), module_idx, nominal_expr.backing_expr),
+                );
+            },
+            .e_nominal_external => |nominal_expr| {
+                try self.scanCirValueExprWithDirectCallResolution(result, thread, module_idx, nominal_expr.backing_expr, resolve_direct_calls);
+                try self.recordExprSourceExpr(
+                    result,
+                    module_idx,
+                    expr_idx,
+                    self.exprSourceAliasOrSelf(result, thread.requireSourceContext(), module_idx, nominal_expr.backing_expr),
+                );
+            },
             .e_closure => |closure_expr| {
                 const lambda_expr = module_env.store.getExpr(closure_expr.lambda_idx);
                 if (lambda_expr == .e_lambda) {
@@ -4008,18 +4088,50 @@ pub const Pass = struct {
                         try self.scanCirExprWithDirectCallResolution(result, thread, module_idx, dot_expr.receiver, resolve_direct_calls);
                         try self.scanCirExprSpanWithDirectCallResolution(result, thread, module_idx, module_env.store.sliceExpr(args), resolve_direct_calls);
                     }
+                } else {
+                    const receiver_source = self.exprSourceAliasOrSelf(result, thread.requireSourceContext(), module_idx, dot_expr.receiver);
+                    const field_source = try self.extendExprSource(result, receiver_source, .{ .field = .{
+                        .module_idx = module_idx,
+                        .ident = dot_expr.field_name,
+                    } });
+                    try self.recordExprSourceExpr(result, module_idx, expr_idx, field_source);
                 }
             },
-            .e_tuple_access => |tuple_access| try self.scanCirExprWithDirectCallResolution(result, thread, module_idx, tuple_access.tuple, resolve_direct_calls),
+            .e_tuple_access => |tuple_access| {
+                try self.scanCirExprWithDirectCallResolution(result, thread, module_idx, tuple_access.tuple, resolve_direct_calls);
+                const tuple_source = self.exprSourceAliasOrSelf(result, thread.requireSourceContext(), module_idx, tuple_access.tuple);
+                const elem_source = try self.extendExprSource(result, tuple_source, .{ .tuple_elem = tuple_access.elem_index });
+                try self.recordExprSourceExpr(result, module_idx, expr_idx, elem_source);
+            },
             .e_dbg => |dbg_expr| {
                 try self.propagateDemandedValueResultMonotypeToChild(result, thread, module_idx, expr_idx, dbg_expr.expr);
                 try self.scanCirValueExprWithDirectCallResolution(result, thread, module_idx, dbg_expr.expr, resolve_direct_calls);
+                try self.recordExprSourceExpr(
+                    result,
+                    module_idx,
+                    expr_idx,
+                    self.exprSourceAliasOrSelf(result, thread.requireSourceContext(), module_idx, dbg_expr.expr),
+                );
             },
             .e_expect => |expect_expr| {
                 try self.propagateDemandedValueResultMonotypeToChild(result, thread, module_idx, expr_idx, expect_expr.body);
                 try self.scanCirValueExprWithDirectCallResolution(result, thread, module_idx, expect_expr.body, resolve_direct_calls);
+                try self.recordExprSourceExpr(
+                    result,
+                    module_idx,
+                    expr_idx,
+                    self.exprSourceAliasOrSelf(result, thread.requireSourceContext(), module_idx, expect_expr.body),
+                );
             },
-            .e_return => |return_expr| try self.scanCirValueExprWithDirectCallResolution(result, thread, module_idx, return_expr.expr, resolve_direct_calls),
+            .e_return => |return_expr| {
+                try self.scanCirValueExprWithDirectCallResolution(result, thread, module_idx, return_expr.expr, resolve_direct_calls);
+                try self.recordExprSourceExpr(
+                    result,
+                    module_idx,
+                    expr_idx,
+                    self.exprSourceAliasOrSelf(result, thread.requireSourceContext(), module_idx, return_expr.expr),
+                );
+            },
             .e_type_var_dispatch => |dispatch_expr| {
                 try self.scanCirExprSpanWithDirectCallResolution(result, thread, module_idx, module_env.store.sliceExpr(dispatch_expr.args), resolve_direct_calls);
                 try self.resolveDispatchExprCallableInst(result, thread, module_idx, expr_idx, expr);
@@ -4587,6 +4699,18 @@ pub const Pass = struct {
         const arg_exprs = module_env.store.sliceExpr(call_expr.args);
         try self.prepareCallableArgsForCallableInst(result, thread, module_idx, arg_exprs, callable_inst_id);
         try self.scanCallableInst(result, callable_inst_id);
+        const callable_def = result.getCallableDefForInst(callable_inst_id);
+        try self.recordExprSourceExpr(
+            result,
+            module_idx,
+            call_expr_idx,
+            .{
+                .source_context = callable_def.body_expr.source_context,
+                .module_idx = callable_def.body_expr.module_idx,
+                .expr_idx = callable_def.body_expr.expr_idx,
+                .projections = callable_def.body_expr.projections,
+            },
+        );
         var visiting: std.AutoHashMapUnmanaged(ContextExprVisitKey, void) = .empty;
         defer visiting.deinit(self.allocator);
         try self.recordCallResultCallableMembersFromCallee(
@@ -5438,30 +5562,14 @@ pub const Pass = struct {
             },
             .record => |record| {
                 for (result.context_mono.monotype_store.getFields(record.fields)) |field| {
-                    var visiting: std.AutoHashMapUnmanaged(ContextExprVisitKey, void) = .empty;
-                    defer visiting.deinit(self.allocator);
-                    const field_source = switch (try self.resolveRecordFieldExprInContext(
-                        result,
-                        source_context,
-                        module_idx,
-                        expr_idx,
-                        field.name.module_idx,
-                        field.name.ident,
-                        &visiting,
-                    )) {
-                        .none => continue,
-                        .blocked => return false,
-                        .source => |source| source,
-                    };
-
                     try projections.append(self.allocator, .{ .field = field.name });
                     defer _ = projections.pop();
 
                     if (!try self.collectCallableParamSpecsFromArgument(
                         result,
                         source_context,
-                        field_source.module_idx,
-                        field_source.expr_idx,
+                        module_idx,
+                        expr_idx,
                         field.type_idx,
                         monotype_module_idx,
                         param_index,
@@ -5474,29 +5582,14 @@ pub const Pass = struct {
             .tuple => |tuple_mono| {
                 const elems = result.context_mono.monotype_store.getIdxSpan(tuple_mono.elems);
                 for (elems, 0..) |elem_mono, elem_index| {
-                    var visiting: std.AutoHashMapUnmanaged(ContextExprVisitKey, void) = .empty;
-                    defer visiting.deinit(self.allocator);
-                    const elem_source = switch (try self.resolveTupleElemExprInContext(
-                        result,
-                        source_context,
-                        module_idx,
-                        expr_idx,
-                        @intCast(elem_index),
-                        &visiting,
-                    )) {
-                        .none => continue,
-                        .blocked => return false,
-                        .source => |source| source,
-                    };
-
                     try projections.append(self.allocator, .{ .tuple_elem = @intCast(elem_index) });
                     defer _ = projections.pop();
 
                     if (!try self.collectCallableParamSpecsFromArgument(
                         result,
                         source_context,
-                        elem_source.module_idx,
-                        elem_source.expr_idx,
+                        module_idx,
+                        expr_idx,
                         elem_mono,
                         monotype_module_idx,
                         param_index,
@@ -6312,73 +6405,22 @@ pub const Pass = struct {
             monotype_module_idx,
         );
 
-        switch (expr) {
-            .e_lookup_local => |lookup| {
-                if (result.getPatternSourceExpr(module_idx, lookup.pattern_idx)) |source| {
-                    try self.propagateDemandedValueMonotypeToValueExpr(
-                        result,
-                        source.source_context,
-                        source.module_idx,
-                        source.expr_idx,
-                        monotype,
-                        monotype_module_idx,
-                        visiting,
-                    );
-                }
-            },
-            .e_lookup_external => |lookup| {
-                const target_module_idx = self.resolveImportedModuleIdx(module_env, lookup.module_idx) orelse return;
-                const target_env = self.all_module_envs[target_module_idx];
-                if (!target_env.store.isDefNode(lookup.target_node_idx)) return;
-                const def_idx: CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
-                const def = target_env.store.getDef(def_idx);
+        if (result.getExprSourceExpr(module_idx, expr_idx)) |source| {
+            const concrete_source = (try self.resolveConcreteExprSource(result, source, visiting)) orelse return;
+            if (!(concrete_source.source_context == source_context and
+                concrete_source.module_idx == module_idx and
+                concrete_source.expr_idx == expr_idx))
+            {
                 try self.propagateDemandedValueMonotypeToValueExpr(
                     result,
-                    .{ .root_expr = .{ .module_idx = target_module_idx, .expr_idx = def.expr } },
-                    target_module_idx,
-                    def.expr,
+                    concrete_source.source_context,
+                    concrete_source.module_idx,
+                    concrete_source.expr_idx,
                     monotype,
                     monotype_module_idx,
                     visiting,
                 );
-            },
-            .e_lookup_required => |lookup| {
-                const target = self.resolveRequiredLookupTarget(module_env, lookup) orelse return;
-                const target_env = self.all_module_envs[target.module_idx];
-                const def = target_env.store.getDef(target.def_idx);
-                try self.propagateDemandedValueMonotypeToValueExpr(
-                    result,
-                    .{ .root_expr = .{ .module_idx = target.module_idx, .expr_idx = def.expr } },
-                    target.module_idx,
-                    def.expr,
-                    monotype,
-                    monotype_module_idx,
-                    visiting,
-                );
-            },
-            .e_nominal => |nominal_expr| {
-                try self.propagateDemandedValueMonotypeToValueExpr(
-                    result,
-                    source_context,
-                    module_idx,
-                    nominal_expr.backing_expr,
-                    monotype,
-                    monotype_module_idx,
-                    visiting,
-                );
-            },
-            .e_nominal_external => |nominal_expr| {
-                try self.propagateDemandedValueMonotypeToValueExpr(
-                    result,
-                    source_context,
-                    module_idx,
-                    nominal_expr.backing_expr,
-                    monotype,
-                    monotype_module_idx,
-                    visiting,
-                );
-            },
-            else => {},
+            }
         }
     }
 
@@ -6409,47 +6451,26 @@ pub const Pass = struct {
             fn_monotype_module_idx,
         );
 
+        if (result.getExprSourceExpr(module_idx, expr_idx)) |source| {
+            const concrete_source = (try self.resolveConcreteExprSource(result, source, visiting)) orelse return;
+            if (!(concrete_source.source_context == source_context and
+                concrete_source.module_idx == module_idx and
+                concrete_source.expr_idx == expr_idx))
+            {
+                try self.propagateDemandedCallableFnMonotypeToValueExpr(
+                    result,
+                    concrete_source.source_context,
+                    concrete_source.module_idx,
+                    concrete_source.expr_idx,
+                    fn_monotype,
+                    fn_monotype_module_idx,
+                    visiting,
+                );
+                return;
+            }
+        }
+
         switch (expr) {
-            .e_lookup_local => |lookup| {
-                if (result.getPatternSourceExpr(module_idx, lookup.pattern_idx)) |source| {
-                    try self.propagateDemandedCallableFnMonotypeToValueExpr(
-                        result,
-                        source.source_context,
-                        source.module_idx,
-                        source.expr_idx,
-                        fn_monotype,
-                        fn_monotype_module_idx,
-                        visiting,
-                    );
-                }
-            },
-            .e_lookup_external => |lookup| {
-                const target_module_idx = self.resolveImportedModuleIdx(module_env, lookup.module_idx) orelse return;
-                const source = try self.resolveExternalDefSourceExpr(result, target_module_idx, lookup.target_node_idx) orelse return;
-                try self.propagateDemandedCallableFnMonotypeToValueExpr(
-                    result,
-                    source.source_context,
-                    source.module_idx,
-                    source.expr_idx,
-                    fn_monotype,
-                    fn_monotype_module_idx,
-                    visiting,
-                );
-            },
-            .e_lookup_required => |lookup| {
-                const target = self.resolveRequiredLookupTarget(module_env, lookup) orelse return;
-                const target_node_idx: u16 = @intCast(@intFromEnum(target.def_idx));
-                const source = try self.resolveExternalDefSourceExpr(result, target.module_idx, target_node_idx) orelse return;
-                try self.propagateDemandedCallableFnMonotypeToValueExpr(
-                    result,
-                    source.source_context,
-                    source.module_idx,
-                    source.expr_idx,
-                    fn_monotype,
-                    fn_monotype_module_idx,
-                    visiting,
-                );
-            },
             .e_if => |if_expr| {
                 for (module_env.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
                     const branch = module_env.store.getIfBranch(branch_idx);
@@ -6486,112 +6507,6 @@ pub const Pass = struct {
                         visiting,
                     );
                 }
-            },
-            .e_block => |block_expr| {
-                try self.propagateDemandedCallableFnMonotypeToValueExpr(
-                    result,
-                    source_context,
-                    module_idx,
-                    block_expr.final_expr,
-                    fn_monotype,
-                    fn_monotype_module_idx,
-                    visiting,
-                );
-            },
-            .e_dbg => |dbg_expr| {
-                try self.propagateDemandedCallableFnMonotypeToValueExpr(
-                    result,
-                    source_context,
-                    module_idx,
-                    dbg_expr.expr,
-                    fn_monotype,
-                    fn_monotype_module_idx,
-                    visiting,
-                );
-            },
-            .e_expect => |expect_expr| {
-                try self.propagateDemandedCallableFnMonotypeToValueExpr(
-                    result,
-                    source_context,
-                    module_idx,
-                    expect_expr.body,
-                    fn_monotype,
-                    fn_monotype_module_idx,
-                    visiting,
-                );
-            },
-            .e_return => |return_expr| {
-                try self.propagateDemandedCallableFnMonotypeToValueExpr(
-                    result,
-                    source_context,
-                    module_idx,
-                    return_expr.expr,
-                    fn_monotype,
-                    fn_monotype_module_idx,
-                    visiting,
-                );
-            },
-            .e_nominal => |nominal_expr| {
-                try self.propagateDemandedCallableFnMonotypeToValueExpr(
-                    result,
-                    source_context,
-                    module_idx,
-                    nominal_expr.backing_expr,
-                    fn_monotype,
-                    fn_monotype_module_idx,
-                    visiting,
-                );
-            },
-            .e_nominal_external => |nominal_expr| {
-                try self.propagateDemandedCallableFnMonotypeToValueExpr(
-                    result,
-                    source_context,
-                    module_idx,
-                    nominal_expr.backing_expr,
-                    fn_monotype,
-                    fn_monotype_module_idx,
-                    visiting,
-                );
-            },
-            .e_dot_access => |dot_expr| {
-                if (dot_expr.args != null) return;
-                const field_expr = try self.resolveRecordFieldExpr(
-                    result,
-                    source_context,
-                    module_idx,
-                    dot_expr.receiver,
-                    module_idx,
-                    dot_expr.field_name,
-                    visiting,
-                ) orelse return;
-                try self.propagateDemandedCallableFnMonotypeToValueExpr(
-                    result,
-                    source_context,
-                    field_expr.module_idx,
-                    field_expr.expr_idx,
-                    fn_monotype,
-                    fn_monotype_module_idx,
-                    visiting,
-                );
-            },
-            .e_tuple_access => |tuple_access| {
-                const elem_expr = try self.resolveTupleElemExpr(
-                    result,
-                    source_context,
-                    module_idx,
-                    tuple_access.tuple,
-                    tuple_access.elem_index,
-                    visiting,
-                ) orelse return;
-                try self.propagateDemandedCallableFnMonotypeToValueExpr(
-                    result,
-                    source_context,
-                    elem_expr.module_idx,
-                    elem_expr.expr_idx,
-                    fn_monotype,
-                    fn_monotype_module_idx,
-                    visiting,
-                );
             },
             else => {},
         }
@@ -6716,24 +6631,35 @@ pub const Pass = struct {
         }
 
         const module_env = self.all_module_envs[module_idx];
+        const expr = module_env.store.getExpr(expr_idx);
+        if (result.getExprSourceExpr(module_idx, expr_idx)) |source| {
+            const concrete_source = (try self.resolveConcreteExprSource(result, source, visiting)) orelse return;
+            if (!(concrete_source.source_context == source_context and
+                concrete_source.module_idx == module_idx and
+                concrete_source.expr_idx == expr_idx))
+            {
+                const maybe_pattern_idx = switch (expr) {
+                    .e_lookup_local => |lookup| lookup.pattern_idx,
+                    else => null,
+                };
+                try self.copyExprCallableMembers(
+                    result,
+                    source_context,
+                    module_idx,
+                    expr_idx,
+                    maybe_pattern_idx,
+                    concrete_source.source_context,
+                    concrete_source.module_idx,
+                    concrete_source.expr_idx,
+                    visiting,
+                );
+                return;
+            }
+        }
+
         var callable_inst_ids = std.ArrayList(CallableInstId).empty;
         defer callable_inst_ids.deinit(self.allocator);
-        switch (module_env.store.getExpr(expr_idx)) {
-            .e_lookup_local => |lookup| {
-                if (result.getPatternSourceExpr(module_idx, lookup.pattern_idx)) |source_expr| {
-                    try self.copyExprCallableMembers(
-                        result,
-                        source_context,
-                        module_idx,
-                        expr_idx,
-                        lookup.pattern_idx,
-                        source_expr.source_context,
-                        source_expr.module_idx,
-                        source_expr.expr_idx,
-                        visiting,
-                    );
-                }
-            },
+        switch (expr) {
             .e_if => |if_expr| {
                 for (module_env.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
                     const branch = module_env.store.getIfBranch(branch_idx);
@@ -6746,36 +6672,6 @@ pub const Pass = struct {
                     const branch = module_env.store.getMatchBranch(branch_idx);
                     try self.appendExprCallableMembers(result, source_context, module_idx, branch.value, visiting, &callable_inst_ids);
                 }
-            },
-            .e_block => |block_expr| try self.appendExprCallableMembers(result, source_context, module_idx, block_expr.final_expr, visiting, &callable_inst_ids),
-            .e_dbg => |dbg_expr| try self.appendExprCallableMembers(result, source_context, module_idx, dbg_expr.expr, visiting, &callable_inst_ids),
-            .e_expect => |expect_expr| try self.appendExprCallableMembers(result, source_context, module_idx, expect_expr.body, visiting, &callable_inst_ids),
-            .e_return => |return_expr| try self.appendExprCallableMembers(result, source_context, module_idx, return_expr.expr, visiting, &callable_inst_ids),
-            .e_nominal => |nominal_expr| try self.appendExprCallableMembers(result, source_context, module_idx, nominal_expr.backing_expr, visiting, &callable_inst_ids),
-            .e_nominal_external => |nominal_expr| try self.appendExprCallableMembers(result, source_context, module_idx, nominal_expr.backing_expr, visiting, &callable_inst_ids),
-            .e_dot_access => |dot_expr| {
-                if (dot_expr.args != null) return;
-                const field_expr = try self.resolveRecordFieldExpr(
-                    result,
-                    source_context,
-                    module_idx,
-                    dot_expr.receiver,
-                    module_idx,
-                    dot_expr.field_name,
-                    visiting,
-                ) orelse return;
-                try self.appendExprCallableMembers(result, source_context, field_expr.module_idx, field_expr.expr_idx, visiting, &callable_inst_ids);
-            },
-            .e_tuple_access => |tuple_access| {
-                const elem_expr = try self.resolveTupleElemExpr(
-                    result,
-                    source_context,
-                    module_idx,
-                    tuple_access.tuple,
-                    tuple_access.elem_index,
-                    visiting,
-                ) orelse return;
-                try self.appendExprCallableMembers(result, source_context, elem_expr.module_idx, elem_expr.expr_idx, visiting, &callable_inst_ids);
             },
             .e_call => |call_expr| {
                 if (self.getCallLowLevelOp(module_env, call_expr.func) != null) return;
@@ -10312,179 +10208,6 @@ pub const Pass = struct {
         return source;
     }
 
-    fn resolveRecordFieldExprInContext(
-        self: *Pass,
-        result: *Result,
-        source_context: SourceContext,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-        field_name_module_idx: u32,
-        field_name: Ident.Idx,
-        visiting: *std.AutoHashMapUnmanaged(ContextExprVisitKey, void),
-    ) Allocator.Error!ContextExprResolution {
-        const visit_key = contextExprVisitKey(source_context, module_idx, expr_idx);
-        if (visiting.contains(visit_key)) return .none;
-        try visiting.put(self.allocator, visit_key, {});
-        defer _ = visiting.remove(visit_key);
-
-        const module_env = self.all_module_envs[module_idx];
-        return switch (module_env.store.getExpr(expr_idx)) {
-            .e_record => |record| blk: {
-                for (module_env.store.sliceRecordFields(record.fields)) |field_idx| {
-                    const field = module_env.store.getRecordField(field_idx);
-                    if (self.identsStructurallyEqualAcrossModules(module_idx, field.name, field_name_module_idx, field_name)) {
-                        break :blk .{ .source = exprSourceInContext(source_context, module_idx, field.value) };
-                    }
-                }
-                break :blk .none;
-            },
-            .e_lookup_local => |lookup| blk: {
-                const source = result.getPatternSourceExpr(module_idx, lookup.pattern_idx) orelse break :blk .none;
-                break :blk try self.resolveRecordFieldExprInContext(
-                    result,
-                    source.source_context,
-                    source.module_idx,
-                    source.expr_idx,
-                    field_name_module_idx,
-                    field_name,
-                    visiting,
-                );
-            },
-            .e_lookup_external => |lookup| blk: {
-                const target_module_idx = self.resolveImportedModuleIdx(module_env, lookup.module_idx) orelse break :blk .none;
-                const source = try self.resolveExternalDefSourceExpr(result, target_module_idx, lookup.target_node_idx) orelse break :blk .none;
-                break :blk try self.resolveRecordFieldExprInContext(
-                    result,
-                    source.source_context,
-                    source.module_idx,
-                    source.expr_idx,
-                    field_name_module_idx,
-                    field_name,
-                    visiting,
-                );
-            },
-            .e_lookup_required => |lookup| blk: {
-                const target = self.resolveRequiredLookupTarget(module_env, lookup) orelse break :blk .none;
-                const target_node_idx: u16 = @intCast(@intFromEnum(target.def_idx));
-                const source = try self.resolveExternalDefSourceExpr(result, target.module_idx, target_node_idx) orelse break :blk .none;
-                break :blk try self.resolveRecordFieldExprInContext(
-                    result,
-                    source.source_context,
-                    source.module_idx,
-                    source.expr_idx,
-                    field_name_module_idx,
-                    field_name,
-                    visiting,
-                );
-            },
-            .e_block => |block| try self.resolveRecordFieldExprInContext(result, source_context, module_idx, block.final_expr, field_name_module_idx, field_name, visiting),
-            .e_dbg => |dbg_expr| try self.resolveRecordFieldExprInContext(result, source_context, module_idx, dbg_expr.expr, field_name_module_idx, field_name, visiting),
-            .e_expect => |expect_expr| try self.resolveRecordFieldExprInContext(result, source_context, module_idx, expect_expr.body, field_name_module_idx, field_name, visiting),
-            .e_return => |return_expr| try self.resolveRecordFieldExprInContext(result, source_context, module_idx, return_expr.expr, field_name_module_idx, field_name, visiting),
-            .e_nominal => |nominal_expr| try self.resolveRecordFieldExprInContext(result, source_context, module_idx, nominal_expr.backing_expr, field_name_module_idx, field_name, visiting),
-            .e_nominal_external => |nominal_expr| try self.resolveRecordFieldExprInContext(result, source_context, module_idx, nominal_expr.backing_expr, field_name_module_idx, field_name, visiting),
-            .e_call => |call_expr| blk: {
-                if (self.getCallLowLevelOp(module_env, call_expr.func) != null) break :blk .none;
-                const callee_callable_inst_id = self.getCallSiteCallableInstForSourceContext(result, source_context, module_idx, expr_idx) orelse break :blk .blocked;
-                const callee_callable_inst = result.getCallableInst(callee_callable_inst_id);
-                const callee_template = result.getCallableTemplate(callee_callable_inst.template);
-                const boundary = self.callableBoundaryInfo(callee_template.module_idx, callee_template.cir_expr) orelse break :blk .none;
-                break :blk try self.resolveRecordFieldExprInContext(
-                    result,
-                    callableInstSourceContext(callee_callable_inst_id),
-                    callee_template.module_idx,
-                    boundary.body_expr,
-                    field_name_module_idx,
-                    field_name,
-                    visiting,
-                );
-            },
-            else => .none,
-        };
-    }
-
-    fn resolveTupleElemExprInContext(
-        self: *Pass,
-        result: *Result,
-        source_context: SourceContext,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-        elem_index: u32,
-        visiting: *std.AutoHashMapUnmanaged(ContextExprVisitKey, void),
-    ) Allocator.Error!ContextExprResolution {
-        const visit_key = contextExprVisitKey(source_context, module_idx, expr_idx);
-        if (visiting.contains(visit_key)) return .none;
-        try visiting.put(self.allocator, visit_key, {});
-        defer _ = visiting.remove(visit_key);
-
-        const module_env = self.all_module_envs[module_idx];
-        return switch (module_env.store.getExpr(expr_idx)) {
-            .e_tuple => |tuple_expr| blk: {
-                const elems = module_env.store.sliceExpr(tuple_expr.elems);
-                if (elem_index >= elems.len) break :blk .none;
-                break :blk .{ .source = exprSourceInContext(source_context, module_idx, elems[elem_index]) };
-            },
-            .e_lookup_local => |lookup| blk: {
-                const source = result.getPatternSourceExpr(module_idx, lookup.pattern_idx) orelse break :blk .none;
-                break :blk try self.resolveTupleElemExprInContext(
-                    result,
-                    source.source_context,
-                    source.module_idx,
-                    source.expr_idx,
-                    elem_index,
-                    visiting,
-                );
-            },
-            .e_lookup_external => |lookup| blk: {
-                const target_module_idx = self.resolveImportedModuleIdx(module_env, lookup.module_idx) orelse break :blk .none;
-                const source = try self.resolveExternalDefSourceExpr(result, target_module_idx, lookup.target_node_idx) orelse break :blk .none;
-                break :blk try self.resolveTupleElemExprInContext(
-                    result,
-                    source.source_context,
-                    source.module_idx,
-                    source.expr_idx,
-                    elem_index,
-                    visiting,
-                );
-            },
-            .e_lookup_required => |lookup| blk: {
-                const target = self.resolveRequiredLookupTarget(module_env, lookup) orelse break :blk .none;
-                const target_node_idx: u16 = @intCast(@intFromEnum(target.def_idx));
-                const source = try self.resolveExternalDefSourceExpr(result, target.module_idx, target_node_idx) orelse break :blk .none;
-                break :blk try self.resolveTupleElemExprInContext(
-                    result,
-                    source.source_context,
-                    source.module_idx,
-                    source.expr_idx,
-                    elem_index,
-                    visiting,
-                );
-            },
-            .e_block => |block| try self.resolveTupleElemExprInContext(result, source_context, module_idx, block.final_expr, elem_index, visiting),
-            .e_dbg => |dbg_expr| try self.resolveTupleElemExprInContext(result, source_context, module_idx, dbg_expr.expr, elem_index, visiting),
-            .e_expect => |expect_expr| try self.resolveTupleElemExprInContext(result, source_context, module_idx, expect_expr.body, elem_index, visiting),
-            .e_return => |return_expr| try self.resolveTupleElemExprInContext(result, source_context, module_idx, return_expr.expr, elem_index, visiting),
-            .e_nominal => |nominal_expr| try self.resolveTupleElemExprInContext(result, source_context, module_idx, nominal_expr.backing_expr, elem_index, visiting),
-            .e_nominal_external => |nominal_expr| try self.resolveTupleElemExprInContext(result, source_context, module_idx, nominal_expr.backing_expr, elem_index, visiting),
-            .e_call => |call_expr| blk: {
-                if (self.getCallLowLevelOp(module_env, call_expr.func) != null) break :blk .none;
-                const callee_callable_inst_id = self.getCallSiteCallableInstForSourceContext(result, source_context, module_idx, expr_idx) orelse break :blk .blocked;
-                const callee_callable_inst = result.getCallableInst(callee_callable_inst_id);
-                const callee_template = result.getCallableTemplate(callee_callable_inst.template);
-                const boundary = self.callableBoundaryInfo(callee_template.module_idx, callee_template.cir_expr) orelse break :blk .none;
-                break :blk try self.resolveTupleElemExprInContext(
-                    result,
-                    callableInstSourceContext(callee_callable_inst_id),
-                    callee_template.module_idx,
-                    boundary.body_expr,
-                    elem_index,
-                    visiting,
-                );
-            },
-            else => .none,
-        };
-    }
-
     fn resolveExprCallableTemplateWithVisited(
         self: *Pass,
         result: *Result,
@@ -10501,6 +10224,22 @@ pub const Pass = struct {
         if (self.getCallableParamSpecCallableMembersForSourceContext(result, source_context, module_idx, expr_idx)) |callable_inst_ids| {
             if (uniformTemplateFromCallableInsts(result, callable_inst_ids)) |template_id| {
                 return template_id;
+            }
+        }
+
+        if (result.getExprSourceExpr(module_idx, expr_idx)) |source| {
+            const concrete_source = (try self.resolveConcreteExprSource(result, source, visiting)) orelse return null;
+            if (!(concrete_source.source_context == source_context and
+                concrete_source.module_idx == module_idx and
+                concrete_source.expr_idx == expr_idx))
+            {
+                return try self.resolveExprCallableTemplateWithVisited(
+                    result,
+                    concrete_source.source_context,
+                    concrete_source.module_idx,
+                    concrete_source.expr_idx,
+                    visiting,
+                );
             }
         }
 
@@ -10548,29 +10287,6 @@ pub const Pass = struct {
                 const source = try self.resolveExternalDefSourceExpr(result, target.module_idx, target_node_idx) orelse break :blk null;
                 break :blk try self.resolveExprCallableTemplateWithVisited(result, source.source_context, source.module_idx, source.expr_idx, visiting);
             },
-            .e_block => |block| try self.resolveExprCallableTemplateWithVisited(result, source_context, module_idx, block.final_expr, visiting),
-            .e_dbg => |dbg_expr| try self.resolveExprCallableTemplateWithVisited(result, source_context, module_idx, dbg_expr.expr, visiting),
-            .e_expect => |expect_expr| try self.resolveExprCallableTemplateWithVisited(result, source_context, module_idx, expect_expr.body, visiting),
-            .e_return => |return_expr| try self.resolveExprCallableTemplateWithVisited(result, source_context, module_idx, return_expr.expr, visiting),
-            .e_nominal => |nominal_expr| try self.resolveExprCallableTemplateWithVisited(result, source_context, module_idx, nominal_expr.backing_expr, visiting),
-            .e_nominal_external => |nominal_expr| try self.resolveExprCallableTemplateWithVisited(result, source_context, module_idx, nominal_expr.backing_expr, visiting),
-            .e_dot_access => |dot_expr| blk: {
-                if (dot_expr.args != null) break :blk null;
-                const field_expr = try self.resolveRecordFieldExpr(
-                    result,
-                    source_context,
-                    module_idx,
-                    dot_expr.receiver,
-                    module_idx,
-                    dot_expr.field_name,
-                    visiting,
-                ) orelse break :blk null;
-                break :blk try self.resolveExprCallableTemplateWithVisited(result, field_expr.source_context, field_expr.module_idx, field_expr.expr_idx, visiting);
-            },
-            .e_tuple_access => |tuple_access| blk: {
-                const elem_expr = try self.resolveTupleElemExpr(result, source_context, module_idx, tuple_access.tuple, tuple_access.elem_index, visiting) orelse break :blk null;
-                break :blk try self.resolveExprCallableTemplateWithVisited(result, elem_expr.source_context, elem_expr.module_idx, elem_expr.expr_idx, visiting);
-            },
             else => null,
         };
         return resolved;
@@ -10613,223 +10329,84 @@ pub const Pass = struct {
         };
     }
 
-    fn resolveRecordFieldExpr(
+    fn resolveConcreteExprSource(
         self: *Pass,
         result: *Result,
-        source_context: SourceContext,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-        field_name_module_idx: u32,
-        field_name: Ident.Idx,
+        source: ExprSource,
         visiting: *std.AutoHashMapUnmanaged(ContextExprVisitKey, void),
     ) Allocator.Error!?ExprSource {
-        const visit_key = contextExprVisitKey(source_context, module_idx, expr_idx);
+        const visit_key = contextExprVisitKey(source.source_context, source.module_idx, source.expr_idx);
         if (visiting.contains(visit_key)) return null;
         try visiting.put(self.allocator, visit_key, {});
         defer _ = visiting.remove(visit_key);
 
-        const module_env = self.all_module_envs[module_idx];
-        return switch (module_env.store.getExpr(expr_idx)) {
+        var current = exprSourceInContext(source.source_context, source.module_idx, source.expr_idx);
+        if (result.getExprSourceExpr(source.module_idx, source.expr_idx)) |aliased| {
+            current = (try self.resolveConcreteExprSource(result, aliased, visiting)) orelse return null;
+        }
+
+        for (result.lambdasolved.getValueProjectionEntries(source.projections)) |projection| {
+            current = (try self.projectConcreteExprSource(result, current, projection)) orelse return null;
+        }
+
+        return current;
+    }
+
+    fn projectConcreteExprSource(
+        self: *Pass,
+        result: *Result,
+        source: ExprSource,
+        projection: CallableParamProjection,
+    ) Allocator.Error!?ExprSource {
+        const module_env = self.all_module_envs[source.module_idx];
+        return switch (module_env.store.getExpr(source.expr_idx)) {
             .e_record => |record| blk: {
+                const field_name_module_idx, const field_name = switch (projection) {
+                    .field => |name| .{ name.module_idx, name.ident },
+                    else => break :blk null,
+                };
                 for (module_env.store.sliceRecordFields(record.fields)) |field_idx| {
                     const field = module_env.store.getRecordField(field_idx);
-                    if (self.identsStructurallyEqualAcrossModules(module_idx, field.name, field_name_module_idx, field_name)) {
-                        break :blk exprSourceInContext(source_context, module_idx, field.value);
+                    if (self.identsStructurallyEqualAcrossModules(source.module_idx, field.name, field_name_module_idx, field_name)) {
+                        break :blk exprSourceInContext(source.source_context, source.module_idx, field.value);
                     }
                 }
                 break :blk null;
             },
-            .e_lookup_local => |lookup| blk: {
-                const source = result.getPatternSourceExpr(module_idx, lookup.pattern_idx) orelse break :blk null;
-                break :blk try self.resolveRecordFieldExpr(result, source.source_context, source.module_idx, source.expr_idx, field_name_module_idx, field_name, visiting);
-            },
-            .e_lookup_external => |lookup| blk: {
-                const target_module_idx = self.resolveImportedModuleIdx(module_env, lookup.module_idx) orelse break :blk null;
-                const source = try self.resolveExternalDefSourceExpr(result, target_module_idx, lookup.target_node_idx) orelse break :blk null;
-                break :blk try self.resolveRecordFieldExpr(result, source.source_context, source.module_idx, source.expr_idx, field_name_module_idx, field_name, visiting);
-            },
-            .e_lookup_required => |lookup| blk: {
-                const target = self.resolveRequiredLookupTarget(module_env, lookup) orelse break :blk null;
-                const target_node_idx: u16 = @intCast(@intFromEnum(target.def_idx));
-                const source = try self.resolveExternalDefSourceExpr(result, target.module_idx, target_node_idx) orelse break :blk null;
-                break :blk try self.resolveRecordFieldExpr(result, source.source_context, source.module_idx, source.expr_idx, field_name_module_idx, field_name, visiting);
-            },
-            .e_block => |block| try self.resolveRecordFieldExpr(result, source_context, module_idx, block.final_expr, field_name_module_idx, field_name, visiting),
-            .e_dbg => |dbg_expr| try self.resolveRecordFieldExpr(result, source_context, module_idx, dbg_expr.expr, field_name_module_idx, field_name, visiting),
-            .e_expect => |expect_expr| try self.resolveRecordFieldExpr(result, source_context, module_idx, expect_expr.body, field_name_module_idx, field_name, visiting),
-            .e_return => |return_expr| try self.resolveRecordFieldExpr(result, source_context, module_idx, return_expr.expr, field_name_module_idx, field_name, visiting),
-            .e_nominal => |nominal_expr| try self.resolveRecordFieldExpr(result, source_context, module_idx, nominal_expr.backing_expr, field_name_module_idx, field_name, visiting),
-            .e_nominal_external => |nominal_expr| try self.resolveRecordFieldExpr(result, source_context, module_idx, nominal_expr.backing_expr, field_name_module_idx, field_name, visiting),
-            else => null,
-        };
-    }
-
-    fn resolveTupleElemExpr(
-        self: *Pass,
-        result: *Result,
-        source_context: SourceContext,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-        elem_index: u32,
-        visiting: *std.AutoHashMapUnmanaged(ContextExprVisitKey, void),
-    ) Allocator.Error!?ExprSource {
-        const visit_key = contextExprVisitKey(source_context, module_idx, expr_idx);
-        if (visiting.contains(visit_key)) return null;
-        try visiting.put(self.allocator, visit_key, {});
-        defer _ = visiting.remove(visit_key);
-
-        const module_env = self.all_module_envs[module_idx];
-        return switch (module_env.store.getExpr(expr_idx)) {
             .e_tuple => |tuple_expr| blk: {
+                const elem_index = switch (projection) {
+                    .tuple_elem => |idx| idx,
+                    else => break :blk null,
+                };
                 const elems = module_env.store.sliceExpr(tuple_expr.elems);
                 if (elem_index >= elems.len) break :blk null;
-                break :blk exprSourceInContext(source_context, module_idx, elems[elem_index]);
+                break :blk exprSourceInContext(source.source_context, source.module_idx, elems[elem_index]);
             },
-            .e_lookup_local => |lookup| blk: {
-                const source = result.getPatternSourceExpr(module_idx, lookup.pattern_idx) orelse break :blk null;
-                break :blk try self.resolveTupleElemExpr(result, source.source_context, source.module_idx, source.expr_idx, elem_index, visiting);
-            },
-            .e_lookup_external => |lookup| blk: {
-                const target_module_idx = self.resolveImportedModuleIdx(module_env, lookup.module_idx) orelse break :blk null;
-                const source = try self.resolveExternalDefSourceExpr(result, target_module_idx, lookup.target_node_idx) orelse break :blk null;
-                break :blk try self.resolveTupleElemExpr(result, source.source_context, source.module_idx, source.expr_idx, elem_index, visiting);
-            },
-            .e_lookup_required => |lookup| blk: {
-                const target = self.resolveRequiredLookupTarget(module_env, lookup) orelse break :blk null;
-                const target_node_idx: u16 = @intCast(@intFromEnum(target.def_idx));
-                const source = try self.resolveExternalDefSourceExpr(result, target.module_idx, target_node_idx) orelse break :blk null;
-                break :blk try self.resolveTupleElemExpr(result, source.source_context, source.module_idx, source.expr_idx, elem_index, visiting);
-            },
-            .e_block => |block| try self.resolveTupleElemExpr(result, source_context, module_idx, block.final_expr, elem_index, visiting),
-            .e_dbg => |dbg_expr| try self.resolveTupleElemExpr(result, source_context, module_idx, dbg_expr.expr, elem_index, visiting),
-            .e_expect => |expect_expr| try self.resolveTupleElemExpr(result, source_context, module_idx, expect_expr.body, elem_index, visiting),
-            .e_return => |return_expr| try self.resolveTupleElemExpr(result, source_context, module_idx, return_expr.expr, elem_index, visiting),
-            .e_nominal => |nominal_expr| try self.resolveTupleElemExpr(result, source_context, module_idx, nominal_expr.backing_expr, elem_index, visiting),
-            .e_nominal_external => |nominal_expr| try self.resolveTupleElemExpr(result, source_context, module_idx, nominal_expr.backing_expr, elem_index, visiting),
-            else => null,
-        };
-    }
-
-    fn resolveTagPayloadExpr(
-        self: *Pass,
-        result: *Result,
-        source_context: SourceContext,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-        tag_name_module_idx: u32,
-        tag_name: Ident.Idx,
-        payload_index: u32,
-        visiting: *std.AutoHashMapUnmanaged(ContextExprVisitKey, void),
-    ) Allocator.Error!?ExprSource {
-        const visit_key = contextExprVisitKey(source_context, module_idx, expr_idx);
-        if (visiting.contains(visit_key)) return null;
-        try visiting.put(self.allocator, visit_key, {});
-        defer _ = visiting.remove(visit_key);
-
-        const module_env = self.all_module_envs[module_idx];
-        return switch (module_env.store.getExpr(expr_idx)) {
             .e_tag => |tag_expr| blk: {
-                if (!self.identsStructurallyEqualAcrossModules(module_idx, tag_expr.name, tag_name_module_idx, tag_name)) {
+                const tag_name_module_idx, const tag_name, const payload_index = switch (projection) {
+                    .tag_payload => |payload| .{
+                        payload.tag_name.module_idx,
+                        payload.tag_name.ident,
+                        payload.payload_index,
+                    },
+                    else => break :blk null,
+                };
+                if (!self.identsStructurallyEqualAcrossModules(source.module_idx, tag_expr.name, tag_name_module_idx, tag_name)) {
                     break :blk null;
                 }
                 const payloads = module_env.store.sliceExpr(tag_expr.args);
                 if (payload_index >= payloads.len) break :blk null;
-                break :blk exprSourceInContext(source_context, module_idx, payloads[payload_index]);
+                break :blk exprSourceInContext(source.source_context, source.module_idx, payloads[payload_index]);
             },
-            .e_lookup_local => |lookup| blk: {
-                const source = result.getPatternSourceExpr(module_idx, lookup.pattern_idx) orelse break :blk null;
-                break :blk try self.resolveTagPayloadExpr(
-                    result,
-                    source.source_context,
-                    source.module_idx,
-                    source.expr_idx,
-                    tag_name_module_idx,
-                    tag_name,
-                    payload_index,
-                    visiting,
-                );
-            },
-            .e_lookup_external => |lookup| blk: {
-                const target_module_idx = self.resolveImportedModuleIdx(module_env, lookup.module_idx) orelse break :blk null;
-                const source = try self.resolveExternalDefSourceExpr(result, target_module_idx, lookup.target_node_idx) orelse break :blk null;
-                break :blk try self.resolveTagPayloadExpr(
-                    result,
-                    source.source_context,
-                    source.module_idx,
-                    source.expr_idx,
-                    tag_name_module_idx,
-                    tag_name,
-                    payload_index,
-                    visiting,
-                );
-            },
-            .e_lookup_required => |lookup| blk: {
-                const target = self.resolveRequiredLookupTarget(module_env, lookup) orelse break :blk null;
-                const target_node_idx: u16 = @intCast(@intFromEnum(target.def_idx));
-                const source = try self.resolveExternalDefSourceExpr(result, target.module_idx, target_node_idx) orelse break :blk null;
-                break :blk try self.resolveTagPayloadExpr(
-                    result,
-                    source.source_context,
-                    source.module_idx,
-                    source.expr_idx,
-                    tag_name_module_idx,
-                    tag_name,
-                    payload_index,
-                    visiting,
-                );
-            },
-            .e_block => |block| try self.resolveTagPayloadExpr(result, source_context, module_idx, block.final_expr, tag_name_module_idx, tag_name, payload_index, visiting),
-            .e_dbg => |dbg_expr| try self.resolveTagPayloadExpr(result, source_context, module_idx, dbg_expr.expr, tag_name_module_idx, tag_name, payload_index, visiting),
-            .e_expect => |expect_expr| try self.resolveTagPayloadExpr(result, source_context, module_idx, expect_expr.body, tag_name_module_idx, tag_name, payload_index, visiting),
-            .e_return => |return_expr| try self.resolveTagPayloadExpr(result, source_context, module_idx, return_expr.expr, tag_name_module_idx, tag_name, payload_index, visiting),
-            .e_nominal => |nominal_expr| try self.resolveTagPayloadExpr(result, source_context, module_idx, nominal_expr.backing_expr, tag_name_module_idx, tag_name, payload_index, visiting),
-            .e_nominal_external => |nominal_expr| try self.resolveTagPayloadExpr(result, source_context, module_idx, nominal_expr.backing_expr, tag_name_module_idx, tag_name, payload_index, visiting),
-            else => null,
-        };
-    }
-
-    fn resolveListElemExpr(
-        self: *Pass,
-        result: *Result,
-        source_context: SourceContext,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-        elem_index: u32,
-        visiting: *std.AutoHashMapUnmanaged(ContextExprVisitKey, void),
-    ) Allocator.Error!?ExprSource {
-        const visit_key = contextExprVisitKey(source_context, module_idx, expr_idx);
-        if (visiting.contains(visit_key)) return null;
-        try visiting.put(self.allocator, visit_key, {});
-        defer _ = visiting.remove(visit_key);
-
-        const module_env = self.all_module_envs[module_idx];
-        return switch (module_env.store.getExpr(expr_idx)) {
             .e_list => |list_expr| blk: {
+                const elem_index = switch (projection) {
+                    .list_elem => |idx| idx,
+                    else => break :blk null,
+                };
                 const elems = module_env.store.sliceExpr(list_expr.elems);
                 if (elem_index >= elems.len) break :blk null;
-                break :blk exprSourceInContext(source_context, module_idx, elems[elem_index]);
+                break :blk exprSourceInContext(source.source_context, source.module_idx, elems[elem_index]);
             },
-            .e_lookup_local => |lookup| blk: {
-                const source = result.getPatternSourceExpr(module_idx, lookup.pattern_idx) orelse break :blk null;
-                break :blk try self.resolveListElemExpr(result, source.source_context, source.module_idx, source.expr_idx, elem_index, visiting);
-            },
-            .e_lookup_external => |lookup| blk: {
-                const target_module_idx = self.resolveImportedModuleIdx(module_env, lookup.module_idx) orelse break :blk null;
-                const source = try self.resolveExternalDefSourceExpr(result, target_module_idx, lookup.target_node_idx) orelse break :blk null;
-                break :blk try self.resolveListElemExpr(result, source.source_context, source.module_idx, source.expr_idx, elem_index, visiting);
-            },
-            .e_lookup_required => |lookup| blk: {
-                const target = self.resolveRequiredLookupTarget(module_env, lookup) orelse break :blk null;
-                const target_node_idx: u16 = @intCast(@intFromEnum(target.def_idx));
-                const source = try self.resolveExternalDefSourceExpr(result, target.module_idx, target_node_idx) orelse break :blk null;
-                break :blk try self.resolveListElemExpr(result, source.source_context, source.module_idx, source.expr_idx, elem_index, visiting);
-            },
-            .e_block => |block| try self.resolveListElemExpr(result, source_context, module_idx, block.final_expr, elem_index, visiting),
-            .e_dbg => |dbg_expr| try self.resolveListElemExpr(result, source_context, module_idx, dbg_expr.expr, elem_index, visiting),
-            .e_expect => |expect_expr| try self.resolveListElemExpr(result, source_context, module_idx, expect_expr.body, elem_index, visiting),
-            .e_return => |return_expr| try self.resolveListElemExpr(result, source_context, module_idx, return_expr.expr, elem_index, visiting),
-            .e_nominal => |nominal_expr| try self.resolveListElemExpr(result, source_context, module_idx, nominal_expr.backing_expr, elem_index, visiting),
-            .e_nominal_external => |nominal_expr| try self.resolveListElemExpr(result, source_context, module_idx, nominal_expr.backing_expr, elem_index, visiting),
             else => null,
         };
     }

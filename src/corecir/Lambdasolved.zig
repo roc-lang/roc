@@ -124,6 +124,7 @@ pub const SolvedCall = union(enum) {
 pub const Result = struct {
     callable_templates: std.ArrayListUnmanaged(CallableTemplate),
     value_projection_entries: std.ArrayListUnmanaged(ValueProjection.Projection),
+    expr_source_exprs: std.AutoHashMapUnmanaged(u64, ExprSource),
     pattern_source_exprs: std.AutoHashMapUnmanaged(u64, ExprSource),
     external_def_source_exprs: std.AutoHashMapUnmanaged(u64, ExprSource),
     local_callable_template_ids: std.AutoHashMapUnmanaged(u64, CallableTemplateId),
@@ -140,6 +141,7 @@ pub const Result = struct {
         return .{
             .callable_templates = .empty,
             .value_projection_entries = .empty,
+            .expr_source_exprs = .empty,
             .pattern_source_exprs = .empty,
             .external_def_source_exprs = .empty,
             .local_callable_template_ids = .empty,
@@ -156,6 +158,7 @@ pub const Result = struct {
     pub fn deinit(self: *Result, allocator: Allocator) void {
         self.callable_templates.deinit(allocator);
         self.value_projection_entries.deinit(allocator);
+        self.expr_source_exprs.deinit(allocator);
         self.pattern_source_exprs.deinit(allocator);
         self.external_def_source_exprs.deinit(allocator);
         self.local_callable_template_ids.deinit(allocator);
@@ -198,6 +201,14 @@ pub const Result = struct {
         pattern_idx: CIR.Pattern.Idx,
     ) ?ExprSource {
         return self.pattern_source_exprs.get(packLocalPatternSourceKey(module_idx, pattern_idx));
+    }
+
+    pub fn getExprSourceExpr(
+        self: *const Result,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) ?ExprSource {
+        return self.expr_source_exprs.get(packExprSourceKey(module_idx, expr_idx));
     }
 
     pub fn getExternalDefSourceExpr(
