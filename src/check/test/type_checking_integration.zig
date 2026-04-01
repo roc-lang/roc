@@ -688,7 +688,7 @@ test "check type - tag - ext - typo" {
         \\
         \\But the annotation say it should be:
         \\
-        \\    Color([Green, ..])
+        \\    Color([Green])
         \\
         \\**Hint:** Maybe `Greeen` should be `Green`?
         \\
@@ -3770,6 +3770,42 @@ fn checkTypesModuleDefs(
     }
 }
 
+/// A unified helper to run the full pipeline using user-facing display mode.
+///
+/// Behavior depends on the expectation:
+/// Pass: Asserts whole module type checks, and assert the specified def matches the expected type string
+/// Fail: Asserts that there is exactly 1 type error in the module and it's title matches the expected string
+fn checkTypesModuleUserFacing(
+    comptime source_expr: []const u8,
+    comptime expectation: ModuleExpectation,
+    comptime expected: []const u8,
+) !void {
+    var test_env = try TestEnv.initUserFacing("Test", source_expr);
+    defer test_env.deinit();
+
+    switch (expectation) {
+        .pass => |def_expectation| {
+            switch (def_expectation) {
+                .last_def => {
+                    return test_env.assertLastDefType(expected);
+                },
+                .def => |def_name| {
+                    return test_env.assertDefType(def_name, expected);
+                },
+            }
+        },
+        .fail => {
+            return test_env.assertOneTypeError(expected);
+        },
+        .fail_with => {
+            return test_env.assertOneTypeErrorMsg(expected);
+        },
+        .fail_first => {
+            return test_env.assertFirstTypeError(expected);
+        },
+    }
+}
+
 // helpers - expr //
 
 const ExprExpectation = union(enum) {
@@ -6145,6 +6181,7 @@ test "check type - tag union - ext hints 2" {
     // With polarity, [A, B] in return (positive) position is now open [A, B, ..].
     // The arg [A, B, ..] has explicit .. (flex ext). The return [A, B, ..] has a
     // polarity_open rigid ext. Unifying flex with rigid ext still produces a mismatch.
+    // In user-facing mode, the polarity_open extension on the annotation is elided, showing [A, B].
     try checkTypesModule(source, .fail_with,
         \\**TYPE MISMATCH**
         \\This expression is used in an unexpected way:
@@ -6160,7 +6197,7 @@ test "check type - tag union - ext hints 2" {
         \\
         \\But the annotation say it should be:
         \\
-        \\    [A, B, ..]
+        \\    [A, B]
         \\
         \\
     );

@@ -262,7 +262,7 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
 
     try checker.checkFile();
 
-    var type_writer = try module_env.initTypeWriter();
+    var type_writer = try module_env.initTypeWriterExplicit();
     errdefer type_writer.deinit();
 
     return TestEnv{
@@ -280,6 +280,116 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
 
 /// Initialize where the provided source is an entire file
 pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
+    const gpa = std.testing.allocator;
+
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(gpa);
+    defer allocators.deinit();
+
+    // Allocate our ModuleEnv and Can on the heap
+    // so we can keep them around for testing purposes...
+    // this is an unusual setup, but helps us with testing
+    const module_env: *ModuleEnv = try gpa.create(ModuleEnv);
+    errdefer gpa.destroy(module_env);
+
+    const can = try gpa.create(Can);
+    errdefer gpa.destroy(can);
+
+    var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
+
+    // Load Builtin module once - Bool, Try, and Str are all types within this module
+    const builtin_indices = try deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    var builtin_module = try loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Builtin", compiled_builtins.builtin_source);
+    errdefer builtin_module.deinit();
+
+    // Initialize the ModuleEnv with the CommonEnv
+    module_env.* = try ModuleEnv.init(gpa, source);
+    errdefer module_env.deinit();
+
+    module_env.common.source = source;
+    module_env.module_name = module_name;
+    module_env.display_module_name_idx = try module_env.insertIdent(base.Ident.for_text(module_name));
+    module_env.qualified_module_ident = module_env.display_module_name_idx;
+    try module_env.common.calcLineStarts(gpa);
+
+    // Parse the AST
+    const parse_ast = try parse.parse(&allocators, &module_env.common);
+    errdefer parse_ast.deinit();
+    parse_ast.store.emptyScratch();
+
+    // Canonicalize
+    try module_env.initCIRFields(module_name);
+
+    can.* = try Can.initModule(&allocators, module_env, parse_ast, .{
+        .builtin_types = .{
+            .builtin_module_env = builtin_module.env,
+            .builtin_indices = builtin_indices,
+        },
+        .imported_modules = &module_envs,
+    });
+    errdefer can.deinit();
+
+    try can.canonicalizeFile();
+    // Note: We skip validateForChecking() in unit tests since tests may not be valid
+    // type modules. The validation is for real modules that will be imported.
+
+    // Get Bool, Try, and Str statement indices from the IMPORTED modules (not copied!)
+    const bool_stmt_in_bool_module = builtin_indices.bool_type;
+    const try_stmt_in_result_module = builtin_indices.try_type;
+    const str_stmt_in_builtin_module = builtin_indices.str_type;
+
+    const module_builtin_ctx: Check.BuiltinContext = .{
+        .module_name = try module_env.insertIdent(base.Ident.for_text(module_name)),
+        .bool_stmt = bool_stmt_in_bool_module,
+        .try_stmt = try_stmt_in_result_module,
+        .str_stmt = str_stmt_in_builtin_module,
+        .builtin_module = builtin_module.env,
+        .builtin_indices = builtin_indices,
+    };
+
+    // Build imported_envs array
+    // Always include the builtin module for auto-imported types (Bool, Str, etc.)
+    var imported_envs = try std.ArrayList(*const ModuleEnv).initCapacity(gpa, 2);
+    defer imported_envs.deinit(gpa);
+
+    // Add builtin module unconditionally (needed for auto-imported types)
+    try imported_envs.append(gpa, builtin_module.env);
+
+    // Resolve imports - map each import to its index in imported_envs
+    module_env.imports.resolveImports(module_env, imported_envs.items);
+
+    // Type Check - Pass the imported modules in other_modules parameter
+    var checker = try Check.init(
+        gpa,
+        &module_env.types,
+        module_env,
+        imported_envs.items,
+        &module_envs,
+        &module_env.store.regions,
+        module_builtin_ctx,
+    );
+    errdefer checker.deinit();
+
+    try checker.checkFile();
+
+    var type_writer = try module_env.initTypeWriterExplicit();
+    errdefer type_writer.deinit();
+
+    return TestEnv{
+        .gpa = gpa,
+        .module_env = module_env,
+        .parse_ast = parse_ast,
+        .can = can,
+        .checker = checker,
+        .type_writer = type_writer,
+        .module_envs = module_envs,
+        .builtin_module = builtin_module,
+        .owns_builtin_module = true, // We own this module
+    };
+}
+
+/// Initialize where the provided source is an entire file (user-facing display mode)
+pub fn initUserFacing(module_name: []const u8, source: []const u8) !TestEnv {
     const gpa = std.testing.allocator;
 
     var allocators: Allocators = undefined;

@@ -39,6 +39,15 @@ const TypeContext = enum {
     FunctionReturn,
 };
 
+pub const DisplayMode = enum {
+    /// User-facing: elide polarity_open extensions in Pos position.
+    /// Open types show as [A, B], closed types show as [A, B].
+    user_facing,
+    /// Test/debug: always show openness explicitly.
+    /// Open types show as [A, B, ..], closed types show as [A, B].
+    explicit,
+};
+
 /// Helper that accepts a `Var` and write it as a nice string.
 /// Entry point is `writeVar`
 const TypeWriter = @This();
@@ -66,6 +75,7 @@ gpa: std.mem.Allocator,
 /// When true, flex vars with from_numeral constraint are displayed as "Dec"
 /// instead of showing the constraint. Used for MONO output.
 default_numerals_to_dec: bool = false,
+display_mode: DisplayMode = .user_facing,
 
 const ByteWrite = std.array_list.Managed(u8).Writer;
 
@@ -119,6 +129,7 @@ pub fn initFromParts(
     types_store: *const TypesStore,
     idents: *const Ident.Store,
     import_mapping: ?*const import_mapping_mod.ImportMapping,
+    display_mode: DisplayMode,
 ) std.mem.Allocator.Error!TypeWriter {
     return .{
         .types = types_store,
@@ -137,6 +148,7 @@ pub fn initFromParts(
         .scratch_tags = try std.array_list.Managed(types_mod.Tag).initCapacity(gpa, 32),
         .import_mapping = import_mapping,
         .gpa = gpa,
+        .display_mode = display_mode,
     };
 }
 
@@ -650,19 +662,29 @@ fn writeRecord(self: *TypeWriter, writer: *ByteWrite, record: Record, root_var: 
             }
         },
         .rigid => |rigid| {
-            if (num_fields > 0) _ = try writer.write(", ");
-            _ = try writer.write("..");
-            const name = switch (rigid.name) {
-                .name => |ident_idx| self.getIdent(ident_idx),
-                .polarity_open => "",
-                .polarity_deferred => blk: {
-                    std.debug.assert(false);
-                    break :blk "<unresolved>";
+            switch (rigid.name) {
+                .polarity_open => {
+                    // In explicit mode, show ".." for open records
+                    // In user_facing mode, elide the extension
+                    if (self.display_mode == .explicit) {
+                        if (num_fields > 0) _ = try writer.write(", ");
+                        _ = try writer.write("..");
+                    }
                 },
-            };
-            // Suppress internal names (e.g. #open_ext_0 from anonymous `..`)
-            if (name.len == 0 or name[0] != '#') {
-                _ = try writer.write(name);
+                .polarity_deferred => {
+                    std.debug.assert(false);
+                    if (num_fields > 0) _ = try writer.write(", ");
+                    _ = try writer.write("..<unresolved>");
+                },
+                .name => |ident_idx| {
+                    if (num_fields > 0) _ = try writer.write(", ");
+                    _ = try writer.write("..");
+                    const name = self.getIdent(ident_idx);
+                    // Suppress internal names (e.g. #open_ext_0 from anonymous `..`)
+                    if (name.len == 0 or name[0] != '#') {
+                        _ = try writer.write(name);
+                    }
+                },
             }
 
             // Since don't recurse above, we must capture the static dispatch
@@ -882,19 +904,29 @@ fn writeTagUnion(self: *TypeWriter, writer: *ByteWrite, tag_union: TagUnion, roo
             }
         },
         .rigid => |rigid| {
-            if (num_tags > 0) _ = try writer.write(", ");
-            _ = try writer.write("..");
-            const name = switch (rigid.name) {
-                .name => |ident_idx| self.getIdent(ident_idx),
-                .polarity_open => "",
-                .polarity_deferred => blk: {
-                    std.debug.assert(false);
-                    break :blk "<unresolved>";
+            switch (rigid.name) {
+                .polarity_open => {
+                    // In explicit mode, show ".." for open tag unions
+                    // In user_facing mode, elide the extension
+                    if (self.display_mode == .explicit) {
+                        if (num_tags > 0) _ = try writer.write(", ");
+                        _ = try writer.write("..");
+                    }
                 },
-            };
-            // Suppress internal names (e.g. #open_ext_0 from anonymous `..`)
-            if (name.len == 0 or name[0] != '#') {
-                _ = try writer.write(name);
+                .polarity_deferred => {
+                    std.debug.assert(false);
+                    if (num_tags > 0) _ = try writer.write(", ");
+                    _ = try writer.write("..<unresolved>");
+                },
+                .name => |ident_idx| {
+                    if (num_tags > 0) _ = try writer.write(", ");
+                    _ = try writer.write("..");
+                    const name = self.getIdent(ident_idx);
+                    // Suppress internal names (e.g. #open_ext_0 from anonymous `..`)
+                    if (name.len == 0 or name[0] != '#') {
+                        _ = try writer.write(name);
+                    }
+                },
             }
 
             for (self.types.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {

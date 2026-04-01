@@ -62,7 +62,7 @@ const TestEnv = struct {
             .module_env = module_env,
             .snapshots = try snapshot_mod.Store.initCapacity(gpa, 16),
             .problems = try problem_mod.Store.initCapacity(gpa, 16),
-            .type_writer = try types_mod.TypeWriter.initFromParts(gpa, &module_env.types, module_env.getIdentStore(), null),
+            .type_writer = try types_mod.TypeWriter.initFromParts(gpa, &module_env.types, module_env.getIdentStore(), null, .user_facing),
             .scratch = try Scratch.init(module_env.gpa),
             .occurs_scratch = try occurs.Scratch.init(module_env.gpa),
         };

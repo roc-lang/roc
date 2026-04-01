@@ -314,7 +314,7 @@ fn initAssumePrepared(
         .top_level_ptrns = std.AutoHashMap(CIR.Pattern.Idx, DefProcessed).init(gpa),
         .enclosing_func_name = null,
         // Initialize with null import_mapping - caller should call fixupTypeWriter() after storing Check
-        .type_writer = try types_mod.TypeWriter.initFromParts(gpa, types, cir.getIdentStore(), null),
+        .type_writer = try types_mod.TypeWriter.initFromParts(gpa, types, cir.getIdentStore(), null, .user_facing),
         .deferred_def_unifications = .{},
         .deferred_cycle_envs = .{},
         .binop_dispatch_tracking = .{},

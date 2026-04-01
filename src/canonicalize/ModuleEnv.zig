@@ -3114,7 +3114,11 @@ pub fn getLineStartsAll(self: *const Self) []const u32 {
 }
 
 pub fn initTypeWriter(self: *Self) std.mem.Allocator.Error!TypeWriter {
-    return TypeWriter.initFromParts(self.gpa, &self.types, self.getIdentStore(), null);
+    return TypeWriter.initFromParts(self.gpa, &self.types, self.getIdentStore(), null, .user_facing);
+}
+
+pub fn initTypeWriterExplicit(self: *Self) std.mem.Allocator.Error!TypeWriter {
+    return TypeWriter.initFromParts(self.gpa, &self.types, self.getIdentStore(), null, .explicit);
 }
 
 /// Inserts an identifier into the common environment and returns its index.
