@@ -88,6 +88,14 @@ pub const ContextPatternKey = struct {
     pattern_raw: u32,
 };
 
+pub const ContextTypeVarKey = struct {
+    source_context_kind: enum(u2) { callable_inst, root_expr, provenance_expr, template_expr },
+    source_context_module_idx: u32,
+    source_context_raw: u32,
+    module_idx: u32,
+    type_var: types.Var,
+};
+
 pub const DispatchExprTarget = struct {
     module_idx: u32,
     def_idx: CIR.Def.Idx,
@@ -100,6 +108,7 @@ pub const Result = struct {
     empty_subst_id: TypeSubstId,
     context_expr_monotypes: std.AutoHashMapUnmanaged(ContextExprKey, ResolvedMonotype),
     context_pattern_monotypes: std.AutoHashMapUnmanaged(ContextPatternKey, ResolvedMonotype),
+    context_type_var_monotypes: std.AutoHashMapUnmanaged(ContextTypeVarKey, ResolvedMonotype),
     type_scope_monotypes: std.AutoHashMapUnmanaged(BoundTypeVarKey, ResolvedMonotype),
     resolved_dispatch_targets: std.AutoHashMapUnmanaged(ContextExprKey, DispatchExprTarget),
 
@@ -111,6 +120,7 @@ pub const Result = struct {
             .empty_subst_id = @enumFromInt(0),
             .context_expr_monotypes = .empty,
             .context_pattern_monotypes = .empty,
+            .context_type_var_monotypes = .empty,
             .type_scope_monotypes = .empty,
             .resolved_dispatch_targets = .empty,
         };
@@ -124,6 +134,7 @@ pub const Result = struct {
         self.substs.deinit(allocator);
         self.context_expr_monotypes.deinit(allocator);
         self.context_pattern_monotypes.deinit(allocator);
+        self.context_type_var_monotypes.deinit(allocator);
         self.type_scope_monotypes.deinit(allocator);
         self.resolved_dispatch_targets.deinit(allocator);
     }
@@ -210,6 +221,48 @@ pub const Result = struct {
         pattern_idx: CIR.Pattern.Idx,
     ) ?ResolvedMonotype {
         return self.context_pattern_monotypes.get(contextPatternKey(source_context, module_idx, pattern_idx));
+    }
+
+    pub fn contextTypeVarKey(source_context: SourceContext, module_idx: u32, type_var: types.Var) ContextTypeVarKey {
+        return switch (source_context) {
+            .callable_inst => |context_id| .{
+                .source_context_kind = .callable_inst,
+                .source_context_module_idx = std.math.maxInt(u32),
+                .source_context_raw = @intFromEnum(context_id),
+                .module_idx = module_idx,
+                .type_var = type_var,
+            },
+            .root_expr => |root| .{
+                .source_context_kind = .root_expr,
+                .source_context_module_idx = root.module_idx,
+                .source_context_raw = @intFromEnum(root.expr_idx),
+                .module_idx = module_idx,
+                .type_var = type_var,
+            },
+            .provenance_expr => |source| .{
+                .source_context_kind = .provenance_expr,
+                .source_context_module_idx = source.module_idx,
+                .source_context_raw = @intFromEnum(source.expr_idx),
+                .module_idx = module_idx,
+                .type_var = type_var,
+            },
+            .template_expr => |template| .{
+                .source_context_kind = .template_expr,
+                .source_context_module_idx = template.module_idx,
+                .source_context_raw = @intFromEnum(template.expr_idx),
+                .module_idx = module_idx,
+                .type_var = type_var,
+            },
+        };
+    }
+
+    pub fn getContextTypeVarMonotype(
+        self: *const Result,
+        source_context: SourceContext,
+        module_idx: u32,
+        type_var: types.Var,
+    ) ?ResolvedMonotype {
+        return self.context_type_var_monotypes.get(contextTypeVarKey(source_context, module_idx, type_var));
     }
 
     pub fn getTypeScopeMonotype(

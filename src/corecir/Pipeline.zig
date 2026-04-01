@@ -96,6 +96,7 @@ pub const DispatchExprTarget = ContextMono.DispatchExprTarget;
 const ContextExprKey = ContextMono.ContextExprKey;
 
 const ContextPatternKey = ContextMono.ContextPatternKey;
+const ContextTypeVarKey = ContextMono.ContextTypeVarKey;
 
 fn callableValueMonotype(result: *const Result, callable_value: CallableValue) ResolvedMonotype {
     return switch (callable_value) {
@@ -143,6 +144,7 @@ const MutationKind = enum(u8) {
     source_value_provenance,
     context_expr_monotypes,
     context_pattern_monotypes,
+    context_type_var_monotypes,
     context_dispatch_targets,
     packed_fns,
     indirect_calls,
@@ -173,15 +175,8 @@ const TypeScopeContext = struct {
     scope: *const types.TypeScope,
 };
 
-const BindingResolutionState = struct {
-    bindings: *std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
-    iteration_expr_monotypes: ?*std.AutoHashMapUnmanaged(ContextExprKey, ResolvedMonotype) = null,
-    iteration_pattern_monotypes: ?*std.AutoHashMapUnmanaged(ContextPatternKey, ResolvedMonotype) = null,
-};
-
 const SemanticThread = struct {
     source_context: SourceContext,
-    resolution: ?*BindingResolutionState = null,
 
     fn trackedThread(source_context: SourceContext) SemanticThread {
         return .{
@@ -524,6 +519,7 @@ pub const Pass = struct {
     in_progress_call_result_callable_insts: std.AutoHashMapUnmanaged(CallResultCallableInstKey, void),
     in_progress_callable_scans: std.AutoHashMapUnmanaged(u32, void),
     completed_callable_scans: std.AutoHashMapUnmanaged(u32, void),
+    expr_build_semantics_by_key: std.AutoHashMapUnmanaged(ContextExprKey, Lambdamono.ExprSemantics),
     mutation_revision: u64,
     mutation_counts: [mutation_kind_count]u32,
 
@@ -546,6 +542,7 @@ pub const Pass = struct {
             .in_progress_call_result_callable_insts = .empty,
             .in_progress_callable_scans = .empty,
             .completed_callable_scans = .empty,
+            .expr_build_semantics_by_key = .empty,
             .mutation_revision = 0,
             .mutation_counts = [_]u32{0} ** mutation_kind_count,
         };
@@ -618,6 +615,23 @@ pub const Pass = struct {
                 "Pipeline invariant violated: source context {s} did not carry a callable inst",
                 .{@tagName(source_context)},
             ),
+        };
+    }
+
+    fn contextTypeVarKeyMatchesSourceContext(source_context: SourceContext, key: ContextTypeVarKey) bool {
+        return switch (source_context) {
+            .callable_inst => |context_id| key.source_context_kind == .callable_inst and
+                key.source_context_module_idx == std.math.maxInt(u32) and
+                key.source_context_raw == @intFromEnum(context_id),
+            .root_expr => |root| key.source_context_kind == .root_expr and
+                key.source_context_module_idx == root.module_idx and
+                key.source_context_raw == @intFromEnum(root.expr_idx),
+            .provenance_expr => |source| key.source_context_kind == .provenance_expr and
+                key.source_context_module_idx == source.module_idx and
+                key.source_context_raw == @intFromEnum(source.expr_idx),
+            .template_expr => |template| key.source_context_kind == .template_expr and
+                key.source_context_module_idx == template.module_idx and
+                key.source_context_raw == @intFromEnum(template.expr_idx),
         };
     }
 
@@ -709,6 +723,24 @@ pub const Pass = struct {
         pattern_idx: CIR.Pattern.Idx,
     ) ContextPatternKey {
         return self.resultPatternKeyForSourceContext(thread.requireSourceContext(), module_idx, pattern_idx);
+    }
+
+    fn resultTypeVarKeyForSourceContext(
+        _: *const Pass,
+        source_context: SourceContext,
+        module_idx: u32,
+        type_var: types.Var,
+    ) ContextTypeVarKey {
+        return ContextMono.Result.contextTypeVarKey(source_context, module_idx, type_var);
+    }
+
+    fn resultTypeVarKeyForThread(
+        self: *const Pass,
+        thread: SemanticThread,
+        module_idx: u32,
+        type_var: types.Var,
+    ) ContextTypeVarKey {
+        return self.resultTypeVarKeyForSourceContext(thread.requireSourceContext(), module_idx, type_var);
     }
 
 
@@ -1365,6 +1397,7 @@ pub const Pass = struct {
         self.in_progress_call_result_callable_insts.deinit(self.allocator);
         self.in_progress_callable_scans.deinit(self.allocator);
         self.completed_callable_scans.deinit(self.allocator);
+        self.expr_build_semantics_by_key.deinit(self.allocator);
     }
 
     fn resetRunState(self: *Pass) void {
@@ -1374,6 +1407,7 @@ pub const Pass = struct {
         self.in_progress_call_result_callable_insts.clearRetainingCapacity();
         self.in_progress_callable_scans.clearRetainingCapacity();
         self.completed_callable_scans.clearRetainingCapacity();
+        self.expr_build_semantics_by_key.clearRetainingCapacity();
         self.mutation_revision = 0;
         self.mutation_counts = [_]u32{0} ** mutation_kind_count;
     }
@@ -1818,8 +1852,9 @@ pub const Pass = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) Allocator.Error!*Lambdamono.ExprSemantics {
+        _ = result;
         const key = Result.contextExprKey(source_context, module_idx, expr_idx);
-        const gop = try result.lambdamono.expr_semantics_by_key.getOrPut(self.allocator, key);
+        const gop = try self.expr_build_semantics_by_key.getOrPut(self.allocator, key);
         if (!gop.found_existing) gop.value_ptr.* = .{};
         return gop.value_ptr;
     }
@@ -1831,8 +1866,10 @@ pub const Pass = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) Lambdamono.ExprSemantics {
-        _ = self;
-        return result.lambdamono.getExprSemantics(source_context, module_idx, expr_idx);
+        _ = result;
+        return self.expr_build_semantics_by_key.get(
+            Result.contextExprKey(source_context, module_idx, expr_idx),
+        ) orelse .{};
     }
 
     fn ensureProgramPatternBinding(
@@ -2756,12 +2793,14 @@ pub const Pass = struct {
                 );
                 try self.bindCurrentPatternFromResolvedMonotype(
                     result,
+                    thread,
                     module_idx,
                     pattern_idx,
                     resolvedMonotype(callable_inst.fn_monotype, callable_inst.fn_monotype_module_idx),
                 );
                 try self.recordCurrentExprMonotype(
                     result,
+                    thread,
                     module_idx,
                     expr_idx,
                     callable_inst.fn_monotype,
@@ -2992,14 +3031,14 @@ pub const Pass = struct {
             );
             if (materialize_if_callable) {
                 try self.materializeDemandedExprCallableInst(result, thread, module_idx, expr_idx, template_id);
-                if (thread.resolution == null and !thread.hasCallableInst()) {
+                if (!force_rescan_children and !thread.hasCallableInst()) {
                     try self.completeCurrentExprMonotype(result, thread, module_idx, expr_idx);
                     return;
                 }
             }
         }
 
-        if (thread.resolution != null or force_rescan_children) {
+        if (force_rescan_children) {
             try self.scanCirExprChildren(result, thread, module_idx, expr_idx, expr, resolve_direct_calls);
             try self.completeCurrentExprMonotype(result, thread, module_idx, expr_idx);
             return;
@@ -3183,26 +3222,12 @@ pub const Pass = struct {
     fn lookupExprMonotypeForSourceContext(
         self: *Pass,
         result: *Result,
-        thread: SemanticThread,
+        _: SemanticThread,
         source_context: SourceContext,
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?ResolvedMonotype {
         const key = self.resultExprKeyForSourceContext(source_context, module_idx, expr_idx);
-        if (thread.resolution) |resolution| {
-            if (resolution.iteration_expr_monotypes) |iteration_map| {
-            if (iteration_map.get(key)) |resolved| return resolved;
-            if (sourceContextHasCallableInst(source_context) and
-                key.source_context_kind == .callable_inst and
-                key.source_context_raw == switch (source_context) {
-                    .callable_inst => |context_id| @intFromEnum(@as(CallableInstId, @enumFromInt(@intFromEnum(context_id)))),
-                    .root_expr, .provenance_expr, .template_expr => std.math.maxInt(u32),
-                })
-            {
-                return null;
-            }
-        }
-        }
         return result.context_mono.context_expr_monotypes.get(key);
     }
 
@@ -3999,13 +4024,6 @@ pub const Pass = struct {
                 } else {
                     try self.scanCirExprWithDirectCallResolution(result, thread, module_idx, call_expr.func, resolve_direct_calls);
                 }
-                try self.scanCirExprSpanWithDirectCallResolution(result, thread, module_idx, arg_exprs, resolve_direct_calls);
-                if (thread.resolution != null) {
-                    if (self.getCallSiteForThread(result, thread, module_idx, expr_idx) == null) {
-                        try self.scanCirExprWithDirectCallResolution(result, thread, module_idx, call_expr.func, resolve_direct_calls);
-                    }
-                    try self.scanCirExprSpanWithDirectCallResolution(result, thread, module_idx, arg_exprs, resolve_direct_calls);
-                }
                 if (resolve_direct_calls) {
                     try self.assignCallableArgCallableInstsFromCallMonotype(result, thread, module_idx, expr_idx, call_expr);
                 }
@@ -4091,17 +4109,10 @@ pub const Pass = struct {
                 try self.scanCirExprWithDirectCallResolution(result, thread, module_idx, binop_expr.lhs, resolve_direct_calls);
                 try self.scanCirExprWithDirectCallResolution(result, thread, module_idx, binop_expr.rhs, resolve_direct_calls);
                 try self.resolveDispatchExprCallableInst(result, thread, module_idx, expr_idx, expr);
-                if (thread.resolution != null) {
-                    try self.scanCirExprWithDirectCallResolution(result, thread, module_idx, binop_expr.lhs, resolve_direct_calls);
-                    try self.scanCirExprWithDirectCallResolution(result, thread, module_idx, binop_expr.rhs, resolve_direct_calls);
-                }
             },
             .e_unary_minus => |unary_expr| {
                 try self.scanCirExprWithDirectCallResolution(result, thread, module_idx, unary_expr.expr, resolve_direct_calls);
                 try self.resolveDispatchExprCallableInst(result, thread, module_idx, expr_idx, expr);
-                if (thread.resolution != null) {
-                    try self.scanCirExprWithDirectCallResolution(result, thread, module_idx, unary_expr.expr, resolve_direct_calls);
-                }
             },
             .e_unary_not => |unary_expr| try self.scanCirExprWithDirectCallResolution(result, thread, module_idx, unary_expr.expr, resolve_direct_calls),
             .e_dot_access => |dot_expr| {
@@ -4109,10 +4120,6 @@ pub const Pass = struct {
                 if (dot_expr.args) |args| {
                     try self.scanCirExprSpanWithDirectCallResolution(result, thread, module_idx, module_env.store.sliceExpr(args), resolve_direct_calls);
                     try self.resolveDispatchExprCallableInst(result, thread, module_idx, expr_idx, expr);
-                    if (thread.resolution != null) {
-                        try self.scanCirExprWithDirectCallResolution(result, thread, module_idx, dot_expr.receiver, resolve_direct_calls);
-                        try self.scanCirExprSpanWithDirectCallResolution(result, thread, module_idx, module_env.store.sliceExpr(args), resolve_direct_calls);
-                    }
                 } else {
                     const receiver_source = self.exprRefAliasOrSelf(result, thread.requireSourceContext(), module_idx, dot_expr.receiver);
                     const field_source = try self.extendExprRef(result, receiver_source, .{ .field = .{
@@ -4163,9 +4170,6 @@ pub const Pass = struct {
             .e_type_var_dispatch => |dispatch_expr| {
                 try self.scanCirExprSpanWithDirectCallResolution(result, thread, module_idx, module_env.store.sliceExpr(dispatch_expr.args), resolve_direct_calls);
                 try self.resolveDispatchExprCallableInst(result, thread, module_idx, expr_idx, expr);
-                if (thread.resolution != null) {
-                    try self.scanCirExprSpanWithDirectCallResolution(result, thread, module_idx, module_env.store.sliceExpr(dispatch_expr.args), resolve_direct_calls);
-                }
             },
             .e_for => |for_expr| {
                 try self.scanCirExprWithDirectCallResolution(result, thread, module_idx, for_expr.expr, resolve_direct_calls);
@@ -4219,21 +4223,26 @@ pub const Pass = struct {
         }
     }
 
-    fn materializeCallableInstBindings(
+    fn seedCallableInstContextTypeVarMonotypes(
         self: *Pass,
         result: *Result,
         callable_inst_id: CallableInstId,
-        bindings: *std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
     ) Allocator.Error!void {
         const callable_inst = result.getCallableInst(callable_inst_id).*;
-        const template = result.getCallableTemplate(callable_inst.template).*;
         const subst = result.getTypeSubst(callable_inst.subst);
         for (result.getTypeSubstEntries(subst.entries)) |entry| {
-            try bindings.put(entry.key, entry.monotype);
+            try self.recordTypeVarMonotypeForSourceContext(
+                result,
+                callableInstSourceContext(callable_inst_id),
+                entry.key.module_idx,
+                entry.key.type_var,
+                entry.monotype.idx,
+                entry.monotype.module_idx,
+            );
         }
     }
 
-    fn recordCallableBoundaryContextMonotypes(
+    fn seedCallableBoundaryContextMonotypes(
         self: *Pass,
         result: *Result,
         source_context: SourceContext,
@@ -4261,7 +4270,15 @@ pub const Pass = struct {
             unreachable;
         }
 
-        try self.recordCurrentExprMonotype(
+        try self.recordTypeVarMonotypeForSourceContext(
+            result,
+            source_context,
+            module_idx,
+            ModuleEnv.varFrom(callable_expr_idx),
+            fn_monotype,
+            fn_monotype_module_idx,
+        );
+        try self.recordExprMonotypeForSourceContext(
             result,
             source_context,
             module_idx,
@@ -4272,6 +4289,14 @@ pub const Pass = struct {
 
         for (boundary.arg_patterns, 0..) |pattern_idx, i| {
             const param_mono = result.context_mono.monotype_store.getIdxSpanItem(fn_mono.args, i);
+            try self.recordTypeVarMonotypeForSourceContext(
+                result,
+                source_context,
+                module_idx,
+                ModuleEnv.varFrom(pattern_idx),
+                param_mono,
+                fn_monotype_module_idx,
+            );
             try self.mergeTrackedContextPatternMonotype(
                 result,
                 self.resultPatternKeyForSourceContext(source_context, module_idx, pattern_idx),
@@ -4279,7 +4304,15 @@ pub const Pass = struct {
             );
         }
 
-        try self.recordCurrentExprMonotype(
+        try self.recordTypeVarMonotypeForSourceContext(
+            result,
+            source_context,
+            module_idx,
+            ModuleEnv.varFrom(boundary.body_expr),
+            fn_mono.ret,
+            fn_monotype_module_idx,
+        );
+        try self.recordExprMonotypeForSourceContext(
             result,
             source_context,
             module_idx,
@@ -4583,9 +4616,10 @@ pub const Pass = struct {
             switch (callee_expr) {
                 .e_lookup_local, .e_lookup_external, .e_lookup_required => {
                     if (try self.callUsesAnnotationOnlyIntrinsic(module_idx, callee_expr_idx)) return;
-                    if (thread.resolution != null and !desired_fn_monotype.isNone()) {
+                    if (!desired_fn_monotype.isNone()) {
                         try self.bindCurrentCallFromFnMonotype(
                             result,
+                            thread,
                             module_idx,
                             call_expr_idx,
                             call_expr,
@@ -4812,7 +4846,7 @@ pub const Pass = struct {
             const maybe_template_id = try self.lookupDirectCalleeTemplate(result, thread.requireSourceContext(), module_idx, arg_expr_idx);
             const template_id = maybe_template_id orelse continue;
             const template = result.getCallableTemplate(template_id);
-            if (thread.resolution != null and !thread.hasCallableInst() and template.kind == .closure) {
+            if (!thread.hasCallableInst() and template.kind == .closure) {
                 // During template-binding completion, a closure's callable identity is not
                 // meaningful until the enclosing callable instantiation exists. Defer that
                 // assignment to the later concrete callable-context scan.
@@ -5427,7 +5461,7 @@ pub const Pass = struct {
         };
         const boundary = self.callableBoundaryInfo(template.module_idx, template.cir_expr) orelse return true;
         if (boundary.arg_patterns.len != fn_mono.args.len) return false;
-        try self.recordCallableBoundaryContextMonotypes(
+        try self.seedCallableBoundaryContextMonotypes(
             result,
             defining_source_context,
             template.module_idx,
@@ -5654,31 +5688,21 @@ pub const Pass = struct {
         resolved_mono: ResolvedMonotype,
     ) Allocator.Error!void {
         if (resolved_mono.isNone()) return;
+        try self.recordTypeVarMonotypeForThread(
+            result,
+            thread,
+            module_idx,
+            ModuleEnv.varFrom(pattern_idx),
+            resolved_mono.idx,
+            resolved_mono.module_idx,
+        );
         try self.mergeTrackedContextPatternMonotype(
             result,
             self.resultPatternKeyForThread(thread, module_idx, pattern_idx),
             resolved_mono,
-            thread,
         );
 
         const module_env = self.all_module_envs[module_idx];
-        if (thread.resolution) |resolution| {
-            const bindings = resolution.bindings;
-            var ordered_entries = std.ArrayList(TypeSubstEntry).empty;
-            defer ordered_entries.deinit(self.allocator);
-
-            try self.bindTypeVarMonotypes(
-                result,
-                module_idx,
-                &module_env.types,
-                bindings,
-                &ordered_entries,
-                ModuleEnv.varFrom(pattern_idx),
-                resolved_mono.idx,
-                resolved_mono.module_idx,
-            );
-        }
-
         const pattern = module_env.store.getPattern(pattern_idx);
         switch (pattern) {
             .assign,
@@ -5927,8 +5951,9 @@ pub const Pass = struct {
         const expr = module_env.store.getExpr(expr_idx);
         if (expr == .e_anno_only) return;
 
-        try self.recordCurrentExprMonotype(
+        try self.recordExprMonotypeForSourceContext(
             result,
+            source_context,
             module_idx,
             expr_idx,
             monotype,
@@ -5973,8 +5998,9 @@ pub const Pass = struct {
         const expr = module_env.store.getExpr(expr_idx);
         if (expr == .e_anno_only) return;
 
-        try self.recordCurrentExprMonotype(
+        try self.recordExprMonotypeForSourceContext(
             result,
+            source_context,
             module_idx,
             expr_idx,
             fn_monotype,
@@ -6424,17 +6450,19 @@ pub const Pass = struct {
         monotype: Monotype.Idx,
         monotype_module_idx: u32,
     ) Allocator.Error!void {
-        const resolution = thread.resolution orelse return;
-        const bindings = resolution.bindings;
-        var ordered_entries = std.ArrayList(TypeSubstEntry).empty;
-        defer ordered_entries.deinit(self.allocator);
-        try self.bindTypeVarMonotypes(
+        try self.recordTypeVarMonotypeForThread(
             result,
+            thread,
             module_idx,
-            &self.all_module_envs[module_idx].types,
-            bindings,
-            &ordered_entries,
             ModuleEnv.varFrom(expr_idx),
+            monotype,
+            monotype_module_idx,
+        );
+        try self.recordExprMonotypeForThread(
+            result,
+            thread,
+            module_idx,
+            expr_idx,
             monotype,
             monotype_module_idx,
         );
@@ -6449,23 +6477,38 @@ pub const Pass = struct {
         monotype: Monotype.Idx,
         monotype_module_idx: u32,
     ) Allocator.Error!void {
-        const resolution = thread.resolution orelse return;
-        const bindings = resolution.bindings;
         const module_env = self.all_module_envs[module_idx];
-        const type_root = switch (module_env.store.getExpr(expr_idx)) {
-            .e_lookup_local => |lookup| ModuleEnv.varFrom(lookup.pattern_idx),
-            else => ModuleEnv.varFrom(expr_idx),
-        };
-
-        var ordered_entries = std.ArrayList(TypeSubstEntry).empty;
-        defer ordered_entries.deinit(self.allocator);
-        try self.bindTypeVarMonotypes(
+        switch (module_env.store.getExpr(expr_idx)) {
+            .e_lookup_local => |lookup| {
+                try self.recordTypeVarMonotypeForThread(
+                    result,
+                    thread,
+                    module_idx,
+                    ModuleEnv.varFrom(lookup.pattern_idx),
+                    monotype,
+                    monotype_module_idx,
+                );
+                try self.mergeTrackedContextPatternMonotype(
+                    result,
+                    self.resultPatternKeyForThread(thread, module_idx, lookup.pattern_idx),
+                    resolvedMonotype(monotype, monotype_module_idx),
+                );
+            },
+            else => {},
+        }
+        try self.recordTypeVarMonotypeForThread(
             result,
+            thread,
             module_idx,
-            &module_env.types,
-            bindings,
-            &ordered_entries,
-            type_root,
+            ModuleEnv.varFrom(expr_idx),
+            monotype,
+            monotype_module_idx,
+        );
+        try self.recordExprMonotypeForThread(
+            result,
+            thread,
+            module_idx,
+            expr_idx,
             monotype,
             monotype_module_idx,
         );
@@ -6587,13 +6630,6 @@ pub const Pass = struct {
         }
 
         if (thread) |active_thread| {
-            if (active_thread.resolution) |resolution| {
-                if (resolution.iteration_expr_monotypes) |iteration_map| {
-                    try iteration_map.put(self.allocator, key, resolved);
-                    return;
-                }
-            }
-
             try self.mergeTrackedContextExprMonotype(result, key, resolved);
             return;
         }
@@ -6622,14 +6658,7 @@ pub const Pass = struct {
         result: *Result,
         key: ContextPatternKey,
         resolved: ResolvedMonotype,
-        thread: SemanticThread,
     ) Allocator.Error!void {
-        if (thread.resolution) |resolution| {
-            if (resolution.iteration_pattern_monotypes) |iteration_map| {
-                try iteration_map.put(self.allocator, key, resolved);
-                return;
-            }
-        }
         return self.mergeTrackedResolvedMonotypeMap(
             result,
             .context_pattern_monotypes,
@@ -6637,6 +6666,59 @@ pub const Pass = struct {
             key,
             resolved,
             "exact pattern",
+        );
+    }
+
+    fn mergeTrackedContextTypeVarMonotype(
+        self: *Pass,
+        result: *Result,
+        key: ContextTypeVarKey,
+        resolved: ResolvedMonotype,
+    ) Allocator.Error!void {
+        return self.mergeTrackedResolvedMonotypeMap(
+            result,
+            .context_type_var_monotypes,
+            &result.context_mono.context_type_var_monotypes,
+            key,
+            resolved,
+            "exact typevar",
+        );
+    }
+
+    fn recordTypeVarMonotypeForSourceContext(
+        self: *Pass,
+        result: *Result,
+        source_context: SourceContext,
+        module_idx: u32,
+        type_var: types.Var,
+        monotype: Monotype.Idx,
+        monotype_module_idx: u32,
+    ) Allocator.Error!void {
+        if (monotype.isNone()) return;
+        const key = self.resultTypeVarKeyForSourceContext(source_context, module_idx, self.all_module_envs[module_idx].types.resolveVar(type_var).var_);
+        try self.mergeTrackedContextTypeVarMonotype(
+            result,
+            key,
+            resolvedMonotype(monotype, monotype_module_idx),
+        );
+    }
+
+    fn recordTypeVarMonotypeForThread(
+        self: *Pass,
+        result: *Result,
+        thread: SemanticThread,
+        module_idx: u32,
+        type_var: types.Var,
+        monotype: Monotype.Idx,
+        monotype_module_idx: u32,
+    ) Allocator.Error!void {
+        return self.recordTypeVarMonotypeForSourceContext(
+            result,
+            thread.requireSourceContext(),
+            module_idx,
+            type_var,
+            monotype,
+            monotype_module_idx,
         );
     }
 
@@ -7012,13 +7094,6 @@ pub const Pass = struct {
             unreachable;
         };
         const callable_inst_id = blk: {
-            if (thread.resolution == null) {
-                const fn_monotype = try self.resolveTypeVarMonotypeResolved(result, thread, module_idx, resolved_target.fn_var);
-                if (!fn_monotype.isNone()) {
-                    break :blk try self.registerCallableInst(result, thread.requireSourceContext(), template_id, fn_monotype.idx, fn_monotype.module_idx);
-                }
-            }
-
             if (try self.specializeDispatchExactCallable(result, thread, module_idx, expr_idx, expr, template_id)) |exact_callable_inst| {
                 break :blk exact_callable_inst;
             }
@@ -7110,7 +7185,6 @@ pub const Pass = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
         dispatch_target: DispatchExprTarget,
-        thread: SemanticThread,
     ) Allocator.Error!void {
         try self.putTracked(
             .context_dispatch_targets,
@@ -7286,31 +7360,15 @@ pub const Pass = struct {
             return self.resolveDispatchTargetForExpr(result, thread, module_idx, expr_idx, method_name);
         }
 
-        var merged_bindings = std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype).init(self.allocator);
-        defer merged_bindings.deinit();
-        if (thread.resolution) |resolution| {
-            var it = resolution.bindings.iterator();
-            while (it.next()) |entry| {
-                try merged_bindings.put(entry.key_ptr.*, entry.value_ptr.*);
-            }
-        }
-        try merged_bindings.put(
-            boundTypeVarKey(module_idx, &self.all_module_envs[module_idx].types, ModuleEnv.varFrom(binop_expr.rhs)),
-            lhs_monotype,
-        );
-        var merged_resolution = BindingResolutionState{
-            .bindings = &merged_bindings,
-        };
-        return self.resolveDispatchTargetForExpr(
+        try self.recordTypeVarMonotypeForThread(
             result,
-            .{
-                .source_context = thread.source_context,
-                .resolution = &merged_resolution,
-            },
+            thread,
             module_idx,
-            expr_idx,
-            method_name,
+            ModuleEnv.varFrom(binop_expr.rhs),
+            lhs_monotype.idx,
+            lhs_monotype.module_idx,
         );
+        return self.resolveDispatchTargetForExpr(result, thread, module_idx, expr_idx, method_name);
     }
 
     fn resolveAssociatedMethodCallableInstForTypeVar(
@@ -9909,15 +9967,8 @@ pub const Pass = struct {
 
         const module_env = self.all_module_envs[template.module_idx];
 
-        var bindings = std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype).init(self.allocator);
-        defer bindings.deinit();
-        var iteration_expr_monotypes: std.AutoHashMapUnmanaged(ContextExprKey, ResolvedMonotype) = .empty;
-        defer iteration_expr_monotypes.deinit(self.allocator);
-        var iteration_pattern_monotypes: std.AutoHashMapUnmanaged(ContextPatternKey, ResolvedMonotype) = .empty;
-        defer iteration_pattern_monotypes.deinit(self.allocator);
-
-        try self.materializeCallableInstBindings(result, callable_inst_id, &bindings);
-        try self.recordCallableBoundaryContextMonotypes(
+        try self.seedCallableInstContextTypeVarMonotypes(result, callable_inst_id);
+        try self.seedCallableBoundaryContextMonotypes(
             result,
             callableInstSourceContext(callable_inst_id),
             template.module_idx,
@@ -9925,21 +9976,14 @@ pub const Pass = struct {
             callable_inst.fn_monotype,
             callable_inst.fn_monotype_module_idx,
         );
-        var resolution = BindingResolutionState{
-            .bindings = &bindings,
-            .iteration_expr_monotypes = &iteration_expr_monotypes,
-            .iteration_pattern_monotypes = &iteration_pattern_monotypes,
-        };
         const thread = SemanticThread{
             .source_context = callableInstSourceContext(callable_inst_id),
-            .resolution = &resolution,
         };
         if (template.binding_pattern) |binding_pattern| {
             try self.mergeTrackedContextPatternMonotype(
                 result,
                 self.resultPatternKey(callable_inst_id, template.module_idx, binding_pattern),
                 resolvedMonotype(callable_inst.fn_monotype, callable_inst.fn_monotype_module_idx),
-                thread,
             );
             try self.setCallableParamDirectValueInCallableContext(
                 result,
@@ -9962,28 +10006,20 @@ pub const Pass = struct {
                 );
             }
 
-            const bindings_before = bindings.count();
             const mutation_revision_before = self.mutation_revision;
-            if (template.binding_pattern) |binding_pattern| {
-                try iteration_pattern_monotypes.put(
-                    self.allocator,
-                    self.resultPatternKey(callable_inst_id, template.module_idx, binding_pattern),
-                    resolvedMonotype(callable_inst.fn_monotype, callable_inst.fn_monotype_module_idx),
-                );
-            }
             try self.recordCallableParamPatternFactsForCallableInst(result, callable_inst_id);
 
             switch (module_env.store.getExpr(template.cir_expr)) {
                 .e_lambda => |lambda_expr| {
-                    try self.scanCirValueExpr(result, thread, template.module_idx, lambda_expr.body);
+                    try self.scanForcedCirValueExpr(result, thread, template.module_idx, lambda_expr.body);
                 },
                 .e_closure => |closure_expr| {
                     const lambda_expr = module_env.store.getExpr(closure_expr.lambda_idx);
                     if (lambda_expr == .e_lambda) {
-                        try self.scanCirValueExpr(result, thread, template.module_idx, lambda_expr.e_lambda.body);
+                        try self.scanForcedCirValueExpr(result, thread, template.module_idx, lambda_expr.e_lambda.body);
                     }
                 },
-                .e_hosted_lambda => |hosted_expr| try self.scanCirValueExpr(result, thread, template.module_idx, hosted_expr.body),
+                .e_hosted_lambda => |hosted_expr| try self.scanForcedCirValueExpr(result, thread, template.module_idx, hosted_expr.body),
                 else => unreachable,
             }
 
@@ -10001,27 +10037,9 @@ pub const Pass = struct {
                 else => unreachable,
             }
 
-            if (bindings.count() == bindings_before and
-                self.mutation_revision == mutation_revision_before)
-            {
+            if (self.mutation_revision == mutation_revision_before) {
                 break;
             }
-        }
-
-        var it = iteration_expr_monotypes.iterator();
-        while (it.next()) |entry| {
-            try self.mergeTrackedContextExprMonotype(result, entry.key_ptr.*, entry.value_ptr.*);
-        }
-        var pattern_it = iteration_pattern_monotypes.iterator();
-        while (pattern_it.next()) |entry| {
-            try self.mergeTrackedResolvedMonotypeMap(
-                result,
-                .context_pattern_monotypes,
-                &result.context_mono.context_pattern_monotypes,
-                entry.key_ptr.*,
-                entry.value_ptr.*,
-                "exact pattern",
-            );
         }
 
         switch (module_env.store.getExpr(template.runtime_expr)) {
@@ -11080,16 +11098,13 @@ pub const Pass = struct {
                 if (result.context_mono.getContextPatternMonotype(source_context, module_idx, lookup.pattern_idx)) |pattern_mono| {
                     return pattern_mono;
                 }
-                if (thread.resolution) |resolution| {
-                    if (try self.lookupBindingMonotype(
-                        result,
-                        module_idx,
-                        &module_env.types,
-                        resolution.bindings,
-                        ModuleEnv.varFrom(lookup.pattern_idx),
-                    )) |binding_mono| {
-                        return binding_mono;
-                    }
+                if (self.lookupContextTypeVarMonotype(
+                    result,
+                    source_context,
+                    module_idx,
+                    ModuleEnv.varFrom(lookup.pattern_idx),
+                )) |binding_mono| {
+                    return binding_mono;
                 }
             },
             else => {},
@@ -11160,16 +11175,13 @@ pub const Pass = struct {
                 if (self.getContextPatternMonotypeForThread(result, thread, module_idx, lookup.pattern_idx)) |pattern_mono| {
                     return pattern_mono;
                 }
-                if (thread.resolution) |resolution| {
-                    if (try self.lookupBindingMonotype(
-                        result,
-                        module_idx,
-                        &module_env.types,
-                        resolution.bindings,
-                        ModuleEnv.varFrom(lookup.pattern_idx),
-                    )) |binding_mono| {
-                        return binding_mono;
-                    }
+                if (self.lookupContextTypeVarMonotype(
+                    result,
+                    source_context,
+                    module_idx,
+                    ModuleEnv.varFrom(lookup.pattern_idx),
+                )) |binding_mono| {
+                    return binding_mono;
                 }
                 if (self.readExprValueOrigin(result, source_context, module_idx, expr_idx)) |source| {
                     var source_mono = try self.lookupRecordedExprMonotypeIfReadyForSourceContext(
@@ -11215,17 +11227,16 @@ pub const Pass = struct {
         module_idx: u32,
         var_: types.Var,
     ) Allocator.Error!ResolvedMonotype {
-        if (thread.resolution) |resolution| {
-            const mono = try self.resolveTypeVarMonotypeWithBindings(
-                result,
-                module_idx,
-                &self.all_module_envs[module_idx].types,
-                var_,
-                resolution.bindings,
-            );
-            return resolvedMonotype(mono, module_idx);
+        if (self.lookupContextTypeVarMonotype(result, thread.requireSourceContext(), module_idx, var_)) |mono| {
+            return mono;
         }
-        const mono = try self.monotypeFromTypeVarInStore(result, module_idx, &self.all_module_envs[module_idx].types, var_);
+        const mono = try self.monotypeFromTypeVarInSourceContext(
+            result,
+            thread.requireSourceContext(),
+            module_idx,
+            &self.all_module_envs[module_idx].types,
+            var_,
+        );
         return resolvedMonotype(mono, module_idx);
     }
 
@@ -11236,59 +11247,242 @@ pub const Pass = struct {
         module_idx: u32,
         var_: types.Var,
     ) Allocator.Error!ResolvedMonotype {
-        const resolution = thread.resolution orelse {
-            const store_types = &self.all_module_envs[module_idx].types;
-            var seen: std.AutoHashMapUnmanaged(types.Var, void) = .empty;
-            defer seen.deinit(self.allocator);
-
-            if (!try self.typeVarFullyBoundWithoutBindings(result, module_idx, store_types, var_, &seen)) {
-                return resolvedMonotype(.none, module_idx);
-            }
-            return self.resolveTypeVarMonotypeResolved(result, thread, module_idx, var_);
-        };
-
         var seen: std.AutoHashMapUnmanaged(types.Var, void) = .empty;
         defer seen.deinit(self.allocator);
 
-        if (!try self.typeVarFullyBoundWithBindings(
+        if (!try self.typeVarFullyBoundInSourceContext(
             result,
+            thread.requireSourceContext(),
             module_idx,
             &self.all_module_envs[module_idx].types,
             var_,
-            resolution.bindings,
             &seen,
         )) {
             return resolvedMonotype(.none, module_idx);
         }
-
-        const mono = try self.resolveTypeVarMonotypeWithBindings(
-            result,
-            module_idx,
-            &self.all_module_envs[module_idx].types,
-            var_,
-            resolution.bindings,
-        );
-        return resolvedMonotype(mono, module_idx);
+        return self.resolveTypeVarMonotypeResolved(result, thread, module_idx, var_);
     }
 
-    fn typeVarFullyBoundWithoutBindings(
+    fn lookupContextTypeVarMonotype(
+        self: *Pass,
+        result: *const Result,
+        source_context: SourceContext,
+        module_idx: u32,
+        var_: types.Var,
+    ) ?ResolvedMonotype {
+        const resolved_var = self.all_module_envs[module_idx].types.resolveVar(var_).var_;
+        return result.context_mono.getContextTypeVarMonotype(source_context, module_idx, resolved_var) orelse
+            result.context_mono.getTypeScopeMonotype(module_idx, resolved_var);
+    }
+
+    fn seedRecordedContextTypeVarSpecializations(
         self: *Pass,
         result: *Result,
+        source_context: SourceContext,
+        module_idx: u32,
+        specializations: *std.AutoHashMap(types.Var, Monotype.Idx),
+    ) Allocator.Error!void {
+        var it = result.context_mono.context_type_var_monotypes.iterator();
+        while (it.next()) |entry| {
+            const key = entry.key_ptr.*;
+            if (key.module_idx != module_idx) continue;
+            if (!contextTypeVarKeyMatchesSourceContext(source_context, key)) continue;
+            if (entry.value_ptr.module_idx != module_idx) continue;
+            try specializations.put(key.type_var, entry.value_ptr.idx);
+        }
+    }
+
+    fn monotypeFromTypeVarInSourceContext(
+        self: *Pass,
+        result: *Result,
+        source_context: SourceContext,
+        module_idx: u32,
+        store_types: *const types.Store,
+        var_: types.Var,
+    ) Allocator.Error!Monotype.Idx {
+        var exact_specializations = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
+        defer exact_specializations.deinit();
+
+        try self.seedRecordedContextTypeVarSpecializations(result, source_context, module_idx, &exact_specializations);
+        try self.seedRecordedTypeScopeSpecializations(result, module_idx, &exact_specializations);
+
+        var nominal_cycle_breakers = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
+        defer nominal_cycle_breakers.deinit();
+
+        var scratches = try Monotype.Store.Scratches.init(self.allocator);
+        defer scratches.deinit();
+
+        const module_env = self.all_module_envs[module_idx];
+        scratches.ident_store = module_env.getIdentStoreConst();
+        scratches.module_env = module_env;
+        scratches.module_idx = module_idx;
+        scratches.all_module_envs = self.all_module_envs;
+        return result.context_mono.monotype_store.fromTypeVarExact(
+            self.allocator,
+            store_types,
+            var_,
+            module_env.idents,
+            &exact_specializations,
+            &nominal_cycle_breakers,
+            &scratches,
+        );
+    }
+
+    fn typeVarFullyBoundInSourceContext(
+        self: *Pass,
+        result: *Result,
+        source_context: SourceContext,
         module_idx: u32,
         store_types: *const types.Store,
         var_: types.Var,
         seen: *std.AutoHashMapUnmanaged(types.Var, void),
     ) Allocator.Error!bool {
-        var empty_bindings = std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype).init(self.allocator);
-        defer empty_bindings.deinit();
-        return self.typeVarFullyBoundWithBindings(
-            result,
-            module_idx,
-            store_types,
-            var_,
-            &empty_bindings,
-            seen,
-        );
+        if (self.lookupContextTypeVarMonotype(result, source_context, module_idx, var_) != null) return true;
+        const resolved = store_types.resolveVar(var_);
+        if (seen.contains(resolved.var_)) return true;
+        try seen.put(self.allocator, resolved.var_, {});
+
+        return switch (resolved.desc.content) {
+            .flex, .rigid => false,
+            .alias => |alias| self.typeVarFullyBoundInSourceContext(
+                result,
+                source_context,
+                module_idx,
+                store_types,
+                store_types.getAliasBackingVar(alias),
+                seen,
+            ),
+            .structure => |flat_type| self.flatTypeFullyBoundInSourceContext(
+                result,
+                source_context,
+                module_idx,
+                store_types,
+                flat_type,
+                seen,
+            ),
+            .err => true,
+        };
+    }
+
+    fn flatTypeFullyBoundInSourceContext(
+        self: *Pass,
+        result: *Result,
+        source_context: SourceContext,
+        module_idx: u32,
+        store_types: *const types.Store,
+        flat_type: types.FlatType,
+        seen: *std.AutoHashMapUnmanaged(types.Var, void),
+    ) Allocator.Error!bool {
+        return switch (flat_type) {
+            .fn_pure, .fn_effectful, .fn_unbound => |func| blk: {
+                for (store_types.sliceVars(func.args)) |arg_var| {
+                    if (!try self.typeVarFullyBoundInSourceContext(result, source_context, module_idx, store_types, arg_var, seen)) {
+                        break :blk false;
+                    }
+                }
+                break :blk try self.typeVarFullyBoundInSourceContext(result, source_context, module_idx, store_types, func.ret, seen);
+            },
+            .nominal_type => |nominal| blk: {
+                for (store_types.sliceNominalArgs(nominal)) |arg_var| {
+                    if (!try self.typeVarFullyBoundInSourceContext(result, source_context, module_idx, store_types, arg_var, seen)) {
+                        break :blk false;
+                    }
+                }
+                break :blk true;
+            },
+            .record => |record| blk: {
+                var current_row = record;
+                while (true) {
+                    const fields_slice = store_types.getRecordFieldsSlice(current_row.fields);
+                    for (fields_slice.items(.var_)) |field_var| {
+                        if (!try self.typeVarFullyBoundInSourceContext(result, source_context, module_idx, store_types, field_var, seen)) {
+                            break :blk false;
+                        }
+                    }
+
+                    const ext_resolved = store_types.resolveVar(current_row.ext);
+                    switch (ext_resolved.desc.content) {
+                        .alias => |alias| {
+                            const backing = store_types.getAliasBackingVar(alias);
+                            const backing_resolved = store_types.resolveVar(backing);
+                            if (backing_resolved.desc.content == .structure) {
+                                switch (backing_resolved.desc.content.structure) {
+                                    .record => |next_row| {
+                                        current_row = next_row;
+                                        continue;
+                                    },
+                                    .record_unbound => |fields_range| {
+                                        const ext_fields = store_types.getRecordFieldsSlice(fields_range);
+                                        for (ext_fields.items(.var_)) |field_var| {
+                                            if (!try self.typeVarFullyBoundInSourceContext(result, source_context, module_idx, store_types, field_var, seen)) {
+                                                break :blk false;
+                                            }
+                                        }
+                                        break :blk true;
+                                    },
+                                    .empty_record => break :blk true,
+                                    else => break :blk try self.typeVarFullyBoundInSourceContext(result, source_context, module_idx, store_types, backing, seen),
+                                }
+                            }
+                            break :blk try self.typeVarFullyBoundInSourceContext(result, source_context, module_idx, store_types, backing, seen);
+                        },
+                        .structure => |ext_flat| switch (ext_flat) {
+                            .record => |next_row| {
+                                current_row = next_row;
+                                continue;
+                            },
+                            .record_unbound => |fields_range| {
+                                const ext_fields = store_types.getRecordFieldsSlice(fields_range);
+                                for (ext_fields.items(.var_)) |field_var| {
+                                    if (!try self.typeVarFullyBoundInSourceContext(result, source_context, module_idx, store_types, field_var, seen)) {
+                                        break :blk false;
+                                    }
+                                }
+                                break :blk true;
+                            },
+                            .empty_record => break :blk true,
+                            else => break :blk false,
+                        },
+                        .flex, .rigid => break :blk true,
+                        else => break :blk try self.typeVarFullyBoundInSourceContext(result, source_context, module_idx, store_types, current_row.ext, seen),
+                    }
+                }
+            },
+            .record_unbound => |fields_range| blk: {
+                const fields_slice = store_types.getRecordFieldsSlice(fields_range);
+                for (fields_slice.items(.var_)) |field_var| {
+                    if (!try self.typeVarFullyBoundInSourceContext(result, source_context, module_idx, store_types, field_var, seen)) {
+                        break :blk false;
+                    }
+                }
+                break :blk true;
+            },
+            .tuple => |tuple| blk: {
+                for (store_types.sliceVars(tuple.elems)) |elem_var| {
+                    if (!try self.typeVarFullyBoundInSourceContext(result, source_context, module_idx, store_types, elem_var, seen)) {
+                        break :blk false;
+                    }
+                }
+                break :blk true;
+            },
+            .tag_union => |tag_union| blk: {
+                const tags = store_types.getTagsSlice(tag_union.tags);
+                for (tags.items(.args)) |args_range| {
+                    for (store_types.sliceVars(args_range)) |payload_var| {
+                        if (!try self.typeVarFullyBoundInSourceContext(result, source_context, module_idx, store_types, payload_var, seen)) {
+                            break :blk false;
+                        }
+                    }
+                }
+
+                const ext_resolved = store_types.resolveVar(tag_union.ext);
+                switch (ext_resolved.desc.content) {
+                    .flex, .rigid => break :blk true,
+                    else => break :blk try self.typeVarFullyBoundInSourceContext(result, source_context, module_idx, store_types, tag_union.ext, seen),
+                }
+            },
+            .empty_record, .empty_tag_union => true,
+        };
     }
 
     fn boundTypeVarKey(
@@ -11304,296 +11498,6 @@ pub const Pass = struct {
 
     fn resolvedMonotype(idx: Monotype.Idx, module_idx: u32) ResolvedMonotype {
         return .{ .idx = idx, .module_idx = module_idx };
-    }
-
-    fn lookupBindingMonotype(
-        self: *Pass,
-        result: *Result,
-        module_idx: u32,
-        store_types: *const types.Store,
-        bindings: *const std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
-        var_: types.Var,
-    ) Allocator.Error!?ResolvedMonotype {
-        if (bindings.get(boundTypeVarKey(module_idx, store_types, var_))) |binding| return binding;
-        return result.context_mono.getTypeScopeMonotype(module_idx, store_types.resolveVar(var_).var_);
-    }
-
-    fn typeVarFullyBoundWithBindings(
-        self: *Pass,
-        result: *Result,
-        module_idx: u32,
-        store_types: *const types.Store,
-        var_: types.Var,
-        bindings: *const std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
-        seen: *std.AutoHashMapUnmanaged(types.Var, void),
-    ) Allocator.Error!bool {
-        if (try lookupBindingMonotype(self, result, module_idx, store_types, bindings, var_)) |_| return true;
-
-        const resolved = store_types.resolveVar(var_);
-        if (seen.contains(resolved.var_)) return true;
-        try seen.put(self.allocator, resolved.var_, {});
-
-        return switch (resolved.desc.content) {
-            .flex, .rigid => false,
-            .alias => |alias| self.typeVarFullyBoundWithBindings(
-                result,
-                module_idx,
-                store_types,
-                store_types.getAliasBackingVar(alias),
-                bindings,
-                seen,
-            ),
-            .structure => |flat_type| self.flatTypeFullyBoundWithBindings(
-                result,
-                module_idx,
-                store_types,
-                flat_type,
-                bindings,
-                seen,
-            ),
-            .err => true,
-        };
-    }
-
-    fn flatTypeFullyBoundWithBindings(
-        self: *Pass,
-        result: *Result,
-        module_idx: u32,
-        store_types: *const types.Store,
-        flat_type: types.FlatType,
-        bindings: *const std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
-        seen: *std.AutoHashMapUnmanaged(types.Var, void),
-    ) Allocator.Error!bool {
-        return switch (flat_type) {
-            .fn_pure, .fn_effectful, .fn_unbound => |func| blk: {
-                for (store_types.sliceVars(func.args)) |arg_var| {
-                    if (!try self.typeVarFullyBoundWithBindings(result, module_idx, store_types, arg_var, bindings, seen)) {
-                        break :blk false;
-                    }
-                }
-                break :blk try self.typeVarFullyBoundWithBindings(result, module_idx, store_types, func.ret, bindings, seen);
-            },
-            .nominal_type => |nominal| blk: {
-                for (store_types.sliceNominalArgs(nominal)) |arg_var| {
-                    if (!try self.typeVarFullyBoundWithBindings(result, module_idx, store_types, arg_var, bindings, seen)) {
-                        break :blk false;
-                    }
-                }
-                break :blk true;
-            },
-            .record => |record| blk: {
-                var current_row = record;
-                while (true) {
-                    const fields_slice = store_types.getRecordFieldsSlice(current_row.fields);
-                    for (fields_slice.items(.var_)) |field_var| {
-                        if (!try self.typeVarFullyBoundWithBindings(result, module_idx, store_types, field_var, bindings, seen)) {
-                            break :blk false;
-                        }
-                    }
-
-                    const ext_resolved = store_types.resolveVar(current_row.ext);
-                    switch (ext_resolved.desc.content) {
-                        .alias => |alias| {
-                            const backing = store_types.getAliasBackingVar(alias);
-                            const backing_resolved = store_types.resolveVar(backing);
-                            if (backing_resolved.desc.content == .structure) {
-                                switch (backing_resolved.desc.content.structure) {
-                                    .record => |next_row| {
-                                        current_row = next_row;
-                                        continue;
-                                    },
-                                    .record_unbound => |fields_range| {
-                                        const ext_fields = store_types.getRecordFieldsSlice(fields_range);
-                                        for (ext_fields.items(.var_)) |field_var| {
-                                            if (!try self.typeVarFullyBoundWithBindings(result, module_idx, store_types, field_var, bindings, seen)) {
-                                                break :blk false;
-                                            }
-                                        }
-                                        break :blk true;
-                                    },
-                                    .empty_record => break :blk true,
-                                    else => break :blk try self.typeVarFullyBoundWithBindings(result, module_idx, store_types, backing, bindings, seen),
-                                }
-                            }
-                            break :blk try self.typeVarFullyBoundWithBindings(result, module_idx, store_types, backing, bindings, seen);
-                        },
-                        .structure => |ext_flat| switch (ext_flat) {
-                            .record => |next_row| {
-                                current_row = next_row;
-                                continue;
-                            },
-                            .record_unbound => |fields_range| {
-                                const ext_fields = store_types.getRecordFieldsSlice(fields_range);
-                                for (ext_fields.items(.var_)) |field_var| {
-                                    if (!try self.typeVarFullyBoundWithBindings(result, module_idx, store_types, field_var, bindings, seen)) {
-                                        break :blk false;
-                                    }
-                                }
-                                break :blk true;
-                            },
-                            .empty_record => break :blk true,
-                            else => break :blk false,
-                        },
-                        .flex, .rigid => break :blk true,
-                        else => break :blk try self.typeVarFullyBoundWithBindings(result, module_idx, store_types, current_row.ext, bindings, seen),
-                    }
-                }
-            },
-            .record_unbound => |fields_range| blk: {
-                const fields_slice = store_types.getRecordFieldsSlice(fields_range);
-                for (fields_slice.items(.var_)) |field_var| {
-                    if (!try self.typeVarFullyBoundWithBindings(result, module_idx, store_types, field_var, bindings, seen)) {
-                        break :blk false;
-                    }
-                }
-                break :blk true;
-            },
-            .tuple => |tuple| blk: {
-                for (store_types.sliceVars(tuple.elems)) |elem_var| {
-                    if (!try self.typeVarFullyBoundWithBindings(result, module_idx, store_types, elem_var, bindings, seen)) {
-                        break :blk false;
-                    }
-                }
-                break :blk true;
-            },
-            .tag_union => |tag_union| blk: {
-                const tags = store_types.getTagsSlice(tag_union.tags);
-                for (tags.items(.args)) |args_range| {
-                    for (store_types.sliceVars(args_range)) |payload_var| {
-                        if (!try self.typeVarFullyBoundWithBindings(result, module_idx, store_types, payload_var, bindings, seen)) {
-                            break :blk false;
-                        }
-                    }
-                }
-
-                const ext_resolved = store_types.resolveVar(tag_union.ext);
-                switch (ext_resolved.desc.content) {
-                    .flex, .rigid => break :blk true,
-                    else => break :blk try self.typeVarFullyBoundWithBindings(result, module_idx, store_types, tag_union.ext, bindings, seen),
-                }
-            },
-            .empty_record, .empty_tag_union => true,
-        };
-    }
-
-    fn flatTypeFullyBoundWithoutBindings(
-        self: *Pass,
-        result: *Result,
-        module_idx: u32,
-        store_types: *const types.Store,
-        flat_type: types.FlatType,
-        seen: *std.AutoHashMapUnmanaged(types.Var, void),
-    ) Allocator.Error!bool {
-        return switch (flat_type) {
-            .fn_pure, .fn_effectful, .fn_unbound => |func| blk: {
-                for (store_types.sliceVars(func.args)) |arg_var| {
-                    if (!try self.typeVarFullyBoundWithoutBindings(result, module_idx, store_types, arg_var, seen)) {
-                        break :blk false;
-                    }
-                }
-                break :blk try self.typeVarFullyBoundWithoutBindings(result, module_idx, store_types, func.ret, seen);
-            },
-            .nominal_type => |nominal| blk: {
-                for (store_types.sliceNominalArgs(nominal)) |arg_var| {
-                    if (!try self.typeVarFullyBoundWithoutBindings(result, module_idx, store_types, arg_var, seen)) {
-                        break :blk false;
-                    }
-                }
-                break :blk true;
-            },
-            .record => |record| blk: {
-                var current_row = record;
-                while (true) {
-                    const fields_slice = store_types.getRecordFieldsSlice(current_row.fields);
-                    for (fields_slice.items(.var_)) |field_var| {
-                        if (!try self.typeVarFullyBoundWithoutBindings(result, module_idx, store_types, field_var, seen)) {
-                            break :blk false;
-                        }
-                    }
-
-                    const ext_resolved = store_types.resolveVar(current_row.ext);
-                    switch (ext_resolved.desc.content) {
-                        .alias => |alias| {
-                            const backing = store_types.getAliasBackingVar(alias);
-                            const backing_resolved = store_types.resolveVar(backing);
-                            if (backing_resolved.desc.content == .structure) {
-                                switch (backing_resolved.desc.content.structure) {
-                                    .record => |next_row| {
-                                        current_row = next_row;
-                                        continue;
-                                    },
-                                    .record_unbound => |fields_range| {
-                                        const ext_fields = store_types.getRecordFieldsSlice(fields_range);
-                                        for (ext_fields.items(.var_)) |field_var| {
-                                            if (!try self.typeVarFullyBoundWithoutBindings(result, module_idx, store_types, field_var, seen)) {
-                                                break :blk false;
-                                            }
-                                        }
-                                        break :blk true;
-                                    },
-                                    .empty_record => break :blk true,
-                                    else => break :blk try self.typeVarFullyBoundWithoutBindings(result, module_idx, store_types, backing, seen),
-                                }
-                            }
-                            break :blk try self.typeVarFullyBoundWithoutBindings(result, module_idx, store_types, backing, seen);
-                        },
-                        .structure => |ext_flat| switch (ext_flat) {
-                            .record => |next_row| {
-                                current_row = next_row;
-                                continue;
-                            },
-                            .record_unbound => |fields_range| {
-                                const ext_fields = store_types.getRecordFieldsSlice(fields_range);
-                                for (ext_fields.items(.var_)) |field_var| {
-                                    if (!try self.typeVarFullyBoundWithoutBindings(result, module_idx, store_types, field_var, seen)) {
-                                        break :blk false;
-                                    }
-                                }
-                                break :blk true;
-                            },
-                            .empty_record => break :blk true,
-                            else => break :blk false,
-                        },
-                        .flex, .rigid => break :blk true,
-                        else => break :blk try self.typeVarFullyBoundWithoutBindings(result, module_idx, store_types, current_row.ext, seen),
-                    }
-                }
-            },
-            .record_unbound => |fields_range| blk: {
-                const fields_slice = store_types.getRecordFieldsSlice(fields_range);
-                for (fields_slice.items(.var_)) |field_var| {
-                    if (!try self.typeVarFullyBoundWithoutBindings(result, module_idx, store_types, field_var, seen)) {
-                        break :blk false;
-                    }
-                }
-                break :blk true;
-            },
-            .tuple => |tuple| blk: {
-                for (store_types.sliceVars(tuple.elems)) |elem_var| {
-                    if (!try self.typeVarFullyBoundWithoutBindings(result, module_idx, store_types, elem_var, seen)) {
-                        break :blk false;
-                    }
-                }
-                break :blk true;
-            },
-            .tag_union => |tag_union| blk: {
-                const tags = store_types.getTagsSlice(tag_union.tags);
-                for (tags.items(.args)) |args_range| {
-                    for (store_types.sliceVars(args_range)) |payload_var| {
-                        if (!try self.typeVarFullyBoundWithoutBindings(result, module_idx, store_types, payload_var, seen)) {
-                            break :blk false;
-                        }
-                    }
-                }
-
-                const ext_resolved = store_types.resolveVar(tag_union.ext);
-                switch (ext_resolved.desc.content) {
-                    .flex, .rigid => break :blk true,
-                    else => break :blk try self.typeVarFullyBoundWithoutBindings(result, module_idx, store_types, tag_union.ext, seen),
-                }
-            },
-            .empty_record, .empty_tag_union => true,
-        };
     }
 
     fn monotypesStructurallyEqual(

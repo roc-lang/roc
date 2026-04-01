@@ -305,7 +305,6 @@ pub const Program = struct {
     value_projection_entries: std.ArrayListUnmanaged(CallableParamProjection),
     pattern_bindings: std.ArrayListUnmanaged(PatternBinding),
     pattern_binding_ids_by_key: std.AutoHashMapUnmanaged(ContextPatternKey, BindingId),
-    expr_semantics_by_key: std.AutoHashMapUnmanaged(ContextExprKey, ExprSemantics),
     exprs: std.ArrayListUnmanaged(Expr),
     expr_ids_by_key: std.AutoHashMapUnmanaged(ContextExprKey, ExprId),
     expr_child_entries: std.ArrayListUnmanaged(ExprId),
@@ -331,7 +330,6 @@ pub const Program = struct {
             .value_projection_entries = .empty,
             .pattern_bindings = .empty,
             .pattern_binding_ids_by_key = .empty,
-            .expr_semantics_by_key = .empty,
             .exprs = .empty,
             .expr_ids_by_key = .empty,
             .expr_child_entries = .empty,
@@ -358,7 +356,6 @@ pub const Program = struct {
         self.value_projection_entries.deinit(allocator);
         self.pattern_bindings.deinit(allocator);
         self.pattern_binding_ids_by_key.deinit(allocator);
-        self.expr_semantics_by_key.deinit(allocator);
         self.exprs.deinit(allocator);
         self.expr_ids_by_key.deinit(allocator);
         self.expr_child_entries.deinit(allocator);
@@ -462,17 +459,6 @@ pub const Program = struct {
         expr_idx: CIR.Expr.Idx,
     ) ?ExprId {
         return self.expr_ids_by_key.get(ContextMono.Result.contextExprKey(source_context, module_idx, expr_idx));
-    }
-
-    pub fn getExprSemantics(
-        self: *const Program,
-        source_context: SourceContext,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-    ) ExprSemantics {
-        return self.expr_semantics_by_key.get(
-            ContextMono.Result.contextExprKey(source_context, module_idx, expr_idx),
-        ) orelse .{};
     }
 
     pub fn getExprChildren(self: *const Program, span: ExprIdSpan) []const ExprId {
