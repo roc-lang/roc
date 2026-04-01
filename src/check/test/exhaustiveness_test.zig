@@ -355,15 +355,17 @@ test "exhaustive - tuple with Try" {
 
 test "exhaustive - empty error type means only Ok needed" {
     // When the error type is an empty tag union [], the Err case is uninhabited
-    // So a match with only Ok should be exhaustive
+    // So a match with only Ok should be exhaustive.
+    // The annotation is on a function parameter (negative/closed position)
+    // so that [] stays truly empty rather than becoming open [..].
     const source =
-        \\x : Try(I64, [])
-        \\x = Ok(42)
+        \\f : Try(I64, []) -> I64
+        \\f = |x|
+        \\    match x {
+        \\        Ok(n) => n
+        \\    }
         \\
-        \\result : I64
-        \\result = match x {
-        \\    Ok(n) => n
-        \\}
+        \\result = f(Ok(42))
     ;
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
@@ -372,15 +374,16 @@ test "exhaustive - empty error type means only Ok needed" {
 }
 
 test "exhaustive - nested Try with empty inner error" {
+    // Annotation on function parameter (negative/closed position) keeps [] truly empty.
     const source =
-        \\x : Try(Try(I64, []), Str)
-        \\x = Ok(Ok(42))
+        \\f : Try(Try(I64, []), Str) -> I64
+        \\f = |x|
+        \\    match x {
+        \\        Ok(Ok(n)) => n
+        \\        Err(_) => 0
+        \\    }
         \\
-        \\result : I64
-        \\result = match x {
-        \\    Ok(Ok(n)) => n
-        \\    Err(_) => 0
-        \\}
+        \\result = f(Ok(Ok(42)))
     ;
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
@@ -390,14 +393,15 @@ test "exhaustive - nested Try with empty inner error" {
 }
 
 test "exhaustive - doubly nested empty errors" {
+    // Annotation on function parameter (negative/closed position) keeps [] truly empty.
     const source =
-        \\x : Try(Try(I64, []), [])
-        \\x = Ok(Ok(42))
+        \\f : Try(Try(I64, []), []) -> I64
+        \\f = |x|
+        \\    match x {
+        \\        Ok(Ok(n)) => n
+        \\    }
         \\
-        \\result : I64
-        \\result = match x {
-        \\    Ok(Ok(n)) => n
-        \\}
+        \\result = f(Ok(Ok(42)))
     ;
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
@@ -425,15 +429,17 @@ test "non-exhaustive - non-empty error type requires Err case" {
 
 test "redundant - second wildcard after first on empty error type" {
     // When matching on a type where one constructor is uninhabited,
-    // patterns after the first one should be redundant
+    // patterns after the first one should be redundant.
+    // Annotation on function parameter (negative/closed position) keeps [] truly empty.
     const source =
-        \\x : Try(I64, [])
-        \\x = Ok(42)
+        \\f : Try(I64, []) -> I64
+        \\f = |x|
+        \\    match x {
+        \\        Ok(n) => n
+        \\        Ok(_) => 0
+        \\    }
         \\
-        \\result = match x {
-        \\    Ok(n) => n
-        \\    Ok(_) => 0
-        \\}
+        \\result = f(Ok(42))
     ;
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
@@ -443,15 +449,17 @@ test "redundant - second wildcard after first on empty error type" {
 }
 
 test "redundant - wildcard after complete coverage on type with empty variant" {
-    // When Ok covers everything (because Err is empty), a following wildcard is redundant
+    // When Ok covers everything (because Err is empty), a following wildcard is redundant.
+    // Annotation on function parameter (negative/closed position) keeps [] truly empty.
     const source =
-        \\x : Try(I64, [])
-        \\x = Ok(42)
+        \\f : Try(I64, []) -> I64
+        \\f = |x|
+        \\    match x {
+        \\        Ok(n) => n
+        \\        _ => 0
+        \\    }
         \\
-        \\result = match x {
-        \\    Ok(n) => n
-        \\    _ => 0
-        \\}
+        \\result = f(Ok(42))
     ;
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
@@ -463,14 +471,16 @@ test "redundant - wildcard after complete coverage on type with empty variant" {
 test "unmatchable - Err pattern first on empty error type is unreachable" {
     // When the error type is empty [], an Err(_) pattern can never match
     // because no Err values can exist. This should be flagged as unmatchable.
+    // Annotation on function parameter (negative/closed position) keeps [] truly empty.
     const source =
-        \\x : Try(I64, [])
-        \\x = Ok(42)
+        \\f : Try(I64, []) -> I64
+        \\f = |x|
+        \\    match x {
+        \\        Err(_) => 0
+        \\        Ok(n) => n
+        \\    }
         \\
-        \\result = match x {
-        \\    Err(_) => 0
-        \\    Ok(n) => n
-        \\}
+        \\result = f(Ok(42))
     ;
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
@@ -482,15 +492,16 @@ test "unmatchable - Err pattern first on empty error type is unreachable" {
 // These tests verify correct handling of various uninhabited type scenarios.
 
 test "exhaustive - triply nested empty errors" {
-    // 3+ levels of nesting with empty types
+    // 3+ levels of nesting with empty types.
+    // Annotation on function parameter (negative/closed position) keeps [] truly empty.
     const source =
-        \\x : Try(Try(Try(I64, []), []), [])
-        \\x = Ok(Ok(Ok(42)))
+        \\f : Try(Try(Try(I64, []), []), []) -> I64
+        \\f = |x|
+        \\    match x {
+        \\        Ok(Ok(Ok(n))) => n
+        \\    }
         \\
-        \\result : I64
-        \\result = match x {
-        \\    Ok(Ok(Ok(n))) => n
-        \\}
+        \\result = f(Ok(Ok(Ok(42))))
     ;
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
@@ -500,15 +511,16 @@ test "exhaustive - triply nested empty errors" {
 }
 
 test "exhaustive - record with uninhabited field means record is uninhabited" {
-    // A record where one field has an uninhabited type is itself uninhabited
+    // A record where one field has an uninhabited type is itself uninhabited.
+    // Annotation on function parameter (negative/closed position) keeps [] truly empty.
     const source =
-        \\x : [HasEmpty({ value: I64, empty: [] }), Normal(I64)]
-        \\x = Normal(42)
+        \\f : [HasEmpty({ value: I64, empty: [] }), Normal(I64)] -> I64
+        \\f = |x|
+        \\    match x {
+        \\        Normal(n) => n
+        \\    }
         \\
-        \\result : I64
-        \\result = match x {
-        \\    Normal(n) => n
-        \\}
+        \\result = f(Normal(42))
     ;
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
@@ -518,15 +530,16 @@ test "exhaustive - record with uninhabited field means record is uninhabited" {
 }
 
 test "exhaustive - tuple with uninhabited element means tuple is uninhabited" {
-    // A tuple where one element has an uninhabited type is itself uninhabited
+    // A tuple where one element has an uninhabited type is itself uninhabited.
+    // Annotation on function parameter (negative/closed position) keeps [] truly empty.
     const source =
-        \\x : [HasEmpty((I64, [])), Normal(I64)]
-        \\x = Normal(42)
+        \\f : [HasEmpty((I64, [])), Normal(I64)] -> I64
+        \\f = |x|
+        \\    match x {
+        \\        Normal(n) => n
+        \\    }
         \\
-        \\result : I64
-        \\result = match x {
-        \\    Normal(n) => n
-        \\}
+        \\result = f(Normal(42))
     ;
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
@@ -536,15 +549,16 @@ test "exhaustive - tuple with uninhabited element means tuple is uninhabited" {
 }
 
 test "exhaustive - tag with mixed inhabited and uninhabited args" {
-    // A tag with multiple args where one is uninhabited makes the whole tag uninhabited
+    // A tag with multiple args where one is uninhabited makes the whole tag uninhabited.
+    // Annotation on function parameter (negative/closed position) keeps [] truly empty.
     const source =
-        \\x : [Mixed(I64, [], Str), Normal(I64)]
-        \\x = Normal(42)
+        \\f : [Mixed(I64, [], Str), Normal(I64)] -> I64
+        \\f = |x|
+        \\    match x {
+        \\        Normal(n) => n
+        \\    }
         \\
-        \\result : I64
-        \\result = match x {
-        \\    Normal(n) => n
-        \\}
+        \\result = f(Normal(42))
     ;
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
@@ -554,15 +568,16 @@ test "exhaustive - tag with mixed inhabited and uninhabited args" {
 }
 
 test "exhaustive - deeply nested uninhabited in record field" {
-    // Uninhabited type nested deeply inside record structure
+    // Uninhabited type nested deeply inside record structure.
+    // Annotation on function parameter (negative/closed position) keeps [] truly empty.
     const source =
-        \\x : [Wrapper({ inner: { deep: Try(I64, []) } })]
-        \\x = Wrapper({ inner: { deep: Ok(42) } })
+        \\f : [Wrapper({ inner: { deep: Try(I64, []) } })] -> I64
+        \\f = |x|
+        \\    match x {
+        \\        Wrapper({ inner: { deep: Ok(n) } }) => n
+        \\    }
         \\
-        \\result : I64
-        \\result = match x {
-        \\    Wrapper({ inner: { deep: Ok(n) } }) => n
-        \\}
+        \\result = f(Wrapper({ inner: { deep: Ok(42) } }))
     ;
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
@@ -572,15 +587,17 @@ test "exhaustive - deeply nested uninhabited in record field" {
 }
 
 test "unmatchable - pattern on tag with direct empty arg" {
-    // Matching on a tag whose argument is directly an empty tag union
+    // Matching on a tag whose argument is directly an empty tag union.
+    // Annotation on function parameter (negative/closed position) keeps [] truly empty.
     const source =
-        \\x : [HasEmpty([]), Normal(I64)]
-        \\x = Normal(42)
+        \\f : [HasEmpty([]), Normal(I64)] -> I64
+        \\f = |x|
+        \\    match x {
+        \\        HasEmpty(_) => 0
+        \\        Normal(n) => n
+        \\    }
         \\
-        \\result = match x {
-        \\    HasEmpty(_) => 0
-        \\    Normal(n) => n
-        \\}
+        \\result = f(Normal(42))
     ;
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
@@ -612,14 +629,15 @@ test "non-exhaustive - not all inhabited tags covered with empty arg" {
 test "exhaustive - List of empty type is still inhabited" {
     // List([]) is inhabited because the empty list [] exists.
     // Since no non-empty list of [] can be constructed, only matching [] is exhaustive.
+    // Annotation on function parameter (negative/closed position) keeps [] truly empty.
     const source =
-        \\x : List([])
-        \\x = []
+        \\f : List([]) -> I64
+        \\f = |x|
+        \\    match x {
+        \\        [] => 0
+        \\    }
         \\
-        \\result : I64
-        \\result = match x {
-        \\    [] => 0
-        \\}
+        \\result = f([])
     ;
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
@@ -629,15 +647,17 @@ test "exhaustive - List of empty type is still inhabited" {
 
 test "unmatchable - second pattern on List of empty type" {
     // When both [] and [_, ..] are present, the [_, ..] is unmatchable
-    // because no non-empty list of [] can exist
+    // because no non-empty list of [] can exist.
+    // Annotation on function parameter (negative/closed position) keeps [] truly empty.
     const source =
-        \\x : List([])
-        \\x = []
+        \\f : List([]) -> I64
+        \\f = |x|
+        \\    match x {
+        \\        [] => 0
+        \\        [_, ..] => 1
+        \\    }
         \\
-        \\result = match x {
-        \\    [] => 0
-        \\    [_, ..] => 1
-        \\}
+        \\result = f([])
     ;
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
@@ -647,15 +667,17 @@ test "unmatchable - second pattern on List of empty type" {
 
 test "unmatchable - non-empty list pattern on List of empty type" {
     // A non-empty list pattern on List([]) is unreachable
-    // because you can't construct a list with elements of type []
+    // because you can't construct a list with elements of type [].
+    // Annotation on function parameter (negative/closed position) keeps [] truly empty.
     const source =
-        \\x : List([])
-        \\x = []
+        \\f : List([]) -> I64
+        \\f = |x|
+        \\    match x {
+        \\        [_, ..] => 1
+        \\        [] => 0
+        \\    }
         \\
-        \\result = match x {
-        \\    [_, ..] => 1
-        \\    [] => 0
-        \\}
+        \\result = f([])
     ;
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
@@ -679,18 +701,19 @@ test "unmatchable - non-empty list pattern on List of empty type" {
 // even though the specific internal representation may vary.
 
 test "exhaustive - union with many tags requires all inhabited to be matched" {
-    // This tests that all tags are found even if they might be split across extensions
+    // This tests that all tags are found even if they might be split across extensions.
+    // Annotation on function parameter (negative/closed position) keeps tag union closed.
     const source =
-        \\x : [A(I64), B(Str), C(U64), D(F64)]
-        \\x = A(1)
+        \\f : [A(I64), B(Str), C(U64), D(F64)] -> I64
+        \\f = |x|
+        \\    match x {
+        \\        A(_) => 1
+        \\        B(_) => 2
+        \\        C(_) => 3
+        \\        D(_) => 4
+        \\    }
         \\
-        \\result : I64
-        \\result = match x {
-        \\    A(_) => 1
-        \\    B(_) => 2
-        \\    C(_) => 3
-        \\    D(_) => 4
-        \\}
+        \\result = f(A(1))
     ;
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
@@ -717,17 +740,18 @@ test "non-exhaustive - missing tag from union with many tags" {
 }
 
 test "exhaustive - union with mix of inhabited and uninhabited tags" {
-    // Tests that uninhabited tags are properly skipped across the whole union
+    // Tests that uninhabited tags are properly skipped across the whole union.
+    // Annotation on function parameter (negative/closed position) keeps tag unions closed.
     const source =
-        \\x : [A(I64), B([]), C(Str), D([]), E(U64)]
-        \\x = A(1)
+        \\f : [A(I64), B([]), C(Str), D([]), E(U64)] -> I64
+        \\f = |x|
+        \\    match x {
+        \\        A(_) => 1
+        \\        C(_) => 3
+        \\        E(_) => 5
+        \\    }
         \\
-        \\result : I64
-        \\result = match x {
-        \\    A(_) => 1
-        \\    C(_) => 3
-        \\    E(_) => 5
-        \\}
+        \\result = f(A(1))
     ;
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
@@ -755,15 +779,16 @@ test "non-exhaustive - missing inhabited tag when uninhabited are present" {
 }
 
 test "exhaustive - tags at various positions all uninhabited" {
-    // Tests that a union is exhausted when all remaining tags are uninhabited
+    // Tests that a union is exhausted when all remaining tags are uninhabited.
+    // Annotation on function parameter (negative/closed position) keeps tag unions closed.
     const source =
-        \\x : [A([]), B([]), C(I64), D([]), E([])]
-        \\x = C(42)
+        \\f : [A([]), B([]), C(I64), D([]), E([])] -> I64
+        \\f = |x|
+        \\    match x {
+        \\        C(n) => n
+        \\    }
         \\
-        \\result : I64
-        \\result = match x {
-        \\    C(n) => n
-        \\}
+        \\result = f(C(42))
     ;
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();

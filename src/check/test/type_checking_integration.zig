@@ -684,11 +684,11 @@ test "check type - tag - ext - typo" {
         \\
         \\It has the type:
         \\
-        \\    [Greeen, ..]
+        \\    [Blue, Greeen, Green, Red, ..]
         \\
         \\But the annotation say it should be:
         \\
-        \\    Color([Green])
+        \\    Color([Green, ..])
         \\
         \\**Hint:** Maybe `Greeen` should be `Green`?
         \\
@@ -1268,7 +1268,7 @@ test "check type - alias open tag union" {
         \\x : {} -> MyAlias([C])
         \\x = |{}| C
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "{} -> MyAlias([C])");
+    try checkTypesModule(source, .{ .pass = .last_def }, "{} -> MyAlias([C, ..])");
 }
 
 test "check type - alias open record" {
@@ -6132,27 +6132,9 @@ test "check type - tag union - ext hints 1" {
         \\foo : [A, B] -> [X, Y, ..]
         \\foo = |tag| bar(tag)
     ;
-    try checkTypesModule(source, .fail_with,
-        \\**TYPE MISMATCH**
-        \\This expression is used in an unexpected way:
-        \\**test:5:13:5:21:**
-        \\```roc
-        \\foo = |tag| bar(tag)
-        \\```
-        \\            ^^^^^^^^
-        \\
-        \\It has the type:
-        \\
-        \\    [X, Y]
-        \\
-        \\But the annotation say it should be:
-        \\
-        \\    [X, Y, ..]
-        \\
-        \\**Hint:** This tag union is closed, but I expected it to be open.
-        \\
-        \\
-    );
+    // With polarity, [X, Y] in return (positive) position is now open [X, Y, ..],
+    // which matches the [X, Y, ..] annotation on foo's return type.
+    try checkTypesModule(source, .{ .pass = .{ .def = "foo" } }, "[A, B] -> [X, Y, ..]");
 }
 
 test "check type - tag union - ext hints 2" {
@@ -6160,6 +6142,9 @@ test "check type - tag union - ext hints 2" {
         \\foo : [A, B, ..] -> [A, B]
         \\foo = |a| a
     ;
+    // With polarity, [A, B] in return (positive) position is now open [A, B, ..].
+    // The arg [A, B, ..] has explicit .. (flex ext). The return [A, B, ..] has a
+    // polarity_open rigid ext. Unifying flex with rigid ext still produces a mismatch.
     try checkTypesModule(source, .fail_with,
         \\**TYPE MISMATCH**
         \\This expression is used in an unexpected way:
@@ -6175,9 +6160,7 @@ test "check type - tag union - ext hints 2" {
         \\
         \\But the annotation say it should be:
         \\
-        \\    [A, B]
-        \\
-        \\**Hint:** This tag union open, but I expected it to be closed.
+        \\    [A, B, ..]
         \\
         \\
     );
