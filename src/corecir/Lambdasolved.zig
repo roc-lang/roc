@@ -8,6 +8,7 @@ const base = @import("base");
 const can = @import("can");
 const types = @import("types");
 const cm = @import("ContextMono.zig");
+const ValueProjection = @import("ValueProjection.zig");
 
 const Allocator = std.mem.Allocator;
 const Region = base.Region;
@@ -80,6 +81,7 @@ pub const ExprSource = struct {
     source_context: SourceContext,
     module_idx: u32,
     expr_idx: CIR.Expr.Idx,
+    projections: ValueProjection.ProjectionSpan = .empty(),
 };
 
 pub const SourceContext = cm.SourceContext;
@@ -121,6 +123,7 @@ pub const SolvedCall = union(enum) {
 
 pub const Result = struct {
     callable_templates: std.ArrayListUnmanaged(CallableTemplate),
+    value_projection_entries: std.ArrayListUnmanaged(ValueProjection.Projection),
     pattern_source_exprs: std.AutoHashMapUnmanaged(u64, ExprSource),
     external_def_source_exprs: std.AutoHashMapUnmanaged(u64, ExprSource),
     local_callable_template_ids: std.AutoHashMapUnmanaged(u64, CallableTemplateId),
@@ -136,6 +139,7 @@ pub const Result = struct {
         _ = allocator;
         return .{
             .callable_templates = .empty,
+            .value_projection_entries = .empty,
             .pattern_source_exprs = .empty,
             .external_def_source_exprs = .empty,
             .local_callable_template_ids = .empty,
@@ -151,6 +155,7 @@ pub const Result = struct {
 
     pub fn deinit(self: *Result, allocator: Allocator) void {
         self.callable_templates.deinit(allocator);
+        self.value_projection_entries.deinit(allocator);
         self.pattern_source_exprs.deinit(allocator);
         self.external_def_source_exprs.deinit(allocator);
         self.local_callable_template_ids.deinit(allocator);
@@ -165,6 +170,14 @@ pub const Result = struct {
 
     pub fn getCallableTemplate(self: *const Result, callable_template_id: CallableTemplateId) *const CallableTemplate {
         return &self.callable_templates.items[@intFromEnum(callable_template_id)];
+    }
+
+    pub fn getValueProjectionEntries(
+        self: *const Result,
+        span: ValueProjection.ProjectionSpan,
+    ) []const ValueProjection.Projection {
+        if (span.len == 0) return &.{};
+        return self.value_projection_entries.items[span.start..][0..span.len];
     }
 
     pub fn getLocalCallableTemplate(self: *const Result, module_idx: u32, pattern_idx: CIR.Pattern.Idx) ?CallableTemplateId {

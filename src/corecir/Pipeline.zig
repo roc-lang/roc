@@ -74,6 +74,8 @@ const CallableParamProjection = Lambdamono.CallableParamProjection;
 const CallableParamProjectionSpan = Lambdamono.CallableParamProjectionSpan;
 const CallableParamSpecEntry = Lambdamono.CallableParamSpecEntry;
 const CallableParamSpecSpan = Lambdamono.CallableParamSpecSpan;
+pub const ValueProjection = CallableParamProjection;
+pub const ValueProjectionSpan = CallableParamProjectionSpan;
 
 pub const CaptureValueSource = Lambdamono.CaptureValueSource;
 pub const CaptureStorage = Lambdamono.CaptureStorage;
@@ -391,7 +393,10 @@ pub const Result = struct {
         expr_idx: CIR.Expr.Idx,
     ) ?CallSite {
         const expr_id = self.lambdamono.getExprId(source_context, module_idx, expr_idx) orelse return null;
-        return self.lambdamono.getExpr(expr_id).call_site;
+        return switch (self.lambdamono.getExpr(expr_id).call_semantics) {
+            .not_call => null,
+            .call => |call_site| call_site,
+        };
     }
 
     pub fn getExprMonotype(
@@ -413,7 +418,10 @@ pub const Result = struct {
         expr_idx: CIR.Expr.Idx,
     ) ?CallableValue {
         const expr_id = self.lambdamono.getExprId(source_context, module_idx, expr_idx) orelse return null;
-        return self.lambdamono.getExpr(expr_id).callable_value;
+        return switch (self.lambdamono.getExpr(expr_id).callable_semantics) {
+            .ordinary => null,
+            .callable => |callable_value| callable_value,
+        };
     }
 
     pub fn getDispatchExprTarget(
@@ -423,7 +431,10 @@ pub const Result = struct {
         expr_idx: CIR.Expr.Idx,
     ) ?DispatchExprTarget {
         const expr_id = self.lambdamono.getExprId(source_context, module_idx, expr_idx) orelse return null;
-        return self.lambdamono.getExpr(expr_id).dispatch_target;
+        return switch (self.lambdamono.getExpr(expr_id).dispatch_semantics) {
+            .not_dispatch => null,
+            .dispatch => |dispatch_target| dispatch_target,
+        };
     }
 
     pub fn getLookupResolution(
@@ -433,10 +444,24 @@ pub const Result = struct {
         expr_idx: CIR.Expr.Idx,
     ) ?Lambdamono.LookupResolution {
         const expr_id = self.lambdamono.getExprId(source_context, module_idx, expr_idx) orelse return null;
-        return self.lambdamono.getExpr(expr_id).lookup_resolution;
+        return switch (self.lambdamono.getExpr(expr_id).lookup_semantics) {
+            .not_lookup => null,
+            .lookup => |lookup_resolution| lookup_resolution,
+        };
     }
 
     pub fn getProgramExprForRef(self: *const Result, expr_ref: ExprRef) *const Lambdamono.Expr {
+        if (!expr_ref.projections.isEmpty()) {
+            std.debug.panic(
+                "Pipeline invariant violated: projected expr ref cannot be treated as a base program expr (ctx={s} module={d} expr={d}, projections={d})",
+                .{
+                    @tagName(expr_ref.source_context),
+                    expr_ref.module_idx,
+                    @intFromEnum(expr_ref.expr_idx),
+                    expr_ref.projections.len,
+                },
+            );
+        }
         const expr_id = self.lambdamono.getExprId(
             expr_ref.source_context,
             expr_ref.module_idx,
@@ -1722,11 +1747,7 @@ pub const Pass = struct {
                     } };
                 }
                 if (result.getPatternSourceExpr(module_idx, lookup.pattern_idx)) |source| {
-                    break :blk LookupResolution{ .expr = .{
-                        .source_context = source.source_context,
-                        .module_idx = source.module_idx,
-                        .expr_idx = source.expr_idx,
-                    } };
+                    break :blk LookupResolution{ .expr = try self.materializeExprRefFromSource(result, source) };
                 }
                 break :blk null;
             },
@@ -1768,10 +1789,22 @@ pub const Pass = struct {
             .monotype = monotype,
             .child_exprs = child_expr_span,
             .child_stmts = child_stmt_span,
-            .callable_value = callable_value,
-            .call_site = call_site,
-            .dispatch_target = dispatch_target,
-            .lookup_resolution = lookup_resolution,
+            .callable_semantics = if (callable_value) |expr_callable_value|
+                .{ .callable = expr_callable_value }
+            else
+                .ordinary,
+            .call_semantics = if (call_site) |expr_call_site|
+                .{ .call = expr_call_site }
+            else
+                .not_call,
+            .dispatch_semantics = if (dispatch_target) |resolved_dispatch_target|
+                .{ .dispatch = resolved_dispatch_target }
+            else
+                .not_dispatch,
+            .lookup_semantics = if (lookup_resolution) |resolved_lookup|
+                .{ .lookup = resolved_lookup }
+            else
+                .not_lookup,
         });
         try result.lambdamono.expr_ids_by_key.put(self.allocator, key, expr_id);
         return expr_id;
@@ -2220,9 +2253,7 @@ pub const Pass = struct {
         self: *Pass,
         result: *Result,
         source_key: u64,
-        source_context: SourceContext,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
+        source: ExprSource,
     ) Allocator.Error!void {
         const existing = switch (callableSourceNamespace(source_key)) {
             .local_pattern => result.lambdasolved.pattern_source_exprs.get(source_key),
@@ -2233,7 +2264,11 @@ pub const Pass = struct {
             ),
         };
         if (existing) |existing_source| {
-            if (!std.meta.eql(existing_source.source_context, source_context) or existing_source.module_idx != module_idx or existing_source.expr_idx != expr_idx) {
+            if (!std.meta.eql(existing_source.source_context, source.source_context) or
+                existing_source.module_idx != source.module_idx or
+                existing_source.expr_idx != source.expr_idx or
+                !self.solvedExprSourceProjectionsEqual(result, existing_source.projections, source.projections))
+            {
                 if (std.debug.runtime_safety) {
                     std.debug.panic(
                         "Pipeline: conflicting source exprs for source key {d} (existing_ctx={s} existing={d}:{d}, new_ctx={s} new={d}:{d})",
@@ -2242,9 +2277,9 @@ pub const Pass = struct {
                             @tagName(existing_source.source_context),
                             existing_source.module_idx,
                             @intFromEnum(existing_source.expr_idx),
-                            @tagName(source_context),
-                            module_idx,
-                            @intFromEnum(expr_idx),
+                            @tagName(source.source_context),
+                            source.module_idx,
+                            @intFromEnum(source.expr_idx),
                         },
                     );
                 }
@@ -2252,12 +2287,6 @@ pub const Pass = struct {
             }
             return;
         }
-
-        const source = ExprSource{
-            .source_context = source_context,
-            .module_idx = module_idx,
-            .expr_idx = expr_idx,
-        };
         switch (callableSourceNamespace(source_key)) {
             .local_pattern => try self.putTracked(
                 .source_value_provenance,
@@ -2285,9 +2314,7 @@ pub const Pass = struct {
         try self.recordSourceExpr(
             result,
             packLocalPatternSourceKey(module_idx, pattern_idx),
-            source.source_context,
-            source.module_idx,
-            source.expr_idx,
+            source,
         );
 
         const module_env = self.all_module_envs[module_idx];
@@ -2307,27 +2334,19 @@ pub const Pass = struct {
             .nominal_external => |nominal_pat| try self.recordPatternSourceExpr(result, module_idx, nominal_pat.backing_pattern, source),
             .tuple => |tuple_pat| {
                 for (module_env.store.slicePatterns(tuple_pat.patterns), 0..) |elem_pattern_idx, elem_index| {
-                    const elem_source = try self.resolveTupleElemSourceExpr(
-                        result,
-                        source.source_context,
-                        source.module_idx,
-                        source.expr_idx,
-                        @intCast(elem_index),
-                    ) orelse continue;
+                    const elem_source = try self.extendExprSource(result, source, .{ .tuple_elem = @intCast(elem_index) });
                     try self.recordPatternSourceExpr(result, module_idx, elem_pattern_idx, elem_source);
                 }
             },
             .applied_tag => |tag_pat| {
                 for (module_env.store.slicePatterns(tag_pat.args), 0..) |arg_pattern_idx, arg_index| {
-                    const arg_source = try self.resolveTagPayloadSourceExpr(
-                        result,
-                        source.source_context,
-                        source.module_idx,
-                        source.expr_idx,
-                        module_idx,
-                        tag_pat.name,
-                        @intCast(arg_index),
-                    ) orelse continue;
+                    const arg_source = try self.extendExprSource(result, source, .{ .tag_payload = .{
+                        .tag_name = .{
+                            .module_idx = module_idx,
+                            .ident = tag_pat.name,
+                        },
+                        .payload_index = @intCast(arg_index),
+                    } });
                     try self.recordPatternSourceExpr(result, module_idx, arg_pattern_idx, arg_source);
                 }
             },
@@ -2336,14 +2355,10 @@ pub const Pass = struct {
                     const destruct = module_env.store.getRecordDestruct(destruct_idx);
                     switch (destruct.kind) {
                         .Required, .SubPattern => |sub_pattern_idx| {
-                            const field_source = try self.resolveRecordFieldSourceExpr(
-                                result,
-                                source.source_context,
-                                source.module_idx,
-                                source.expr_idx,
-                                module_idx,
-                                destruct.label,
-                            ) orelse continue;
+                            const field_source = try self.extendExprSource(result, source, .{ .field = .{
+                                .module_idx = module_idx,
+                                .ident = destruct.label,
+                            } });
                             try self.recordPatternSourceExpr(result, module_idx, sub_pattern_idx, field_source);
                         },
                         .Rest => {},
@@ -2352,13 +2367,7 @@ pub const Pass = struct {
             },
             .list => |list_pat| {
                 for (module_env.store.slicePatterns(list_pat.patterns), 0..) |elem_pattern_idx, elem_index| {
-                    const elem_source = try self.resolveListElemSourceExpr(
-                        result,
-                        source.source_context,
-                        source.module_idx,
-                        source.expr_idx,
-                        @intCast(elem_index),
-                    ) orelse continue;
+                    const elem_source = try self.extendExprSource(result, source, .{ .list_elem = @intCast(elem_index) });
                     try self.recordPatternSourceExpr(result, module_idx, elem_pattern_idx, elem_source);
                 }
             },
@@ -3236,6 +3245,71 @@ pub const Pass = struct {
         };
     }
 
+    fn addSolvedValueProjectionEntries(
+        self: *Pass,
+        result: *Result,
+        entries: []const CallableParamProjection,
+    ) Allocator.Error!CallableParamProjectionSpan {
+        if (entries.len == 0) return .empty();
+
+        const start: u32 = @intCast(result.lambdasolved.value_projection_entries.items.len);
+        try result.lambdasolved.value_projection_entries.appendSlice(self.allocator, entries);
+        return .{
+            .start = start,
+            .len = @intCast(entries.len),
+        };
+    }
+
+    fn extendExprSource(
+        self: *Pass,
+        result: *Result,
+        source: ExprSource,
+        projection: CallableParamProjection,
+    ) Allocator.Error!ExprSource {
+        const existing = result.lambdasolved.getValueProjectionEntries(source.projections);
+        const top = result.lambdasolved.value_projection_entries.items.len;
+        try result.lambdasolved.value_projection_entries.appendSlice(self.allocator, existing);
+        try result.lambdasolved.value_projection_entries.append(self.allocator, projection);
+        return .{
+            .source_context = source.source_context,
+            .module_idx = source.module_idx,
+            .expr_idx = source.expr_idx,
+            .projections = .{
+                .start = @intCast(top),
+                .len = @intCast(existing.len + 1),
+            },
+        };
+    }
+
+    fn solvedExprSourceProjectionsEqual(
+        self: *const Pass,
+        result: *const Result,
+        lhs: CallableParamProjectionSpan,
+        rhs: CallableParamProjectionSpan,
+    ) bool {
+        return self.callableParamProjectionSeqEqual(
+            result.getValueProjectionEntries(lhs),
+            result.getValueProjectionEntries(rhs),
+        );
+    }
+
+    fn materializeExprRefFromSource(
+        self: *Pass,
+        result: *Result,
+        source: ExprSource,
+    ) Allocator.Error!ExprRef {
+        const projections = try self.addCallableParamProjectionEntries(
+            result,
+            result.lambdasolved.getValueProjectionEntries(source.projections),
+        );
+        return .{
+            .source_context = source.source_context,
+            .module_idx = source.module_idx,
+            .expr_idx = source.expr_idx,
+            .projections = projections,
+        };
+    }
+
     fn updateCallableDefRuntimeValue(
         self: *Pass,
         result: *Result,
@@ -3318,42 +3392,12 @@ pub const Pass = struct {
             return null;
         }
         if (result.getPatternSourceExpr(module_idx, pattern_idx)) |source| {
-            return .{ .expr = .{
-                .source_context = source.source_context,
-                .module_idx = source.module_idx,
-                .expr_idx = source.expr_idx,
-            } };
+            return .{ .expr = try self.materializeExprRefFromSource(result, source) };
         }
         return .{ .lexical_pattern = .{
             .module_idx = module_idx,
             .pattern_idx = pattern_idx,
         } };
-    }
-
-    fn getExactCallableInstForCaptureValueSource(
-        self: *Pass,
-        result: *const Result,
-        capture_context_callable_inst: CallableInstId,
-        capture_value_source: CaptureValueSource,
-    ) ?CallableInstId {
-        switch (capture_value_source) {
-            .expr => |capture_expr_ref| {
-                return self.getExprCallableInstInContext(
-                    result,
-                    capture_context_callable_inst,
-                    capture_expr_ref.module_idx,
-                    capture_expr_ref.expr_idx,
-                );
-            },
-            .lexical_pattern => |lexical| {
-                return self.resolveBoundPatternCallableInstInContext(
-                    result,
-                    capture_context_callable_inst,
-                    lexical.module_idx,
-                    lexical.pattern_idx,
-                );
-            },
-        }
     }
 
     fn resolveCaptureValueSourceMonotype(
@@ -3362,20 +3406,129 @@ pub const Pass = struct {
         capture_context_callable_inst: CallableInstId,
         capture_value_source: CaptureValueSource,
     ) Allocator.Error!ResolvedMonotype {
+        _ = self;
         return switch (capture_value_source) {
-            .expr => |capture_expr_ref| self.resolveExprMonotypeResolvedForSourceContext(
-                result,
-                SemanticThread.trackedThread(capture_expr_ref.source_context),
-                capture_expr_ref.source_context,
-                capture_expr_ref.module_idx,
-                capture_expr_ref.expr_idx,
-            ),
-            .lexical_pattern => |lexical| self.resolvePatternMonotypeInSourceContext(
-                result,
+            .expr => |capture_expr_ref| blk: {
+                var resolved = result.context_mono.getExprMonotype(
+                    capture_expr_ref.source_context,
+                    capture_expr_ref.module_idx,
+                    capture_expr_ref.expr_idx,
+                ) orelse std.debug.panic(
+                    "Pipeline invariant violated: missing exact contextual monotype for capture expr source context={s} module={d} expr={d}",
+                    .{
+                        @tagName(capture_expr_ref.source_context),
+                        capture_expr_ref.module_idx,
+                        @intFromEnum(capture_expr_ref.expr_idx),
+                    },
+                );
+                for (result.lambdamono.getValueProjectionEntries(capture_expr_ref.projections)) |projection| {
+                    resolved = try self.projectResolvedMonotypeByValueProjection(result, resolved, projection);
+                }
+                break :blk resolved;
+            },
+            .lexical_pattern => |lexical| result.context_mono.getContextPatternMonotype(
                 callableInstSourceContext(capture_context_callable_inst),
                 lexical.module_idx,
                 lexical.pattern_idx,
+            ) orelse std.debug.panic(
+                "Pipeline invariant violated: missing exact contextual monotype for lexical capture pattern module={d} pattern={d} context_callable_inst={d}",
+                .{
+                    lexical.module_idx,
+                    @intFromEnum(lexical.pattern_idx),
+                    @intFromEnum(capture_context_callable_inst),
+                },
             ),
+        };
+    }
+
+    fn projectResolvedMonotypeByValueProjection(
+        self: *Pass,
+        result: *const Result,
+        source_monotype: ResolvedMonotype,
+        projection: CallableParamProjection,
+    ) Allocator.Error!ResolvedMonotype {
+        const mono = result.context_mono.monotype_store.getMonotype(source_monotype.idx);
+        return switch (projection) {
+            .field => |field_name| blk: {
+                const record = switch (mono) {
+                    .record => |record| record,
+                    else => std.debug.panic(
+                        "Pipeline invariant violated: record field projection expected record monotype, found '{s}'",
+                        .{@tagName(mono)},
+                    ),
+                };
+                for (result.context_mono.monotype_store.getFields(record.fields)) |field| {
+                    if (self.identsStructurallyEqualAcrossModules(
+                        field.name.module_idx,
+                        field.name.ident,
+                        field_name.module_idx,
+                        field_name.ident,
+                    )) {
+                        break :blk resolvedMonotype(field.type_idx, source_monotype.module_idx);
+                    }
+                }
+                std.debug.panic(
+                    "Pipeline invariant violated: record field projection could not find field in monotype",
+                    .{},
+                );
+            },
+            .tuple_elem => |elem_index| blk: {
+                const tuple = switch (mono) {
+                    .tuple => |tuple| tuple,
+                    else => std.debug.panic(
+                        "Pipeline invariant violated: tuple projection expected tuple monotype, found '{s}'",
+                        .{@tagName(mono)},
+                    ),
+                };
+                const elems = result.context_mono.monotype_store.getIdxSpan(tuple.elems);
+                if (builtin.mode == .Debug and elem_index >= elems.len) {
+                    std.debug.panic(
+                        "Pipeline invariant violated: tuple projection elem_index {d} out of bounds for tuple arity {d}",
+                        .{ elem_index, elems.len },
+                    );
+                }
+                break :blk resolvedMonotype(elems[elem_index], source_monotype.module_idx);
+            },
+            .tag_payload => |payload| blk: {
+                const tags = switch (mono) {
+                    .tag_union => |tag_union| result.context_mono.monotype_store.getTags(tag_union.tags),
+                    else => std.debug.panic(
+                        "Pipeline invariant violated: tag payload projection expected tag_union monotype, found '{s}'",
+                        .{@tagName(mono)},
+                    ),
+                };
+                for (tags) |tag| {
+                    if (!self.identsStructurallyEqualAcrossModules(
+                        tag.name.module_idx,
+                        tag.name.ident,
+                        payload.tag_name.module_idx,
+                        payload.tag_name.ident,
+                    )) continue;
+                    const payload_monos = result.context_mono.monotype_store.getIdxSpan(tag.payloads);
+                    if (builtin.mode == .Debug and payload.payload_index >= payload_monos.len) {
+                        std.debug.panic(
+                            "Pipeline invariant violated: tag payload projection index {d} out of bounds for payload arity {d}",
+                            .{ payload.payload_index, payload_monos.len },
+                        );
+                    }
+                    break :blk resolvedMonotype(payload_monos[payload.payload_index], source_monotype.module_idx);
+                }
+                std.debug.panic(
+                    "Pipeline invariant violated: tag payload projection could not find tag in monotype",
+                    .{},
+                );
+            },
+            .list_elem => |elem_index| blk: {
+                _ = elem_index;
+                const list = switch (mono) {
+                    .list => |list| list,
+                    else => std.debug.panic(
+                        "Pipeline invariant violated: list elem projection expected list monotype, found '{s}'",
+                        .{@tagName(mono)},
+                    ),
+                };
+                break :blk resolvedMonotype(list.elem, source_monotype.module_idx);
+            },
         };
     }
 
@@ -3423,14 +3576,24 @@ pub const Pass = struct {
             }
 
             const exact_capture_callable_inst = if (result.context_mono.monotype_store.getMonotype(capture_mono.idx) == .func)
-                self.getExactCallableInstForCaptureValueSource(
-                    result,
-                    capture_context_callable_inst,
-                    capture_value_source,
+                switch (result.lambdasolved.getPatternCallableValue(
+                    callableInstSourceContext(capture_context_callable_inst),
+                    module_idx,
+                    capture.pattern_idx,
                 ) orelse std.debug.panic(
-                    "Pipeline invariant violated: function-valued closure capture pattern {d} for callable inst {d} had no exact callable fact in specialization tables",
+                    "Pipeline invariant violated: function-valued closure capture pattern {d} for callable inst {d} had no solved callable value fact",
                     .{ @intFromEnum(capture.pattern_idx), @intFromEnum(closure_callable_inst_id) },
-                )
+                )) {
+                    .direct => |capture_callable_inst_id| capture_callable_inst_id,
+                    .lambda_set => |lambda_set_id| std.debug.panic(
+                        "Pipeline invariant violated: function-valued closure capture pattern {d} for callable inst {d} remained lambda-set-valued ({d}) after specialization",
+                        .{
+                            @intFromEnum(capture.pattern_idx),
+                            @intFromEnum(closure_callable_inst_id),
+                            @intFromEnum(lambda_set_id),
+                        },
+                    ),
+                }
             else
                 null;
 
@@ -3582,12 +3745,14 @@ pub const Pass = struct {
                 try self.recordSourceExpr(
                     result,
                     packExternalDefSourceKey(target_module_idx, lookup.target_node_idx),
-                    .{ .root_expr = .{
+                    .{
+                        .source_context = .{ .root_expr = .{
+                            .module_idx = target_module_idx,
+                            .expr_idx = def.expr,
+                        } },
                         .module_idx = target_module_idx,
                         .expr_idx = def.expr,
-                    } },
-                    target_module_idx,
-                    def.expr,
+                    },
                 );
                 _ = try self.registerCallableBackedDefTemplate(
                     result,
@@ -3636,12 +3801,14 @@ pub const Pass = struct {
                 try self.recordSourceExpr(
                     result,
                     packExternalDefSourceKey(target.module_idx, target_node_idx),
-                    .{ .root_expr = .{
+                    .{
+                        .source_context = .{ .root_expr = .{
+                            .module_idx = target.module_idx,
+                            .expr_idx = def.expr,
+                        } },
                         .module_idx = target.module_idx,
                         .expr_idx = def.expr,
-                    } },
-                    target.module_idx,
-                    def.expr,
+                    },
                 );
                 _ = try self.registerCallableBackedDefTemplate(
                     result,
@@ -3903,7 +4070,7 @@ pub const Pass = struct {
         }
     }
 
-    fn seedBindingsForCallableInst(
+    fn materializeCallableInstBindings(
         self: *Pass,
         result: *Result,
         callable_inst_id: CallableInstId,
@@ -3915,65 +4082,62 @@ pub const Pass = struct {
         for (result.getTypeSubstEntries(subst.entries)) |entry| {
             try bindings.put(entry.key, entry.monotype);
         }
-
-        try self.seedCallableBodyBindingsFromSignature(
-            result,
-            template.module_idx,
-            template.cir_expr,
-            callableInstSourceContext(callable_inst_id),
-            callable_inst.fn_monotype,
-            callable_inst.fn_monotype_module_idx,
-            bindings,
-        );
     }
 
-    fn resolvePatternMonotypeInSourceContext(
+    fn recordCallableBoundaryContextMonotypes(
         self: *Pass,
         result: *Result,
         source_context: SourceContext,
         module_idx: u32,
-        pattern_idx: CIR.Pattern.Idx,
-    ) Allocator.Error!ResolvedMonotype {
-        var bindings = std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype).init(self.allocator);
-        defer bindings.deinit();
-
-        var thread = SemanticThread.trackedThread(source_context);
-        switch (source_context) {
-            .callable_inst => |context_id| {
-                try self.seedBindingsForCallableInst(result, @enumFromInt(@intFromEnum(context_id)), &bindings);
-                thread = thread.withBindings(&bindings);
-            },
-            .root_expr, .provenance_expr, .template_expr => {},
+        callable_expr_idx: CIR.Expr.Idx,
+        fn_monotype: Monotype.Idx,
+        fn_monotype_module_idx: u32,
+    ) Allocator.Error!void {
+        const fn_mono = switch (result.context_mono.monotype_store.getMonotype(fn_monotype)) {
+            .func => |func| func,
+            else => return,
+        };
+        const boundary = self.callableBoundaryInfo(module_idx, callable_expr_idx) orelse return;
+        if (boundary.arg_patterns.len != fn_mono.args.len) {
+            if (std.debug.runtime_safety) {
+                std.debug.panic(
+                    "Pipeline: callable boundary arity mismatch for expr {d} (patterns={d}, monos={d})",
+                    .{
+                        @intFromEnum(callable_expr_idx),
+                        boundary.arg_patterns.len,
+                        fn_mono.args.len,
+                    },
+                );
+            }
+            unreachable;
         }
 
-        return self.resolveTypeVarMonotypeResolved(
+        try self.recordCurrentExprMonotype(
             result,
-            thread,
+            source_context,
             module_idx,
-            ModuleEnv.varFrom(pattern_idx),
+            callable_expr_idx,
+            fn_monotype,
+            fn_monotype_module_idx,
         );
-    }
 
-    fn resolveExprMonotypeInSourceContext(
-        self: *Pass,
-        result: *Result,
-        source_context: SourceContext,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-    ) Allocator.Error!ResolvedMonotype {
-        var bindings = std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype).init(self.allocator);
-        defer bindings.deinit();
-
-        var thread = SemanticThread.trackedThread(source_context);
-        switch (source_context) {
-            .callable_inst => |context_id| {
-                try self.seedBindingsForCallableInst(result, @enumFromInt(@intFromEnum(context_id)), &bindings);
-                thread = thread.withBindings(&bindings);
-            },
-            .root_expr, .provenance_expr, .template_expr => {},
+        for (boundary.arg_patterns, 0..) |pattern_idx, i| {
+            const param_mono = result.context_mono.monotype_store.getIdxSpanItem(fn_mono.args, i);
+            try self.mergeTrackedContextPatternMonotype(
+                result,
+                self.resultPatternKeyForSourceContext(source_context, module_idx, pattern_idx),
+                resolvedMonotype(param_mono, fn_monotype_module_idx),
+            );
         }
 
-        return self.resolveExprMonotypeResolved(result, thread, module_idx, expr_idx);
+        try self.recordCurrentExprMonotype(
+            result,
+            source_context,
+            module_idx,
+            boundary.body_expr,
+            fn_mono.ret,
+            fn_monotype_module_idx,
+        );
     }
 
     fn scanClosureCaptureSources(
@@ -10177,7 +10341,7 @@ pub const Pass = struct {
             .module_idx = target_module_idx,
             .expr_idx = def.expr,
         };
-        try self.recordSourceExpr(result, key, source.source_context, target_module_idx, def.expr);
+        try self.recordSourceExpr(result, key, source);
         _ = try self.registerCallableBackedDefTemplate(
             result,
             target_module_idx,
@@ -10187,78 +10351,6 @@ pub const Pass = struct {
             key,
         );
         return source;
-    }
-
-    fn resolveRecordFieldSourceExpr(
-        self: *Pass,
-        result: *Result,
-        source_context: SourceContext,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-        field_name_module_idx: u32,
-        field_name: Ident.Idx,
-    ) Allocator.Error!?ExprSource {
-        var visiting: std.AutoHashMapUnmanaged(ContextExprVisitKey, void) = .empty;
-        defer visiting.deinit(self.allocator);
-        return self.resolveRecordFieldExpr(
-            result,
-            source_context,
-            module_idx,
-            expr_idx,
-            field_name_module_idx,
-            field_name,
-            &visiting,
-        );
-    }
-
-    fn resolveTupleElemSourceExpr(
-        self: *Pass,
-        result: *Result,
-        source_context: SourceContext,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-        elem_index: u32,
-    ) Allocator.Error!?ExprSource {
-        var visiting: std.AutoHashMapUnmanaged(ContextExprVisitKey, void) = .empty;
-        defer visiting.deinit(self.allocator);
-        return self.resolveTupleElemExpr(result, source_context, module_idx, expr_idx, elem_index, &visiting);
-    }
-
-    fn resolveTagPayloadSourceExpr(
-        self: *Pass,
-        result: *Result,
-        source_context: SourceContext,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-        tag_name_module_idx: u32,
-        tag_name: Ident.Idx,
-        payload_index: u32,
-    ) Allocator.Error!?ExprSource {
-        var visiting: std.AutoHashMapUnmanaged(ContextExprVisitKey, void) = .empty;
-        defer visiting.deinit(self.allocator);
-        return self.resolveTagPayloadExpr(
-            result,
-            source_context,
-            module_idx,
-            expr_idx,
-            tag_name_module_idx,
-            tag_name,
-            payload_index,
-            &visiting,
-        );
-    }
-
-    fn resolveListElemSourceExpr(
-        self: *Pass,
-        result: *Result,
-        source_context: SourceContext,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-        elem_index: u32,
-    ) Allocator.Error!?ExprSource {
-        var visiting: std.AutoHashMapUnmanaged(ContextExprVisitKey, void) = .empty;
-        defer visiting.deinit(self.allocator);
-        return self.resolveListElemExpr(result, source_context, module_idx, expr_idx, elem_index, &visiting);
     }
 
     fn resolveRecordFieldExprInContext(
@@ -10955,8 +11047,8 @@ pub const Pass = struct {
     ) Allocator.Error!CallableParamProjectionSpan {
         if (entries.len == 0) return .empty();
 
-        const start: u32 = @intCast(result.lambdamono.callable_param_projection_entries.items.len);
-        try result.lambdamono.callable_param_projection_entries.appendSlice(self.allocator, entries);
+        const start: u32 = @intCast(result.lambdamono.value_projection_entries.items.len);
+        try result.lambdamono.value_projection_entries.appendSlice(self.allocator, entries);
         return .{
             .start = start,
             .len = @intCast(entries.len),
@@ -11116,7 +11208,15 @@ pub const Pass = struct {
         var iteration_pattern_monotypes: std.AutoHashMapUnmanaged(ContextPatternKey, ResolvedMonotype) = .empty;
         defer iteration_pattern_monotypes.deinit(self.allocator);
 
-        try self.seedBindingsForCallableInst(result, callable_inst_id, &bindings);
+        try self.materializeCallableInstBindings(result, callable_inst_id, &bindings);
+        try self.recordCallableBoundaryContextMonotypes(
+            result,
+            callableInstSourceContext(callable_inst_id),
+            template.module_idx,
+            template.cir_expr,
+            callable_inst.fn_monotype,
+            callable_inst.fn_monotype_module_idx,
+        );
         const thread = SemanticThread.trackedThread(callableInstSourceContext(callable_inst_id))
             .withBindings(&bindings)
             .withIterationMonotypes(&iteration_expr_monotypes, &iteration_pattern_monotypes);
@@ -12651,8 +12751,17 @@ pub const Pass = struct {
             return try solvedCallableValueMonotype(self, result, callable_value);
         }
 
+        const module_env = self.all_module_envs[module_idx];
+        switch (module_env.store.getExpr(expr_idx)) {
+            .e_lookup_local => |lookup| {
+                if (result.context_mono.getContextPatternMonotype(source_context, module_idx, lookup.pattern_idx)) |pattern_mono| {
+                    return pattern_mono;
+                }
+            },
+            else => {},
+        }
+
         if (thread.bindings() != null) {
-            const module_env = self.all_module_envs[module_idx];
             switch (module_env.store.getExpr(expr_idx)) {
                 .e_lookup_local => |lookup| {
                     const pattern_mono = try self.resolveTypeVarMonotypeResolved(

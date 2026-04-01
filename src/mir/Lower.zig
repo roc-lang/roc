@@ -787,68 +787,12 @@ fn lookupProgramExprLookupResolution(
     );
 }
 
-fn requireDirectCallableInstFromCallableValue(
-    maybe_callable_value: ?Pipeline.CallableValue,
-    comptime fmt: []const u8,
-    args: anytype,
-) Pipeline.CallableInstId {
-    const callable_value = maybe_callable_value orelse std.debug.panic(
-        "statement-only MIR invariant violated: " ++ fmt,
-        args,
-    );
-    return switch (callable_value) {
-        .direct => |callable_inst_id| callable_inst_id,
-        .packed_fn => |packed_fn_id| std.debug.panic(
-            "statement-only MIR invariant violated: direct callable introduction encountered packed fn {d}",
-            .{@intFromEnum(packed_fn_id)},
-        ),
-    };
-}
-
-fn directCallableInstIfCallableValueDirect(
-    maybe_callable_value: ?Pipeline.CallableValue,
-) ?Pipeline.CallableInstId {
-    const callable_value = maybe_callable_value orelse return null;
-    return switch (callable_value) {
-        .direct => |callable_inst_id| callable_inst_id,
-        .packed_fn => null,
-    };
-}
-
 fn lookupProgramExprCallSite(session: LowerSession, expr_idx: CIR.Expr.Idx) ?Pipeline.CallSite {
     return session.lower.callable_pipeline.getExprCallSite(
         session.source_context,
         session.lower.current_module_idx,
         expr_idx,
     );
-}
-
-fn requireDirectCallableInstFromCallSite(
-    maybe_call_site: ?Pipeline.CallSite,
-    comptime fmt: []const u8,
-    args: anytype,
-) Pipeline.CallableInstId {
-    const call_site = maybe_call_site orelse std.debug.panic(
-        "statement-only MIR invariant violated: " ++ fmt,
-        args,
-    );
-    return switch (call_site) {
-        .direct => |callable_inst_id| callable_inst_id,
-        .indirect_call => |indirect_call_id| std.debug.panic(
-            "statement-only MIR invariant violated: direct call lowering encountered indirect call {d}",
-            .{@intFromEnum(indirect_call_id)},
-        ),
-    };
-}
-
-fn directCallableInstIfCallSiteDirect(
-    maybe_call_site: ?Pipeline.CallSite,
-) ?Pipeline.CallableInstId {
-    const call_site = maybe_call_site orelse return null;
-    return switch (call_site) {
-        .direct => |callable_inst_id| callable_inst_id,
-        .indirect_call => null,
-    };
 }
 
 fn lookupProgramExprDispatchTarget(
@@ -2766,14 +2710,23 @@ fn materializeTopLevelDefInto(
         }
     }
 
-    if (directCallableInstIfCallableValueDirect(callable_value)) |callable_inst_id| {
-        const runtime_monotype = self.callable_pipeline.getCallableInstRuntimeMonotype(callable_inst_id);
-        self.store.getLocalPtr(target).monotype = try self.importMonotypeFromStore(
-            &self.callable_pipeline.context_mono.monotype_store,
-            runtime_monotype.idx,
-            runtime_monotype.module_idx,
+    if (callable_value) |resolved_callable_value| switch (resolved_callable_value) {
+        .direct => |callable_inst_id| {
+            const runtime_monotype = self.callable_pipeline.getCallableInstRuntimeMonotype(callable_inst_id);
+            self.store.getLocalPtr(target).monotype = try self.importMonotypeFromStore(
+                &self.callable_pipeline.context_mono.monotype_store,
+                runtime_monotype.idx,
+                runtime_monotype.module_idx,
+                saved_module_idx,
+            );
+        },
+        .packed_fn => try self.refreshTargetLocalMonotypeFromExprIntoModule(
+            session,
+            def.expr,
+            module_idx,
             saved_module_idx,
-        );
+            target,
+        ),
     } else {
         try self.refreshTargetLocalMonotypeFromExprIntoModule(
             session,
@@ -3450,6 +3403,57 @@ fn lowerCapturedSourceExprInto(
     target: MIR.LocalId,
     next: MIR.CFStmtId,
 ) Allocator.Error!MIR.CFStmtId {
+    const projections = self.callable_pipeline.lambdamono.getValueProjectionEntries(source_expr_ref.projections);
+    if (projections.len != 0) {
+        const base_expr_ref = Pipeline.ExprRef{
+            .source_context = source_expr_ref.source_context,
+            .module_idx = source_expr_ref.module_idx,
+            .expr_idx = source_expr_ref.expr_idx,
+            .projections = .empty(),
+        };
+        const base_session = session.withSourceContext(base_expr_ref.source_context);
+        const base_monotype = try self.resolveExprMonotypeInModule(
+            base_session,
+            base_expr_ref.module_idx,
+            base_expr_ref.expr_idx,
+        );
+        const base_local = try self.freshSyntheticLocal(base_monotype, false);
+
+        const locals_top = self.scratch_local_ids.top();
+        defer self.scratch_local_ids.clearFrom(locals_top);
+
+        var current_monotype = base_monotype;
+        for (projections, 0..) |projection, i| {
+            const projected_monotype = try self.projectMonotypeByValueProjection(current_monotype, projection);
+            if (i + 1 < projections.len) {
+                try self.scratch_local_ids.append(try self.freshSyntheticLocal(projected_monotype, false));
+            }
+            current_monotype = projected_monotype;
+        }
+
+        var entry = next;
+        var i: usize = projections.len;
+        while (i > 0) {
+            i -= 1;
+            const source_local = if (i == 0)
+                base_local
+            else
+                self.scratch_local_ids.items.items[locals_top + (i - 1)];
+            const projected_local = if (i + 1 == projections.len)
+                target
+            else
+                self.scratch_local_ids.items.items[locals_top + i];
+            entry = try self.lowerValueProjectionInto(
+                projections[i],
+                source_local,
+                projected_local,
+                entry,
+            );
+        }
+
+        return self.lowerCapturedSourceExprInto(base_session, base_expr_ref, base_local, entry);
+    }
+
     const source_session = session.withSourceContext(source_expr_ref.source_context);
 
     if (source_expr_ref.module_idx == self.current_module_idx) {
@@ -3484,6 +3488,120 @@ fn lowerCapturedSourceExprInto(
         target,
     );
     return self.lowerCirExprInto(source_session, source_expr_ref.expr_idx, target, next);
+}
+
+fn projectMonotypeByValueProjection(
+    self: *Self,
+    source_monotype: Monotype.Idx,
+    projection: Pipeline.ValueProjection,
+) Allocator.Error!Monotype.Idx {
+    return switch (projection) {
+        .field => |field_name| blk: {
+            const record = switch (self.store.monotype_store.getMonotype(source_monotype)) {
+                .record => |record| record,
+                else => typeBindingInvariant(
+                    "value-path field projection expected record monotype, found '{s}'",
+                    .{@tagName(self.store.monotype_store.getMonotype(source_monotype))},
+                ),
+            };
+            const field_idx = self.recordFieldIndexByName(
+                field_name,
+                self.store.monotype_store.getFields(record.fields),
+            );
+            break :blk self.store.monotype_store.getFieldItem(record.fields, field_idx).type_idx;
+        },
+        .tuple_elem => |elem_index| blk: {
+            const tuple = switch (self.store.monotype_store.getMonotype(source_monotype)) {
+                .tuple => |tuple| tuple,
+                else => typeBindingInvariant(
+                    "value-path tuple projection expected tuple monotype, found '{s}'",
+                    .{@tagName(self.store.monotype_store.getMonotype(source_monotype))},
+                ),
+            };
+            const elems = self.store.monotype_store.getIdxSpan(tuple.elems);
+            if (builtin.mode == .Debug and elem_index >= elems.len) {
+                std.debug.panic(
+                    "statement-only MIR invariant violated: tuple projection elem_index {d} out of bounds for tuple arity {d}",
+                    .{ elem_index, elems.len },
+                );
+            }
+            break :blk elems[elem_index];
+        },
+        .tag_payload => |payload| blk: {
+            const payload_monos = self.tagPayloadMonotypesByName(source_monotype, payload.tag_name.ident);
+            if (builtin.mode == .Debug and payload.payload_index >= payload_monos.len) {
+                std.debug.panic(
+                    "statement-only MIR invariant violated: tag payload projection index {d} out of bounds for tag payload arity {d}",
+                    .{ payload.payload_index, payload_monos.len },
+                );
+            }
+            break :blk payload_monos[payload.payload_index];
+        },
+        .list_elem => |elem_index| blk: {
+            _ = elem_index;
+            const list_mono = switch (self.store.monotype_store.getMonotype(source_monotype)) {
+                .list => |list| list,
+                else => typeBindingInvariant(
+                    "value-path list projection expected list monotype, found '{s}'",
+                    .{@tagName(self.store.monotype_store.getMonotype(source_monotype))},
+                ),
+            };
+            break :blk list_mono.elem;
+        },
+    };
+}
+
+fn lowerValueProjectionInto(
+    self: *Self,
+    projection: Pipeline.ValueProjection,
+    source_local: MIR.LocalId,
+    target_local: MIR.LocalId,
+    next: MIR.CFStmtId,
+) Allocator.Error!MIR.CFStmtId {
+    const source_monotype = self.store.getLocal(source_local).monotype;
+    return switch (projection) {
+        .field => |field_name| blk: {
+            const record = switch (self.store.monotype_store.getMonotype(source_monotype)) {
+                .record => |record| record,
+                else => typeBindingInvariant(
+                    "value-path field projection expected record monotype, found '{s}'",
+                    .{@tagName(self.store.monotype_store.getMonotype(source_monotype))},
+                ),
+            };
+            const field_idx = self.recordFieldIndexByName(
+                field_name,
+                self.store.monotype_store.getFields(record.fields),
+            );
+            break :blk try self.lowerRefInto(target_local, .{ .field = .{
+                .source = source_local,
+                .field_idx = field_idx,
+                .ownership = .move,
+            } }, next);
+        },
+        .tuple_elem => |elem_index| try self.lowerRefInto(target_local, .{ .field = .{
+            .source = source_local,
+            .field_idx = elem_index,
+            .ownership = .move,
+        } }, next),
+        .tag_payload => |payload| try self.lowerRefInto(target_local, .{ .tag_payload = .{
+            .source = source_local,
+            .payload_idx = payload.payload_index,
+            .tag_discriminant = @intCast(self.tagDiscriminantForMonotypeName(source_monotype, payload.tag_name)),
+            .ownership = .move,
+        } }, next),
+        .list_elem => |elem_index| blk: {
+            const index_local = try self.freshSyntheticLocal(self.store.monotype_store.u64_idx, false);
+            const args = try self.store.addLocalSpan(self.allocator, &.{ source_local, index_local });
+            const stmt = try self.store.reserveCFStmt(self.allocator);
+            try self.store.finalizeCFStmt(stmt, .{ .assign_low_level = .{
+                .target = target_local,
+                .op = .list_get_unsafe,
+                .args = args,
+                .next = next,
+            } });
+            break :blk try self.lowerU64LiteralInto(index_local, elem_index, stmt);
+        },
+    };
 }
 
 fn resolveExprMonotypeInModule(
@@ -3716,9 +3834,8 @@ fn lowerResolvedDispatchTargetCallInto(
     try actual_arg_exprs.appendSlice(self.allocator, arg_exprs);
 
     _ = try self.dispatchTargetEffectful(dispatch_target);
-    const exact_dispatch_callable_inst = requireDirectCallableInstFromCallSite(
-        lookupProgramExprCallSite(session, result_expr_idx),
-        "resolved dispatch expr {d} target module={d} def={d} had no exact call-site callable in context={d} root_expr={d}",
+    const exact_dispatch_callable_inst = switch (lookupProgramExprCallSite(session, result_expr_idx) orelse std.debug.panic(
+        "statement-only MIR invariant violated: resolved dispatch expr {d} target module={d} def={d} had no call-site semantics in context={d} root_expr={d}",
         .{
             @intFromEnum(result_expr_idx),
             dispatch_target.module_idx,
@@ -3726,7 +3843,13 @@ fn lowerResolvedDispatchTargetCallInto(
             session.callableInstRawForDebug(),
             session.rootExprRawForDebug(),
         },
-    );
+    )) {
+        .direct => |callable_inst_id| callable_inst_id,
+        .indirect_call => |indirect_call_id| std.debug.panic(
+            "statement-only MIR invariant violated: resolved dispatch expr {d} expected direct callable but specialized to indirect call {d}",
+            .{ @intFromEnum(result_expr_idx), @intFromEnum(indirect_call_id) },
+        ),
+    };
     const callee_runtime_mono = self.callable_pipeline.getCallableInstRuntimeMonotype(exact_dispatch_callable_inst);
     const callee_local = try self.freshSyntheticLocal(try self.importMonotypeFromStore(
         &self.callable_pipeline.context_mono.monotype_store,
@@ -3798,9 +3921,13 @@ fn lowerIndirectCallInto(
     const switch_branches = try self.allocator.alloc(MIR.SwitchBranch, members.len - 1);
     defer self.allocator.free(switch_branches);
 
-    const exact_result_callable_inst_id = directCallableInstIfCallableValueDirect(
-        lookupProgramExprCallableValue(session, call_expr_idx),
-    );
+    const exact_result_callable_inst_id = if (lookupProgramExprCallableValue(session, call_expr_idx)) |callable_value|
+        switch (callable_value) {
+            .direct => |callable_inst_id| callable_inst_id,
+            .packed_fn => null,
+        }
+    else
+        null;
 
     const default_branch = try self.lowerIndirectCallBranchInto(
         packed_fn_id,
@@ -4324,9 +4451,10 @@ fn lowerDotAccessInto(
         self.store.monotype_store.getFields(receiver_record.fields),
     );
     const receiver_local = try self.freshSyntheticLocal(receiver_mono, false);
-    if (directCallableInstIfCallableValueDirect(lookupProgramExprCallableValue(session, expr_idx))) |callable_inst_id| {
-        try self.bindExactCallableLocal(target, callable_inst_id);
-    }
+    if (lookupProgramExprCallableValue(session, expr_idx)) |callable_value| switch (callable_value) {
+        .direct => |callable_inst_id| try self.bindExactCallableLocal(target, callable_inst_id),
+        .packed_fn => {},
+    };
     const field_stmt = try self.lowerRefInto(target, .{ .field = .{
         .source = receiver_local,
         .field_idx = field_idx,
@@ -4361,9 +4489,10 @@ fn lowerTupleAccessInto(
     }
 
     const tuple_local = try self.freshSyntheticLocal(tuple_mono, false);
-    if (directCallableInstIfCallableValueDirect(lookupProgramExprCallableValue(session, expr_idx))) |callable_inst_id| {
-        try self.bindExactCallableLocal(target, callable_inst_id);
-    }
+    if (lookupProgramExprCallableValue(session, expr_idx)) |callable_value| switch (callable_value) {
+        .direct => |callable_inst_id| try self.bindExactCallableLocal(target, callable_inst_id),
+        .packed_fn => {},
+    };
     const field_stmt = try self.lowerRefInto(target, .{ .field = .{
         .source = tuple_local,
         .field_idx = tuple_access.elem_index,
@@ -4460,8 +4589,9 @@ fn bindCallResultExactCallableFromExpr(
     result_expr_idx: CIR.Expr.Idx,
     local_id: MIR.LocalId,
 ) Allocator.Error!void {
-    if (directCallableInstIfCallableValueDirect(lookupProgramExprCallableValue(session, result_expr_idx))) |callable_inst_id| {
-        try self.bindExactCallableLocal(local_id, callable_inst_id);
+    if (lookupProgramExprCallableValue(session, result_expr_idx)) |callable_value| switch (callable_value) {
+        .direct => |callable_inst_id| try self.bindExactCallableLocal(local_id, callable_inst_id),
+        .packed_fn => self.clearExactCallableLocal(local_id),
     } else {
         self.clearExactCallableLocal(local_id);
     }
@@ -5920,7 +6050,13 @@ fn debugAssertNoUnitPrimPatternBinding(
     };
     const has_program_expr_mono = lookupProgramExprMonotype(session, expr_idx) != null;
     const maybe_callsite_inst = switch (expr) {
-        .e_call => directCallableInstIfCallSiteDirect(lookupProgramExprCallSite(session, expr_idx)),
+        .e_call => if (lookupProgramExprCallSite(session, expr_idx)) |call_site|
+            switch (call_site) {
+                .direct => |callable_inst_id| callable_inst_id,
+                .indirect_call => null,
+            }
+        else
+            null,
         else => null,
     };
     const callsite_template_expr: u32 = if (maybe_callsite_inst) |callsite_inst|
@@ -7203,15 +7339,20 @@ fn lowerCirExprInto(
         .e_lookup_required => |lookup| self.lowerLookupRequiredInto(session, expr_idx, module_env, lookup, target, next),
         .e_lambda => |lambda| blk: {
             _ = lambda;
-            const resolved_callable_inst_id = requireDirectCallableInstFromCallableValue(
-                lookupProgramExprCallableValue(session, expr_idx),
-                "lambda expr {d} lacked an exact callable specialization in context callable_inst={d} root_source_expr={d}",
+            const resolved_callable_inst_id = switch (lookupProgramExprCallableValue(session, expr_idx) orelse std.debug.panic(
+                "statement-only MIR invariant violated: lambda expr {d} lacked callable-value specialization in context callable_inst={d} root_source_expr={d}",
                 .{
                     @intFromEnum(expr_idx),
                     session.callableInstRawForDebug(),
                     session.rootExprRawForDebug(),
                 },
-            );
+            )) {
+                .direct => |callable_inst_id| callable_inst_id,
+                .packed_fn => |packed_fn_id| std.debug.panic(
+                    "statement-only MIR invariant violated: lambda expr {d} specialized to packed callable {d}",
+                    .{ @intFromEnum(expr_idx), @intFromEnum(packed_fn_id) },
+                ),
+            };
             break :blk try self.lowerResolvedCallableInstValueInto(
                 resolved_callable_inst_id,
                 target,
@@ -7219,15 +7360,20 @@ fn lowerCirExprInto(
             );
         },
         .e_closure => |closure| blk: {
-            const callable_inst_id = requireDirectCallableInstFromCallableValue(
-                lookupProgramExprCallableValue(session, expr_idx),
-                "closure expr {d} lacked an exact callable specialization in context callable_inst={d} root_source_expr={d}",
+            const callable_inst_id = switch (lookupProgramExprCallableValue(session, expr_idx) orelse std.debug.panic(
+                "statement-only MIR invariant violated: closure expr {d} lacked callable-value specialization in context callable_inst={d} root_source_expr={d}",
                 .{
                     @intFromEnum(expr_idx),
                     session.callableInstRawForDebug(),
                     session.rootExprRawForDebug(),
                 },
-            );
+            )) {
+                .direct => |resolved_callable_inst_id| resolved_callable_inst_id,
+                .packed_fn => |packed_fn_id| std.debug.panic(
+                    "statement-only MIR invariant violated: closure expr {d} specialized to packed callable {d}",
+                    .{ @intFromEnum(expr_idx), @intFromEnum(packed_fn_id) },
+                ),
+            };
             _ = closure;
             break :blk try self.lowerResolvedCallableInstValueInto(
                 callable_inst_id,

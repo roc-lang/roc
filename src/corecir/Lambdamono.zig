@@ -6,6 +6,7 @@ const can = @import("can");
 const ContextMono = @import("ContextMono.zig");
 const Lambdasolved = @import("Lambdasolved.zig");
 const Monotype = @import("Monotype.zig");
+const ValueProjection = @import("ValueProjection.zig");
 
 const Allocator = std.mem.Allocator;
 const Region = base.Region;
@@ -59,6 +60,7 @@ pub const ExprRef = struct {
     source_context: SourceContext,
     module_idx: u32,
     expr_idx: CIR.Expr.Idx,
+    projections: ValueProjection.ProjectionSpan = .empty(),
 };
 
 pub const ExprIdSpan = extern struct {
@@ -105,28 +107,33 @@ pub const CallSite = union(enum) {
     indirect_call: IndirectCallId,
 };
 
+pub const ExprCallableSemantics = union(enum) {
+    ordinary,
+    callable: CallableValue,
+};
+
+pub const ExprCallSemantics = union(enum) {
+    not_call,
+    call: CallSite,
+};
+
 pub const LookupResolution = union(enum) {
     expr: ExprRef,
     def: Lambdasolved.ExternalDefSource,
 };
 
-pub const CallableParamProjection = union(enum) {
-    field: Monotype.Name,
-    tuple_elem: u32,
+pub const ExprLookupSemantics = union(enum) {
+    not_lookup,
+    lookup: LookupResolution,
 };
 
-pub const CallableParamProjectionSpan = extern struct {
-    start: u32,
-    len: u16,
-
-    pub fn empty() CallableParamProjectionSpan {
-        return .{ .start = 0, .len = 0 };
-    }
-
-    pub fn isEmpty(self: CallableParamProjectionSpan) bool {
-        return self.len == 0;
-    }
+pub const ExprDispatchSemantics = union(enum) {
+    not_dispatch,
+    dispatch: ContextMono.DispatchExprTarget,
 };
+
+pub const CallableParamProjection = ValueProjection.Projection;
+pub const CallableParamProjectionSpan = ValueProjection.ProjectionSpan;
 
 pub const CallableParamSpecEntry = struct {
     param_index: u16,
@@ -237,10 +244,10 @@ pub const Expr = struct {
     monotype: ContextMono.ResolvedMonotype,
     child_exprs: ExprIdSpan = .empty(),
     child_stmts: StmtIdSpan = .empty(),
-    callable_value: ?CallableValue = null,
-    call_site: ?CallSite = null,
-    dispatch_target: ?ContextMono.DispatchExprTarget = null,
-    lookup_resolution: ?LookupResolution = null,
+    callable_semantics: ExprCallableSemantics = .ordinary,
+    call_semantics: ExprCallSemantics = .not_call,
+    dispatch_semantics: ExprDispatchSemantics = .not_dispatch,
+    lookup_semantics: ExprLookupSemantics = .not_lookup,
 };
 
 pub const Stmt = struct {
@@ -261,7 +268,7 @@ pub const Program = struct {
     packed_fn_ids_by_member_group: std.AutoHashMapUnmanaged(CallableMemberGroupId, PackedFnId),
     indirect_call_ids_by_member_group: std.AutoHashMapUnmanaged(CallableMemberGroupId, IndirectCallId),
     callable_param_spec_entries: std.ArrayListUnmanaged(CallableParamSpecEntry),
-    callable_param_projection_entries: std.ArrayListUnmanaged(CallableParamProjection),
+    value_projection_entries: std.ArrayListUnmanaged(CallableParamProjection),
     pattern_callable_values: std.AutoHashMapUnmanaged(ContextPatternKey, CallableValue),
     exprs: std.ArrayListUnmanaged(Expr),
     expr_ids_by_key: std.AutoHashMapUnmanaged(ContextExprKey, ExprId),
@@ -285,7 +292,7 @@ pub const Program = struct {
             .packed_fn_ids_by_member_group = .empty,
             .indirect_call_ids_by_member_group = .empty,
             .callable_param_spec_entries = .empty,
-            .callable_param_projection_entries = .empty,
+            .value_projection_entries = .empty,
             .pattern_callable_values = .empty,
             .exprs = .empty,
             .expr_ids_by_key = .empty,
@@ -310,7 +317,7 @@ pub const Program = struct {
         self.packed_fn_ids_by_member_group.deinit(allocator);
         self.indirect_call_ids_by_member_group.deinit(allocator);
         self.callable_param_spec_entries.deinit(allocator);
-        self.callable_param_projection_entries.deinit(allocator);
+        self.value_projection_entries.deinit(allocator);
         self.pattern_callable_values.deinit(allocator);
         self.exprs.deinit(allocator);
         self.expr_ids_by_key.deinit(allocator);
@@ -355,7 +362,15 @@ pub const Program = struct {
         span: CallableParamProjectionSpan,
     ) []const CallableParamProjection {
         if (span.len == 0) return &.{};
-        return self.callable_param_projection_entries.items[span.start..][0..span.len];
+        return self.value_projection_entries.items[span.start..][0..span.len];
+    }
+
+    pub fn getValueProjectionEntries(
+        self: *const Program,
+        span: ValueProjection.ProjectionSpan,
+    ) []const ValueProjection.Projection {
+        if (span.len == 0) return &.{};
+        return self.value_projection_entries.items[span.start..][0..span.len];
     }
 
     pub fn getPatternCallableValue(
