@@ -34,6 +34,40 @@ pub const CallResultCallableInstKey = struct {
     callee_callable_inst_raw: u32,
 };
 
+pub const ExprTraversalState = struct {
+    visited_exprs: std.AutoHashMapUnmanaged(ContextExprKey, void),
+
+    pub fn init() ExprTraversalState {
+        return .{ .visited_exprs = .empty };
+    }
+
+    pub fn deinit(self: *ExprTraversalState, allocator: std.mem.Allocator) void {
+        self.visited_exprs.deinit(allocator);
+    }
+
+    pub fn clearAll(self: *ExprTraversalState) void {
+        self.visited_exprs.clearRetainingCapacity();
+    }
+
+    pub fn clearPerScan(self: *ExprTraversalState) void {
+        self.visited_exprs.clearRetainingCapacity();
+    }
+
+    pub fn hasVisited(self: *const ExprTraversalState, key: ContextExprKey) bool {
+        return self.visited_exprs.contains(key);
+    }
+
+    pub fn beginVisit(
+        self: *ExprTraversalState,
+        allocator: std.mem.Allocator,
+        key: ContextExprKey,
+    ) std.mem.Allocator.Error!bool {
+        if (self.visited_exprs.contains(key)) return false;
+        try self.visited_exprs.put(allocator, key, {});
+        return true;
+    }
+};
+
 pub const ValueDefResolutionState = struct {
     in_progress_exprs: std.AutoHashMapUnmanaged(ContextExprKey, void),
 
@@ -95,13 +129,13 @@ pub const CallResultResolutionState = struct {
 };
 
 pub const RootAnalysisState = struct {
-    expr_traversal: cm.ExprTraversalState,
+    expr_traversal: ExprTraversalState,
     value_def_resolution: ValueDefResolutionState,
     call_result_resolution: CallResultResolutionState,
 
     pub fn init() RootAnalysisState {
         return .{
-            .expr_traversal = cm.ExprTraversalState.init(),
+            .expr_traversal = ExprTraversalState.init(),
             .value_def_resolution = ValueDefResolutionState.init(),
             .call_result_resolution = CallResultResolutionState.init(),
         };
