@@ -2,6 +2,14 @@
 //!
 //! This stage owns all source-level monotype determination and all language
 //! defaulting. No later phase may default unresolved source-level types.
+//!
+//! Source-of-truth rule:
+//! `ContextMono` records monotypes only from already-inferred checker types.
+//! This stage must never synthesize or "recover" monotypes from declared
+//! signatures, annotations, lambda parameter counts, call argument shapes,
+//! builtin-specific shortcuts, or any other CIR structure. Later stages must
+//! consume these recorded inferred-type results directly; they are not allowed
+//! to invent replacement monotypes when a fact is missing.
 
 const std = @import("std");
 const can = @import("can");
@@ -23,6 +31,7 @@ pub const ExprContext = struct {
 pub const RootExprContext = ExprContext;
 pub const ProvenanceExprContext = ExprContext;
 pub const TemplateExprContext = ExprContext;
+pub const SourceContextKind = enum(u2) { callable_inst, root_expr, provenance_expr, template_expr };
 
 pub const SourceContext = union(enum) {
     /// Lowering/scanning inside a specialized callable body.
@@ -73,7 +82,7 @@ pub const TypeSubst = struct {
 };
 
 pub const ContextExprKey = struct {
-    source_context_kind: enum(u2) { callable_inst, root_expr, provenance_expr, template_expr },
+    source_context_kind: SourceContextKind,
     source_context_module_idx: u32,
     source_context_raw: u32,
     module_idx: u32,
@@ -81,7 +90,7 @@ pub const ContextExprKey = struct {
 };
 
 pub const ContextPatternKey = struct {
-    source_context_kind: enum(u2) { callable_inst, root_expr, provenance_expr, template_expr },
+    source_context_kind: SourceContextKind,
     source_context_module_idx: u32,
     source_context_raw: u32,
     module_idx: u32,
@@ -89,7 +98,7 @@ pub const ContextPatternKey = struct {
 };
 
 pub const ContextTypeVarKey = struct {
-    source_context_kind: enum(u2) { callable_inst, root_expr, provenance_expr, template_expr },
+    source_context_kind: SourceContextKind,
     source_context_module_idx: u32,
     source_context_raw: u32,
     module_idx: u32,

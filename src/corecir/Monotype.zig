@@ -6,6 +6,15 @@
 //! non-numeric unresolved type vars must never survive into this IR.
 //!
 //! Each MIR expression has exactly one Monotype via a 1:1 Expr.Idx → Monotype.Idx mapping.
+//!
+//! Critical invariant:
+//! monotypes must be derived only from already-inferred checker type variables
+//! and the exact contextual facts recorded from those inferred types.
+//! Reconstructing monotypes from declared signatures, annotations, source
+//! syntax, CIR argument shape, builtin call shape, or any other heuristic is
+//! strictly forbidden in this code base. If an exact monotype is needed, the
+//! compiler must read the inferred type that was already solved earlier or
+//! panic in debug when that fact was not recorded correctly.
 
 const std = @import("std");
 const base = @import("base");

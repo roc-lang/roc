@@ -3069,8 +3069,7 @@ const MaterializeCallableValueFailure = enum {
                 try self.scanCirValueExprWithDirectCallResolution(result, thread, module_idx, decl.expr, resolve_direct_calls);
                 try self.bindPatternCallableValueCallableInsts(result, thread, module_idx, decl.pattern, decl.expr);
                 if (self.readCallableParamValue(result, thread.requireSourceContext(), module_idx, decl.pattern) == null) {
-                    const expr_mono = try self.resolveExprMonotypeResolved(result, thread, module_idx, decl.expr);
-                    if (!expr_mono.isNone()) {
+                    if (try self.resolveExprMonotypeResolved(result, thread, module_idx, decl.expr)) |expr_mono| {
                         try self.bindCurrentPatternFromResolvedMonotype(
                             result,
                             thread,
@@ -3093,8 +3092,7 @@ const MaterializeCallableValueFailure = enum {
                 try self.scanCirValueExprWithDirectCallResolution(result, thread, module_idx, var_decl.expr, resolve_direct_calls);
                 try self.bindPatternCallableValueCallableInsts(result, thread, module_idx, var_decl.pattern_idx, var_decl.expr);
                 if (self.readCallableParamValue(result, thread.requireSourceContext(), module_idx, var_decl.pattern_idx) == null) {
-                    const expr_mono = try self.resolveExprMonotypeResolved(result, thread, module_idx, var_decl.expr);
-                    if (!expr_mono.isNone()) {
+                    if (try self.resolveExprMonotypeResolved(result, thread, module_idx, var_decl.expr)) |expr_mono| {
                         try self.bindCurrentPatternFromResolvedMonotype(
                             result,
                             thread,
@@ -3108,8 +3106,7 @@ const MaterializeCallableValueFailure = enum {
             .s_reassign => |reassign| {
                 try self.propagatePatternDemandToExpr(result, thread, module_idx, reassign.pattern_idx, reassign.expr);
                 try self.scanCirExprWithDirectCallResolution(result, thread, module_idx, reassign.expr, resolve_direct_calls);
-                const expr_mono = try self.resolveExprMonotypeResolved(result, thread, module_idx, reassign.expr);
-                if (!expr_mono.isNone()) {
+                if (try self.resolveExprMonotypeResolved(result, thread, module_idx, reassign.expr)) |expr_mono| {
                     try self.bindCurrentPatternFromResolvedMonotype(
                         result,
                         thread,
@@ -3124,8 +3121,7 @@ const MaterializeCallableValueFailure = enum {
             .s_expect => |expect_stmt| try self.scanCirValueExprWithDirectCallResolution(result, thread, module_idx, expect_stmt.body, resolve_direct_calls),
             .s_for => |for_stmt| {
                 try self.scanCirExprWithDirectCallResolution(result, thread, module_idx, for_stmt.expr, resolve_direct_calls);
-                const iter_mono = try self.resolveExprMonotypeResolved(result, thread, module_idx, for_stmt.expr);
-                if (!iter_mono.isNone()) {
+                if (try self.resolveExprMonotypeResolved(result, thread, module_idx, for_stmt.expr)) |iter_mono| {
                     const item_mono = switch (result.context_mono.monotype_store.getMonotype(iter_mono.idx)) {
                         .list => |list| resolvedMonotype(list.elem, iter_mono.module_idx),
                         else => std.debug.panic(
@@ -3507,8 +3503,7 @@ const MaterializeCallableValueFailure = enum {
         const module_env = self.all_module_envs[module_idx];
         const expr = module_env.store.getExpr(expr_idx);
 
-        const monotype = try self.resolveExprMonotypeResolved(result, thread, module_idx, expr_idx);
-        if (!monotype.isNone()) {
+        if (try self.resolveExprMonotypeResolved(result, thread, module_idx, expr_idx)) |monotype| {
             try self.recordExprMonotypeForThread(
                 result,
                 thread,
@@ -3579,7 +3574,7 @@ const MaterializeCallableValueFailure = enum {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) Allocator.Error!void {
-        const resolved = try self.resolveExprMonotypeResolved(result, thread, module_idx, expr_idx);
+        const resolved = (try self.resolveExprMonotypeResolved(result, thread, module_idx, expr_idx)) orelse return;
         if (comptime trace.enabled) {
             const expr = self.all_module_envs[module_idx].store.getExpr(expr_idx);
             switch (expr) {
@@ -3596,7 +3591,6 @@ const MaterializeCallableValueFailure = enum {
                 else => {},
             }
         }
-        if (resolved.isNone()) return;
         try self.recordExprMonotypeForThread(
             result,
             thread,
@@ -4109,17 +4103,21 @@ const MaterializeCallableValueFailure = enum {
                 if (capture_callable_value) |callable_value| {
                     break :blk callableValueMonotype(result, callable_value);
                 }
-                const binding_mono = try self.resolveBoundCapturePatternMonotype(result, bound_expr);
-                if (!binding_mono.isNone()) break :blk binding_mono;
-                std.debug.panic(
-                    "Pipeline invariant violated: missing exact contextual monotype for captured bound pattern module={d} pattern={d} source_context={s} context_callable_inst={d}",
-                    .{
-                        bound_expr.binding_module_idx,
-                        @intFromEnum(bound_expr.binding_pattern_idx),
-                        @tagName(bound_expr.binding_source_context),
-                        @intFromEnum(capture_context_callable_inst),
-                    },
-                );
+                if (try self.resolveBoundCapturePatternMonotype(result, bound_expr)) |binding_mono| {
+                    break :blk binding_mono;
+                }
+                if (std.debug.runtime_safety) {
+                    std.debug.panic(
+                        "Pipeline invariant violated: missing exact contextual monotype for captured bound pattern module={d} pattern={d} source_context={s} context_callable_inst={d}",
+                        .{
+                            bound_expr.binding_module_idx,
+                            @intFromEnum(bound_expr.binding_pattern_idx),
+                            @tagName(bound_expr.binding_source_context),
+                            @intFromEnum(capture_context_callable_inst),
+                        },
+                    );
+                }
+                unreachable;
             },
             .lexical_pattern => |lexical| blk: {
                 if (result.getContextPatternMonotype(
@@ -4133,15 +4131,18 @@ const MaterializeCallableValueFailure = enum {
                     lexical.module_idx,
                     ModuleEnv.varFrom(lexical.pattern_idx),
                 )) |binding_mono| break :blk binding_mono;
-                std.debug.panic(
-                    "Pipeline invariant violated: missing exact contextual monotype for lexical capture pattern module={d} pattern={d} source_context={s} context_callable_inst={d}",
-                    .{
-                        lexical.module_idx,
-                        @intFromEnum(lexical.pattern_idx),
-                        @tagName(lexical.source_context),
-                        @intFromEnum(capture_context_callable_inst),
-                    },
-                );
+                if (std.debug.runtime_safety) {
+                    std.debug.panic(
+                        "Pipeline invariant violated: missing exact contextual monotype for lexical capture pattern module={d} pattern={d} source_context={s} context_callable_inst={d}",
+                        .{
+                            lexical.module_idx,
+                            @intFromEnum(lexical.pattern_idx),
+                            @tagName(lexical.source_context),
+                            @intFromEnum(capture_context_callable_inst),
+                        },
+                    );
+                }
+                unreachable;
             },
         };
     }
@@ -4150,7 +4151,7 @@ const MaterializeCallableValueFailure = enum {
         self: *Pass,
         result: *Result,
         bound_expr: @FieldType(CaptureValueSource, "bound_expr"),
-    ) Allocator.Error!ResolvedMonotype {
+    ) Allocator.Error!?ResolvedMonotype {
         const binding_thread = SemanticThread.trackedThread(bound_expr.binding_source_context);
         const binding_mono = try self.resolvePatternMonotypeResolved(
             result,
@@ -4161,16 +4162,15 @@ const MaterializeCallableValueFailure = enum {
         if (!binding_mono.isNone()) return binding_mono;
 
         const source_thread = SemanticThread.trackedThread(bound_expr.expr_ref.source_context);
-        var source_mono = try self.resolveExprMonotypeResolved(
+        var source_mono = (try self.resolveExprMonotypeResolved(
             result,
             source_thread,
             bound_expr.expr_ref.module_idx,
             bound_expr.expr_ref.expr_idx,
-        );
-        if (source_mono.isNone()) return source_mono;
+        )) orelse return null;
         for (result.lambdamono.getValueProjectionEntries(bound_expr.expr_ref.projections)) |projection| {
             source_mono = try self.projectResolvedMonotypeByValueProjection(result, source_mono, projection);
-            if (source_mono.isNone()) return source_mono;
+            if (source_mono.isNone()) return null;
         }
         try self.mergeContextPatternMonotype(
             result,
@@ -4236,7 +4236,7 @@ const MaterializeCallableValueFailure = enum {
                                 SemanticThread.trackedThread(materialization_expr_ref.source_context),
                                 materialization_expr_ref.module_idx,
                                 materialization_expr_ref.expr_idx,
-                            ),
+                            ) orelse break :blk null,
                         ) orelse break :blk null;
                         _ = try self.materializeExprCallableValueWithKnownFnMonotype(
                             result,
@@ -4258,15 +4258,13 @@ const MaterializeCallableValueFailure = enum {
                             break :blk callable_value;
                         }
                     } else if (std.debug.runtime_safety) {
-                        const fn_monotype = try self.resolveExprMonotypeResolved(
+                        const fn_monotype = (try self.resolveExprMonotypeResolved(
                             result,
                             SemanticThread.trackedThread(materialization_expr_ref.source_context),
                             materialization_expr_ref.module_idx,
                             materialization_expr_ref.expr_idx,
-                        );
-                        if (!fn_monotype.isNone() and
-                            result.context_mono.monotype_store.getMonotype(fn_monotype.idx) == .func)
-                        {
+                        )) orelse break :blk null;
+                        if (result.context_mono.monotype_store.getMonotype(fn_monotype.idx) == .func) {
                             std.debug.panic(
                                 "Pipeline invariant violated: function-valued capture materialization expr {d} in module {d} under source context {s} had no registered callable template",
                                 .{
@@ -4618,8 +4616,7 @@ const MaterializeCallableValueFailure = enum {
             .e_match => |match_expr| {
                 try self.scanCirExprWithDirectCallResolution(result, thread, module_idx, match_expr.cond, resolve_direct_calls);
                 try self.recordMatchBranchPatternSources(result, thread, module_idx, match_expr);
-                var cond_mono = try self.resolveExprMonotypeResolved(result, thread, module_idx, match_expr.cond);
-                if (!cond_mono.isNone()) {
+                if (try self.resolveExprMonotypeResolved(result, thread, module_idx, match_expr.cond)) |cond_mono| {
                     try self.bindMatchBranchPatternsFromCondMonotype(result, thread, module_idx, match_expr, cond_mono);
                 }
 
@@ -4635,8 +4632,7 @@ const MaterializeCallableValueFailure = enum {
 
                 try self.propagateMatchBranchPatternDemandsToCond(result, thread, module_idx, match_expr);
                 try self.completeCurrentExprMonotype(result, thread, module_idx, match_expr.cond);
-                cond_mono = try self.resolveExprMonotypeResolved(result, thread, module_idx, match_expr.cond);
-                if (!cond_mono.isNone()) {
+                if (try self.resolveExprMonotypeResolved(result, thread, module_idx, match_expr.cond)) |cond_mono| {
                     try self.bindMatchBranchPatternsFromCondMonotype(result, thread, module_idx, match_expr, cond_mono);
                 }
             },
@@ -5273,19 +5269,19 @@ const MaterializeCallableValueFailure = enum {
             call_expr_idx,
             call_expr,
         );
-        if (!desired_fn_monotype.isNone()) {
+        if (desired_fn_monotype) |resolved_fn_monotype| {
             try self.bindCurrentCallFromFnMonotype(
                 result,
                 thread,
                 module_idx,
                 call_expr_idx,
                 call_expr,
-                desired_fn_monotype.idx,
-                desired_fn_monotype.module_idx,
+                resolved_fn_monotype.idx,
+                resolved_fn_monotype.module_idx,
             );
         }
         var resolved_template_id = result.getExprTemplateId(thread.requireSourceContext(), module_idx, callee_expr_idx);
-        if (resolved_template_id == null and !desired_fn_monotype.isNone()) {
+        if (resolved_template_id == null and desired_fn_monotype != null) {
             var visiting: std.AutoHashMapUnmanaged(ContextExprVisitKey, void) = .empty;
             defer visiting.deinit(self.allocator);
             try self.propagateDemandedCallableFnMonotypeToValueExpr(
@@ -5293,8 +5289,8 @@ const MaterializeCallableValueFailure = enum {
                 thread.requireSourceContext(),
                 module_idx,
                 callee_expr_idx,
-                desired_fn_monotype.idx,
-                desired_fn_monotype.module_idx,
+                desired_fn_monotype.?.idx,
+                desired_fn_monotype.?.module_idx,
                 &visiting,
             );
             resolved_template_id = result.getExprTemplateId(thread.requireSourceContext(), module_idx, callee_expr_idx);
@@ -5340,14 +5336,14 @@ const MaterializeCallableValueFailure = enum {
 
         var required_callable_param_specs = std.ArrayListUnmanaged(CallableParamSpecEntry).empty;
         defer required_callable_param_specs.deinit(self.allocator);
-        if (!desired_fn_monotype.isNone()) {
+        if (desired_fn_monotype != null) {
             const arg_exprs = module_env.store.sliceExpr(call_expr.args);
             const specs_complete = try self.collectDirectCallCallableParamSpecs(
                 result,
                 thread.requireSourceContext(),
                 module_idx,
-                desired_fn_monotype.idx,
-                desired_fn_monotype.module_idx,
+                desired_fn_monotype.?.idx,
+                desired_fn_monotype.?.module_idx,
                 arg_exprs,
                 &required_callable_param_specs,
             );
@@ -6120,9 +6116,9 @@ const MaterializeCallableValueFailure = enum {
             call_expr_idx,
             call_expr,
         );
-        if (call_fn_monotype.isNone()) return;
+        const resolved_call_fn_monotype = call_fn_monotype orelse return;
 
-        const fn_mono = switch (result.context_mono.monotype_store.getMonotype(call_fn_monotype.idx)) {
+        const fn_mono = switch (result.context_mono.monotype_store.getMonotype(resolved_call_fn_monotype.idx)) {
             .func => |func| func,
             else => return,
         };
@@ -6224,12 +6220,11 @@ const MaterializeCallableValueFailure = enum {
         module_idx: u32,
         call_expr_idx: CIR.Expr.Idx,
         call_expr: anytype,
-    ) Allocator.Error!Monotype.Idx {
+    ) Allocator.Error!?Monotype.Idx {
         _ = call_expr_idx;
-        const callee_monotype = try self.resolveExprMonotypeResolved(result, thread, module_idx, call_expr.func);
-        if (callee_monotype.isNone()) return .none;
+        const callee_monotype = (try self.resolveExprMonotypeResolved(result, thread, module_idx, call_expr.func)) orelse return null;
         if (callee_monotype.module_idx == module_idx) return callee_monotype.idx;
-        return self.remapMonotypeBetweenModules(
+        return try self.remapMonotypeBetweenModules(
             result,
             callee_monotype.idx,
             callee_monotype.module_idx,
@@ -6244,17 +6239,15 @@ const MaterializeCallableValueFailure = enum {
         module_idx: u32,
         call_expr_idx: CIR.Expr.Idx,
         call_expr: anytype,
-    ) Allocator.Error!ResolvedMonotype {
-        return resolvedMonotype(
-            try self.resolveDirectCallFnMonotype(
-                result,
-                thread,
-                module_idx,
-                call_expr_idx,
-                call_expr,
-            ),
+    ) Allocator.Error!?ResolvedMonotype {
+        const fn_monotype = (try self.resolveDirectCallFnMonotype(
+            result,
+            thread,
             module_idx,
-        );
+            call_expr_idx,
+            call_expr,
+        )) orelse return null;
+        return resolvedMonotype(fn_monotype, module_idx);
     }
 
     fn specializeDirectCallExactCallable(
@@ -6274,17 +6267,13 @@ const MaterializeCallableValueFailure = enum {
         const template = result.getCallableTemplate(template_id).*;
         const defining_source_context = self.resolveTemplateDefiningSourceContext(result, template_source_context, template);
         const arg_exprs = self.all_module_envs[module_idx].store.sliceExpr(call_expr.args);
-        const exact_desired_fn_monotype = resolvedMonotype(
-            try self.resolveDirectCallFnMonotype(
-                result,
-                thread,
-                module_idx,
-                call_expr_idx,
-                call_expr,
-            ),
+        const exact_desired_fn_monotype = (try self.resolveDemandedDirectCallFnMonotype(
+            result,
+            thread,
             module_idx,
-        );
-        if (exact_desired_fn_monotype.isNone()) return null;
+            call_expr_idx,
+            call_expr,
+        )) orelse return null;
         const fn_monotype = exact_desired_fn_monotype.idx;
         const fn_monotype_module_idx = exact_desired_fn_monotype.module_idx;
 
@@ -7696,13 +7685,13 @@ const MaterializeCallableValueFailure = enum {
         var resolved_callable_value = try self.resolveExprRefCallableValue(result, source, visiting);
         if (resolved_callable_value == null and source.projections.isEmpty()) {
             if (result.getExprTemplateId(source.source_context, source.module_idx, source.expr_idx)) |template_id| {
-                const target_fn_monotype = try self.resolveExprMonotypeResolved(
+                const target_fn_monotype = (try self.resolveExprMonotypeResolved(
                     result,
                     SemanticThread.trackedThread(target_source_context),
                     target_module_idx,
                     target_expr_idx,
-                );
-                if (!target_fn_monotype.isNone()) {
+                )) orelse return;
+                {
                     const materialize_failure = try self.materializeExprCallableValueWithKnownFnMonotype(
                         result,
                         source.source_context,
@@ -8371,26 +8360,25 @@ const MaterializeCallableValueFailure = enum {
         switch (expr) {
             .e_binop => |binop_expr| {
                 if (binop_expr.op == .eq or binop_expr.op == .ne) {
-                    const lhs_monotype = try self.resolveExprMonotypeResolved(result, thread, module_idx, binop_expr.lhs);
-                    if (!lhs_monotype.isNone() and
-                        result.context_mono.monotype_store.getMonotype(lhs_monotype.idx) != .func)
-                    {
-                        try self.bindCurrentExprTypeRoot(
-                            result,
-                            thread,
-                            module_idx,
-                            binop_expr.rhs,
-                            lhs_monotype.idx,
-                            lhs_monotype.module_idx,
-                        );
-                        try self.propagateDemandedValueMonotypeToValueExpr(
-                            result,
-                            thread.requireSourceContext(),
-                            module_idx,
-                            binop_expr.rhs,
-                            lhs_monotype.idx,
-                            lhs_monotype.module_idx,
-                        );
+                    if (try self.resolveExprMonotypeResolved(result, thread, module_idx, binop_expr.lhs)) |lhs_monotype| {
+                        if (result.context_mono.monotype_store.getMonotype(lhs_monotype.idx) != .func) {
+                            try self.bindCurrentExprTypeRoot(
+                                result,
+                                thread,
+                                module_idx,
+                                binop_expr.rhs,
+                                lhs_monotype.idx,
+                                lhs_monotype.module_idx,
+                            );
+                            try self.propagateDemandedValueMonotypeToValueExpr(
+                                result,
+                                thread.requireSourceContext(),
+                                module_idx,
+                                binop_expr.rhs,
+                                lhs_monotype.idx,
+                                lhs_monotype.module_idx,
+                            );
+                        }
                     }
                 }
             },
@@ -8707,8 +8695,7 @@ const MaterializeCallableValueFailure = enum {
         expr_idx: CIR.Expr.Idx,
         record_expr: @TypeOf(@as(CIR.Expr, undefined).e_record),
     ) Allocator.Error!void {
-        const record_mono = try self.resolveExprMonotypeResolved(result, thread, module_idx, expr_idx);
-        if (record_mono.idx.isNone()) return;
+        const record_mono = (try self.resolveExprMonotypeResolved(result, thread, module_idx, expr_idx)) orelse return;
 
         const mono = result.context_mono.monotype_store.getMonotype(record_mono.idx);
         const mono_record = switch (mono) {
@@ -8755,8 +8742,7 @@ const MaterializeCallableValueFailure = enum {
         expr_idx: CIR.Expr.Idx,
         tuple_expr: @TypeOf(@as(CIR.Expr, undefined).e_tuple),
     ) Allocator.Error!void {
-        const tuple_mono = try self.resolveExprMonotypeResolved(result, thread, module_idx, expr_idx);
-        if (tuple_mono.idx.isNone()) return;
+        const tuple_mono = (try self.resolveExprMonotypeResolved(result, thread, module_idx, expr_idx)) orelse return;
 
         const mono = result.context_mono.monotype_store.getMonotype(tuple_mono.idx);
         const module_env = self.all_module_envs[module_idx];
@@ -8808,8 +8794,7 @@ const MaterializeCallableValueFailure = enum {
         parent_expr_idx: CIR.Expr.Idx,
         child_expr_idx: CIR.Expr.Idx,
     ) Allocator.Error!void {
-        const parent_mono = try self.resolveExprMonotypeResolved(result, thread, module_idx, parent_expr_idx);
-        if (parent_mono.isNone()) return;
+        const parent_mono = (try self.resolveExprMonotypeResolved(result, thread, module_idx, parent_expr_idx)) orelse return;
         const child_expr = self.all_module_envs[module_idx].store.getExpr(child_expr_idx);
         if (exprMonotypeOwnedByInvocation(child_expr)) return;
         try self.recordCurrentExprMonotype(
@@ -8860,29 +8845,30 @@ const MaterializeCallableValueFailure = enum {
                     ModuleEnv.varFrom(binop_expr.lhs),
                     method_name,
                 );
-            const lhs_monotype = try self.resolveExprMonotypeResolved(result, thread, module_idx, binop_expr.lhs);
-            if (associated_target == null and !lhs_monotype.isNone()) {
-                if (try self.resolveAssociatedMethodCallableInstForMonotype(
-                    result,
-                    thread,
-                    module_idx,
-                    expr_idx,
-                    expr,
-                    lhs_monotype.idx,
-                    method_name,
-                )) |callable_inst_id| {
-                    try self.commitDirectDispatchExprSemantics(result, thread, module_idx, expr_idx, expr, callable_inst_id);
-                    return;
+            if (associated_target == null) {
+                if (try self.resolveExprMonotypeResolved(result, thread, module_idx, binop_expr.lhs)) |lhs_monotype| {
+                    if (try self.resolveAssociatedMethodCallableInstForMonotype(
+                        result,
+                        thread,
+                        module_idx,
+                        expr_idx,
+                        expr,
+                        lhs_monotype.idx,
+                        method_name,
+                    )) |callable_inst_id| {
+                        try self.commitDirectDispatchExprSemantics(result, thread, module_idx, expr_idx, expr, callable_inst_id);
+                        return;
+                    }
+                    associated_target = try self.resolveAssociatedMethodDispatchTargetForMonotype(
+                        result,
+                        thread,
+                        module_idx,
+                        expr_idx,
+                        expr,
+                        lhs_monotype.idx,
+                        method_name,
+                    );
                 }
-                associated_target = try self.resolveAssociatedMethodDispatchTargetForMonotype(
-                    result,
-                    thread,
-                    module_idx,
-                    expr_idx,
-                    expr,
-                    lhs_monotype.idx,
-                    method_name,
-                );
             }
         }
 
@@ -8914,29 +8900,30 @@ const MaterializeCallableValueFailure = enum {
                     ModuleEnv.varFrom(dot_expr.receiver),
                     dot_expr.field_name,
                 );
-                const receiver_monotype = try self.resolveExprMonotypeResolved(result, thread, module_idx, dot_expr.receiver);
-                if (associated_target == null and !receiver_monotype.isNone()) {
-                    if (try self.resolveAssociatedMethodCallableInstForMonotype(
-                        result,
-                        thread,
-                        module_idx,
-                        expr_idx,
-                        expr,
-                        receiver_monotype.idx,
-                        dot_expr.field_name,
-                    )) |callable_inst_id| {
-                        try self.commitDirectDispatchExprSemantics(result, thread, module_idx, expr_idx, expr, callable_inst_id);
-                        return;
+                if (associated_target == null) {
+                    if (try self.resolveExprMonotypeResolved(result, thread, module_idx, dot_expr.receiver)) |receiver_monotype| {
+                        if (try self.resolveAssociatedMethodCallableInstForMonotype(
+                            result,
+                            thread,
+                            module_idx,
+                            expr_idx,
+                            expr,
+                            receiver_monotype.idx,
+                            dot_expr.field_name,
+                        )) |callable_inst_id| {
+                            try self.commitDirectDispatchExprSemantics(result, thread, module_idx, expr_idx, expr, callable_inst_id);
+                            return;
+                        }
+                        associated_target = try self.resolveAssociatedMethodDispatchTargetForMonotype(
+                            result,
+                            thread,
+                            module_idx,
+                            expr_idx,
+                            expr,
+                            receiver_monotype.idx,
+                            dot_expr.field_name,
+                        );
                     }
-                    associated_target = try self.resolveAssociatedMethodDispatchTargetForMonotype(
-                        result,
-                        thread,
-                        module_idx,
-                        expr_idx,
-                        expr,
-                        receiver_monotype.idx,
-                        dot_expr.field_name,
-                    );
                 }
             }
         }
@@ -9213,7 +9200,7 @@ const MaterializeCallableValueFailure = enum {
         if (!dotCallUsesRuntimeReceiver(module_env, dot_expr.receiver)) return false;
         if (std.mem.eql(u8, module_env.getIdent(dot_expr.field_name), "to_str")) {
             const receiver_monotype = try self.resolveExprMonotype(result, thread, module_idx, dot_expr.receiver);
-            if (receiver_monotype.isNone()) {
+            if (receiver_monotype == null) {
                 return self.dispatchHandledAsPrimitiveToStrIntrinsic(
                     result,
                     thread,
@@ -9222,7 +9209,7 @@ const MaterializeCallableValueFailure = enum {
                     dot_expr.field_name,
                 );
             }
-            return switch (result.context_mono.monotype_store.getMonotype(receiver_monotype)) {
+            return switch (result.context_mono.monotype_store.getMonotype(receiver_monotype.?)) {
                 .prim => |prim| primitiveUsesIntrinsicToStr(prim),
                 else => false,
             };
@@ -9230,7 +9217,7 @@ const MaterializeCallableValueFailure = enum {
         if (!dot_expr.field_name.eql(module_env.idents.is_eq)) return false;
 
         const receiver_monotype = try self.resolveExprMonotype(result, thread, module_idx, dot_expr.receiver);
-        if (receiver_monotype.isNone()) {
+        if (receiver_monotype == null) {
             const eq_constraint = try self.exactStaticDispatchConstraintForExpr(result, thread, module_idx, expr_idx, module_env.idents.is_eq);
             const constraint_resolved = if (eq_constraint) |constraint|
                 !constraint.resolved_target.isNone() and self.resolvedTargetIsUsable(module_env, module_env.idents.is_eq, constraint.resolved_target)
@@ -9239,7 +9226,7 @@ const MaterializeCallableValueFailure = enum {
             return self.lookupResolvedDispatchTarget(result, thread, module_idx, expr_idx) == null and !constraint_resolved;
         }
 
-        return switch (result.context_mono.monotype_store.getMonotype(receiver_monotype)) {
+        return switch (result.context_mono.monotype_store.getMonotype(receiver_monotype.?)) {
             .record, .tuple, .list, .unit => true,
             .tag_union => self.lookupResolvedDispatchTarget(result, thread, module_idx, expr_idx) == null,
             else => false,
@@ -9327,7 +9314,7 @@ const MaterializeCallableValueFailure = enum {
 
         const module_env = self.all_module_envs[module_idx];
         const lhs_monotype = try self.resolveExprMonotype(result, thread, module_idx, binop_expr.lhs);
-        if (lhs_monotype.isNone()) {
+        if (lhs_monotype == null) {
             const eq_constraint = try self.exactStaticDispatchConstraintForExpr(result, thread, module_idx, expr_idx, module_env.idents.is_eq);
             const constraint_resolved = if (eq_constraint) |constraint|
                 !constraint.resolved_target.isNone() and self.resolvedTargetIsUsable(module_env, module_env.idents.is_eq, constraint.resolved_target)
@@ -9336,7 +9323,7 @@ const MaterializeCallableValueFailure = enum {
             return self.lookupResolvedDispatchTarget(result, thread, module_idx, expr_idx) == null and !constraint_resolved;
         }
 
-        const lhs_mono = result.context_mono.monotype_store.getMonotype(lhs_monotype);
+        const lhs_mono = result.context_mono.monotype_store.getMonotype(lhs_monotype.?);
         return switch (lhs_mono) {
             .record, .tuple, .list, .unit, .prim => true,
             .tag_union => blk: {
@@ -9369,8 +9356,7 @@ const MaterializeCallableValueFailure = enum {
         );
         if (arg_exprs.items.len != 1) return false;
 
-        const arg_monotype = try self.resolveExprMonotype(result, thread, module_idx, arg_exprs.items[0]);
-        if (arg_monotype.isNone()) return false;
+        const arg_monotype = (try self.resolveExprMonotype(result, thread, module_idx, arg_exprs.items[0])) orelse return false;
 
         const arg_mono = result.context_mono.monotype_store.getMonotype(arg_monotype);
         const intrinsic = switch (arg_mono) {
@@ -9400,10 +9386,9 @@ const MaterializeCallableValueFailure = enum {
         binop_expr: CIR.Expr.Binop,
         method_name: Ident.Idx,
     ) Allocator.Error!ResolvedDispatchTarget {
-        const lhs_monotype = try self.resolveExprMonotypeResolved(result, thread, module_idx, binop_expr.lhs);
-        if (lhs_monotype.isNone()) {
+        const lhs_monotype = (try self.resolveExprMonotypeResolved(result, thread, module_idx, binop_expr.lhs)) orelse {
             return self.resolveDispatchTargetForExpr(result, thread, module_idx, expr_idx, method_name);
-        }
+        };
 
         try self.recordTypeVarMonotypeForThread(
             result,
@@ -13088,8 +13073,11 @@ const MaterializeCallableValueFailure = enum {
         thread: SemanticThread,
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
-    ) Allocator.Error!Monotype.Idx {
-        return (try self.resolveExprMonotypeResolved(result, thread, module_idx, expr_idx)).idx;
+    ) Allocator.Error!?Monotype.Idx {
+        return if (try self.resolveExprMonotypeResolved(result, thread, module_idx, expr_idx)) |resolved|
+            resolved.idx
+        else
+            null;
     }
 
     fn resolvePatternMonotypeResolved(
@@ -13195,7 +13183,7 @@ const MaterializeCallableValueFailure = enum {
         thread: SemanticThread,
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
-    ) Allocator.Error!ResolvedMonotype {
+    ) Allocator.Error!?ResolvedMonotype {
         const source_context = thread.requireSourceContext();
         const module_env = self.all_module_envs[module_idx];
         const expr = module_env.store.getExpr(expr_idx);
@@ -13240,13 +13228,13 @@ const MaterializeCallableValueFailure = enum {
             );
             return typevar_resolved;
         }
-        return (try self.lookupRecordedExprMonotypeIfReadyForSourceContext(
+        return try self.lookupRecordedExprMonotypeIfReadyForSourceContext(
             result,
             thread,
             source_context,
             module_idx,
             expr_idx,
-        )) orelse resolvedMonotype(.none, module_idx);
+        );
     }
 
     /// Require that an exact contextual expr monotype already exists in the
@@ -13492,12 +13480,12 @@ const MaterializeCallableValueFailure = enum {
     fn resolvedIfFunctionMonotype(
         self: *Pass,
         result: *const Result,
-        resolved: ResolvedMonotype,
+        resolved: ?ResolvedMonotype,
     ) ?ResolvedMonotype {
         _ = self;
-        if (resolved.isNone()) return null;
-        return switch (result.context_mono.monotype_store.getMonotype(resolved.idx)) {
-            .func => resolved,
+        const resolved_mono = resolved orelse return null;
+        return switch (result.context_mono.monotype_store.getMonotype(resolved_mono.idx)) {
+            .func => resolved_mono,
             else => null,
         };
     }
