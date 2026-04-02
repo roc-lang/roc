@@ -6,6 +6,15 @@ const TestEnv = @import("./TestEnv.zig");
 
 const testing = std.testing;
 
+const checkTypesModule = TestEnv.checkTypesModule;
+const checkTypesModuleDefs = TestEnv.checkTypesModuleDefs;
+const checkTypesModuleUserFacing = TestEnv.checkTypesModuleUserFacing;
+const checkTypesExpr = TestEnv.checkTypesExpr;
+const ModuleExpectation = TestEnv.ModuleExpectation;
+const DefExpectation = TestEnv.DefExpectation;
+const DefAndExpectation = TestEnv.DefAndExpectation;
+const ExprExpectation = TestEnv.ExprExpectation;
+
 // primitives - nums //
 
 test "check type - num - unbound" {
@@ -3703,144 +3712,7 @@ test "check type - structural tag - if True True else False is open tag union" {
     try checkTypesModule(source, .{ .pass = .last_def }, "[False, True, ..]");
 }
 
-// helpers - module //
-
-const ModuleExpectation = union(enum) {
-    pass: DefExpectation,
-    fail,
-    fail_first, // Allows multiple errors, checks first error title
-    fail_with,
-};
-
-const DefExpectation = union(enum) {
-    last_def,
-    def: []const u8,
-};
-
-/// A unified helper to run the full pipeline: parse, canonicalize, and type-check source code.
-///
-/// Behavior depends on the expectation:
-/// Pass: Asserts whole module type checks, and assert the specified def matches the expected type string
-/// Fail: Asserts that there is exactly 1 type error in the module and it's title matches the expected string
-fn checkTypesModule(
-    comptime source_expr: []const u8,
-    comptime expectation: ModuleExpectation,
-    comptime expected: []const u8,
-) !void {
-    var test_env = try TestEnv.init("Test", source_expr);
-    defer test_env.deinit();
-
-    switch (expectation) {
-        .pass => |def_expectation| {
-            switch (def_expectation) {
-                .last_def => {
-                    return test_env.assertLastDefType(expected);
-                },
-                .def => |def_name| {
-                    return test_env.assertDefType(def_name, expected);
-                },
-            }
-        },
-        .fail => {
-            return test_env.assertOneTypeError(expected);
-        },
-        .fail_with => {
-            return test_env.assertOneTypeErrorMsg(expected);
-        },
-        .fail_first => {
-            return test_env.assertFirstTypeError(expected);
-        },
-    }
-}
-
-const DefAndExpectation = struct {
-    def: []const u8,
-    expected: []const u8,
-};
-
-fn checkTypesModuleDefs(
-    comptime source_expr: []const u8,
-    comptime expectations: []const DefAndExpectation,
-) !void {
-    var test_env = try TestEnv.init("Test", source_expr);
-    defer test_env.deinit();
-
-    inline for (expectations) |expectation| {
-        try test_env.assertDefType(expectation.def, expectation.expected);
-    }
-}
-
-/// A unified helper to run the full pipeline using user-facing display mode.
-///
-/// Behavior depends on the expectation:
-/// Pass: Asserts whole module type checks, and assert the specified def matches the expected type string
-/// Fail: Asserts that there is exactly 1 type error in the module and it's title matches the expected string
-fn checkTypesModuleUserFacing(
-    comptime source_expr: []const u8,
-    comptime expectation: ModuleExpectation,
-    comptime expected: []const u8,
-) !void {
-    var test_env = try TestEnv.initUserFacing("Test", source_expr);
-    defer test_env.deinit();
-
-    switch (expectation) {
-        .pass => |def_expectation| {
-            switch (def_expectation) {
-                .last_def => {
-                    return test_env.assertLastDefType(expected);
-                },
-                .def => |def_name| {
-                    return test_env.assertDefType(def_name, expected);
-                },
-            }
-        },
-        .fail => {
-            return test_env.assertOneTypeError(expected);
-        },
-        .fail_with => {
-            return test_env.assertOneTypeErrorMsg(expected);
-        },
-        .fail_first => {
-            return test_env.assertFirstTypeError(expected);
-        },
-    }
-}
-
-// helpers - expr //
-
-const ExprExpectation = union(enum) {
-    pass,
-    fail,
-    fail_with,
-};
-
-/// A unified helper to run the full pipeline: parse, canonicalize, and type-check source code.
-///
-/// Behavior depends on the expectation:
-/// Pass: Asserts expr type checks, and asserts that the expr's type match the expected type string
-/// Fail: Asserts that there is exactly 1 type error and it's title matches the expected string
-fn checkTypesExpr(
-    comptime source_expr: []const u8,
-    comptime expectation: ExprExpectation,
-    comptime expected: []const u8,
-) !void {
-    var test_env = try TestEnv.initExpr("Test", source_expr);
-    defer test_env.deinit();
-
-    switch (expectation) {
-        .pass => {
-            return test_env.assertLastDefType(expected);
-        },
-        .fail => {
-            return test_env.assertOneTypeError(expected);
-        },
-        .fail_with => {
-            return test_env.assertOneTypeErrorMsg(expected);
-        },
-    }
-
-    return test_env.assertLastDefType(expected);
-}
+// helpers - expr and module assertion functions are in TestEnv.zig
 
 // effectful function type annotation parsing //
 
