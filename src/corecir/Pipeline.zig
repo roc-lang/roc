@@ -696,7 +696,6 @@ pub const Pass = struct {
     types_store: *const types.Store,
     current_module_idx: u32,
     app_module_idx: ?u32,
-    visited_modules: std.AutoHashMapUnmanaged(u32, void),
     visited_exprs: std.AutoHashMapUnmanaged(ContextExprVisitKey, void),
     in_progress_program_expr_assembly: std.AutoHashMapUnmanaged(ContextExprKey, void),
     in_progress_value_defs: std.AutoHashMapUnmanaged(ContextExprKey, void),
@@ -719,7 +718,6 @@ pub const Pass = struct {
             .types_store = types_store,
             .current_module_idx = current_module_idx,
             .app_module_idx = app_module_idx,
-            .visited_modules = .empty,
             .visited_exprs = .empty,
             .in_progress_program_expr_assembly = .empty,
             .in_progress_value_defs = .empty,
@@ -1590,7 +1588,6 @@ const MaterializeCallableValueFailure = enum {
     }
 
     pub fn deinit(self: *Pass) void {
-        self.visited_modules.deinit(self.allocator);
         self.visited_exprs.deinit(self.allocator);
         self.in_progress_program_expr_assembly.deinit(self.allocator);
         self.in_progress_value_defs.deinit(self.allocator);
@@ -1602,7 +1599,6 @@ const MaterializeCallableValueFailure = enum {
     }
 
     fn resetRunState(self: *Pass) void {
-        self.visited_modules.clearRetainingCapacity();
         self.visited_exprs.clearRetainingCapacity();
         self.in_progress_program_expr_assembly.clearRetainingCapacity();
         self.in_progress_value_defs.clearRetainingCapacity();
@@ -2617,9 +2613,6 @@ const MaterializeCallableValueFailure = enum {
 
     fn scanModule(self: *Pass, result: *Result, module_idx: u32) Allocator.Error!void {
         try self.primeModuleDefs(result, module_idx);
-
-        if (self.visited_modules.contains(module_idx)) return;
-        try self.visited_modules.put(self.allocator, module_idx, {});
     }
 
     fn primeModuleDefs(self: *Pass, result: *Result, module_idx: u32) Allocator.Error!void {
