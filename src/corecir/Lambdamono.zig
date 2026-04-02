@@ -119,6 +119,20 @@ pub const CallSite = union(enum) {
     low_level: CIR.Expr.LowLevel,
 };
 
+pub fn exactCallableInstFromValue(callable_value: CallableValue) ?CallableInstId {
+    return switch (callable_value) {
+        .direct => |callable_inst_id| callable_inst_id,
+        .packed_fn => null,
+    };
+}
+
+pub fn exactCallableInstFromCallSite(call_site: CallSite) ?CallableInstId {
+    return switch (call_site) {
+        .direct => |callable_inst_id| callable_inst_id,
+        .indirect_call, .low_level => null,
+    };
+}
+
 pub const ExprCallableSemantics = union(enum) {
     callable: CallableValue,
     intro: struct {
@@ -552,6 +566,29 @@ pub const Program = struct {
     pub fn getDirectCallableVariants(self: *const Program, callable_inst_id: CallableInstId) []const CallableInstId {
         const variant_group_id = self.direct_callable_variant_group_ids_by_callable_inst.get(callable_inst_id) orelse unreachable;
         return self.getCallableVariantGroupVariants(variant_group_id);
+    }
+
+    pub fn getPackedFnVariants(self: *const Program, packed_fn: PackedFn) []const CallableInstId {
+        return self.getCallableVariantGroupVariants(packed_fn.variant_group);
+    }
+
+    pub fn getIndirectCallVariants(self: *const Program, indirect_call: IndirectCall) []const CallableInstId {
+        return self.getCallableVariantGroupVariants(indirect_call.packed_fn.variant_group);
+    }
+
+    pub fn getCallableValueVariants(self: *const Program, callable_value: CallableValue) []const CallableInstId {
+        return switch (callable_value) {
+            .direct => |callable_inst_id| self.getDirectCallableVariants(callable_inst_id),
+            .packed_fn => |packed_fn| self.getPackedFnVariants(packed_fn),
+        };
+    }
+
+    pub fn getCallSiteVariants(self: *const Program, call_site: CallSite) []const CallableInstId {
+        return switch (call_site) {
+            .direct => |callable_inst_id| self.getDirectCallableVariants(callable_inst_id),
+            .indirect_call => |indirect_call| self.getIndirectCallVariants(indirect_call),
+            .low_level => &.{},
+        };
     }
 
     pub fn getCallableParamSpecEntries(

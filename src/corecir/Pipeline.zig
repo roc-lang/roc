@@ -868,41 +868,11 @@ pub const Pass = struct {
         };
     }
 
-fn exactCallableInstFromCallableValue(callable_value: CallableValue) ?CallableInstId {
-    return switch (callable_value) {
-        .direct => |callable_inst_id| callable_inst_id,
-        .packed_fn => null,
-    };
-}
-
 const MaterializeCallableValueFailure = enum {
     non_function_monotype,
     requires_owner_callable_inst,
     nested_callable_value_shape,
 };
-
-    fn callableAlternativesFromValue(result: *const Result, callable_value: CallableValue) []const CallableInstId {
-        return switch (callable_value) {
-            .direct => |callable_inst_id| result.lambdamono.getDirectCallableVariants(callable_inst_id),
-            .packed_fn => |packed_fn| result.getPackedFnVariants(packed_fn),
-        };
-    }
-
-    fn exactCallableInstFromCallSite(call_site: CallSite) ?CallableInstId {
-        return switch (call_site) {
-            .direct => |callable_inst_id| callable_inst_id,
-            .indirect_call => null,
-            .low_level => null,
-        };
-    }
-
-    fn callableAlternativesFromCallSite(result: *const Result, call_site: CallSite) []const CallableInstId {
-        return switch (call_site) {
-            .direct => |callable_inst_id| result.lambdamono.getDirectCallableVariants(callable_inst_id),
-            .indirect_call => |indirect_call| result.getIndirectCallVariants(indirect_call),
-            .low_level => &.{},
-        };
-    }
 
     const CallableVariantBuilder = struct {
         variants: std.ArrayList(CallableInstId),
@@ -936,7 +906,7 @@ const MaterializeCallableValueFailure = enum {
             result: *const Result,
             callable_value: CallableValue,
         ) Allocator.Error!void {
-            for (callableAlternativesFromValue(result, callable_value)) |callable_inst_id| {
+            for (result.lambdamono.getCallableValueVariants(callable_value)) |callable_inst_id| {
                 try self.includeCallableInst(pass, callable_inst_id);
             }
         }
@@ -947,7 +917,7 @@ const MaterializeCallableValueFailure = enum {
             result: *const Result,
             call_site: CallSite,
         ) Allocator.Error!void {
-            for (callableAlternativesFromCallSite(result, call_site)) |callable_inst_id| {
+            for (result.lambdamono.getCallSiteVariants(call_site)) |callable_inst_id| {
                 try self.includeCallableInst(pass, callable_inst_id);
             }
         }
@@ -1054,7 +1024,7 @@ const MaterializeCallableValueFailure = enum {
             module_idx,
             pattern_idx,
         ) orelse return null;
-        return exactCallableInstFromCallableValue(callable_value);
+        return Lambdamono.exactCallableInstFromValue(callable_value);
     }
 
     fn resolveBoundPatternCallableInstForThread(
@@ -1070,7 +1040,7 @@ const MaterializeCallableValueFailure = enum {
             module_idx,
             pattern_idx,
         ) orelse return null;
-        return exactCallableInstFromCallableValue(callable_value);
+        return Lambdamono.exactCallableInstFromValue(callable_value);
     }
 
     fn getExprCallableValueInContext(
@@ -1116,7 +1086,7 @@ const MaterializeCallableValueFailure = enum {
             module_idx,
             expr_idx,
         ) orelse return null;
-        return exactCallableInstFromCallableValue(callable_value);
+        return Lambdamono.exactCallableInstFromValue(callable_value);
     }
 
     fn getExprCallableInstForThread(
@@ -1132,7 +1102,7 @@ const MaterializeCallableValueFailure = enum {
             module_idx,
             expr_idx,
         ) orelse return null;
-        return exactCallableInstFromCallableValue(callable_value);
+        return Lambdamono.exactCallableInstFromValue(callable_value);
     }
 
     fn getCallSiteInContext(
@@ -1188,7 +1158,7 @@ const MaterializeCallableValueFailure = enum {
             module_idx,
             expr_idx,
         ) orelse return null;
-        return exactCallableInstFromCallSite(call_site);
+        return Lambdamono.exactCallableInstFromCallSite(call_site);
     }
 
     fn getCallSiteCallableInstForThread(
@@ -1204,7 +1174,7 @@ const MaterializeCallableValueFailure = enum {
             module_idx,
             expr_idx,
         ) orelse return null;
-        return exactCallableInstFromCallSite(call_site);
+        return Lambdamono.exactCallableInstFromCallSite(call_site);
     }
 
     fn getCallSiteCallableInstForSourceContext(
@@ -1215,7 +1185,7 @@ const MaterializeCallableValueFailure = enum {
         expr_idx: CIR.Expr.Idx,
     ) ?CallableInstId {
         const call_site = self.getCallSiteForSourceContext(result, source_context, module_idx, expr_idx) orelse return null;
-        return exactCallableInstFromCallSite(call_site);
+        return Lambdamono.exactCallableInstFromCallSite(call_site);
     }
 
     fn getCallableParamSpecCallableValueForSourceContext(
@@ -1349,7 +1319,7 @@ const MaterializeCallableValueFailure = enum {
             module_idx,
             expr_idx,
         ) orelse return null;
-        return exactCallableInstFromCallableValue(callable_value);
+        return Lambdamono.exactCallableInstFromValue(callable_value);
     }
 
     fn getValueExprCallableInstForThread(
@@ -1365,7 +1335,7 @@ const MaterializeCallableValueFailure = enum {
             module_idx,
             expr_idx,
         ) orelse return null;
-        return exactCallableInstFromCallableValue(callable_value);
+        return Lambdamono.exactCallableInstFromValue(callable_value);
     }
 
     fn getValueExprCallableValueForSourceContext(
@@ -1427,7 +1397,7 @@ const MaterializeCallableValueFailure = enum {
         expr_idx: CIR.Expr.Idx,
     ) ?CallableInstId {
         if (self.getValueExprCallableValueForSourceContext(result, source_context, module_idx, expr_idx)) |callable_value| {
-            if (exactCallableInstFromCallableValue(callable_value)) |callable_inst_id| {
+            if (Lambdamono.exactCallableInstFromValue(callable_value)) |callable_inst_id| {
                 return callable_inst_id;
             }
         }
@@ -3230,7 +3200,7 @@ const MaterializeCallableValueFailure = enum {
         const callable_def = result.getCallableDefForInst(from_callable_inst_id);
         for (result.getCaptureFields(callable_def.captures)) |capture_field| {
             if (capture_field.callable_value) |callable_value| {
-                for (callableAlternativesFromValue(result, callable_value)) |capture_callable_inst_id| {
+                for (result.lambdamono.getCallableValueVariants(callable_value)) |capture_callable_inst_id| {
                     if (try self.callableInstCaptureGraphReaches(
                         result,
                         capture_callable_inst_id,
@@ -4614,7 +4584,7 @@ const MaterializeCallableValueFailure = enum {
         }
 
         if (self.getValueExprCallableValueForSourceContext(result, source_context, module_idx, expr_idx)) |callable_value| {
-            if (exactCallableInstFromCallableValue(callable_value)) |callable_inst_id| {
+            if (Lambdamono.exactCallableInstFromValue(callable_value)) |callable_inst_id| {
                 return result.getCallableInst(callable_inst_id).defining_source_context;
             }
         }
@@ -4629,7 +4599,7 @@ const MaterializeCallableValueFailure = enum {
                 source.module_idx,
                 source.expr_idx,
             )) |callable_value| {
-                if (exactCallableInstFromCallableValue(callable_value)) |callable_inst_id| {
+                if (Lambdamono.exactCallableInstFromValue(callable_value)) |callable_inst_id| {
                     return result.getCallableInst(callable_inst_id).defining_source_context;
                 }
             }
@@ -4903,7 +4873,7 @@ const MaterializeCallableValueFailure = enum {
 
         if (self.getValueExprCallableValueForThread(result, thread, module_idx, callee_expr_idx)) |callable_value| {
             var all_satisfy = true;
-            for (callableAlternativesFromValue(result, callable_value)) |callable_inst_id| {
+            for (result.lambdamono.getCallableValueVariants(callable_value)) |callable_inst_id| {
                 if (!try self.callableInstSatisfiesCallSiteRequirements(
                     result,
                     callable_inst_id,
@@ -4931,7 +4901,7 @@ const MaterializeCallableValueFailure = enum {
                     call_expr_idx,
                     (try call_variant_builder.finishCallSite(self, result)).?,
                 );
-                for (callableAlternativesFromValue(result, callable_value)) |callable_inst_id| {
+                for (result.lambdamono.getCallableValueVariants(callable_value)) |callable_inst_id| {
                     try self.recordCallResultCallableValueFromCallee(
                         result,
                         thread.requireSourceContext(),
@@ -4952,7 +4922,7 @@ const MaterializeCallableValueFailure = enum {
                     );
                 }
                 if (self.readExprCallSite(result, thread.requireSourceContext(), module_idx, call_expr_idx)) |call_site| {
-                    if (exactCallableInstFromCallSite(call_site)) |direct_callable_inst_id| {
+                    if (Lambdamono.exactCallableInstFromCallSite(call_site)) |direct_callable_inst_id| {
                         try self.finalizeResolvedDirectCallCallableInst(
                             result,
                             thread,
@@ -5389,7 +5359,7 @@ const MaterializeCallableValueFailure = enum {
                     variant_callable_inst,
                 ),
                 .packed_fn => {
-                    if (callableAlternativesFromValue(result, spec.callable_value).len == 0) {
+                    if (result.lambdamono.getCallableValueVariants(spec.callable_value).len == 0) {
                         std.debug.panic(
                             "Pipeline: callable param spec for callable inst {d} param {d} had an empty packed callable variant set",
                             .{ @intFromEnum(callable_inst_id), spec.param_index },
@@ -7476,7 +7446,7 @@ const MaterializeCallableValueFailure = enum {
                     );
                 };
 
-                for (callableAlternativesFromCallSite(result, resolved_call_site)) |callee_callable_inst_id| {
+                for (result.lambdamono.getCallSiteVariants(resolved_call_site)) |callee_callable_inst_id| {
                     try self.recordCallResultCallableValueFromCallee(
                         result,
                         source_context,
