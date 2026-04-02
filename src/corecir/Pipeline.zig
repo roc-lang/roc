@@ -8957,9 +8957,11 @@ const MaterializeCallableValueFailure = enum {
         expr_idx: CIR.Expr.Idx,
         dispatch_target: DispatchExprTarget,
     ) Allocator.Error!void {
-        try self.putIfChanged(
-            &result.dispatch_solved.resolved_dispatch_targets,
-            self.resultExprKeyForSourceContext(source_context, module_idx, expr_idx),
+        try result.dispatch_solved.recordDispatchExprTarget(
+            self.allocator,
+            source_context,
+            module_idx,
+            expr_idx,
             dispatch_target,
         );
         const semantics = try self.ensureProgramExprNode(result, source_context, module_idx, expr_idx);
@@ -8988,9 +8990,11 @@ const MaterializeCallableValueFailure = enum {
         expr_idx: CIR.Expr.Idx,
         site: ExactDispatchSite,
     ) Allocator.Error!void {
-        try self.putIfChanged(
-            &result.dispatch_solved.exact_dispatch_sites,
-            self.resultExprKeyForSourceContext(source_context, module_idx, expr_idx),
+        try result.dispatch_solved.recordExactDispatchSite(
+            self.allocator,
+            source_context,
+            module_idx,
+            expr_idx,
             site,
         );
     }

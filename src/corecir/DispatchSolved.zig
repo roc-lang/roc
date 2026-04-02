@@ -107,4 +107,34 @@ pub const Result = struct {
     ) ?ExactDispatchSite {
         return self.exact_dispatch_sites.get(ContextMono.Result.contextExprKey(source_context, module_idx, expr_idx));
     }
+
+    pub fn recordDispatchExprTarget(
+        self: *Result,
+        allocator: Allocator,
+        source_context: SourceContext,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+        target: DispatchExprTarget,
+    ) Allocator.Error!void {
+        const key = ContextMono.Result.contextExprKey(source_context, module_idx, expr_idx);
+        const gop = try self.resolved_dispatch_targets.getOrPut(allocator, key);
+        if (!gop.found_existing or !std.meta.eql(gop.value_ptr.*, target)) {
+            gop.value_ptr.* = target;
+        }
+    }
+
+    pub fn recordExactDispatchSite(
+        self: *Result,
+        allocator: Allocator,
+        source_context: SourceContext,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+        site: ExactDispatchSite,
+    ) Allocator.Error!void {
+        const key = ContextMono.Result.contextExprKey(source_context, module_idx, expr_idx);
+        const gop = try self.exact_dispatch_sites.getOrPut(allocator, key);
+        if (!gop.found_existing or !std.meta.eql(gop.value_ptr.*, site)) {
+            gop.value_ptr.* = site;
+        }
+    }
 };
