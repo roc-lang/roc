@@ -1667,105 +1667,12 @@ const MaterializeCallableValueFailure = enum {
                 callable_def.body_expr.module_idx,
                 callable_def.body_expr.expr_idx,
             );
-            for (result.lambdamono.getPatternIds(callable_def.arg_patterns)) |pattern_idx| {
-                try self.enqueuePatternBindingReachability(
-                    result,
-                    callableInstSourceContext(callable_inst_id),
-                    template.module_idx,
-                    pattern_idx,
-                );
-            }
             for (result.getCaptureFields(callable_def.captures)) |capture_field| {
-                if (capture_field.callable_value) |callable_value| {
-                    try self.enqueueReachableCallableValue(result, callable_value);
-                }
                 switch (capture_field.source) {
                     .bound_expr => |bound_expr| try self.ensureProgramExprRefNode(result, bound_expr.expr_ref),
                     .lexical_pattern => {},
                 }
             }
-        }
-    }
-
-    fn enqueuePatternBindingReachability(
-        self: *Pass,
-        result: *Result,
-        source_context: SourceContext,
-        module_idx: u32,
-        pattern_idx: CIR.Pattern.Idx,
-    ) Allocator.Error!void {
-        if (result.getPatternCallableValue(source_context, module_idx, pattern_idx)) |callable_value| {
-            try self.enqueueReachableCallableValue(result, callable_value);
-        }
-
-        const module_env = self.all_module_envs[module_idx];
-        switch (module_env.store.getPattern(pattern_idx)) {
-            .assign,
-            .underscore,
-            .num_literal,
-            .small_dec_literal,
-            .dec_literal,
-            .frac_f32_literal,
-            .frac_f64_literal,
-            .str_literal,
-            .runtime_error,
-            => {},
-            .as => |as_pat| try self.enqueuePatternBindingReachability(result, source_context, module_idx, as_pat.pattern),
-            .nominal => |nom_pat| try self.enqueuePatternBindingReachability(result, source_context, module_idx, nom_pat.backing_pattern),
-            .nominal_external => |nom_pat| try self.enqueuePatternBindingReachability(result, source_context, module_idx, nom_pat.backing_pattern),
-            .tuple => |tuple_pat| for (module_env.store.slicePatterns(tuple_pat.patterns)) |elem_pattern_idx| {
-                try self.enqueuePatternBindingReachability(result, source_context, module_idx, elem_pattern_idx);
-            },
-            .applied_tag => |tag_pat| for (module_env.store.slicePatterns(tag_pat.args)) |arg_pattern_idx| {
-                try self.enqueuePatternBindingReachability(result, source_context, module_idx, arg_pattern_idx);
-            },
-            .record_destructure => |record_pat| {
-                for (module_env.store.sliceRecordDestructs(record_pat.destructs)) |destruct_idx| {
-                    const destruct = module_env.store.getRecordDestruct(destruct_idx);
-                    switch (destruct.kind) {
-                        .Required, .SubPattern => |sub_pattern_idx| try self.enqueuePatternBindingReachability(
-                            result,
-                            source_context,
-                            module_idx,
-                            sub_pattern_idx,
-                        ),
-                        .Rest => {},
-                    }
-                }
-            },
-            .list => |list_pat| for (module_env.store.slicePatterns(list_pat.patterns)) |elem_pattern_idx| {
-                try self.enqueuePatternBindingReachability(result, source_context, module_idx, elem_pattern_idx);
-            },
-        }
-    }
-
-    fn enqueueReachableCallableInst(
-        self: *Pass,
-        result: *Result,
-        callable_inst_id: CallableInstId,
-    ) Allocator.Error!void {
-        _ = self;
-        _ = result;
-        _ = callable_inst_id;
-    }
-
-    fn enqueueReachableCallableValue(
-        self: *Pass,
-        result: *Result,
-        callable_value: CallableValue,
-    ) Allocator.Error!void {
-        for (callableAlternativesFromValue(result, callable_value)) |callable_inst_id| {
-            try self.enqueueReachableCallableInst(result, callable_inst_id);
-        }
-    }
-
-    fn enqueueReachableCallSite(
-        self: *Pass,
-        result: *Result,
-        call_site: CallSite,
-    ) Allocator.Error!void {
-        for (callableAlternativesFromCallSite(result, call_site)) |callable_inst_id| {
-            try self.enqueueReachableCallableInst(result, callable_inst_id);
         }
     }
 
@@ -1776,13 +1683,7 @@ const MaterializeCallableValueFailure = enum {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) Allocator.Error!Lambdamono.ExprId {
-        return self.assembleProgramExprNodeWithReachability(
-            result,
-            source_context,
-            module_idx,
-            expr_idx,
-            true,
-        );
+        return self.assembleProgramExprNodeInternal(result, source_context, module_idx, expr_idx);
     }
 
     fn appendProgramExprChildIfPresent(
@@ -1793,7 +1694,6 @@ const MaterializeCallableValueFailure = enum {
         module_idx: u32,
         parent_expr_idx: CIR.Expr.Idx,
         expr_idx: CIR.Expr.Idx,
-        enqueue_reachability: bool,
     ) Allocator.Error!void {
         _ = parent_expr_idx;
         if (result.getExprTemplateId(source_context, module_idx, expr_idx) != null) {
@@ -1808,23 +1708,16 @@ const MaterializeCallableValueFailure = enum {
 
         try child_exprs.append(
             self.allocator,
-            try self.assembleProgramExprNodeWithReachability(
-                result,
-                source_context,
-                module_idx,
-                expr_idx,
-                enqueue_reachability,
-            ),
+            try self.assembleProgramExprNodeInternal(result, source_context, module_idx, expr_idx),
         );
     }
 
-    fn assembleProgramExprNodeWithReachability(
+    fn assembleProgramExprNodeInternal(
         self: *Pass,
         result: *Result,
         source_context: SourceContext,
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
-        enqueue_reachability: bool,
     ) Allocator.Error!Lambdamono.ExprId {
         const key = Result.contextExprKey(source_context, module_idx, expr_idx);
         const expr_id = result.lambdamono.expr_ids_by_key.get(key) orelse blk: {
@@ -1846,40 +1739,32 @@ const MaterializeCallableValueFailure = enum {
 
         switch (expr) {
             .e_str => |str_expr| for (module_env.store.sliceExpr(str_expr.span)) |child_expr_idx| {
-                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, child_expr_idx, enqueue_reachability);
+                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, child_expr_idx);
             },
             .e_list => |list_expr| for (module_env.store.sliceExpr(list_expr.elems)) |child_expr_idx| {
-                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, child_expr_idx, enqueue_reachability);
+                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, child_expr_idx);
             },
             .e_tuple => |tuple_expr| for (module_env.store.sliceExpr(tuple_expr.elems)) |child_expr_idx| {
-                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, child_expr_idx, enqueue_reachability);
+                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, child_expr_idx);
             },
             .e_match => |match_expr| {
-                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, match_expr.cond, enqueue_reachability);
+                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, match_expr.cond);
                 for (module_env.store.sliceMatchBranches(match_expr.branches)) |branch_idx| {
                     const branch = module_env.store.getMatchBranch(branch_idx);
-                    for (module_env.store.sliceMatchBranchPatterns(branch.patterns)) |branch_pattern_idx| {
-                        const branch_pattern = module_env.store.getMatchBranchPattern(branch_pattern_idx);
-                        try self.enqueuePatternBindingReachability(
-                            result,
-                            source_context,
-                            module_idx,
-                            branch_pattern.pattern,
-                        );
-                    }
+                    _ = branch_idx;
                     if (branch.guard) |guard_expr_idx| {
-                        try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, guard_expr_idx, enqueue_reachability);
+                        try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, guard_expr_idx);
                     }
-                    try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, branch.value, enqueue_reachability);
+                    try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, branch.value);
                 }
             },
             .e_if => |if_expr| {
                 for (module_env.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
                     const branch = module_env.store.getIfBranch(branch_idx);
-                    try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, branch.cond, enqueue_reachability);
-                    try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, branch.body, enqueue_reachability);
+                    try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, branch.cond);
+                    try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, branch.body);
                 }
-                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, if_expr.final_else, enqueue_reachability);
+                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, if_expr.final_else);
             },
             .e_call => |call_expr| {
                 const callee_expr = module_env.store.getExpr(call_expr.func);
@@ -1897,73 +1782,73 @@ const MaterializeCallableValueFailure = enum {
                 else
                     true;
                 if (include_func_child) {
-                    try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, call_expr.func, enqueue_reachability);
+                    try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, call_expr.func);
                 }
                 for (module_env.store.sliceExpr(call_expr.args)) |arg_expr_idx| {
-                    try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, arg_expr_idx, enqueue_reachability);
+                    try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, arg_expr_idx);
                 }
             },
             .e_record => |record_expr| {
                 for (module_env.store.sliceRecordFields(record_expr.fields)) |field_idx| {
                     const field = module_env.store.getRecordField(field_idx);
-                    try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, field.value, enqueue_reachability);
+                    try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, field.value);
                 }
                 if (record_expr.ext) |ext_expr_idx| {
-                    try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, ext_expr_idx, enqueue_reachability);
+                    try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, ext_expr_idx);
                 }
             },
             .e_block => |block_expr| {
                 for (module_env.store.sliceStatements(block_expr.stmts)) |stmt_idx| {
                     try child_stmts.append(self.allocator, try self.assembleProgramStmtNode(result, source_context, module_idx, stmt_idx));
                 }
-                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, block_expr.final_expr, enqueue_reachability);
+                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, block_expr.final_expr);
             },
             .e_tag => |tag_expr| for (module_env.store.sliceExpr(tag_expr.args)) |child_expr_idx| {
-                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, child_expr_idx, enqueue_reachability);
+                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, child_expr_idx);
             },
             .e_nominal => |nominal_expr| {
-                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, nominal_expr.backing_expr, enqueue_reachability);
+                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, nominal_expr.backing_expr);
             },
             .e_nominal_external => |nominal_expr| {
-                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, nominal_expr.backing_expr, enqueue_reachability);
+                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, nominal_expr.backing_expr);
             },
             .e_binop => |binop_expr| {
-                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, binop_expr.lhs, enqueue_reachability);
-                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, binop_expr.rhs, enqueue_reachability);
+                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, binop_expr.lhs);
+                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, binop_expr.rhs);
             },
             .e_unary_minus => |unary_expr| {
-                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, unary_expr.expr, enqueue_reachability);
+                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, unary_expr.expr);
             },
             .e_unary_not => |unary_expr| {
-                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, unary_expr.expr, enqueue_reachability);
+                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, unary_expr.expr);
             },
             .e_dot_access => |dot_expr| {
-                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, dot_expr.receiver, enqueue_reachability);
+                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, dot_expr.receiver);
                 if (dot_expr.args) |args| for (module_env.store.sliceExpr(args)) |arg_expr_idx| {
-                    try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, arg_expr_idx, enqueue_reachability);
+                    try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, arg_expr_idx);
                 };
             },
             .e_tuple_access => |tuple_access| {
-                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, tuple_access.tuple, enqueue_reachability);
+                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, tuple_access.tuple);
             },
             .e_dbg => |dbg_expr| {
-                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, dbg_expr.expr, enqueue_reachability);
+                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, dbg_expr.expr);
             },
             .e_expect => |expect_expr| {
-                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, expect_expr.body, enqueue_reachability);
+                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, expect_expr.body);
             },
             .e_return => |return_expr| {
-                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, return_expr.expr, enqueue_reachability);
+                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, return_expr.expr);
             },
             .e_type_var_dispatch => |dispatch_expr| for (module_env.store.sliceExpr(dispatch_expr.args)) |arg_expr_idx| {
-                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, arg_expr_idx, enqueue_reachability);
+                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, arg_expr_idx);
             },
             .e_for => |for_expr| {
-                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, for_expr.expr, enqueue_reachability);
-                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, for_expr.body, enqueue_reachability);
+                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, for_expr.expr);
+                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, for_expr.body);
             },
             .e_run_low_level => |run_low_level| for (module_env.store.sliceExpr(run_low_level.args)) |arg_expr_idx| {
-                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, arg_expr_idx, enqueue_reachability);
+                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, arg_expr_idx);
             },
             else => {},
         }
@@ -1971,18 +1856,6 @@ const MaterializeCallableValueFailure = enum {
         const child_expr_span = try self.appendProgramExprChildren(&result.lambdamono, child_exprs.items);
         const child_stmt_span = try self.appendProgramStmtChildren(&result.lambdamono, child_stmts.items);
         const reserved_expr = self.programExpr(result, expr_id).*;
-        if (enqueue_reachability) {
-            if (reserved_expr.getCallable()) |callable_semantics| switch (callable_semantics) {
-                .callable => |callable_value| try self.enqueueReachableCallableValue(result, callable_value),
-                .intro => |intro| {
-                    try self.enqueueReachableCallableInst(result, intro.callable_inst);
-                    try self.enqueueReachableCallableValue(result, intro.callable_value);
-                },
-            };
-            if (reserved_expr.getCall()) |call_site| {
-                try self.enqueueReachableCallSite(result, call_site);
-            }
-        }
         const callable_value = if (reserved_expr.getCallable()) |callable_semantics| switch (callable_semantics) {
             .callable => |expr_callable_value| expr_callable_value,
             .intro => |intro| intro.callable_value,
@@ -2100,19 +1973,16 @@ const MaterializeCallableValueFailure = enum {
 
         switch (stmt) {
             .s_decl => |decl| {
-                try self.enqueuePatternBindingReachability(result, source_context, module_idx, decl.pattern);
                 if (try self.exprHasExactProgramSemantics(result, source_context, module_idx, decl.expr)) {
                     try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, decl.expr));
                 }
             },
             .s_var => |var_decl| {
-                try self.enqueuePatternBindingReachability(result, source_context, module_idx, var_decl.pattern_idx);
                 if (try self.exprHasExactProgramSemantics(result, source_context, module_idx, var_decl.expr)) {
                     try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, var_decl.expr));
                 }
             },
             .s_reassign => |reassign| {
-                try self.enqueuePatternBindingReachability(result, source_context, module_idx, reassign.pattern_idx);
                 if (try self.exprHasExactProgramSemantics(result, source_context, module_idx, reassign.expr)) {
                     try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, reassign.expr));
                 }
@@ -2121,7 +1991,6 @@ const MaterializeCallableValueFailure = enum {
             .s_expr => |expr_stmt| try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, expr_stmt.expr)),
             .s_expect => |expect_stmt| try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, expect_stmt.body)),
             .s_for => |for_stmt| {
-                try self.enqueuePatternBindingReachability(result, source_context, module_idx, for_stmt.patt);
                 try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, for_stmt.expr));
                 try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, for_stmt.body));
             },
@@ -2148,12 +2017,11 @@ const MaterializeCallableValueFailure = enum {
         result: *Result,
         expr_ref: ExprRef,
     ) Allocator.Error!void {
-        _ = try self.assembleProgramExprNodeWithReachability(
+        _ = try self.assembleProgramExprNodeInternal(
             result,
             expr_ref.source_context,
             expr_ref.module_idx,
             expr_ref.expr_idx,
-            false,
         );
     }
 
