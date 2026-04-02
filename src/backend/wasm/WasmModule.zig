@@ -1088,12 +1088,22 @@ pub fn mergeModule(self: *Self, source: *const Self) !MergeResult {
                     try self.linking.symbol_table.append(gpa, src_sym);
                     symbol_remap[src_sym_idx] = new_sym_idx;
                 } else {
-                    // Defined data — remap segment offset.
+                    // Defined data — rebase the symbol's absolute memory address.
+                    //
+                    // Preloaded relocatable modules normalize data_offset from
+                    // segment-relative to absolute during parse. To merge a data
+                    // symbol into self, first recover its offset within the
+                    // source segment, then add that intra-segment offset to the
+                    // new segment base in self.
                     const new_sym_idx: u32 = @intCast(self.linking.symbol_table.items.len);
-                    const new_offset = if (src_sym.index < data_remap.len)
-                        data_remap[src_sym.index] + src_sym.data_offset
-                    else
-                        src_sym.data_offset;
+                    const new_offset = if (src_sym.index < data_remap.len and src_sym.index < source.data_segments.items.len) blk: {
+                        const source_segment_offset = source.data_segments.items[src_sym.index].offset;
+                        const within_segment_offset = if (src_sym.data_offset >= source_segment_offset)
+                            src_sym.data_offset - source_segment_offset
+                        else
+                            src_sym.data_offset;
+                        break :blk data_remap[src_sym.index] + within_segment_offset;
+                    } else src_sym.data_offset;
                     const new_segment_idx = if (src_sym.index < data_segment_remap.len)
                         data_segment_remap[src_sym.index]
                     else
@@ -4162,14 +4172,14 @@ fn buildMergeDataRelocModule(allocator: Allocator) !Self {
     // Segment 0: relocation patch site (4-byte placeholder)
     _ = try module.addDataSegment(&[_]u8{ 0, 0, 0, 0 }, 4);
     // Segment 1: relocation target
-    _ = try module.addDataSegment("DATA", 4);
+    const target_offset = try module.addDataSegment("DATA", 4);
 
     try module.linking.symbol_table.append(allocator, .{
         .kind = .data,
         .flags = 0,
         .name = ".rodata.target",
         .index = 1,
-        .data_offset = 0, // offset within segment 1 before merge
+        .data_offset = target_offset, // absolute address before merge
         .data_size = 4,
     });
 
@@ -4334,6 +4344,9 @@ test "mergeModule + resolveDataRelocations — patches merged data segment bytes
 
     try std.testing.expectEqual(@as(usize, 3), host.data_segments.items.len);
     try std.testing.expectEqual(@as(usize, 1), host.reloc_data.entries.items.len);
+
+    const target_sym = host.linking.symbol_table.items[0];
+    try std.testing.expectEqual(host.data_segments.items[2].offset, target_sym.data_offset);
 
     host.resolveDataRelocations();
 
