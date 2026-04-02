@@ -652,7 +652,7 @@ test "check type - tag union - tag typo" {
         \\
         \\It has the type:
         \\
-        \\    [Blue, Greeen, Green, Red, ..]
+        \\    [Greeen, ..]
         \\
         \\But the annotation say it should be:
         \\
@@ -684,7 +684,7 @@ test "check type - tag - ext - typo" {
         \\
         \\It has the type:
         \\
-        \\    [Blue, Greeen, Green, Red, ..]
+        \\    [Greeen, ..]
         \\
         \\But the annotation say it should be:
         \\
@@ -6290,4 +6290,43 @@ test "check type - polarity - user facing neg arg with flex ext shown" {
         \\foo = |_| "hello"
     ;
     try checkTypesModuleUserFacing(source, .{ .pass = .{ .def = "foo" } }, "[A, B, ..] -> Str");
+}
+
+test "check type - polarity - value annotation closed, passed to closed param (issue 8872)" {
+    // Reproduces the pattern from eval test issue 8872:
+    // A polymorphic function with closed param annotation receives a value
+    // whose annotation is also closed (value annotations don't get polarity_open —
+    // only function return types are implicitly open).
+    const source =
+        \\transform_err : [Ok({}), Err(a)], (a -> b) -> [Ok({}), Err(b)]
+        \\transform_err = |try_val, transform| match try_val {
+        \\    Err(a) => Err(transform(a))
+        \\    Ok(ok) => Ok(ok)
+        \\}
+        \\
+        \\err : [Ok({}), Err(I32)]
+        \\err = Err(42.I32)
+        \\
+        \\result = transform_err(err, |_e| "hello")
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "result" } }, "[Err(Str), Ok({}), ..]");
+}
+
+test "check type - polarity - explicit open ext value passed to closed param" {
+    // Value annotation with explicit `..` creates a rigid ext.
+    // Passing to a function with closed param is a TYPE MISMATCH because
+    // the rigid ext can't unify with the closed (empty_tag_union) param.
+    const source =
+        \\transform_err : [Ok({}), Err(a)], (a -> b) -> [Ok({}), Err(b)]
+        \\transform_err = |try_val, transform| match try_val {
+        \\    Err(a) => Err(transform(a))
+        \\    Ok(ok) => Ok(ok)
+        \\}
+        \\
+        \\err : [Ok({}), Err(I32), ..]
+        \\err = Err(42.I32)
+        \\
+        \\result = transform_err(err, |_e| "hello")
+    ;
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }

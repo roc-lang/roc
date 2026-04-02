@@ -2245,9 +2245,15 @@ fn generateStandaloneTypeAnno(
         }
     }
 
-    // Generate the type from the annotation
+    // Generate the type from the annotation.
+    // Same logic as generateAnnotationType: function roots get .pos, non-function roots get .neg.
     const anno_var: Var = ModuleEnv.varFrom(type_anno.anno);
-    try self.generateAnnoTypeInPlace(type_anno.anno, env, .{ .annotation = .pos });
+    const root_anno = self.cir.store.getTypeAnno(type_anno.anno);
+    const starting_polarity: types_mod.Polarity = switch (root_anno) {
+        .@"fn" => .pos,
+        else => .neg,
+    };
+    try self.generateAnnoTypeInPlace(type_anno.anno, env, .{ .annotation = starting_polarity });
 
     // Unify the statement variable with the generated annotation type
     _ = try self.unify(stmt_var, anno_var, env);
@@ -2338,8 +2344,18 @@ fn generateAnnotationType(self: *Self, annotation_idx: CIR.Annotation.Idx, env: 
         }
     }
 
-    // Then, generate the type for the annotation
-    try self.generateAnnoTypeInPlace(annotation.anno, env, .{ .annotation = .pos });
+    // Then, generate the type for the annotation.
+    // For function annotations, start in positive position so return types are
+    // implicitly open and params are closed (standard polarity).
+    // For non-function annotations (value defs), start in negative position so
+    // tag unions are closed — a value annotation describes exactly what the value IS,
+    // not a function contract with open return types.
+    const root_anno = self.cir.store.getTypeAnno(annotation.anno);
+    const starting_polarity: types_mod.Polarity = switch (root_anno) {
+        .@"fn" => .pos,
+        else => .neg,
+    };
+    try self.generateAnnoTypeInPlace(annotation.anno, env, .{ .annotation = starting_polarity });
 
     // Redirect the root annotation to inner annotation
     _ = try self.unify(annotation_var, ModuleEnv.varFrom(annotation.anno), env);

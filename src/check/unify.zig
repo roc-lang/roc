@@ -463,20 +463,13 @@ const Unifier = struct {
                 try self.recordDeferredConstraint(vars, b_flex.constraints);
                 self.merge(vars, .{ .rigid = a_rigid });
             },
-            .rigid => |b_rigid| {
-                // Two polarity_open rigids can unify (e.g., when separate values
-                // with inferred open extensions are combined in a list).
-                if (a_rigid.name == .polarity_open and b_rigid.name == .polarity_open) {
-                    self.merge(vars, .{ .rigid = a_rigid });
-                } else {
-                    return error.TypeMismatch;
-                }
-            },
+            .rigid => return error.TypeMismatch,
             .alias => return error.TypeMismatch,
             .structure => |b_flat_type| {
-                // A polarity_open rigid extension can unify with empty_tag_union
-                // (closing the open extension). This allows values annotated in
-                // positive position to be passed to closed negative-position params.
+                // A polarity_open rigid extension can unify with empty_tag_union.
+                // This is needed when a function's return annotation is implicitly open
+                // (polarity_open) but the body returns a closed type — the body satisfies
+                // the "at least these tags" contract of the annotation.
                 if (a_rigid.name == .polarity_open and b_flat_type == .empty_tag_union) {
                     self.merge(vars, Content{ .structure = .empty_tag_union });
                 } else {
@@ -615,8 +608,7 @@ const Unifier = struct {
                 self.merge(vars, Content{ .structure = a_flat_type });
             },
             .rigid => |b_rigid| {
-                // A polarity_open rigid extension can unify with empty_tag_union
-                // (closing the open extension). Symmetric case of unifyRigid.
+                // Symmetric case of polarity_open + empty_tag_union in unifyRigid.
                 if (b_rigid.name == .polarity_open and a_flat_type == .empty_tag_union) {
                     self.merge(vars, Content{ .structure = .empty_tag_union });
                 } else {
