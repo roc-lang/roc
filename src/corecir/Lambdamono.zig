@@ -44,6 +44,15 @@ pub const IndirectCall = struct {
     packed_fn: PackedFn,
 };
 
+pub const DispatchIntrinsic = enum {
+    negate,
+};
+
+pub const DispatchSemantics = union(enum) {
+    target: ContextMono.DispatchExprTarget,
+    intrinsic: DispatchIntrinsic,
+};
+
 pub const ExprId = enum(u32) {
     _,
 };
@@ -110,8 +119,8 @@ pub const CallSite = union(enum) {
 
 pub const ExprCallableSemantics = union(enum) {
     callable: CallableValue,
-    packed_intro: struct {
-        packed_fn: PackedFn,
+    intro: struct {
+        callable_value: CallableValue,
         callable_inst: CallableInstId,
     },
 };
@@ -177,10 +186,16 @@ pub const BuildStmtKey = struct {
 
 pub const CaptureValueSource = union(enum) {
     lexical_pattern: struct {
+        source_context: SourceContext,
         module_idx: u32,
         pattern_idx: CIR.Pattern.Idx,
     },
-    expr: ExprRef,
+    bound_expr: struct {
+        binding_source_context: SourceContext,
+        binding_module_idx: u32,
+        binding_pattern_idx: CIR.Pattern.Idx,
+        expr_ref: ExprRef,
+    },
 };
 
 pub const CaptureStorage = union(enum) {
@@ -233,12 +248,23 @@ pub const BindingId = enum(u32) {
     _,
 };
 
+/// One finalized specialized pattern binding in the executable
+/// `Lambdamono.Program`.
+///
+/// Invariant: this struct must never be used as mutable staging state during
+/// specialization. If a consumer reads a `PatternBinding` from
+/// `Program.pattern_bindings`, every recorded fact here is already final.
 pub const PatternBinding = struct {
     key: ContextPatternKey,
     callable_value: ?CallableValue = null,
     origin: ?ExprRef = null,
 };
 
+/// One finalized specialized expr in the executable `Lambdamono.Program`.
+///
+/// Invariant: this struct must never be used as a mutable staging area during
+/// specialization. If a consumer reads an `Expr` from `Program.exprs`, every
+/// recorded fact here is already final.
 pub const Expr = struct {
     source_context: SourceContext,
     module_idx: u32,
@@ -249,7 +275,7 @@ pub const Expr = struct {
     callable: ?ExprCallableSemantics = null,
     call: ?CallSite = null,
     origin: ?ExprRef = null,
-    dispatch: ?ContextMono.DispatchExprTarget = null,
+    dispatch: ?DispatchSemantics = null,
     lookup: ?LookupResolution = null,
 };
 
@@ -259,6 +285,11 @@ pub const Stmt = struct {
     child_exprs: ExprIdSpan = .empty(),
 };
 
+/// Final specialized program consumed by later lowering stages.
+///
+/// Invariant: `exprs` contains only finalized expr records. Any temporary
+/// specialization/build state must live outside this struct. The same is true
+/// for `pattern_bindings`.
 pub const Program = struct {
     callable_insts: std.ArrayListUnmanaged(CallableInst),
     callable_variant_groups: std.ArrayListUnmanaged(CallableVariantGroup),
