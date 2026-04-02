@@ -804,20 +804,6 @@ pub const StaticDispatchConstraint = struct {
     }
 };
 
-/// Explicit dispatch syntax sites recorded during type checking.
-///
-/// These are not type-level constraints. They are the exact source-level sites
-/// that introduced dispatch requirements, and they remain separate so later
-/// stages can consume explicit site facts instead of embedding source/target
-/// metadata into the type-level constraint records themselves.
-pub const StaticDispatchSite = struct {
-    expr_idx: u32,
-    fn_name: Ident.Idx,
-    fn_var: Var,
-
-    pub const SafeList = MkSafeList(@This());
-};
-
 /// Two record fields
 pub const TwoStaticDispatchConstraints = struct {
     a: StaticDispatchConstraint,

@@ -4765,11 +4765,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         .origin = .method_call,
                     };
                     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
-                    _ = try self.types.appendStaticDispatchSites(&.{.{
-                        .expr_idx = @intFromEnum(expr_idx),
-                        .fn_name = dot_access.field_name,
-                        .fn_var = constraint_fn_var,
-                    }});
 
                     // Create our constrained flex, and unify it with the receiver
                     // Use field_name_region so error messages point at the method name, not the whole expression
@@ -4956,11 +4951,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     .origin = .method_call,
                 };
                 const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
-                _ = try self.types.appendStaticDispatchSites(&.{.{
-                    .expr_idx = @intFromEnum(expr_idx),
-                    .fn_name = tvd.method_name,
-                    .fn_var = constraint_fn_var,
-                }});
 
                 // Create a constrained flex and unify it with the type variable
                 const constrained_var = try self.freshFromContent(
@@ -6021,13 +6011,6 @@ fn mkBinopConstraint(
         .origin = .desugared_binop,
     };
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
-    if (binop_expr_idx) |idx| {
-        _ = try self.types.appendStaticDispatchSites(&.{.{
-            .expr_idx = @intFromEnum(idx),
-            .fn_name = method_name,
-            .fn_var = constraint_fn_var,
-        }});
-    }
 
     // Create a constrained flex and unify it with the lhs (receiver)
     const constrained_var = try self.freshFromContent(
@@ -6078,13 +6061,6 @@ fn mkUnaryOp(
         .origin = .desugared_unaryop,
     };
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
-    if (unary_expr_idx) |idx| {
-        _ = try self.types.appendStaticDispatchSites(&.{.{
-            .expr_idx = @intFromEnum(idx),
-            .fn_name = method_name,
-            .fn_var = constraint_fn_var,
-        }});
-    }
 
     // Create a constrained flex and unify it with the arg
     const constrained_var = try self.freshFromContent(

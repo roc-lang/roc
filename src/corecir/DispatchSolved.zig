@@ -10,59 +10,11 @@ const can = @import("can");
 const types = @import("types");
 const ContextMono = @import("ContextMono.zig");
 
-const Allocator = std.mem.Allocator;
 const CIR = can.CIR;
 const Ident = base.Ident;
 
 pub const SourceContext = ContextMono.SourceContext;
 pub const ContextExprKey = ContextMono.ContextExprKey;
-
-pub const SiteIndex = struct {
-    const Key = struct {
-        expr_idx: u32,
-        fn_name: base.Ident.Idx,
-    };
-
-    entries_by_key: std.AutoHashMapUnmanaged(Key, std.ArrayListUnmanaged(u32)),
-
-    pub fn init(types_store: *const types.Store, allocator: Allocator) Allocator.Error!SiteIndex {
-        var index: SiteIndex = .{
-            .entries_by_key = .empty,
-        };
-        errdefer index.deinit(allocator);
-
-        for (types_store.static_dispatch_sites.items.items, 0..) |site, raw_idx| {
-            const gop = try index.entries_by_key.getOrPut(allocator, .{
-                .expr_idx = site.expr_idx,
-                .fn_name = site.fn_name,
-            });
-            if (!gop.found_existing) gop.value_ptr.* = .empty;
-            try gop.value_ptr.append(allocator, @intCast(raw_idx));
-        }
-
-        return index;
-    }
-
-    pub fn deinit(self: *SiteIndex, allocator: Allocator) void {
-        var it = self.entries_by_key.valueIterator();
-        while (it.next()) |entries| {
-            entries.deinit(allocator);
-        }
-        self.entries_by_key.deinit(allocator);
-    }
-
-    pub fn getSiteIndices(
-        self: *const SiteIndex,
-        expr_idx: u32,
-        fn_name: base.Ident.Idx,
-    ) []const u32 {
-        const entries = self.entries_by_key.get(.{
-            .expr_idx = expr_idx,
-            .fn_name = fn_name,
-        }) orelse return &.{};
-        return entries.items;
-    }
-};
 
 pub const DispatchExprTarget = struct {
     module_idx: u32,
@@ -72,45 +24,6 @@ pub const DispatchExprTarget = struct {
 pub const ExactDispatchSite = struct {
     method_name: Ident.Idx,
     fn_var: types.Var,
-};
-
-pub const Solver = struct {
-    site_indices_by_module: std.AutoHashMapUnmanaged(u32, SiteIndex),
-
-    pub fn init() Solver {
-        return .{
-            .site_indices_by_module = .empty,
-        };
-    }
-
-    pub fn deinit(self: *Solver, allocator: Allocator) void {
-        var it = self.site_indices_by_module.valueIterator();
-        while (it.next()) |index| {
-            index.deinit(allocator);
-        }
-        self.site_indices_by_module.deinit(allocator);
-    }
-
-    pub fn clear(self: *Solver, allocator: Allocator) void {
-        var it = self.site_indices_by_module.valueIterator();
-        while (it.next()) |index| {
-            index.deinit(allocator);
-        }
-        self.site_indices_by_module.clearRetainingCapacity();
-    }
-
-    pub fn requireModuleSiteIndex(
-        self: *Solver,
-        allocator: Allocator,
-        module_idx: u32,
-        types_store: *const types.Store,
-    ) Allocator.Error!*const SiteIndex {
-        const gop = try self.site_indices_by_module.getOrPut(allocator, module_idx);
-        if (!gop.found_existing) {
-            gop.value_ptr.* = try SiteIndex.init(types_store, allocator);
-        }
-        return gop.value_ptr;
-    }
 };
 
 pub const Result = struct {

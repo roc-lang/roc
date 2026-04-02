@@ -29,7 +29,6 @@ const FlatType = types.FlatType;
 const NominalType = types.NominalType;
 const Record = types.Record;
 const StaticDispatchConstraint = types.StaticDispatchConstraint;
-const StaticDispatchSite = types.StaticDispatchSite;
 
 const SERIALIZATION_ALIGNMENT = collections.SERIALIZATION_ALIGNMENT;
 
@@ -89,7 +88,6 @@ pub const Store = struct {
     record_fields: RecordFieldSafeMultiList,
     tags: TagSafeMultiList,
     static_dispatch_constraints: StaticDispatchConstraint.SafeList,
-    static_dispatch_sites: StaticDispatchSite.SafeList,
 
     /// Count of flex vars that currently have a from_numeral constraint.
     /// Used to skip the finalization walk when no numeric defaults need resolving.
@@ -128,7 +126,6 @@ pub const Store = struct {
             .record_fields = try RecordFieldSafeMultiList.initCapacity(gpa, child_capacity),
             .tags = try TagSafeMultiList.initCapacity(gpa, child_capacity),
             .static_dispatch_constraints = try StaticDispatchConstraint.SafeList.initCapacity(gpa, child_capacity),
-            .static_dispatch_sites = try StaticDispatchSite.SafeList.initCapacity(gpa, child_capacity),
             .from_numeral_flex_count = 0,
         };
     }
@@ -158,7 +155,6 @@ pub const Store = struct {
         self.record_fields.deinit(self.gpa);
         self.tags.deinit(self.gpa);
         self.static_dispatch_constraints.deinit(self.gpa);
-        self.static_dispatch_sites.deinit(self.gpa);
     }
 
     /// Return the number of type variables in the store.
@@ -602,10 +598,6 @@ pub const Store = struct {
         return try self.static_dispatch_constraints.appendSlice(self.gpa, s);
     }
 
-    pub fn appendStaticDispatchSites(self: *Self, s: []const StaticDispatchSite) std.mem.Allocator.Error!StaticDispatchSite.SafeList.Range {
-        return try self.static_dispatch_sites.appendSlice(self.gpa, s);
-    }
-
     // sub list getters //
 
     /// Given a range, get a slice of vars from the backing array
@@ -645,14 +637,6 @@ pub const Store = struct {
 
     pub fn getStaticDispatchConstraintAt(self: *const Self, idx: usize) StaticDispatchConstraint {
         return self.static_dispatch_constraints.items.items[idx];
-    }
-
-    pub fn sliceStaticDispatchSites(self: *const Self, range: StaticDispatchSite.SafeList.Range) []StaticDispatchSite {
-        return self.static_dispatch_sites.sliceRange(range);
-    }
-
-    pub fn getStaticDispatchSiteAt(self: *const Self, idx: usize) StaticDispatchSite {
-        return self.static_dispatch_sites.items.items[idx];
     }
 
     // helpers - alias types //
@@ -891,7 +875,6 @@ pub const Store = struct {
         record_fields: RecordFieldSafeMultiList.Serialized,
         tags: TagSafeMultiList.Serialized,
         static_dispatch_constraints: StaticDispatchConstraint.SafeList.Serialized,
-        static_dispatch_sites: StaticDispatchSite.SafeList.Serialized,
 
         /// Serialize a Store into this Serialized struct, appending data to the writer
         pub fn serialize(
@@ -907,7 +890,6 @@ pub const Store = struct {
             try self.record_fields.serialize(&store.record_fields, allocator, writer);
             try self.tags.serialize(&store.tags, allocator, writer);
             try self.static_dispatch_constraints.serialize(&store.static_dispatch_constraints, allocator, writer);
-            try self.static_dispatch_sites.serialize(&store.static_dispatch_sites, allocator, writer);
 
             // Set gpa to all zeros; the space needs to be here,
             // but the value will be set separately during deserialization.
@@ -927,7 +909,6 @@ pub const Store = struct {
                 .record_fields = self.record_fields.deserializeInto(base_addr),
                 .tags = self.tags.deserializeInto(base_addr),
                 .static_dispatch_constraints = self.static_dispatch_constraints.deserializeInto(base_addr),
-                .static_dispatch_sites = self.static_dispatch_sites.deserializeInto(base_addr),
                 .from_numeral_flex_count = 0,
             };
         }
@@ -943,7 +924,6 @@ pub const Store = struct {
                 .record_fields = try self.record_fields.deserializeWithCopy(base_addr, gpa),
                 .tags = try self.tags.deserializeWithCopy(base_addr, gpa),
                 .static_dispatch_constraints = try self.static_dispatch_constraints.deserializeWithCopy(base_addr, gpa),
-                .static_dispatch_sites = try self.static_dispatch_sites.deserializeWithCopy(base_addr, gpa),
                 .from_numeral_flex_count = 0,
             };
         }

@@ -639,7 +639,6 @@ pub const Pass = struct {
     program_assembly: Lambdamono.BuilderState,
     value_def_resolution: Lambdasolved.ValueDefResolutionState,
     call_result_resolution: Lambdasolved.CallResultResolutionState,
-    dispatch_solver: DispatchSolved.Solver,
 
     pub fn init(
         allocator: Allocator,
@@ -658,7 +657,6 @@ pub const Pass = struct {
             .program_assembly = Lambdamono.BuilderState.init(),
             .value_def_resolution = Lambdasolved.ValueDefResolutionState.init(),
             .call_result_resolution = Lambdasolved.CallResultResolutionState.init(),
-            .dispatch_solver = DispatchSolved.Solver.init(),
         };
     }
 
@@ -1525,7 +1523,6 @@ const MaterializeCallableValueFailure = enum {
         self.program_assembly.deinit(self.allocator);
         self.value_def_resolution.deinit(self.allocator);
         self.call_result_resolution.deinit(self.allocator);
-        self.dispatch_solver.deinit(self.allocator);
     }
 
     fn resetRunState(self: *Pass) void {
@@ -1533,7 +1530,6 @@ const MaterializeCallableValueFailure = enum {
         self.program_assembly.clear();
         self.value_def_resolution.clear();
         self.call_result_resolution.clear();
-        self.dispatch_solver.clear(self.allocator);
     }
 
     pub fn runRootSourceExpr(self: *Pass, expr_idx: CIR.Expr.Idx) Allocator.Error!Result {
@@ -1559,6 +1555,28 @@ const MaterializeCallableValueFailure = enum {
         }
     }
 
+    fn runLambdamonoAssemblyStage(
+        self: *Pass,
+        result: *Result,
+        root_exprs: []const CIR.Expr.Idx,
+    ) Allocator.Error!void {
+        try self.assembleRootProgramExprs(result, root_exprs);
+        trace.log("assembleCallableDefExprGraph start", .{});
+        try self.assembleCallableDefExprGraph(result);
+        trace.log("assembleCallableDefExprGraph done", .{});
+    }
+
+    fn runStagesForRoots(
+        self: *Pass,
+        result: *Result,
+        root_exprs: []const CIR.Expr.Idx,
+    ) Allocator.Error!void {
+        self.resetRunState();
+        try self.runTemplateCatalogStage(result);
+        try self.runRootAnalysisStage(result, root_exprs);
+        try self.runLambdamonoAssemblyStage(result, root_exprs);
+    }
+
     fn assembleRootProgramExprs(self: *Pass, result: *Result, root_exprs: []const CIR.Expr.Idx) Allocator.Error!void {
         for (root_exprs) |expr_idx| {
             trace.log("assembleProgramExprNode start expr={d}", .{@intFromEnum(expr_idx)});
@@ -1581,13 +1599,7 @@ const MaterializeCallableValueFailure = enum {
         expr_idx: CIR.Expr.Idx,
     ) Allocator.Error!void {
         trace.log("runRootSourceExprInto start expr={d}", .{@intFromEnum(expr_idx)});
-        self.resetRunState();
-        try self.runTemplateCatalogStage(result);
-        try self.runRootAnalysisStage(result, &.{expr_idx});
-        try self.assembleRootProgramExprs(result, &.{expr_idx});
-        trace.log("assembleCallableDefExprGraph start", .{});
-        try self.assembleCallableDefExprGraph(result);
-        trace.log("assembleCallableDefExprGraph done", .{});
+        try self.runStagesForRoots(result, &.{expr_idx});
     }
 
     pub fn runRootSourceExprs(self: *Pass, exprs: []const CIR.Expr.Idx) Allocator.Error!Result {
@@ -1601,16 +1613,7 @@ const MaterializeCallableValueFailure = enum {
         result: *Result,
         exprs: []const CIR.Expr.Idx,
     ) Allocator.Error!void {
-        self.resetRunState();
-        try self.runTemplateCatalogStage(result);
-        try self.runRootAnalysisStage(result, exprs);
-        trace.log("assembleCallableDefExprGraph start", .{});
-        try self.assembleCallableDefExprGraph(result);
-        trace.log("assembleCallableDefExprGraph done", .{});
-        try self.assembleRootProgramExprs(result, exprs);
-        trace.log("assembleCallableDefExprGraph start", .{});
-        try self.assembleCallableDefExprGraph(result);
-        trace.log("assembleCallableDefExprGraph done", .{});
+        try self.runStagesForRoots(result, exprs);
     }
 
     /// Pipeline all callables rooted in the current module.
@@ -1626,20 +1629,9 @@ const MaterializeCallableValueFailure = enum {
     ) Allocator.Error!void {
         self.resetRunState();
         try self.runTemplateCatalogStage(result);
-
-        const module_env = self.all_module_envs[self.current_module_idx];
-        const defs = module_env.store.sliceDefs(module_env.all_defs);
-        var root_source_exprs = std.ArrayList(CIR.Expr.Idx).empty;
-        defer root_source_exprs.deinit(self.allocator);
-        for (defs) |def_idx| {
-            const def = module_env.store.getDef(def_idx);
-            try root_source_exprs.append(self.allocator, def.expr);
-        }
-        try self.runRootAnalysisStage(result, root_source_exprs.items);
-        try self.assembleRootProgramExprs(result, root_source_exprs.items);
-        trace.log("assembleCallableDefExprGraph start", .{});
-        try self.assembleCallableDefExprGraph(result);
-        trace.log("assembleCallableDefExprGraph done", .{});
+        const root_exprs = result.template_catalog.getModuleRootExprs(self.current_module_idx);
+        try self.runRootAnalysisStage(result, root_exprs);
+        try self.runLambdamonoAssemblyStage(result, root_exprs);
     }
 
     fn assembleCallableDefExprGraph(
@@ -8725,15 +8717,48 @@ const MaterializeCallableValueFailure = enum {
         );
     }
 
-    fn requireModuleDispatchSiteIndex(
+    fn dispatchConstraintReceiverTypeVar(
         self: *Pass,
         module_idx: u32,
-    ) Allocator.Error!*const DispatchSolved.SiteIndex {
-        return self.dispatch_solver.requireModuleSiteIndex(
-            self.allocator,
-            module_idx,
-            &self.all_module_envs[module_idx].types,
-        );
+        expr_idx: CIR.Expr.Idx,
+        method_name: Ident.Idx,
+    ) ?types.Var {
+        const module_env = self.all_module_envs[module_idx];
+        return switch (module_env.store.getExpr(expr_idx)) {
+            .e_binop => |binop_expr| blk: {
+                const binop_method = dispatchMethodIdentForBinop(module_env, binop_expr.op) orelse break :blk null;
+                if (!binop_method.eql(method_name)) break :blk null;
+                break :blk ModuleEnv.varFrom(binop_expr.lhs);
+            },
+            .e_unary_minus => |unary_expr| if (method_name.eql(module_env.idents.negate))
+                ModuleEnv.varFrom(unary_expr.expr)
+            else
+                null,
+            .e_dot_access => |dot_expr| if (dot_expr.args != null and dot_expr.field_name.eql(method_name))
+                ModuleEnv.varFrom(dot_expr.receiver)
+            else
+                null,
+            .e_type_var_dispatch => |dispatch_expr| blk: {
+                if (!dispatch_expr.method_name.eql(method_name)) break :blk null;
+                const alias_stmt = module_env.store.getStatement(dispatch_expr.type_var_alias_stmt).s_type_var_alias;
+                break :blk ModuleEnv.varFrom(alias_stmt.type_var_anno);
+            },
+            else => null,
+        };
+    }
+
+    fn dispatchConstraintsForTypeVar(
+        self: *Pass,
+        module_idx: u32,
+        type_var: types.Var,
+    ) []const types.StaticDispatchConstraint {
+        const module_env = self.all_module_envs[module_idx];
+        const resolved = module_env.types.resolveVar(type_var);
+        return switch (resolved.desc.content) {
+            .flex => |flex| module_env.types.sliceStaticDispatchConstraints(flex.constraints),
+            .rigid => |rigid| module_env.types.sliceStaticDispatchConstraints(rigid.constraints),
+            else => &.{},
+        };
     }
 
     fn getRecordedExactDispatchSiteForExpr(
@@ -8773,20 +8798,20 @@ const MaterializeCallableValueFailure = enum {
         method_name: Ident.Idx,
     ) Allocator.Error!?ExactDispatchSite {
         const module_env = self.all_module_envs[module_idx];
-        const site_index = try self.requireModuleDispatchSiteIndex(module_idx);
+        const receiver_type_var = self.dispatchConstraintReceiverTypeVar(module_idx, expr_idx, method_name) orelse return null;
         var matched: ?ExactDispatchSite = null;
         var saw_unresolved_match = false;
 
-        for (site_index.getSiteIndices(@intFromEnum(expr_idx), method_name)) |site_idx| {
-            const site = module_env.types.getStaticDispatchSiteAt(site_idx);
-            const fn_monotype = try self.resolveTypeVarMonotypeResolved(result, thread, module_idx, site.fn_var);
+        for (self.dispatchConstraintsForTypeVar(module_idx, receiver_type_var)) |constraint| {
+            if (!constraint.fn_name.eql(method_name)) continue;
+            const fn_monotype = try self.resolveTypeVarMonotypeResolved(result, thread, module_idx, constraint.fn_var);
             if (fn_monotype.isNone()) {
                 saw_unresolved_match = true;
                 continue;
             }
 
             if (matched) |existing| {
-                if (existing.fn_var == site.fn_var) {
+                if (existing.fn_var == constraint.fn_var) {
                     continue;
                 }
 
@@ -8815,7 +8840,7 @@ const MaterializeCallableValueFailure = enum {
                             @intFromEnum(existing.fn_var),
                             @intFromEnum(existing_mono.idx),
                             existing_mono.module_idx,
-                            @intFromEnum(site.fn_var),
+                            @intFromEnum(constraint.fn_var),
                             @intFromEnum(next_mono.idx),
                             next_mono.module_idx,
                         },
@@ -8824,8 +8849,8 @@ const MaterializeCallableValueFailure = enum {
                 unreachable;
             } else {
                 matched = .{
-                    .method_name = site.fn_name,
-                    .fn_var = site.fn_var,
+                    .method_name = constraint.fn_name,
+                    .fn_var = constraint.fn_var,
                 };
             }
         }
