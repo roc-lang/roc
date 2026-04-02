@@ -106,6 +106,7 @@ const ContextExprKey = ContextMono.ContextExprKey;
 
 const ContextPatternKey = ContextMono.ContextPatternKey;
 const ContextTypeVarKey = ContextMono.ContextTypeVarKey;
+const StaticDispatchConstraintIndex = types.Store.StaticDispatchConstraintIndex;
 
 fn callableValueMonotype(result: *const Result, callable_value: CallableValue) ResolvedMonotype {
     return switch (callable_value) {
@@ -743,6 +744,7 @@ pub const Pass = struct {
     current_module_idx: u32,
     app_module_idx: ?u32,
     expr_scan: ExprScanState,
+    dispatch_constraint_indices_by_module: std.AutoHashMapUnmanaged(u32, StaticDispatchConstraintIndex),
 
     pub fn init(
         allocator: Allocator,
@@ -758,6 +760,7 @@ pub const Pass = struct {
             .current_module_idx = current_module_idx,
             .app_module_idx = app_module_idx,
             .expr_scan = ExprScanState.init(),
+            .dispatch_constraint_indices_by_module = .empty,
         };
     }
 
@@ -1621,10 +1624,28 @@ const MaterializeCallableValueFailure = enum {
 
     pub fn deinit(self: *Pass) void {
         self.expr_scan.deinit(self.allocator);
+        self.deinitDispatchConstraintIndices();
     }
 
     fn resetRunState(self: *Pass) void {
         self.expr_scan.clearAll();
+        self.clearDispatchConstraintIndices();
+    }
+
+    fn deinitDispatchConstraintIndices(self: *Pass) void {
+        var it = self.dispatch_constraint_indices_by_module.valueIterator();
+        while (it.next()) |index| {
+            index.deinit(self.allocator);
+        }
+        self.dispatch_constraint_indices_by_module.deinit(self.allocator);
+    }
+
+    fn clearDispatchConstraintIndices(self: *Pass) void {
+        var it = self.dispatch_constraint_indices_by_module.valueIterator();
+        while (it.next()) |index| {
+            index.deinit(self.allocator);
+        }
+        self.dispatch_constraint_indices_by_module.clearRetainingCapacity();
     }
 
     pub fn runRootSourceExpr(self: *Pass, expr_idx: CIR.Expr.Idx) Allocator.Error!Result {
@@ -9123,6 +9144,20 @@ const MaterializeCallableValueFailure = enum {
         );
     }
 
+    fn requireModuleDispatchConstraintIndex(
+        self: *Pass,
+        module_idx: u32,
+    ) Allocator.Error!*const StaticDispatchConstraintIndex {
+        const gop = try self.dispatch_constraint_indices_by_module.getOrPut(self.allocator, module_idx);
+        if (!gop.found_existing) {
+            gop.value_ptr.* = try StaticDispatchConstraintIndex.init(
+                &self.all_module_envs[module_idx].types,
+                self.allocator,
+            );
+        }
+        return gop.value_ptr;
+    }
+
     fn getRecordedExactDispatchConstraintForExpr(
         self: *Pass,
         result: *const Result,
@@ -9160,12 +9195,12 @@ const MaterializeCallableValueFailure = enum {
         method_name: Ident.Idx,
     ) Allocator.Error!?ContextMono.ExactDispatchConstraint {
         const module_env = self.all_module_envs[module_idx];
+        const constraint_index = try self.requireModuleDispatchConstraintIndex(module_idx);
         var matched: ?ContextMono.ExactDispatchConstraint = null;
         var saw_unresolved_match = false;
 
-        for (module_env.types.sliceAllStaticDispatchConstraints()) |constraint| {
-            if (constraint.source_expr_idx != @intFromEnum(expr_idx)) continue;
-            if (!constraint.fn_name.eql(method_name)) continue;
+        for (constraint_index.getConstraintIndices(@intFromEnum(expr_idx), method_name)) |constraint_idx| {
+            const constraint = module_env.types.getStaticDispatchConstraintAt(constraint_idx);
 
             const fn_monotype = try self.resolveTypeVarMonotypeResolved(result, thread, module_idx, constraint.fn_var);
             if (fn_monotype.isNone()) {

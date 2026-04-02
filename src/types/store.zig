@@ -77,6 +77,54 @@ pub const Slot = union(enum) {
 pub const Store = struct {
     const Self = @This();
 
+    pub const StaticDispatchConstraintIndex = struct {
+        const Key = struct {
+            source_expr_idx: u32,
+            fn_name: base.Ident.Idx,
+        };
+
+        entries_by_key: std.AutoHashMapUnmanaged(Key, std.ArrayListUnmanaged(u32)),
+
+        pub fn init(store: *const Self, allocator: Allocator) Allocator.Error!StaticDispatchConstraintIndex {
+            var index: StaticDispatchConstraintIndex = .{
+                .entries_by_key = .empty,
+            };
+            errdefer index.deinit(allocator);
+
+            for (store.static_dispatch_constraints.items.items, 0..) |constraint, raw_idx| {
+                if (constraint.source_expr_idx == StaticDispatchConstraint.no_source_expr) continue;
+                const gop = try index.entries_by_key.getOrPut(allocator, .{
+                    .source_expr_idx = constraint.source_expr_idx,
+                    .fn_name = constraint.fn_name,
+                });
+                if (!gop.found_existing) gop.value_ptr.* = .empty;
+                try gop.value_ptr.append(allocator, @intCast(raw_idx));
+            }
+
+            return index;
+        }
+
+        pub fn deinit(self: *StaticDispatchConstraintIndex, allocator: Allocator) void {
+            var it = self.entries_by_key.valueIterator();
+            while (it.next()) |entries| {
+                entries.deinit(allocator);
+            }
+            self.entries_by_key.deinit(allocator);
+        }
+
+        pub fn getConstraintIndices(
+            self: *const StaticDispatchConstraintIndex,
+            source_expr_idx: u32,
+            fn_name: base.Ident.Idx,
+        ) []const u32 {
+            const entries = self.entries_by_key.get(.{
+                .source_expr_idx = source_expr_idx,
+                .fn_name = fn_name,
+            }) orelse return &.{};
+            return entries.items;
+        }
+    };
+
     gpa: Allocator,
 
     /// Type variable storage
@@ -635,9 +683,8 @@ pub const Store = struct {
         return self.static_dispatch_constraints.sliceRange(range);
     }
 
-    /// Get all static dispatch constraints in this store.
-    pub fn sliceAllStaticDispatchConstraints(self: *const Self) []StaticDispatchConstraint {
-        return self.static_dispatch_constraints.items.items;
+    pub fn getStaticDispatchConstraintAt(self: *const Self, idx: usize) StaticDispatchConstraint {
+        return self.static_dispatch_constraints.items.items[idx];
     }
 
     // helpers - alias types //
