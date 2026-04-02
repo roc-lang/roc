@@ -2117,34 +2117,34 @@ const MaterializeCallableValueFailure = enum {
     ) Allocator.Error!void {
         const semantics = try self.ensureProgramExpr(result, source_context, module_idx, expr_idx);
         const owns_callable_intro = result.getExprTemplateId(source_context, module_idx, expr_idx) != null;
-        const next_payload: Lambdamono.ExprPayload = switch (callable_value) {
+        const next_role: Lambdamono.ExprRole = switch (callable_value) {
             .direct => |callable_inst_id| if (owns_callable_intro)
-                .{ .callable_intro = .{
+                .{ .callable = .{ .intro = .{
                     .callable_value = callable_value,
                     .callable_inst = callable_inst_id,
-                } }
+                } } }
             else
-                .{ .callable_value = callable_value },
+                .{ .callable = .{ .callable = callable_value } },
             .packed_fn => |packed_fn| blk: {
                 if (owns_callable_intro) {
-                    switch (semantics.getCallable() orelse break :blk .{ .callable = callable_value }) {
+                    switch (semantics.getCallable() orelse break :blk .{ .callable = .{ .callable = callable_value } }) {
                         .callable => |existing_callable_value| switch (existing_callable_value) {
-                            .direct => |callable_inst_id| break :blk .{ .callable_intro = .{
+                            .direct => |callable_inst_id| break :blk .{ .callable = .{ .intro = .{
                                 .callable_value = .{ .packed_fn = packed_fn },
                                 .callable_inst = callable_inst_id,
-                            } },
+                            } } },
                             .packed_fn => {},
                         },
-                        .intro => |existing_intro| break :blk .{ .callable_intro = .{
+                        .intro => |existing_intro| break :blk .{ .callable = .{ .intro = .{
                             .callable_value = .{ .packed_fn = packed_fn },
                             .callable_inst = existing_intro.callable_inst,
-                        } },
+                        } } },
                     }
                 }
-                break :blk .{ .callable_value = callable_value };
+                break :blk .{ .callable = .{ .callable = callable_value } };
             },
         };
-        if (!std.meta.eql(semantics.payload, next_payload)) semantics.payload = next_payload;
+        if (!std.meta.eql(semantics.role, next_role)) semantics.role = next_role;
     }
 
     fn writeCallableParamValue(
@@ -2195,12 +2195,8 @@ const MaterializeCallableValueFailure = enum {
         call_site: CallSite,
     ) Allocator.Error!void {
         const semantics = try self.ensureProgramExpr(result, source_context, module_idx, expr_idx);
-        const next_payload: Lambdamono.ExprPayload = switch (call_site) {
-            .direct => |callable_inst| .{ .direct_call = callable_inst },
-            .indirect_call => |indirect_call| .{ .indirect_call = indirect_call },
-            .low_level => |low_level| .{ .low_level_call = low_level },
-        };
-        if (!std.meta.eql(semantics.payload, next_payload)) semantics.payload = next_payload;
+        const next_role: Lambdamono.ExprRole = .{ .call = call_site };
+        if (!std.meta.eql(semantics.role, next_role)) semantics.role = next_role;
     }
 
     fn readExprCallSite(
@@ -2259,11 +2255,8 @@ const MaterializeCallableValueFailure = enum {
         lookup_resolution: LookupResolution,
     ) Allocator.Error!void {
         const semantics = try self.ensureProgramExpr(result, source_context, module_idx, expr_idx);
-        const next_payload: Lambdamono.ExprPayload = switch (lookup_resolution) {
-            .expr => |expr_ref| .{ .lookup_expr = expr_ref },
-            .def => |def_source| .{ .lookup_def = def_source },
-        };
-        if (!std.meta.eql(semantics.payload, next_payload)) semantics.payload = next_payload;
+        const next_role: Lambdamono.ExprRole = .{ .lookup = lookup_resolution };
+        if (!std.meta.eql(semantics.role, next_role)) semantics.role = next_role;
     }
 
     fn exprVisitKey(module_idx: u32, expr_idx: CIR.Expr.Idx) u64 {
@@ -8579,8 +8572,8 @@ const MaterializeCallableValueFailure = enum {
             dispatch_target,
         );
         const semantics = try self.ensureProgramExpr(result, source_context, module_idx, expr_idx);
-        const next_payload: Lambdamono.ExprPayload = .{ .dispatch_target = dispatch_target };
-        if (!std.meta.eql(semantics.payload, next_payload)) semantics.payload = next_payload;
+        const next_role: Lambdamono.ExprRole = .{ .dispatch = .{ .target = dispatch_target } };
+        if (!std.meta.eql(semantics.role, next_role)) semantics.role = next_role;
     }
 
     fn recordDispatchExprIntrinsic(
@@ -8592,8 +8585,8 @@ const MaterializeCallableValueFailure = enum {
         dispatch_intrinsic: DispatchIntrinsic,
     ) Allocator.Error!void {
         const semantics = try self.ensureProgramExpr(result, source_context, module_idx, expr_idx);
-        const next_payload: Lambdamono.ExprPayload = .{ .dispatch_intrinsic = dispatch_intrinsic };
-        if (!std.meta.eql(semantics.payload, next_payload)) semantics.payload = next_payload;
+        const next_role: Lambdamono.ExprRole = .{ .dispatch = .{ .intrinsic = dispatch_intrinsic } };
+        if (!std.meta.eql(semantics.role, next_role)) semantics.role = next_role;
     }
 
     fn recordExactDispatchSite(

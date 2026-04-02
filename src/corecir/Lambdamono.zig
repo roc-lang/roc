@@ -132,20 +132,12 @@ pub const LookupResolution = union(enum) {
     def: Lambdasolved.ExternalDefSource,
 };
 
-pub const ExprPayload = union(enum) {
+pub const ExprRole = union(enum) {
     plain,
-    callable_value: CallableValue,
-    callable_intro: struct {
-        callable_value: CallableValue,
-        callable_inst: CallableInstId,
-    },
-    direct_call: CallableInstId,
-    indirect_call: IndirectCall,
-    low_level_call: CIR.Expr.LowLevel,
-    lookup_expr: ExprRef,
-    lookup_def: Lambdasolved.ExternalDefSource,
-    dispatch_target: DispatchSolved.DispatchExprTarget,
-    dispatch_intrinsic: DispatchIntrinsic,
+    callable: ExprCallableSemantics,
+    call: CallSite,
+    lookup: LookupResolution,
+    dispatch: DispatchSemantics,
 };
 
 pub const BuilderState = struct {
@@ -343,14 +335,16 @@ pub const Expr = struct {
     monotype: ContextMono.ResolvedMonotype,
     child_exprs: ExprIdSpan = .empty(),
     child_stmts: StmtIdSpan = .empty(),
-    payload: ExprPayload = .plain,
+    role: ExprRole = .plain,
     origin: ValueOrigin = .self,
 
     pub fn getCallableValue(self: *const Expr) ?CallableValue {
-        return switch (self.payload) {
-            .callable_value => |callable_value| callable_value,
-            .callable_intro => |intro| intro.callable_value,
-            .plain, .direct_call, .indirect_call, .low_level_call, .lookup_expr, .lookup_def, .dispatch_target, .dispatch_intrinsic => null,
+        return switch (self.role) {
+            .callable => |callable_semantics| switch (callable_semantics) {
+                .callable => |callable_value| callable_value,
+                .intro => |intro| intro.callable_value,
+            },
+            .plain, .call, .lookup, .dispatch => null,
         };
     }
 
@@ -358,84 +352,111 @@ pub const Expr = struct {
         callable_value: CallableValue,
         callable_inst: CallableInstId,
     } {
-        return switch (self.payload) {
-            .callable_intro => |intro| intro,
-            .plain, .callable_value, .direct_call, .indirect_call, .low_level_call, .lookup_expr, .lookup_def, .dispatch_target, .dispatch_intrinsic => null,
+        return switch (self.role) {
+            .callable => |callable_semantics| switch (callable_semantics) {
+                .intro => |intro| intro,
+                .callable => null,
+            },
+            .plain, .call, .lookup, .dispatch => null,
         };
     }
 
     pub fn getCallable(self: *const Expr) ?ExprCallableSemantics {
-        if (self.getCallableIntro()) |intro| return .{ .intro = intro };
-        if (self.getCallableValue()) |callable_value| return .{ .callable = callable_value };
-        return null;
+        return switch (self.role) {
+            .callable => |callable_semantics| callable_semantics,
+            .plain, .call, .lookup, .dispatch => null,
+        };
     }
 
     pub fn getDirectCall(self: *const Expr) ?CallableInstId {
-        return switch (self.payload) {
-            .direct_call => |callable_inst| callable_inst,
-            .plain, .callable_value, .callable_intro, .indirect_call, .low_level_call, .lookup_expr, .lookup_def, .dispatch_target, .dispatch_intrinsic => null,
+        return switch (self.role) {
+            .call => |call_site| switch (call_site) {
+                .direct => |callable_inst| callable_inst,
+                .indirect_call, .low_level => null,
+            },
+            .plain, .callable, .lookup, .dispatch => null,
         };
     }
 
     pub fn getIndirectCall(self: *const Expr) ?IndirectCall {
-        return switch (self.payload) {
-            .indirect_call => |indirect_call| indirect_call,
-            .plain, .callable_value, .callable_intro, .direct_call, .low_level_call, .lookup_expr, .lookup_def, .dispatch_target, .dispatch_intrinsic => null,
+        return switch (self.role) {
+            .call => |call_site| switch (call_site) {
+                .indirect_call => |indirect_call| indirect_call,
+                .direct, .low_level => null,
+            },
+            .plain, .callable, .lookup, .dispatch => null,
         };
     }
 
     pub fn getLowLevelCall(self: *const Expr) ?CIR.Expr.LowLevel {
-        return switch (self.payload) {
-            .low_level_call => |low_level| low_level,
-            .plain, .callable_value, .callable_intro, .direct_call, .indirect_call, .lookup_expr, .lookup_def, .dispatch_target, .dispatch_intrinsic => null,
+        return switch (self.role) {
+            .call => |call_site| switch (call_site) {
+                .low_level => |low_level| low_level,
+                .direct, .indirect_call => null,
+            },
+            .plain, .callable, .lookup, .dispatch => null,
         };
     }
 
     pub fn getCall(self: *const Expr) ?CallSite {
-        if (self.getDirectCall()) |callable_inst| return .{ .direct = callable_inst };
-        if (self.getIndirectCall()) |indirect_call| return .{ .indirect_call = indirect_call };
-        if (self.getLowLevelCall()) |low_level| return .{ .low_level = low_level };
-        return null;
+        return switch (self.role) {
+            .call => |call_site| call_site,
+            .plain, .callable, .lookup, .dispatch => null,
+        };
     }
 
     pub fn getLookupExpr(self: *const Expr) ?ExprRef {
-        return switch (self.payload) {
-            .lookup_expr => |expr_ref| expr_ref,
-            .plain, .callable_value, .callable_intro, .direct_call, .indirect_call, .low_level_call, .lookup_def, .dispatch_target, .dispatch_intrinsic => null,
+        return switch (self.role) {
+            .lookup => |lookup_resolution| switch (lookup_resolution) {
+                .expr => |expr_ref| expr_ref,
+                .def => null,
+            },
+            .plain, .callable, .call, .dispatch => null,
         };
     }
 
     pub fn getLookupDef(self: *const Expr) ?Lambdasolved.ExternalDefSource {
-        return switch (self.payload) {
-            .lookup_def => |def_source| def_source,
-            .plain, .callable_value, .callable_intro, .direct_call, .indirect_call, .low_level_call, .lookup_expr, .dispatch_target, .dispatch_intrinsic => null,
+        return switch (self.role) {
+            .lookup => |lookup_resolution| switch (lookup_resolution) {
+                .def => |def_source| def_source,
+                .expr => null,
+            },
+            .plain, .callable, .call, .dispatch => null,
         };
     }
 
     pub fn getLookup(self: *const Expr) ?LookupResolution {
-        if (self.getLookupExpr()) |expr_ref| return .{ .expr = expr_ref };
-        if (self.getLookupDef()) |def_source| return .{ .def = def_source };
-        return null;
+        return switch (self.role) {
+            .lookup => |lookup_resolution| lookup_resolution,
+            .plain, .callable, .call, .dispatch => null,
+        };
     }
 
     pub fn getDispatchTarget(self: *const Expr) ?DispatchSolved.DispatchExprTarget {
-        return switch (self.payload) {
-            .dispatch_target => |target| target,
-            .plain, .callable_value, .callable_intro, .direct_call, .indirect_call, .low_level_call, .lookup_expr, .lookup_def, .dispatch_intrinsic => null,
+        return switch (self.role) {
+            .dispatch => |dispatch_semantics| switch (dispatch_semantics) {
+                .target => |target| target,
+                .intrinsic => null,
+            },
+            .plain, .callable, .call, .lookup => null,
         };
     }
 
     pub fn getDispatchIntrinsic(self: *const Expr) ?DispatchIntrinsic {
-        return switch (self.payload) {
-            .dispatch_intrinsic => |intrinsic| intrinsic,
-            .plain, .callable_value, .callable_intro, .direct_call, .indirect_call, .low_level_call, .lookup_expr, .lookup_def, .dispatch_target => null,
+        return switch (self.role) {
+            .dispatch => |dispatch_semantics| switch (dispatch_semantics) {
+                .intrinsic => |intrinsic| intrinsic,
+                .target => null,
+            },
+            .plain, .callable, .call, .lookup => null,
         };
     }
 
     pub fn getDispatch(self: *const Expr) ?DispatchSemantics {
-        if (self.getDispatchTarget()) |target| return .{ .target = target };
-        if (self.getDispatchIntrinsic()) |intrinsic| return .{ .intrinsic = intrinsic };
-        return null;
+        return switch (self.role) {
+            .dispatch => |dispatch_semantics| dispatch_semantics,
+            .plain, .callable, .call, .lookup => null,
+        };
     }
 
     pub fn getOriginExpr(self: *const Expr) ?ExprRef {
@@ -636,7 +657,7 @@ pub const Program = struct {
                 .monotype = monotype,
                 .child_exprs = .empty(),
                 .child_stmts = .empty(),
-                .payload = .plain,
+                .role = .plain,
                 .origin = .self,
             });
             try self.expr_ids_by_key.put(allocator, key, new_expr_id);
