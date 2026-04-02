@@ -295,18 +295,10 @@ pub const Result = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?ResolvedMonotype {
-        const expr_id = self.lambdamono.getExprId(source_context, module_idx, expr_idx) orelse return null;
-        const expr = self.lambdamono.getExpr(expr_id);
-        if (self.getExprMonotypeById(expr_id)) |monotype| return monotype;
-        if (expr.getCallableValue()) |callable_value| {
-            return callableValueMonotype(self, callable_value);
+        if (self.lambdamono.getExprId(source_context, module_idx, expr_idx)) |expr_id| {
+            if (self.getExprMonotypeById(expr_id)) |monotype| return monotype;
         }
-        if (self.getExprOriginById(expr_id)) |origin| {
-            if (origin.projections.isEmpty()) {
-                return self.getExprMonotype(origin.source_context, origin.module_idx, origin.expr_idx);
-            }
-        }
-        return null;
+        return self.context_mono.getExprMonotype(source_context, module_idx, expr_idx);
     }
 
     pub fn getExprCallableValue(
@@ -2305,11 +2297,7 @@ const MaterializeCallableValueFailure = enum {
             module_idx,
             expr_idx,
         );
-        if (monotype != null) return true;
-        if (self.readExprCallableValue(result, source_context, module_idx, expr_idx)) |callable_value| {
-            return !callableValueMonotype(result, callable_value).isNone();
-        }
-        return false;
+        return monotype != null;
     }
 
     fn programExpr(self: *Pass, result: *Result, expr_id: Lambdamono.ExprId) *Lambdamono.Expr {
@@ -8133,6 +8121,28 @@ const MaterializeCallableValueFailure = enum {
         if (monotype.isNone()) return;
         const key = self.resultExprKeyForSourceContext(source_context, module_idx, expr_idx);
         const resolved = resolvedMonotype(monotype, monotype_module_idx);
+        if (result.lambdamono.getExprId(source_context, module_idx, expr_idx)) |expr_id| {
+            const program_expr = &result.lambdamono.exprs.items[@intFromEnum(expr_id)];
+            if (program_expr.monotype) |existing_program_mono| {
+                if (!try self.monotypesStructurallyEqualAcrossModules(
+                    result,
+                    existing_program_mono.idx,
+                    existing_program_mono.module_idx,
+                    resolved.idx,
+                    resolved.module_idx,
+                )) {
+                    if (std.debug.runtime_safety) {
+                        std.debug.panic(
+                            "Pipeline invariant violated: finalized expr monotype disagreed with recorded exact monotype for ctx={s} module={d} expr={d}",
+                            .{ @tagName(source_context), module_idx, @intFromEnum(expr_idx) },
+                        );
+                    }
+                    unreachable;
+                }
+            } else {
+                program_expr.monotype = resolved;
+            }
+        }
         try self.recordTypeVarMonotypeForSourceContext(
             result,
             source_context,
@@ -12956,45 +12966,8 @@ const MaterializeCallableValueFailure = enum {
             return resolved;
         }
 
-        if (self.readExprCallableValue(result, source_context, module_idx, expr_idx)) |callable_value| {
-            return callableValueMonotype(result, callable_value);
-        }
-
         const module_env = self.all_module_envs[module_idx];
         const expr = module_env.store.getExpr(expr_idx);
-        switch (expr) {
-            .e_lookup_local => |lookup| {
-                if (self.readCallableParamValue(result, source_context, module_idx, lookup.pattern_idx)) |callable_value| {
-                    return callableValueMonotype(result, callable_value);
-                }
-                if (result.getContextPatternMonotype(source_context, module_idx, lookup.pattern_idx)) |pattern_mono| {
-                    return pattern_mono;
-                }
-                if (self.lookupContextTypeVarMonotype(
-                    result,
-                    source_context,
-                    module_idx,
-                    ModuleEnv.varFrom(lookup.pattern_idx),
-                )) |binding_mono| {
-                    return binding_mono;
-                }
-            },
-            else => {},
-        }
-
-        if (result.getExprOriginExpr(source_context, module_idx, expr_idx)) |source| {
-            var source_mono = try self.requireRecordedExprMonotypeForSourceContext(
-                result,
-                thread,
-                source.source_context,
-                source.module_idx,
-                source.expr_idx,
-            );
-            for (result.lambdamono.getValueProjectionEntries(source.projections)) |projection| {
-                source_mono = try self.projectResolvedMonotypeByValueProjection(result, source_mono, projection);
-            }
-            return source_mono;
-        }
 
         const typevar_resolved = try self.resolveTypeVarMonotypeResolved(
             result,
@@ -13064,57 +13037,24 @@ const MaterializeCallableValueFailure = enum {
         if (self.lookupExprMonotypeForSourceContext(result, thread, source_context, module_idx, expr_idx)) |resolved| {
             return resolved;
         }
-
-        if (self.readExprCallableValue(result, source_context, module_idx, expr_idx)) |callable_value| {
-            return callableValueMonotype(result, callable_value);
+        const typevar_resolved = try self.resolveTypeVarMonotypeResolved(
+            result,
+            thread,
+            module_idx,
+            ModuleEnv.varFrom(expr_idx),
+        );
+        if (!typevar_resolved.isNone()) {
+            try self.recordExprMonotypeResolved(
+                result,
+                source_context,
+                module_idx,
+                expr_idx,
+                typevar_resolved.idx,
+                typevar_resolved.module_idx,
+                thread,
+            );
+            return typevar_resolved;
         }
-
-        const module_env = self.all_module_envs[module_idx];
-        const expr = module_env.store.getExpr(expr_idx);
-
-        switch (expr) {
-            .e_lookup_local => |lookup| {
-                if (self.readCallableParamValue(result, source_context, module_idx, lookup.pattern_idx)) |callable_value| {
-                    return callableValueMonotype(result, callable_value);
-                }
-                if (self.getContextPatternMonotypeForThread(result, thread, module_idx, lookup.pattern_idx)) |pattern_mono| {
-                    return pattern_mono;
-                }
-                if (self.lookupContextTypeVarMonotype(
-                    result,
-                    source_context,
-                    module_idx,
-                    ModuleEnv.varFrom(lookup.pattern_idx),
-                )) |binding_mono| {
-                    return binding_mono;
-                }
-            },
-            else => {},
-        }
-
-        if (result.getExprOriginExpr(source_context, module_idx, expr_idx)) |source| {
-            if (!(sourceContextsEqual(source.source_context, source_context) and
-                source.module_idx == module_idx and
-                source.expr_idx == expr_idx and
-                source.projections.isEmpty()))
-            {
-                var source_mono = (try self.lookupRecordedExprMonotypeIfReadyForSourceContext(
-                    result,
-                    thread,
-                    source.source_context,
-                    source.module_idx,
-                    source.expr_idx,
-                )) orelse return null;
-                for (result.lambdamono.getValueProjectionEntries(source.projections)) |projection| {
-                    if (source_mono.isNone()) break;
-                    source_mono = try self.projectResolvedMonotypeByValueProjection(result, source_mono, projection);
-                }
-                if (!source_mono.isNone()) {
-                    return source_mono;
-                }
-            }
-        }
-
         return null;
     }
 
