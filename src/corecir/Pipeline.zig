@@ -5092,14 +5092,14 @@ const MaterializeCallableValueFailure = enum {
         );
     }
 
-    fn resolveTemplateDemandSourceContextForExpr(
+    fn requireTemplateDemandSourceContextForExpr(
         self: *Pass,
         result: *Result,
         source_context: SourceContext,
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
         template_id: CallableTemplateId,
-    ) ?SourceContext {
+    ) SourceContext {
         if (!templateRequiresConcreteOwnerCallableInst(result, template_id)) {
             return source_context;
         }
@@ -5129,7 +5129,20 @@ const MaterializeCallableValueFailure = enum {
             }
         }
 
-        return null;
+        if (std.debug.runtime_safety) {
+            const module_env = self.all_module_envs[module_idx];
+            std.debug.panic(
+                "Pipeline invariant violated: expr {d} in module {d} required a concrete owner callable-inst source context for template {d} but none was available in ctx={s}",
+                .{
+                    @intFromEnum(expr_idx),
+                    module_idx,
+                    @intFromEnum(template_id),
+                    @tagName(source_context),
+                },
+            );
+            _ = module_env;
+        }
+        unreachable;
     }
 
     fn resolveDirectCallSite(
@@ -5232,77 +5245,76 @@ const MaterializeCallableValueFailure = enum {
         }
 
         if (resolved_template_id) |template_id| {
-            if (self.resolveTemplateDemandSourceContextForExpr(
+            const template_source_context = self.requireTemplateDemandSourceContextForExpr(
                 result,
                 thread.requireSourceContext(),
                 module_idx,
                 callee_expr_idx,
                 template_id,
-            )) |template_source_context| {
-                if (try self.specializeDirectCallExactCallable(
+            );
+            if (try self.specializeDirectCallExactCallable(
+                result,
+                thread,
+                module_idx,
+                call_expr_idx,
+                call_expr,
+                template_id,
+                template_source_context,
+            )) |callable_inst_id| {
+                try self.finalizeResolvedDirectCallCallableInst(
                     result,
                     thread,
                     module_idx,
                     call_expr_idx,
                     call_expr,
-                    template_id,
-                    template_source_context,
-                )) |callable_inst_id| {
-                    try self.finalizeResolvedDirectCallCallableInst(
-                        result,
-                        thread,
-                        module_idx,
-                        call_expr_idx,
-                        call_expr,
-                        callee_expr,
-                        callable_inst_id,
-                    );
-                    return;
-                }
-                if (std.debug.runtime_safety) switch (callee_expr) {
-                    .e_lookup_external, .e_lookup_required => {
-                        const arg_exprs = module_env.store.sliceExpr(call_expr.args);
-                        var arg_monos = std.ArrayList(ResolvedMonotype).empty;
-                        defer arg_monos.deinit(self.allocator);
-                        for (arg_exprs) |arg_expr_idx| {
-                            try arg_monos.append(
-                                self.allocator,
-                                try self.requireFullyBoundExprMonotype(
-                                    result,
-                                    thread,
-                                    module_idx,
-                                    arg_expr_idx,
-                                ),
-                            );
-                        }
-                        const exact_call_fn_monotype = resolvedMonotype(
-                            try self.resolveDirectCallFnMonotype(
+                    callee_expr,
+                    callable_inst_id,
+                );
+                return;
+            }
+            if (std.debug.runtime_safety) switch (callee_expr) {
+                .e_lookup_external, .e_lookup_required => {
+                    const arg_exprs = module_env.store.sliceExpr(call_expr.args);
+                    var arg_monos = std.ArrayList(ResolvedMonotype).empty;
+                    defer arg_monos.deinit(self.allocator);
+                    for (arg_exprs) |arg_expr_idx| {
+                        try arg_monos.append(
+                            self.allocator,
+                            try self.requireFullyBoundExprMonotype(
                                 result,
                                 thread,
                                 module_idx,
-                                call_expr_idx,
-                                call_expr,
+                                arg_expr_idx,
                             ),
+                        );
+                    }
+                    const exact_call_fn_monotype = resolvedMonotype(
+                        try self.resolveDirectCallFnMonotype(
+                            result,
+                            thread,
                             module_idx,
-                        );
-                        const template = result.getCallableTemplate(template_id);
-                        std.debug.panic(
-                            "Pipeline invariant violated: exact direct-call specialization failed for external callee expr {d} in module {d}; source_context={s} template={d} template_kind={s} template_owner={s} template_source_context={s} call_fn_monotype={any} arg_monotypes={any}",
-                            .{
-                                @intFromEnum(callee_expr_idx),
-                                module_idx,
-                                @tagName(thread.requireSourceContext()),
-                                @intFromEnum(template_id),
-                                @tagName(template.kind),
-                                @tagName(template.owner),
-                                @tagName(template_source_context),
-                                exact_call_fn_monotype,
-                                arg_monos.items,
-                            },
-                        );
-                    },
-                    else => {},
-                };
+                            call_expr_idx,
+                            call_expr,
+                        ),
+                        module_idx,
+                    );
+                    const template = result.getCallableTemplate(template_id);
+                    std.debug.panic(
+                        "Pipeline invariant violated: exact direct-call specialization failed for external callee expr {d} in module {d}; source_context={s} template={d} template_kind={s} template_owner={s} template_source_context={s} call_fn_monotype={any} arg_monotypes={any}",
+                        .{
+                            @intFromEnum(callee_expr_idx),
+                            module_idx,
+                            @tagName(thread.requireSourceContext()),
+                            @intFromEnum(template_id),
+                            @tagName(template.kind),
+                            @tagName(template.owner),
+                            @tagName(template_source_context),
+                            exact_call_fn_monotype,
+                            arg_monos.items,
+                        },
+                    );
+                },
+                else => {},
             }
         }
 
@@ -5310,7 +5322,7 @@ const MaterializeCallableValueFailure = enum {
             .e_lookup_external, .e_lookup_required => {
                 const current_call_site = self.getCallSiteForThread(result, thread, module_idx, call_expr_idx);
                 const template_source_context = if (resolved_template_id) |template_id|
-                    self.resolveTemplateDemandSourceContextForExpr(
+                    self.requireTemplateDemandSourceContextForExpr(
                         result,
                         thread.requireSourceContext(),
                         module_idx,
@@ -5496,15 +5508,13 @@ const MaterializeCallableValueFailure = enum {
                 else => return,
             }
         };
-        const template_source_context = self.resolveTemplateDemandSourceContextForExpr(
+        const template_source_context = self.requireTemplateDemandSourceContextForExpr(
             result,
             thread.requireSourceContext(),
             module_idx,
             callee_expr_idx,
             template_id,
-        ) orelse {
-            return;
-        };
+        );
         const callable_inst_id = try self.specializeDirectCallExactCallable(
             result,
             thread,
@@ -8126,13 +8136,13 @@ const MaterializeCallableValueFailure = enum {
             expr_idx,
             &actual_args,
         );
-        const defining_source_context = self.resolveTemplateDemandSourceContextForExpr(
+        const defining_source_context = self.requireTemplateDemandSourceContextForExpr(
             result,
             thread.requireSourceContext(),
             module_idx,
             expr_idx,
             template_id,
-        ) orelse return null;
+        );
         const resolved_target = switch (expr) {
             .e_binop => |binop_expr| try self.resolveDispatchTargetForExpr(result, thread, module_idx, expr_idx, identFromBinOp(binop_expr.op)),
             .e_dot_access => |dot_expr| try self.resolveDispatchTargetForExpr(result, thread, module_idx, expr_idx, dot_expr.field_name),
@@ -9069,6 +9079,163 @@ const MaterializeCallableValueFailure = enum {
         if (!std.meta.eql(semantics.dispatch, next_dispatch)) semantics.dispatch = next_dispatch;
     }
 
+    fn recordExactDispatchConstraint(
+        self: *Pass,
+        result: *Result,
+        source_context: SourceContext,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+        constraint: ContextMono.ExactDispatchConstraint,
+    ) Allocator.Error!void {
+        try self.putIfChanged(
+            &result.context_mono.exact_dispatch_constraints,
+            self.resultExprKeyForSourceContext(source_context, module_idx, expr_idx),
+            constraint,
+        );
+    }
+
+    fn exactStaticDispatchConstraintForExpr(
+        self: *Pass,
+        result: *Result,
+        thread: SemanticThread,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+        method_name: Ident.Idx,
+    ) Allocator.Error!?ContextMono.ExactDispatchConstraint {
+        const source_context = thread.requireSourceContext();
+        if (result.context_mono.getExactDispatchConstraint(source_context, module_idx, expr_idx)) |constraint| {
+            if (!constraint.method_name.eql(method_name)) {
+                const module_env = self.all_module_envs[module_idx];
+                if (std.debug.runtime_safety) {
+                    std.debug.panic(
+                        "Pipeline invariant violated: dispatch expr={d} cached method '{s}' but requested '{s}'",
+                        .{
+                            @intFromEnum(expr_idx),
+                            module_env.getIdent(constraint.method_name),
+                            module_env.getIdent(method_name),
+                        },
+                    );
+                }
+                unreachable;
+            }
+            return constraint;
+        }
+
+        const module_env = self.all_module_envs[module_idx];
+        var matched: ?ContextMono.ExactDispatchConstraint = null;
+        var saw_unresolved_match = false;
+
+        for (module_env.types.sliceAllStaticDispatchConstraints()) |constraint| {
+            if (constraint.source_expr_idx != @intFromEnum(expr_idx)) continue;
+            if (!constraint.fn_name.eql(method_name)) continue;
+
+            const fn_monotype = try self.resolveTypeVarMonotypeResolved(result, thread, module_idx, constraint.fn_var);
+            if (fn_monotype.isNone()) {
+                saw_unresolved_match = true;
+                continue;
+            }
+
+            if (!constraint.resolved_target.isNone() and
+                self.resolvedTargetIsUsable(module_env, method_name, constraint.resolved_target))
+            {
+                const target_module_idx = self.findModuleForOriginMaybe(module_env, constraint.resolved_target.origin_module).?;
+                const resolved_target = ResolvedDispatchTarget{
+                    .origin = constraint.resolved_target.origin_module,
+                    .method_ident = constraint.resolved_target.method_ident,
+                    .fn_var = constraint.fn_var,
+                    .module_idx = target_module_idx,
+                };
+                if (!try self.resolvedDispatchTargetMatchesMonotype(result, module_idx, resolved_target, fn_monotype.idx)) {
+                    continue;
+                }
+            }
+
+            const exact_constraint: ContextMono.ExactDispatchConstraint = .{
+                .method_name = constraint.fn_name,
+                .fn_var = constraint.fn_var,
+                .resolved_target = constraint.resolved_target,
+            };
+
+            if (matched) |existing| {
+                if (std.meta.eql(existing, exact_constraint) or
+                    try self.dispatchConstraintsEquivalent(result, thread, module_idx, existing, exact_constraint))
+                {
+                    matched = if (!existing.resolved_target.isNone())
+                        existing
+                    else
+                        exact_constraint;
+                    continue;
+                }
+
+                const existing_mono = try self.resolveTypeVarMonotypeResolved(result, thread, module_idx, existing.fn_var);
+                const next_mono = fn_monotype;
+
+                if (!existing_mono.isNone() and !next_mono.isNone() and
+                    try self.monotypesStructurallyEqualAcrossModules(
+                        result,
+                        existing_mono.idx,
+                        existing_mono.module_idx,
+                        next_mono.idx,
+                        next_mono.module_idx,
+                    ))
+                {
+                    const existing_target_usable = !existing.resolved_target.isNone() and
+                        self.resolvedTargetIsUsable(module_env, method_name, existing.resolved_target);
+                    const next_target_usable = !exact_constraint.resolved_target.isNone() and
+                        self.resolvedTargetIsUsable(module_env, method_name, exact_constraint.resolved_target);
+
+                    if (existing_target_usable and next_target_usable and
+                        !existing.resolved_target.origin_module.eql(exact_constraint.resolved_target.origin_module))
+                    {
+                        if (std.debug.runtime_safety) {
+                            std.debug.panic(
+                                "Pipeline invariant violated: dispatch expr={d} method='{s}' had conflicting resolved targets for the same function monotype",
+                                .{ @intFromEnum(expr_idx), module_env.getIdent(method_name) },
+                            );
+                        }
+                        unreachable;
+                    }
+
+                    matched = if (existing_target_usable) existing else if (next_target_usable) exact_constraint else existing;
+                    continue;
+                }
+
+                if (std.debug.runtime_safety) {
+                    std.debug.panic(
+                        "Pipeline invariant violated: dispatch expr={d} method='{s}' had multiple non-equivalent surviving static dispatch constraints (existing_var={d} existing_mono={d}@{d} existing_target={any} next_var={d} next_mono={d}@{d} next_target={any})",
+                        .{
+                            @intFromEnum(expr_idx),
+                            module_env.getIdent(method_name),
+                            @intFromEnum(existing.fn_var),
+                            @intFromEnum(existing_mono.idx),
+                            existing_mono.module_idx,
+                            existing.resolved_target,
+                            @intFromEnum(exact_constraint.fn_var),
+                            @intFromEnum(next_mono.idx),
+                            next_mono.module_idx,
+                            exact_constraint.resolved_target,
+                        },
+                    );
+                }
+                unreachable;
+            } else {
+                matched = exact_constraint;
+            }
+        }
+
+        if (saw_unresolved_match) return null;
+
+        const exact = matched orelse return null;
+        try self.recordExactDispatchConstraint(
+            result,
+            source_context,
+            module_idx,
+            expr_idx,
+            exact,
+        );
+        return exact;
+    }
+
     fn dotDispatchHandledWithoutCallableInst(
         self: *Pass,
         result: *Result,
@@ -9143,44 +9310,43 @@ const MaterializeCallableValueFailure = enum {
         method_name: Ident.Idx,
     ) Allocator.Error!bool {
         const module_env = self.all_module_envs[module_idx];
-        var saw_matching_constraint = false;
+        const constraint = try self.exactStaticDispatchConstraintForExpr(result, thread, module_idx, expr_idx, method_name) orelse return false;
 
-        for (module_env.types.sliceAllStaticDispatchConstraints()) |constraint| {
-            if (constraint.source_expr_idx != @intFromEnum(expr_idx)) continue;
-            if (!constraint.fn_name.eql(method_name)) continue;
-
-            if (!constraint.resolved_target.isNone() and
-                self.resolvedTargetIsUsable(module_env, method_name, constraint.resolved_target))
-            {
-                return false;
-            }
-
-            const fn_monotype = try self.resolveTypeVarMonotypeResolved(result, thread, module_idx, constraint.fn_var);
-            if (fn_monotype.isNone()) return false;
-
-            const fn_mono = switch (result.context_mono.monotype_store.getMonotype(fn_monotype.idx)) {
-                .func => |func| func,
-                else => return false,
-            };
-
-            const fn_args = result.context_mono.monotype_store.getIdxSpan(fn_mono.args);
-            if (fn_args.len != 1) return false;
-
-            const receiver_prim = switch (result.context_mono.monotype_store.getMonotype(fn_args[0])) {
-                .prim => |prim| prim,
-                else => return false,
-            };
-            if (!primitiveUsesIntrinsicToStr(receiver_prim)) return false;
-
-            switch (result.context_mono.monotype_store.getMonotype(fn_mono.ret)) {
-                .prim => |ret_prim| if (ret_prim != .str) return false,
-                else => return false,
-            }
-
-            saw_matching_constraint = true;
+        if (!constraint.resolved_target.isNone() and
+            self.resolvedTargetIsUsable(module_env, method_name, constraint.resolved_target))
+        {
+            return false;
         }
 
-        return saw_matching_constraint;
+        const fn_monotype = try self.resolveTypeVarMonotypeResolved(result, thread, module_idx, constraint.fn_var);
+        if (fn_monotype.isNone()) {
+            if (std.debug.runtime_safety) {
+                std.debug.panic(
+                    "Pipeline invariant violated: cached exact dispatch expr={d} method='{s}' had no exact function monotype",
+                    .{ @intFromEnum(expr_idx), module_env.getIdent(method_name) },
+                );
+            }
+            unreachable;
+        }
+
+        const fn_mono = switch (result.context_mono.monotype_store.getMonotype(fn_monotype.idx)) {
+            .func => |func| func,
+            else => return false,
+        };
+
+        const fn_args = result.context_mono.monotype_store.getIdxSpan(fn_mono.args);
+        if (fn_args.len != 1) return false;
+
+        const receiver_prim = switch (result.context_mono.monotype_store.getMonotype(fn_args[0])) {
+            .prim => |prim| prim,
+            else => return false,
+        };
+        if (!primitiveUsesIntrinsicToStr(receiver_prim)) return false;
+
+        switch (result.context_mono.monotype_store.getMonotype(fn_mono.ret)) {
+            .prim => |ret_prim| return ret_prim == .str,
+            else => return false,
+        }
     }
 
     fn binopDispatchHandledWithoutCallableInst(
@@ -9397,104 +9563,6 @@ const MaterializeCallableValueFailure = enum {
         );
     }
 
-    fn exactStaticDispatchConstraintForExpr(
-        self: *Pass,
-        result: *Result,
-        thread: SemanticThread,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-        method_name: Ident.Idx,
-    ) Allocator.Error!?types.StaticDispatchConstraint {
-        const module_env = self.all_module_envs[module_idx];
-        var matched: ?types.StaticDispatchConstraint = null;
-
-        for (module_env.types.sliceAllStaticDispatchConstraints()) |constraint| {
-            if (constraint.source_expr_idx != @intFromEnum(expr_idx)) continue;
-            if (!constraint.fn_name.eql(method_name)) continue;
-
-            const fn_monotype = try self.resolveTypeVarMonotypeResolved(result, thread, module_idx, constraint.fn_var);
-            if (fn_monotype.isNone()) continue;
-            if (!constraint.resolved_target.isNone() and
-                self.resolvedTargetIsUsable(module_env, method_name, constraint.resolved_target))
-            {
-                const target_module_idx = self.findModuleForOriginMaybe(module_env, constraint.resolved_target.origin_module).?;
-                const resolved_target = ResolvedDispatchTarget{
-                    .origin = constraint.resolved_target.origin_module,
-                    .method_ident = constraint.resolved_target.method_ident,
-                    .fn_var = constraint.fn_var,
-                    .module_idx = target_module_idx,
-                };
-                if (!try self.resolvedDispatchTargetMatchesMonotype(result, module_idx, resolved_target, fn_monotype.idx)) {
-                    continue;
-                }
-            }
-
-            if (matched) |existing| {
-                if (staticDispatchConstraintsEqual(existing, constraint) or
-                    try self.dispatchConstraintsEquivalent(result, thread, module_idx, existing, constraint))
-                {
-                    matched = if (!existing.resolved_target.isNone())
-                        existing
-                    else
-                        constraint;
-                    continue;
-                }
-
-                const existing_mono = try self.resolveTypeVarMonotypeResolved(result, thread, module_idx, existing.fn_var);
-                const next_mono = try self.resolveTypeVarMonotypeResolved(result, thread, module_idx, constraint.fn_var);
-
-                if (!existing_mono.isNone() and !next_mono.isNone() and
-                    try self.monotypesStructurallyEqualAcrossModules(
-                        result,
-                        existing_mono.idx,
-                        existing_mono.module_idx,
-                        next_mono.idx,
-                        next_mono.module_idx,
-                    ))
-                {
-                    const existing_target_usable = !existing.resolved_target.isNone() and
-                        self.resolvedTargetIsUsable(module_env, method_name, existing.resolved_target);
-                    const next_target_usable = !constraint.resolved_target.isNone() and
-                        self.resolvedTargetIsUsable(module_env, method_name, constraint.resolved_target);
-
-                    if (existing_target_usable and next_target_usable and
-                        !existing.resolved_target.origin_module.eql(constraint.resolved_target.origin_module))
-                    {
-                        std.debug.panic(
-                            "Pipeline invariant violated: dispatch expr={d} method='{s}' had conflicting resolved targets for the same function monotype",
-                            .{ @intFromEnum(expr_idx), module_env.getIdent(method_name) },
-                        );
-                    }
-
-                    matched = if (existing_target_usable) existing else if (next_target_usable) constraint else existing;
-                    continue;
-                }
-
-                std.debug.panic(
-                    "Pipeline invariant violated: dispatch expr={d} method='{s}' had multiple non-equivalent surviving static dispatch constraints (existing_var={d} existing_mono={d}@{d} existing_shape={any} existing_target={any} next_var={d} next_mono={d}@{d} next_shape={any} next_target={any})",
-                    .{
-                        @intFromEnum(expr_idx),
-                        module_env.getIdent(method_name),
-                        @intFromEnum(existing.fn_var),
-                        @intFromEnum(existing_mono.idx),
-                        existing_mono.module_idx,
-                        result.context_mono.monotype_store.getMonotype(existing_mono.idx),
-                        existing.resolved_target,
-                        @intFromEnum(constraint.fn_var),
-                        @intFromEnum(next_mono.idx),
-                        next_mono.module_idx,
-                        result.context_mono.monotype_store.getMonotype(next_mono.idx),
-                        constraint.resolved_target,
-                    },
-                );
-            } else {
-                matched = constraint;
-            }
-        }
-
-        return matched;
-    }
-
     fn exactAssociatedMethodDispatchConstraint(
         self: *Pass,
         result: *Result,
@@ -9505,105 +9573,54 @@ const MaterializeCallableValueFailure = enum {
         method_name: Ident.Idx,
         method_info: AssociatedMethodTemplate,
         receiver_monotype: Monotype.Idx,
-    ) Allocator.Error!?types.StaticDispatchConstraint {
+    ) Allocator.Error!?ContextMono.ExactDispatchConstraint {
         _ = expr;
         const module_env = self.all_module_envs[module_idx];
         const target_method_text = method_info.target_env.getIdent(method_info.qualified_method_ident);
-        var matched: ?types.StaticDispatchConstraint = null;
+        const constraint = try self.exactStaticDispatchConstraintForExpr(
+            result,
+            thread,
+            module_idx,
+            expr_idx,
+            method_name,
+        ) orelse return null;
 
-        for (module_env.types.sliceAllStaticDispatchConstraints()) |constraint| {
-            if (constraint.source_expr_idx != @intFromEnum(expr_idx)) continue;
-            if (!constraint.fn_name.eql(method_name)) continue;
-
-            const fn_monotype = try self.resolveTypeVarMonotypeResolved(
-                result,
-                thread,
-                module_idx,
-                constraint.fn_var,
-            );
-            if (fn_monotype.isNone()) continue;
-            if (!receiver_monotype.isNone()) {
-                const mono = result.context_mono.monotype_store.getMonotype(fn_monotype.idx);
-                if (mono != .func) continue;
-
-                const fn_args = result.context_mono.monotype_store.getIdxSpan(mono.func.args);
-                if (fn_args.len == 0) continue;
-
-                if (!try self.monotypeDispatchCompatible(
-                    result,
-                    fn_args[0],
-                    module_idx,
-                    receiver_monotype,
-                    fn_monotype.module_idx,
-                )) continue;
+        const fn_monotype = try self.resolveTypeVarMonotypeResolved(result, thread, module_idx, constraint.fn_var);
+        if (fn_monotype.isNone()) {
+            if (std.debug.runtime_safety) {
+                std.debug.panic(
+                    "Pipeline invariant violated: associated dispatch expr={d} method='{s}' cached an exact constraint without an exact function monotype",
+                    .{ @intFromEnum(expr_idx), module_env.getIdent(method_name) },
+                );
             }
-
-            if (!constraint.resolved_target.isNone()) {
-                const target_module_idx = self.findModuleForOriginMaybe(module_env, constraint.resolved_target.origin_module) orelse continue;
-                if (target_module_idx != method_info.module_idx) continue;
-                if (!std.mem.eql(u8, module_env.getIdent(constraint.resolved_target.method_ident), target_method_text)) continue;
-            } else {
-                if (receiver_monotype.isNone()) continue;
-            }
-
-            if (matched) |existing| {
-                if (staticDispatchConstraintsEqual(existing, constraint) or
-                    try self.dispatchConstraintsEquivalent(result, thread, module_idx, existing, constraint))
-                {
-                    continue;
-                }
-
-                const existing_exact = try self.resolveTypeVarMonotypeResolved(result, thread, module_idx, existing.fn_var);
-                const next_exact = try self.resolveTypeVarMonotypeResolved(result, thread, module_idx, constraint.fn_var);
-
-                if (!existing_exact.isNone() and !next_exact.isNone()) {
-                    if (!try self.monotypesStructurallyEqualAcrossModules(
-                        result,
-                        existing_exact.idx,
-                        existing_exact.module_idx,
-                        next_exact.idx,
-                        next_exact.module_idx,
-                    )) {
-                        const expr_region = module_env.store.getExprRegion(expr_idx);
-                        const source = module_env.getSourceAll();
-                        const snippet_start = @min(expr_region.start.offset, source.len);
-                        const snippet_end = @min(expr_region.end.offset, source.len);
-                        std.debug.panic(
-                            "Pipeline invariant violated: associated dispatch expr={d} method='{s}' had conflicting exact function monotypes; region={any} snippet=\"{s}\" existing={d}@{d} existing_mono={any} next={d}@{d} next_mono={any}",
-                            .{
-                                @intFromEnum(expr_idx),
-                                module_env.getIdent(method_name),
-                                expr_region,
-                                source[snippet_start..snippet_end],
-                                @intFromEnum(existing_exact.idx),
-                                existing_exact.module_idx,
-                                result.context_mono.monotype_store.getMonotype(existing_exact.idx),
-                                @intFromEnum(next_exact.idx),
-                                next_exact.module_idx,
-                                result.context_mono.monotype_store.getMonotype(next_exact.idx),
-                            },
-                        );
-                    }
-                }
-            } else {
-                matched = constraint;
-            }
+            unreachable;
         }
 
-        return matched;
-    }
+        if (!receiver_monotype.isNone()) {
+            const mono = result.context_mono.monotype_store.getMonotype(fn_monotype.idx);
+            if (mono != .func) return null;
 
-    fn staticDispatchConstraintsEqual(
-        lhs: types.StaticDispatchConstraint,
-        rhs: types.StaticDispatchConstraint,
-    ) bool {
-        return lhs.fn_name.eql(rhs.fn_name) and
-            lhs.fn_var == rhs.fn_var and
-            lhs.origin == rhs.origin and
-            std.meta.eql(lhs.num_literal, rhs.num_literal) and
-            lhs.source_expr_idx == rhs.source_expr_idx and
-            lhs.resolved_target.origin_module.eql(rhs.resolved_target.origin_module) and
-            lhs.resolved_target.method_ident.eql(rhs.resolved_target.method_ident);
+            const fn_args = result.context_mono.monotype_store.getIdxSpan(mono.func.args);
+            if (fn_args.len == 0) return null;
+
+            if (!try self.monotypeDispatchCompatible(
+                result,
+                fn_args[0],
+                module_idx,
+                receiver_monotype,
+                fn_monotype.module_idx,
+            )) return null;
+        }
+
+        if (!constraint.resolved_target.isNone()) {
+            const target_module_idx = self.findModuleForOriginMaybe(module_env, constraint.resolved_target.origin_module) orelse return null;
+            if (target_module_idx != method_info.module_idx) return null;
+            if (!std.mem.eql(u8, module_env.getIdent(constraint.resolved_target.method_ident), target_method_text)) return null;
+        } else if (receiver_monotype.isNone()) {
+            return null;
+        }
+
+        return constraint;
     }
 
     fn dispatchConstraintsEquivalent(
@@ -9611,11 +9628,10 @@ const MaterializeCallableValueFailure = enum {
         result: *Result,
         thread: SemanticThread,
         module_idx: u32,
-        lhs: types.StaticDispatchConstraint,
-        rhs: types.StaticDispatchConstraint,
+        lhs: ContextMono.ExactDispatchConstraint,
+        rhs: ContextMono.ExactDispatchConstraint,
     ) Allocator.Error!bool {
-        if (!lhs.fn_name.eql(rhs.fn_name)) return false;
-        if (lhs.source_expr_idx != rhs.source_expr_idx) return false;
+        if (!lhs.method_name.eql(rhs.method_name)) return false;
         if (!lhs.resolved_target.origin_module.eql(rhs.resolved_target.origin_module)) return false;
         if (!lhs.resolved_target.method_ident.eql(rhs.resolved_target.method_ident)) return false;
 
@@ -9676,9 +9692,6 @@ const MaterializeCallableValueFailure = enum {
                     },
                     else => null,
                 };
-                var expr_constraint_count: usize = 0;
-                var method_constraint_count: usize = 0;
-                var bound_method_constraint_count: usize = 0;
                 const receiver_lookup_pattern: ?CIR.Pattern.Idx = switch (expr) {
                     .e_dot_access => |dot_expr| switch (module_env.store.getExpr(dot_expr.receiver)) {
                         .e_lookup_local => |lookup| lookup.pattern_idx,
@@ -9706,23 +9719,8 @@ const MaterializeCallableValueFailure = enum {
                     result.getCallableInst(callable_inst_id)
                 else
                     null;
-                for (module_env.types.sliceAllStaticDispatchConstraints()) |candidate| {
-                    if (candidate.source_expr_idx != @intFromEnum(expr_idx)) continue;
-                    expr_constraint_count += 1;
-                    if (!candidate.fn_name.eql(method_name)) continue;
-                    method_constraint_count += 1;
-                    const candidate_mono = try self.resolveTypeVarMonotypeResolved(
-                        result,
-                        thread,
-                        module_idx,
-                        candidate.fn_var,
-                    );
-                    if (!candidate_mono.isNone()) {
-                        bound_method_constraint_count += 1;
-                    }
-                }
                 std.debug.panic(
-                    "Pipeline: no static dispatch constraint for expr={d} method='{s}' in ctx={s}; expr_tag={s} receiver={?d}@{?d} receiver_shape={?any} receiver_pattern={?d} receiver_pattern_value={?any} receiver_pattern_mono={?any} receiver_pattern_source={?any} current_callable_inst={?d} current_callable_fn={?d}@{?d} current_callable_fn_shape={?any} current_callable_template_expr={?d} expr_constraint_count={d} method_constraint_count={d} bound_method_constraint_count={d}",
+                    "Pipeline invariant violated: no exact cached dispatch constraint for expr={d} method='{s}' in ctx={s}; expr_tag={s} receiver={?d}@{?d} receiver_shape={?any} receiver_pattern={?d} receiver_pattern_value={?any} receiver_pattern_mono={?any} receiver_pattern_source={?any} current_callable_inst={?d} current_callable_fn={?d}@{?d} current_callable_fn_shape={?any} current_callable_template_expr={?d}",
                     .{
                         @intFromEnum(expr_idx),
                         module_env.getIdent(method_name),
@@ -9746,9 +9744,6 @@ const MaterializeCallableValueFailure = enum {
                         if (current_callable_fn) |callable_inst| callable_inst.fn_monotype_module_idx else null,
                         if (current_callable_fn) |callable_inst| result.context_mono.monotype_store.getMonotype(callable_inst.fn_monotype) else null,
                         if (current_callable_fn) |callable_inst| @intFromEnum(result.getCallableTemplate(callable_inst.template).cir_expr) else null,
-                        expr_constraint_count,
-                        method_constraint_count,
-                        bound_method_constraint_count,
                     },
                 );
             }
