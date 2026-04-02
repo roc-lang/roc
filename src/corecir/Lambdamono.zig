@@ -115,6 +115,7 @@ pub const CallableValue = union(enum) {
 pub const CallSite = union(enum) {
     direct: CallableInstId,
     indirect_call: IndirectCall,
+    low_level: CIR.Expr.LowLevel,
 };
 
 pub const ExprCallableSemantics = union(enum) {

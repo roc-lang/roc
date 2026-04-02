@@ -1058,6 +1058,7 @@ const MaterializeCallableValueFailure = enum {
         return switch (call_site) {
             .direct => |callable_inst_id| callable_inst_id,
             .indirect_call => null,
+            .low_level => null,
         };
     }
 
@@ -1065,6 +1066,7 @@ const MaterializeCallableValueFailure = enum {
         return switch (call_site) {
             .direct => |callable_inst_id| result.lambdamono.getDirectCallableVariants(callable_inst_id),
             .indirect_call => |indirect_call| result.getIndirectCallVariants(indirect_call),
+            .low_level => &.{},
         };
     }
 
@@ -2063,6 +2065,7 @@ const MaterializeCallableValueFailure = enum {
                             .closure => true,
                         },
                         .indirect_call => true,
+                        .low_level => false,
                     }
                 else
                     true;
@@ -5351,6 +5354,13 @@ const MaterializeCallableValueFailure = enum {
         }
         if (self.getCallLowLevelOp(module_env, call_expr.func)) |low_level_op| {
             const arg_exprs = module_env.store.sliceExpr(call_expr.args);
+            try self.writeExprCallSite(
+                result,
+                thread.requireSourceContext(),
+                module_idx,
+                call_expr_idx,
+                .{ .low_level = low_level_op },
+            );
             if (low_level_op == .str_inspect and arg_exprs.len != 0) {
                 try self.resolveStrInspectHelperCallableInstsForTypeVar(
                     result,
@@ -5509,6 +5519,7 @@ const MaterializeCallableValueFailure = enum {
                             result.lambdamono.getCallableVariantGroupVariants(indirect.packed_fn.variant_group).len,
                         },
                     ),
+                    .low_level => unreachable,
                 }
             },
             else => {},
