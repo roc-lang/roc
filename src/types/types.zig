@@ -36,7 +36,7 @@ test {
     try std.testing.expectEqual(24, @sizeOf(FlatType));
     try std.testing.expectEqual(12, @sizeOf(Record));
     try std.testing.expectEqual(20, @sizeOf(NominalType)); // Increased from 16 due to is_opaque field
-    try std.testing.expectEqual(56, @sizeOf(StaticDispatchConstraint)); // Includes source expr + resolved dispatch target metadata
+    try std.testing.expectEqual(40, @sizeOf(StaticDispatchConstraint));
     try std.testing.expectEqual(16, @sizeOf(Func));
 }
 
@@ -767,22 +767,6 @@ pub const NumeralInfo = struct {
 pub const StaticDispatchConstraint = struct {
     const Self = @This();
 
-    pub const no_source_expr: u32 = std.math.maxInt(u32);
-
-    pub const ResolvedTarget = struct {
-        origin_module: Ident.Idx,
-        method_ident: Ident.Idx,
-
-        pub const none: ResolvedTarget = .{
-            .origin_module = Ident.Idx.NONE,
-            .method_ident = Ident.Idx.NONE,
-        };
-
-        pub fn isNone(self: ResolvedTarget) bool {
-            return self.origin_module.isNone() and self.method_ident.isNone();
-        }
-    };
-
     /// the dispatch fn name
     fn_name: Ident.Idx,
     /// the dispatch fn var, a function
@@ -791,12 +775,6 @@ pub const StaticDispatchConstraint = struct {
     origin: Origin,
     /// Optional numeric literal info for from_numeral constraints
     num_literal: ?NumeralInfo = null,
-    /// Expression that introduced this dispatch constraint, if known.
-    /// Used to wire resolved static dispatch targets into MIR lowering.
-    source_expr_idx: u32 = no_source_expr,
-    /// Resolved method target after constraint solving.
-    /// `.none` means unresolved or non-nominal dispatch.
-    resolved_target: ResolvedTarget = .none,
 
     /// Tracks where a static dispatch constraint originated from
     pub const Origin = enum(u4) {
@@ -824,6 +802,20 @@ pub const StaticDispatchConstraint = struct {
         const b_text = store.getText(b.fn_name);
         return std.mem.order(u8, a_text, b_text);
     }
+};
+
+/// Explicit dispatch syntax sites recorded during type checking.
+///
+/// These are not type-level constraints. They are the exact source-level sites
+/// that introduced dispatch requirements, and they remain separate so later
+/// stages can consume explicit site facts instead of embedding source/target
+/// metadata into the type-level constraint records themselves.
+pub const StaticDispatchSite = struct {
+    expr_idx: u32,
+    fn_name: Ident.Idx,
+    fn_var: Var,
+
+    pub const SafeList = MkSafeList(@This());
 };
 
 /// Two record fields

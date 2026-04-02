@@ -4763,9 +4763,13 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         .fn_name = dot_access.field_name,
                         .fn_var = constraint_fn_var,
                         .origin = .method_call,
-                        .source_expr_idx = @intFromEnum(expr_idx),
                     };
                     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
+                    _ = try self.types.appendStaticDispatchSites(&.{.{
+                        .expr_idx = @intFromEnum(expr_idx),
+                        .fn_name = dot_access.field_name,
+                        .fn_var = constraint_fn_var,
+                    }});
 
                     // Create our constrained flex, and unify it with the receiver
                     // Use field_name_region so error messages point at the method name, not the whole expression
@@ -4950,9 +4954,13 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     .fn_name = tvd.method_name,
                     .fn_var = constraint_fn_var,
                     .origin = .method_call,
-                    .source_expr_idx = @intFromEnum(expr_idx),
                 };
                 const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
+                _ = try self.types.appendStaticDispatchSites(&.{.{
+                    .expr_idx = @intFromEnum(expr_idx),
+                    .fn_name = tvd.method_name,
+                    .fn_var = constraint_fn_var,
+                }});
 
                 // Create a constrained flex and unify it with the type variable
                 const constrained_var = try self.freshFromContent(
@@ -6011,9 +6019,15 @@ fn mkBinopConstraint(
         .fn_name = method_name,
         .fn_var = constraint_fn_var,
         .origin = .desugared_binop,
-        .source_expr_idx = if (binop_expr_idx) |idx| @intFromEnum(idx) else StaticDispatchConstraint.no_source_expr,
     };
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
+    if (binop_expr_idx) |idx| {
+        _ = try self.types.appendStaticDispatchSites(&.{.{
+            .expr_idx = @intFromEnum(idx),
+            .fn_name = method_name,
+            .fn_var = constraint_fn_var,
+        }});
+    }
 
     // Create a constrained flex and unify it with the lhs (receiver)
     const constrained_var = try self.freshFromContent(
@@ -6062,9 +6076,15 @@ fn mkUnaryOp(
         .fn_name = method_name,
         .fn_var = constraint_fn_var,
         .origin = .desugared_unaryop,
-        .source_expr_idx = if (unary_expr_idx) |idx| @intFromEnum(idx) else StaticDispatchConstraint.no_source_expr,
     };
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
+    if (unary_expr_idx) |idx| {
+        _ = try self.types.appendStaticDispatchSites(&.{.{
+            .expr_idx = @intFromEnum(idx),
+            .fn_name = method_name,
+            .fn_var = constraint_fn_var,
+        }});
+    }
 
     // Create a constrained flex and unify it with the arg
     const constrained_var = try self.freshFromContent(
@@ -6662,20 +6682,6 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     );
                     continue;
                 };
-
-                const method_name = original_env.getIdent(method_ident);
-                const translated_method_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text(method_name));
-                const origin_name = if (!original_env.qualified_module_ident.isNone())
-                    original_env.getIdent(original_env.qualified_module_ident)
-                else
-                    original_env.module_name;
-                const translated_origin_module = try @constCast(self.cir).insertIdent(base.Ident.for_text(origin_name));
-
-                constraint.resolved_target = .{
-                    .origin_module = translated_origin_module,
-                    .method_ident = translated_method_ident,
-                };
-                self.types.static_dispatch_constraints.items.items[constraints_start + constraint_i] = constraint;
 
                 const def_idx: CIR.Def.Idx = @enumFromInt(@as(u32, @intCast(node_idx_in_original_env)));
                 const def_var: Var = ModuleEnv.varFrom(def_idx);

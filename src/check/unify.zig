@@ -2232,18 +2232,7 @@ const Unifier = struct {
         const top: u32 = @intCast(self.types_store.static_dispatch_constraints.len());
 
         // Ensure we have enough memory for the new contiguous list.
-        // Count extra capacity for "in_both" entries where a and b have different source_expr_idx —
-        // both call sites need a resolved dispatch target.
-        var extra_capacity: usize = 0;
-        for (self.scratch.in_both_static_dispatch_constraints.sliceRange(partitioned.in_both)) |two_constraints| {
-            if (two_constraints.a.source_expr_idx != two_constraints.b.source_expr_idx and
-                two_constraints.a.source_expr_idx != StaticDispatchConstraint.no_source_expr)
-            {
-                extra_capacity += 1;
-            }
-        }
-
-        const capacity = partitioned.in_both.len() + partitioned.only_in_a.len() + partitioned.only_in_b.len() + extra_capacity;
+        const capacity = partitioned.in_both.len() + partitioned.only_in_a.len() + partitioned.only_in_b.len();
         try self.types_store.static_dispatch_constraints.items.ensureUnusedCapacity(
             self.types_store.gpa,
             capacity,
@@ -2251,15 +2240,6 @@ const Unifier = struct {
 
         for (self.scratch.in_both_static_dispatch_constraints.sliceRange(partitioned.in_both)) |two_constraints| {
             self.types_store.static_dispatch_constraints.items.appendAssumeCapacity(two_constraints.b);
-            // When a and b have different source_expr_idx, both call sites need a resolved
-            // dispatch target. Emit a duplicate with a's source_expr_idx.
-            if (two_constraints.a.source_expr_idx != two_constraints.b.source_expr_idx and
-                two_constraints.a.source_expr_idx != StaticDispatchConstraint.no_source_expr)
-            {
-                var a_copy = two_constraints.b;
-                a_copy.source_expr_idx = two_constraints.a.source_expr_idx;
-                self.types_store.static_dispatch_constraints.items.appendAssumeCapacity(a_copy);
-            }
         }
         for (self.scratch.only_in_a_static_dispatch_constraints.sliceRange(partitioned.only_in_a)) |only_a| {
             self.types_store.static_dispatch_constraints.items.appendAssumeCapacity(only_a);

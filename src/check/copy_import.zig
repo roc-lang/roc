@@ -425,23 +425,6 @@ fn copyStaticDispatchConstraints(
             dest_constraint.fn_name = translated_fn_name;
             dest_constraint.fn_var = try copyVar(source_store, dest_store, source_constraint.fn_var, var_mapping, source_idents, dest_idents, allocator);
 
-            // Imported constraints originate from source module expressions, so
-            // their source expr indices are not meaningful in the destination module.
-            // Clearing this prevents accidental expr-index collisions in MIR dispatch lookup.
-            dest_constraint.source_expr_idx = StaticDispatchConstraint.no_source_expr;
-
-            // Translate resolved target idents into destination ident space.
-            if (!source_constraint.resolved_target.isNone()) {
-                const origin_name = source_idents.getText(source_constraint.resolved_target.origin_module);
-                const method_name = source_idents.getText(source_constraint.resolved_target.method_ident);
-                dest_constraint.resolved_target = .{
-                    .origin_module = try dest_idents.insert(allocator, base.Ident.for_text(origin_name)),
-                    .method_ident = try dest_idents.insert(allocator, base.Ident.for_text(method_name)),
-                };
-            } else {
-                dest_constraint.resolved_target = .none;
-            }
-
             try dest_constraints.append(dest_constraint);
         }
 

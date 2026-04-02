@@ -17,25 +17,24 @@ const Ident = base.Ident;
 pub const SourceContext = ContextMono.SourceContext;
 pub const ContextExprKey = ContextMono.ContextExprKey;
 
-pub const ConstraintIndex = struct {
+pub const SiteIndex = struct {
     const Key = struct {
-        source_expr_idx: u32,
+        expr_idx: u32,
         fn_name: base.Ident.Idx,
     };
 
     entries_by_key: std.AutoHashMapUnmanaged(Key, std.ArrayListUnmanaged(u32)),
 
-    pub fn init(types_store: *const types.Store, allocator: Allocator) Allocator.Error!ConstraintIndex {
-        var index: ConstraintIndex = .{
+    pub fn init(types_store: *const types.Store, allocator: Allocator) Allocator.Error!SiteIndex {
+        var index: SiteIndex = .{
             .entries_by_key = .empty,
         };
         errdefer index.deinit(allocator);
 
-        for (types_store.static_dispatch_constraints.items.items, 0..) |constraint, raw_idx| {
-            if (constraint.source_expr_idx == types.StaticDispatchConstraint.no_source_expr) continue;
+        for (types_store.static_dispatch_sites.items.items, 0..) |site, raw_idx| {
             const gop = try index.entries_by_key.getOrPut(allocator, .{
-                .source_expr_idx = constraint.source_expr_idx,
-                .fn_name = constraint.fn_name,
+                .expr_idx = site.expr_idx,
+                .fn_name = site.fn_name,
             });
             if (!gop.found_existing) gop.value_ptr.* = .empty;
             try gop.value_ptr.append(allocator, @intCast(raw_idx));
@@ -44,7 +43,7 @@ pub const ConstraintIndex = struct {
         return index;
     }
 
-    pub fn deinit(self: *ConstraintIndex, allocator: Allocator) void {
+    pub fn deinit(self: *SiteIndex, allocator: Allocator) void {
         var it = self.entries_by_key.valueIterator();
         while (it.next()) |entries| {
             entries.deinit(allocator);
@@ -52,13 +51,13 @@ pub const ConstraintIndex = struct {
         self.entries_by_key.deinit(allocator);
     }
 
-    pub fn getConstraintIndices(
-        self: *const ConstraintIndex,
-        source_expr_idx: u32,
+    pub fn getSiteIndices(
+        self: *const SiteIndex,
+        expr_idx: u32,
         fn_name: base.Ident.Idx,
     ) []const u32 {
         const entries = self.entries_by_key.get(.{
-            .source_expr_idx = source_expr_idx,
+            .expr_idx = expr_idx,
             .fn_name = fn_name,
         }) orelse return &.{};
         return entries.items;
@@ -70,25 +69,24 @@ pub const DispatchExprTarget = struct {
     def_idx: CIR.Def.Idx,
 };
 
-pub const ExactDispatchConstraint = struct {
+pub const ExactDispatchSite = struct {
     method_name: Ident.Idx,
     fn_var: types.Var,
-    resolved_target: types.StaticDispatchConstraint.ResolvedTarget,
 };
 
 pub const Result = struct {
-    exact_dispatch_constraints: std.AutoHashMapUnmanaged(ContextExprKey, ExactDispatchConstraint),
+    exact_dispatch_sites: std.AutoHashMapUnmanaged(ContextExprKey, ExactDispatchSite),
     resolved_dispatch_targets: std.AutoHashMapUnmanaged(ContextExprKey, DispatchExprTarget),
 
     pub fn init() Result {
         return .{
-            .exact_dispatch_constraints = .empty,
+            .exact_dispatch_sites = .empty,
             .resolved_dispatch_targets = .empty,
         };
     }
 
     pub fn deinit(self: *Result, allocator: Allocator) void {
-        self.exact_dispatch_constraints.deinit(allocator);
+        self.exact_dispatch_sites.deinit(allocator);
         self.resolved_dispatch_targets.deinit(allocator);
     }
 
@@ -101,12 +99,12 @@ pub const Result = struct {
         return self.resolved_dispatch_targets.get(ContextMono.Result.contextExprKey(source_context, module_idx, expr_idx));
     }
 
-    pub fn getExactDispatchConstraint(
+    pub fn getExactDispatchSite(
         self: *const Result,
         source_context: SourceContext,
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
-    ) ?ExactDispatchConstraint {
-        return self.exact_dispatch_constraints.get(ContextMono.Result.contextExprKey(source_context, module_idx, expr_idx));
+    ) ?ExactDispatchSite {
+        return self.exact_dispatch_sites.get(ContextMono.Result.contextExprKey(source_context, module_idx, expr_idx));
     }
 };
