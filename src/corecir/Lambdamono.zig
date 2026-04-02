@@ -150,19 +150,23 @@ pub const ExprPayload = union(enum) {
 
 pub const BuilderState = struct {
     in_progress_exprs: std.AutoHashMapUnmanaged(ContextMono.ContextExprKey, void),
+    assembled_exprs: std.AutoHashMapUnmanaged(ContextMono.ContextExprKey, void),
 
     pub fn init() BuilderState {
         return .{
             .in_progress_exprs = .empty,
+            .assembled_exprs = .empty,
         };
     }
 
     pub fn deinit(self: *BuilderState, allocator: Allocator) void {
         self.in_progress_exprs.deinit(allocator);
+        self.assembled_exprs.deinit(allocator);
     }
 
     pub fn clear(self: *BuilderState) void {
         self.in_progress_exprs.clearRetainingCapacity();
+        self.assembled_exprs.clearRetainingCapacity();
     }
 
     pub fn beginExprAssembly(
@@ -177,6 +181,18 @@ pub const BuilderState = struct {
 
     pub fn endExprAssembly(self: *BuilderState, key: ContextMono.ContextExprKey) void {
         _ = self.in_progress_exprs.remove(key);
+    }
+
+    pub fn isExprAssembled(self: *const BuilderState, key: ContextMono.ContextExprKey) bool {
+        return self.assembled_exprs.contains(key);
+    }
+
+    pub fn markExprAssembled(
+        self: *BuilderState,
+        allocator: Allocator,
+        key: ContextMono.ContextExprKey,
+    ) Allocator.Error!void {
+        try self.assembled_exprs.put(allocator, key, {});
     }
 };
 
@@ -317,15 +333,14 @@ pub const PatternBinding = struct {
 
 /// One finalized specialized expr in the executable `Lambdamono.Program`.
 ///
-/// During specialization, `Program.exprs` is the single authoritative store
-/// for executable expr semantics. The only field allowed to remain pending
-/// before final assembly completes is `monotype`; later consumers must require
-/// that it is non-null before treating the expr as finalized executable IR.
+/// Invariant: every `Expr` stored in `Program.exprs` already has its exact
+/// monotype. Finalization/build progress must live in `BuilderState`, not in
+/// the executable IR itself.
 pub const Expr = struct {
     source_context: SourceContext,
     module_idx: u32,
     source_expr: CIR.Expr.Idx,
-    monotype: ?ContextMono.ResolvedMonotype = null,
+    monotype: ContextMono.ResolvedMonotype,
     child_exprs: ExprIdSpan = .empty(),
     child_stmts: StmtIdSpan = .empty(),
     payload: ExprPayload = .plain,
@@ -609,6 +624,7 @@ pub const Program = struct {
         source_context: SourceContext,
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
+        monotype: ContextMono.ResolvedMonotype,
     ) Allocator.Error!*Expr {
         const key = ContextMono.Result.contextExprKey(source_context, module_idx, expr_idx);
         const expr_id = self.expr_ids_by_key.get(key) orelse blk: {
@@ -617,7 +633,7 @@ pub const Program = struct {
                 .source_context = source_context,
                 .module_idx = module_idx,
                 .source_expr = expr_idx,
-                .monotype = null,
+                .monotype = monotype,
                 .child_exprs = .empty(),
                 .child_stmts = .empty(),
                 .payload = .plain,
@@ -626,7 +642,17 @@ pub const Program = struct {
             try self.expr_ids_by_key.put(allocator, key, new_expr_id);
             break :blk new_expr_id;
         };
-        return self.getExprPtr(expr_id);
+        const expr = self.getExprPtr(expr_id);
+        if (!std.meta.eql(expr.monotype, monotype)) {
+            if (std.debug.runtime_safety) {
+                std.debug.panic(
+                    "Lambdamono invariant violated: expr monotype changed after reservation",
+                    .{},
+                );
+            }
+            unreachable;
+        }
+        return expr;
     }
 
     pub fn getStmt(self: *const Program, stmt_id: StmtId) *const Stmt {
