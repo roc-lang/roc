@@ -7,6 +7,7 @@
 //! results for the staged explicit architecture.
 
 const std = @import("std");
+const build_options = @import("build_options");
 const base = @import("base");
 const can = @import("can");
 const layout = @import("layout");
@@ -24,6 +25,16 @@ const LirProcSpecId = lir.LirProcSpecId;
 const MIR = mir.MIR;
 const Lambdamono = corecir.Lambdamono;
 const Pipeline = corecir.Pipeline;
+
+const trace = struct {
+    const enabled = if (@hasDecl(build_options, "trace_eval")) build_options.trace_eval else false;
+
+    fn log(comptime fmt: []const u8, args: anytype) void {
+        if (comptime enabled) {
+            std.debug.print("[cir-to-lir] " ++ fmt ++ "\n", args);
+        }
+    }
+};
 
 /// Find the index of a module environment in the all-module-env slice.
 pub fn findModuleEnvIdx(all_module_envs: []const *ModuleEnv, module_env: *ModuleEnv) ?u32 {
@@ -244,14 +255,15 @@ pub const LirProgram = struct {
         layout_store_ptr: *layout.Store,
         maybe_type_scope: ?*const types.TypeScope,
     ) Error!LowerResult {
+        trace.log("lowerExprWithPreparedLayout start expr={d}", .{@intFromEnum(expr_idx)});
         var mir_store = MIR.Store.init(self.allocator) catch return error.OutOfMemory;
         defer mir_store.deinit(self.allocator);
 
+        trace.log("pipeline start expr={d}", .{@intFromEnum(expr_idx)});
         var callable_pipeline = if (maybe_type_scope) |type_scope|
             Pipeline.runRootSourceExprWithTypeScope(
                 self.allocator,
                 all_module_envs,
-                &module_env.types,
                 module_idx,
                 app_module_idx,
                 expr_idx,
@@ -263,12 +275,12 @@ pub const LirProgram = struct {
             Pipeline.runRootSourceExpr(
                 self.allocator,
                 all_module_envs,
-                &module_env.types,
                 module_idx,
                 app_module_idx,
                 expr_idx,
             ) catch return error.OutOfMemory;
         defer callable_pipeline.deinit(self.allocator);
+        trace.log("pipeline done expr={d}", .{@intFromEnum(expr_idx)});
 
         var mir_lower = mir.Lower.init(
             self.allocator,
@@ -281,7 +293,9 @@ pub const LirProgram = struct {
         ) catch return error.OutOfMemory;
         defer mir_lower.deinit();
 
+        trace.log("mir lower root start expr={d}", .{@intFromEnum(expr_idx)});
         const root_const_id = mir_lower.lowerRootConst(expr_idx) catch return error.RuntimeError;
+        trace.log("mir lower root done expr={d} root_const={d}", .{ @intFromEnum(expr_idx), @intFromEnum(root_const_id) });
         var mir_analyses = mir.Analyses.init(
             self.allocator,
             &mir_store,
@@ -290,6 +304,7 @@ pub const LirProgram = struct {
             &.{root_const_id},
         ) catch return error.OutOfMemory;
         defer mir_analyses.deinit();
+        trace.log("mir analyses done expr={d}", .{@intFromEnum(expr_idx)});
 
         var lir_store = LirStore.init(self.allocator);
         errdefer lir_store.deinit();
@@ -297,12 +312,15 @@ pub const LirProgram = struct {
         var mir_to_lir = lir.MirToLir.init(self.allocator, &mir_store, &lir_store, layout_store_ptr, &mir_analyses);
         defer mir_to_lir.deinit();
 
+        trace.log("mir-to-lir start expr={d}", .{@intFromEnum(expr_idx)});
         const root_proc_id = mir_to_lir.lower(root_const_id) catch return error.RuntimeError;
         try mir_to_lir.flush();
+        trace.log("mir-to-lir done expr={d} root_proc={d}", .{ @intFromEnum(expr_idx), @intFromEnum(root_proc_id) });
         var rc_pass = lir.RcInsert.RcInsertPass.init(self.allocator, &lir_store, layout_store_ptr) catch return error.OutOfMemory;
         defer rc_pass.deinit();
+        trace.log("rc insert start expr={d}", .{@intFromEnum(expr_idx)});
         try rc_pass.insertRcOpsForAllProcs();
-
+        trace.log("rc insert done expr={d}", .{@intFromEnum(expr_idx)});
         const cir_expr = module_env.store.getExpr(expr_idx);
         const tuple_len: usize = if (cir_expr == .e_tuple)
             module_env.store.exprSlice(cir_expr.e_tuple.elems).len
@@ -330,14 +348,15 @@ pub const LirProgram = struct {
         ret_layout: layout.Idx,
         type_scope: ?*const types.TypeScope,
     ) Error!LowerResult {
+        trace.log("lowerEntrypointExprWithPreparedLayout start expr={d}", .{@intFromEnum(expr_idx)});
         var mir_store = MIR.Store.init(self.allocator) catch return error.OutOfMemory;
         defer mir_store.deinit(self.allocator);
 
+        trace.log("entry pipeline start expr={d}", .{@intFromEnum(expr_idx)});
         var callable_pipeline = if (type_scope) |ts|
             Pipeline.runRootSourceExprWithTypeScope(
                 self.allocator,
                 all_module_envs,
-                &module_env.types,
                 module_idx,
                 app_module_idx,
                 expr_idx,
@@ -349,12 +368,12 @@ pub const LirProgram = struct {
             Pipeline.runRootSourceExpr(
                 self.allocator,
                 all_module_envs,
-                &module_env.types,
                 module_idx,
                 app_module_idx,
                 expr_idx,
             ) catch return error.OutOfMemory;
         defer callable_pipeline.deinit(self.allocator);
+        trace.log("entry pipeline done expr={d}", .{@intFromEnum(expr_idx)});
 
         var mir_lower = mir.Lower.init(
             self.allocator,
@@ -367,7 +386,9 @@ pub const LirProgram = struct {
         ) catch return error.OutOfMemory;
         defer mir_lower.deinit();
 
+        trace.log("entry mir lower root start expr={d}", .{@intFromEnum(expr_idx)});
         const root_const_id = mir_lower.lowerRootConst(expr_idx) catch return error.RuntimeError;
+        trace.log("entry mir lower root done expr={d} root_const={d}", .{ @intFromEnum(expr_idx), @intFromEnum(root_const_id) });
 
         var mir_analyses = mir.Analyses.init(
             self.allocator,
@@ -377,6 +398,7 @@ pub const LirProgram = struct {
             &.{root_const_id},
         ) catch return error.OutOfMemory;
         defer mir_analyses.deinit();
+        trace.log("entry mir analyses done expr={d}", .{@intFromEnum(expr_idx)});
 
         var lir_store = LirStore.init(self.allocator);
         errdefer lir_store.deinit();
@@ -384,12 +406,16 @@ pub const LirProgram = struct {
         var mir_to_lir = lir.MirToLir.init(self.allocator, &mir_store, &lir_store, layout_store_ptr, &mir_analyses);
         defer mir_to_lir.deinit();
 
+        trace.log("entry mir-to-lir start expr={d}", .{@intFromEnum(expr_idx)});
         const root_proc_id = mir_to_lir.lowerEntrypointProc(root_const_id, arg_layouts, ret_layout) catch return error.RuntimeError;
         try mir_to_lir.flush();
+        trace.log("entry mir-to-lir done expr={d} root_proc={d}", .{ @intFromEnum(expr_idx), @intFromEnum(root_proc_id) });
 
         var rc_pass = lir.RcInsert.RcInsertPass.init(self.allocator, &lir_store, layout_store_ptr) catch return error.OutOfMemory;
         defer rc_pass.deinit();
+        trace.log("entry rc insert start expr={d}", .{@intFromEnum(expr_idx)});
         try rc_pass.insertRcOpsForAllProcs();
+        trace.log("entry rc insert done expr={d}", .{@intFromEnum(expr_idx)});
 
         return .{
             .lir_store = lir_store,

@@ -632,7 +632,6 @@ pub const Result = struct {
 pub const Pass = struct {
     allocator: Allocator,
     all_module_envs: []const *ModuleEnv,
-    types_store: *const types.Store,
     current_module_idx: u32,
     app_module_idx: ?u32,
     expr_traversal: ContextMono.ExprTraversalState,
@@ -643,14 +642,12 @@ pub const Pass = struct {
     pub fn init(
         allocator: Allocator,
         all_module_envs: []const *ModuleEnv,
-        types_store: *const types.Store,
         current_module_idx: u32,
         app_module_idx: ?u32,
     ) Pass {
         return .{
             .allocator = allocator,
             .all_module_envs = all_module_envs,
-            .types_store = types_store,
             .current_module_idx = current_module_idx,
             .app_module_idx = app_module_idx,
             .expr_traversal = ContextMono.ExprTraversalState.init(),
@@ -1713,7 +1710,7 @@ const MaterializeCallableValueFailure = enum {
     ) Allocator.Error!Lambdamono.ExprId {
         const key = Result.contextExprKey(source_context, module_idx, expr_idx);
         const expr_id = result.lambdamono.expr_ids_by_key.get(key) orelse blk: {
-            _ = try self.ensureProgramExprNode(result, source_context, module_idx, expr_idx);
+            _ = try result.lambdamono.ensureExpr(self.allocator, source_context, module_idx, expr_idx);
             break :blk result.lambdamono.expr_ids_by_key.get(key).?;
         };
         if (result.getExprMonotypeById(expr_id) != null) return expr_id;
@@ -1845,8 +1842,8 @@ const MaterializeCallableValueFailure = enum {
             else => {},
         }
 
-        const child_expr_span = try self.appendProgramExprChildren(&result.lambdamono, child_exprs.items);
-        const child_stmt_span = try self.appendProgramStmtChildren(&result.lambdamono, child_stmts.items);
+        const child_expr_span = try result.lambdamono.appendExprChildren(self.allocator, child_exprs.items);
+        const child_stmt_span = try result.lambdamono.appendStmtChildren(self.allocator, child_stmts.items);
         const reserved_expr = self.programExpr(result, expr_id).*;
         const callable_value = if (reserved_expr.getCallable()) |callable_semantics| switch (callable_semantics) {
             .callable => |expr_callable_value| expr_callable_value,
@@ -1998,7 +1995,7 @@ const MaterializeCallableValueFailure = enum {
         try result.lambdamono.stmts.append(self.allocator, .{
             .module_idx = module_idx,
             .source_stmt = stmt_idx,
-            .child_exprs = try self.appendProgramExprChildren(&result.lambdamono, child_exprs.items),
+            .child_exprs = try result.lambdamono.appendExprChildren(self.allocator, child_exprs.items),
         });
         try result.lambdamono.stmt_ids_by_key.put(self.allocator, key, stmt_id);
         return stmt_id;
@@ -2017,79 +2014,6 @@ const MaterializeCallableValueFailure = enum {
         );
     }
 
-    fn appendProgramExprChildren(
-        self: *Pass,
-        program: *Lambdamono.Program,
-        child_exprs: []const Lambdamono.ExprId,
-    ) Allocator.Error!Lambdamono.ExprIdSpan {
-        const start: u32 = @intCast(program.expr_child_entries.items.len);
-        try program.expr_child_entries.appendSlice(self.allocator, child_exprs);
-        return .{
-            .start = start,
-            .len = @intCast(child_exprs.len),
-        };
-    }
-
-    fn appendProgramStmtChildren(
-        self: *Pass,
-        program: *Lambdamono.Program,
-        child_stmts: []const Lambdamono.StmtId,
-    ) Allocator.Error!Lambdamono.StmtIdSpan {
-        const start: u32 = @intCast(program.stmt_child_entries.items.len);
-        try program.stmt_child_entries.appendSlice(self.allocator, child_stmts);
-        return .{
-            .start = start,
-            .len = @intCast(child_stmts.len),
-        };
-    }
-
-    fn ensureProgramExprNode(
-        self: *Pass,
-        result: *Result,
-        source_context: SourceContext,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-    ) Allocator.Error!*Lambdamono.Expr {
-        const key = Result.contextExprKey(source_context, module_idx, expr_idx);
-        const expr_id = result.lambdamono.expr_ids_by_key.get(key) orelse blk: {
-            const new_expr_id: Lambdamono.ExprId = @enumFromInt(result.lambdamono.exprs.items.len);
-            try result.lambdamono.exprs.append(self.allocator, .{
-                .source_context = source_context,
-                .module_idx = module_idx,
-                .source_expr = expr_idx,
-                .monotype = null,
-                .child_exprs = .empty(),
-                .child_stmts = .empty(),
-                .payload = .plain,
-                .origin = .self,
-            });
-            try result.lambdamono.expr_ids_by_key.put(self.allocator, key, new_expr_id);
-            break :blk new_expr_id;
-        };
-        return &result.lambdamono.exprs.items[@intFromEnum(expr_id)];
-    }
-
-    fn ensureProgramPatternBinding(
-        self: *Pass,
-        result: *Result,
-        source_context: SourceContext,
-        module_idx: u32,
-        pattern_idx: CIR.Pattern.Idx,
-    ) Allocator.Error!*Lambdamono.PatternBinding {
-        const key = Result.contextPatternKey(source_context, module_idx, pattern_idx);
-        const binding_id = result.lambdamono.pattern_binding_ids_by_key.get(key) orelse blk: {
-            const new_binding_id: Lambdamono.BindingId = @enumFromInt(result.lambdamono.pattern_bindings.items.len);
-            try result.lambdamono.pattern_bindings.append(self.allocator, .{
-                .key = key,
-                .callable_value = null,
-                .origin = .self,
-            });
-            try result.lambdamono.pattern_binding_ids_by_key.put(self.allocator, key, new_binding_id);
-            break :blk new_binding_id;
-        };
-        return &result.lambdamono.pattern_bindings.items[@intFromEnum(binding_id)];
-    }
-
     fn writePatternOriginExpr(
         self: *Pass,
         result: *Result,
@@ -2098,7 +2022,7 @@ const MaterializeCallableValueFailure = enum {
         pattern_idx: CIR.Pattern.Idx,
         expr_ref: ExprRef,
     ) Allocator.Error!void {
-        const binding = try self.ensureProgramPatternBinding(result, source_context, module_idx, pattern_idx);
+        const binding = try result.lambdamono.ensurePatternBinding(self.allocator, source_context, module_idx, pattern_idx);
         const canonical_ref = blk: {
             const origin = result.getExprOriginExpr(expr_ref.source_context, expr_ref.module_idx, expr_ref.expr_idx) orelse break :blk expr_ref;
             if (result.getExprOriginExpr(origin.source_context, origin.module_idx, origin.expr_idx) != null) {
@@ -2213,7 +2137,7 @@ const MaterializeCallableValueFailure = enum {
         expr_idx: CIR.Expr.Idx,
         callable_value: CallableValue,
     ) Allocator.Error!void {
-        const semantics = try self.ensureProgramExprNode(result, source_context, module_idx, expr_idx);
+        const semantics = try result.lambdamono.ensureExpr(self.allocator, source_context, module_idx, expr_idx);
         const owns_callable_intro = result.getExprTemplateId(source_context, module_idx, expr_idx) != null;
         const next_payload: Lambdamono.ExprPayload = switch (callable_value) {
             .direct => |callable_inst_id| if (owns_callable_intro)
@@ -2253,7 +2177,7 @@ const MaterializeCallableValueFailure = enum {
         pattern_idx: CIR.Pattern.Idx,
         callable_value: CallableValue,
     ) Allocator.Error!void {
-        const binding = try self.ensureProgramPatternBinding(result, source_context, module_idx, pattern_idx);
+        const binding = try result.lambdamono.ensurePatternBinding(self.allocator, source_context, module_idx, pattern_idx);
         const next_callable_value: ?CallableValue = callable_value;
         if (!std.meta.eql(binding.callable_value, next_callable_value)) binding.callable_value = next_callable_value;
     }
@@ -2292,7 +2216,7 @@ const MaterializeCallableValueFailure = enum {
         expr_idx: CIR.Expr.Idx,
         call_site: CallSite,
     ) Allocator.Error!void {
-        const semantics = try self.ensureProgramExprNode(result, source_context, module_idx, expr_idx);
+        const semantics = try result.lambdamono.ensureExpr(self.allocator, source_context, module_idx, expr_idx);
         const next_payload: Lambdamono.ExprPayload = switch (call_site) {
             .direct => |callable_inst| .{ .direct_call = callable_inst },
             .indirect_call => |indirect_call| .{ .indirect_call = indirect_call },
@@ -2343,7 +2267,7 @@ const MaterializeCallableValueFailure = enum {
                 ),
             };
         };
-        const semantics = try self.ensureProgramExprNode(result, source_context, module_idx, expr_idx);
+        const semantics = try result.lambdamono.ensureExpr(self.allocator, source_context, module_idx, expr_idx);
         const next_origin: Lambdamono.ValueOrigin = .{ .expr = canonical_ref };
         if (!std.meta.eql(semantics.origin, next_origin)) semantics.origin = next_origin;
     }
@@ -2356,7 +2280,7 @@ const MaterializeCallableValueFailure = enum {
         expr_idx: CIR.Expr.Idx,
         lookup_resolution: LookupResolution,
     ) Allocator.Error!void {
-        const semantics = try self.ensureProgramExprNode(result, source_context, module_idx, expr_idx);
+        const semantics = try result.lambdamono.ensureExpr(self.allocator, source_context, module_idx, expr_idx);
         const next_payload: Lambdamono.ExprPayload = switch (lookup_resolution) {
             .expr => |expr_ref| .{ .lookup_expr = expr_ref },
             .def => |def_source| .{ .lookup_def = def_source },
@@ -7664,7 +7588,7 @@ const MaterializeCallableValueFailure = enum {
         expr_idx: CIR.Expr.Idx,
     ) Allocator.Error!Lambdamono.ExprId {
         const expr_id = result.lambdamono.getExprId(source_context, module_idx, expr_idx) orelse blk: {
-            _ = try self.ensureProgramExprNode(result, source_context, module_idx, expr_idx);
+            _ = try result.lambdamono.ensureExpr(self.allocator, source_context, module_idx, expr_idx);
             break :blk result.lambdamono.getExprId(source_context, module_idx, expr_idx).?;
         };
         if (!self.programExpr(result, expr_id).child_exprs.isEmpty()) return expr_id;
@@ -7676,26 +7600,26 @@ const MaterializeCallableValueFailure = enum {
 
         switch (expr) {
             .e_binop => |binop_expr| {
-                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, binop_expr.lhs, false);
-                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, binop_expr.rhs, false);
+                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, binop_expr.lhs);
+                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, binop_expr.rhs);
             },
             .e_unary_minus => |unary_expr| {
-                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, unary_expr.expr, false);
+                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, unary_expr.expr);
             },
             .e_dot_access => |dot_expr| {
-                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, dot_expr.receiver, false);
+                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, dot_expr.receiver);
                 if (dot_expr.args) |args| for (module_env.store.sliceExpr(args)) |arg_expr_idx| {
-                    try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, arg_expr_idx, false);
+                    try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, arg_expr_idx);
                 };
             },
             .e_type_var_dispatch => |dispatch_expr| for (module_env.store.sliceExpr(dispatch_expr.args)) |arg_expr_idx| {
-                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, arg_expr_idx, false);
+                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, arg_expr_idx);
             },
             else => unreachable,
         }
 
         self.programExpr(result, expr_id).child_exprs =
-            try self.appendProgramExprChildren(&result.lambdamono, child_exprs.items);
+            try result.lambdamono.appendExprChildren(self.allocator, child_exprs.items);
         return expr_id;
     }
 
@@ -8682,7 +8606,7 @@ const MaterializeCallableValueFailure = enum {
             expr_idx,
             dispatch_target,
         );
-        const semantics = try self.ensureProgramExprNode(result, source_context, module_idx, expr_idx);
+        const semantics = try result.lambdamono.ensureExpr(self.allocator, source_context, module_idx, expr_idx);
         const next_payload: Lambdamono.ExprPayload = .{ .dispatch_target = dispatch_target };
         if (!std.meta.eql(semantics.payload, next_payload)) semantics.payload = next_payload;
     }
@@ -8695,7 +8619,7 @@ const MaterializeCallableValueFailure = enum {
         expr_idx: CIR.Expr.Idx,
         dispatch_intrinsic: DispatchIntrinsic,
     ) Allocator.Error!void {
-        const semantics = try self.ensureProgramExprNode(result, source_context, module_idx, expr_idx);
+        const semantics = try result.lambdamono.ensureExpr(self.allocator, source_context, module_idx, expr_idx);
         const next_payload: Lambdamono.ExprPayload = .{ .dispatch_intrinsic = dispatch_intrinsic };
         if (!std.meta.eql(semantics.payload, next_payload)) semantics.payload = next_payload;
     }
@@ -13592,7 +13516,6 @@ fn identLastSegment(ident: []const u8) []const u8 {
 pub fn runRootSourceExpr(
     allocator: Allocator,
     all_module_envs: []const *ModuleEnv,
-    types_store: *const types.Store,
     current_module_idx: u32,
     app_module_idx: ?u32,
     expr_idx: CIR.Expr.Idx,
@@ -13600,7 +13523,6 @@ pub fn runRootSourceExpr(
     var pass = Pass.init(
         allocator,
         all_module_envs,
-        types_store,
         current_module_idx,
         app_module_idx,
     );
@@ -13612,7 +13534,6 @@ pub fn runRootSourceExpr(
 pub fn runRootSourceExprWithTypeScope(
     allocator: Allocator,
     all_module_envs: []const *ModuleEnv,
-    types_store: *const types.Store,
     current_module_idx: u32,
     app_module_idx: ?u32,
     expr_idx: CIR.Expr.Idx,
@@ -13625,7 +13546,6 @@ pub fn runRootSourceExprWithTypeScope(
     var pass = Pass.init(
         allocator,
         all_module_envs,
-        types_store,
         current_module_idx,
         app_module_idx,
     );
@@ -13643,7 +13563,6 @@ pub fn runRootSourceExprWithTypeScope(
 pub fn runRootSourceExprs(
     allocator: Allocator,
     all_module_envs: []const *ModuleEnv,
-    types_store: *const types.Store,
     current_module_idx: u32,
     app_module_idx: ?u32,
     exprs: []const CIR.Expr.Idx,
@@ -13651,7 +13570,6 @@ pub fn runRootSourceExprs(
     var pass = Pass.init(
         allocator,
         all_module_envs,
-        types_store,
         current_module_idx,
         app_module_idx,
     );
@@ -13663,7 +13581,6 @@ pub fn runRootSourceExprs(
 pub fn runRootSourceExprsWithTypeScope(
     allocator: Allocator,
     all_module_envs: []const *ModuleEnv,
-    types_store: *const types.Store,
     current_module_idx: u32,
     app_module_idx: ?u32,
     exprs: []const CIR.Expr.Idx,
@@ -13676,7 +13593,6 @@ pub fn runRootSourceExprsWithTypeScope(
     var pass = Pass.init(
         allocator,
         all_module_envs,
-        types_store,
         current_module_idx,
         app_module_idx,
     );
@@ -13694,14 +13610,12 @@ pub fn runRootSourceExprsWithTypeScope(
 pub fn runModule(
     allocator: Allocator,
     all_module_envs: []const *ModuleEnv,
-    types_store: *const types.Store,
     current_module_idx: u32,
     app_module_idx: ?u32,
 ) Allocator.Error!Result {
     var pass = Pass.init(
         allocator,
         all_module_envs,
-        types_store,
         current_module_idx,
         app_module_idx,
     );
@@ -13713,7 +13627,6 @@ pub fn runModule(
 pub fn runModuleWithTypeScope(
     allocator: Allocator,
     all_module_envs: []const *ModuleEnv,
-    types_store: *const types.Store,
     current_module_idx: u32,
     app_module_idx: ?u32,
     scope_module_idx: u32,
@@ -13725,7 +13638,6 @@ pub fn runModuleWithTypeScope(
     var pass = Pass.init(
         allocator,
         all_module_envs,
-        types_store,
         current_module_idx,
         app_module_idx,
     );

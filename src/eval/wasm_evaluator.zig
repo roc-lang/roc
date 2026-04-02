@@ -173,7 +173,6 @@ pub const WasmEvaluator = struct {
         var callable_pipeline = Pipeline.runRootSourceExpr(
             self.allocator,
             all_module_envs,
-            &module_env.types,
             module_idx,
             null,
             expr_idx,

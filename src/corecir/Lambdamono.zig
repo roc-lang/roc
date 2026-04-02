@@ -567,6 +567,10 @@ pub const Program = struct {
         return &self.exprs.items[@intFromEnum(expr_id)];
     }
 
+    pub fn getExprPtr(self: *Program, expr_id: ExprId) *Expr {
+        return &self.exprs.items[@intFromEnum(expr_id)];
+    }
+
     pub fn getExprId(
         self: *const Program,
         source_context: SourceContext,
@@ -585,6 +589,32 @@ pub const Program = struct {
         return self.getExprChildren(self.getExpr(expr_id).child_exprs)[index];
     }
 
+    pub fn ensureExpr(
+        self: *Program,
+        allocator: Allocator,
+        source_context: SourceContext,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) Allocator.Error!*Expr {
+        const key = ContextMono.Result.contextExprKey(source_context, module_idx, expr_idx);
+        const expr_id = self.expr_ids_by_key.get(key) orelse blk: {
+            const new_expr_id: ExprId = @enumFromInt(self.exprs.items.len);
+            try self.exprs.append(allocator, .{
+                .source_context = source_context,
+                .module_idx = module_idx,
+                .source_expr = expr_idx,
+                .monotype = null,
+                .child_exprs = .empty(),
+                .child_stmts = .empty(),
+                .payload = .plain,
+                .origin = .self,
+            });
+            try self.expr_ids_by_key.put(allocator, key, new_expr_id);
+            break :blk new_expr_id;
+        };
+        return self.getExprPtr(expr_id);
+    }
+
     pub fn getStmt(self: *const Program, stmt_id: StmtId) *const Stmt {
         return &self.stmts.items[@intFromEnum(stmt_id)];
     }
@@ -599,9 +629,56 @@ pub const Program = struct {
         return self.pattern_entries.items[span.start..][0..span.len];
     }
 
+    pub fn ensurePatternBinding(
+        self: *Program,
+        allocator: Allocator,
+        source_context: SourceContext,
+        module_idx: u32,
+        pattern_idx: CIR.Pattern.Idx,
+    ) Allocator.Error!*PatternBinding {
+        const key = ContextMono.Result.contextPatternKey(source_context, module_idx, pattern_idx);
+        const binding_id = self.pattern_binding_ids_by_key.get(key) orelse blk: {
+            const new_binding_id: BindingId = @enumFromInt(self.pattern_bindings.items.len);
+            try self.pattern_bindings.append(allocator, .{
+                .key = key,
+                .callable_value = null,
+                .origin = .self,
+            });
+            try self.pattern_binding_ids_by_key.put(allocator, key, new_binding_id);
+            break :blk new_binding_id;
+        };
+        return &self.pattern_bindings.items[@intFromEnum(binding_id)];
+    }
+
+    pub fn appendExprChildren(
+        self: *Program,
+        allocator: Allocator,
+        child_exprs: []const ExprId,
+    ) Allocator.Error!ExprIdSpan {
+        const start: u32 = @intCast(self.expr_child_entries.items.len);
+        try self.expr_child_entries.appendSlice(allocator, child_exprs);
+        return .{
+            .start = start,
+            .len = @intCast(child_exprs.len),
+        };
+    }
+
     pub fn getBlockStmtChildren(self: *const Program, span: StmtIdSpan) []const StmtId {
         if (span.len == 0) return &.{};
         return self.stmt_child_entries.items[span.start..][0..span.len];
+    }
+
+    pub fn appendStmtChildren(
+        self: *Program,
+        allocator: Allocator,
+        child_stmts: []const StmtId,
+    ) Allocator.Error!StmtIdSpan {
+        const start: u32 = @intCast(self.stmt_child_entries.items.len);
+        try self.stmt_child_entries.appendSlice(allocator, child_stmts);
+        return .{
+            .start = start,
+            .len = @intCast(child_stmts.len),
+        };
     }
 
 };

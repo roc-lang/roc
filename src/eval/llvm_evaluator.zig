@@ -236,7 +236,6 @@ pub const LlvmEvaluator = struct {
         var callable_pipeline = Pipeline.runRootSourceExpr(
             self.allocator,
             all_module_envs,
-            &module_env.types,
             module_idx,
             null, // app_module_idx - not used for JIT evaluation
             expr_idx,

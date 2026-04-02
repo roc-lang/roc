@@ -762,7 +762,6 @@ pub const DevEvaluator = struct {
             Pipeline.runRootSourceExprWithTypeScope(
                 self.allocator,
                 all_module_envs,
-                &module_env.types,
                 module_idx,
                 app_module_idx,
                 expr_idx,
@@ -774,7 +773,6 @@ pub const DevEvaluator = struct {
             Pipeline.runRootSourceExpr(
                 self.allocator,
                 all_module_envs,
-                &module_env.types,
                 module_idx,
                 app_module_idx,
                 expr_idx,
@@ -923,7 +921,6 @@ pub const DevEvaluator = struct {
             Pipeline.runRootSourceExprWithTypeScope(
                 self.allocator,
                 all_module_envs,
-                &module_env.types,
                 module_idx,
                 app_module_idx,
                 expr_idx,
@@ -935,7 +932,6 @@ pub const DevEvaluator = struct {
             Pipeline.runRootSourceExpr(
                 self.allocator,
                 all_module_envs,
-                &module_env.types,
                 module_idx,
                 app_module_idx,
                 expr_idx,
