@@ -689,6 +689,72 @@ pub const Result = struct {
     }
 };
 
+const ExprScanState = struct {
+    visited_exprs: std.AutoHashMapUnmanaged(ContextExprVisitKey, void),
+    in_progress_program_expr_assembly: std.AutoHashMapUnmanaged(ContextExprKey, void),
+    in_progress_value_defs: std.AutoHashMapUnmanaged(ContextExprKey, void),
+    in_progress_call_result_callable_insts: std.AutoHashMapUnmanaged(CallResultCallableInstKey, void),
+
+    fn init() ExprScanState {
+        return .{
+            .visited_exprs = .empty,
+            .in_progress_program_expr_assembly = .empty,
+            .in_progress_value_defs = .empty,
+            .in_progress_call_result_callable_insts = .empty,
+        };
+    }
+
+    fn deinit(self: *ExprScanState, allocator: Allocator) void {
+        self.visited_exprs.deinit(allocator);
+        self.in_progress_program_expr_assembly.deinit(allocator);
+        self.in_progress_value_defs.deinit(allocator);
+        self.in_progress_call_result_callable_insts.deinit(allocator);
+    }
+
+    fn clearAll(self: *ExprScanState) void {
+        self.visited_exprs.clearRetainingCapacity();
+        self.in_progress_program_expr_assembly.clearRetainingCapacity();
+        self.in_progress_value_defs.clearRetainingCapacity();
+        self.in_progress_call_result_callable_insts.clearRetainingCapacity();
+    }
+
+    fn clearPerScan(self: *ExprScanState) void {
+        self.visited_exprs.clearRetainingCapacity();
+        self.in_progress_value_defs.clearRetainingCapacity();
+        self.in_progress_call_result_callable_insts.clearRetainingCapacity();
+    }
+};
+
+const CallableRealizationState = struct {
+    in_progress_callable_scans: std.AutoHashMapUnmanaged(u32, void),
+    realized_callable_insts: std.AutoHashMapUnmanaged(CallableInstId, void),
+    reachable_callable_inst_set: std.AutoHashMapUnmanaged(CallableInstId, void),
+    reachable_callable_inst_queue: std.ArrayListUnmanaged(CallableInstId),
+
+    fn init() CallableRealizationState {
+        return .{
+            .in_progress_callable_scans = .empty,
+            .realized_callable_insts = .empty,
+            .reachable_callable_inst_set = .empty,
+            .reachable_callable_inst_queue = .empty,
+        };
+    }
+
+    fn deinit(self: *CallableRealizationState, allocator: Allocator) void {
+        self.in_progress_callable_scans.deinit(allocator);
+        self.realized_callable_insts.deinit(allocator);
+        self.reachable_callable_inst_set.deinit(allocator);
+        self.reachable_callable_inst_queue.deinit(allocator);
+    }
+
+    fn clear(self: *CallableRealizationState) void {
+        self.in_progress_callable_scans.clearRetainingCapacity();
+        self.realized_callable_insts.clearRetainingCapacity();
+        self.reachable_callable_inst_set.clearRetainingCapacity();
+        self.reachable_callable_inst_queue.clearRetainingCapacity();
+    }
+};
+
 /// Pipelines callable templates into explicit callable instantiations.
 pub const Pass = struct {
     allocator: Allocator,
@@ -696,14 +762,8 @@ pub const Pass = struct {
     types_store: *const types.Store,
     current_module_idx: u32,
     app_module_idx: ?u32,
-    visited_exprs: std.AutoHashMapUnmanaged(ContextExprVisitKey, void),
-    in_progress_program_expr_assembly: std.AutoHashMapUnmanaged(ContextExprKey, void),
-    in_progress_value_defs: std.AutoHashMapUnmanaged(ContextExprKey, void),
-    in_progress_call_result_callable_insts: std.AutoHashMapUnmanaged(CallResultCallableInstKey, void),
-    in_progress_callable_scans: std.AutoHashMapUnmanaged(u32, void),
-    realized_callable_insts: std.AutoHashMapUnmanaged(CallableInstId, void),
-    reachable_callable_inst_set: std.AutoHashMapUnmanaged(CallableInstId, void),
-    reachable_callable_inst_queue: std.ArrayListUnmanaged(CallableInstId),
+    expr_scan: ExprScanState,
+    callable_realization: CallableRealizationState,
 
     pub fn init(
         allocator: Allocator,
@@ -718,14 +778,8 @@ pub const Pass = struct {
             .types_store = types_store,
             .current_module_idx = current_module_idx,
             .app_module_idx = app_module_idx,
-            .visited_exprs = .empty,
-            .in_progress_program_expr_assembly = .empty,
-            .in_progress_value_defs = .empty,
-            .in_progress_call_result_callable_insts = .empty,
-            .in_progress_callable_scans = .empty,
-            .realized_callable_insts = .empty,
-            .reachable_callable_inst_set = .empty,
-            .reachable_callable_inst_queue = .empty,
+            .expr_scan = ExprScanState.init(),
+            .callable_realization = CallableRealizationState.init(),
         };
     }
 
@@ -1588,25 +1642,13 @@ const MaterializeCallableValueFailure = enum {
     }
 
     pub fn deinit(self: *Pass) void {
-        self.visited_exprs.deinit(self.allocator);
-        self.in_progress_program_expr_assembly.deinit(self.allocator);
-        self.in_progress_value_defs.deinit(self.allocator);
-        self.in_progress_call_result_callable_insts.deinit(self.allocator);
-        self.in_progress_callable_scans.deinit(self.allocator);
-        self.realized_callable_insts.deinit(self.allocator);
-        self.reachable_callable_inst_set.deinit(self.allocator);
-        self.reachable_callable_inst_queue.deinit(self.allocator);
+        self.expr_scan.deinit(self.allocator);
+        self.callable_realization.deinit(self.allocator);
     }
 
     fn resetRunState(self: *Pass) void {
-        self.visited_exprs.clearRetainingCapacity();
-        self.in_progress_program_expr_assembly.clearRetainingCapacity();
-        self.in_progress_value_defs.clearRetainingCapacity();
-        self.in_progress_call_result_callable_insts.clearRetainingCapacity();
-        self.in_progress_callable_scans.clearRetainingCapacity();
-        self.realized_callable_insts.clearRetainingCapacity();
-        self.reachable_callable_inst_set.clearRetainingCapacity();
-        self.reachable_callable_inst_queue.clearRetainingCapacity();
+        self.expr_scan.clearAll();
+        self.callable_realization.clear();
     }
 
     pub fn runRootSourceExpr(self: *Pass, expr_idx: CIR.Expr.Idx) Allocator.Error!Result {
@@ -1738,10 +1780,10 @@ const MaterializeCallableValueFailure = enum {
         result: *Result,
     ) Allocator.Error!void {
         var raw_queue_idx: usize = 0;
-        while (raw_queue_idx < self.reachable_callable_inst_queue.items.len) : (raw_queue_idx += 1) {
-            const callable_inst_id = self.reachable_callable_inst_queue.items[raw_queue_idx];
+        while (raw_queue_idx < self.callable_realization.reachable_callable_inst_queue.items.len) : (raw_queue_idx += 1) {
+            const callable_inst_id = self.callable_realization.reachable_callable_inst_queue.items[raw_queue_idx];
             try self.ensureCallableInstRealized(result, callable_inst_id);
-            trace.log("assembling reachable callable_inst={d}/{d}", .{ raw_queue_idx, self.reachable_callable_inst_queue.items.len });
+            trace.log("assembling reachable callable_inst={d}/{d}", .{ raw_queue_idx, self.callable_realization.reachable_callable_inst_queue.items.len });
             const callable_inst = result.getCallableInst(callable_inst_id).*;
             const template = result.getCallableTemplate(callable_inst.template);
             switch (template.kind) {
@@ -1835,9 +1877,9 @@ const MaterializeCallableValueFailure = enum {
         _: *Result,
         callable_inst_id: CallableInstId,
     ) Allocator.Error!void {
-        const gop = try self.reachable_callable_inst_set.getOrPut(self.allocator, callable_inst_id);
+        const gop = try self.callable_realization.reachable_callable_inst_set.getOrPut(self.allocator, callable_inst_id);
         if (!gop.found_existing) {
-            try self.reachable_callable_inst_queue.append(self.allocator, callable_inst_id);
+            try self.callable_realization.reachable_callable_inst_queue.append(self.allocator, callable_inst_id);
         }
     }
 
@@ -1924,9 +1966,9 @@ const MaterializeCallableValueFailure = enum {
             break :blk result.lambdamono.expr_ids_by_key.get(key).?;
         };
         if (result.getExprMonotypeById(expr_id) != null) return expr_id;
-        if (self.in_progress_program_expr_assembly.contains(key)) return expr_id;
-        try self.in_progress_program_expr_assembly.put(self.allocator, key, {});
-        defer _ = self.in_progress_program_expr_assembly.remove(key);
+        if (self.expr_scan.in_progress_program_expr_assembly.contains(key)) return expr_id;
+        try self.expr_scan.in_progress_program_expr_assembly.put(self.allocator, key, {});
+        defer _ = self.expr_scan.in_progress_program_expr_assembly.remove(key);
 
         const module_env = self.all_module_envs[module_idx];
         const expr = module_env.store.getExpr(expr_idx);
@@ -2411,9 +2453,7 @@ const MaterializeCallableValueFailure = enum {
     }
 
     fn clearScanScratch(self: *Pass) void {
-        self.visited_exprs.clearRetainingCapacity();
-        self.in_progress_value_defs.clearRetainingCapacity();
-        self.in_progress_call_result_callable_insts.clearRetainingCapacity();
+        self.expr_scan.clearPerScan();
     }
 
     fn scanRootExpr(self: *Pass, result: *Result, root: RootExprContext) Allocator.Error!void {
@@ -3273,9 +3313,9 @@ const MaterializeCallableValueFailure = enum {
         expr_idx: CIR.Expr.Idx,
     ) Allocator.Error!void {
         const key = self.resultExprKeyForThread(thread, module_idx, expr_idx);
-        if (self.in_progress_value_defs.contains(key)) return;
-        try self.in_progress_value_defs.put(self.allocator, key, {});
-        defer _ = self.in_progress_value_defs.remove(key);
+        if (self.expr_scan.in_progress_value_defs.contains(key)) return;
+        try self.expr_scan.in_progress_value_defs.put(self.allocator, key, {});
+        defer _ = self.expr_scan.in_progress_value_defs.remove(key);
 
         try self.scanCirValueExpr(result, thread, module_idx, expr_idx);
 
@@ -3378,8 +3418,8 @@ const MaterializeCallableValueFailure = enum {
         }
 
         const visit_key = self.resultExprKeyForThread(thread, module_idx, expr_idx);
-        if (self.visited_exprs.contains(visit_key)) return;
-        try self.visited_exprs.put(self.allocator, visit_key, {});
+        if (self.expr_scan.visited_exprs.contains(visit_key)) return;
+        try self.expr_scan.visited_exprs.put(self.allocator, visit_key, {});
 
         try self.scanCirExprChildren(result, thread, module_idx, expr_idx, expr, resolve_direct_calls);
 
@@ -5418,7 +5458,7 @@ const MaterializeCallableValueFailure = enum {
                             desired_fn_monotype.module_idx,
                         );
                     } else if (std.debug.runtime_safety and !thread.hasCallableInst()) {
-                        if (!self.visited_exprs.contains(self.resultExprKeyForThread(thread, module_idx, callee_expr_idx))) {
+                        if (!self.expr_scan.visited_exprs.contains(self.resultExprKeyForThread(thread, module_idx, callee_expr_idx))) {
                             return;
                         }
                         std.debug.panic(
@@ -7627,9 +7667,9 @@ const MaterializeCallableValueFailure = enum {
             .context_expr = Result.contextExprKey(target_source_context, target_module_idx, call_expr_idx),
             .callee_callable_inst_raw = @intFromEnum(callee_callable_inst_id),
         };
-        if (self.in_progress_call_result_callable_insts.contains(in_progress_key)) return;
-        try self.in_progress_call_result_callable_insts.put(self.allocator, in_progress_key, {});
-        defer _ = self.in_progress_call_result_callable_insts.remove(in_progress_key);
+        if (self.expr_scan.in_progress_call_result_callable_insts.contains(in_progress_key)) return;
+        try self.expr_scan.in_progress_call_result_callable_insts.put(self.allocator, in_progress_key, {});
+        defer _ = self.expr_scan.in_progress_call_result_callable_insts.remove(in_progress_key);
 
         const callable_def = result.getCallableDefForInst(callee_callable_inst_id);
         if (result.getExprCallableValue(
@@ -11476,7 +11516,7 @@ const MaterializeCallableValueFailure = enum {
         result: *Result,
         callable_inst_id: CallableInstId,
     ) Allocator.Error!void {
-        if (self.realized_callable_insts.contains(callable_inst_id)) return;
+        if (self.callable_realization.realized_callable_insts.contains(callable_inst_id)) return;
         try self.realizeCallableInst(result, callable_inst_id);
     }
 
@@ -11800,22 +11840,22 @@ const MaterializeCallableValueFailure = enum {
     }
 
     fn realizeCallableInst(self: *Pass, result: *Result, callable_inst_id: CallableInstId) Allocator.Error!void {
-        if (self.realized_callable_insts.contains(callable_inst_id)) return;
+        if (self.callable_realization.realized_callable_insts.contains(callable_inst_id)) return;
         try self.realizeCallableInstBody(result, callable_inst_id);
-        try self.realized_callable_insts.put(self.allocator, callable_inst_id, {});
+        try self.callable_realization.realized_callable_insts.put(self.allocator, callable_inst_id, {});
     }
 
     fn realizeCallableInstBody(self: *Pass, result: *Result, callable_inst_id: CallableInstId) Allocator.Error!void {
         const callable_inst_key = @intFromEnum(callable_inst_id);
-        if (self.in_progress_callable_scans.contains(callable_inst_key)) return;
+        if (self.callable_realization.in_progress_callable_scans.contains(callable_inst_key)) return;
         // Snapshot these by value before scanning. `scanModule` can discover more
         // demanded callables and append to both arrays, which would invalidate pointers.
         const callable_inst = result.getCallableInst(callable_inst_id).*;
         const template = result.getCallableTemplate(callable_inst.template).*;
         const defining_source_context = callable_inst.defining_source_context;
         try self.primeModuleDefs(result, template.module_idx);
-        try self.in_progress_callable_scans.put(self.allocator, callable_inst_key, {});
-        defer _ = self.in_progress_callable_scans.remove(callable_inst_key);
+        try self.callable_realization.in_progress_callable_scans.put(self.allocator, callable_inst_key, {});
+        defer _ = self.callable_realization.in_progress_callable_scans.remove(callable_inst_key);
 
         const module_env = self.all_module_envs[template.module_idx];
 
