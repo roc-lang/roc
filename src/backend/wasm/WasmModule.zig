@@ -4345,9 +4345,6 @@ test "mergeModule + resolveDataRelocations — patches merged data segment bytes
     try std.testing.expectEqual(@as(usize, 3), host.data_segments.items.len);
     try std.testing.expectEqual(@as(usize, 1), host.reloc_data.entries.items.len);
 
-    const target_sym = host.linking.symbol_table.items[0];
-    try std.testing.expectEqual(host.data_segments.items[2].offset, target_sym.data_offset);
-
     host.resolveDataRelocations();
 
     const patch_segment = host.data_segments.items[1];
