@@ -2675,7 +2675,7 @@ const MaterializeCallableValueFailure = enum {
 
             _ = try self.preRegisterCallableTemplateForDefExpr(
                 result,
-                null,
+                .root_scope,
                 module_idx,
                 def.expr,
                 ModuleEnv.varFrom(def.pattern),
@@ -2691,7 +2691,7 @@ const MaterializeCallableValueFailure = enum {
     fn registerCallableTemplate(
         self: *Pass,
         result: *Result,
-        owner_source_context: ?SourceContext,
+        closure_owner: Lambdasolved.CallableTemplateOwner,
         source: CallableTemplateSource,
         module_idx: u32,
         cir_expr: CIR.Expr.Idx,
@@ -2715,13 +2715,7 @@ const MaterializeCallableValueFailure = enum {
         };
 
         const owner: Lambdasolved.CallableTemplateOwner = if (kind == .closure)
-            if (owner_source_context) |source_context|
-                if (result.getSourceContextTemplateId(source_context)) |template_id|
-                    .{ .lexical_template = template_id }
-                else
-                    .root_scope
-            else
-                .root_scope
+            closure_owner
         else
             .root_scope;
 
@@ -2892,7 +2886,7 @@ const MaterializeCallableValueFailure = enum {
     fn preRegisterCallableTemplateForDefExpr(
         self: *Pass,
         result: *Result,
-        owner_source_context: ?SourceContext,
+        closure_owner: Lambdasolved.CallableTemplateOwner,
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
         type_root: types.Var,
@@ -2903,7 +2897,7 @@ const MaterializeCallableValueFailure = enum {
         const module_env = self.all_module_envs[module_idx];
         const template_id = try self.registerCallableTemplate(
             result,
-            owner_source_context,
+            closure_owner,
             .{ .expr = exprTemplateSource(module_idx, boundary.expr_idx) },
             module_idx,
             boundary.expr_idx,
@@ -2918,6 +2912,18 @@ const MaterializeCallableValueFailure = enum {
             try self.recordAdditionalCallableTemplateSource(result, source, template_id);
         }
         return template_id;
+    }
+
+    fn callableTemplateOwnerForSourceContext(
+        self: *Pass,
+        result: *const Result,
+        source_context: SourceContext,
+    ) Lambdasolved.CallableTemplateOwner {
+        _ = self;
+        if (result.getSourceContextTemplateId(source_context)) |template_id| {
+            return .{ .lexical_template = template_id };
+        }
+        return .root_scope;
     }
 
     fn scanStmt(
@@ -3398,7 +3404,7 @@ const MaterializeCallableValueFailure = enum {
         if (callable_kind) |kind| {
             const template_id = try self.registerCallableTemplate(
                 result,
-                thread.requireSourceContext(),
+                self.callableTemplateOwnerForSourceContext(result, thread.requireSourceContext()),
                 .{ .expr = exprTemplateSource(module_idx, expr_idx) },
                 module_idx,
                 expr_idx,
@@ -4621,7 +4627,7 @@ const MaterializeCallableValueFailure = enum {
                 if (lambda_expr == .e_lambda) {
                     const lambda_template_id = try self.registerCallableTemplate(
                         result,
-                        thread.requireSourceContext(),
+                        self.callableTemplateOwnerForSourceContext(result, thread.requireSourceContext()),
                         .{ .expr = exprTemplateSource(module_idx, closure_expr.lambda_idx) },
                         module_idx,
                         closure_expr.lambda_idx,
@@ -5031,7 +5037,7 @@ const MaterializeCallableValueFailure = enum {
                 .s_decl => |decl| {
                     _ = try self.preRegisterCallableTemplateForDefExpr(
                         result,
-                        thread.requireSourceContext(),
+                        self.callableTemplateOwnerForSourceContext(result, thread.requireSourceContext()),
                         module_idx,
                         decl.expr,
                         ModuleEnv.varFrom(decl.pattern),
@@ -5042,7 +5048,7 @@ const MaterializeCallableValueFailure = enum {
                 .s_var => |var_decl| {
                     _ = try self.preRegisterCallableTemplateForDefExpr(
                         result,
-                        thread.requireSourceContext(),
+                        self.callableTemplateOwnerForSourceContext(result, thread.requireSourceContext()),
                         module_idx,
                         var_decl.expr,
                         ModuleEnv.varFrom(var_decl.pattern_idx),
