@@ -620,10 +620,8 @@ pub const Pass = struct {
     all_module_envs: []const *ModuleEnv,
     current_module_idx: u32,
     app_module_idx: ?u32,
-    expr_traversal: ContextMono.ExprTraversalState,
+    root_analysis: Lambdasolved.RootAnalysisState,
     program_assembly: Lambdamono.BuilderState,
-    value_def_resolution: Lambdasolved.ValueDefResolutionState,
-    call_result_resolution: Lambdasolved.CallResultResolutionState,
 
     pub fn init(
         allocator: Allocator,
@@ -636,10 +634,8 @@ pub const Pass = struct {
             .all_module_envs = all_module_envs,
             .current_module_idx = current_module_idx,
             .app_module_idx = app_module_idx,
-            .expr_traversal = ContextMono.ExprTraversalState.init(),
+            .root_analysis = Lambdasolved.RootAnalysisState.init(),
             .program_assembly = Lambdamono.BuilderState.init(),
-            .value_def_resolution = Lambdasolved.ValueDefResolutionState.init(),
-            .call_result_resolution = Lambdasolved.CallResultResolutionState.init(),
         };
     }
 
@@ -1502,17 +1498,13 @@ const MaterializeCallableValueFailure = enum {
     }
 
     pub fn deinit(self: *Pass) void {
-        self.expr_traversal.deinit(self.allocator);
+        self.root_analysis.deinit(self.allocator);
         self.program_assembly.deinit(self.allocator);
-        self.value_def_resolution.deinit(self.allocator);
-        self.call_result_resolution.deinit(self.allocator);
     }
 
     fn resetRunState(self: *Pass) void {
-        self.expr_traversal.clearAll();
+        self.root_analysis.clearAll();
         self.program_assembly.clear();
-        self.value_def_resolution.clear();
-        self.call_result_resolution.clear();
     }
 
     pub fn runRootSourceExpr(self: *Pass, expr_idx: CIR.Expr.Idx) Allocator.Error!Result {
@@ -2089,9 +2081,7 @@ const MaterializeCallableValueFailure = enum {
     }
 
     fn clearScanScratch(self: *Pass) void {
-        self.expr_traversal.clearPerScan();
-        self.value_def_resolution.clear();
-        self.call_result_resolution.clear();
+        self.root_analysis.clearPerScan();
     }
 
     fn scanRootExpr(self: *Pass, result: *Result, root: RootExprContext) Allocator.Error!void {
@@ -2804,8 +2794,8 @@ const MaterializeCallableValueFailure = enum {
         expr_idx: CIR.Expr.Idx,
     ) Allocator.Error!void {
         const key = self.resultExprKeyForThread(thread, module_idx, expr_idx);
-        if (!try self.value_def_resolution.beginExpr(self.allocator, key)) return;
-        defer self.value_def_resolution.endExpr(key);
+        if (!try self.root_analysis.beginValueDefExpr(self.allocator, key)) return;
+        defer self.root_analysis.endValueDefExpr(key);
 
         try self.scanCirValueExpr(result, thread, module_idx, expr_idx);
 
@@ -2909,7 +2899,7 @@ const MaterializeCallableValueFailure = enum {
         }
 
         const visit_key = self.resultExprKeyForThread(thread, module_idx, expr_idx);
-        if (!try self.expr_traversal.beginVisit(self.allocator, visit_key)) return;
+        if (!try self.root_analysis.beginExprVisit(self.allocator, visit_key)) return;
 
         try self.scanCirExprChildren(result, thread, module_idx, expr_idx, expr, resolve_direct_calls);
 
@@ -4999,7 +4989,7 @@ const MaterializeCallableValueFailure = enum {
                             desired_fn_monotype.module_idx,
                         );
                     } else if (std.debug.runtime_safety and !thread.hasCallableInst()) {
-                        if (!self.expr_traversal.hasVisited(self.resultExprKeyForThread(thread, module_idx, callee_expr_idx))) {
+                        if (!self.root_analysis.hasVisitedExpr(self.resultExprKeyForThread(thread, module_idx, callee_expr_idx))) {
                             return;
                         }
                         std.debug.panic(
@@ -7174,8 +7164,8 @@ const MaterializeCallableValueFailure = enum {
             .context_expr = Result.contextExprKey(target_source_context, target_module_idx, call_expr_idx),
             .callee_callable_inst_raw = @intFromEnum(callee_callable_inst_id),
         };
-        if (!try self.call_result_resolution.beginCall(self.allocator, in_progress_key)) return;
-        defer self.call_result_resolution.endCall(in_progress_key);
+        if (!try self.root_analysis.beginCallResult(self.allocator, in_progress_key)) return;
+        defer self.root_analysis.endCallResult(in_progress_key);
 
         const callable_def = result.getCallableDefForInst(callee_callable_inst_id);
         if (result.getExprCallableValue(

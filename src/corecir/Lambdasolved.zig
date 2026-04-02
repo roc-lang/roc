@@ -94,6 +94,74 @@ pub const CallResultResolutionState = struct {
     }
 };
 
+pub const RootAnalysisState = struct {
+    expr_traversal: cm.ExprTraversalState,
+    value_def_resolution: ValueDefResolutionState,
+    call_result_resolution: CallResultResolutionState,
+
+    pub fn init() RootAnalysisState {
+        return .{
+            .expr_traversal = cm.ExprTraversalState.init(),
+            .value_def_resolution = ValueDefResolutionState.init(),
+            .call_result_resolution = CallResultResolutionState.init(),
+        };
+    }
+
+    pub fn deinit(self: *RootAnalysisState, allocator: std.mem.Allocator) void {
+        self.expr_traversal.deinit(allocator);
+        self.value_def_resolution.deinit(allocator);
+        self.call_result_resolution.deinit(allocator);
+    }
+
+    pub fn clearAll(self: *RootAnalysisState) void {
+        self.expr_traversal.clearAll();
+        self.value_def_resolution.clear();
+        self.call_result_resolution.clear();
+    }
+
+    pub fn clearPerScan(self: *RootAnalysisState) void {
+        self.expr_traversal.clearPerScan();
+        self.value_def_resolution.clear();
+        self.call_result_resolution.clear();
+    }
+
+    pub fn hasVisitedExpr(self: *const RootAnalysisState, key: ContextExprKey) bool {
+        return self.expr_traversal.hasVisited(key);
+    }
+
+    pub fn beginExprVisit(
+        self: *RootAnalysisState,
+        allocator: std.mem.Allocator,
+        key: ContextExprKey,
+    ) std.mem.Allocator.Error!bool {
+        return self.expr_traversal.beginVisit(allocator, key);
+    }
+
+    pub fn beginValueDefExpr(
+        self: *RootAnalysisState,
+        allocator: std.mem.Allocator,
+        key: ContextExprKey,
+    ) std.mem.Allocator.Error!bool {
+        return self.value_def_resolution.beginExpr(allocator, key);
+    }
+
+    pub fn endValueDefExpr(self: *RootAnalysisState, key: ContextExprKey) void {
+        self.value_def_resolution.endExpr(key);
+    }
+
+    pub fn beginCallResult(
+        self: *RootAnalysisState,
+        allocator: std.mem.Allocator,
+        key: CallResultCallableInstKey,
+    ) std.mem.Allocator.Error!bool {
+        return self.call_result_resolution.beginCall(allocator, key);
+    }
+
+    pub fn endCallResult(self: *RootAnalysisState, key: CallResultCallableInstKey) void {
+        self.call_result_resolution.endCall(key);
+    }
+};
+
 pub const Result = struct {
     pub fn init(allocator: std.mem.Allocator) !Result {
         _ = allocator;
