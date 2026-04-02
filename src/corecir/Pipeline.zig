@@ -9551,42 +9551,6 @@ const MaterializeCallableValueFailure = enum {
         );
     }
 
-    fn internCallableVariantGroup(
-        self: *Pass,
-        result: *Result,
-        variants: []const CallableInstId,
-    ) Allocator.Error!Lambdamono.CallableVariantGroupId {
-        for (result.lambdamono.callable_variant_groups.items, 0..) |_, idx| {
-            const existing_variants = result.lambdamono.getCallableVariantGroupVariants(@enumFromInt(idx));
-            if (existing_variants.len != variants.len) continue;
-
-            var matches = true;
-            for (existing_variants, variants) |lhs, rhs| {
-                if (lhs != rhs) {
-                    matches = false;
-                    break;
-                }
-            }
-            if (matches) return @enumFromInt(idx);
-        }
-
-        const span: Lambdamono.CallableVariantSpan = if (variants.len == 0)
-            Lambdamono.CallableVariantSpan.empty()
-        else blk: {
-            const start: u32 = @intCast(result.lambdamono.callable_variant_entries.items.len);
-            try result.lambdamono.callable_variant_entries.appendSlice(self.allocator, variants);
-            break :blk .{
-                .start = start,
-                .len = @intCast(variants.len),
-            };
-        };
-
-        const set_id: Lambdamono.CallableVariantGroupId = @enumFromInt(result.lambdamono.callable_variant_groups.items.len);
-        const new_set: @TypeOf(result.lambdamono.callable_variant_groups.items[0]) = .{ .variants = span };
-        try self.appendExact(&result.lambdamono.callable_variant_groups, new_set);
-        return set_id;
-    }
-
     fn setExprDirectCallSite(
         self: *Pass,
         result: *Result,
@@ -9677,17 +9641,14 @@ const MaterializeCallableValueFailure = enum {
         result: *Result,
         callable_inst_ids: []const CallableInstId,
     ) Allocator.Error!PackedFn {
-        const variant_group_id = try self.internCallableVariantGroup(
-            result,
-            callable_inst_ids,
-        );
         const fn_monotype = try self.requireUniformPackedCallableFnMonotype(result, callable_inst_ids);
         const runtime_monotype = try self.buildPackedFnRuntimeMonotype(result, callable_inst_ids);
-        return .{
-            .variant_group = variant_group_id,
-            .fn_monotype = fn_monotype,
-            .runtime_monotype = runtime_monotype,
-        };
+        return result.lambdamono.makePackedFn(
+            self.allocator,
+            callable_inst_ids,
+            fn_monotype,
+            runtime_monotype,
+        );
     }
 
     fn packedCallableTagName(
@@ -9774,9 +9735,14 @@ const MaterializeCallableValueFailure = enum {
         result: *Result,
         callable_inst_ids: []const CallableInstId,
     ) Allocator.Error!IndirectCall {
-        return .{
-            .packed_fn = try self.ensurePackedFnForVariants(result, callable_inst_ids),
-        };
+        const fn_monotype = try self.requireUniformPackedCallableFnMonotype(result, callable_inst_ids);
+        const runtime_monotype = try self.buildPackedFnRuntimeMonotype(result, callable_inst_ids);
+        return result.lambdamono.makeIndirectCall(
+            self.allocator,
+            callable_inst_ids,
+            fn_monotype,
+            runtime_monotype,
+        );
     }
 
     fn requireScannedExternalCallableTemplate(
@@ -11167,9 +11133,7 @@ const MaterializeCallableValueFailure = enum {
         result: *Result,
         callable_inst_id: CallableInstId,
     ) Allocator.Error!void {
-        if (result.lambdamono.direct_callable_variant_group_ids_by_callable_inst.contains(callable_inst_id)) return;
-        const variant_group_id = try self.internCallableVariantGroup(result, &.{callable_inst_id});
-        try result.lambdamono.direct_callable_variant_group_ids_by_callable_inst.put(self.allocator, callable_inst_id, variant_group_id);
+        try result.lambdamono.ensureDirectCallableVariantGroup(self.allocator, callable_inst_id);
     }
 
     fn appendCallableParamSpecEntry(

@@ -557,6 +557,83 @@ pub const Program = struct {
         return &self.callable_insts.items[@intFromEnum(callable_inst_id)];
     }
 
+    pub fn internCallableVariantGroup(
+        self: *Program,
+        allocator: Allocator,
+        variants: []const CallableInstId,
+    ) Allocator.Error!CallableVariantGroupId {
+        for (self.callable_variant_groups.items, 0..) |_, idx| {
+            const existing_variants = self.getCallableVariantGroupVariants(@enumFromInt(idx));
+            if (existing_variants.len != variants.len) continue;
+
+            var matches = true;
+            for (existing_variants, variants) |lhs, rhs| {
+                if (lhs != rhs) {
+                    matches = false;
+                    break;
+                }
+            }
+            if (matches) return @enumFromInt(idx);
+        }
+
+        const span: CallableVariantSpan = if (variants.len == 0)
+            CallableVariantSpan.empty()
+        else blk: {
+            const start: u32 = @intCast(self.callable_variant_entries.items.len);
+            try self.callable_variant_entries.appendSlice(allocator, variants);
+            break :blk .{
+                .start = start,
+                .len = @intCast(variants.len),
+            };
+        };
+
+        const variant_group_id: CallableVariantGroupId = @enumFromInt(self.callable_variant_groups.items.len);
+        try self.callable_variant_groups.append(allocator, .{ .variants = span });
+        return variant_group_id;
+    }
+
+    pub fn ensureDirectCallableVariantGroup(
+        self: *Program,
+        allocator: Allocator,
+        callable_inst_id: CallableInstId,
+    ) Allocator.Error!void {
+        if (self.direct_callable_variant_group_ids_by_callable_inst.contains(callable_inst_id)) return;
+        const variant_group_id = try self.internCallableVariantGroup(allocator, &.{callable_inst_id});
+        try self.direct_callable_variant_group_ids_by_callable_inst.put(allocator, callable_inst_id, variant_group_id);
+    }
+
+    pub fn makePackedFn(
+        self: *Program,
+        allocator: Allocator,
+        callable_inst_ids: []const CallableInstId,
+        fn_monotype: ContextMono.ResolvedMonotype,
+        runtime_monotype: ContextMono.ResolvedMonotype,
+    ) Allocator.Error!PackedFn {
+        const variant_group = try self.internCallableVariantGroup(allocator, callable_inst_ids);
+        return .{
+            .variant_group = variant_group,
+            .fn_monotype = fn_monotype,
+            .runtime_monotype = runtime_monotype,
+        };
+    }
+
+    pub fn makeIndirectCall(
+        self: *Program,
+        allocator: Allocator,
+        callable_inst_ids: []const CallableInstId,
+        fn_monotype: ContextMono.ResolvedMonotype,
+        runtime_monotype: ContextMono.ResolvedMonotype,
+    ) Allocator.Error!IndirectCall {
+        return .{
+            .packed_fn = try self.makePackedFn(
+                allocator,
+                callable_inst_ids,
+                fn_monotype,
+                runtime_monotype,
+            ),
+        };
+    }
+
     pub fn getCallableVariantGroupVariants(self: *const Program, variant_group_id: CallableVariantGroupId) []const CallableInstId {
         const group = self.callable_variant_groups.items[@intFromEnum(variant_group_id)];
         if (group.variants.len == 0) return &.{};
