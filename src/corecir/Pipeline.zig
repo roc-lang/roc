@@ -238,106 +238,21 @@ const RequiredLookupTarget = struct {
 
 const BuildStmtKey = Lambdamono.BuildStmtKey;
 
-const BuildPatternBinding = struct {
-    key: ContextPatternKey,
-    callable_value: ?CallableValue = null,
-    origin: ?ExprRef = null,
-
-    fn finalize(self: BuildPatternBinding) Lambdamono.PatternBinding {
-        return .{
-            .key = self.key,
-            .callable_value = self.callable_value,
-            .origin = self.origin,
-        };
-    }
-};
-
-const BuildExprMonotype = union(enum) {
-    pending,
-    resolved: ResolvedMonotype,
-
-    fn resolvedOrNull(self: BuildExprMonotype) ?ResolvedMonotype {
-        return switch (self) {
-            .resolved => |resolved| resolved,
-            .pending => null,
-        };
-    }
-
-    fn isResolved(self: BuildExprMonotype) bool {
-        return switch (self) {
-            .resolved => true,
-            .pending => false,
-        };
-    }
-};
-
-const BuildExpr = struct {
-    source_context: SourceContext,
-    module_idx: u32,
-    source_expr: CIR.Expr.Idx,
-    monotype: BuildExprMonotype,
-    child_exprs: Lambdamono.ExprIdSpan = .empty(),
-    child_stmts: Lambdamono.StmtIdSpan = .empty(),
-    callable: ?Lambdamono.ExprCallableSemantics = null,
-    call: ?CallSite = null,
-    origin: ?ExprRef = null,
-    dispatch: ?Lambdamono.DispatchSemantics = null,
-    lookup: ?Lambdamono.LookupResolution = null,
-
-    fn finalize(self: BuildExpr) Lambdamono.Expr {
-        const monotype = switch (self.monotype) {
-            .resolved => |resolved| resolved,
-            .pending => {
-                if (std.debug.runtime_safety) {
-                    std.debug.panic(
-                        "Pipeline invariant violated: attempted to finalize pending build expr module={d} expr={d} source_context={s}",
-                        .{
-                            self.module_idx,
-                            @intFromEnum(self.source_expr),
-                            @tagName(self.source_context),
-                        },
-                    );
-                }
-                unreachable;
-            },
-        };
-        return .{
-            .source_context = self.source_context,
-            .module_idx = self.module_idx,
-            .source_expr = self.source_expr,
-            .monotype = monotype,
-            .child_exprs = self.child_exprs,
-            .child_stmts = self.child_stmts,
-            .callable = self.callable,
-            .call = self.call,
-            .origin = self.origin,
-            .dispatch = self.dispatch,
-            .lookup = self.lookup,
-        };
-    }
-};
-
 /// Output of the staged CoreCIR/context-mono/lambda-specialization pipeline.
 pub const Result = struct {
     context_mono: ContextMono.Result,
     lambdasolved: Lambdasolved.Result,
     lambdamono: Lambdamono.Program,
-    build_exprs: std.ArrayListUnmanaged(BuildExpr),
-    build_pattern_bindings: std.ArrayListUnmanaged(BuildPatternBinding),
 
     pub fn init(allocator: Allocator) !Result {
         return .{
             .context_mono = try ContextMono.Result.init(allocator),
             .lambdasolved = try Lambdasolved.Result.init(allocator),
             .lambdamono = Lambdamono.Program.init(),
-            .build_exprs = .empty,
-            .build_pattern_bindings = .empty,
         };
     }
 
     pub fn deinit(self: *Result, allocator: Allocator) void {
-        self.build_exprs.deinit(allocator);
-        self.build_pattern_bindings.deinit(allocator);
         self.lambdamono.deinit(allocator);
         self.context_mono.deinit(allocator);
         self.lambdasolved.deinit(allocator);
@@ -363,19 +278,11 @@ pub const Result = struct {
         return ContextMono.Result.contextPatternKey(source_context, module_idx, pattern_idx);
     }
 
-    fn getBuildExprStateById(self: *const Result, expr_id: Lambdamono.ExprId) ?*const BuildExpr {
-        const raw: usize = @intFromEnum(expr_id);
-        if (raw < self.build_exprs.items.len) return &self.build_exprs.items[raw];
-        return null;
-    }
-
     fn getExprCallSemanticsById(self: *const Result, expr_id: Lambdamono.ExprId) ?CallSite {
-        if (self.getBuildExprStateById(expr_id)) |expr| return expr.call;
         return self.lambdamono.getExpr(expr_id).call;
     }
 
     fn getExprMonotypeById(self: *const Result, expr_id: Lambdamono.ExprId) ?ResolvedMonotype {
-        if (self.getBuildExprStateById(expr_id)) |expr| return expr.monotype.resolvedOrNull();
         return self.lambdamono.getExpr(expr_id).monotype;
     }
 
@@ -383,7 +290,6 @@ pub const Result = struct {
         self: *const Result,
         expr_id: Lambdamono.ExprId,
     ) ?Lambdamono.ExprCallableSemantics {
-        if (self.getBuildExprStateById(expr_id)) |expr| return expr.callable;
         return self.lambdamono.getExpr(expr_id).callable;
     }
 
@@ -391,7 +297,6 @@ pub const Result = struct {
         self: *const Result,
         expr_id: Lambdamono.ExprId,
     ) ?Lambdamono.DispatchSemantics {
-        if (self.getBuildExprStateById(expr_id)) |expr| return expr.dispatch;
         return self.lambdamono.getExpr(expr_id).dispatch;
     }
 
@@ -399,37 +304,19 @@ pub const Result = struct {
         self: *const Result,
         expr_id: Lambdamono.ExprId,
     ) ?Lambdamono.LookupResolution {
-        if (self.getBuildExprStateById(expr_id)) |expr| return expr.lookup;
         return self.lambdamono.getExpr(expr_id).lookup;
     }
 
     fn getExprOriginById(self: *const Result, expr_id: Lambdamono.ExprId) ?ExprRef {
-        if (self.getBuildExprStateById(expr_id)) |expr| return expr.origin;
         return self.lambdamono.getExpr(expr_id).origin;
     }
 
     fn getExprSourceExprById(self: *const Result, expr_id: Lambdamono.ExprId) CIR.Expr.Idx {
-        if (self.getBuildExprStateById(expr_id)) |expr| return expr.source_expr;
         return self.lambdamono.getExpr(expr_id).source_expr;
     }
 
     fn getExprChildExprsById(self: *const Result, expr_id: Lambdamono.ExprId) Lambdamono.ExprIdSpan {
-        if (self.getBuildExprStateById(expr_id)) |expr| return expr.child_exprs;
         return self.lambdamono.getExpr(expr_id).child_exprs;
-    }
-
-    fn getBuildPatternBindingState(
-        self: *const Result,
-        source_context: SourceContext,
-        module_idx: u32,
-        pattern_idx: CIR.Pattern.Idx,
-    ) ?*const BuildPatternBinding {
-        const binding_id = self.lambdamono.pattern_binding_ids_by_key.get(
-            ContextMono.Result.contextPatternKey(source_context, module_idx, pattern_idx),
-        ) orelse return null;
-        const raw: usize = @intFromEnum(binding_id);
-        if (raw < self.build_pattern_bindings.items.len) return &self.build_pattern_bindings.items[raw];
-        return null;
     }
 
     pub fn getExprCallSite(
@@ -527,19 +414,6 @@ pub const Result = struct {
     }
 
     pub fn getProgramExprForRef(self: *const Result, expr_ref: ExprRef) *const Lambdamono.Expr {
-        if (self.build_exprs.items.len != 0 or self.build_pattern_bindings.items.len != 0) {
-            if (std.debug.runtime_safety) {
-                std.debug.panic(
-                    "Pipeline invariant violated: finalized program expr requested before build-state flush (ctx={s} module={d} expr={d})",
-                    .{
-                        @tagName(expr_ref.source_context),
-                        expr_ref.module_idx,
-                        @intFromEnum(expr_ref.expr_idx),
-                    },
-                );
-            }
-            unreachable;
-        }
         if (!expr_ref.projections.isEmpty()) {
             std.debug.panic(
                 "Pipeline invariant violated: projected expr ref cannot be treated as a base program expr (ctx={s} module={d} expr={d}, projections={d})",
@@ -563,7 +437,21 @@ pub const Result = struct {
                 @intFromEnum(expr_ref.expr_idx),
             },
         );
-        return self.lambdamono.getExpr(expr_id);
+        const expr = self.lambdamono.getExpr(expr_id);
+        if (expr.monotype == null) {
+            if (std.debug.runtime_safety) {
+                std.debug.panic(
+                    "Pipeline invariant violated: finalized lambdamono program requested before expr monotype finalized for source context {s} module={d} expr={d}",
+                    .{
+                        @tagName(expr_ref.source_context),
+                        expr_ref.module_idx,
+                        @intFromEnum(expr_ref.expr_idx),
+                    },
+                );
+            }
+            unreachable;
+        }
+        return expr;
     }
 
     pub fn getContextPatternMonotype(
@@ -610,9 +498,6 @@ pub const Result = struct {
         module_idx: u32,
         pattern_idx: CIR.Pattern.Idx,
     ) ?CallableValue {
-        if (self.getBuildPatternBindingState(source_context, module_idx, pattern_idx)) |binding| {
-            return binding.callable_value;
-        }
         return self.lambdamono.getPatternCallableValue(source_context, module_idx, pattern_idx);
     }
 
@@ -701,9 +586,6 @@ pub const Result = struct {
         module_idx: u32,
         pattern_idx: CIR.Pattern.Idx,
     ) ?ExprRef {
-        if (self.getBuildPatternBindingState(source_context, module_idx, pattern_idx)) |binding| {
-            return binding.origin;
-        }
         return self.lambdamono.getPatternOriginExpr(source_context, module_idx, pattern_idx);
     }
 
@@ -1773,7 +1655,6 @@ const MaterializeCallableValueFailure = enum {
         trace.log("assembleCallableDefExprGraph start expr={d}", .{@intFromEnum(expr_idx)});
         try self.assembleCallableDefExprGraph(result);
         trace.log("assembleCallableDefExprGraph done expr={d}", .{@intFromEnum(expr_idx)});
-        try self.flushBuildStateToProgram(result);
     }
 
     pub fn runRootSourceExprs(self: *Pass, exprs: []const CIR.Expr.Idx) Allocator.Error!Result {
@@ -1810,7 +1691,6 @@ const MaterializeCallableValueFailure = enum {
             );
         }
         try self.assembleCallableDefExprGraph(result);
-        try self.flushBuildStateToProgram(result);
     }
 
     /// Pipeline all callables rooted in the current module.
@@ -1855,7 +1735,6 @@ const MaterializeCallableValueFailure = enum {
             );
         }
         try self.assembleCallableDefExprGraph(result);
-        try self.flushBuildStateToProgram(result);
     }
 
     fn assembleCallableDefExprGraph(
@@ -2045,10 +1924,10 @@ const MaterializeCallableValueFailure = enum {
     ) Allocator.Error!Lambdamono.ExprId {
         const key = Result.contextExprKey(source_context, module_idx, expr_idx);
         const expr_id = result.lambdamono.expr_ids_by_key.get(key) orelse blk: {
-            _ = try self.reserveBuildExprNode(result, source_context, module_idx, expr_idx);
+            _ = try self.ensureProgramExprNode(result, source_context, module_idx, expr_idx);
             break :blk result.lambdamono.expr_ids_by_key.get(key).?;
         };
-        if (self.buildExpr(result, expr_id).monotype.isResolved()) return expr_id;
+        if (result.getExprMonotypeById(expr_id) != null) return expr_id;
         if (self.in_progress_program_expr_assembly.contains(key)) return expr_id;
         try self.in_progress_program_expr_assembly.put(self.allocator, key, {});
         defer _ = self.in_progress_program_expr_assembly.remove(key);
@@ -2102,7 +1981,7 @@ const MaterializeCallableValueFailure = enum {
                 const callee_expr = module_env.store.getExpr(call_expr.func);
                 const include_func_child = if (!calleeUsesFirstClassCallableValuePath(callee_expr))
                     false
-                else if (self.buildExpr(result, expr_id).call) |call_site|
+                else if (result.getExprCallSemanticsById(expr_id)) |call_site|
                     switch (call_site) {
                         .direct => |callable_inst_id| switch (result.getCallableInst(callable_inst_id).runtime_value) {
                             .direct_lambda => false,
@@ -2187,7 +2066,7 @@ const MaterializeCallableValueFailure = enum {
 
         const child_expr_span = try self.appendProgramExprChildren(&result.lambdamono, child_exprs.items);
         const child_stmt_span = try self.appendProgramStmtChildren(&result.lambdamono, child_stmts.items);
-        const reserved_expr = self.buildExpr(result, expr_id).*;
+        const reserved_expr = self.programExpr(result, expr_id).*;
         if (enqueue_reachability) {
             if (reserved_expr.callable) |callable_semantics| switch (callable_semantics) {
                 .callable => |callable_value| try self.enqueueReachableCallableValue(result, callable_value),
@@ -2204,7 +2083,7 @@ const MaterializeCallableValueFailure = enum {
             .callable => |expr_callable_value| expr_callable_value,
             .intro => |intro| intro.callable_value,
         } else null;
-        var monotype = reserved_expr.monotype.resolvedOrNull();
+        var monotype = reserved_expr.monotype;
         if (monotype == null) {
             if (callable_value) |expr_callable_value| {
                 monotype = result.getCallableValueSourceMonotype(expr_callable_value);
@@ -2218,18 +2097,13 @@ const MaterializeCallableValueFailure = enum {
                 expr_idx,
             );
         }
-        const program_expr = self.buildExpr(result, expr_id);
+        const program_expr = self.programExpr(result, expr_id);
         program_expr.source_context = source_context;
         program_expr.module_idx = module_idx;
         program_expr.source_expr = expr_idx;
-        program_expr.monotype = .{ .resolved = monotype.? };
+        program_expr.monotype = monotype.?;
         program_expr.child_exprs = child_expr_span;
         program_expr.child_stmts = child_stmt_span;
-        program_expr.callable = reserved_expr.callable;
-        program_expr.call = reserved_expr.call;
-        program_expr.origin = reserved_expr.origin;
-        program_expr.dispatch = reserved_expr.dispatch;
-        program_expr.lookup = reserved_expr.lookup;
         return expr_id;
     }
 
@@ -2405,21 +2279,21 @@ const MaterializeCallableValueFailure = enum {
         };
     }
 
-    fn reserveBuildExprNode(
+    fn ensureProgramExprNode(
         self: *Pass,
         result: *Result,
         source_context: SourceContext,
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
-    ) Allocator.Error!*BuildExpr {
+    ) Allocator.Error!*Lambdamono.Expr {
         const key = Result.contextExprKey(source_context, module_idx, expr_idx);
         const expr_id = result.lambdamono.expr_ids_by_key.get(key) orelse blk: {
-            const new_expr_id: Lambdamono.ExprId = @enumFromInt(result.build_exprs.items.len);
-            try result.build_exprs.append(self.allocator, .{
+            const new_expr_id: Lambdamono.ExprId = @enumFromInt(result.lambdamono.exprs.items.len);
+            try result.lambdamono.exprs.append(self.allocator, .{
                 .source_context = source_context,
                 .module_idx = module_idx,
                 .source_expr = expr_idx,
-                .monotype = .pending,
+                .monotype = null,
                 .child_exprs = .empty(),
                 .child_stmts = .empty(),
                 .callable = null,
@@ -2431,20 +2305,20 @@ const MaterializeCallableValueFailure = enum {
             try result.lambdamono.expr_ids_by_key.put(self.allocator, key, new_expr_id);
             break :blk new_expr_id;
         };
-        return &result.build_exprs.items[@intFromEnum(expr_id)];
+        return &result.lambdamono.exprs.items[@intFromEnum(expr_id)];
     }
 
-    fn ensureBuildPatternBinding(
+    fn ensureProgramPatternBinding(
         self: *Pass,
         result: *Result,
         source_context: SourceContext,
         module_idx: u32,
         pattern_idx: CIR.Pattern.Idx,
-    ) Allocator.Error!*BuildPatternBinding {
+    ) Allocator.Error!*Lambdamono.PatternBinding {
         const key = Result.contextPatternKey(source_context, module_idx, pattern_idx);
         const binding_id = result.lambdamono.pattern_binding_ids_by_key.get(key) orelse blk: {
-            const new_binding_id: Lambdamono.BindingId = @enumFromInt(result.build_pattern_bindings.items.len);
-            try result.build_pattern_bindings.append(self.allocator, .{
+            const new_binding_id: Lambdamono.BindingId = @enumFromInt(result.lambdamono.pattern_bindings.items.len);
+            try result.lambdamono.pattern_bindings.append(self.allocator, .{
                 .key = key,
                 .callable_value = null,
                 .origin = null,
@@ -2452,7 +2326,7 @@ const MaterializeCallableValueFailure = enum {
             try result.lambdamono.pattern_binding_ids_by_key.put(self.allocator, key, new_binding_id);
             break :blk new_binding_id;
         };
-        return &result.build_pattern_bindings.items[@intFromEnum(binding_id)];
+        return &result.lambdamono.pattern_bindings.items[@intFromEnum(binding_id)];
     }
 
     fn writePatternOriginExpr(
@@ -2463,7 +2337,7 @@ const MaterializeCallableValueFailure = enum {
         pattern_idx: CIR.Pattern.Idx,
         expr_ref: ExprRef,
     ) Allocator.Error!void {
-        const binding = try self.ensureBuildPatternBinding(result, source_context, module_idx, pattern_idx);
+        const binding = try self.ensureProgramPatternBinding(result, source_context, module_idx, pattern_idx);
         const canonical_ref = blk: {
             const origin = result.getExprOriginExpr(expr_ref.source_context, expr_ref.module_idx, expr_ref.expr_idx) orelse break :blk expr_ref;
             if (result.getExprOriginExpr(origin.source_context, origin.module_idx, origin.expr_idx) != null) {
@@ -2529,41 +2403,9 @@ const MaterializeCallableValueFailure = enum {
         return false;
     }
 
-    fn buildExpr(self: *Pass, result: *Result, expr_id: Lambdamono.ExprId) *BuildExpr {
+    fn programExpr(self: *Pass, result: *Result, expr_id: Lambdamono.ExprId) *Lambdamono.Expr {
         _ = self;
-        return &result.build_exprs.items[@intFromEnum(expr_id)];
-    }
-
-    fn flushBuildPatternBindingsToProgram(self: *Pass, result: *Result) Allocator.Error!void {
-        result.lambdamono.pattern_bindings.clearRetainingCapacity();
-        for (result.build_pattern_bindings.items) |binding| {
-            try result.lambdamono.pattern_bindings.append(self.allocator, binding.finalize());
-        }
-        result.build_pattern_bindings.clearRetainingCapacity();
-    }
-
-    fn flushBuildStateToProgram(self: *Pass, result: *Result) Allocator.Error!void {
-        for (result.build_exprs.items) |expr| {
-            if (!expr.monotype.isResolved()) {
-                if (std.debug.runtime_safety) {
-                    std.debug.panic(
-                        "Pipeline invariant violated: attempted to flush unfinalized program expr module={d} expr={d} source_context={s}",
-                        .{
-                            expr.module_idx,
-                            @intFromEnum(expr.source_expr),
-                            @tagName(expr.source_context),
-                        },
-                    );
-                }
-                unreachable;
-            }
-        }
-        result.lambdamono.exprs.clearRetainingCapacity();
-        for (result.build_exprs.items) |expr| {
-            try result.lambdamono.exprs.append(self.allocator, expr.finalize());
-        }
-        result.build_exprs.clearRetainingCapacity();
-        try self.flushBuildPatternBindingsToProgram(result);
+        return &result.lambdamono.exprs.items[@intFromEnum(expr_id)];
     }
 
     fn primeAllModules(self: *Pass, result: *Result) Allocator.Error!void {
@@ -2609,7 +2451,7 @@ const MaterializeCallableValueFailure = enum {
         expr_idx: CIR.Expr.Idx,
         callable_value: CallableValue,
     ) Allocator.Error!void {
-        const semantics = try self.reserveBuildExprNode(result, source_context, module_idx, expr_idx);
+        const semantics = try self.ensureProgramExprNode(result, source_context, module_idx, expr_idx);
         const owns_callable_intro = result.getExprTemplateId(source_context, module_idx, expr_idx) != null;
         const next_callable: Lambdamono.ExprCallableSemantics = switch (callable_value) {
             .direct => |callable_inst_id| if (owns_callable_intro)
@@ -2649,7 +2491,7 @@ const MaterializeCallableValueFailure = enum {
         pattern_idx: CIR.Pattern.Idx,
         callable_value: CallableValue,
     ) Allocator.Error!void {
-        const binding = try self.ensureBuildPatternBinding(result, source_context, module_idx, pattern_idx);
+        const binding = try self.ensureProgramPatternBinding(result, source_context, module_idx, pattern_idx);
         const next_callable_value: ?CallableValue = callable_value;
         if (!std.meta.eql(binding.callable_value, next_callable_value)) binding.callable_value = next_callable_value;
     }
@@ -2688,7 +2530,7 @@ const MaterializeCallableValueFailure = enum {
         expr_idx: CIR.Expr.Idx,
         call_site: CallSite,
     ) Allocator.Error!void {
-        const semantics = try self.reserveBuildExprNode(result, source_context, module_idx, expr_idx);
+        const semantics = try self.ensureProgramExprNode(result, source_context, module_idx, expr_idx);
         const next_call: ?CallSite = call_site;
         if (!std.meta.eql(semantics.call, next_call)) semantics.call = next_call;
     }
@@ -2735,7 +2577,7 @@ const MaterializeCallableValueFailure = enum {
                 ),
             };
         };
-        const semantics = try self.reserveBuildExprNode(result, source_context, module_idx, expr_idx);
+        const semantics = try self.ensureProgramExprNode(result, source_context, module_idx, expr_idx);
         const next_origin: ?ExprRef = canonical_ref;
         if (!std.meta.eql(semantics.origin, next_origin)) semantics.origin = next_origin;
     }
@@ -2748,7 +2590,7 @@ const MaterializeCallableValueFailure = enum {
         expr_idx: CIR.Expr.Idx,
         lookup_resolution: LookupResolution,
     ) Allocator.Error!void {
-        const semantics = try self.reserveBuildExprNode(result, source_context, module_idx, expr_idx);
+        const semantics = try self.ensureProgramExprNode(result, source_context, module_idx, expr_idx);
         const next_lookup: ?LookupResolution = lookup_resolution;
         if (!std.meta.eql(semantics.lookup, next_lookup)) semantics.lookup = next_lookup;
     }
@@ -8192,10 +8034,10 @@ const MaterializeCallableValueFailure = enum {
         expr_idx: CIR.Expr.Idx,
     ) Allocator.Error!Lambdamono.ExprId {
         const expr_id = result.lambdamono.getExprId(source_context, module_idx, expr_idx) orelse blk: {
-            _ = try self.reserveBuildExprNode(result, source_context, module_idx, expr_idx);
+            _ = try self.ensureProgramExprNode(result, source_context, module_idx, expr_idx);
             break :blk result.lambdamono.getExprId(source_context, module_idx, expr_idx).?;
         };
-        if (!self.buildExpr(result, expr_id).child_exprs.isEmpty()) return expr_id;
+        if (!self.programExpr(result, expr_id).child_exprs.isEmpty()) return expr_id;
 
         const module_env = self.all_module_envs[module_idx];
         const expr = module_env.store.getExpr(expr_idx);
@@ -8222,7 +8064,7 @@ const MaterializeCallableValueFailure = enum {
             else => unreachable,
         }
 
-        self.buildExpr(result, expr_id).child_exprs =
+        self.programExpr(result, expr_id).child_exprs =
             try self.appendProgramExprChildren(&result.lambdamono, child_exprs.items);
         return expr_id;
     }
@@ -9170,7 +9012,7 @@ const MaterializeCallableValueFailure = enum {
             self.resultExprKeyForSourceContext(source_context, module_idx, expr_idx),
             dispatch_target,
         );
-        const semantics = try self.reserveBuildExprNode(result, source_context, module_idx, expr_idx);
+        const semantics = try self.ensureProgramExprNode(result, source_context, module_idx, expr_idx);
         const next_dispatch: ?DispatchSemantics = .{ .target = dispatch_target };
         if (!std.meta.eql(semantics.dispatch, next_dispatch)) semantics.dispatch = next_dispatch;
     }
@@ -9183,7 +9025,7 @@ const MaterializeCallableValueFailure = enum {
         expr_idx: CIR.Expr.Idx,
         dispatch_intrinsic: DispatchIntrinsic,
     ) Allocator.Error!void {
-        const semantics = try self.reserveBuildExprNode(result, source_context, module_idx, expr_idx);
+        const semantics = try self.ensureProgramExprNode(result, source_context, module_idx, expr_idx);
         const next_dispatch: ?DispatchSemantics = .{ .intrinsic = dispatch_intrinsic };
         if (!std.meta.eql(semantics.dispatch, next_dispatch)) semantics.dispatch = next_dispatch;
     }

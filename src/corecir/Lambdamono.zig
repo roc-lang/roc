@@ -263,14 +263,15 @@ pub const PatternBinding = struct {
 
 /// One finalized specialized expr in the executable `Lambdamono.Program`.
 ///
-/// Invariant: this struct must never be used as a mutable staging area during
-/// specialization. If a consumer reads an `Expr` from `Program.exprs`, every
-/// recorded fact here is already final.
+/// During specialization, `Program.exprs` is the single authoritative store
+/// for executable expr semantics. The only field allowed to remain pending
+/// before final assembly completes is `monotype`; later consumers must require
+/// that it is non-null before treating the expr as finalized executable IR.
 pub const Expr = struct {
     source_context: SourceContext,
     module_idx: u32,
     source_expr: CIR.Expr.Idx,
-    monotype: ContextMono.ResolvedMonotype,
+    monotype: ?ContextMono.ResolvedMonotype = null,
     child_exprs: ExprIdSpan = .empty(),
     child_stmts: StmtIdSpan = .empty(),
     callable: ?ExprCallableSemantics = null,
