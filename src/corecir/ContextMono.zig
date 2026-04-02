@@ -105,11 +105,6 @@ pub const ContextTypeVarKey = struct {
     type_var: types.Var,
 };
 
-pub const DispatchExprTarget = struct {
-    module_idx: u32,
-    def_idx: CIR.Def.Idx,
-};
-
 pub const Result = struct {
     monotype_store: Monotype.Store,
     subst_entries: std.ArrayListUnmanaged(TypeSubstEntry),
@@ -119,7 +114,6 @@ pub const Result = struct {
     context_pattern_monotypes: std.AutoHashMapUnmanaged(ContextPatternKey, ResolvedMonotype),
     context_type_var_monotypes: std.AutoHashMapUnmanaged(ContextTypeVarKey, ResolvedMonotype),
     type_scope_monotypes: std.AutoHashMapUnmanaged(BoundTypeVarKey, ResolvedMonotype),
-    resolved_dispatch_targets: std.AutoHashMapUnmanaged(ContextExprKey, DispatchExprTarget),
 
     pub fn init(allocator: Allocator) !Result {
         var result: Result = .{
@@ -131,7 +125,6 @@ pub const Result = struct {
             .context_pattern_monotypes = .empty,
             .context_type_var_monotypes = .empty,
             .type_scope_monotypes = .empty,
-            .resolved_dispatch_targets = .empty,
         };
         try result.substs.append(allocator, .{ .entries = TypeSubstSpan.empty() });
         return result;
@@ -145,7 +138,6 @@ pub const Result = struct {
         self.context_pattern_monotypes.deinit(allocator);
         self.context_type_var_monotypes.deinit(allocator);
         self.type_scope_monotypes.deinit(allocator);
-        self.resolved_dispatch_targets.deinit(allocator);
     }
 
     pub fn contextExprKey(source_context: SourceContext, module_idx: u32, expr_idx: CIR.Expr.Idx) ContextExprKey {
@@ -283,15 +275,6 @@ pub const Result = struct {
             .module_idx = module_idx,
             .type_var = type_var,
         });
-    }
-
-    pub fn getDispatchExprTarget(
-        self: *const Result,
-        source_context: SourceContext,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-    ) ?DispatchExprTarget {
-        return self.resolved_dispatch_targets.get(contextExprKey(source_context, module_idx, expr_idx));
     }
 
     pub fn getTypeSubst(self: *const Result, subst_id: TypeSubstId) *const TypeSubst {

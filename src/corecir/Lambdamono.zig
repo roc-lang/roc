@@ -4,6 +4,7 @@ const std = @import("std");
 const base = @import("base");
 const can = @import("can");
 const ContextMono = @import("ContextMono.zig");
+const DispatchSolved = @import("DispatchSolved.zig");
 const Lambdasolved = @import("Lambdasolved.zig");
 const Monotype = @import("Monotype.zig");
 const ValueProjection = @import("ValueProjection.zig");
@@ -49,7 +50,7 @@ pub const DispatchIntrinsic = enum {
 };
 
 pub const DispatchSemantics = union(enum) {
-    target: ContextMono.DispatchExprTarget,
+    target: DispatchSolved.DispatchExprTarget,
     intrinsic: DispatchIntrinsic,
 };
 

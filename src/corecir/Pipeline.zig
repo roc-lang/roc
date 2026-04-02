@@ -12,7 +12,9 @@ const can = @import("can");
 const types = @import("types");
 
 const Monotype = @import("Monotype.zig");
+const TemplateCatalog = @import("TemplateCatalog.zig");
 const ContextMono = @import("ContextMono.zig");
+const DispatchSolved = @import("DispatchSolved.zig");
 const Lambdasolved = @import("Lambdasolved.zig");
 const Lambdamono = @import("Lambdamono.zig");
 
@@ -22,12 +24,12 @@ const Region = base.Region;
 const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
 
-const CallableTemplateSource = Lambdasolved.CallableTemplateSource;
-const ExprTemplateSource = Lambdasolved.ExprTemplateSource;
-const LocalPatternTemplateSource = Lambdasolved.LocalPatternTemplateSource;
+const CallableTemplateSource = TemplateCatalog.CallableTemplateSource;
+const ExprTemplateSource = TemplateCatalog.ExprTemplateSource;
+const LocalPatternTemplateSource = TemplateCatalog.LocalPatternTemplateSource;
 
 /// Identifies a semantic callable template before executable specialization.
-pub const CallableTemplateId = Lambdasolved.CallableTemplateId;
+pub const CallableTemplateId = TemplateCatalog.CallableTemplateId;
 
 /// Identifies a canonical type-variable substitution for a callable template.
 pub const TypeSubstId = ContextMono.TypeSubstId;
@@ -51,11 +53,11 @@ pub const TypeSubstEntry = ContextMono.TypeSubstEntry;
 pub const TypeSubstSpan = ContextMono.TypeSubstSpan;
 
 /// Describes the original callable form that produced a callable template.
-pub const CallableTemplateKind = Lambdasolved.CallableTemplateKind;
+pub const CallableTemplateKind = TemplateCatalog.CallableTemplateKind;
 
 /// A semantic callable body that can later be instantiated monomorphically.
-pub const CallableTemplate = Lambdasolved.CallableTemplate;
-pub const ExternalDefSource = Lambdasolved.ExternalDefSource;
+pub const CallableTemplate = TemplateCatalog.CallableTemplate;
+pub const ExternalDefSource = TemplateCatalog.ExternalDefSource;
 
 /// Records a block-local polymorphic callable that is materialized on demand.
 
@@ -98,7 +100,8 @@ pub const ExprId = Lambdamono.ExprId;
 pub const ExprRef = Lambdamono.ExprRef;
 
 /// One statically resolved dispatch target definition.
-pub const DispatchExprTarget = ContextMono.DispatchExprTarget;
+pub const DispatchExprTarget = DispatchSolved.DispatchExprTarget;
+pub const ExactDispatchConstraint = DispatchSolved.ExactDispatchConstraint;
 pub const DispatchIntrinsic = Lambdamono.DispatchIntrinsic;
 pub const DispatchSemantics = Lambdamono.DispatchSemantics;
 
@@ -106,7 +109,7 @@ const ContextExprKey = ContextMono.ContextExprKey;
 
 const ContextPatternKey = ContextMono.ContextPatternKey;
 const ContextTypeVarKey = ContextMono.ContextTypeVarKey;
-const StaticDispatchConstraintIndex = types.Store.StaticDispatchConstraintIndex;
+const StaticDispatchConstraintIndex = DispatchSolved.ConstraintIndex;
 
 fn callableValueMonotype(result: *const Result, callable_value: CallableValue) ResolvedMonotype {
     return switch (callable_value) {
@@ -147,7 +150,7 @@ fn externalDefTemplateSource(module_idx: u32, def_node_idx: u16) ExternalDefSour
 }
 
 fn lookupCallableTemplateBySource(result: *const Result, source: CallableTemplateSource) ?CallableTemplateId {
-    return result.lambdasolved.callable_template_ids_by_source.get(source);
+    return result.template_catalog.callable_template_ids_by_source.get(source);
 }
 
 fn recordCallableTemplateSource(
@@ -156,7 +159,7 @@ fn recordCallableTemplateSource(
     source: CallableTemplateSource,
     template_id: CallableTemplateId,
 ) Allocator.Error!void {
-    try result.lambdasolved.callable_template_ids_by_source.put(allocator, source, template_id);
+    try result.template_catalog.callable_template_ids_by_source.put(allocator, source, template_id);
 }
 
 const ResolvedDispatchTarget = struct {
@@ -251,13 +254,17 @@ const BuildStmtKey = Lambdamono.BuildStmtKey;
 
 /// Output of the staged CoreCIR/context-mono/lambda-specialization pipeline.
 pub const Result = struct {
+    template_catalog: TemplateCatalog.Result,
     context_mono: ContextMono.Result,
+    dispatch_solved: DispatchSolved.Result,
     lambdasolved: Lambdasolved.Result,
     lambdamono: Lambdamono.Program,
 
     pub fn init(allocator: Allocator) !Result {
         return .{
+            .template_catalog = TemplateCatalog.Result.init(),
             .context_mono = try ContextMono.Result.init(allocator),
+            .dispatch_solved = DispatchSolved.Result.init(),
             .lambdasolved = try Lambdasolved.Result.init(allocator),
             .lambdamono = Lambdamono.Program.init(),
         };
@@ -265,8 +272,10 @@ pub const Result = struct {
 
     pub fn deinit(self: *Result, allocator: Allocator) void {
         self.lambdamono.deinit(allocator);
+        self.dispatch_solved.deinit(allocator);
         self.context_mono.deinit(allocator);
         self.lambdasolved.deinit(allocator);
+        self.template_catalog.deinit(allocator);
     }
 
     pub fn callSiteKey(module_idx: u32, expr_idx: CIR.Expr.Idx) u64 {
@@ -488,7 +497,7 @@ pub const Result = struct {
     }
 
     fn getCallableTemplate(self: *const Result, callable_template_id: CallableTemplateId) *const CallableTemplate {
-        return self.lambdasolved.getCallableTemplate(callable_template_id);
+        return self.template_catalog.getCallableTemplate(callable_template_id);
     }
 
     pub fn getCallableInst(self: *const Result, callable_inst_id: CallableInstId) *const CallableInst {
@@ -584,11 +593,11 @@ pub const Result = struct {
     }
 
     fn getLocalCallableTemplate(self: *const Result, module_idx: u32, pattern_idx: CIR.Pattern.Idx) ?CallableTemplateId {
-        return self.lambdasolved.getLocalCallableTemplate(module_idx, pattern_idx);
+        return self.template_catalog.getLocalCallableTemplate(module_idx, pattern_idx);
     }
 
     fn getExternalCallableTemplate(self: *const Result, module_idx: u32, def_node_idx: u16) ?CallableTemplateId {
-        return self.lambdasolved.getExternalCallableTemplate(module_idx, def_node_idx);
+        return self.template_catalog.getExternalCallableTemplate(module_idx, def_node_idx);
     }
 
     pub fn getContextPatternSourceExpr(
@@ -641,7 +650,7 @@ pub const Result = struct {
                 }
             }
         }
-        if (self.lambdasolved.getExprCallableTemplate(module_idx, expr_idx)) |template_id| {
+        if (self.template_catalog.getExprCallableTemplate(module_idx, expr_idx)) |template_id| {
             return template_id;
         }
         return null;
@@ -700,39 +709,73 @@ pub const Result = struct {
     }
 };
 
-const ExprScanState = struct {
+const ExprTraversalState = struct {
     visited_exprs: std.AutoHashMapUnmanaged(ContextExprVisitKey, void),
-    in_progress_program_expr_assembly: std.AutoHashMapUnmanaged(ContextExprKey, void),
-    in_progress_value_defs: std.AutoHashMapUnmanaged(ContextExprKey, void),
-    in_progress_call_result_callable_insts: std.AutoHashMapUnmanaged(CallResultCallableInstKey, void),
 
-    fn init() ExprScanState {
+    fn init() ExprTraversalState {
         return .{
             .visited_exprs = .empty,
-            .in_progress_program_expr_assembly = .empty,
-            .in_progress_value_defs = .empty,
-            .in_progress_call_result_callable_insts = .empty,
         };
     }
 
-    fn deinit(self: *ExprScanState, allocator: Allocator) void {
+    fn deinit(self: *ExprTraversalState, allocator: Allocator) void {
         self.visited_exprs.deinit(allocator);
-        self.in_progress_program_expr_assembly.deinit(allocator);
-        self.in_progress_value_defs.deinit(allocator);
-        self.in_progress_call_result_callable_insts.deinit(allocator);
     }
 
-    fn clearAll(self: *ExprScanState) void {
+    fn clearAll(self: *ExprTraversalState) void {
         self.visited_exprs.clearRetainingCapacity();
-        self.in_progress_program_expr_assembly.clearRetainingCapacity();
-        self.in_progress_value_defs.clearRetainingCapacity();
-        self.in_progress_call_result_callable_insts.clearRetainingCapacity();
     }
 
-    fn clearPerScan(self: *ExprScanState) void {
+    fn clearPerScan(self: *ExprTraversalState) void {
         self.visited_exprs.clearRetainingCapacity();
-        self.in_progress_value_defs.clearRetainingCapacity();
-        self.in_progress_call_result_callable_insts.clearRetainingCapacity();
+    }
+};
+
+const ProgramAssemblyState = struct {
+    in_progress_exprs: std.AutoHashMapUnmanaged(ContextExprKey, void),
+
+    fn init() ProgramAssemblyState {
+        return .{ .in_progress_exprs = .empty };
+    }
+
+    fn deinit(self: *ProgramAssemblyState, allocator: Allocator) void {
+        self.in_progress_exprs.deinit(allocator);
+    }
+
+    fn clear(self: *ProgramAssemblyState) void {
+        self.in_progress_exprs.clearRetainingCapacity();
+    }
+};
+
+const ValueDefResolutionState = struct {
+    in_progress_exprs: std.AutoHashMapUnmanaged(ContextExprKey, void),
+
+    fn init() ValueDefResolutionState {
+        return .{ .in_progress_exprs = .empty };
+    }
+
+    fn deinit(self: *ValueDefResolutionState, allocator: Allocator) void {
+        self.in_progress_exprs.deinit(allocator);
+    }
+
+    fn clear(self: *ValueDefResolutionState) void {
+        self.in_progress_exprs.clearRetainingCapacity();
+    }
+};
+
+const CallResultResolutionState = struct {
+    in_progress_calls: std.AutoHashMapUnmanaged(CallResultCallableInstKey, void),
+
+    fn init() CallResultResolutionState {
+        return .{ .in_progress_calls = .empty };
+    }
+
+    fn deinit(self: *CallResultResolutionState, allocator: Allocator) void {
+        self.in_progress_calls.deinit(allocator);
+    }
+
+    fn clear(self: *CallResultResolutionState) void {
+        self.in_progress_calls.clearRetainingCapacity();
     }
 };
 
@@ -743,7 +786,10 @@ pub const Pass = struct {
     types_store: *const types.Store,
     current_module_idx: u32,
     app_module_idx: ?u32,
-    expr_scan: ExprScanState,
+    expr_traversal: ExprTraversalState,
+    program_assembly: ProgramAssemblyState,
+    value_def_resolution: ValueDefResolutionState,
+    call_result_resolution: CallResultResolutionState,
     dispatch_constraint_indices_by_module: std.AutoHashMapUnmanaged(u32, StaticDispatchConstraintIndex),
 
     pub fn init(
@@ -759,7 +805,10 @@ pub const Pass = struct {
             .types_store = types_store,
             .current_module_idx = current_module_idx,
             .app_module_idx = app_module_idx,
-            .expr_scan = ExprScanState.init(),
+            .expr_traversal = ExprTraversalState.init(),
+            .program_assembly = ProgramAssemblyState.init(),
+            .value_def_resolution = ValueDefResolutionState.init(),
+            .call_result_resolution = CallResultResolutionState.init(),
             .dispatch_constraint_indices_by_module = .empty,
         };
     }
@@ -1623,12 +1672,18 @@ const MaterializeCallableValueFailure = enum {
     }
 
     pub fn deinit(self: *Pass) void {
-        self.expr_scan.deinit(self.allocator);
+        self.expr_traversal.deinit(self.allocator);
+        self.program_assembly.deinit(self.allocator);
+        self.value_def_resolution.deinit(self.allocator);
+        self.call_result_resolution.deinit(self.allocator);
         self.deinitDispatchConstraintIndices();
     }
 
     fn resetRunState(self: *Pass) void {
-        self.expr_scan.clearAll();
+        self.expr_traversal.clearAll();
+        self.program_assembly.clear();
+        self.value_def_resolution.clear();
+        self.call_result_resolution.clear();
         self.clearDispatchConstraintIndices();
     }
 
@@ -1654,6 +1709,45 @@ const MaterializeCallableValueFailure = enum {
         return result;
     }
 
+    fn runTemplateCatalogStage(self: *Pass, result: *Result) Allocator.Error!void {
+        trace.log("primeAllModules start", .{});
+        try self.primeAllModules(result);
+        trace.log("primeAllModules done", .{});
+        trace.log("scanSeedModules start", .{});
+        try self.scanSeedModules(result);
+        trace.log("scanSeedModules done", .{});
+        trace.log("scanModule start module={d}", .{self.current_module_idx});
+        try self.scanModule(result, self.current_module_idx);
+        trace.log("scanModule done module={d}", .{self.current_module_idx});
+    }
+
+    fn runRootAnalysisStage(self: *Pass, result: *Result, root_exprs: []const CIR.Expr.Idx) Allocator.Error!void {
+        for (root_exprs) |expr_idx| {
+            trace.log("scanRootExpr start expr={d}", .{@intFromEnum(expr_idx)});
+            try self.scanRootExpr(result, .{
+                .module_idx = self.current_module_idx,
+                .expr_idx = expr_idx,
+            });
+            trace.log("scanRootExpr done expr={d}", .{@intFromEnum(expr_idx)});
+        }
+    }
+
+    fn assembleRootProgramExprs(self: *Pass, result: *Result, root_exprs: []const CIR.Expr.Idx) Allocator.Error!void {
+        for (root_exprs) |expr_idx| {
+            trace.log("assembleProgramExprNode start expr={d}", .{@intFromEnum(expr_idx)});
+            _ = try self.assembleProgramExprNode(
+                result,
+                .{ .root_expr = .{
+                    .module_idx = self.current_module_idx,
+                    .expr_idx = expr_idx,
+                } },
+                self.current_module_idx,
+                expr_idx,
+            );
+            trace.log("assembleProgramExprNode done expr={d}", .{@intFromEnum(expr_idx)});
+        }
+    }
+
     fn runRootSourceExprInto(
         self: *Pass,
         result: *Result,
@@ -1661,35 +1755,12 @@ const MaterializeCallableValueFailure = enum {
     ) Allocator.Error!void {
         trace.log("runRootSourceExprInto start expr={d}", .{@intFromEnum(expr_idx)});
         self.resetRunState();
-        trace.log("primeAllModules start expr={d}", .{@intFromEnum(expr_idx)});
-        try self.primeAllModules(result);
-        trace.log("primeAllModules done expr={d}", .{@intFromEnum(expr_idx)});
-        trace.log("scanSeedModules start expr={d}", .{@intFromEnum(expr_idx)});
-        try self.scanSeedModules(result);
-        trace.log("scanSeedModules done expr={d}", .{@intFromEnum(expr_idx)});
-        trace.log("scanModule start expr={d} module={d}", .{ @intFromEnum(expr_idx), self.current_module_idx });
-        try self.scanModule(result, self.current_module_idx);
-        trace.log("scanModule done expr={d} module={d}", .{ @intFromEnum(expr_idx), self.current_module_idx });
-        trace.log("scanRootExpr start expr={d}", .{@intFromEnum(expr_idx)});
-        try self.scanRootExpr(result, .{
-            .module_idx = self.current_module_idx,
-            .expr_idx = expr_idx,
-        });
-        trace.log("scanRootExpr done expr={d}", .{@intFromEnum(expr_idx)});
-        trace.log("assembleProgramExprNode start expr={d}", .{@intFromEnum(expr_idx)});
-        _ = try self.assembleProgramExprNode(
-            result,
-            .{ .root_expr = .{
-                .module_idx = self.current_module_idx,
-                .expr_idx = expr_idx,
-            } },
-            self.current_module_idx,
-            expr_idx,
-        );
-        trace.log("assembleProgramExprNode done expr={d}", .{@intFromEnum(expr_idx)});
-        trace.log("assembleCallableDefExprGraph start expr={d}", .{@intFromEnum(expr_idx)});
+        try self.runTemplateCatalogStage(result);
+        try self.runRootAnalysisStage(result, &.{expr_idx});
+        try self.assembleRootProgramExprs(result, &.{expr_idx});
+        trace.log("assembleCallableDefExprGraph start", .{});
         try self.assembleCallableDefExprGraph(result);
-        trace.log("assembleCallableDefExprGraph done expr={d}", .{@intFromEnum(expr_idx)});
+        trace.log("assembleCallableDefExprGraph done", .{});
     }
 
     pub fn runRootSourceExprs(self: *Pass, exprs: []const CIR.Expr.Idx) Allocator.Error!Result {
@@ -1704,28 +1775,15 @@ const MaterializeCallableValueFailure = enum {
         exprs: []const CIR.Expr.Idx,
     ) Allocator.Error!void {
         self.resetRunState();
-        try self.primeAllModules(result);
-        try self.scanSeedModules(result);
-        try self.scanModule(result, self.current_module_idx);
-        for (exprs) |expr_idx| {
-            try self.scanRootExpr(result, .{
-                .module_idx = self.current_module_idx,
-                .expr_idx = expr_idx,
-            });
-        }
+        try self.runTemplateCatalogStage(result);
+        try self.runRootAnalysisStage(result, exprs);
+        trace.log("assembleCallableDefExprGraph start", .{});
         try self.assembleCallableDefExprGraph(result);
-        for (exprs) |expr_idx| {
-            _ = try self.assembleProgramExprNode(
-                result,
-                .{ .root_expr = .{
-                    .module_idx = self.current_module_idx,
-                    .expr_idx = expr_idx,
-                } },
-                self.current_module_idx,
-                expr_idx,
-            );
-        }
+        trace.log("assembleCallableDefExprGraph done", .{});
+        try self.assembleRootProgramExprs(result, exprs);
+        trace.log("assembleCallableDefExprGraph start", .{});
         try self.assembleCallableDefExprGraph(result);
+        trace.log("assembleCallableDefExprGraph done", .{});
     }
 
     /// Pipeline all callables rooted in the current module.
@@ -1740,9 +1798,7 @@ const MaterializeCallableValueFailure = enum {
         result: *Result,
     ) Allocator.Error!void {
         self.resetRunState();
-        try self.primeAllModules(result);
-        try self.scanSeedModules(result);
-        try self.scanModule(result, self.current_module_idx);
+        try self.runTemplateCatalogStage(result);
 
         const module_env = self.all_module_envs[self.current_module_idx];
         const defs = module_env.store.sliceDefs(module_env.all_defs);
@@ -1752,24 +1808,11 @@ const MaterializeCallableValueFailure = enum {
             const def = module_env.store.getDef(def_idx);
             try root_source_exprs.append(self.allocator, def.expr);
         }
-        for (root_source_exprs.items) |expr_idx| {
-            try self.scanRootExpr(result, .{
-                .module_idx = self.current_module_idx,
-                .expr_idx = expr_idx,
-            });
-        }
-        for (root_source_exprs.items) |expr_idx| {
-            _ = try self.assembleProgramExprNode(
-                result,
-                .{ .root_expr = .{
-                    .module_idx = self.current_module_idx,
-                    .expr_idx = expr_idx,
-                } },
-                self.current_module_idx,
-                expr_idx,
-            );
-        }
+        try self.runRootAnalysisStage(result, root_source_exprs.items);
+        try self.assembleRootProgramExprs(result, root_source_exprs.items);
+        trace.log("assembleCallableDefExprGraph start", .{});
         try self.assembleCallableDefExprGraph(result);
+        trace.log("assembleCallableDefExprGraph done", .{});
     }
 
     fn assembleCallableDefExprGraph(
@@ -1962,9 +2005,9 @@ const MaterializeCallableValueFailure = enum {
             break :blk result.lambdamono.expr_ids_by_key.get(key).?;
         };
         if (result.getExprMonotypeById(expr_id) != null) return expr_id;
-        if (self.expr_scan.in_progress_program_expr_assembly.contains(key)) return expr_id;
-        try self.expr_scan.in_progress_program_expr_assembly.put(self.allocator, key, {});
-        defer _ = self.expr_scan.in_progress_program_expr_assembly.remove(key);
+        if (self.program_assembly.in_progress_exprs.contains(key)) return expr_id;
+        try self.program_assembly.in_progress_exprs.put(self.allocator, key, {});
+        defer _ = self.program_assembly.in_progress_exprs.remove(key);
 
         const module_env = self.all_module_envs[module_idx];
         const expr = module_env.store.getExpr(expr_idx);
@@ -2449,7 +2492,9 @@ const MaterializeCallableValueFailure = enum {
     }
 
     fn clearScanScratch(self: *Pass) void {
-        self.expr_scan.clearPerScan();
+        self.expr_traversal.clearPerScan();
+        self.value_def_resolution.clear();
+        self.call_result_resolution.clear();
     }
 
     fn scanRootExpr(self: *Pass, result: *Result, root: RootExprContext) Allocator.Error!void {
@@ -2715,8 +2760,8 @@ const MaterializeCallableValueFailure = enum {
         else
             .root_scope;
 
-        const callable_template_id: CallableTemplateId = @enumFromInt(result.lambdasolved.callable_templates.items.len);
-        try self.appendExact(&result.lambdasolved.callable_templates, CallableTemplate{
+        const callable_template_id: CallableTemplateId = @enumFromInt(result.template_catalog.callable_templates.items.len);
+        try self.appendExact(&result.template_catalog.callable_templates, CallableTemplate{
             .source = source,
             .module_idx = module_idx,
             .cir_expr = cir_expr,
@@ -3315,9 +3360,9 @@ const MaterializeCallableValueFailure = enum {
         expr_idx: CIR.Expr.Idx,
     ) Allocator.Error!void {
         const key = self.resultExprKeyForThread(thread, module_idx, expr_idx);
-        if (self.expr_scan.in_progress_value_defs.contains(key)) return;
-        try self.expr_scan.in_progress_value_defs.put(self.allocator, key, {});
-        defer _ = self.expr_scan.in_progress_value_defs.remove(key);
+        if (self.value_def_resolution.in_progress_exprs.contains(key)) return;
+        try self.value_def_resolution.in_progress_exprs.put(self.allocator, key, {});
+        defer _ = self.value_def_resolution.in_progress_exprs.remove(key);
 
         try self.scanCirValueExpr(result, thread, module_idx, expr_idx);
 
@@ -3420,8 +3465,8 @@ const MaterializeCallableValueFailure = enum {
         }
 
         const visit_key = self.resultExprKeyForThread(thread, module_idx, expr_idx);
-        if (self.expr_scan.visited_exprs.contains(visit_key)) return;
-        try self.expr_scan.visited_exprs.put(self.allocator, visit_key, {});
+        if (self.expr_traversal.visited_exprs.contains(visit_key)) return;
+        try self.expr_traversal.visited_exprs.put(self.allocator, visit_key, {});
 
         try self.scanCirExprChildren(result, thread, module_idx, expr_idx, expr, resolve_direct_calls);
 
@@ -5510,7 +5555,7 @@ const MaterializeCallableValueFailure = enum {
                             desired_fn_monotype.module_idx,
                         );
                     } else if (std.debug.runtime_safety and !thread.hasCallableInst()) {
-                        if (!self.expr_scan.visited_exprs.contains(self.resultExprKeyForThread(thread, module_idx, callee_expr_idx))) {
+                        if (!self.expr_traversal.visited_exprs.contains(self.resultExprKeyForThread(thread, module_idx, callee_expr_idx))) {
                             return;
                         }
                         std.debug.panic(
@@ -7717,9 +7762,9 @@ const MaterializeCallableValueFailure = enum {
             .context_expr = Result.contextExprKey(target_source_context, target_module_idx, call_expr_idx),
             .callee_callable_inst_raw = @intFromEnum(callee_callable_inst_id),
         };
-        if (self.expr_scan.in_progress_call_result_callable_insts.contains(in_progress_key)) return;
-        try self.expr_scan.in_progress_call_result_callable_insts.put(self.allocator, in_progress_key, {});
-        defer _ = self.expr_scan.in_progress_call_result_callable_insts.remove(in_progress_key);
+        if (self.call_result_resolution.in_progress_calls.contains(in_progress_key)) return;
+        try self.call_result_resolution.in_progress_calls.put(self.allocator, in_progress_key, {});
+        defer _ = self.call_result_resolution.in_progress_calls.remove(in_progress_key);
 
         const callable_def = result.getCallableDefForInst(callee_callable_inst_id);
         if (result.getExprCallableValue(
@@ -9107,7 +9152,7 @@ const MaterializeCallableValueFailure = enum {
         dispatch_target: DispatchExprTarget,
     ) Allocator.Error!void {
         try self.putIfChanged(
-            &result.context_mono.resolved_dispatch_targets,
+            &result.dispatch_solved.resolved_dispatch_targets,
             self.resultExprKeyForSourceContext(source_context, module_idx, expr_idx),
             dispatch_target,
         );
@@ -9135,10 +9180,10 @@ const MaterializeCallableValueFailure = enum {
         source_context: SourceContext,
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
-        constraint: ContextMono.ExactDispatchConstraint,
+        constraint: ExactDispatchConstraint,
     ) Allocator.Error!void {
         try self.putIfChanged(
-            &result.context_mono.exact_dispatch_constraints,
+            &result.dispatch_solved.exact_dispatch_constraints,
             self.resultExprKeyForSourceContext(source_context, module_idx, expr_idx),
             constraint,
         );
@@ -9165,8 +9210,8 @@ const MaterializeCallableValueFailure = enum {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
         method_name: Ident.Idx,
-    ) ?ContextMono.ExactDispatchConstraint {
-        if (result.context_mono.getExactDispatchConstraint(source_context, module_idx, expr_idx)) |constraint| {
+    ) ?ExactDispatchConstraint {
+        if (result.dispatch_solved.getExactDispatchConstraint(source_context, module_idx, expr_idx)) |constraint| {
             if (!constraint.method_name.eql(method_name)) {
                 const module_env = self.all_module_envs[module_idx];
                 if (std.debug.runtime_safety) {
@@ -9193,10 +9238,10 @@ const MaterializeCallableValueFailure = enum {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
         method_name: Ident.Idx,
-    ) Allocator.Error!?ContextMono.ExactDispatchConstraint {
+    ) Allocator.Error!?ExactDispatchConstraint {
         const module_env = self.all_module_envs[module_idx];
         const constraint_index = try self.requireModuleDispatchConstraintIndex(module_idx);
-        var matched: ?ContextMono.ExactDispatchConstraint = null;
+        var matched: ?ExactDispatchConstraint = null;
         var saw_unresolved_match = false;
 
         for (constraint_index.getConstraintIndices(@intFromEnum(expr_idx), method_name)) |constraint_idx| {
@@ -9223,7 +9268,7 @@ const MaterializeCallableValueFailure = enum {
                 }
             }
 
-            const exact_constraint: ContextMono.ExactDispatchConstraint = .{
+            const exact_constraint: ExactDispatchConstraint = .{
                 .method_name = constraint.fn_name,
                 .fn_var = constraint.fn_var,
                 .resolved_target = constraint.resolved_target,
@@ -9335,7 +9380,7 @@ const MaterializeCallableValueFailure = enum {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
         method_name: Ident.Idx,
-    ) ?ContextMono.ExactDispatchConstraint {
+    ) ?ExactDispatchConstraint {
         return self.getRecordedExactDispatchConstraintForExpr(
             result,
             thread.requireSourceContext(),
@@ -9665,7 +9710,7 @@ const MaterializeCallableValueFailure = enum {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?DispatchExprTarget {
-        return result.context_mono.getDispatchExprTarget(
+        return result.dispatch_solved.getDispatchExprTarget(
             thread.requireSourceContext(),
             module_idx,
             expr_idx,
@@ -9682,7 +9727,7 @@ const MaterializeCallableValueFailure = enum {
         method_name: Ident.Idx,
         method_info: AssociatedMethodTemplate,
         receiver_monotype: Monotype.Idx,
-    ) Allocator.Error!?ContextMono.ExactDispatchConstraint {
+    ) Allocator.Error!?ExactDispatchConstraint {
         _ = expr;
         const module_env = self.all_module_envs[module_idx];
         const target_method_text = method_info.target_env.getIdent(method_info.qualified_method_ident);
@@ -9737,8 +9782,8 @@ const MaterializeCallableValueFailure = enum {
         result: *Result,
         thread: SemanticThread,
         module_idx: u32,
-        lhs: ContextMono.ExactDispatchConstraint,
-        rhs: ContextMono.ExactDispatchConstraint,
+        lhs: ExactDispatchConstraint,
+        rhs: ExactDispatchConstraint,
     ) Allocator.Error!bool {
         if (!lhs.method_name.eql(rhs.method_name)) return false;
         if (!lhs.resolved_target.origin_module.eql(rhs.resolved_target.origin_module)) return false;
