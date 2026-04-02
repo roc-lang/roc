@@ -1714,9 +1714,8 @@ const MaterializeCallableValueFailure = enum {
             break :blk result.lambdamono.expr_ids_by_key.get(key).?;
         };
         if (result.getExprMonotypeById(expr_id) != null) return expr_id;
-        if (self.program_assembly.in_progress_exprs.contains(key)) return expr_id;
-        try self.program_assembly.in_progress_exprs.put(self.allocator, key, {});
-        defer _ = self.program_assembly.in_progress_exprs.remove(key);
+        if (!try self.program_assembly.beginExprAssembly(self.allocator, key)) return expr_id;
+        defer self.program_assembly.endExprAssembly(key);
 
         const module_env = self.all_module_envs[module_idx];
         const expr = module_env.store.getExpr(expr_idx);
@@ -2816,9 +2815,8 @@ const MaterializeCallableValueFailure = enum {
         expr_idx: CIR.Expr.Idx,
     ) Allocator.Error!void {
         const key = self.resultExprKeyForThread(thread, module_idx, expr_idx);
-        if (self.value_def_resolution.in_progress_exprs.contains(key)) return;
-        try self.value_def_resolution.in_progress_exprs.put(self.allocator, key, {});
-        defer _ = self.value_def_resolution.in_progress_exprs.remove(key);
+        if (!try self.value_def_resolution.beginExpr(self.allocator, key)) return;
+        defer self.value_def_resolution.endExpr(key);
 
         try self.scanCirValueExpr(result, thread, module_idx, expr_idx);
 
@@ -2922,8 +2920,7 @@ const MaterializeCallableValueFailure = enum {
         }
 
         const visit_key = self.resultExprKeyForThread(thread, module_idx, expr_idx);
-        if (self.expr_traversal.visited_exprs.contains(visit_key)) return;
-        try self.expr_traversal.visited_exprs.put(self.allocator, visit_key, {});
+        if (!try self.expr_traversal.beginVisit(self.allocator, visit_key)) return;
 
         try self.scanCirExprChildren(result, thread, module_idx, expr_idx, expr, resolve_direct_calls);
 
@@ -5013,7 +5010,7 @@ const MaterializeCallableValueFailure = enum {
                             desired_fn_monotype.module_idx,
                         );
                     } else if (std.debug.runtime_safety and !thread.hasCallableInst()) {
-                        if (!self.expr_traversal.visited_exprs.contains(self.resultExprKeyForThread(thread, module_idx, callee_expr_idx))) {
+                        if (!self.expr_traversal.hasVisited(self.resultExprKeyForThread(thread, module_idx, callee_expr_idx))) {
                             return;
                         }
                         std.debug.panic(
@@ -7188,9 +7185,8 @@ const MaterializeCallableValueFailure = enum {
             .context_expr = Result.contextExprKey(target_source_context, target_module_idx, call_expr_idx),
             .callee_callable_inst_raw = @intFromEnum(callee_callable_inst_id),
         };
-        if (self.call_result_resolution.in_progress_calls.contains(in_progress_key)) return;
-        try self.call_result_resolution.in_progress_calls.put(self.allocator, in_progress_key, {});
-        defer _ = self.call_result_resolution.in_progress_calls.remove(in_progress_key);
+        if (!try self.call_result_resolution.beginCall(self.allocator, in_progress_key)) return;
+        defer self.call_result_resolution.endCall(in_progress_key);
 
         const callable_def = result.getCallableDefForInst(callee_callable_inst_id);
         if (result.getExprCallableValue(

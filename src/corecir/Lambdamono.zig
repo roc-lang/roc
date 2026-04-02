@@ -164,6 +164,20 @@ pub const BuilderState = struct {
     pub fn clear(self: *BuilderState) void {
         self.in_progress_exprs.clearRetainingCapacity();
     }
+
+    pub fn beginExprAssembly(
+        self: *BuilderState,
+        allocator: Allocator,
+        key: ContextMono.ContextExprKey,
+    ) Allocator.Error!bool {
+        if (self.in_progress_exprs.contains(key)) return false;
+        try self.in_progress_exprs.put(allocator, key, {});
+        return true;
+    }
+
+    pub fn endExprAssembly(self: *BuilderState, key: ContextMono.ContextExprKey) void {
+        _ = self.in_progress_exprs.remove(key);
+    }
 };
 
 pub const CallableParamProjection = ValueProjection.Projection;

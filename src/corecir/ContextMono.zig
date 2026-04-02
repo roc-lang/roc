@@ -117,6 +117,20 @@ pub const ExprTraversalState = struct {
     pub fn clearPerScan(self: *ExprTraversalState) void {
         self.visited_exprs.clearRetainingCapacity();
     }
+
+    pub fn hasVisited(self: *const ExprTraversalState, key: ContextExprKey) bool {
+        return self.visited_exprs.contains(key);
+    }
+
+    pub fn beginVisit(
+        self: *ExprTraversalState,
+        allocator: Allocator,
+        key: ContextExprKey,
+    ) Allocator.Error!bool {
+        if (self.visited_exprs.contains(key)) return false;
+        try self.visited_exprs.put(allocator, key, {});
+        return true;
+    }
 };
 
 pub const ContextTypeVarKey = struct {

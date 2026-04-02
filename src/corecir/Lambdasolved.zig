@@ -48,6 +48,20 @@ pub const ValueDefResolutionState = struct {
     pub fn clear(self: *ValueDefResolutionState) void {
         self.in_progress_exprs.clearRetainingCapacity();
     }
+
+    pub fn beginExpr(
+        self: *ValueDefResolutionState,
+        allocator: std.mem.Allocator,
+        key: ContextExprKey,
+    ) std.mem.Allocator.Error!bool {
+        if (self.in_progress_exprs.contains(key)) return false;
+        try self.in_progress_exprs.put(allocator, key, {});
+        return true;
+    }
+
+    pub fn endExpr(self: *ValueDefResolutionState, key: ContextExprKey) void {
+        _ = self.in_progress_exprs.remove(key);
+    }
 };
 
 pub const CallResultResolutionState = struct {
@@ -63,6 +77,20 @@ pub const CallResultResolutionState = struct {
 
     pub fn clear(self: *CallResultResolutionState) void {
         self.in_progress_calls.clearRetainingCapacity();
+    }
+
+    pub fn beginCall(
+        self: *CallResultResolutionState,
+        allocator: std.mem.Allocator,
+        key: CallResultCallableInstKey,
+    ) std.mem.Allocator.Error!bool {
+        if (self.in_progress_calls.contains(key)) return false;
+        try self.in_progress_calls.put(allocator, key, {});
+        return true;
+    }
+
+    pub fn endCall(self: *CallResultResolutionState, key: CallResultCallableInstKey) void {
+        _ = self.in_progress_calls.remove(key);
     }
 };
 
