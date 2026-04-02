@@ -74,6 +74,45 @@ pub const ExactDispatchSite = struct {
     fn_var: types.Var,
 };
 
+pub const Solver = struct {
+    site_indices_by_module: std.AutoHashMapUnmanaged(u32, SiteIndex),
+
+    pub fn init() Solver {
+        return .{
+            .site_indices_by_module = .empty,
+        };
+    }
+
+    pub fn deinit(self: *Solver, allocator: Allocator) void {
+        var it = self.site_indices_by_module.valueIterator();
+        while (it.next()) |index| {
+            index.deinit(allocator);
+        }
+        self.site_indices_by_module.deinit(allocator);
+    }
+
+    pub fn clear(self: *Solver, allocator: Allocator) void {
+        var it = self.site_indices_by_module.valueIterator();
+        while (it.next()) |index| {
+            index.deinit(allocator);
+        }
+        self.site_indices_by_module.clearRetainingCapacity();
+    }
+
+    pub fn requireModuleSiteIndex(
+        self: *Solver,
+        allocator: Allocator,
+        module_idx: u32,
+        types_store: *const types.Store,
+    ) Allocator.Error!*const SiteIndex {
+        const gop = try self.site_indices_by_module.getOrPut(allocator, module_idx);
+        if (!gop.found_existing) {
+            gop.value_ptr.* = try SiteIndex.init(types_store, allocator);
+        }
+        return gop.value_ptr;
+    }
+};
+
 pub const Result = struct {
     exact_dispatch_sites: std.AutoHashMapUnmanaged(ContextExprKey, ExactDispatchSite),
     resolved_dispatch_targets: std.AutoHashMapUnmanaged(ContextExprKey, DispatchExprTarget),

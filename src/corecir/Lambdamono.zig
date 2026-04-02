@@ -148,6 +148,24 @@ pub const ExprPayload = union(enum) {
     dispatch_intrinsic: DispatchIntrinsic,
 };
 
+pub const BuilderState = struct {
+    in_progress_exprs: std.AutoHashMapUnmanaged(ContextMono.ContextExprKey, void),
+
+    pub fn init() BuilderState {
+        return .{
+            .in_progress_exprs = .empty,
+        };
+    }
+
+    pub fn deinit(self: *BuilderState, allocator: Allocator) void {
+        self.in_progress_exprs.deinit(allocator);
+    }
+
+    pub fn clear(self: *BuilderState) void {
+        self.in_progress_exprs.clearRetainingCapacity();
+    }
+};
+
 pub const CallableParamProjection = ValueProjection.Projection;
 pub const CallableParamProjectionSpan = ValueProjection.ProjectionSpan;
 
@@ -266,6 +284,11 @@ pub const BindingId = enum(u32) {
     _,
 };
 
+pub const ValueOrigin = union(enum) {
+    self,
+    expr: ExprRef,
+};
+
 /// One finalized specialized pattern binding in the executable
 /// `Lambdamono.Program`.
 ///
@@ -275,7 +298,7 @@ pub const BindingId = enum(u32) {
 pub const PatternBinding = struct {
     key: ContextPatternKey,
     callable_value: ?CallableValue = null,
-    origin: ?ExprRef = null,
+    origin: ValueOrigin = .self,
 };
 
 /// One finalized specialized expr in the executable `Lambdamono.Program`.
@@ -292,38 +315,104 @@ pub const Expr = struct {
     child_exprs: ExprIdSpan = .empty(),
     child_stmts: StmtIdSpan = .empty(),
     payload: ExprPayload = .plain,
-    origin: ?ExprRef = null,
+    origin: ValueOrigin = .self,
 
-    pub fn getCallable(self: *const Expr) ?ExprCallableSemantics {
+    pub fn getCallableValue(self: *const Expr) ?CallableValue {
         return switch (self.payload) {
-            .callable_value => |callable_value| .{ .callable = callable_value },
-            .callable_intro => |intro| .{ .intro = intro },
+            .callable_value => |callable_value| callable_value,
+            .callable_intro => |intro| intro.callable_value,
             .plain, .direct_call, .indirect_call, .low_level_call, .lookup_expr, .lookup_def, .dispatch_target, .dispatch_intrinsic => null,
         };
     }
 
-    pub fn getCall(self: *const Expr) ?CallSite {
+    pub fn getCallableIntro(self: *const Expr) ?struct {
+        callable_value: CallableValue,
+        callable_inst: CallableInstId,
+    } {
         return switch (self.payload) {
-            .direct_call => |callable_inst| .{ .direct = callable_inst },
-            .indirect_call => |indirect_call| .{ .indirect_call = indirect_call },
-            .low_level_call => |low_level| .{ .low_level = low_level },
-            .plain, .callable_value, .callable_intro, .lookup_expr, .lookup_def, .dispatch_target, .dispatch_intrinsic => null,
+            .callable_intro => |intro| intro,
+            .plain, .callable_value, .direct_call, .indirect_call, .low_level_call, .lookup_expr, .lookup_def, .dispatch_target, .dispatch_intrinsic => null,
+        };
+    }
+
+    pub fn getCallable(self: *const Expr) ?ExprCallableSemantics {
+        if (self.getCallableIntro()) |intro| return .{ .intro = intro };
+        if (self.getCallableValue()) |callable_value| return .{ .callable = callable_value };
+        return null;
+    }
+
+    pub fn getDirectCall(self: *const Expr) ?CallableInstId {
+        return switch (self.payload) {
+            .direct_call => |callable_inst| callable_inst,
+            .plain, .callable_value, .callable_intro, .indirect_call, .low_level_call, .lookup_expr, .lookup_def, .dispatch_target, .dispatch_intrinsic => null,
+        };
+    }
+
+    pub fn getIndirectCall(self: *const Expr) ?IndirectCall {
+        return switch (self.payload) {
+            .indirect_call => |indirect_call| indirect_call,
+            .plain, .callable_value, .callable_intro, .direct_call, .low_level_call, .lookup_expr, .lookup_def, .dispatch_target, .dispatch_intrinsic => null,
+        };
+    }
+
+    pub fn getLowLevelCall(self: *const Expr) ?CIR.Expr.LowLevel {
+        return switch (self.payload) {
+            .low_level_call => |low_level| low_level,
+            .plain, .callable_value, .callable_intro, .direct_call, .indirect_call, .lookup_expr, .lookup_def, .dispatch_target, .dispatch_intrinsic => null,
+        };
+    }
+
+    pub fn getCall(self: *const Expr) ?CallSite {
+        if (self.getDirectCall()) |callable_inst| return .{ .direct = callable_inst };
+        if (self.getIndirectCall()) |indirect_call| return .{ .indirect_call = indirect_call };
+        if (self.getLowLevelCall()) |low_level| return .{ .low_level = low_level };
+        return null;
+    }
+
+    pub fn getLookupExpr(self: *const Expr) ?ExprRef {
+        return switch (self.payload) {
+            .lookup_expr => |expr_ref| expr_ref,
+            .plain, .callable_value, .callable_intro, .direct_call, .indirect_call, .low_level_call, .lookup_def, .dispatch_target, .dispatch_intrinsic => null,
+        };
+    }
+
+    pub fn getLookupDef(self: *const Expr) ?Lambdasolved.ExternalDefSource {
+        return switch (self.payload) {
+            .lookup_def => |def_source| def_source,
+            .plain, .callable_value, .callable_intro, .direct_call, .indirect_call, .low_level_call, .lookup_expr, .dispatch_target, .dispatch_intrinsic => null,
         };
     }
 
     pub fn getLookup(self: *const Expr) ?LookupResolution {
+        if (self.getLookupExpr()) |expr_ref| return .{ .expr = expr_ref };
+        if (self.getLookupDef()) |def_source| return .{ .def = def_source };
+        return null;
+    }
+
+    pub fn getDispatchTarget(self: *const Expr) ?DispatchSolved.DispatchExprTarget {
         return switch (self.payload) {
-            .lookup_expr => |expr_ref| .{ .expr = expr_ref },
-            .lookup_def => |def_source| .{ .def = def_source },
-            .plain, .callable_value, .callable_intro, .direct_call, .indirect_call, .low_level_call, .dispatch_target, .dispatch_intrinsic => null,
+            .dispatch_target => |target| target,
+            .plain, .callable_value, .callable_intro, .direct_call, .indirect_call, .low_level_call, .lookup_expr, .lookup_def, .dispatch_intrinsic => null,
+        };
+    }
+
+    pub fn getDispatchIntrinsic(self: *const Expr) ?DispatchIntrinsic {
+        return switch (self.payload) {
+            .dispatch_intrinsic => |intrinsic| intrinsic,
+            .plain, .callable_value, .callable_intro, .direct_call, .indirect_call, .low_level_call, .lookup_expr, .lookup_def, .dispatch_target => null,
         };
     }
 
     pub fn getDispatch(self: *const Expr) ?DispatchSemantics {
-        return switch (self.payload) {
-            .dispatch_target => |target| .{ .target = target },
-            .dispatch_intrinsic => |intrinsic| .{ .intrinsic = intrinsic },
-            .plain, .callable_value, .callable_intro, .direct_call, .indirect_call, .low_level_call, .lookup_expr, .lookup_def => null,
+        if (self.getDispatchTarget()) |target| return .{ .target = target };
+        if (self.getDispatchIntrinsic()) |intrinsic| return .{ .intrinsic = intrinsic };
+        return null;
+    }
+
+    pub fn getOriginExpr(self: *const Expr) ?ExprRef {
+        return switch (self.origin) {
+            .self => null,
+            .expr => |origin| origin,
         };
     }
 };
@@ -468,7 +557,10 @@ pub const Program = struct {
         pattern_idx: CIR.Pattern.Idx,
     ) ?ExprRef {
         const binding = self.getPatternBinding(source_context, module_idx, pattern_idx) orelse return null;
-        return binding.origin;
+        return switch (binding.origin) {
+            .self => null,
+            .expr => |origin| origin,
+        };
     }
 
     pub fn getExpr(self: *const Program, expr_id: ExprId) *const Expr {

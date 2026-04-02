@@ -97,6 +97,28 @@ pub const ContextPatternKey = struct {
     pattern_raw: u32,
 };
 
+pub const ExprTraversalState = struct {
+    visited_exprs: std.AutoHashMapUnmanaged(ContextExprKey, void),
+
+    pub fn init() ExprTraversalState {
+        return .{
+            .visited_exprs = .empty,
+        };
+    }
+
+    pub fn deinit(self: *ExprTraversalState, allocator: Allocator) void {
+        self.visited_exprs.deinit(allocator);
+    }
+
+    pub fn clearAll(self: *ExprTraversalState) void {
+        self.visited_exprs.clearRetainingCapacity();
+    }
+
+    pub fn clearPerScan(self: *ExprTraversalState) void {
+        self.visited_exprs.clearRetainingCapacity();
+    }
+};
+
 pub const ContextTypeVarKey = struct {
     source_context_kind: SourceContextKind,
     source_context_module_idx: u32,

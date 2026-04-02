@@ -29,6 +29,43 @@ pub const SourceContext = cm.SourceContext;
 pub const ContextExprKey = cm.ContextExprKey;
 pub const ContextPatternKey = cm.ContextPatternKey;
 
+pub const CallResultCallableInstKey = struct {
+    context_expr: ContextExprKey,
+    callee_callable_inst_raw: u32,
+};
+
+pub const ValueDefResolutionState = struct {
+    in_progress_exprs: std.AutoHashMapUnmanaged(ContextExprKey, void),
+
+    pub fn init() ValueDefResolutionState {
+        return .{ .in_progress_exprs = .empty };
+    }
+
+    pub fn deinit(self: *ValueDefResolutionState, allocator: std.mem.Allocator) void {
+        self.in_progress_exprs.deinit(allocator);
+    }
+
+    pub fn clear(self: *ValueDefResolutionState) void {
+        self.in_progress_exprs.clearRetainingCapacity();
+    }
+};
+
+pub const CallResultResolutionState = struct {
+    in_progress_calls: std.AutoHashMapUnmanaged(CallResultCallableInstKey, void),
+
+    pub fn init() CallResultResolutionState {
+        return .{ .in_progress_calls = .empty };
+    }
+
+    pub fn deinit(self: *CallResultResolutionState, allocator: std.mem.Allocator) void {
+        self.in_progress_calls.deinit(allocator);
+    }
+
+    pub fn clear(self: *CallResultResolutionState) void {
+        self.in_progress_calls.clearRetainingCapacity();
+    }
+};
+
 pub const Result = struct {
     pub fn init(allocator: std.mem.Allocator) !Result {
         _ = allocator;

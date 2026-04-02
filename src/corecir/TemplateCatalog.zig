@@ -314,4 +314,31 @@ pub const Result = struct {
         }
         return template_id;
     }
+
+    pub fn primeModuleCallableDefs(
+        self: *Result,
+        allocator: Allocator,
+        all_module_envs: []const *ModuleEnv,
+        module_idx: u32,
+    ) Allocator.Error!void {
+        const module_env = all_module_envs[module_idx];
+        const defs = module_env.store.sliceDefs(module_env.all_defs);
+
+        for (defs) |def_idx| {
+            const def = module_env.store.getDef(def_idx);
+            _ = try self.preRegisterCallableTemplateForDefExpr(
+                allocator,
+                all_module_envs,
+                .root_scope,
+                module_idx,
+                def.expr,
+                ModuleEnv.varFrom(def.pattern),
+                def.pattern,
+                &.{
+                    .{ .external_def = externalDefTemplateSource(module_idx, @intCast(@intFromEnum(def_idx))) },
+                    .{ .local_pattern = localPatternTemplateSource(module_idx, def.pattern) },
+                },
+            );
+        }
+    }
 };
