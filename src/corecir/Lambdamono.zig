@@ -132,6 +132,14 @@ pub const LookupResolution = union(enum) {
     def: Lambdasolved.ExternalDefSource,
 };
 
+pub const ExprPayload = union(enum) {
+    plain,
+    callable: ExprCallableSemantics,
+    call: CallSite,
+    lookup: LookupResolution,
+    dispatch: DispatchSemantics,
+};
+
 pub const CallableParamProjection = ValueProjection.Projection;
 pub const CallableParamProjectionSpan = ValueProjection.ProjectionSpan;
 
@@ -275,11 +283,36 @@ pub const Expr = struct {
     monotype: ?ContextMono.ResolvedMonotype = null,
     child_exprs: ExprIdSpan = .empty(),
     child_stmts: StmtIdSpan = .empty(),
-    callable: ?ExprCallableSemantics = null,
-    call: ?CallSite = null,
+    payload: ExprPayload = .plain,
     origin: ?ExprRef = null,
-    dispatch: ?DispatchSemantics = null,
-    lookup: ?LookupResolution = null,
+
+    pub fn getCallable(self: *const Expr) ?ExprCallableSemantics {
+        return switch (self.payload) {
+            .callable => |callable| callable,
+            .plain, .call, .lookup, .dispatch => null,
+        };
+    }
+
+    pub fn getCall(self: *const Expr) ?CallSite {
+        return switch (self.payload) {
+            .call => |call_site| call_site,
+            .plain, .callable, .lookup, .dispatch => null,
+        };
+    }
+
+    pub fn getLookup(self: *const Expr) ?LookupResolution {
+        return switch (self.payload) {
+            .lookup => |lookup| lookup,
+            .plain, .callable, .call, .dispatch => null,
+        };
+    }
+
+    pub fn getDispatch(self: *const Expr) ?DispatchSemantics {
+        return switch (self.payload) {
+            .dispatch => |dispatch| dispatch,
+            .plain, .callable, .call, .lookup => null,
+        };
+    }
 };
 
 pub const Stmt = struct {

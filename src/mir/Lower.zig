@@ -462,7 +462,7 @@ fn callableDefBodyRetMonotype(
     callable_def: *const Pipeline.CallableDef,
 ) Allocator.Error!Monotype.Idx {
     const body_expr = self.callableDefBodyExpr(callable_def);
-    const resolved = if (body_expr.callable) |callable_semantics| switch (callable_semantics) {
+    const resolved = if (body_expr.getCallable()) |callable_semantics| switch (callable_semantics) {
         .callable => |callable_value| self.callable_pipeline.getCallableValueRuntimeMonotype(callable_value),
         .intro => |intro| self.callable_pipeline.getCallableValueRuntimeMonotype(intro.callable_value),
     } else body_expr.monotype orelse {

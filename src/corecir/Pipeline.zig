@@ -270,7 +270,7 @@ pub const Result = struct {
     }
 
     fn getExprCallSemanticsById(self: *const Result, expr_id: Lambdamono.ExprId) ?CallSite {
-        return self.lambdamono.getExpr(expr_id).call;
+        return self.lambdamono.getExpr(expr_id).getCall();
     }
 
     fn getExprMonotypeById(self: *const Result, expr_id: Lambdamono.ExprId) ?ResolvedMonotype {
@@ -281,21 +281,21 @@ pub const Result = struct {
         self: *const Result,
         expr_id: Lambdamono.ExprId,
     ) ?Lambdamono.ExprCallableSemantics {
-        return self.lambdamono.getExpr(expr_id).callable;
+        return self.lambdamono.getExpr(expr_id).getCallable();
     }
 
     fn getExprDispatchSemanticsById(
         self: *const Result,
         expr_id: Lambdamono.ExprId,
     ) ?Lambdamono.DispatchSemantics {
-        return self.lambdamono.getExpr(expr_id).dispatch;
+        return self.lambdamono.getExpr(expr_id).getDispatch();
     }
 
     fn getExprLookupResolutionById(
         self: *const Result,
         expr_id: Lambdamono.ExprId,
     ) ?Lambdamono.LookupResolution {
-        return self.lambdamono.getExpr(expr_id).lookup;
+        return self.lambdamono.getExpr(expr_id).getLookup();
     }
 
     fn getExprOriginById(self: *const Result, expr_id: Lambdamono.ExprId) ?ExprRef {
@@ -2116,18 +2116,18 @@ const MaterializeCallableValueFailure = enum {
         const child_stmt_span = try self.appendProgramStmtChildren(&result.lambdamono, child_stmts.items);
         const reserved_expr = self.programExpr(result, expr_id).*;
         if (enqueue_reachability) {
-            if (reserved_expr.callable) |callable_semantics| switch (callable_semantics) {
+            if (reserved_expr.getCallable()) |callable_semantics| switch (callable_semantics) {
                 .callable => |callable_value| try self.enqueueReachableCallableValue(result, callable_value),
                 .intro => |intro| {
                     try self.enqueueReachableCallableInst(result, intro.callable_inst);
                     try self.enqueueReachableCallableValue(result, intro.callable_value);
                 },
             };
-            if (reserved_expr.call) |call_site| {
+            if (reserved_expr.getCall()) |call_site| {
                 try self.enqueueReachableCallSite(result, call_site);
             }
         }
-        const callable_value = if (reserved_expr.callable) |callable_semantics| switch (callable_semantics) {
+        const callable_value = if (reserved_expr.getCallable()) |callable_semantics| switch (callable_semantics) {
             .callable => |expr_callable_value| expr_callable_value,
             .intro => |intro| intro.callable_value,
         } else null;
@@ -2344,11 +2344,8 @@ const MaterializeCallableValueFailure = enum {
                 .monotype = null,
                 .child_exprs = .empty(),
                 .child_stmts = .empty(),
-                .callable = null,
-                .call = null,
+                .payload = .plain,
                 .origin = null,
-                .dispatch = null,
-                .lookup = null,
             });
             try result.lambdamono.expr_ids_by_key.put(self.allocator, key, new_expr_id);
             break :blk new_expr_id;
@@ -2511,7 +2508,7 @@ const MaterializeCallableValueFailure = enum {
                 .{ .callable = callable_value },
             .packed_fn => |packed_fn| blk: {
                 if (owns_callable_intro) {
-                    switch (semantics.callable orelse break :blk .{ .callable = callable_value }) {
+                    switch (semantics.getCallable() orelse break :blk .{ .callable = callable_value }) {
                         .callable => |existing_callable_value| switch (existing_callable_value) {
                             .direct => |callable_inst_id| break :blk .{ .intro = .{
                                 .callable_value = .{ .packed_fn = packed_fn },
@@ -2528,7 +2525,8 @@ const MaterializeCallableValueFailure = enum {
                 break :blk .{ .callable = callable_value };
             },
         };
-        if (!std.meta.eql(semantics.callable, next_callable)) semantics.callable = next_callable;
+        const next_payload: Lambdamono.ExprPayload = .{ .callable = next_callable };
+        if (!std.meta.eql(semantics.payload, next_payload)) semantics.payload = next_payload;
     }
 
     fn writeCallableParamValue(
@@ -2579,8 +2577,8 @@ const MaterializeCallableValueFailure = enum {
         call_site: CallSite,
     ) Allocator.Error!void {
         const semantics = try self.ensureProgramExprNode(result, source_context, module_idx, expr_idx);
-        const next_call: ?CallSite = call_site;
-        if (!std.meta.eql(semantics.call, next_call)) semantics.call = next_call;
+        const next_payload: Lambdamono.ExprPayload = .{ .call = call_site };
+        if (!std.meta.eql(semantics.payload, next_payload)) semantics.payload = next_payload;
     }
 
     fn readExprCallSite(
@@ -2639,8 +2637,8 @@ const MaterializeCallableValueFailure = enum {
         lookup_resolution: LookupResolution,
     ) Allocator.Error!void {
         const semantics = try self.ensureProgramExprNode(result, source_context, module_idx, expr_idx);
-        const next_lookup: ?LookupResolution = lookup_resolution;
-        if (!std.meta.eql(semantics.lookup, next_lookup)) semantics.lookup = next_lookup;
+        const next_payload: Lambdamono.ExprPayload = .{ .lookup = lookup_resolution };
+        if (!std.meta.eql(semantics.payload, next_payload)) semantics.payload = next_payload;
     }
 
     fn scanSeedModules(self: *Pass, result: *Result) Allocator.Error!void {
@@ -8965,8 +8963,8 @@ const MaterializeCallableValueFailure = enum {
             dispatch_target,
         );
         const semantics = try self.ensureProgramExprNode(result, source_context, module_idx, expr_idx);
-        const next_dispatch: ?DispatchSemantics = .{ .target = dispatch_target };
-        if (!std.meta.eql(semantics.dispatch, next_dispatch)) semantics.dispatch = next_dispatch;
+        const next_payload: Lambdamono.ExprPayload = .{ .dispatch = .{ .target = dispatch_target } };
+        if (!std.meta.eql(semantics.payload, next_payload)) semantics.payload = next_payload;
     }
 
     fn recordDispatchExprIntrinsic(
@@ -8978,8 +8976,8 @@ const MaterializeCallableValueFailure = enum {
         dispatch_intrinsic: DispatchIntrinsic,
     ) Allocator.Error!void {
         const semantics = try self.ensureProgramExprNode(result, source_context, module_idx, expr_idx);
-        const next_dispatch: ?DispatchSemantics = .{ .intrinsic = dispatch_intrinsic };
-        if (!std.meta.eql(semantics.dispatch, next_dispatch)) semantics.dispatch = next_dispatch;
+        const next_payload: Lambdamono.ExprPayload = .{ .dispatch = .{ .intrinsic = dispatch_intrinsic } };
+        if (!std.meta.eql(semantics.payload, next_payload)) semantics.payload = next_payload;
     }
 
     fn recordExactDispatchSite(
