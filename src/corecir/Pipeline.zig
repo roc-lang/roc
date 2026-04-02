@@ -20,13 +20,8 @@ const Lambdamono = @import("Lambdamono.zig");
 
 const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
-const Region = base.Region;
 const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
-
-const CallableTemplateSource = TemplateCatalog.CallableTemplateSource;
-const ExprTemplateSource = TemplateCatalog.ExprTemplateSource;
-const LocalPatternTemplateSource = TemplateCatalog.LocalPatternTemplateSource;
 
 /// Identifies a semantic callable template before executable specialization.
 pub const CallableTemplateId = TemplateCatalog.CallableTemplateId;
@@ -134,33 +129,9 @@ fn callableInstHasRealizedRuntimeExpr(result: *const Result, callable_inst_id: C
     ) != null;
 }
 
-fn exprTemplateSource(module_idx: u32, expr_idx: CIR.Expr.Idx) ExprTemplateSource {
-    return .{ .module_idx = module_idx, .expr_idx = expr_idx };
-}
-
-fn localPatternTemplateSource(module_idx: u32, pattern_idx: CIR.Pattern.Idx) LocalPatternTemplateSource {
-    return .{ .module_idx = module_idx, .pattern_idx = pattern_idx };
-}
-
-fn externalDefTemplateSource(module_idx: u32, def_node_idx: u16) ExternalDefSource {
-    return .{
-        .module_idx = module_idx,
-        .def_idx = @enumFromInt(def_node_idx),
-    };
-}
-
-fn lookupCallableTemplateBySource(result: *const Result, source: CallableTemplateSource) ?CallableTemplateId {
-    return result.template_catalog.callable_template_ids_by_source.get(source);
-}
-
-fn recordCallableTemplateSource(
-    result: *Result,
-    allocator: Allocator,
-    source: CallableTemplateSource,
-    template_id: CallableTemplateId,
-) Allocator.Error!void {
-    try result.template_catalog.callable_template_ids_by_source.put(allocator, source, template_id);
-}
+const exprTemplateSource = TemplateCatalog.exprTemplateSource;
+const localPatternTemplateSource = TemplateCatalog.localPatternTemplateSource;
+const externalDefTemplateSource = TemplateCatalog.externalDefTemplateSource;
 
 const ResolvedDispatchTarget = struct {
     origin: Ident.Idx,
@@ -2714,8 +2685,9 @@ const MaterializeCallableValueFailure = enum {
                 .expr_idx = def.expr,
             });
 
-            _ = try self.preRegisterCallableTemplateForDefExpr(
-                result,
+            _ = try result.template_catalog.preRegisterCallableTemplateForDefExpr(
+                self.allocator,
+                self.all_module_envs,
                 .root_scope,
                 module_idx,
                 def.expr,
@@ -2727,86 +2699,6 @@ const MaterializeCallableValueFailure = enum {
                 },
             );
         }
-    }
-
-    fn registerCallableTemplate(
-        self: *Pass,
-        result: *Result,
-        closure_owner: Lambdasolved.CallableTemplateOwner,
-        source: CallableTemplateSource,
-        module_idx: u32,
-        cir_expr: CIR.Expr.Idx,
-        runtime_expr: CIR.Expr.Idx,
-        type_root: types.Var,
-        binding_pattern: ?CIR.Pattern.Idx,
-        kind: CallableTemplateKind,
-        source_region: Region,
-    ) Allocator.Error!CallableTemplateId {
-        const existing = lookupCallableTemplateBySource(result, source);
-        if (existing) |template_id| return template_id;
-        const module_env = self.all_module_envs[module_idx];
-        const boundary = self.callableBoundaryInfo(module_idx, cir_expr) orelse blk: {
-            if (std.debug.runtime_safety) {
-                std.debug.panic(
-                    "Pipeline invariant violated: registering callable template for non-callable boundary expr {d} in module {d}",
-                    .{ @intFromEnum(cir_expr), module_idx },
-                );
-            }
-            break :blk unreachable;
-        };
-
-        const owner: Lambdasolved.CallableTemplateOwner = if (kind == .closure)
-            closure_owner
-        else
-            .root_scope;
-
-        const callable_template_id: CallableTemplateId = @enumFromInt(result.template_catalog.callable_templates.items.len);
-        try self.appendExact(&result.template_catalog.callable_templates, CallableTemplate{
-            .source = source,
-            .module_idx = module_idx,
-            .cir_expr = cir_expr,
-            .runtime_expr = runtime_expr,
-            .arg_patterns = boundary.arg_patterns,
-            .body_expr = boundary.body_expr,
-            .low_level_op = switch (module_env.store.getExpr(boundary.body_expr)) {
-                .e_run_low_level => |run_low_level| run_low_level.op,
-                else => null,
-            },
-            .type_root = type_root,
-            .binding = if (binding_pattern) |pattern_idx|
-                .{ .pattern = pattern_idx }
-            else
-                .anonymous,
-            .kind = kind,
-            .owner = owner,
-            .source_region = source_region,
-        });
-        try recordCallableTemplateSource(result, self.allocator, source, callable_template_id);
-
-        return callable_template_id;
-    }
-
-    fn recordAdditionalCallableTemplateSource(
-        self: *Pass,
-        result: *Result,
-        source: CallableTemplateSource,
-        template_id: CallableTemplateId,
-    ) Allocator.Error!void {
-        const existing = lookupCallableTemplateBySource(result, source);
-        if (existing) |existing_template_id| {
-            if (existing_template_id != template_id) {
-                if (std.debug.runtime_safety) {
-                    std.debug.panic(
-                        "Pipeline: conflicting callable template aliases for source={s} (existing={d}, new={d})",
-                        .{ @tagName(source), @intFromEnum(existing_template_id), @intFromEnum(template_id) },
-                    );
-                }
-                unreachable;
-            }
-            return;
-        }
-
-        try recordCallableTemplateSource(result, self.allocator, source, template_id);
     }
 
     fn recordContextPatternSourceExpr(
@@ -2897,62 +2789,6 @@ const MaterializeCallableValueFailure = enum {
             expr_idx,
             source,
         );
-    }
-
-    const DefExprCallableBoundary = struct {
-        expr_idx: CIR.Expr.Idx,
-        kind: CallableTemplateKind,
-    };
-
-    fn defExprCallableBoundary(
-        self: *Pass,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-    ) ?DefExprCallableBoundary {
-        const module_env = self.all_module_envs[module_idx];
-        return switch (module_env.store.getExpr(expr_idx)) {
-            .e_lambda => .{ .expr_idx = expr_idx, .kind = .lambda },
-            .e_closure => .{ .expr_idx = expr_idx, .kind = .closure },
-            .e_hosted_lambda => .{ .expr_idx = expr_idx, .kind = .hosted_lambda },
-            .e_block => |block| self.defExprCallableBoundary(module_idx, block.final_expr),
-            .e_dbg => |dbg_expr| self.defExprCallableBoundary(module_idx, dbg_expr.expr),
-            .e_expect => |expect_expr| self.defExprCallableBoundary(module_idx, expect_expr.body),
-            .e_return => |return_expr| self.defExprCallableBoundary(module_idx, return_expr.expr),
-            .e_nominal => |nominal_expr| self.defExprCallableBoundary(module_idx, nominal_expr.backing_expr),
-            .e_nominal_external => |nominal_expr| self.defExprCallableBoundary(module_idx, nominal_expr.backing_expr),
-            else => null,
-        };
-    }
-
-    fn preRegisterCallableTemplateForDefExpr(
-        self: *Pass,
-        result: *Result,
-        closure_owner: Lambdasolved.CallableTemplateOwner,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-        type_root: types.Var,
-        binding_pattern: ?CIR.Pattern.Idx,
-        additional_sources: []const CallableTemplateSource,
-    ) Allocator.Error!?CallableTemplateId {
-        const boundary = self.defExprCallableBoundary(module_idx, expr_idx) orelse return null;
-        const module_env = self.all_module_envs[module_idx];
-        const template_id = try self.registerCallableTemplate(
-            result,
-            closure_owner,
-            .{ .expr = exprTemplateSource(module_idx, boundary.expr_idx) },
-            module_idx,
-            boundary.expr_idx,
-            boundary.expr_idx,
-            type_root,
-            binding_pattern,
-            boundary.kind,
-            module_env.store.getExprRegion(boundary.expr_idx),
-        );
-        try self.recordAdditionalCallableTemplateSource(result, .{ .expr = exprTemplateSource(module_idx, expr_idx) }, template_id);
-        for (additional_sources) |source| {
-            try self.recordAdditionalCallableTemplateSource(result, source, template_id);
-        }
-        return template_id;
     }
 
     fn callableTemplateOwnerForSourceContext(
@@ -3443,8 +3279,9 @@ const MaterializeCallableValueFailure = enum {
             else => null,
         };
         if (callable_kind) |kind| {
-            const template_id = try self.registerCallableTemplate(
-                result,
+            const template_id = try result.template_catalog.registerCallableTemplate(
+                self.allocator,
+                self.all_module_envs,
                 self.callableTemplateOwnerForSourceContext(result, thread.requireSourceContext()),
                 .{ .expr = exprTemplateSource(module_idx, expr_idx) },
                 module_idx,
@@ -4704,8 +4541,9 @@ const MaterializeCallableValueFailure = enum {
             .e_closure => |closure_expr| {
                 const lambda_expr = module_env.store.getExpr(closure_expr.lambda_idx);
                 if (lambda_expr == .e_lambda) {
-                    const lambda_template_id = try self.registerCallableTemplate(
-                        result,
+                    const lambda_template_id = try result.template_catalog.registerCallableTemplate(
+                        self.allocator,
+                        self.all_module_envs,
                         self.callableTemplateOwnerForSourceContext(result, thread.requireSourceContext()),
                         .{ .expr = exprTemplateSource(module_idx, closure_expr.lambda_idx) },
                         module_idx,
@@ -5114,8 +4952,9 @@ const MaterializeCallableValueFailure = enum {
             const stmt = module_env.store.getStatement(stmt_idx);
             switch (stmt) {
                 .s_decl => |decl| {
-                    _ = try self.preRegisterCallableTemplateForDefExpr(
-                        result,
+                    _ = try result.template_catalog.preRegisterCallableTemplateForDefExpr(
+                        self.allocator,
+                        self.all_module_envs,
                         self.callableTemplateOwnerForSourceContext(result, thread.requireSourceContext()),
                         module_idx,
                         decl.expr,
@@ -5125,8 +4964,9 @@ const MaterializeCallableValueFailure = enum {
                     );
                 },
                 .s_var => |var_decl| {
-                    _ = try self.preRegisterCallableTemplateForDefExpr(
-                        result,
+                    _ = try result.template_catalog.preRegisterCallableTemplateForDefExpr(
+                        self.allocator,
+                        self.all_module_envs,
                         self.callableTemplateOwnerForSourceContext(result, thread.requireSourceContext()),
                         module_idx,
                         var_decl.expr,
@@ -6149,38 +5989,6 @@ const MaterializeCallableValueFailure = enum {
             );
             _ = self.getValueExprCallableValueForThread(result, thread, module_idx, arg_expr_idx);
         }
-    }
-
-    const CallableBoundaryInfo = struct {
-        arg_patterns: CIR.Pattern.Span,
-        body_expr: CIR.Expr.Idx,
-    };
-
-    fn callableBoundaryInfo(
-        self: *Pass,
-        module_idx: u32,
-        callable_expr_idx: CIR.Expr.Idx,
-    ) ?CallableBoundaryInfo {
-        const module_env = self.all_module_envs[module_idx];
-        return switch (module_env.store.getExpr(callable_expr_idx)) {
-            .e_lambda => |lambda_expr| .{
-                .arg_patterns = lambda_expr.args,
-                .body_expr = lambda_expr.body,
-            },
-            .e_closure => |closure_expr| blk: {
-                const lambda_expr = module_env.store.getExpr(closure_expr.lambda_idx);
-                if (lambda_expr != .e_lambda) break :blk null;
-                break :blk .{
-                    .arg_patterns = lambda_expr.e_lambda.args,
-                    .body_expr = lambda_expr.e_lambda.body,
-                };
-            },
-            .e_hosted_lambda => |hosted_expr| .{
-                .arg_patterns = hosted_expr.args,
-                .body_expr = hosted_expr.body,
-            },
-            else => null,
-        };
     }
 
     fn resolveDirectCallFnMonotype(
