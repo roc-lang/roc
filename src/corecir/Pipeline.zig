@@ -120,6 +120,16 @@ fn callableValueMonotype(result: *const Result, callable_value: CallableValue) R
     };
 }
 
+fn callableInstHasRealizedRuntimeExpr(result: *const Result, callable_inst_id: CallableInstId) bool {
+    const callable_inst = result.getCallableInst(callable_inst_id);
+    const template = result.getCallableTemplate(callable_inst.template);
+    return result.getExprCallableValue(
+        callableInstSourceContext(callable_inst_id),
+        template.module_idx,
+        template.runtime_expr,
+    ) != null;
+}
+
 fn exprTemplateSource(module_idx: u32, expr_idx: CIR.Expr.Idx) ExprTemplateSource {
     return .{ .module_idx = module_idx, .expr_idx = expr_idx };
 }
@@ -725,36 +735,6 @@ const ExprScanState = struct {
     }
 };
 
-const CallableRealizationState = struct {
-    in_progress_callable_scans: std.AutoHashMapUnmanaged(u32, void),
-    realized_callable_insts: std.AutoHashMapUnmanaged(CallableInstId, void),
-    reachable_callable_inst_set: std.AutoHashMapUnmanaged(CallableInstId, void),
-    reachable_callable_inst_queue: std.ArrayListUnmanaged(CallableInstId),
-
-    fn init() CallableRealizationState {
-        return .{
-            .in_progress_callable_scans = .empty,
-            .realized_callable_insts = .empty,
-            .reachable_callable_inst_set = .empty,
-            .reachable_callable_inst_queue = .empty,
-        };
-    }
-
-    fn deinit(self: *CallableRealizationState, allocator: Allocator) void {
-        self.in_progress_callable_scans.deinit(allocator);
-        self.realized_callable_insts.deinit(allocator);
-        self.reachable_callable_inst_set.deinit(allocator);
-        self.reachable_callable_inst_queue.deinit(allocator);
-    }
-
-    fn clear(self: *CallableRealizationState) void {
-        self.in_progress_callable_scans.clearRetainingCapacity();
-        self.realized_callable_insts.clearRetainingCapacity();
-        self.reachable_callable_inst_set.clearRetainingCapacity();
-        self.reachable_callable_inst_queue.clearRetainingCapacity();
-    }
-};
-
 /// Pipelines callable templates into explicit callable instantiations.
 pub const Pass = struct {
     allocator: Allocator,
@@ -763,7 +743,6 @@ pub const Pass = struct {
     current_module_idx: u32,
     app_module_idx: ?u32,
     expr_scan: ExprScanState,
-    callable_realization: CallableRealizationState,
 
     pub fn init(
         allocator: Allocator,
@@ -779,7 +758,6 @@ pub const Pass = struct {
             .current_module_idx = current_module_idx,
             .app_module_idx = app_module_idx,
             .expr_scan = ExprScanState.init(),
-            .callable_realization = CallableRealizationState.init(),
         };
     }
 
@@ -1643,12 +1621,10 @@ const MaterializeCallableValueFailure = enum {
 
     pub fn deinit(self: *Pass) void {
         self.expr_scan.deinit(self.allocator);
-        self.callable_realization.deinit(self.allocator);
     }
 
     fn resetRunState(self: *Pass) void {
         self.expr_scan.clearAll();
-        self.callable_realization.clear();
     }
 
     pub fn runRootSourceExpr(self: *Pass, expr_idx: CIR.Expr.Idx) Allocator.Error!Result {
@@ -1779,11 +1755,11 @@ const MaterializeCallableValueFailure = enum {
         self: *Pass,
         result: *Result,
     ) Allocator.Error!void {
-        var raw_queue_idx: usize = 0;
-        while (raw_queue_idx < self.callable_realization.reachable_callable_inst_queue.items.len) : (raw_queue_idx += 1) {
-            const callable_inst_id = self.callable_realization.reachable_callable_inst_queue.items[raw_queue_idx];
+        var callable_inst_idx: usize = 0;
+        while (callable_inst_idx < result.lambdamono.callable_insts.items.len) : (callable_inst_idx += 1) {
+            const callable_inst_id: CallableInstId = @enumFromInt(callable_inst_idx);
             try self.ensureCallableInstRealized(result, callable_inst_id);
-            trace.log("assembling reachable callable_inst={d}/{d}", .{ raw_queue_idx, self.callable_realization.reachable_callable_inst_queue.items.len });
+            trace.log("assembling callable_inst={d}/{d}", .{ callable_inst_idx, result.lambdamono.callable_insts.items.len });
             const callable_inst = result.getCallableInst(callable_inst_id).*;
             const template = result.getCallableTemplate(callable_inst.template);
             switch (template.kind) {
@@ -1874,13 +1850,12 @@ const MaterializeCallableValueFailure = enum {
 
     fn enqueueReachableCallableInst(
         self: *Pass,
-        _: *Result,
+        result: *Result,
         callable_inst_id: CallableInstId,
     ) Allocator.Error!void {
-        const gop = try self.callable_realization.reachable_callable_inst_set.getOrPut(self.allocator, callable_inst_id);
-        if (!gop.found_existing) {
-            try self.callable_realization.reachable_callable_inst_queue.append(self.allocator, callable_inst_id);
-        }
+        _ = self;
+        _ = result;
+        _ = callable_inst_id;
     }
 
     fn enqueueReachableCallableValue(
@@ -3877,12 +3852,39 @@ const MaterializeCallableValueFailure = enum {
             }
         }
 
-        callable_def.runtime_expr = runtime_expr_ref;
-        callable_def.body_expr = body_expr_ref;
+        if (!std.meta.eql(callable_def.runtime_expr, runtime_expr_ref)) {
+            if (std.debug.runtime_safety and callableInstHasRealizedRuntimeExpr(result, callable_inst_id)) {
+                std.debug.panic(
+                    "Pipeline invariant violated: callable inst {d} attempted to rewrite finalized runtime expr",
+                    .{@intFromEnum(callable_inst_id)},
+                );
+            }
+            callable_def.runtime_expr = runtime_expr_ref;
+        }
+        if (!std.meta.eql(callable_def.body_expr, body_expr_ref)) {
+            if (std.debug.runtime_safety and callableInstHasRealizedRuntimeExpr(result, callable_inst_id)) {
+                std.debug.panic(
+                    "Pipeline invariant violated: callable inst {d} attempted to rewrite finalized body expr",
+                    .{@intFromEnum(callable_inst_id)},
+                );
+            }
+            callable_def.body_expr = body_expr_ref;
+        }
 
+        const existing_capture_fields = result.getCaptureFields(callable_def.captures);
         const capture_span: CaptureFieldSpan = if (capture_fields.len == 0)
             .empty()
-        else blk: {
+        else if (captureFieldsEqual(existing_capture_fields, capture_fields))
+            callable_def.captures
+        else if (!callable_def.captures.isEmpty()) blk: {
+            if (std.debug.runtime_safety) {
+                std.debug.panic(
+                    "Pipeline invariant violated: callable inst {d} attempted to rewrite finalized capture fields",
+                    .{@intFromEnum(callable_inst_id)},
+                );
+            }
+            unreachable;
+        } else blk: {
             const start: u32 = @intCast(result.lambdamono.capture_fields.items.len);
             try result.lambdamono.capture_fields.appendSlice(self.allocator, capture_fields);
             break :blk .{
@@ -3892,7 +3894,7 @@ const MaterializeCallableValueFailure = enum {
         };
         callable_def.captures = capture_span;
 
-        result.lambdamono.callable_insts.items[@intFromEnum(callable_inst_id)].runtime_value =
+        const next_runtime_value: RuntimeValue =
             if (runtime_field_monotypes.items.len == 0)
                 .direct_lambda
             else blk: {
@@ -3904,7 +3906,18 @@ const MaterializeCallableValueFailure = enum {
                     ),
                 } };
             };
+        if (!std.meta.eql(result.lambdamono.callable_insts.items[@intFromEnum(callable_inst_id)].runtime_value, next_runtime_value)) {
+            result.lambdamono.callable_insts.items[@intFromEnum(callable_inst_id)].runtime_value = next_runtime_value;
+        }
 
+    }
+
+    fn captureFieldsEqual(lhs: []const CaptureField, rhs: []const CaptureField) bool {
+        if (lhs.len != rhs.len) return false;
+        for (lhs, rhs) |lhs_field, rhs_field| {
+            if (!std.meta.eql(lhs_field, rhs_field)) return false;
+        }
+        return true;
     }
 
     fn closureCaptureAnalysisCallableInst(
@@ -8707,6 +8720,22 @@ const MaterializeCallableValueFailure = enum {
         expr: CIR.Expr,
     ) Allocator.Error!void {
         const module_env = self.all_module_envs[module_idx];
+        const dispatch_method_name = switch (expr) {
+            .e_binop => |binop_expr| dispatchMethodIdentForBinop(module_env, binop_expr.op),
+            .e_unary_minus => module_env.idents.negate,
+            .e_dot_access => |dot_expr| if (dot_expr.args != null) dot_expr.field_name else null,
+            .e_type_var_dispatch => |dispatch_expr| dispatch_expr.method_name,
+            else => null,
+        };
+        if (dispatch_method_name) |method_name| {
+            try self.ensureRecordedExactDispatchConstraintForExpr(
+                result,
+                thread,
+                module_idx,
+                expr_idx,
+                method_name,
+            );
+        }
         var associated_target: ?ResolvedDispatchTarget = null;
         if (expr == .e_binop) {
             const binop_expr = expr.e_binop;
@@ -9094,15 +9123,14 @@ const MaterializeCallableValueFailure = enum {
         );
     }
 
-    fn exactStaticDispatchConstraintForExpr(
+    fn getRecordedExactDispatchConstraintForExpr(
         self: *Pass,
-        result: *Result,
-        thread: SemanticThread,
+        result: *const Result,
+        source_context: SourceContext,
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
         method_name: Ident.Idx,
-    ) Allocator.Error!?ContextMono.ExactDispatchConstraint {
-        const source_context = thread.requireSourceContext();
+    ) ?ContextMono.ExactDispatchConstraint {
         if (result.context_mono.getExactDispatchConstraint(source_context, module_idx, expr_idx)) |constraint| {
             if (!constraint.method_name.eql(method_name)) {
                 const module_env = self.all_module_envs[module_idx];
@@ -9120,7 +9148,17 @@ const MaterializeCallableValueFailure = enum {
             }
             return constraint;
         }
+        return null;
+    }
 
+    fn extractExactDispatchConstraintForExprFromChecker(
+        self: *Pass,
+        result: *Result,
+        thread: SemanticThread,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+        method_name: Ident.Idx,
+    ) Allocator.Error!?ContextMono.ExactDispatchConstraint {
         const module_env = self.all_module_envs[module_idx];
         var matched: ?ContextMono.ExactDispatchConstraint = null;
         var saw_unresolved_match = false;
@@ -9224,8 +9262,28 @@ const MaterializeCallableValueFailure = enum {
         }
 
         if (saw_unresolved_match) return null;
+        return matched;
+    }
 
-        const exact = matched orelse return null;
+    fn ensureRecordedExactDispatchConstraintForExpr(
+        self: *Pass,
+        result: *Result,
+        thread: SemanticThread,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+        method_name: Ident.Idx,
+    ) Allocator.Error!void {
+        const source_context = thread.requireSourceContext();
+        if (self.getRecordedExactDispatchConstraintForExpr(result, source_context, module_idx, expr_idx, method_name) != null) {
+            return;
+        }
+        const exact = try self.extractExactDispatchConstraintForExprFromChecker(
+            result,
+            thread,
+            module_idx,
+            expr_idx,
+            method_name,
+        ) orelse return;
         try self.recordExactDispatchConstraint(
             result,
             source_context,
@@ -9233,7 +9291,23 @@ const MaterializeCallableValueFailure = enum {
             expr_idx,
             exact,
         );
-        return exact;
+    }
+
+    fn exactStaticDispatchConstraintForExpr(
+        self: *Pass,
+        result: *const Result,
+        thread: SemanticThread,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+        method_name: Ident.Idx,
+    ) ?ContextMono.ExactDispatchConstraint {
+        return self.getRecordedExactDispatchConstraintForExpr(
+            result,
+            thread.requireSourceContext(),
+            module_idx,
+            expr_idx,
+            method_name,
+        );
     }
 
     fn dotDispatchHandledWithoutCallableInst(
@@ -11517,7 +11591,7 @@ const MaterializeCallableValueFailure = enum {
         result: *Result,
         callable_inst_id: CallableInstId,
     ) Allocator.Error!void {
-        if (self.callable_realization.realized_callable_insts.contains(callable_inst_id)) return;
+        if (callableInstHasRealizedRuntimeExpr(result, callable_inst_id)) return;
         try self.realizeCallableInst(result, callable_inst_id);
     }
 
@@ -11841,22 +11915,17 @@ const MaterializeCallableValueFailure = enum {
     }
 
     fn realizeCallableInst(self: *Pass, result: *Result, callable_inst_id: CallableInstId) Allocator.Error!void {
-        if (self.callable_realization.realized_callable_insts.contains(callable_inst_id)) return;
+        if (callableInstHasRealizedRuntimeExpr(result, callable_inst_id)) return;
         try self.realizeCallableInstBody(result, callable_inst_id);
-        try self.callable_realization.realized_callable_insts.put(self.allocator, callable_inst_id, {});
     }
 
     fn realizeCallableInstBody(self: *Pass, result: *Result, callable_inst_id: CallableInstId) Allocator.Error!void {
-        const callable_inst_key = @intFromEnum(callable_inst_id);
-        if (self.callable_realization.in_progress_callable_scans.contains(callable_inst_key)) return;
         // Snapshot these by value before scanning. `scanModule` can discover more
         // demanded callables and append to both arrays, which would invalidate pointers.
         const callable_inst = result.getCallableInst(callable_inst_id).*;
         const template = result.getCallableTemplate(callable_inst.template).*;
         const defining_source_context = callable_inst.defining_source_context;
         try self.primeModuleDefs(result, template.module_idx);
-        try self.callable_realization.in_progress_callable_scans.put(self.allocator, callable_inst_key, {});
-        defer _ = self.callable_realization.in_progress_callable_scans.remove(callable_inst_key);
 
         const module_env = self.all_module_envs[template.module_idx];
 
