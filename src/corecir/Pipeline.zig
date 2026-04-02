@@ -252,11 +252,30 @@ const BuildPatternBinding = struct {
     }
 };
 
+const BuildExprMonotype = union(enum) {
+    pending,
+    resolved: ResolvedMonotype,
+
+    fn resolvedOrNull(self: BuildExprMonotype) ?ResolvedMonotype {
+        return switch (self) {
+            .resolved => |resolved| resolved,
+            .pending => null,
+        };
+    }
+
+    fn isResolved(self: BuildExprMonotype) bool {
+        return switch (self) {
+            .resolved => true,
+            .pending => false,
+        };
+    }
+};
+
 const BuildExpr = struct {
     source_context: SourceContext,
     module_idx: u32,
     source_expr: CIR.Expr.Idx,
-    monotype: ResolvedMonotype,
+    monotype: BuildExprMonotype,
     child_exprs: Lambdamono.ExprIdSpan = .empty(),
     child_stmts: Lambdamono.StmtIdSpan = .empty(),
     callable: ?Lambdamono.ExprCallableSemantics = null,
@@ -266,11 +285,27 @@ const BuildExpr = struct {
     lookup: ?Lambdamono.LookupResolution = null,
 
     fn finalize(self: BuildExpr) Lambdamono.Expr {
+        const monotype = switch (self.monotype) {
+            .resolved => |resolved| resolved,
+            .pending => {
+                if (std.debug.runtime_safety) {
+                    std.debug.panic(
+                        "Pipeline invariant violated: attempted to finalize pending build expr module={d} expr={d} source_context={s}",
+                        .{
+                            self.module_idx,
+                            @intFromEnum(self.source_expr),
+                            @tagName(self.source_context),
+                        },
+                    );
+                }
+                unreachable;
+            },
+        };
         return .{
             .source_context = self.source_context,
             .module_idx = self.module_idx,
             .source_expr = self.source_expr,
-            .monotype = self.monotype,
+            .monotype = monotype,
             .child_exprs = self.child_exprs,
             .child_stmts = self.child_stmts,
             .callable = self.callable,
@@ -339,8 +374,8 @@ pub const Result = struct {
         return self.lambdamono.getExpr(expr_id).call;
     }
 
-    fn getExprMonotypeById(self: *const Result, expr_id: Lambdamono.ExprId) ResolvedMonotype {
-        if (self.getBuildExprStateById(expr_id)) |expr| return expr.monotype;
+    fn getExprMonotypeById(self: *const Result, expr_id: Lambdamono.ExprId) ?ResolvedMonotype {
+        if (self.getBuildExprStateById(expr_id)) |expr| return expr.monotype.resolvedOrNull();
         return self.lambdamono.getExpr(expr_id).monotype;
     }
 
@@ -414,8 +449,7 @@ pub const Result = struct {
         expr_idx: CIR.Expr.Idx,
     ) ?ResolvedMonotype {
         const expr_id = self.lambdamono.getExprId(source_context, module_idx, expr_idx) orelse return null;
-        const monotype = self.getExprMonotypeById(expr_id);
-        if (!monotype.isNone()) return monotype;
+        if (self.getExprMonotypeById(expr_id)) |monotype| return monotype;
         if (self.getExprCallableSemanticsById(expr_id)) |callable_semantics| {
             return switch (callable_semantics) {
                 .callable => |callable_value| callableValueMonotype(self, callable_value),
@@ -760,6 +794,16 @@ pub const Result = struct {
             .root_expr => |root_ctx| self.getExprTemplateId(source_context, root_ctx.module_idx, root_ctx.expr_idx),
             .provenance_expr => |provenance_ctx| self.getExprTemplateId(source_context, provenance_ctx.module_idx, provenance_ctx.expr_idx),
         };
+    }
+
+    pub fn getExprLowLevelOp(
+        self: *const Result,
+        source_context: SourceContext,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) ?CIR.Expr.LowLevel {
+        const template_id = self.getExprTemplateId(source_context, module_idx, expr_idx) orelse return null;
+        return self.getCallableTemplate(template_id).low_level_op;
     }
 };
 
@@ -2004,7 +2048,7 @@ const MaterializeCallableValueFailure = enum {
             _ = try self.reserveBuildExprNode(result, source_context, module_idx, expr_idx);
             break :blk result.lambdamono.expr_ids_by_key.get(key).?;
         };
-        if (!self.buildExpr(result, expr_id).monotype.isNone()) return expr_id;
+        if (self.buildExpr(result, expr_id).monotype.isResolved()) return expr_id;
         if (self.in_progress_program_expr_assembly.contains(key)) return expr_id;
         try self.in_progress_program_expr_assembly.put(self.allocator, key, {});
         defer _ = self.in_progress_program_expr_assembly.remove(key);
@@ -2160,13 +2204,13 @@ const MaterializeCallableValueFailure = enum {
             .callable => |expr_callable_value| expr_callable_value,
             .intro => |intro| intro.callable_value,
         } else null;
-        var monotype = reserved_expr.monotype;
-        if (monotype.isNone()) {
+        var monotype = reserved_expr.monotype.resolvedOrNull();
+        if (monotype == null) {
             if (callable_value) |expr_callable_value| {
                 monotype = result.getCallableValueSourceMonotype(expr_callable_value);
             }
         }
-        if (monotype.isNone()) {
+        if (monotype == null) {
             monotype = try self.requireProgramExprMonotype(
                 result,
                 source_context,
@@ -2178,7 +2222,7 @@ const MaterializeCallableValueFailure = enum {
         program_expr.source_context = source_context;
         program_expr.module_idx = module_idx;
         program_expr.source_expr = expr_idx;
-        program_expr.monotype = monotype;
+        program_expr.monotype = .{ .resolved = monotype.? };
         program_expr.child_exprs = child_expr_span;
         program_expr.child_stmts = child_stmt_span;
         program_expr.callable = reserved_expr.callable;
@@ -2375,7 +2419,7 @@ const MaterializeCallableValueFailure = enum {
                 .source_context = source_context,
                 .module_idx = module_idx,
                 .source_expr = expr_idx,
-                .monotype = resolvedMonotype(.none, module_idx),
+                .monotype = .pending,
                 .child_exprs = .empty(),
                 .child_stmts = .empty(),
                 .callable = null,
@@ -2478,7 +2522,7 @@ const MaterializeCallableValueFailure = enum {
             module_idx,
             expr_idx,
         );
-        if (!monotype.isNone()) return true;
+        if (monotype != null) return true;
         if (self.readExprCallableValue(result, source_context, module_idx, expr_idx)) |callable_value| {
             return !callableValueMonotype(result, callable_value).isNone();
         }
@@ -2500,7 +2544,7 @@ const MaterializeCallableValueFailure = enum {
 
     fn flushBuildStateToProgram(self: *Pass, result: *Result) Allocator.Error!void {
         for (result.build_exprs.items) |expr| {
-            if (expr.monotype.isNone()) {
+            if (!expr.monotype.isResolved()) {
                 if (std.debug.runtime_safety) {
                     std.debug.panic(
                         "Pipeline invariant violated: attempted to flush unfinalized program expr module={d} expr={d} source_context={s}",
@@ -2754,21 +2798,18 @@ const MaterializeCallableValueFailure = enum {
                 .expr_idx = def.expr,
             });
 
-            const template_id = try self.registerCallableBackedDefTemplate(
+            _ = try self.preRegisterCallableTemplateForDefExpr(
                 result,
+                null,
                 module_idx,
                 def.expr,
                 ModuleEnv.varFrom(def.pattern),
                 def.pattern,
-                .{ .external_def = externalDefTemplateSource(module_idx, @intCast(@intFromEnum(def_idx))) },
-            );
-            if (template_id) |resolved_template_id| {
-                try self.recordAdditionalCallableTemplateSource(
-                    result,
+                &.{
+                    .{ .external_def = externalDefTemplateSource(module_idx, @intCast(@intFromEnum(def_idx))) },
                     .{ .local_pattern = localPatternTemplateSource(module_idx, def.pattern) },
-                    resolved_template_id,
-                );
-            }
+                },
+            );
         }
     }
 
@@ -2787,6 +2828,7 @@ const MaterializeCallableValueFailure = enum {
     ) Allocator.Error!CallableTemplateId {
         const existing = lookupCallableTemplateBySource(result, source);
         if (existing) |template_id| return template_id;
+        const module_env = self.all_module_envs[module_idx];
         const boundary = self.callableBoundaryInfo(module_idx, cir_expr) orelse blk: {
             if (std.debug.runtime_safety) {
                 std.debug.panic(
@@ -2816,6 +2858,10 @@ const MaterializeCallableValueFailure = enum {
             .runtime_expr = runtime_expr,
             .arg_patterns = boundary.arg_patterns,
             .body_expr = boundary.body_expr,
+            .low_level_op = switch (module_env.store.getExpr(boundary.body_expr)) {
+                .e_run_low_level => |run_low_level| run_low_level.op,
+                else => null,
+            },
             .type_root = type_root,
             .binding = if (binding_pattern) |pattern_idx|
                 .{ .pattern = pattern_idx }
@@ -2943,114 +2989,59 @@ const MaterializeCallableValueFailure = enum {
         );
     }
 
-    fn registerCallableDefTemplate(
-        self: *Pass,
-        result: *Result,
-        module_idx: u32,
+    const DefExprCallableBoundary = struct {
         expr_idx: CIR.Expr.Idx,
-        type_root: types.Var,
-        binding_pattern: ?CIR.Pattern.Idx,
         kind: CallableTemplateKind,
-        source_region: Region,
-        additional_source: CallableTemplateSource,
-    ) Allocator.Error!CallableTemplateId {
-        const template_id = try self.registerCallableTemplate(
-            result,
-            null,
-            .{ .expr = exprTemplateSource(module_idx, expr_idx) },
-            module_idx,
-            expr_idx,
-            expr_idx,
-            type_root,
-            binding_pattern,
-            kind,
-            source_region,
-        );
-        try self.recordAdditionalCallableTemplateSource(result, additional_source, template_id);
-        return template_id;
-    }
+    };
 
-    fn registerCallableBackedDefTemplate(
+    fn defExprCallableBoundary(
         self: *Pass,
-        result: *Result,
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
-        type_root: types.Var,
-        binding_pattern: ?CIR.Pattern.Idx,
-        additional_source: CallableTemplateSource,
-    ) Allocator.Error!?CallableTemplateId {
+    ) ?DefExprCallableBoundary {
         const module_env = self.all_module_envs[module_idx];
-        const expr = module_env.store.getExpr(expr_idx);
-
-        if (callableKind(expr)) |kind| {
-            return try self.registerCallableDefTemplate(
-                result,
-                module_idx,
-                expr_idx,
-                type_root,
-                binding_pattern,
-                kind,
-                module_env.store.getExprRegion(expr_idx),
-                additional_source,
-            );
-        }
-
-        const template_id = switch (expr) {
-            .e_block => |block| try self.registerCallableBackedDefTemplate(
-                result,
-                module_idx,
-                block.final_expr,
-                type_root,
-                binding_pattern,
-                additional_source,
-            ),
-            .e_dbg => |dbg_expr| try self.registerCallableBackedDefTemplate(
-                result,
-                module_idx,
-                dbg_expr.expr,
-                type_root,
-                binding_pattern,
-                additional_source,
-            ),
-            .e_expect => |expect_expr| try self.registerCallableBackedDefTemplate(
-                result,
-                module_idx,
-                expect_expr.body,
-                type_root,
-                binding_pattern,
-                additional_source,
-            ),
-            .e_return => |return_expr| try self.registerCallableBackedDefTemplate(
-                result,
-                module_idx,
-                return_expr.expr,
-                type_root,
-                binding_pattern,
-                additional_source,
-            ),
-            .e_nominal => |nominal_expr| try self.registerCallableBackedDefTemplate(
-                result,
-                module_idx,
-                nominal_expr.backing_expr,
-                type_root,
-                binding_pattern,
-                additional_source,
-            ),
-            .e_nominal_external => |nominal_expr| try self.registerCallableBackedDefTemplate(
-                result,
-                module_idx,
-                nominal_expr.backing_expr,
-                type_root,
-                binding_pattern,
-                additional_source,
-            ),
+        return switch (module_env.store.getExpr(expr_idx)) {
+            .e_lambda => .{ .expr_idx = expr_idx, .kind = .lambda },
+            .e_closure => .{ .expr_idx = expr_idx, .kind = .closure },
+            .e_hosted_lambda => .{ .expr_idx = expr_idx, .kind = .hosted_lambda },
+            .e_block => |block| self.defExprCallableBoundary(module_idx, block.final_expr),
+            .e_dbg => |dbg_expr| self.defExprCallableBoundary(module_idx, dbg_expr.expr),
+            .e_expect => |expect_expr| self.defExprCallableBoundary(module_idx, expect_expr.body),
+            .e_return => |return_expr| self.defExprCallableBoundary(module_idx, return_expr.expr),
+            .e_nominal => |nominal_expr| self.defExprCallableBoundary(module_idx, nominal_expr.backing_expr),
+            .e_nominal_external => |nominal_expr| self.defExprCallableBoundary(module_idx, nominal_expr.backing_expr),
             else => null,
         };
+    }
 
-        if (template_id) |id| {
-            try self.recordAdditionalCallableTemplateSource(result, .{ .expr = exprTemplateSource(module_idx, expr_idx) }, id);
+    fn preRegisterCallableTemplateForDefExpr(
+        self: *Pass,
+        result: *Result,
+        owner_source_context: ?SourceContext,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+        type_root: types.Var,
+        binding_pattern: ?CIR.Pattern.Idx,
+        additional_sources: []const CallableTemplateSource,
+    ) Allocator.Error!?CallableTemplateId {
+        const boundary = self.defExprCallableBoundary(module_idx, expr_idx) orelse return null;
+        const module_env = self.all_module_envs[module_idx];
+        const template_id = try self.registerCallableTemplate(
+            result,
+            owner_source_context,
+            .{ .expr = exprTemplateSource(module_idx, boundary.expr_idx) },
+            module_idx,
+            boundary.expr_idx,
+            boundary.expr_idx,
+            type_root,
+            binding_pattern,
+            boundary.kind,
+            module_env.store.getExprRegion(boundary.expr_idx),
+        );
+        try self.recordAdditionalCallableTemplateSource(result, .{ .expr = exprTemplateSource(module_idx, expr_idx) }, template_id);
+        for (additional_sources) |source| {
+            try self.recordAdditionalCallableTemplateSource(result, source, template_id);
         }
-
         return template_id;
     }
 
@@ -3075,19 +3066,9 @@ const MaterializeCallableValueFailure = enum {
                     exprRefInContext(thread.requireSourceContext(), module_idx, decl.expr),
                 );
                 try self.propagatePatternDemandToExpr(result, thread, module_idx, decl.pattern, decl.expr);
-                if (try self.registerCallableBackedDefTemplate(
-                    result,
-                    module_idx,
-                    decl.expr,
-                    ModuleEnv.varFrom(decl.pattern),
-                    decl.pattern,
-                    .{ .local_pattern = localPatternTemplateSource(module_idx, decl.pattern) },
-                )) |_| {
-                    try self.scanCirValueExprWithDirectCallResolution(result, thread, module_idx, decl.expr, resolve_direct_calls);
-                    try self.bindPatternCallableValueCallableInsts(result, thread, module_idx, decl.pattern, decl.expr);
-                } else {
-                    try self.scanCirExprWithDirectCallResolution(result, thread, module_idx, decl.expr, resolve_direct_calls);
-                    try self.bindPatternCallableValueCallableInsts(result, thread, module_idx, decl.pattern, decl.expr);
+                try self.scanCirValueExprWithDirectCallResolution(result, thread, module_idx, decl.expr, resolve_direct_calls);
+                try self.bindPatternCallableValueCallableInsts(result, thread, module_idx, decl.pattern, decl.expr);
+                if (self.readCallableParamValue(result, thread.requireSourceContext(), module_idx, decl.pattern) == null) {
                     const expr_mono = try self.resolveExprMonotypeResolved(result, thread, module_idx, decl.expr);
                     if (!expr_mono.isNone()) {
                         try self.bindCurrentPatternFromResolvedMonotype(
@@ -3109,19 +3090,9 @@ const MaterializeCallableValueFailure = enum {
                     exprRefInContext(thread.requireSourceContext(), module_idx, var_decl.expr),
                 );
                 try self.propagatePatternDemandToExpr(result, thread, module_idx, var_decl.pattern_idx, var_decl.expr);
-                if (try self.registerCallableBackedDefTemplate(
-                    result,
-                    module_idx,
-                    var_decl.expr,
-                    ModuleEnv.varFrom(var_decl.pattern_idx),
-                    var_decl.pattern_idx,
-                    .{ .local_pattern = localPatternTemplateSource(module_idx, var_decl.pattern_idx) },
-                )) |_| {
-                    try self.scanCirValueExprWithDirectCallResolution(result, thread, module_idx, var_decl.expr, resolve_direct_calls);
-                    try self.bindPatternCallableValueCallableInsts(result, thread, module_idx, var_decl.pattern_idx, var_decl.expr);
-                } else {
-                    try self.scanCirExprWithDirectCallResolution(result, thread, module_idx, var_decl.expr, resolve_direct_calls);
-                    try self.bindPatternCallableValueCallableInsts(result, thread, module_idx, var_decl.pattern_idx, var_decl.expr);
+                try self.scanCirValueExprWithDirectCallResolution(result, thread, module_idx, var_decl.expr, resolve_direct_calls);
+                try self.bindPatternCallableValueCallableInsts(result, thread, module_idx, var_decl.pattern_idx, var_decl.expr);
+                if (self.readCallableParamValue(result, thread.requireSourceContext(), module_idx, var_decl.pattern_idx) == null) {
                     const expr_mono = try self.resolveExprMonotypeResolved(result, thread, module_idx, var_decl.expr);
                     if (!expr_mono.isNone()) {
                         try self.bindCurrentPatternFromResolvedMonotype(
@@ -3400,7 +3371,7 @@ const MaterializeCallableValueFailure = enum {
         expr_idx: CIR.Expr.Idx,
         resolve_direct_calls: bool,
     ) Allocator.Error!void {
-        return self.scanCirExprInternal(result, thread, module_idx, expr_idx, false, false, resolve_direct_calls);
+        return self.scanCirExprInternal(result, thread, module_idx, expr_idx, false, resolve_direct_calls);
     }
 
     fn scanCirValueExprWithDirectCallResolution(
@@ -3411,7 +3382,7 @@ const MaterializeCallableValueFailure = enum {
         expr_idx: CIR.Expr.Idx,
         resolve_direct_calls: bool,
     ) Allocator.Error!void {
-        return self.scanCirExprInternal(result, thread, module_idx, expr_idx, true, false, resolve_direct_calls);
+        return self.scanCirExprInternal(result, thread, module_idx, expr_idx, true, resolve_direct_calls);
     }
 
     fn scanCirExprSpanWithDirectCallResolution(
@@ -3438,16 +3409,6 @@ const MaterializeCallableValueFailure = enum {
         for (exprs) |child_expr| {
             try self.scanCirValueExprWithDirectCallResolution(result, thread, module_idx, child_expr, resolve_direct_calls);
         }
-    }
-
-    fn scanForcedCirValueExpr(
-        self: *Pass,
-        result: *Result,
-        thread: SemanticThread,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-    ) Allocator.Error!void {
-        return self.scanCirExprInternal(result, thread, module_idx, expr_idx, true, true, true);
     }
 
     fn scanCirValueExprWithoutDirectCallResolution(
@@ -3485,7 +3446,7 @@ const MaterializeCallableValueFailure = enum {
         try self.in_progress_value_defs.put(self.allocator, key, {});
         defer _ = self.in_progress_value_defs.remove(key);
 
-        try self.scanForcedCirValueExpr(result, thread, module_idx, expr_idx);
+        try self.scanCirValueExpr(result, thread, module_idx, expr_idx);
 
         if (result.getExprTemplateId(thread.requireSourceContext(), module_idx, expr_idx)) |template_id| {
             try self.materializeDemandedExprCallableInst(result, thread, module_idx, expr_idx, template_id);
@@ -3501,21 +3462,6 @@ const MaterializeCallableValueFailure = enum {
         expr_idx: CIR.Expr.Idx,
     ) Allocator.Error!void {
         try self.scanDemandedValueDefExpr(
-            result,
-            SemanticThread.trackedThread(source_context),
-            module_idx,
-            expr_idx,
-        );
-    }
-
-    fn scanForcedCirValueExprInSourceContext(
-        self: *Pass,
-        result: *Result,
-        source_context: SourceContext,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-    ) Allocator.Error!void {
-        try self.scanForcedCirValueExpr(
             result,
             SemanticThread.trackedThread(source_context),
             module_idx,
@@ -3556,7 +3502,6 @@ const MaterializeCallableValueFailure = enum {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
         materialize_if_callable: bool,
-        force_rescan_children: bool,
         resolve_direct_calls: bool,
     ) Allocator.Error!void {
         const module_env = self.all_module_envs[module_idx];
@@ -3574,7 +3519,13 @@ const MaterializeCallableValueFailure = enum {
             );
         }
 
-        if (callableKind(expr)) |kind| {
+        const callable_kind: ?CallableTemplateKind = switch (expr) {
+            .e_lambda => .lambda,
+            .e_closure => .closure,
+            .e_hosted_lambda => .hosted_lambda,
+            else => null,
+        };
+        if (callable_kind) |kind| {
             const template_id = try self.registerCallableTemplate(
                 result,
                 thread.requireSourceContext(),
@@ -3589,17 +3540,11 @@ const MaterializeCallableValueFailure = enum {
             );
             if (materialize_if_callable) {
                 try self.materializeDemandedExprCallableInst(result, thread, module_idx, expr_idx, template_id);
-                if (!force_rescan_children and !thread.hasCallableInst()) {
+                if (!thread.hasCallableInst()) {
                     try self.completeCurrentExprMonotype(result, thread, module_idx, expr_idx);
                     return;
                 }
             }
-        }
-
-        if (force_rescan_children) {
-            try self.scanCirExprChildren(result, thread, module_idx, expr_idx, expr, resolve_direct_calls);
-            try self.completeCurrentExprMonotype(result, thread, module_idx, expr_idx);
-            return;
         }
 
         const visit_key = self.resultExprKeyForThread(thread, module_idx, expr_idx);
@@ -3677,8 +3622,7 @@ const MaterializeCallableValueFailure = enum {
             thread,
             module_idx,
             expr_idx,
-        );
-        if (fn_monotype.isNone()) return;
+        ) orelse return;
         if (result.context_mono.monotype_store.getMonotype(fn_monotype.idx) != .func) return;
         _ = try self.materializeExprCallableValueWithKnownFnMonotype(
             result,
@@ -4719,7 +4663,7 @@ const MaterializeCallableValueFailure = enum {
                         resolve_direct_calls,
                     );
                 }
-                if (self.getCallLowLevelOp(module_env, call_expr.func)) |low_level_op| {
+                if (result.getExprLowLevelOp(thread.requireSourceContext(), module_idx, call_expr.func)) |low_level_op| {
                     if (low_level_op == .str_inspect and arg_exprs.len != 0) {
                         try self.resolveStrInspectHelperCallableInstsForTypeVar(
                             result,
@@ -4766,7 +4710,7 @@ const MaterializeCallableValueFailure = enum {
             },
             .e_block => |block_expr| {
                 const stmts = module_env.store.sliceStatements(block_expr.stmts);
-                try self.preRegisterBlockCallableStmtTemplates(result, module_idx, stmts);
+                try self.preRegisterBlockCallableStmtTemplates(result, thread, module_idx, stmts);
                 for (stmts) |stmt_idx| {
                     try self.scanStmt(result, thread, module_idx, stmt_idx, resolve_direct_calls);
                 }
@@ -5204,6 +5148,7 @@ const MaterializeCallableValueFailure = enum {
     fn preRegisterBlockCallableStmtTemplates(
         self: *Pass,
         result: *Result,
+        thread: SemanticThread,
         module_idx: u32,
         stmts: []const CIR.Statement.Idx,
     ) Allocator.Error!void {
@@ -5213,24 +5158,26 @@ const MaterializeCallableValueFailure = enum {
             const stmt = module_env.store.getStatement(stmt_idx);
             switch (stmt) {
                 .s_decl => |decl| {
-                    if ((try self.registerCallableBackedDefTemplate(
+                    _ = try self.preRegisterCallableTemplateForDefExpr(
                         result,
+                        thread.requireSourceContext(),
                         module_idx,
                         decl.expr,
                         ModuleEnv.varFrom(decl.pattern),
                         decl.pattern,
-                        .{ .local_pattern = localPatternTemplateSource(module_idx, decl.pattern) },
-                    )) != null) {}
+                        &.{.{ .local_pattern = localPatternTemplateSource(module_idx, decl.pattern) }},
+                    );
                 },
                 .s_var => |var_decl| {
-                    if ((try self.registerCallableBackedDefTemplate(
+                    _ = try self.preRegisterCallableTemplateForDefExpr(
                         result,
+                        thread.requireSourceContext(),
                         module_idx,
                         var_decl.expr,
                         ModuleEnv.varFrom(var_decl.pattern_idx),
                         var_decl.pattern_idx,
-                        .{ .local_pattern = localPatternTemplateSource(module_idx, var_decl.pattern_idx) },
-                    )) != null) {}
+                        &.{.{ .local_pattern = localPatternTemplateSource(module_idx, var_decl.pattern_idx) }},
+                    );
                 },
                 else => {},
             }
@@ -5352,7 +5299,7 @@ const MaterializeCallableValueFailure = enum {
             );
             resolved_template_id = result.getExprTemplateId(thread.requireSourceContext(), module_idx, callee_expr_idx);
         }
-        if (self.getCallLowLevelOp(module_env, call_expr.func)) |low_level_op| {
+        if (result.getExprLowLevelOp(thread.requireSourceContext(), module_idx, call_expr.func)) |low_level_op| {
             const arg_exprs = module_env.store.sliceExpr(call_expr.args);
             try self.writeExprCallSite(
                 result,
@@ -5443,7 +5390,7 @@ const MaterializeCallableValueFailure = enum {
                         for (arg_exprs) |arg_expr_idx| {
                             try arg_monos.append(
                                 self.allocator,
-                                try self.lookupRecordedExprMonotypeIfReady(
+                                try self.requireFullyBoundExprMonotype(
                                     result,
                                     thread,
                                     module_idx,
@@ -6705,28 +6652,31 @@ const MaterializeCallableValueFailure = enum {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) Allocator.Error!ResolvedMonotype {
-        const resolved = try self.lookupRecordedExprMonotypeIfReady(result, thread, module_idx, expr_idx);
-        if (!resolved.isNone()) return resolved;
-
-        std.debug.panic(
-            "Pipeline invariant violated: missing fully-bound monotype for expr {d} ({s}) in module {d} under source context {s}/{d}/{d}",
-            .{
-                @intFromEnum(expr_idx),
-                @tagName(self.all_module_envs[module_idx].store.getExpr(expr_idx)),
-                module_idx,
-                @tagName(thread.requireSourceContext()),
-                switch (thread.requireSourceContext()) {
-                    .callable_inst => |context_id| @intFromEnum(@as(CallableInstId, @enumFromInt(@intFromEnum(context_id)))),
-                    .root_expr, .provenance_expr, .template_expr => std.math.maxInt(u32),
-                },
-                switch (thread.requireSourceContext()) {
-                    .root_expr => |root| @intFromEnum(root.expr_idx),
-                    .provenance_expr => |source| @intFromEnum(source.expr_idx),
-                    .template_expr => |template_ctx| @intFromEnum(template_ctx.expr_idx),
-                    .callable_inst => std.math.maxInt(u32),
-                },
-            },
-        );
+        const resolved = (try self.lookupRecordedExprMonotypeIfReady(result, thread, module_idx, expr_idx)) orelse {
+            if (std.debug.runtime_safety) {
+                std.debug.panic(
+                    "Pipeline invariant violated: missing fully-bound monotype for expr {d} ({s}) in module {d} under source context {s}/{d}/{d}",
+                    .{
+                        @intFromEnum(expr_idx),
+                        @tagName(self.all_module_envs[module_idx].store.getExpr(expr_idx)),
+                        module_idx,
+                        @tagName(thread.requireSourceContext()),
+                        switch (thread.requireSourceContext()) {
+                            .callable_inst => |context_id| @intFromEnum(@as(CallableInstId, @enumFromInt(@intFromEnum(context_id)))),
+                            .root_expr, .provenance_expr, .template_expr => std.math.maxInt(u32),
+                        },
+                        switch (thread.requireSourceContext()) {
+                            .root_expr => |root| @intFromEnum(root.expr_idx),
+                            .provenance_expr => |source| @intFromEnum(source.expr_idx),
+                            .template_expr => |template_ctx| @intFromEnum(template_ctx.expr_idx),
+                            .callable_inst => std.math.maxInt(u32),
+                        },
+                    },
+                );
+            }
+            unreachable;
+        };
+        return resolved;
     }
 
     fn bindCurrentPatternFromResolvedMonotype(
@@ -7395,11 +7345,11 @@ const MaterializeCallableValueFailure = enum {
             module_idx,
             expr_idx,
         );
-        if (!existing.isNone()) {
+        if (existing) |resolved_existing| {
             if (try self.monotypesStructurallyEqualAcrossModules(
                 result,
-                existing.idx,
-                existing.module_idx,
+                resolved_existing.idx,
+                resolved_existing.module_idx,
                 monotype,
                 monotype_module_idx,
             )) {
@@ -7421,9 +7371,9 @@ const MaterializeCallableValueFailure = enum {
                     source[snippet_start..snippet_end],
                     module_idx,
                     @tagName(source_context),
-                    @intFromEnum(existing.idx),
-                    existing.module_idx,
-                    result.context_mono.monotype_store.getMonotype(existing.idx),
+                    @intFromEnum(resolved_existing.idx),
+                    resolved_existing.module_idx,
+                    result.context_mono.monotype_store.getMonotype(resolved_existing.idx),
                     @intFromEnum(monotype),
                     monotype_module_idx,
                     result.context_mono.monotype_store.getMonotype(monotype),
@@ -8013,7 +7963,18 @@ const MaterializeCallableValueFailure = enum {
                 }
             },
             .e_call => |call_expr| {
-                if (self.getCallLowLevelOp(module_env, call_expr.func) != null) return;
+                if (self.getCallSiteForSourceContext(
+                    result,
+                    source_context,
+                    module_idx,
+                    expr_idx,
+                )) |call_site| {
+                    switch (call_site) {
+                        .low_level => return,
+                        .direct, .indirect_call => {},
+                    }
+                }
+                if (result.getExprLowLevelOp(source_context, module_idx, call_expr.func) != null) return;
 
                 var call_site = self.getCallSiteForSourceContext(
                     result,
@@ -8021,20 +7982,6 @@ const MaterializeCallableValueFailure = enum {
                     module_idx,
                     expr_idx,
                 );
-                if (call_site == null) {
-                    try self.scanForcedCirValueExprInSourceContext(
-                        result,
-                        source_context,
-                        module_idx,
-                        expr_idx,
-                    );
-                    call_site = self.getCallSiteForSourceContext(
-                        result,
-                        source_context,
-                        module_idx,
-                        expr_idx,
-                    );
-                }
                 if (call_site == null) {
                     try self.resolveDirectCallSite(
                         result,
@@ -8102,10 +8049,9 @@ const MaterializeCallableValueFailure = enum {
                         expr_idx,
                         call_expr,
                     );
-                    const callee_expr_monotype = try self.lookupRecordedExprMonotypeIfReadyForSourceContext(
+                    const callee_expr_monotype = try self.requireFullyBoundExprMonotype(
                         result,
                         SemanticThread.trackedThread(source_context),
-                        source_context,
                         module_idx,
                         callee_expr_idx,
                     );
@@ -12114,7 +12060,7 @@ const MaterializeCallableValueFailure = enum {
             );
         }
 
-        try self.scanForcedCirValueExpr(result, thread, template.module_idx, template.body_expr);
+        try self.scanCirValueExpr(result, thread, template.module_idx, template.body_expr);
 
         switch (template.kind) {
             .closure => {
@@ -13294,13 +13240,13 @@ const MaterializeCallableValueFailure = enum {
             );
             return typevar_resolved;
         }
-        return self.lookupRecordedExprMonotypeIfReadyForSourceContext(
+        return (try self.lookupRecordedExprMonotypeIfReadyForSourceContext(
             result,
             thread,
             source_context,
             module_idx,
             expr_idx,
-        );
+        )) orelse resolvedMonotype(.none, module_idx);
     }
 
     /// Require that an exact contextual expr monotype already exists in the
@@ -13407,7 +13353,7 @@ const MaterializeCallableValueFailure = enum {
         thread: SemanticThread,
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
-    ) Allocator.Error!ResolvedMonotype {
+    ) Allocator.Error!?ResolvedMonotype {
         const source_context = thread.requireSourceContext();
         return self.lookupRecordedExprMonotypeIfReadyForSourceContext(
             result,
@@ -13425,7 +13371,7 @@ const MaterializeCallableValueFailure = enum {
         source_context: SourceContext,
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
-    ) Allocator.Error!ResolvedMonotype {
+    ) Allocator.Error!?ResolvedMonotype {
         if (self.lookupExprMonotypeForSourceContext(result, thread, source_context, module_idx, expr_idx)) |resolved| {
             return resolved;
         }
@@ -13463,13 +13409,13 @@ const MaterializeCallableValueFailure = enum {
                 source.expr_idx == expr_idx and
                 source.projections.isEmpty()))
             {
-                var source_mono = try self.lookupRecordedExprMonotypeIfReadyForSourceContext(
+                var source_mono = (try self.lookupRecordedExprMonotypeIfReadyForSourceContext(
                     result,
                     thread,
                     source.source_context,
                     source.module_idx,
                     source.expr_idx,
-                );
+                )) orelse return null;
                 for (result.lambdamono.getValueProjectionEntries(source.projections)) |projection| {
                     if (source_mono.isNone()) break;
                     source_mono = try self.projectResolvedMonotypeByValueProjection(result, source_mono, projection);
@@ -13480,7 +13426,7 @@ const MaterializeCallableValueFailure = enum {
             }
         }
 
-        return resolvedMonotype(.none, module_idx);
+        return null;
     }
 
     fn resolveTypeVarMonotype(
@@ -14074,24 +14020,6 @@ const MaterializeCallableValueFailure = enum {
         return null;
     }
 
-    fn getCallLowLevelOp(self: *Pass, caller_env: *const ModuleEnv, func_expr_idx: CIR.Expr.Idx) ?CIR.Expr.LowLevel {
-        return switch (caller_env.store.getExpr(func_expr_idx)) {
-            .e_lookup_external => |lookup| self.getExternalLowLevelOp(caller_env, lookup),
-            .e_lookup_local => |lookup| getLocalLowLevelOp(caller_env, lookup.pattern_idx),
-            else => null,
-        };
-    }
-
-    fn getLocalLowLevelOp(module_env: *const ModuleEnv, pattern_idx: CIR.Pattern.Idx) ?CIR.Expr.LowLevel {
-        const defs = module_env.store.sliceDefs(module_env.all_defs);
-        for (defs) |def_idx| {
-            const def = module_env.store.getDef(def_idx);
-            if (def.pattern != pattern_idx) continue;
-            return exprLowLevelOp(module_env.store.getExpr(def.expr), module_env);
-        }
-        return null;
-    }
-
     fn findDefByPattern(module_env: *const ModuleEnv, pattern_idx: CIR.Pattern.Idx) ?CIR.Def.Idx {
         const defs = module_env.store.sliceDefs(module_env.all_defs);
         for (defs) |def_idx| {
@@ -14099,40 +14027,8 @@ const MaterializeCallableValueFailure = enum {
         }
         return null;
     }
-
-    fn getExternalLowLevelOp(
-        self: *Pass,
-        caller_env: *const ModuleEnv,
-        lookup: @TypeOf(@as(CIR.Expr, undefined).e_lookup_external),
-    ) ?CIR.Expr.LowLevel {
-        const ext_module_idx = self.resolveImportedModuleIdx(caller_env, lookup.module_idx) orelse return null;
-        const ext_env = self.all_module_envs[ext_module_idx];
-        if (!ext_env.store.isDefNode(lookup.target_node_idx)) return null;
-        const def_idx: CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
-        const def = ext_env.store.getDef(def_idx);
-        return exprLowLevelOp(ext_env.store.getExpr(def.expr), ext_env);
-    }
-
-    fn exprLowLevelOp(expr: CIR.Expr, module_env: *const ModuleEnv) ?CIR.Expr.LowLevel {
-        const body_expr_idx = switch (expr) {
-            .e_lambda => |lambda_expr| lambda_expr.body,
-            .e_hosted_lambda => |hosted_expr| hosted_expr.body,
-            else => return null,
-        };
-        const body_expr = module_env.store.getExpr(body_expr_idx);
-        if (body_expr == .e_run_low_level) return body_expr.e_run_low_level.op;
-        return null;
-    }
 };
 
-fn callableKind(expr: CIR.Expr) ?CallableTemplateKind {
-    return switch (expr) {
-        .e_lambda => .lambda,
-        .e_closure => .closure,
-        .e_hosted_lambda => .hosted_lambda,
-        else => null,
-    };
-}
 
 fn dotCallUsesRuntimeReceiver(module_env: *const ModuleEnv, receiver_expr_idx: CIR.Expr.Idx) bool {
     return switch (module_env.store.getExpr(receiver_expr_idx)) {

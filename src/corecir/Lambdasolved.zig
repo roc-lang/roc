@@ -67,6 +67,7 @@ pub const CallableTemplate = struct {
     runtime_expr: CIR.Expr.Idx,
     arg_patterns: CIR.Pattern.Span,
     body_expr: CIR.Expr.Idx,
+    low_level_op: ?CIR.Expr.LowLevel = null,
     type_root: types.Var,
     binding: CallableTemplateBinding,
     kind: CallableTemplateKind,
