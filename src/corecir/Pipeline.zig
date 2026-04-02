@@ -131,12 +131,7 @@ const exprTemplateSource = TemplateCatalog.exprTemplateSource;
 const localPatternTemplateSource = TemplateCatalog.localPatternTemplateSource;
 const externalDefTemplateSource = TemplateCatalog.externalDefTemplateSource;
 
-const ResolvedDispatchTarget = struct {
-    origin: Ident.Idx,
-    method_ident: Ident.Idx,
-    fn_var: types.Var,
-    module_idx: ?u32 = null,
-};
+const ResolvedDispatchTarget = DispatchSolved.ResolvedDispatchTarget;
 
 const AssociatedMethodTemplate = struct {
     target_env: *const ModuleEnv,
@@ -8378,7 +8373,11 @@ const MaterializeCallableValueFailure = enum {
             },
             else => return,
         };
-        const target_def = try self.resolveDispatchTargetToExternalDef(module_idx, resolved_target);
+        const target_def = DispatchSolved.resolveDispatchTargetToExternalDef(
+            self.all_module_envs,
+            module_idx,
+            resolved_target,
+        );
             try self.recordDispatchExprTarget(
                 result,
                 thread.requireSourceContext(),
@@ -8501,7 +8500,11 @@ const MaterializeCallableValueFailure = enum {
             ),
             else => null,
         } orelse return null;
-        const target_def = try self.resolveDispatchTargetToExternalDef(module_idx, resolved_target);
+        const target_def = DispatchSolved.resolveDispatchTargetToExternalDef(
+            self.all_module_envs,
+            module_idx,
+            resolved_target,
+        );
         return .{
             .module_idx = target_def.module_idx,
             .def_idx = @enumFromInt(target_def.def_node_idx),
@@ -9423,7 +9426,11 @@ const MaterializeCallableValueFailure = enum {
     ) Allocator.Error!bool {
         if (desired_func_monotype.isNone()) return true;
 
-        const target_def = try self.resolveDispatchTargetToExternalDef(source_module_idx, target);
+        const target_def = DispatchSolved.resolveDispatchTargetToExternalDef(
+            self.all_module_envs,
+            source_module_idx,
+            target,
+        );
         const target_env = self.all_module_envs[target_def.module_idx];
         const def_idx: CIR.Def.Idx = @enumFromInt(target_def.def_node_idx);
         const def = target_env.store.getDef(def_idx);
@@ -9798,148 +9805,17 @@ const MaterializeCallableValueFailure = enum {
         source_module_idx: u32,
         resolved_target: ResolvedDispatchTarget,
     ) Allocator.Error!CallableTemplateId {
-        const target_def = try self.resolveDispatchTargetToExternalDef(source_module_idx, resolved_target);
+        const target_def = DispatchSolved.resolveDispatchTargetToExternalDef(
+            self.all_module_envs,
+            source_module_idx,
+            resolved_target,
+        );
         return self.requireScannedExternalCallableTemplate(
             result,
             target_def.module_idx,
             target_def.def_node_idx,
             "resolved dispatch target",
         );
-    }
-
-    fn moduleIndexForEnv(self: *Pass, env: *const ModuleEnv) ?u32 {
-        for (self.all_module_envs, 0..) |module_env_entry, idx| {
-            if (module_env_entry == env) return @intCast(idx);
-        }
-        return null;
-    }
-
-    fn findModuleForOrigin(self: *Pass, source_env: *const ModuleEnv, origin_module: Ident.Idx) u32 {
-        const source_module_idx = self.moduleIndexForEnv(source_env) orelse unreachable;
-        const origin_name = source_env.getIdent(origin_module);
-
-        for (self.all_module_envs, 0..) |module_env_entry, idx| {
-            const origin_module_name = module_env_entry.getIdent(module_env_entry.qualified_module_ident);
-            if (std.mem.eql(u8, origin_module_name, origin_name)) {
-                return @intCast(idx);
-            }
-        }
-
-        if (std.debug.runtime_safety) {
-            std.debug.panic(
-                "Pipeline: could not resolve origin module '{s}' from source module {d}",
-                .{ origin_name, source_module_idx },
-            );
-        }
-        unreachable;
-    }
-
-    fn findModuleForOriginMaybe(self: *Pass, source_env: *const ModuleEnv, origin_module: Ident.Idx) ?u32 {
-        const source_module_idx = self.moduleIndexForEnv(source_env) orelse return null;
-        if (origin_module.eql(source_env.qualified_module_ident)) return source_module_idx;
-
-        const origin_name = self.identTextAcrossModules(source_env, origin_module) orelse return null;
-        for (self.all_module_envs, 0..) |module_env_entry, idx| {
-            const origin_module_name = module_env_entry.getIdent(module_env_entry.qualified_module_ident);
-            if (std.mem.eql(u8, origin_name, origin_module_name)) return @intCast(idx);
-        }
-        return null;
-    }
-
-    fn identTextAcrossModules(self: *Pass, starting_env: *const ModuleEnv, ident: Ident.Idx) ?[]const u8 {
-        if (moduleOwnsIdent(starting_env, ident)) return getOwnedIdentText(starting_env, ident);
-
-        for (self.all_module_envs) |module_env_entry| {
-            if (module_env_entry == starting_env) continue;
-            if (moduleOwnsIdent(module_env_entry, ident)) return getOwnedIdentText(module_env_entry, ident);
-        }
-
-        return null;
-    }
-
-    fn moduleOwnsIdent(env: *const ModuleEnv, ident: Ident.Idx) bool {
-        const ident_store = env.getIdentStoreConst();
-        const bytes = ident_store.interner.bytes.items.items;
-        const start: usize = @intCast(ident.idx);
-        if (start >= bytes.len) return false;
-
-        const tail = bytes[start..];
-        const end_rel = std.mem.indexOfScalar(u8, tail, 0) orelse return false;
-        const text = tail[0..end_rel];
-
-        const roundtrip = ident_store.findByString(text) orelse return false;
-        return roundtrip.eql(ident);
-    }
-
-    fn getOwnedIdentText(env: *const ModuleEnv, ident: Ident.Idx) []const u8 {
-        if (builtin.mode == .Debug) std.debug.assert(moduleOwnsIdent(env, ident));
-        return env.getIdent(ident);
-    }
-
-    fn dispatchTargetMethodText(
-        self: *Pass,
-        source_env: *const ModuleEnv,
-        target: ResolvedDispatchTarget,
-    ) ?[]const u8 {
-        if (moduleOwnsIdent(source_env, target.method_ident)) return getOwnedIdentText(source_env, target.method_ident);
-
-        if (target.module_idx) |target_module_idx| {
-            const target_env = self.all_module_envs[target_module_idx];
-            if (moduleOwnsIdent(target_env, target.method_ident)) return getOwnedIdentText(target_env, target.method_ident);
-        }
-
-        return null;
-    }
-
-    fn resolveDispatchTargetToExternalDef(
-        self: *Pass,
-        source_module_idx: u32,
-        target: ResolvedDispatchTarget,
-    ) Allocator.Error!struct { module_idx: u32, def_node_idx: u16 } {
-        const source_env = self.all_module_envs[source_module_idx];
-        const target_module_idx = target.module_idx orelse self.findModuleForOrigin(source_env, target.origin);
-        const target_env = self.all_module_envs[target_module_idx];
-        const method_name = self.dispatchTargetMethodText(source_env, target) orelse {
-            if (std.debug.runtime_safety) {
-                std.debug.panic(
-                    "Pipeline: method ident {d} not readable from source module {d} or target module {d}",
-                    .{ target.method_ident.idx, source_module_idx, target_module_idx },
-                );
-            }
-            unreachable;
-        };
-
-        const target_ident = target_env.common.findIdent(method_name) orelse {
-            if (std.debug.runtime_safety) {
-                std.debug.panic(
-                    "Pipeline: method '{s}' not found in target module {d}",
-                    .{ method_name, target_module_idx },
-                );
-            }
-            unreachable;
-        };
-        const target_node_idx = target_env.getExposedNodeIndexById(target_ident) orelse {
-            if (std.debug.runtime_safety) {
-                std.debug.panic(
-                    "Pipeline: exposed node not found for method '{s}' in module {d}",
-                    .{ method_name, target_module_idx },
-                );
-            }
-            unreachable;
-        };
-        if (!target_env.store.isDefNode(target_node_idx)) {
-            if (std.debug.runtime_safety) {
-                std.debug.panic(
-                    "Pipeline: exposed node for method '{s}' is not a def node (module={d}, node={d})",
-                    .{ method_name, target_module_idx, target_node_idx },
-                );
-            }
-            unreachable;
-        }
-        return .{
-            .module_idx = target_module_idx,
-            .def_node_idx = target_node_idx,
-        };
     }
 
     fn builtinPrimForNominal(ident: Ident.Idx, common: ModuleEnv.CommonIdents) ?Monotype.Prim {
@@ -10027,7 +9903,11 @@ const MaterializeCallableValueFailure = enum {
         method_ident: Ident.Idx,
     ) Allocator.Error!?AssociatedMethodTemplate {
         const source_env = self.all_module_envs[source_module_idx];
-        const target_module_idx = self.findModuleForOrigin(source_env, origin_module);
+        const target_module_idx = TemplateCatalog.findModuleForOrigin(
+            self.all_module_envs,
+            source_env,
+            origin_module,
+        );
         const target_env = self.all_module_envs[target_module_idx];
         const qualified_method_ident = target_env.lookupMethodIdentFromEnvConst(
             source_env,
@@ -10063,7 +9943,11 @@ const MaterializeCallableValueFailure = enum {
     ) Allocator.Error!void {
         const source_env = self.all_module_envs[source_module_idx];
         const common = ModuleEnv.CommonIdents.find(&source_env.common);
-        const builtin_module_idx = self.findModuleForOrigin(source_env, common.builtin_module);
+        const builtin_module_idx = TemplateCatalog.findModuleForOrigin(
+            self.all_module_envs,
+            source_env,
+            common.builtin_module,
+        );
         const builtin_env = self.all_module_envs[builtin_module_idx];
         const method_name = source_env.getIdent(common.builtin_box_unbox);
         const target_ident = builtin_env.common.findIdent(method_name) orelse {

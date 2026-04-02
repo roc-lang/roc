@@ -150,6 +150,81 @@ pub fn defExprCallableBoundary(
     };
 }
 
+fn moduleIndexForEnv(all_module_envs: []const *ModuleEnv, env: *const ModuleEnv) ?u32 {
+    for (all_module_envs, 0..) |module_env_entry, idx| {
+        if (module_env_entry == env) return @intCast(idx);
+    }
+    return null;
+}
+
+pub fn moduleOwnsIdent(env: *const ModuleEnv, ident: base.Ident.Idx) bool {
+    const ident_store = env.getIdentStoreConst();
+    const bytes = ident_store.interner.bytes.items.items;
+    const start: usize = @intCast(ident.idx);
+    if (start >= bytes.len) return false;
+
+    const tail = bytes[start..];
+    const end_rel = std.mem.indexOfScalar(u8, tail, 0) orelse return false;
+    const text = tail[0..end_rel];
+
+    const roundtrip = ident_store.findByString(text) orelse return false;
+    return roundtrip.eql(ident);
+}
+
+pub fn getOwnedIdentText(env: *const ModuleEnv, ident: base.Ident.Idx) []const u8 {
+    if (std.debug.runtime_safety) std.debug.assert(moduleOwnsIdent(env, ident));
+    return env.getIdent(ident);
+}
+
+pub fn identTextAcrossModules(
+    all_module_envs: []const *ModuleEnv,
+    starting_env: *const ModuleEnv,
+    ident: base.Ident.Idx,
+) ?[]const u8 {
+    if (moduleOwnsIdent(starting_env, ident)) return getOwnedIdentText(starting_env, ident);
+
+    for (all_module_envs) |module_env_entry| {
+        if (module_env_entry == starting_env) continue;
+        if (moduleOwnsIdent(module_env_entry, ident)) return getOwnedIdentText(module_env_entry, ident);
+    }
+
+    return null;
+}
+
+pub fn findModuleForOriginMaybe(
+    all_module_envs: []const *ModuleEnv,
+    source_env: *const ModuleEnv,
+    origin_module: base.Ident.Idx,
+) ?u32 {
+    const source_module_idx = moduleIndexForEnv(all_module_envs, source_env) orelse return null;
+    if (origin_module.eql(source_env.qualified_module_ident)) return source_module_idx;
+
+    const origin_name = identTextAcrossModules(all_module_envs, source_env, origin_module) orelse return null;
+    for (all_module_envs, 0..) |module_env_entry, idx| {
+        const origin_module_name = module_env_entry.getIdent(module_env_entry.qualified_module_ident);
+        if (std.mem.eql(u8, origin_name, origin_module_name)) return @intCast(idx);
+    }
+    return null;
+}
+
+pub fn findModuleForOrigin(
+    all_module_envs: []const *ModuleEnv,
+    source_env: *const ModuleEnv,
+    origin_module: base.Ident.Idx,
+) u32 {
+    const source_module_idx = moduleIndexForEnv(all_module_envs, source_env) orelse unreachable;
+    return findModuleForOriginMaybe(all_module_envs, source_env, origin_module) orelse {
+        const origin_name = identTextAcrossModules(all_module_envs, source_env, origin_module) orelse source_env.getIdent(origin_module);
+        if (std.debug.runtime_safety) {
+            std.debug.panic(
+                "TemplateCatalog invariant violated: could not resolve origin module '{s}' from source module {d}",
+                .{ origin_name, source_module_idx },
+            );
+        }
+        unreachable;
+    };
+}
+
 pub const Result = struct {
     callable_templates: std.ArrayListUnmanaged(CallableTemplate),
     callable_template_ids_by_source: std.AutoHashMapUnmanaged(CallableTemplateSource, CallableTemplateId),
