@@ -1009,6 +1009,140 @@ pub fn resolvedIfFunctionMonotype(
     };
 }
 
+pub fn projectResolvedMonotypeByValueProjection(
+    driver: anytype,
+    result: anytype,
+    source_monotype: ResolvedMonotype,
+    projection: anytype,
+) Allocator.Error!ResolvedMonotype {
+    const mono = result.context_mono.monotype_store.getMonotype(source_monotype.idx);
+    return switch (projection) {
+        .field => |field_name| blk: {
+            const record = switch (mono) {
+                .record => |record| record,
+                else => std.debug.panic(
+                    "ContextMono invariant violated: record field projection expected record monotype, found '{s}'",
+                    .{@tagName(mono)},
+                ),
+            };
+            for (result.context_mono.monotype_store.getFields(record.fields)) |field| {
+                if (identsStructurallyEqualAcrossModules(
+                    driver.all_module_envs,
+                    field.name.module_idx,
+                    field.name.ident,
+                    field_name.module_idx,
+                    field_name.ident,
+                )) {
+                    break :blk resolvedMonotype(field.type_idx, source_monotype.module_idx);
+                }
+            }
+            std.debug.panic(
+                "ContextMono invariant violated: record field projection could not find field in monotype",
+                .{},
+            );
+        },
+        .tuple_elem => |elem_index| blk: {
+            const tuple = switch (mono) {
+                .tuple => |tuple| tuple,
+                else => std.debug.panic(
+                    "ContextMono invariant violated: tuple projection expected tuple monotype, found '{s}'",
+                    .{@tagName(mono)},
+                ),
+            };
+            const elems = result.context_mono.monotype_store.getIdxSpan(tuple.elems);
+            if (builtin.mode == .Debug and elem_index >= elems.len) {
+                std.debug.panic(
+                    "ContextMono invariant violated: tuple projection elem_index {d} out of bounds for tuple arity {d}",
+                    .{ elem_index, elems.len },
+                );
+            }
+            break :blk resolvedMonotype(elems[elem_index], source_monotype.module_idx);
+        },
+        .tag_payload => |payload| blk: {
+            const tags = switch (mono) {
+                .tag_union => |tag_union| result.context_mono.monotype_store.getTags(tag_union.tags),
+                else => std.debug.panic(
+                    "ContextMono invariant violated: tag payload projection expected tag_union monotype, found '{s}'",
+                    .{@tagName(mono)},
+                ),
+            };
+            for (tags) |tag| {
+                if (!identsStructurallyEqualAcrossModules(
+                    driver.all_module_envs,
+                    tag.name.module_idx,
+                    tag.name.ident,
+                    payload.tag_name.module_idx,
+                    payload.tag_name.ident,
+                )) continue;
+                const payload_monos = result.context_mono.monotype_store.getIdxSpan(tag.payloads);
+                if (builtin.mode == .Debug and payload.payload_index >= payload_monos.len) {
+                    std.debug.panic(
+                        "ContextMono invariant violated: tag payload projection index {d} out of bounds for payload arity {d}",
+                        .{ payload.payload_index, payload_monos.len },
+                    );
+                }
+                break :blk resolvedMonotype(payload_monos[payload.payload_index], source_monotype.module_idx);
+            }
+            std.debug.panic(
+                "ContextMono invariant violated: tag payload projection could not find tag in monotype",
+                .{},
+            );
+        },
+        .list_elem => |elem_index| blk: {
+            _ = elem_index;
+            const list = switch (mono) {
+                .list => |list| list,
+                else => std.debug.panic(
+                    "ContextMono invariant violated: list elem projection expected list monotype, found '{s}'",
+                    .{@tagName(mono)},
+                ),
+            };
+            break :blk resolvedMonotype(list.elem, source_monotype.module_idx);
+        },
+    };
+}
+
+pub fn requireFullyBoundExprMonotype(
+    driver: anytype,
+    result: anytype,
+    thread: anytype,
+    module_idx: u32,
+    expr_idx: CIR.Expr.Idx,
+) Allocator.Error!ResolvedMonotype {
+    const resolved = (try lookupRecordedExprMonotypeIfReadyForSourceContext(
+        driver,
+        result,
+        thread,
+        thread.requireSourceContext(),
+        module_idx,
+        expr_idx,
+    )) orelse {
+        if (std.debug.runtime_safety) {
+            std.debug.panic(
+                "ContextMono invariant violated: missing fully-bound monotype for expr {d} ({s}) in module {d} under source context {s}/{d}/{d}",
+                .{
+                    @intFromEnum(expr_idx),
+                    @tagName(driver.all_module_envs[module_idx].store.getExpr(expr_idx)),
+                    module_idx,
+                    @tagName(thread.requireSourceContext()),
+                    switch (thread.requireSourceContext()) {
+                        .callable_inst => |context_id| @intFromEnum(context_id),
+                        .root_expr, .provenance_expr, .template_expr => std.math.maxInt(u32),
+                    },
+                    switch (thread.requireSourceContext()) {
+                        .root_expr => |root| @intFromEnum(root.expr_idx),
+                        .provenance_expr => |source| @intFromEnum(source.expr_idx),
+                        .template_expr => |template_ctx| @intFromEnum(template_ctx.expr_idx),
+                        .callable_inst => std.math.maxInt(u32),
+                    },
+                },
+            );
+        }
+        unreachable;
+    };
+    return resolved;
+}
+
 pub fn seedRecordedContextTypeVarSpecializations(
     driver: anytype,
     result: anytype,
@@ -1690,7 +1824,7 @@ pub fn resolvePatternMonotypeResolved(
             source.expr_idx,
         );
         for (result.lambdamono.getValueProjectionEntries(source.projections)) |projection| {
-            resolved = try driver.projectResolvedMonotypeByValueProjection(result, resolved, projection);
+            resolved = try projectResolvedMonotypeByValueProjection(driver, result, resolved, projection);
         }
         try mergeContextPatternMonotype(
             driver,
@@ -1775,6 +1909,1276 @@ pub fn monotypesStructurallyEqualAcrossModules(
         rhs,
         rhs_module_idx,
     );
+}
+
+pub fn ensureTypeSubst(
+    driver: anytype,
+    result: anytype,
+    template: anytype,
+    fn_monotype: Monotype.Idx,
+    fn_monotype_module_idx: u32,
+) Allocator.Error!TypeSubstId {
+    var bindings = std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype).init(driver.allocator);
+    defer bindings.deinit();
+
+    var ordered_entries = std.ArrayList(TypeSubstEntry).empty;
+    defer ordered_entries.deinit(driver.allocator);
+
+    try bindTypeVarMonotypes(
+        driver,
+        result,
+        template.module_idx,
+        &driver.all_module_envs[template.module_idx].types,
+        &bindings,
+        &ordered_entries,
+        template.type_root,
+        fn_monotype,
+        fn_monotype_module_idx,
+    );
+    for (result.context_mono.substs.items, 0..) |existing_subst, idx| {
+        if (try typeSubstEntriesEqual(
+            driver,
+            result,
+            result.getTypeSubstEntries(existing_subst.entries),
+            ordered_entries.items,
+        )) {
+            return @enumFromInt(idx);
+        }
+    }
+
+    const entries_span: TypeSubstSpan = if (ordered_entries.items.len == 0)
+        TypeSubstSpan.empty()
+    else blk: {
+        const start: u32 = @intCast(result.context_mono.subst_entries.items.len);
+        try result.context_mono.subst_entries.appendSlice(driver.allocator, ordered_entries.items);
+        break :blk TypeSubstSpan{
+            .start = start,
+            .len = @as(u16, @intCast(ordered_entries.items.len)),
+        };
+    };
+
+    const subst_id: TypeSubstId = @enumFromInt(result.context_mono.substs.items.len);
+    try result.context_mono.substs.append(driver.allocator, .{ .entries = entries_span });
+    return subst_id;
+}
+
+fn typeSubstEntriesEqual(
+    driver: anytype,
+    result: anytype,
+    lhs: []const TypeSubstEntry,
+    rhs: []const TypeSubstEntry,
+) Allocator.Error!bool {
+    if (lhs.len != rhs.len) return false;
+
+    for (lhs, rhs) |lhs_entry, rhs_entry| {
+        if (!std.meta.eql(lhs_entry.key, rhs_entry.key)) return false;
+        if (lhs_entry.monotype.module_idx != rhs_entry.monotype.module_idx) return false;
+        if (!try monotypesStructurallyEqual(driver, result, lhs_entry.monotype.idx, rhs_entry.monotype.idx)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+pub fn bindTypeVarMonotypesInStore(
+    driver: anytype,
+    result: anytype,
+    module_idx: u32,
+    store_types: *const types.Store,
+    common_idents: ModuleEnv.CommonIdents,
+    bindings: *std.AutoHashMap(types.Var, Monotype.Idx),
+    type_var: types.Var,
+    monotype: Monotype.Idx,
+) Allocator.Error!void {
+    if (monotype.isNone()) return;
+
+    const resolved = store_types.resolveVar(type_var);
+    if (bindings.get(resolved.var_)) |existing| {
+        if (!(try monotypesStructurallyEqual(driver, result, existing, monotype))) {
+            if (std.debug.runtime_safety) {
+                std.debug.panic(
+                    "ContextMono: conflicting monotype binding for type var root {d}",
+                    .{@intFromEnum(resolved.var_)},
+                );
+            }
+            unreachable;
+        }
+        return;
+    }
+
+    switch (resolved.desc.content) {
+        .flex, .rigid => try bindings.put(resolved.var_, monotype),
+        .alias => |alias| try bindTypeVarMonotypesInStore(
+            driver,
+            result,
+            module_idx,
+            store_types,
+            common_idents,
+            bindings,
+            store_types.getAliasBackingVar(alias),
+            monotype,
+        ),
+        .structure => |flat_type| {
+            try bindings.put(resolved.var_, monotype);
+            try bindFlatTypeMonotypesInStore(
+                driver,
+                result,
+                module_idx,
+                store_types,
+                common_idents,
+                bindings,
+                flat_type,
+                monotype,
+            );
+        },
+        .err => {},
+    }
+}
+
+fn flatRecordRepresentsEmpty(store_types: *const types.Store, record: types.Record) bool {
+    var current_row = record;
+
+    rows: while (true) {
+        if (store_types.getRecordFieldsSlice(current_row.fields).len != 0) return false;
+
+        var ext_var = current_row.ext;
+        while (true) {
+            const ext_resolved = store_types.resolveVar(ext_var);
+            switch (ext_resolved.desc.content) {
+                .alias => |alias| {
+                    ext_var = store_types.getAliasBackingVar(alias);
+                    continue;
+                },
+                .structure => |ext_flat| switch (ext_flat) {
+                    .record => |next_row| {
+                        current_row = next_row;
+                        continue :rows;
+                    },
+                    .record_unbound => |fields_range| return store_types.getRecordFieldsSlice(fields_range).len == 0,
+                    .empty_record => return true,
+                    else => return false,
+                },
+                .flex, .rigid, .err => return false,
+            }
+        }
+    }
+}
+
+fn bindFlatTypeMonotypesInStore(
+    driver: anytype,
+    result: anytype,
+    module_idx: u32,
+    store_types: *const types.Store,
+    common_idents: ModuleEnv.CommonIdents,
+    bindings: *std.AutoHashMap(types.Var, Monotype.Idx),
+    flat_type: types.FlatType,
+    monotype: Monotype.Idx,
+) Allocator.Error!void {
+    if (monotype.isNone()) return;
+
+    const mono = result.context_mono.monotype_store.getMonotype(monotype);
+
+    switch (flat_type) {
+        .fn_pure, .fn_effectful, .fn_unbound => |func| {
+            const mfunc = switch (mono) {
+                .func => |mfunc| mfunc,
+                else => unreachable,
+            };
+
+            const type_args = store_types.sliceVars(func.args);
+            const mono_args = result.context_mono.monotype_store.getIdxSpan(mfunc.args);
+            if (type_args.len != mono_args.len) unreachable;
+            for (type_args, 0..) |arg_var, i| {
+                try bindTypeVarMonotypesInStore(driver, result, module_idx, store_types, common_idents, bindings, arg_var, mono_args[i]);
+            }
+            try bindTypeVarMonotypesInStore(driver, result, module_idx, store_types, common_idents, bindings, func.ret, mfunc.ret);
+        },
+        .nominal_type => |nominal| {
+            const ident = nominal.ident.ident_idx;
+            const origin = nominal.origin_module;
+
+            if (origin.eql(common_idents.builtin_module) and ident.eql(common_idents.list)) {
+                const mlist = switch (mono) {
+                    .list => |mlist| mlist,
+                    else => unreachable,
+                };
+                const type_args = store_types.sliceNominalArgs(nominal);
+                if (type_args.len != 1) unreachable;
+                try bindTypeVarMonotypesInStore(driver, result, module_idx, store_types, common_idents, bindings, type_args[0], mlist.elem);
+                return;
+            }
+
+            if (origin.eql(common_idents.builtin_module) and ident.eql(common_idents.box)) {
+                const mbox = switch (mono) {
+                    .box => |mbox| mbox,
+                    else => unreachable,
+                };
+                const type_args = store_types.sliceNominalArgs(nominal);
+                if (type_args.len != 1) unreachable;
+                try bindTypeVarMonotypesInStore(driver, result, module_idx, store_types, common_idents, bindings, type_args[0], mbox.inner);
+                return;
+            }
+
+            if (origin.eql(common_idents.builtin_module) and DispatchSolved.builtinPrimForNominal(ident, common_idents) != null) {
+                switch (mono) {
+                    .prim => {},
+                    else => unreachable,
+                }
+                return;
+            }
+
+            try bindTypeVarMonotypesInStore(
+                driver,
+                result,
+                module_idx,
+                store_types,
+                common_idents,
+                bindings,
+                store_types.getNominalBackingVar(nominal),
+                monotype,
+            );
+        },
+        .record => |record| {
+            const mrec = switch (mono) {
+                .record => |mrec| mrec,
+                .unit => {
+                    if (flatRecordRepresentsEmpty(store_types, record)) return;
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic(
+                            "ContextMono invariant violated: non-empty store record matched unit monotype (module={d}, monotype={d})",
+                            .{ module_idx, @intFromEnum(monotype) },
+                        );
+                    }
+                    unreachable;
+                },
+                else => {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic(
+                            "ContextMono invariant violated: expected record monotype for store record, got {s} (module={d}, monotype={d})",
+                            .{ @tagName(mono), module_idx, @intFromEnum(monotype) },
+                        );
+                    }
+                    unreachable;
+                },
+            };
+            const mono_fields = result.context_mono.monotype_store.getFields(mrec.fields);
+            var seen_field_indices: std.ArrayListUnmanaged(u32) = .empty;
+            defer seen_field_indices.deinit(driver.allocator);
+
+            var current_row = record;
+            rows: while (true) {
+                const fields_slice = store_types.getRecordFieldsSlice(current_row.fields);
+                const field_names = fields_slice.items(.name);
+                const field_vars = fields_slice.items(.var_);
+                for (field_names, field_vars) |field_name, field_var| {
+                    const field_idx = recordFieldIndexByName(
+                        driver,
+                        module_idx,
+                        field_name,
+                        module_idx,
+                        mono_fields,
+                    );
+                    try appendSeenIndex(driver.allocator, &seen_field_indices, field_idx);
+                    try bindTypeVarMonotypesInStore(
+                        driver,
+                        result,
+                        module_idx,
+                        store_types,
+                        common_idents,
+                        bindings,
+                        field_var,
+                        mono_fields[field_idx].type_idx,
+                    );
+                }
+
+                var ext_var = current_row.ext;
+                while (true) {
+                    const ext_resolved = store_types.resolveVar(ext_var);
+                    switch (ext_resolved.desc.content) {
+                        .alias => |alias| {
+                            ext_var = store_types.getAliasBackingVar(alias);
+                            continue;
+                        },
+                        .structure => |ext_flat| switch (ext_flat) {
+                            .record => |next_row| {
+                                current_row = next_row;
+                                continue :rows;
+                            },
+                            .record_unbound => |fields_range| {
+                                const ext_fields = store_types.getRecordFieldsSlice(fields_range);
+                                const ext_names = ext_fields.items(.name);
+                                const ext_vars = ext_fields.items(.var_);
+                                for (ext_names, ext_vars) |field_name, field_var| {
+                                    const field_idx = recordFieldIndexByName(
+                                        driver,
+                                        module_idx,
+                                        field_name,
+                                        module_idx,
+                                        mono_fields,
+                                    );
+                                    if (seenIndex(seen_field_indices.items, field_idx)) continue;
+                                    try bindTypeVarMonotypesInStore(
+                                        driver,
+                                        result,
+                                        module_idx,
+                                        store_types,
+                                        common_idents,
+                                        bindings,
+                                        field_var,
+                                        mono_fields[field_idx].type_idx,
+                                    );
+                                }
+                                return;
+                            },
+                            .empty_record => return,
+                            else => unreachable,
+                        },
+                        .flex, .rigid, .err => return,
+                    }
+                }
+            }
+        },
+        .record_unbound => |fields_range| {
+            const mrec = switch (mono) {
+                .record => |mrec| mrec,
+                .unit => {
+                    if (store_types.getRecordFieldsSlice(fields_range).len == 0) return;
+                    unreachable;
+                },
+                else => unreachable,
+            };
+            const mono_fields = result.context_mono.monotype_store.getFields(mrec.fields);
+            const fields = store_types.getRecordFieldsSlice(fields_range);
+            for (fields.items(.name), fields.items(.var_)) |field_name, field_var| {
+                const field_idx = recordFieldIndexByName(driver, module_idx, field_name, module_idx, mono_fields);
+                try bindTypeVarMonotypesInStore(
+                    driver,
+                    result,
+                    module_idx,
+                    store_types,
+                    common_idents,
+                    bindings,
+                    field_var,
+                    mono_fields[field_idx].type_idx,
+                );
+            }
+        },
+        .tuple => |tuple| {
+            const mtup = switch (mono) {
+                .tuple => |mtup| mtup,
+                else => unreachable,
+            };
+            const mono_elems = result.context_mono.monotype_store.getIdxSpan(mtup.elems);
+            const elem_vars = store_types.sliceVars(tuple.elems);
+            if (mono_elems.len != elem_vars.len) unreachable;
+            for (elem_vars, mono_elems) |elem_var, elem_mono| {
+                try bindTypeVarMonotypesInStore(driver, result, module_idx, store_types, common_idents, bindings, elem_var, elem_mono);
+            }
+        },
+        .tag_union => |tag_union| {
+            const mtag = switch (mono) {
+                .tag_union => |mtag| mtag,
+                else => unreachable,
+            };
+            const mono_tags = result.context_mono.monotype_store.getTags(mtag.tags);
+            const tags = store_types.getTagsSlice(tag_union.tags);
+            const tag_args = tags.items(.args);
+            if (tag_args.len != mono_tags.len) unreachable;
+            for (tag_args, mono_tags) |args_range, mono_tag| {
+                const payload_vars = store_types.sliceVars(args_range);
+                const mono_payloads = result.context_mono.monotype_store.getIdxSpan(mono_tag.payloads);
+                if (payload_vars.len != mono_payloads.len) unreachable;
+                for (payload_vars, mono_payloads) |payload_var, payload_mono| {
+                    try bindTypeVarMonotypesInStore(driver, result, module_idx, store_types, common_idents, bindings, payload_var, payload_mono);
+                }
+            }
+        },
+        .empty_record => switch (mono) {
+            .unit, .record => {},
+            else => unreachable,
+        },
+        .empty_tag_union => switch (mono) {
+            .tag_union => {},
+            else => unreachable,
+        },
+    }
+}
+
+pub fn recordFieldIndexByName(
+    driver: anytype,
+    template_module_idx: u32,
+    field_name: base.Ident.Idx,
+    mono_module_idx: u32,
+    mono_fields: []const Monotype.Field,
+) u32 {
+    for (mono_fields, 0..) |mono_field, field_idx| {
+        if (identsStructurallyEqualAcrossModules(
+            driver.all_module_envs,
+            template_module_idx,
+            field_name,
+            mono_module_idx,
+            mono_field.name,
+        )) {
+            return @intCast(field_idx);
+        }
+    }
+
+    if (std.debug.runtime_safety) {
+        std.debug.panic(
+            "ContextMono: record field '{s}' missing from monotype (template_module={d}, mono_module={d})",
+            .{ driver.all_module_envs[template_module_idx].getIdent(field_name), template_module_idx, mono_module_idx },
+        );
+    }
+    unreachable;
+}
+
+pub fn recordFieldIndexByNameInSpan(
+    driver: anytype,
+    result: anytype,
+    template_module_idx: u32,
+    field_name: base.Ident.Idx,
+    mono_module_idx: u32,
+    mono_fields: Monotype.FieldSpan,
+) u32 {
+    var field_i: usize = 0;
+    while (field_i < mono_fields.len) : (field_i += 1) {
+        const mono_field = result.context_mono.monotype_store.getFieldItem(mono_fields, field_i);
+        if (identsStructurallyEqualAcrossModules(
+            driver.all_module_envs,
+            template_module_idx,
+            field_name,
+            mono_module_idx,
+            mono_field.name,
+        )) {
+            return @intCast(field_i);
+        }
+    }
+
+    if (std.debug.runtime_safety) {
+        std.debug.panic(
+            "ContextMono: record field '{s}' missing from monotype (template_module={d}, mono_module={d})",
+            .{ driver.all_module_envs[template_module_idx].getIdent(field_name), template_module_idx, mono_module_idx },
+        );
+    }
+    unreachable;
+}
+
+pub fn tagIndexByNameInSpan(
+    driver: anytype,
+    result: anytype,
+    template_module_idx: u32,
+    tag_name: base.Ident.Idx,
+    mono_module_idx: u32,
+    mono_tags: Monotype.TagSpan,
+) u32 {
+    var tag_i: usize = 0;
+    while (tag_i < mono_tags.len) : (tag_i += 1) {
+        const mono_tag = result.context_mono.monotype_store.getTagItem(mono_tags, tag_i);
+        if (identsStructurallyEqualAcrossModules(
+            driver.all_module_envs,
+            template_module_idx,
+            tag_name,
+            mono_module_idx,
+            mono_tag.name,
+        )) {
+            return @intCast(tag_i);
+        }
+    }
+
+    if (std.debug.runtime_safety) {
+        std.debug.panic(
+            "ContextMono: tag '{s}' missing from monotype",
+            .{driver.all_module_envs[template_module_idx].getIdent(tag_name)},
+        );
+    }
+    unreachable;
+}
+
+fn seenIndex(seen_indices: []const u32, idx: u32) bool {
+    for (seen_indices) |seen_idx| {
+        if (seen_idx == idx) return true;
+    }
+    return false;
+}
+
+fn appendSeenIndex(
+    allocator: Allocator,
+    seen_indices: *std.ArrayListUnmanaged(u32),
+    idx: u32,
+) Allocator.Error!void {
+    if (seenIndex(seen_indices.items, idx)) return;
+    try seen_indices.append(allocator, idx);
+}
+
+fn remainingRecordTailMonotype(
+    driver: anytype,
+    result: anytype,
+    mono_fields: []const Monotype.Field,
+    seen_indices: []const u32,
+) Allocator.Error!Monotype.Idx {
+    var remaining_fields: std.ArrayListUnmanaged(Monotype.Field) = .empty;
+    defer remaining_fields.deinit(driver.allocator);
+
+    for (mono_fields, 0..) |field, field_idx| {
+        if (seenIndex(seen_indices, @intCast(field_idx))) continue;
+        try remaining_fields.append(driver.allocator, field);
+    }
+
+    if (remaining_fields.items.len == 0) {
+        return result.context_mono.monotype_store.unit_idx;
+    }
+
+    const field_span = try result.context_mono.monotype_store.addFields(driver.allocator, remaining_fields.items);
+    return try result.context_mono.monotype_store.addMonotype(driver.allocator, .{ .record = .{ .fields = field_span } });
+}
+
+fn remainingTagUnionTailMonotype(
+    driver: anytype,
+    result: anytype,
+    mono_tags: []const Monotype.Tag,
+    seen_indices: []const u32,
+) Allocator.Error!Monotype.Idx {
+    var remaining_tags: std.ArrayListUnmanaged(Monotype.Tag) = .empty;
+    defer remaining_tags.deinit(driver.allocator);
+
+    for (mono_tags, 0..) |tag, tag_idx| {
+        if (seenIndex(seen_indices, @intCast(tag_idx))) continue;
+        try remaining_tags.append(driver.allocator, tag);
+    }
+
+    const tag_span = try result.context_mono.monotype_store.addTags(driver.allocator, remaining_tags.items);
+    return try result.context_mono.monotype_store.addMonotype(driver.allocator, .{ .tag_union = .{ .tags = tag_span } });
+}
+
+fn bindRecordRowTail(
+    driver: anytype,
+    result: anytype,
+    template_module_idx: u32,
+    template_types: *const types.Store,
+    bindings: *std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
+    ordered_entries: *std.ArrayList(TypeSubstEntry),
+    ext_var: types.Var,
+    mono_fields: []const Monotype.Field,
+    seen_indices: []const u32,
+    mono_module_idx: u32,
+    comptime allow_failure: bool,
+) Allocator.Error!bool {
+    const tail_mono = try remainingRecordTailMonotype(driver, result, mono_fields, seen_indices);
+    return bindTypeVarMonotypesMode(
+        driver,
+        result,
+        template_module_idx,
+        template_types,
+        bindings,
+        ordered_entries,
+        ext_var,
+        tail_mono,
+        mono_module_idx,
+        allow_failure,
+    );
+}
+
+fn bindTagUnionRowTail(
+    driver: anytype,
+    result: anytype,
+    template_module_idx: u32,
+    template_types: *const types.Store,
+    bindings: *std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
+    ordered_entries: *std.ArrayList(TypeSubstEntry),
+    ext_var: types.Var,
+    mono_tags: []const Monotype.Tag,
+    seen_indices: []const u32,
+    mono_module_idx: u32,
+    comptime allow_failure: bool,
+) Allocator.Error!bool {
+    const tail_mono = try remainingTagUnionTailMonotype(driver, result, mono_tags, seen_indices);
+    return bindTypeVarMonotypesMode(
+        driver,
+        result,
+        template_module_idx,
+        template_types,
+        bindings,
+        ordered_entries,
+        ext_var,
+        tail_mono,
+        mono_module_idx,
+        allow_failure,
+    );
+}
+
+fn bindTagPayloadsByName(
+    driver: anytype,
+    result: anytype,
+    template_module_idx: u32,
+    template_types: *const types.Store,
+    bindings: *std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
+    ordered_entries: *std.ArrayList(TypeSubstEntry),
+    tag_name: base.Ident.Idx,
+    payload_vars: []const types.Var,
+    mono_tags: Monotype.TagSpan,
+    mono_module_idx: u32,
+    comptime allow_failure: bool,
+) Allocator.Error!bool {
+    var tag_i: usize = 0;
+    while (tag_i < mono_tags.len) : (tag_i += 1) {
+        const mono_tag = result.context_mono.monotype_store.getTagItem(mono_tags, tag_i);
+        if (!identsStructurallyEqualAcrossModules(
+            driver.all_module_envs,
+            template_module_idx,
+            tag_name,
+            mono_module_idx,
+            mono_tag.name,
+        )) continue;
+
+        if (payload_vars.len != mono_tag.payloads.len) {
+            if (allow_failure) return false;
+            if (std.debug.runtime_safety) {
+                std.debug.panic(
+                    "ContextMono: payload arity mismatch for tag '{s}'",
+                    .{driver.all_module_envs[template_module_idx].getIdent(tag_name)},
+                );
+            }
+            unreachable;
+        }
+
+        for (payload_vars, 0..) |payload_var, i| {
+            const mono_payload = result.context_mono.monotype_store.getIdxSpanItem(mono_tag.payloads, i);
+            if (!try bindTypeVarMonotypesMode(
+                driver,
+                result,
+                template_module_idx,
+                template_types,
+                bindings,
+                ordered_entries,
+                payload_var,
+                mono_payload,
+                mono_module_idx,
+                allow_failure,
+            )) return false;
+        }
+        return true;
+    }
+
+    if (allow_failure) return false;
+    if (std.debug.runtime_safety) {
+        std.debug.panic(
+            "ContextMono: tag '{s}' missing from monotype",
+            .{driver.all_module_envs[template_module_idx].getIdent(tag_name)},
+        );
+    }
+    unreachable;
+}
+
+pub fn bindTypeVarMonotypes(
+    driver: anytype,
+    result: anytype,
+    template_module_idx: u32,
+    template_types: *const types.Store,
+    bindings: *std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
+    ordered_entries: *std.ArrayList(TypeSubstEntry),
+    type_var: types.Var,
+    monotype: Monotype.Idx,
+    mono_module_idx: u32,
+) Allocator.Error!void {
+    const ok = try bindTypeVarMonotypesMode(
+        driver,
+        result,
+        template_module_idx,
+        template_types,
+        bindings,
+        ordered_entries,
+        type_var,
+        monotype,
+        mono_module_idx,
+        false,
+    );
+    if (!ok) unreachable;
+}
+
+pub fn tryBindTypeVarMonotypes(
+    driver: anytype,
+    result: anytype,
+    template_module_idx: u32,
+    template_types: *const types.Store,
+    bindings: *std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
+    ordered_entries: *std.ArrayList(TypeSubstEntry),
+    type_var: types.Var,
+    monotype: Monotype.Idx,
+    mono_module_idx: u32,
+) Allocator.Error!bool {
+    return bindTypeVarMonotypesMode(
+        driver,
+        result,
+        template_module_idx,
+        template_types,
+        bindings,
+        ordered_entries,
+        type_var,
+        monotype,
+        mono_module_idx,
+        true,
+    );
+}
+
+fn bindTypeVarMonotypesMode(
+    driver: anytype,
+    result: anytype,
+    template_module_idx: u32,
+    template_types: *const types.Store,
+    bindings: *std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
+    ordered_entries: *std.ArrayList(TypeSubstEntry),
+    type_var: types.Var,
+    monotype: Monotype.Idx,
+    mono_module_idx: u32,
+    comptime allow_failure: bool,
+) Allocator.Error!bool {
+    if (monotype.isNone()) return true;
+    const normalized_mono = if (mono_module_idx == template_module_idx)
+        monotype
+    else
+        try remapMonotypeBetweenModules(driver, result, monotype, mono_module_idx, template_module_idx);
+    const resolved_mono = resolvedMonotype(normalized_mono, template_module_idx);
+
+    const resolved_key = boundTypeVarKey(template_module_idx, template_types, type_var);
+    if (bindings.get(resolved_key)) |existing| {
+        if (existing.module_idx != resolved_mono.module_idx or
+            !try monotypesStructurallyEqual(driver, result, existing.idx, resolved_mono.idx))
+        {
+            if (allow_failure) return false;
+            if (std.debug.runtime_safety) {
+                std.debug.panic(
+                    "ContextMono: conflicting monotype binding for type var root {d} in module {d} existing={d}@{d} existing_mono={any} new={d}@{d} new_mono={any}",
+                    .{
+                        @intFromEnum(resolved_key.type_var),
+                        resolved_key.module_idx,
+                        @intFromEnum(existing.idx),
+                        existing.module_idx,
+                        result.context_mono.monotype_store.getMonotype(existing.idx),
+                        @intFromEnum(resolved_mono.idx),
+                        resolved_mono.module_idx,
+                        result.context_mono.monotype_store.getMonotype(resolved_mono.idx),
+                    },
+                );
+            }
+            unreachable;
+        }
+        return true;
+    }
+
+    const resolved = template_types.resolveVar(type_var);
+
+    switch (resolved.desc.content) {
+        .flex, .rigid => {
+            try bindings.put(resolved_key, resolved_mono);
+            try ordered_entries.append(driver.allocator, .{
+                .key = resolved_key,
+                .monotype = resolved_mono,
+            });
+        },
+        .alias => |alias| {
+            if (!try bindTypeVarMonotypesMode(
+                driver,
+                result,
+                template_module_idx,
+                template_types,
+                bindings,
+                ordered_entries,
+                template_types.getAliasBackingVar(alias),
+                normalized_mono,
+                template_module_idx,
+                allow_failure,
+            )) return false;
+        },
+        .structure => |flat_type| {
+            try bindings.put(resolved_key, resolved_mono);
+            try ordered_entries.append(driver.allocator, .{
+                .key = resolved_key,
+                .monotype = resolved_mono,
+            });
+            if (!try bindFlatTypeMonotypesMode(
+                driver,
+                result,
+                template_module_idx,
+                template_types,
+                bindings,
+                ordered_entries,
+                flat_type,
+                normalized_mono,
+                template_module_idx,
+                allow_failure,
+            )) return false;
+        },
+        .err => {},
+    }
+
+    return true;
+}
+
+fn bindFlatTypeMonotypesMode(
+    driver: anytype,
+    result: anytype,
+    template_module_idx: u32,
+    template_types: *const types.Store,
+    bindings: *std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
+    ordered_entries: *std.ArrayList(TypeSubstEntry),
+    flat_type: types.FlatType,
+    monotype: Monotype.Idx,
+    mono_module_idx: u32,
+    comptime allow_failure: bool,
+) Allocator.Error!bool {
+    if (monotype.isNone()) return true;
+
+    const mono = result.context_mono.monotype_store.getMonotype(monotype);
+    const common_idents = ModuleEnv.CommonIdents.find(&driver.all_module_envs[template_module_idx].common);
+
+    switch (flat_type) {
+        .fn_pure, .fn_effectful, .fn_unbound => |func| {
+            const mfunc = switch (mono) {
+                .func => |mfunc| mfunc,
+                else => {
+                    return bindFlatTypeMismatch(allow_failure, flat_type, mono, template_module_idx, mono_module_idx, monotype);
+                },
+            };
+
+            const type_args = template_types.sliceVars(func.args);
+            if (type_args.len != mfunc.args.len) unreachable;
+
+            for (type_args, 0..) |arg_var, i| {
+                const mono_arg = result.context_mono.monotype_store.getIdxSpanItem(mfunc.args, i);
+                if (!try bindTypeVarMonotypesMode(
+                    driver,
+                    result,
+                    template_module_idx,
+                    template_types,
+                    bindings,
+                    ordered_entries,
+                    arg_var,
+                    mono_arg,
+                    mono_module_idx,
+                    allow_failure,
+                )) return false;
+            }
+            if (!try bindTypeVarMonotypesMode(
+                driver,
+                result,
+                template_module_idx,
+                template_types,
+                bindings,
+                ordered_entries,
+                func.ret,
+                mfunc.ret,
+                mono_module_idx,
+                allow_failure,
+            )) return false;
+        },
+        .nominal_type => |nominal| {
+            const ident = nominal.ident.ident_idx;
+            const origin = nominal.origin_module;
+
+            if (origin.eql(common_idents.builtin_module) and ident.eql(common_idents.list)) {
+                const mlist = switch (mono) {
+                    .list => |mlist| mlist,
+                    else => {
+                        return bindFlatTypeMismatch(allow_failure, flat_type, mono, template_module_idx, mono_module_idx, monotype);
+                    },
+                };
+                const type_args = template_types.sliceNominalArgs(nominal);
+                if (type_args.len != 1) unreachable;
+                if (!try bindTypeVarMonotypesMode(
+                    driver,
+                    result,
+                    template_module_idx,
+                    template_types,
+                    bindings,
+                    ordered_entries,
+                    type_args[0],
+                    mlist.elem,
+                    mono_module_idx,
+                    allow_failure,
+                )) return false;
+                return true;
+            }
+
+            if (origin.eql(common_idents.builtin_module) and ident.eql(common_idents.box)) {
+                const mbox = switch (mono) {
+                    .box => |mbox| mbox,
+                    else => {
+                        return bindFlatTypeMismatch(allow_failure, flat_type, mono, template_module_idx, mono_module_idx, monotype);
+                    },
+                };
+                const type_args = template_types.sliceNominalArgs(nominal);
+                if (type_args.len != 1) unreachable;
+                if (!try bindTypeVarMonotypesMode(
+                    driver,
+                    result,
+                    template_module_idx,
+                    template_types,
+                    bindings,
+                    ordered_entries,
+                    type_args[0],
+                    mbox.inner,
+                    mono_module_idx,
+                    allow_failure,
+                )) return false;
+                return true;
+            }
+
+            if (origin.eql(common_idents.builtin_module) and DispatchSolved.builtinPrimForNominal(ident, common_idents) != null) {
+                switch (mono) {
+                    .prim => {},
+                    else => {
+                        return bindFlatTypeMismatch(allow_failure, flat_type, mono, template_module_idx, mono_module_idx, monotype);
+                    },
+                }
+                return true;
+            }
+
+            if (!try bindTypeVarMonotypesMode(
+                driver,
+                result,
+                template_module_idx,
+                template_types,
+                bindings,
+                ordered_entries,
+                template_types.getNominalBackingVar(nominal),
+                monotype,
+                mono_module_idx,
+                allow_failure,
+            )) return false;
+        },
+        .record => |record| {
+            const mrec = switch (mono) {
+                .record => |mrec| mrec,
+                .unit => {
+                    if (flatRecordRepresentsEmpty(template_types, record)) return true;
+                    return bindFlatTypeMismatch(allow_failure, flat_type, mono, template_module_idx, mono_module_idx, monotype);
+                },
+                else => {
+                    return bindFlatTypeMismatch(allow_failure, flat_type, mono, template_module_idx, mono_module_idx, monotype);
+                },
+            };
+            var seen_field_indices: std.ArrayListUnmanaged(u32) = .empty;
+            defer seen_field_indices.deinit(driver.allocator);
+
+            var current_row = record;
+            rows: while (true) {
+                const fields_slice = template_types.getRecordFieldsSlice(current_row.fields);
+                const field_names = fields_slice.items(.name);
+                const field_vars = fields_slice.items(.var_);
+                for (field_names, field_vars) |field_name, field_var| {
+                    const field_idx = recordFieldIndexByNameInSpan(
+                        driver,
+                        result,
+                        template_module_idx,
+                        field_name,
+                        mono_module_idx,
+                        mrec.fields,
+                    );
+                    try appendSeenIndex(driver.allocator, &seen_field_indices, field_idx);
+                    const mono_field = result.context_mono.monotype_store.getFieldItem(mrec.fields, field_idx);
+                    if (!try bindTypeVarMonotypesMode(
+                        driver,
+                        result,
+                        template_module_idx,
+                        template_types,
+                        bindings,
+                        ordered_entries,
+                        field_var,
+                        mono_field.type_idx,
+                        mono_module_idx,
+                        allow_failure,
+                    )) return false;
+                }
+
+                var ext_var = current_row.ext;
+                while (true) {
+                    const ext_resolved = template_types.resolveVar(ext_var);
+                    switch (ext_resolved.desc.content) {
+                        .alias => |alias| {
+                            ext_var = template_types.getAliasBackingVar(alias);
+                            continue;
+                        },
+                        .structure => |ext_flat| switch (ext_flat) {
+                            .record => |next_row| {
+                                current_row = next_row;
+                                continue :rows;
+                            },
+                            .record_unbound => |fields_range| {
+                                const ext_fields = template_types.getRecordFieldsSlice(fields_range);
+                                const ext_names = ext_fields.items(.name);
+                                const ext_vars = ext_fields.items(.var_);
+                                for (ext_names, ext_vars) |field_name, field_var| {
+                                    const field_idx = recordFieldIndexByNameInSpan(
+                                        driver,
+                                        result,
+                                        template_module_idx,
+                                        field_name,
+                                        mono_module_idx,
+                                        mrec.fields,
+                                    );
+                                    try appendSeenIndex(driver.allocator, &seen_field_indices, field_idx);
+                                    const mono_field = result.context_mono.monotype_store.getFieldItem(mrec.fields, field_idx);
+                                    if (!try bindTypeVarMonotypesMode(
+                                        driver,
+                                        result,
+                                        template_module_idx,
+                                        template_types,
+                                        bindings,
+                                        ordered_entries,
+                                        field_var,
+                                        mono_field.type_idx,
+                                        mono_module_idx,
+                                        allow_failure,
+                                    )) return false;
+                                }
+                                break :rows;
+                            },
+                            .empty_record => break :rows,
+                            else => {
+                                return bindFlatTypeMismatch(allow_failure, flat_type, mono, template_module_idx, mono_module_idx, monotype);
+                            },
+                        },
+                        .flex, .rigid => {
+                            if (!try bindRecordRowTail(
+                                driver,
+                                result,
+                                template_module_idx,
+                                template_types,
+                                bindings,
+                                ordered_entries,
+                                ext_var,
+                                result.context_mono.monotype_store.getFields(mrec.fields),
+                                seen_field_indices.items,
+                                mono_module_idx,
+                                allow_failure,
+                            )) return false;
+                            break :rows;
+                        },
+                        .err => {
+                            return bindFlatTypeErrorTail(allow_failure, flat_type, template_module_idx, mono_module_idx, monotype);
+                        },
+                    }
+                }
+                return true;
+            }
+        },
+        .record_unbound => |fields_range| {
+            const mrec = switch (mono) {
+                .record => |mrec| mrec,
+                .unit => {
+                    if (template_types.getRecordFieldsSlice(fields_range).len == 0) return true;
+                    return bindFlatTypeMismatch(allow_failure, flat_type, mono, template_module_idx, mono_module_idx, monotype);
+                },
+                else => {
+                    return bindFlatTypeMismatch(allow_failure, flat_type, mono, template_module_idx, mono_module_idx, monotype);
+                },
+            };
+            const fields_slice = template_types.getRecordFieldsSlice(fields_range);
+            const field_names = fields_slice.items(.name);
+            const field_vars = fields_slice.items(.var_);
+            for (field_names, field_vars) |field_name, field_var| {
+                const field_idx = recordFieldIndexByNameInSpan(
+                    driver,
+                    result,
+                    template_module_idx,
+                    field_name,
+                    mono_module_idx,
+                    mrec.fields,
+                );
+                const mono_field = result.context_mono.monotype_store.getFieldItem(mrec.fields, field_idx);
+                if (!try bindTypeVarMonotypesMode(
+                    driver,
+                    result,
+                    template_module_idx,
+                    template_types,
+                    bindings,
+                    ordered_entries,
+                    field_var,
+                    mono_field.type_idx,
+                    mono_module_idx,
+                    allow_failure,
+                )) return false;
+            }
+        },
+        .tuple => |tuple| {
+            const mtup = switch (mono) {
+                .tuple => |mtup| mtup,
+                else => {
+                    return bindFlatTypeMismatch(allow_failure, flat_type, mono, template_module_idx, mono_module_idx, monotype);
+                },
+            };
+            const elem_vars = template_types.sliceVars(tuple.elems);
+            if (elem_vars.len != mtup.elems.len) unreachable;
+            for (elem_vars, 0..) |elem_var, i| {
+                const elem_mono = result.context_mono.monotype_store.getIdxSpanItem(mtup.elems, i);
+                if (!try bindTypeVarMonotypesMode(
+                    driver,
+                    result,
+                    template_module_idx,
+                    template_types,
+                    bindings,
+                    ordered_entries,
+                    elem_var,
+                    elem_mono,
+                    mono_module_idx,
+                    allow_failure,
+                )) return false;
+            }
+        },
+        .tag_union => |tag_union| {
+            const mtag = switch (mono) {
+                .tag_union => |mtag| mtag,
+                else => {
+                    return bindFlatTypeMismatch(allow_failure, flat_type, mono, template_module_idx, mono_module_idx, monotype);
+                },
+            };
+            var seen_tag_indices: std.ArrayListUnmanaged(u32) = .empty;
+            defer seen_tag_indices.deinit(driver.allocator);
+
+            var current_row = tag_union;
+            rows: while (true) {
+                const type_tags = template_types.getTagsSlice(current_row.tags);
+                const tag_names = type_tags.items(.name);
+                const tag_args = type_tags.items(.args);
+                for (tag_names, tag_args) |tag_name, args_range| {
+                    const tag_idx = tagIndexByNameInSpan(
+                        driver,
+                        result,
+                        template_module_idx,
+                        tag_name,
+                        mono_module_idx,
+                        mtag.tags,
+                    );
+                    try appendSeenIndex(driver.allocator, &seen_tag_indices, tag_idx);
+                    if (!try bindTagPayloadsByName(
+                        driver,
+                        result,
+                        template_module_idx,
+                        template_types,
+                        bindings,
+                        ordered_entries,
+                        tag_name,
+                        template_types.sliceVars(args_range),
+                        mtag.tags,
+                        mono_module_idx,
+                        allow_failure,
+                    )) return false;
+                }
+
+                var ext_var = current_row.ext;
+                while (true) {
+                    const ext_resolved = template_types.resolveVar(ext_var);
+                    switch (ext_resolved.desc.content) {
+                        .alias => |alias| {
+                            ext_var = template_types.getAliasBackingVar(alias);
+                            continue;
+                        },
+                        .structure => |ext_flat| switch (ext_flat) {
+                            .tag_union => |next_row| {
+                                current_row = next_row;
+                                continue :rows;
+                            },
+                            .empty_tag_union => break :rows,
+                            else => {
+                                return bindFlatTypeMismatch(allow_failure, flat_type, mono, template_module_idx, mono_module_idx, monotype);
+                            },
+                        },
+                        .flex, .rigid => {
+                            if (!try bindTagUnionRowTail(
+                                driver,
+                                result,
+                                template_module_idx,
+                                template_types,
+                                bindings,
+                                ordered_entries,
+                                ext_var,
+                                result.context_mono.monotype_store.getTags(mtag.tags),
+                                seen_tag_indices.items,
+                                mono_module_idx,
+                                allow_failure,
+                            )) return false;
+                            break :rows;
+                        },
+                        .err => {
+                            return bindFlatTypeErrorTail(allow_failure, flat_type, template_module_idx, mono_module_idx, monotype);
+                        },
+                    }
+                }
+            }
+        },
+        .empty_record => switch (mono) {
+            .unit, .record => {},
+            else => {
+                return bindFlatTypeMismatch(allow_failure, flat_type, mono, template_module_idx, mono_module_idx, monotype);
+            },
+        },
+        .empty_tag_union => switch (mono) {
+            .tag_union => {},
+            else => {
+                return bindFlatTypeMismatch(allow_failure, flat_type, mono, template_module_idx, mono_module_idx, monotype);
+            },
+        },
+    }
+
+    return true;
+}
+
+fn bindFlatTypeMismatch(
+    comptime allow_failure: bool,
+    flat_type: types.FlatType,
+    mono: Monotype.Monotype,
+    template_module_idx: u32,
+    mono_module_idx: u32,
+    monotype: Monotype.Idx,
+) bool {
+    if (allow_failure) return false;
+    if (std.debug.runtime_safety) {
+        std.debug.panic(
+            "ContextMono bindFlatTypeMonotypes mismatch: flat_type={s} mono={s} template_module={d} mono_module={d} monotype={d}",
+            .{
+                @tagName(flat_type),
+                @tagName(mono),
+                template_module_idx,
+                mono_module_idx,
+                @intFromEnum(monotype),
+            },
+        );
+    }
+    unreachable;
+}
+
+fn bindFlatTypeErrorTail(
+    comptime allow_failure: bool,
+    flat_type: types.FlatType,
+    template_module_idx: u32,
+    mono_module_idx: u32,
+    monotype: Monotype.Idx,
+) bool {
+    if (allow_failure) return false;
+    if (std.debug.runtime_safety) {
+        std.debug.panic(
+            "ContextMono bindFlatTypeMonotypes hit err tail: flat_type={s} template_module={d} mono_module={d} monotype={d}",
+            .{
+                @tagName(flat_type),
+                template_module_idx,
+                mono_module_idx,
+                @intFromEnum(monotype),
+            },
+        );
+    }
+    unreachable;
+}
+
+fn boundTypeVarKey(
+    module_idx: u32,
+    store_types: *const types.Store,
+    var_: types.Var,
+) BoundTypeVarKey {
+    return .{
+        .module_idx = module_idx,
+        .type_var = store_types.resolveVar(var_).var_,
+    };
 }
 
 pub fn labelTextAcrossModules(all_module_envs: []const *ModuleEnv, module_idx: u32, label: anytype) []const u8 {
