@@ -12,12 +12,14 @@
 //! to invent replacement monotypes when a fact is missing.
 
 const std = @import("std");
+const base = @import("base");
 const can = @import("can");
 const types = @import("types");
 const Monotype = @import("Monotype.zig");
 
 const Allocator = std.mem.Allocator;
 const CIR = can.CIR;
+const ModuleEnv = can.ModuleEnv;
 
 pub const ContextId = enum(u32) {
     _,
@@ -289,8 +291,345 @@ pub const Result = struct {
         if (span.len == 0) return &.{};
         return self.subst_entries.items[span.start..][0..span.len];
     }
+
+    pub fn monotypesStructurallyEqual(
+        self: *const Result,
+        allocator: Allocator,
+        all_module_envs: []const *ModuleEnv,
+        lhs: Monotype.Idx,
+        rhs: Monotype.Idx,
+    ) Allocator.Error!bool {
+        if (lhs == rhs) return true;
+
+        var seen = std.AutoHashMap(u64, void).init(allocator);
+        defer seen.deinit();
+
+        return self.monotypesStructurallyEqualRec(all_module_envs, lhs, rhs, &seen);
+    }
+
+    pub fn monotypesStructurallyEqualAcrossModules(
+        self: *const Result,
+        allocator: Allocator,
+        all_module_envs: []const *ModuleEnv,
+        lhs: Monotype.Idx,
+        lhs_module_idx: u32,
+        rhs: Monotype.Idx,
+        rhs_module_idx: u32,
+    ) Allocator.Error!bool {
+        var seen = std.AutoHashMap(u64, void).init(allocator);
+        defer seen.deinit();
+
+        return self.monotypesStructurallyEqualAcrossModulesRec(
+            allocator,
+            all_module_envs,
+            lhs,
+            lhs_module_idx,
+            rhs,
+            rhs_module_idx,
+            &seen,
+        );
+    }
+
+    fn monotypesStructurallyEqualRec(
+        self: *const Result,
+        all_module_envs: []const *ModuleEnv,
+        lhs: Monotype.Idx,
+        rhs: Monotype.Idx,
+        seen: *std.AutoHashMap(u64, void),
+    ) Allocator.Error!bool {
+        if (lhs == rhs) return true;
+
+        const lhs_u32: u32 = @intFromEnum(lhs);
+        const rhs_u32: u32 = @intFromEnum(rhs);
+        const key: u64 = (@as(u64, lhs_u32) << 32) | @as(u64, rhs_u32);
+
+        if (seen.contains(key)) return true;
+        try seen.put(key, {});
+
+        const lhs_mono = self.monotype_store.getMonotype(lhs);
+        const rhs_mono = self.monotype_store.getMonotype(rhs);
+        if (std.meta.activeTag(lhs_mono) != std.meta.activeTag(rhs_mono)) return false;
+
+        return switch (lhs_mono) {
+            .recursive_placeholder => unreachable,
+            .unit => true,
+            .prim => |lhs_prim| lhs_prim == rhs_mono.prim,
+            .list => |lhs_list| try self.monotypesStructurallyEqualRec(all_module_envs, lhs_list.elem, rhs_mono.list.elem, seen),
+            .box => |lhs_box| try self.monotypesStructurallyEqualRec(all_module_envs, lhs_box.inner, rhs_mono.box.inner, seen),
+            .tuple => |lhs_tuple| blk: {
+                const lhs_elems = self.monotype_store.getIdxSpan(lhs_tuple.elems);
+                const rhs_elems = self.monotype_store.getIdxSpan(rhs_mono.tuple.elems);
+                if (lhs_elems.len != rhs_elems.len) break :blk false;
+                for (lhs_elems, rhs_elems) |lhs_elem, rhs_elem| {
+                    if (!try self.monotypesStructurallyEqualRec(all_module_envs, lhs_elem, rhs_elem, seen)) {
+                        break :blk false;
+                    }
+                }
+                break :blk true;
+            },
+            .func => |lhs_func| blk: {
+                const rhs_func = rhs_mono.func;
+                const lhs_args = self.monotype_store.getIdxSpan(lhs_func.args);
+                const rhs_args = self.monotype_store.getIdxSpan(rhs_func.args);
+                if (lhs_func.effectful != rhs_func.effectful) break :blk false;
+                if (lhs_args.len != rhs_args.len) break :blk false;
+                for (lhs_args, rhs_args) |lhs_arg, rhs_arg| {
+                    if (!try self.monotypesStructurallyEqualRec(all_module_envs, lhs_arg, rhs_arg, seen)) {
+                        break :blk false;
+                    }
+                }
+                break :blk try self.monotypesStructurallyEqualRec(all_module_envs, lhs_func.ret, rhs_func.ret, seen);
+            },
+            .record => |lhs_record| blk: {
+                const lhs_fields = self.monotype_store.getFields(lhs_record.fields);
+                const rhs_fields = self.monotype_store.getFields(rhs_mono.record.fields);
+                if (lhs_fields.len != rhs_fields.len) break :blk false;
+                for (lhs_fields, rhs_fields) |lhs_field, rhs_field| {
+                    if (!identsStructurallyEqualAcrossModules(
+                        all_module_envs,
+                        lhs_field.name.module_idx,
+                        lhs_field.name,
+                        rhs_field.name.module_idx,
+                        rhs_field.name,
+                    )) break :blk false;
+                    if (!try self.monotypesStructurallyEqualRec(all_module_envs, lhs_field.type_idx, rhs_field.type_idx, seen)) {
+                        break :blk false;
+                    }
+                }
+                break :blk true;
+            },
+            .tag_union => |lhs_union| blk: {
+                const lhs_tags = self.monotype_store.getTags(lhs_union.tags);
+                const rhs_tags = self.monotype_store.getTags(rhs_mono.tag_union.tags);
+                if (lhs_tags.len != rhs_tags.len) break :blk false;
+                for (lhs_tags, rhs_tags) |lhs_tag, rhs_tag| {
+                    const lhs_payloads = self.monotype_store.getIdxSpan(lhs_tag.payloads);
+                    const rhs_payloads = self.monotype_store.getIdxSpan(rhs_tag.payloads);
+                    if (!identsStructurallyEqualAcrossModules(
+                        all_module_envs,
+                        lhs_tag.name.module_idx,
+                        lhs_tag.name,
+                        rhs_tag.name.module_idx,
+                        rhs_tag.name,
+                    )) break :blk false;
+                    if (lhs_payloads.len != rhs_payloads.len) break :blk false;
+                    for (lhs_payloads, rhs_payloads) |lhs_payload, rhs_payload| {
+                        if (!try self.monotypesStructurallyEqualRec(all_module_envs, lhs_payload, rhs_payload, seen)) {
+                            break :blk false;
+                        }
+                    }
+                }
+                break :blk true;
+            },
+        };
+    }
+
+    fn monotypesStructurallyEqualAcrossModulesRec(
+        self: *const Result,
+        allocator: Allocator,
+        all_module_envs: []const *ModuleEnv,
+        lhs: Monotype.Idx,
+        lhs_module_idx: u32,
+        rhs: Monotype.Idx,
+        rhs_module_idx: u32,
+        seen: *std.AutoHashMap(u64, void),
+    ) Allocator.Error!bool {
+        const lhs_u32: u32 = @intFromEnum(lhs);
+        const rhs_u32: u32 = @intFromEnum(rhs);
+        const key: u64 = (@as(u64, lhs_u32) << 32) | @as(u64, rhs_u32);
+        if (seen.contains(key)) return true;
+        try seen.put(key, {});
+
+        const lhs_mono = self.monotype_store.getMonotype(lhs);
+        const rhs_mono = self.monotype_store.getMonotype(rhs);
+        if (std.meta.activeTag(lhs_mono) != std.meta.activeTag(rhs_mono)) return false;
+
+        return switch (lhs_mono) {
+            .recursive_placeholder => unreachable,
+            .unit => true,
+            .prim => |lhs_prim| lhs_prim == rhs_mono.prim,
+            .list => |lhs_list| try self.monotypesStructurallyEqualAcrossModulesRec(
+                allocator,
+                all_module_envs,
+                lhs_list.elem,
+                lhs_module_idx,
+                rhs_mono.list.elem,
+                rhs_module_idx,
+                seen,
+            ),
+            .box => |lhs_box| try self.monotypesStructurallyEqualAcrossModulesRec(
+                allocator,
+                all_module_envs,
+                lhs_box.inner,
+                lhs_module_idx,
+                rhs_mono.box.inner,
+                rhs_module_idx,
+                seen,
+            ),
+            .tuple => |lhs_tuple| blk: {
+                const lhs_elems = self.monotype_store.getIdxSpan(lhs_tuple.elems);
+                const rhs_elems = self.monotype_store.getIdxSpan(rhs_mono.tuple.elems);
+                if (lhs_elems.len != rhs_elems.len) break :blk false;
+                for (lhs_elems, rhs_elems) |lhs_elem, rhs_elem| {
+                    if (!try self.monotypesStructurallyEqualAcrossModulesRec(
+                        allocator,
+                        all_module_envs,
+                        lhs_elem,
+                        lhs_module_idx,
+                        rhs_elem,
+                        rhs_module_idx,
+                        seen,
+                    )) break :blk false;
+                }
+                break :blk true;
+            },
+            .func => |lhs_func| blk: {
+                const rhs_func = rhs_mono.func;
+                const lhs_args = self.monotype_store.getIdxSpan(lhs_func.args);
+                const rhs_args = self.monotype_store.getIdxSpan(rhs_func.args);
+                if (lhs_func.effectful != rhs_func.effectful) break :blk false;
+                if (lhs_args.len != rhs_args.len) break :blk false;
+                for (lhs_args, rhs_args) |lhs_arg, rhs_arg| {
+                    if (!try self.monotypesStructurallyEqualAcrossModulesRec(
+                        allocator,
+                        all_module_envs,
+                        lhs_arg,
+                        lhs_module_idx,
+                        rhs_arg,
+                        rhs_module_idx,
+                        seen,
+                    )) break :blk false;
+                }
+                break :blk try self.monotypesStructurallyEqualAcrossModulesRec(
+                    allocator,
+                    all_module_envs,
+                    lhs_func.ret,
+                    lhs_module_idx,
+                    rhs_func.ret,
+                    rhs_module_idx,
+                    seen,
+                );
+            },
+            .record => |lhs_record| blk: {
+                const lhs_fields = self.monotype_store.getFields(lhs_record.fields);
+                const rhs_fields = self.monotype_store.getFields(rhs_mono.record.fields);
+                if (lhs_fields.len != rhs_fields.len) break :blk false;
+
+                var rhs_used = std.ArrayListUnmanaged(bool){};
+                defer rhs_used.deinit(allocator);
+                try rhs_used.resize(allocator, rhs_fields.len);
+                @memset(rhs_used.items, false);
+
+                for (lhs_fields) |lhs_field| {
+                    var matched = false;
+                    for (rhs_fields, 0..) |rhs_field, rhs_i| {
+                        if (rhs_used.items[rhs_i]) continue;
+                        if (!identsStructurallyEqualAcrossModules(
+                            all_module_envs,
+                            lhs_module_idx,
+                            lhs_field.name,
+                            rhs_module_idx,
+                            rhs_field.name,
+                        )) continue;
+                        if (!try self.monotypesStructurallyEqualAcrossModulesRec(
+                            allocator,
+                            all_module_envs,
+                            lhs_field.type_idx,
+                            lhs_module_idx,
+                            rhs_field.type_idx,
+                            rhs_module_idx,
+                            seen,
+                        )) break :blk false;
+                        rhs_used.items[rhs_i] = true;
+                        matched = true;
+                        break;
+                    }
+                    if (!matched) break :blk false;
+                }
+                break :blk true;
+            },
+            .tag_union => |lhs_union| blk: {
+                const lhs_tags = self.monotype_store.getTags(lhs_union.tags);
+                const rhs_tags = self.monotype_store.getTags(rhs_mono.tag_union.tags);
+                if (lhs_tags.len != rhs_tags.len) break :blk false;
+
+                var rhs_used = std.ArrayListUnmanaged(bool){};
+                defer rhs_used.deinit(allocator);
+                try rhs_used.resize(allocator, rhs_tags.len);
+                @memset(rhs_used.items, false);
+
+                for (lhs_tags) |lhs_tag| {
+                    var matched = false;
+                    for (rhs_tags, 0..) |rhs_tag, rhs_i| {
+                        if (rhs_used.items[rhs_i]) continue;
+                        if (!identsStructurallyEqualAcrossModules(
+                            all_module_envs,
+                            lhs_module_idx,
+                            lhs_tag.name,
+                            rhs_module_idx,
+                            rhs_tag.name,
+                        )) continue;
+
+                        const lhs_payloads = self.monotype_store.getIdxSpan(lhs_tag.payloads);
+                        const rhs_payloads = self.monotype_store.getIdxSpan(rhs_tag.payloads);
+                        if (lhs_payloads.len != rhs_payloads.len) continue;
+
+                        var payloads_equal = true;
+                        for (lhs_payloads, rhs_payloads) |lhs_payload, rhs_payload| {
+                            if (!try self.monotypesStructurallyEqualAcrossModulesRec(
+                                allocator,
+                                all_module_envs,
+                                lhs_payload,
+                                lhs_module_idx,
+                                rhs_payload,
+                                rhs_module_idx,
+                                seen,
+                            )) {
+                                payloads_equal = false;
+                                break;
+                            }
+                        }
+                        if (!payloads_equal) continue;
+
+                        rhs_used.items[rhs_i] = true;
+                        matched = true;
+                        break;
+                    }
+                    if (!matched) break :blk false;
+                }
+                break :blk true;
+            },
+        };
+    }
 };
 
 pub fn resolvedMonotype(idx: Monotype.Idx, module_idx: u32) ResolvedMonotype {
     return .{ .idx = idx, .module_idx = module_idx };
+}
+
+pub fn labelTextAcrossModules(all_module_envs: []const *ModuleEnv, module_idx: u32, label: anytype) []const u8 {
+    return switch (@TypeOf(label)) {
+        base.Ident.Idx => all_module_envs[module_idx].getIdent(label),
+        Monotype.Name => label.text(all_module_envs),
+        else => @compileError("unsupported label type"),
+    };
+}
+
+pub fn identsStructurallyEqualAcrossModules(
+    all_module_envs: []const *ModuleEnv,
+    lhs_module_idx: u32,
+    lhs: anytype,
+    rhs_module_idx: u32,
+    rhs: anytype,
+) bool {
+    if (@TypeOf(lhs) == base.Ident.Idx and @TypeOf(rhs) == base.Ident.Idx and lhs_module_idx == rhs_module_idx and lhs == rhs) {
+        return true;
+    }
+    if (@TypeOf(lhs) == Monotype.Name and @TypeOf(rhs) == Monotype.Name and lhs.eql(rhs)) {
+        return true;
+    }
+
+    const lhs_text = labelTextAcrossModules(all_module_envs, lhs_module_idx, lhs);
+    const rhs_text = labelTextAcrossModules(all_module_envs, rhs_module_idx, rhs);
+    return std.mem.eql(u8, lhs_text, rhs_text);
 }

@@ -444,14 +444,10 @@ pub const Result = struct {
         self: *const Result,
         callable_inst_id: CallableInstId,
     ) ResolvedMonotype {
-        const callable_inst = self.getCallableInst(callable_inst_id);
-        return switch (callable_inst.runtime_value) {
-            .direct_lambda => .{
-                .idx = self.context_mono.monotype_store.unit_idx,
-                .module_idx = callable_inst.fn_monotype_module_idx,
-            },
-            .closure => |closure| closure.capture_tuple_monotype,
-        };
+        return self.lambdamono.getCallableInstRuntimeMonotype(
+            self.context_mono.monotype_store.unit_idx,
+            callable_inst_id,
+        );
     }
 
     pub fn getPackedFnVariants(self: *const Result, packed_fn: PackedFn) []const CallableInstId {
@@ -9641,93 +9637,13 @@ const MaterializeCallableValueFailure = enum {
         result: *Result,
         callable_inst_ids: []const CallableInstId,
     ) Allocator.Error!PackedFn {
-        const fn_monotype = try self.requireUniformPackedCallableFnMonotype(result, callable_inst_ids);
-        const runtime_monotype = try self.buildPackedFnRuntimeMonotype(result, callable_inst_ids);
-        return result.lambdamono.makePackedFn(
+        return result.lambdamono.makePackedFnForCallableInsts(
             self.allocator,
+            self.all_module_envs,
+            self.current_module_idx,
+            &result.context_mono,
             callable_inst_ids,
-            fn_monotype,
-            runtime_monotype,
         );
-    }
-
-    fn packedCallableTagName(
-        self: *Pass,
-        module_idx: u32,
-        callable_inst_id: CallableInstId,
-    ) Allocator.Error!Monotype.Name {
-        var name_buf: [32]u8 = undefined;
-        const name_text = std.fmt.bufPrint(&name_buf, "__roc_fn_{d:0>10}", .{@intFromEnum(callable_inst_id)}) catch unreachable;
-        const module_env = self.all_module_envs[module_idx];
-        const ident = module_env.common.findIdent(name_text) orelse
-            try module_env.common.insertIdent(self.allocator, Ident.for_text(name_text));
-        return .{
-            .module_idx = module_idx,
-            .ident = ident,
-        };
-    }
-
-    fn buildPackedFnRuntimeMonotype(
-        self: *Pass,
-        result: *Result,
-        callable_inst_ids: []const CallableInstId,
-    ) Allocator.Error!ResolvedMonotype {
-        if (callable_inst_ids.len == 0) unreachable;
-
-        var tags = std.ArrayList(Monotype.Tag).empty;
-        defer tags.deinit(self.allocator);
-
-        const monotype_module_idx = self.current_module_idx;
-        for (callable_inst_ids) |callable_inst_id| {
-            const payload_mono = result.getCallableInstRuntimeMonotype(callable_inst_id);
-            const payloads = if (payload_mono.isNone() or payload_mono.idx == result.context_mono.monotype_store.unit_idx)
-                Monotype.Span.empty()
-            else
-                try result.context_mono.monotype_store.addIdxSpan(self.allocator, &.{payload_mono.idx});
-            try tags.append(self.allocator, .{
-                .name = try self.packedCallableTagName(monotype_module_idx, callable_inst_id),
-                .payloads = payloads,
-            });
-        }
-
-        std.mem.sortUnstable(Monotype.Tag, tags.items, self.all_module_envs, Monotype.Tag.sortByNameAsc);
-        const tag_span = try result.context_mono.monotype_store.addTags(self.allocator, tags.items);
-        return .{
-            .idx = try result.context_mono.monotype_store.addMonotype(self.allocator, .{
-                .tag_union = .{ .tags = tag_span },
-            }),
-            .module_idx = monotype_module_idx,
-        };
-    }
-
-    fn requireUniformPackedCallableFnMonotype(
-        self: *Pass,
-        result: *const Result,
-        callable_inst_ids: []const CallableInstId,
-    ) Allocator.Error!ResolvedMonotype {
-        if (callable_inst_ids.len == 0) unreachable;
-
-        const first_callable = result.getCallableInst(callable_inst_ids[0]);
-        const first_resolved: ResolvedMonotype = .{
-            .idx = first_callable.fn_monotype,
-            .module_idx = first_callable.fn_monotype_module_idx,
-        };
-        for (callable_inst_ids[1..]) |callable_inst_id| {
-            const callable_inst = result.getCallableInst(callable_inst_id);
-            if (!try self.monotypesStructurallyEqualAcrossModules(
-                result,
-                first_resolved.idx,
-                first_resolved.module_idx,
-                callable_inst.fn_monotype,
-                callable_inst.fn_monotype_module_idx,
-            )) {
-                std.debug.panic(
-                    "Pipeline invariant violated: callable variant set contained mismatched fn monotypes between callable insts {d} and {d}",
-                    .{ @intFromEnum(callable_inst_ids[0]), @intFromEnum(callable_inst_id) },
-                );
-            }
-        }
-        return first_resolved;
     }
 
     fn ensureIndirectCallForVariants(
@@ -9735,34 +9651,13 @@ const MaterializeCallableValueFailure = enum {
         result: *Result,
         callable_inst_ids: []const CallableInstId,
     ) Allocator.Error!IndirectCall {
-        const fn_monotype = try self.requireUniformPackedCallableFnMonotype(result, callable_inst_ids);
-        const runtime_monotype = try self.buildPackedFnRuntimeMonotype(result, callable_inst_ids);
-        return result.lambdamono.makeIndirectCall(
+        return result.lambdamono.makeIndirectCallForCallableInsts(
             self.allocator,
+            self.all_module_envs,
+            self.current_module_idx,
+            &result.context_mono,
             callable_inst_ids,
-            fn_monotype,
-            runtime_monotype,
         );
-    }
-
-    fn requireScannedExternalCallableTemplate(
-        self: *Pass,
-        result: *Result,
-        module_idx: u32,
-        def_node_idx: u16,
-        comptime reason: []const u8,
-    ) Allocator.Error!CallableTemplateId {
-        if (result.getExternalCallableTemplate(module_idx, def_node_idx)) |template_id| {
-            return template_id;
-        }
-
-        if (std.debug.runtime_safety) {
-            std.debug.panic(
-                "Pipeline invariant violated: {s} required external callable template after template-catalog priming (module={d}, def_node={d})",
-                .{ reason, module_idx, def_node_idx },
-            );
-        }
-        unreachable;
     }
 
     fn lookupResolvedDispatchTemplate(
@@ -9776,8 +9671,7 @@ const MaterializeCallableValueFailure = enum {
             source_module_idx,
             resolved_target,
         );
-        return self.requireScannedExternalCallableTemplate(
-            result,
+        return result.template_catalog.requireExternalCallableTemplate(
             target_def.module_idx,
             target_def.def_node_idx,
             "resolved dispatch target",
@@ -9885,8 +9779,7 @@ const MaterializeCallableValueFailure = enum {
 
         const def_idx: CIR.Def.Idx = @enumFromInt(node_idx);
         const def = target_env.store.getDef(def_idx);
-        const template_id = try self.requireScannedExternalCallableTemplate(
-            result,
+        const template_id = result.template_catalog.requireExternalCallableTemplate(
             target_module_idx,
             node_idx,
             "associated method lookup",
@@ -9944,8 +9837,7 @@ const MaterializeCallableValueFailure = enum {
             unreachable;
         }
 
-        const template_id = try self.requireScannedExternalCallableTemplate(
-            result,
+        const template_id = result.template_catalog.requireExternalCallableTemplate(
             builtin_module_idx,
             node_idx,
             "builtin box/unbox specialization",
@@ -11471,11 +11363,7 @@ const MaterializeCallableValueFailure = enum {
     }
 
     fn labelTextAcrossModules(self: *Pass, module_idx: u32, label: anytype) []const u8 {
-        return switch (@TypeOf(label)) {
-            base.Ident.Idx => self.all_module_envs[module_idx].getIdent(label),
-            Monotype.Name => label.text(self.all_module_envs),
-            else => @compileError("unsupported label type"),
-        };
+        return ContextMono.labelTextAcrossModules(self.all_module_envs, module_idx, label);
     }
 
     fn identsStructurallyEqualAcrossModules(
@@ -11485,16 +11373,13 @@ const MaterializeCallableValueFailure = enum {
         rhs_module_idx: u32,
         rhs: anytype,
     ) bool {
-        if (@TypeOf(lhs) == base.Ident.Idx and @TypeOf(rhs) == base.Ident.Idx and lhs_module_idx == rhs_module_idx and lhs == rhs) {
-            return true;
-        }
-        if (@TypeOf(lhs) == Monotype.Name and @TypeOf(rhs) == Monotype.Name and lhs.eql(rhs)) {
-            return true;
-        }
-
-        const lhs_text = self.labelTextAcrossModules(lhs_module_idx, lhs);
-        const rhs_text = self.labelTextAcrossModules(rhs_module_idx, rhs);
-        return std.mem.eql(u8, lhs_text, rhs_text);
+        return ContextMono.identsStructurallyEqualAcrossModules(
+            self.all_module_envs,
+            lhs_module_idx,
+            lhs,
+            rhs_module_idx,
+            rhs,
+        );
     }
 
     fn recordFieldIndexByName(
@@ -12947,12 +12832,12 @@ const MaterializeCallableValueFailure = enum {
         lhs: Monotype.Idx,
         rhs: Monotype.Idx,
     ) Allocator.Error!bool {
-        if (lhs == rhs) return true;
-
-        var seen = std.AutoHashMap(u64, void).init(self.allocator);
-        defer seen.deinit();
-
-        return self.monotypesStructurallyEqualRec(result, lhs, rhs, &seen);
+        return result.context_mono.monotypesStructurallyEqual(
+            self.allocator,
+            self.all_module_envs,
+            lhs,
+            rhs,
+        );
     }
 
     fn monotypesStructurallyEqualAcrossModules(
@@ -12963,267 +12848,14 @@ const MaterializeCallableValueFailure = enum {
         rhs: Monotype.Idx,
         rhs_module_idx: u32,
     ) Allocator.Error!bool {
-        var seen = std.AutoHashMap(u64, void).init(self.allocator);
-        defer seen.deinit();
-
-        return self.monotypesStructurallyEqualAcrossModulesRec(
-            result,
+        return result.context_mono.monotypesStructurallyEqualAcrossModules(
+            self.allocator,
+            self.all_module_envs,
             lhs,
             lhs_module_idx,
             rhs,
             rhs_module_idx,
-            &seen,
         );
-    }
-
-    fn monotypesStructurallyEqualRec(
-        self: *Pass,
-        result: *const Result,
-        lhs: Monotype.Idx,
-        rhs: Monotype.Idx,
-        seen: *std.AutoHashMap(u64, void),
-    ) Allocator.Error!bool {
-        if (lhs == rhs) return true;
-
-        const lhs_u32: u32 = @intFromEnum(lhs);
-        const rhs_u32: u32 = @intFromEnum(rhs);
-        const key: u64 = (@as(u64, lhs_u32) << 32) | @as(u64, rhs_u32);
-
-        if (seen.contains(key)) return true;
-        try seen.put(key, {});
-
-        const lhs_mono = result.context_mono.monotype_store.getMonotype(lhs);
-        const rhs_mono = result.context_mono.monotype_store.getMonotype(rhs);
-        if (std.meta.activeTag(lhs_mono) != std.meta.activeTag(rhs_mono)) return false;
-
-        return switch (lhs_mono) {
-            .recursive_placeholder => unreachable,
-            .unit => true,
-            .prim => |lhs_prim| lhs_prim == rhs_mono.prim,
-            .list => |lhs_list| try self.monotypesStructurallyEqualRec(result, lhs_list.elem, rhs_mono.list.elem, seen),
-            .box => |lhs_box| try self.monotypesStructurallyEqualRec(result, lhs_box.inner, rhs_mono.box.inner, seen),
-            .tuple => |lhs_tuple| blk: {
-                const lhs_elems = result.context_mono.monotype_store.getIdxSpan(lhs_tuple.elems);
-                const rhs_elems = result.context_mono.monotype_store.getIdxSpan(rhs_mono.tuple.elems);
-                if (lhs_elems.len != rhs_elems.len) break :blk false;
-                for (lhs_elems, rhs_elems) |lhs_elem, rhs_elem| {
-                    if (!try self.monotypesStructurallyEqualRec(result, lhs_elem, rhs_elem, seen)) {
-                        break :blk false;
-                    }
-                }
-                break :blk true;
-            },
-            .func => |lhs_func| blk: {
-                const rhs_func = rhs_mono.func;
-                const lhs_args = result.context_mono.monotype_store.getIdxSpan(lhs_func.args);
-                const rhs_args = result.context_mono.monotype_store.getIdxSpan(rhs_func.args);
-                if (lhs_func.effectful != rhs_func.effectful) break :blk false;
-                if (lhs_args.len != rhs_args.len) break :blk false;
-                for (lhs_args, rhs_args) |lhs_arg, rhs_arg| {
-                    if (!try self.monotypesStructurallyEqualRec(result, lhs_arg, rhs_arg, seen)) {
-                        break :blk false;
-                    }
-                }
-                break :blk try self.monotypesStructurallyEqualRec(result, lhs_func.ret, rhs_func.ret, seen);
-            },
-            .record => |lhs_record| blk: {
-                const lhs_fields = result.context_mono.monotype_store.getFields(lhs_record.fields);
-                const rhs_fields = result.context_mono.monotype_store.getFields(rhs_mono.record.fields);
-                if (lhs_fields.len != rhs_fields.len) break :blk false;
-                for (lhs_fields, rhs_fields) |lhs_field, rhs_field| {
-                    if (!lhs_field.name.textEqual(self.all_module_envs, rhs_field.name)) break :blk false;
-                    if (!try self.monotypesStructurallyEqualRec(result, lhs_field.type_idx, rhs_field.type_idx, seen)) {
-                        break :blk false;
-                    }
-                }
-                break :blk true;
-            },
-            .tag_union => |lhs_union| blk: {
-                const lhs_tags = result.context_mono.monotype_store.getTags(lhs_union.tags);
-                const rhs_tags = result.context_mono.monotype_store.getTags(rhs_mono.tag_union.tags);
-                if (lhs_tags.len != rhs_tags.len) break :blk false;
-                for (lhs_tags, rhs_tags) |lhs_tag, rhs_tag| {
-                    const lhs_payloads = result.context_mono.monotype_store.getIdxSpan(lhs_tag.payloads);
-                    const rhs_payloads = result.context_mono.monotype_store.getIdxSpan(rhs_tag.payloads);
-                    if (!lhs_tag.name.textEqual(self.all_module_envs, rhs_tag.name)) break :blk false;
-                    if (lhs_payloads.len != rhs_payloads.len) break :blk false;
-                    for (lhs_payloads, rhs_payloads) |lhs_payload, rhs_payload| {
-                        if (!try self.monotypesStructurallyEqualRec(result, lhs_payload, rhs_payload, seen)) {
-                            break :blk false;
-                        }
-                    }
-                }
-                break :blk true;
-            },
-        };
-    }
-
-    fn monotypesStructurallyEqualAcrossModulesRec(
-        self: *Pass,
-        result: *const Result,
-        lhs: Monotype.Idx,
-        lhs_module_idx: u32,
-        rhs: Monotype.Idx,
-        rhs_module_idx: u32,
-        seen: *std.AutoHashMap(u64, void),
-    ) Allocator.Error!bool {
-        const lhs_u32: u32 = @intFromEnum(lhs);
-        const rhs_u32: u32 = @intFromEnum(rhs);
-        const key: u64 = (@as(u64, lhs_u32) << 32) | @as(u64, rhs_u32);
-        if (seen.contains(key)) return true;
-        try seen.put(key, {});
-
-        const lhs_mono = result.context_mono.monotype_store.getMonotype(lhs);
-        const rhs_mono = result.context_mono.monotype_store.getMonotype(rhs);
-        if (std.meta.activeTag(lhs_mono) != std.meta.activeTag(rhs_mono)) return false;
-
-        return switch (lhs_mono) {
-            .recursive_placeholder => unreachable,
-            .unit => true,
-            .prim => |lhs_prim| lhs_prim == rhs_mono.prim,
-            .list => |lhs_list| try self.monotypesStructurallyEqualAcrossModulesRec(
-                result,
-                lhs_list.elem,
-                lhs_module_idx,
-                rhs_mono.list.elem,
-                rhs_module_idx,
-                seen,
-            ),
-            .box => |lhs_box| try self.monotypesStructurallyEqualAcrossModulesRec(
-                result,
-                lhs_box.inner,
-                lhs_module_idx,
-                rhs_mono.box.inner,
-                rhs_module_idx,
-                seen,
-            ),
-            .tuple => |lhs_tuple| blk: {
-                const lhs_elems = result.context_mono.monotype_store.getIdxSpan(lhs_tuple.elems);
-                const rhs_elems = result.context_mono.monotype_store.getIdxSpan(rhs_mono.tuple.elems);
-                if (lhs_elems.len != rhs_elems.len) break :blk false;
-                for (lhs_elems, rhs_elems) |lhs_elem, rhs_elem| {
-                    if (!try self.monotypesStructurallyEqualAcrossModulesRec(
-                        result,
-                        lhs_elem,
-                        lhs_module_idx,
-                        rhs_elem,
-                        rhs_module_idx,
-                        seen,
-                    )) break :blk false;
-                }
-                break :blk true;
-            },
-            .func => |lhs_func| blk: {
-                const rhs_func = rhs_mono.func;
-                const lhs_args = result.context_mono.monotype_store.getIdxSpan(lhs_func.args);
-                const rhs_args = result.context_mono.monotype_store.getIdxSpan(rhs_func.args);
-                if (lhs_func.effectful != rhs_func.effectful) break :blk false;
-                if (lhs_args.len != rhs_args.len) break :blk false;
-                for (lhs_args, rhs_args) |lhs_arg, rhs_arg| {
-                    if (!try self.monotypesStructurallyEqualAcrossModulesRec(
-                        result,
-                        lhs_arg,
-                        lhs_module_idx,
-                        rhs_arg,
-                        rhs_module_idx,
-                        seen,
-                    )) break :blk false;
-                }
-                break :blk try self.monotypesStructurallyEqualAcrossModulesRec(
-                    result,
-                    lhs_func.ret,
-                    lhs_module_idx,
-                    rhs_func.ret,
-                    rhs_module_idx,
-                    seen,
-                );
-            },
-            .record => |lhs_record| blk: {
-                const lhs_fields = result.context_mono.monotype_store.getFields(lhs_record.fields);
-                const rhs_fields = result.context_mono.monotype_store.getFields(rhs_mono.record.fields);
-                if (lhs_fields.len != rhs_fields.len) break :blk false;
-
-                var rhs_used = std.ArrayListUnmanaged(bool){};
-                defer rhs_used.deinit(self.allocator);
-                try rhs_used.resize(self.allocator, rhs_fields.len);
-                @memset(rhs_used.items, false);
-
-                for (lhs_fields) |lhs_field| {
-                    var matched = false;
-                    for (rhs_fields, 0..) |rhs_field, rhs_i| {
-                        if (rhs_used.items[rhs_i]) continue;
-                        if (!self.identsStructurallyEqualAcrossModules(
-                            lhs_module_idx,
-                            lhs_field.name,
-                            rhs_module_idx,
-                            rhs_field.name,
-                        )) continue;
-                        if (!try self.monotypesStructurallyEqualAcrossModulesRec(
-                            result,
-                            lhs_field.type_idx,
-                            lhs_module_idx,
-                            rhs_field.type_idx,
-                            rhs_module_idx,
-                            seen,
-                        )) break :blk false;
-                        rhs_used.items[rhs_i] = true;
-                        matched = true;
-                        break;
-                    }
-                    if (!matched) break :blk false;
-                }
-                break :blk true;
-            },
-            .tag_union => |lhs_union| blk: {
-                const lhs_tags = result.context_mono.monotype_store.getTags(lhs_union.tags);
-                const rhs_tags = result.context_mono.monotype_store.getTags(rhs_mono.tag_union.tags);
-                if (lhs_tags.len != rhs_tags.len) break :blk false;
-
-                var rhs_used = std.ArrayListUnmanaged(bool){};
-                defer rhs_used.deinit(self.allocator);
-                try rhs_used.resize(self.allocator, rhs_tags.len);
-                @memset(rhs_used.items, false);
-
-                for (lhs_tags) |lhs_tag| {
-                    var matched = false;
-                    for (rhs_tags, 0..) |rhs_tag, rhs_i| {
-                        if (rhs_used.items[rhs_i]) continue;
-                        if (!self.identsStructurallyEqualAcrossModules(
-                            lhs_module_idx,
-                            lhs_tag.name,
-                            rhs_module_idx,
-                            rhs_tag.name,
-                        )) continue;
-
-                        const lhs_payloads = result.context_mono.monotype_store.getIdxSpan(lhs_tag.payloads);
-                        const rhs_payloads = result.context_mono.monotype_store.getIdxSpan(rhs_tag.payloads);
-                        if (lhs_payloads.len != rhs_payloads.len) continue;
-
-                        var payloads_equal = true;
-                        for (lhs_payloads, rhs_payloads) |lhs_payload, rhs_payload| {
-                            if (!try self.monotypesStructurallyEqualAcrossModulesRec(
-                                result,
-                                lhs_payload,
-                                lhs_module_idx,
-                                rhs_payload,
-                                rhs_module_idx,
-                                seen,
-                            )) {
-                                payloads_equal = false;
-                                break;
-                            }
-                        }
-                        if (!payloads_equal) continue;
-
-                        rhs_used.items[rhs_i] = true;
-                        matched = true;
-                        break;
-                    }
-                    if (!matched) break :blk false;
-                }
-                break :blk true;
-            },
-        };
     }
 
     fn resolveImportedModuleIdx(self: *Pass, caller_env: *const ModuleEnv, import_idx: CIR.Import.Idx) ?u32 {

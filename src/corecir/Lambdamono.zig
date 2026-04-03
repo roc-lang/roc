@@ -10,8 +10,10 @@ const Monotype = @import("Monotype.zig");
 const ValueProjection = @import("ValueProjection.zig");
 
 const Allocator = std.mem.Allocator;
+const Ident = base.Ident;
 const Region = base.Region;
 const CIR = can.CIR;
+const ModuleEnv = can.ModuleEnv;
 
 /// Identifies one executable callable specialization chosen from solved
 /// callable semantics.
@@ -632,6 +634,151 @@ pub const Program = struct {
                 runtime_monotype,
             ),
         };
+    }
+
+    pub fn getCallableInstRuntimeMonotype(
+        self: *const Program,
+        unit_monotype: Monotype.Idx,
+        callable_inst_id: CallableInstId,
+    ) ContextMono.ResolvedMonotype {
+        const callable_inst = self.getCallableInst(callable_inst_id);
+        return switch (callable_inst.runtime_value) {
+            .direct_lambda => .{
+                .idx = unit_monotype,
+                .module_idx = callable_inst.fn_monotype_module_idx,
+            },
+            .closure => |closure| closure.capture_tuple_monotype,
+        };
+    }
+
+    fn packedCallableTagName(
+        allocator: Allocator,
+        all_module_envs: []const *ModuleEnv,
+        module_idx: u32,
+        callable_inst_id: CallableInstId,
+    ) Allocator.Error!Monotype.Name {
+        var name_buf: [32]u8 = undefined;
+        const name_text = std.fmt.bufPrint(&name_buf, "__roc_fn_{d:0>10}", .{@intFromEnum(callable_inst_id)}) catch unreachable;
+        const module_env = all_module_envs[module_idx];
+        const ident = module_env.common.findIdent(name_text) orelse
+            try module_env.common.insertIdent(allocator, Ident.for_text(name_text));
+        return .{
+            .module_idx = module_idx,
+            .ident = ident,
+        };
+    }
+
+    fn requireUniformPackedCallableFnMonotype(
+        self: *const Program,
+        allocator: Allocator,
+        all_module_envs: []const *ModuleEnv,
+        context_mono: *const ContextMono.Result,
+        callable_inst_ids: []const CallableInstId,
+    ) Allocator.Error!ContextMono.ResolvedMonotype {
+        if (callable_inst_ids.len == 0) unreachable;
+
+        const first_callable = self.getCallableInst(callable_inst_ids[0]);
+        const first_resolved: ContextMono.ResolvedMonotype = .{
+            .idx = first_callable.fn_monotype,
+            .module_idx = first_callable.fn_monotype_module_idx,
+        };
+        for (callable_inst_ids[1..]) |callable_inst_id| {
+            const callable_inst = self.getCallableInst(callable_inst_id);
+            if (!try context_mono.monotypesStructurallyEqualAcrossModules(
+                allocator,
+                all_module_envs,
+                first_resolved.idx,
+                first_resolved.module_idx,
+                callable_inst.fn_monotype,
+                callable_inst.fn_monotype_module_idx,
+            )) {
+                std.debug.panic(
+                    "Lambdamono invariant violated: callable variant set contained mismatched fn monotypes between callable insts {d} and {d}",
+                    .{ @intFromEnum(callable_inst_ids[0]), @intFromEnum(callable_inst_id) },
+                );
+            }
+        }
+        return first_resolved;
+    }
+
+    fn buildPackedFnRuntimeMonotype(
+        self: *const Program,
+        allocator: Allocator,
+        all_module_envs: []const *ModuleEnv,
+        current_module_idx: u32,
+        context_mono: *ContextMono.Result,
+        callable_inst_ids: []const CallableInstId,
+    ) Allocator.Error!ContextMono.ResolvedMonotype {
+        if (callable_inst_ids.len == 0) unreachable;
+
+        var tags = std.ArrayList(Monotype.Tag).empty;
+        defer tags.deinit(allocator);
+
+        for (callable_inst_ids) |callable_inst_id| {
+            const payload_mono = self.getCallableInstRuntimeMonotype(
+                context_mono.monotype_store.unit_idx,
+                callable_inst_id,
+            );
+            const payloads = if (payload_mono.isNone() or payload_mono.idx == context_mono.monotype_store.unit_idx)
+                Monotype.Span.empty()
+            else
+                try context_mono.monotype_store.addIdxSpan(allocator, &.{payload_mono.idx});
+            try tags.append(allocator, .{
+                .name = try packedCallableTagName(allocator, all_module_envs, current_module_idx, callable_inst_id),
+                .payloads = payloads,
+            });
+        }
+
+        std.mem.sortUnstable(Monotype.Tag, tags.items, all_module_envs, Monotype.Tag.sortByNameAsc);
+        const tag_span = try context_mono.monotype_store.addTags(allocator, tags.items);
+        return .{
+            .idx = try context_mono.monotype_store.addMonotype(allocator, .{
+                .tag_union = .{ .tags = tag_span },
+            }),
+            .module_idx = current_module_idx,
+        };
+    }
+
+    pub fn makePackedFnForCallableInsts(
+        self: *Program,
+        allocator: Allocator,
+        all_module_envs: []const *ModuleEnv,
+        current_module_idx: u32,
+        context_mono: *ContextMono.Result,
+        callable_inst_ids: []const CallableInstId,
+    ) Allocator.Error!PackedFn {
+        const fn_monotype = try self.requireUniformPackedCallableFnMonotype(
+            allocator,
+            all_module_envs,
+            context_mono,
+            callable_inst_ids,
+        );
+        const runtime_monotype = try self.buildPackedFnRuntimeMonotype(
+            allocator,
+            all_module_envs,
+            current_module_idx,
+            context_mono,
+            callable_inst_ids,
+        );
+        return self.makePackedFn(allocator, callable_inst_ids, fn_monotype, runtime_monotype);
+    }
+
+    pub fn makeIndirectCallForCallableInsts(
+        self: *Program,
+        allocator: Allocator,
+        all_module_envs: []const *ModuleEnv,
+        current_module_idx: u32,
+        context_mono: *ContextMono.Result,
+        callable_inst_ids: []const CallableInstId,
+    ) Allocator.Error!IndirectCall {
+        const packed_fn = try self.makePackedFnForCallableInsts(
+            allocator,
+            all_module_envs,
+            current_module_idx,
+            context_mono,
+            callable_inst_ids,
+        );
+        return .{ .packed_fn = packed_fn };
     }
 
     pub fn getCallableVariantGroupVariants(self: *const Program, variant_group_id: CallableVariantGroupId) []const CallableInstId {

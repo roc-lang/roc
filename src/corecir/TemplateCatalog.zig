@@ -269,6 +269,25 @@ pub const Result = struct {
         });
     }
 
+    pub fn requireExternalCallableTemplate(
+        self: *const Result,
+        module_idx: u32,
+        def_node_idx: u16,
+        comptime reason: []const u8,
+    ) CallableTemplateId {
+        if (self.getExternalCallableTemplate(module_idx, def_node_idx)) |template_id| {
+            return template_id;
+        }
+
+        if (std.debug.runtime_safety) {
+            std.debug.panic(
+                "TemplateCatalog invariant violated: {s} required external callable template after template-catalog priming (module={d}, def_node={d})",
+                .{ reason, module_idx, def_node_idx },
+            );
+        }
+        unreachable;
+    }
+
     pub fn getExprCallableTemplate(self: *const Result, module_idx: u32, expr_idx: CIR.Expr.Idx) ?CallableTemplateId {
         return self.callable_template_ids_by_source.get(.{
             .expr = .{
