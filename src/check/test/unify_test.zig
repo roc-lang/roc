@@ -1643,3 +1643,112 @@ test "unify - flex vs nominal type captures constraint" {
     );
     try std.testing.expectEqual(constraints, deferred.constraints);
 }
+
+test "unify - from_numeral flex with rigid retains constraints on resolved rigid" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const to_str_fn = try env.module_env.types.freshFromContent(try env.mkFuncPure(&[_]Var{str}, str));
+    const to_str_constraint = types_mod.StaticDispatchConstraint{
+        .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("to_str")),
+        .fn_var = to_str_fn,
+        .origin = .from_numeral,
+        .num_literal = types_mod.NumeralInfo.fromU128(12345, false, base.Region.zero()),
+    };
+    const constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{to_str_constraint});
+
+    const flex_var = try env.module_env.types.freshFromContent(.{ .flex = .{
+        .name = null,
+        .constraints = constraints,
+    } });
+    env.module_env.types.from_numeral_flex_count += 1;
+
+    const rigid_ident = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("a"));
+    const rigid_var = try env.module_env.types.freshFromContent(.{ .rigid = Rigid.init(rigid_ident) });
+
+    const result = try env.unify(flex_var, rigid_var);
+    try std.testing.expectEqual(.ok, result);
+
+    const resolved = env.module_env.types.resolveVar(rigid_var);
+    const retained_constraints = env.module_env.types.sliceStaticDispatchConstraints(resolved.desc.content.rigid.constraints);
+    try std.testing.expectEqual(@as(u32, 0), env.module_env.types.from_numeral_flex_count);
+    try std.testing.expect(resolved.desc.content == .rigid);
+    try std.testing.expectEqual(@as(usize, 1), retained_constraints.len);
+    try std.testing.expectEqual(to_str_constraint.fn_name, retained_constraints[0].fn_name);
+    try std.testing.expectEqual(.from_numeral, retained_constraints[0].origin);
+    try std.testing.expectEqual(1, env.scratch.deferred_constraints.len());
+    try std.testing.expectEqual(constraints, env.scratch.deferred_constraints.items.items[0].constraints);
+}
+
+test "unify - rigid with from_numeral flex retains constraints on resolved rigid" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const to_str_fn = try env.module_env.types.freshFromContent(try env.mkFuncPure(&[_]Var{str}, str));
+    const to_str_constraint = types_mod.StaticDispatchConstraint{
+        .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("to_str")),
+        .fn_var = to_str_fn,
+        .origin = .from_numeral,
+        .num_literal = types_mod.NumeralInfo.fromU128(12345, false, base.Region.zero()),
+    };
+    const constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{to_str_constraint});
+
+    const rigid_ident = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("a"));
+    const rigid_var = try env.module_env.types.freshFromContent(.{ .rigid = Rigid.init(rigid_ident) });
+    const flex_var = try env.module_env.types.freshFromContent(.{ .flex = .{
+        .name = null,
+        .constraints = constraints,
+    } });
+    env.module_env.types.from_numeral_flex_count += 1;
+
+    const result = try env.unify(rigid_var, flex_var);
+    try std.testing.expectEqual(.ok, result);
+
+    const resolved = env.module_env.types.resolveVar(rigid_var);
+    const retained_constraints = env.module_env.types.sliceStaticDispatchConstraints(resolved.desc.content.rigid.constraints);
+    try std.testing.expectEqual(@as(u32, 0), env.module_env.types.from_numeral_flex_count);
+    try std.testing.expect(resolved.desc.content == .rigid);
+    try std.testing.expectEqual(@as(usize, 1), retained_constraints.len);
+    try std.testing.expectEqual(to_str_constraint.fn_name, retained_constraints[0].fn_name);
+    try std.testing.expectEqual(.from_numeral, retained_constraints[0].origin);
+    try std.testing.expectEqual(1, env.scratch.deferred_constraints.len());
+    try std.testing.expectEqual(constraints, env.scratch.deferred_constraints.items.items[0].constraints);
+}
+
+test "unify - non-numeric flex with rigid keeps constraints deferred-only" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const to_str_fn = try env.module_env.types.freshFromContent(try env.mkFuncPure(&[_]Var{str}, str));
+    const to_str_constraint = types_mod.StaticDispatchConstraint{
+        .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("to_str")),
+        .fn_var = to_str_fn,
+        .origin = .method_call,
+    };
+    const constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{to_str_constraint});
+
+    const flex_var = try env.module_env.types.freshFromContent(.{ .flex = .{
+        .name = null,
+        .constraints = constraints,
+    } });
+    const rigid_ident = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("a"));
+    const rigid_var = try env.module_env.types.freshFromContent(.{ .rigid = Rigid.init(rigid_ident) });
+
+    const result = try env.unify(flex_var, rigid_var);
+    try std.testing.expectEqual(.ok, result);
+
+    const resolved = env.module_env.types.resolveVar(rigid_var);
+    try std.testing.expect(resolved.desc.content == .rigid);
+    try std.testing.expectEqual(
+        types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
+        resolved.desc.content.rigid.constraints,
+    );
+    try std.testing.expectEqual(1, env.scratch.deferred_constraints.len());
+    try std.testing.expectEqual(constraints, env.scratch.deferred_constraints.items.items[0].constraints);
+}

@@ -3379,6 +3379,38 @@ fn appendCaptureMaterialization(
             self.current_module_idx,
         );
     const capture_local = switch (capture_field.source) {
+        .specialized_param => |source| blk: {
+            const callable_inst = self.callable_pipeline.getCallableInst(source.callable_inst);
+            const template = self.callable_pipeline.getCallableTemplate(callable_inst.template);
+            const param_patterns = self.all_module_envs[template.module_idx].store.slicePatterns(template.arg_patterns);
+            if (source.param_index >= param_patterns.len) {
+                std.debug.panic(
+                    "statement-only MIR invariant violated: specialized capture param index {d} out of bounds for callable inst {d}",
+                    .{ source.param_index, @intFromEnum(source.callable_inst) },
+                );
+            }
+            const pattern_idx = param_patterns[source.param_index];
+            if (template.module_idx != self.current_module_idx) {
+                std.debug.panic(
+                    "statement-only MIR invariant violated: specialized capture param pattern {d} pointed at module {d} while lowering module {d}",
+                    .{
+                        @intFromEnum(pattern_idx),
+                        template.module_idx,
+                        self.current_module_idx,
+                    },
+                );
+            }
+            if (self.lookupExistingBindingLocalWithinCurrentLambda(pattern_idx)) |existing| break :blk existing;
+            if (self.lookupUsableBindingLocalInAncestorScopes(
+                self.current_module_idx,
+                self.current_binding_scope,
+                pattern_idx,
+            )) |existing| break :blk existing;
+            std.debug.panic(
+                "statement-only MIR invariant violated: specialized capture param {d} had no reusable local in scope",
+                .{source.param_index},
+            );
+        },
         .lexical_binding => |source| blk: {
             if (source.module_idx != self.current_module_idx) {
                 std.debug.panic(
@@ -4815,16 +4847,14 @@ fn lowerUnaryNotInto(
     return self.lowerCirExprInto(session, unary.expr, source_local, not_stmt);
 }
 
-fn lowerIntrinsicTypeVarDispatchInto(
+fn lowerIntrinsicDispatchInto(
     self: *Self,
     session: LowerSession,
     expr_idx: CIR.Expr.Idx,
-    dispatch_expr: @TypeOf(@as(CIR.Expr, undefined).e_type_var_dispatch),
     dispatch_intrinsic: Pipeline.DispatchIntrinsic,
     target: MIR.LocalId,
     next: MIR.CFStmtId,
 ) Allocator.Error!MIR.CFStmtId {
-    _ = dispatch_expr;
     var arg_exprs = std.ArrayList(CIR.Expr.Idx).empty;
     defer arg_exprs.deinit(self.allocator);
     try self.appendDispatchActualArgExprs(session, expr_idx, &arg_exprs);
@@ -4856,6 +4886,31 @@ fn lowerIntrinsicTypeVarDispatchInto(
             const source_local = try self.freshSyntheticLocal(operand_mono, false);
             const negate_stmt = try self.lowerUnaryLowLevelInto(target, .num_negate, source_local, next);
             break :blk try self.lowerCirExprInto(session, arg_exprs.items[0], source_local, negate_stmt);
+        },
+        .to_str => blk: {
+            if (arg_exprs.items.len != 1) {
+                std.debug.panic(
+                    "statement-only MIR to_str intrinsic expected 1 arg, got {d}",
+                    .{arg_exprs.items.len},
+                );
+            }
+
+            const operand_mono = try self.resolveMonotype(session, arg_exprs.items[0]);
+            const source_local = try self.freshSyntheticLocal(operand_mono, false);
+            switch (self.store.monotype_store.getMonotype(operand_mono)) {
+                .prim => |prim| {
+                    const rendered = toStrLowLevelForPrim(prim) orelse {
+                        const alias_stmt = try self.lowerLocalAliasInto(target, source_local, next);
+                        break :blk try self.lowerCirExprInto(session, arg_exprs.items[0], source_local, alias_stmt);
+                    };
+                    const render_stmt = try self.lowerUnaryLowLevelInto(target, rendered, source_local, next);
+                    break :blk try self.lowerCirExprInto(session, arg_exprs.items[0], source_local, render_stmt);
+                },
+                else => std.debug.panic(
+                    "statement-only MIR to_str intrinsic is not implemented for monotype kind {s}",
+                    .{@tagName(self.store.monotype_store.getMonotype(operand_mono))},
+                ),
+            }
         },
     };
 }
@@ -4979,34 +5034,20 @@ fn lowerDotAccessInto(
     const module_env = self.all_module_envs[self.current_module_idx];
 
     if (da.args != null) {
-        const receiver_mono = try self.resolveMonotype(session, da.receiver);
-        var actual_arg_exprs = std.ArrayList(CIR.Expr.Idx).empty;
-        defer actual_arg_exprs.deinit(self.allocator);
-        try self.appendDispatchActualArgExprs(session, expr_idx, &actual_arg_exprs);
-
-        if (actual_arg_exprs.items.len == 1 and std.mem.eql(u8, module_env.getIdent(da.field_name), "to_str")) {
-            const receiver_local = try self.freshSyntheticLocal(receiver_mono, false);
-            return switch (self.store.monotype_store.getMonotype(receiver_mono)) {
-                .prim => |prim| {
-                    const rendered = toStrLowLevelForPrim(prim) orelse {
-                        const alias_stmt = try self.lowerLocalAliasInto(target, receiver_local, next);
-                        return self.lowerCirExprInto(session, da.receiver, receiver_local, alias_stmt);
-                    };
-                    const render_stmt = try self.lowerUnaryLowLevelInto(target, rendered, receiver_local, next);
-                    return self.lowerCirExprInto(session, da.receiver, receiver_local, render_stmt);
-                },
-                else => std.debug.panic(
-                    "statement-only MIR dot-call field '{s}' has no resolved dispatch target for monotype kind {s}",
-                    .{ module_env.getIdent(da.field_name), @tagName(self.store.monotype_store.getMonotype(receiver_mono)) },
-                ),
-            };
-        }
-
         if (lookupProgramExprDispatchTarget(session, expr_idx)) |dispatch_target| {
             return self.lowerResolvedDispatchTargetCallInto(
                 session,
                 dispatch_target,
                 expr_idx,
+                target,
+                next,
+            );
+        }
+        if (lookupProgramExprDispatchIntrinsic(session, expr_idx)) |dispatch_intrinsic| {
+            return self.lowerIntrinsicDispatchInto(
+                session,
+                expr_idx,
+                dispatch_intrinsic,
                 target,
                 next,
             );
@@ -8599,10 +8640,9 @@ fn lowerCirExprInto(
                 );
             }
             if (lookupProgramExprDispatchIntrinsic(session, expr_idx)) |dispatch_intrinsic| {
-                break :blk try self.lowerIntrinsicTypeVarDispatchInto(
+                break :blk try self.lowerIntrinsicDispatchInto(
                     session,
                     expr_idx,
-                    dispatch_expr,
                     dispatch_intrinsic,
                     target,
                     next,

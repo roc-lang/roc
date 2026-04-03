@@ -1717,11 +1717,80 @@ pub fn resolveExprMonotypeResolved(
     expr_idx: CIR.Expr.Idx,
 ) Allocator.Error!?ResolvedMonotype {
     const source_context = thread.requireSourceContext();
+    const Thread = @TypeOf(thread);
     const module_env = driver.all_module_envs[module_idx];
     const expr = module_env.store.getExpr(expr_idx);
     const expr_var = ModuleEnv.varFrom(expr_idx);
     if (lookupExprMonotypeForSourceContext(result, source_context, module_idx, expr_idx)) |resolved| {
         return resolved;
+    }
+    if (@hasDecl(Thread, "lookupValueBinding")) {
+        switch (expr) {
+            .e_lookup_local => |lookup| {
+                if (thread.lookupValueBinding(module_idx, lookup.pattern_idx)) |source| {
+                    const SourceContextThread = struct {
+                        source_context: SourceContext,
+
+                        pub fn requireSourceContext(self: @This()) SourceContext {
+                            return self.source_context;
+                        }
+                    };
+
+                    const resolved = switch (source) {
+                        .bound_expr => |bound_expr| blk: {
+                            var projected = try requireRecordedExprMonotypeForSourceContext(
+                                driver,
+                                result,
+                                SourceContextThread{ .source_context = bound_expr.expr_ref.source_context },
+                                bound_expr.expr_ref.source_context,
+                                bound_expr.expr_ref.module_idx,
+                                bound_expr.expr_ref.expr_idx,
+                            );
+                            for (result.lambdasolved.getValueProjectionEntries(bound_expr.expr_ref.projections)) |projection| {
+                                projected = try projectResolvedMonotypeByValueProjection(driver, result, projected, projection);
+                            }
+                            break :blk projected;
+                        },
+                        .specialized_param => |specialized_param| blk: {
+                            const callable_inst = result.getCallableInst(specialized_param.callable_inst);
+                            const fn_mono = switch (result.context_mono.monotype_store.getMonotype(callable_inst.fn_monotype)) {
+                                .func => |func| func,
+                                else => unreachable,
+                            };
+                            if (specialized_param.param_index >= fn_mono.args.len) unreachable;
+                            break :blk resolvedMonotype(
+                                result.context_mono.monotype_store.getIdxSpanItem(fn_mono.args, specialized_param.param_index),
+                                callable_inst.fn_monotype_module_idx,
+                            );
+                        },
+                        .lexical_binding => |lexical_binding| blk: {
+                            break :blk try resolveTypeVarMonotypeResolved(
+                                driver,
+                                result,
+                                SourceContextThread{ .source_context = .{
+                                    .callable_inst = @enumFromInt(@intFromEnum(lexical_binding.callable_inst)),
+                                } },
+                                lexical_binding.module_idx,
+                                ModuleEnv.varFrom(lexical_binding.pattern_idx),
+                            );
+                        },
+                    };
+                    if (!resolved.isNone()) {
+                        try recordExprMonotypeResolved(
+                            driver,
+                            result,
+                            source_context,
+                            module_idx,
+                            expr_idx,
+                            resolved.idx,
+                            resolved.module_idx,
+                        );
+                        return resolved;
+                    }
+                }
+            },
+            else => {},
+        }
     }
     const typevar_resolved = try resolveTypeVarMonotypeResolved(
         driver,
@@ -1797,6 +1866,18 @@ pub fn resolvePatternMonotypeResolved(
         if (@hasDecl(Thread, "lookupValueBinding")) {
             if (thread.lookupValueBinding(module_idx, pattern_idx)) |source| switch (source) {
                 .bound_expr => |bound_expr| break :blk bound_expr.expr_ref,
+                .specialized_param => |specialized_param| {
+                    const callable_inst = result.getCallableInst(specialized_param.callable_inst);
+                    const fn_mono = switch (result.context_mono.monotype_store.getMonotype(callable_inst.fn_monotype)) {
+                        .func => |func| func,
+                        else => unreachable,
+                    };
+                    if (specialized_param.param_index >= fn_mono.args.len) unreachable;
+                    return resolvedMonotype(
+                        result.context_mono.monotype_store.getIdxSpanItem(fn_mono.args, specialized_param.param_index),
+                        callable_inst.fn_monotype_module_idx,
+                    );
+                },
                 .lexical_binding => |lexical_binding| {
                     const SourceContextThread = struct {
                         source_context: SourceContext,

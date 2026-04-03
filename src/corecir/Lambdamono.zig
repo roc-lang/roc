@@ -48,6 +48,7 @@ pub const IndirectCall = struct {
 
 pub const DispatchIntrinsic = enum {
     negate,
+    to_str,
 };
 
 pub const DispatchSemantics = union(enum) {
@@ -398,6 +399,10 @@ pub fn requireCallableInstRealized(
 }
 
 pub const CaptureValueSource = union(enum) {
+    specialized_param: struct {
+        callable_inst: CallableInstId,
+        param_index: u16,
+    },
     lexical_binding: struct {
         callable_inst: CallableInstId,
         module_idx: u32,
@@ -880,14 +885,6 @@ fn Transform(comptime ResultPtr: type, comptime Driver: type) type {
                     expr_idx,
                 );
             }
-
-            // Match cor's specialization shape: once solved callable insts
-            // exist, materialize each specialized body directly rather than
-            // hoping later expr-demand walks discover it.
-            var callable_inst_idx: usize = 0;
-            while (callable_inst_idx < self.result.lambdasolved.getCallableInsts().len) : (callable_inst_idx += 1) {
-                try self.ensureCallableInstBodyGraph(@enumFromInt(callable_inst_idx));
-            }
         }
 
         fn assembleProgramExprNode(
@@ -1122,7 +1119,7 @@ fn Transform(comptime ResultPtr: type, comptime Driver: type) type {
             for (self.result.getCaptureFields(callable_def.captures)) |capture_field| {
                 switch (capture_field.source) {
                     .bound_expr => |bound_expr| try self.ensureProgramExprRefNode(bound_expr.expr_ref),
-                    .lexical_binding => {},
+                    .specialized_param, .lexical_binding => {},
                 }
             }
 

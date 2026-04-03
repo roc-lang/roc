@@ -287,6 +287,32 @@ const Unifier = struct {
         }
     }
 
+    fn rigidWithRetainedFromNumeralConstraints(
+        self: *Self,
+        rigid: Rigid,
+        extra_constraints: StaticDispatchConstraint.SafeList.Range,
+    ) Error!Rigid {
+        if (extra_constraints.len() == 0) return rigid;
+
+        var retained_constraints = std.array_list.Managed(StaticDispatchConstraint).init(self.scratch.gpa);
+        defer retained_constraints.deinit();
+
+        for (self.types_store.sliceStaticDispatchConstraints(extra_constraints)) |constraint| {
+            if (constraint.origin == .from_numeral) {
+                try retained_constraints.append(constraint);
+            }
+        }
+
+        if (retained_constraints.items.len == 0) return rigid;
+
+        const retained_range = try self.types_store.appendStaticDispatchConstraints(retained_constraints.items);
+        const merged_constraints = try self.unifyStaticDispatchConstraints(
+            rigid.constraints,
+            retained_range,
+        );
+        return rigid.withConstraints(merged_constraints);
+    }
+
     /// Check if we're already unifying this pair of descriptors (recursion guard).
     /// This prevents infinite recursion on self-referential types.
     /// We check pairs because unifying (A, B) shouldn't block unifying (A, C).
@@ -428,8 +454,11 @@ const Unifier = struct {
                 } });
             },
             .rigid => |b_rigid| {
+                if (self.flexHasFromNumeral(a_flex)) {
+                    self.types_store.from_numeral_flex_count -|= 1;
+                }
                 try self.recordDeferredConstraint(vars, a_flex.constraints);
-                self.merge(vars, .{ .rigid = b_rigid });
+                self.merge(vars, .{ .rigid = try self.rigidWithRetainedFromNumeralConstraints(b_rigid, a_flex.constraints) });
             },
             .alias => |b_alias| {
                 if (a_flex.constraints.len() == 0) {
@@ -460,8 +489,11 @@ const Unifier = struct {
 
         switch (b_content) {
             .flex => |b_flex| {
+                if (self.flexHasFromNumeral(b_flex)) {
+                    self.types_store.from_numeral_flex_count -|= 1;
+                }
                 try self.recordDeferredConstraint(vars, b_flex.constraints);
-                self.merge(vars, .{ .rigid = a_rigid });
+                self.merge(vars, .{ .rigid = try self.rigidWithRetainedFromNumeralConstraints(a_rigid, b_flex.constraints) });
             },
             .rigid => return error.TypeMismatch,
             .alias => return error.TypeMismatch,
