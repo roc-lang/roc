@@ -448,50 +448,6 @@ pub const Result = struct {
         return template_id;
     }
 
-    pub fn primeModuleCallableDefs(
-        self: *Result,
-        allocator: Allocator,
-        all_module_envs: []const *ModuleEnv,
-        module_idx: u32,
-    ) Allocator.Error!void {
-        if (self.root_expr_spans_by_module.contains(module_idx)) return;
-        const module_env = all_module_envs[module_idx];
-        const defs = module_env.store.sliceDefs(module_env.all_defs);
-        const root_expr_entries_start: u32 = @intCast(self.root_expr_entries.items.len);
-
-        for (defs) |def_idx| {
-            const def = module_env.store.getDef(def_idx);
-            try self.root_expr_entries.append(allocator, def.expr);
-            _ = try self.preRegisterCallableTemplateForDefExpr(
-                allocator,
-                all_module_envs,
-                .root_scope,
-                module_idx,
-                def.expr,
-                ModuleEnv.varFrom(def.pattern),
-                def.pattern,
-                &.{
-                    .{ .external_def = externalDefTemplateSource(module_idx, @intCast(@intFromEnum(def_idx))) },
-                    .{ .local_pattern = localPatternTemplateSource(module_idx, def.pattern) },
-                },
-            );
-        }
-
-        try self.root_expr_spans_by_module.put(allocator, module_idx, .{
-            .start = root_expr_entries_start,
-            .len = @intCast(defs.len),
-        });
-    }
-
-    fn primeAllModules(
-        self: *Result,
-        allocator: Allocator,
-        all_module_envs: []const *ModuleEnv,
-    ) Allocator.Error!void {
-        for (all_module_envs, 0..) |_, module_idx| {
-            try self.primeModuleCallableDefs(allocator, all_module_envs, @intCast(module_idx));
-        }
-    }
 };
 
 pub fn run(
@@ -500,6 +456,36 @@ pub fn run(
 ) Allocator.Error!Result {
     var result = Result.init();
     errdefer result.deinit(allocator);
-    try result.primeAllModules(allocator, all_module_envs);
+    for (all_module_envs, 0..) |_, module_idx| {
+        const resolved_module_idx: u32 = @intCast(module_idx);
+        if (result.root_expr_spans_by_module.contains(resolved_module_idx)) continue;
+
+        const module_env = all_module_envs[resolved_module_idx];
+        const defs = module_env.store.sliceDefs(module_env.all_defs);
+        const root_expr_entries_start: u32 = @intCast(result.root_expr_entries.items.len);
+
+        for (defs) |def_idx| {
+            const def = module_env.store.getDef(def_idx);
+            try result.root_expr_entries.append(allocator, def.expr);
+            _ = try result.preRegisterCallableTemplateForDefExpr(
+                allocator,
+                all_module_envs,
+                .root_scope,
+                resolved_module_idx,
+                def.expr,
+                ModuleEnv.varFrom(def.pattern),
+                def.pattern,
+                &.{
+                    .{ .external_def = externalDefTemplateSource(resolved_module_idx, @intCast(@intFromEnum(def_idx))) },
+                    .{ .local_pattern = localPatternTemplateSource(resolved_module_idx, def.pattern) },
+                },
+            );
+        }
+
+        try result.root_expr_spans_by_module.put(allocator, resolved_module_idx, .{
+            .start = root_expr_entries_start,
+            .len = @intCast(defs.len),
+        });
+    }
     return result;
 }

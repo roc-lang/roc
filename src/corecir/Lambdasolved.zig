@@ -123,6 +123,11 @@ const RequiredLookupTarget = struct {
     def_idx: CIR.Def.Idx,
 };
 
+const EnsuredCallableInst = struct {
+    id: CallableInstId,
+    created: bool,
+};
+
 pub const SemanticThread = struct {
     source_context: SourceContext,
     value_env: ?*const ValueLexicalEnv = null,
@@ -202,123 +207,33 @@ pub const SemanticThread = struct {
     }
 };
 
-const ExprTraversalState = struct {
-    visited_exprs: std.AutoHashMapUnmanaged(ContextExprKey, void),
-
-    pub fn init() ExprTraversalState {
-        return .{ .visited_exprs = .empty };
-    }
-
-    pub fn deinit(self: *ExprTraversalState, allocator: std.mem.Allocator) void {
-        self.visited_exprs.deinit(allocator);
-    }
-
-    pub fn clearPerScan(self: *ExprTraversalState) void {
-        self.visited_exprs.clearRetainingCapacity();
-    }
-
-    pub fn hasVisited(self: *const ExprTraversalState, key: ContextExprKey) bool {
-        return self.visited_exprs.contains(key);
-    }
-
-    pub fn beginVisit(
-        self: *ExprTraversalState,
-        allocator: std.mem.Allocator,
-        key: ContextExprKey,
-    ) std.mem.Allocator.Error!bool {
-        if (self.visited_exprs.contains(key)) return false;
-        try self.visited_exprs.put(allocator, key, {});
-        return true;
-    }
-};
-
-const ValueDefResolutionState = struct {
-    in_progress_exprs: std.AutoHashMapUnmanaged(ContextExprKey, void),
-
-    pub fn init() ValueDefResolutionState {
-        return .{ .in_progress_exprs = .empty };
-    }
-
-    pub fn deinit(self: *ValueDefResolutionState, allocator: std.mem.Allocator) void {
-        self.in_progress_exprs.deinit(allocator);
-    }
-
-    pub fn clear(self: *ValueDefResolutionState) void {
-        self.in_progress_exprs.clearRetainingCapacity();
-    }
-
-    pub fn beginExpr(
-        self: *ValueDefResolutionState,
-        allocator: std.mem.Allocator,
-        key: ContextExprKey,
-    ) std.mem.Allocator.Error!bool {
-        if (self.in_progress_exprs.contains(key)) return false;
-        try self.in_progress_exprs.put(allocator, key, {});
-        return true;
-    }
-
-    pub fn endExpr(self: *ValueDefResolutionState, key: ContextExprKey) void {
-        _ = self.in_progress_exprs.remove(key);
-    }
-};
-
-const CallResultResolutionState = struct {
-    in_progress_calls: std.AutoHashMapUnmanaged(CallResultCallableInstKey, void),
-
-    pub fn init() CallResultResolutionState {
-        return .{ .in_progress_calls = .empty };
-    }
-
-    pub fn deinit(self: *CallResultResolutionState, allocator: std.mem.Allocator) void {
-        self.in_progress_calls.deinit(allocator);
-    }
-
-    pub fn clear(self: *CallResultResolutionState) void {
-        self.in_progress_calls.clearRetainingCapacity();
-    }
-
-    pub fn beginCall(
-        self: *CallResultResolutionState,
-        allocator: std.mem.Allocator,
-        key: CallResultCallableInstKey,
-    ) std.mem.Allocator.Error!bool {
-        if (self.in_progress_calls.contains(key)) return false;
-        try self.in_progress_calls.put(allocator, key, {});
-        return true;
-    }
-
-    pub fn endCall(self: *CallResultResolutionState, key: CallResultCallableInstKey) void {
-        _ = self.in_progress_calls.remove(key);
-    }
-};
-
 const RootAnalysisState = struct {
-    expr_traversal: ExprTraversalState,
-    value_def_resolution: ValueDefResolutionState,
-    call_result_resolution: CallResultResolutionState,
+    visited_exprs: std.AutoHashMapUnmanaged(ContextExprKey, void),
+    in_progress_value_def_exprs: std.AutoHashMapUnmanaged(ContextExprKey, void),
+    in_progress_call_results: std.AutoHashMapUnmanaged(CallResultCallableInstKey, void),
 
     pub fn init() RootAnalysisState {
         return .{
-            .expr_traversal = ExprTraversalState.init(),
-            .value_def_resolution = ValueDefResolutionState.init(),
-            .call_result_resolution = CallResultResolutionState.init(),
+            .visited_exprs = .empty,
+            .in_progress_value_def_exprs = .empty,
+            .in_progress_call_results = .empty,
         };
     }
 
     pub fn deinit(self: *RootAnalysisState, allocator: std.mem.Allocator) void {
-        self.expr_traversal.deinit(allocator);
-        self.value_def_resolution.deinit(allocator);
-        self.call_result_resolution.deinit(allocator);
+        self.visited_exprs.deinit(allocator);
+        self.in_progress_value_def_exprs.deinit(allocator);
+        self.in_progress_call_results.deinit(allocator);
     }
 
     pub fn clearPerScan(self: *RootAnalysisState) void {
-        self.expr_traversal.clearPerScan();
-        self.value_def_resolution.clear();
-        self.call_result_resolution.clear();
+        self.visited_exprs.clearRetainingCapacity();
+        self.in_progress_value_def_exprs.clearRetainingCapacity();
+        self.in_progress_call_results.clearRetainingCapacity();
     }
 
     pub fn hasVisitedExpr(self: *const RootAnalysisState, key: ContextExprKey) bool {
-        return self.expr_traversal.hasVisited(key);
+        return self.visited_exprs.contains(key);
     }
 
     pub fn exprVisitStillPending(self: *const RootAnalysisState, key: ContextExprKey) bool {
@@ -330,7 +245,9 @@ const RootAnalysisState = struct {
         allocator: std.mem.Allocator,
         key: ContextExprKey,
     ) std.mem.Allocator.Error!bool {
-        return self.expr_traversal.beginVisit(allocator, key);
+        if (self.visited_exprs.contains(key)) return false;
+        try self.visited_exprs.put(allocator, key, {});
+        return true;
     }
 
     pub fn visitExprOnce(
@@ -355,11 +272,13 @@ const RootAnalysisState = struct {
         allocator: std.mem.Allocator,
         key: ContextExprKey,
     ) std.mem.Allocator.Error!bool {
-        return self.value_def_resolution.beginExpr(allocator, key);
+        if (self.in_progress_value_def_exprs.contains(key)) return false;
+        try self.in_progress_value_def_exprs.put(allocator, key, {});
+        return true;
     }
 
     pub fn endValueDefExpr(self: *RootAnalysisState, key: ContextExprKey) void {
-        self.value_def_resolution.endExpr(key);
+        _ = self.in_progress_value_def_exprs.remove(key);
     }
 
     pub fn withValueDefExpr(
@@ -385,11 +304,13 @@ const RootAnalysisState = struct {
         allocator: std.mem.Allocator,
         key: CallResultCallableInstKey,
     ) std.mem.Allocator.Error!bool {
-        return self.call_result_resolution.beginCall(allocator, key);
+        if (self.in_progress_call_results.contains(key)) return false;
+        try self.in_progress_call_results.put(allocator, key, {});
+        return true;
     }
 
     pub fn endCallResult(self: *RootAnalysisState, key: CallResultCallableInstKey) void {
-        self.call_result_resolution.endCall(key);
+        _ = self.in_progress_call_results.remove(key);
     }
 
     pub fn withCallResult(
@@ -791,7 +712,7 @@ fn callableInstCaptureGraphReaches(
     const callable_def = result.getCallableDefForInst(from_callable_inst_id);
     for (result.getCaptureFields(callable_def.captures)) |capture_field| {
         if (capture_field.callable_value) |callable_value| {
-            for (result.lambdamono.getCallableValueVariants(callable_value)) |capture_callable_inst_id| {
+            for (result.getCallableValueVariants(callable_value)) |capture_callable_inst_id| {
                 if (try callableInstCaptureGraphReaches(
                     driver,
                     result,
@@ -901,7 +822,7 @@ pub fn resolveBoundCaptureExprMonotype(
         bound_expr.expr_ref.module_idx,
         bound_expr.expr_ref.expr_idx,
     )) orelse return null;
-    for (result.lambdamono.getValueProjectionEntries(bound_expr.expr_ref.projections)) |projection| {
+    for (result.getValueProjectionEntries(bound_expr.expr_ref.projections)) |projection| {
         source_mono = try cm.projectResolvedMonotypeByValueProjection(driver, result, source_mono, projection);
         if (source_mono.isNone()) return null;
     }
@@ -1097,7 +1018,7 @@ pub fn resolveCaptureCallableValue(
                                 lexical.module_idx,
                                 @intFromEnum(lexical.callable_inst),
                                 @intFromEnum(capture_context_callable_inst),
-                                result.lambdamono.getCallableParamSpecEntries(result.getCallableInst(lexical.callable_inst).callable_param_specs).len,
+                                result.getCallableParamSpecEntries(result.getCallableInst(lexical.callable_inst).callable_param_specs).len,
                                 @intFromEnum(current_template.cir_expr),
                                 driver.all_module_envs[current_template.module_idx].store.slicePatterns(current_template.arg_patterns),
                             },
@@ -1152,7 +1073,7 @@ pub fn updateCallableDefRuntimeValue(
                 ),
             } };
         };
-    try Lambdamono.updateCallableDefRuntimeSemantics(
+    try updateCallableDefRuntimeSemantics(
         driver,
         result,
         callable_inst_id,
@@ -1491,9 +1412,9 @@ pub fn collectCallableParamSpecsFromFunctionArgument(
         projections.items,
         &demand_visiting,
     )) |callable_value| {
-        try Lambdamono.appendCallableParamSpecEntry(driver, result, out, .{
+        try appendCallableParamSpecEntry(driver, result, out, .{
             .param_index = param_index,
-            .projections = try Lambdamono.addCallableParamProjectionEntries(
+            .projections = try addCallableParamProjectionEntries(
                 driver,
                 result,
                 projections.items,
@@ -1575,7 +1496,7 @@ fn callableInstReadyForRealization(
 
     for (result.context_mono.monotype_store.getIdxSpan(fn_mono.args), 0..) |param_mono, param_index| {
         if (!try monotypeRequiresCallableParamSpec(driver, result, param_mono)) continue;
-        for (result.lambdamono.getCallableParamSpecEntries(callable_inst.callable_param_specs)) |spec| {
+        for (result.getCallableParamSpecEntries(callable_inst.callable_param_specs)) |spec| {
             if (spec.param_index == param_index and spec.projections.isEmpty()) break;
         } else {
             return false;
@@ -1594,7 +1515,7 @@ fn requireCallableInst(
     fn_monotype: Monotype.Idx,
     fn_monotype_module_idx: u32,
 ) std.mem.Allocator.Error!CallableInstId {
-    const callable_inst_id = (try Lambdamono.ensureCallableInstRecord(
+    const callable_inst_id = (try ensureCallableInstRecord(
         driver,
         result,
         defining_source_context,
@@ -1619,7 +1540,7 @@ fn requireCallableInstWithCallableParamSpecs(
     fn_monotype_module_idx: u32,
     callable_param_specs: []const Lambdamono.CallableParamSpecEntry,
 ) std.mem.Allocator.Error!CallableInstId {
-    const callable_inst_id = (try Lambdamono.ensureCallableInstRecord(
+    const callable_inst_id = (try ensureCallableInstRecord(
         driver,
         result,
         defining_source_context,
@@ -1651,7 +1572,7 @@ pub fn collectCallableParamSpecsFromArgument(
             .source_context = source_context,
             .module_idx = module_idx,
             .expr_idx = expr_idx,
-            .projections = try Lambdamono.addCallableParamProjectionEntries(
+            .projections = try addCallableParamProjectionEntries(
                 driver,
                 result,
                 projections.items,
@@ -1815,7 +1736,7 @@ pub fn specializeDirectCallExactCallable(
     }
 
     const template = result.getCallableTemplate(template_id).*;
-    const defining_source_context = Lambdamono.resolveTemplateDefiningSourceContext(result, template_source_context, template);
+    const defining_source_context = resolveTemplateDefiningSourceContext(result, template_source_context, template);
     const arg_exprs = driver.all_module_envs[module_idx].store.sliceExpr(call_expr.args);
     const exact_desired_fn_monotype = (try resolveDemandedDirectCallFnMonotype(
         driver,
@@ -1901,7 +1822,7 @@ pub fn assignCallableArgCallableInstsFromParams(
         if (thread.callableInst() == null and template.kind == .closure) {
             continue;
         }
-        const callable_inst_id = (try Lambdamono.ensureCallableInstRecord(
+        const callable_inst_id = (try ensureCallableInstRecord(
             driver,
             result,
             thread.requireSourceContext(),
@@ -2112,7 +2033,7 @@ pub fn finalizeResolvedDirectCallCallableInst(
     const arg_exprs = module_env.store.sliceExpr(call_expr.args);
     try prepareCallableArgsForCallableInst(driver, result, thread, module_idx, arg_exprs, callable_inst_id);
     const callable_def = result.getCallableDefForInst(callable_inst_id);
-    try Lambdamono.recordExprSourceExpr(
+    try recordExprSourceExpr(
         driver,
         result,
         source_context,
@@ -2196,9 +2117,9 @@ pub fn inferCallableParamPatternValueForCallableInst(
     var variant_builder = CallableVariantBuilder.init();
     defer variant_builder.deinit(driver.allocator);
 
-    for (result.lambdamono.getCallableInsts()) |other_callable_inst| {
+    for (result.lambdasolved.getCallableInsts()) |other_callable_inst| {
         if (other_callable_inst.template != callable_inst.template) continue;
-        for (result.lambdamono.getCallableParamSpecEntries(other_callable_inst.callable_param_specs)) |spec| {
+        for (result.getCallableParamSpecEntries(other_callable_inst.callable_param_specs)) |spec| {
             if (spec.param_index != param_index or !spec.projections.isEmpty()) continue;
 
             const spec_monotype = result.getCallableValueSourceMonotype(spec.callable_value);
@@ -2250,7 +2171,7 @@ fn appendCallableInstLexicalBindings(
         }
 
         if (callable_value == null) {
-            for (result.lambdamono.getCallableParamSpecEntries(callable_inst.callable_param_specs)) |spec| {
+            for (result.getCallableParamSpecEntries(callable_inst.callable_param_specs)) |spec| {
                 if (!spec.projections.isEmpty()) continue;
                 if (spec.param_index >= arg_patterns.len) continue;
                 if (arg_patterns[spec.param_index] == pattern_idx) {
@@ -2565,6 +2486,484 @@ fn sourceContextCallableInstId(source_context: SourceContext) ?CallableInstId {
         .callable_inst => |context_id| @enumFromInt(@intFromEnum(context_id)),
         .root_expr, .provenance_expr, .template_expr => null,
     };
+}
+
+fn callableInstHasRealizedRuntimeExpr(result: anytype, callable_inst_id: CallableInstId) bool {
+    const callable_def = result.getCallableDefForInst(callable_inst_id);
+    return result.getExprCallableValue(
+        callable_def.runtime_expr.source_context,
+        callable_def.runtime_expr.module_idx,
+        callable_def.runtime_expr.expr_idx,
+    ) != null;
+}
+
+fn resolveTemplateDefiningSourceContext(
+    result: anytype,
+    active_source_context: SourceContext,
+    template: CallableTemplate,
+) SourceContext {
+    switch (template.kind) {
+        .top_level_def => return .{ .template_expr = .{
+            .module_idx = template.module_idx,
+            .expr_idx = template.cir_expr,
+        } },
+        .lambda, .hosted_lambda, .closure => {},
+    }
+
+    switch (template.owner) {
+        .root_scope => {
+            var current = active_source_context;
+            while (true) switch (current) {
+                .callable_inst => |context_id| {
+                    current = result.getCallableInst(@as(CallableInstId, @enumFromInt(@intFromEnum(context_id)))).defining_source_context;
+                },
+                .root_expr, .provenance_expr => return current,
+                .template_expr => {
+                    std.debug.panic(
+                        "Lambdasolved invariant violated: template expr={d} in module {d} reached callable inst creation from template_expr context",
+                        .{ @intFromEnum(template.cir_expr), template.module_idx },
+                    );
+                },
+            };
+        },
+        .lexical_template => |lexical_owner_template| {
+            if (result.getSourceContextTemplateId(active_source_context)) |active_template| {
+                if (active_template == lexical_owner_template) {
+                    switch (active_source_context) {
+                        .root_expr, .provenance_expr => return active_source_context,
+                        .callable_inst, .template_expr => {},
+                    }
+                }
+            }
+            var current = switch (active_source_context) {
+                .callable_inst => |context_id| @as(CallableInstId, @enumFromInt(@intFromEnum(context_id))),
+                .root_expr, .provenance_expr, .template_expr => {
+                    if (std.debug.runtime_safety) {
+                        std.debug.panic(
+                            "Lambdasolved invariant violated: template expr={d} requires lexical owner template={d} but active source context was {s}",
+                            .{
+                                @intFromEnum(template.cir_expr),
+                                @intFromEnum(lexical_owner_template),
+                                @tagName(active_source_context),
+                            },
+                        );
+                    }
+                    unreachable;
+                },
+            };
+            while (true) {
+                const current_callable_inst = result.getCallableInst(current);
+                if (current_callable_inst.template == lexical_owner_template) {
+                    return callableInstSourceContext(current);
+                }
+                current = sourceContextCallableInstId(current_callable_inst.defining_source_context) orelse break;
+            }
+
+            if (std.debug.runtime_safety) {
+                std.debug.panic(
+                    "Lambdasolved invariant violated: template expr={d} could not resolve lexical owner template={d} from active callable inst={d}",
+                    .{
+                        @intFromEnum(template.cir_expr),
+                        @intFromEnum(lexical_owner_template),
+                        switch (active_source_context) {
+                            .callable_inst => |context_id| @intFromEnum(@as(CallableInstId, @enumFromInt(@intFromEnum(context_id)))),
+                            .root_expr, .provenance_expr, .template_expr => std.math.maxInt(u32),
+                        },
+                    },
+                );
+            }
+            unreachable;
+        },
+    }
+}
+
+fn callableParamProjectionsEqual(
+    lhs: []const Lambdamono.CallableParamProjection,
+    rhs: []const Lambdamono.CallableParamProjection,
+) bool {
+    if (lhs.len != rhs.len) return false;
+    for (lhs, rhs) |lhs_proj, rhs_proj| {
+        switch (lhs_proj) {
+            .field => |lhs_field| switch (rhs_proj) {
+                .field => |rhs_field| if (!lhs_field.eql(rhs_field)) return false,
+                else => return false,
+            },
+            .tuple_elem => |lhs_index| switch (rhs_proj) {
+                .tuple_elem => |rhs_index| if (lhs_index != rhs_index) return false,
+                else => return false,
+            },
+            .tag_payload => |lhs_payload| switch (rhs_proj) {
+                .tag_payload => |rhs_payload| if (lhs_payload.payload_index != rhs_payload.payload_index or !lhs_payload.tag_name.eql(rhs_payload.tag_name)) return false,
+                else => return false,
+            },
+            .list_elem => |lhs_index| switch (rhs_proj) {
+                .list_elem => |rhs_index| if (lhs_index != rhs_index) return false,
+                else => return false,
+            },
+        }
+    }
+    return true;
+}
+
+fn callableParamSpecsEqual(
+    result: anytype,
+    lhs: []const CallableParamSpecEntry,
+    rhs: []const CallableParamSpecEntry,
+) bool {
+    if (lhs.len != rhs.len) return false;
+    for (lhs, rhs) |lhs_entry, rhs_entry| {
+        if (lhs_entry.param_index != rhs_entry.param_index) return false;
+        if (!callableParamProjectionsEqual(
+            result.getCallableParamProjectionEntries(lhs_entry.projections),
+            result.getCallableParamProjectionEntries(rhs_entry.projections),
+        )) return false;
+        if (!std.meta.eql(lhs_entry.callable_value, rhs_entry.callable_value)) return false;
+    }
+    return true;
+}
+
+fn addCallableParamProjectionEntries(
+    driver: anytype,
+    result: anytype,
+    entries: []const Lambdamono.CallableParamProjection,
+) std.mem.Allocator.Error!Lambdamono.CallableParamProjectionSpan {
+    return result.lambdasolved.addValueProjectionEntries(driver.allocator, entries);
+}
+
+fn appendValueProjectionEntries(
+    driver: anytype,
+    result: anytype,
+    existing: ValueProjection.ProjectionSpan,
+    appended: []const Lambdamono.CallableParamProjection,
+) std.mem.Allocator.Error!ValueProjection.ProjectionSpan {
+    if (existing.isEmpty() and appended.len == 0) return .empty();
+
+    var combined = std.ArrayListUnmanaged(Lambdamono.CallableParamProjection).empty;
+    defer combined.deinit(driver.allocator);
+
+    try combined.appendSlice(driver.allocator, result.getValueProjectionEntries(existing));
+    try combined.appendSlice(driver.allocator, appended);
+    return try addCallableParamProjectionEntries(driver, result, combined.items);
+}
+
+fn appendCallableParamSpecEntry(
+    driver: anytype,
+    result: anytype,
+    out: *std.ArrayListUnmanaged(CallableParamSpecEntry),
+    entry: CallableParamSpecEntry,
+) std.mem.Allocator.Error!void {
+    for (out.items) |existing| {
+        if (existing.param_index != entry.param_index) continue;
+        if (!std.meta.eql(existing.callable_value, entry.callable_value)) continue;
+        if (!callableParamProjectionsEqual(
+            result.getCallableParamProjectionEntries(existing.projections),
+            result.getCallableParamProjectionEntries(entry.projections),
+        )) continue;
+        return;
+    }
+    try out.append(driver.allocator, entry);
+}
+
+fn ensureCallableInstRecord(
+    driver: anytype,
+    result: anytype,
+    active_source_context: SourceContext,
+    template_id: CallableTemplateId,
+    fn_monotype: Monotype.Idx,
+    fn_monotype_module_idx: u32,
+    callable_param_specs: []const CallableParamSpecEntry,
+) std.mem.Allocator.Error!EnsuredCallableInst {
+    const template = result.getCallableTemplate(template_id);
+    const defining_source_context = resolveTemplateDefiningSourceContext(
+        result,
+        active_source_context,
+        template.*,
+    );
+    const canonical_fn_monotype = if (fn_monotype_module_idx == template.module_idx)
+        fn_monotype
+    else
+        try cm.remapMonotypeBetweenModules(
+            driver,
+            result,
+            fn_monotype,
+            fn_monotype_module_idx,
+            template.module_idx,
+        );
+    const canonical_fn_monotype_module_idx = template.module_idx;
+    const subst_id = if (driver.all_module_envs[template.module_idx].types.needsInstantiation(template.type_root))
+        try cm.ensureTypeSubst(
+            driver,
+            result,
+            template.*,
+            canonical_fn_monotype,
+            canonical_fn_monotype_module_idx,
+        )
+    else
+        result.context_mono.getEmptyTypeSubstId();
+
+    for (result.lambdasolved.callable_insts.items, 0..) |existing_callable_inst, idx| {
+        if (existing_callable_inst.template != template_id) continue;
+        if (existing_callable_inst.fn_monotype_module_idx != canonical_fn_monotype_module_idx) continue;
+        if (!std.meta.eql(existing_callable_inst.defining_source_context, defining_source_context)) continue;
+        if (!callableParamSpecsEqual(
+            result,
+            result.getCallableParamSpecEntries(existing_callable_inst.callable_param_specs),
+            callable_param_specs,
+        )) continue;
+        const mono_equal = try cm.monotypesStructurallyEqual(
+            driver,
+            result,
+            existing_callable_inst.fn_monotype,
+            canonical_fn_monotype,
+        );
+        if (mono_equal) {
+            if (existing_callable_inst.subst != subst_id) continue;
+            const existing_id: CallableInstId = @enumFromInt(idx);
+            try result.lambdasolved.ensureDirectCallableVariantGroup(driver.allocator, existing_id);
+            return .{ .id = existing_id, .created = false };
+        }
+    }
+
+    const runtime_kind: Lambdamono.CallableRuntimeKind = switch (template.kind) {
+        .lambda => .lambda,
+        .closure => .closure,
+        .hosted_lambda => .hosted_lambda,
+        .top_level_def => std.debug.panic(
+            "Lambdasolved invariant violated: callable template {d} runtime expr {d} in module {d} had top_level_def kind at instantiation time",
+            .{ @intFromEnum(template_id), @intFromEnum(template.runtime_expr), template.module_idx },
+        ),
+    };
+    const callable_inst_id: CallableInstId = @enumFromInt(result.lambdasolved.callable_insts.items.len);
+    const callable_def_id: Lambdamono.CallableDefId = @enumFromInt(result.lambdasolved.callable_defs.items.len);
+    try result.lambdasolved.callable_defs.append(driver.allocator, .{
+        .module_idx = template.module_idx,
+        .runtime_kind = runtime_kind,
+        .arg_patterns = try result.lambdasolved.appendPatternEntries(
+            driver.allocator,
+            driver.all_module_envs[template.module_idx].store.slicePatterns(template.arg_patterns),
+        ),
+        .runtime_expr = .{
+            .source_context = callableInstSourceContext(callable_inst_id),
+            .module_idx = template.module_idx,
+            .expr_idx = template.runtime_expr,
+        },
+        .body_expr = .{
+            .source_context = callableInstSourceContext(callable_inst_id),
+            .module_idx = template.module_idx,
+            .expr_idx = template.body_expr,
+        },
+        .fn_monotype = cm.resolvedMonotype(canonical_fn_monotype, canonical_fn_monotype_module_idx),
+        .captures = .empty(),
+        .source_region = template.source_region,
+    });
+    try result.lambdasolved.callable_insts.append(driver.allocator, .{
+        .template = template_id,
+        .subst = subst_id,
+        .fn_monotype = canonical_fn_monotype,
+        .fn_monotype_module_idx = canonical_fn_monotype_module_idx,
+        .defining_source_context = defining_source_context,
+        .callable_def = callable_def_id,
+        .runtime_value = .direct_lambda,
+        .callable_param_specs = try result.lambdasolved.addCallableParamSpecEntries(driver.allocator, callable_param_specs),
+    });
+    try result.lambdasolved.ensureDirectCallableVariantGroup(driver.allocator, callable_inst_id);
+    return .{ .id = callable_inst_id, .created = true };
+}
+
+fn recordExprCallableValue(
+    driver: anytype,
+    result: anytype,
+    source_context: SourceContext,
+    module_idx: u32,
+    expr_idx: CIR.Expr.Idx,
+    callable_value: CallableValue,
+) std.mem.Allocator.Error!void {
+    try result.lambdasolved.recordExprCallableValue(
+        driver.allocator,
+        source_context,
+        module_idx,
+        expr_idx,
+        callable_value,
+    );
+}
+
+fn recordExprCallSite(
+    driver: anytype,
+    result: anytype,
+    source_context: SourceContext,
+    module_idx: u32,
+    expr_idx: CIR.Expr.Idx,
+    call_site: CallSite,
+) std.mem.Allocator.Error!void {
+    try result.lambdasolved.recordExprCallSite(
+        driver.allocator,
+        source_context,
+        module_idx,
+        expr_idx,
+        call_site,
+    );
+}
+
+fn recordExprOriginExpr(
+    driver: anytype,
+    result: anytype,
+    source_context: SourceContext,
+    module_idx: u32,
+    expr_idx: CIR.Expr.Idx,
+    expr_ref: ExprRef,
+) std.mem.Allocator.Error!void {
+    const canonical_ref = blk: {
+        const origin = result.getExprOriginExpr(expr_ref.source_context, expr_ref.module_idx, expr_ref.expr_idx) orelse break :blk expr_ref;
+        if (result.getExprOriginExpr(origin.source_context, origin.module_idx, origin.expr_idx) != null) {
+            std.debug.panic(
+                "Lambdasolved invariant violated: expr value-origin for ctx={s} module={d} expr={d} was not canonical",
+                .{
+                    @tagName(expr_ref.source_context),
+                    expr_ref.module_idx,
+                    @intFromEnum(expr_ref.expr_idx),
+                },
+            );
+        }
+        break :blk ExprRef{
+            .source_context = origin.source_context,
+            .module_idx = origin.module_idx,
+            .expr_idx = origin.expr_idx,
+            .projections = try appendValueProjectionEntries(
+                driver,
+                result,
+                origin.projections,
+                result.getValueProjectionEntries(expr_ref.projections),
+            ),
+        };
+    };
+    try result.lambdasolved.recordExprOriginExpr(
+        driver.allocator,
+        source_context,
+        module_idx,
+        expr_idx,
+        canonical_ref,
+    );
+}
+
+fn recordExprSourceExpr(
+    driver: anytype,
+    result: anytype,
+    source_context: SourceContext,
+    module_idx: u32,
+    expr_idx: CIR.Expr.Idx,
+    source: ExprRef,
+) std.mem.Allocator.Error!void {
+    try recordExprOriginExpr(driver, result, source_context, module_idx, expr_idx, source);
+}
+
+fn recordExprLookupResolution(
+    driver: anytype,
+    result: anytype,
+    source_context: SourceContext,
+    module_idx: u32,
+    expr_idx: CIR.Expr.Idx,
+    lookup_resolution: Lambdamono.LookupResolution,
+) std.mem.Allocator.Error!void {
+    try result.lambdasolved.recordExprLookupResolution(
+        driver.allocator,
+        source_context,
+        module_idx,
+        expr_idx,
+        lookup_resolution,
+    );
+}
+
+fn recordDispatchExprTarget(
+    driver: anytype,
+    result: anytype,
+    source_context: SourceContext,
+    module_idx: u32,
+    expr_idx: CIR.Expr.Idx,
+    dispatch_target: DispatchSolved.DispatchExprTarget,
+) std.mem.Allocator.Error!void {
+    try result.dispatch_solved.recordDispatchExprTarget(
+        driver.allocator,
+        source_context,
+        module_idx,
+        expr_idx,
+        dispatch_target,
+    );
+}
+
+fn recordDispatchExprIntrinsic(
+    driver: anytype,
+    result: anytype,
+    source_context: SourceContext,
+    module_idx: u32,
+    expr_idx: CIR.Expr.Idx,
+    dispatch_intrinsic: DispatchIntrinsic,
+) std.mem.Allocator.Error!void {
+    try result.lambdasolved.recordExprDispatchIntrinsic(
+        driver.allocator,
+        source_context,
+        module_idx,
+        expr_idx,
+        dispatch_intrinsic,
+    );
+}
+
+fn captureFieldsEqual(lhs: []const CaptureField, rhs: []const CaptureField) bool {
+    if (lhs.len != rhs.len) return false;
+    for (lhs, rhs) |lhs_field, rhs_field| {
+        if (!std.meta.eql(lhs_field, rhs_field)) return false;
+    }
+    return true;
+}
+
+fn updateCallableDefRuntimeSemantics(
+    driver: anytype,
+    result: anytype,
+    callable_inst_id: CallableInstId,
+    runtime_expr_ref: ExprRef,
+    body_expr_ref: ExprRef,
+    capture_fields: []const CaptureField,
+    runtime_value: RuntimeValue,
+) std.mem.Allocator.Error!void {
+    const callable_inst = result.getCallableInst(callable_inst_id);
+    const callable_def = result.lambdasolved.getCallableDefMut(callable_inst.callable_def);
+
+    if (!std.meta.eql(callable_def.runtime_expr, runtime_expr_ref)) {
+        if (std.debug.runtime_safety and callableInstHasRealizedRuntimeExpr(result, callable_inst_id)) {
+            std.debug.panic(
+                "Lambdasolved invariant violated: callable inst {d} attempted to rewrite finalized runtime expr",
+                .{@intFromEnum(callable_inst_id)},
+            );
+        }
+        callable_def.runtime_expr = runtime_expr_ref;
+    }
+    if (!std.meta.eql(callable_def.body_expr, body_expr_ref)) {
+        if (std.debug.runtime_safety and callableInstHasRealizedRuntimeExpr(result, callable_inst_id)) {
+            std.debug.panic(
+                "Lambdasolved invariant violated: callable inst {d} attempted to rewrite finalized body expr",
+                .{@intFromEnum(callable_inst_id)},
+            );
+        }
+        callable_def.body_expr = body_expr_ref;
+    }
+
+    const existing_capture_fields = result.getCaptureFields(callable_def.captures);
+    callable_def.captures = if (capture_fields.len == 0)
+        .empty()
+    else if (captureFieldsEqual(existing_capture_fields, capture_fields))
+        callable_def.captures
+    else if (!callable_def.captures.isEmpty()) {
+        if (std.debug.runtime_safety) {
+            std.debug.panic(
+                "Lambdasolved invariant violated: callable inst {d} attempted to rewrite finalized capture fields",
+                .{@intFromEnum(callable_inst_id)},
+            );
+        }
+        unreachable;
+    } else try result.lambdasolved.appendCaptureFields(driver.allocator, capture_fields);
+
+    if (!std.meta.eql(result.lambdasolved.callable_insts.items[@intFromEnum(callable_inst_id)].runtime_value, runtime_value)) {
+        result.lambdasolved.callable_insts.items[@intFromEnum(callable_inst_id)].runtime_value = runtime_value;
+    }
 }
 
 fn calleeUsesFirstClassCallableValuePath(expr: CIR.Expr) bool {
@@ -2981,14 +3380,7 @@ fn specializeDispatchExactCallable(
 ) std.mem.Allocator.Error!?CallableInstId {
     var actual_args = std.ArrayList(CIR.Expr.Idx).empty;
     defer actual_args.deinit(driver.allocator);
-    try Lambdamono.appendDispatchActualArgsFromProgram(
-        driver,
-        result,
-        thread.requireSourceContext(),
-        module_idx,
-        expr_idx,
-        &actual_args,
-    );
+    try appendDispatchActualArgsFromExpr(driver, module_idx, expr, &actual_args);
     const defining_source_context = requireTemplateDemandSourceContextForExpr(
         driver,
         root_analysis,
@@ -3044,6 +3436,29 @@ fn specializeDispatchExactCallable(
         callable_param_specs.items,
     );
     return callable_inst_id;
+}
+
+fn appendDispatchActualArgsFromExpr(
+    driver: anytype,
+    module_idx: u32,
+    expr: CIR.Expr,
+    actual_args: *std.ArrayList(CIR.Expr.Idx),
+) std.mem.Allocator.Error!void {
+    const module_env = driver.all_module_envs[module_idx];
+    switch (expr) {
+        .e_binop => |binop_expr| {
+            try actual_args.append(driver.allocator, binop_expr.lhs);
+            try actual_args.append(driver.allocator, binop_expr.rhs);
+        },
+        .e_dot_access => |dot_expr| {
+            try actual_args.append(driver.allocator, dot_expr.receiver);
+            if (dot_expr.args) |args| try actual_args.appendSlice(driver.allocator, module_env.store.sliceExpr(args));
+        },
+        .e_type_var_dispatch => |dispatch_expr| {
+            try actual_args.appendSlice(driver.allocator, module_env.store.sliceExpr(dispatch_expr.args));
+        },
+        else => unreachable,
+    }
 }
 
 fn ensureBuiltinBoxUnboxCallableInst(
@@ -3449,7 +3864,7 @@ const CallableVariantBuilder = struct {
         result: anytype,
         callable_value: CallableValue,
     ) std.mem.Allocator.Error!void {
-        for (result.lambdamono.getCallableValueVariants(callable_value)) |callable_inst_id| {
+        for (result.getCallableValueVariants(callable_value)) |callable_inst_id| {
             try self.includeCallableInst(driver, callable_inst_id);
         }
     }
@@ -3460,7 +3875,7 @@ const CallableVariantBuilder = struct {
         result: anytype,
         call_site: CallSite,
     ) std.mem.Allocator.Error!void {
-        for (result.lambdamono.getCallSiteVariants(call_site)) |callable_inst_id| {
+        for (result.getCallSiteVariants(call_site)) |callable_inst_id| {
             try self.includeCallableInst(driver, callable_inst_id);
         }
     }
@@ -3479,7 +3894,7 @@ const CallableVariantBuilder = struct {
         if (self.variants.items.len == 1) {
             return .{ .direct = self.variants.items[0] };
         }
-        return .{ .packed_fn = try result.lambdamono.makePackedFnForCallableInsts(
+        return .{ .packed_fn = try result.lambdasolved.makePackedFnForCallableInsts(
             driver.allocator,
             driver.all_module_envs,
             driver.current_module_idx,
@@ -3502,7 +3917,7 @@ const CallableVariantBuilder = struct {
         if (self.variants.items.len == 1) {
             return .{ .direct = self.variants.items[0] };
         }
-        return .{ .indirect_call = try result.lambdamono.makeIndirectCallForCallableInsts(
+        return .{ .indirect_call = try result.lambdasolved.makeIndirectCallForCallableInsts(
             driver.allocator,
             driver.all_module_envs,
             driver.current_module_idx,
@@ -3636,11 +4051,11 @@ fn getCallableParamSpecCallableValueForThread(
         if (param_pattern_idx == pattern_idx) break idx;
     } else return null;
 
-    for (result.lambdamono.getCallableParamSpecEntries(result.getCallableInst(resolved_context_callable_inst).callable_param_specs)) |spec| {
+    for (result.getCallableParamSpecEntries(result.getCallableInst(resolved_context_callable_inst).callable_param_specs)) |spec| {
         if (spec.param_index != param_index) continue;
         if (!callableParamProjectionSeqEqual(
             driver,
-            result.lambdamono.getCallableParamProjectionEntries(spec.projections),
+            result.getCallableParamProjectionEntries(spec.projections),
             projections.items,
         )) continue;
         return spec.callable_value;
@@ -3743,7 +4158,7 @@ pub fn resolveExprRefCallableValue(
         expr_ref.source_context,
         expr_ref.module_idx,
         expr_ref.expr_idx,
-        result.lambdamono.getValueProjectionEntries(expr_ref.projections),
+        result.getValueProjectionEntries(expr_ref.projections),
         visiting,
     );
 }
@@ -3772,7 +4187,7 @@ pub fn resolveProjectedExprCallableValue(
     }
 
     if (result.getExprOriginExpr(source_context, module_idx, expr_idx)) |origin| {
-        const combined_projections = try Lambdamono.appendValueProjectionEntries(
+        const combined_projections = try appendValueProjectionEntries(
             driver,
             result,
             origin.projections,
@@ -3785,7 +4200,7 @@ pub fn resolveProjectedExprCallableValue(
             origin.source_context,
             origin.module_idx,
             origin.expr_idx,
-            result.lambdamono.getValueProjectionEntries(combined_projections),
+            result.getValueProjectionEntries(combined_projections),
             visiting,
         );
     }
@@ -4323,7 +4738,7 @@ fn propagateDemandedValueMonotypeToExprRef(
         expr_ref.source_context,
         expr_ref.module_idx,
         expr_ref.expr_idx,
-        result.lambdamono.getValueProjectionEntries(expr_ref.projections),
+        result.getValueProjectionEntries(expr_ref.projections),
         monotype,
         monotype_module_idx,
     );
@@ -5545,7 +5960,7 @@ pub fn extendExprRef(
         .source_context = source.source_context,
         .module_idx = source.module_idx,
         .expr_idx = source.expr_idx,
-        .projections = try Lambdamono.appendValueProjectionEntries(
+        .projections = try appendValueProjectionEntries(
             driver,
             result,
             source.projections,
@@ -5897,7 +6312,7 @@ fn materializeExprCallableValueWithKnownFnMonotype(
         return .nested_callable_value_shape;
     }
 
-    const callable_inst_id = (try Lambdamono.ensureCallableInstRecord(
+    const callable_inst_id = (try ensureCallableInstRecord(
         driver,
         result,
         source_context,
@@ -5987,7 +6402,7 @@ pub fn materializeLookupExprCallableValue(
         if (try monotypeContainsNestedCallableValueShape(driver, result, fn_monotype)) {
             return;
         }
-        break :blk (try Lambdamono.ensureCallableInstRecord(
+        break :blk (try ensureCallableInstRecord(
             driver,
             result,
             thread.requireSourceContext(),
@@ -6045,7 +6460,7 @@ pub fn setExprDirectCallable(
     expr_idx: CIR.Expr.Idx,
     callable_inst_id: CallableInstId,
 ) std.mem.Allocator.Error!void {
-    try Lambdamono.recordExprCallableValue(
+    try recordExprCallableValue(
         driver,
         result,
         source_context,
@@ -6081,7 +6496,7 @@ pub fn setExprCallableValue(
     expr_idx: CIR.Expr.Idx,
     callable_value: anytype,
 ) std.mem.Allocator.Error!void {
-    try Lambdamono.recordExprCallableValue(driver, result, source_context, module_idx, expr_idx, callable_value);
+    try recordExprCallableValue(driver, result, source_context, module_idx, expr_idx, callable_value);
 }
 
 pub fn setExprDirectCallSite(
@@ -6092,7 +6507,7 @@ pub fn setExprDirectCallSite(
     expr_idx: CIR.Expr.Idx,
     callable_inst_id: CallableInstId,
 ) std.mem.Allocator.Error!void {
-    return Lambdamono.recordExprCallSite(
+    return recordExprCallSite(
         driver,
         result,
         source_context,
@@ -6117,8 +6532,8 @@ fn realizeLookupExprSemantics(
         .e_lookup_local => |lookup| {
             if (thread.lookupValueBinding(module_idx, lookup.pattern_idx)) |source| {
                 if (bindingSourceExprRef(source)) |source_expr_ref| {
-                    try Lambdamono.recordExprSourceExpr(driver, result, source_context, module_idx, expr_idx, source_expr_ref);
-                    try Lambdamono.recordExprLookupResolution(
+                    try recordExprSourceExpr(driver, result, source_context, module_idx, expr_idx, source_expr_ref);
+                    try recordExprLookupResolution(
                         driver,
                         result,
                         source_context,
@@ -6128,7 +6543,7 @@ fn realizeLookupExprSemantics(
                     );
                 }
             } else if (findDefByPatternInModule(module_env, lookup.pattern_idx)) |def_idx| {
-                try Lambdamono.recordExprLookupResolution(
+                try recordExprLookupResolution(
                     driver,
                     result,
                     source_context,
@@ -6152,7 +6567,7 @@ fn realizeLookupExprSemantics(
                 .module_idx = target_module_idx,
                 .expr_idx = def.expr,
             } };
-            try Lambdamono.recordExprLookupResolution(
+            try recordExprLookupResolution(
                 driver,
                 result,
                 source_context,
@@ -6163,7 +6578,7 @@ fn realizeLookupExprSemantics(
                     .def_idx = def_idx,
                 } },
             );
-            try Lambdamono.recordExprSourceExpr(
+            try recordExprSourceExpr(
                 driver,
                 result,
                 source_context,
@@ -6184,7 +6599,7 @@ fn realizeLookupExprSemantics(
                 .module_idx = target.module_idx,
                 .expr_idx = def.expr,
             } };
-            try Lambdamono.recordExprLookupResolution(
+            try recordExprLookupResolution(
                 driver,
                 result,
                 source_context,
@@ -6195,7 +6610,7 @@ fn realizeLookupExprSemantics(
                     .def_idx = target.def_idx,
                 } },
             );
-            try Lambdamono.recordExprSourceExpr(
+            try recordExprSourceExpr(
                 driver,
                 result,
                 source_context,
@@ -6379,7 +6794,7 @@ fn scanCirExprChildren(
             }
             try propagateDemandedValueResultMonotypeToChild(driver, result, block_thread, module_idx, expr_idx, block_expr.final_expr);
             try scanCirValueExprWithDirectCallResolution(driver, root_analysis, result, block_thread, module_idx, block_expr.final_expr, resolve_direct_calls);
-            try Lambdamono.recordExprSourceExpr(
+            try recordExprSourceExpr(
                 driver,
                 result,
                 block_thread.requireSourceContext(),
@@ -6391,7 +6806,7 @@ fn scanCirExprChildren(
         .e_tag => |tag_expr| try scanCirValueExprSpanWithDirectCallResolution(driver, root_analysis, result, thread, module_idx, module_env.store.sliceExpr(tag_expr.args), resolve_direct_calls),
         .e_nominal => |nominal_expr| {
             try scanCirValueExprWithDirectCallResolution(driver, root_analysis, result, thread, module_idx, nominal_expr.backing_expr, resolve_direct_calls);
-            try Lambdamono.recordExprSourceExpr(
+            try recordExprSourceExpr(
                 driver,
                 result,
                 thread.requireSourceContext(),
@@ -6402,7 +6817,7 @@ fn scanCirExprChildren(
         },
         .e_nominal_external => |nominal_expr| {
             try scanCirValueExprWithDirectCallResolution(driver, root_analysis, result, thread, module_idx, nominal_expr.backing_expr, resolve_direct_calls);
-            try Lambdamono.recordExprSourceExpr(
+            try recordExprSourceExpr(
                 driver,
                 result,
                 thread.requireSourceContext(),
@@ -6460,19 +6875,19 @@ fn scanCirExprChildren(
                     .module_idx = module_idx,
                     .ident = dot_expr.field_name,
                 } });
-                try Lambdamono.recordExprSourceExpr(driver, result, thread.requireSourceContext(), module_idx, expr_idx, field_source);
+                try recordExprSourceExpr(driver, result, thread.requireSourceContext(), module_idx, expr_idx, field_source);
             }
         },
         .e_tuple_access => |tuple_access| {
             try scanCirExprWithDirectCallResolution(driver, root_analysis, result, thread, module_idx, tuple_access.tuple, resolve_direct_calls);
             const tuple_source = exprRefAliasOrSelf(result, thread.requireSourceContext(), module_idx, tuple_access.tuple);
             const elem_source = try extendExprRef(driver, result, tuple_source, .{ .tuple_elem = tuple_access.elem_index });
-            try Lambdamono.recordExprSourceExpr(driver, result, thread.requireSourceContext(), module_idx, expr_idx, elem_source);
+            try recordExprSourceExpr(driver, result, thread.requireSourceContext(), module_idx, expr_idx, elem_source);
         },
         .e_dbg => |dbg_expr| {
             try propagateDemandedValueResultMonotypeToChild(driver, result, thread, module_idx, expr_idx, dbg_expr.expr);
             try scanCirValueExprWithDirectCallResolution(driver, root_analysis, result, thread, module_idx, dbg_expr.expr, resolve_direct_calls);
-            try Lambdamono.recordExprSourceExpr(
+            try recordExprSourceExpr(
                 driver,
                 result,
                 thread.requireSourceContext(),
@@ -6484,7 +6899,7 @@ fn scanCirExprChildren(
         .e_expect => |expect_expr| {
             try propagateDemandedValueResultMonotypeToChild(driver, result, thread, module_idx, expr_idx, expect_expr.body);
             try scanCirValueExprWithDirectCallResolution(driver, root_analysis, result, thread, module_idx, expect_expr.body, resolve_direct_calls);
-            try Lambdamono.recordExprSourceExpr(
+            try recordExprSourceExpr(
                 driver,
                 result,
                 thread.requireSourceContext(),
@@ -6495,7 +6910,7 @@ fn scanCirExprChildren(
         },
         .e_return => |return_expr| {
             try scanCirValueExprWithDirectCallResolution(driver, root_analysis, result, thread, module_idx, return_expr.expr, resolve_direct_calls);
-            try Lambdamono.recordExprSourceExpr(
+            try recordExprSourceExpr(
                 driver,
                 result,
                 thread.requireSourceContext(),
@@ -6659,9 +7074,9 @@ pub fn callableInstSatisfiesCallSiteRequirements(
 
     if (desired_fn_monotype) |desired| {
         if (desired.isNone()) {
-            return Lambdamono.callableParamSpecsEqual(
+            return callableParamSpecsEqual(
                 result,
-                result.lambdamono.getCallableParamSpecEntries(result.getCallableInst(callable_inst_id).callable_param_specs),
+                result.getCallableParamSpecEntries(result.getCallableInst(callable_inst_id).callable_param_specs),
                 required_callable_param_specs,
             );
         }
@@ -6675,9 +7090,9 @@ pub fn callableInstSatisfiesCallSiteRequirements(
         )) return false;
     }
 
-    return Lambdamono.callableParamSpecsEqual(
+    return callableParamSpecsEqual(
         result,
-        result.lambdamono.getCallableParamSpecEntries(result.getCallableInst(callable_inst_id).callable_param_specs),
+        result.getCallableParamSpecEntries(result.getCallableInst(callable_inst_id).callable_param_specs),
         required_callable_param_specs,
     );
 }
@@ -6825,7 +7240,7 @@ pub fn resolveDirectCallSite(
     }
     if (result.getExprLowLevelOp(thread.requireSourceContext(), module_idx, call_expr.func)) |low_level_op| {
         const arg_exprs = module_env.store.sliceExpr(call_expr.args);
-        try Lambdamono.recordExprCallSite(
+        try recordExprCallSite(
             driver,
             result,
             thread.requireSourceContext(),
@@ -7009,7 +7424,7 @@ pub fn resolveDirectCallSite(
                         @tagName(thread.requireSourceContext()),
                         if (resolved_template_id) |template_id| @intFromEnum(template_id) else null,
                         if (template_source_context) |ctx| @tagName(ctx) else null,
-                        result.lambdamono.getCallableVariantGroupVariants(indirect.packed_fn.variant_group).len,
+                        result.getIndirectCallVariants(indirect).len,
                     },
                 ),
                 .low_level => unreachable,
@@ -7060,7 +7475,7 @@ pub fn resolveDirectCallSite(
 
     if (getValueExprCallableValueForThread(driver, root_analysis, result, thread, module_idx, callee_expr_idx)) |callable_value| {
         var all_satisfy = true;
-        for (result.lambdamono.getCallableValueVariants(callable_value)) |callable_inst_id| {
+        for (result.getCallableValueVariants(callable_value)) |callable_inst_id| {
             if (!try callableInstSatisfiesCallSiteRequirements(
                 driver,
                 result,
@@ -7082,7 +7497,7 @@ pub fn resolveDirectCallSite(
             var call_variant_builder = CallableVariantBuilder.init();
             defer call_variant_builder.deinit(driver.allocator);
             try call_variant_builder.includeCallableValue(driver, result, callable_value);
-            try Lambdamono.recordExprCallSite(
+            try recordExprCallSite(
                 driver,
                 result,
                 thread.requireSourceContext(),
@@ -7090,7 +7505,7 @@ pub fn resolveDirectCallSite(
                 call_expr_idx,
                 (try call_variant_builder.finishCallSite(driver, result)).?,
             );
-            for (result.lambdamono.getCallableValueVariants(callable_value)) |callable_inst_id| {
+            for (result.getCallableValueVariants(callable_value)) |callable_inst_id| {
                 try recordCallResultCallableValueFromCallee(
                     driver,
                     root_analysis,
@@ -7424,7 +7839,7 @@ fn realizeStructuredExprCallableSemantics(
                 else
                     null;
                 const callable_param_spec_count: ?usize = if (source_context_callable_inst) |context_callable_inst|
-                    result.lambdamono.getCallableParamSpecEntries(result.getCallableInst(context_callable_inst).callable_param_specs).len
+                    result.getCallableParamSpecEntries(result.getCallableInst(context_callable_inst).callable_param_specs).len
                 else
                     null;
                 const current_callable_template = if (source_context_callable_inst) |context_callable_inst|
@@ -7526,7 +7941,7 @@ fn realizeStructuredExprCallableSemantics(
                 );
             };
 
-            for (result.lambdamono.getCallSiteVariants(resolved_call_site)) |callee_callable_inst_id| {
+            for (result.getCallSiteVariants(resolved_call_site)) |callee_callable_inst_id| {
                 try recordCallResultCallableValueFromCallee(
                     driver,
                     root_analysis,
@@ -7827,7 +8242,7 @@ fn realizeDispatchExprSemantics(
         module_idx,
         resolved_target,
     );
-    try Lambdamono.recordDispatchExprTarget(
+    try recordDispatchExprTarget(
         driver,
         result,
         thread.requireSourceContext(),
@@ -8056,14 +8471,8 @@ pub fn typeVarDispatchHandledWithoutCallableInst(
 
     var arg_exprs = std.ArrayList(CIR.Expr.Idx).empty;
     defer arg_exprs.deinit(driver.allocator);
-    try Lambdamono.appendDispatchActualArgsFromProgram(
-        driver,
-        result,
-        thread.requireSourceContext(),
-        module_idx,
-        expr_idx,
-        &arg_exprs,
-    );
+    _ = result;
+    try appendDispatchActualArgsFromExpr(driver, module_idx, .{ .e_type_var_dispatch = dispatch_expr }, &arg_exprs);
     if (arg_exprs.items.len != 1) return false;
 
     const arg_monotype = (try cm.resolveExprMonotype(driver, result, thread, module_idx, arg_exprs.items[0])) orelse return false;
@@ -8077,7 +8486,7 @@ pub fn typeVarDispatchHandledWithoutCallableInst(
         else => return false,
     };
 
-    try Lambdamono.recordDispatchExprIntrinsic(
+    try recordDispatchExprIntrinsic(
         driver,
         result,
         thread.requireSourceContext(),
@@ -8291,14 +8700,7 @@ pub fn resolveDispatchTargetForExpr(
                 .e_type_var_dispatch => blk: {
                     var args = std.ArrayList(CIR.Expr.Idx).empty;
                     defer args.deinit(driver.allocator);
-                    try Lambdamono.appendDispatchActualArgsFromProgram(
-                        driver,
-                        result,
-                        thread.requireSourceContext(),
-                        module_idx,
-                        expr_idx,
-                        &args,
-                    );
+                    try appendDispatchActualArgsFromExpr(driver, module_idx, .{ .e_type_var_dispatch = dispatch_expr }, &args);
                     if (args.items.len == 0) break :blk null;
                     break :blk try cm.resolveExprMonotypeResolved(driver, result, thread, module_idx, args.items[0]);
                 },
@@ -8577,14 +8979,7 @@ pub fn bindCurrentDispatchFromCallableInst(
 
     var actual_args = std.ArrayList(CIR.Expr.Idx).empty;
     defer actual_args.deinit(driver.allocator);
-    try Lambdamono.appendDispatchActualArgsFromProgram(
-        driver,
-        result,
-        thread.requireSourceContext(),
-        module_idx,
-        expr_idx,
-        &actual_args,
-    );
+    try appendDispatchActualArgsFromExpr(driver, module_idx, expr, &actual_args);
 
     if (actual_args.items.len != fn_mono.args.len) unreachable;
 
@@ -8638,7 +9033,7 @@ pub fn commitDirectDispatchExprSemantics(
         unreachable;
     };
     if (dispatch_target) |target_def| {
-        try Lambdamono.recordDispatchExprTarget(
+        try recordDispatchExprTarget(
             driver,
             result,
             thread.requireSourceContext(),
@@ -8667,27 +9062,550 @@ pub fn commitDirectDispatchExprSemantics(
     );
     var actual_args = std.ArrayList(CIR.Expr.Idx).empty;
     defer actual_args.deinit(driver.allocator);
-    try Lambdamono.appendDispatchActualArgsFromProgram(
-        driver,
-        result,
-        thread.requireSourceContext(),
-        module_idx,
-        expr_idx,
-        &actual_args,
-    );
+    try appendDispatchActualArgsFromExpr(driver, module_idx, expr, &actual_args);
     try prepareCallableArgsForCallableInst(driver, result, thread, module_idx, actual_args.items, callable_inst_id);
     try realizeCallableArgSemanticsSlice(driver, root_analysis, result, thread, module_idx, actual_args.items);
     try bindCurrentDispatchFromCallableInst(driver, result, thread, module_idx, expr_idx, callable_inst_id);
 }
 
+const CallableVariantGroup = struct {
+    variants: Lambdamono.CallableVariantSpan,
+};
+
+pub const SolvedExprSemantics = struct {
+    callable: ?Lambdamono.ExprCallableSemantics = null,
+    origin: Lambdamono.ValueOrigin = .self,
+    call: ?CallSite = null,
+    lookup: ?Lambdamono.LookupResolution = null,
+    dispatch_intrinsic: ?DispatchIntrinsic = null,
+};
+
 pub const Result = struct {
+    expr_semantics_by_key: std.AutoHashMapUnmanaged(ContextExprKey, SolvedExprSemantics),
+    callable_insts: std.ArrayListUnmanaged(Lambdamono.CallableInst),
+    callable_defs: std.ArrayListUnmanaged(Lambdamono.CallableDef),
+    callable_param_spec_entries: std.ArrayListUnmanaged(Lambdamono.CallableParamSpecEntry),
+    value_projection_entries: std.ArrayListUnmanaged(Lambdamono.CallableParamProjection),
+    pattern_entries: std.ArrayListUnmanaged(CIR.Pattern.Idx),
+    capture_fields: std.ArrayListUnmanaged(Lambdamono.CaptureField),
+    callable_variant_groups: std.ArrayListUnmanaged(CallableVariantGroup),
+    direct_callable_variant_group_ids_by_callable_inst: std.AutoHashMapUnmanaged(CallableInstId, Lambdamono.CallableVariantGroupId),
+    callable_variant_entries: std.ArrayListUnmanaged(CallableInstId),
+
     pub fn init(allocator: std.mem.Allocator) !Result {
         _ = allocator;
-        return .{};
+        return .{
+            .expr_semantics_by_key = .empty,
+            .callable_insts = .empty,
+            .callable_defs = .empty,
+            .callable_param_spec_entries = .empty,
+            .value_projection_entries = .empty,
+            .pattern_entries = .empty,
+            .capture_fields = .empty,
+            .callable_variant_groups = .empty,
+            .direct_callable_variant_group_ids_by_callable_inst = .empty,
+            .callable_variant_entries = .empty,
+        };
     }
 
     pub fn deinit(self: *Result, allocator: std.mem.Allocator) void {
-        _ = self;
-        _ = allocator;
+        self.expr_semantics_by_key.deinit(allocator);
+        self.callable_insts.deinit(allocator);
+        self.callable_defs.deinit(allocator);
+        self.callable_param_spec_entries.deinit(allocator);
+        self.value_projection_entries.deinit(allocator);
+        self.pattern_entries.deinit(allocator);
+        self.capture_fields.deinit(allocator);
+        self.callable_variant_groups.deinit(allocator);
+        self.direct_callable_variant_group_ids_by_callable_inst.deinit(allocator);
+        self.callable_variant_entries.deinit(allocator);
+    }
+
+    pub fn getExprSemantics(
+        self: *const Result,
+        source_context: SourceContext,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) ?SolvedExprSemantics {
+        return self.expr_semantics_by_key.get(cm.Result.contextExprKey(source_context, module_idx, expr_idx));
+    }
+
+    pub fn getExprSemanticsPtr(
+        self: *Result,
+        allocator: std.mem.Allocator,
+        source_context: SourceContext,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) std.mem.Allocator.Error!*SolvedExprSemantics {
+        const entry = try self.expr_semantics_by_key.getOrPut(allocator, cm.Result.contextExprKey(source_context, module_idx, expr_idx));
+        if (!entry.found_existing) entry.value_ptr.* = .{};
+        return entry.value_ptr;
+    }
+
+    pub fn getExprCallableValue(
+        self: *const Result,
+        source_context: SourceContext,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) ?CallableValue {
+        const semantics = self.getExprSemantics(source_context, module_idx, expr_idx) orelse return null;
+        return switch (semantics.callable orelse return null) {
+            .callable => |callable_value| callable_value,
+            .intro => |intro| intro.callable_value,
+        };
+    }
+
+    pub fn getExprIntroCallableInst(
+        self: *const Result,
+        source_context: SourceContext,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) ?CallableInstId {
+        const semantics = self.getExprSemantics(source_context, module_idx, expr_idx) orelse return null;
+        return switch (semantics.callable orelse return null) {
+            .intro => |intro| intro.callable_inst,
+            .callable => null,
+        };
+    }
+
+    pub fn getExprOriginExpr(
+        self: *const Result,
+        source_context: SourceContext,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) ?ExprRef {
+        const semantics = self.getExprSemantics(source_context, module_idx, expr_idx) orelse return null;
+        return switch (semantics.origin) {
+            .self => null,
+            .expr => |origin| origin,
+        };
+    }
+
+    pub fn getExprCallSite(
+        self: *const Result,
+        source_context: SourceContext,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) ?CallSite {
+        const semantics = self.getExprSemantics(source_context, module_idx, expr_idx) orelse return null;
+        return semantics.call;
+    }
+
+    pub fn getExprLookupResolution(
+        self: *const Result,
+        source_context: SourceContext,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) ?Lambdamono.LookupResolution {
+        const semantics = self.getExprSemantics(source_context, module_idx, expr_idx) orelse return null;
+        return semantics.lookup;
+    }
+
+    pub fn getExprDispatchIntrinsic(
+        self: *const Result,
+        source_context: SourceContext,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) ?DispatchIntrinsic {
+        const semantics = self.getExprSemantics(source_context, module_idx, expr_idx) orelse return null;
+        return semantics.dispatch_intrinsic;
+    }
+
+    pub fn recordExprCallableValue(
+        self: *Result,
+        allocator: std.mem.Allocator,
+        source_context: SourceContext,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+        callable_value: CallableValue,
+    ) std.mem.Allocator.Error!void {
+        const semantics = try self.getExprSemanticsPtr(allocator, source_context, module_idx, expr_idx);
+        const owns_callable_intro = self.getExprIntroCallableInst(source_context, module_idx, expr_idx) != null or self.getExprCallableValue(source_context, module_idx, expr_idx) != null;
+        const next_callable: Lambdamono.ExprCallableSemantics = switch (callable_value) {
+            .direct => |callable_inst_id| if (self.getExprIntroCallableInst(source_context, module_idx, expr_idx) != null)
+                .{ .intro = .{ .callable_value = callable_value, .callable_inst = callable_inst_id } }
+            else
+                .{ .callable = callable_value },
+            .packed_fn => |packed_fn| blk: {
+                if (owns_callable_intro) {
+                    switch (semantics.callable orelse break :blk .{ .callable = callable_value }) {
+                        .callable => |existing_callable_value| switch (existing_callable_value) {
+                            .direct => |callable_inst_id| break :blk .{ .intro = .{
+                                .callable_value = .{ .packed_fn = packed_fn },
+                                .callable_inst = callable_inst_id,
+                            } },
+                            .packed_fn => {},
+                        },
+                        .intro => |existing_intro| break :blk .{ .intro = .{
+                            .callable_value = .{ .packed_fn = packed_fn },
+                            .callable_inst = existing_intro.callable_inst,
+                        } },
+                    }
+                }
+                break :blk .{ .callable = callable_value };
+            },
+        };
+        semantics.callable = next_callable;
+    }
+
+    pub fn recordExprOriginExpr(
+        self: *Result,
+        allocator: std.mem.Allocator,
+        source_context: SourceContext,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+        expr_ref: ExprRef,
+    ) std.mem.Allocator.Error!void {
+        const semantics = try self.getExprSemanticsPtr(allocator, source_context, module_idx, expr_idx);
+        semantics.origin = .{ .expr = expr_ref };
+    }
+
+    pub fn recordExprCallSite(
+        self: *Result,
+        allocator: std.mem.Allocator,
+        source_context: SourceContext,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+        call_site: CallSite,
+    ) std.mem.Allocator.Error!void {
+        const semantics = try self.getExprSemanticsPtr(allocator, source_context, module_idx, expr_idx);
+        semantics.call = call_site;
+    }
+
+    pub fn recordExprLookupResolution(
+        self: *Result,
+        allocator: std.mem.Allocator,
+        source_context: SourceContext,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+        lookup_resolution: Lambdamono.LookupResolution,
+    ) std.mem.Allocator.Error!void {
+        const semantics = try self.getExprSemanticsPtr(allocator, source_context, module_idx, expr_idx);
+        semantics.lookup = lookup_resolution;
+    }
+
+    pub fn recordExprDispatchIntrinsic(
+        self: *Result,
+        allocator: std.mem.Allocator,
+        source_context: SourceContext,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+        intrinsic: DispatchIntrinsic,
+    ) std.mem.Allocator.Error!void {
+        const semantics = try self.getExprSemanticsPtr(allocator, source_context, module_idx, expr_idx);
+        semantics.dispatch_intrinsic = intrinsic;
+    }
+
+    pub fn getCallableInst(self: *const Result, callable_inst_id: CallableInstId) *const Lambdamono.CallableInst {
+        return &self.callable_insts.items[@intFromEnum(callable_inst_id)];
+    }
+
+    pub fn getCallableInsts(self: *const Result) []const Lambdamono.CallableInst {
+        return self.callable_insts.items;
+    }
+
+    pub fn getCallableDef(self: *const Result, callable_def_id: Lambdamono.CallableDefId) *const Lambdamono.CallableDef {
+        return &self.callable_defs.items[@intFromEnum(callable_def_id)];
+    }
+
+    pub fn getCallableDefMut(self: *Result, callable_def_id: Lambdamono.CallableDefId) *Lambdamono.CallableDef {
+        return &self.callable_defs.items[@intFromEnum(callable_def_id)];
+    }
+
+    pub fn appendCaptureFields(
+        self: *Result,
+        allocator: std.mem.Allocator,
+        capture_fields: []const Lambdamono.CaptureField,
+    ) std.mem.Allocator.Error!Lambdamono.CaptureFieldSpan {
+        if (capture_fields.len == 0) return .empty();
+        const start: u32 = @intCast(self.capture_fields.items.len);
+        try self.capture_fields.appendSlice(allocator, capture_fields);
+        return .{ .start = start, .len = @intCast(capture_fields.len) };
+    }
+
+    pub fn getCaptureFields(self: *const Result, span: Lambdamono.CaptureFieldSpan) []const Lambdamono.CaptureField {
+        if (span.len == 0) return &.{};
+        return self.capture_fields.items[span.start..][0..span.len];
+    }
+
+    pub fn appendPatternEntries(
+        self: *Result,
+        allocator: std.mem.Allocator,
+        pattern_ids: []const CIR.Pattern.Idx,
+    ) std.mem.Allocator.Error!Lambdamono.PatternIdSpan {
+        const start: u32 = @intCast(self.pattern_entries.items.len);
+        try self.pattern_entries.appendSlice(allocator, pattern_ids);
+        return .{ .start = start, .len = @intCast(pattern_ids.len) };
+    }
+
+    pub fn getPatternIds(self: *const Result, span: Lambdamono.PatternIdSpan) []const CIR.Pattern.Idx {
+        if (span.len == 0) return &.{};
+        return self.pattern_entries.items[span.start..][0..span.len];
+    }
+
+    pub fn addCallableParamSpecEntries(
+        self: *Result,
+        allocator: std.mem.Allocator,
+        entries: []const Lambdamono.CallableParamSpecEntry,
+    ) std.mem.Allocator.Error!Lambdamono.CallableParamSpecSpan {
+        if (entries.len == 0) return .empty();
+        const start: u32 = @intCast(self.callable_param_spec_entries.items.len);
+        try self.callable_param_spec_entries.appendSlice(allocator, entries);
+        return .{ .start = start, .len = @intCast(entries.len) };
+    }
+
+    pub fn getCallableParamSpecEntries(
+        self: *const Result,
+        span: Lambdamono.CallableParamSpecSpan,
+    ) []const Lambdamono.CallableParamSpecEntry {
+        if (span.len == 0) return &.{};
+        return self.callable_param_spec_entries.items[span.start..][0..span.len];
+    }
+
+    pub fn addValueProjectionEntries(
+        self: *Result,
+        allocator: std.mem.Allocator,
+        entries: []const Lambdamono.CallableParamProjection,
+    ) std.mem.Allocator.Error!Lambdamono.CallableParamProjectionSpan {
+        if (entries.len == 0) return .empty();
+        const start: u32 = @intCast(self.value_projection_entries.items.len);
+        try self.value_projection_entries.appendSlice(allocator, entries);
+        return .{ .start = start, .len = @intCast(entries.len) };
+    }
+
+    pub fn getCallableParamProjectionEntries(
+        self: *const Result,
+        span: Lambdamono.CallableParamProjectionSpan,
+    ) []const Lambdamono.CallableParamProjection {
+        if (span.len == 0) return &.{};
+        return self.value_projection_entries.items[span.start..][0..span.len];
+    }
+
+    pub fn getValueProjectionEntries(
+        self: *const Result,
+        span: ValueProjection.ProjectionSpan,
+    ) []const ValueProjection.Projection {
+        if (span.len == 0) return &.{};
+        return self.value_projection_entries.items[span.start..][0..span.len];
+    }
+
+    pub fn internCallableVariantGroup(
+        self: *Result,
+        allocator: std.mem.Allocator,
+        variants: []const CallableInstId,
+    ) std.mem.Allocator.Error!Lambdamono.CallableVariantGroupId {
+        for (self.callable_variant_groups.items, 0..) |_, idx| {
+            const existing_variants = self.getCallableVariantGroupVariants(@enumFromInt(idx));
+            if (existing_variants.len != variants.len) continue;
+            var matches = true;
+            for (existing_variants, variants) |lhs, rhs| {
+                if (lhs != rhs) {
+                    matches = false;
+                    break;
+                }
+            }
+            if (matches) return @enumFromInt(idx);
+        }
+
+        const span: Lambdamono.CallableVariantSpan = if (variants.len == 0)
+            .empty()
+        else blk: {
+            const start: u32 = @intCast(self.callable_variant_entries.items.len);
+            try self.callable_variant_entries.appendSlice(allocator, variants);
+            break :blk .{ .start = start, .len = @intCast(variants.len) };
+        };
+
+        const variant_group_id: Lambdamono.CallableVariantGroupId = @enumFromInt(self.callable_variant_groups.items.len);
+        try self.callable_variant_groups.append(allocator, .{ .variants = span });
+        return variant_group_id;
+    }
+
+    pub fn ensureDirectCallableVariantGroup(
+        self: *Result,
+        allocator: std.mem.Allocator,
+        callable_inst_id: CallableInstId,
+    ) std.mem.Allocator.Error!void {
+        if (self.direct_callable_variant_group_ids_by_callable_inst.contains(callable_inst_id)) return;
+        const variant_group_id = try self.internCallableVariantGroup(allocator, &.{callable_inst_id});
+        try self.direct_callable_variant_group_ids_by_callable_inst.put(allocator, callable_inst_id, variant_group_id);
+    }
+
+    pub fn getCallableVariantGroupVariants(
+        self: *const Result,
+        variant_group_id: Lambdamono.CallableVariantGroupId,
+    ) []const CallableInstId {
+        const group = self.callable_variant_groups.items[@intFromEnum(variant_group_id)];
+        if (group.variants.len == 0) return &.{};
+        return self.callable_variant_entries.items[group.variants.start..][0..group.variants.len];
+    }
+
+    pub fn getDirectCallableVariants(self: *const Result, callable_inst_id: CallableInstId) []const CallableInstId {
+        const variant_group_id = self.direct_callable_variant_group_ids_by_callable_inst.get(callable_inst_id) orelse unreachable;
+        return self.getCallableVariantGroupVariants(variant_group_id);
+    }
+
+    pub fn getPackedFnVariants(self: *const Result, packed_fn: Lambdamono.PackedFn) []const CallableInstId {
+        return self.getCallableVariantGroupVariants(packed_fn.variant_group);
+    }
+
+    pub fn getIndirectCallVariants(self: *const Result, indirect_call: Lambdamono.IndirectCall) []const CallableInstId {
+        return self.getCallableVariantGroupVariants(indirect_call.packed_fn.variant_group);
+    }
+
+    pub fn getCallableValueVariants(self: *const Result, callable_value: CallableValue) []const CallableInstId {
+        return switch (callable_value) {
+            .direct => |callable_inst_id| self.getDirectCallableVariants(callable_inst_id),
+            .packed_fn => |packed_fn| self.getPackedFnVariants(packed_fn),
+        };
+    }
+
+    pub fn getCallSiteVariants(self: *const Result, call_site: CallSite) []const CallableInstId {
+        return switch (call_site) {
+            .direct => |callable_inst_id| self.getDirectCallableVariants(callable_inst_id),
+            .indirect_call => |indirect_call| self.getIndirectCallVariants(indirect_call),
+            .low_level => &.{},
+        };
+    }
+
+    pub fn getCallableInstRuntimeMonotype(
+        self: *const Result,
+        unit_monotype: Monotype.Idx,
+        callable_inst_id: CallableInstId,
+    ) ResolvedMonotype {
+        const callable_inst = self.getCallableInst(callable_inst_id);
+        return switch (callable_inst.runtime_value) {
+            .direct_lambda => .{ .idx = unit_monotype, .module_idx = callable_inst.fn_monotype_module_idx },
+            .closure => |closure| closure.capture_tuple_monotype,
+        };
+    }
+
+    fn packedCallableTagName(
+        allocator: std.mem.Allocator,
+        all_module_envs: []const *ModuleEnv,
+        module_idx: u32,
+        callable_inst_id: CallableInstId,
+    ) std.mem.Allocator.Error!Monotype.Name {
+        var name_buf: [32]u8 = undefined;
+        const name_text = std.fmt.bufPrint(&name_buf, "__roc_fn_{d:0>10}", .{@intFromEnum(callable_inst_id)}) catch unreachable;
+        const module_env = all_module_envs[module_idx];
+        const ident = module_env.common.findIdent(name_text) orelse
+            try module_env.common.insertIdent(allocator, Ident.for_text(name_text));
+        return .{ .module_idx = module_idx, .ident = ident };
+    }
+
+    fn requireUniformPackedCallableFnMonotype(
+        self: *const Result,
+        allocator: std.mem.Allocator,
+        all_module_envs: []const *ModuleEnv,
+        context_mono: *const cm.Result,
+        callable_inst_ids: []const CallableInstId,
+    ) std.mem.Allocator.Error!ResolvedMonotype {
+        if (callable_inst_ids.len == 0) unreachable;
+
+        const first_callable = self.getCallableInst(callable_inst_ids[0]);
+        const first_resolved: ResolvedMonotype = .{
+            .idx = first_callable.fn_monotype,
+            .module_idx = first_callable.fn_monotype_module_idx,
+        };
+        for (callable_inst_ids[1..]) |callable_inst_id| {
+            const callable_inst = self.getCallableInst(callable_inst_id);
+            if (!try context_mono.monotypesStructurallyEqualAcrossModules(
+                allocator,
+                all_module_envs,
+                first_resolved.idx,
+                first_resolved.module_idx,
+                callable_inst.fn_monotype,
+                callable_inst.fn_monotype_module_idx,
+            )) {
+                std.debug.panic(
+                    "Lambdasolved invariant violated: callable variant set contained mismatched fn monotypes between callable insts {d} and {d}",
+                    .{ @intFromEnum(callable_inst_ids[0]), @intFromEnum(callable_inst_id) },
+                );
+            }
+        }
+        return first_resolved;
+    }
+
+    fn buildPackedFnRuntimeMonotype(
+        self: *const Result,
+        allocator: std.mem.Allocator,
+        all_module_envs: []const *ModuleEnv,
+        current_module_idx: u32,
+        context_mono: *cm.Result,
+        callable_inst_ids: []const CallableInstId,
+    ) std.mem.Allocator.Error!ResolvedMonotype {
+        if (callable_inst_ids.len == 0) unreachable;
+
+        var tags = std.ArrayList(Monotype.Tag).empty;
+        defer tags.deinit(allocator);
+
+        for (callable_inst_ids) |callable_inst_id| {
+            const payload_mono = self.getCallableInstRuntimeMonotype(context_mono.monotype_store.unit_idx, callable_inst_id);
+            const payloads = if (payload_mono.isNone() or payload_mono.idx == context_mono.monotype_store.unit_idx)
+                Monotype.Span.empty()
+            else
+                try context_mono.monotype_store.addIdxSpan(allocator, &.{payload_mono.idx});
+            try tags.append(allocator, .{
+                .name = try packedCallableTagName(allocator, all_module_envs, current_module_idx, callable_inst_id),
+                .payloads = payloads,
+            });
+        }
+
+        std.mem.sortUnstable(Monotype.Tag, tags.items, all_module_envs, Monotype.Tag.sortByNameAsc);
+        const tag_span = try context_mono.monotype_store.addTags(allocator, tags.items);
+        return .{
+            .idx = try context_mono.monotype_store.addMonotype(allocator, .{
+                .tag_union = .{ .tags = tag_span },
+            }),
+            .module_idx = current_module_idx,
+        };
+    }
+
+    pub fn makePackedFnForCallableInsts(
+        self: *Result,
+        allocator: std.mem.Allocator,
+        all_module_envs: []const *ModuleEnv,
+        current_module_idx: u32,
+        context_mono: *cm.Result,
+        callable_inst_ids: []const CallableInstId,
+    ) std.mem.Allocator.Error!Lambdamono.PackedFn {
+        const fn_monotype = try self.requireUniformPackedCallableFnMonotype(
+            allocator,
+            all_module_envs,
+            context_mono,
+            callable_inst_ids,
+        );
+        const runtime_monotype = try self.buildPackedFnRuntimeMonotype(
+            allocator,
+            all_module_envs,
+            current_module_idx,
+            context_mono,
+            callable_inst_ids,
+        );
+        const variant_group = try self.internCallableVariantGroup(allocator, callable_inst_ids);
+        return .{
+            .variant_group = variant_group,
+            .fn_monotype = fn_monotype,
+            .runtime_monotype = runtime_monotype,
+        };
+    }
+
+    pub fn makeIndirectCallForCallableInsts(
+        self: *Result,
+        allocator: std.mem.Allocator,
+        all_module_envs: []const *ModuleEnv,
+        current_module_idx: u32,
+        context_mono: *cm.Result,
+        callable_inst_ids: []const CallableInstId,
+    ) std.mem.Allocator.Error!Lambdamono.IndirectCall {
+        return .{
+            .packed_fn = try self.makePackedFnForCallableInsts(
+                allocator,
+                all_module_envs,
+                current_module_idx,
+                context_mono,
+                callable_inst_ids,
+            ),
+        };
     }
 };

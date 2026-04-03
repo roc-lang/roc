@@ -467,7 +467,7 @@ fn lowerExprSourceRefFromPipeline(self: *const Self, expr_ref: Pipeline.ExprRef)
         .source_context = expr_ref.source_context,
         .module_idx = expr_ref.module_idx,
         .expr_idx = expr_ref.expr_idx,
-        .projections = self.callable_pipeline.lambdamono.getValueProjectionEntries(expr_ref.projections),
+        .projections = self.callable_pipeline.getValueProjectionEntries(expr_ref.projections),
     };
 }
 
@@ -852,7 +852,7 @@ fn resolveExprRefCallableValue(
         expr_ref.source_context,
         expr_ref.module_idx,
         expr_ref.expr_idx,
-        self.callable_pipeline.lambdamono.getValueProjectionEntries(expr_ref.projections),
+        self.callable_pipeline.getValueProjectionEntries(expr_ref.projections),
     );
 }
 
@@ -906,7 +906,7 @@ fn resolveProjectedExprCallableValue(
     }
 
     if (self.callable_pipeline.getExprOriginExpr(source_context, module_idx, expr_idx)) |origin| {
-        const origin_projections = self.callable_pipeline.lambdamono.getValueProjectionEntries(origin.projections);
+        const origin_projections = self.callable_pipeline.getValueProjectionEntries(origin.projections);
         const combined = try self.allocator.alloc(Pipeline.ValueProjection, origin_projections.len + projections.len);
         defer self.allocator.free(combined);
         @memcpy(combined[0..origin_projections.len], origin_projections);
@@ -3433,7 +3433,7 @@ fn lowerReservedTrivialClosureLambda(
 
     const body_program_expr = self.callableDefBodyExpr(callable_def);
     const body_expr_idx = body_program_expr.common().source_expr;
-    const param_patterns = self.callable_pipeline.lambdamono.getPatternIds(callable_def.arg_patterns);
+    const param_patterns = self.callable_pipeline.getPatternIds(callable_def.arg_patterns);
     const ret_monotype = try self.callableDefBodyRetMonotype(callable_def);
 
     const callable_inst_key = @intFromEnum(callable_inst_id);
@@ -3717,7 +3717,7 @@ fn lowerResolvedCallableInstValueInto(
         } });
     }
 
-    const callable_inst = self.callable_pipeline.lambdamono.getCallableInst(callable_inst_id);
+    const callable_inst = self.callable_pipeline.getCallableInst(callable_inst_id);
     const callable_def = self.callable_pipeline.getCallableDef(callable_inst.callable_def);
     const module_idx = callable_def.module_idx;
     const module_env = self.all_module_envs[module_idx];
@@ -3803,7 +3803,7 @@ fn lowerCapturedSourceExprInto(
     target: MIR.LocalId,
     next: MIR.CFStmtId,
 ) Allocator.Error!MIR.CFStmtId {
-    const projections = self.callable_pipeline.lambdamono.getValueProjectionEntries(source_expr_ref.projections);
+    const projections = self.callable_pipeline.getValueProjectionEntries(source_expr_ref.projections);
     if (projections.len != 0) {
         if (try self.resolveExprRefCallableValue(source_expr_ref)) |callable_value| {
             try self.seedCallableValueLocal(target, callable_value);
@@ -4082,7 +4082,7 @@ fn lowerResolvedCallableInstLambda(
         );
     }
 
-    const callable_inst = self.callable_pipeline.lambdamono.getCallableInst(callable_inst_id);
+    const callable_inst = self.callable_pipeline.getCallableInst(callable_inst_id);
     const callable_def = self.callable_pipeline.getCallableDef(callable_inst.callable_def);
     const runtime_expr_idx = callable_def.runtime_expr.expr_idx;
     const module_idx = callable_def.module_idx;
@@ -4145,7 +4145,7 @@ fn lowerResolvedCallableInstLambda(
             session,
             module_env,
             runtime_expr_idx,
-            self.callable_pipeline.lambdamono.getPatternIds(callable_def.arg_patterns),
+            self.callable_pipeline.getPatternIds(callable_def.arg_patterns),
             self.callableDefBodyExpr(callable_def).common().source_expr,
             fn_monotype,
             body_ret_monotype,
@@ -4155,7 +4155,7 @@ fn lowerResolvedCallableInstLambda(
             session,
             module_env,
             runtime_expr_idx,
-            self.callable_pipeline.lambdamono.getPatternIds(callable_def.arg_patterns),
+            self.callable_pipeline.getPatternIds(callable_def.arg_patterns),
             self.callableDefBodyExpr(callable_def).common().source_expr,
             fn_monotype,
             body_ret_monotype,
@@ -5243,7 +5243,7 @@ fn callableInstRequiresHiddenCapture(
     self: *const Self,
     callable_inst_id: Pipeline.CallableInstId,
 ) bool {
-    return switch (self.callable_pipeline.lambdamono.getCallableInst(callable_inst_id).runtime_value) {
+    return switch (self.callable_pipeline.getCallableInst(callable_inst_id).runtime_value) {
         .direct_lambda => false,
         .closure => true,
     };
@@ -6747,11 +6747,11 @@ fn debugAssertNoUnitPrimBinding(
     else
         "none";
     const callsite_fn_monotype: []const u8 = if (maybe_callsite_inst) |callsite_inst| blk: {
-        const callable_inst = self.callable_pipeline.lambdamono.getCallableInst(callsite_inst);
+        const callable_inst = self.callable_pipeline.getCallableInst(callsite_inst);
         break :blk @tagName(self.callable_pipeline.context_mono.monotype_store.getMonotype(callable_inst.fn_monotype));
     } else "none";
     const callsite_ret_monotype: []const u8 = if (maybe_callsite_inst) |callsite_inst| blk: {
-        const callable_inst = self.callable_pipeline.lambdamono.getCallableInst(callsite_inst);
+        const callable_inst = self.callable_pipeline.getCallableInst(callsite_inst);
         const fn_mono = self.callable_pipeline.context_mono.monotype_store.getMonotype(callable_inst.fn_monotype);
         break :blk switch (fn_mono) {
             .func => |func| @tagName(self.callable_pipeline.context_mono.monotype_store.getMonotype(func.ret)),

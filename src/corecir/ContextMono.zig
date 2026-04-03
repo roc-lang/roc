@@ -759,26 +759,6 @@ pub fn recordExprMonotypeResolved(
     if (monotype.isNone()) return;
     const key = Result.contextExprKey(source_context, module_idx, expr_idx);
     const resolved = resolvedMonotype(monotype, monotype_module_idx);
-    if (result.lambdamono.getExprId(source_context, module_idx, expr_idx)) |expr_id| {
-        const program_expr = result.lambdamono.getExpr(expr_id);
-        const existing_program_mono = program_expr.common().monotype;
-        if (!try monotypesStructurallyEqualAcrossModules(
-            driver,
-            result,
-            existing_program_mono.idx,
-            existing_program_mono.module_idx,
-            resolved.idx,
-            resolved.module_idx,
-        )) {
-            if (std.debug.runtime_safety) {
-                std.debug.panic(
-                    "ContextMono invariant violated: finalized expr monotype disagreed with recorded exact monotype for ctx={s} module={d} expr={d}",
-                    .{ @tagName(source_context), module_idx, @intFromEnum(expr_idx) },
-                );
-            }
-            unreachable;
-        }
-    }
     try recordTypeVarMonotypeForSourceContext(
         driver,
         result,
@@ -1827,7 +1807,7 @@ pub fn resolvePatternMonotypeResolved(
             source.module_idx,
             source.expr_idx,
         );
-        for (result.lambdamono.getValueProjectionEntries(source.projections)) |projection| {
+        for (result.lambdasolved.getValueProjectionEntries(source.projections)) |projection| {
             resolved = try projectResolvedMonotypeByValueProjection(driver, result, resolved, projection);
         }
         return resolved;

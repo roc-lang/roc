@@ -6,8 +6,6 @@
 
 const std = @import("std");
 const build_options = @import("build_options");
-const builtin = @import("builtin");
-const base = @import("base");
 const can = @import("can");
 const types = @import("types");
 
@@ -19,7 +17,6 @@ const Lambdasolved = @import("Lambdasolved.zig");
 const Lambdamono = @import("Lambdamono.zig");
 
 const Allocator = std.mem.Allocator;
-const Ident = base.Ident;
 const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
 
@@ -116,16 +113,6 @@ fn callableValueMonotype(result: *const Result, callable_value: CallableValue) R
     };
 }
 
-fn callableInstHasRealizedRuntimeExpr(result: *const Result, callable_inst_id: CallableInstId) bool {
-    const callable_inst = result.getCallableInst(callable_inst_id);
-    const template = result.getCallableTemplate(callable_inst.template);
-    return result.getExprCallableValue(
-        .{ .callable_inst = @enumFromInt(@intFromEnum(callable_inst_id)) },
-        template.module_idx,
-        template.runtime_expr,
-    ) != null;
-}
-
 const exprTemplateSource = TemplateCatalog.exprTemplateSource;
 const localPatternTemplateSource = TemplateCatalog.localPatternTemplateSource;
 const externalDefTemplateSource = TemplateCatalog.externalDefTemplateSource;
@@ -185,14 +172,6 @@ pub const Result = struct {
         return ContextMono.Result.contextExprKey(source_context, module_idx, expr_idx);
     }
 
-    fn getExprMonotypeById(self: *const Result, expr_id: Lambdamono.ExprId) ResolvedMonotype {
-        return self.lambdamono.getExpr(expr_id).common().monotype;
-    }
-
-    fn getExprOriginById(self: *const Result, expr_id: Lambdamono.ExprId) ?ExprRef {
-        return self.lambdamono.getExpr(expr_id).getOriginExpr();
-    }
-
     pub fn getExprSourceExprById(self: *const Result, expr_id: Lambdamono.ExprId) CIR.Expr.Idx {
         return self.lambdamono.getExpr(expr_id).common().source_expr;
     }
@@ -207,8 +186,7 @@ pub const Result = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?CallSite {
-        const expr_id = self.lambdamono.getExprId(source_context, module_idx, expr_idx) orelse return null;
-        return self.lambdamono.getExpr(expr_id).getCall();
+        return self.lambdasolved.getExprCallSite(source_context, module_idx, expr_idx);
     }
 
     pub fn getExprMonotype(
@@ -217,9 +195,6 @@ pub const Result = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?ResolvedMonotype {
-        if (self.lambdamono.getExprId(source_context, module_idx, expr_idx)) |expr_id| {
-            return self.getExprMonotypeById(expr_id);
-        }
         return self.context_mono.getExprMonotype(source_context, module_idx, expr_idx);
     }
 
@@ -229,8 +204,7 @@ pub const Result = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?CallableValue {
-        const expr_id = self.lambdamono.getExprId(source_context, module_idx, expr_idx) orelse return null;
-        return self.lambdamono.getExpr(expr_id).getCallableValue();
+        return self.lambdasolved.getExprCallableValue(source_context, module_idx, expr_idx);
     }
 
     pub fn getExprIntroCallableInst(
@@ -239,11 +213,7 @@ pub const Result = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?CallableInstId {
-        const expr_id = self.lambdamono.getExprId(source_context, module_idx, expr_idx) orelse return null;
-        return if (self.lambdamono.getExpr(expr_id).getCallableIntro()) |intro|
-            intro.callable_inst
-        else
-            null;
+        return self.lambdasolved.getExprIntroCallableInst(source_context, module_idx, expr_idx);
     }
 
     pub fn getDispatchExprTarget(
@@ -252,8 +222,7 @@ pub const Result = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?DispatchExprTarget {
-        const expr_id = self.lambdamono.getExprId(source_context, module_idx, expr_idx) orelse return null;
-        return self.lambdamono.getExpr(expr_id).getDispatchTarget();
+        return self.dispatch_solved.getDispatchExprTarget(source_context, module_idx, expr_idx);
     }
 
     pub fn getDispatchExprIntrinsic(
@@ -262,8 +231,7 @@ pub const Result = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?DispatchIntrinsic {
-        const expr_id = self.lambdamono.getExprId(source_context, module_idx, expr_idx) orelse return null;
-        return self.lambdamono.getExpr(expr_id).getDispatchIntrinsic();
+        return self.lambdasolved.getExprDispatchIntrinsic(source_context, module_idx, expr_idx);
     }
 
     pub fn getLookupResolution(
@@ -272,8 +240,7 @@ pub const Result = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?Lambdamono.LookupResolution {
-        const expr_id = self.lambdamono.getExprId(source_context, module_idx, expr_idx) orelse return null;
-        return self.lambdamono.getExpr(expr_id).getLookup();
+        return self.lambdasolved.getExprLookupResolution(source_context, module_idx, expr_idx);
     }
 
     pub fn getProgramExprForRef(self: *const Result, expr_ref: ExprRef) *const Lambdamono.Expr {
@@ -308,11 +275,11 @@ pub const Result = struct {
     }
 
     pub fn getCallableInst(self: *const Result, callable_inst_id: CallableInstId) *const CallableInst {
-        return self.lambdamono.getCallableInst(callable_inst_id);
+        return self.lambdasolved.getCallableInst(callable_inst_id);
     }
 
     pub fn getCallableDef(self: *const Result, callable_def_id: CallableDefId) *const CallableDef {
-        return Lambdamono.getCallableDef(&self.lambdamono, callable_def_id);
+        return self.lambdasolved.getCallableDef(callable_def_id);
     }
 
     pub fn getCallableDefForInst(self: *const Result, callable_inst_id: CallableInstId) *const CallableDef {
@@ -340,18 +307,18 @@ pub const Result = struct {
         self: *const Result,
         callable_inst_id: CallableInstId,
     ) ResolvedMonotype {
-        return self.lambdamono.getCallableInstRuntimeMonotype(
+        return self.lambdasolved.getCallableInstRuntimeMonotype(
             self.context_mono.monotype_store.unit_idx,
             callable_inst_id,
         );
     }
 
     pub fn getPackedFnVariants(self: *const Result, packed_fn: PackedFn) []const CallableInstId {
-        return self.lambdamono.getCallableVariantGroupVariants(packed_fn.variant_group);
+        return self.lambdasolved.getPackedFnVariants(packed_fn);
     }
 
     pub fn getIndirectCallVariants(self: *const Result, indirect_call: IndirectCall) []const CallableInstId {
-        return self.lambdamono.getCallableVariantGroupVariants(indirect_call.packed_fn.variant_group);
+        return self.lambdasolved.getIndirectCallVariants(indirect_call);
     }
 
     pub fn getPackedFnTagName(
@@ -375,7 +342,43 @@ pub const Result = struct {
     }
 
     pub fn getCaptureFields(self: *const Result, span: CaptureFieldSpan) []const CaptureField {
-        return Lambdamono.getCaptureFields(&self.lambdamono, span);
+        return self.lambdasolved.getCaptureFields(span);
+    }
+
+    pub fn getCallableParamSpecEntries(
+        self: *const Result,
+        span: CallableParamSpecSpan,
+    ) []const CallableParamSpecEntry {
+        return self.lambdasolved.getCallableParamSpecEntries(span);
+    }
+
+    pub fn getCallableParamProjectionEntries(
+        self: *const Result,
+        span: CallableParamProjectionSpan,
+    ) []const CallableParamProjection {
+        return self.lambdasolved.getCallableParamProjectionEntries(span);
+    }
+
+    pub fn getValueProjectionEntries(
+        self: *const Result,
+        span: ValueProjectionSpan,
+    ) []const CallableParamProjection {
+        return self.lambdasolved.getValueProjectionEntries(span);
+    }
+
+    pub fn getPatternIds(
+        self: *const Result,
+        span: Lambdamono.PatternIdSpan,
+    ) []const CIR.Pattern.Idx {
+        return self.lambdasolved.getPatternIds(span);
+    }
+
+    pub fn getCallableValueVariants(self: *const Result, callable_value: CallableValue) []const CallableInstId {
+        return self.lambdasolved.getCallableValueVariants(callable_value);
+    }
+
+    pub fn getCallSiteVariants(self: *const Result, call_site: CallSite) []const CallableInstId {
+        return self.lambdasolved.getCallSiteVariants(call_site);
     }
 
     pub fn getTypeSubst(self: *const Result, subst_id: TypeSubstId) *const TypeSubst {
@@ -400,8 +403,7 @@ pub const Result = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?ExprRef {
-        const expr_id = self.lambdamono.getExprId(source_context, module_idx, expr_idx) orelse return null;
-        return self.getExprOriginById(expr_id);
+        return self.lambdasolved.getExprOriginExpr(source_context, module_idx, expr_idx);
     }
 
     pub fn getExprTemplateId(
@@ -410,30 +412,29 @@ pub const Result = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?CallableTemplateId {
-        if (self.lambdamono.getExprId(source_context, module_idx, expr_idx)) |expr_id| {
-            const expr = self.lambdamono.getExpr(expr_id);
-            if (expr.getCallableIntro()) |intro| {
-                return self.getCallableInst(intro.callable_inst).template;
-            }
-            if (expr.getCallableValue()) |callable_value| switch (callable_value) {
-                .direct => |callable_inst_id| return self.getCallableInst(callable_inst_id).template,
-                .packed_fn => {},
-            };
-            if (expr.getLookupExpr()) |expr_ref| {
+        if (self.getExprIntroCallableInst(source_context, module_idx, expr_idx)) |callable_inst_id| {
+            return self.getCallableInst(callable_inst_id).template;
+        }
+        if (self.getExprCallableValue(source_context, module_idx, expr_idx)) |callable_value| switch (callable_value) {
+            .direct => |callable_inst_id| return self.getCallableInst(callable_inst_id).template,
+            .packed_fn => {},
+        };
+        if (self.getExprLookupResolution(source_context, module_idx, expr_idx)) |lookup| switch (lookup) {
+            .expr => |expr_ref| {
                 if (self.getExprTemplateId(expr_ref.source_context, expr_ref.module_idx, expr_ref.expr_idx)) |template_id| {
                     return template_id;
                 }
-            }
-            if (expr.getLookupDef()) |external_def| {
+            },
+            .def => |external_def| {
                 return self.getExternalCallableTemplate(
                     external_def.module_idx,
                     @intCast(@intFromEnum(external_def.def_idx)),
                 );
-            }
-            if (self.getExprOriginById(expr_id)) |origin| {
-                if (self.getExprTemplateId(origin.source_context, origin.module_idx, origin.expr_idx)) |template_id| {
-                    return template_id;
-                }
+            },
+        };
+        if (self.getExprOriginExpr(source_context, module_idx, expr_idx)) |origin| {
+            if (self.getExprTemplateId(origin.source_context, origin.module_idx, origin.expr_idx)) |template_id| {
+                return template_id;
             }
         }
         if (self.template_catalog.getExprCallableTemplate(module_idx, expr_idx)) |template_id| {
@@ -465,8 +466,7 @@ pub const Result = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?LookupResolution {
-        const expr_id = self.lambdamono.getExprId(source_context, module_idx, expr_idx) orelse return null;
-        return self.lambdamono.getExpr(expr_id).getLookup();
+        return self.lambdasolved.getExprLookupResolution(source_context, module_idx, expr_idx);
     }
 
     pub fn getExprDispatchTarget(
@@ -475,8 +475,7 @@ pub const Result = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?DispatchExprTarget {
-        const expr_id = self.lambdamono.getExprId(source_context, module_idx, expr_idx) orelse return null;
-        return self.lambdamono.getExpr(expr_id).getDispatchTarget();
+        return self.dispatch_solved.getDispatchExprTarget(source_context, module_idx, expr_idx);
     }
 
     pub fn getSourceContextTemplateId(
