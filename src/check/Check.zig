@@ -2916,11 +2916,12 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                             .nominal => .in_opaque,
                         },
                     };
-                    break :inner_blk switch (polarity) {
+                    const pol_ext = switch (polarity) {
                         .pos => try self.freshFromContent(.{ .rigid = types_mod.Rigid.initPolarityOpen() }, env, anno_region),
                         .neg, .in_opaque => try self.freshFromContent(.{ .structure = .empty_tag_union }, env, anno_region),
                         .in_alias => try self.freshFromContent(.{ .rigid = types_mod.Rigid.initPolarityDeferred() }, env, anno_region),
                     };
+                    break :inner_blk pol_ext;
                 }
             };
 

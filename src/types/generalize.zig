@@ -308,16 +308,11 @@ pub const Generalizer = struct {
                 return next_rank;
             },
             .alias => |alias| {
-                // THEORY: Here, we don't need to recurse into the backing type because:
-                // 1. We visit the type arguments (args)
-                // 2. Anything in the RHS of the alias is either:
-                //    - A reference to an arg (already visited via args)
-                //    - A concrete type (adjustRankContent would resolve to outermost)
-                // So traversing the backing var would be redundant.
-                //
-                // We use outermost as a default, as the type container itself
-                // does not contribute to the rank calculation.
-                var next_rank = Rank.outermost;
+                // Recurse into the backing var and all alias args.
+                // The backing var may contain variables that aren't accessible
+                // through the args (e.g., polarity extension variables on tag
+                // unions), so we must include it in the rank calculation.
+                var next_rank = try self.adjustRank(self.store.getAliasBackingVar(alias), group_rank, vars_to_generalize);
                 var args_iter = self.store.iterAliasArgs(alias);
                 while (args_iter.next()) |arg_var| {
                     next_rank = next_rank.max(try self.adjustRank(arg_var, group_rank, vars_to_generalize));
@@ -344,16 +339,11 @@ pub const Generalizer = struct {
                         }
                     },
                     .nominal_type => |nominal| {
-                        // THEORY: Here, we don't need to recurse into the backing type because:
-                        // 1. We visit the type arguments (args)
-                        // 2. Anything in the RHS of the nominal type is either:
-                        //    - A reference to an arg (already visited via args)
-                        //    - A concrete type (adjustRankContent would resolve to outermost)
-                        // So traversing the backing var would be redundant.
-                        //
-                        // We use outermost as a default, as the type container itself
-                        // does not contribute to the rank calculation.
-                        var next_rank = Rank.outermost;
+                        // Recurse into the backing var and all nominal args.
+                        // The backing var may contain variables that aren't accessible
+                        // through the args (e.g., polarity extension variables on tag
+                        // unions), so we must include it in the rank calculation.
+                        var next_rank = try self.adjustRank(self.store.getNominalBackingVar(nominal), group_rank, vars_to_generalize);
                         var args_iter = self.store.iterNominalArgs(nominal);
                         while (args_iter.next()) |arg_var| {
                             next_rank = next_rank.max(try self.adjustRank(arg_var, group_rank, vars_to_generalize));

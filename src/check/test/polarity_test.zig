@@ -1091,6 +1091,90 @@ test "check type - polarity - undeclared tag fails" {
     try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
+test "check type - polarity - match directly on function return" {
+    const source =
+        \\get_tag : Str -> [A, B, C]
+        \\get_tag = |_| A
+        \\
+        \\use_tag : Str -> Str
+        \\use_tag = |s|
+        \\    match get_tag(s) {
+        \\        A => "a"
+        \\        B => "b"
+        \\        C => "c"
+        \\    }
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "use_tag" } }, "Str -> Str");
+}
+
+test "check type - polarity - aliased return type is open" {
+    const source =
+        \\MyTag : [A, B, C]
+        \\
+        \\get_tag : Str -> MyTag
+        \\get_tag = |_| A
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "get_tag" } }, "Str -> MyTag");
+}
+
+test "check type - polarity - match directly on aliased function return" {
+    // Matching directly on a function whose return is an alias should work,
+    // because at the call site the polarity_open rigid gets instantiated to flex.
+    const source =
+        \\MyTag : [A, B, C]
+        \\
+        \\get_tag : Str -> MyTag
+        \\get_tag = |_| A
+        \\
+        \\use_tag : Str -> Str
+        \\use_tag = |s|
+        \\    match get_tag(s) {
+        \\        A => "a"
+        \\        B => "b"
+        \\        C => "c"
+        \\    }
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "use_tag" } }, "Str -> Str");
+}
+
+test "check type - polarity - match on non-aliased function return (control)" {
+    const source =
+        \\get_tag : Str -> [A, B, C]
+        \\get_tag = |_| A
+        \\
+        \\use_tag : Str -> Str
+        \\use_tag = |s|
+        \\    match get_tag(s) {
+        \\        A => "a"
+        \\        B => "b"
+        \\        C => "c"
+        \\    }
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "use_tag" } }, "Str -> Str");
+}
+
+test "check type - polarity - match directly on aliased function return (with binding)" {
+    // Same as above but binding to an intermediate value with an alias annotation.
+    const source =
+        \\MyTag : [A, B, C]
+        \\
+        \\get_tag : Str -> MyTag
+        \\get_tag = |_| A
+        \\
+        \\use_tag : Str -> Str
+        \\use_tag = |s| {
+        \\    result : MyTag
+        \\    result = get_tag(s)
+        \\    match result {
+        \\        A => "a"
+        \\        B => "b"
+        \\        C => "c"
+        \\    }
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "use_tag" } }, "Str -> Str");
+}
+
 test "check type - polarity - user facing pos return elided" {
     const source =
         \\foo : Str -> [Ok(U64), Err(Str)]

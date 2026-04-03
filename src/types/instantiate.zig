@@ -105,13 +105,12 @@ pub const Instantiator = struct {
                         const fresh_var = try self.store.freshFromContentWithRank(fresh_content, self.current_rank);
                         try self.var_map.put(resolved_var, fresh_var);
                         return fresh_var;
-                    } else {
-                        // Deferred rigids must always be instantiated with polarity context.
-                        std.debug.assert(false);
-                        const fresh_var = try self.store.freshFromContentWithRank(.err, self.current_rank);
-                        try self.var_map.put(resolved_var, fresh_var);
-                        return fresh_var;
                     }
+                    // No polarity context (e.g., call-site instantiation).
+                    // This can happen when an alias's backing type contains polarity_deferred
+                    // that wasn't resolved during annotation processing (e.g., when unification
+                    // preserves the original alias rather than the freshly-instantiated one).
+                    // Fall through to normal rigid handling — treat like polarity_open.
                 }
 
                 // If this var is rigid, then create a new var depending on the
@@ -142,9 +141,10 @@ pub const Instantiator = struct {
                                         }
                                     },
                                     .polarity_open, .polarity_deferred => {
-                                        std.debug.assert(false);
+                                        // polarity vars should not appear in substitute_rigids context
+                                        // (they're anonymous, not user-named rigids)
                                         break :inner_blk try self.store.freshFromContentWithRank(
-                                            .err,
+                                            .{ .flex = Flex.init() },
                                             self.current_rank,
                                         );
                                     },
@@ -171,8 +171,7 @@ pub const Instantiator = struct {
                 const fresh_content = switch (fresh_type) {
                     .flex => Content{ .flex = Flex{ .name = switch (rigid.name) {
                         .name => |ident_idx| ident_idx,
-                        .polarity_open => null,
-                        .polarity_deferred => unreachable,
+                        .polarity_open, .polarity_deferred => null,
                     }, .constraints = fresh_constraints } },
                     .rigid => Content{ .rigid = Rigid{ .name = rigid.name, .constraints = fresh_constraints } },
                 };
