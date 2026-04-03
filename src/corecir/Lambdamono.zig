@@ -1772,12 +1772,12 @@ pub const Program = struct {
     }
 };
 
-fn ProgramAssembler(comptime ResultPtr: type, comptime PassPtr: type) type {
+fn ProgramAssembler(comptime ResultPtr: type, comptime Driver: type) type {
     return struct {
         allocator: Allocator,
         all_module_envs: []const *ModuleEnv,
         result: ResultPtr,
-        pass: PassPtr,
+        driver: Driver,
         assembly: *AssemblyState,
 
         const Self = @This();
@@ -1799,7 +1799,7 @@ fn ProgramAssembler(comptime ResultPtr: type, comptime PassPtr: type) type {
             var callable_inst_idx: usize = 0;
             while (callable_inst_idx < self.result.lambdamono.callable_insts.items.len) : (callable_inst_idx += 1) {
                 const callable_inst_id: CallableInstId = @enumFromInt(callable_inst_idx);
-                try requireCallableInstRealized(self.pass, self.result, callable_inst_id);
+                try requireCallableInstRealized(self.driver, self.result, callable_inst_id);
                 const callable_inst = self.result.getCallableInst(callable_inst_id).*;
                 const template = self.result.getCallableTemplate(callable_inst.template);
                 switch (template.kind) {
@@ -1841,7 +1841,7 @@ fn ProgramAssembler(comptime ResultPtr: type, comptime PassPtr: type) type {
             expr_idx: CIR.Expr.Idx,
         ) Allocator.Error!void {
             if (self.result.getExprTemplateId(source_context, module_idx, expr_idx) != null) {
-                if (!try exprHasExactProgramSemantics(self.pass, self.result, source_context, module_idx, expr_idx)) return;
+                if (!try exprHasExactProgramSemantics(self.driver, self.result, source_context, module_idx, expr_idx)) return;
             }
 
             try child_exprs.append(
@@ -1858,7 +1858,7 @@ fn ProgramAssembler(comptime ResultPtr: type, comptime PassPtr: type) type {
         ) Allocator.Error!ExprId {
             const key = ContextMono.Result.contextExprKey(source_context, module_idx, expr_idx);
             const expr_id = self.result.lambdamono.expr_ids_by_key.get(key) orelse blk: {
-                _ = try ensureProgramExpr(self.pass, self.result, source_context, module_idx, expr_idx);
+                _ = try ensureProgramExpr(self.driver, self.result, source_context, module_idx, expr_idx);
                 break :blk self.result.lambdamono.expr_ids_by_key.get(key).?;
             };
             if (self.assembly.isExprAssembled(key)) return expr_id;
@@ -1867,7 +1867,7 @@ fn ProgramAssembler(comptime ResultPtr: type, comptime PassPtr: type) type {
 
             const module_env = self.all_module_envs[module_idx];
             const expr = module_env.store.getExpr(expr_idx);
-            try requireProgramExprSemanticShape(self.pass, self.result, source_context, module_idx, expr_idx, expr);
+            try requireProgramExprSemanticShape(self.driver, self.result, source_context, module_idx, expr_idx, expr);
             var child_exprs = std.ArrayList(ExprId).empty;
             defer child_exprs.deinit(self.allocator);
             var child_stmts = std.ArrayList(StmtId).empty;
@@ -2020,17 +2020,17 @@ fn ProgramAssembler(comptime ResultPtr: type, comptime PassPtr: type) type {
 
             switch (stmt) {
                 .s_decl => |decl| {
-                    if (try exprHasExactProgramSemantics(self.pass, self.result, source_context, module_idx, decl.expr)) {
+                    if (try exprHasExactProgramSemantics(self.driver, self.result, source_context, module_idx, decl.expr)) {
                         try child_exprs.append(self.allocator, try self.assembleProgramExprNode(source_context, module_idx, decl.expr));
                     }
                 },
                 .s_var => |var_decl| {
-                    if (try exprHasExactProgramSemantics(self.pass, self.result, source_context, module_idx, var_decl.expr)) {
+                    if (try exprHasExactProgramSemantics(self.driver, self.result, source_context, module_idx, var_decl.expr)) {
                         try child_exprs.append(self.allocator, try self.assembleProgramExprNode(source_context, module_idx, var_decl.expr));
                     }
                 },
                 .s_reassign => |reassign| {
-                    if (try exprHasExactProgramSemantics(self.pass, self.result, source_context, module_idx, reassign.expr)) {
+                    if (try exprHasExactProgramSemantics(self.driver, self.result, source_context, module_idx, reassign.expr)) {
                         try child_exprs.append(self.allocator, try self.assembleProgramExprNode(source_context, module_idx, reassign.expr));
                     }
                 },
@@ -2074,17 +2074,17 @@ pub fn assembleRoots(
     all_module_envs: []const *ModuleEnv,
     current_module_idx: u32,
     result: anytype,
-    pass: anytype,
+    driver: anytype,
     root_exprs: []const CIR.Expr.Idx,
 ) Allocator.Error!void {
     var assembly = AssemblyState.init();
     defer assembly.deinit(allocator);
 
-    var assembler = ProgramAssembler(@TypeOf(result), @TypeOf(pass)){
+    var assembler = ProgramAssembler(@TypeOf(result), @TypeOf(driver)){
         .allocator = allocator,
         .all_module_envs = all_module_envs,
         .result = result,
-        .pass = pass,
+        .driver = driver,
         .assembly = &assembly,
     };
     try assembler.assembleRoots(current_module_idx, root_exprs);

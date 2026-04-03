@@ -341,6 +341,8 @@ pub fn analyzeRoots(
     // This is Lambdasolved's one public CIR traversal boundary: analyze the
     // reachable roots once under explicit semantic contexts, record solved
     // facts, and let later stages consume those facts mechanically.
+    try seedAllModuleDefPatternOrigins(pass, result);
+
     var root_analysis = RootAnalysisState.init();
     defer root_analysis.deinit(allocator);
 
@@ -7964,7 +7966,7 @@ fn realizeDispatchExprSemantics(
     try commitDirectDispatchExprSemantics(driver, result, thread, module_idx, expr_idx, expr, callable_inst_id);
 }
 
-pub fn seedModuleDefPatternOrigins(
+fn seedModuleDefPatternOrigins(
     driver: anytype,
     result: anytype,
     module_idx: u32,
@@ -7988,7 +7990,7 @@ pub fn seedModuleDefPatternOrigins(
     }
 }
 
-pub fn seedAllModuleDefPatternOrigins(
+fn seedAllModuleDefPatternOrigins(
     driver: anytype,
     result: anytype,
 ) std.mem.Allocator.Error!void {

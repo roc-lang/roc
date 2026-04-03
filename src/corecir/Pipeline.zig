@@ -624,77 +624,61 @@ pub const Pass = struct {
     pub fn deinit(self: *Pass) void {
         _ = self;
     }
-
-    pub fn runRootSourceExpr(self: *Pass, expr_idx: CIR.Expr.Idx) Allocator.Error!Result {
-        var result = try Result.init(self.allocator);
-        trace.log("runRootSourceExpr start expr={d}", .{@intFromEnum(expr_idx)});
-        try self.runRootsInto(&result, &.{expr_idx});
-        return result;
-    }
-
-    pub fn runRootSourceExprs(self: *Pass, exprs: []const CIR.Expr.Idx) Allocator.Error!Result {
-        var result = try Result.init(self.allocator);
-        try self.runRootsInto(&result, exprs);
-        return result;
-    }
-
-    fn runRootsInto(
-        self: *Pass,
-        result: *Result,
-        exprs: []const CIR.Expr.Idx,
-    ) Allocator.Error!void {
-        trace.log("primeAllModules start", .{});
-        try Lambdasolved.seedAllModuleDefPatternOrigins(self, result);
-        try result.template_catalog.primeAllModules(self.allocator, self.all_module_envs);
-        trace.log("primeAllModules done", .{});
-        try Lambdasolved.analyzeRoots(
-            self.allocator,
-            self.current_module_idx,
-            exprs,
-            self,
-            result,
-        );
-        trace.log("assembleLambdamono start", .{});
-        try Lambdamono.assembleRoots(
-            self.allocator,
-            self.all_module_envs,
-            self.current_module_idx,
-            result,
-            self,
-            exprs,
-        );
-        trace.log("assembleLambdamono done", .{});
-    }
-
-    /// Pipeline all callables rooted in the current module.
-    pub fn runModule(self: *Pass) Allocator.Error!Result {
-        var result = try Result.init(self.allocator);
-        trace.log("primeAllModules start", .{});
-        try Lambdasolved.seedAllModuleDefPatternOrigins(self, &result);
-        try result.template_catalog.primeAllModules(self.allocator, self.all_module_envs);
-        trace.log("primeAllModules done", .{});
-        const root_exprs = result.template_catalog.getModuleRootExprs(self.current_module_idx);
-        try Lambdasolved.analyzeRoots(
-            self.allocator,
-            self.current_module_idx,
-            root_exprs,
-            self,
-            &result,
-        );
-        trace.log("assembleLambdamono start", .{});
-        try Lambdamono.assembleRoots(
-            self.allocator,
-            self.all_module_envs,
-            self.current_module_idx,
-            &result,
-            self,
-            root_exprs,
-        );
-        trace.log("assembleLambdamono done", .{});
-        return result;
-    }
-
 };
+
+fn runRootsInto(
+    pass: *Pass,
+    result: *Result,
+    exprs: []const CIR.Expr.Idx,
+) Allocator.Error!void {
+    trace.log("primeAllModules start", .{});
+    try result.template_catalog.primeAllModules(pass.allocator, pass.all_module_envs);
+    trace.log("primeAllModules done", .{});
+    try Lambdasolved.analyzeRoots(
+        pass.allocator,
+        pass.current_module_idx,
+        exprs,
+        pass,
+        result,
+    );
+    trace.log("assembleLambdamono start", .{});
+    try Lambdamono.assembleRoots(
+        pass.allocator,
+        pass.all_module_envs,
+        pass.current_module_idx,
+        result,
+        pass,
+        exprs,
+    );
+    trace.log("assembleLambdamono done", .{});
+}
+
+fn runModuleInto(
+    pass: *Pass,
+    result: *Result,
+) Allocator.Error!void {
+    trace.log("primeAllModules start", .{});
+    try result.template_catalog.primeAllModules(pass.allocator, pass.all_module_envs);
+    trace.log("primeAllModules done", .{});
+    const root_exprs = result.template_catalog.getModuleRootExprs(pass.current_module_idx);
+    try Lambdasolved.analyzeRoots(
+        pass.allocator,
+        pass.current_module_idx,
+        root_exprs,
+        pass,
+        result,
+    );
+    trace.log("assembleLambdamono start", .{});
+    try Lambdamono.assembleRoots(
+        pass.allocator,
+        pass.all_module_envs,
+        pass.current_module_idx,
+        result,
+        pass,
+        root_exprs,
+    );
+    trace.log("assembleLambdamono done", .{});
+}
 
 /// Pipeline one expression tree rooted in the given module.
 pub fn runRootSourceExpr(
@@ -711,7 +695,10 @@ pub fn runRootSourceExpr(
         app_module_idx,
     );
     defer pass.deinit();
-    return pass.runRootSourceExpr(expr_idx);
+    var result = try Result.init(allocator);
+    trace.log("runRootSourceExpr start expr={d}", .{@intFromEnum(expr_idx)});
+    try runRootsInto(&pass, &result, &.{expr_idx});
+    return result;
 }
 
 /// Pipeline one root source expression using an explicit type scope for cross-module substitutions.
@@ -740,7 +727,7 @@ pub fn runRootSourceExprWithTypeScope(
         .scope = explicit_type_scope,
     });
     trace.log("runRootSourceExprWithTypeScope start expr={d}", .{@intFromEnum(expr_idx)});
-    try pass.runRootsInto(&result, &.{expr_idx});
+    try runRootsInto(&pass, &result, &.{expr_idx});
     return result;
 }
 
@@ -759,7 +746,9 @@ pub fn runRootSourceExprs(
         app_module_idx,
     );
     defer pass.deinit();
-    return pass.runRootSourceExprs(exprs);
+    var result = try Result.init(allocator);
+    try runRootsInto(&pass, &result, exprs);
+    return result;
 }
 
 /// Pipeline explicit root source expressions using an explicit type scope for cross-module substitutions.
@@ -787,7 +776,7 @@ pub fn runRootSourceExprsWithTypeScope(
         .caller_module_idx = scope_caller_module_idx,
         .scope = explicit_type_scope,
     });
-    try pass.runRootsInto(&result, exprs);
+    try runRootsInto(&pass, &result, exprs);
     return result;
 }
 
@@ -805,7 +794,9 @@ pub fn runModule(
         app_module_idx,
     );
     defer pass.deinit();
-    return pass.runModule();
+    var result = try Result.init(allocator);
+    try runModuleInto(&pass, &result);
+    return result;
 }
 
 /// Pipeline all callables rooted in the current module using an explicit type scope.
@@ -832,27 +823,6 @@ pub fn runModuleWithTypeScope(
         .caller_module_idx = scope_caller_module_idx,
         .scope = explicit_type_scope,
     });
-    trace.log("primeAllModules start", .{});
-    try Lambdasolved.seedAllModuleDefPatternOrigins(&pass, &result);
-    try result.template_catalog.primeAllModules(allocator, all_module_envs);
-    trace.log("primeAllModules done", .{});
-    const root_exprs = result.template_catalog.getModuleRootExprs(current_module_idx);
-    try Lambdasolved.analyzeRoots(
-        allocator,
-        current_module_idx,
-        root_exprs,
-        &pass,
-        &result,
-    );
-    trace.log("assembleLambdamono start", .{});
-    try Lambdamono.assembleRoots(
-        allocator,
-        all_module_envs,
-        current_module_idx,
-        &result,
-        &pass,
-        root_exprs,
-    );
-    trace.log("assembleLambdamono done", .{});
+    try runModuleInto(&pass, &result);
     return result;
 }
