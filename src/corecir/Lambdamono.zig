@@ -346,7 +346,7 @@ pub fn requireProgramExprMonotype(
     );
 }
 
-pub fn ensureProgramExpr(
+fn ensureExprRecord(
     driver: anytype,
     result: anytype,
     source_context: SourceContext,
@@ -369,6 +369,146 @@ pub fn ensureProgramExpr(
     );
 }
 
+pub fn recordExprCallableValue(
+    driver: anytype,
+    result: anytype,
+    source_context: SourceContext,
+    module_idx: u32,
+    expr_idx: CIR.Expr.Idx,
+    callable_value: CallableValue,
+) Allocator.Error!void {
+    const semantics = try ensureExprRecord(driver, result, source_context, module_idx, expr_idx);
+    const owns_callable_intro = result.getExprTemplateId(source_context, module_idx, expr_idx) != null;
+    const next_callable: ExprCallableSemantics = switch (callable_value) {
+        .direct => |callable_inst_id| if (owns_callable_intro)
+            .{ .intro = .{
+                .callable_value = callable_value,
+                .callable_inst = callable_inst_id,
+            } }
+        else
+            .{ .callable = callable_value },
+        .packed_fn => |packed_fn| blk: {
+            if (owns_callable_intro) {
+                switch (semantics.getCallable() orelse break :blk .{ .callable = callable_value }) {
+                    .callable => |existing_callable_value| switch (existing_callable_value) {
+                        .direct => |callable_inst_id| break :blk .{ .intro = .{
+                            .callable_value = .{ .packed_fn = packed_fn },
+                            .callable_inst = callable_inst_id,
+                        } },
+                        .packed_fn => {},
+                    },
+                    .intro => |existing_intro| break :blk .{ .intro = .{
+                        .callable_value = .{ .packed_fn = packed_fn },
+                        .callable_inst = existing_intro.callable_inst,
+                    } },
+                }
+            }
+            break :blk .{ .callable = callable_value };
+        },
+    };
+    if (!std.meta.eql(semantics.common().callable, next_callable)) {
+        semantics.commonMut().callable = next_callable;
+    }
+}
+
+pub fn recordExprCallSite(
+    driver: anytype,
+    result: anytype,
+    source_context: SourceContext,
+    module_idx: u32,
+    expr_idx: CIR.Expr.Idx,
+    call_site: CallSite,
+) Allocator.Error!void {
+    const semantics = try ensureExprRecord(driver, result, source_context, module_idx, expr_idx);
+    const common = semantics.common().*;
+    const next_expr: Expr = switch (call_site) {
+        .direct => |callable_inst| .{ .direct_call = .{
+            .common = common,
+            .callable_inst = callable_inst,
+        } },
+        .indirect_call => |indirect_call| .{ .indirect_call = .{
+            .common = common,
+            .indirect_call = indirect_call,
+        } },
+        .low_level => |low_level| .{ .low_level_call = .{
+            .common = common,
+            .low_level = low_level,
+        } },
+    };
+    if (!std.meta.eql(semantics.*, next_expr)) semantics.* = next_expr;
+}
+
+pub fn recordExprOriginExpr(
+    driver: anytype,
+    result: anytype,
+    source_context: SourceContext,
+    module_idx: u32,
+    expr_idx: CIR.Expr.Idx,
+    expr_ref: ExprRef,
+) Allocator.Error!void {
+    const canonical_ref = blk: {
+        const origin = result.getExprOriginExpr(expr_ref.source_context, expr_ref.module_idx, expr_ref.expr_idx) orelse break :blk expr_ref;
+        if (result.getExprOriginExpr(origin.source_context, origin.module_idx, origin.expr_idx) != null) {
+            std.debug.panic(
+                "Lambdamono invariant violated: expr value-origin for ctx={s} module={d} expr={d} was not canonical",
+                .{
+                    @tagName(expr_ref.source_context),
+                    expr_ref.module_idx,
+                    @intFromEnum(expr_ref.expr_idx),
+                },
+            );
+        }
+        break :blk ExprRef{
+            .source_context = origin.source_context,
+            .module_idx = origin.module_idx,
+            .expr_idx = origin.expr_idx,
+            .projections = try appendValueProjectionEntries(
+                driver,
+                result,
+                origin.projections,
+                result.lambdamono.getValueProjectionEntries(expr_ref.projections),
+            ),
+        };
+    };
+    const semantics = try ensureExprRecord(driver, result, source_context, module_idx, expr_idx);
+    const next_origin: ValueOrigin = .{ .expr = canonical_ref };
+    if (!std.meta.eql(semantics.common().origin, next_origin)) semantics.commonMut().origin = next_origin;
+}
+
+pub fn recordExprLookupResolution(
+    driver: anytype,
+    result: anytype,
+    source_context: SourceContext,
+    module_idx: u32,
+    expr_idx: CIR.Expr.Idx,
+    lookup_resolution: LookupResolution,
+) Allocator.Error!void {
+    const semantics = try ensureExprRecord(driver, result, source_context, module_idx, expr_idx);
+    const common = semantics.common().*;
+    const next_expr: Expr = switch (lookup_resolution) {
+        .expr => |expr_ref| .{ .lookup_expr = .{
+            .common = common,
+            .expr_ref = expr_ref,
+        } },
+        .def => |def_source| .{ .lookup_def = .{
+            .common = common,
+            .def_source = def_source,
+        } },
+    };
+    if (!std.meta.eql(semantics.*, next_expr)) semantics.* = next_expr;
+}
+
+pub fn recordExprSourceExpr(
+    driver: anytype,
+    result: anytype,
+    source_context: SourceContext,
+    module_idx: u32,
+    expr_idx: CIR.Expr.Idx,
+    source: ExprRef,
+) Allocator.Error!void {
+    try recordExprOriginExpr(driver, result, source_context, module_idx, expr_idx, source);
+}
+
 pub fn recordDispatchExprTarget(
     driver: anytype,
     result: anytype,
@@ -384,7 +524,7 @@ pub fn recordDispatchExprTarget(
         expr_idx,
         dispatch_target,
     );
-    const semantics = try ensureProgramExpr(driver, result, source_context, module_idx, expr_idx);
+    const semantics = try ensureExprRecord(driver, result, source_context, module_idx, expr_idx);
     const common = semantics.common().*;
     const next_expr: Expr = .{ .dispatch_target = .{
         .common = common,
@@ -401,7 +541,7 @@ pub fn recordDispatchExprIntrinsic(
     expr_idx: CIR.Expr.Idx,
     dispatch_intrinsic: DispatchIntrinsic,
 ) Allocator.Error!void {
-    const semantics = try ensureProgramExpr(driver, result, source_context, module_idx, expr_idx);
+    const semantics = try ensureExprRecord(driver, result, source_context, module_idx, expr_idx);
     const common = semantics.common().*;
     const next_expr: Expr = .{ .dispatch_intrinsic = .{
         .common = common,
@@ -779,7 +919,7 @@ fn ensureReservedDispatchActualArgChildren(
                 module_idx_inner,
                 child_expr_idx,
             ) orelse blk: {
-                _ = try ensureProgramExpr(
+                _ = try ensureExprRecord(
                     driver_inner,
                     result_inner,
                     source_context_inner,
@@ -797,7 +937,7 @@ fn ensureReservedDispatchActualArgChildren(
     }.run;
 
     const expr_id = result.lambdamono.getExprId(source_context, module_idx, expr_idx) orelse blk: {
-        _ = try ensureProgramExpr(driver, result, source_context, module_idx, expr_idx);
+        _ = try ensureExprRecord(driver, result, source_context, module_idx, expr_idx);
         break :blk result.lambdamono.getExprId(source_context, module_idx, expr_idx).?;
     };
     if (!result.lambdamono.getExprPtr(expr_id).common().child_exprs.isEmpty()) return expr_id;
@@ -1715,7 +1855,7 @@ fn ProgramAssembler(comptime ResultPtr: type, comptime Driver: type) type {
 
         const Self = @This();
 
-        fn assembleRoots(self: *Self, current_module_idx: u32, root_exprs: []const CIR.Expr.Idx) Allocator.Error!void {
+        fn run(self: *Self, current_module_idx: u32, root_exprs: []const CIR.Expr.Idx) Allocator.Error!void {
             for (root_exprs) |expr_idx| {
                 _ = try self.assembleProgramExprNode(
                     .{ .root_expr = .{
@@ -1762,7 +1902,7 @@ fn ProgramAssembler(comptime ResultPtr: type, comptime Driver: type) type {
         ) Allocator.Error!ExprId {
             const key = ContextMono.Result.contextExprKey(source_context, module_idx, expr_idx);
             const expr_id = self.result.lambdamono.expr_ids_by_key.get(key) orelse blk: {
-                _ = try ensureProgramExpr(self.driver, self.result, source_context, module_idx, expr_idx);
+                _ = try ensureExprRecord(self.driver, self.result, source_context, module_idx, expr_idx);
                 break :blk self.result.lambdamono.expr_ids_by_key.get(key).?;
             };
             if (self.assembly.isExprAssembled(key)) return expr_id;
@@ -2032,7 +2172,7 @@ fn ProgramAssembler(comptime ResultPtr: type, comptime Driver: type) type {
     };
 }
 
-pub fn assembleRoots(
+pub fn run(
     allocator: Allocator,
     all_module_envs: []const *ModuleEnv,
     current_module_idx: u32,
@@ -2050,7 +2190,7 @@ pub fn assembleRoots(
         .driver = driver,
         .assembly = &assembly,
     };
-    try assembler.assembleRoots(current_module_idx, root_exprs);
+    try assembler.run(current_module_idx, root_exprs);
 }
 
 pub fn getCallableDef(program: *const Program, callable_def_id: CallableDefId) *const CallableDef {

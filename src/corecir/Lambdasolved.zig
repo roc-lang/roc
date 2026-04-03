@@ -411,7 +411,7 @@ const RootAnalysisState = struct {
     }
 };
 
-pub fn analyzeRoots(
+pub fn run(
     allocator: std.mem.Allocator,
     current_module_idx: u32,
     root_exprs: []const CIR.Expr.Idx,
@@ -2112,7 +2112,7 @@ pub fn finalizeResolvedDirectCallCallableInst(
     const arg_exprs = module_env.store.sliceExpr(call_expr.args);
     try prepareCallableArgsForCallableInst(driver, result, thread, module_idx, arg_exprs, callable_inst_id);
     const callable_def = result.getCallableDefForInst(callable_inst_id);
-    try recordExprSourceExpr(
+    try Lambdamono.recordExprSourceExpr(
         driver,
         result,
         source_context,
@@ -5554,153 +5554,6 @@ pub fn extendExprRef(
     };
 }
 
-pub fn writeExprCallableValue(
-    driver: anytype,
-    result: anytype,
-    source_context: SourceContext,
-    module_idx: u32,
-    expr_idx: CIR.Expr.Idx,
-    callable_value: CallableValue,
-) std.mem.Allocator.Error!void {
-    const semantics = try Lambdamono.ensureProgramExpr(driver, result, source_context, module_idx, expr_idx);
-    const owns_callable_intro = result.getExprTemplateId(source_context, module_idx, expr_idx) != null;
-    const next_callable: Lambdamono.ExprCallableSemantics = switch (callable_value) {
-        .direct => |callable_inst_id| if (owns_callable_intro)
-            .{ .intro = .{
-                .callable_value = callable_value,
-                .callable_inst = callable_inst_id,
-            } }
-        else
-            .{ .callable = callable_value },
-        .packed_fn => |packed_fn| blk: {
-            if (owns_callable_intro) {
-                switch (semantics.getCallable() orelse break :blk .{ .callable = callable_value }) {
-                    .callable => |existing_callable_value| switch (existing_callable_value) {
-                        .direct => |callable_inst_id| break :blk .{ .intro = .{
-                                .callable_value = .{ .packed_fn = packed_fn },
-                                .callable_inst = callable_inst_id,
-                            } },
-                        .packed_fn => {},
-                    },
-                    .intro => |existing_intro| break :blk .{ .intro = .{
-                            .callable_value = .{ .packed_fn = packed_fn },
-                            .callable_inst = existing_intro.callable_inst,
-                        } },
-                }
-            }
-            break :blk .{ .callable = callable_value };
-        },
-    };
-    if (!std.meta.eql(semantics.common().callable, next_callable)) {
-        semantics.commonMut().callable = next_callable;
-    }
-}
-
-pub fn writeExprCallSite(
-    driver: anytype,
-    result: anytype,
-    source_context: SourceContext,
-    module_idx: u32,
-    expr_idx: CIR.Expr.Idx,
-    call_site: CallSite,
-) std.mem.Allocator.Error!void {
-    const semantics = try Lambdamono.ensureProgramExpr(driver, result, source_context, module_idx, expr_idx);
-    const common = semantics.common().*;
-    const next_expr: Lambdamono.Expr = switch (call_site) {
-        .direct => |callable_inst| .{ .direct_call = .{
-            .common = common,
-            .callable_inst = callable_inst,
-        } },
-        .indirect_call => |indirect_call| .{ .indirect_call = .{
-            .common = common,
-            .indirect_call = indirect_call,
-        } },
-        .low_level => |low_level| .{ .low_level_call = .{
-            .common = common,
-            .low_level = low_level,
-        } },
-    };
-    if (!std.meta.eql(semantics.*, next_expr)) semantics.* = next_expr;
-}
-
-pub fn writeExprOriginExpr(
-    driver: anytype,
-    result: anytype,
-    source_context: SourceContext,
-    module_idx: u32,
-    expr_idx: CIR.Expr.Idx,
-    expr_ref: ExprRef,
-) std.mem.Allocator.Error!void {
-    const canonical_ref = blk: {
-        const origin = result.getExprOriginExpr(expr_ref.source_context, expr_ref.module_idx, expr_ref.expr_idx) orelse break :blk expr_ref;
-        if (result.getExprOriginExpr(origin.source_context, origin.module_idx, origin.expr_idx) != null) {
-            std.debug.panic(
-                "Lambdasolved invariant violated: expr value-origin for ctx={s} module={d} expr={d} was not canonical",
-                .{
-                    @tagName(expr_ref.source_context),
-                    expr_ref.module_idx,
-                    @intFromEnum(expr_ref.expr_idx),
-                },
-            );
-        }
-        break :blk ExprRef{
-            .source_context = origin.source_context,
-            .module_idx = origin.module_idx,
-            .expr_idx = origin.expr_idx,
-            .projections = try Lambdamono.appendValueProjectionEntries(
-                driver,
-                result,
-                origin.projections,
-                result.lambdamono.getValueProjectionEntries(expr_ref.projections),
-            ),
-        };
-    };
-    const semantics = try Lambdamono.ensureProgramExpr(driver, result, source_context, module_idx, expr_idx);
-    const next_origin: Lambdamono.ValueOrigin = .{ .expr = canonical_ref };
-    if (!std.meta.eql(semantics.common().origin, next_origin)) semantics.commonMut().origin = next_origin;
-}
-
-pub fn writeExprLookupResolution(
-    driver: anytype,
-    result: anytype,
-    source_context: SourceContext,
-    module_idx: u32,
-    expr_idx: CIR.Expr.Idx,
-    lookup_resolution: Lambdamono.LookupResolution,
-) std.mem.Allocator.Error!void {
-    const semantics = try Lambdamono.ensureProgramExpr(driver, result, source_context, module_idx, expr_idx);
-    const common = semantics.common().*;
-    const next_expr: Lambdamono.Expr = switch (lookup_resolution) {
-        .expr => |expr_ref| .{ .lookup_expr = .{
-            .common = common,
-            .expr_ref = expr_ref,
-        } },
-        .def => |def_source| .{ .lookup_def = .{
-            .common = common,
-            .def_source = def_source,
-        } },
-    };
-    if (!std.meta.eql(semantics.*, next_expr)) semantics.* = next_expr;
-}
-
-pub fn recordExprSourceExpr(
-    driver: anytype,
-    result: anytype,
-    source_context: SourceContext,
-    module_idx: u32,
-    expr_idx: CIR.Expr.Idx,
-    source: ExprRef,
-) std.mem.Allocator.Error!void {
-    try writeExprOriginExpr(
-        driver,
-        result,
-        source_context,
-        module_idx,
-        expr_idx,
-        source,
-    );
-}
-
 pub fn propagatePatternDemandToExpr(
     driver: anytype,
     result: anytype,
@@ -6192,7 +6045,7 @@ pub fn setExprDirectCallable(
     expr_idx: CIR.Expr.Idx,
     callable_inst_id: CallableInstId,
 ) std.mem.Allocator.Error!void {
-    try writeExprCallableValue(
+    try Lambdamono.recordExprCallableValue(
         driver,
         result,
         source_context,
@@ -6228,7 +6081,7 @@ pub fn setExprCallableValue(
     expr_idx: CIR.Expr.Idx,
     callable_value: anytype,
 ) std.mem.Allocator.Error!void {
-    try writeExprCallableValue(driver, result, source_context, module_idx, expr_idx, callable_value);
+    try Lambdamono.recordExprCallableValue(driver, result, source_context, module_idx, expr_idx, callable_value);
 }
 
 pub fn setExprDirectCallSite(
@@ -6239,7 +6092,7 @@ pub fn setExprDirectCallSite(
     expr_idx: CIR.Expr.Idx,
     callable_inst_id: CallableInstId,
 ) std.mem.Allocator.Error!void {
-    return writeExprCallSite(
+    return Lambdamono.recordExprCallSite(
         driver,
         result,
         source_context,
@@ -6264,8 +6117,8 @@ fn realizeLookupExprSemantics(
         .e_lookup_local => |lookup| {
             if (thread.lookupValueBinding(module_idx, lookup.pattern_idx)) |source| {
                 if (bindingSourceExprRef(source)) |source_expr_ref| {
-                    try recordExprSourceExpr(driver, result, source_context, module_idx, expr_idx, source_expr_ref);
-                    try writeExprLookupResolution(
+                    try Lambdamono.recordExprSourceExpr(driver, result, source_context, module_idx, expr_idx, source_expr_ref);
+                    try Lambdamono.recordExprLookupResolution(
                         driver,
                         result,
                         source_context,
@@ -6275,7 +6128,7 @@ fn realizeLookupExprSemantics(
                     );
                 }
             } else if (findDefByPatternInModule(module_env, lookup.pattern_idx)) |def_idx| {
-                try writeExprLookupResolution(
+                try Lambdamono.recordExprLookupResolution(
                     driver,
                     result,
                     source_context,
@@ -6299,7 +6152,7 @@ fn realizeLookupExprSemantics(
                 .module_idx = target_module_idx,
                 .expr_idx = def.expr,
             } };
-            try writeExprLookupResolution(
+            try Lambdamono.recordExprLookupResolution(
                 driver,
                 result,
                 source_context,
@@ -6310,7 +6163,7 @@ fn realizeLookupExprSemantics(
                     .def_idx = def_idx,
                 } },
             );
-            try recordExprSourceExpr(
+            try Lambdamono.recordExprSourceExpr(
                 driver,
                 result,
                 source_context,
@@ -6331,7 +6184,7 @@ fn realizeLookupExprSemantics(
                 .module_idx = target.module_idx,
                 .expr_idx = def.expr,
             } };
-            try writeExprLookupResolution(
+            try Lambdamono.recordExprLookupResolution(
                 driver,
                 result,
                 source_context,
@@ -6342,7 +6195,7 @@ fn realizeLookupExprSemantics(
                     .def_idx = target.def_idx,
                 } },
             );
-            try recordExprSourceExpr(
+            try Lambdamono.recordExprSourceExpr(
                 driver,
                 result,
                 source_context,
@@ -6526,7 +6379,7 @@ fn scanCirExprChildren(
             }
             try propagateDemandedValueResultMonotypeToChild(driver, result, block_thread, module_idx, expr_idx, block_expr.final_expr);
             try scanCirValueExprWithDirectCallResolution(driver, root_analysis, result, block_thread, module_idx, block_expr.final_expr, resolve_direct_calls);
-            try recordExprSourceExpr(
+            try Lambdamono.recordExprSourceExpr(
                 driver,
                 result,
                 block_thread.requireSourceContext(),
@@ -6538,7 +6391,7 @@ fn scanCirExprChildren(
         .e_tag => |tag_expr| try scanCirValueExprSpanWithDirectCallResolution(driver, root_analysis, result, thread, module_idx, module_env.store.sliceExpr(tag_expr.args), resolve_direct_calls),
         .e_nominal => |nominal_expr| {
             try scanCirValueExprWithDirectCallResolution(driver, root_analysis, result, thread, module_idx, nominal_expr.backing_expr, resolve_direct_calls);
-            try recordExprSourceExpr(
+            try Lambdamono.recordExprSourceExpr(
                 driver,
                 result,
                 thread.requireSourceContext(),
@@ -6549,7 +6402,7 @@ fn scanCirExprChildren(
         },
         .e_nominal_external => |nominal_expr| {
             try scanCirValueExprWithDirectCallResolution(driver, root_analysis, result, thread, module_idx, nominal_expr.backing_expr, resolve_direct_calls);
-            try recordExprSourceExpr(
+            try Lambdamono.recordExprSourceExpr(
                 driver,
                 result,
                 thread.requireSourceContext(),
@@ -6607,19 +6460,19 @@ fn scanCirExprChildren(
                     .module_idx = module_idx,
                     .ident = dot_expr.field_name,
                 } });
-                try recordExprSourceExpr(driver, result, thread.requireSourceContext(), module_idx, expr_idx, field_source);
+                try Lambdamono.recordExprSourceExpr(driver, result, thread.requireSourceContext(), module_idx, expr_idx, field_source);
             }
         },
         .e_tuple_access => |tuple_access| {
             try scanCirExprWithDirectCallResolution(driver, root_analysis, result, thread, module_idx, tuple_access.tuple, resolve_direct_calls);
             const tuple_source = exprRefAliasOrSelf(result, thread.requireSourceContext(), module_idx, tuple_access.tuple);
             const elem_source = try extendExprRef(driver, result, tuple_source, .{ .tuple_elem = tuple_access.elem_index });
-            try recordExprSourceExpr(driver, result, thread.requireSourceContext(), module_idx, expr_idx, elem_source);
+            try Lambdamono.recordExprSourceExpr(driver, result, thread.requireSourceContext(), module_idx, expr_idx, elem_source);
         },
         .e_dbg => |dbg_expr| {
             try propagateDemandedValueResultMonotypeToChild(driver, result, thread, module_idx, expr_idx, dbg_expr.expr);
             try scanCirValueExprWithDirectCallResolution(driver, root_analysis, result, thread, module_idx, dbg_expr.expr, resolve_direct_calls);
-            try recordExprSourceExpr(
+            try Lambdamono.recordExprSourceExpr(
                 driver,
                 result,
                 thread.requireSourceContext(),
@@ -6631,7 +6484,7 @@ fn scanCirExprChildren(
         .e_expect => |expect_expr| {
             try propagateDemandedValueResultMonotypeToChild(driver, result, thread, module_idx, expr_idx, expect_expr.body);
             try scanCirValueExprWithDirectCallResolution(driver, root_analysis, result, thread, module_idx, expect_expr.body, resolve_direct_calls);
-            try recordExprSourceExpr(
+            try Lambdamono.recordExprSourceExpr(
                 driver,
                 result,
                 thread.requireSourceContext(),
@@ -6642,7 +6495,7 @@ fn scanCirExprChildren(
         },
         .e_return => |return_expr| {
             try scanCirValueExprWithDirectCallResolution(driver, root_analysis, result, thread, module_idx, return_expr.expr, resolve_direct_calls);
-            try recordExprSourceExpr(
+            try Lambdamono.recordExprSourceExpr(
                 driver,
                 result,
                 thread.requireSourceContext(),
@@ -6972,7 +6825,7 @@ pub fn resolveDirectCallSite(
     }
     if (result.getExprLowLevelOp(thread.requireSourceContext(), module_idx, call_expr.func)) |low_level_op| {
         const arg_exprs = module_env.store.sliceExpr(call_expr.args);
-        try writeExprCallSite(
+        try Lambdamono.recordExprCallSite(
             driver,
             result,
             thread.requireSourceContext(),
@@ -7229,7 +7082,7 @@ pub fn resolveDirectCallSite(
             var call_variant_builder = CallableVariantBuilder.init();
             defer call_variant_builder.deinit(driver.allocator);
             try call_variant_builder.includeCallableValue(driver, result, callable_value);
-            try writeExprCallSite(
+            try Lambdamono.recordExprCallSite(
                 driver,
                 result,
                 thread.requireSourceContext(),

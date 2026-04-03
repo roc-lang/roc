@@ -155,9 +155,9 @@ pub const Result = struct {
     lambdasolved: Lambdasolved.Result,
     lambdamono: Lambdamono.Program,
 
-    pub fn init(allocator: Allocator) !Result {
+    pub fn init(allocator: Allocator, all_module_envs: []const *ModuleEnv) !Result {
         return .{
-            .template_catalog = TemplateCatalog.Result.init(),
+            .template_catalog = try TemplateCatalog.run(allocator, all_module_envs),
             .context_mono = try ContextMono.Result.init(allocator),
             .dispatch_solved = DispatchSolved.Result.init(),
             .lambdasolved = try Lambdasolved.Result.init(allocator),
@@ -577,60 +577,6 @@ pub const Pass = struct {
     }
 };
 
-fn runRootsInto(
-    pass: *Pass,
-    result: *Result,
-    exprs: []const CIR.Expr.Idx,
-) Allocator.Error!void {
-    trace.log("primeAllModules start", .{});
-    try result.template_catalog.primeAllModules(pass.allocator, pass.all_module_envs);
-    trace.log("primeAllModules done", .{});
-    try Lambdasolved.analyzeRoots(
-        pass.allocator,
-        pass.current_module_idx,
-        exprs,
-        pass,
-        result,
-    );
-    trace.log("assembleLambdamono start", .{});
-    try Lambdamono.assembleRoots(
-        pass.allocator,
-        pass.all_module_envs,
-        pass.current_module_idx,
-        result,
-        pass,
-        exprs,
-    );
-    trace.log("assembleLambdamono done", .{});
-}
-
-fn runModuleInto(
-    pass: *Pass,
-    result: *Result,
-) Allocator.Error!void {
-    trace.log("primeAllModules start", .{});
-    try result.template_catalog.primeAllModules(pass.allocator, pass.all_module_envs);
-    trace.log("primeAllModules done", .{});
-    const root_exprs = result.template_catalog.getModuleRootExprs(pass.current_module_idx);
-    try Lambdasolved.analyzeRoots(
-        pass.allocator,
-        pass.current_module_idx,
-        root_exprs,
-        pass,
-        result,
-    );
-    trace.log("assembleLambdamono start", .{});
-    try Lambdamono.assembleRoots(
-        pass.allocator,
-        pass.all_module_envs,
-        pass.current_module_idx,
-        result,
-        pass,
-        root_exprs,
-    );
-    trace.log("assembleLambdamono done", .{});
-}
-
 /// Pipeline one expression tree rooted in the given module.
 pub fn runRootSourceExpr(
     allocator: Allocator,
@@ -646,9 +592,12 @@ pub fn runRootSourceExpr(
         app_module_idx,
     );
     defer pass.deinit();
-    var result = try Result.init(allocator);
+    var result = try Result.init(allocator, all_module_envs);
     trace.log("runRootSourceExpr start expr={d}", .{@intFromEnum(expr_idx)});
-    try runRootsInto(&pass, &result, &.{expr_idx});
+    try Lambdasolved.run(allocator, current_module_idx, &.{expr_idx}, &pass, &result);
+    trace.log("assembleLambdamono start", .{});
+    try Lambdamono.run(allocator, all_module_envs, current_module_idx, &result, &pass, &.{expr_idx});
+    trace.log("assembleLambdamono done", .{});
     return result;
 }
 
@@ -663,7 +612,7 @@ pub fn runRootSourceExprWithTypeScope(
     explicit_type_scope: *const types.TypeScope,
     scope_caller_module_idx: u32,
 ) Allocator.Error!Result {
-    var result = try Result.init(allocator);
+    var result = try Result.init(allocator, all_module_envs);
     errdefer result.deinit(allocator);
     var pass = Pass.init(
         allocator,
@@ -678,7 +627,10 @@ pub fn runRootSourceExprWithTypeScope(
         .scope = explicit_type_scope,
     });
     trace.log("runRootSourceExprWithTypeScope start expr={d}", .{@intFromEnum(expr_idx)});
-    try runRootsInto(&pass, &result, &.{expr_idx});
+    try Lambdasolved.run(allocator, current_module_idx, &.{expr_idx}, &pass, &result);
+    trace.log("assembleLambdamono start", .{});
+    try Lambdamono.run(allocator, all_module_envs, current_module_idx, &result, &pass, &.{expr_idx});
+    trace.log("assembleLambdamono done", .{});
     return result;
 }
 
@@ -697,8 +649,9 @@ pub fn runRootSourceExprs(
         app_module_idx,
     );
     defer pass.deinit();
-    var result = try Result.init(allocator);
-    try runRootsInto(&pass, &result, exprs);
+    var result = try Result.init(allocator, all_module_envs);
+    try Lambdasolved.run(allocator, current_module_idx, exprs, &pass, &result);
+    try Lambdamono.run(allocator, all_module_envs, current_module_idx, &result, &pass, exprs);
     return result;
 }
 
@@ -713,7 +666,7 @@ pub fn runRootSourceExprsWithTypeScope(
     explicit_type_scope: *const types.TypeScope,
     scope_caller_module_idx: u32,
 ) Allocator.Error!Result {
-    var result = try Result.init(allocator);
+    var result = try Result.init(allocator, all_module_envs);
     errdefer result.deinit(allocator);
     var pass = Pass.init(
         allocator,
@@ -727,7 +680,8 @@ pub fn runRootSourceExprsWithTypeScope(
         .caller_module_idx = scope_caller_module_idx,
         .scope = explicit_type_scope,
     });
-    try runRootsInto(&pass, &result, exprs);
+    try Lambdasolved.run(allocator, current_module_idx, exprs, &pass, &result);
+    try Lambdamono.run(allocator, all_module_envs, current_module_idx, &result, &pass, exprs);
     return result;
 }
 
@@ -745,8 +699,10 @@ pub fn runModule(
         app_module_idx,
     );
     defer pass.deinit();
-    var result = try Result.init(allocator);
-    try runModuleInto(&pass, &result);
+    var result = try Result.init(allocator, all_module_envs);
+    const root_exprs = result.template_catalog.getModuleRootExprs(current_module_idx);
+    try Lambdasolved.run(allocator, current_module_idx, root_exprs, &pass, &result);
+    try Lambdamono.run(allocator, all_module_envs, current_module_idx, &result, &pass, root_exprs);
     return result;
 }
 
@@ -760,7 +716,7 @@ pub fn runModuleWithTypeScope(
     explicit_type_scope: *const types.TypeScope,
     scope_caller_module_idx: u32,
 ) Allocator.Error!Result {
-    var result = try Result.init(allocator);
+    var result = try Result.init(allocator, all_module_envs);
     errdefer result.deinit(allocator);
     var pass = Pass.init(
         allocator,
@@ -774,6 +730,8 @@ pub fn runModuleWithTypeScope(
         .caller_module_idx = scope_caller_module_idx,
         .scope = explicit_type_scope,
     });
-    try runModuleInto(&pass, &result);
+    const root_exprs = result.template_catalog.getModuleRootExprs(current_module_idx);
+    try Lambdasolved.run(allocator, current_module_idx, root_exprs, &pass, &result);
+    try Lambdamono.run(allocator, all_module_envs, current_module_idx, &result, &pass, root_exprs);
     return result;
 }

@@ -483,7 +483,7 @@ pub const Result = struct {
         });
     }
 
-    pub fn primeAllModules(
+    fn primeAllModules(
         self: *Result,
         allocator: Allocator,
         all_module_envs: []const *ModuleEnv,
@@ -493,3 +493,13 @@ pub const Result = struct {
         }
     }
 };
+
+pub fn run(
+    allocator: Allocator,
+    all_module_envs: []const *ModuleEnv,
+) Allocator.Error!Result {
+    var result = Result.init();
+    errdefer result.deinit(allocator);
+    try result.primeAllModules(allocator, all_module_envs);
+    return result;
+}
