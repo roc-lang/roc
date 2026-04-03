@@ -78,19 +78,6 @@ pub const DefExprCallableBoundary = struct {
     kind: CallableTemplateKind,
 };
 
-pub const RootExprSpan = extern struct {
-    start: u32,
-    len: u32,
-
-    pub fn empty() RootExprSpan {
-        return .{ .start = 0, .len = 0 };
-    }
-
-    pub fn isEmpty(self: RootExprSpan) bool {
-        return self.len == 0;
-    }
-};
-
 pub fn exprTemplateSource(module_idx: u32, expr_idx: CIR.Expr.Idx) ExprTemplateSource {
     return .{ .module_idx = module_idx, .expr_idx = expr_idx };
 }
@@ -228,23 +215,17 @@ pub fn findModuleForOrigin(
 pub const Result = struct {
     callable_templates: std.ArrayListUnmanaged(CallableTemplate),
     callable_template_ids_by_source: std.AutoHashMapUnmanaged(CallableTemplateSource, CallableTemplateId),
-    root_expr_entries: std.ArrayListUnmanaged(CIR.Expr.Idx),
-    root_expr_spans_by_module: std.AutoHashMapUnmanaged(u32, RootExprSpan),
 
     pub fn init() Result {
         return .{
             .callable_templates = .empty,
             .callable_template_ids_by_source = .empty,
-            .root_expr_entries = .empty,
-            .root_expr_spans_by_module = .empty,
         };
     }
 
     pub fn deinit(self: *Result, allocator: Allocator) void {
         self.callable_templates.deinit(allocator);
         self.callable_template_ids_by_source.deinit(allocator);
-        self.root_expr_entries.deinit(allocator);
-        self.root_expr_spans_by_module.deinit(allocator);
     }
 
     pub fn getCallableTemplate(self: *const Result, callable_template_id: CallableTemplateId) *const CallableTemplate {
@@ -299,26 +280,6 @@ pub const Result = struct {
 
     pub fn lookupCallableTemplateBySource(self: *const Result, source: CallableTemplateSource) ?CallableTemplateId {
         return self.callable_template_ids_by_source.get(source);
-    }
-
-    pub fn getModuleRootExprs(self: *const Result, module_idx: u32) []const CIR.Expr.Idx {
-        const span = self.root_expr_spans_by_module.get(module_idx) orelse return &.{};
-        return self.root_expr_entries.items[span.start .. span.start + span.len];
-    }
-
-    pub fn recordModuleRootExprs(
-        self: *Result,
-        allocator: Allocator,
-        module_idx: u32,
-        exprs: []const CIR.Expr.Idx,
-    ) Allocator.Error!void {
-        if (self.root_expr_spans_by_module.contains(module_idx)) return;
-        const start: u32 = @intCast(self.root_expr_entries.items.len);
-        try self.root_expr_entries.appendSlice(allocator, exprs);
-        try self.root_expr_spans_by_module.put(allocator, module_idx, .{
-            .start = start,
-            .len = @intCast(exprs.len),
-        });
     }
 
     pub fn recordCallableTemplateSource(
@@ -458,15 +419,11 @@ pub fn run(
     errdefer result.deinit(allocator);
     for (all_module_envs, 0..) |_, module_idx| {
         const resolved_module_idx: u32 = @intCast(module_idx);
-        if (result.root_expr_spans_by_module.contains(resolved_module_idx)) continue;
-
         const module_env = all_module_envs[resolved_module_idx];
         const defs = module_env.store.sliceDefs(module_env.all_defs);
-        const root_expr_entries_start: u32 = @intCast(result.root_expr_entries.items.len);
 
         for (defs) |def_idx| {
             const def = module_env.store.getDef(def_idx);
-            try result.root_expr_entries.append(allocator, def.expr);
             _ = try result.preRegisterCallableTemplateForDefExpr(
                 allocator,
                 all_module_envs,
@@ -481,11 +438,6 @@ pub fn run(
                 },
             );
         }
-
-        try result.root_expr_spans_by_module.put(allocator, resolved_module_idx, .{
-            .start = root_expr_entries_start,
-            .len = @intCast(defs.len),
-        });
     }
     return result;
 }

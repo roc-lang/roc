@@ -134,6 +134,23 @@ const RequiredLookupTarget = struct {
     def_idx: CIR.Def.Idx,
 };
 
+fn collectModuleRootExprs(
+    allocator: Allocator,
+    all_module_envs: []const *ModuleEnv,
+    module_idx: u32,
+) Allocator.Error![]CIR.Expr.Idx {
+    const module_env = all_module_envs[module_idx];
+    const defs = module_env.store.sliceDefs(module_env.all_defs);
+    const root_exprs = try allocator.alloc(CIR.Expr.Idx, defs.len);
+    errdefer allocator.free(root_exprs);
+
+    for (defs, 0..) |def_idx, i| {
+        root_exprs[i] = module_env.store.getDef(def_idx).expr;
+    }
+
+    return root_exprs;
+}
+
 /// Output of the staged CoreCIR/context-mono/lambda-specialization pipeline.
 pub const Result = struct {
     template_catalog: TemplateCatalog.Result,
@@ -699,7 +716,8 @@ pub fn runModule(
     );
     defer pass.deinit();
     var result = try Result.init(allocator, all_module_envs);
-    const root_exprs = result.template_catalog.getModuleRootExprs(current_module_idx);
+    const root_exprs = try collectModuleRootExprs(allocator, all_module_envs, current_module_idx);
+    defer allocator.free(root_exprs);
     try Lambdasolved.run(allocator, current_module_idx, root_exprs, &pass, &result);
     try Lambdamono.run(allocator, all_module_envs, current_module_idx, &result, &pass, root_exprs);
     return result;
@@ -729,7 +747,8 @@ pub fn runModuleWithTypeScope(
         .caller_module_idx = scope_caller_module_idx,
         .scope = explicit_type_scope,
     });
-    const root_exprs = result.template_catalog.getModuleRootExprs(current_module_idx);
+    const root_exprs = try collectModuleRootExprs(allocator, all_module_envs, current_module_idx);
+    defer allocator.free(root_exprs);
     try Lambdasolved.run(allocator, current_module_idx, root_exprs, &pass, &result);
     try Lambdamono.run(allocator, all_module_envs, current_module_idx, &result, &pass, root_exprs);
     return result;

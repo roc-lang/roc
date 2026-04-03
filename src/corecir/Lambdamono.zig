@@ -266,29 +266,6 @@ pub fn requireProgramExprMonotype(
     );
 }
 
-fn ensureExprRecord(
-    driver: anytype,
-    result: anytype,
-    source_context: SourceContext,
-    module_idx: u32,
-    expr_idx: CIR.Expr.Idx,
-) Allocator.Error!*Expr {
-    const monotype = try requireProgramExprMonotype(
-        driver,
-        result,
-        source_context,
-        module_idx,
-        expr_idx,
-    );
-    return result.lambdamono.ensureExpr(
-        driver.allocator,
-        source_context,
-        module_idx,
-        expr_idx,
-        monotype,
-    );
-}
-
 pub fn exprHasExactProgramSemantics(
     driver: anytype,
     result: anytype,
@@ -489,7 +466,7 @@ pub const ValueOrigin = union(enum) {
 /// One finalized specialized expr in the executable `Lambdamono.Program`.
 ///
 /// Invariant: every `Expr` stored in `Program.exprs` already has its exact
-/// monotype. Finalization/build progress must live in the run-local assembler,
+/// monotype. Finalization/build progress must live in the run-local transform,
 /// not in the executable IR itself.
 pub const ExprCommon = struct {
     source_context: SourceContext,
@@ -671,7 +648,9 @@ pub const Stmt = struct {
 /// specialization/build state must live outside this struct.
 pub const Program = struct {
     exprs: std.ArrayListUnmanaged(Expr),
-    expr_ids_by_key: std.AutoHashMapUnmanaged(ContextExprKey, ExprId),
+    // Final lookup index for downstream stages that need the executable expr
+    // corresponding to a source-context expr.
+    expr_ids_by_context: std.AutoHashMapUnmanaged(ContextExprKey, ExprId),
     expr_child_entries: std.ArrayListUnmanaged(ExprId),
     stmts: std.ArrayListUnmanaged(Stmt),
     stmt_ids_by_key: std.AutoHashMapUnmanaged(BuildStmtKey, StmtId),
@@ -680,7 +659,7 @@ pub const Program = struct {
     pub fn init() Program {
         return .{
             .exprs = .empty,
-            .expr_ids_by_key = .empty,
+            .expr_ids_by_context = .empty,
             .expr_child_entries = .empty,
             .stmts = .empty,
             .stmt_ids_by_key = .empty,
@@ -690,7 +669,7 @@ pub const Program = struct {
 
     pub fn deinit(self: *Program, allocator: Allocator) void {
         self.exprs.deinit(allocator);
-        self.expr_ids_by_key.deinit(allocator);
+        self.expr_ids_by_context.deinit(allocator);
         self.expr_child_entries.deinit(allocator);
         self.stmts.deinit(allocator);
         self.stmt_ids_by_key.deinit(allocator);
@@ -711,7 +690,7 @@ pub const Program = struct {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) ?ExprId {
-        return self.expr_ids_by_key.get(ContextMono.Result.contextExprKey(source_context, module_idx, expr_idx));
+        return self.expr_ids_by_context.get(ContextMono.Result.contextExprKey(source_context, module_idx, expr_idx));
     }
 
     pub fn getExprChildren(self: *const Program, span: ExprIdSpan) []const ExprId {
@@ -723,44 +702,6 @@ pub const Program = struct {
         return self.getExprChildren(self.getExpr(expr_id).common().child_exprs)[index];
     }
 
-    pub fn ensureExpr(
-        self: *Program,
-        allocator: Allocator,
-        source_context: SourceContext,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-        monotype: ContextMono.ResolvedMonotype,
-    ) Allocator.Error!*Expr {
-        const key = ContextMono.Result.contextExprKey(source_context, module_idx, expr_idx);
-        const expr_id = self.expr_ids_by_key.get(key) orelse blk: {
-            const new_expr_id: ExprId = @enumFromInt(self.exprs.items.len);
-            try self.exprs.append(allocator, .{
-                .plain = .{
-                    .source_context = source_context,
-                    .module_idx = module_idx,
-                    .source_expr = expr_idx,
-                    .monotype = monotype,
-                    .child_exprs = .empty(),
-                    .child_stmts = .empty(),
-                    .origin = .self,
-                },
-            });
-            try self.expr_ids_by_key.put(allocator, key, new_expr_id);
-            break :blk new_expr_id;
-        };
-        const expr = self.getExprPtr(expr_id);
-        if (!std.meta.eql(expr.common().monotype, monotype)) {
-            if (std.debug.runtime_safety) {
-                std.debug.panic(
-                    "Lambdamono invariant violated: expr monotype changed after reservation",
-                    .{},
-                );
-            }
-            unreachable;
-        }
-        return expr;
-    }
-
     pub fn getStmt(self: *const Program, stmt_id: StmtId) *const Stmt {
         return &self.stmts.items[@intFromEnum(stmt_id)];
     }
@@ -770,39 +711,13 @@ pub const Program = struct {
         return self.expr_child_entries.items[span.start..][0..span.len];
     }
 
-    pub fn appendExprChildren(
-        self: *Program,
-        allocator: Allocator,
-        child_exprs: []const ExprId,
-    ) Allocator.Error!ExprIdSpan {
-        const start: u32 = @intCast(self.expr_child_entries.items.len);
-        try self.expr_child_entries.appendSlice(allocator, child_exprs);
-        return .{
-            .start = start,
-            .len = @intCast(child_exprs.len),
-        };
-    }
-
     pub fn getBlockStmtChildren(self: *const Program, span: StmtIdSpan) []const StmtId {
         if (span.len == 0) return &.{};
         return self.stmt_child_entries.items[span.start..][0..span.len];
     }
-
-    pub fn appendStmtChildren(
-        self: *Program,
-        allocator: Allocator,
-        child_stmts: []const StmtId,
-    ) Allocator.Error!StmtIdSpan {
-        const start: u32 = @intCast(self.stmt_child_entries.items.len);
-        try self.stmt_child_entries.appendSlice(allocator, child_stmts);
-        return .{
-            .start = start,
-            .len = @intCast(child_stmts.len),
-        };
-    }
 };
 
-fn ExecutableTransform(comptime ResultPtr: type, comptime Driver: type) type {
+fn Transform(comptime ResultPtr: type, comptime Driver: type) type {
     return struct {
         allocator: Allocator,
         all_module_envs: []const *ModuleEnv,
@@ -876,6 +791,67 @@ fn ExecutableTransform(comptime ResultPtr: type, comptime Driver: type) type {
             try self.assembled_callable_insts.put(self.allocator, callable_inst_id, {});
         }
 
+        fn ensureExprRecord(
+            self: *Self,
+            source_context: SourceContext,
+            module_idx: u32,
+            expr_idx: CIR.Expr.Idx,
+        ) Allocator.Error!*Expr {
+            const monotype = try requireProgramExprMonotype(
+                self.driver,
+                self.result,
+                source_context,
+                module_idx,
+                expr_idx,
+            );
+            const key = ContextMono.Result.contextExprKey(source_context, module_idx, expr_idx);
+            const expr_id = self.result.lambdamono.expr_ids_by_context.get(key) orelse blk: {
+                const new_expr_id: ExprId = @enumFromInt(self.result.lambdamono.exprs.items.len);
+                try self.result.lambdamono.exprs.append(self.allocator, .{
+                    .plain = .{
+                        .source_context = source_context,
+                        .module_idx = module_idx,
+                        .source_expr = expr_idx,
+                        .monotype = monotype,
+                        .child_exprs = .empty(),
+                        .child_stmts = .empty(),
+                        .origin = .self,
+                    },
+                });
+                try self.result.lambdamono.expr_ids_by_context.put(self.allocator, key, new_expr_id);
+                break :blk new_expr_id;
+            };
+            const expr = self.result.lambdamono.getExprPtr(expr_id);
+            if (!std.meta.eql(expr.common().monotype, monotype)) {
+                if (std.debug.runtime_safety) {
+                    std.debug.panic(
+                        "Lambdamono invariant violated: expr monotype changed after reservation",
+                        .{},
+                    );
+                }
+                unreachable;
+            }
+            return expr;
+        }
+
+        fn appendExprChildren(self: *Self, child_exprs: []const ExprId) Allocator.Error!ExprIdSpan {
+            const start: u32 = @intCast(self.result.lambdamono.expr_child_entries.items.len);
+            try self.result.lambdamono.expr_child_entries.appendSlice(self.allocator, child_exprs);
+            return .{
+                .start = start,
+                .len = @intCast(child_exprs.len),
+            };
+        }
+
+        fn appendStmtChildren(self: *Self, child_stmts: []const StmtId) Allocator.Error!StmtIdSpan {
+            const start: u32 = @intCast(self.result.lambdamono.stmt_child_entries.items.len);
+            try self.result.lambdamono.stmt_child_entries.appendSlice(self.allocator, child_stmts);
+            return .{
+                .start = start,
+                .len = @intCast(child_stmts.len),
+            };
+        }
+
         fn run(self: *Self, current_module_idx: u32, root_exprs: []const CIR.Expr.Idx) Allocator.Error!void {
             for (root_exprs) |expr_idx| {
                 _ = try self.assembleProgramExprNode(
@@ -922,9 +898,9 @@ fn ExecutableTransform(comptime ResultPtr: type, comptime Driver: type) type {
             expr_idx: CIR.Expr.Idx,
         ) Allocator.Error!ExprId {
             const key = ContextMono.Result.contextExprKey(source_context, module_idx, expr_idx);
-            const expr_id = self.result.lambdamono.expr_ids_by_key.get(key) orelse blk: {
-                _ = try ensureExprRecord(self.driver, self.result, source_context, module_idx, expr_idx);
-                break :blk self.result.lambdamono.expr_ids_by_key.get(key).?;
+            const expr_id = self.result.lambdamono.expr_ids_by_context.get(key) orelse blk: {
+                _ = try self.ensureExprRecord(source_context, module_idx, expr_idx);
+                break :blk self.result.lambdamono.expr_ids_by_context.get(key).?;
             };
             if (self.isExprAssembled(key)) return expr_id;
             if (!try self.beginExprAssembly(key)) return expr_id;
@@ -1056,8 +1032,8 @@ fn ExecutableTransform(comptime ResultPtr: type, comptime Driver: type) type {
                 else => {},
             }
 
-            const child_expr_span = try self.result.lambdamono.appendExprChildren(self.allocator, child_exprs.items);
-            const child_stmt_span = try self.result.lambdamono.appendStmtChildren(self.allocator, child_stmts.items);
+            const child_expr_span = try self.appendExprChildren(child_exprs.items);
+            const child_stmt_span = try self.appendStmtChildren(child_stmts.items);
             const program_expr = self.result.lambdamono.getExprPtr(expr_id);
             const common = program_expr.commonMut();
             common.source_context = source_context;
@@ -1177,7 +1153,7 @@ fn ExecutableTransform(comptime ResultPtr: type, comptime Driver: type) type {
             try self.result.lambdamono.stmts.append(self.allocator, .{
                 .module_idx = module_idx,
                 .source_stmt = stmt_idx,
-                .child_exprs = try self.result.lambdamono.appendExprChildren(self.allocator, child_exprs.items),
+                .child_exprs = try self.appendExprChildren(child_exprs.items),
             });
             try self.result.lambdamono.stmt_ids_by_key.put(self.allocator, key, stmt_id);
             return stmt_id;
@@ -1201,14 +1177,14 @@ pub fn run(
     driver: anytype,
     root_exprs: []const CIR.Expr.Idx,
 ) Allocator.Error!void {
-    var assembler = ExecutableTransform(@TypeOf(result), @TypeOf(driver)).init(
+    var transform = Transform(@TypeOf(result), @TypeOf(driver)).init(
         allocator,
         all_module_envs,
         result,
         driver,
     );
-    defer assembler.deinit();
-    try assembler.run(current_module_idx, root_exprs);
+    defer transform.deinit();
+    try transform.run(current_module_idx, root_exprs);
 }
 
 fn callableInstHasRealizedRuntimeExpr(result: anytype, callable_inst_id: CallableInstId) bool {
