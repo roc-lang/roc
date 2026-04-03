@@ -50,6 +50,11 @@ const OwnedInputSpan = struct {
     len: u16,
 };
 
+const JoinInfo = struct {
+    params: LIR.LocalSpan,
+    body: CFStmtId,
+};
+
 const LocalDefinitionKind = union(enum) {
     proc_param,
     join_param,
@@ -74,6 +79,7 @@ pub const RcInsertPass = struct {
     promoted_fresh_join_params: std.AutoHashMap(u64, void),
     owning_join_params: std.AutoHashMap(u64, void),
     active_join_params: std.AutoHashMap(u32, LIR.LocalSpan),
+    joins_by_id: std.AutoHashMap(u32, JoinInfo),
     proc_param_use_kinds: std.ArrayListUnmanaged([]UseKind),
 
     /// Initializes an RC insertion pass over the provided LIR store.
@@ -94,6 +100,7 @@ pub const RcInsertPass = struct {
             .promoted_fresh_join_params = std.AutoHashMap(u64, void).init(allocator),
             .owning_join_params = std.AutoHashMap(u64, void).init(allocator),
             .active_join_params = std.AutoHashMap(u32, LIR.LocalSpan).init(allocator),
+            .joins_by_id = std.AutoHashMap(u32, JoinInfo).init(allocator),
             .proc_param_use_kinds = .empty,
         };
     }
@@ -112,6 +119,7 @@ pub const RcInsertPass = struct {
         self.promoted_fresh_join_params.deinit();
         self.owning_join_params.deinit();
         self.active_join_params.deinit();
+        self.joins_by_id.deinit();
         for (self.proc_param_use_kinds.items) |use_kinds| {
             self.allocator.free(use_kinds);
         }
@@ -161,6 +169,7 @@ pub const RcInsertPass = struct {
         self.promoted_fresh_join_params.clearRetainingCapacity();
         self.owning_join_params.clearRetainingCapacity();
         self.active_join_params.clearRetainingCapacity();
+        self.joins_by_id.clearRetainingCapacity();
     }
 
     fn cloneSwitchBranches(self: *RcInsertPass, span: LIR.CFSwitchBranchSpan) Allocator.Error![]LIR.CFSwitchBranch {
@@ -226,6 +235,18 @@ pub const RcInsertPass = struct {
     }
 
     fn localCarriesOwnedValue(self: *const RcInsertPass, local: LocalId) bool {
+        const initial_def_kind = self.local_definition_kinds.get(localKey(local)) orelse std.debug.panic(
+            "RcInsertPass invariant violated: missing definition kind for local {d}",
+            .{@intFromEnum(local)},
+        );
+        switch (initial_def_kind) {
+            .join_param => {
+                return self.promoted_fresh_join_params.contains(localKey(local)) or
+                    self.owning_join_params.contains(localKey(local));
+            },
+            else => {},
+        }
+
         var current = local;
         var steps: u32 = 0;
 
@@ -1517,6 +1538,10 @@ pub const RcInsertPass = struct {
                 try self.collectAliasSemanticsInStmt(scope.remainder);
             },
             .join => |join| {
+                try self.joins_by_id.put(@intFromEnum(join.id), .{
+                    .params = join.params,
+                    .body = join.body,
+                });
                 try self.recordJoinParamDefinitions(join.params);
                 try self.collectAliasSemanticsInStmt(join.body);
                 try self.collectAliasSemanticsInStmt(join.remainder);
@@ -1986,6 +2011,7 @@ pub const RcInsertPass = struct {
         params: []const LocalId,
         forwarded_values: []const LocalId,
         next: CFStmtId,
+        external_jump_target: ?LIR.JoinPointId,
     ) Allocator.Error!CFStmtId {
         var rewritten = next;
         for (params) |param| {
@@ -2024,6 +2050,12 @@ pub const RcInsertPass = struct {
             }
             if (forwarded) continue;
 
+            if (external_jump_target) |target_join_id| {
+                if (param_root) |root| {
+                    if (self.joinBodyUsesOwnershipRoot(target_join_id, root)) continue;
+                }
+            }
+
             if (self.forwardingAliasRepresentative(param)) |alias_root| {
                 if (self.local_alias_sources.contains(localKey(alias_root))) continue;
             }
@@ -2034,6 +2066,101 @@ pub const RcInsertPass = struct {
             } });
         }
         return rewritten;
+    }
+
+    fn localUseTouchesOwnershipRoot(self: *const RcInsertPass, local: LocalId, root: LocalId) bool {
+        return self.localTransfersOwnership(local, root);
+    }
+
+    fn stmtUsesOwnershipRoot(self: *const RcInsertPass, stmt_id: CFStmtId, root: LocalId) bool {
+        const stmt = self.store.getCFStmt(stmt_id);
+        switch (stmt) {
+            .assign_symbol, .assign_literal, .runtime_error, .scope_exit, .crash => return false,
+            .assign_ref => |assign| {
+                if (self.localUseTouchesOwnershipRoot(refOpSource(assign.op), root)) return true;
+                return self.stmtUsesOwnershipRoot(assign.next, root);
+            },
+            .assign_call => |assign| {
+                for (self.store.getLocalSpan(assign.args)) |arg| {
+                    if (self.localUseTouchesOwnershipRoot(arg, root)) return true;
+                }
+                return self.stmtUsesOwnershipRoot(assign.next, root);
+            },
+            .assign_low_level => |assign| {
+                for (self.store.getLocalSpan(assign.args)) |arg| {
+                    if (self.localUseTouchesOwnershipRoot(arg, root)) return true;
+                }
+                return self.stmtUsesOwnershipRoot(assign.next, root);
+            },
+            .assign_list => |assign| {
+                for (self.store.getLocalSpan(assign.elems)) |arg| {
+                    if (self.localUseTouchesOwnershipRoot(arg, root)) return true;
+                }
+                return self.stmtUsesOwnershipRoot(assign.next, root);
+            },
+            .assign_struct => |assign| {
+                for (self.store.getLocalSpan(assign.fields)) |arg| {
+                    if (self.localUseTouchesOwnershipRoot(arg, root)) return true;
+                }
+                return self.stmtUsesOwnershipRoot(assign.next, root);
+            },
+            .assign_tag => |assign| {
+                for (self.store.getLocalSpan(assign.args)) |arg| {
+                    if (self.localUseTouchesOwnershipRoot(arg, root)) return true;
+                }
+                return self.stmtUsesOwnershipRoot(assign.next, root);
+            },
+            .debug => |stmt_debug| {
+                if (self.localUseTouchesOwnershipRoot(stmt_debug.message, root)) return true;
+                return self.stmtUsesOwnershipRoot(stmt_debug.next, root);
+            },
+            .expect => |stmt_expect| {
+                if (self.localUseTouchesOwnershipRoot(stmt_expect.condition, root)) return true;
+                return self.stmtUsesOwnershipRoot(stmt_expect.next, root);
+            },
+            .incref => |inc| {
+                if (self.localUseTouchesOwnershipRoot(inc.value, root)) return true;
+                return self.stmtUsesOwnershipRoot(inc.next, root);
+            },
+            .decref => |dec| {
+                if (self.localUseTouchesOwnershipRoot(dec.value, root)) return true;
+                return self.stmtUsesOwnershipRoot(dec.next, root);
+            },
+            .free => |free_stmt| {
+                if (self.localUseTouchesOwnershipRoot(free_stmt.value, root)) return true;
+                return self.stmtUsesOwnershipRoot(free_stmt.next, root);
+            },
+            .switch_stmt => |switch_stmt| {
+                if (self.localUseTouchesOwnershipRoot(switch_stmt.cond, root)) return true;
+                for (self.store.getCFSwitchBranches(switch_stmt.branches)) |branch| {
+                    if (self.stmtUsesOwnershipRoot(branch.body, root)) return true;
+                }
+                return self.stmtUsesOwnershipRoot(switch_stmt.default_branch, root);
+            },
+            .borrow_scope => |scope| {
+                if (self.stmtUsesOwnershipRoot(scope.body, root)) return true;
+                return self.stmtUsesOwnershipRoot(scope.remainder, root);
+            },
+            .join => |join| {
+                if (self.stmtUsesOwnershipRoot(join.body, root)) return true;
+                return self.stmtUsesOwnershipRoot(join.remainder, root);
+            },
+            .jump => |jump| {
+                for (self.store.getLocalSpan(jump.args)) |arg| {
+                    if (self.localUseTouchesOwnershipRoot(arg, root)) return true;
+                }
+                return false;
+            },
+            .ret => |ret_stmt| return self.localUseTouchesOwnershipRoot(ret_stmt.value, root),
+        }
+    }
+
+    fn joinBodyUsesOwnershipRoot(self: *const RcInsertPass, join_id: LIR.JoinPointId, root: LocalId) bool {
+        const join_info = self.joins_by_id.get(@intFromEnum(join_id)) orelse std.debug.panic(
+            "RcInsertPass invariant violated: missing join info for join {d}",
+            .{@intFromEnum(join_id)},
+        );
+        return self.stmtUsesOwnershipRoot(join_info.body, root);
     }
 
     fn appendReachableJoinIds(
@@ -2292,12 +2419,12 @@ pub const RcInsertPass = struct {
             else if (!close_on_external_jump)
                 stmt_id
             else
-                try self.prependJoinParamDecrefs(params, self.store.getLocalSpan(jump.args), stmt_id),
+                try self.prependJoinParamDecrefs(params, self.store.getLocalSpan(jump.args), stmt_id, jump.target),
             .ret => |ret_stmt| blk: {
                 const forwarded = [_]LocalId{ret_stmt.value};
-                break :blk try self.prependJoinParamDecrefs(params, &forwarded, stmt_id);
+                break :blk try self.prependJoinParamDecrefs(params, &forwarded, stmt_id, null);
             },
-            .runtime_error, .crash => try self.prependJoinParamDecrefs(params, &.{}, stmt_id),
+            .runtime_error, .crash => try self.prependJoinParamDecrefs(params, &.{}, stmt_id, null),
             .scope_exit => stmt_id,
         };
     }
