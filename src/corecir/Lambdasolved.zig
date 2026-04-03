@@ -9,6 +9,7 @@ const cm = @import("ContextMono.zig");
 const TemplateCatalog = @import("TemplateCatalog.zig");
 
 const CIR = can.CIR;
+const RootExprContext = cm.RootExprContext;
 pub const ExprTemplateSource = TemplateCatalog.ExprTemplateSource;
 pub const LocalPatternTemplateSource = TemplateCatalog.LocalPatternTemplateSource;
 pub const CallableTemplateId = TemplateCatalog.CallableTemplateId;
@@ -32,6 +33,60 @@ pub const ContextPatternKey = cm.ContextPatternKey;
 pub const CallResultCallableInstKey = struct {
     context_expr: ContextExprKey,
     callee_callable_inst_raw: u32,
+};
+
+pub const SemanticThread = struct {
+    source_context: SourceContext,
+
+    pub fn trackedThread(source_context: SourceContext) SemanticThread {
+        return .{
+            .source_context = source_context,
+        };
+    }
+
+    pub fn requireSourceContext(self: SemanticThread) SourceContext {
+        return self.source_context;
+    }
+
+    pub fn hasCallableInst(self: SemanticThread) bool {
+        return switch (self.source_context) {
+            .callable_inst => true,
+            .root_expr, .provenance_expr, .template_expr => false,
+        };
+    }
+
+    pub fn callableInst(self: SemanticThread) ?CallableInstId {
+        return switch (self.source_context) {
+            .callable_inst => |context_id| @enumFromInt(@intFromEnum(context_id)),
+            .root_expr, .provenance_expr, .template_expr => null,
+        };
+    }
+
+    pub fn requireCallableInst(self: SemanticThread) CallableInstId {
+        return self.callableInst() orelse blk: {
+            if (std.debug.runtime_safety) {
+                std.debug.panic(
+                    "Lambdasolved invariant violated: source context {s} had no callable inst",
+                    .{@tagName(self.source_context)},
+                );
+            }
+            break :blk unreachable;
+        };
+    }
+
+    pub fn callableInstRawForDebug(self: SemanticThread) u32 {
+        return switch (self.source_context) {
+            .callable_inst => |context_id| @intFromEnum(@as(CallableInstId, @enumFromInt(@intFromEnum(context_id)))),
+            .root_expr, .provenance_expr, .template_expr => std.math.maxInt(u32),
+        };
+    }
+
+    pub fn rootExprRawForDebug(self: SemanticThread) u32 {
+        return switch (self.source_context) {
+            .root_expr => |root| @intFromEnum(root.expr_idx),
+            .callable_inst, .provenance_expr, .template_expr => std.math.maxInt(u32),
+        };
+    }
 };
 
 pub const ExprTraversalState = struct {
@@ -171,6 +226,45 @@ pub const RootAnalysisState = struct {
         return self.expr_traversal.beginVisit(allocator, key);
     }
 
+    pub fn visitExprOnce(
+        self: *RootAnalysisState,
+        allocator: std.mem.Allocator,
+        key: ContextExprKey,
+        worker: anytype,
+    ) std.mem.Allocator.Error!void {
+        const Worker = @TypeOf(worker);
+        comptime {
+            if (!@hasDecl(Worker, "run")) {
+                @compileError("RootAnalysisState.visitExprOnce requires a worker value with a run() method");
+            }
+        }
+
+        if (!try self.beginExprVisit(allocator, key)) return;
+        try worker.run();
+    }
+
+    pub fn scanRoots(
+        self: *RootAnalysisState,
+        current_module_idx: u32,
+        root_exprs: []const CIR.Expr.Idx,
+        scanner: anytype,
+    ) std.mem.Allocator.Error!void {
+        const Scanner = @TypeOf(scanner);
+        comptime {
+            if (!@hasDecl(Scanner, "scan")) {
+                @compileError("RootAnalysisState.scanRoots requires a scanner value with a scan(root: RootExprContext) method");
+            }
+        }
+
+        for (root_exprs) |expr_idx| {
+            self.clearPerScan();
+            try scanner.scan(.{
+                .module_idx = current_module_idx,
+                .expr_idx = expr_idx,
+            });
+        }
+    }
+
     pub fn beginValueDefExpr(
         self: *RootAnalysisState,
         allocator: std.mem.Allocator,
@@ -183,6 +277,24 @@ pub const RootAnalysisState = struct {
         self.value_def_resolution.endExpr(key);
     }
 
+    pub fn withValueDefExpr(
+        self: *RootAnalysisState,
+        allocator: std.mem.Allocator,
+        key: ContextExprKey,
+        worker: anytype,
+    ) std.mem.Allocator.Error!void {
+        const Worker = @TypeOf(worker);
+        comptime {
+            if (!@hasDecl(Worker, "run")) {
+                @compileError("RootAnalysisState.withValueDefExpr requires a worker value with a run() method");
+            }
+        }
+
+        if (!try self.beginValueDefExpr(allocator, key)) return;
+        defer self.endValueDefExpr(key);
+        try worker.run();
+    }
+
     pub fn beginCallResult(
         self: *RootAnalysisState,
         allocator: std.mem.Allocator,
@@ -193,6 +305,24 @@ pub const RootAnalysisState = struct {
 
     pub fn endCallResult(self: *RootAnalysisState, key: CallResultCallableInstKey) void {
         self.call_result_resolution.endCall(key);
+    }
+
+    pub fn withCallResult(
+        self: *RootAnalysisState,
+        allocator: std.mem.Allocator,
+        key: CallResultCallableInstKey,
+        worker: anytype,
+    ) std.mem.Allocator.Error!void {
+        const Worker = @TypeOf(worker);
+        comptime {
+            if (!@hasDecl(Worker, "run")) {
+                @compileError("RootAnalysisState.withCallResult requires a worker value with a run() method");
+            }
+        }
+
+        if (!try self.beginCallResult(allocator, key)) return;
+        defer self.endCallResult(key);
+        try worker.run();
     }
 };
 

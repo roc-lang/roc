@@ -146,61 +146,7 @@ const TypeScopeContext = struct {
     caller_module_idx: u32,
     scope: *const types.TypeScope,
 };
-
-const SemanticThread = struct {
-    source_context: SourceContext,
-
-    fn trackedThread(source_context: SourceContext) SemanticThread {
-        return .{
-            .source_context = source_context,
-        };
-    }
-
-    fn requireSourceContext(self: SemanticThread) SourceContext {
-        return self.source_context;
-    }
-
-    fn hasCallableInst(self: SemanticThread) bool {
-        return switch (self.source_context) {
-            .callable_inst => true,
-            .root_expr, .provenance_expr, .template_expr => false,
-        };
-    }
-
-    fn callableInst(self: SemanticThread) ?CallableInstId {
-        return switch (self.source_context) {
-            .callable_inst => |context_id| @enumFromInt(@intFromEnum(context_id)),
-            .root_expr, .provenance_expr, .template_expr => null,
-        };
-    }
-
-    fn requireCallableInst(self: SemanticThread) CallableInstId {
-        return self.callableInst() orelse blk: {
-            if (std.debug.runtime_safety) {
-                std.debug.panic(
-                    "Pipeline invariant violated: source context {s} had no callable inst",
-                    .{@tagName(self.source_context)},
-                );
-            }
-            break :blk unreachable;
-        };
-    }
-
-    fn callableInstRawForDebug(self: SemanticThread) u32 {
-        return switch (self.source_context) {
-            .callable_inst => |context_id| @intFromEnum(@as(CallableInstId, @enumFromInt(@intFromEnum(context_id)))),
-            .root_expr, .provenance_expr, .template_expr => std.math.maxInt(u32),
-        };
-    }
-
-    fn rootExprRawForDebug(self: SemanticThread) u32 {
-        return switch (self.source_context) {
-            .root_expr => |root| @intFromEnum(root.expr_idx),
-            .callable_inst, .provenance_expr, .template_expr => std.math.maxInt(u32),
-        };
-    }
-
-};
+const SemanticThread = Lambdasolved.SemanticThread;
 
 const ContextExprVisitKey = ContextExprKey;
 const CallResultCallableInstKey = Lambdasolved.CallResultCallableInstKey;
@@ -1481,14 +1427,27 @@ const MaterializeCallableValueFailure = enum {
     }
 
     fn runRootAnalysisStage(self: *Pass, result: *Result, root_exprs: []const CIR.Expr.Idx) Allocator.Error!void {
-        for (root_exprs) |expr_idx| {
-            trace.log("scanRootExpr start expr={d}", .{@intFromEnum(expr_idx)});
-            try self.scanRootExpr(result, .{
-                .module_idx = self.current_module_idx,
-                .expr_idx = expr_idx,
-            });
-            trace.log("scanRootExpr done expr={d}", .{@intFromEnum(expr_idx)});
-        }
+        const RootScanner = struct {
+            pass: *Pass,
+            result: *Result,
+
+            fn scan(self: @This(), root: RootExprContext) Allocator.Error!void {
+                trace.log("scanRootExpr start expr={d}", .{@intFromEnum(root.expr_idx)});
+                try self.pass.scanCirValueExpr(
+                    self.result,
+                    SemanticThread.trackedThread(.{ .root_expr = root }),
+                    root.module_idx,
+                    root.expr_idx,
+                );
+                trace.log("scanRootExpr done expr={d}", .{@intFromEnum(root.expr_idx)});
+            }
+        };
+
+        try self.root_analysis.scanRoots(
+            self.current_module_idx,
+            root_exprs,
+            RootScanner{ .pass = self, .result = result },
+        );
     }
 
     fn runLambdamonoAssemblyStage(
@@ -2039,20 +1998,6 @@ const MaterializeCallableValueFailure = enum {
                 @intCast(module_idx),
             );
         }
-    }
-
-    fn clearScanScratch(self: *Pass) void {
-        self.root_analysis.clearPerScan();
-    }
-
-    fn scanRootExpr(self: *Pass, result: *Result, root: RootExprContext) Allocator.Error!void {
-        self.clearScanScratch();
-        try self.scanCirValueExpr(
-            result,
-            SemanticThread.trackedThread(.{ .root_expr = root }),
-            root.module_idx,
-            root.expr_idx,
-        );
     }
 
     fn putIfChanged(self: *Pass, map: anytype, key: anytype, value: anytype) Allocator.Error!void {
@@ -2748,15 +2693,39 @@ const MaterializeCallableValueFailure = enum {
         expr_idx: CIR.Expr.Idx,
     ) Allocator.Error!void {
         const key = self.resultExprKeyForThread(thread, module_idx, expr_idx);
-        if (!try self.root_analysis.beginValueDefExpr(self.allocator, key)) return;
-        defer self.root_analysis.endValueDefExpr(key);
+        const Worker = struct {
+            pass: *Pass,
+            result: *Result,
+            thread: SemanticThread,
+            module_idx: u32,
+            expr_idx: CIR.Expr.Idx,
 
-        try self.scanCirValueExpr(result, thread, module_idx, expr_idx);
+            fn run(self: @This()) Allocator.Error!void {
+                try self.pass.scanCirValueExpr(self.result, self.thread, self.module_idx, self.expr_idx);
 
-        if (result.getExprTemplateId(thread.requireSourceContext(), module_idx, expr_idx)) |template_id| {
-            try self.materializeDemandedExprCallableInst(result, thread, module_idx, expr_idx, template_id);
-            return;
-        }
+                if (self.result.getExprTemplateId(self.thread.requireSourceContext(), self.module_idx, self.expr_idx)) |template_id| {
+                    try self.pass.materializeDemandedExprCallableInst(
+                        self.result,
+                        self.thread,
+                        self.module_idx,
+                        self.expr_idx,
+                        template_id,
+                    );
+                }
+            }
+        };
+
+        try self.root_analysis.withValueDefExpr(
+            self.allocator,
+            key,
+            Worker{
+                .pass = self,
+                .result = result,
+                .thread = thread,
+                .module_idx = module_idx,
+                .expr_idx = expr_idx,
+            },
+        );
     }
 
     fn scanDemandedValueDefExprInSourceContext(
@@ -2853,27 +2822,65 @@ const MaterializeCallableValueFailure = enum {
         }
 
         const visit_key = self.resultExprKeyForThread(thread, module_idx, expr_idx);
-        if (!try self.root_analysis.beginExprVisit(self.allocator, visit_key)) return;
+        const Worker = struct {
+            pass: *Pass,
+            result: *Result,
+            thread: SemanticThread,
+            module_idx: u32,
+            expr_idx: CIR.Expr.Idx,
+            expr: CIR.Expr,
+            materialize_if_callable: bool,
+            resolve_direct_calls: bool,
 
-        try self.scanCirExprChildren(result, thread, module_idx, expr_idx, expr, resolve_direct_calls);
+            fn run(self: @This()) Allocator.Error!void {
+                try self.pass.scanCirExprChildren(
+                    self.result,
+                    self.thread,
+                    self.module_idx,
+                    self.expr_idx,
+                    self.expr,
+                    self.resolve_direct_calls,
+                );
 
-        if (materialize_if_callable and
-            result.getExprTemplateId(thread.requireSourceContext(), module_idx, expr_idx) == null)
-        {
-            if (self.getValueExprCallableValueForThread(result, thread, module_idx, expr_idx) == null) {
-                var visiting: std.AutoHashMapUnmanaged(ContextExprVisitKey, void) = .empty;
-                defer visiting.deinit(self.allocator);
-                try self.realizeStructuredExprCallableSemantics(
-                    result,
-                    thread.requireSourceContext(),
-                    module_idx,
-                    expr_idx,
-                    &visiting,
+                if (self.materialize_if_callable and
+                    self.result.getExprTemplateId(self.thread.requireSourceContext(), self.module_idx, self.expr_idx) == null)
+                {
+                    if (self.pass.getValueExprCallableValueForThread(self.result, self.thread, self.module_idx, self.expr_idx) == null) {
+                        var visiting: std.AutoHashMapUnmanaged(ContextExprVisitKey, void) = .empty;
+                        defer visiting.deinit(self.pass.allocator);
+                        try self.pass.realizeStructuredExprCallableSemantics(
+                            self.result,
+                            self.thread.requireSourceContext(),
+                            self.module_idx,
+                            self.expr_idx,
+                            &visiting,
+                        );
+                    }
+                }
+
+                try self.pass.completeCurrentExprMonotype(
+                    self.result,
+                    self.thread,
+                    self.module_idx,
+                    self.expr_idx,
                 );
             }
-        }
+        };
 
-        try self.completeCurrentExprMonotype(result, thread, module_idx, expr_idx);
+        try self.root_analysis.visitExprOnce(
+            self.allocator,
+            visit_key,
+            Worker{
+                .pass = self,
+                .result = result,
+                .thread = thread,
+                .module_idx = module_idx,
+                .expr_idx = expr_idx,
+                .expr = expr,
+                .materialize_if_callable = materialize_if_callable,
+                .resolve_direct_calls = resolve_direct_calls,
+            },
+        );
     }
 
     fn completeCurrentExprMonotype(
@@ -7118,59 +7125,82 @@ const MaterializeCallableValueFailure = enum {
             .context_expr = Result.contextExprKey(target_source_context, target_module_idx, call_expr_idx),
             .callee_callable_inst_raw = @intFromEnum(callee_callable_inst_id),
         };
-        if (!try self.root_analysis.beginCallResult(self.allocator, in_progress_key)) return;
-        defer self.root_analysis.endCallResult(in_progress_key);
+        const Worker = struct {
+            pass: *Pass,
+            result: *Result,
+            callee_callable_inst_id: CallableInstId,
+            callee_fn_ret: Monotype.Idx,
+            callee_fn_module_idx: u32,
+            visiting: *std.AutoHashMapUnmanaged(ContextExprVisitKey, void),
+            variant_builder: *CallableVariantBuilder,
 
-        const callable_def = result.getCallableDefForInst(callee_callable_inst_id);
-        if (result.getExprCallableValue(
-            callable_def.body_expr.source_context,
-            callable_def.body_expr.module_idx,
-            callable_def.body_expr.expr_idx,
-        ) == null) {
-            const template_id = result.getExprTemplateId(
-                callable_def.body_expr.source_context,
-                callable_def.body_expr.module_idx,
-                callable_def.body_expr.expr_idx,
-            ) orelse std.debug.panic(
-                "Pipeline invariant violated: function-valued body expr {d} for callable inst {d} had no executable callable value fact and no registered callable template",
-                .{
-                    @intFromEnum(callable_def.body_expr.expr_idx),
-                    @intFromEnum(callee_callable_inst_id),
-                },
-            );
-            const materialize_failure = try self.materializeExprCallableValueWithKnownFnMonotype(
-                result,
-                callable_def.body_expr.source_context,
-                callable_def.body_expr.module_idx,
-                callable_def.body_expr.expr_idx,
-                template_id,
-                resolvedMonotype(callee_fn_mono.ret, callee_callable_inst.fn_monotype_module_idx),
-            );
-            if (std.debug.runtime_safety and
-                result.getExprCallableValue(
+            fn run(self: @This()) Allocator.Error!void {
+                const callable_def = self.result.getCallableDefForInst(self.callee_callable_inst_id);
+                if (self.result.getExprCallableValue(
                     callable_def.body_expr.source_context,
                     callable_def.body_expr.module_idx,
                     callable_def.body_expr.expr_idx,
-                ) == null)
-            {
-                std.debug.panic(
-                    "Pipeline invariant violated: function-valued body expr {d} for callable inst {d} failed to materialize callable value; reason={?s} template={d}",
-                    .{
-                        @intFromEnum(callable_def.body_expr.expr_idx),
-                        @intFromEnum(callee_callable_inst_id),
-                        if (materialize_failure) |failure| @tagName(failure) else null,
-                        @intFromEnum(template_id),
-                    },
+                ) == null) {
+                    const template_id = self.result.getExprTemplateId(
+                        callable_def.body_expr.source_context,
+                        callable_def.body_expr.module_idx,
+                        callable_def.body_expr.expr_idx,
+                    ) orelse std.debug.panic(
+                        "Pipeline invariant violated: function-valued body expr {d} for callable inst {d} had no executable callable value fact and no registered callable template",
+                        .{
+                            @intFromEnum(callable_def.body_expr.expr_idx),
+                            @intFromEnum(self.callee_callable_inst_id),
+                        },
+                    );
+                    const materialize_failure = try self.pass.materializeExprCallableValueWithKnownFnMonotype(
+                        self.result,
+                        callable_def.body_expr.source_context,
+                        callable_def.body_expr.module_idx,
+                        callable_def.body_expr.expr_idx,
+                        template_id,
+                        resolvedMonotype(self.callee_fn_ret, self.callee_fn_module_idx),
+                    );
+                    if (std.debug.runtime_safety and
+                        self.result.getExprCallableValue(
+                            callable_def.body_expr.source_context,
+                            callable_def.body_expr.module_idx,
+                            callable_def.body_expr.expr_idx,
+                        ) == null)
+                    {
+                        std.debug.panic(
+                            "Pipeline invariant violated: function-valued body expr {d} for callable inst {d} failed to materialize callable value; reason={?s} template={d}",
+                            .{
+                                @intFromEnum(callable_def.body_expr.expr_idx),
+                                @intFromEnum(self.callee_callable_inst_id),
+                                if (materialize_failure) |failure| @tagName(failure) else null,
+                                @intFromEnum(template_id),
+                            },
+                        );
+                    }
+                }
+                try self.pass.includeExprCallableValue(
+                    self.result,
+                    callable_def.body_expr.source_context,
+                    callable_def.body_expr.module_idx,
+                    callable_def.body_expr.expr_idx,
+                    self.visiting,
+                    self.variant_builder,
                 );
             }
-        }
-        try self.includeExprCallableValue(
-            result,
-            callable_def.body_expr.source_context,
-            callable_def.body_expr.module_idx,
-            callable_def.body_expr.expr_idx,
-            visiting,
-            variant_builder,
+        };
+
+        try self.root_analysis.withCallResult(
+            self.allocator,
+            in_progress_key,
+            Worker{
+                .pass = self,
+                .result = result,
+                .callee_callable_inst_id = callee_callable_inst_id,
+                .callee_fn_ret = callee_fn_mono.ret,
+                .callee_fn_module_idx = callee_callable_inst.fn_monotype_module_idx,
+                .visiting = visiting,
+                .variant_builder = variant_builder,
+            },
         );
     }
 
