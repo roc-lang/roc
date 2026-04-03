@@ -6447,18 +6447,15 @@ fn scanCirExprChildren(
         },
         .e_call => |call_expr| {
             const arg_exprs = module_env.store.sliceExpr(call_expr.args);
-            const callee_expr = module_env.store.getExpr(call_expr.func);
-            if (!calleeUsesFirstClassCallableValuePath(callee_expr)) {
-                try scanCirValueExprWithDirectCallResolution(
-                    driver,
-                    root_analysis,
-                    result,
-                    thread,
-                    module_idx,
-                    call_expr.func,
-                    resolve_direct_calls,
-                );
-            }
+            try scanCirValueExprWithDirectCallResolution(
+                driver,
+                root_analysis,
+                result,
+                thread,
+                module_idx,
+                call_expr.func,
+                resolve_direct_calls,
+            );
             if (result.getExprLowLevelOp(thread.requireSourceContext(), module_idx, call_expr.func)) |low_level_op| {
                 if (low_level_op == .str_inspect and arg_exprs.len != 0) {
                     try resolveStrInspectHelperCallableInstsForTypeVar(
@@ -6473,23 +6470,7 @@ fn scanCirExprChildren(
             try scanCirValueExprSpanWithDirectCallResolution(driver, root_analysis, result, thread, module_idx, arg_exprs, resolve_direct_calls);
             if (resolve_direct_calls) {
                 try resolveDirectCallSite(driver, root_analysis, result, thread, module_idx, expr_idx, call_expr);
-                if (getCallSiteForThread(result, thread, module_idx, expr_idx) == null and
-                    calleeUsesFirstClassCallableValuePath(callee_expr))
-                {
-                    try scanCirValueExprWithDirectCallResolution(driver, root_analysis, result, thread, module_idx, call_expr.func, resolve_direct_calls);
-                    try resolveDirectCallSite(driver, root_analysis, result, thread, module_idx, expr_idx, call_expr);
-                }
                 try assignCallableArgCallableInstsFromCallMonotype(driver, result, thread, module_idx, expr_idx, call_expr);
-            } else {
-                try scanCirValueExprWithDirectCallResolution(driver, root_analysis, result, thread, module_idx, call_expr.func, resolve_direct_calls);
-            }
-            if (resolve_direct_calls) {
-                try assignCallableArgCallableInstsFromCallMonotype(driver, result, thread, module_idx, expr_idx, call_expr);
-            }
-            if (resolve_direct_calls and
-                getCallSiteCallableInstForThread(result, thread, module_idx, expr_idx) == null)
-            {
-                try resolveDirectCallSite(driver, root_analysis, result, thread, module_idx, expr_idx, call_expr);
             }
         },
         .e_record => |record_expr| {
@@ -7505,7 +7486,7 @@ fn realizeStructuredExprCallableSemantics(
             }
             if (result.getExprLowLevelOp(source_context, module_idx, call_expr.func) != null) return;
 
-            var call_site = getCallSiteForSourceContext(
+            const call_site = getCallSiteForSourceContext(
                 result,
                 source_context,
                 module_idx,
