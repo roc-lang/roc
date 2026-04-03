@@ -330,6 +330,73 @@ pub const RootAnalysisState = struct {
     }
 };
 
+fn RootRunner(comptime Driver: type) type {
+    return struct {
+        allocator: std.mem.Allocator,
+        current_module_idx: u32,
+        root_analysis: RootAnalysisState,
+        driver: Driver,
+
+        const Self = @This();
+
+        fn init(
+            allocator: std.mem.Allocator,
+            current_module_idx: u32,
+            driver: Driver,
+        ) Self {
+            return .{
+                .allocator = allocator,
+                .current_module_idx = current_module_idx,
+                .root_analysis = RootAnalysisState.init(),
+                .driver = driver,
+            };
+        }
+
+        fn deinit(self: *Self) void {
+            self.root_analysis.deinit(self.allocator);
+        }
+
+        fn scan(self: *Self, root: RootExprContext) std.mem.Allocator.Error!void {
+            try self.driver.scanRootExpr(&self.root_analysis, root);
+        }
+
+        fn run(self: *Self, root_exprs: []const CIR.Expr.Idx) std.mem.Allocator.Error!void {
+            try self.root_analysis.scanRoots(self.current_module_idx, root_exprs, self);
+        }
+    };
+}
+
+pub fn analyzeRoots(
+    allocator: std.mem.Allocator,
+    current_module_idx: u32,
+    root_exprs: []const CIR.Expr.Idx,
+    driver: anytype,
+) std.mem.Allocator.Error!void {
+    var runner = RootRunner(@TypeOf(driver)).init(
+        allocator,
+        current_module_idx,
+        driver,
+    );
+    defer runner.deinit();
+    try runner.run(root_exprs);
+}
+
+pub fn withRootAnalysis(
+    allocator: std.mem.Allocator,
+    worker: anytype,
+) std.mem.Allocator.Error!void {
+    const Worker = @TypeOf(worker);
+    comptime {
+        if (!@hasDecl(Worker, "run")) {
+            @compileError("Lambdasolved.withRootAnalysis requires a worker value with a run(root_analysis: *RootAnalysisState) method");
+        }
+    }
+
+    var root_analysis = RootAnalysisState.init();
+    defer root_analysis.deinit(allocator);
+    try worker.run(&root_analysis);
+}
+
 pub const Result = struct {
     pub fn init(allocator: std.mem.Allocator) !Result {
         _ = allocator;

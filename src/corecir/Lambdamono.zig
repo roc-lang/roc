@@ -150,41 +150,23 @@ pub const LookupResolution = union(enum) {
     def: Lambdasolved.ExternalDefSource,
 };
 
-pub const ExprPayload = union(enum) {
-    plain,
-    callable_value: CallableValue,
-    callable_intro: CallableIntro,
-    direct_call: CallableInstId,
-    indirect_call: IndirectCall,
-    low_level_call: CIR.Expr.LowLevel,
-    lookup_expr: ExprRef,
-    lookup_def: Lambdasolved.ExternalDefSource,
-    dispatch_target: DispatchSolved.DispatchExprTarget,
-    dispatch_intrinsic: DispatchIntrinsic,
-};
-
-pub const AssemblyState = struct {
+const AssemblyState = struct {
     in_progress_exprs: std.AutoHashMapUnmanaged(ContextMono.ContextExprKey, void),
     assembled_exprs: std.AutoHashMapUnmanaged(ContextMono.ContextExprKey, void),
 
-    pub fn init() AssemblyState {
+    fn init() AssemblyState {
         return .{
             .in_progress_exprs = .empty,
             .assembled_exprs = .empty,
         };
     }
 
-    pub fn deinit(self: *AssemblyState, allocator: Allocator) void {
+    fn deinit(self: *AssemblyState, allocator: Allocator) void {
         self.in_progress_exprs.deinit(allocator);
         self.assembled_exprs.deinit(allocator);
     }
 
-    pub fn clear(self: *AssemblyState) void {
-        self.in_progress_exprs.clearRetainingCapacity();
-        self.assembled_exprs.clearRetainingCapacity();
-    }
-
-    pub fn beginExprAssembly(
+    fn beginExprAssembly(
         self: *AssemblyState,
         allocator: Allocator,
         key: ContextMono.ContextExprKey,
@@ -194,15 +176,15 @@ pub const AssemblyState = struct {
         return true;
     }
 
-    pub fn endExprAssembly(self: *AssemblyState, key: ContextMono.ContextExprKey) void {
+    fn endExprAssembly(self: *AssemblyState, key: ContextMono.ContextExprKey) void {
         _ = self.in_progress_exprs.remove(key);
     }
 
-    pub fn isExprAssembled(self: *const AssemblyState, key: ContextMono.ContextExprKey) bool {
+    fn isExprAssembled(self: *const AssemblyState, key: ContextMono.ContextExprKey) bool {
         return self.assembled_exprs.contains(key);
     }
 
-    pub fn markExprAssembled(
+    fn markExprAssembled(
         self: *AssemblyState,
         allocator: Allocator,
         key: ContextMono.ContextExprKey,
@@ -264,6 +246,56 @@ pub const BuildStmtKey = struct {
     module_idx: u32,
     stmt_raw: u32,
 };
+
+pub fn buildStmtKey(
+    source_context: SourceContext,
+    module_idx: u32,
+    stmt_idx: CIR.Statement.Idx,
+) BuildStmtKey {
+    return switch (source_context) {
+        .callable_inst => |context_id| .{
+            .source_context_kind = .callable_inst,
+            .source_context_module_idx = std.math.maxInt(u32),
+            .source_context_raw = @intFromEnum(context_id),
+            .module_idx = module_idx,
+            .stmt_raw = @intFromEnum(stmt_idx),
+        },
+        .root_expr => |root| .{
+            .source_context_kind = .root_expr,
+            .source_context_module_idx = root.module_idx,
+            .source_context_raw = @intFromEnum(root.expr_idx),
+            .module_idx = module_idx,
+            .stmt_raw = @intFromEnum(stmt_idx),
+        },
+        .provenance_expr => |source| .{
+            .source_context_kind = .provenance_expr,
+            .source_context_module_idx = source.module_idx,
+            .source_context_raw = @intFromEnum(source.expr_idx),
+            .module_idx = module_idx,
+            .stmt_raw = @intFromEnum(stmt_idx),
+        },
+        .template_expr => |template| .{
+            .source_context_kind = .template_expr,
+            .source_context_module_idx = template.module_idx,
+            .source_context_raw = @intFromEnum(template.expr_idx),
+            .module_idx = module_idx,
+            .stmt_raw = @intFromEnum(stmt_idx),
+        },
+    };
+}
+
+pub fn calleeUsesFirstClassCallableValuePath(expr: CIR.Expr) bool {
+    return switch (expr) {
+        .e_lookup_local,
+        .e_lookup_external,
+        .e_lookup_required,
+        .e_lambda,
+        .e_closure,
+        .e_hosted_lambda,
+        => false,
+        else => true,
+    };
+}
 
 pub const CaptureValueSource = union(enum) {
     lexical_pattern: struct {
@@ -351,115 +383,184 @@ pub const PatternBinding = struct {
 /// Invariant: every `Expr` stored in `Program.exprs` already has its exact
 /// monotype. Finalization/build progress must live in `AssemblyState`, not in
 /// the executable IR itself.
-pub const Expr = struct {
+pub const ExprCommon = struct {
     source_context: SourceContext,
     module_idx: u32,
     source_expr: CIR.Expr.Idx,
     monotype: ContextMono.ResolvedMonotype,
     child_exprs: ExprIdSpan = .empty(),
     child_stmts: StmtIdSpan = .empty(),
-    payload: ExprPayload = .plain,
     origin: ValueOrigin = .self,
+};
+
+pub const Expr = union(enum) {
+    plain: ExprCommon,
+    callable_value: struct {
+        common: ExprCommon,
+        callable_value: CallableValue,
+    },
+    callable_intro: struct {
+        common: ExprCommon,
+        intro: CallableIntro,
+    },
+    direct_call: struct {
+        common: ExprCommon,
+        callable_inst: CallableInstId,
+    },
+    indirect_call: struct {
+        common: ExprCommon,
+        indirect_call: IndirectCall,
+    },
+    low_level_call: struct {
+        common: ExprCommon,
+        low_level: CIR.Expr.LowLevel,
+    },
+    lookup_expr: struct {
+        common: ExprCommon,
+        expr_ref: ExprRef,
+    },
+    lookup_def: struct {
+        common: ExprCommon,
+        def_source: Lambdasolved.ExternalDefSource,
+    },
+    dispatch_target: struct {
+        common: ExprCommon,
+        target: DispatchSolved.DispatchExprTarget,
+    },
+    dispatch_intrinsic: struct {
+        common: ExprCommon,
+        intrinsic: DispatchIntrinsic,
+    },
+
+    pub fn common(self: *const Expr) *const ExprCommon {
+        return switch (self.*) {
+            .plain => |*common| common,
+            .callable_value => |*value| &value.common,
+            .callable_intro => |*intro| &intro.common,
+            .direct_call => |*call| &call.common,
+            .indirect_call => |*call| &call.common,
+            .low_level_call => |*call| &call.common,
+            .lookup_expr => |*lookup| &lookup.common,
+            .lookup_def => |*lookup| &lookup.common,
+            .dispatch_target => |*dispatch| &dispatch.common,
+            .dispatch_intrinsic => |*dispatch| &dispatch.common,
+        };
+    }
+
+    pub fn commonMut(self: *Expr) *ExprCommon {
+        return switch (self.*) {
+            .plain => |*common| common,
+            .callable_value => |*value| &value.common,
+            .callable_intro => |*intro| &intro.common,
+            .direct_call => |*call| &call.common,
+            .indirect_call => |*call| &call.common,
+            .low_level_call => |*call| &call.common,
+            .lookup_expr => |*lookup| &lookup.common,
+            .lookup_def => |*lookup| &lookup.common,
+            .dispatch_target => |*dispatch| &dispatch.common,
+            .dispatch_intrinsic => |*dispatch| &dispatch.common,
+        };
+    }
 
     pub fn getCallableValue(self: *const Expr) ?CallableValue {
-        return switch (self.payload) {
-            .callable_value => |callable_value| callable_value,
-            .callable_intro => |intro| intro.callable_value,
+        return switch (self.*) {
+            .callable_value => |value| value.callable_value,
+            .callable_intro => |intro| intro.intro.callable_value,
             else => null,
         };
     }
 
     pub fn getCallableIntro(self: *const Expr) ?CallableIntro {
-        return switch (self.payload) {
-            .callable_intro => |intro| intro,
+        return switch (self.*) {
+            .callable_intro => |intro| intro.intro,
             else => null,
         };
     }
 
     pub fn getCallable(self: *const Expr) ?ExprCallableSemantics {
-        return switch (self.payload) {
-            .callable_value => |callable_value| .{ .callable = callable_value },
-            .callable_intro => |intro| .{ .intro = intro },
+        return switch (self.*) {
+            .callable_value => |value| .{ .callable = value.callable_value },
+            .callable_intro => |intro| .{ .intro = intro.intro },
             else => null,
         };
     }
 
     pub fn getDirectCall(self: *const Expr) ?CallableInstId {
-        return switch (self.payload) {
-            .direct_call => |callable_inst| callable_inst,
+        return switch (self.*) {
+            .direct_call => |call| call.callable_inst,
             else => null,
         };
     }
 
     pub fn getIndirectCall(self: *const Expr) ?IndirectCall {
-        return switch (self.payload) {
-            .indirect_call => |indirect_call| indirect_call,
+        return switch (self.*) {
+            .indirect_call => |call| call.indirect_call,
             else => null,
         };
     }
 
     pub fn getLowLevelCall(self: *const Expr) ?CIR.Expr.LowLevel {
-        return switch (self.payload) {
-            .low_level_call => |low_level| low_level,
+        return switch (self.*) {
+            .low_level_call => |call| call.low_level,
             else => null,
         };
     }
 
     pub fn getCall(self: *const Expr) ?CallSite {
-        return switch (self.payload) {
-            .direct_call => |callable_inst| .{ .direct = callable_inst },
-            .indirect_call => |indirect_call| .{ .indirect_call = indirect_call },
-            .low_level_call => |low_level| .{ .low_level = low_level },
+        return switch (self.*) {
+            .direct_call => |call| .{ .direct = call.callable_inst },
+            .indirect_call => |call| .{ .indirect_call = call.indirect_call },
+            .low_level_call => |call| .{ .low_level = call.low_level },
             else => null,
         };
     }
 
     pub fn getLookupExpr(self: *const Expr) ?ExprRef {
-        return switch (self.payload) {
-            .lookup_expr => |expr_ref| expr_ref,
+        return switch (self.*) {
+            .lookup_expr => |lookup| lookup.expr_ref,
             else => null,
         };
     }
 
     pub fn getLookupDef(self: *const Expr) ?Lambdasolved.ExternalDefSource {
-        return switch (self.payload) {
-            .lookup_def => |def_source| def_source,
+        return switch (self.*) {
+            .lookup_def => |lookup| lookup.def_source,
             else => null,
         };
     }
 
     pub fn getLookup(self: *const Expr) ?LookupResolution {
-        return switch (self.payload) {
-            .lookup_expr => |expr_ref| .{ .expr = expr_ref },
-            .lookup_def => |def_source| .{ .def = def_source },
+        return switch (self.*) {
+            .lookup_expr => |lookup| .{ .expr = lookup.expr_ref },
+            .lookup_def => |lookup| .{ .def = lookup.def_source },
             else => null,
         };
     }
 
     pub fn getDispatchTarget(self: *const Expr) ?DispatchSolved.DispatchExprTarget {
-        return switch (self.payload) {
-            .dispatch_target => |target| target,
+        return switch (self.*) {
+            .dispatch_target => |dispatch| dispatch.target,
             else => null,
         };
     }
 
     pub fn getDispatchIntrinsic(self: *const Expr) ?DispatchIntrinsic {
-        return switch (self.payload) {
-            .dispatch_intrinsic => |intrinsic| intrinsic,
+        return switch (self.*) {
+            .dispatch_intrinsic => |dispatch| dispatch.intrinsic,
             else => null,
         };
     }
 
     pub fn getDispatch(self: *const Expr) ?DispatchSemantics {
-        return switch (self.payload) {
-            .dispatch_target => |target| .{ .target = target },
-            .dispatch_intrinsic => |intrinsic| .{ .intrinsic = intrinsic },
+        return switch (self.*) {
+            .dispatch_target => |dispatch| .{ .target = dispatch.target },
+            .dispatch_intrinsic => |dispatch| .{ .intrinsic = dispatch.intrinsic },
             else => null,
         };
     }
 
     pub fn getOriginExpr(self: *const Expr) ?ExprRef {
-        return switch (self.origin) {
+        return switch (self.common().origin) {
             .self => null,
             .expr => |origin| origin,
         };
@@ -880,7 +981,7 @@ pub const Program = struct {
     }
 
     pub fn getExprChild(self: *const Program, expr_id: ExprId, index: usize) ExprId {
-        return self.getExprChildren(self.getExpr(expr_id).child_exprs)[index];
+        return self.getExprChildren(self.getExpr(expr_id).common().child_exprs)[index];
     }
 
     pub fn ensureExpr(
@@ -895,20 +996,21 @@ pub const Program = struct {
         const expr_id = self.expr_ids_by_key.get(key) orelse blk: {
             const new_expr_id: ExprId = @enumFromInt(self.exprs.items.len);
             try self.exprs.append(allocator, .{
-                .source_context = source_context,
-                .module_idx = module_idx,
-                .source_expr = expr_idx,
-                .monotype = monotype,
-                .child_exprs = .empty(),
-                .child_stmts = .empty(),
-                .payload = .plain,
-                .origin = .self,
+                .plain = .{
+                    .source_context = source_context,
+                    .module_idx = module_idx,
+                    .source_expr = expr_idx,
+                    .monotype = monotype,
+                    .child_exprs = .empty(),
+                    .child_stmts = .empty(),
+                    .origin = .self,
+                },
             });
             try self.expr_ids_by_key.put(allocator, key, new_expr_id);
             break :blk new_expr_id;
         };
         const expr = self.getExprPtr(expr_id);
-        if (!std.meta.eql(expr.monotype, monotype)) {
+        if (!std.meta.eql(expr.common().monotype, monotype)) {
             if (std.debug.runtime_safety) {
                 std.debug.panic(
                     "Lambdamono invariant violated: expr monotype changed after reservation",
@@ -985,8 +1087,337 @@ pub const Program = struct {
             .len = @intCast(child_stmts.len),
         };
     }
-
 };
+
+fn ProgramAssembler(comptime ResultPtr: type, comptime Driver: type) type {
+    return struct {
+        allocator: Allocator,
+        all_module_envs: []const *ModuleEnv,
+        result: ResultPtr,
+        driver: Driver,
+        assembly: *AssemblyState,
+
+        const Self = @This();
+
+        fn assembleRoots(self: *Self, current_module_idx: u32, root_exprs: []const CIR.Expr.Idx) Allocator.Error!void {
+            for (root_exprs) |expr_idx| {
+                _ = try self.assembleProgramExprNode(
+                    .{ .root_expr = .{
+                        .module_idx = current_module_idx,
+                        .expr_idx = expr_idx,
+                    } },
+                    current_module_idx,
+                    expr_idx,
+                );
+            }
+        }
+
+        fn assembleCallableDefExprGraph(self: *Self) Allocator.Error!void {
+            var callable_inst_idx: usize = 0;
+            while (callable_inst_idx < self.result.lambdamono.callable_insts.items.len) : (callable_inst_idx += 1) {
+                const callable_inst_id: CallableInstId = @enumFromInt(callable_inst_idx);
+                try self.driver.ensureCallableInstRealized(self.result, callable_inst_id);
+                const callable_inst = self.result.getCallableInst(callable_inst_id).*;
+                const template = self.result.getCallableTemplate(callable_inst.template);
+                switch (template.kind) {
+                    .lambda, .closure, .hosted_lambda => {},
+                    .top_level_def => std.debug.panic(
+                        "Lambdamono invariant violated: callable inst {d} runtime expr {d} in module {d} retained top_level_def callable template kind after callable registration",
+                        .{ @intFromEnum(callable_inst_id), @intFromEnum(template.runtime_expr), template.module_idx },
+                    ),
+                }
+                const callable_def = self.result.lambdamono.callable_defs.items[@intFromEnum(callable_inst.callable_def)];
+                _ = try self.assembleProgramExprNode(
+                    callable_def.body_expr.source_context,
+                    callable_def.body_expr.module_idx,
+                    callable_def.body_expr.expr_idx,
+                );
+                for (self.result.getCaptureFields(callable_def.captures)) |capture_field| {
+                    switch (capture_field.source) {
+                        .bound_expr => |bound_expr| try self.ensureProgramExprRefNode(bound_expr.expr_ref),
+                        .lexical_pattern => {},
+                    }
+                }
+            }
+        }
+
+        fn assembleProgramExprNode(
+            self: *Self,
+            source_context: SourceContext,
+            module_idx: u32,
+            expr_idx: CIR.Expr.Idx,
+        ) Allocator.Error!ExprId {
+            return self.assembleProgramExprNodeInternal(source_context, module_idx, expr_idx);
+        }
+
+        fn appendProgramExprChildIfPresent(
+            self: *Self,
+            child_exprs: *std.ArrayList(ExprId),
+            source_context: SourceContext,
+            module_idx: u32,
+            expr_idx: CIR.Expr.Idx,
+        ) Allocator.Error!void {
+            if (self.result.getExprTemplateId(source_context, module_idx, expr_idx) != null) {
+                if (!try self.driver.exprHasExactProgramSemantics(
+                    self.result,
+                    source_context,
+                    module_idx,
+                    expr_idx,
+                )) return;
+            }
+
+            try child_exprs.append(
+                self.allocator,
+                try self.assembleProgramExprNodeInternal(source_context, module_idx, expr_idx),
+            );
+        }
+
+        fn assembleProgramExprNodeInternal(
+            self: *Self,
+            source_context: SourceContext,
+            module_idx: u32,
+            expr_idx: CIR.Expr.Idx,
+        ) Allocator.Error!ExprId {
+            const key = ContextMono.Result.contextExprKey(source_context, module_idx, expr_idx);
+            const expr_id = self.result.lambdamono.expr_ids_by_key.get(key) orelse blk: {
+                _ = try self.driver.ensureProgramExpr(self.result, source_context, module_idx, expr_idx);
+                break :blk self.result.lambdamono.expr_ids_by_key.get(key).?;
+            };
+            if (self.assembly.isExprAssembled(key)) return expr_id;
+            if (!try self.assembly.beginExprAssembly(self.allocator, key)) return expr_id;
+            defer self.assembly.endExprAssembly(key);
+
+            const module_env = self.all_module_envs[module_idx];
+            const expr = module_env.store.getExpr(expr_idx);
+            try self.driver.ensureProgramExprSemanticShape(
+                self.result,
+                source_context,
+                module_idx,
+                expr_idx,
+                expr,
+            );
+            var child_exprs = std.ArrayList(ExprId).empty;
+            defer child_exprs.deinit(self.allocator);
+            var child_stmts = std.ArrayList(StmtId).empty;
+            defer child_stmts.deinit(self.allocator);
+
+            switch (expr) {
+                .e_str => |str_expr| for (module_env.store.sliceExpr(str_expr.span)) |child_expr_idx| {
+                    try self.appendProgramExprChildIfPresent(&child_exprs, source_context, module_idx, child_expr_idx);
+                },
+                .e_list => |list_expr| for (module_env.store.sliceExpr(list_expr.elems)) |child_expr_idx| {
+                    try self.appendProgramExprChildIfPresent(&child_exprs, source_context, module_idx, child_expr_idx);
+                },
+                .e_tuple => |tuple_expr| for (module_env.store.sliceExpr(tuple_expr.elems)) |child_expr_idx| {
+                    try self.appendProgramExprChildIfPresent(&child_exprs, source_context, module_idx, child_expr_idx);
+                },
+                .e_match => |match_expr| {
+                    try self.appendProgramExprChildIfPresent(&child_exprs, source_context, module_idx, match_expr.cond);
+                    for (module_env.store.sliceMatchBranches(match_expr.branches)) |branch_idx| {
+                        const branch = module_env.store.getMatchBranch(branch_idx);
+                        if (branch.guard) |guard_expr_idx| {
+                            try self.appendProgramExprChildIfPresent(&child_exprs, source_context, module_idx, guard_expr_idx);
+                        }
+                        try self.appendProgramExprChildIfPresent(&child_exprs, source_context, module_idx, branch.value);
+                    }
+                },
+                .e_if => |if_expr| {
+                    for (module_env.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
+                        const branch = module_env.store.getIfBranch(branch_idx);
+                        try self.appendProgramExprChildIfPresent(&child_exprs, source_context, module_idx, branch.cond);
+                        try self.appendProgramExprChildIfPresent(&child_exprs, source_context, module_idx, branch.body);
+                    }
+                    try self.appendProgramExprChildIfPresent(&child_exprs, source_context, module_idx, if_expr.final_else);
+                },
+                .e_call => |call_expr| {
+                    const callee_expr = module_env.store.getExpr(call_expr.func);
+                    const include_func_child = if (!calleeUsesFirstClassCallableValuePath(callee_expr))
+                        false
+                    else if (self.result.lambdamono.getExpr(expr_id).getCall()) |call_site|
+                        switch (call_site) {
+                            .direct => |callable_inst_id| switch (self.result.getCallableInst(callable_inst_id).runtime_value) {
+                                .direct_lambda => false,
+                                .closure => true,
+                            },
+                            .indirect_call => true,
+                            .low_level => false,
+                        }
+                    else
+                        true;
+                    if (include_func_child) {
+                        try self.appendProgramExprChildIfPresent(&child_exprs, source_context, module_idx, call_expr.func);
+                    }
+                    for (module_env.store.sliceExpr(call_expr.args)) |arg_expr_idx| {
+                        try self.appendProgramExprChildIfPresent(&child_exprs, source_context, module_idx, arg_expr_idx);
+                    }
+                },
+                .e_record => |record_expr| {
+                    for (module_env.store.sliceRecordFields(record_expr.fields)) |field_idx| {
+                        const field = module_env.store.getRecordField(field_idx);
+                        try self.appendProgramExprChildIfPresent(&child_exprs, source_context, module_idx, field.value);
+                    }
+                    if (record_expr.ext) |ext_expr_idx| {
+                        try self.appendProgramExprChildIfPresent(&child_exprs, source_context, module_idx, ext_expr_idx);
+                    }
+                },
+                .e_block => |block_expr| {
+                    for (module_env.store.sliceStatements(block_expr.stmts)) |stmt_idx| {
+                        try child_stmts.append(
+                            self.allocator,
+                            try self.assembleProgramStmtNode(source_context, module_idx, stmt_idx),
+                        );
+                    }
+                    try self.appendProgramExprChildIfPresent(&child_exprs, source_context, module_idx, block_expr.final_expr);
+                },
+                .e_tag => |tag_expr| for (module_env.store.sliceExpr(tag_expr.args)) |child_expr_idx| {
+                    try self.appendProgramExprChildIfPresent(&child_exprs, source_context, module_idx, child_expr_idx);
+                },
+                .e_nominal => |nominal_expr| {
+                    try self.appendProgramExprChildIfPresent(&child_exprs, source_context, module_idx, nominal_expr.backing_expr);
+                },
+                .e_nominal_external => |nominal_expr| {
+                    try self.appendProgramExprChildIfPresent(&child_exprs, source_context, module_idx, nominal_expr.backing_expr);
+                },
+                .e_binop => |binop_expr| {
+                    try self.appendProgramExprChildIfPresent(&child_exprs, source_context, module_idx, binop_expr.lhs);
+                    try self.appendProgramExprChildIfPresent(&child_exprs, source_context, module_idx, binop_expr.rhs);
+                },
+                .e_unary_minus => |unary_expr| {
+                    try self.appendProgramExprChildIfPresent(&child_exprs, source_context, module_idx, unary_expr.expr);
+                },
+                .e_unary_not => |unary_expr| {
+                    try self.appendProgramExprChildIfPresent(&child_exprs, source_context, module_idx, unary_expr.expr);
+                },
+                .e_dot_access => |dot_expr| {
+                    try self.appendProgramExprChildIfPresent(&child_exprs, source_context, module_idx, dot_expr.receiver);
+                    if (dot_expr.args) |args| for (module_env.store.sliceExpr(args)) |arg_expr_idx| {
+                        try self.appendProgramExprChildIfPresent(&child_exprs, source_context, module_idx, arg_expr_idx);
+                    };
+                },
+                .e_tuple_access => |tuple_access| {
+                    try self.appendProgramExprChildIfPresent(&child_exprs, source_context, module_idx, tuple_access.tuple);
+                },
+                .e_dbg => |dbg_expr| {
+                    try self.appendProgramExprChildIfPresent(&child_exprs, source_context, module_idx, dbg_expr.expr);
+                },
+                .e_expect => |expect_expr| {
+                    try self.appendProgramExprChildIfPresent(&child_exprs, source_context, module_idx, expect_expr.body);
+                },
+                .e_return => |return_expr| {
+                    try self.appendProgramExprChildIfPresent(&child_exprs, source_context, module_idx, return_expr.expr);
+                },
+                .e_type_var_dispatch => |dispatch_expr| for (module_env.store.sliceExpr(dispatch_expr.args)) |arg_expr_idx| {
+                    try self.appendProgramExprChildIfPresent(&child_exprs, source_context, module_idx, arg_expr_idx);
+                },
+                .e_for => |for_expr| {
+                    try self.appendProgramExprChildIfPresent(&child_exprs, source_context, module_idx, for_expr.expr);
+                    try self.appendProgramExprChildIfPresent(&child_exprs, source_context, module_idx, for_expr.body);
+                },
+                .e_run_low_level => |run_low_level| for (module_env.store.sliceExpr(run_low_level.args)) |arg_expr_idx| {
+                    try self.appendProgramExprChildIfPresent(&child_exprs, source_context, module_idx, arg_expr_idx);
+                },
+                else => {},
+            }
+
+            const child_expr_span = try self.result.lambdamono.appendExprChildren(self.allocator, child_exprs.items);
+            const child_stmt_span = try self.result.lambdamono.appendStmtChildren(self.allocator, child_stmts.items);
+            const program_expr = self.result.lambdamono.getExprPtr(expr_id);
+            const common = program_expr.commonMut();
+            common.source_context = source_context;
+            common.module_idx = module_idx;
+            common.source_expr = expr_idx;
+            common.child_exprs = child_expr_span;
+            common.child_stmts = child_stmt_span;
+            try self.assembly.markExprAssembled(self.allocator, key);
+            return expr_id;
+        }
+
+        fn assembleProgramStmtNode(
+            self: *Self,
+            source_context: SourceContext,
+            module_idx: u32,
+            stmt_idx: CIR.Statement.Idx,
+        ) Allocator.Error!StmtId {
+            const key = buildStmtKey(source_context, module_idx, stmt_idx);
+            if (self.result.lambdamono.stmt_ids_by_key.get(key)) |existing| return existing;
+
+            const module_env = self.all_module_envs[module_idx];
+            const stmt = module_env.store.getStatement(stmt_idx);
+            var child_exprs = std.ArrayList(ExprId).empty;
+            defer child_exprs.deinit(self.allocator);
+
+            switch (stmt) {
+                .s_decl => |decl| {
+                    if (try self.driver.exprHasExactProgramSemantics(self.result, source_context, module_idx, decl.expr)) {
+                        try child_exprs.append(self.allocator, try self.assembleProgramExprNode(source_context, module_idx, decl.expr));
+                    }
+                },
+                .s_var => |var_decl| {
+                    if (try self.driver.exprHasExactProgramSemantics(self.result, source_context, module_idx, var_decl.expr)) {
+                        try child_exprs.append(self.allocator, try self.assembleProgramExprNode(source_context, module_idx, var_decl.expr));
+                    }
+                },
+                .s_reassign => |reassign| {
+                    if (try self.driver.exprHasExactProgramSemantics(self.result, source_context, module_idx, reassign.expr)) {
+                        try child_exprs.append(self.allocator, try self.assembleProgramExprNode(source_context, module_idx, reassign.expr));
+                    }
+                },
+                .s_dbg => |dbg_stmt| try child_exprs.append(self.allocator, try self.assembleProgramExprNode(source_context, module_idx, dbg_stmt.expr)),
+                .s_expr => |expr_stmt| try child_exprs.append(self.allocator, try self.assembleProgramExprNode(source_context, module_idx, expr_stmt.expr)),
+                .s_expect => |expect_stmt| try child_exprs.append(self.allocator, try self.assembleProgramExprNode(source_context, module_idx, expect_stmt.body)),
+                .s_for => |for_stmt| {
+                    try child_exprs.append(self.allocator, try self.assembleProgramExprNode(source_context, module_idx, for_stmt.expr));
+                    try child_exprs.append(self.allocator, try self.assembleProgramExprNode(source_context, module_idx, for_stmt.body));
+                },
+                .s_while => |while_stmt| {
+                    try child_exprs.append(self.allocator, try self.assembleProgramExprNode(source_context, module_idx, while_stmt.cond));
+                    try child_exprs.append(self.allocator, try self.assembleProgramExprNode(source_context, module_idx, while_stmt.body));
+                },
+                .s_return => |return_stmt| try child_exprs.append(self.allocator, try self.assembleProgramExprNode(source_context, module_idx, return_stmt.expr)),
+                else => {},
+            }
+
+            const stmt_id: StmtId = @enumFromInt(self.result.lambdamono.stmts.items.len);
+            try self.result.lambdamono.stmts.append(self.allocator, .{
+                .module_idx = module_idx,
+                .source_stmt = stmt_idx,
+                .child_exprs = try self.result.lambdamono.appendExprChildren(self.allocator, child_exprs.items),
+            });
+            try self.result.lambdamono.stmt_ids_by_key.put(self.allocator, key, stmt_id);
+            return stmt_id;
+        }
+
+        fn ensureProgramExprRefNode(self: *Self, expr_ref: ExprRef) Allocator.Error!void {
+            _ = try self.assembleProgramExprNodeInternal(
+                expr_ref.source_context,
+                expr_ref.module_idx,
+                expr_ref.expr_idx,
+            );
+        }
+    };
+}
+
+pub fn assembleRoots(
+    allocator: Allocator,
+    all_module_envs: []const *ModuleEnv,
+    current_module_idx: u32,
+    result: anytype,
+    driver: anytype,
+    root_exprs: []const CIR.Expr.Idx,
+) Allocator.Error!void {
+    var assembly = AssemblyState.init();
+    defer assembly.deinit(allocator);
+
+    var assembler = ProgramAssembler(@TypeOf(result), @TypeOf(driver)){
+        .allocator = allocator,
+        .all_module_envs = all_module_envs,
+        .result = result,
+        .driver = driver,
+        .assembly = &assembly,
+    };
+    try assembler.assembleRoots(current_module_idx, root_exprs);
+    try assembler.assembleCallableDefExprGraph();
+}
 
 pub fn getCallableDef(program: *const Program, callable_def_id: CallableDefId) *const CallableDef {
     return &program.callable_defs.items[@intFromEnum(callable_def_id)];

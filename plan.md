@@ -17,15 +17,19 @@ The following architectural cuts are already complete:
 - `TemplateCatalog` owns callable-template extraction and root inventory.
 - `DispatchSolved` owns normalized dispatch results.
 - `ContextMono` owns structural monotype/name comparison.
-- `Lambdasolved` owns `SemanticThread` and the root-analysis control-flow helpers.
+- `Lambdasolved` owns `SemanticThread`, root-analysis state construction, and top-level root-analysis execution.
 - `Lambdamono.Program` owns packed/indirect callable construction.
+- `Lambdamono` owns executable-program assembly through a stage-owned assembler.
+- `Lambdamono.Expr` is now a tagged executable union instead of a payload-overlay record.
 - `Pipeline` no longer owns:
   - external-template invariant helpers
   - dispatch-target resolution
   - packed-callable construction logic
   - root-analysis re-entrancy helpers
+  - top-level root-analysis state construction
+  - executable-program node assembly
 
-What remains is structural: finishing the move from a large integrated `Pipeline` shell to true stage-owned scanning/assembly, and replacing the last flexible `Lambdamono.Expr` representation with the strict executable AST end state.
+What remains is structural: finishing the move from a large integrated `Pipeline` shell to true stage-owned semantic scanning, and deleting the last residual builder/driver seams left after the executable AST cutover.
 
 ## Remaining Goal
 
@@ -34,7 +38,7 @@ Reach the long-term ideal end state:
 1. `Pipeline.zig` is orchestration-only.
 2. `Lambdasolved` owns solved semantic scanning and root-analysis execution, not just its state containers.
 3. `Lambdamono` owns executable-program construction, not just executable data types plus helper utilities.
-4. `Lambdamono.Expr` is a strict executable AST where invalid states are unrepresentable.
+4. `Lambdamono.Expr` remains a strict executable AST where invalid states are unrepresentable.
 5. No remaining stage reads another stage's mutable internal state directly.
 6. No remaining transitional/legacy artifacts survive anywhere in the Zig compiler.
 
@@ -48,6 +52,7 @@ Current remaining shell in `Pipeline.zig`:
   - `runRootSourceExprsInto(...)`
   - `runModuleInto(...)`
 - module-def pattern-origin seeding still owned by `Pipeline`
+- thin stage-driver structs still live in `Pipeline`
 
 Required end state:
 
@@ -57,9 +62,9 @@ Required end state:
 
 Concrete work:
 
-1. Move template-catalog execution into a `TemplateCatalog` runner API.
-2. Move root-analysis execution into a `Lambdasolved` runner API.
-3. Move executable-program construction into a `Lambdamono` builder/runner API.
+1. Keep template-catalog execution in its stage API.
+2. Keep root-analysis execution in its `Lambdasolved` stage API.
+3. Keep executable-program construction in its `Lambdamono` stage API.
 4. Reduce `Pipeline` to:
    - allocate `Result`
    - invoke stage runners in order
@@ -69,41 +74,7 @@ Success condition:
 
 - `Pipeline.zig` no longer contains stage-specific execution helpers.
 
-### B. Move Executable Program Construction Out Of `Pipeline`
-
-Current remaining assembly ownership in `Pipeline.zig`:
-
-- `assembleRootProgramExprs(...)`
-- `assembleCallableDefExprGraph(...)`
-- `assembleProgramExprNode(...)`
-- `assembleProgramExprNodeInternal(...)`
-- `ensureProgramExprSemanticShape(...)`
-- `assembleProgramStmtNode(...)`
-- `ensureProgramExprRefNode(...)`
-- `ensureProgramExpr(...)`
-- `exprHasExactProgramSemantics(...)`
-
-Required end state:
-
-- executable-program construction is owned by `Lambdamono`
-- `Pipeline` does not perform late assembly itself
-- any builder scratch state lives in `Lambdamono`, not in `Pipeline`
-
-Concrete work:
-
-1. Move the remaining assembly routines themselves under `Lambdamono`.
-2. Introduce `Lambdamono` builder/assembler APIs that:
-   - assemble root exprs
-   - assemble callable bodies
-   - assemble stmt/expr children
-   - ensure semantic shape before node emission
-3. Replace direct assembly calls in `Pipeline` with `Lambdamono` stage-owned APIs.
-
-Success condition:
-
-- `Pipeline.zig` no longer assembles executable nodes directly.
-
-### C. Move Remaining Semantic Scan Algorithms Out Of `Pipeline`
+### B. Move Remaining Semantic Scan Algorithms Out Of `Pipeline`
 
 Current remaining semantic algorithms still in `Pipeline.zig`:
 
@@ -117,8 +88,8 @@ Current remaining semantic algorithms still in `Pipeline.zig`:
 
 Required end state:
 
-- `Lambdasolved` owns solved scanning and semantic realization
-- `Pipeline` does not contain the body of the semantic scan engine
+- `Lambdasolved` owns solved scanning and semantic realization.
+- `Pipeline` does not contain the body of the semantic scan engine.
 
 Concrete work:
 
@@ -131,80 +102,37 @@ Success condition:
 
 - the semantic scan/realization engine lives in `Lambdasolved`, not in `Pipeline`.
 
-### D. Delete Direct Reads Of Stage-Internal Scan State
-
-Current remaining leak:
-
-- `Pipeline.zig` still owns local root-analysis orchestration in its run methods instead of delegating execution to a stage-owned runner type
-
-Required end state:
-
-- `Pipeline` does not inspect stage-internal mutable state directly
-- that decision becomes a `Lambdasolved` stage API or is eliminated by the architectural move in Stage C
-
-Concrete work:
-
-1. Keep root-analysis state owned by `Lambdasolved`, not by `Pipeline`.
-2. Move the remaining run-method orchestration that creates and drives root-analysis into a stage-owned runner.
-3. If Stage C makes even that local runner state unnecessary to mention in `Pipeline`, delete the leak entirely.
-
-Success condition:
-
-- no stage-internal root-analysis state is owned by `Pipeline`.
-
-### E. Replace The Remaining Fat `Lambdamono.Expr`
+### C. Tighten The Strict `Lambdamono.Expr` End State
 
 Current remaining non-ideal representation in `Lambdamono.zig`:
 
-- `Expr` as a fat struct with:
-  - `payload`
-  - `origin`
-  - generic child spans
-  - helper getters that still decode semantic meaning after the fact
-- `AssemblyState` still exists as local assembly tracking around this struct
+- `Expr` is now a tagged union, but still uses:
+  - a generic common header
+  - convenience getters that decode semantic meaning
+- assembly still uses a local recursion/assembled-state helper
 
 Required end state:
 
-- `Lambdamono.Expr` becomes a strict executable AST
-- invalid combinations become unrepresentable
+- `Lambdamono.Expr` remains a strict executable AST.
+- Invalid combinations stay unrepresentable.
+- Any remaining generic helper surface is only structural, not semantic-overlay based.
 
 Concrete work:
 
-1. Replace the current `Expr` struct with a tagged union of executable node kinds.
-2. Make each variant carry exactly the data it needs.
-3. Eliminate generic semantic decoding helpers that only exist because `Expr` is over-flexible.
-4. Push shared metadata into a small common header if needed, but not semantic role slots.
-5. Rework assembly/build logic to emit concrete variants directly.
-
-Required variants include at least:
-
-- local lookup
-- def lookup
-- direct callable
-- packed callable
-- closure introduction
-- direct call
-- indirect call
-- low-level call
-- dispatch target
-- dispatch intrinsic
-- projection / origin-bearing lookup node as needed
-- block
-- switch/match
-- return
-- literals / tuple / record / tag forms as needed
+1. Keep executable variants concrete and direct.
+2. Reduce any remaining getter usage that only exists because callers have not yet been updated to switch on variants directly where that is clearer.
+3. Keep shared metadata structural only.
 
 Success condition:
 
-- `ExprPayload` no longer acts as a semantic overlay on a generic fat record
-- fat `Expr` payload/origin decoding is gone
+- no semantic payload-overlay representation remains
 - invalid executable states are unrepresentable in the IR type itself
 
-### F. Delete Transitional Builder State Once The Strict AST Exists
+### D. Delete Transitional Builder State Once The Strict AST Exists
 
 Current remaining transitional state:
 
-- `Lambdamono.AssemblyState`
+- local `Lambdamono` assembly scratch still exists, even though it is now stage-private
 
 Required end state:
 
@@ -213,13 +141,13 @@ Required end state:
 
 Concrete work:
 
-1. After strict AST emission is in place, reduce or delete `AssemblyState`.
+1. After strict AST emission is in place, reduce or delete the remaining assembly scratch.
 2. Keep only truly local builder recursion guards if still needed.
 3. Ensure the final program is the only source of truth.
 
 Success condition:
 
-- there is no broad transitional builder overlay remaining around executable expr state.
+- there is no broad transitional builder overlay remaining around executable expr state
 
 ## Mandatory Re-Audit Loop
 

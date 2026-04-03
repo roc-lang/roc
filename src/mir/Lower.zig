@@ -465,7 +465,7 @@ fn callableDefBodyRetMonotype(
     const resolved = if (body_expr.getCallable()) |callable_semantics| switch (callable_semantics) {
         .callable => |callable_value| self.callable_pipeline.getCallableValueRuntimeMonotype(callable_value),
         .intro => |intro| self.callable_pipeline.getCallableValueRuntimeMonotype(intro.callable_value),
-    } else body_expr.monotype;
+    } else body_expr.common().monotype;
     return self.importMonotypeFromStore(
         &self.callable_pipeline.context_mono.monotype_store,
         resolved.idx,
@@ -3304,7 +3304,7 @@ fn lowerReservedTrivialClosureLambda(
     try self.lowered_callable_lambdas.put(cache_key, reserved_lambda);
 
     const body_program_expr = self.callableDefBodyExpr(callable_def);
-    const body_expr_idx = body_program_expr.source_expr;
+    const body_expr_idx = body_program_expr.common().source_expr;
     const param_patterns = self.callable_pipeline.lambdamono.getPatternIds(callable_def.arg_patterns);
     const ret_monotype = try self.callableDefBodyRetMonotype(callable_def);
 
@@ -4018,7 +4018,7 @@ fn lowerResolvedCallableInstLambda(
             module_env,
             runtime_expr_idx,
             self.callable_pipeline.lambdamono.getPatternIds(callable_def.arg_patterns),
-            self.callableDefBodyExpr(callable_def).source_expr,
+            self.callableDefBodyExpr(callable_def).common().source_expr,
             fn_monotype,
             body_ret_monotype,
             reserved_lambda,
@@ -4028,7 +4028,7 @@ fn lowerResolvedCallableInstLambda(
             module_env,
             runtime_expr_idx,
             self.callable_pipeline.lambdamono.getPatternIds(callable_def.arg_patterns),
-            self.callableDefBodyExpr(callable_def).source_expr,
+            self.callableDefBodyExpr(callable_def).common().source_expr,
             fn_monotype,
             body_ret_monotype,
             reserved_lambda,
@@ -4216,11 +4216,11 @@ fn appendDispatchActualArgExprs(
         .{ @intFromEnum(expr_idx), self.current_module_idx },
     );
     for (self.callable_pipeline.lambdamono.getExprChildren(
-        self.callable_pipeline.lambdamono.getExpr(expr_id).child_exprs,
+        self.callable_pipeline.lambdamono.getExpr(expr_id).common().child_exprs,
     )) |child_expr_id| {
         try actual_arg_exprs.append(
             self.allocator,
-            self.callable_pipeline.lambdamono.getExpr(child_expr_id).source_expr,
+            self.callable_pipeline.lambdamono.getExpr(child_expr_id).common().source_expr,
         );
     }
 }
@@ -6534,13 +6534,13 @@ fn debugAssertNoUnitPrimPatternBinding(
     else
         std.math.maxInt(u32);
     const callsite_template_body_expr: u32 = if (maybe_callsite_inst) |callsite_inst|
-        @intFromEnum(self.callableDefBodyExpr(self.callable_pipeline.getCallableDefForInst(callsite_inst)).source_expr)
+        @intFromEnum(self.callableDefBodyExpr(self.callable_pipeline.getCallableDefForInst(callsite_inst)).common().source_expr)
     else
         std.math.maxInt(u32);
     const callsite_template_body_tag: []const u8 = if (maybe_callsite_inst) |callsite_inst| blk: {
         const callable_def = self.callable_pipeline.getCallableDefForInst(callsite_inst);
         const template_env = self.all_module_envs[callable_def.module_idx];
-        break :blk @tagName(template_env.store.getExpr(self.callableDefBodyExpr(callable_def).source_expr));
+        break :blk @tagName(template_env.store.getExpr(self.callableDefBodyExpr(callable_def).common().source_expr));
     } else "none";
     const callsite_callable_kind: []const u8 = if (maybe_callsite_inst) |callsite_inst|
         callableRuntimeValueKindText(self.callable_pipeline.getCallableInst(callsite_inst).runtime_value)
