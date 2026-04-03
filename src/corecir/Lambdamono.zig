@@ -153,17 +153,23 @@ pub const LookupResolution = union(enum) {
 const AssemblyState = struct {
     in_progress_exprs: std.AutoHashMapUnmanaged(ContextMono.ContextExprKey, void),
     assembled_exprs: std.AutoHashMapUnmanaged(ContextMono.ContextExprKey, void),
+    in_progress_callable_insts: std.AutoHashMapUnmanaged(CallableInstId, void),
+    assembled_callable_insts: std.AutoHashMapUnmanaged(CallableInstId, void),
 
     fn init() AssemblyState {
         return .{
             .in_progress_exprs = .empty,
             .assembled_exprs = .empty,
+            .in_progress_callable_insts = .empty,
+            .assembled_callable_insts = .empty,
         };
     }
 
     fn deinit(self: *AssemblyState, allocator: Allocator) void {
         self.in_progress_exprs.deinit(allocator);
         self.assembled_exprs.deinit(allocator);
+        self.in_progress_callable_insts.deinit(allocator);
+        self.assembled_callable_insts.deinit(allocator);
     }
 
     fn beginExprAssembly(
@@ -190,6 +196,32 @@ const AssemblyState = struct {
         key: ContextMono.ContextExprKey,
     ) Allocator.Error!void {
         try self.assembled_exprs.put(allocator, key, {});
+    }
+
+    fn beginCallableInstAssembly(
+        self: *AssemblyState,
+        allocator: Allocator,
+        callable_inst_id: CallableInstId,
+    ) Allocator.Error!bool {
+        if (self.in_progress_callable_insts.contains(callable_inst_id)) return false;
+        try self.in_progress_callable_insts.put(allocator, callable_inst_id, {});
+        return true;
+    }
+
+    fn endCallableInstAssembly(self: *AssemblyState, callable_inst_id: CallableInstId) void {
+        _ = self.in_progress_callable_insts.remove(callable_inst_id);
+    }
+
+    fn isCallableInstAssembled(self: *const AssemblyState, callable_inst_id: CallableInstId) bool {
+        return self.assembled_callable_insts.contains(callable_inst_id);
+    }
+
+    fn markCallableInstAssembled(
+        self: *AssemblyState,
+        allocator: Allocator,
+        callable_inst_id: CallableInstId,
+    ) Allocator.Error!void {
+        try self.assembled_callable_insts.put(allocator, callable_inst_id, {});
     }
 };
 
@@ -1779,35 +1811,6 @@ fn ProgramAssembler(comptime ResultPtr: type, comptime Driver: type) type {
             }
         }
 
-        fn assembleCallableDefExprGraph(self: *Self) Allocator.Error!void {
-            var callable_inst_idx: usize = 0;
-            while (callable_inst_idx < self.result.lambdamono.callable_insts.items.len) : (callable_inst_idx += 1) {
-                const callable_inst_id: CallableInstId = @enumFromInt(callable_inst_idx);
-                if (!callableInstHasRealizedRuntimeExpr(self.result, callable_inst_id)) continue;
-                const callable_inst = self.result.getCallableInst(callable_inst_id).*;
-                const template = self.result.getCallableTemplate(callable_inst.template);
-                switch (template.kind) {
-                    .lambda, .closure, .hosted_lambda => {},
-                    .top_level_def => std.debug.panic(
-                        "Lambdamono invariant violated: callable inst {d} runtime expr {d} in module {d} retained top_level_def callable template kind after callable registration",
-                        .{ @intFromEnum(callable_inst_id), @intFromEnum(template.runtime_expr), template.module_idx },
-                    ),
-                }
-                const callable_def = self.result.lambdamono.callable_defs.items[@intFromEnum(callable_inst.callable_def)];
-                _ = try self.assembleProgramExprNode(
-                    callable_def.body_expr.source_context,
-                    callable_def.body_expr.module_idx,
-                    callable_def.body_expr.expr_idx,
-                );
-                for (self.result.getCaptureFields(callable_def.captures)) |capture_field| {
-                    switch (capture_field.source) {
-                        .bound_expr => |bound_expr| try self.ensureProgramExprRefNode(bound_expr.expr_ref),
-                        .lexical_pattern => {},
-                    }
-                }
-            }
-        }
-
         fn assembleProgramExprNode(
             self: *Self,
             source_context: SourceContext,
@@ -1985,7 +1988,66 @@ fn ProgramAssembler(comptime ResultPtr: type, comptime Driver: type) type {
             common.child_exprs = child_expr_span;
             common.child_stmts = child_stmt_span;
             try self.assembly.markExprAssembled(self.allocator, key);
+            try self.ensureProgramExprDependencyGraphs(expr_id);
             return expr_id;
+        }
+
+        fn ensureProgramExprDependencyGraphs(self: *Self, expr_id: ExprId) Allocator.Error!void {
+            const expr = self.result.lambdamono.getExpr(expr_id);
+            const callable_value = expr.getCallableValue();
+            const call_site = expr.getCall();
+
+            if (callable_value) |value| {
+                try self.ensureCallableValueBodyGraphs(value);
+            }
+            if (call_site) |resolved_call_site| {
+                try self.ensureCallSiteBodyGraphs(resolved_call_site);
+            }
+        }
+
+        fn ensureCallableValueBodyGraphs(self: *Self, callable_value: CallableValue) Allocator.Error!void {
+            for (self.result.lambdamono.getCallableValueVariants(callable_value)) |callable_inst_id| {
+                try self.ensureCallableInstBodyGraph(callable_inst_id);
+            }
+        }
+
+        fn ensureCallSiteBodyGraphs(self: *Self, call_site: CallSite) Allocator.Error!void {
+            for (self.result.lambdamono.getCallSiteVariants(call_site)) |callable_inst_id| {
+                try self.ensureCallableInstBodyGraph(callable_inst_id);
+            }
+        }
+
+        fn ensureCallableInstBodyGraph(self: *Self, callable_inst_id: CallableInstId) Allocator.Error!void {
+            if (self.assembly.isCallableInstAssembled(callable_inst_id)) return;
+            if (!try self.assembly.beginCallableInstAssembly(self.allocator, callable_inst_id)) return;
+            defer self.assembly.endCallableInstAssembly(callable_inst_id);
+
+            try requireCallableInstRealized(self.driver, self.result, callable_inst_id);
+
+            const callable_inst = self.result.getCallableInst(callable_inst_id).*;
+            const template = self.result.getCallableTemplate(callable_inst.template);
+            switch (template.kind) {
+                .lambda, .closure, .hosted_lambda => {},
+                .top_level_def => std.debug.panic(
+                    "Lambdamono invariant violated: callable inst {d} runtime expr {d} in module {d} retained top_level_def callable template kind after callable registration",
+                    .{ @intFromEnum(callable_inst_id), @intFromEnum(template.runtime_expr), template.module_idx },
+                ),
+            }
+
+            const callable_def = self.result.lambdamono.callable_defs.items[@intFromEnum(callable_inst.callable_def)];
+            _ = try self.assembleProgramExprNode(
+                callable_def.body_expr.source_context,
+                callable_def.body_expr.module_idx,
+                callable_def.body_expr.expr_idx,
+            );
+            for (self.result.getCaptureFields(callable_def.captures)) |capture_field| {
+                switch (capture_field.source) {
+                    .bound_expr => |bound_expr| try self.ensureProgramExprRefNode(bound_expr.expr_ref),
+                    .lexical_pattern => {},
+                }
+            }
+
+            try self.assembly.markCallableInstAssembled(self.allocator, callable_inst_id);
         }
 
         fn assembleProgramStmtNode(
@@ -2072,7 +2134,6 @@ pub fn assembleRoots(
         .assembly = &assembly,
     };
     try assembler.assembleRoots(current_module_idx, root_exprs);
-    try assembler.assembleCallableDefExprGraph();
 }
 
 pub fn getCallableDef(program: *const Program, callable_def_id: CallableDefId) *const CallableDef {

@@ -1830,6 +1830,7 @@ pub fn assignCallableArgCallableInstsFromParams(
             fn_monotype_module_idx,
             &.{},
         )).id;
+        try ensureCallableInstRealized(driver, result, callable_inst_id);
 
         try setExprDirectCallable(driver,
             result,
@@ -6050,6 +6051,7 @@ pub fn materializeExprCallableValueWithKnownFnMonotype(
         fn_monotype.module_idx,
         &.{},
     )).id;
+    try ensureCallableInstRealized(driver, result, callable_inst_id);
     try setExprDirectCallable(
         driver,
         result,
@@ -6137,6 +6139,7 @@ pub fn materializeLookupExprCallableValue(
             &.{},
         )).id;
     };
+    try ensureCallableInstRealized(driver, result, callable_inst_id);
     try setExprDirectCallable(
         driver,
         result,
