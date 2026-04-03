@@ -239,6 +239,7 @@ pub const CallableVariantGroupId = enum(u32) {
 pub const ContextExprKey = ContextMono.ContextExprKey;
 pub const ContextPatternKey = ContextMono.ContextPatternKey;
 pub const SourceContext = ContextMono.SourceContext;
+const SemanticThread = Lambdasolved.SemanticThread;
 pub const BuildStmtKey = struct {
     source_context_kind: ContextMono.SourceContextKind,
     source_context_module_idx: u32,
@@ -295,6 +296,260 @@ pub fn calleeUsesFirstClassCallableValuePath(expr: CIR.Expr) bool {
         => false,
         else => true,
     };
+}
+
+pub fn requireProgramExprMonotype(
+    driver: anytype,
+    result: anytype,
+    source_context: SourceContext,
+    module_idx: u32,
+    expr_idx: CIR.Expr.Idx,
+) Allocator.Error!ContextMono.ResolvedMonotype {
+    return driver.requireRecordedExprMonotypeForSourceContext(
+        result,
+        SemanticThread.trackedThread(source_context),
+        source_context,
+        module_idx,
+        expr_idx,
+    );
+}
+
+pub fn ensureProgramExpr(
+    driver: anytype,
+    result: anytype,
+    source_context: SourceContext,
+    module_idx: u32,
+    expr_idx: CIR.Expr.Idx,
+) Allocator.Error!*Expr {
+    const monotype = try requireProgramExprMonotype(
+        driver,
+        result,
+        source_context,
+        module_idx,
+        expr_idx,
+    );
+    return result.lambdamono.ensureExpr(
+        driver.allocator,
+        source_context,
+        module_idx,
+        expr_idx,
+        monotype,
+    );
+}
+
+pub fn recordDispatchExprTarget(
+    driver: anytype,
+    result: anytype,
+    source_context: SourceContext,
+    module_idx: u32,
+    expr_idx: CIR.Expr.Idx,
+    dispatch_target: DispatchSolved.DispatchExprTarget,
+) Allocator.Error!void {
+    try result.dispatch_solved.recordDispatchExprTarget(
+        driver.allocator,
+        source_context,
+        module_idx,
+        expr_idx,
+        dispatch_target,
+    );
+    const semantics = try ensureProgramExpr(driver, result, source_context, module_idx, expr_idx);
+    const common = semantics.common().*;
+    const next_expr: Expr = .{ .dispatch_target = .{
+        .common = common,
+        .target = dispatch_target,
+    } };
+    if (!std.meta.eql(semantics.*, next_expr)) semantics.* = next_expr;
+}
+
+pub fn recordDispatchExprIntrinsic(
+    driver: anytype,
+    result: anytype,
+    source_context: SourceContext,
+    module_idx: u32,
+    expr_idx: CIR.Expr.Idx,
+    dispatch_intrinsic: DispatchIntrinsic,
+) Allocator.Error!void {
+    const semantics = try ensureProgramExpr(driver, result, source_context, module_idx, expr_idx);
+    const common = semantics.common().*;
+    const next_expr: Expr = .{ .dispatch_intrinsic = .{
+        .common = common,
+        .intrinsic = dispatch_intrinsic,
+    } };
+    if (!std.meta.eql(semantics.*, next_expr)) semantics.* = next_expr;
+}
+
+pub fn exprHasExactProgramSemantics(
+    driver: anytype,
+    result: anytype,
+    source_context: SourceContext,
+    module_idx: u32,
+    expr_idx: CIR.Expr.Idx,
+) Allocator.Error!bool {
+    const thread = SemanticThread.trackedThread(source_context);
+    const monotype = try driver.lookupRecordedExprMonotypeIfReadyForSourceContext(
+        result,
+        thread,
+        source_context,
+        module_idx,
+        expr_idx,
+    );
+    return monotype != null;
+}
+
+pub fn ensureProgramExprSemanticShape(
+    driver: anytype,
+    result: anytype,
+    source_context: SourceContext,
+    module_idx: u32,
+    expr_idx: CIR.Expr.Idx,
+    expr: CIR.Expr,
+) Allocator.Error!void {
+    switch (expr) {
+        .e_lookup_local, .e_lookup_external, .e_lookup_required => {
+            try Lambdasolved.realizeLookupExprSemantics(
+                driver,
+                result,
+                SemanticThread.trackedThread(source_context),
+                module_idx,
+                expr_idx,
+                expr,
+            );
+            var visiting: std.AutoHashMapUnmanaged(ContextExprKey, void) = .empty;
+            defer visiting.deinit(driver.allocator);
+            try Lambdasolved.realizeStructuredExprCallableSemantics(
+                driver,
+                result,
+                source_context,
+                module_idx,
+                expr_idx,
+                &visiting,
+            );
+        },
+        .e_call => {
+            var visiting: std.AutoHashMapUnmanaged(ContextExprKey, void) = .empty;
+            defer visiting.deinit(driver.allocator);
+            try Lambdasolved.realizeStructuredExprCallableSemantics(
+                driver,
+                result,
+                source_context,
+                module_idx,
+                expr_idx,
+                &visiting,
+            );
+        },
+        .e_type_var_dispatch => {
+            try Lambdasolved.realizeDispatchExprSemantics(
+                driver,
+                result,
+                SemanticThread.trackedThread(source_context),
+                module_idx,
+                expr_idx,
+                expr,
+            );
+        },
+        .e_dot_access => |dot_expr| {
+            if (dot_expr.args != null) {
+                try Lambdasolved.realizeDispatchExprSemantics(
+                    driver,
+                    result,
+                    SemanticThread.trackedThread(source_context),
+                    module_idx,
+                    expr_idx,
+                    expr,
+                );
+            }
+        },
+        else => if (result.getExprTemplateId(source_context, module_idx, expr_idx) != null) {
+            var visiting: std.AutoHashMapUnmanaged(ContextExprKey, void) = .empty;
+            defer visiting.deinit(driver.allocator);
+            try Lambdasolved.realizeStructuredExprCallableSemantics(
+                driver,
+                result,
+                source_context,
+                module_idx,
+                expr_idx,
+                &visiting,
+            );
+        },
+    }
+}
+
+pub fn ensureCallableInstRealized(
+    driver: anytype,
+    result: anytype,
+    callable_inst_id: CallableInstId,
+) Allocator.Error!void {
+    const callable_inst = result.getCallableInst(callable_inst_id);
+    const template = result.getCallableTemplate(callable_inst.template);
+    const callable_source_context: SourceContext = .{
+        .callable_inst = @enumFromInt(@intFromEnum(callable_inst_id)),
+    };
+    if (result.getExprCallableValue(
+        callable_source_context,
+        template.module_idx,
+        template.runtime_expr,
+    ) != null) return;
+    try Lambdasolved.realizeCallableInstWithFreshRootAnalysis(
+        driver,
+        result,
+        callable_inst_id,
+    );
+}
+
+fn ProgramAssemblyDriver(comptime PassPtr: type) type {
+    return struct {
+        pass: PassPtr,
+
+        fn ensureCallableInstRealized(
+            self: @This(),
+            result: anytype,
+            callable_inst_id: CallableInstId,
+        ) Allocator.Error!void {
+            return ensureCallableInstRealized(self.pass, result, callable_inst_id);
+        }
+
+        fn ensureProgramExpr(
+            self: @This(),
+            result: anytype,
+            source_context: SourceContext,
+            module_idx: u32,
+            expr_idx: CIR.Expr.Idx,
+        ) Allocator.Error!*Expr {
+            return ensureProgramExpr(self.pass, result, source_context, module_idx, expr_idx);
+        }
+
+        fn exprHasExactProgramSemantics(
+            self: @This(),
+            result: anytype,
+            source_context: SourceContext,
+            module_idx: u32,
+            expr_idx: CIR.Expr.Idx,
+        ) Allocator.Error!bool {
+            return exprHasExactProgramSemantics(self.pass, result, source_context, module_idx, expr_idx);
+        }
+
+        fn ensureProgramExprSemanticShape(
+            self: @This(),
+            result: anytype,
+            source_context: SourceContext,
+            module_idx: u32,
+            expr_idx: CIR.Expr.Idx,
+            expr: CIR.Expr,
+        ) Allocator.Error!void {
+            return ensureProgramExprSemanticShape(
+                self.pass,
+                result,
+                source_context,
+                module_idx,
+                expr_idx,
+                expr,
+            );
+        }
+    };
+}
+
+pub fn programAssemblyDriver(pass: anytype) ProgramAssemblyDriver(@TypeOf(pass)) {
+    return .{ .pass = pass };
 }
 
 pub const CaptureValueSource = union(enum) {
