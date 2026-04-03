@@ -12,6 +12,7 @@
 //! to invent replacement monotypes when a fact is missing.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const can = @import("can");
 const types = @import("types");
@@ -1025,8 +1026,7 @@ pub fn seedRecordedContextTypeVarSpecializations(
                 const canonical_mono = if (entry.monotype.module_idx == module_idx)
                     entry.monotype.idx
                 else
-                    try driver.remapMonotypeBetweenModules(
-                        result,
+                    try remapMonotypeBetweenModules(driver, result,
                         entry.monotype.idx,
                         entry.monotype.module_idx,
                         module_idx,
@@ -1161,6 +1161,223 @@ pub fn resolveTypeVarMonotypeWithBindings(
     );
 }
 
+pub fn remapMonotypeBetweenModules(
+    driver: anytype,
+    result: anytype,
+    monotype: Monotype.Idx,
+    from_module_idx: u32,
+    to_module_idx: u32,
+) Allocator.Error!Monotype.Idx {
+    if (monotype.isNone() or from_module_idx == to_module_idx) return monotype;
+
+    var remapped = std.AutoHashMap(Monotype.Idx, Monotype.Idx).init(driver.allocator);
+    defer remapped.deinit();
+
+    var scratches = try Monotype.Store.Scratches.init(driver.allocator);
+    defer scratches.deinit();
+    scratches.ident_store = driver.all_module_envs[to_module_idx].getIdentStoreConst();
+    scratches.module_env = driver.all_module_envs[to_module_idx];
+    scratches.module_idx = to_module_idx;
+    scratches.all_module_envs = driver.all_module_envs;
+
+    return remapMonotypeBetweenModulesRec(
+        driver,
+        result,
+        monotype,
+        from_module_idx,
+        to_module_idx,
+        &remapped,
+        &scratches,
+    );
+}
+
+fn remapMonotypeBetweenModulesRec(
+    driver: anytype,
+    result: anytype,
+    monotype: Monotype.Idx,
+    from_module_idx: u32,
+    to_module_idx: u32,
+    remapped: *std.AutoHashMap(Monotype.Idx, Monotype.Idx),
+    scratches: *Monotype.Store.Scratches,
+) Allocator.Error!Monotype.Idx {
+    if (monotype.isNone() or from_module_idx == to_module_idx) return monotype;
+    if (remapped.get(monotype)) |existing| return existing;
+
+    const mono = result.context_mono.monotype_store.getMonotype(monotype);
+    switch (mono) {
+        .unit => return result.context_mono.monotype_store.unit_idx,
+        .prim => |prim| return result.context_mono.monotype_store.primIdx(prim),
+        .recursive_placeholder => {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("remapMonotypeBetweenModules: unexpected recursive_placeholder", .{});
+            }
+            unreachable;
+        },
+        .list, .box, .tuple, .func, .record, .tag_union => {},
+    }
+
+    const placeholder = try result.context_mono.monotype_store.addMonotype(driver.allocator, .recursive_placeholder);
+    try remapped.put(monotype, placeholder);
+
+    const mapped_mono: Monotype.Monotype = switch (mono) {
+        .list => |list_mono| .{ .list = .{
+            .elem = try remapMonotypeBetweenModulesRec(
+                driver,
+                result,
+                list_mono.elem,
+                from_module_idx,
+                to_module_idx,
+                remapped,
+                scratches,
+            ),
+        } },
+        .box => |box_mono| .{ .box = .{
+            .inner = try remapMonotypeBetweenModulesRec(
+                driver,
+                result,
+                box_mono.inner,
+                from_module_idx,
+                to_module_idx,
+                remapped,
+                scratches,
+            ),
+        } },
+        .tuple => |tuple_mono| blk: {
+            const idx_top = scratches.idxs.top();
+            defer scratches.idxs.clearFrom(idx_top);
+
+            var elem_i: usize = 0;
+            while (elem_i < tuple_mono.elems.len) : (elem_i += 1) {
+                const elem_mono = result.context_mono.monotype_store.getIdxSpanItem(tuple_mono.elems, elem_i);
+                try scratches.idxs.append(try remapMonotypeBetweenModulesRec(
+                    driver,
+                    result,
+                    elem_mono,
+                    from_module_idx,
+                    to_module_idx,
+                    remapped,
+                    scratches,
+                ));
+            }
+
+            const mapped_elems = try result.context_mono.monotype_store.addIdxSpan(
+                driver.allocator,
+                scratches.idxs.sliceFromStart(idx_top),
+            );
+            break :blk .{ .tuple = .{ .elems = mapped_elems } };
+        },
+        .func => |func_mono| blk: {
+            const idx_top = scratches.idxs.top();
+            defer scratches.idxs.clearFrom(idx_top);
+
+            var arg_i: usize = 0;
+            while (arg_i < func_mono.args.len) : (arg_i += 1) {
+                const arg_mono = result.context_mono.monotype_store.getIdxSpanItem(func_mono.args, arg_i);
+                try scratches.idxs.append(try remapMonotypeBetweenModulesRec(
+                    driver,
+                    result,
+                    arg_mono,
+                    from_module_idx,
+                    to_module_idx,
+                    remapped,
+                    scratches,
+                ));
+            }
+            const mapped_args = try result.context_mono.monotype_store.addIdxSpan(
+                driver.allocator,
+                scratches.idxs.sliceFromStart(idx_top),
+            );
+
+            const mapped_ret = try remapMonotypeBetweenModulesRec(
+                driver,
+                result,
+                func_mono.ret,
+                from_module_idx,
+                to_module_idx,
+                remapped,
+                scratches,
+            );
+
+            break :blk .{ .func = .{
+                .args = mapped_args,
+                .ret = mapped_ret,
+                .effectful = func_mono.effectful,
+            } };
+        },
+        .record => |record_mono| blk: {
+            const fields_top = scratches.fields.top();
+            defer scratches.fields.clearFrom(fields_top);
+
+            var field_i: usize = 0;
+            while (field_i < record_mono.fields.len) : (field_i += 1) {
+                const field = result.context_mono.monotype_store.getFieldItem(record_mono.fields, field_i);
+                try scratches.fields.append(.{
+                    .name = field.name,
+                    .type_idx = try remapMonotypeBetweenModulesRec(
+                        driver,
+                        result,
+                        field.type_idx,
+                        from_module_idx,
+                        to_module_idx,
+                        remapped,
+                        scratches,
+                    ),
+                });
+            }
+
+            const mapped_fields = try result.context_mono.monotype_store.addFields(
+                driver.allocator,
+                scratches.fields.sliceFromStart(fields_top),
+            );
+            break :blk .{ .record = .{ .fields = mapped_fields } };
+        },
+        .tag_union => |tag_union_mono| blk: {
+            const tags_top = scratches.tags.top();
+            defer scratches.tags.clearFrom(tags_top);
+
+            var tag_i: usize = 0;
+            while (tag_i < tag_union_mono.tags.len) : (tag_i += 1) {
+                const tag = result.context_mono.monotype_store.getTagItem(tag_union_mono.tags, tag_i);
+                const payload_top = scratches.idxs.top();
+                defer scratches.idxs.clearFrom(payload_top);
+
+                var payload_i: usize = 0;
+                while (payload_i < tag.payloads.len) : (payload_i += 1) {
+                    const payload_mono = result.context_mono.monotype_store.getIdxSpanItem(tag.payloads, payload_i);
+                    try scratches.idxs.append(try remapMonotypeBetweenModulesRec(
+                        driver,
+                        result,
+                        payload_mono,
+                        from_module_idx,
+                        to_module_idx,
+                        remapped,
+                        scratches,
+                    ));
+                }
+
+                const mapped_payloads = try result.context_mono.monotype_store.addIdxSpan(
+                    driver.allocator,
+                    scratches.idxs.sliceFromStart(payload_top),
+                );
+                try scratches.tags.append(.{
+                    .name = tag.name,
+                    .payloads = mapped_payloads,
+                });
+            }
+
+            const mapped_tags = try result.context_mono.monotype_store.addTags(
+                driver.allocator,
+                scratches.tags.sliceFromStart(tags_top),
+            );
+            break :blk .{ .tag_union = .{ .tags = mapped_tags } };
+        },
+        .unit, .prim, .recursive_placeholder => unreachable,
+    };
+
+    result.context_mono.monotype_store.monotypes.items[@intFromEnum(placeholder)] = mapped_mono;
+    return placeholder;
+}
+
 pub fn monotypeFromTypeVarInSourceContext(
     driver: anytype,
     result: anytype,
@@ -1203,8 +1420,7 @@ pub fn monotypeFromTypeVarInSourceContextWithExtraBindings(
         const canonical_mono = if (entry.value_ptr.module_idx == module_idx)
             entry.value_ptr.idx
         else
-            try driver.remapMonotypeBetweenModules(
-                result,
+            try remapMonotypeBetweenModules(driver, result,
                 entry.value_ptr.idx,
                 entry.value_ptr.module_idx,
                 module_idx,
@@ -1276,8 +1492,7 @@ pub fn monotypeFromTypeVarWithLanguageDefaultingInSourceContextWithExtraBindings
         const canonical_mono = if (entry.value_ptr.module_idx == module_idx)
             entry.value_ptr.idx
         else
-            try driver.remapMonotypeBetweenModules(
-                result,
+            try remapMonotypeBetweenModules(driver, result,
                 entry.value_ptr.idx,
                 entry.value_ptr.module_idx,
                 module_idx,

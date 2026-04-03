@@ -1124,8 +1124,7 @@ pub fn updateCallableDefRuntimeValue(
                 const field_monotype = if (runtime_field.field_monotype.module_idx == callable_def.module_idx)
                     runtime_field.field_monotype.idx
                 else
-                    try driver.remapMonotypeBetweenModules(
-                        result,
+                    try cm.remapMonotypeBetweenModules(driver, result,
                         runtime_field.field_monotype.idx,
                         runtime_field.field_monotype.module_idx,
                         callable_def.module_idx,
@@ -4421,8 +4420,7 @@ pub fn resolveDirectCallFnMonotype(
     _ = call_expr_idx;
     const callee_monotype = (try cm.resolveExprMonotypeResolved(driver, result, thread, module_idx, call_expr.func)) orelse return null;
     if (callee_monotype.module_idx == module_idx) return callee_monotype.idx;
-    return try driver.remapMonotypeBetweenModules(
-        result,
+    return try cm.remapMonotypeBetweenModules(driver, result,
         callee_monotype.idx,
         callee_monotype.module_idx,
         module_idx,

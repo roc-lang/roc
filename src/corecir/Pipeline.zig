@@ -588,8 +588,7 @@ pub const Pass = struct {
                 const normalized_mono = if (caller_module_idx == module_idx)
                     caller_mono
                 else
-                    try self.remapMonotypeBetweenModules(
-                        result,
+                    try ContextMono.remapMonotypeBetweenModules(self, result,
                         caller_mono,
                         caller_module_idx,
                         module_idx,
@@ -3510,215 +3509,6 @@ const MaterializeCallableValueFailure = enum {
         _ = try self.requireCallableInst(result, templateSourceContext(result.getCallableTemplate(template_id).*) , template_id, fn_monotype, source_module_idx);
     }
 
-    fn remapMonotypeBetweenModules(
-        self: *Pass,
-        result: *Result,
-        monotype: Monotype.Idx,
-        from_module_idx: u32,
-        to_module_idx: u32,
-    ) Allocator.Error!Monotype.Idx {
-        if (monotype.isNone() or from_module_idx == to_module_idx) return monotype;
-
-        var remapped = std.AutoHashMap(Monotype.Idx, Monotype.Idx).init(self.allocator);
-        defer remapped.deinit();
-
-        var scratches = try Monotype.Store.Scratches.init(self.allocator);
-        defer scratches.deinit();
-        scratches.ident_store = self.all_module_envs[to_module_idx].getIdentStoreConst();
-        scratches.module_env = self.all_module_envs[to_module_idx];
-        scratches.module_idx = to_module_idx;
-        scratches.all_module_envs = self.all_module_envs;
-
-        return self.remapMonotypeBetweenModulesRec(
-            result,
-            monotype,
-            from_module_idx,
-            to_module_idx,
-            &remapped,
-            &scratches,
-        );
-    }
-
-    fn remapMonotypeBetweenModulesRec(
-        self: *Pass,
-        result: *Result,
-        monotype: Monotype.Idx,
-        from_module_idx: u32,
-        to_module_idx: u32,
-        remapped: *std.AutoHashMap(Monotype.Idx, Monotype.Idx),
-        scratches: *Monotype.Store.Scratches,
-    ) Allocator.Error!Monotype.Idx {
-        if (monotype.isNone() or from_module_idx == to_module_idx) return monotype;
-        if (remapped.get(monotype)) |existing| return existing;
-
-        const mono = result.context_mono.monotype_store.getMonotype(monotype);
-        switch (mono) {
-            .unit => return result.context_mono.monotype_store.unit_idx,
-            .prim => |prim| return result.context_mono.monotype_store.primIdx(prim),
-            .recursive_placeholder => {
-                if (builtin.mode == .Debug) {
-                    std.debug.panic("remapMonotypeBetweenModules: unexpected recursive_placeholder", .{});
-                }
-                unreachable;
-            },
-            .list, .box, .tuple, .func, .record, .tag_union => {},
-        }
-
-        const placeholder = try result.context_mono.monotype_store.addMonotype(self.allocator, .recursive_placeholder);
-        try remapped.put(monotype, placeholder);
-
-        const mapped_mono: Monotype.Monotype = switch (mono) {
-            .list => |list_mono| .{ .list = .{
-                .elem = try self.remapMonotypeBetweenModulesRec(
-                    result,
-                    list_mono.elem,
-                    from_module_idx,
-                    to_module_idx,
-                    remapped,
-                    scratches,
-                ),
-            } },
-            .box => |box_mono| .{ .box = .{
-                .inner = try self.remapMonotypeBetweenModulesRec(
-                    result,
-                    box_mono.inner,
-                    from_module_idx,
-                    to_module_idx,
-                    remapped,
-                    scratches,
-                ),
-            } },
-            .tuple => |tuple_mono| blk: {
-                const idx_top = scratches.idxs.top();
-                defer scratches.idxs.clearFrom(idx_top);
-
-                var elem_i: usize = 0;
-                while (elem_i < tuple_mono.elems.len) : (elem_i += 1) {
-                    const elem_mono = result.context_mono.monotype_store.getIdxSpanItem(tuple_mono.elems, elem_i);
-                    try scratches.idxs.append(try self.remapMonotypeBetweenModulesRec(
-                        result,
-                        elem_mono,
-                        from_module_idx,
-                        to_module_idx,
-                        remapped,
-                        scratches,
-                    ));
-                }
-
-                const mapped_elems = try result.context_mono.monotype_store.addIdxSpan(
-                    self.allocator,
-                    scratches.idxs.sliceFromStart(idx_top),
-                );
-                break :blk .{ .tuple = .{ .elems = mapped_elems } };
-            },
-            .func => |func_mono| blk: {
-                const idx_top = scratches.idxs.top();
-                defer scratches.idxs.clearFrom(idx_top);
-
-                var arg_i: usize = 0;
-                while (arg_i < func_mono.args.len) : (arg_i += 1) {
-                    const arg_mono = result.context_mono.monotype_store.getIdxSpanItem(func_mono.args, arg_i);
-                    try scratches.idxs.append(try self.remapMonotypeBetweenModulesRec(
-                        result,
-                        arg_mono,
-                        from_module_idx,
-                        to_module_idx,
-                        remapped,
-                        scratches,
-                    ));
-                }
-                const mapped_args = try result.context_mono.monotype_store.addIdxSpan(
-                    self.allocator,
-                    scratches.idxs.sliceFromStart(idx_top),
-                );
-
-                const mapped_ret = try self.remapMonotypeBetweenModulesRec(
-                    result,
-                    func_mono.ret,
-                    from_module_idx,
-                    to_module_idx,
-                    remapped,
-                    scratches,
-                );
-
-                break :blk .{ .func = .{
-                    .args = mapped_args,
-                    .ret = mapped_ret,
-                    .effectful = func_mono.effectful,
-                } };
-            },
-            .record => |record_mono| blk: {
-                const fields_top = scratches.fields.top();
-                defer scratches.fields.clearFrom(fields_top);
-
-                var field_i: usize = 0;
-                while (field_i < record_mono.fields.len) : (field_i += 1) {
-                    const field = result.context_mono.monotype_store.getFieldItem(record_mono.fields, field_i);
-                    try scratches.fields.append(.{
-                        .name = field.name,
-                        .type_idx = try self.remapMonotypeBetweenModulesRec(
-                            result,
-                            field.type_idx,
-                            from_module_idx,
-                            to_module_idx,
-                            remapped,
-                            scratches,
-                        ),
-                    });
-                }
-
-                const mapped_fields = try result.context_mono.monotype_store.addFields(
-                    self.allocator,
-                    scratches.fields.sliceFromStart(fields_top),
-                );
-                break :blk .{ .record = .{ .fields = mapped_fields } };
-            },
-            .tag_union => |tag_union_mono| blk: {
-                const tags_top = scratches.tags.top();
-                defer scratches.tags.clearFrom(tags_top);
-
-                var tag_i: usize = 0;
-                while (tag_i < tag_union_mono.tags.len) : (tag_i += 1) {
-                    const tag = result.context_mono.monotype_store.getTagItem(tag_union_mono.tags, tag_i);
-                    const payload_top = scratches.idxs.top();
-                    defer scratches.idxs.clearFrom(payload_top);
-
-                    var payload_i: usize = 0;
-                    while (payload_i < tag.payloads.len) : (payload_i += 1) {
-                        const payload_mono = result.context_mono.monotype_store.getIdxSpanItem(tag.payloads, payload_i);
-                        try scratches.idxs.append(try self.remapMonotypeBetweenModulesRec(
-                            result,
-                            payload_mono,
-                            from_module_idx,
-                            to_module_idx,
-                            remapped,
-                            scratches,
-                        ));
-                    }
-
-                    const mapped_payloads = try result.context_mono.monotype_store.addIdxSpan(
-                        self.allocator,
-                        scratches.idxs.sliceFromStart(payload_top),
-                    );
-                    try scratches.tags.append(.{
-                        .name = tag.name,
-                        .payloads = mapped_payloads,
-                    });
-                }
-
-                const mapped_tags = try result.context_mono.monotype_store.addTags(
-                    self.allocator,
-                    scratches.tags.sliceFromStart(tags_top),
-                );
-                break :blk .{ .tag_union = .{ .tags = mapped_tags } };
-            },
-            .unit, .prim, .recursive_placeholder => unreachable,
-        };
-
-        result.context_mono.monotype_store.monotypes.items[@intFromEnum(placeholder)] = mapped_mono;
-        return placeholder;
-    }
-
     fn bindTypeVarMonotypesInStore(
         self: *Pass,
         result: *Result,
@@ -4385,8 +4175,7 @@ const MaterializeCallableValueFailure = enum {
         const canonical_fn_monotype = if (fn_monotype_module_idx == template.module_idx)
             fn_monotype
         else
-            try self.remapMonotypeBetweenModules(
-                result,
+            try ContextMono.remapMonotypeBetweenModules(self, result,
                 fn_monotype,
                 fn_monotype_module_idx,
                 template.module_idx,
@@ -5107,7 +4896,7 @@ const MaterializeCallableValueFailure = enum {
         const normalized_mono = if (mono_module_idx == template_module_idx)
             monotype
         else
-            try self.remapMonotypeBetweenModules(result, monotype, mono_module_idx, template_module_idx);
+            try ContextMono.remapMonotypeBetweenModules(self, result, monotype, mono_module_idx, template_module_idx);
         const resolved_mono = ContextMono.resolvedMonotype(normalized_mono, template_module_idx);
 
         const resolved_key = boundTypeVarKey(template_module_idx, template_types, type_var);
