@@ -607,6 +607,847 @@ pub fn resolvedMonotype(idx: Monotype.Idx, module_idx: u32) ResolvedMonotype {
     return .{ .idx = idx, .module_idx = module_idx };
 }
 
+pub fn resolveFuncTypeInStore(types_store: *const types.Store, type_var: types.Var) ?struct { func: types.Func, effectful: bool } {
+    var resolved = types_store.resolveVar(type_var);
+    while (resolved.desc.content == .alias) {
+        resolved = types_store.resolveVar(types_store.getAliasBackingVar(resolved.desc.content.alias));
+    }
+
+    if (resolved.desc.content != .structure) return null;
+    return switch (resolved.desc.content.structure) {
+        .fn_pure => |func| .{ .func = func, .effectful = false },
+        .fn_effectful => |func| .{ .func = func, .effectful = true },
+        .fn_unbound => |func| .{ .func = func, .effectful = false },
+        else => null,
+    };
+}
+
+pub fn resolveNominalTypeInStore(types_store: *const types.Store, type_var: types.Var) ?types.NominalType {
+    var resolved = types_store.resolveVar(type_var);
+    while (resolved.desc.content == .alias) {
+        resolved = types_store.resolveVar(types_store.getAliasBackingVar(resolved.desc.content.alias));
+    }
+
+    if (resolved.desc.content != .structure) return null;
+    return switch (resolved.desc.content.structure) {
+        .nominal_type => |nominal| nominal,
+        else => null,
+    };
+}
+
+pub fn mergeResolvedMonotypeMap(
+    driver: anytype,
+    result: anytype,
+    map: anytype,
+    key: anytype,
+    resolved: ResolvedMonotype,
+    comptime label: []const u8,
+) Allocator.Error!void {
+    const gop = try map.getOrPut(driver.allocator, key);
+    if (!gop.found_existing) {
+        gop.value_ptr.* = resolved;
+        return;
+    }
+
+    const existing = gop.value_ptr.*;
+    if (try driver.monotypesStructurallyEqualAcrossModules(
+        result,
+        existing.idx,
+        existing.module_idx,
+        resolved.idx,
+        resolved.module_idx,
+    )) {
+        return;
+    }
+
+    if (std.debug.runtime_safety) {
+        std.debug.panic(
+            "ContextMono: conflicting {s} monotypes while merging key={any} existing={d}@{d} existing_mono={any} new={d}@{d} new_mono={any}",
+            .{
+                label,
+                key,
+                @intFromEnum(existing.idx),
+                existing.module_idx,
+                result.context_mono.monotype_store.getMonotype(existing.idx),
+                @intFromEnum(resolved.idx),
+                resolved.module_idx,
+                result.context_mono.monotype_store.getMonotype(resolved.idx),
+            },
+        );
+    }
+    unreachable;
+}
+
+pub fn recordTypeVarMonotypeForSourceContext(
+    driver: anytype,
+    result: anytype,
+    source_context: SourceContext,
+    module_idx: u32,
+    type_var: types.Var,
+    monotype: Monotype.Idx,
+    monotype_module_idx: u32,
+) Allocator.Error!void {
+    if (monotype.isNone()) return;
+    const resolved_var = driver.all_module_envs[module_idx].types.resolveVar(type_var).var_;
+    const key = Result.contextTypeVarKey(source_context, module_idx, resolved_var);
+    try mergeResolvedMonotypeMap(
+        driver,
+        result,
+        &result.context_mono.context_type_var_monotypes,
+        key,
+        resolvedMonotype(monotype, monotype_module_idx),
+        "exact typevar",
+    );
+}
+
+pub fn mergeContextExprMonotype(
+    driver: anytype,
+    result: anytype,
+    key: ContextExprKey,
+    resolved: ResolvedMonotype,
+) Allocator.Error!void {
+    return mergeResolvedMonotypeMap(
+        driver,
+        result,
+        &result.context_mono.context_expr_monotypes,
+        key,
+        resolved,
+        "exact expr",
+    );
+}
+
+pub fn mergeContextPatternMonotype(
+    driver: anytype,
+    result: anytype,
+    key: ContextPatternKey,
+    resolved: ResolvedMonotype,
+) Allocator.Error!void {
+    return mergeResolvedMonotypeMap(
+        driver,
+        result,
+        &result.context_mono.context_pattern_monotypes,
+        key,
+        resolved,
+        "exact pattern",
+    );
+}
+
+pub fn mergeContextTypeVarMonotype(
+    driver: anytype,
+    result: anytype,
+    key: ContextTypeVarKey,
+    resolved: ResolvedMonotype,
+) Allocator.Error!void {
+    return mergeResolvedMonotypeMap(
+        driver,
+        result,
+        &result.context_mono.context_type_var_monotypes,
+        key,
+        resolved,
+        "exact typevar",
+    );
+}
+
+pub fn recordTypeVarMonotypeForThread(
+    driver: anytype,
+    result: anytype,
+    thread: anytype,
+    module_idx: u32,
+    type_var: types.Var,
+    monotype: Monotype.Idx,
+    monotype_module_idx: u32,
+) Allocator.Error!void {
+    return recordTypeVarMonotypeForSourceContext(
+        driver,
+        result,
+        thread.requireSourceContext(),
+        module_idx,
+        type_var,
+        monotype,
+        monotype_module_idx,
+    );
+}
+
+pub fn recordExprMonotypeResolved(
+    driver: anytype,
+    result: anytype,
+    source_context: SourceContext,
+    module_idx: u32,
+    expr_idx: CIR.Expr.Idx,
+    monotype: Monotype.Idx,
+    monotype_module_idx: u32,
+) Allocator.Error!void {
+    if (monotype.isNone()) return;
+    const key = Result.contextExprKey(source_context, module_idx, expr_idx);
+    const resolved = resolvedMonotype(monotype, monotype_module_idx);
+    if (result.lambdamono.getExprId(source_context, module_idx, expr_idx)) |expr_id| {
+        const program_expr = &result.lambdamono.exprs.items[@intFromEnum(expr_id)];
+        const existing_program_mono = program_expr.monotype;
+        if (!try driver.monotypesStructurallyEqualAcrossModules(
+            result,
+            existing_program_mono.idx,
+            existing_program_mono.module_idx,
+            resolved.idx,
+            resolved.module_idx,
+        )) {
+            if (std.debug.runtime_safety) {
+                std.debug.panic(
+                    "ContextMono invariant violated: finalized expr monotype disagreed with recorded exact monotype for ctx={s} module={d} expr={d}",
+                    .{ @tagName(source_context), module_idx, @intFromEnum(expr_idx) },
+                );
+            }
+            unreachable;
+        }
+    }
+    try recordTypeVarMonotypeForSourceContext(
+        driver,
+        result,
+        source_context,
+        module_idx,
+        ModuleEnv.varFrom(expr_idx),
+        monotype,
+        monotype_module_idx,
+    );
+    if (result.context_mono.context_expr_monotypes.get(key)) |existing| {
+        if (try driver.monotypesStructurallyEqualAcrossModules(
+            result,
+            existing.idx,
+            existing.module_idx,
+            resolved.idx,
+            resolved.module_idx,
+        )) {
+            return;
+        }
+
+        if (std.debug.runtime_safety) {
+            const module_env = driver.all_module_envs[module_idx];
+            const expr = module_env.store.getExpr(expr_idx);
+            const expr_region = module_env.store.getExprRegion(expr_idx);
+            const source = module_env.getSourceAll();
+            const snippet_start = @min(expr_region.start.offset, source.len);
+            const snippet_end = @min(expr_region.end.offset, source.len);
+            const context_template = result.getSourceContextTemplateId(source_context);
+            std.debug.panic(
+                "ContextMono: conflicting exact expr monotypes for ctx={s} module={d} module_name={s} expr={d} kind={s} region={any} snippet=\"{s}\" existing={d}@{d} existing_mono={any} new={d}@{d} new_mono={any} template_expr={d}",
+                .{
+                    @tagName(source_context),
+                    module_idx,
+                    module_env.module_name,
+                    @intFromEnum(expr_idx),
+                    @tagName(expr),
+                    expr_region,
+                    source[snippet_start..snippet_end],
+                    @intFromEnum(existing.idx),
+                    existing.module_idx,
+                    result.context_mono.monotype_store.getMonotype(existing.idx),
+                    @intFromEnum(resolved.idx),
+                    resolved.module_idx,
+                    result.context_mono.monotype_store.getMonotype(resolved.idx),
+                    if (context_template) |template_id| @intFromEnum(result.getCallableTemplate(template_id).cir_expr) else std.math.maxInt(u32),
+                },
+            );
+        }
+        unreachable;
+    }
+    try mergeResolvedMonotypeMap(
+        driver,
+        result,
+        &result.context_mono.context_expr_monotypes,
+        key,
+        resolved,
+        "exact expr",
+    );
+}
+
+pub fn recordExprMonotypeForSourceContext(
+    driver: anytype,
+    result: anytype,
+    source_context: SourceContext,
+    module_idx: u32,
+    expr_idx: CIR.Expr.Idx,
+    monotype: Monotype.Idx,
+    monotype_module_idx: u32,
+) Allocator.Error!void {
+    return recordExprMonotypeResolved(
+        driver,
+        result,
+        source_context,
+        module_idx,
+        expr_idx,
+        monotype,
+        monotype_module_idx,
+    );
+}
+
+pub fn recordExprMonotypeForThread(
+    driver: anytype,
+    result: anytype,
+    thread: anytype,
+    module_idx: u32,
+    expr_idx: CIR.Expr.Idx,
+    monotype: Monotype.Idx,
+    monotype_module_idx: u32,
+) Allocator.Error!void {
+    return recordExprMonotypeResolved(
+        driver,
+        result,
+        thread.requireSourceContext(),
+        module_idx,
+        expr_idx,
+        monotype,
+        monotype_module_idx,
+    );
+}
+
+pub fn lookupRecordedExprMonotypeIfReadyForSourceContext(
+    driver: anytype,
+    result: anytype,
+    thread: anytype,
+    source_context: SourceContext,
+    module_idx: u32,
+    expr_idx: CIR.Expr.Idx,
+) Allocator.Error!?ResolvedMonotype {
+    if (lookupExprMonotypeForSourceContext(result, source_context, module_idx, expr_idx)) |resolved| {
+        return resolved;
+    }
+    const typevar_resolved = try resolveTypeVarMonotypeResolved(
+        driver,
+        result,
+        thread,
+        module_idx,
+        ModuleEnv.varFrom(expr_idx),
+    );
+    if (!typevar_resolved.isNone()) {
+        try recordExprMonotypeResolved(
+            driver,
+            result,
+            source_context,
+            module_idx,
+            expr_idx,
+            typevar_resolved.idx,
+            typevar_resolved.module_idx,
+        );
+        return typevar_resolved;
+    }
+    return null;
+}
+
+pub fn requireRecordedExprMonotypeForSourceContext(
+    driver: anytype,
+    result: anytype,
+    thread: anytype,
+    source_context: SourceContext,
+    module_idx: u32,
+    expr_idx: CIR.Expr.Idx,
+) Allocator.Error!ResolvedMonotype {
+    if (try lookupRecordedExprMonotypeIfReadyForSourceContext(
+        driver,
+        result,
+        thread,
+        source_context,
+        module_idx,
+        expr_idx,
+    )) |resolved| {
+        return resolved;
+    }
+
+    const module_env = driver.all_module_envs[module_idx];
+    const expr = module_env.store.getExpr(expr_idx);
+    const expr_region = module_env.store.getExprRegion(expr_idx);
+    const source = module_env.getSourceAll();
+    const snippet_start = @min(expr_region.start.offset, source.len);
+    const snippet_end = @min(expr_region.end.offset, source.len);
+    const origin = result.getExprOriginExpr(source_context, module_idx, expr_idx);
+    std.debug.panic(
+        "ContextMono invariant violated: missing exact contextual monotype for expr {d} kind={s} region={any} snippet=\"{s}\" in module {d} under source context {s} origin_ctx={s} origin_module={d} origin_expr={d}",
+        .{
+            @intFromEnum(expr_idx),
+            @tagName(expr),
+            expr_region,
+            source[snippet_start..snippet_end],
+            module_idx,
+            @tagName(source_context),
+            if (origin) |expr_ref| @tagName(expr_ref.source_context) else "none",
+            if (origin) |expr_ref| expr_ref.module_idx else std.math.maxInt(u32),
+            if (origin) |expr_ref| @intFromEnum(expr_ref.expr_idx) else std.math.maxInt(u32),
+        },
+    );
+}
+
+pub fn lookupExprMonotypeForThread(
+    result: anytype,
+    thread: anytype,
+    module_idx: u32,
+    expr_idx: CIR.Expr.Idx,
+) ?ResolvedMonotype {
+    return lookupExprMonotypeForSourceContext(
+        result,
+        thread.requireSourceContext(),
+        module_idx,
+        expr_idx,
+    );
+}
+
+pub fn lookupExprMonotypeForSourceContext(
+    result: anytype,
+    source_context: SourceContext,
+    module_idx: u32,
+    expr_idx: CIR.Expr.Idx,
+) ?ResolvedMonotype {
+    return result.context_mono.getExprMonotype(source_context, module_idx, expr_idx);
+}
+
+pub fn resolvedIfFunctionMonotype(
+    result: anytype,
+    resolved: ?ResolvedMonotype,
+) ?ResolvedMonotype {
+    const resolved_mono = resolved orelse return null;
+    return switch (result.context_mono.monotype_store.getMonotype(resolved_mono.idx)) {
+        .func => resolved_mono,
+        else => null,
+    };
+}
+
+pub fn seedRecordedContextTypeVarSpecializations(
+    driver: anytype,
+    result: anytype,
+    source_context: SourceContext,
+    module_idx: u32,
+    specializations: *std.AutoHashMap(types.Var, Monotype.Idx),
+) Allocator.Error!void {
+    switch (source_context) {
+        .callable_inst => |context_id| {
+            const callable_inst = result.getCallableInst(@enumFromInt(@intFromEnum(context_id)));
+            const subst = result.getTypeSubst(callable_inst.subst);
+            for (result.getTypeSubstEntries(subst.entries)) |entry| {
+                if (entry.key.module_idx != module_idx) continue;
+                const resolved_var = driver.all_module_envs[module_idx].types.resolveVar(entry.key.type_var).var_;
+                const canonical_mono = if (entry.monotype.module_idx == module_idx)
+                    entry.monotype.idx
+                else
+                    try driver.remapMonotypeBetweenModules(
+                        result,
+                        entry.monotype.idx,
+                        entry.monotype.module_idx,
+                        module_idx,
+                    );
+                try specializations.put(resolved_var, canonical_mono);
+            }
+        },
+        .root_expr, .provenance_expr, .template_expr => {},
+    }
+
+    var it = result.context_mono.context_type_var_monotypes.iterator();
+    while (it.next()) |entry| {
+        const key = entry.key_ptr.*;
+        if (key.module_idx != module_idx) continue;
+        if (!driver.contextTypeVarKeyMatchesSourceContext(source_context, key)) continue;
+        if (entry.value_ptr.module_idx != module_idx) continue;
+        try specializations.put(key.type_var, entry.value_ptr.idx);
+    }
+}
+
+pub fn monotypeFromTypeVarInSourceContext(
+    driver: anytype,
+    result: anytype,
+    source_context: SourceContext,
+    module_idx: u32,
+    store_types: *const types.Store,
+    var_: types.Var,
+) Allocator.Error!Monotype.Idx {
+    var extra_bindings = std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype).init(driver.allocator);
+    defer extra_bindings.deinit();
+    return monotypeFromTypeVarInSourceContextWithExtraBindings(
+        driver,
+        result,
+        source_context,
+        module_idx,
+        store_types,
+        var_,
+        &extra_bindings,
+    );
+}
+
+pub fn monotypeFromTypeVarInSourceContextWithExtraBindings(
+    driver: anytype,
+    result: anytype,
+    source_context: SourceContext,
+    module_idx: u32,
+    store_types: *const types.Store,
+    var_: types.Var,
+    extra_bindings: *const std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
+) Allocator.Error!Monotype.Idx {
+    var exact_specializations = std.AutoHashMap(types.Var, Monotype.Idx).init(driver.allocator);
+    defer exact_specializations.deinit();
+
+    try seedRecordedContextTypeVarSpecializations(driver, result, source_context, module_idx, &exact_specializations);
+    try driver.seedRecordedTypeScopeSpecializations(result, module_idx, &exact_specializations);
+
+    var extra_it = extra_bindings.iterator();
+    while (extra_it.next()) |entry| {
+        if (entry.key_ptr.module_idx != module_idx) continue;
+        const canonical_mono = if (entry.value_ptr.module_idx == module_idx)
+            entry.value_ptr.idx
+        else
+            try driver.remapMonotypeBetweenModules(
+                result,
+                entry.value_ptr.idx,
+                entry.value_ptr.module_idx,
+                module_idx,
+            );
+        try exact_specializations.put(entry.key_ptr.type_var, canonical_mono);
+    }
+
+    var nominal_cycle_breakers = std.AutoHashMap(types.Var, Monotype.Idx).init(driver.allocator);
+    defer nominal_cycle_breakers.deinit();
+
+    var scratches = try Monotype.Store.Scratches.init(driver.allocator);
+    defer scratches.deinit();
+
+    const module_env = driver.all_module_envs[module_idx];
+    scratches.ident_store = module_env.getIdentStoreConst();
+    scratches.module_env = module_env;
+    scratches.module_idx = module_idx;
+    scratches.all_module_envs = driver.all_module_envs;
+    return result.context_mono.monotype_store.fromTypeVarExact(
+        driver.allocator,
+        store_types,
+        var_,
+        module_env.idents,
+        &exact_specializations,
+        &nominal_cycle_breakers,
+        &scratches,
+    );
+}
+
+pub fn monotypeFromTypeVarWithLanguageDefaultingInSourceContext(
+    driver: anytype,
+    result: anytype,
+    source_context: SourceContext,
+    module_idx: u32,
+    store_types: *const types.Store,
+    var_: types.Var,
+) Allocator.Error!Monotype.Idx {
+    var extra_bindings = std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype).init(driver.allocator);
+    defer extra_bindings.deinit();
+    return monotypeFromTypeVarWithLanguageDefaultingInSourceContextWithExtraBindings(
+        driver,
+        result,
+        source_context,
+        module_idx,
+        store_types,
+        var_,
+        &extra_bindings,
+    );
+}
+
+pub fn monotypeFromTypeVarWithLanguageDefaultingInSourceContextWithExtraBindings(
+    driver: anytype,
+    result: anytype,
+    source_context: SourceContext,
+    module_idx: u32,
+    store_types: *const types.Store,
+    var_: types.Var,
+    extra_bindings: *const std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
+) Allocator.Error!Monotype.Idx {
+    var exact_specializations = std.AutoHashMap(types.Var, Monotype.Idx).init(driver.allocator);
+    defer exact_specializations.deinit();
+
+    try seedRecordedContextTypeVarSpecializations(driver, result, source_context, module_idx, &exact_specializations);
+    try driver.seedRecordedTypeScopeSpecializations(result, module_idx, &exact_specializations);
+
+    var extra_it = extra_bindings.iterator();
+    while (extra_it.next()) |entry| {
+        if (entry.key_ptr.module_idx != module_idx) continue;
+        const canonical_mono = if (entry.value_ptr.module_idx == module_idx)
+            entry.value_ptr.idx
+        else
+            try driver.remapMonotypeBetweenModules(
+                result,
+                entry.value_ptr.idx,
+                entry.value_ptr.module_idx,
+                module_idx,
+            );
+        try exact_specializations.put(entry.key_ptr.type_var, canonical_mono);
+    }
+
+    var nominal_cycle_breakers = std.AutoHashMap(types.Var, Monotype.Idx).init(driver.allocator);
+    defer nominal_cycle_breakers.deinit();
+
+    var scratches = try Monotype.Store.Scratches.init(driver.allocator);
+    defer scratches.deinit();
+
+    const module_env = driver.all_module_envs[module_idx];
+    scratches.ident_store = module_env.getIdentStoreConst();
+    scratches.module_env = module_env;
+    scratches.module_idx = module_idx;
+    scratches.all_module_envs = driver.all_module_envs;
+    return result.context_mono.monotype_store.fromTypeVar(
+        driver.allocator,
+        store_types,
+        var_,
+        module_env.idents,
+        &exact_specializations,
+        &nominal_cycle_breakers,
+        &scratches,
+    );
+}
+
+pub fn resolveTypeVarMonotypeResolved(
+    driver: anytype,
+    result: anytype,
+    thread: anytype,
+    module_idx: u32,
+    var_: types.Var,
+) Allocator.Error!ResolvedMonotype {
+    const module_env = driver.all_module_envs[module_idx];
+    const resolved_var = module_env.types.resolveVar(var_).var_;
+    if (lookupContextTypeVarMonotype(driver, result, thread.requireSourceContext(), module_idx, resolved_var)) |mono| {
+        return mono;
+    }
+    const mono = try monotypeFromTypeVarInSourceContext(
+        driver,
+        result,
+        thread.requireSourceContext(),
+        module_idx,
+        &module_env.types,
+        resolved_var,
+    );
+    if (!mono.isNone()) {
+        try recordTypeVarMonotypeForThread(
+            driver,
+            result,
+            thread,
+            module_idx,
+            resolved_var,
+            mono,
+            module_idx,
+        );
+        return resolvedMonotype(mono, module_idx);
+    }
+    const defaulted = try monotypeFromTypeVarWithLanguageDefaultingInSourceContext(
+        driver,
+        result,
+        thread.requireSourceContext(),
+        module_idx,
+        &module_env.types,
+        resolved_var,
+    );
+    if (!defaulted.isNone()) {
+        try recordTypeVarMonotypeForThread(
+            driver,
+            result,
+            thread,
+            module_idx,
+            resolved_var,
+            defaulted,
+            module_idx,
+        );
+    }
+    return resolvedMonotype(defaulted, module_idx);
+}
+
+pub fn resolveTypeVarMonotype(
+    driver: anytype,
+    result: anytype,
+    thread: anytype,
+    module_idx: u32,
+    var_: types.Var,
+) Allocator.Error!Monotype.Idx {
+    return (try resolveTypeVarMonotypeResolved(driver, result, thread, module_idx, var_)).idx;
+}
+
+pub fn resolveExprMonotypeResolved(
+    driver: anytype,
+    result: anytype,
+    thread: anytype,
+    module_idx: u32,
+    expr_idx: CIR.Expr.Idx,
+) Allocator.Error!?ResolvedMonotype {
+    const source_context = thread.requireSourceContext();
+    const module_env = driver.all_module_envs[module_idx];
+    const expr = module_env.store.getExpr(expr_idx);
+    const expr_var = ModuleEnv.varFrom(expr_idx);
+    if (lookupExprMonotypeForSourceContext(result, source_context, module_idx, expr_idx)) |resolved| {
+        return resolved;
+    }
+    const typevar_resolved = try resolveTypeVarMonotypeResolved(
+        driver,
+        result,
+        thread,
+        module_idx,
+        expr_var,
+    );
+    if (!typevar_resolved.isNone()) {
+        try recordExprMonotypeResolved(
+            driver,
+            result,
+            source_context,
+            module_idx,
+            expr_idx,
+            typevar_resolved.idx,
+            typevar_resolved.module_idx,
+        );
+        return typevar_resolved;
+    }
+
+    if (std.debug.runtime_safety) {
+        switch (expr) {
+            .e_tag, .e_empty_list, .e_lambda, .e_closure, .e_hosted_lambda => {
+                const resolved_var = module_env.types.resolveVar(ModuleEnv.varFrom(expr_idx));
+                std.debug.print(
+                    "[contextmono] resolveExprMonotypeResolved none expr={d} kind={s} ctx={s} typevar_content={s}\n",
+                    .{
+                        @intFromEnum(expr_idx),
+                        @tagName(expr),
+                        @tagName(source_context),
+                        @tagName(resolved_var.desc.content),
+                    },
+                );
+            },
+            else => {},
+        }
+    }
+
+    return try lookupRecordedExprMonotypeIfReadyForSourceContext(
+        driver,
+        result,
+        thread,
+        source_context,
+        module_idx,
+        expr_idx,
+    );
+}
+
+pub fn resolveExprMonotype(
+    driver: anytype,
+    result: anytype,
+    thread: anytype,
+    module_idx: u32,
+    expr_idx: CIR.Expr.Idx,
+) Allocator.Error!?Monotype.Idx {
+    return if (try resolveExprMonotypeResolved(driver, result, thread, module_idx, expr_idx)) |resolved|
+        resolved.idx
+    else
+        null;
+}
+
+pub fn resolvePatternMonotypeResolved(
+    driver: anytype,
+    result: anytype,
+    thread: anytype,
+    module_idx: u32,
+    pattern_idx: CIR.Pattern.Idx,
+) Allocator.Error!ResolvedMonotype {
+    const source_context = thread.requireSourceContext();
+    if (result.getContextPatternMonotype(source_context, module_idx, pattern_idx)) |resolved| {
+        return resolved;
+    }
+    if (result.getContextPatternSourceExpr(source_context, module_idx, pattern_idx)) |source| {
+        const SourceContextThread = struct {
+            source_context: SourceContext,
+
+            pub fn requireSourceContext(self: @This()) SourceContext {
+                return self.source_context;
+            }
+        };
+
+        var resolved = try requireRecordedExprMonotypeForSourceContext(
+            driver,
+            result,
+            SourceContextThread{ .source_context = source.source_context },
+            source.source_context,
+            source.module_idx,
+            source.expr_idx,
+        );
+        for (result.lambdamono.getValueProjectionEntries(source.projections)) |projection| {
+            resolved = try driver.projectResolvedMonotypeByValueProjection(result, resolved, projection);
+        }
+        try mergeContextPatternMonotype(
+            driver,
+            result,
+            Result.contextPatternKey(source_context, module_idx, pattern_idx),
+            resolved,
+        );
+        return resolved;
+    }
+    if (lookupContextTypeVarMonotype(
+        driver,
+        result,
+        source_context,
+        module_idx,
+        ModuleEnv.varFrom(pattern_idx),
+    )) |resolved| {
+        try mergeContextPatternMonotype(
+            driver,
+            result,
+            Result.contextPatternKey(source_context, module_idx, pattern_idx),
+            resolved,
+        );
+        return resolved;
+    }
+    const resolved = try resolveTypeVarMonotypeResolved(
+        driver,
+        result,
+        thread,
+        module_idx,
+        ModuleEnv.varFrom(pattern_idx),
+    );
+    if (!resolved.isNone()) {
+        try mergeContextPatternMonotype(
+            driver,
+            result,
+            Result.contextPatternKey(source_context, module_idx, pattern_idx),
+            resolved,
+        );
+    }
+    return resolved;
+}
+
+pub fn lookupContextTypeVarMonotype(
+    driver: anytype,
+    result: anytype,
+    source_context: SourceContext,
+    module_idx: u32,
+    var_: types.Var,
+) ?ResolvedMonotype {
+    const resolved_var = driver.all_module_envs[module_idx].types.resolveVar(var_).var_;
+    return result.context_mono.getContextTypeVarMonotype(source_context, module_idx, resolved_var) orelse
+        result.context_mono.getTypeScopeMonotype(module_idx, resolved_var);
+}
+
+pub fn monotypesStructurallyEqual(
+    driver: anytype,
+    result: anytype,
+    lhs: Monotype.Idx,
+    rhs: Monotype.Idx,
+) Allocator.Error!bool {
+    return result.context_mono.monotypesStructurallyEqual(
+        driver.allocator,
+        driver.all_module_envs,
+        lhs,
+        rhs,
+    );
+}
+
+pub fn monotypesStructurallyEqualAcrossModules(
+    driver: anytype,
+    result: anytype,
+    lhs: Monotype.Idx,
+    lhs_module_idx: u32,
+    rhs: Monotype.Idx,
+    rhs_module_idx: u32,
+) Allocator.Error!bool {
+    return result.context_mono.monotypesStructurallyEqualAcrossModules(
+        driver.allocator,
+        driver.all_module_envs,
+        lhs,
+        lhs_module_idx,
+        rhs,
+        rhs_module_idx,
+    );
+}
+
 pub fn labelTextAcrossModules(all_module_envs: []const *ModuleEnv, module_idx: u32, label: anytype) []const u8 {
     return switch (@TypeOf(label)) {
         base.Ident.Idx => all_module_envs[module_idx].getIdent(label),

@@ -305,7 +305,8 @@ pub fn requireProgramExprMonotype(
     module_idx: u32,
     expr_idx: CIR.Expr.Idx,
 ) Allocator.Error!ContextMono.ResolvedMonotype {
-    return driver.requireRecordedExprMonotypeForSourceContext(
+    return ContextMono.requireRecordedExprMonotypeForSourceContext(
+        driver,
         result,
         SemanticThread.trackedThread(source_context),
         source_context,
@@ -386,7 +387,8 @@ pub fn exprHasExactProgramSemantics(
     expr_idx: CIR.Expr.Idx,
 ) Allocator.Error!bool {
     const thread = SemanticThread.trackedThread(source_context);
-    const monotype = try driver.lookupRecordedExprMonotypeIfReadyForSourceContext(
+    const monotype = try ContextMono.lookupRecordedExprMonotypeIfReadyForSourceContext(
+        driver,
         result,
         thread,
         source_context,

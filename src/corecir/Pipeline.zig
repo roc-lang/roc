@@ -599,7 +599,7 @@ pub const Pass = struct {
                         .module_idx = module_idx,
                         .type_var = platform_var,
                     },
-                    resolvedMonotype(normalized_mono, module_idx),
+                    ContextMono.resolvedMonotype(normalized_mono, module_idx),
                 );
             }
         }
@@ -1579,32 +1579,6 @@ const MaterializeCallableValueFailure = enum {
         return null;
     }
 
-    fn lookupExprMonotypeForThread(
-        self: *Pass,
-        result: *Result,
-        thread: SemanticThread,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-    ) ?ResolvedMonotype {
-        return self.lookupExprMonotypeForSourceContext(result, thread, thread.requireSourceContext(), module_idx, expr_idx);
-    }
-
-    fn lookupExprMonotypeForSourceContext(
-        self: *Pass,
-        result: *Result,
-        _: SemanticThread,
-        source_context: SourceContext,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-    ) ?ResolvedMonotype {
-        const key = self.resultExprKeyForSourceContext(source_context, module_idx, expr_idx);
-        if (result.context_mono.context_expr_monotypes.get(key)) |resolved| return resolved;
-        if (result.getExprCallableValue(source_context, module_idx, expr_idx)) |callable_value| {
-            return callableValueMonotype(result, callable_value);
-        }
-        return null;
-    }
-
     fn exprMonotypeOwnedByInvocation(expr: CIR.Expr) bool {
         return switch (expr) {
             .e_call,
@@ -1777,7 +1751,7 @@ const MaterializeCallableValueFailure = enum {
                         field_name.module_idx,
                         field_name.ident,
                     )) {
-                        break :blk resolvedMonotype(field.type_idx, source_monotype.module_idx);
+                        break :blk ContextMono.resolvedMonotype(field.type_idx, source_monotype.module_idx);
                     }
                 }
                 std.debug.panic(
@@ -1800,7 +1774,7 @@ const MaterializeCallableValueFailure = enum {
                         .{ elem_index, elems.len },
                     );
                 }
-                break :blk resolvedMonotype(elems[elem_index], source_monotype.module_idx);
+                break :blk ContextMono.resolvedMonotype(elems[elem_index], source_monotype.module_idx);
             },
             .tag_payload => |payload| blk: {
                 const tags = switch (mono) {
@@ -1824,7 +1798,7 @@ const MaterializeCallableValueFailure = enum {
                             .{ payload.payload_index, payload_monos.len },
                         );
                     }
-                    break :blk resolvedMonotype(payload_monos[payload.payload_index], source_monotype.module_idx);
+                    break :blk ContextMono.resolvedMonotype(payload_monos[payload.payload_index], source_monotype.module_idx);
                 }
                 std.debug.panic(
                     "Pipeline invariant violated: tag payload projection could not find tag in monotype",
@@ -1840,7 +1814,7 @@ const MaterializeCallableValueFailure = enum {
                         .{@tagName(mono)},
                     ),
                 };
-                break :blk resolvedMonotype(list.elem, source_monotype.module_idx);
+                break :blk ContextMono.resolvedMonotype(list.elem, source_monotype.module_idx);
             },
         };
     }
@@ -2028,7 +2002,14 @@ const MaterializeCallableValueFailure = enum {
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) Allocator.Error!ResolvedMonotype {
-        const resolved = (try self.lookupRecordedExprMonotypeIfReady(result, thread, module_idx, expr_idx)) orelse {
+        const resolved = (try ContextMono.lookupRecordedExprMonotypeIfReadyForSourceContext(
+            self,
+            result,
+            thread,
+            thread.requireSourceContext(),
+            module_idx,
+            expr_idx,
+        )) orelse {
             if (std.debug.runtime_safety) {
                 std.debug.panic(
                     "Pipeline invariant violated: missing fully-bound monotype for expr {d} ({s}) in module {d} under source context {s}/{d}/{d}",
@@ -2065,7 +2046,8 @@ const MaterializeCallableValueFailure = enum {
     ) Allocator.Error!void {
         if (resolved_mono.isNone()) return;
         if (result.context_mono.monotype_store.getMonotype(resolved_mono.idx) == .func) return;
-        try self.recordTypeVarMonotypeForThread(
+        try ContextMono.recordTypeVarMonotypeForThread(
+            self,
             result,
             thread,
             module_idx,
@@ -2073,7 +2055,8 @@ const MaterializeCallableValueFailure = enum {
             resolved_mono.idx,
             resolved_mono.module_idx,
         );
-        try self.mergeContextPatternMonotype(
+        try ContextMono.mergeContextPatternMonotype(
+            self,
             result,
             self.resultPatternKeyForThread(thread, module_idx, pattern_idx),
             resolved_mono,
@@ -2145,7 +2128,7 @@ const MaterializeCallableValueFailure = enum {
                         thread,
                         module_idx,
                         payload_pattern_idx,
-                        resolvedMonotype(payload_mono, resolved_mono.module_idx),
+                        ContextMono.resolvedMonotype(payload_mono, resolved_mono.module_idx),
                     );
                 }
             },
@@ -2170,7 +2153,7 @@ const MaterializeCallableValueFailure = enum {
                                 thread,
                                 module_idx,
                                 sub_pattern_idx,
-                                resolvedMonotype(mono_fields[field_idx].type_idx, resolved_mono.module_idx),
+                                ContextMono.resolvedMonotype(mono_fields[field_idx].type_idx, resolved_mono.module_idx),
                             );
                         },
                         .Rest => {},
@@ -2188,7 +2171,7 @@ const MaterializeCallableValueFailure = enum {
                         thread,
                         module_idx,
                         elem_pattern_idx,
-                        resolvedMonotype(elem_mono, resolved_mono.module_idx),
+                        ContextMono.resolvedMonotype(elem_mono, resolved_mono.module_idx),
                     );
                 }
                 if (list_pat.rest_info) |rest| {
@@ -2217,7 +2200,7 @@ const MaterializeCallableValueFailure = enum {
                         thread,
                         module_idx,
                         elem_pattern_idx,
-                        resolvedMonotype(elem_mono, resolved_mono.module_idx),
+                        ContextMono.resolvedMonotype(elem_mono, resolved_mono.module_idx),
                     );
                 }
             },
@@ -2293,7 +2276,7 @@ const MaterializeCallableValueFailure = enum {
     ) Allocator.Error!void {
         const module_env = self.all_module_envs[module_idx];
         const expr = module_env.store.getExpr(expr_idx);
-        const demanded = resolvedMonotype(monotype, monotype_module_idx);
+        const demanded = ContextMono.resolvedMonotype(monotype, monotype_module_idx);
         try self.recordExprMonotypeIfUnsetOrEqualForSourceContext(
             result,
             source_context,
@@ -2599,7 +2582,8 @@ const MaterializeCallableValueFailure = enum {
         demanded_monotype: Monotype.Idx,
         demanded_module_idx: u32,
     ) Allocator.Error!void {
-        var projected = try self.requireRecordedExprMonotypeForSourceContext(
+        var projected = try ContextMono.requireRecordedExprMonotypeForSourceContext(
+            self,
             result,
             SemanticThread.trackedThread(source_context),
             source_context,
@@ -2609,7 +2593,8 @@ const MaterializeCallableValueFailure = enum {
         for (projections) |projection| {
             projected = try self.projectResolvedMonotypeByValueProjection(result, projected, projection);
         }
-        if (!try self.monotypesStructurallyEqualAcrossModules(
+        if (!try ContextMono.monotypesStructurallyEqualAcrossModules(
+            self,
             result,
             projected.idx,
             projected.module_idx,
@@ -2637,7 +2622,8 @@ const MaterializeCallableValueFailure = enum {
         monotype_module_idx: u32,
     ) Allocator.Error!void {
         const thread = SemanticThread.trackedThread(source_context);
-        const existing = try self.lookupRecordedExprMonotypeIfReadyForSourceContext(
+        const existing = try ContextMono.lookupRecordedExprMonotypeIfReadyForSourceContext(
+            self,
             result,
             thread,
             source_context,
@@ -2645,7 +2631,8 @@ const MaterializeCallableValueFailure = enum {
             expr_idx,
         );
         if (existing) |resolved_existing| {
-            if (try self.monotypesStructurallyEqualAcrossModules(
+            if (try ContextMono.monotypesStructurallyEqualAcrossModules(
+                self,
                 result,
                 resolved_existing.idx,
                 resolved_existing.module_idx,
@@ -2680,7 +2667,8 @@ const MaterializeCallableValueFailure = enum {
             );
         }
 
-        try self.recordExprMonotypeForSourceContext(
+        try ContextMono.recordExprMonotypeForSourceContext(
+            self,
             result,
             source_context,
             module_idx,
@@ -2708,7 +2696,8 @@ const MaterializeCallableValueFailure = enum {
         const module_env = self.all_module_envs[module_idx];
         const expr = module_env.store.getExpr(expr_idx);
 
-        try self.recordExprMonotypeForSourceContext(
+        try ContextMono.recordExprMonotypeForSourceContext(
+            self,
             result,
             source_context,
             module_idx,
@@ -2941,7 +2930,8 @@ const MaterializeCallableValueFailure = enum {
         var resolved_callable_value = try self.resolveExprRefCallableValue(result, source, visiting);
         if (resolved_callable_value == null and source.projections.isEmpty()) {
             if (result.getExprTemplateId(source.source_context, source.module_idx, source.expr_idx)) |template_id| {
-                const target_fn_monotype = (try self.resolveExprMonotypeResolved(
+                const target_fn_monotype = (try ContextMono.resolveExprMonotypeResolved(
+                    self,
                     result,
                     SemanticThread.trackedThread(target_source_context),
                     target_module_idx,
@@ -3063,7 +3053,8 @@ const MaterializeCallableValueFailure = enum {
                 child_expr_idx: CIR.Expr.Idx,
             ) Allocator.Error!void {
                 if (result_inner.getExprTemplateId(source_context_inner, module_idx_inner, child_expr_idx) != null) {
-                    const monotype = try pass.lookupRecordedExprMonotypeIfReadyForSourceContext(
+                    const monotype = try ContextMono.lookupRecordedExprMonotypeIfReadyForSourceContext(
+                        pass,
                         result_inner,
                         SemanticThread.trackedThread(source_context_inner),
                         source_context_inner,
@@ -3172,10 +3163,7 @@ const MaterializeCallableValueFailure = enum {
             }
             unreachable;
         }
-        const exact_desired_fn_monotype = try self.resolveTypeVarMonotypeResolved(
-            result,
-            thread,
-            module_idx,
+        const exact_desired_fn_monotype = try ContextMono.resolveTypeVarMonotypeResolved(self, result, thread, module_idx,
             resolved_target.fn_var,
         );
         if (exact_desired_fn_monotype.isNone()) return null;
@@ -3218,7 +3206,7 @@ const MaterializeCallableValueFailure = enum {
         switch (expr) {
             .e_binop => |binop_expr| {
                 if (binop_expr.op == .eq or binop_expr.op == .ne) {
-                    if (try self.resolveExprMonotypeResolved(result, thread, module_idx, binop_expr.lhs)) |lhs_monotype| {
+                    if (try ContextMono.resolveExprMonotypeResolved(self, result, thread, module_idx, binop_expr.lhs)) |lhs_monotype| {
                         if (result.context_mono.monotype_store.getMonotype(lhs_monotype.idx) != .func) {
                             try self.bindCurrentExprTypeRoot(
                                 result,
@@ -3243,10 +3231,7 @@ const MaterializeCallableValueFailure = enum {
             else => {},
         }
 
-        const expr_monotype = try self.resolveTypeVarMonotypeResolved(
-            result,
-            thread,
-            module_idx,
+        const expr_monotype = try ContextMono.resolveTypeVarMonotypeResolved(self, result, thread, module_idx,
             ModuleEnv.varFrom(expr_idx),
         );
         if (expr_monotype.isNone()) {
@@ -3284,7 +3269,8 @@ const MaterializeCallableValueFailure = enum {
         monotype: Monotype.Idx,
         monotype_module_idx: u32,
     ) Allocator.Error!void {
-        try self.recordExprMonotypeForThread(
+        try ContextMono.recordExprMonotypeForThread(
+            self,
             result,
             thread,
             module_idx,
@@ -3304,7 +3290,8 @@ const MaterializeCallableValueFailure = enum {
         monotype_module_idx: u32,
     ) Allocator.Error!void {
         if (monotype.isNone()) return;
-        try self.recordExprMonotypeForThread(
+        try ContextMono.recordExprMonotypeForThread(
+            self,
             result,
             thread,
             module_idx,
@@ -3312,256 +3299,6 @@ const MaterializeCallableValueFailure = enum {
             monotype,
             monotype_module_idx,
         );
-    }
-
-    fn recordExprMonotypeForThread(
-        self: *Pass,
-        result: *Result,
-        thread: SemanticThread,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-        monotype: Monotype.Idx,
-        monotype_module_idx: u32,
-    ) Allocator.Error!void {
-        return self.recordExprMonotypeResolved(
-            result,
-            thread.requireSourceContext(),
-            module_idx,
-            expr_idx,
-            monotype,
-            monotype_module_idx,
-            thread,
-        );
-    }
-
-    fn recordExprMonotypeForSourceContext(
-        self: *Pass,
-        result: *Result,
-        source_context: SourceContext,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-        monotype: Monotype.Idx,
-        monotype_module_idx: u32,
-    ) Allocator.Error!void {
-        return self.recordExprMonotypeResolved(
-            result,
-            source_context,
-            module_idx,
-            expr_idx,
-            monotype,
-            monotype_module_idx,
-            null,
-        );
-    }
-
-    fn recordExprMonotypeResolved(
-        self: *Pass,
-        result: *Result,
-        source_context: SourceContext,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-        monotype: Monotype.Idx,
-        monotype_module_idx: u32,
-        _: ?SemanticThread,
-    ) Allocator.Error!void {
-        if (monotype.isNone()) return;
-        const key = self.resultExprKeyForSourceContext(source_context, module_idx, expr_idx);
-        const resolved = resolvedMonotype(monotype, monotype_module_idx);
-        if (result.lambdamono.getExprId(source_context, module_idx, expr_idx)) |expr_id| {
-            const program_expr = &result.lambdamono.exprs.items[@intFromEnum(expr_id)];
-            const existing_program_mono = program_expr.monotype;
-            if (!try self.monotypesStructurallyEqualAcrossModules(
-                result,
-                existing_program_mono.idx,
-                existing_program_mono.module_idx,
-                resolved.idx,
-                resolved.module_idx,
-            )) {
-                if (std.debug.runtime_safety) {
-                    std.debug.panic(
-                        "Pipeline invariant violated: finalized expr monotype disagreed with recorded exact monotype for ctx={s} module={d} expr={d}",
-                        .{ @tagName(source_context), module_idx, @intFromEnum(expr_idx) },
-                    );
-                }
-                unreachable;
-            }
-        }
-        try self.recordTypeVarMonotypeForSourceContext(
-            result,
-            source_context,
-            module_idx,
-            ModuleEnv.varFrom(expr_idx),
-            monotype,
-            monotype_module_idx,
-        );
-        if (result.context_mono.context_expr_monotypes.get(key)) |existing| {
-            if (try self.monotypesStructurallyEqualAcrossModules(
-                result,
-                existing.idx,
-                existing.module_idx,
-                resolved.idx,
-                resolved.module_idx,
-            )) {
-                return;
-            }
-
-            if (std.debug.runtime_safety) {
-                const module_env = self.all_module_envs[module_idx];
-                const expr = module_env.store.getExpr(expr_idx);
-                const expr_region = module_env.store.getExprRegion(expr_idx);
-                const source = module_env.getSourceAll();
-                const snippet_start = @min(expr_region.start.offset, source.len);
-                const snippet_end = @min(expr_region.end.offset, source.len);
-                const context_template = result.getSourceContextTemplateId(source_context);
-                std.debug.panic(
-                    "Pipeline: conflicting exact expr monotypes for ctx={s} module={d} module_name={s} expr={d} kind={s} region={any} snippet=\"{s}\" existing={d}@{d} existing_mono={any} new={d}@{d} new_mono={any} template_expr={d}",
-                    .{
-                        @tagName(source_context),
-                        module_idx,
-                        module_env.module_name,
-                        @intFromEnum(expr_idx),
-                        @tagName(expr),
-                        expr_region,
-                        source[snippet_start..snippet_end],
-                        @intFromEnum(existing.idx),
-                        existing.module_idx,
-                        result.context_mono.monotype_store.getMonotype(existing.idx),
-                        @intFromEnum(resolved.idx),
-                        resolved.module_idx,
-                        result.context_mono.monotype_store.getMonotype(resolved.idx),
-                        if (context_template) |template_id| @intFromEnum(result.getCallableTemplate(template_id).cir_expr) else std.math.maxInt(u32),
-                    },
-                );
-            }
-            unreachable;
-        }
-        try self.mergeContextExprMonotype(result, key, resolved);
-    }
-
-    fn mergeContextExprMonotype(
-        self: *Pass,
-        result: *Result,
-        key: ContextExprKey,
-        resolved: ResolvedMonotype,
-    ) Allocator.Error!void {
-        return self.mergeResolvedMonotypeMap(
-            result,
-            &result.context_mono.context_expr_monotypes,
-            key,
-            resolved,
-            "exact expr",
-        );
-    }
-
-    fn mergeContextPatternMonotype(
-        self: *Pass,
-        result: *Result,
-        key: ContextPatternKey,
-        resolved: ResolvedMonotype,
-    ) Allocator.Error!void {
-        return self.mergeResolvedMonotypeMap(
-            result,
-            &result.context_mono.context_pattern_monotypes,
-            key,
-            resolved,
-            "exact pattern",
-        );
-    }
-
-    fn mergeContextTypeVarMonotype(
-        self: *Pass,
-        result: *Result,
-        key: ContextTypeVarKey,
-        resolved: ResolvedMonotype,
-    ) Allocator.Error!void {
-        return self.mergeResolvedMonotypeMap(
-            result,
-            &result.context_mono.context_type_var_monotypes,
-            key,
-            resolved,
-            "exact typevar",
-        );
-    }
-
-    fn recordTypeVarMonotypeForSourceContext(
-        self: *Pass,
-        result: *Result,
-        source_context: SourceContext,
-        module_idx: u32,
-        type_var: types.Var,
-        monotype: Monotype.Idx,
-        monotype_module_idx: u32,
-    ) Allocator.Error!void {
-        if (monotype.isNone()) return;
-        const resolved_var = self.all_module_envs[module_idx].types.resolveVar(type_var).var_;
-        const key = self.resultTypeVarKeyForSourceContext(source_context, module_idx, resolved_var);
-        try self.mergeContextTypeVarMonotype(
-            result,
-            key,
-            resolvedMonotype(monotype, monotype_module_idx),
-        );
-    }
-
-    fn recordTypeVarMonotypeForThread(
-        self: *Pass,
-        result: *Result,
-        thread: SemanticThread,
-        module_idx: u32,
-        type_var: types.Var,
-        monotype: Monotype.Idx,
-        monotype_module_idx: u32,
-    ) Allocator.Error!void {
-        return self.recordTypeVarMonotypeForSourceContext(
-            result,
-            thread.requireSourceContext(),
-            module_idx,
-            type_var,
-            monotype,
-            monotype_module_idx,
-        );
-    }
-
-    fn mergeResolvedMonotypeMap(
-        self: *Pass,
-        result: *Result,
-        map: anytype,
-        key: anytype,
-        resolved: ResolvedMonotype,
-        comptime label: []const u8,
-    ) Allocator.Error!void {
-        const gop = try map.getOrPut(self.allocator, key);
-        if (!gop.found_existing) {
-            gop.value_ptr.* = resolved;
-            return;
-        }
-
-        const existing = gop.value_ptr.*;
-        if (try self.monotypesStructurallyEqualAcrossModules(
-            result,
-            existing.idx,
-            existing.module_idx,
-            resolved.idx,
-            resolved.module_idx,
-        )) {
-            return;
-        }
-
-        if (std.debug.runtime_safety) {
-            std.debug.panic(
-                "Pipeline: conflicting {s} monotypes while merging key={any} existing={d}@{d} existing_mono={any} new={d}@{d} new_mono={any}",
-                .{
-                    label,
-                    key,
-                    @intFromEnum(existing.idx),
-                    existing.module_idx,
-                    result.context_mono.monotype_store.getMonotype(existing.idx),
-                    @intFromEnum(resolved.idx),
-                    resolved.module_idx,
-                    result.context_mono.monotype_store.getMonotype(resolved.idx),
-                },
-            );
-        }
-        unreachable;
     }
 
     fn recordDemandedRecordFieldMonotypes(
@@ -3572,7 +3309,7 @@ const MaterializeCallableValueFailure = enum {
         expr_idx: CIR.Expr.Idx,
         record_expr: @TypeOf(@as(CIR.Expr, undefined).e_record),
     ) Allocator.Error!void {
-        const record_mono = (try self.resolveExprMonotypeResolved(result, thread, module_idx, expr_idx)) orelse return;
+        const record_mono = (try ContextMono.resolveExprMonotypeResolved(self, result, thread, module_idx, expr_idx)) orelse return;
 
         const mono = result.context_mono.monotype_store.getMonotype(record_mono.idx);
         const mono_record = switch (mono) {
@@ -3619,7 +3356,7 @@ const MaterializeCallableValueFailure = enum {
         expr_idx: CIR.Expr.Idx,
         tuple_expr: @TypeOf(@as(CIR.Expr, undefined).e_tuple),
     ) Allocator.Error!void {
-        const tuple_mono = (try self.resolveExprMonotypeResolved(result, thread, module_idx, expr_idx)) orelse return;
+        const tuple_mono = (try ContextMono.resolveExprMonotypeResolved(self, result, thread, module_idx, expr_idx)) orelse return;
 
         const mono = result.context_mono.monotype_store.getMonotype(tuple_mono.idx);
         const module_env = self.all_module_envs[module_idx];
@@ -3671,7 +3408,7 @@ const MaterializeCallableValueFailure = enum {
         parent_expr_idx: CIR.Expr.Idx,
         child_expr_idx: CIR.Expr.Idx,
     ) Allocator.Error!void {
-        const parent_mono = (try self.resolveExprMonotypeResolved(result, thread, module_idx, parent_expr_idx)) orelse return;
+        const parent_mono = (try ContextMono.resolveExprMonotypeResolved(self, result, thread, module_idx, parent_expr_idx)) orelse return;
         const child_expr = self.all_module_envs[module_idx].store.getExpr(child_expr_idx);
         if (exprMonotypeOwnedByInvocation(child_expr)) return;
         try self.recordCurrentExprMonotype(
@@ -3789,7 +3526,7 @@ const MaterializeCallableValueFailure = enum {
 
             if (exact_specializations.get(entry.key_ptr.type_var)) |existing| {
                 if (entry.value_ptr.module_idx != module_idx or
-                    !try self.monotypesStructurallyEqual(result, existing, entry.value_ptr.idx))
+                    !try ContextMono.monotypesStructurallyEqual(self, result, existing, entry.value_ptr.idx))
                 {
                     if (std.debug.runtime_safety) {
                         std.debug.panic(
@@ -4038,34 +3775,6 @@ const MaterializeCallableValueFailure = enum {
         return placeholder;
     }
 
-    fn resolveFuncTypeInStore(types_store: *const types.Store, type_var: types.Var) ?struct { func: types.Func, effectful: bool } {
-        var resolved = types_store.resolveVar(type_var);
-        while (resolved.desc.content == .alias) {
-            resolved = types_store.resolveVar(types_store.getAliasBackingVar(resolved.desc.content.alias));
-        }
-
-        if (resolved.desc.content != .structure) return null;
-        return switch (resolved.desc.content.structure) {
-            .fn_pure => |func| .{ .func = func, .effectful = false },
-            .fn_effectful => |func| .{ .func = func, .effectful = true },
-            .fn_unbound => |func| .{ .func = func, .effectful = false },
-            else => null,
-        };
-    }
-
-    fn resolveNominalTypeInStore(types_store: *const types.Store, type_var: types.Var) ?types.NominalType {
-        var resolved = types_store.resolveVar(type_var);
-        while (resolved.desc.content == .alias) {
-            resolved = types_store.resolveVar(types_store.getAliasBackingVar(resolved.desc.content.alias));
-        }
-
-        if (resolved.desc.content != .structure) return null;
-        return switch (resolved.desc.content.structure) {
-            .nominal_type => |nominal| nominal,
-            else => null,
-        };
-    }
-
     fn bindTypeVarMonotypesInStore(
         self: *Pass,
         result: *Result,
@@ -4080,7 +3789,7 @@ const MaterializeCallableValueFailure = enum {
 
         const resolved = store_types.resolveVar(type_var);
         if (bindings.get(resolved.var_)) |existing| {
-            if (!(try self.monotypesStructurallyEqual(result, existing, monotype))) {
+            if (!(try ContextMono.monotypesStructurallyEqual(self, result, existing, monotype))) {
                 if (std.debug.runtime_safety) {
                     std.debug.panic(
                         "Pipeline: conflicting monotype binding for type var root {d}",
@@ -4485,7 +4194,7 @@ const MaterializeCallableValueFailure = enum {
                         }
                         if (ident.eql(common.box)) {
                             const type_args = module_env.types.sliceNominalArgs(nominal);
-                            const outer_mono = try self.resolveTypeVarMonotype(result, thread, module_idx, resolved.var_);
+                            const outer_mono = try ContextMono.resolveTypeVarMonotype(self, result, thread, module_idx, resolved.var_);
                             const outer_box = result.context_mono.monotype_store.getMonotype(outer_mono).box;
                             try self.ensureBuiltinBoxUnboxCallableInst(result, module_idx, outer_mono, outer_box.inner);
                             if (type_args.len == 1) {
@@ -4496,7 +4205,7 @@ const MaterializeCallableValueFailure = enum {
                     }
 
                     if (try DispatchSolved.lookupAssociatedMethodTemplate(self, result, module_idx, nominal, module_env.idents.to_inspect)) |method_info| {
-                        if (resolveFuncTypeInStore(&method_info.target_env.types, method_info.type_var)) |resolved_func| {
+                        if (ContextMono.resolveFuncTypeInStore(&method_info.target_env.types, method_info.type_var)) |resolved_func| {
                             if (!resolved_func.effectful) {
                                 const param_vars = method_info.target_env.types.sliceVars(resolved_func.func.args);
                                 if (param_vars.len == 1) {
@@ -4505,7 +4214,7 @@ const MaterializeCallableValueFailure = enum {
                                     var ordered_entries = std.ArrayList(TypeSubstEntry).empty;
                                     defer ordered_entries.deinit(self.allocator);
 
-                                    const arg_mono = try self.resolveTypeVarMonotype(result, thread, module_idx, resolved.var_);
+                                    const arg_mono = try ContextMono.resolveTypeVarMonotype(self, result, thread, module_idx, resolved.var_);
                                     try self.bindTypeVarMonotypes(
                                         result,
                                         method_info.module_idx,
@@ -4555,7 +4264,7 @@ const MaterializeCallableValueFailure = enum {
                     try self.resolveStrInspectHelperCallableInstsForMonotype(
                         result,
                         module_idx,
-                        try self.resolveTypeVarMonotype(result, thread, module_idx, resolved.var_),
+                        try ContextMono.resolveTypeVarMonotype(self, result, thread, module_idx, resolved.var_),
                     );
                     return;
                 },
@@ -4588,7 +4297,7 @@ const MaterializeCallableValueFailure = enum {
         try self.resolveStrInspectHelperCallableInstsForMonotype(
             result,
             module_idx,
-            try self.resolveTypeVarMonotype(result, thread, module_idx, resolved.var_),
+            try ContextMono.resolveTypeVarMonotype(self, result, thread, module_idx, resolved.var_),
         );
     }
 
@@ -4809,7 +4518,8 @@ const MaterializeCallableValueFailure = enum {
                 result.lambdamono.getCallableParamSpecEntries(existing_callable_inst.callable_param_specs),
                 callable_param_specs,
             )) continue;
-            const mono_equal = try self.monotypesStructurallyEqual(
+            const mono_equal = try ContextMono.monotypesStructurallyEqual(
+                self,
                 result,
                 existing_callable_inst.fn_monotype,
                 canonical_fn_monotype,
@@ -4850,7 +4560,7 @@ const MaterializeCallableValueFailure = enum {
                 .module_idx = template.module_idx,
                 .expr_idx = template.body_expr,
             },
-            .fn_monotype = resolvedMonotype(canonical_fn_monotype, canonical_fn_monotype_module_idx),
+            .fn_monotype = ContextMono.resolvedMonotype(canonical_fn_monotype, canonical_fn_monotype_module_idx),
             .captures = .empty(),
             .source_region = template.source_region,
         });
@@ -5142,7 +4852,7 @@ const MaterializeCallableValueFailure = enum {
         for (lhs, rhs) |lhs_entry, rhs_entry| {
             if (!std.meta.eql(lhs_entry.key, rhs_entry.key)) return false;
             if (lhs_entry.monotype.module_idx != rhs_entry.monotype.module_idx) return false;
-            if (!try self.monotypesStructurallyEqual(result, lhs_entry.monotype.idx, rhs_entry.monotype.idx)) {
+            if (!try ContextMono.monotypesStructurallyEqual(self, result, lhs_entry.monotype.idx, rhs_entry.monotype.idx)) {
                 return false;
             }
         }
@@ -5510,12 +5220,12 @@ const MaterializeCallableValueFailure = enum {
             monotype
         else
             try self.remapMonotypeBetweenModules(result, monotype, mono_module_idx, template_module_idx);
-        const resolved_mono = resolvedMonotype(normalized_mono, template_module_idx);
+        const resolved_mono = ContextMono.resolvedMonotype(normalized_mono, template_module_idx);
 
         const resolved_key = boundTypeVarKey(template_module_idx, template_types, type_var);
         if (bindings.get(resolved_key)) |existing| {
             if (existing.module_idx != resolved_mono.module_idx or
-                !try self.monotypesStructurallyEqual(result, existing.idx, resolved_mono.idx))
+                !try ContextMono.monotypesStructurallyEqual(self, result, existing.idx, resolved_mono.idx))
             {
                 if (allow_failure) return false;
                 if (std.debug.runtime_safety) {
@@ -6051,554 +5761,6 @@ const MaterializeCallableValueFailure = enum {
         unreachable;
     }
 
-    fn resolveExprMonotype(
-        self: *Pass,
-        result: *Result,
-        thread: SemanticThread,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-    ) Allocator.Error!?Monotype.Idx {
-        return if (try self.resolveExprMonotypeResolved(result, thread, module_idx, expr_idx)) |resolved|
-            resolved.idx
-        else
-            null;
-    }
-
-    fn resolvePatternMonotypeResolved(
-        self: *Pass,
-        result: *Result,
-        thread: SemanticThread,
-        module_idx: u32,
-        pattern_idx: CIR.Pattern.Idx,
-    ) Allocator.Error!ResolvedMonotype {
-        const source_context = thread.requireSourceContext();
-        if (result.getContextPatternMonotype(source_context, module_idx, pattern_idx)) |resolved| {
-            if (comptime trace.enabled) {
-                trace.log(
-                    "resolvePatternMonotypeResolved pattern={d} ctx={s} resolved(existing)={d} module={d}",
-                    .{ @intFromEnum(pattern_idx), @tagName(source_context), @intFromEnum(resolved.idx), resolved.module_idx },
-                );
-            }
-            return resolved;
-        }
-        if (result.getContextPatternSourceExpr(source_context, module_idx, pattern_idx)) |source| {
-            var resolved = try self.requireRecordedExprMonotypeForSourceContext(
-                result,
-                SemanticThread.trackedThread(source.source_context),
-                source.source_context,
-                source.module_idx,
-                source.expr_idx,
-            );
-            for (result.lambdamono.getValueProjectionEntries(source.projections)) |projection| {
-                resolved = try self.projectResolvedMonotypeByValueProjection(result, resolved, projection);
-            }
-            try self.mergeContextPatternMonotype(
-                result,
-                self.resultPatternKeyForSourceContext(source_context, module_idx, pattern_idx),
-                resolved,
-            );
-            if (comptime trace.enabled) {
-                trace.log(
-                    "resolvePatternMonotypeResolved pattern={d} ctx={s} resolved(source-expr)={d} module={d}",
-                    .{ @intFromEnum(pattern_idx), @tagName(source_context), @intFromEnum(resolved.idx), resolved.module_idx },
-                );
-            }
-            return resolved;
-        }
-        if (self.lookupContextTypeVarMonotype(
-            result,
-            source_context,
-            module_idx,
-            ModuleEnv.varFrom(pattern_idx),
-        )) |resolved| {
-            try self.mergeContextPatternMonotype(
-                result,
-                self.resultPatternKeyForSourceContext(source_context, module_idx, pattern_idx),
-                resolved,
-            );
-            if (comptime trace.enabled) {
-                trace.log(
-                    "resolvePatternMonotypeResolved pattern={d} ctx={s} resolved(typevar-lookup)={d} module={d}",
-                    .{ @intFromEnum(pattern_idx), @tagName(source_context), @intFromEnum(resolved.idx), resolved.module_idx },
-                );
-            }
-            return resolved;
-        }
-        const resolved = try self.resolveTypeVarMonotypeResolved(
-            result,
-            thread,
-            module_idx,
-            ModuleEnv.varFrom(pattern_idx),
-        );
-        if (!resolved.isNone()) {
-            try self.mergeContextPatternMonotype(
-                result,
-                self.resultPatternKeyForSourceContext(source_context, module_idx, pattern_idx),
-                resolved,
-            );
-        }
-        if (comptime trace.enabled) {
-            trace.log(
-                "resolvePatternMonotypeResolved pattern={d} ctx={s} resolved(typevar)={d} module={d}",
-                .{ @intFromEnum(pattern_idx), @tagName(source_context), @intFromEnum(resolved.idx), resolved.module_idx },
-            );
-        }
-        return resolved;
-    }
-
-    /// Resolve an exact contextual expr monotype from already-inferred type
-    /// information only.
-    ///
-    /// This function is intentionally forbidden from consulting declared
-    /// signatures, annotations, CIR argument shape, low-level op shape, or any
-    /// other source-syntax heuristic. The only valid authorities are:
-    /// 1. exact contextual monotypes already recorded from inferred typevars
-    /// 2. exact or language-defaulted contextual typevar monotypes derived
-    ///    from already-inferred checker types
-    /// 3. exact callable/value facts whose source monotype was itself derived
-    ///    from inferred type information earlier
-    ///
-    /// If those authorities do not provide an answer, the pipeline must keep
-    /// the value unresolved or panic in debug when a required fact is missing;
-    /// it must not invent a replacement monotype.
-    fn resolveExprMonotypeResolved(
-        self: *Pass,
-        result: *Result,
-        thread: SemanticThread,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-    ) Allocator.Error!?ResolvedMonotype {
-        const source_context = thread.requireSourceContext();
-        const module_env = self.all_module_envs[module_idx];
-        const expr = module_env.store.getExpr(expr_idx);
-        const expr_var = ModuleEnv.varFrom(expr_idx);
-        if (self.lookupExprMonotypeForSourceContext(result, thread, source_context, module_idx, expr_idx)) |resolved| {
-            return resolved;
-        }
-        const typevar_resolved = try self.resolveTypeVarMonotypeResolved(
-            result,
-            thread,
-            module_idx,
-            expr_var,
-        );
-        if (comptime trace.enabled) {
-            if (typevar_resolved.isNone()) {
-                switch (expr) {
-                    .e_tag, .e_empty_list, .e_lambda, .e_closure, .e_hosted_lambda => {
-                        const resolved_var = module_env.types.resolveVar(ModuleEnv.varFrom(expr_idx));
-                        trace.log(
-                            "resolveExprMonotypeResolved none expr={d} kind={s} ctx={s} typevar_content={s}",
-                            .{
-                                @intFromEnum(expr_idx),
-                                @tagName(expr),
-                                @tagName(source_context),
-                                @tagName(resolved_var.desc.content),
-                            },
-                        );
-                    },
-                    else => {},
-                }
-            }
-        }
-        if (!typevar_resolved.isNone()) {
-            try self.recordExprMonotypeResolved(
-                result,
-                source_context,
-                module_idx,
-                expr_idx,
-                typevar_resolved.idx,
-                typevar_resolved.module_idx,
-                thread,
-            );
-            return typevar_resolved;
-        }
-        return try self.lookupRecordedExprMonotypeIfReadyForSourceContext(
-            result,
-            thread,
-            source_context,
-            module_idx,
-            expr_idx,
-        );
-    }
-
-    /// Require that an exact contextual expr monotype already exists in the
-    /// inferred-type-backed pipeline state.
-    ///
-    /// This is a consumer-side invariant check, not a permission slip to
-    /// reconstruct monotypes from CIR shape. If the required inferred fact was
-    /// never recorded, that is a compiler bug and must trip a debug panic.
-    fn requireRecordedExprMonotypeForSourceContext(
-        self: *Pass,
-        result: *Result,
-        thread: SemanticThread,
-        source_context: SourceContext,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-    ) Allocator.Error!ResolvedMonotype {
-        if (self.lookupExprMonotypeForSourceContext(result, thread, source_context, module_idx, expr_idx)) |resolved| {
-            return resolved;
-        }
-
-        const module_env = self.all_module_envs[module_idx];
-        const expr = module_env.store.getExpr(expr_idx);
-
-        const typevar_resolved = try self.resolveTypeVarMonotypeResolved(
-            result,
-            thread,
-            module_idx,
-            ModuleEnv.varFrom(expr_idx),
-        );
-        if (!typevar_resolved.isNone()) {
-            try self.recordExprMonotypeResolved(
-                result,
-                source_context,
-                module_idx,
-                expr_idx,
-                typevar_resolved.idx,
-                typevar_resolved.module_idx,
-                thread,
-            );
-            return typevar_resolved;
-        }
-
-        const expr_region = module_env.store.getExprRegion(expr_idx);
-        const source = module_env.getSourceAll();
-        const snippet_start = @min(expr_region.start.offset, source.len);
-        const snippet_end = @min(expr_region.end.offset, source.len);
-        const origin = result.getExprOriginExpr(source_context, module_idx, expr_idx);
-        std.debug.panic(
-            "Pipeline invariant violated: missing exact contextual monotype for expr {d} kind={s} region={any} snippet=\"{s}\" in module {d} under source context {s} origin_ctx={s} origin_module={d} origin_expr={d}",
-            .{
-                @intFromEnum(expr_idx),
-                @tagName(expr),
-                expr_region,
-                source[snippet_start..snippet_end],
-                module_idx,
-                @tagName(source_context),
-                if (origin) |expr_ref| @tagName(expr_ref.source_context) else "none",
-                if (origin) |expr_ref| expr_ref.module_idx else std.math.maxInt(u32),
-                if (origin) |expr_ref| @intFromEnum(expr_ref.expr_idx) else std.math.maxInt(u32),
-            },
-        );
-    }
-
-    fn lookupRecordedExprMonotypeIfReady(
-        self: *Pass,
-        result: *Result,
-        thread: SemanticThread,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-    ) Allocator.Error!?ResolvedMonotype {
-        const source_context = thread.requireSourceContext();
-        return self.lookupRecordedExprMonotypeIfReadyForSourceContext(
-            result,
-            thread,
-            source_context,
-            module_idx,
-            expr_idx,
-        );
-    }
-
-    fn lookupRecordedExprMonotypeIfReadyForSourceContext(
-        self: *Pass,
-        result: *Result,
-        thread: SemanticThread,
-        source_context: SourceContext,
-        module_idx: u32,
-        expr_idx: CIR.Expr.Idx,
-    ) Allocator.Error!?ResolvedMonotype {
-        if (self.lookupExprMonotypeForSourceContext(result, thread, source_context, module_idx, expr_idx)) |resolved| {
-            return resolved;
-        }
-        const typevar_resolved = try self.resolveTypeVarMonotypeResolved(
-            result,
-            thread,
-            module_idx,
-            ModuleEnv.varFrom(expr_idx),
-        );
-        if (!typevar_resolved.isNone()) {
-            try self.recordExprMonotypeResolved(
-                result,
-                source_context,
-                module_idx,
-                expr_idx,
-                typevar_resolved.idx,
-                typevar_resolved.module_idx,
-                thread,
-            );
-            return typevar_resolved;
-        }
-        return null;
-    }
-
-    fn resolveTypeVarMonotype(
-        self: *Pass,
-        result: *Result,
-        thread: SemanticThread,
-        module_idx: u32,
-        var_: types.Var,
-    ) Allocator.Error!Monotype.Idx {
-        return (try self.resolveTypeVarMonotypeResolved(result, thread, module_idx, var_)).idx;
-    }
-
-    fn resolveTypeVarMonotypeResolved(
-        self: *Pass,
-        result: *Result,
-        thread: SemanticThread,
-        module_idx: u32,
-        var_: types.Var,
-    ) Allocator.Error!ResolvedMonotype {
-        const module_env = self.all_module_envs[module_idx];
-        const resolved_var = module_env.types.resolveVar(var_).var_;
-        if (self.lookupContextTypeVarMonotype(result, thread.requireSourceContext(), module_idx, resolved_var)) |mono| {
-            return mono;
-        }
-        const mono = try self.monotypeFromTypeVarInSourceContext(
-            result,
-            thread.requireSourceContext(),
-            module_idx,
-            &module_env.types,
-            resolved_var,
-        );
-        if (!mono.isNone()) {
-            try self.recordTypeVarMonotypeForThread(
-                result,
-                thread,
-                module_idx,
-                resolved_var,
-                mono,
-                module_idx,
-            );
-            return resolvedMonotype(mono, module_idx);
-        }
-        const defaulted = try self.monotypeFromTypeVarWithLanguageDefaultingInSourceContext(
-            result,
-            thread.requireSourceContext(),
-            module_idx,
-            &module_env.types,
-            resolved_var,
-        );
-        if (!defaulted.isNone()) {
-            try self.recordTypeVarMonotypeForThread(
-                result,
-                thread,
-                module_idx,
-                resolved_var,
-                defaulted,
-                module_idx,
-            );
-        }
-        return resolvedMonotype(defaulted, module_idx);
-    }
-
-    fn resolvedIfFunctionMonotype(
-        self: *Pass,
-        result: *const Result,
-        resolved: ?ResolvedMonotype,
-    ) ?ResolvedMonotype {
-        _ = self;
-        const resolved_mono = resolved orelse return null;
-        return switch (result.context_mono.monotype_store.getMonotype(resolved_mono.idx)) {
-            .func => resolved_mono,
-            else => null,
-        };
-    }
-
-    fn lookupContextTypeVarMonotype(
-        self: *Pass,
-        result: *const Result,
-        source_context: SourceContext,
-        module_idx: u32,
-        var_: types.Var,
-    ) ?ResolvedMonotype {
-        const resolved_var = self.all_module_envs[module_idx].types.resolveVar(var_).var_;
-        return result.context_mono.getContextTypeVarMonotype(source_context, module_idx, resolved_var) orelse
-            result.context_mono.getTypeScopeMonotype(module_idx, resolved_var);
-    }
-
-    fn seedRecordedContextTypeVarSpecializations(
-        self: *Pass,
-        result: *Result,
-        source_context: SourceContext,
-        module_idx: u32,
-        specializations: *std.AutoHashMap(types.Var, Monotype.Idx),
-    ) Allocator.Error!void {
-        switch (source_context) {
-            .callable_inst => |context_id| {
-                const callable_inst = result.getCallableInst(@as(CallableInstId, @enumFromInt(@intFromEnum(context_id))));
-                const subst = result.getTypeSubst(callable_inst.subst);
-                for (result.getTypeSubstEntries(subst.entries)) |entry| {
-                    if (entry.key.module_idx != module_idx) continue;
-                    const resolved_var = self.all_module_envs[module_idx].types.resolveVar(entry.key.type_var).var_;
-                    const canonical_mono = if (entry.monotype.module_idx == module_idx)
-                        entry.monotype.idx
-                    else
-                        try self.remapMonotypeBetweenModules(
-                            result,
-                            entry.monotype.idx,
-                            entry.monotype.module_idx,
-                            module_idx,
-                        );
-                    try specializations.put(resolved_var, canonical_mono);
-                }
-            },
-            .root_expr, .provenance_expr, .template_expr => {},
-        }
-
-        var it = result.context_mono.context_type_var_monotypes.iterator();
-        while (it.next()) |entry| {
-            const key = entry.key_ptr.*;
-            if (key.module_idx != module_idx) continue;
-            if (!contextTypeVarKeyMatchesSourceContext(source_context, key)) continue;
-            if (entry.value_ptr.module_idx != module_idx) continue;
-            try specializations.put(key.type_var, entry.value_ptr.idx);
-        }
-    }
-
-    fn monotypeFromTypeVarInSourceContext(
-        self: *Pass,
-        result: *Result,
-        source_context: SourceContext,
-        module_idx: u32,
-        store_types: *const types.Store,
-        var_: types.Var,
-    ) Allocator.Error!Monotype.Idx {
-        var extra_bindings = std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype).init(self.allocator);
-        defer extra_bindings.deinit();
-        return self.monotypeFromTypeVarInSourceContextWithExtraBindings(
-            result,
-            source_context,
-            module_idx,
-            store_types,
-            var_,
-            &extra_bindings,
-        );
-    }
-
-    fn monotypeFromTypeVarInSourceContextWithExtraBindings(
-        self: *Pass,
-        result: *Result,
-        source_context: SourceContext,
-        module_idx: u32,
-        store_types: *const types.Store,
-        var_: types.Var,
-        extra_bindings: *const std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
-    ) Allocator.Error!Monotype.Idx {
-        var exact_specializations = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
-        defer exact_specializations.deinit();
-
-        try self.seedRecordedContextTypeVarSpecializations(result, source_context, module_idx, &exact_specializations);
-        try self.seedRecordedTypeScopeSpecializations(result, module_idx, &exact_specializations);
-
-        var extra_it = extra_bindings.iterator();
-        while (extra_it.next()) |entry| {
-            if (entry.key_ptr.module_idx != module_idx) continue;
-            const canonical_mono = if (entry.value_ptr.module_idx == module_idx)
-                entry.value_ptr.idx
-            else
-                try self.remapMonotypeBetweenModules(
-                    result,
-                    entry.value_ptr.idx,
-                    entry.value_ptr.module_idx,
-                    module_idx,
-                );
-            try exact_specializations.put(entry.key_ptr.type_var, canonical_mono);
-        }
-
-        var nominal_cycle_breakers = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
-        defer nominal_cycle_breakers.deinit();
-
-        var scratches = try Monotype.Store.Scratches.init(self.allocator);
-        defer scratches.deinit();
-
-        const module_env = self.all_module_envs[module_idx];
-        scratches.ident_store = module_env.getIdentStoreConst();
-        scratches.module_env = module_env;
-        scratches.module_idx = module_idx;
-        scratches.all_module_envs = self.all_module_envs;
-        return result.context_mono.monotype_store.fromTypeVarExact(
-            self.allocator,
-            store_types,
-            var_,
-            module_env.idents,
-            &exact_specializations,
-            &nominal_cycle_breakers,
-            &scratches,
-        );
-    }
-
-    fn monotypeFromTypeVarWithLanguageDefaultingInSourceContext(
-        self: *Pass,
-        result: *Result,
-        source_context: SourceContext,
-        module_idx: u32,
-        store_types: *const types.Store,
-        var_: types.Var,
-    ) Allocator.Error!Monotype.Idx {
-        var extra_bindings = std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype).init(self.allocator);
-        defer extra_bindings.deinit();
-        return self.monotypeFromTypeVarWithLanguageDefaultingInSourceContextWithExtraBindings(
-            result,
-            source_context,
-            module_idx,
-            store_types,
-            var_,
-            &extra_bindings,
-        );
-    }
-
-    fn monotypeFromTypeVarWithLanguageDefaultingInSourceContextWithExtraBindings(
-        self: *Pass,
-        result: *Result,
-        source_context: SourceContext,
-        module_idx: u32,
-        store_types: *const types.Store,
-        var_: types.Var,
-        extra_bindings: *const std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
-    ) Allocator.Error!Monotype.Idx {
-        var exact_specializations = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
-        defer exact_specializations.deinit();
-
-        try self.seedRecordedContextTypeVarSpecializations(result, source_context, module_idx, &exact_specializations);
-        try self.seedRecordedTypeScopeSpecializations(result, module_idx, &exact_specializations);
-
-        var extra_it = extra_bindings.iterator();
-        while (extra_it.next()) |entry| {
-            if (entry.key_ptr.module_idx != module_idx) continue;
-            const canonical_mono = if (entry.value_ptr.module_idx == module_idx)
-                entry.value_ptr.idx
-            else
-                try self.remapMonotypeBetweenModules(
-                    result,
-                    entry.value_ptr.idx,
-                    entry.value_ptr.module_idx,
-                    module_idx,
-                );
-            try exact_specializations.put(entry.key_ptr.type_var, canonical_mono);
-        }
-
-        var nominal_cycle_breakers = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
-        defer nominal_cycle_breakers.deinit();
-
-        var scratches = try Monotype.Store.Scratches.init(self.allocator);
-        defer scratches.deinit();
-
-        const module_env = self.all_module_envs[module_idx];
-        scratches.ident_store = module_env.getIdentStoreConst();
-        scratches.module_env = module_env;
-        scratches.module_idx = module_idx;
-        scratches.all_module_envs = self.all_module_envs;
-        return result.context_mono.monotype_store.fromTypeVar(
-            self.allocator,
-            store_types,
-            var_,
-            module_env.idents,
-            &exact_specializations,
-            &nominal_cycle_breakers,
-            &scratches,
-        );
-    }
-
     fn boundTypeVarKey(
         module_idx: u32,
         store_types: *const types.Store,
@@ -6608,42 +5770,6 @@ const MaterializeCallableValueFailure = enum {
             .module_idx = module_idx,
             .type_var = store_types.resolveVar(var_).var_,
         };
-    }
-
-    fn resolvedMonotype(idx: Monotype.Idx, module_idx: u32) ResolvedMonotype {
-        return .{ .idx = idx, .module_idx = module_idx };
-    }
-
-    fn monotypesStructurallyEqual(
-        self: *Pass,
-        result: *const Result,
-        lhs: Monotype.Idx,
-        rhs: Monotype.Idx,
-    ) Allocator.Error!bool {
-        return result.context_mono.monotypesStructurallyEqual(
-            self.allocator,
-            self.all_module_envs,
-            lhs,
-            rhs,
-        );
-    }
-
-    fn monotypesStructurallyEqualAcrossModules(
-        self: *Pass,
-        result: *const Result,
-        lhs: Monotype.Idx,
-        lhs_module_idx: u32,
-        rhs: Monotype.Idx,
-        rhs_module_idx: u32,
-    ) Allocator.Error!bool {
-        return result.context_mono.monotypesStructurallyEqualAcrossModules(
-            self.allocator,
-            self.all_module_envs,
-            lhs,
-            lhs_module_idx,
-            rhs,
-            rhs_module_idx,
-        );
     }
 
     fn resolveImportedModuleIdx(self: *Pass, caller_env: *const ModuleEnv, import_idx: CIR.Import.Idx) ?u32 {
