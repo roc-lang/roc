@@ -269,7 +269,6 @@ pub const CallableVariantGroupId = enum(u32) {
 };
 
 pub const ContextExprKey = ContextMono.ContextExprKey;
-pub const ContextPatternKey = ContextMono.ContextPatternKey;
 pub const SourceContext = ContextMono.SourceContext;
 const SemanticThread = Lambdasolved.SemanticThread;
 pub const BuildStmtKey = struct {
@@ -977,15 +976,12 @@ pub fn callableParamSpecsEqual(
 }
 
 pub const CaptureValueSource = union(enum) {
-    lexical_pattern: struct {
-        source_context: SourceContext,
+    lexical_binding: struct {
+        callable_inst: CallableInstId,
         module_idx: u32,
         pattern_idx: CIR.Pattern.Idx,
     },
     bound_expr: struct {
-        binding_source_context: SourceContext,
-        binding_module_idx: u32,
-        binding_pattern_idx: CIR.Pattern.Idx,
         expr_ref: ExprRef,
     },
 };
@@ -1040,25 +1036,9 @@ pub const CallableDef = struct {
     source_region: Region,
 };
 
-pub const BindingId = enum(u32) {
-    _,
-};
-
 pub const ValueOrigin = union(enum) {
     self,
     expr: ExprRef,
-};
-
-/// One finalized specialized pattern binding in the executable
-/// `Lambdamono.Program`.
-///
-/// Invariant: this struct must never be used as mutable staging state during
-/// specialization. If a consumer reads a `PatternBinding` from
-/// `Program.pattern_bindings`, every recorded fact here is already final.
-pub const PatternBinding = struct {
-    key: ContextPatternKey,
-    callable_value: ?CallableValue = null,
-    origin: ValueOrigin = .self,
 };
 
 /// One finalized specialized expr in the executable `Lambdamono.Program`.
@@ -1243,8 +1223,7 @@ pub const Stmt = struct {
 /// Final specialized program consumed by later lowering stages.
 ///
 /// Invariant: `exprs` contains only finalized expr records. Any temporary
-/// specialization/build state must live outside this struct. The same is true
-/// for `pattern_bindings`.
+/// specialization/build state must live outside this struct.
 pub const Program = struct {
     callable_insts: std.ArrayListUnmanaged(CallableInst),
     callable_variant_groups: std.ArrayListUnmanaged(CallableVariantGroup),
@@ -1252,8 +1231,6 @@ pub const Program = struct {
     callable_param_spec_entries: std.ArrayListUnmanaged(CallableParamSpecEntry),
     value_projection_entries: std.ArrayListUnmanaged(CallableParamProjection),
     pattern_entries: std.ArrayListUnmanaged(CIR.Pattern.Idx),
-    pattern_bindings: std.ArrayListUnmanaged(PatternBinding),
-    pattern_binding_ids_by_key: std.AutoHashMapUnmanaged(ContextPatternKey, BindingId),
     exprs: std.ArrayListUnmanaged(Expr),
     expr_ids_by_key: std.AutoHashMapUnmanaged(ContextExprKey, ExprId),
     expr_child_entries: std.ArrayListUnmanaged(ExprId),
@@ -1272,8 +1249,6 @@ pub const Program = struct {
             .callable_param_spec_entries = .empty,
             .value_projection_entries = .empty,
             .pattern_entries = .empty,
-            .pattern_bindings = .empty,
-            .pattern_binding_ids_by_key = .empty,
             .exprs = .empty,
             .expr_ids_by_key = .empty,
             .expr_child_entries = .empty,
@@ -1293,8 +1268,6 @@ pub const Program = struct {
         self.callable_param_spec_entries.deinit(allocator);
         self.value_projection_entries.deinit(allocator);
         self.pattern_entries.deinit(allocator);
-        self.pattern_bindings.deinit(allocator);
-        self.pattern_binding_ids_by_key.deinit(allocator);
         self.exprs.deinit(allocator);
         self.expr_ids_by_key.deinit(allocator);
         self.expr_child_entries.deinit(allocator);
@@ -1622,41 +1595,6 @@ pub const Program = struct {
         return self.value_projection_entries.items[span.start..][0..span.len];
     }
 
-    pub fn getPatternBinding(
-        self: *const Program,
-        source_context: SourceContext,
-        module_idx: u32,
-        pattern_idx: CIR.Pattern.Idx,
-    ) ?*const PatternBinding {
-        const binding_id = self.pattern_binding_ids_by_key.get(
-            ContextMono.Result.contextPatternKey(source_context, module_idx, pattern_idx),
-        ) orelse return null;
-        return &self.pattern_bindings.items[@intFromEnum(binding_id)];
-    }
-
-    pub fn getPatternCallableValue(
-        self: *const Program,
-        source_context: SourceContext,
-        module_idx: u32,
-        pattern_idx: CIR.Pattern.Idx,
-    ) ?CallableValue {
-        const binding = self.getPatternBinding(source_context, module_idx, pattern_idx) orelse return null;
-        return binding.callable_value;
-    }
-
-    pub fn getPatternOriginExpr(
-        self: *const Program,
-        source_context: SourceContext,
-        module_idx: u32,
-        pattern_idx: CIR.Pattern.Idx,
-    ) ?ExprRef {
-        const binding = self.getPatternBinding(source_context, module_idx, pattern_idx) orelse return null;
-        return switch (binding.origin) {
-            .self => null,
-            .expr => |origin| origin,
-        };
-    }
-
     pub fn getExpr(self: *const Program, expr_id: ExprId) *const Expr {
         return &self.exprs.items[@intFromEnum(expr_id)];
     }
@@ -1733,27 +1671,6 @@ pub const Program = struct {
     pub fn getPatternIds(self: *const Program, span: PatternIdSpan) []const CIR.Pattern.Idx {
         if (span.len == 0) return &.{};
         return self.pattern_entries.items[span.start..][0..span.len];
-    }
-
-    pub fn ensurePatternBinding(
-        self: *Program,
-        allocator: Allocator,
-        source_context: SourceContext,
-        module_idx: u32,
-        pattern_idx: CIR.Pattern.Idx,
-    ) Allocator.Error!*PatternBinding {
-        const key = ContextMono.Result.contextPatternKey(source_context, module_idx, pattern_idx);
-        const binding_id = self.pattern_binding_ids_by_key.get(key) orelse blk: {
-            const new_binding_id: BindingId = @enumFromInt(self.pattern_bindings.items.len);
-            try self.pattern_bindings.append(allocator, .{
-                .key = key,
-                .callable_value = null,
-                .origin = .self,
-            });
-            try self.pattern_binding_ids_by_key.put(allocator, key, new_binding_id);
-            break :blk new_binding_id;
-        };
-        return &self.pattern_bindings.items[@intFromEnum(binding_id)];
     }
 
     pub fn appendExprChildren(
@@ -2043,7 +1960,7 @@ fn ProgramAssembler(comptime ResultPtr: type, comptime Driver: type) type {
             for (self.result.getCaptureFields(callable_def.captures)) |capture_field| {
                 switch (capture_field.source) {
                     .bound_expr => |bound_expr| try self.ensureProgramExprRefNode(bound_expr.expr_ref),
-                    .lexical_pattern => {},
+                    .lexical_binding => {},
                 }
             }
 

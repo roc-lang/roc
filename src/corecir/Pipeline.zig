@@ -101,7 +101,6 @@ pub const DispatchIntrinsic = Lambdamono.DispatchIntrinsic;
 pub const DispatchSemantics = Lambdamono.DispatchSemantics;
 
 const ContextExprKey = ContextMono.ContextExprKey;
-const ContextPatternKey = ContextMono.ContextPatternKey;
 const ContextTypeVarKey = ContextMono.ContextTypeVarKey;
 
 fn callableValueMonotype(result: *const Result, callable_value: CallableValue) ResolvedMonotype {
@@ -184,14 +183,6 @@ pub const Result = struct {
         expr_idx: CIR.Expr.Idx,
     ) ContextExprKey {
         return ContextMono.Result.contextExprKey(source_context, module_idx, expr_idx);
-    }
-
-    pub fn contextPatternKey(
-        source_context: SourceContext,
-        module_idx: u32,
-        pattern_idx: CIR.Pattern.Idx,
-    ) ContextPatternKey {
-        return ContextMono.Result.contextPatternKey(source_context, module_idx, pattern_idx);
     }
 
     fn getExprMonotypeById(self: *const Result, expr_id: Lambdamono.ExprId) ResolvedMonotype {
@@ -312,28 +303,6 @@ pub const Result = struct {
         return self.lambdamono.getExpr(expr_id);
     }
 
-    pub fn getContextPatternMonotype(
-        self: *const Result,
-        source_context: SourceContext,
-        module_idx: u32,
-        pattern_idx: CIR.Pattern.Idx,
-    ) ?ResolvedMonotype {
-        if (self.getPatternCallableValue(source_context, module_idx, pattern_idx)) |callable_value| {
-            return self.getCallableValueSourceMonotype(callable_value);
-        }
-
-        if (self.context_mono.getContextPatternMonotype(source_context, module_idx, pattern_idx)) |resolved| {
-            return resolved;
-        }
-
-        const source = self.getContextPatternSourceExpr(source_context, module_idx, pattern_idx) orelse return null;
-        if (!source.projections.isEmpty()) return null;
-        if (self.getExprCallableValue(source.source_context, source.module_idx, source.expr_idx)) |callable_value| {
-            return self.getCallableValueSourceMonotype(callable_value);
-        }
-        return self.getExprMonotype(source.source_context, source.module_idx, source.expr_idx);
-    }
-
     pub fn getCallableTemplate(self: *const Result, callable_template_id: CallableTemplateId) *const CallableTemplate {
         return self.template_catalog.getCallableTemplate(callable_template_id);
     }
@@ -348,15 +317,6 @@ pub const Result = struct {
 
     pub fn getCallableDefForInst(self: *const Result, callable_inst_id: CallableInstId) *const CallableDef {
         return self.getCallableDef(self.getCallableInst(callable_inst_id).callable_def);
-    }
-
-    pub fn getPatternCallableValue(
-        self: *const Result,
-        source_context: SourceContext,
-        module_idx: u32,
-        pattern_idx: CIR.Pattern.Idx,
-    ) ?CallableValue {
-        return self.lambdamono.getPatternCallableValue(source_context, module_idx, pattern_idx);
     }
 
     pub fn getCallableValueSourceMonotype(
@@ -432,15 +392,6 @@ pub const Result = struct {
 
     fn getExternalCallableTemplate(self: *const Result, module_idx: u32, def_node_idx: u16) ?CallableTemplateId {
         return self.template_catalog.getExternalCallableTemplate(module_idx, def_node_idx);
-    }
-
-    pub fn getContextPatternSourceExpr(
-        self: *const Result,
-        source_context: SourceContext,
-        module_idx: u32,
-        pattern_idx: CIR.Pattern.Idx,
-    ) ?ExprRef {
-        return self.lambdamono.getPatternOriginExpr(source_context, module_idx, pattern_idx);
     }
 
     pub fn getExprOriginExpr(

@@ -93,14 +93,6 @@ pub const ContextExprKey = struct {
     expr_raw: u32,
 };
 
-pub const ContextPatternKey = struct {
-    source_context_kind: SourceContextKind,
-    source_context_module_idx: u32,
-    source_context_raw: u32,
-    module_idx: u32,
-    pattern_raw: u32,
-};
-
 pub const ContextTypeVarKey = struct {
     source_context_kind: SourceContextKind,
     source_context_module_idx: u32,
@@ -115,7 +107,6 @@ pub const Result = struct {
     substs: std.ArrayListUnmanaged(TypeSubst),
     empty_subst_id: TypeSubstId,
     context_expr_monotypes: std.AutoHashMapUnmanaged(ContextExprKey, ResolvedMonotype),
-    context_pattern_monotypes: std.AutoHashMapUnmanaged(ContextPatternKey, ResolvedMonotype),
     context_type_var_monotypes: std.AutoHashMapUnmanaged(ContextTypeVarKey, ResolvedMonotype),
     type_scope_monotypes: std.AutoHashMapUnmanaged(BoundTypeVarKey, ResolvedMonotype),
 
@@ -126,7 +117,6 @@ pub const Result = struct {
             .substs = .empty,
             .empty_subst_id = undefined,
             .context_expr_monotypes = .empty,
-            .context_pattern_monotypes = .empty,
             .context_type_var_monotypes = .empty,
             .type_scope_monotypes = .empty,
         };
@@ -140,7 +130,6 @@ pub const Result = struct {
         self.subst_entries.deinit(allocator);
         self.substs.deinit(allocator);
         self.context_expr_monotypes.deinit(allocator);
-        self.context_pattern_monotypes.deinit(allocator);
         self.context_type_var_monotypes.deinit(allocator);
         self.type_scope_monotypes.deinit(allocator);
     }
@@ -178,39 +167,6 @@ pub const Result = struct {
         };
     }
 
-    pub fn contextPatternKey(source_context: SourceContext, module_idx: u32, pattern_idx: CIR.Pattern.Idx) ContextPatternKey {
-        return switch (source_context) {
-            .callable_inst => |context_id| .{
-                .source_context_kind = .callable_inst,
-                .source_context_module_idx = std.math.maxInt(u32),
-                .source_context_raw = @intFromEnum(context_id),
-                .module_idx = module_idx,
-                .pattern_raw = @intFromEnum(pattern_idx),
-            },
-            .root_expr => |root| .{
-                .source_context_kind = .root_expr,
-                .source_context_module_idx = root.module_idx,
-                .source_context_raw = @intFromEnum(root.expr_idx),
-                .module_idx = module_idx,
-                .pattern_raw = @intFromEnum(pattern_idx),
-            },
-            .provenance_expr => |source| .{
-                .source_context_kind = .provenance_expr,
-                .source_context_module_idx = source.module_idx,
-                .source_context_raw = @intFromEnum(source.expr_idx),
-                .module_idx = module_idx,
-                .pattern_raw = @intFromEnum(pattern_idx),
-            },
-            .template_expr => |template| .{
-                .source_context_kind = .template_expr,
-                .source_context_module_idx = template.module_idx,
-                .source_context_raw = @intFromEnum(template.expr_idx),
-                .module_idx = module_idx,
-                .pattern_raw = @intFromEnum(pattern_idx),
-            },
-        };
-    }
-
     pub fn getExprMonotype(
         self: *const Result,
         source_context: SourceContext,
@@ -218,15 +174,6 @@ pub const Result = struct {
         expr_idx: CIR.Expr.Idx,
     ) ?ResolvedMonotype {
         return self.context_expr_monotypes.get(contextExprKey(source_context, module_idx, expr_idx));
-    }
-
-    pub fn getContextPatternMonotype(
-        self: *const Result,
-        source_context: SourceContext,
-        module_idx: u32,
-        pattern_idx: CIR.Pattern.Idx,
-    ) ?ResolvedMonotype {
-        return self.context_pattern_monotypes.get(contextPatternKey(source_context, module_idx, pattern_idx));
     }
 
     pub fn contextTypeVarKey(source_context: SourceContext, module_idx: u32, type_var: types.Var) ContextTypeVarKey {
@@ -761,22 +708,6 @@ pub fn mergeContextExprMonotype(
         key,
         resolved,
         "exact expr",
-    );
-}
-
-pub fn mergeContextPatternMonotype(
-    driver: anytype,
-    result: anytype,
-    key: ContextPatternKey,
-    resolved: ResolvedMonotype,
-) Allocator.Error!void {
-    return mergeResolvedMonotypeMap(
-        driver,
-        result,
-        &result.context_mono.context_pattern_monotypes,
-        key,
-        resolved,
-        "exact pattern",
     );
 }
 
@@ -1852,10 +1783,34 @@ pub fn resolvePatternMonotypeResolved(
     pattern_idx: CIR.Pattern.Idx,
 ) Allocator.Error!ResolvedMonotype {
     const source_context = thread.requireSourceContext();
-    if (result.getContextPatternMonotype(source_context, module_idx, pattern_idx)) |resolved| {
-        return resolved;
-    }
-    if (result.getContextPatternSourceExpr(source_context, module_idx, pattern_idx)) |source| {
+    const Thread = @TypeOf(thread);
+    const pattern_source = blk: {
+        if (@hasDecl(Thread, "lookupValueBinding")) {
+            if (thread.lookupValueBinding(module_idx, pattern_idx)) |source| switch (source) {
+                .bound_expr => |bound_expr| break :blk bound_expr.expr_ref,
+                .lexical_binding => |lexical_binding| {
+                    const SourceContextThread = struct {
+                        source_context: SourceContext,
+
+                        pub fn requireSourceContext(self: @This()) SourceContext {
+                            return self.source_context;
+                        }
+                    };
+                    return resolveTypeVarMonotypeResolved(
+                        driver,
+                        result,
+                        SourceContextThread{ .source_context = .{
+                            .callable_inst = @enumFromInt(@intFromEnum(lexical_binding.callable_inst)),
+                        } },
+                        lexical_binding.module_idx,
+                        ModuleEnv.varFrom(lexical_binding.pattern_idx),
+                    );
+                },
+            };
+        }
+        break :blk null;
+    };
+    if (pattern_source) |source| {
         const SourceContextThread = struct {
             source_context: SourceContext,
 
@@ -1875,12 +1830,6 @@ pub fn resolvePatternMonotypeResolved(
         for (result.lambdamono.getValueProjectionEntries(source.projections)) |projection| {
             resolved = try projectResolvedMonotypeByValueProjection(driver, result, resolved, projection);
         }
-        try mergeContextPatternMonotype(
-            driver,
-            result,
-            Result.contextPatternKey(source_context, module_idx, pattern_idx),
-            resolved,
-        );
         return resolved;
     }
     if (lookupContextTypeVarMonotype(
@@ -1890,30 +1839,15 @@ pub fn resolvePatternMonotypeResolved(
         module_idx,
         ModuleEnv.varFrom(pattern_idx),
     )) |resolved| {
-        try mergeContextPatternMonotype(
-            driver,
-            result,
-            Result.contextPatternKey(source_context, module_idx, pattern_idx),
-            resolved,
-        );
         return resolved;
     }
-    const resolved = try resolveTypeVarMonotypeResolved(
+    return resolveTypeVarMonotypeResolved(
         driver,
         result,
         thread,
         module_idx,
         ModuleEnv.varFrom(pattern_idx),
     );
-    if (!resolved.isNone()) {
-        try mergeContextPatternMonotype(
-            driver,
-            result,
-            Result.contextPatternKey(source_context, module_idx, pattern_idx),
-            resolved,
-        );
-    }
-    return resolved;
 }
 
 pub fn lookupContextTypeVarMonotype(

@@ -60,7 +60,7 @@ const SymbolMetadata = union(enum) {
     },
 };
 
-const PatternBinding = struct {
+const BindingNode = struct {
     ident: Ident.Idx,
     pattern_idx: CIR.Pattern.Idx,
 };
@@ -150,6 +150,13 @@ const CaptureMaterialization = union(enum) {
     },
 };
 
+const LowerExprSourceRef = struct {
+    source_context: Pipeline.SourceContext,
+    module_idx: u32,
+    expr_idx: CIR.Expr.Idx,
+    projections: []const Pipeline.ValueProjection = &.{},
+};
+
 const LoopContext = struct {
     exit_id: MIR.JoinPointId,
     exit_scope: u64,
@@ -160,7 +167,7 @@ const RequiredLookupTarget = struct {
     def_idx: CIR.Def.Idx,
 };
 
-const VisiblePatternBinding = struct {
+const VisibleBindingLocal = struct {
     pattern_idx: CIR.Pattern.Idx,
     local: MIR.LocalId,
 };
@@ -195,9 +202,11 @@ const ExprSequenceScopeInfo = struct {
     after: u64,
 };
 
-const PatternBindingRecord = struct {
+const BindingRecord = struct {
     local: ?MIR.LocalId = null,
     explicit_monotype: ?Monotype.Idx = null,
+    source_expr_ref: ?LowerExprSourceRef = null,
+    callable_value: ?Pipeline.CallableValue = null,
     shadowed: bool = false,
 };
 
@@ -224,14 +233,14 @@ current_module_idx: u32,
 /// This is only a source-binder lookup environment during CIR -> MIR lowering.
 /// It must never be treated as executable MIR semantics.
 /// 0 means unscoped (module/pattern only).
-current_pattern_scope: u64,
+current_binding_scope: u64,
 
 /// App module index (for resolving `e_lookup_required` from platform modules)
 app_module_idx: ?u32,
 
 /// Map from ((scope_key << 64) | (module_idx << 32 | CIR.Pattern.Idx)) → lowering binding.
 /// Used only to resolve CIR local lookups to the current MIR local during lowering.
-pattern_bindings: std.AutoHashMap(u128, PatternBindingRecord),
+binding_records: std.AutoHashMap(u128, BindingRecord),
 
 /// Cycle breakers for recursive nominal types (e.g. Tree := [Leaf, Node(Tree)]).
 /// Used only by `fromNominalType` during monotype construction; separate from
@@ -259,10 +268,10 @@ symbol_metadata: std.AutoHashMap(u64, SymbolMetadata),
 next_synthetic_ident: u29,
 
 /// Counter for assigning unique local-pattern scopes to statement-lowered lambdas.
-next_statement_pattern_scope: u64,
+next_statement_binding_scope: u64,
 
 /// Parent scope links for lexically nested statement-lowered lambdas.
-pattern_scope_parents: std.AutoHashMap(u64, u64),
+binding_scope_parents: std.AutoHashMap(u64, u64),
 
 /// Counter for assigning unique explicit join-point ids in strongest-form MIR.
 next_join_point_id: u32,
@@ -313,17 +322,17 @@ pub fn init(
         .all_module_envs = all_module_envs,
         .types_store = types_store,
         .current_module_idx = current_module_idx,
-        .current_pattern_scope = 0,
+        .current_binding_scope = 0,
         .app_module_idx = app_module_idx,
-        .pattern_bindings = std.AutoHashMap(u128, PatternBindingRecord).init(allocator),
+        .binding_records = std.AutoHashMap(u128, BindingRecord).init(allocator),
         .nominal_cycle_breakers = std.AutoHashMap(types.Var, Monotype.Idx).init(allocator),
         .lowered_callable_insts = std.AutoHashMap(u32, MIR.LambdaId).init(allocator),
         .lowered_callable_lambdas = std.AutoHashMap(CallableCacheKey, MIR.LambdaId).init(allocator),
         .in_progress_const_defs = std.AutoHashMap(u64, void).init(allocator),
         .symbol_metadata = std.AutoHashMap(u64, SymbolMetadata).init(allocator),
         .next_synthetic_ident = Ident.Idx.NONE.idx - 1,
-        .next_statement_pattern_scope = 1,
-        .pattern_scope_parents = std.AutoHashMap(u64, u64).init(allocator),
+        .next_statement_binding_scope = 1,
+        .binding_scope_parents = std.AutoHashMap(u64, u64).init(allocator),
         .next_join_point_id = 0,
         .current_body_local_floor = 0,
         .in_progress_callable_insts = std.AutoHashMap(u32, MIR.LambdaId).init(allocator),
@@ -348,13 +357,13 @@ pub fn init(
 }
 
 pub fn deinit(self: *Self) void {
-    self.pattern_bindings.deinit();
+    self.binding_records.deinit();
     self.nominal_cycle_breakers.deinit();
     self.lowered_callable_insts.deinit();
     self.lowered_callable_lambdas.deinit();
     self.in_progress_const_defs.deinit();
     self.symbol_metadata.deinit();
-    self.pattern_scope_parents.deinit();
+    self.binding_scope_parents.deinit();
     self.in_progress_callable_insts.deinit();
     self.reserved_callable_insts.deinit();
     self.scratch_local_ids.deinit();
@@ -450,6 +459,55 @@ fn lowerSession(self: *Self, source_context: Pipeline.SourceContext) LowerSessio
     return .{
         .lower = self,
         .source_context = source_context,
+    };
+}
+
+fn lowerExprSourceRefFromPipeline(self: *const Self, expr_ref: Pipeline.ExprRef) LowerExprSourceRef {
+    return .{
+        .source_context = expr_ref.source_context,
+        .module_idx = expr_ref.module_idx,
+        .expr_idx = expr_ref.expr_idx,
+        .projections = self.callable_pipeline.lambdamono.getValueProjectionEntries(expr_ref.projections),
+    };
+}
+
+fn exprSourceRefAliasOrSelf(
+    self: *const Self,
+    session: LowerSession,
+    expr_idx: CIR.Expr.Idx,
+) LowerExprSourceRef {
+    if (self.callable_pipeline.getExprOriginExpr(
+        session.source_context,
+        self.current_module_idx,
+        expr_idx,
+    )) |origin| {
+        return self.lowerExprSourceRefFromPipeline(origin);
+    }
+
+    return .{
+        .source_context = session.source_context,
+        .module_idx = self.current_module_idx,
+        .expr_idx = expr_idx,
+        .projections = &.{},
+    };
+}
+
+fn extendLowerExprSourceRef(
+    self: *Self,
+    source_expr_ref: LowerExprSourceRef,
+    projection: Pipeline.ValueProjection,
+) Allocator.Error!LowerExprSourceRef {
+    const next_projections = try self.allocator.alloc(
+        Pipeline.ValueProjection,
+        source_expr_ref.projections.len + 1,
+    );
+    @memcpy(next_projections[0..source_expr_ref.projections.len], source_expr_ref.projections);
+    next_projections[source_expr_ref.projections.len] = projection;
+    return .{
+        .source_context = source_expr_ref.source_context,
+        .module_idx = source_expr_ref.module_idx,
+        .expr_idx = source_expr_ref.expr_idx,
+        .projections = next_projections,
     };
 }
 
@@ -613,51 +671,51 @@ fn tagIndexByName(
     );
 }
 
-fn collectPatternBindings(
+fn collectBindingNodes(
     self: *Self,
     module_env: *const ModuleEnv,
     pattern_idx: CIR.Pattern.Idx,
-    out: *std.ArrayList(PatternBinding),
+    out: *std.ArrayList(BindingNode),
 ) Allocator.Error!void {
     const pattern = module_env.store.getPattern(pattern_idx);
     switch (pattern) {
         .assign => |assign| try out.append(self.allocator, .{ .ident = assign.ident, .pattern_idx = pattern_idx }),
         .as => |as_pat| {
             try out.append(self.allocator, .{ .ident = as_pat.ident, .pattern_idx = pattern_idx });
-            try self.collectPatternBindings(module_env, as_pat.pattern, out);
+            try self.collectBindingNodes(module_env, as_pat.pattern, out);
         },
         .tuple => |tuple| {
             for (module_env.store.slicePatterns(tuple.patterns)) |elem_pattern_idx| {
-                try self.collectPatternBindings(module_env, elem_pattern_idx, out);
+                try self.collectBindingNodes(module_env, elem_pattern_idx, out);
             }
         },
         .applied_tag => |tag| {
             for (module_env.store.slicePatterns(tag.args)) |arg_pattern_idx| {
-                try self.collectPatternBindings(module_env, arg_pattern_idx, out);
+                try self.collectBindingNodes(module_env, arg_pattern_idx, out);
             }
         },
         .record_destructure => |destructure| {
             for (module_env.store.sliceRecordDestructs(destructure.destructs)) |destruct_idx| {
                 const destruct = module_env.store.getRecordDestruct(destruct_idx);
                 switch (destruct.kind) {
-                    .Required => |sub_pattern_idx| try self.collectPatternBindings(module_env, sub_pattern_idx, out),
-                    .SubPattern => |sub_pattern_idx| try self.collectPatternBindings(module_env, sub_pattern_idx, out),
-                    .Rest => |sub_pattern_idx| try self.collectPatternBindings(module_env, sub_pattern_idx, out),
+                    .Required => |sub_pattern_idx| try self.collectBindingNodes(module_env, sub_pattern_idx, out),
+                    .SubPattern => |sub_pattern_idx| try self.collectBindingNodes(module_env, sub_pattern_idx, out),
+                    .Rest => |sub_pattern_idx| try self.collectBindingNodes(module_env, sub_pattern_idx, out),
                 }
             }
         },
         .list => |list| {
             for (module_env.store.slicePatterns(list.patterns)) |elem_pattern_idx| {
-                try self.collectPatternBindings(module_env, elem_pattern_idx, out);
+                try self.collectBindingNodes(module_env, elem_pattern_idx, out);
             }
             if (list.rest_info) |rest| {
                 if (rest.pattern) |rest_pattern_idx| {
-                    try self.collectPatternBindings(module_env, rest_pattern_idx, out);
+                    try self.collectBindingNodes(module_env, rest_pattern_idx, out);
                 }
             }
         },
-        .nominal => |nom| try self.collectPatternBindings(module_env, nom.backing_pattern, out),
-        .nominal_external => |nom| try self.collectPatternBindings(module_env, nom.backing_pattern, out),
+        .nominal => |nom| try self.collectBindingNodes(module_env, nom.backing_pattern, out),
+        .nominal_external => |nom| try self.collectBindingNodes(module_env, nom.backing_pattern, out),
         .num_literal,
         .small_dec_literal,
         .dec_literal,
@@ -693,7 +751,7 @@ const CallableCacheKey = struct {
     module_idx: u32,
     expr_idx: CIR.Expr.Idx,
     fn_monotype: Monotype.Idx,
-    parent_pattern_scope: u64,
+    parent_binding_scope: u64,
 };
 
 fn makeCallableCacheKey(
@@ -725,7 +783,7 @@ fn makeCallableCacheKey(
         .module_idx = self.current_module_idx,
         .expr_idx = expr_idx,
         .fn_monotype = fn_monotype,
-        .parent_pattern_scope = self.current_pattern_scope,
+        .parent_binding_scope = self.current_binding_scope,
     };
 }
 
@@ -746,19 +804,36 @@ fn lookupProgramExprMonotype(session: LowerSession, expr_idx: CIR.Expr.Idx) ?Pip
 }
 
 fn lookupProgramPatternMonotype(session: LowerSession, pattern_idx: CIR.Pattern.Idx) ?Pipeline.ResolvedMonotype {
-    return session.lower.callable_pipeline.getContextPatternMonotype(
-        session.source_context,
+    if (session.lower.lookupBindingSourceExprRef(pattern_idx)) |source_expr_ref| {
+        return session.lower.resolveLowerExprSourceMonotype(source_expr_ref) catch unreachable;
+    }
+    const SourceContextThread = struct {
+        source_context: Pipeline.SourceContext,
+
+        fn requireSourceContext(self: @This()) Pipeline.SourceContext {
+            return self.source_context;
+        }
+    };
+    return corecir.ContextMono.resolveTypeVarMonotypeResolved(
+        session.lower,
+        session.lower.callable_pipeline,
+        SourceContextThread{ .source_context = session.source_context },
         session.lower.current_module_idx,
-        pattern_idx,
-    );
+        ModuleEnv.varFrom(pattern_idx),
+    ) catch unreachable;
 }
 
-fn lookupProgramPatternCallableValue(session: LowerSession, pattern_idx: CIR.Pattern.Idx) ?Pipeline.CallableValue {
-    return session.lower.callable_pipeline.getPatternCallableValue(
-        session.source_context,
-        session.lower.current_module_idx,
-        pattern_idx,
-    );
+fn resolveProgramPatternCallableValue(
+    session: LowerSession,
+    pattern_idx: CIR.Pattern.Idx,
+) Allocator.Error!?Pipeline.CallableValue {
+    if (session.lower.lookupBindingCallableValue(pattern_idx)) |callable_value| {
+        return callable_value;
+    }
+    if (session.lower.lookupBindingSourceExprRef(pattern_idx)) |source_expr_ref| {
+        return session.lower.resolveLowerExprSourceCallableValue(source_expr_ref);
+    }
+    return null;
 }
 
 fn lookupProgramExprCallableValue(session: LowerSession, expr_idx: CIR.Expr.Idx) ?Pipeline.CallableValue {
@@ -779,6 +854,44 @@ fn resolveExprRefCallableValue(
         expr_ref.expr_idx,
         self.callable_pipeline.lambdamono.getValueProjectionEntries(expr_ref.projections),
     );
+}
+
+fn resolveLowerExprSourceCallableValue(
+    self: *Self,
+    expr_ref: LowerExprSourceRef,
+) Allocator.Error!?Pipeline.CallableValue {
+    return self.resolveProjectedExprCallableValue(
+        expr_ref.source_context,
+        expr_ref.module_idx,
+        expr_ref.expr_idx,
+        expr_ref.projections,
+    );
+}
+
+fn resolveLowerExprSourceMonotype(
+    self: *Self,
+    expr_ref: LowerExprSourceRef,
+) Allocator.Error!?Pipeline.ResolvedMonotype {
+    var source_resolved = if (try self.resolveLowerExprSourceCallableValue(expr_ref)) |callable_value|
+        self.callable_pipeline.getCallableValueRuntimeMonotype(callable_value)
+    else
+        self.callable_pipeline.getExprMonotype(
+            expr_ref.source_context,
+            expr_ref.module_idx,
+            expr_ref.expr_idx,
+        ) orelse return null;
+
+    for (expr_ref.projections) |projection| {
+        source_resolved = try corecir.ContextMono.projectResolvedMonotypeByValueProjection(
+            self,
+            self.callable_pipeline,
+            source_resolved,
+            projection,
+        );
+        if (source_resolved.isNone()) return null;
+    }
+
+    return source_resolved;
 }
 
 fn resolveProjectedExprCallableValue(
@@ -1847,7 +1960,7 @@ fn lowerLocalAliasInto(
                         @intFromEnum(target),
                         @intFromEnum(source),
                         if (self.store.getLocalDefOpt(source)) |source_def| @tagName(source_def) else "none",
-                        self.current_pattern_scope,
+                        self.current_binding_scope,
                     },
                 );
             }
@@ -1918,18 +2031,25 @@ fn mergeExactCallableJoinIncoming(
     try self.bindExactLambdaLocal(dest_local, source_resolution.lambda);
 }
 
-fn seedExactCallablePatternLocal(
+fn seedExactCallableBindingLocal(
     self: *Self,
     session: LowerSession,
     pattern_idx: CIR.Pattern.Idx,
     local: MIR.LocalId,
+    source_expr_ref: ?LowerExprSourceRef,
 ) Allocator.Error!void {
-    const binding_key = patternScopeKey(self.current_module_idx, self.current_pattern_scope, pattern_idx);
-    const callable_value = lookupProgramPatternCallableValue(session, pattern_idx) orelse {
+    const binding_key = bindingScopeKey(self.current_module_idx, self.current_binding_scope, pattern_idx);
+    if (source_expr_ref) |source| {
+        try self.bindBindingSourceExprRefInCurrentScope(pattern_idx, source);
+    }
+    const callable_value = (try resolveProgramPatternCallableValue(session, pattern_idx)) orelse {
+        if (self.binding_records.getPtr(binding_key)) |binding| {
+            if (!binding.shadowed) binding.callable_value = null;
+        }
         self.clearExactCallableLocal(local);
         if (comptime trace.enabled) {
             trace.log(
-                "seedExactCallablePatternLocal pattern={d} local={d} callable_value=none monotype={s}",
+                "seedExactCallableBindingLocal binding={d} local={d} callable_value=none monotype={s}",
                 .{
                     @intFromEnum(pattern_idx),
                     @intFromEnum(local),
@@ -1940,13 +2060,20 @@ fn seedExactCallablePatternLocal(
         return;
     };
     try self.seedCallableValueLocal(local, callable_value);
-    if (self.pattern_bindings.getPtr(binding_key)) |binding| {
+    if (self.binding_records.getPtr(binding_key)) |binding| {
         if (binding.shadowed) unreachable;
         binding.explicit_monotype = self.store.getLocal(local).monotype;
+        binding.callable_value = callable_value;
+    } else {
+        try self.binding_records.put(binding_key, .{
+            .local = local,
+            .explicit_monotype = self.store.getLocal(local).monotype,
+            .callable_value = callable_value,
+        });
     }
     if (comptime trace.enabled) {
         trace.log(
-            "seedExactCallablePatternLocal pattern={d} local={d} callable_value={s} monotype={s}",
+            "seedExactCallableBindingLocal binding={d} local={d} callable_value={s} monotype={s}",
             .{
                 @intFromEnum(pattern_idx),
                 @intFromEnum(local),
@@ -1971,7 +2098,7 @@ fn seedExactCallableParamLocals(
     }
 
     for (param_patterns, param_locals) |pattern_idx, param_local| {
-        try self.seedExactCallablePatternLocal(session, pattern_idx, param_local);
+        try self.seedExactCallableBindingLocal(session, pattern_idx, param_local, null);
     }
 }
 
@@ -2641,17 +2768,17 @@ fn lowerLookupLocalInto(
 ) Allocator.Error!MIR.CFStmtId {
     const lookup_resolution = lookupProgramExprLookupResolution(session, expr_idx);
     const usable_source_local = blk: {
-        if (self.lookupUsablePatternLocalAtScope(self.current_pattern_scope, lookup.pattern_idx)) |local| {
+        if (self.lookupUsableBindingLocalAtScope(self.current_binding_scope, lookup.pattern_idx)) |local| {
             break :blk local;
         }
 
         if (self.current_lambda_scope_boundary != null) {
-            break :blk self.lookupExistingPatternLocalWithinCurrentLambda(lookup.pattern_idx);
+            break :blk self.lookupExistingBindingLocalWithinCurrentLambda(lookup.pattern_idx);
         }
 
-        break :blk self.lookupUsablePatternLocalInAncestorScopes(
+        break :blk self.lookupUsableBindingLocalInAncestorScopes(
             self.current_module_idx,
-            self.current_pattern_scope,
+            self.current_binding_scope,
             lookup.pattern_idx,
         );
     };
@@ -2680,7 +2807,7 @@ fn lowerLookupLocalInto(
         .expr => |source_expr_ref| {
             if (source_expr_ref.module_idx == self.current_module_idx and source_expr_ref.expr_idx == expr_idx) {
                 std.debug.panic(
-                    "statement-only MIR invariant violated: local lookup expr {d} resolved to itself as a pattern source",
+                    "statement-only MIR invariant violated: local lookup expr {d} resolved to itself as a binding source",
                     .{@intFromEnum(expr_idx)},
                 );
             }
@@ -2695,7 +2822,7 @@ fn lowerLookupLocalInto(
             .as => |as_pattern| self.all_module_envs[self.current_module_idx].getIdent(as_pattern.ident),
             else => "<non-binding>",
         };
-        const has_root_local = self.lookupExistingPatternLocalInScope(
+        const has_root_local = self.lookupExistingBindingLocalInScope(
             self.current_module_idx,
             0,
             lookup.pattern_idx,
@@ -2713,7 +2840,7 @@ fn lowerLookupLocalInto(
                 @intFromEnum(lookup.pattern_idx),
                 @tagName(pattern),
                 ident,
-                self.current_pattern_scope,
+                self.current_binding_scope,
                 has_root_local,
                 session.callableInstRawForDebug(),
                 active_callable_kind,
@@ -2736,9 +2863,9 @@ fn planClosureEntryCaptureLocals(
     var seen_capture_patterns = std.AutoHashMap(CIR.Pattern.Idx, void).init(self.allocator);
     defer seen_capture_patterns.deinit();
 
-    const saved_scope = self.current_pattern_scope;
-    self.current_pattern_scope = entry_scope;
-    defer self.current_pattern_scope = saved_scope;
+    const saved_scope = self.current_binding_scope;
+    self.current_binding_scope = entry_scope;
+    defer self.current_binding_scope = saved_scope;
 
     for (capture_fields) |capture_field| {
         if (!(try recordSeenCapturePattern(&seen_capture_patterns, capture_field.pattern_idx))) {
@@ -2776,6 +2903,7 @@ fn planClosureEntryCaptureLocals(
 
         if (capture_field.callable_value) |callable_value| {
             try self.seedCallableValueLocal(capture_local, callable_value);
+            try self.bindBindingCallableValueInCurrentScope(capture_field.pattern_idx, callable_value);
         }
 
         switch (capture_field.storage) {
@@ -2920,7 +3048,7 @@ fn ensureNamedConstDefRegistered(
     defer _ = self.in_progress_const_defs.remove(key);
 
     const saved_module_idx = self.current_module_idx;
-    const saved_pattern_scope = self.current_pattern_scope;
+    const saved_binding_scope = self.current_binding_scope;
     const saved_ident_store = self.mono_scratches.ident_store;
     const saved_module_env = self.mono_scratches.module_env;
     const saved_scratches_module_idx = self.mono_scratches.module_idx;
@@ -2929,13 +3057,13 @@ fn ensureNamedConstDefRegistered(
     const def = target_env.store.getDef(def_idx);
 
     self.current_module_idx = module_idx;
-    self.current_pattern_scope = 0;
+    self.current_binding_scope = 0;
     self.mono_scratches.ident_store = target_env.getIdentStoreConst();
     self.mono_scratches.module_env = target_env;
     self.mono_scratches.module_idx = module_idx;
 
     defer self.current_module_idx = saved_module_idx;
-    defer self.current_pattern_scope = saved_pattern_scope;
+    defer self.current_binding_scope = saved_binding_scope;
     defer self.mono_scratches.ident_store = saved_ident_store;
     defer self.mono_scratches.module_env = saved_module_env;
     defer self.mono_scratches.module_idx = saved_scratches_module_idx;
@@ -3065,10 +3193,10 @@ fn lowerLambdaInto(
         try self.lowered_callable_lambdas.put(cache_key, reserved);
     }
 
-    const saved_scope = self.current_pattern_scope;
-    const lambda_entry_scope = self.freshStatementPatternScope();
-    self.current_pattern_scope = lambda_entry_scope;
-    defer self.current_pattern_scope = saved_scope;
+    const saved_scope = self.current_binding_scope;
+    const lambda_entry_scope = self.freshStatementBindingScope();
+    self.current_binding_scope = lambda_entry_scope;
+    defer self.current_binding_scope = saved_scope;
     const saved_lambda_scope_boundary = self.current_lambda_scope_boundary;
     self.current_lambda_scope_boundary = lambda_entry_scope;
     defer self.current_lambda_scope_boundary = saved_lambda_scope_boundary;
@@ -3088,7 +3216,7 @@ fn lowerLambdaInto(
     stable_param_locals.appendSliceAssumeCapacity(self.store.getLocalSpan(params));
     const param_locals = stable_param_locals.items;
     for (param_patterns) |pattern_idx| {
-        try self.predeclarePatternLocals(session, module_env, pattern_idx);
+        try self.predeclareBindingLocals(session, module_env, pattern_idx);
     }
 
     const active_lambda = if (reserved_lambda) |reserved|
@@ -3129,10 +3257,10 @@ fn lowerLambdaInto(
 
     const result_local = try self.freshSyntheticLocal(ret_monotype, false);
     const ret_stmt = try self.store.addCFStmt(self.allocator, .{ .ret = .{ .value = result_local } });
-    const lambda_body_scope = self.freshChildPatternScope(lambda_entry_scope);
-    self.current_pattern_scope = lambda_body_scope;
+    const lambda_body_scope = self.freshChildBindingScope(lambda_entry_scope);
+    self.current_binding_scope = lambda_body_scope;
     var body = try self.lowerCirExprInto(session, body_expr_idx, result_local, ret_stmt);
-    self.current_pattern_scope = lambda_entry_scope;
+    self.current_binding_scope = lambda_entry_scope;
 
     const captures_param_local: ?MIR.LocalId = null;
 
@@ -3140,7 +3268,7 @@ fn lowerLambdaInto(
     while (i > 0) {
         i -= 1;
         if (!self.paramPatternNeedsBindingStmt(module_env, param_patterns[i], param_locals[i])) continue;
-        body = try self.lowerPatternBindingLocalInto(session, module_env, param_patterns[i], param_locals[i], body);
+        body = try self.lowerBindingLocalInto(session, module_env, param_patterns[i], param_locals[i], self.lookupBindingSourceExprRef(param_patterns[i]), body);
     }
 
     const lowered_lambda = MIR.Lambda{
@@ -3196,7 +3324,7 @@ fn lowerLambdaParamLocals(
         };
         const param_local = try self.freshSyntheticLocal(monotype, param_reassignable);
         self.store.getLocalPtr(param_local).monotype = monotype;
-        try self.predeclarePatternLocalsFromMonotype(module_env, pattern_idx, monotype, param_local);
+        try self.predeclareBindingLocalsFromMonotype(module_env, pattern_idx, monotype, param_local);
         try self.scratch_local_ids.append(param_local);
     }
 
@@ -3216,7 +3344,7 @@ fn appendCaptureMaterialization(
             self.current_module_idx,
         );
     const capture_local = switch (capture_field.source) {
-        .lexical_pattern => |source| blk: {
+        .lexical_binding => |source| blk: {
             if (source.module_idx != self.current_module_idx) {
                 std.debug.panic(
                     "statement-only MIR invariant violated: lexical capture pattern {d} pointed at module {d} while lowering module {d}",
@@ -3227,10 +3355,10 @@ fn appendCaptureMaterialization(
                     },
                 );
             }
-            if (self.lookupExistingPatternLocalWithinCurrentLambda(source.pattern_idx)) |existing| break :blk existing;
-            if (self.lookupUsablePatternLocalInAncestorScopes(
+            if (self.lookupExistingBindingLocalWithinCurrentLambda(source.pattern_idx)) |existing| break :blk existing;
+            if (self.lookupUsableBindingLocalInAncestorScopes(
                 self.current_module_idx,
-                self.current_pattern_scope,
+                self.current_binding_scope,
                 source.pattern_idx,
             )) |existing| break :blk existing;
             std.debug.panic(
@@ -3319,10 +3447,10 @@ fn lowerReservedTrivialClosureLambda(
         }
     }
 
-    const saved_scope = self.current_pattern_scope;
-    const lambda_entry_scope = self.freshStatementPatternScope();
-    self.current_pattern_scope = lambda_entry_scope;
-    defer self.current_pattern_scope = saved_scope;
+    const saved_scope = self.current_binding_scope;
+    const lambda_entry_scope = self.freshStatementBindingScope();
+    self.current_binding_scope = lambda_entry_scope;
+    defer self.current_binding_scope = saved_scope;
     const saved_lambda_scope_boundary = self.current_lambda_scope_boundary;
     self.current_lambda_scope_boundary = lambda_entry_scope;
     defer self.current_lambda_scope_boundary = saved_lambda_scope_boundary;
@@ -3341,7 +3469,7 @@ fn lowerReservedTrivialClosureLambda(
     stable_param_locals.appendSliceAssumeCapacity(self.store.getLocalSpan(params));
     const param_locals = stable_param_locals.items;
     for (param_patterns) |pattern_idx| {
-        try self.predeclarePatternLocals(session, module_env, pattern_idx);
+        try self.predeclareBindingLocals(session, module_env, pattern_idx);
     }
 
     const capture_top = self.scratch_local_ids.top();
@@ -3418,10 +3546,10 @@ fn lowerReservedTrivialClosureLambda(
 
     const result_local = try self.freshSyntheticLocal(ret_monotype, false);
     const ret_stmt = try self.store.addCFStmt(self.allocator, .{ .ret = .{ .value = result_local } });
-    const lambda_body_scope = self.freshChildPatternScope(lambda_entry_scope);
-    self.current_pattern_scope = lambda_body_scope;
+    const lambda_body_scope = self.freshChildBindingScope(lambda_entry_scope);
+    self.current_binding_scope = lambda_body_scope;
     var body = try self.lowerCirExprInto(session, body_expr_idx, result_local, ret_stmt);
-    self.current_pattern_scope = lambda_entry_scope;
+    self.current_binding_scope = lambda_entry_scope;
 
     const nonrecursive_capture_locals = self.scratch_local_ids.sliceFromStart(capture_top);
     const captures_tuple_monotype = if (nonrecursive_capture_locals.len == 0)
@@ -3529,7 +3657,7 @@ fn lowerReservedTrivialClosureLambda(
     while (param_i > 0) {
         param_i -= 1;
         if (!self.paramPatternNeedsBindingStmt(module_env, param_patterns[param_i], param_locals[param_i])) continue;
-        body = try self.lowerPatternBindingLocalInto(session, module_env, param_patterns[param_i], param_locals[param_i], body);
+        body = try self.lowerBindingLocalInto(session, module_env, param_patterns[param_i], param_locals[param_i], self.lookupBindingSourceExprRef(param_patterns[param_i]), body);
     }
 
     var callable_only_i = callable_only_captures.items.len;
@@ -5134,7 +5262,7 @@ fn cirExprKnownBoolValue(self: *const Self, module_idx: u32, expr_idx: CIR.Expr.
     };
 }
 
-fn setPatternLocalsReassignable(
+fn setBindingLocalsReassignable(
     self: *Self,
     session: LowerSession,
     module_env: *const ModuleEnv,
@@ -5155,31 +5283,31 @@ fn setPatternLocalsReassignable(
         .frac_f64_literal,
         .runtime_error,
         => {},
-        .nominal => |nom| self.setPatternLocalsReassignable(session, module_env, nom.backing_pattern, reassignable),
-        .nominal_external => |nom| self.setPatternLocalsReassignable(session, module_env, nom.backing_pattern, reassignable),
+        .nominal => |nom| self.setBindingLocalsReassignable(session, module_env, nom.backing_pattern, reassignable),
+        .nominal_external => |nom| self.setBindingLocalsReassignable(session, module_env, nom.backing_pattern, reassignable),
         .applied_tag => |tag| {
             for (module_env.store.slicePatterns(tag.args)) |arg_pattern| {
-                self.setPatternLocalsReassignable(session, module_env, arg_pattern, reassignable);
+                self.setBindingLocalsReassignable(session, module_env, arg_pattern, reassignable);
             }
         },
         .record_destructure => |record_pat| {
             for (module_env.store.sliceRecordDestructs(record_pat.destructs)) |destruct_idx| {
                 const destruct = module_env.store.getRecordDestruct(destruct_idx);
-                self.setPatternLocalsReassignable(session, module_env, destruct.kind.toPatternIdx(), reassignable);
+                self.setBindingLocalsReassignable(session, module_env, destruct.kind.toPatternIdx(), reassignable);
             }
         },
         .tuple => |tuple_pat| {
             for (module_env.store.slicePatterns(tuple_pat.patterns)) |elem_pattern| {
-                self.setPatternLocalsReassignable(session, module_env, elem_pattern, reassignable);
+                self.setBindingLocalsReassignable(session, module_env, elem_pattern, reassignable);
             }
         },
         .list => |list_pat| {
             for (module_env.store.slicePatterns(list_pat.patterns)) |elem_pattern| {
-                self.setPatternLocalsReassignable(session, module_env, elem_pattern, reassignable);
+                self.setBindingLocalsReassignable(session, module_env, elem_pattern, reassignable);
             }
             if (list_pat.rest_info) |rest| {
                 if (rest.pattern) |rest_pattern| {
-                    self.setPatternLocalsReassignable(session, module_env, rest_pattern, reassignable);
+                    self.setBindingLocalsReassignable(session, module_env, rest_pattern, reassignable);
                 }
             }
         },
@@ -5277,6 +5405,7 @@ fn lowerListPatternMatchLocalInto(
     module_env: *const ModuleEnv,
     list_pat: anytype,
     source_local: MIR.LocalId,
+    source_expr_ref: ?LowerExprSourceRef,
     on_match: MIR.CFStmtId,
     on_fail: MIR.CFStmtId,
 ) Allocator.Error!MIR.CFStmtId {
@@ -5320,6 +5449,7 @@ fn lowerListPatternMatchLocalInto(
                     module_env,
                     rest_pattern_idx,
                     source_local,
+                    source_expr_ref,
                     body,
                     on_fail,
                 );
@@ -5333,6 +5463,7 @@ fn lowerListPatternMatchLocalInto(
                     module_env,
                     rest_pattern_idx,
                     rest_local,
+                    null,
                     body,
                     on_fail,
                 );
@@ -5356,12 +5487,20 @@ fn lowerListPatternMatchLocalInto(
         const offset_local = try self.freshSyntheticLocal(u64_mono, false);
         const pattern_idx = elem_patterns[prefix_len + suffix_i];
         const offset_from_end: u64 = @intCast(suffix_len - suffix_i);
+        const elem_source_expr_ref = if (source_expr_ref) |source|
+            try self.extendLowerExprSourceRef(
+                source,
+                .{ .list_elem = @intCast(prefix_len + suffix_i) },
+            )
+        else
+            null;
 
         body = try self.lowerPatternMatchLocalInto(
             session,
             module_env,
             pattern_idx,
             elem_local,
+            elem_source_expr_ref,
             body,
             on_fail,
         );
@@ -5386,12 +5525,17 @@ fn lowerListPatternMatchLocalInto(
         const elem_local = try self.freshSyntheticLocal(list_data.elem, false);
         const index_local = try self.freshSyntheticLocal(u64_mono, false);
         const pattern_idx = elem_patterns[prefix_i];
+        const elem_source_expr_ref = if (source_expr_ref) |source|
+            try self.extendLowerExprSourceRef(source, .{ .list_elem = @intCast(prefix_i) })
+        else
+            null;
 
         body = try self.lowerPatternMatchLocalInto(
             session,
             module_env,
             pattern_idx,
             elem_local,
+            elem_source_expr_ref,
             body,
             on_fail,
         );
@@ -5430,20 +5574,20 @@ fn lowerListPatternMatchLocalInto(
     } });
 }
 
-fn lowerPatternBindingInto(
+fn lowerBindingInto(
     self: *Self,
     session: LowerSession,
     module_env: *const ModuleEnv,
     pattern_idx: CIR.Pattern.Idx,
     expr_idx: CIR.Expr.Idx,
     mark_reassignable: bool,
-    rhs_pattern_scope: u64,
+    rhs_binding_scope: u64,
     next: MIR.CFStmtId,
 ) Allocator.Error!MIR.CFStmtId {
-    const continuation_scope = self.current_pattern_scope;
-    var bindings = std.ArrayList(PatternBinding).empty;
+    const continuation_scope = self.current_binding_scope;
+    var bindings = std.ArrayList(BindingNode).empty;
     defer bindings.deinit(self.allocator);
-    try self.collectPatternBindings(module_env, pattern_idx, &bindings);
+    try self.collectBindingNodes(module_env, pattern_idx, &bindings);
     const excluded_patterns = try self.allocator.alloc(CIR.Pattern.Idx, bindings.items.len);
     defer self.allocator.free(excluded_patterns);
     for (bindings.items, 0..) |binding, i| {
@@ -5452,9 +5596,9 @@ fn lowerPatternBindingInto(
 
     if (builtin.mode == .Debug) {
         if (self.current_lambda_entry_bound_locals) |entry_bound_locals| {
-            if (self.lookupExistingPatternLocalInScope(
+            if (self.lookupExistingBindingLocalInScope(
                 self.current_module_idx,
-                self.current_pattern_scope,
+                self.current_binding_scope,
                 pattern_idx,
             )) |existing_local| {
                 if (entry_bound_locals.contains(existing_local)) {
@@ -5462,7 +5606,7 @@ fn lowerPatternBindingInto(
                         "statement-only MIR invariant violated: block binding pattern {d} in scope {d} collided with entry-bound local {d} (expr={d}, expr_tag={s}, callable_inst={d})",
                         .{
                             @intFromEnum(pattern_idx),
-                            self.current_pattern_scope,
+                            self.current_binding_scope,
                             @intFromEnum(existing_local),
                             @intFromEnum(expr_idx),
                             @tagName(module_env.store.getExpr(expr_idx)),
@@ -5474,27 +5618,35 @@ fn lowerPatternBindingInto(
         }
     }
     const source_mono = try self.resolveMonotype(session, expr_idx);
+    const source_expr_ref = self.exprSourceRefAliasOrSelf(session, expr_idx);
 
-    const source_local = if (continuation_scope == rhs_pattern_scope)
-        if (self.directPatternBindingTargetLocal(module_env, pattern_idx)) |existing_local|
+    const source_local = if (continuation_scope == rhs_binding_scope)
+        if (self.directBindingTargetLocal(module_env, pattern_idx)) |existing_local|
             existing_local
         else
             try self.freshSyntheticLocal(source_mono, false)
     else
         try self.freshSyntheticLocal(source_mono, false);
     if (mark_reassignable) {
-        self.setPatternLocalsReassignable(session, module_env, pattern_idx, true);
+        self.setBindingLocalsReassignable(session, module_env, pattern_idx, true);
     }
-    if (continuation_scope == rhs_pattern_scope) {
-        const bound = try self.lowerPatternBindingLocalInto(session, module_env, pattern_idx, source_local, next);
-        self.current_pattern_scope = rhs_pattern_scope;
+    if (continuation_scope == rhs_binding_scope) {
+        const bound = try self.lowerBindingLocalInto(
+            session,
+            module_env,
+            pattern_idx,
+            source_local,
+            source_expr_ref,
+            next,
+        );
+        self.current_binding_scope = rhs_binding_scope;
         return self.lowerCirExprInto(session, expr_idx, source_local, bound);
     }
 
     const joined_source_local = try self.freshSyntheticLocal(source_mono, false);
     const after_expr_join_id = self.freshJoinPointId();
     const after_expr_jump = try self.store.reserveCFStmt(self.allocator);
-    self.current_pattern_scope = rhs_pattern_scope;
+    self.current_binding_scope = rhs_binding_scope;
     const lowered = try self.lowerExprWithExitScope(session, expr_idx, source_local, after_expr_jump);
     if (!lowered.falls_through) {
         return lowered.entry;
@@ -5510,10 +5662,17 @@ fn lowerPatternBindingInto(
         ),
     } });
 
-    const saved_scope = self.current_pattern_scope;
-    self.current_pattern_scope = continuation_scope;
-    const bound = try self.lowerPatternBindingLocalInto(session, module_env, pattern_idx, joined_source_local, next);
-    self.current_pattern_scope = saved_scope;
+    const saved_scope = self.current_binding_scope;
+    self.current_binding_scope = continuation_scope;
+    const bound = try self.lowerBindingLocalInto(
+        session,
+        module_env,
+        pattern_idx,
+        joined_source_local,
+        source_expr_ref,
+        next,
+    );
+    self.current_binding_scope = saved_scope;
     const join_stmt = try self.store.addCFStmt(self.allocator, .{ .join = .{
         .id = after_expr_join_id,
         .params = try self.buildJoinParamSpanWithValueExcluding(
@@ -5537,10 +5696,10 @@ fn lowerExprIntoContinuationScope(
     excluded_patterns: []const CIR.Pattern.Idx,
     next: MIR.CFStmtId,
 ) Allocator.Error!MIR.CFStmtId {
-    const saved_scope = self.current_pattern_scope;
-    defer self.current_pattern_scope = saved_scope;
+    const saved_scope = self.current_binding_scope;
+    defer self.current_binding_scope = saved_scope;
 
-    self.current_pattern_scope = expr_scope;
+    self.current_binding_scope = expr_scope;
     const after_expr_join_id = self.freshJoinPointId();
     const after_expr_jump = try self.store.reserveCFStmt(self.allocator);
     const lowered = try self.lowerExprWithExitScope(session, expr_idx, target, after_expr_jump);
@@ -5571,10 +5730,10 @@ fn lowerExprIntoContinuationScopeWithValue(
     excluded_patterns: []const CIR.Pattern.Idx,
     next: MIR.CFStmtId,
 ) Allocator.Error!MIR.CFStmtId {
-    const saved_scope = self.current_pattern_scope;
-    defer self.current_pattern_scope = saved_scope;
+    const saved_scope = self.current_binding_scope;
+    defer self.current_binding_scope = saved_scope;
 
-    self.current_pattern_scope = expr_scope;
+    self.current_binding_scope = expr_scope;
     const after_expr_join_id = self.freshJoinPointId();
     const after_expr_jump = try self.store.reserveCFStmt(self.allocator);
     const lowered = try self.lowerExprWithExitScope(session, expr_idx, target, after_expr_jump);
@@ -5636,15 +5795,15 @@ fn directCallableDefinitionExpr(
     };
 }
 
-fn directPatternBindingTargetLocal(
+fn directBindingTargetLocal(
     self: *Self,
     module_env: *const ModuleEnv,
     pattern_idx: CIR.Pattern.Idx,
 ) ?MIR.LocalId {
     return switch (module_env.store.getPattern(pattern_idx)) {
-        .assign, .as => self.lookupExistingPatternLocal(pattern_idx),
-        .nominal => |nom| self.directPatternBindingTargetLocal(module_env, nom.backing_pattern),
-        .nominal_external => |nom| self.directPatternBindingTargetLocal(module_env, nom.backing_pattern),
+        .assign, .as => self.lookupExistingBindingLocal(pattern_idx),
+        .nominal => |nom| self.directBindingTargetLocal(module_env, nom.backing_pattern),
+        .nominal_external => |nom| self.directBindingTargetLocal(module_env, nom.backing_pattern),
         else => null,
     };
 }
@@ -5655,18 +5814,25 @@ fn lowerPatternMatchLocalInto(
     module_env: *const ModuleEnv,
     pattern_idx: CIR.Pattern.Idx,
     source_local: MIR.LocalId,
+    source_expr_ref: ?LowerExprSourceRef,
     on_match: MIR.CFStmtId,
     on_fail: MIR.CFStmtId,
 ) Allocator.Error!MIR.CFStmtId {
     const source_mono = self.store.getLocal(source_local).monotype;
     return switch (module_env.store.getPattern(pattern_idx)) {
         .assign => {
+            if (source_expr_ref) |source| {
+                try self.bindBindingSourceExprRefInCurrentScope(pattern_idx, source);
+            }
             const local = try self.patternToLocal(session, pattern_idx);
             if (local == source_local) return on_match;
             return self.lowerLocalAliasInto(local, source_local, on_match);
         },
         .underscore => on_match,
         .as => |as_pattern| blk: {
+            if (source_expr_ref) |source| {
+                try self.bindBindingSourceExprRefInCurrentScope(pattern_idx, source);
+            }
             const local = try self.patternToLocal(session, pattern_idx);
             const alias_stmt = if (local == source_local)
                 on_match
@@ -5677,12 +5843,13 @@ fn lowerPatternMatchLocalInto(
                 module_env,
                 as_pattern.pattern,
                 source_local,
+                source_expr_ref,
                 alias_stmt,
                 on_fail,
             );
         },
-        .nominal => |nom| self.lowerPatternMatchLocalInto(session, module_env, nom.backing_pattern, source_local, on_match, on_fail),
-        .nominal_external => |nom| self.lowerPatternMatchLocalInto(session, module_env, nom.backing_pattern, source_local, on_match, on_fail),
+        .nominal => |nom| self.lowerPatternMatchLocalInto(session, module_env, nom.backing_pattern, source_local, source_expr_ref, on_match, on_fail),
+        .nominal_external => |nom| self.lowerPatternMatchLocalInto(session, module_env, nom.backing_pattern, source_local, source_expr_ref, on_match, on_fail),
         .num_literal => |nl| self.lowerLiteralPatternMatchLocalInto(
             source_local,
             source_mono,
@@ -5750,12 +5917,23 @@ fn lowerPatternMatchLocalInto(
             while (i > 0) {
                 i -= 1;
                 const payload_local = try self.freshSyntheticLocal(payload_monos[i], false);
-                try self.seedExactCallablePatternLocal(session, payload_patterns[i], payload_local);
+                const payload_source_expr_ref = if (source_expr_ref) |source|
+                    try self.extendLowerExprSourceRef(source, .{ .tag_payload = .{
+                        .tag_name = .{
+                            .module_idx = self.current_module_idx,
+                            .ident = tag.name,
+                        },
+                        .payload_index = @intCast(i),
+                    } })
+                else
+                    null;
+                try self.seedExactCallableBindingLocal(session, payload_patterns[i], payload_local, payload_source_expr_ref);
                 body = try self.lowerPatternMatchLocalInto(
                     session,
                     module_env,
                     payload_patterns[i],
                     payload_local,
+                    payload_source_expr_ref,
                     body,
                     on_fail,
                 );
@@ -5788,12 +5966,25 @@ fn lowerPatternMatchLocalInto(
                         const destruct = module_env.store.getRecordDestruct(cir_destructs[i]);
                         const field_idx = self.recordFieldIndexByName(destruct.label, mono_fields);
                         const field_local = try self.freshSyntheticLocal(mono_fields[field_idx].type_idx, false);
-                        try self.seedExactCallablePatternLocal(session, destruct.kind.toPatternIdx(), field_local);
+                        const field_source_expr_ref = if (source_expr_ref) |source|
+                            try self.extendLowerExprSourceRef(source, .{ .field = .{
+                                .module_idx = self.current_module_idx,
+                                .ident = destruct.label,
+                            } })
+                        else
+                            null;
+                        try self.seedExactCallableBindingLocal(
+                            session,
+                            destruct.kind.toPatternIdx(),
+                            field_local,
+                            field_source_expr_ref,
+                        );
                         body = try self.lowerPatternMatchLocalInto(
                             session,
                             module_env,
                             destruct.kind.toPatternIdx(),
                             field_local,
+                            field_source_expr_ref,
                             body,
                             on_fail,
                         );
@@ -5818,6 +6009,7 @@ fn lowerPatternMatchLocalInto(
                             module_env,
                             destruct_pattern_idx,
                             field_local,
+                            null,
                             body,
                             on_fail,
                         );
@@ -5852,12 +6044,17 @@ fn lowerPatternMatchLocalInto(
             while (i > 0) {
                 i -= 1;
                 const elem_local = try self.freshSyntheticLocal(elem_monos[i], false);
-                try self.seedExactCallablePatternLocal(session, elem_patterns[i], elem_local);
+                const elem_source_expr_ref = if (source_expr_ref) |source|
+                    try self.extendLowerExprSourceRef(source, .{ .tuple_elem = @intCast(i) })
+                else
+                    null;
+                try self.seedExactCallableBindingLocal(session, elem_patterns[i], elem_local, elem_source_expr_ref);
                 body = try self.lowerPatternMatchLocalInto(
                     session,
                     module_env,
                     elem_patterns[i],
                     elem_local,
+                    elem_source_expr_ref,
                     body,
                     on_fail,
                 );
@@ -5874,6 +6071,7 @@ fn lowerPatternMatchLocalInto(
             module_env,
             list_pat,
             source_local,
+            source_expr_ref,
             on_match,
             on_fail,
         ),
@@ -5884,12 +6082,13 @@ fn lowerPatternMatchLocalInto(
     };
 }
 
-fn lowerPatternBindingLocalInto(
+fn lowerBindingLocalInto(
     self: *Self,
     session: LowerSession,
     module_env: *const ModuleEnv,
     pattern_idx: CIR.Pattern.Idx,
     source_local: MIR.LocalId,
+    source_expr_ref: ?LowerExprSourceRef,
     next: MIR.CFStmtId,
 ) Allocator.Error!MIR.CFStmtId {
     const failure = try self.store.addCFStmt(self.allocator, .{ .runtime_error = .type_error });
@@ -5898,6 +6097,7 @@ fn lowerPatternBindingLocalInto(
         module_env,
         pattern_idx,
         source_local,
+        source_expr_ref,
         next,
         failure,
     );
@@ -5911,7 +6111,7 @@ fn lowerLoopBreakJump(self: *Self) Allocator.Error!MIR.CFStmtId {
     return self.store.addCFStmt(self.allocator, .{ .jump = .{
         .id = loop_ctx.exit_id,
         .args = try self.buildCarriedJumpArgs(
-            self.current_pattern_scope,
+            self.current_binding_scope,
             loop_ctx.exit_scope,
         ),
     } });
@@ -5924,8 +6124,8 @@ fn lowerWhileStmtInto(
     before_scope: u64,
     next: MIR.CFStmtId,
 ) Allocator.Error!MIR.CFStmtId {
-    const after_scope = self.current_pattern_scope;
-    const head_scope = self.freshChildPatternScope(before_scope);
+    const after_scope = self.current_binding_scope;
+    const head_scope = self.freshChildBindingScope(before_scope);
     try self.predeclareVisibleReassignableBindingsInScope(before_scope, head_scope);
 
     const loop_exit_id = self.freshJoinPointId();
@@ -5940,7 +6140,7 @@ fn lowerWhileStmtInto(
     const cond_mono = try self.resolveMonotype(session, while_stmt.cond);
     const cond_local = try self.freshSyntheticLocal(cond_mono, false);
 
-    self.current_pattern_scope = head_scope;
+    self.current_binding_scope = head_scope;
     const saved_entry_bound_locals = self.current_lambda_entry_bound_locals;
     var loop_entry_bound_locals = try LambdaEntryBindingState.cloneFrom(self.allocator, saved_entry_bound_locals);
     defer loop_entry_bound_locals.deinit();
@@ -5956,7 +6156,7 @@ fn lowerWhileStmtInto(
     );
     const lowered_cond = try self.lowerExprWithExitScope(session, while_stmt.cond, cond_local, discrim_stmt);
 
-    self.current_pattern_scope = lowered_cond.exit_scope;
+    self.current_binding_scope = lowered_cond.exit_scope;
     const continue_jump = try self.store.reserveCFStmt(self.allocator);
     const body_value = try self.freshSyntheticLocal(try self.resolveMonotype(session, while_stmt.body), false);
     const lowered_body = try self.lowerExprWithExitScope(session, while_stmt.body, body_value, continue_jump);
@@ -6014,8 +6214,8 @@ fn lowerForStmtInto(
     before_scope: u64,
     next: MIR.CFStmtId,
 ) Allocator.Error!MIR.CFStmtId {
-    const after_scope = self.current_pattern_scope;
-    const head_scope = self.freshChildPatternScope(before_scope);
+    const after_scope = self.current_binding_scope;
+    const head_scope = self.freshChildBindingScope(before_scope);
     try self.predeclareVisibleReassignableBindingsInScope(before_scope, head_scope);
 
     const list_mono = try self.resolveMonotype(session, for_stmt.expr);
@@ -6065,7 +6265,7 @@ fn lowerForStmtInto(
         .args = try self.store.addLocalSpan(self.allocator, &.{ head_index_local, one_local }),
         .next = loop_back,
     } });
-    self.current_pattern_scope = head_scope;
+    self.current_binding_scope = head_scope;
     const saved_entry_bound_locals = self.current_lambda_entry_bound_locals;
     var loop_entry_bound_locals = try LambdaEntryBindingState.cloneFrom(self.allocator, saved_entry_bound_locals);
     defer loop_entry_bound_locals.deinit();
@@ -6077,8 +6277,8 @@ fn lowerForStmtInto(
     defer loop_prelude_bound_locals.deinit();
     self.current_prelude_bound_locals = &loop_prelude_bound_locals;
     defer self.current_prelude_bound_locals = saved_prelude_bound_locals;
-    try self.predeclarePatternLocals(session, module_env, for_stmt.patt);
-    try self.markPatternLocalsPreludeBound(module_env, for_stmt.patt);
+    try self.predeclareBindingLocals(session, module_env, for_stmt.patt);
+    try self.markBindingLocalsPreludeBound(module_env, for_stmt.patt);
     const lowered_body = try self.lowerExprWithExitScope(session, for_stmt.body, body_value, increment_stmt);
     try self.store.finalizeCFStmt(loop_back, .{ .jump = .{
         .id = loop_head_id,
@@ -6089,7 +6289,7 @@ fn lowerForStmtInto(
         ),
     } });
     const body_stmt = lowered_body.entry;
-    const bind_item = try self.lowerPatternBindingLocalInto(session, module_env, for_stmt.patt, item_local, body_stmt);
+    const bind_item = try self.lowerBindingLocalInto(session, module_env, for_stmt.patt, item_local, null, body_stmt);
     const get_item = try self.store.addCFStmt(self.allocator, .{ .assign_low_level = .{
         .target = item_local,
         .op = .list_get_unsafe,
@@ -6134,9 +6334,9 @@ fn lowerForStmtInto(
         .args = try self.store.addLocalSpan(self.allocator, &.{init_list_local}),
         .next = init_index,
     } });
-    const saved_scope = self.current_pattern_scope;
-    self.current_pattern_scope = before_scope;
-    defer self.current_pattern_scope = saved_scope;
+    const saved_scope = self.current_binding_scope;
+    self.current_binding_scope = before_scope;
+    defer self.current_binding_scope = saved_scope;
     const init_list = try self.lowerCirExprInto(session, for_stmt.expr, init_list_local, init_len);
 
     const head_join = try self.store.addCFStmt(self.allocator, .{ .join = .{
@@ -6162,7 +6362,7 @@ fn lowerBlockStmtInto(
     session: LowerSession,
     module_env: *const ModuleEnv,
     stmt_idx: CIR.Statement.Idx,
-    before_pattern_scope: u64,
+    before_binding_scope: u64,
     next: MIR.CFStmtId,
 ) Allocator.Error!MIR.CFStmtId {
     const stmt = module_env.store.getStatement(stmt_idx);
@@ -6171,37 +6371,37 @@ fn lowerBlockStmtInto(
         .s_decl => |decl| if (shouldOmitCallableBindingExpr(session, module_env, decl.expr))
             next
         else
-            self.lowerPatternBindingInto(
+            self.lowerBindingInto(
             session,
             module_env,
             decl.pattern,
             decl.expr,
             false,
-            before_pattern_scope,
+            before_binding_scope,
             next,
         ),
         .s_var => |var_decl| if (shouldOmitCallableBindingExpr(session, module_env, var_decl.expr))
             next
         else
-            self.lowerPatternBindingInto(
+            self.lowerBindingInto(
             session,
             module_env,
             var_decl.pattern_idx,
             var_decl.expr,
             true,
-            before_pattern_scope,
+            before_binding_scope,
             next,
         ),
         .s_reassign => |reassign| if (shouldOmitCallableBindingExpr(session, module_env, reassign.expr))
             next
         else
-            self.lowerPatternBindingInto(
+            self.lowerBindingInto(
             session,
             module_env,
             reassign.pattern_idx,
             reassign.expr,
             false,
-            before_pattern_scope,
+            before_binding_scope,
             next,
         ),
         .s_expr => |expr_stmt| blk: {
@@ -6210,8 +6410,8 @@ fn lowerBlockStmtInto(
                 session,
                 expr_stmt.expr,
                 value_local,
-                before_pattern_scope,
-                self.current_pattern_scope,
+                before_binding_scope,
+                self.current_binding_scope,
                 &.{},
                 next,
             );
@@ -6231,8 +6431,8 @@ fn lowerBlockStmtInto(
                 dbg_stmt.expr,
                 value_local,
                 joined_value_local,
-                before_pattern_scope,
-                self.current_pattern_scope,
+                before_binding_scope,
+                self.current_binding_scope,
                 &.{},
                 inspect_stmt,
             );
@@ -6249,8 +6449,8 @@ fn lowerBlockStmtInto(
                 expect_stmt.body,
                 cond_local,
                 joined_cond_local,
-                before_pattern_scope,
-                self.current_pattern_scope,
+                before_binding_scope,
+                self.current_binding_scope,
                 &.{},
                 mir_expect,
             );
@@ -6262,9 +6462,9 @@ fn lowerBlockStmtInto(
         .s_return => |return_stmt| blk: {
             const value_local = try self.freshSyntheticLocal(try self.resolveMonotype(session, return_stmt.expr), false);
             const ret_stmt = try self.store.addCFStmt(self.allocator, .{ .ret = .{ .value = value_local } });
-            const saved_scope = self.current_pattern_scope;
-            self.current_pattern_scope = before_pattern_scope;
-            defer self.current_pattern_scope = saved_scope;
+            const saved_scope = self.current_binding_scope;
+            self.current_binding_scope = before_binding_scope;
+            defer self.current_binding_scope = saved_scope;
             break :blk try self.lowerCirExprInto(session, return_stmt.expr, value_local, ret_stmt);
         },
         .s_runtime_error => |runtime_error_stmt| self.store.addCFStmt(self.allocator, .{ .runtime_error = .{
@@ -6276,8 +6476,8 @@ fn lowerBlockStmtInto(
         .s_type_anno,
         .s_type_var_alias,
         => next,
-        .s_for => |s_for| self.lowerForStmtInto(session, module_env, s_for, before_pattern_scope, next),
-        .s_while => |s_while| self.lowerWhileStmtInto(session, s_while, before_pattern_scope, next),
+        .s_for => |s_for| self.lowerForStmtInto(session, module_env, s_for, before_binding_scope, next),
+        .s_while => |s_while| self.lowerWhileStmtInto(session, s_while, before_binding_scope, next),
         .s_break => self.lowerLoopBreakJump(),
     };
 }
@@ -6310,9 +6510,9 @@ fn predeclareTrivialBlockStmtPatterns(
             }
             const source_mono = try self.resolveMonotype(session, decl.expr);
             if (builtin.mode == .Debug) {
-                try self.debugAssertNoUnitPrimPatternBinding(session, module_env, decl.pattern, decl.expr, source_mono, stmt_idx, "s_decl");
+                try self.debugAssertNoUnitPrimBinding(session, module_env, decl.pattern, decl.expr, source_mono, stmt_idx, "s_decl");
             }
-            try self.predeclarePatternLocals(session, module_env, decl.pattern);
+            try self.predeclareBindingLocals(session, module_env, decl.pattern);
             try self.markDirectCallableBackedBindingIfNeeded(
                 module_env,
                 decl.pattern,
@@ -6341,10 +6541,10 @@ fn predeclareTrivialBlockStmtPatterns(
             }
             const source_mono = try self.resolveMonotype(session, var_decl.expr);
             if (builtin.mode == .Debug) {
-                try self.debugAssertNoUnitPrimPatternBinding(session, module_env, var_decl.pattern_idx, var_decl.expr, source_mono, stmt_idx, "s_var");
+                try self.debugAssertNoUnitPrimBinding(session, module_env, var_decl.pattern_idx, var_decl.expr, source_mono, stmt_idx, "s_var");
             }
-            try self.predeclarePatternLocals(session, module_env, var_decl.pattern_idx);
-            self.setPatternLocalsReassignable(session, module_env, var_decl.pattern_idx, true);
+            try self.predeclareBindingLocals(session, module_env, var_decl.pattern_idx);
+            self.setBindingLocalsReassignable(session, module_env, var_decl.pattern_idx, true);
             try self.markDirectCallableBackedBindingIfNeeded(
                 module_env,
                 var_decl.pattern_idx,
@@ -6373,10 +6573,10 @@ fn predeclareTrivialBlockStmtPatterns(
             }
             const source_mono = try self.resolveMonotype(session, reassign.expr);
             if (builtin.mode == .Debug) {
-                try self.debugAssertNoUnitPrimPatternBinding(session, module_env, reassign.pattern_idx, reassign.expr, source_mono, stmt_idx, "s_reassign");
+                try self.debugAssertNoUnitPrimBinding(session, module_env, reassign.pattern_idx, reassign.expr, source_mono, stmt_idx, "s_reassign");
             }
-            try self.predeclarePatternLocals(session, module_env, reassign.pattern_idx);
-            self.setPatternLocalsReassignable(session, module_env, reassign.pattern_idx, true);
+            try self.predeclareBindingLocals(session, module_env, reassign.pattern_idx);
+            self.setBindingLocalsReassignable(session, module_env, reassign.pattern_idx, true);
             try self.markDirectCallableBackedBindingIfNeeded(
                 module_env,
                 reassign.pattern_idx,
@@ -6397,9 +6597,9 @@ fn predeclareReassignableBindingsForStmtScope(
 ) Allocator.Error!void {
     switch (module_env.store.getStatement(stmt_idx)) {
         .s_decl => |decl| {
-            var bindings = std.ArrayList(PatternBinding).empty;
+            var bindings = std.ArrayList(BindingNode).empty;
             defer bindings.deinit(self.allocator);
-            try self.collectPatternBindings(module_env, decl.pattern, &bindings);
+            try self.collectBindingNodes(module_env, decl.pattern, &bindings);
 
             const excluded_patterns = try self.allocator.alloc(CIR.Pattern.Idx, bindings.items.len);
             defer self.allocator.free(excluded_patterns);
@@ -6414,9 +6614,9 @@ fn predeclareReassignableBindingsForStmtScope(
             );
         },
         .s_var => |var_decl| {
-            var bindings = std.ArrayList(PatternBinding).empty;
+            var bindings = std.ArrayList(BindingNode).empty;
             defer bindings.deinit(self.allocator);
-            try self.collectPatternBindings(module_env, var_decl.pattern_idx, &bindings);
+            try self.collectBindingNodes(module_env, var_decl.pattern_idx, &bindings);
 
             const excluded_patterns = try self.allocator.alloc(CIR.Pattern.Idx, bindings.items.len);
             defer self.allocator.free(excluded_patterns);
@@ -6431,9 +6631,9 @@ fn predeclareReassignableBindingsForStmtScope(
             );
         },
         .s_reassign => |reassign| {
-            var bindings = std.ArrayList(PatternBinding).empty;
+            var bindings = std.ArrayList(BindingNode).empty;
             defer bindings.deinit(self.allocator);
-            try self.collectPatternBindings(module_env, reassign.pattern_idx, &bindings);
+            try self.collectBindingNodes(module_env, reassign.pattern_idx, &bindings);
 
             const excluded_patterns = try self.allocator.alloc(CIR.Pattern.Idx, bindings.items.len);
             defer self.allocator.free(excluded_patterns);
@@ -6455,7 +6655,7 @@ fn predeclareReassignableBindingsForStmtScope(
     }
 }
 
-fn debugAssertNoUnitPrimPatternBinding(
+fn debugAssertNoUnitPrimBinding(
     self: *Self,
     session: LowerSession,
     module_env: *const ModuleEnv,
@@ -6588,21 +6788,21 @@ fn debugAssertNoUnitPrimPatternBinding(
     );
 }
 
-fn predeclarePatternLocals(
+fn predeclareBindingLocals(
     self: *Self,
     session: LowerSession,
     module_env: *const ModuleEnv,
     pattern_idx: CIR.Pattern.Idx,
 ) Allocator.Error!void {
-    var bindings = std.ArrayList(PatternBinding).empty;
+    var bindings = std.ArrayList(BindingNode).empty;
     defer bindings.deinit(self.allocator);
-    try self.collectPatternBindings(module_env, pattern_idx, &bindings);
+    try self.collectBindingNodes(module_env, pattern_idx, &bindings);
     for (bindings.items) |binding| {
         _ = try self.patternToLocal(session, binding.pattern_idx);
     }
 }
 
-fn predeclarePatternLocalsFromMonotype(
+fn predeclareBindingLocalsFromMonotype(
     self: *Self,
     module_env: *const ModuleEnv,
     pattern_idx: CIR.Pattern.Idx,
@@ -6612,9 +6812,9 @@ fn predeclarePatternLocalsFromMonotype(
     switch (module_env.store.getPattern(pattern_idx)) {
         .assign => {
             if (existing_local) |local| {
-                try self.bindPatternLocalInCurrentScope(pattern_idx, local);
-                const key = patternScopeKey(self.current_module_idx, self.current_pattern_scope, pattern_idx);
-                const binding = self.pattern_bindings.getPtr(key) orelse unreachable;
+                try self.bindBindingLocalInCurrentScope(pattern_idx, local);
+                const key = bindingScopeKey(self.current_module_idx, self.current_binding_scope, pattern_idx);
+                const binding = self.binding_records.getPtr(key) orelse unreachable;
                 if (binding.shadowed) unreachable;
                 binding.explicit_monotype = monotype;
                 self.store.getLocalPtr(local).monotype = monotype;
@@ -6624,19 +6824,19 @@ fn predeclarePatternLocalsFromMonotype(
         },
         .as => |as_pat| {
             if (existing_local) |local| {
-                try self.bindPatternLocalInCurrentScope(pattern_idx, local);
-                const key = patternScopeKey(self.current_module_idx, self.current_pattern_scope, pattern_idx);
-                const binding = self.pattern_bindings.getPtr(key) orelse unreachable;
+                try self.bindBindingLocalInCurrentScope(pattern_idx, local);
+                const key = bindingScopeKey(self.current_module_idx, self.current_binding_scope, pattern_idx);
+                const binding = self.binding_records.getPtr(key) orelse unreachable;
                 if (binding.shadowed) unreachable;
                 binding.explicit_monotype = monotype;
                 self.store.getLocalPtr(local).monotype = monotype;
             } else {
                 _ = try self.patternToLocalWithMonotype(pattern_idx, monotype);
             }
-            try self.predeclarePatternLocalsFromMonotype(module_env, as_pat.pattern, monotype, null);
+            try self.predeclareBindingLocalsFromMonotype(module_env, as_pat.pattern, monotype, null);
         },
-        .nominal => |nominal_pat| try self.predeclarePatternLocalsFromMonotype(module_env, nominal_pat.backing_pattern, monotype, existing_local),
-        .nominal_external => |nominal_pat| try self.predeclarePatternLocalsFromMonotype(module_env, nominal_pat.backing_pattern, monotype, existing_local),
+        .nominal => |nominal_pat| try self.predeclareBindingLocalsFromMonotype(module_env, nominal_pat.backing_pattern, monotype, existing_local),
+        .nominal_external => |nominal_pat| try self.predeclareBindingLocalsFromMonotype(module_env, nominal_pat.backing_pattern, monotype, existing_local),
         .applied_tag => |tag_pat| {
             const payload_monos = self.tagPayloadMonotypesByName(monotype, tag_pat.name);
             const payload_patterns = module_env.store.slicePatterns(tag_pat.args);
@@ -6647,7 +6847,7 @@ fn predeclarePatternLocalsFromMonotype(
                 );
             }
             for (payload_patterns, payload_monos) |payload_pattern_idx, payload_mono| {
-                try self.predeclarePatternLocalsFromMonotype(module_env, payload_pattern_idx, payload_mono, null);
+                try self.predeclareBindingLocalsFromMonotype(module_env, payload_pattern_idx, payload_mono, null);
             }
         },
         .record_destructure => |record_pat| {
@@ -6670,14 +6870,14 @@ fn predeclarePatternLocalsFromMonotype(
                             },
                             record_fields,
                         );
-                        try self.predeclarePatternLocalsFromMonotype(
+                        try self.predeclareBindingLocalsFromMonotype(
                             module_env,
                             sub_pattern_idx,
                             record_fields[field_idx].type_idx,
                             null,
                         );
                     },
-                    .Rest => |sub_pattern_idx| try self.predeclarePatternLocalsFromMonotype(module_env, sub_pattern_idx, monotype, null),
+                    .Rest => |sub_pattern_idx| try self.predeclareBindingLocalsFromMonotype(module_env, sub_pattern_idx, monotype, null),
                 }
             }
         },
@@ -6690,11 +6890,11 @@ fn predeclarePatternLocalsFromMonotype(
                 ),
             };
             for (module_env.store.slicePatterns(list_pat.patterns)) |elem_pattern_idx| {
-                try self.predeclarePatternLocalsFromMonotype(module_env, elem_pattern_idx, elem_mono, null);
+                try self.predeclareBindingLocalsFromMonotype(module_env, elem_pattern_idx, elem_mono, null);
             }
             if (list_pat.rest_info) |rest| {
                 if (rest.pattern) |rest_pattern_idx| {
-                    try self.predeclarePatternLocalsFromMonotype(module_env, rest_pattern_idx, monotype, null);
+                    try self.predeclareBindingLocalsFromMonotype(module_env, rest_pattern_idx, monotype, null);
                 }
             }
         },
@@ -6714,7 +6914,7 @@ fn predeclarePatternLocalsFromMonotype(
                 );
             }
             for (elem_patterns, elem_monos) |elem_pattern_idx, elem_mono| {
-                try self.predeclarePatternLocalsFromMonotype(module_env, elem_pattern_idx, elem_mono, null);
+                try self.predeclareBindingLocalsFromMonotype(module_env, elem_pattern_idx, elem_mono, null);
             }
         },
         .underscore,
@@ -6729,30 +6929,30 @@ fn predeclarePatternLocalsFromMonotype(
     }
 }
 
-fn markPatternLocalsPreludeBound(
+fn markBindingLocalsPreludeBound(
     self: *Self,
     module_env: *const ModuleEnv,
     pattern_idx: CIR.Pattern.Idx,
 ) Allocator.Error!void {
     const prelude_bound_locals = self.current_prelude_bound_locals orelse return;
 
-    var bindings = std.ArrayList(PatternBinding).empty;
+    var bindings = std.ArrayList(BindingNode).empty;
     defer bindings.deinit(self.allocator);
-    try self.collectPatternBindings(module_env, pattern_idx, &bindings);
+    try self.collectBindingNodes(module_env, pattern_idx, &bindings);
     for (bindings.items) |binding| {
-        const local = self.lookupExistingPatternLocalInScope(
+        const local = self.lookupExistingBindingLocalInScope(
             self.current_module_idx,
-            self.current_pattern_scope,
+            self.current_binding_scope,
             binding.pattern_idx,
         ) orelse std.debug.panic(
-            "statement-only MIR invariant violated: prelude-bound marking missing predeclared pattern local {d} in scope {d}",
-            .{ @intFromEnum(binding.pattern_idx), self.current_pattern_scope },
+            "statement-only MIR invariant violated: prelude-bound marking missing predeclared binding local {d} in scope {d}",
+            .{ @intFromEnum(binding.pattern_idx), self.current_binding_scope },
         );
         try prelude_bound_locals.add(local);
     }
 }
 
-fn bindRepresentativePatternLocalsToBranchPattern(
+fn bindRepresentativeBindingLocalsToBranchPattern(
     self: *Self,
     session: LowerSession,
     module_env: *const ModuleEnv,
@@ -6761,32 +6961,34 @@ fn bindRepresentativePatternLocalsToBranchPattern(
 ) Allocator.Error!void {
     if (representative_pattern_idx == alternative_pattern_idx) return;
 
-    var representative_bindings = std.ArrayList(PatternBinding).empty;
+    var representative_bindings = std.ArrayList(BindingNode).empty;
     defer representative_bindings.deinit(self.allocator);
 
-    var alternative_bindings = std.ArrayList(PatternBinding).empty;
+    var alternative_bindings = std.ArrayList(BindingNode).empty;
     defer alternative_bindings.deinit(self.allocator);
 
-    try self.collectPatternBindings(module_env, representative_pattern_idx, &representative_bindings);
-    try self.collectPatternBindings(module_env, alternative_pattern_idx, &alternative_bindings);
+    try self.collectBindingNodes(module_env, representative_pattern_idx, &representative_bindings);
+    try self.collectBindingNodes(module_env, alternative_pattern_idx, &alternative_bindings);
 
     for (representative_bindings.items) |rep_binding| {
         for (alternative_bindings.items) |alt_binding| {
             if (!rep_binding.ident.eql(alt_binding.ident)) continue;
 
-            const alt_local = self.lookupExistingPatternLocalInScope(
+            const alt_local = self.lookupExistingBindingLocalInScope(
                 self.current_module_idx,
-                self.current_pattern_scope,
+                self.current_binding_scope,
                 alt_binding.pattern_idx,
             ) orelse try self.patternToLocal(session, alt_binding.pattern_idx);
-            try self.bindPatternLocalInCurrentScope(rep_binding.pattern_idx, alt_local);
+            try self.bindBindingLocalInCurrentScope(rep_binding.pattern_idx, alt_local);
 
-            const alt_key = patternScopeKey(self.current_module_idx, self.current_pattern_scope, alt_binding.pattern_idx);
-            if (self.pattern_bindings.get(alt_key)) |binding| if (!binding.shadowed) if (binding.explicit_monotype) |monotype| {
-                const rep_key = patternScopeKey(self.current_module_idx, self.current_pattern_scope, rep_binding.pattern_idx);
-                const rep_binding_state = self.pattern_bindings.getPtr(rep_key) orelse unreachable;
+            const alt_key = bindingScopeKey(self.current_module_idx, self.current_binding_scope, alt_binding.pattern_idx);
+            if (self.binding_records.get(alt_key)) |binding| if (!binding.shadowed) if (binding.explicit_monotype) |monotype| {
+                const rep_key = bindingScopeKey(self.current_module_idx, self.current_binding_scope, rep_binding.pattern_idx);
+                const rep_binding_state = self.binding_records.getPtr(rep_key) orelse unreachable;
                 if (rep_binding_state.shadowed) unreachable;
                 rep_binding_state.explicit_monotype = monotype;
+                rep_binding_state.source_expr_ref = binding.source_expr_ref;
+                rep_binding_state.callable_value = binding.callable_value;
             };
 
             break;
@@ -6795,7 +6997,7 @@ fn bindRepresentativePatternLocalsToBranchPattern(
 }
 
 fn findVisibleBindingLocal(
-    bindings: []const VisiblePatternBinding,
+    bindings: []const VisibleBindingLocal,
     source_index: *usize,
     pattern_idx: CIR.Pattern.Idx,
     comptime missing_message: []const u8,
@@ -7099,20 +7301,20 @@ fn lowerExprSequenceIntoContinuationWithValues(
         );
     }
 
-    const start_scope = self.current_pattern_scope;
+    const start_scope = self.current_binding_scope;
     const scope_infos = try self.allocator.alloc(ExprSequenceScopeInfo, exprs.len);
     defer self.allocator.free(scope_infos);
 
     var scope = start_scope;
     for (exprs, 0..) |_, i| {
         scope_infos[i].before = scope;
-        scope = self.freshChildPatternScope(scope);
+        scope = self.freshChildBindingScope(scope);
         scope_infos[i].after = scope;
 
-        const saved_scope = self.current_pattern_scope;
-        self.current_pattern_scope = scope_infos[i].after;
+        const saved_scope = self.current_binding_scope;
+        self.current_binding_scope = scope_infos[i].after;
         try self.predeclareVisibleReassignableBindingsInScope(scope_infos[i].before, scope_infos[i].after);
-        self.current_pattern_scope = saved_scope;
+        self.current_binding_scope = saved_scope;
     }
 
     var lowered_next = next;
@@ -7134,7 +7336,7 @@ fn lowerExprSequenceIntoContinuationWithValues(
     }
 
     const exit_scope = if (scope_infos.len == 0) start_scope else scope_infos[scope_infos.len - 1].after;
-    self.current_pattern_scope = exit_scope;
+    self.current_binding_scope = exit_scope;
     return .{
         .entry = lowered_next,
         .exit_scope = exit_scope,
@@ -7177,13 +7379,13 @@ fn lowerBoolBranchChainIntoWithExitScope(
     if (!lowered_cond.falls_through) {
         return lowered_cond;
     }
-    const join_scope = self.freshChildPatternScope(lowered_cond.exit_scope);
+    const join_scope = self.freshChildBindingScope(lowered_cond.exit_scope);
     try self.predeclareVisibleReassignableBindingsInScope(lowered_cond.exit_scope, join_scope);
     const join_id = self.freshJoinPointId();
     const joined_value_local = try self.freshSyntheticLocal(result_mono, false);
     var join_has_incoming = false;
 
-    self.current_pattern_scope = lowered_cond.exit_scope;
+    self.current_binding_scope = lowered_cond.exit_scope;
     const else_value = try self.freshSyntheticLocal(result_mono, false);
     const else_jump = try self.store.reserveCFStmt(self.allocator);
     const lowered_else = try self.lowerBoolBranchChainIntoWithExitScope(session, branches[1..], final_else, else_value, else_jump);
@@ -7200,7 +7402,7 @@ fn lowerBoolBranchChainIntoWithExitScope(
         } });
     }
 
-    self.current_pattern_scope = lowered_cond.exit_scope;
+    self.current_binding_scope = lowered_cond.exit_scope;
     const then_value = try self.freshSyntheticLocal(result_mono, false);
     const then_jump = try self.store.reserveCFStmt(self.allocator);
     const lowered_then = try self.lowerExprWithExitScope(session, branch.body, then_value, then_jump);
@@ -7263,7 +7465,7 @@ fn lowerExprWithExitScope(
     next: MIR.CFStmtId,
 ) Allocator.Error!LoweredExprWithScope {
     const module_env = self.all_module_envs[self.current_module_idx];
-    const start_scope = self.current_pattern_scope;
+    const start_scope = self.current_binding_scope;
     const lowered = switch (module_env.store.getExpr(expr_idx)) {
         .e_block => |block| try self.lowerBlockExprIntoWithExitScope(session, block, target, next),
         .e_if => |if_expr| try self.lowerBoolBranchChainIntoWithExitScope(
@@ -7276,14 +7478,14 @@ fn lowerExprWithExitScope(
         .e_match => |match_expr| try self.lowerMatchIntoWithExitScope(session, module_env, match_expr, target, next),
         else => LoweredExprWithScope{
             .entry = try self.lowerCirExprInto(session, expr_idx, target, next),
-            .exit_scope = self.current_pattern_scope,
+            .exit_scope = self.current_binding_scope,
             .falls_through = switch (module_env.store.getExpr(expr_idx)) {
                 .e_return, .e_runtime_error, .e_crash => false,
                 else => true,
             },
         },
     };
-    self.current_pattern_scope = start_scope;
+    self.current_binding_scope = start_scope;
     return lowered;
 }
 
@@ -7296,16 +7498,16 @@ fn lowerBlockExprIntoWithExitScope(
 ) Allocator.Error!LoweredExprWithScope {
     const module_env = self.all_module_envs[self.current_module_idx];
     const stmts = module_env.store.sliceStatements(block.stmts);
-    const saved_scope = self.current_pattern_scope;
+    const saved_scope = self.current_binding_scope;
     const scope_infos = try self.allocator.alloc(BlockStmtScopeInfo, stmts.len);
     defer self.allocator.free(scope_infos);
 
-    var scope = self.current_pattern_scope;
+    var scope = self.current_binding_scope;
     for (stmts, 0..) |stmt_idx, i| {
         scope_infos[i].before = scope;
         switch (module_env.store.getStatement(stmt_idx)) {
             .s_decl, .s_var, .s_reassign, .s_expr, .s_dbg, .s_expect, .s_for, .s_while => {
-                scope = self.freshChildPatternScope(scope);
+                scope = self.freshChildBindingScope(scope);
                 scope_infos[i].after = scope;
             },
             else => {
@@ -7313,7 +7515,7 @@ fn lowerBlockExprIntoWithExitScope(
             },
         }
 
-        self.current_pattern_scope = scope_infos[i].after;
+        self.current_binding_scope = scope_infos[i].after;
         try self.predeclareReassignableBindingsForStmtScope(
             module_env,
             stmt_idx,
@@ -7323,17 +7525,17 @@ fn lowerBlockExprIntoWithExitScope(
         try self.predeclareTrivialBlockStmtPatterns(session, module_env, stmt_idx);
     }
 
-    self.current_pattern_scope = scope;
+    self.current_binding_scope = scope;
     const lowered_final = try self.lowerExprWithExitScope(session, block.final_expr, target, next);
     var entry = lowered_final.entry;
     var i = stmts.len;
     while (i > 0) {
         i -= 1;
-        self.current_pattern_scope = scope_infos[i].after;
+        self.current_binding_scope = scope_infos[i].after;
         entry = try self.lowerBlockStmtInto(session, module_env, stmts[i], scope_infos[i].before, entry);
-        self.current_pattern_scope = scope_infos[i].before;
+        self.current_binding_scope = scope_infos[i].before;
     }
-    self.current_pattern_scope = saved_scope;
+    self.current_binding_scope = saved_scope;
     return .{
         .entry = entry,
         .exit_scope = lowered_final.exit_scope,
@@ -7350,16 +7552,16 @@ fn lowerBlockIntoWithExitScope(
 ) Allocator.Error!LoweredExprWithScope {
     const module_env = self.all_module_envs[self.current_module_idx];
     const stmts = module_env.store.sliceStatements(block.stmts);
-    const saved_scope = self.current_pattern_scope;
+    const saved_scope = self.current_binding_scope;
     const scope_infos = try self.allocator.alloc(BlockStmtScopeInfo, stmts.len);
     defer self.allocator.free(scope_infos);
 
-    var scope = self.current_pattern_scope;
+    var scope = self.current_binding_scope;
     for (stmts, 0..) |stmt_idx, i| {
         scope_infos[i].before = scope;
         switch (module_env.store.getStatement(stmt_idx)) {
             .s_decl, .s_var, .s_reassign, .s_expr, .s_dbg, .s_expect, .s_for, .s_while => {
-                scope = self.freshChildPatternScope(scope);
+                scope = self.freshChildBindingScope(scope);
                 scope_infos[i].after = scope;
             },
             else => {
@@ -7367,7 +7569,7 @@ fn lowerBlockIntoWithExitScope(
             },
         }
 
-        self.current_pattern_scope = scope_infos[i].after;
+        self.current_binding_scope = scope_infos[i].after;
         try self.predeclareReassignableBindingsForStmtScope(
             module_env,
             stmt_idx,
@@ -7377,14 +7579,14 @@ fn lowerBlockIntoWithExitScope(
         try self.predeclareTrivialBlockStmtPatterns(session, module_env, stmt_idx);
     }
 
-    const exit_scope = self.freshChildPatternScope(saved_scope);
+    const exit_scope = self.freshChildBindingScope(saved_scope);
     try self.predeclareVisibleReassignableBindingsInScope(saved_scope, exit_scope);
     const after_final_join_id = self.freshJoinPointId();
     const final_value_local = try self.freshSyntheticLocal(self.store.getLocal(target).monotype, false);
     const joined_final_local = try self.freshSyntheticLocal(self.store.getLocal(target).monotype, false);
     const after_final_jump = try self.store.reserveCFStmt(self.allocator);
 
-    self.current_pattern_scope = scope;
+    self.current_binding_scope = scope;
     const lowered_final = try self.lowerExprWithExitScope(session, block.final_expr, final_value_local, after_final_jump);
     var entry = lowered_final.entry;
     var final_exit_scope = lowered_final.exit_scope;
@@ -7410,11 +7612,11 @@ fn lowerBlockIntoWithExitScope(
     var i = stmts.len;
     while (i > 0) {
         i -= 1;
-        self.current_pattern_scope = scope_infos[i].after;
+        self.current_binding_scope = scope_infos[i].after;
         entry = try self.lowerBlockStmtInto(session, module_env, stmts[i], scope_infos[i].before, entry);
-        self.current_pattern_scope = scope_infos[i].before;
+        self.current_binding_scope = scope_infos[i].before;
     }
-    self.current_pattern_scope = saved_scope;
+    self.current_binding_scope = saved_scope;
     return .{
         .entry = entry,
         .exit_scope = final_exit_scope,
@@ -7432,10 +7634,11 @@ fn lowerMatchIntoWithExitScope(
 ) Allocator.Error!LoweredExprWithScope {
     const cond_mono = try self.resolveMonotype(session, match_expr.cond);
     const cond_local = try self.freshSyntheticLocal(cond_mono, false);
-    const dispatch_scope = self.freshChildPatternScope(self.current_pattern_scope);
+    const dispatch_scope = self.freshChildBindingScope(self.current_binding_scope);
     const dispatch_join_cond_local = try self.freshSyntheticLocal(cond_mono, false);
     const dispatch_join_id = self.freshJoinPointId();
     const dispatch_jump = try self.store.reserveCFStmt(self.allocator);
+    const cond_source_expr_ref = self.exprSourceRefAliasOrSelf(session, match_expr.cond);
     const lowered_cond = try self.lowerExprWithExitScope(session, match_expr.cond, cond_local, dispatch_jump);
     if (!lowered_cond.falls_through) {
         return lowered_cond;
@@ -7451,7 +7654,7 @@ fn lowerMatchIntoWithExitScope(
         ),
     } });
 
-    const join_scope = self.freshChildPatternScope(dispatch_scope);
+    const join_scope = self.freshChildBindingScope(dispatch_scope);
     try self.predeclareVisibleReassignableBindingsInScope(dispatch_scope, join_scope);
     const join_id = self.freshJoinPointId();
     const joined_result_local = try self.freshSyntheticLocal(self.store.getLocal(target).monotype, false);
@@ -7466,6 +7669,7 @@ fn lowerMatchIntoWithExitScope(
         branch_indices,
         dispatch_scope,
         dispatch_join_cond_local,
+        cond_source_expr_ref,
         cond_mono,
         joined_result_local,
         join_id,
@@ -7510,6 +7714,7 @@ fn lowerMatchBranchChainInto(
     branch_indices: []const CIR.Expr.Match.Branch.Idx,
     input_scope: u64,
     cond_local: MIR.LocalId,
+    cond_source_expr_ref: LowerExprSourceRef,
     cond_mono: Monotype.Idx,
     result_local: MIR.LocalId,
     result_join_id: MIR.JoinPointId,
@@ -7525,7 +7730,7 @@ fn lowerMatchBranchChainInto(
     }
 
     const cir_branch = module_env.store.getMatchBranch(branch_indices[0]);
-    const rest_scope = self.freshChildPatternScope(input_scope);
+    const rest_scope = self.freshChildBindingScope(input_scope);
     try self.predeclareVisibleReassignableBindingsInScope(input_scope, rest_scope);
     const rest = try self.lowerMatchBranchChainInto(
         session,
@@ -7533,6 +7738,7 @@ fn lowerMatchBranchChainInto(
         branch_indices[1..],
         rest_scope,
         cond_local,
+        cond_source_expr_ref,
         cond_mono,
         result_local,
         result_join_id,
@@ -7553,11 +7759,11 @@ fn lowerMatchBranchChainInto(
     var branch_entry = pattern_fail_jump;
     var branch_reaches_result_join = false;
     if (branch_pattern_indices.len == 0) {
-        const branch_scope = self.freshChildPatternScope(input_scope);
+        const branch_scope = self.freshChildBindingScope(input_scope);
         try self.inheritVisibleReassignableBindingsInScope(input_scope, branch_scope);
-        const saved_scope = self.current_pattern_scope;
-        self.current_pattern_scope = branch_scope;
-        defer self.current_pattern_scope = saved_scope;
+        const saved_scope = self.current_binding_scope;
+        self.current_binding_scope = branch_scope;
+        defer self.current_binding_scope = saved_scope;
 
         const branch_value_local = try self.freshSyntheticLocal(result_mono, false);
         const branch_jump = try self.store.reserveCFStmt(self.allocator);
@@ -7617,28 +7823,28 @@ fn lowerMatchBranchChainInto(
         while (pattern_i > 0) {
             pattern_i -= 1;
             const branch_pattern = module_env.store.getMatchBranchPattern(branch_pattern_indices[pattern_i]);
-            const alternative_scope = self.freshChildPatternScope(input_scope);
+            const alternative_scope = self.freshChildBindingScope(input_scope);
             try self.inheritVisibleReassignableBindingsInScope(input_scope, alternative_scope);
             branch_entry = blk: {
-                const saved_scope = self.current_pattern_scope;
-                self.current_pattern_scope = alternative_scope;
-                defer self.current_pattern_scope = saved_scope;
+                const saved_scope = self.current_binding_scope;
+                self.current_binding_scope = alternative_scope;
+                defer self.current_binding_scope = saved_scope;
                 const saved_prelude_bound_locals = self.current_prelude_bound_locals;
                 var branch_prelude_bound_locals = try LambdaEntryBindingState.cloneFrom(self.allocator, saved_prelude_bound_locals);
                 defer branch_prelude_bound_locals.deinit();
                 self.current_prelude_bound_locals = &branch_prelude_bound_locals;
                 defer self.current_prelude_bound_locals = saved_prelude_bound_locals;
 
-                try self.predeclarePatternLocals(session, module_env, branch_pattern.pattern);
-                try self.markPatternLocalsPreludeBound(module_env, branch_pattern.pattern);
+                try self.predeclareBindingLocals(session, module_env, branch_pattern.pattern);
+                try self.markBindingLocalsPreludeBound(module_env, branch_pattern.pattern);
                 if (representative_pattern_idx) |representative_pattern| {
-                    try self.bindRepresentativePatternLocalsToBranchPattern(
+                    try self.bindRepresentativeBindingLocalsToBranchPattern(
                         session,
                         module_env,
                         representative_pattern,
                         branch_pattern.pattern,
                     );
-                    try self.markPatternLocalsPreludeBound(module_env, representative_pattern);
+                    try self.markBindingLocalsPreludeBound(module_env, representative_pattern);
                 }
 
                 const branch_value_local = try self.freshSyntheticLocal(result_mono, false);
@@ -7696,6 +7902,7 @@ fn lowerMatchBranchChainInto(
                     module_env,
                     branch_pattern.pattern,
                     cond_local,
+                    cond_source_expr_ref,
                     if (branch_pattern.degenerate) branch_degenerate_failure else guarded_body,
                     branch_entry,
                 );
@@ -8061,7 +8268,7 @@ fn lowerCirExprInto(
         },
         .e_block => |block| blk: {
             const lowered = try self.lowerBlockExprIntoWithExitScope(session, block, target, next);
-            self.current_pattern_scope = lowered.exit_scope;
+            self.current_binding_scope = lowered.exit_scope;
             break :blk lowered.entry;
         },
         .e_dot_access => |da| self.lowerDotAccessInto(session, expr_idx, da, target, next),
@@ -8072,7 +8279,7 @@ fn lowerCirExprInto(
         .e_call => |call| self.lowerCallInto(session, module_env, expr_idx, call, target, next),
         .e_match => |match_expr| blk: {
             const lowered = try self.lowerMatchIntoWithExitScope(session, module_env, match_expr, target, next);
-            self.current_pattern_scope = lowered.exit_scope;
+            self.current_binding_scope = lowered.exit_scope;
             break :blk lowered.entry;
         },
         .e_if => |if_expr| blk: {
@@ -8083,7 +8290,7 @@ fn lowerCirExprInto(
                 target,
                 next,
             );
-            self.current_pattern_scope = lowered.exit_scope;
+            self.current_binding_scope = lowered.exit_scope;
             break :blk lowered.entry;
         },
         .e_dbg => |dbg_expr| blk: {
@@ -8211,9 +8418,9 @@ fn lowerCirExprInto(
 
 /// Resolve a CIR binding pattern to one executable MIR local.
 fn patternToLocal(self: *Self, session: LowerSession, pattern_idx: CIR.Pattern.Idx) Allocator.Error!MIR.LocalId {
-    const key = patternScopeKey(self.current_module_idx, self.current_pattern_scope, pattern_idx);
+    const key = bindingScopeKey(self.current_module_idx, self.current_binding_scope, pattern_idx);
 
-    if (self.pattern_bindings.get(key)) |binding| {
+    if (self.binding_records.get(key)) |binding| {
         if (!binding.shadowed) {
             if (binding.explicit_monotype) |monotype| {
                 self.store.getLocalPtr(binding.local.?).monotype = monotype;
@@ -8225,7 +8432,7 @@ fn patternToLocal(self: *Self, session: LowerSession, pattern_idx: CIR.Pattern.I
     const module_env = self.all_module_envs[self.current_module_idx];
     const pattern = module_env.store.getPattern(pattern_idx);
     const is_top_level_pattern = isTopLevelPattern(module_env, pattern_idx);
-    const use_scoped_local_ident = self.current_pattern_scope != 0 and !is_top_level_pattern;
+    const use_scoped_local_ident = self.current_binding_scope != 0 and !is_top_level_pattern;
 
     const ident_idx: Ident.Idx = switch (pattern) {
         .assign => |a| if (use_scoped_local_ident) self.makeSyntheticIdent(a.ident) else a.ident,
@@ -8252,7 +8459,12 @@ fn patternToLocal(self: *Self, session: LowerSession, pattern_idx: CIR.Pattern.I
         .monotype = monotype,
         .reassignable = ident_idx.attributes.reassignable,
     });
-    try self.pattern_bindings.put(key, .{ .local = local });
+    if (self.binding_records.getPtr(key)) |binding| {
+        binding.local = local;
+        binding.shadowed = false;
+    } else {
+        try self.binding_records.put(key, .{ .local = local });
+    }
     return local;
 }
 
@@ -8261,9 +8473,9 @@ fn patternToLocalWithMonotype(
     pattern_idx: CIR.Pattern.Idx,
     monotype: Monotype.Idx,
 ) Allocator.Error!MIR.LocalId {
-    const key = patternScopeKey(self.current_module_idx, self.current_pattern_scope, pattern_idx);
+    const key = bindingScopeKey(self.current_module_idx, self.current_binding_scope, pattern_idx);
 
-    if (self.pattern_bindings.getPtr(key)) |binding| {
+    if (self.binding_records.getPtr(key)) |binding| {
         if (!binding.shadowed) {
             self.store.getLocalPtr(binding.local.?).monotype = monotype;
             binding.explicit_monotype = monotype;
@@ -8274,7 +8486,7 @@ fn patternToLocalWithMonotype(
     const module_env = self.all_module_envs[self.current_module_idx];
     const pattern = module_env.store.getPattern(pattern_idx);
     const is_top_level_pattern = isTopLevelPattern(module_env, pattern_idx);
-    const use_scoped_local_ident = self.current_pattern_scope != 0 and !is_top_level_pattern;
+    const use_scoped_local_ident = self.current_binding_scope != 0 and !is_top_level_pattern;
 
     const ident_idx: Ident.Idx = switch (pattern) {
         .assign => |a| if (use_scoped_local_ident) self.makeSyntheticIdent(a.ident) else a.ident,
@@ -8300,97 +8512,134 @@ fn patternToLocalWithMonotype(
         .monotype = monotype,
         .reassignable = ident_idx.attributes.reassignable,
     });
-    try self.pattern_bindings.put(key, .{ .local = local, .explicit_monotype = monotype });
+    if (self.binding_records.getPtr(key)) |binding| {
+        binding.local = local;
+        binding.explicit_monotype = monotype;
+        binding.shadowed = false;
+    } else {
+        try self.binding_records.put(key, .{ .local = local, .explicit_monotype = monotype });
+    }
     return local;
 }
 
-fn lookupExistingPatternLocal(self: *Self, pattern_idx: CIR.Pattern.Idx) ?MIR.LocalId {
-    if (self.lookupExistingPatternLocalAtScope(self.current_pattern_scope, pattern_idx)) |local| return local;
-    if (self.lookupPatternBindingRecordInScope(self.current_module_idx, self.current_pattern_scope, pattern_idx)) |binding| {
+fn lookupExistingBindingLocal(self: *Self, pattern_idx: CIR.Pattern.Idx) ?MIR.LocalId {
+    if (self.lookupExistingBindingLocalAtScope(self.current_binding_scope, pattern_idx)) |local| return local;
+    if (self.lookupBindingRecordInScope(self.current_module_idx, self.current_binding_scope, pattern_idx)) |binding| {
         if (binding.shadowed) return null;
     }
 
-    var scope = self.pattern_scope_parents.get(self.current_pattern_scope) orelse return null;
+    var scope = self.binding_scope_parents.get(self.current_binding_scope) orelse return null;
     while (true) {
-        if (self.lookupExistingPatternLocalAtScope(scope, pattern_idx)) |local| return local;
-        if (self.lookupPatternBindingRecordInScope(self.current_module_idx, scope, pattern_idx)) |binding| {
+        if (self.lookupExistingBindingLocalAtScope(scope, pattern_idx)) |local| return local;
+        if (self.lookupBindingRecordInScope(self.current_module_idx, scope, pattern_idx)) |binding| {
             if (binding.shadowed) return null;
         }
-        scope = self.pattern_scope_parents.get(scope) orelse break;
+        scope = self.binding_scope_parents.get(scope) orelse break;
     }
 
     return null;
 }
 
-fn lookupUsablePatternLocalAtScope(
+fn lookupUsableBindingLocalAtScope(
     self: *Self,
-    pattern_scope: u64,
+    binding_scope: u64,
     pattern_idx: CIR.Pattern.Idx,
 ) ?MIR.LocalId {
-    const local = self.lookupExistingPatternLocalAtScope(pattern_scope, pattern_idx) orelse return null;
+    const local = self.lookupExistingBindingLocalAtScope(binding_scope, pattern_idx) orelse return null;
     return local;
 }
 
-fn lookupExistingPatternLocalWithinCurrentLambda(
+fn lookupExistingBindingLocalWithinCurrentLambda(
     self: *Self,
     pattern_idx: CIR.Pattern.Idx,
 ) ?MIR.LocalId {
-    if (self.lookupExistingPatternLocalAtScope(self.current_pattern_scope, pattern_idx)) |local| return local;
-    if (self.lookupPatternBindingRecordInScope(self.current_module_idx, self.current_pattern_scope, pattern_idx)) |binding| {
+    if (self.lookupExistingBindingLocalAtScope(self.current_binding_scope, pattern_idx)) |local| return local;
+    if (self.lookupBindingRecordInScope(self.current_module_idx, self.current_binding_scope, pattern_idx)) |binding| {
         if (binding.shadowed) return null;
     }
 
     const boundary = self.current_lambda_scope_boundary orelse return null;
-    var scope = self.pattern_scope_parents.get(self.current_pattern_scope) orelse return null;
+    var scope = self.binding_scope_parents.get(self.current_binding_scope) orelse return null;
     while (true) {
-        if (self.lookupExistingPatternLocalAtScope(scope, pattern_idx)) |local| return local;
-        if (self.lookupPatternBindingRecordInScope(self.current_module_idx, scope, pattern_idx)) |binding| {
+        if (self.lookupExistingBindingLocalAtScope(scope, pattern_idx)) |local| return local;
+        if (self.lookupBindingRecordInScope(self.current_module_idx, scope, pattern_idx)) |binding| {
             if (binding.shadowed) return null;
         }
         if (scope == boundary) break;
-        scope = self.pattern_scope_parents.get(scope) orelse break;
+        scope = self.binding_scope_parents.get(scope) orelse break;
     }
 
     return null;
 }
 
-fn lookupExistingPatternLocalAtScope(
+fn lookupExistingBindingLocalAtScope(
     self: *Self,
-    pattern_scope: u64,
+    binding_scope: u64,
     pattern_idx: CIR.Pattern.Idx,
 ) ?MIR.LocalId {
-    const local = self.lookupExistingPatternLocalInScope(
+    const local = self.lookupExistingBindingLocalInScope(
         self.current_module_idx,
-        pattern_scope,
+        binding_scope,
         pattern_idx,
     ) orelse return null;
-    const key = patternScopeKey(self.current_module_idx, pattern_scope, pattern_idx);
-    if (self.pattern_bindings.get(key)) |binding| if (!binding.shadowed) if (binding.explicit_monotype) |monotype| {
+    const key = bindingScopeKey(self.current_module_idx, binding_scope, pattern_idx);
+    if (self.binding_records.get(key)) |binding| if (!binding.shadowed) if (binding.explicit_monotype) |monotype| {
         self.store.getLocalPtr(local).monotype = monotype;
     };
     return local;
 }
 
-fn bindPatternLocalInCurrentScope(
+fn bindBindingLocalInCurrentScope(
     self: *Self,
     pattern_idx: CIR.Pattern.Idx,
     local: MIR.LocalId,
 ) Allocator.Error!void {
-    const key = patternScopeKey(self.current_module_idx, self.current_pattern_scope, pattern_idx);
-    try self.pattern_bindings.put(key, .{ .local = local });
+    const key = bindingScopeKey(self.current_module_idx, self.current_binding_scope, pattern_idx);
+    if (self.binding_records.getPtr(key)) |binding| {
+        binding.local = local;
+        binding.shadowed = false;
+        return;
+    }
+    try self.binding_records.put(key, .{ .local = local });
 }
 
-fn shadowPatternLocalInCurrentScope(
+fn bindBindingSourceExprRefInCurrentScope(
+    self: *Self,
+    pattern_idx: CIR.Pattern.Idx,
+    source_expr_ref: LowerExprSourceRef,
+) Allocator.Error!void {
+    const key = bindingScopeKey(self.current_module_idx, self.current_binding_scope, pattern_idx);
+    if (self.binding_records.getPtr(key)) |binding| {
+        if (!binding.shadowed) binding.source_expr_ref = source_expr_ref;
+        return;
+    }
+    try self.binding_records.put(key, .{ .source_expr_ref = source_expr_ref });
+}
+
+fn bindBindingCallableValueInCurrentScope(
+    self: *Self,
+    pattern_idx: CIR.Pattern.Idx,
+    callable_value: Pipeline.CallableValue,
+) Allocator.Error!void {
+    const key = bindingScopeKey(self.current_module_idx, self.current_binding_scope, pattern_idx);
+    if (self.binding_records.getPtr(key)) |binding| {
+        if (!binding.shadowed) binding.callable_value = callable_value;
+        return;
+    }
+    try self.binding_records.put(key, .{ .callable_value = callable_value });
+}
+
+fn shadowBindingInCurrentScope(
     self: *Self,
     pattern_idx: CIR.Pattern.Idx,
 ) Allocator.Error!void {
-    const key = patternScopeKey(self.current_module_idx, self.current_pattern_scope, pattern_idx);
-    try self.pattern_bindings.put(key, .{ .shadowed = true });
+    const key = bindingScopeKey(self.current_module_idx, self.current_binding_scope, pattern_idx);
+    try self.binding_records.put(key, .{ .shadowed = true });
 }
 
-fn patternScopeKey(module_idx: u32, pattern_scope: u64, pattern_idx: CIR.Pattern.Idx) u128 {
+fn bindingScopeKey(module_idx: u32, binding_scope: u64, pattern_idx: CIR.Pattern.Idx) u128 {
     const base_key: u64 = (@as(u64, module_idx) << 32) | @intFromEnum(pattern_idx);
-    return (@as(u128, pattern_scope) << 64) | @as(u128, base_key);
+    return (@as(u128, binding_scope) << 64) | @as(u128, base_key);
 }
 
 fn paramPatternNeedsBindingStmt(
@@ -8401,9 +8650,9 @@ fn paramPatternNeedsBindingStmt(
 ) bool {
     return switch (module_env.store.getPattern(pattern_idx)) {
         .assign => {
-            const existing = self.lookupExistingPatternLocalInScope(
+            const existing = self.lookupExistingBindingLocalInScope(
                 self.current_module_idx,
-                self.current_pattern_scope,
+                self.current_binding_scope,
                 pattern_idx,
             ) orelse return true;
             return existing != source_local;
@@ -8412,84 +8661,154 @@ fn paramPatternNeedsBindingStmt(
     };
 }
 
-fn lookupExistingPatternLocalInScope(
+fn lookupExistingBindingLocalInScope(
     self: *const Self,
     module_idx: u32,
-    pattern_scope: u64,
+    binding_scope: u64,
     pattern_idx: CIR.Pattern.Idx,
 ) ?MIR.LocalId {
-    const binding = self.lookupPatternBindingRecordInScope(module_idx, pattern_scope, pattern_idx) orelse return null;
+    const binding = self.lookupBindingRecordInScope(module_idx, binding_scope, pattern_idx) orelse return null;
     if (binding.shadowed) return null;
     return binding.local;
 }
 
-fn lookupPatternBindingRecordInScope(
+fn lookupBindingRecordInScope(
     self: *const Self,
     module_idx: u32,
-    pattern_scope: u64,
+    binding_scope: u64,
     pattern_idx: CIR.Pattern.Idx,
-) ?PatternBindingRecord {
+) ?BindingRecord {
     const base_key: u64 = (@as(u64, module_idx) << 32) | @intFromEnum(pattern_idx);
-    const key: u128 = (@as(u128, pattern_scope) << 64) | @as(u128, base_key);
-    return self.pattern_bindings.get(key);
+    const key: u128 = (@as(u128, binding_scope) << 64) | @as(u128, base_key);
+    return self.binding_records.get(key);
 }
 
-fn lookupExistingPatternLocalInAncestorScopes(
-    self: *Self,
-    module_idx: u32,
-    pattern_scope: u64,
+fn lookupBindingSourceExprRefAtScope(
+    self: *const Self,
+    binding_scope: u64,
     pattern_idx: CIR.Pattern.Idx,
-) ?MIR.LocalId {
-    const scoped = self.lookupExistingPatternLocalInAncestorScopesWithScope(
-        module_idx,
-        pattern_scope,
+) ?LowerExprSourceRef {
+    const binding = self.lookupBindingRecordInScope(
+        self.current_module_idx,
+        binding_scope,
         pattern_idx,
     ) orelse return null;
-    return scoped.local;
+    if (binding.shadowed) return null;
+    return binding.source_expr_ref;
 }
 
-fn lookupUsablePatternLocalInAncestorScopes(
-    self: *Self,
-    module_idx: u32,
-    pattern_scope: u64,
+fn lookupBindingSourceExprRef(
+    self: *const Self,
     pattern_idx: CIR.Pattern.Idx,
-) ?MIR.LocalId {
-    var scope = self.pattern_scope_parents.get(pattern_scope) orelse return null;
-    while (true) {
-        if (self.lookupPatternBindingRecordInScope(module_idx, scope, pattern_idx)) |binding| {
-            if (binding.shadowed) return null;
-            const local = if (module_idx == self.current_module_idx)
-                self.lookupUsablePatternLocalAtScope(scope, pattern_idx)
-            else
-                binding.local;
-            if (local) |usable| return usable;
-        }
+) ?LowerExprSourceRef {
+    if (self.lookupBindingSourceExprRefAtScope(self.current_binding_scope, pattern_idx)) |source| return source;
+    if (self.lookupBindingRecordInScope(self.current_module_idx, self.current_binding_scope, pattern_idx)) |binding| {
+        if (binding.shadowed) return null;
+    }
 
-        scope = self.pattern_scope_parents.get(scope) orelse break;
+    var scope = self.binding_scope_parents.get(self.current_binding_scope) orelse return null;
+    while (true) {
+        if (self.lookupBindingSourceExprRefAtScope(scope, pattern_idx)) |source| return source;
+        if (self.lookupBindingRecordInScope(self.current_module_idx, scope, pattern_idx)) |binding| {
+            if (binding.shadowed) return null;
+        }
+        scope = self.binding_scope_parents.get(scope) orelse break;
     }
 
     return null;
 }
 
-const ScopedPatternLocal = struct {
+fn lookupBindingCallableValueAtScope(
+    self: *const Self,
+    binding_scope: u64,
+    pattern_idx: CIR.Pattern.Idx,
+) ?Pipeline.CallableValue {
+    const binding = self.lookupBindingRecordInScope(
+        self.current_module_idx,
+        binding_scope,
+        pattern_idx,
+    ) orelse return null;
+    if (binding.shadowed) return null;
+    return binding.callable_value;
+}
+
+fn lookupBindingCallableValue(
+    self: *const Self,
+    pattern_idx: CIR.Pattern.Idx,
+) ?Pipeline.CallableValue {
+    if (self.lookupBindingCallableValueAtScope(self.current_binding_scope, pattern_idx)) |callable_value| return callable_value;
+    if (self.lookupBindingRecordInScope(self.current_module_idx, self.current_binding_scope, pattern_idx)) |binding| {
+        if (binding.shadowed) return null;
+    }
+
+    var scope = self.binding_scope_parents.get(self.current_binding_scope) orelse return null;
+    while (true) {
+        if (self.lookupBindingCallableValueAtScope(scope, pattern_idx)) |callable_value| return callable_value;
+        if (self.lookupBindingRecordInScope(self.current_module_idx, scope, pattern_idx)) |binding| {
+            if (binding.shadowed) return null;
+        }
+        scope = self.binding_scope_parents.get(scope) orelse break;
+    }
+
+    return null;
+}
+
+fn lookupExistingBindingLocalInAncestorScopes(
+    self: *Self,
+    module_idx: u32,
+    binding_scope: u64,
+    pattern_idx: CIR.Pattern.Idx,
+) ?MIR.LocalId {
+    const scoped = self.lookupExistingBindingLocalInAncestorScopesWithScope(
+        module_idx,
+        binding_scope,
+        pattern_idx,
+    ) orelse return null;
+    return scoped.local;
+}
+
+fn lookupUsableBindingLocalInAncestorScopes(
+    self: *Self,
+    module_idx: u32,
+    binding_scope: u64,
+    pattern_idx: CIR.Pattern.Idx,
+) ?MIR.LocalId {
+    var scope = self.binding_scope_parents.get(binding_scope) orelse return null;
+    while (true) {
+        if (self.lookupBindingRecordInScope(module_idx, scope, pattern_idx)) |binding| {
+            if (binding.shadowed) return null;
+            const local = if (module_idx == self.current_module_idx)
+                self.lookupUsableBindingLocalAtScope(scope, pattern_idx)
+            else
+                binding.local;
+            if (local) |usable| return usable;
+        }
+
+        scope = self.binding_scope_parents.get(scope) orelse break;
+    }
+
+    return null;
+}
+
+const ScopedBindingLocal = struct {
     scope: u64,
     local: MIR.LocalId,
 };
 
-fn lookupExistingPatternLocalInAncestorScopesWithScope(
+fn lookupExistingBindingLocalInAncestorScopesWithScope(
     self: *Self,
     module_idx: u32,
-    pattern_scope: u64,
+    binding_scope: u64,
     pattern_idx: CIR.Pattern.Idx,
-) ?ScopedPatternLocal {
-    var scope = self.pattern_scope_parents.get(pattern_scope) orelse return null;
+) ?ScopedBindingLocal {
+    var scope = self.binding_scope_parents.get(binding_scope) orelse return null;
     while (true) {
-        if (self.lookupPatternBindingRecordInScope(module_idx, scope, pattern_idx)) |binding| {
+        if (self.lookupBindingRecordInScope(module_idx, scope, pattern_idx)) |binding| {
             if (binding.shadowed) return null;
             const local = binding.local orelse return null;
             if (module_idx == self.current_module_idx) {
-                const key = patternScopeKey(module_idx, scope, pattern_idx);
-                if (self.pattern_bindings.get(key)) |current_binding| if (!current_binding.shadowed) if (current_binding.explicit_monotype) |monotype| {
+                const key = bindingScopeKey(module_idx, scope, pattern_idx);
+                if (self.binding_records.get(key)) |current_binding| if (!current_binding.shadowed) if (current_binding.explicit_monotype) |monotype| {
                     self.store.getLocalPtr(local).monotype = monotype;
                 };
             }
@@ -8499,7 +8818,7 @@ fn lookupExistingPatternLocalInAncestorScopesWithScope(
             };
         }
 
-        scope = self.pattern_scope_parents.get(scope) orelse break;
+        scope = self.binding_scope_parents.get(scope) orelse break;
     }
 
     return null;
@@ -8510,7 +8829,7 @@ fn scopeIsWithinCurrentLambda(self: *const Self, scope: u64) bool {
     var cursor = scope;
     while (true) {
         if (cursor == boundary) return true;
-        cursor = self.pattern_scope_parents.get(cursor) orelse return false;
+        cursor = self.binding_scope_parents.get(cursor) orelse return false;
     }
 }
 
@@ -8523,29 +8842,29 @@ fn makeSyntheticIdent(self: *Self, original_ident: Ident.Idx) Ident.Idx {
     };
 }
 
-fn freshStatementPatternScope(self: *Self) u64 {
-    return self.freshChildPatternScope(self.current_pattern_scope);
+fn freshStatementBindingScope(self: *Self) u64 {
+    return self.freshChildBindingScope(self.current_binding_scope);
 }
 
-fn freshChildPatternScope(self: *Self, parent_scope: u64) u64 {
-    const scope = self.next_statement_pattern_scope;
-    self.next_statement_pattern_scope += 1;
+fn freshChildBindingScope(self: *Self, parent_scope: u64) u64 {
+    const scope = self.next_statement_binding_scope;
+    self.next_statement_binding_scope += 1;
     if (parent_scope != 0) {
-        self.pattern_scope_parents.put(scope, parent_scope) catch @panic("OutOfMemory");
+        self.binding_scope_parents.put(scope, parent_scope) catch @panic("OutOfMemory");
     }
     return scope;
 }
 
-fn currentVisibleReassignableBindings(self: *Self) Allocator.Error![]VisiblePatternBinding {
-    var bindings = std.ArrayList(VisiblePatternBinding).empty;
+fn currentVisibleReassignableBindings(self: *Self) Allocator.Error![]VisibleBindingLocal {
+    var bindings = std.ArrayList(VisibleBindingLocal).empty;
     errdefer bindings.deinit(self.allocator);
 
     var seen_patterns = std.AutoHashMap(u64, void).init(self.allocator);
     defer seen_patterns.deinit();
 
-    var scope = self.current_pattern_scope;
+    var scope = self.current_binding_scope;
     while (true) {
-        var it = self.pattern_bindings.iterator();
+        var it = self.binding_records.iterator();
         while (it.next()) |entry| {
             const packed_key = entry.key_ptr.*;
             const entry_scope: u64 = @truncate(packed_key >> 64);
@@ -8570,15 +8889,15 @@ fn currentVisibleReassignableBindings(self: *Self) Allocator.Error![]VisiblePatt
         }
 
         if (scope == 0) break;
-        scope = self.pattern_scope_parents.get(scope) orelse 0;
+        scope = self.binding_scope_parents.get(scope) orelse 0;
     }
 
     std.mem.sort(
-        VisiblePatternBinding,
+        VisibleBindingLocal,
         bindings.items,
         {},
         struct {
-            fn lessThan(_: void, lhs: VisiblePatternBinding, rhs: VisiblePatternBinding) bool {
+            fn lessThan(_: void, lhs: VisibleBindingLocal, rhs: VisibleBindingLocal) bool {
                 return @intFromEnum(lhs.pattern_idx) < @intFromEnum(rhs.pattern_idx);
             }
         }.lessThan,
@@ -8590,10 +8909,10 @@ fn currentVisibleReassignableBindings(self: *Self) Allocator.Error![]VisiblePatt
 fn visibleReassignableBindingsInScope(
     self: *Self,
     scope: u64,
-) Allocator.Error![]VisiblePatternBinding {
-    const saved_scope = self.current_pattern_scope;
-    self.current_pattern_scope = scope;
-    defer self.current_pattern_scope = saved_scope;
+) Allocator.Error![]VisibleBindingLocal {
+    const saved_scope = self.current_binding_scope;
+    self.current_binding_scope = scope;
+    defer self.current_binding_scope = saved_scope;
     return self.currentVisibleReassignableBindings();
 }
 
@@ -8642,26 +8961,26 @@ fn inheritVisibleReassignableBindingsInScopeExcluding(
     const bindings = try self.visibleReassignableBindingsInScope(before_scope);
     defer self.allocator.free(bindings);
 
-    const saved_scope = self.current_pattern_scope;
-    self.current_pattern_scope = after_scope;
-    defer self.current_pattern_scope = saved_scope;
+    const saved_scope = self.current_binding_scope;
+    self.current_binding_scope = after_scope;
+    defer self.current_binding_scope = saved_scope;
 
     for_bindings: for (bindings) |binding| {
         for (excluded_patterns) |excluded_pattern| {
             if (binding.pattern_idx == excluded_pattern) continue :for_bindings;
         }
-        if (self.lookupExistingPatternLocalInScope(
+        if (self.lookupExistingBindingLocalInScope(
             self.current_module_idx,
             after_scope,
             binding.pattern_idx,
         ) != null) continue;
 
-        try self.bindPatternLocalInCurrentScope(binding.pattern_idx, binding.local);
+        try self.bindBindingLocalInCurrentScope(binding.pattern_idx, binding.local);
     }
 
     for (excluded_patterns) |excluded_pattern| {
-        if (self.lookupPatternBindingRecordInScope(self.current_module_idx, after_scope, excluded_pattern) != null) continue;
-        try self.shadowPatternLocalInCurrentScope(excluded_pattern);
+        if (self.lookupBindingRecordInScope(self.current_module_idx, after_scope, excluded_pattern) != null) continue;
+        try self.shadowBindingInCurrentScope(excluded_pattern);
     }
 }
 
@@ -8674,15 +8993,15 @@ fn predeclareVisibleReassignableBindingsInScopeExcluding(
     const bindings = try self.visibleReassignableBindingsInScope(before_scope);
     defer self.allocator.free(bindings);
 
-    const saved_scope = self.current_pattern_scope;
-    self.current_pattern_scope = after_scope;
-    defer self.current_pattern_scope = saved_scope;
+    const saved_scope = self.current_binding_scope;
+    self.current_binding_scope = after_scope;
+    defer self.current_binding_scope = saved_scope;
 
     for_bindings: for (bindings) |binding| {
         for (excluded_patterns) |excluded_pattern| {
             if (binding.pattern_idx == excluded_pattern) continue :for_bindings;
         }
-        if (self.lookupExistingPatternLocalInScope(
+        if (self.lookupExistingBindingLocalInScope(
             self.current_module_idx,
             after_scope,
             binding.pattern_idx,
@@ -8693,12 +9012,12 @@ fn predeclareVisibleReassignableBindingsInScopeExcluding(
             self.store.getLocal(source_local).monotype,
             true,
         );
-        try self.bindPatternLocalInCurrentScope(binding.pattern_idx, new_local);
+        try self.bindBindingLocalInCurrentScope(binding.pattern_idx, new_local);
     }
 
     for (excluded_patterns) |excluded_pattern| {
-        if (self.lookupPatternBindingRecordInScope(self.current_module_idx, after_scope, excluded_pattern) != null) continue;
-        try self.shadowPatternLocalInCurrentScope(excluded_pattern);
+        if (self.lookupBindingRecordInScope(self.current_module_idx, after_scope, excluded_pattern) != null) continue;
+        try self.shadowBindingInCurrentScope(excluded_pattern);
     }
 }
 
@@ -8867,7 +9186,7 @@ fn resolveMonotype(self: *Self, session: LowerSession, expr_idx: CIR.Expr.Idx) A
     );
     switch (expr) {
         .e_lookup_local => |lookup| {
-            if (lookupProgramPatternCallableValue(session, lookup.pattern_idx)) |callable_value| {
+            if (try resolveProgramPatternCallableValue(session, lookup.pattern_idx)) |callable_value| {
                 const mono = self.callable_pipeline.getCallableValueRuntimeMonotype(callable_value);
                 return self.importMonotypeFromStore(
                     &self.callable_pipeline.context_mono.monotype_store,
@@ -8911,7 +9230,7 @@ fn currentCommonIdents(self: *const Self) ModuleEnv.CommonIdents {
     return self.all_module_envs[self.current_module_idx].idents;
 }
 
-fn refreshPatternLocalMonotype(
+fn refreshBindingLocalMonotype(
     self: *Self,
     session: LowerSession,
     pattern_idx: CIR.Pattern.Idx,
@@ -8926,17 +9245,13 @@ fn requirePatternMonotype(
     session: LowerSession,
     pattern_idx: CIR.Pattern.Idx,
 ) Allocator.Error!Monotype.Idx {
-    const explicit_key = patternScopeKey(self.current_module_idx, self.current_pattern_scope, pattern_idx);
-    if (self.pattern_bindings.get(explicit_key)) |binding| if (!binding.shadowed) if (binding.explicit_monotype) |monotype| {
+    const explicit_key = bindingScopeKey(self.current_module_idx, self.current_binding_scope, pattern_idx);
+    if (self.binding_records.get(explicit_key)) |binding| if (!binding.shadowed) if (binding.explicit_monotype) |monotype| {
         return monotype;
     };
 
-    if (self.callable_pipeline.getContextPatternSourceExpr(
-        session.source_context,
-        self.current_module_idx,
-        pattern_idx,
-    )) |source_expr_ref| {
-        var source_resolved = if (try self.resolveExprRefCallableValue(source_expr_ref)) |callable_value|
+    if (self.lookupBindingSourceExprRef(pattern_idx)) |source_expr_ref| {
+        var source_resolved = if (try self.resolveLowerExprSourceCallableValue(source_expr_ref)) |callable_value|
             self.callable_pipeline.getCallableValueRuntimeMonotype(callable_value)
         else
             self.callable_pipeline.getExprMonotype(
@@ -8955,7 +9270,7 @@ fn requirePatternMonotype(
                 source_resolved.module_idx,
                 self.current_module_idx,
             );
-            for (self.callable_pipeline.lambdamono.getValueProjectionEntries(source_expr_ref.projections)) |projection| {
+            for (source_expr_ref.projections) |projection| {
                 monotype = try self.projectMonotypeByValueProjection(monotype, projection);
             }
             return monotype;
@@ -8977,47 +9292,27 @@ fn requirePatternMonotype(
             @intFromEnum(pattern_idx),
             @tagName(self.all_module_envs[self.current_module_idx].store.getPattern(pattern_idx)),
             self.current_module_idx,
-            self.current_pattern_scope,
+            self.current_binding_scope,
             session.callableInstRawForDebug(),
             session.rootExprRawForDebug(),
-            if (self.callable_pipeline.getContextPatternSourceExpr(
-                session.source_context,
-                self.current_module_idx,
-                pattern_idx,
-            )) |source_expr_ref|
+            if (self.lookupBindingSourceExprRef(pattern_idx)) |source_expr_ref|
                 @tagName(source_expr_ref.source_context)
             else
                 "none",
-            if (self.callable_pipeline.getContextPatternSourceExpr(
-                session.source_context,
-                self.current_module_idx,
-                pattern_idx,
-            )) |source_expr_ref|
+            if (self.lookupBindingSourceExprRef(pattern_idx)) |source_expr_ref|
                 source_expr_ref.module_idx
             else
                 std.math.maxInt(u32),
-            if (self.callable_pipeline.getContextPatternSourceExpr(
-                session.source_context,
-                self.current_module_idx,
-                pattern_idx,
-            )) |source_expr_ref|
+            if (self.lookupBindingSourceExprRef(pattern_idx)) |source_expr_ref|
                 @intFromEnum(source_expr_ref.expr_idx)
             else
                 std.math.maxInt(u32),
-            if (self.callable_pipeline.getContextPatternSourceExpr(
-                session.source_context,
-                self.current_module_idx,
-                pattern_idx,
-            )) |source_expr_ref|
-                self.callable_pipeline.lambdamono.getValueProjectionEntries(source_expr_ref.projections).len
+            if (self.lookupBindingSourceExprRef(pattern_idx)) |source_expr_ref|
+                source_expr_ref.projections.len
             else
                 0,
-            if (lookupProgramPatternCallableValue(session, pattern_idx) != null) "yes" else "no",
-            if (self.callable_pipeline.getContextPatternSourceExpr(
-                session.source_context,
-                self.current_module_idx,
-                pattern_idx,
-            )) |source_expr_ref|
+            if ((try resolveProgramPatternCallableValue(session, pattern_idx)) != null) "yes" else "no",
+            if (self.lookupBindingSourceExprRef(pattern_idx)) |source_expr_ref|
                 if (self.callable_pipeline.getExprCallableValue(
                     source_expr_ref.source_context,
                     source_expr_ref.module_idx,
@@ -9028,11 +9323,7 @@ fn requirePatternMonotype(
                     "no"
             else
                 "no",
-            if (self.callable_pipeline.getContextPatternSourceExpr(
-                session.source_context,
-                self.current_module_idx,
-                pattern_idx,
-            )) |source_expr_ref|
+            if (self.lookupBindingSourceExprRef(pattern_idx)) |source_expr_ref|
                 if (self.callable_pipeline.getExprMonotype(
                     source_expr_ref.source_context,
                     source_expr_ref.module_idx,
