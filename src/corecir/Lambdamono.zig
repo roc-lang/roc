@@ -863,6 +863,14 @@ fn Transform(comptime ResultPtr: type, comptime Driver: type) type {
                     expr_idx,
                 );
             }
+
+            // Match cor's specialization shape: once solved callable insts
+            // exist, materialize each specialized body directly rather than
+            // hoping later expr-demand walks discover it.
+            var callable_inst_idx: usize = 0;
+            while (callable_inst_idx < self.result.lambdasolved.getCallableInsts().len) : (callable_inst_idx += 1) {
+                try self.ensureCallableInstBodyGraph(@enumFromInt(callable_inst_idx));
+            }
         }
 
         fn assembleProgramExprNode(

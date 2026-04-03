@@ -48,6 +48,34 @@ pub const SourceContext = union(enum) {
     template_expr: TemplateExprContext,
 };
 
+fn requireSourceContextFromThreadLike(
+    thread: anytype,
+    module_idx: u32,
+    var_: ?types.Var,
+) SourceContext {
+    return switch (@typeInfo(@TypeOf(thread))) {
+        .optional => if (thread) |tracked_thread|
+            tracked_thread.requireSourceContext()
+        else {
+            if (std.debug.runtime_safety) {
+                if (var_) |resolved_var| {
+                    std.debug.panic(
+                        "ContextMono invariant violated: missing source context for module={d} var={d}",
+                        .{ module_idx, @intFromEnum(resolved_var) },
+                    );
+                } else {
+                    std.debug.panic(
+                        "ContextMono invariant violated: missing source context for module={d}",
+                        .{module_idx},
+                    );
+                }
+            }
+            unreachable;
+        },
+        else => thread.requireSourceContext(),
+    };
+}
+
 pub const BoundTypeVarKey = struct {
     module_idx: u32,
     type_var: types.Var,
@@ -613,7 +641,7 @@ pub fn mergeResolvedMonotypeMap(
     resolved: ResolvedMonotype,
     comptime label: []const u8,
 ) Allocator.Error!void {
-    const gop = try map.getOrPut(driver.allocator, key);
+    const gop = try @constCast(map).getOrPut(driver.allocator, key);
     if (!gop.found_existing) {
         gop.value_ptr.* = resolved;
         return;
@@ -739,7 +767,7 @@ pub fn recordTypeVarMonotypeForThread(
     return recordTypeVarMonotypeForSourceContext(
         driver,
         result,
-        thread.requireSourceContext(),
+        requireSourceContextFromThreadLike(thread, module_idx, type_var),
         module_idx,
         type_var,
         monotype,
@@ -1310,7 +1338,7 @@ fn remapMonotypeBetweenModulesRec(
         .list, .box, .tuple, .func, .record, .tag_union => {},
     }
 
-    const placeholder = try result.context_mono.monotype_store.addMonotype(driver.allocator, .recursive_placeholder);
+    const placeholder = try (@constCast(&result.context_mono.monotype_store)).addMonotype(driver.allocator, .recursive_placeholder);
     try remapped.put(monotype, placeholder);
 
     const mapped_mono: Monotype.Monotype = switch (mono) {
@@ -1354,7 +1382,7 @@ fn remapMonotypeBetweenModulesRec(
                 ));
             }
 
-            const mapped_elems = try result.context_mono.monotype_store.addIdxSpan(
+            const mapped_elems = try (@constCast(&result.context_mono.monotype_store)).addIdxSpan(
                 driver.allocator,
                 scratches.idxs.sliceFromStart(idx_top),
             );
@@ -1377,7 +1405,7 @@ fn remapMonotypeBetweenModulesRec(
                     scratches,
                 ));
             }
-            const mapped_args = try result.context_mono.monotype_store.addIdxSpan(
+            const mapped_args = try (@constCast(&result.context_mono.monotype_store)).addIdxSpan(
                 driver.allocator,
                 scratches.idxs.sliceFromStart(idx_top),
             );
@@ -1419,7 +1447,7 @@ fn remapMonotypeBetweenModulesRec(
                 });
             }
 
-            const mapped_fields = try result.context_mono.monotype_store.addFields(
+            const mapped_fields = try (@constCast(&result.context_mono.monotype_store)).addFields(
                 driver.allocator,
                 scratches.fields.sliceFromStart(fields_top),
             );
@@ -1449,7 +1477,7 @@ fn remapMonotypeBetweenModulesRec(
                     ));
                 }
 
-                const mapped_payloads = try result.context_mono.monotype_store.addIdxSpan(
+                const mapped_payloads = try (@constCast(&result.context_mono.monotype_store)).addIdxSpan(
                     driver.allocator,
                     scratches.idxs.sliceFromStart(payload_top),
                 );
@@ -1459,7 +1487,7 @@ fn remapMonotypeBetweenModulesRec(
                 });
             }
 
-            const mapped_tags = try result.context_mono.monotype_store.addTags(
+            const mapped_tags = try (@constCast(&result.context_mono.monotype_store)).addTags(
                 driver.allocator,
                 scratches.tags.sliceFromStart(tags_top),
             );
@@ -1533,7 +1561,7 @@ pub fn monotypeFromTypeVarInSourceContextWithExtraBindings(
     scratches.module_env = module_env;
     scratches.module_idx = module_idx;
     scratches.all_module_envs = driver.all_module_envs;
-    return result.context_mono.monotype_store.fromTypeVarExact(
+    return (@constCast(&result.context_mono.monotype_store)).fromTypeVarExact(
         driver.allocator,
         store_types,
         var_,
@@ -1605,7 +1633,7 @@ pub fn monotypeFromTypeVarWithLanguageDefaultingInSourceContextWithExtraBindings
     scratches.module_env = module_env;
     scratches.module_idx = module_idx;
     scratches.all_module_envs = driver.all_module_envs;
-    return result.context_mono.monotype_store.fromTypeVar(
+    return (@constCast(&result.context_mono.monotype_store)).fromTypeVar(
         driver.allocator,
         store_types,
         var_,
@@ -1623,15 +1651,16 @@ pub fn resolveTypeVarMonotypeResolved(
     module_idx: u32,
     var_: types.Var,
 ) Allocator.Error!ResolvedMonotype {
+    const source_context = requireSourceContextFromThreadLike(thread, module_idx, var_);
     const module_env = driver.all_module_envs[module_idx];
     const resolved_var = module_env.types.resolveVar(var_).var_;
-    if (lookupContextTypeVarMonotype(driver, result, thread.requireSourceContext(), module_idx, resolved_var)) |mono| {
+    if (lookupContextTypeVarMonotype(driver, result, source_context, module_idx, resolved_var)) |mono| {
         return mono;
     }
     const mono = try monotypeFromTypeVarInSourceContext(
         driver,
         result,
-        thread.requireSourceContext(),
+        source_context,
         module_idx,
         &module_env.types,
         resolved_var,
@@ -1651,7 +1680,7 @@ pub fn resolveTypeVarMonotypeResolved(
     const defaulted = try monotypeFromTypeVarWithLanguageDefaultingInSourceContext(
         driver,
         result,
-        thread.requireSourceContext(),
+        source_context,
         module_idx,
         &module_env.types,
         resolved_var,

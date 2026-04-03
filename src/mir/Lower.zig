@@ -810,7 +810,7 @@ fn lookupProgramPatternMonotype(session: LowerSession, pattern_idx: CIR.Pattern.
     const SourceContextThread = struct {
         source_context: Pipeline.SourceContext,
 
-        fn requireSourceContext(self: @This()) Pipeline.SourceContext {
+        pub fn requireSourceContext(self: @This()) Pipeline.SourceContext {
             return self.source_context;
         }
     };
