@@ -135,12 +135,14 @@ pub fn exactCallableInstFromCallSite(call_site: CallSite) ?CallableInstId {
     };
 }
 
+pub const CallableIntro = struct {
+    callable_value: CallableValue,
+    callable_inst: CallableInstId,
+};
+
 pub const ExprCallableSemantics = union(enum) {
     callable: CallableValue,
-    intro: struct {
-        callable_value: CallableValue,
-        callable_inst: CallableInstId,
-    },
+    intro: CallableIntro,
 };
 
 pub const LookupResolution = union(enum) {
@@ -148,37 +150,42 @@ pub const LookupResolution = union(enum) {
     def: Lambdasolved.ExternalDefSource,
 };
 
-pub const ExprRole = union(enum) {
+pub const ExprPayload = union(enum) {
     plain,
-    callable: ExprCallableSemantics,
-    call: CallSite,
-    lookup: LookupResolution,
-    dispatch: DispatchSemantics,
+    callable_value: CallableValue,
+    callable_intro: CallableIntro,
+    direct_call: CallableInstId,
+    indirect_call: IndirectCall,
+    low_level_call: CIR.Expr.LowLevel,
+    lookup_expr: ExprRef,
+    lookup_def: Lambdasolved.ExternalDefSource,
+    dispatch_target: DispatchSolved.DispatchExprTarget,
+    dispatch_intrinsic: DispatchIntrinsic,
 };
 
-pub const BuilderState = struct {
+pub const AssemblyState = struct {
     in_progress_exprs: std.AutoHashMapUnmanaged(ContextMono.ContextExprKey, void),
     assembled_exprs: std.AutoHashMapUnmanaged(ContextMono.ContextExprKey, void),
 
-    pub fn init() BuilderState {
+    pub fn init() AssemblyState {
         return .{
             .in_progress_exprs = .empty,
             .assembled_exprs = .empty,
         };
     }
 
-    pub fn deinit(self: *BuilderState, allocator: Allocator) void {
+    pub fn deinit(self: *AssemblyState, allocator: Allocator) void {
         self.in_progress_exprs.deinit(allocator);
         self.assembled_exprs.deinit(allocator);
     }
 
-    pub fn clear(self: *BuilderState) void {
+    pub fn clear(self: *AssemblyState) void {
         self.in_progress_exprs.clearRetainingCapacity();
         self.assembled_exprs.clearRetainingCapacity();
     }
 
     pub fn beginExprAssembly(
-        self: *BuilderState,
+        self: *AssemblyState,
         allocator: Allocator,
         key: ContextMono.ContextExprKey,
     ) Allocator.Error!bool {
@@ -187,16 +194,16 @@ pub const BuilderState = struct {
         return true;
     }
 
-    pub fn endExprAssembly(self: *BuilderState, key: ContextMono.ContextExprKey) void {
+    pub fn endExprAssembly(self: *AssemblyState, key: ContextMono.ContextExprKey) void {
         _ = self.in_progress_exprs.remove(key);
     }
 
-    pub fn isExprAssembled(self: *const BuilderState, key: ContextMono.ContextExprKey) bool {
+    pub fn isExprAssembled(self: *const AssemblyState, key: ContextMono.ContextExprKey) bool {
         return self.assembled_exprs.contains(key);
     }
 
     pub fn markExprAssembled(
-        self: *BuilderState,
+        self: *AssemblyState,
         allocator: Allocator,
         key: ContextMono.ContextExprKey,
     ) Allocator.Error!void {
@@ -342,7 +349,7 @@ pub const PatternBinding = struct {
 /// One finalized specialized expr in the executable `Lambdamono.Program`.
 ///
 /// Invariant: every `Expr` stored in `Program.exprs` already has its exact
-/// monotype. Finalization/build progress must live in `BuilderState`, not in
+/// monotype. Finalization/build progress must live in `AssemblyState`, not in
 /// the executable IR itself.
 pub const Expr = struct {
     source_context: SourceContext,
@@ -351,127 +358,103 @@ pub const Expr = struct {
     monotype: ContextMono.ResolvedMonotype,
     child_exprs: ExprIdSpan = .empty(),
     child_stmts: StmtIdSpan = .empty(),
-    role: ExprRole = .plain,
+    payload: ExprPayload = .plain,
     origin: ValueOrigin = .self,
 
     pub fn getCallableValue(self: *const Expr) ?CallableValue {
-        return switch (self.role) {
-            .callable => |callable_semantics| switch (callable_semantics) {
-                .callable => |callable_value| callable_value,
-                .intro => |intro| intro.callable_value,
-            },
-            .plain, .call, .lookup, .dispatch => null,
+        return switch (self.payload) {
+            .callable_value => |callable_value| callable_value,
+            .callable_intro => |intro| intro.callable_value,
+            else => null,
         };
     }
 
-    pub fn getCallableIntro(self: *const Expr) ?struct {
-        callable_value: CallableValue,
-        callable_inst: CallableInstId,
-    } {
-        return switch (self.role) {
-            .callable => |callable_semantics| switch (callable_semantics) {
-                .intro => |intro| intro,
-                .callable => null,
-            },
-            .plain, .call, .lookup, .dispatch => null,
+    pub fn getCallableIntro(self: *const Expr) ?CallableIntro {
+        return switch (self.payload) {
+            .callable_intro => |intro| intro,
+            else => null,
         };
     }
 
     pub fn getCallable(self: *const Expr) ?ExprCallableSemantics {
-        return switch (self.role) {
-            .callable => |callable_semantics| callable_semantics,
-            .plain, .call, .lookup, .dispatch => null,
+        return switch (self.payload) {
+            .callable_value => |callable_value| .{ .callable = callable_value },
+            .callable_intro => |intro| .{ .intro = intro },
+            else => null,
         };
     }
 
     pub fn getDirectCall(self: *const Expr) ?CallableInstId {
-        return switch (self.role) {
-            .call => |call_site| switch (call_site) {
-                .direct => |callable_inst| callable_inst,
-                .indirect_call, .low_level => null,
-            },
-            .plain, .callable, .lookup, .dispatch => null,
+        return switch (self.payload) {
+            .direct_call => |callable_inst| callable_inst,
+            else => null,
         };
     }
 
     pub fn getIndirectCall(self: *const Expr) ?IndirectCall {
-        return switch (self.role) {
-            .call => |call_site| switch (call_site) {
-                .indirect_call => |indirect_call| indirect_call,
-                .direct, .low_level => null,
-            },
-            .plain, .callable, .lookup, .dispatch => null,
+        return switch (self.payload) {
+            .indirect_call => |indirect_call| indirect_call,
+            else => null,
         };
     }
 
     pub fn getLowLevelCall(self: *const Expr) ?CIR.Expr.LowLevel {
-        return switch (self.role) {
-            .call => |call_site| switch (call_site) {
-                .low_level => |low_level| low_level,
-                .direct, .indirect_call => null,
-            },
-            .plain, .callable, .lookup, .dispatch => null,
+        return switch (self.payload) {
+            .low_level_call => |low_level| low_level,
+            else => null,
         };
     }
 
     pub fn getCall(self: *const Expr) ?CallSite {
-        return switch (self.role) {
-            .call => |call_site| call_site,
-            .plain, .callable, .lookup, .dispatch => null,
+        return switch (self.payload) {
+            .direct_call => |callable_inst| .{ .direct = callable_inst },
+            .indirect_call => |indirect_call| .{ .indirect_call = indirect_call },
+            .low_level_call => |low_level| .{ .low_level = low_level },
+            else => null,
         };
     }
 
     pub fn getLookupExpr(self: *const Expr) ?ExprRef {
-        return switch (self.role) {
-            .lookup => |lookup_resolution| switch (lookup_resolution) {
-                .expr => |expr_ref| expr_ref,
-                .def => null,
-            },
-            .plain, .callable, .call, .dispatch => null,
+        return switch (self.payload) {
+            .lookup_expr => |expr_ref| expr_ref,
+            else => null,
         };
     }
 
     pub fn getLookupDef(self: *const Expr) ?Lambdasolved.ExternalDefSource {
-        return switch (self.role) {
-            .lookup => |lookup_resolution| switch (lookup_resolution) {
-                .def => |def_source| def_source,
-                .expr => null,
-            },
-            .plain, .callable, .call, .dispatch => null,
+        return switch (self.payload) {
+            .lookup_def => |def_source| def_source,
+            else => null,
         };
     }
 
     pub fn getLookup(self: *const Expr) ?LookupResolution {
-        return switch (self.role) {
-            .lookup => |lookup_resolution| lookup_resolution,
-            .plain, .callable, .call, .dispatch => null,
+        return switch (self.payload) {
+            .lookup_expr => |expr_ref| .{ .expr = expr_ref },
+            .lookup_def => |def_source| .{ .def = def_source },
+            else => null,
         };
     }
 
     pub fn getDispatchTarget(self: *const Expr) ?DispatchSolved.DispatchExprTarget {
-        return switch (self.role) {
-            .dispatch => |dispatch_semantics| switch (dispatch_semantics) {
-                .target => |target| target,
-                .intrinsic => null,
-            },
-            .plain, .callable, .call, .lookup => null,
+        return switch (self.payload) {
+            .dispatch_target => |target| target,
+            else => null,
         };
     }
 
     pub fn getDispatchIntrinsic(self: *const Expr) ?DispatchIntrinsic {
-        return switch (self.role) {
-            .dispatch => |dispatch_semantics| switch (dispatch_semantics) {
-                .intrinsic => |intrinsic| intrinsic,
-                .target => null,
-            },
-            .plain, .callable, .call, .lookup => null,
+        return switch (self.payload) {
+            .dispatch_intrinsic => |intrinsic| intrinsic,
+            else => null,
         };
     }
 
     pub fn getDispatch(self: *const Expr) ?DispatchSemantics {
-        return switch (self.role) {
-            .dispatch => |dispatch_semantics| dispatch_semantics,
-            .plain, .callable, .call, .lookup => null,
+        return switch (self.payload) {
+            .dispatch_target => |target| .{ .target = target },
+            .dispatch_intrinsic => |intrinsic| .{ .intrinsic = intrinsic },
+            else => null,
         };
     }
 
@@ -918,7 +901,7 @@ pub const Program = struct {
                 .monotype = monotype,
                 .child_exprs = .empty(),
                 .child_stmts = .empty(),
-                .role = .plain,
+                .payload = .plain,
                 .origin = .self,
             });
             try self.expr_ids_by_key.put(allocator, key, new_expr_id);

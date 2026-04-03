@@ -465,18 +465,7 @@ fn callableDefBodyRetMonotype(
     const resolved = if (body_expr.getCallable()) |callable_semantics| switch (callable_semantics) {
         .callable => |callable_value| self.callable_pipeline.getCallableValueRuntimeMonotype(callable_value),
         .intro => |intro| self.callable_pipeline.getCallableValueRuntimeMonotype(intro.callable_value),
-    } else body_expr.monotype orelse {
-        if (std.debug.runtime_safety) {
-            std.debug.panic(
-                "Pipeline invariant violated: callable body expr {d} in module {d} was lowered before its monotype was finalized",
-                .{
-                    @intFromEnum(body_expr.source_expr),
-                    body_expr.module_idx,
-                },
-            );
-        }
-        unreachable;
-    };
+    } else body_expr.monotype;
     return self.importMonotypeFromStore(
         &self.callable_pipeline.context_mono.monotype_store,
         resolved.idx,

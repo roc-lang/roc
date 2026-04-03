@@ -557,8 +557,6 @@ pub const Pass = struct {
     all_module_envs: []const *ModuleEnv,
     current_module_idx: u32,
     app_module_idx: ?u32,
-    root_analysis: Lambdasolved.RootAnalysisState,
-    program_assembly: Lambdamono.BuilderState,
 
     pub fn init(
         allocator: Allocator,
@@ -571,8 +569,6 @@ pub const Pass = struct {
             .all_module_envs = all_module_envs,
             .current_module_idx = current_module_idx,
             .app_module_idx = app_module_idx,
-            .root_analysis = Lambdasolved.RootAnalysisState.init(),
-            .program_assembly = Lambdamono.BuilderState.init(),
         };
     }
 
@@ -1405,13 +1401,7 @@ const MaterializeCallableValueFailure = enum {
     }
 
     pub fn deinit(self: *Pass) void {
-        self.root_analysis.deinit(self.allocator);
-        self.program_assembly.deinit(self.allocator);
-    }
-
-    fn resetRunState(self: *Pass) void {
-        self.root_analysis.clearAll();
-        self.program_assembly.clear();
+        _ = self;
     }
 
     pub fn runRootSourceExpr(self: *Pass, expr_idx: CIR.Expr.Idx) Allocator.Error!Result {
@@ -1420,63 +1410,17 @@ const MaterializeCallableValueFailure = enum {
         return result;
     }
 
-    fn runTemplateCatalogStage(self: *Pass, result: *Result) Allocator.Error!void {
-        trace.log("primeAllModules start", .{});
-        try self.primeAllModules(result);
-        trace.log("primeAllModules done", .{});
-    }
-
-    fn runRootAnalysisStage(self: *Pass, result: *Result, root_exprs: []const CIR.Expr.Idx) Allocator.Error!void {
-        const RootScanner = struct {
-            pass: *Pass,
-            result: *Result,
-
-            fn scan(self: @This(), root: RootExprContext) Allocator.Error!void {
-                trace.log("scanRootExpr start expr={d}", .{@intFromEnum(root.expr_idx)});
-                try self.pass.scanCirValueExpr(
-                    self.result,
-                    SemanticThread.trackedThread(.{ .root_expr = root }),
-                    root.module_idx,
-                    root.expr_idx,
-                );
-                trace.log("scanRootExpr done expr={d}", .{@intFromEnum(root.expr_idx)});
-            }
-        };
-
-        try self.root_analysis.scanRoots(
-            self.current_module_idx,
-            root_exprs,
-            RootScanner{ .pass = self, .result = result },
-        );
-    }
-
-    fn runLambdamonoAssemblyStage(
+    fn assembleRootProgramExprs(
         self: *Pass,
         result: *Result,
         root_exprs: []const CIR.Expr.Idx,
+        assembly: *Lambdamono.AssemblyState,
     ) Allocator.Error!void {
-        try self.assembleRootProgramExprs(result, root_exprs);
-        trace.log("assembleCallableDefExprGraph start", .{});
-        try self.assembleCallableDefExprGraph(result);
-        trace.log("assembleCallableDefExprGraph done", .{});
-    }
-
-    fn runStagesForRoots(
-        self: *Pass,
-        result: *Result,
-        root_exprs: []const CIR.Expr.Idx,
-    ) Allocator.Error!void {
-        self.resetRunState();
-        try self.runTemplateCatalogStage(result);
-        try self.runRootAnalysisStage(result, root_exprs);
-        try self.runLambdamonoAssemblyStage(result, root_exprs);
-    }
-
-    fn assembleRootProgramExprs(self: *Pass, result: *Result, root_exprs: []const CIR.Expr.Idx) Allocator.Error!void {
         for (root_exprs) |expr_idx| {
             trace.log("assembleProgramExprNode start expr={d}", .{@intFromEnum(expr_idx)});
             _ = try self.assembleProgramExprNode(
                 result,
+                assembly,
                 .{ .root_expr = .{
                     .module_idx = self.current_module_idx,
                     .expr_idx = expr_idx,
@@ -1494,7 +1438,7 @@ const MaterializeCallableValueFailure = enum {
         expr_idx: CIR.Expr.Idx,
     ) Allocator.Error!void {
         trace.log("runRootSourceExprInto start expr={d}", .{@intFromEnum(expr_idx)});
-        try self.runStagesForRoots(result, &.{expr_idx});
+        try self.runRootSourceExprsInto(result, &.{expr_idx});
     }
 
     pub fn runRootSourceExprs(self: *Pass, exprs: []const CIR.Expr.Idx) Allocator.Error!Result {
@@ -1508,7 +1452,43 @@ const MaterializeCallableValueFailure = enum {
         result: *Result,
         exprs: []const CIR.Expr.Idx,
     ) Allocator.Error!void {
-        try self.runStagesForRoots(result, exprs);
+        var root_analysis = Lambdasolved.RootAnalysisState.init();
+        defer root_analysis.deinit(self.allocator);
+
+        const RootScanner = struct {
+            pass: *Pass,
+            result: *Result,
+            root_analysis: *Lambdasolved.RootAnalysisState,
+
+            fn scan(self: @This(), root: RootExprContext) Allocator.Error!void {
+                trace.log("scanRootExpr start expr={d}", .{@intFromEnum(root.expr_idx)});
+                try self.pass.scanCirValueExpr(
+                    self.root_analysis,
+                    self.result,
+                    SemanticThread.trackedThread(.{ .root_expr = root }),
+                    root.module_idx,
+                    root.expr_idx,
+                );
+                trace.log("scanRootExpr done expr={d}", .{@intFromEnum(root.expr_idx)});
+            }
+        };
+
+        trace.log("primeAllModules start", .{});
+        try self.seedAllModuleDefPatternOrigins(result);
+        try result.template_catalog.primeAllModules(self.allocator, self.all_module_envs);
+        trace.log("primeAllModules done", .{});
+        try root_analysis.scanRoots(
+            self.current_module_idx,
+            exprs,
+            RootScanner{ .pass = self, .result = result, .root_analysis = &root_analysis },
+        );
+
+        var assembly = Lambdamono.AssemblyState.init();
+        defer assembly.deinit(self.allocator);
+        try self.assembleRootProgramExprs(result, exprs, &assembly);
+        trace.log("assembleCallableDefExprGraph start", .{});
+        try self.assembleCallableDefExprGraph(result, &assembly);
+        trace.log("assembleCallableDefExprGraph done", .{});
     }
 
     /// Pipeline all callables rooted in the current module.
@@ -1522,16 +1502,50 @@ const MaterializeCallableValueFailure = enum {
         self: *Pass,
         result: *Result,
     ) Allocator.Error!void {
-        self.resetRunState();
-        try self.runTemplateCatalogStage(result);
+        var root_analysis = Lambdasolved.RootAnalysisState.init();
+        defer root_analysis.deinit(self.allocator);
+
+        const RootScanner = struct {
+            pass: *Pass,
+            result: *Result,
+            root_analysis: *Lambdasolved.RootAnalysisState,
+
+            fn scan(self: @This(), root: RootExprContext) Allocator.Error!void {
+                trace.log("scanRootExpr start expr={d}", .{@intFromEnum(root.expr_idx)});
+                try self.pass.scanCirValueExpr(
+                    self.root_analysis,
+                    self.result,
+                    SemanticThread.trackedThread(.{ .root_expr = root }),
+                    root.module_idx,
+                    root.expr_idx,
+                );
+                trace.log("scanRootExpr done expr={d}", .{@intFromEnum(root.expr_idx)});
+            }
+        };
+
+        trace.log("primeAllModules start", .{});
+        try self.seedAllModuleDefPatternOrigins(result);
+        try result.template_catalog.primeAllModules(self.allocator, self.all_module_envs);
+        trace.log("primeAllModules done", .{});
         const root_exprs = result.template_catalog.getModuleRootExprs(self.current_module_idx);
-        try self.runRootAnalysisStage(result, root_exprs);
-        try self.runLambdamonoAssemblyStage(result, root_exprs);
+        try root_analysis.scanRoots(
+            self.current_module_idx,
+            root_exprs,
+            RootScanner{ .pass = self, .result = result, .root_analysis = &root_analysis },
+        );
+
+        var assembly = Lambdamono.AssemblyState.init();
+        defer assembly.deinit(self.allocator);
+        try self.assembleRootProgramExprs(result, root_exprs, &assembly);
+        trace.log("assembleCallableDefExprGraph start", .{});
+        try self.assembleCallableDefExprGraph(result, &assembly);
+        trace.log("assembleCallableDefExprGraph done", .{});
     }
 
     fn assembleCallableDefExprGraph(
         self: *Pass,
         result: *Result,
+        assembly: *Lambdamono.AssemblyState,
     ) Allocator.Error!void {
         var callable_inst_idx: usize = 0;
         while (callable_inst_idx < result.lambdamono.callable_insts.items.len) : (callable_inst_idx += 1) {
@@ -1550,13 +1564,14 @@ const MaterializeCallableValueFailure = enum {
             const callable_def = result.lambdamono.callable_defs.items[@intFromEnum(callable_inst.callable_def)];
             _ = try self.assembleProgramExprNode(
                 result,
+                assembly,
                 callable_def.body_expr.source_context,
                 callable_def.body_expr.module_idx,
                 callable_def.body_expr.expr_idx,
             );
             for (result.getCaptureFields(callable_def.captures)) |capture_field| {
                 switch (capture_field.source) {
-                    .bound_expr => |bound_expr| try self.ensureProgramExprRefNode(result, bound_expr.expr_ref),
+                    .bound_expr => |bound_expr| try self.ensureProgramExprRefNode(result, assembly, bound_expr.expr_ref),
                     .lexical_pattern => {},
                 }
             }
@@ -1566,16 +1581,18 @@ const MaterializeCallableValueFailure = enum {
     fn assembleProgramExprNode(
         self: *Pass,
         result: *Result,
+        assembly: *Lambdamono.AssemblyState,
         source_context: SourceContext,
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) Allocator.Error!Lambdamono.ExprId {
-        return self.assembleProgramExprNodeInternal(result, source_context, module_idx, expr_idx);
+        return self.assembleProgramExprNodeInternal(result, assembly, source_context, module_idx, expr_idx);
     }
 
     fn appendProgramExprChildIfPresent(
         self: *Pass,
         result: *Result,
+        assembly: *Lambdamono.AssemblyState,
         child_exprs: *std.ArrayList(Lambdamono.ExprId),
         source_context: SourceContext,
         module_idx: u32,
@@ -1595,13 +1612,14 @@ const MaterializeCallableValueFailure = enum {
 
         try child_exprs.append(
             self.allocator,
-            try self.assembleProgramExprNodeInternal(result, source_context, module_idx, expr_idx),
+            try self.assembleProgramExprNodeInternal(result, assembly, source_context, module_idx, expr_idx),
         );
     }
 
     fn assembleProgramExprNodeInternal(
         self: *Pass,
         result: *Result,
+        assembly: *Lambdamono.AssemblyState,
         source_context: SourceContext,
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
@@ -1611,9 +1629,9 @@ const MaterializeCallableValueFailure = enum {
             _ = try self.ensureProgramExpr(result, source_context, module_idx, expr_idx);
             break :blk result.lambdamono.expr_ids_by_key.get(key).?;
         };
-        if (self.program_assembly.isExprAssembled(key)) return expr_id;
-        if (!try self.program_assembly.beginExprAssembly(self.allocator, key)) return expr_id;
-        defer self.program_assembly.endExprAssembly(key);
+        if (assembly.isExprAssembled(key)) return expr_id;
+        if (!try assembly.beginExprAssembly(self.allocator, key)) return expr_id;
+        defer assembly.endExprAssembly(key);
 
         const module_env = self.all_module_envs[module_idx];
         const expr = module_env.store.getExpr(expr_idx);
@@ -1625,32 +1643,32 @@ const MaterializeCallableValueFailure = enum {
 
         switch (expr) {
             .e_str => |str_expr| for (module_env.store.sliceExpr(str_expr.span)) |child_expr_idx| {
-                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, child_expr_idx);
+                try self.appendProgramExprChildIfPresent(result, assembly, &child_exprs, source_context, module_idx, expr_idx, child_expr_idx);
             },
             .e_list => |list_expr| for (module_env.store.sliceExpr(list_expr.elems)) |child_expr_idx| {
-                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, child_expr_idx);
+                try self.appendProgramExprChildIfPresent(result, assembly, &child_exprs, source_context, module_idx, expr_idx, child_expr_idx);
             },
             .e_tuple => |tuple_expr| for (module_env.store.sliceExpr(tuple_expr.elems)) |child_expr_idx| {
-                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, child_expr_idx);
+                try self.appendProgramExprChildIfPresent(result, assembly, &child_exprs, source_context, module_idx, expr_idx, child_expr_idx);
             },
             .e_match => |match_expr| {
-                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, match_expr.cond);
+                try self.appendProgramExprChildIfPresent(result, assembly, &child_exprs, source_context, module_idx, expr_idx, match_expr.cond);
                 for (module_env.store.sliceMatchBranches(match_expr.branches)) |branch_idx| {
                     const branch = module_env.store.getMatchBranch(branch_idx);
                     _ = branch_idx;
                     if (branch.guard) |guard_expr_idx| {
-                        try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, guard_expr_idx);
+                        try self.appendProgramExprChildIfPresent(result, assembly, &child_exprs, source_context, module_idx, expr_idx, guard_expr_idx);
                     }
-                    try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, branch.value);
+                    try self.appendProgramExprChildIfPresent(result, assembly, &child_exprs, source_context, module_idx, expr_idx, branch.value);
                 }
             },
             .e_if => |if_expr| {
                 for (module_env.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
                     const branch = module_env.store.getIfBranch(branch_idx);
-                    try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, branch.cond);
-                    try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, branch.body);
+                    try self.appendProgramExprChildIfPresent(result, assembly, &child_exprs, source_context, module_idx, expr_idx, branch.cond);
+                    try self.appendProgramExprChildIfPresent(result, assembly, &child_exprs, source_context, module_idx, expr_idx, branch.body);
                 }
-                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, if_expr.final_else);
+                try self.appendProgramExprChildIfPresent(result, assembly, &child_exprs, source_context, module_idx, expr_idx, if_expr.final_else);
             },
             .e_call => |call_expr| {
                 const callee_expr = module_env.store.getExpr(call_expr.func);
@@ -1668,86 +1686,86 @@ const MaterializeCallableValueFailure = enum {
                 else
                     true;
                 if (include_func_child) {
-                    try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, call_expr.func);
+                    try self.appendProgramExprChildIfPresent(result, assembly, &child_exprs, source_context, module_idx, expr_idx, call_expr.func);
                 }
                 for (module_env.store.sliceExpr(call_expr.args)) |arg_expr_idx| {
-                    try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, arg_expr_idx);
+                    try self.appendProgramExprChildIfPresent(result, assembly, &child_exprs, source_context, module_idx, expr_idx, arg_expr_idx);
                 }
             },
             .e_record => |record_expr| {
                 for (module_env.store.sliceRecordFields(record_expr.fields)) |field_idx| {
                     const field = module_env.store.getRecordField(field_idx);
-                    try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, field.value);
+                    try self.appendProgramExprChildIfPresent(result, assembly, &child_exprs, source_context, module_idx, expr_idx, field.value);
                 }
                 if (record_expr.ext) |ext_expr_idx| {
-                    try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, ext_expr_idx);
+                    try self.appendProgramExprChildIfPresent(result, assembly, &child_exprs, source_context, module_idx, expr_idx, ext_expr_idx);
                 }
             },
             .e_block => |block_expr| {
                 for (module_env.store.sliceStatements(block_expr.stmts)) |stmt_idx| {
-                    try child_stmts.append(self.allocator, try self.assembleProgramStmtNode(result, source_context, module_idx, stmt_idx));
+                    try child_stmts.append(self.allocator, try self.assembleProgramStmtNode(result, assembly, source_context, module_idx, stmt_idx));
                 }
-                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, block_expr.final_expr);
+                try self.appendProgramExprChildIfPresent(result, assembly, &child_exprs, source_context, module_idx, expr_idx, block_expr.final_expr);
             },
             .e_tag => |tag_expr| for (module_env.store.sliceExpr(tag_expr.args)) |child_expr_idx| {
-                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, child_expr_idx);
+                try self.appendProgramExprChildIfPresent(result, assembly, &child_exprs, source_context, module_idx, expr_idx, child_expr_idx);
             },
             .e_nominal => |nominal_expr| {
-                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, nominal_expr.backing_expr);
+                try self.appendProgramExprChildIfPresent(result, assembly, &child_exprs, source_context, module_idx, expr_idx, nominal_expr.backing_expr);
             },
             .e_nominal_external => |nominal_expr| {
-                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, nominal_expr.backing_expr);
+                try self.appendProgramExprChildIfPresent(result, assembly, &child_exprs, source_context, module_idx, expr_idx, nominal_expr.backing_expr);
             },
             .e_binop => |binop_expr| {
-                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, binop_expr.lhs);
-                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, binop_expr.rhs);
+                try self.appendProgramExprChildIfPresent(result, assembly, &child_exprs, source_context, module_idx, expr_idx, binop_expr.lhs);
+                try self.appendProgramExprChildIfPresent(result, assembly, &child_exprs, source_context, module_idx, expr_idx, binop_expr.rhs);
             },
             .e_unary_minus => |unary_expr| {
-                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, unary_expr.expr);
+                try self.appendProgramExprChildIfPresent(result, assembly, &child_exprs, source_context, module_idx, expr_idx, unary_expr.expr);
             },
             .e_unary_not => |unary_expr| {
-                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, unary_expr.expr);
+                try self.appendProgramExprChildIfPresent(result, assembly, &child_exprs, source_context, module_idx, expr_idx, unary_expr.expr);
             },
             .e_dot_access => |dot_expr| {
-                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, dot_expr.receiver);
+                try self.appendProgramExprChildIfPresent(result, assembly, &child_exprs, source_context, module_idx, expr_idx, dot_expr.receiver);
                 if (dot_expr.args) |args| for (module_env.store.sliceExpr(args)) |arg_expr_idx| {
-                    try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, arg_expr_idx);
+                    try self.appendProgramExprChildIfPresent(result, assembly, &child_exprs, source_context, module_idx, expr_idx, arg_expr_idx);
                 };
             },
             .e_tuple_access => |tuple_access| {
-                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, tuple_access.tuple);
+                try self.appendProgramExprChildIfPresent(result, assembly, &child_exprs, source_context, module_idx, expr_idx, tuple_access.tuple);
             },
             .e_dbg => |dbg_expr| {
-                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, dbg_expr.expr);
+                try self.appendProgramExprChildIfPresent(result, assembly, &child_exprs, source_context, module_idx, expr_idx, dbg_expr.expr);
             },
             .e_expect => |expect_expr| {
-                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, expect_expr.body);
+                try self.appendProgramExprChildIfPresent(result, assembly, &child_exprs, source_context, module_idx, expr_idx, expect_expr.body);
             },
             .e_return => |return_expr| {
-                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, return_expr.expr);
+                try self.appendProgramExprChildIfPresent(result, assembly, &child_exprs, source_context, module_idx, expr_idx, return_expr.expr);
             },
             .e_type_var_dispatch => |dispatch_expr| for (module_env.store.sliceExpr(dispatch_expr.args)) |arg_expr_idx| {
-                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, arg_expr_idx);
+                try self.appendProgramExprChildIfPresent(result, assembly, &child_exprs, source_context, module_idx, expr_idx, arg_expr_idx);
             },
             .e_for => |for_expr| {
-                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, for_expr.expr);
-                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, for_expr.body);
+                try self.appendProgramExprChildIfPresent(result, assembly, &child_exprs, source_context, module_idx, expr_idx, for_expr.expr);
+                try self.appendProgramExprChildIfPresent(result, assembly, &child_exprs, source_context, module_idx, expr_idx, for_expr.body);
             },
             .e_run_low_level => |run_low_level| for (module_env.store.sliceExpr(run_low_level.args)) |arg_expr_idx| {
-                try self.appendProgramExprChildIfPresent(result, &child_exprs, source_context, module_idx, expr_idx, arg_expr_idx);
+                try self.appendProgramExprChildIfPresent(result, assembly, &child_exprs, source_context, module_idx, expr_idx, arg_expr_idx);
             },
             else => {},
         }
 
         const child_expr_span = try result.lambdamono.appendExprChildren(self.allocator, child_exprs.items);
         const child_stmt_span = try result.lambdamono.appendStmtChildren(self.allocator, child_stmts.items);
-        const program_expr = self.programExpr(result, expr_id);
+        const program_expr = result.lambdamono.getExprPtr(expr_id);
         program_expr.source_context = source_context;
         program_expr.module_idx = module_idx;
         program_expr.source_expr = expr_idx;
         program_expr.child_exprs = child_expr_span;
         program_expr.child_stmts = child_stmt_span;
-        try self.program_assembly.markExprAssembled(self.allocator, key);
+        try assembly.markExprAssembled(self.allocator, key);
         return expr_id;
     }
 
@@ -1826,6 +1844,7 @@ const MaterializeCallableValueFailure = enum {
     fn assembleProgramStmtNode(
         self: *Pass,
         result: *Result,
+        assembly: *Lambdamono.AssemblyState,
         source_context: SourceContext,
         module_idx: u32,
         stmt_idx: CIR.Statement.Idx,
@@ -1841,31 +1860,31 @@ const MaterializeCallableValueFailure = enum {
         switch (stmt) {
             .s_decl => |decl| {
                 if (try self.exprHasExactProgramSemantics(result, source_context, module_idx, decl.expr)) {
-                    try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, decl.expr));
+                    try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, assembly, source_context, module_idx, decl.expr));
                 }
             },
             .s_var => |var_decl| {
                 if (try self.exprHasExactProgramSemantics(result, source_context, module_idx, var_decl.expr)) {
-                    try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, var_decl.expr));
+                    try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, assembly, source_context, module_idx, var_decl.expr));
                 }
             },
             .s_reassign => |reassign| {
                 if (try self.exprHasExactProgramSemantics(result, source_context, module_idx, reassign.expr)) {
-                    try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, reassign.expr));
+                    try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, assembly, source_context, module_idx, reassign.expr));
                 }
             },
-            .s_dbg => |dbg_stmt| try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, dbg_stmt.expr)),
-            .s_expr => |expr_stmt| try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, expr_stmt.expr)),
-            .s_expect => |expect_stmt| try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, expect_stmt.body)),
+            .s_dbg => |dbg_stmt| try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, assembly, source_context, module_idx, dbg_stmt.expr)),
+            .s_expr => |expr_stmt| try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, assembly, source_context, module_idx, expr_stmt.expr)),
+            .s_expect => |expect_stmt| try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, assembly, source_context, module_idx, expect_stmt.body)),
             .s_for => |for_stmt| {
-                try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, for_stmt.expr));
-                try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, for_stmt.body));
+                try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, assembly, source_context, module_idx, for_stmt.expr));
+                try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, assembly, source_context, module_idx, for_stmt.body));
             },
             .s_while => |while_stmt| {
-                try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, while_stmt.cond));
-                try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, while_stmt.body));
+                try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, assembly, source_context, module_idx, while_stmt.cond));
+                try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, assembly, source_context, module_idx, while_stmt.body));
             },
-            .s_return => |return_stmt| try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, source_context, module_idx, return_stmt.expr)),
+            .s_return => |return_stmt| try child_exprs.append(self.allocator, try self.assembleProgramExprNode(result, assembly, source_context, module_idx, return_stmt.expr)),
             else => {},
         }
 
@@ -1882,10 +1901,12 @@ const MaterializeCallableValueFailure = enum {
     fn ensureProgramExprRefNode(
         self: *Pass,
         result: *Result,
+        assembly: *Lambdamono.AssemblyState,
         expr_ref: ExprRef,
     ) Allocator.Error!void {
         _ = try self.assembleProgramExprNodeInternal(
             result,
+            assembly,
             expr_ref.source_context,
             expr_ref.module_idx,
             expr_ref.expr_idx,
@@ -1984,19 +2005,9 @@ const MaterializeCallableValueFailure = enum {
         return monotype != null;
     }
 
-    fn programExpr(self: *Pass, result: *Result, expr_id: Lambdamono.ExprId) *Lambdamono.Expr {
-        _ = self;
-        return &result.lambdamono.exprs.items[@intFromEnum(expr_id)];
-    }
-
-    fn primeAllModules(self: *Pass, result: *Result) Allocator.Error!void {
+    fn seedAllModuleDefPatternOrigins(self: *Pass, result: *Result) Allocator.Error!void {
         for (self.all_module_envs, 0..) |_, module_idx| {
             try self.seedModuleDefPatternOrigins(result, @intCast(module_idx));
-            try result.template_catalog.primeModuleCallableDefs(
-                self.allocator,
-                self.all_module_envs,
-                @intCast(module_idx),
-            );
         }
     }
 
@@ -2023,34 +2034,34 @@ const MaterializeCallableValueFailure = enum {
     ) Allocator.Error!void {
         const semantics = try self.ensureProgramExpr(result, source_context, module_idx, expr_idx);
         const owns_callable_intro = result.getExprTemplateId(source_context, module_idx, expr_idx) != null;
-        const next_role: Lambdamono.ExprRole = switch (callable_value) {
+        const next_payload: Lambdamono.ExprPayload = switch (callable_value) {
             .direct => |callable_inst_id| if (owns_callable_intro)
-                .{ .callable = .{ .intro = .{
+                .{ .callable_intro = .{
                     .callable_value = callable_value,
                     .callable_inst = callable_inst_id,
-                } } }
+                } }
             else
-                .{ .callable = .{ .callable = callable_value } },
+                .{ .callable_value = callable_value },
             .packed_fn => |packed_fn| blk: {
                 if (owns_callable_intro) {
-                    switch (semantics.getCallable() orelse break :blk .{ .callable = .{ .callable = callable_value } }) {
+                    switch (semantics.getCallable() orelse break :blk .{ .callable_value = callable_value }) {
                         .callable => |existing_callable_value| switch (existing_callable_value) {
-                            .direct => |callable_inst_id| break :blk .{ .callable = .{ .intro = .{
+                            .direct => |callable_inst_id| break :blk .{ .callable_intro = .{
                                 .callable_value = .{ .packed_fn = packed_fn },
                                 .callable_inst = callable_inst_id,
-                            } } },
+                            } },
                             .packed_fn => {},
                         },
-                        .intro => |existing_intro| break :blk .{ .callable = .{ .intro = .{
+                        .intro => |existing_intro| break :blk .{ .callable_intro = .{
                             .callable_value = .{ .packed_fn = packed_fn },
                             .callable_inst = existing_intro.callable_inst,
-                        } } },
+                        } },
                     }
                 }
-                break :blk .{ .callable = .{ .callable = callable_value } };
+                break :blk .{ .callable_value = callable_value };
             },
         };
-        if (!std.meta.eql(semantics.role, next_role)) semantics.role = next_role;
+        if (!std.meta.eql(semantics.payload, next_payload)) semantics.payload = next_payload;
     }
 
     fn writeCallableParamValue(
@@ -2101,8 +2112,12 @@ const MaterializeCallableValueFailure = enum {
         call_site: CallSite,
     ) Allocator.Error!void {
         const semantics = try self.ensureProgramExpr(result, source_context, module_idx, expr_idx);
-        const next_role: Lambdamono.ExprRole = .{ .call = call_site };
-        if (!std.meta.eql(semantics.role, next_role)) semantics.role = next_role;
+        const next_payload: Lambdamono.ExprPayload = switch (call_site) {
+            .direct => |callable_inst| .{ .direct_call = callable_inst },
+            .indirect_call => |indirect_call| .{ .indirect_call = indirect_call },
+            .low_level => |low_level| .{ .low_level_call = low_level },
+        };
+        if (!std.meta.eql(semantics.payload, next_payload)) semantics.payload = next_payload;
     }
 
     fn readExprCallSite(
@@ -2161,8 +2176,11 @@ const MaterializeCallableValueFailure = enum {
         lookup_resolution: LookupResolution,
     ) Allocator.Error!void {
         const semantics = try self.ensureProgramExpr(result, source_context, module_idx, expr_idx);
-        const next_role: Lambdamono.ExprRole = .{ .lookup = lookup_resolution };
-        if (!std.meta.eql(semantics.role, next_role)) semantics.role = next_role;
+        const next_payload: Lambdamono.ExprPayload = switch (lookup_resolution) {
+            .expr => |expr_ref| .{ .lookup_expr = expr_ref },
+            .def => |def_source| .{ .lookup_def = def_source },
+        };
+        if (!std.meta.eql(semantics.payload, next_payload)) semantics.payload = next_payload;
     }
 
     fn exprVisitKey(module_idx: u32, expr_idx: CIR.Expr.Idx) u64 {
@@ -2302,6 +2320,7 @@ const MaterializeCallableValueFailure = enum {
 
     fn scanStmt(
         self: *Pass,
+        root_analysis: *Lambdasolved.RootAnalysisState,
         result: *Result,
         thread: SemanticThread,
         module_idx: u32,
@@ -2321,7 +2340,7 @@ const MaterializeCallableValueFailure = enum {
                     exprRefInContext(thread.requireSourceContext(), module_idx, decl.expr),
                 );
                 try self.propagatePatternDemandToExpr(result, thread, module_idx, decl.pattern, decl.expr);
-                try self.scanCirValueExprWithDirectCallResolution(result, thread, module_idx, decl.expr, resolve_direct_calls);
+                try self.scanCirValueExprWithDirectCallResolution(root_analysis, result, thread, module_idx, decl.expr, resolve_direct_calls);
                 try self.bindPatternCallableValueCallableInsts(result, thread, module_idx, decl.pattern, decl.expr);
                 if (self.readCallableParamValue(result, thread.requireSourceContext(), module_idx, decl.pattern) == null) {
                     if (try self.resolveExprMonotypeResolved(result, thread, module_idx, decl.expr)) |expr_mono| {
@@ -2344,7 +2363,7 @@ const MaterializeCallableValueFailure = enum {
                     exprRefInContext(thread.requireSourceContext(), module_idx, var_decl.expr),
                 );
                 try self.propagatePatternDemandToExpr(result, thread, module_idx, var_decl.pattern_idx, var_decl.expr);
-                try self.scanCirValueExprWithDirectCallResolution(result, thread, module_idx, var_decl.expr, resolve_direct_calls);
+                try self.scanCirValueExprWithDirectCallResolution(root_analysis, result, thread, module_idx, var_decl.expr, resolve_direct_calls);
                 try self.bindPatternCallableValueCallableInsts(result, thread, module_idx, var_decl.pattern_idx, var_decl.expr);
                 if (self.readCallableParamValue(result, thread.requireSourceContext(), module_idx, var_decl.pattern_idx) == null) {
                     if (try self.resolveExprMonotypeResolved(result, thread, module_idx, var_decl.expr)) |expr_mono| {
@@ -2360,7 +2379,7 @@ const MaterializeCallableValueFailure = enum {
             },
             .s_reassign => |reassign| {
                 try self.propagatePatternDemandToExpr(result, thread, module_idx, reassign.pattern_idx, reassign.expr);
-                try self.scanCirExprWithDirectCallResolution(result, thread, module_idx, reassign.expr, resolve_direct_calls);
+                try self.scanCirExprWithDirectCallResolution(root_analysis, result, thread, module_idx, reassign.expr, resolve_direct_calls);
                 if (try self.resolveExprMonotypeResolved(result, thread, module_idx, reassign.expr)) |expr_mono| {
                     try self.bindCurrentPatternFromResolvedMonotype(
                         result,
@@ -2371,11 +2390,11 @@ const MaterializeCallableValueFailure = enum {
                     );
                 }
             },
-            .s_dbg => |dbg_stmt| try self.scanCirValueExprWithDirectCallResolution(result, thread, module_idx, dbg_stmt.expr, resolve_direct_calls),
-            .s_expr => |expr_stmt| try self.scanCirValueExprWithDirectCallResolution(result, thread, module_idx, expr_stmt.expr, resolve_direct_calls),
-            .s_expect => |expect_stmt| try self.scanCirValueExprWithDirectCallResolution(result, thread, module_idx, expect_stmt.body, resolve_direct_calls),
+            .s_dbg => |dbg_stmt| try self.scanCirValueExprWithDirectCallResolution(root_analysis, result, thread, module_idx, dbg_stmt.expr, resolve_direct_calls),
+            .s_expr => |expr_stmt| try self.scanCirValueExprWithDirectCallResolution(root_analysis, result, thread, module_idx, expr_stmt.expr, resolve_direct_calls),
+            .s_expect => |expect_stmt| try self.scanCirValueExprWithDirectCallResolution(root_analysis, result, thread, module_idx, expect_stmt.body, resolve_direct_calls),
             .s_for => |for_stmt| {
-                try self.scanCirExprWithDirectCallResolution(result, thread, module_idx, for_stmt.expr, resolve_direct_calls);
+                try self.scanCirExprWithDirectCallResolution(root_analysis, result, thread, module_idx, for_stmt.expr, resolve_direct_calls);
                 if (try self.resolveExprMonotypeResolved(result, thread, module_idx, for_stmt.expr)) |iter_mono| {
                     const item_mono = switch (result.context_mono.monotype_store.getMonotype(iter_mono.idx)) {
                         .list => |list| resolvedMonotype(list.elem, iter_mono.module_idx),
@@ -2386,13 +2405,13 @@ const MaterializeCallableValueFailure = enum {
                     };
                     try self.bindCurrentPatternFromResolvedMonotype(result, thread, module_idx, for_stmt.patt, item_mono);
                 }
-                try self.scanCirExprWithDirectCallResolution(result, thread, module_idx, for_stmt.body, resolve_direct_calls);
+                try self.scanCirExprWithDirectCallResolution(root_analysis, result, thread, module_idx, for_stmt.body, resolve_direct_calls);
             },
             .s_while => |while_stmt| {
-                try self.scanCirExprWithDirectCallResolution(result, thread, module_idx, while_stmt.cond, resolve_direct_calls);
-                try self.scanCirExprWithDirectCallResolution(result, thread, module_idx, while_stmt.body, resolve_direct_calls);
+                try self.scanCirExprWithDirectCallResolution(root_analysis, result, thread, module_idx, while_stmt.cond, resolve_direct_calls);
+                try self.scanCirExprWithDirectCallResolution(root_analysis, result, thread, module_idx, while_stmt.body, resolve_direct_calls);
             },
-            .s_return => |return_stmt| try self.scanCirValueExprWithDirectCallResolution(result, thread, module_idx, return_stmt.expr, resolve_direct_calls),
+            .s_return => |return_stmt| try self.scanCirValueExprWithDirectCallResolution(root_analysis, result, thread, module_idx, return_stmt.expr, resolve_direct_calls),
             .s_import,
             .s_alias_decl,
             .s_nominal_decl,
@@ -2596,48 +2615,53 @@ const MaterializeCallableValueFailure = enum {
 
     fn scanCirExpr(
         self: *Pass,
+        root_analysis: *Lambdasolved.RootAnalysisState,
         result: *Result,
         thread: SemanticThread,
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) Allocator.Error!void {
-        return self.scanCirExprWithDirectCallResolution(result, thread, module_idx, expr_idx, true);
+        return self.scanCirExprWithDirectCallResolution(root_analysis, result, thread, module_idx, expr_idx, true);
     }
 
     fn scanCirValueExpr(
         self: *Pass,
+        root_analysis: *Lambdasolved.RootAnalysisState,
         result: *Result,
         thread: SemanticThread,
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) Allocator.Error!void {
-        return self.scanCirValueExprWithDirectCallResolution(result, thread, module_idx, expr_idx, true);
+        return self.scanCirValueExprWithDirectCallResolution(root_analysis, result, thread, module_idx, expr_idx, true);
     }
 
     fn scanCirExprWithDirectCallResolution(
         self: *Pass,
+        root_analysis: *Lambdasolved.RootAnalysisState,
         result: *Result,
         thread: SemanticThread,
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
         resolve_direct_calls: bool,
     ) Allocator.Error!void {
-        return self.scanCirExprInternal(result, thread, module_idx, expr_idx, false, resolve_direct_calls);
+        return self.scanCirExprInternal(root_analysis, result, thread, module_idx, expr_idx, false, resolve_direct_calls);
     }
 
     fn scanCirValueExprWithDirectCallResolution(
         self: *Pass,
+        root_analysis: *Lambdasolved.RootAnalysisState,
         result: *Result,
         thread: SemanticThread,
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
         resolve_direct_calls: bool,
     ) Allocator.Error!void {
-        return self.scanCirExprInternal(result, thread, module_idx, expr_idx, true, resolve_direct_calls);
+        return self.scanCirExprInternal(root_analysis, result, thread, module_idx, expr_idx, true, resolve_direct_calls);
     }
 
     fn scanCirExprSpanWithDirectCallResolution(
         self: *Pass,
+        root_analysis: *Lambdasolved.RootAnalysisState,
         result: *Result,
         thread: SemanticThread,
         module_idx: u32,
@@ -2645,12 +2669,13 @@ const MaterializeCallableValueFailure = enum {
         resolve_direct_calls: bool,
     ) Allocator.Error!void {
         for (exprs) |child_expr| {
-            try self.scanCirExprWithDirectCallResolution(result, thread, module_idx, child_expr, resolve_direct_calls);
+            try self.scanCirExprWithDirectCallResolution(root_analysis, result, thread, module_idx, child_expr, resolve_direct_calls);
         }
     }
 
     fn scanCirValueExprSpanWithDirectCallResolution(
         self: *Pass,
+        root_analysis: *Lambdasolved.RootAnalysisState,
         result: *Result,
         thread: SemanticThread,
         module_idx: u32,
@@ -2658,18 +2683,19 @@ const MaterializeCallableValueFailure = enum {
         resolve_direct_calls: bool,
     ) Allocator.Error!void {
         for (exprs) |child_expr| {
-            try self.scanCirValueExprWithDirectCallResolution(result, thread, module_idx, child_expr, resolve_direct_calls);
+            try self.scanCirValueExprWithDirectCallResolution(root_analysis, result, thread, module_idx, child_expr, resolve_direct_calls);
         }
     }
 
     fn scanCirValueExprWithoutDirectCallResolution(
         self: *Pass,
+        root_analysis: *Lambdasolved.RootAnalysisState,
         result: *Result,
         thread: SemanticThread,
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) Allocator.Error!void {
-        return self.scanCirValueExprWithDirectCallResolution(result, thread, module_idx, expr_idx, false);
+        return self.scanCirValueExprWithDirectCallResolution(root_analysis, result, thread, module_idx, expr_idx, false);
     }
 
     fn calleeUsesFirstClassCallableValuePath(expr: CIR.Expr) bool {
@@ -2687,6 +2713,7 @@ const MaterializeCallableValueFailure = enum {
 
     fn scanDemandedValueDefExpr(
         self: *Pass,
+        root_analysis: *Lambdasolved.RootAnalysisState,
         result: *Result,
         thread: SemanticThread,
         module_idx: u32,
@@ -2695,13 +2722,14 @@ const MaterializeCallableValueFailure = enum {
         const key = self.resultExprKeyForThread(thread, module_idx, expr_idx);
         const Worker = struct {
             pass: *Pass,
+            root_analysis: *Lambdasolved.RootAnalysisState,
             result: *Result,
             thread: SemanticThread,
             module_idx: u32,
             expr_idx: CIR.Expr.Idx,
 
             fn run(self: @This()) Allocator.Error!void {
-                try self.pass.scanCirValueExpr(self.result, self.thread, self.module_idx, self.expr_idx);
+                try self.pass.scanCirValueExpr(self.root_analysis, self.result, self.thread, self.module_idx, self.expr_idx);
 
                 if (self.result.getExprTemplateId(self.thread.requireSourceContext(), self.module_idx, self.expr_idx)) |template_id| {
                     try self.pass.materializeDemandedExprCallableInst(
@@ -2715,11 +2743,12 @@ const MaterializeCallableValueFailure = enum {
             }
         };
 
-        try self.root_analysis.withValueDefExpr(
+        try root_analysis.withValueDefExpr(
             self.allocator,
             key,
             Worker{
                 .pass = self,
+                .root_analysis = root_analysis,
                 .result = result,
                 .thread = thread,
                 .module_idx = module_idx,
@@ -2730,12 +2759,14 @@ const MaterializeCallableValueFailure = enum {
 
     fn scanDemandedValueDefExprInSourceContext(
         self: *Pass,
+        root_analysis: *Lambdasolved.RootAnalysisState,
         result: *Result,
         source_context: SourceContext,
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
     ) Allocator.Error!void {
         try self.scanDemandedValueDefExpr(
+            root_analysis,
             result,
             SemanticThread.trackedThread(source_context),
             module_idx,
@@ -2771,6 +2802,7 @@ const MaterializeCallableValueFailure = enum {
 
     fn scanCirExprInternal(
         self: *Pass,
+        root_analysis: *Lambdasolved.RootAnalysisState,
         result: *Result,
         thread: SemanticThread,
         module_idx: u32,
@@ -2824,6 +2856,7 @@ const MaterializeCallableValueFailure = enum {
         const visit_key = self.resultExprKeyForThread(thread, module_idx, expr_idx);
         const Worker = struct {
             pass: *Pass,
+            root_analysis: *Lambdasolved.RootAnalysisState,
             result: *Result,
             thread: SemanticThread,
             module_idx: u32,
@@ -2834,6 +2867,7 @@ const MaterializeCallableValueFailure = enum {
 
             fn run(self: @This()) Allocator.Error!void {
                 try self.pass.scanCirExprChildren(
+                    self.root_analysis,
                     self.result,
                     self.thread,
                     self.module_idx,
@@ -2867,11 +2901,12 @@ const MaterializeCallableValueFailure = enum {
             }
         };
 
-        try self.root_analysis.visitExprOnce(
+        try root_analysis.visitExprOnce(
             self.allocator,
             visit_key,
             Worker{
                 .pass = self,
+                .root_analysis = root_analysis,
                 .result = result,
                 .thread = thread,
                 .module_idx = module_idx,
@@ -3926,6 +3961,7 @@ const MaterializeCallableValueFailure = enum {
 
     fn scanCirExprChildren(
         self: *Pass,
+        root_analysis: *Lambdasolved.RootAnalysisState,
         result: *Result,
         thread: SemanticThread,
         module_idx: u32,
@@ -3961,14 +3997,14 @@ const MaterializeCallableValueFailure = enum {
                 expr_idx,
                 expr,
             ),
-            .e_str => |str_expr| try self.scanCirValueExprSpanWithDirectCallResolution(result, thread, module_idx, module_env.store.sliceExpr(str_expr.span), resolve_direct_calls),
-            .e_list => |list_expr| try self.scanCirValueExprSpanWithDirectCallResolution(result, thread, module_idx, module_env.store.sliceExpr(list_expr.elems), resolve_direct_calls),
+            .e_str => |str_expr| try self.scanCirValueExprSpanWithDirectCallResolution(root_analysis, result, thread, module_idx, module_env.store.sliceExpr(str_expr.span), resolve_direct_calls),
+            .e_list => |list_expr| try self.scanCirValueExprSpanWithDirectCallResolution(root_analysis, result, thread, module_idx, module_env.store.sliceExpr(list_expr.elems), resolve_direct_calls),
             .e_tuple => |tuple_expr| {
                 try self.recordDemandedTupleElemMonotypes(result, thread, module_idx, expr_idx, tuple_expr);
-                try self.scanCirValueExprSpanWithDirectCallResolution(result, thread, module_idx, module_env.store.sliceExpr(tuple_expr.elems), resolve_direct_calls);
+                try self.scanCirValueExprSpanWithDirectCallResolution(root_analysis, result, thread, module_idx, module_env.store.sliceExpr(tuple_expr.elems), resolve_direct_calls);
             },
             .e_match => |match_expr| {
-                try self.scanCirExprWithDirectCallResolution(result, thread, module_idx, match_expr.cond, resolve_direct_calls);
+                try self.scanCirExprWithDirectCallResolution(root_analysis, result, thread, module_idx, match_expr.cond, resolve_direct_calls);
                 try self.recordMatchBranchPatternSources(result, thread, module_idx, match_expr);
                 if (try self.resolveExprMonotypeResolved(result, thread, module_idx, match_expr.cond)) |cond_mono| {
                     try self.bindMatchBranchPatternsFromCondMonotype(result, thread, module_idx, match_expr, cond_mono);
@@ -3978,9 +4014,9 @@ const MaterializeCallableValueFailure = enum {
                 for (branches) |branch_idx| {
                     const branch = module_env.store.getMatchBranch(branch_idx);
                     try self.propagateDemandedValueResultMonotypeToChild(result, thread, module_idx, expr_idx, branch.value);
-                    try self.scanCirValueExprWithDirectCallResolution(result, thread, module_idx, branch.value, resolve_direct_calls);
+                    try self.scanCirValueExprWithDirectCallResolution(root_analysis, result, thread, module_idx, branch.value, resolve_direct_calls);
                     if (branch.guard) |guard_expr| {
-                        try self.scanCirExprWithDirectCallResolution(result, thread, module_idx, guard_expr, resolve_direct_calls);
+                        try self.scanCirExprWithDirectCallResolution(root_analysis, result, thread, module_idx, guard_expr, resolve_direct_calls);
                     }
                 }
 
@@ -3994,12 +4030,12 @@ const MaterializeCallableValueFailure = enum {
                 const branches = module_env.store.sliceIfBranches(if_expr.branches);
                 for (branches) |branch_idx| {
                     const branch = module_env.store.getIfBranch(branch_idx);
-                    try self.scanCirExprWithDirectCallResolution(result, thread, module_idx, branch.cond, resolve_direct_calls);
+                    try self.scanCirExprWithDirectCallResolution(root_analysis, result, thread, module_idx, branch.cond, resolve_direct_calls);
                     try self.propagateDemandedValueResultMonotypeToChild(result, thread, module_idx, expr_idx, branch.body);
-                    try self.scanCirValueExprWithDirectCallResolution(result, thread, module_idx, branch.body, resolve_direct_calls);
+                    try self.scanCirValueExprWithDirectCallResolution(root_analysis, result, thread, module_idx, branch.body, resolve_direct_calls);
                 }
                 try self.propagateDemandedValueResultMonotypeToChild(result, thread, module_idx, expr_idx, if_expr.final_else);
-                try self.scanCirValueExprWithDirectCallResolution(result, thread, module_idx, if_expr.final_else, resolve_direct_calls);
+                try self.scanCirValueExprWithDirectCallResolution(root_analysis, result, thread, module_idx, if_expr.final_else, resolve_direct_calls);
             },
             .e_call => |call_expr| {
                 const arg_exprs = module_env.store.sliceExpr(call_expr.args);
@@ -4023,18 +4059,18 @@ const MaterializeCallableValueFailure = enum {
                         );
                     }
                 }
-                try self.scanCirValueExprSpanWithDirectCallResolution(result, thread, module_idx, arg_exprs, resolve_direct_calls);
+                try self.scanCirValueExprSpanWithDirectCallResolution(root_analysis, result, thread, module_idx, arg_exprs, resolve_direct_calls);
                 if (resolve_direct_calls) {
-                    try self.resolveDirectCallSite(result, thread, module_idx, expr_idx, call_expr);
+                    try self.resolveDirectCallSite(root_analysis, result, thread, module_idx, expr_idx, call_expr);
                     if (self.getCallSiteForThread(result, thread, module_idx, expr_idx) == null and
                         calleeUsesFirstClassCallableValuePath(callee_expr))
                     {
-                        try self.scanCirValueExprWithDirectCallResolution(result, thread, module_idx, call_expr.func, resolve_direct_calls);
-                        try self.resolveDirectCallSite(result, thread, module_idx, expr_idx, call_expr);
+                        try self.scanCirValueExprWithDirectCallResolution(root_analysis, result, thread, module_idx, call_expr.func, resolve_direct_calls);
+                        try self.resolveDirectCallSite(root_analysis, result, thread, module_idx, expr_idx, call_expr);
                     }
                     try self.assignCallableArgCallableInstsFromCallMonotype(result, thread, module_idx, expr_idx, call_expr);
                 } else {
-                    try self.scanCirValueExprWithDirectCallResolution(result, thread, module_idx, call_expr.func, resolve_direct_calls);
+                    try self.scanCirValueExprWithDirectCallResolution(root_analysis, result, thread, module_idx, call_expr.func, resolve_direct_calls);
                 }
                 if (resolve_direct_calls) {
                     try self.assignCallableArgCallableInstsFromCallMonotype(result, thread, module_idx, expr_idx, call_expr);
@@ -4042,12 +4078,12 @@ const MaterializeCallableValueFailure = enum {
                 if (resolve_direct_calls and
                     self.getCallSiteCallableInstForThread(result, thread, module_idx, expr_idx) == null)
                 {
-                    try self.resolveDirectCallSite(result, thread, module_idx, expr_idx, call_expr);
+                    try self.resolveDirectCallSite(root_analysis, result, thread, module_idx, expr_idx, call_expr);
                 }
             },
             .e_record => |record_expr| {
                 if (record_expr.ext) |ext_expr| {
-                    try self.scanCirExprWithDirectCallResolution(result, thread, module_idx, ext_expr, resolve_direct_calls);
+                    try self.scanCirExprWithDirectCallResolution(root_analysis, result, thread, module_idx, ext_expr, resolve_direct_calls);
                 }
 
                 try self.recordDemandedRecordFieldMonotypes(result, thread, module_idx, expr_idx, record_expr);
@@ -4055,17 +4091,17 @@ const MaterializeCallableValueFailure = enum {
                 const fields = module_env.store.sliceRecordFields(record_expr.fields);
                 for (fields) |field_idx| {
                     const field = module_env.store.getRecordField(field_idx);
-                    try self.scanCirValueExprWithDirectCallResolution(result, thread, module_idx, field.value, resolve_direct_calls);
+                    try self.scanCirValueExprWithDirectCallResolution(root_analysis, result, thread, module_idx, field.value, resolve_direct_calls);
                 }
             },
             .e_block => |block_expr| {
                 const stmts = module_env.store.sliceStatements(block_expr.stmts);
                 try self.preRegisterBlockCallableStmtTemplates(result, thread, module_idx, stmts);
                 for (stmts) |stmt_idx| {
-                    try self.scanStmt(result, thread, module_idx, stmt_idx, resolve_direct_calls);
+                    try self.scanStmt(root_analysis, result, thread, module_idx, stmt_idx, resolve_direct_calls);
                 }
                 try self.propagateDemandedValueResultMonotypeToChild(result, thread, module_idx, expr_idx, block_expr.final_expr);
-                try self.scanCirValueExprWithDirectCallResolution(result, thread, module_idx, block_expr.final_expr, resolve_direct_calls);
+                try self.scanCirValueExprWithDirectCallResolution(root_analysis, result, thread, module_idx, block_expr.final_expr, resolve_direct_calls);
                 try self.recordExprSourceExpr(
                     result,
                     thread.requireSourceContext(),
@@ -4074,9 +4110,9 @@ const MaterializeCallableValueFailure = enum {
                     self.exprRefAliasOrSelf(result, thread.requireSourceContext(), module_idx, block_expr.final_expr),
                 );
             },
-            .e_tag => |tag_expr| try self.scanCirValueExprSpanWithDirectCallResolution(result, thread, module_idx, module_env.store.sliceExpr(tag_expr.args), resolve_direct_calls),
+            .e_tag => |tag_expr| try self.scanCirValueExprSpanWithDirectCallResolution(root_analysis, result, thread, module_idx, module_env.store.sliceExpr(tag_expr.args), resolve_direct_calls),
             .e_nominal => |nominal_expr| {
-                try self.scanCirValueExprWithDirectCallResolution(result, thread, module_idx, nominal_expr.backing_expr, resolve_direct_calls);
+                try self.scanCirValueExprWithDirectCallResolution(root_analysis, result, thread, module_idx, nominal_expr.backing_expr, resolve_direct_calls);
                 try self.recordExprSourceExpr(
                     result,
                     thread.requireSourceContext(),
@@ -4086,7 +4122,7 @@ const MaterializeCallableValueFailure = enum {
                 );
             },
             .e_nominal_external => |nominal_expr| {
-                try self.scanCirValueExprWithDirectCallResolution(result, thread, module_idx, nominal_expr.backing_expr, resolve_direct_calls);
+                try self.scanCirValueExprWithDirectCallResolution(root_analysis, result, thread, module_idx, nominal_expr.backing_expr, resolve_direct_calls);
                 try self.recordExprSourceExpr(
                     result,
                     thread.requireSourceContext(),
@@ -4116,22 +4152,22 @@ const MaterializeCallableValueFailure = enum {
                 // the callable template/inst has established its own lexical owner and
                 // defining-context chain. Generic expr traversal only records the
                 // closure value's capture sources in the surrounding callable.
-                try self.scanClosureCaptureSources(result, thread.requireSourceContext(), module_idx, expr_idx, closure_expr, null);
+                try self.scanClosureCaptureSources(root_analysis, result, thread.requireSourceContext(), module_idx, expr_idx, closure_expr, null);
             },
             .e_lambda => {},
             .e_binop => |binop_expr| {
-                try self.scanCirExprWithDirectCallResolution(result, thread, module_idx, binop_expr.lhs, resolve_direct_calls);
-                try self.scanCirExprWithDirectCallResolution(result, thread, module_idx, binop_expr.rhs, resolve_direct_calls);
+                try self.scanCirExprWithDirectCallResolution(root_analysis, result, thread, module_idx, binop_expr.lhs, resolve_direct_calls);
+                try self.scanCirExprWithDirectCallResolution(root_analysis, result, thread, module_idx, binop_expr.rhs, resolve_direct_calls);
                 try self.realizeDispatchExprSemantics(result, thread, module_idx, expr_idx, expr);
             },
             .e_unary_minus => |unary_expr| {
-                try self.scanCirExprWithDirectCallResolution(result, thread, module_idx, unary_expr.expr, resolve_direct_calls);
+                try self.scanCirExprWithDirectCallResolution(root_analysis, result, thread, module_idx, unary_expr.expr, resolve_direct_calls);
             },
-            .e_unary_not => |unary_expr| try self.scanCirExprWithDirectCallResolution(result, thread, module_idx, unary_expr.expr, resolve_direct_calls),
+            .e_unary_not => |unary_expr| try self.scanCirExprWithDirectCallResolution(root_analysis, result, thread, module_idx, unary_expr.expr, resolve_direct_calls),
             .e_dot_access => |dot_expr| {
-                try self.scanCirExprWithDirectCallResolution(result, thread, module_idx, dot_expr.receiver, resolve_direct_calls);
+                try self.scanCirExprWithDirectCallResolution(root_analysis, result, thread, module_idx, dot_expr.receiver, resolve_direct_calls);
                 if (dot_expr.args) |args| {
-                    try self.scanCirExprSpanWithDirectCallResolution(result, thread, module_idx, module_env.store.sliceExpr(args), resolve_direct_calls);
+                    try self.scanCirExprSpanWithDirectCallResolution(root_analysis, result, thread, module_idx, module_env.store.sliceExpr(args), resolve_direct_calls);
                     try self.realizeDispatchExprSemantics(result, thread, module_idx, expr_idx, expr);
                 } else {
                     const receiver_source = self.exprRefAliasOrSelf(result, thread.requireSourceContext(), module_idx, dot_expr.receiver);
@@ -4143,14 +4179,14 @@ const MaterializeCallableValueFailure = enum {
                 }
             },
             .e_tuple_access => |tuple_access| {
-                try self.scanCirExprWithDirectCallResolution(result, thread, module_idx, tuple_access.tuple, resolve_direct_calls);
+                try self.scanCirExprWithDirectCallResolution(root_analysis, result, thread, module_idx, tuple_access.tuple, resolve_direct_calls);
                 const tuple_source = self.exprRefAliasOrSelf(result, thread.requireSourceContext(), module_idx, tuple_access.tuple);
                 const elem_source = try self.extendExprRef(result, tuple_source, .{ .tuple_elem = tuple_access.elem_index });
                 try self.recordExprSourceExpr(result, thread.requireSourceContext(), module_idx, expr_idx, elem_source);
             },
             .e_dbg => |dbg_expr| {
                 try self.propagateDemandedValueResultMonotypeToChild(result, thread, module_idx, expr_idx, dbg_expr.expr);
-                try self.scanCirValueExprWithDirectCallResolution(result, thread, module_idx, dbg_expr.expr, resolve_direct_calls);
+                try self.scanCirValueExprWithDirectCallResolution(root_analysis, result, thread, module_idx, dbg_expr.expr, resolve_direct_calls);
                 try self.recordExprSourceExpr(
                     result,
                     thread.requireSourceContext(),
@@ -4161,7 +4197,7 @@ const MaterializeCallableValueFailure = enum {
             },
             .e_expect => |expect_expr| {
                 try self.propagateDemandedValueResultMonotypeToChild(result, thread, module_idx, expr_idx, expect_expr.body);
-                try self.scanCirValueExprWithDirectCallResolution(result, thread, module_idx, expect_expr.body, resolve_direct_calls);
+                try self.scanCirValueExprWithDirectCallResolution(root_analysis, result, thread, module_idx, expect_expr.body, resolve_direct_calls);
                 try self.recordExprSourceExpr(
                     result,
                     thread.requireSourceContext(),
@@ -4171,7 +4207,7 @@ const MaterializeCallableValueFailure = enum {
                 );
             },
             .e_return => |return_expr| {
-                try self.scanCirValueExprWithDirectCallResolution(result, thread, module_idx, return_expr.expr, resolve_direct_calls);
+                try self.scanCirValueExprWithDirectCallResolution(root_analysis, result, thread, module_idx, return_expr.expr, resolve_direct_calls);
                 try self.recordExprSourceExpr(
                     result,
                     thread.requireSourceContext(),
@@ -4181,17 +4217,17 @@ const MaterializeCallableValueFailure = enum {
                 );
             },
             .e_type_var_dispatch => |dispatch_expr| {
-                try self.scanCirExprSpanWithDirectCallResolution(result, thread, module_idx, module_env.store.sliceExpr(dispatch_expr.args), resolve_direct_calls);
+                try self.scanCirExprSpanWithDirectCallResolution(root_analysis, result, thread, module_idx, module_env.store.sliceExpr(dispatch_expr.args), resolve_direct_calls);
                 try self.realizeDispatchExprSemantics(result, thread, module_idx, expr_idx, expr);
             },
             .e_for => |for_expr| {
-                try self.scanCirExprWithDirectCallResolution(result, thread, module_idx, for_expr.expr, resolve_direct_calls);
-                try self.scanCirExprWithDirectCallResolution(result, thread, module_idx, for_expr.body, resolve_direct_calls);
+                try self.scanCirExprWithDirectCallResolution(root_analysis, result, thread, module_idx, for_expr.expr, resolve_direct_calls);
+                try self.scanCirExprWithDirectCallResolution(root_analysis, result, thread, module_idx, for_expr.body, resolve_direct_calls);
             },
             .e_hosted_lambda => {},
             .e_run_low_level => |run_low_level| {
                 const args = module_env.store.sliceExpr(run_low_level.args);
-                try self.scanCirExprSpan(result, thread, module_idx, args);
+                try self.scanCirExprSpan(root_analysis, result, thread, module_idx, args);
                 if (run_low_level.op == .str_inspect and args.len != 0) {
                     try self.resolveStrInspectHelperCallableInstsForTypeVar(
                         result,
@@ -4308,25 +4344,27 @@ const MaterializeCallableValueFailure = enum {
 
     fn scanCirExprSpan(
         self: *Pass,
+        root_analysis: *Lambdasolved.RootAnalysisState,
         result: *Result,
         thread: SemanticThread,
         module_idx: u32,
         exprs: []const CIR.Expr.Idx,
     ) Allocator.Error!void {
         for (exprs) |child_expr| {
-            try self.scanCirExpr(result, thread, module_idx, child_expr);
+            try self.scanCirExpr(root_analysis, result, thread, module_idx, child_expr);
         }
     }
 
     fn scanCirValueExprSpan(
         self: *Pass,
+        root_analysis: *Lambdasolved.RootAnalysisState,
         result: *Result,
         thread: SemanticThread,
         module_idx: u32,
         exprs: []const CIR.Expr.Idx,
     ) Allocator.Error!void {
         for (exprs) |child_expr| {
-            try self.scanCirValueExpr(result, thread, module_idx, child_expr);
+            try self.scanCirValueExpr(root_analysis, result, thread, module_idx, child_expr);
         }
     }
 
@@ -4393,6 +4431,7 @@ const MaterializeCallableValueFailure = enum {
 
     fn scanClosureCaptureSources(
         self: *Pass,
+        root_analysis: *Lambdasolved.RootAnalysisState,
         result: *Result,
         source_context: SourceContext,
         module_idx: u32,
@@ -4439,6 +4478,7 @@ const MaterializeCallableValueFailure = enum {
             };
             switch (capture_source) {
                 .bound_expr => |bound_expr| try self.scanDemandedValueDefExprInSourceContext(
+                    root_analysis,
                     result,
                     bound_expr.expr_ref.source_context,
                     bound_expr.expr_ref.module_idx,
@@ -4621,6 +4661,7 @@ const MaterializeCallableValueFailure = enum {
 
     fn resolveDirectCallSite(
         self: *Pass,
+        root_analysis: *Lambdasolved.RootAnalysisState,
         result: *Result,
         thread: SemanticThread,
         module_idx: u32,
@@ -4950,7 +4991,7 @@ const MaterializeCallableValueFailure = enum {
                             desired_fn_monotype.module_idx,
                         );
                     } else if (std.debug.runtime_safety and !thread.hasCallableInst()) {
-                        if (!self.root_analysis.hasVisitedExpr(self.resultExprKeyForThread(thread, module_idx, callee_expr_idx))) {
+                        if (root_analysis.exprVisitStillPending(self.resultExprKeyForThread(thread, module_idx, callee_expr_idx))) {
                             return;
                         }
                         std.debug.panic(
@@ -5509,9 +5550,11 @@ const MaterializeCallableValueFailure = enum {
         module_idx: u32,
         args: CIR.Expr.Span,
     ) Allocator.Error!void {
+        var root_analysis = Lambdasolved.RootAnalysisState.init();
+        defer root_analysis.deinit(self.allocator);
         const module_env = self.all_module_envs[module_idx];
         for (module_env.store.sliceExpr(args)) |arg_expr_idx| {
-            try self.scanCirValueExpr(result, thread, module_idx, arg_expr_idx);
+            try self.scanCirValueExpr(&root_analysis, result, thread, module_idx, arg_expr_idx);
             var visiting: std.AutoHashMapUnmanaged(ContextExprVisitKey, void) = .empty;
             defer visiting.deinit(self.allocator);
             try self.realizeStructuredExprCallableSemantics(
@@ -5708,6 +5751,8 @@ const MaterializeCallableValueFailure = enum {
         projections: *std.ArrayListUnmanaged(CallableParamProjection),
         out: *std.ArrayListUnmanaged(CallableParamSpecEntry),
     ) Allocator.Error!bool {
+        var root_analysis = Lambdasolved.RootAnalysisState.init();
+        defer root_analysis.deinit(self.allocator);
         try self.propagateDemandedValueMonotypeToValueExpr(
             result,
             source_context,
@@ -5724,6 +5769,7 @@ const MaterializeCallableValueFailure = enum {
                 var demand_visiting: std.AutoHashMapUnmanaged(ContextExprVisitKey, void) = .empty;
                 defer demand_visiting.deinit(self.allocator);
                 try self.scanCirValueExpr(
+                    &root_analysis,
                     result,
                     SemanticThread.trackedThread(source_context),
                     module_idx,
@@ -7113,6 +7159,8 @@ const MaterializeCallableValueFailure = enum {
         visiting: *std.AutoHashMapUnmanaged(ContextExprVisitKey, void),
         variant_builder: *CallableVariantBuilder,
     ) Allocator.Error!void {
+        var root_analysis = Lambdasolved.RootAnalysisState.init();
+        defer root_analysis.deinit(self.allocator);
         try self.ensureCallableInstRealized(result, callee_callable_inst_id);
         const callee_callable_inst = result.getCallableInst(callee_callable_inst_id);
         const callee_fn_mono = switch (result.context_mono.monotype_store.getMonotype(callee_callable_inst.fn_monotype)) {
@@ -7189,7 +7237,7 @@ const MaterializeCallableValueFailure = enum {
             }
         };
 
-        try self.root_analysis.withCallResult(
+        try root_analysis.withCallResult(
             self.allocator,
             in_progress_key,
             Worker{
@@ -7550,7 +7598,7 @@ const MaterializeCallableValueFailure = enum {
             _ = try self.ensureProgramExpr(result, source_context, module_idx, expr_idx);
             break :blk result.lambdamono.getExprId(source_context, module_idx, expr_idx).?;
         };
-        if (!self.programExpr(result, expr_id).child_exprs.isEmpty()) return expr_id;
+        if (!result.lambdamono.getExprPtr(expr_id).child_exprs.isEmpty()) return expr_id;
 
         const module_env = self.all_module_envs[module_idx];
         const expr = module_env.store.getExpr(expr_idx);
@@ -7577,7 +7625,7 @@ const MaterializeCallableValueFailure = enum {
             else => unreachable,
         }
 
-        self.programExpr(result, expr_id).child_exprs =
+        result.lambdamono.getExprPtr(expr_id).child_exprs =
             try result.lambdamono.appendExprChildren(self.allocator, child_exprs.items);
         return expr_id;
     }
@@ -8571,8 +8619,8 @@ const MaterializeCallableValueFailure = enum {
             dispatch_target,
         );
         const semantics = try self.ensureProgramExpr(result, source_context, module_idx, expr_idx);
-        const next_role: Lambdamono.ExprRole = .{ .dispatch = .{ .target = dispatch_target } };
-        if (!std.meta.eql(semantics.role, next_role)) semantics.role = next_role;
+        const next_payload: Lambdamono.ExprPayload = .{ .dispatch_target = dispatch_target };
+        if (!std.meta.eql(semantics.payload, next_payload)) semantics.payload = next_payload;
     }
 
     fn recordDispatchExprIntrinsic(
@@ -8584,8 +8632,8 @@ const MaterializeCallableValueFailure = enum {
         dispatch_intrinsic: DispatchIntrinsic,
     ) Allocator.Error!void {
         const semantics = try self.ensureProgramExpr(result, source_context, module_idx, expr_idx);
-        const next_role: Lambdamono.ExprRole = .{ .dispatch = .{ .intrinsic = dispatch_intrinsic } };
-        if (!std.meta.eql(semantics.role, next_role)) semantics.role = next_role;
+        const next_payload: Lambdamono.ExprPayload = .{ .dispatch_intrinsic = dispatch_intrinsic };
+        if (!std.meta.eql(semantics.payload, next_payload)) semantics.payload = next_payload;
     }
 
     fn recordExactDispatchSite(
@@ -10882,7 +10930,9 @@ const MaterializeCallableValueFailure = enum {
         callable_inst_id: CallableInstId,
     ) Allocator.Error!void {
         if (callableInstHasRealizedRuntimeExpr(result, callable_inst_id)) return;
-        try self.realizeCallableInst(result, callable_inst_id);
+        var root_analysis = Lambdasolved.RootAnalysisState.init();
+        defer root_analysis.deinit(self.allocator);
+        try self.realizeCallableInst(&root_analysis, result, callable_inst_id);
     }
 
     const EnsuredCallableInst = struct {
@@ -11202,12 +11252,22 @@ const MaterializeCallableValueFailure = enum {
         return true;
     }
 
-    fn realizeCallableInst(self: *Pass, result: *Result, callable_inst_id: CallableInstId) Allocator.Error!void {
+    fn realizeCallableInst(
+        self: *Pass,
+        root_analysis: *Lambdasolved.RootAnalysisState,
+        result: *Result,
+        callable_inst_id: CallableInstId,
+    ) Allocator.Error!void {
         if (callableInstHasRealizedRuntimeExpr(result, callable_inst_id)) return;
-        try self.realizeCallableInstBody(result, callable_inst_id);
+        try self.realizeCallableInstBody(root_analysis, result, callable_inst_id);
     }
 
-    fn realizeCallableInstBody(self: *Pass, result: *Result, callable_inst_id: CallableInstId) Allocator.Error!void {
+    fn realizeCallableInstBody(
+        self: *Pass,
+        root_analysis: *Lambdasolved.RootAnalysisState,
+        result: *Result,
+        callable_inst_id: CallableInstId,
+    ) Allocator.Error!void {
         // Snapshot these by value before scanning. Realizing the body can discover
         // more demanded callables and append to both arrays, which would
         // invalidate pointers.
@@ -11262,6 +11322,7 @@ const MaterializeCallableValueFailure = enum {
                 callable_inst_id,
             );
             try self.scanClosureCaptureSources(
+                root_analysis,
                 result,
                 defining_source_context,
                 template.module_idx,
@@ -11278,7 +11339,7 @@ const MaterializeCallableValueFailure = enum {
             );
         }
 
-        try self.scanCirValueExpr(result, thread, template.module_idx, template.body_expr);
+        try self.scanCirValueExpr(root_analysis, result, thread, template.module_idx, template.body_expr);
 
         switch (template.kind) {
             .closure => {

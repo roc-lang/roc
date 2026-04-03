@@ -482,4 +482,14 @@ pub const Result = struct {
             .len = @intCast(defs.len),
         });
     }
+
+    pub fn primeAllModules(
+        self: *Result,
+        allocator: Allocator,
+        all_module_envs: []const *ModuleEnv,
+    ) Allocator.Error!void {
+        for (all_module_envs, 0..) |_, module_idx| {
+            try self.primeModuleCallableDefs(allocator, all_module_envs, @intCast(module_idx));
+        }
+    }
 };

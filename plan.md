@@ -1,4 +1,4 @@
-# CoreCIR Architectural Cutover Plan
+# Remaining CoreCIR Architectural Plan
 
 ## Absolute Rules
 
@@ -10,169 +10,229 @@
   - `std.debug.panic(...)` in debug builds
   - `unreachable` in release builds
 
-## Goal
+## Current State
 
-Replace the remaining integrated mutable CoreCIR pipeline architecture with the long-term ideal architecture:
+The following architectural cuts are already complete:
 
-1. `TemplateCatalog` performs one-time source-to-solved extraction of callable templates and root inventory.
-2. `ContextMono` owns exact contextual monotypes derived only from already-inferred checker types.
-3. `DispatchSolved` owns exact static-dispatch sites and their normalized resolutions.
-4. `Lambdasolved` owns solved callable-set membership and capture provenance.
-5. `Lambdamono` is a real executable specialized IR, not a fat record with optional semantic slots.
-6. `Lower` mechanically consumes `Lambdamono`; it does not search, recover, or reinterpret source semantics.
+- `TemplateCatalog` owns callable-template extraction and root inventory.
+- `DispatchSolved` owns normalized dispatch results.
+- `ContextMono` owns structural monotype/name comparison.
+- `Lambdasolved` owns `SemanticThread` and the root-analysis control-flow helpers.
+- `Lambdamono.Program` owns packed/indirect callable construction.
+- `Pipeline` no longer owns:
+  - external-template invariant helpers
+  - dispatch-target resolution
+  - packed-callable construction logic
+  - root-analysis re-entrancy helpers
 
-## Stage 1: Introduce Dedicated Stage Boundaries
+What remains is structural: finishing the move from a large integrated `Pipeline` shell to true stage-owned scanning/assembly, and replacing the last flexible `Lambdamono.Expr` representation with the strict executable AST end state.
 
-### 1.1 Add `TemplateCatalog`
+## Remaining Goal
 
-- Create a new `src/corecir/TemplateCatalog.zig`.
-- Move one-time callable/root discovery into `TemplateCatalog`.
-- `TemplateCatalog` must own:
-  - callable template registration
-  - root expression inventory
-  - external callable-backed def registration
-  - callable boundary extraction from CIR
-- After this, later stages may not inspect raw CIR callable shape to rediscover template boundaries.
+Reach the long-term ideal end state:
 
-### 1.2 Add `DispatchSolved`
+1. `Pipeline.zig` is orchestration-only.
+2. `Lambdasolved` owns solved semantic scanning and root-analysis execution, not just its state containers.
+3. `Lambdamono` owns executable-program construction, not just executable data types plus helper utilities.
+4. `Lambdamono.Expr` is a strict executable AST where invalid states are unrepresentable.
+5. No remaining stage reads another stage's mutable internal state directly.
+6. No remaining transitional/legacy artifacts survive anywhere in the Zig compiler.
 
-- Create a new `src/corecir/DispatchSolved.zig`.
-- Move normalized dispatch-site ownership out of checker storage and out of `ContextMono`.
-- `DispatchSolved` must own:
-  - dispatch site identity
-  - source-context-scoped dispatch sites
-  - normalized resolution:
-    - target def
-    - intrinsic dispatch
-- After this, later stages may not read checker dispatch constraints directly.
+## Remaining Work
 
-### 1.3 Reduce `Pipeline.zig` To Orchestration Only
+### A. Delete The Remaining Integrated Pipeline Shell
 
-- `Pipeline.zig` must stop implementing semantic work directly.
-- It must only sequence stage execution:
-  - `TemplateCatalog`
-  - `ContextMono`
-  - `DispatchSolved`
-  - `Lambdasolved`
-  - `Lambdamono`
-- Delete semantic helper ownership from `Pipeline` as it moves into stage files.
+Current remaining shell in `Pipeline.zig`:
 
-## Stage 2: Make Checker Types The Only Monotype Source Of Truth
+- run-time orchestration in:
+  - `runRootSourceExprsInto(...)`
+  - `runModuleInto(...)`
+- module-def pattern-origin seeding still owned by `Pipeline`
 
-### 2.1 Strip Resolved Dispatch Metadata From Checker Storage
+Required end state:
 
-- Replace `types.StaticDispatchConstraint` with a checker-owned requirement-only form.
-- Delete checker-owned:
-  - `source_expr_idx`
-  - `resolved_target`
-- Rename it to a requirement-oriented shape if necessary.
+- `Pipeline` only wires together already-defined stage runners.
+- Stage runners live with their owning stage modules.
+- `Pass` must stop owning stage-local mutable execution state.
 
-### 2.2 Keep `ContextMono` Pure
+Concrete work:
 
-- `ContextMono` must continue to derive monotypes only from inferred checker types.
-- No monotype logic may inspect:
-  - declared signatures
-  - annotations
-  - CIR argument shape
-  - builtin call shape
-  - lambda parameter counts
-  - dispatch resolution artifacts
+1. Move template-catalog execution into a `TemplateCatalog` runner API.
+2. Move root-analysis execution into a `Lambdasolved` runner API.
+3. Move executable-program construction into a `Lambdamono` builder/runner API.
+4. Reduce `Pipeline` to:
+   - allocate `Result`
+   - invoke stage runners in order
+   - return the final result
 
-## Stage 3: Replace Shared Mutable Scan State With Stage-Local Worklists
+Success condition:
 
-### 3.1 Delete Shared `ExprScanState`
+- `Pipeline.zig` no longer contains stage-specific execution helpers.
 
-- Delete the shared scan/in-progress state currently hanging off `Pipeline.Pass`.
-- Replace it with stage-local state:
-  - `TemplateCatalog.Builder`
-  - `ContextMono.Solver`
-  - `DispatchSolved.Solver`
-  - `Lambdasolved.Solver`
-  - `Lambdamono.Builder`
+### B. Move Executable Program Construction Out Of `Pipeline`
 
-### 3.2 Remove Mixed Scan/Assembly Flows
+Current remaining assembly ownership in `Pipeline.zig`:
 
-- Delete the current “scan root, then assemble expr graph, then assemble callable defs” flow.
-- Each stage must either:
-  - solve facts
-  - or build the final output for that stage
-- No stage may first scan mutable side tables and then separately assemble the same semantics later.
+- `assembleRootProgramExprs(...)`
+- `assembleCallableDefExprGraph(...)`
+- `assembleProgramExprNode(...)`
+- `assembleProgramExprNodeInternal(...)`
+- `ensureProgramExprSemanticShape(...)`
+- `assembleProgramStmtNode(...)`
+- `ensureProgramExprRefNode(...)`
+- `ensureProgramExpr(...)`
+- `exprHasExactProgramSemantics(...)`
 
-## Stage 4: Make `Lambdamono` A Real Executable AST
+Required end state:
 
-### 4.1 Delete The Fat Optional-Slot Expr Record
+- executable-program construction is owned by `Lambdamono`
+- `Pipeline` does not perform late assembly itself
+- any builder scratch state lives in `Lambdamono`, not in `Pipeline`
 
-- Replace `Lambdamono.Expr` with a tagged union of executable node kinds.
-- Make `monotype` structurally required.
-- Delete optional semantic slots like:
-  - `callable`
-  - `call`
+Concrete work:
+
+1. Move the remaining assembly routines themselves under `Lambdamono`.
+2. Introduce `Lambdamono` builder/assembler APIs that:
+   - assemble root exprs
+   - assemble callable bodies
+   - assemble stmt/expr children
+   - ensure semantic shape before node emission
+3. Replace direct assembly calls in `Pipeline` with `Lambdamono` stage-owned APIs.
+
+Success condition:
+
+- `Pipeline.zig` no longer assembles executable nodes directly.
+
+### C. Move Remaining Semantic Scan Algorithms Out Of `Pipeline`
+
+Current remaining semantic algorithms still in `Pipeline.zig`:
+
+- `scanStmt(...)`
+- `scanCirExprInternal(...)`
+- `scanCirExprChildren(...)`
+- `realizeLookupExprSemantics(...)`
+- `realizeStructuredExprCallableSemantics(...)`
+- `realizeDispatchExprSemantics(...)`
+- related scanning/materialization helpers that are still part of the same root-analysis engine
+
+Required end state:
+
+- `Lambdasolved` owns solved scanning and semantic realization
+- `Pipeline` does not contain the body of the semantic scan engine
+
+Concrete work:
+
+1. Move root-analysis scan routines into `Lambdasolved` runner/solver APIs.
+2. Move lookup/callable/dispatch realization into `Lambdasolved`.
+3. Replace `Pipeline` direct calls with stage-owned entrypoints.
+4. Leave only thin orchestration in `Pipeline`.
+
+Success condition:
+
+- the semantic scan/realization engine lives in `Lambdasolved`, not in `Pipeline`.
+
+### D. Delete Direct Reads Of Stage-Internal Scan State
+
+Current remaining leak:
+
+- `Pipeline.zig` still owns local root-analysis orchestration in its run methods instead of delegating execution to a stage-owned runner type
+
+Required end state:
+
+- `Pipeline` does not inspect stage-internal mutable state directly
+- that decision becomes a `Lambdasolved` stage API or is eliminated by the architectural move in Stage C
+
+Concrete work:
+
+1. Keep root-analysis state owned by `Lambdasolved`, not by `Pipeline`.
+2. Move the remaining run-method orchestration that creates and drives root-analysis into a stage-owned runner.
+3. If Stage C makes even that local runner state unnecessary to mention in `Pipeline`, delete the leak entirely.
+
+Success condition:
+
+- no stage-internal root-analysis state is owned by `Pipeline`.
+
+### E. Replace The Remaining Fat `Lambdamono.Expr`
+
+Current remaining non-ideal representation in `Lambdamono.zig`:
+
+- `Expr` as a fat struct with:
+  - `payload`
   - `origin`
-  - `dispatch`
-  - `lookup`
+  - generic child spans
+  - helper getters that still decode semantic meaning after the fact
+- `AssemblyState` still exists as local assembly tracking around this struct
 
-### 4.2 Introduce Explicit Executable Node Variants
+Required end state:
 
-- The specialized IR must have explicit executable nodes for at least:
-  - local lookup
-  - def lookup
-  - direct callable
-  - packed callable
-  - closure introduction
-  - direct call
-  - indirect call
-  - low-level call
-  - dispatch call
-  - projection
-  - block
-  - switch
-  - return
-  - literals/records/tags/tuples as needed
+- `Lambdamono.Expr` becomes a strict executable AST
+- invalid combinations become unrepresentable
 
-### 4.3 Make Invalid States Unrepresentable
+Concrete work:
 
-- A node that is a direct call must not also have optional lookup semantics.
-- A node that is a def lookup must not also have optional dispatch semantics.
-- A node that is a packed callable must encode that directly, not via optional side slots.
+1. Replace the current `Expr` struct with a tagged union of executable node kinds.
+2. Make each variant carry exactly the data it needs.
+3. Eliminate generic semantic decoding helpers that only exist because `Expr` is over-flexible.
+4. Push shared metadata into a small common header if needed, but not semantic role slots.
+5. Rework assembly/build logic to emit concrete variants directly.
 
-## Stage 5: Make Dispatch First-Class In Specialized IR
+Required variants include at least:
 
-### 5.1 Dispatch Sites Must Be Normalized Before `Lambdasolved`
+- local lookup
+- def lookup
+- direct callable
+- packed callable
+- closure introduction
+- direct call
+- indirect call
+- low-level call
+- dispatch target
+- dispatch intrinsic
+- projection / origin-bearing lookup node as needed
+- block
+- switch/match
+- return
+- literals / tuple / record / tag forms as needed
 
-- `DispatchSolved` must produce exact dispatch-site facts keyed by source context.
-- `Lambdasolved` and `Lambdamono` must consume those exact facts, not checker constraints.
+Success condition:
 
-### 5.2 `Lambdamono` Must Encode Dispatch Explicitly
+- `ExprPayload` no longer acts as a semantic overlay on a generic fat record
+- fat `Expr` payload/origin decoding is gone
+- invalid executable states are unrepresentable in the IR type itself
 
-- Dispatch must appear as explicit executable IR, not as a side lookup against `ContextMono`.
-- Later lowering must consume:
-  - direct dispatch target
-  - dispatch intrinsic
+### F. Delete Transitional Builder State Once The Strict AST Exists
 
-## Stage 6: Delete Legacy / Transitional Artifacts
+Current remaining transitional state:
 
-- Delete all remaining legacy or transitional artifacts introduced by the current integrated pipeline design, including:
-  - direct semantic work in `Pipeline.zig`
-  - shared scan/in-progress state structs
-  - late assembly flows that duplicate earlier semantic work
-  - checker-owned resolved dispatch metadata
-  - optional semantic-slot executable IR in `Lambdamono`
-  - any remaining consumer-side rereads of raw CIR to rediscover already-recorded facts
+- `Lambdamono.AssemblyState`
 
-## Stage 7: Mandatory Re-Audit Loop
+Required end state:
 
-When the cutover appears complete:
+- any remaining builder scratch is narrowly scoped to the builder implementation
+- no user-visible or pipeline-visible transitional executable-state layer remains
+
+Concrete work:
+
+1. After strict AST emission is in place, reduce or delete `AssemblyState`.
+2. Keep only truly local builder recursion guards if still needed.
+3. Ensure the final program is the only source of truth.
+
+Success condition:
+
+- there is no broad transitional builder overlay remaining around executable expr state.
+
+## Mandatory Re-Audit Loop
+
+When the remaining work appears complete:
 
 1. Audit `src/corecir`, `src/mir`, `src/lir`, `src/types`, `src/backend`, and `src/eval`.
-2. For each of the following artifact classes, search the codebase and verify there is no remaining trace of them:
-   - integrated semantic work in `Pipeline`
-   - shared scan/in-progress state spanning multiple stages
+2. Search specifically for:
+   - stage-local execution still owned by `Pipeline`
+   - direct reads of another stage's mutable internal state
    - late scan-then-assemble duplication
-   - checker-owned resolved dispatch metadata
-   - raw checker dispatch-constraint reads outside dispatch solving
-   - fat optional-slot `Lambdamono.Expr` semantics
-   - consumer-side CIR rereads for already-solved facts
-3. If even one trace remains:
+   - fat/role-based executable expr representation
+   - builder overlay state that duplicates final executable facts
+3. If even one remaining trace is found:
    - loop back to the beginning of this plan
    - delete it
    - continue until the audit is clean
@@ -183,8 +243,9 @@ This plan is complete only when all of the following are true:
 
 - `zig` has not been run at any point while carrying out this plan.
 - `Pipeline.zig` is orchestration-only.
-- `TemplateCatalog`, `ContextMono`, `DispatchSolved`, `Lambdasolved`, and `Lambdamono` are physically separate stage owners.
-- checker storage no longer owns resolved dispatch targets or source-expression dispatch metadata.
-- `Lambdamono` is a strict executable AST with invalid states unrepresentable.
-- later stages consume explicit earlier-stage outputs and do not search, guess, recover, or reinterpret.
-- a final artifact-by-artifact audit finds no remaining trace of the old integrated/transitional design anywhere in the code base.
+- `TemplateCatalog`, `ContextMono`, `DispatchSolved`, `Lambdasolved`, and `Lambdamono` each own their own execution and data responsibilities.
+- `Lambdasolved` owns semantic scanning/root analysis rather than merely storing scan state.
+- `Lambdamono` owns executable-program construction rather than merely storing output structs.
+- `Lambdamono.Expr` is a strict executable AST with invalid states unrepresentable.
+- no direct inspection of another stage's mutable internal state remains.
+- a final artifact-by-artifact audit finds no remaining trace of the old integrated/transitional design anywhere in the Zig compiler.

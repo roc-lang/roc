@@ -218,6 +218,10 @@ pub const RootAnalysisState = struct {
         return self.expr_traversal.hasVisited(key);
     }
 
+    pub fn exprVisitStillPending(self: *const RootAnalysisState, key: ContextExprKey) bool {
+        return !self.hasVisitedExpr(key);
+    }
+
     pub fn beginExprVisit(
         self: *RootAnalysisState,
         allocator: std.mem.Allocator,
