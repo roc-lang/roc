@@ -599,24 +599,54 @@ pub const Interpreter = struct {
             const stmt = self.store.getCFStmt(current);
             switch (stmt) {
                 .assign_symbol => |assign| {
+                    trace.log("stmt proc={d} id={d} kind=assign_symbol target={d}", .{
+                        @intFromEnum(frame.proc_id),
+                        @intFromEnum(current),
+                        @intFromEnum(assign.target),
+                    });
                     frame.setLocal(assign.target, try self.evalAssignSymbol(assign.symbol, self.store.getLocal(assign.target).layout_idx));
                     current = assign.next;
                 },
                 .assign_ref => |assign| {
+                    trace.log("stmt proc={d} id={d} kind=assign_ref target={d} op={s}", .{
+                        @intFromEnum(frame.proc_id),
+                        @intFromEnum(current),
+                        @intFromEnum(assign.target),
+                        @tagName(assign.op),
+                    });
                     frame.setLocal(assign.target, try self.evalAssignRef(frame, assign.op, self.store.getLocal(assign.target).layout_idx));
                     current = assign.next;
                 },
                 .assign_literal => |assign| {
+                    trace.log("stmt proc={d} id={d} kind=assign_literal target={d}", .{
+                        @intFromEnum(frame.proc_id),
+                        @intFromEnum(current),
+                        @intFromEnum(assign.target),
+                    });
                     frame.setLocal(assign.target, try self.evalLiteral(assign.value));
                     current = assign.next;
                 },
                 .assign_call => |assign| {
+                    trace.log("stmt proc={d} id={d} kind=assign_call target={d} callee={d} args={d}", .{
+                        @intFromEnum(frame.proc_id),
+                        @intFromEnum(current),
+                        @intFromEnum(assign.target),
+                        @intFromEnum(assign.proc),
+                        self.store.getLocalSpan(assign.args).len,
+                    });
                     const arg_locals = self.store.getLocalSpan(assign.args);
                     const arg_values = try self.collectLocalValues(frame, arg_locals);
                     frame.setLocal(assign.target, try self.evalProcById(assign.proc, arg_values));
                     current = assign.next;
                 },
                 .assign_low_level => |assign| {
+                    trace.log("stmt proc={d} id={d} kind=assign_low_level target={d} op={s} args={d}", .{
+                        @intFromEnum(frame.proc_id),
+                        @intFromEnum(current),
+                        @intFromEnum(assign.target),
+                        @tagName(assign.op),
+                        self.store.getLocalSpan(assign.args).len,
+                    });
                     const arg_locals = self.store.getLocalSpan(assign.args);
                     const arg_values = try self.collectLocalValues(frame, arg_locals);
                     const arg_layouts = try self.localLayouts(arg_locals);
@@ -630,14 +660,33 @@ pub const Interpreter = struct {
                     current = assign.next;
                 },
                 .assign_list => |assign| {
+                    trace.log("stmt proc={d} id={d} kind=assign_list target={d} elems={d}", .{
+                        @intFromEnum(frame.proc_id),
+                        @intFromEnum(current),
+                        @intFromEnum(assign.target),
+                        self.store.getLocalSpan(assign.elems).len,
+                    });
                     frame.setLocal(assign.target, try self.evalListLiteral(frame, assign.elems, self.store.getLocal(assign.target).layout_idx));
                     current = assign.next;
                 },
                 .assign_struct => |assign| {
+                    trace.log("stmt proc={d} id={d} kind=assign_struct target={d} fields={d}", .{
+                        @intFromEnum(frame.proc_id),
+                        @intFromEnum(current),
+                        @intFromEnum(assign.target),
+                        self.store.getLocalSpan(assign.fields).len,
+                    });
                     frame.setLocal(assign.target, try self.evalStructLiteral(frame, assign.fields, self.store.getLocal(assign.target).layout_idx));
                     current = assign.next;
                 },
                 .assign_tag => |assign| {
+                    trace.log("stmt proc={d} id={d} kind=assign_tag target={d} discr={d} args={d}", .{
+                        @intFromEnum(frame.proc_id),
+                        @intFromEnum(current),
+                        @intFromEnum(assign.target),
+                        assign.discriminant,
+                        self.store.getLocalSpan(assign.args).len,
+                    });
                     frame.setLocal(assign.target, try self.evalTagLiteral(frame, assign.discriminant, assign.args, self.store.getLocal(assign.target).layout_idx));
                     current = assign.next;
                 },
@@ -657,14 +706,30 @@ pub const Interpreter = struct {
                     return self.runtimeError("RuntimeError");
                 },
                 .incref => |inc| {
+                    trace.log("stmt proc={d} id={d} kind=incref local={d} count={d}", .{
+                        @intFromEnum(frame.proc_id),
+                        @intFromEnum(current),
+                        @intFromEnum(inc.value),
+                        inc.count,
+                    });
                     self.performRc(.incref, frame.getLocal(inc.value), self.store.getLocal(inc.value).layout_idx, inc.count);
                     current = inc.next;
                 },
                 .decref => |dec| {
+                    trace.log("stmt proc={d} id={d} kind=decref local={d}", .{
+                        @intFromEnum(frame.proc_id),
+                        @intFromEnum(current),
+                        @intFromEnum(dec.value),
+                    });
                     self.performRc(.decref, frame.getLocal(dec.value), self.store.getLocal(dec.value).layout_idx, 0);
                     current = dec.next;
                 },
                 .free => |free_stmt| {
+                    trace.log("stmt proc={d} id={d} kind=free local={d}", .{
+                        @intFromEnum(frame.proc_id),
+                        @intFromEnum(current),
+                        @intFromEnum(free_stmt.value),
+                    });
                     self.performRc(.free, frame.getLocal(free_stmt.value), self.store.getLocal(free_stmt.value).layout_idx, 0);
                     current = free_stmt.next;
                 },
@@ -697,9 +762,20 @@ pub const Interpreter = struct {
                     return .scope_exit;
                 },
                 .join => |join_stmt| {
+                    trace.log("stmt proc={d} id={d} kind=join join={d}", .{
+                        @intFromEnum(frame.proc_id),
+                        @intFromEnum(current),
+                        @intFromEnum(join_stmt.id),
+                    });
                     current = join_stmt.remainder;
                 },
                 .jump => |jump_stmt| {
+                    trace.log("stmt proc={d} id={d} kind=jump target={d} args={d}", .{
+                        @intFromEnum(frame.proc_id),
+                        @intFromEnum(current),
+                        @intFromEnum(jump_stmt.target),
+                        self.store.getLocalSpan(jump_stmt.args).len,
+                    });
                     const join_info = frame.join_points.get(@intFromEnum(jump_stmt.target)) orelse std.debug.panic(
                         "LIR/interpreter invariant violated: missing join point {d} in proc {d}",
                         .{ @intFromEnum(jump_stmt.target), @intFromEnum(frame.proc_id) },
@@ -715,7 +791,14 @@ pub const Interpreter = struct {
                     for (params, arg_values) |param, arg| frame.setLocal(param, arg);
                     current = join_info.body;
                 },
-                .ret => |ret_stmt| return .{ .returned = frame.getLocal(ret_stmt.value) },
+                .ret => |ret_stmt| {
+                    trace.log("stmt proc={d} id={d} kind=ret local={d}", .{
+                        @intFromEnum(frame.proc_id),
+                        @intFromEnum(current),
+                        @intFromEnum(ret_stmt.value),
+                    });
+                    return .{ .returned = frame.getLocal(ret_stmt.value) };
+                },
                 .crash => |crash_stmt| return self.triggerCrash(self.store.getString(crash_stmt.msg)),
             }
         }
