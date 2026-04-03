@@ -2860,7 +2860,7 @@ fn poisonRecursiveNonFunctionDefs(
             const def = self.env.store.getDef(def_idx);
             if (isRecursiveFunctionDefExpr(self.env.store.getExpr(def.expr))) continue;
 
-            const ident = defPatternIdent(self.env.store, def.pattern) orelse continue;
+            const ident = defPatternIdent(&self.env.store, def.pattern) orelse continue;
             const malformed_idx = try self.env.pushMalformed(CIR.Expr.Idx, Diagnostic{
                 .circular_value_definition = .{
                     .ident = ident,

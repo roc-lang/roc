@@ -2103,20 +2103,6 @@ pub fn finalizeResolvedDirectCallCallableInst(
     };
     const arg_exprs = module_env.store.sliceExpr(call_expr.args);
     try prepareCallableArgsForCallableInst(driver, visit_memo, result, thread, module_idx, arg_exprs, callable_inst_id);
-    const callable_def = result.getCallableDefForInst(callable_inst_id);
-    try recordExprSourceExpr(
-        driver,
-        result,
-        source_context,
-        module_idx,
-        call_expr_idx,
-        .{
-            .source_context = callable_def.body_expr.source_context,
-            .module_idx = callable_def.body_expr.module_idx,
-            .expr_idx = callable_def.body_expr.expr_idx,
-            .projections = callable_def.body_expr.projections,
-        },
-    );
     var visiting: std.AutoHashMapUnmanaged(ContextExprKey, void) = .empty;
     defer visiting.deinit(driver.allocator);
     var variant_builder = CallableVariantBuilder.init();

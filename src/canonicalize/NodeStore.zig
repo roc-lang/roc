@@ -272,7 +272,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 70;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 72;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 45;
 /// Count of the statement nodes in the ModuleEnv
