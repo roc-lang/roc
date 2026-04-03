@@ -2840,12 +2840,51 @@ pub fn canonicalizeFile(
     defer graph.deinit();
 
     const eval_order = try DependencyGraph.computeSCCs(&graph, self.env.gpa);
+    try self.poisonRecursiveNonFunctionDefs(&eval_order);
     const eval_order_ptr = try self.env.gpa.create(DependencyGraph.EvaluationOrder);
     eval_order_ptr.* = eval_order;
     self.env.evaluation_order = eval_order_ptr;
 
     // Assert that everything is in-sync
     self.env.debugAssertArraysInSync();
+}
+
+fn poisonRecursiveNonFunctionDefs(
+    self: *Self,
+    eval_order: *const @import("DependencyGraph.zig").EvaluationOrder,
+) std.mem.Allocator.Error!void {
+    for (eval_order.sccs) |scc| {
+        if (!scc.is_recursive) continue;
+
+        for (scc.defs) |def_idx| {
+            const def = self.env.store.getDef(def_idx);
+            if (isRecursiveFunctionDefExpr(self.env.store.getExpr(def.expr))) continue;
+
+            const ident = defPatternIdent(self.env.store, def.pattern) orelse continue;
+            const malformed_idx = try self.env.pushMalformed(CIR.Expr.Idx, Diagnostic{
+                .circular_value_definition = .{
+                    .ident = ident,
+                    .region = self.env.store.getPatternRegion(def.pattern),
+                },
+            });
+            self.env.store.setDefExpr(def_idx, malformed_idx);
+        }
+    }
+}
+
+fn isRecursiveFunctionDefExpr(expr: CIR.Expr) bool {
+    return switch (expr) {
+        .e_closure, .e_lambda, .e_anno_only, .e_hosted_lambda => true,
+        else => false,
+    };
+}
+
+fn defPatternIdent(store: *const CIR.NodeStore, pattern_idx: CIR.Pattern.Idx) ?Ident.Idx {
+    return switch (store.getPattern(pattern_idx)) {
+        .assign => |assign| assign.ident,
+        .as => |as_pattern| as_pattern.ident,
+        else => null,
+    };
 }
 
 /// Validate a type module for use in checking mode (roc check).

@@ -2491,37 +2491,6 @@ pub fn runExpectProblem(src: []const u8) !void {
     try std.testing.expect(can_diags + type_problems > 0);
 }
 
-/// Helper function to verify type mismatch error and runtime crash.
-/// This tests both compile-time behavior (type mismatch reported) and
-/// runtime behavior (crash encountered instead of successfully evaluating).
-pub fn runExpectTypeMismatchAndCrash(src: []const u8) !void {
-    const resources = try parseAndCanonicalizeExprAllowProblems(test_allocator, src);
-    defer cleanupParseAndCanonical(test_allocator, resources);
-
-    // Step 1: Verify that the type checker detected a type-level dispatch failure.
-    // Depending on where the failure is reported, this may surface as either
-    // `type_mismatch` or `static_dispatch`.
-    const problems = resources.checker.problems.problems.items;
-    var found_dispatch_failure = false;
-    for (problems) |problem| {
-        if (problem == .type_mismatch or problem == .static_dispatch) {
-            found_dispatch_failure = true;
-            break;
-        }
-    }
-
-    if (!found_dispatch_failure) {
-        std.debug.print("Expected TYPE MISMATCH/STATIC DISPATCH error, but found {} problems:\n", .{problems.len});
-        for (problems, 0..) |problem, i| {
-            std.debug.print("  Problem {}: {s}\n", .{ i, @tagName(problem) });
-        }
-        return error.ExpectedTypeMismatch;
-    }
-
-    // Step 2: Skip runtime evaluation — monomorphization may panic (uncatchable)
-    // on type-mismatched code. The type checker verification above is sufficient.
-}
-
 /// Helpers to setup and run an interpreter expecting an integer result.
 pub fn runExpectI64(src: []const u8, expected_int: i128) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);

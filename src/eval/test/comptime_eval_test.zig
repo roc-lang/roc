@@ -347,6 +347,42 @@ test "comptime eval - crash in constant" {
     try testing.expectEqual(@as(usize, 1), result.problems.len());
 }
 
+test "comptime eval - erroneous monomorphic top-level numeric constant uses crash" {
+    const src =
+        \\x = 5
+        \\a : I64
+        \\a = x
+        \\b : U8
+        \\b = x
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    try testing.expectEqual(@as(u32, 3), summary.evaluated);
+    try testing.expectEqual(@as(u32, 2), summary.crashed);
+}
+
+test "comptime eval - erroneous monomorphic top-level empty list uses crash" {
+    const src =
+        \\xs = []
+        \\a : List(I64)
+        \\a = xs
+        \\b : List(Str)
+        \\b = xs
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    try testing.expectEqual(@as(u32, 3), summary.evaluated);
+    try testing.expectEqual(@as(u32, 2), summary.crashed);
+}
+
 test "comptime eval - crash in if branch not taken" {
     const src =
         \\x = if True 42 else {

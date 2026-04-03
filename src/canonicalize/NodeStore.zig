@@ -43,11 +43,6 @@ type_apply_data: collections.SafeList(TypeApplyData), // Typed storage for type 
 pattern_list_data: collections.SafeList(PatternListData), // Typed storage for pattern lists
 index_data: collections.SafeList(u32), // Storage for variable-length index arrays (tuple elems, tag args, scratch spans)
 scratch: ?*Scratch, // Nullable because when we deserialize a NodeStore, we don't bother to reinitialize scratch.
-/// Expressions whose type doesn't match the expected return type in their context.
-/// Populated by the type checker for match/if branch bodies, read by the interpreter
-/// to crash at runtime when an erroneous branch is actually taken.
-/// Key: @intFromEnum(CIR.Expr.Idx) of the branch body expression.
-erroneous_exprs: std.AutoHashMapUnmanaged(u32, void) = .{},
 
 /// A pair of u32 values representing a span (start index and length).
 /// Used for storing argument lists, field lists, branch lists, etc.
@@ -248,7 +243,6 @@ pub fn deinit(store: *NodeStore) void {
     store.type_apply_data.deinit(store.gpa);
     store.pattern_list_data.deinit(store.gpa);
     store.index_data.deinit(store.gpa);
-    store.erroneous_exprs.deinit(store.gpa);
     if (store.scratch) |scratch| {
         scratch.deinit(store.gpa);
     }
@@ -1063,6 +1057,22 @@ pub fn replaceExprWithTag(
         .name = @bitCast(name),
         .args_start = @intCast(index_data_start),
         .args_len = @intCast(arg_indices.len),
+    } });
+    store.nodes.set(node_idx, node);
+}
+
+/// Replaces an existing expression with an in-place runtime error node.
+/// Used when an earlier compilation stage has already determined that the
+/// expression is erroneous and later stages must observe an explicit crash.
+pub fn replaceExprWithRuntimeError(
+    store: *NodeStore,
+    expr_idx: CIR.Expr.Idx,
+    diagnostic_idx: CIR.Diagnostic.Idx,
+) void {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+    var node = Node.init(.malformed);
+    node.setPayload(.{ .diag_single_value = .{
+        .value = @intFromEnum(diagnostic_idx),
     } });
     store.nodes.set(node_idx, node);
 }
@@ -3274,6 +3284,16 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
             region = r.region;
             node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident) } });
         },
+        .circular_value_definition => |r| {
+            node.tag = .diag_circular_value_definition;
+            region = r.region;
+            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident) } });
+        },
+        .erroneous_value_use => |r| {
+            node.tag = .diag_erroneous_value_use;
+            region = r.region;
+            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident) } });
+        },
         .qualified_ident_does_not_exist => |r| {
             node.tag = .diag_qualified_ident_does_not_exist;
             region = r.region;
@@ -3660,6 +3680,14 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .region = store.getRegionAt(node_idx),
         } },
         .diag_self_referential_definition => return CIR.Diagnostic{ .self_referential_definition = .{
+            .ident = @bitCast(payload.diag_single_ident.ident),
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_circular_value_definition => return CIR.Diagnostic{ .circular_value_definition = .{
+            .ident = @bitCast(payload.diag_single_ident.ident),
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_erroneous_value_use => return CIR.Diagnostic{ .erroneous_value_use = .{
             .ident = @bitCast(payload.diag_single_ident.ident),
             .region = store.getRegionAt(node_idx),
         } },

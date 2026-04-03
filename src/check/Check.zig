@@ -164,10 +164,8 @@ deferred_def_unifications: std.ArrayListUnmanaged(DeferredDefUnification),
 /// Stored here instead of merging eagerly so that ranks remain correct
 /// (no `popRankRetainingVars` needed).
 deferred_cycle_envs: std.ArrayListUnmanaged(Env),
-/// Tracks binop expressions whose dispatch constraints may fail.
-/// After constraint resolution, if the fn_var resolves to .err, the
-/// corresponding expression is marked as erroneous (added to erroneous_exprs).
-binop_dispatch_tracking: std.ArrayListUnmanaged(BinopDispatchEntry),
+/// Tracks lookup exprs that reference top-level non-function values.
+top_level_value_lookup_tracking: std.ArrayListUnmanaged(TopLevelValueLookupEntry),
 /// A def + processing data
 const DefProcessed = struct {
     def_idx: CIR.Def.Idx,
@@ -185,11 +183,9 @@ const DeferredDefUnification = struct {
     expr_var: Var,
 };
 
-/// Tracks a binop expression and its dispatch constraint fn_var.
-/// Used to detect failed dispatch after constraint resolution.
-const BinopDispatchEntry = struct {
+const TopLevelValueLookupEntry = struct {
     expr_idx: CIR.Expr.Idx,
-    fn_var: Var,
+    pattern_idx: CIR.Pattern.Idx,
 };
 
 /// A struct scratch info about a static dispatch constraint
@@ -321,7 +317,7 @@ fn initAssumePrepared(
         .type_writer = try types_mod.TypeWriter.initFromParts(gpa, types, cir.getIdentStore(), null),
         .deferred_def_unifications = .{},
         .deferred_cycle_envs = .{},
-        .binop_dispatch_tracking = .{},
+        .top_level_value_lookup_tracking = .{},
     };
 }
 
@@ -345,7 +341,7 @@ pub fn deinit(self: *Self) void {
         self.env_pool.release(deferred_env);
     }
     self.deferred_cycle_envs.deinit(self.gpa);
-    self.binop_dispatch_tracking.deinit(self.gpa);
+    self.top_level_value_lookup_tracking.deinit(self.gpa);
     self.env_pool.deinit();
     self.generalizer.deinit(self.gpa);
     self.var_map.deinit();
@@ -1458,13 +1454,12 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
         }
     }
 
-    // Mark binop expressions whose dispatch constraints failed as erroneous
-    try self.markErroneousBinopDispatches();
-
     // After solving all deferred constraints, check for infinite types
     for (defs_slice) |def_idx| {
         try self.checkForInfiniteType(CIR.Def.Idx, def_idx);
     }
+
+    try self.poisonErroneousTopLevelValueUses();
 
     // Note that we can't use SCCs to determine the order to resolve defs
     // because anonymous static dispatch makes function order not knowable
@@ -1976,13 +1971,12 @@ pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Alloca
         try self.checkAllConstraints(&env);
     }
 
-    // Mark binop expressions whose dispatch constraints failed as erroneous
-    try self.markErroneousBinopDispatches();
-
     // After solving all deferred constraints, check for infinite types
     for (defs_slice) |def_idx| {
         try self.checkForInfiniteType(CIR.Def.Idx, def_idx);
     }
+
+    try self.poisonErroneousTopLevelValueUses();
 }
 
 // defs //
@@ -3361,6 +3355,7 @@ fn getPatternIdent(self: *const Self, ptrn_idx: CIR.Pattern.Idx) ?Ident.Idx {
     const pattern = self.cir.store.getPattern(ptrn_idx);
     switch (pattern) {
         .assign => |assign| return assign.ident,
+        .as => |as_pattern| return as_pattern.ident,
         else => return null,
     }
 }
@@ -4145,6 +4140,14 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
             const mb_processing_def = self.top_level_ptrns.get(lookup.pattern_idx);
             if (mb_processing_def) |processing_def| {
+                const referenced_def = self.cir.store.getDef(processing_def.def_idx);
+                if (!isFunctionDef(&self.cir.store, self.cir.store.getExpr(referenced_def.expr))) {
+                    try self.top_level_value_lookup_tracking.append(self.gpa, .{
+                        .expr_idx = expr_idx,
+                        .pattern_idx = lookup.pattern_idx,
+                    });
+                }
+
                 switch (processing_def.status) {
                     .not_processed => {
                         var sub_env = try self.env_pool.acquire();
@@ -4178,12 +4181,18 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         }
                     },
                     .processing => {
-                        // This is a recursive reference
-                        //
-                        // In this case, we simply assign the pattern to be a
-                        // flex var, then write down an eql constraint for later
-                        // validation. This deferred approach is necessary for
-                        // good error messages.
+                        if (!isFunctionDef(&self.cir.store, self.cir.store.getExpr(referenced_def.expr))) {
+                            if (builtin.mode == .Debug) {
+                                std.debug.panic(
+                                    "frontend invariant violated: recursive non-function top-level def {d} reached type checking",
+                                    .{@intFromEnum(processing_def.def_idx)},
+                                );
+                            } else unreachable;
+                        }
+
+                        // Recursive function reference. We assign the lookup a
+                        // flex var, then record an equality constraint for
+                        // later validation at the function-recursion boundary.
 
                         // Assert that this def is NOT generalized nor outermost
                         std.debug.assert(self.types.resolveVar(pat_var).desc.rank != .generalized);
@@ -4198,27 +4207,20 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                             .ctx = .{ .recursive_def = .{ .def_name = processing_def.def_name } },
                         } });
 
-                        // Detect mutual recursion through local lookups.
-                        // If the referenced def is different from the current one,
-                        // we have a cycle: current → ... → this_def → ... → current.
-                        // Only trigger deferred generalization for function defs
-                        // (closures/lambdas), since only they are generalized and
-                        // have the cycle root cleanup code in their checkExpr.
-                        // Non-closure circular refs (e.g. associated item values)
-                        // are handled by the eql constraint above.
+                        // Detect mutual recursion through local lookups. If the
+                        // referenced def is different from the current one, we
+                        // have a function cycle: current → ... → this_def → ...
+                        // → current.
                         if (self.current_processing_def) |current_def| {
                             if (current_def != processing_def.def_idx) {
-                                const ref_def = self.cir.store.getDef(processing_def.def_idx);
-                                if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(ref_def.expr))) {
-                                    if (self.cycle_root_def == null) {
-                                        // First cycle detection: no prior cycle should be in progress.
-                                        std.debug.assert(!self.defer_generalize);
-                                        std.debug.assert(self.deferred_cycle_envs.items.len == 0);
-                                        std.debug.assert(self.deferred_def_unifications.items.len == 0);
-                                        self.cycle_root_def = processing_def.def_idx;
-                                    }
-                                    self.defer_generalize = true;
+                                if (self.cycle_root_def == null) {
+                                    // First cycle detection: no prior cycle should be in progress.
+                                    std.debug.assert(!self.defer_generalize);
+                                    std.debug.assert(self.deferred_cycle_envs.items.len == 0);
+                                    std.debug.assert(self.deferred_def_unifications.items.len == 0);
+                                    self.cycle_root_def = processing_def.def_idx;
                                 }
+                                self.defer_generalize = true;
                             }
                         }
 
@@ -5363,9 +5365,7 @@ fn checkIfElseExpr(
     // Check first branch body against expected return type
     if (expected_branch_ret) |expected_ret| {
         const first_body_var = ModuleEnv.varFrom(first_branch.body);
-        if (!self.isCompatibleWithExpected(first_body_var, expected_ret)) {
-            try self.cir.store.erroneous_exprs.put(self.gpa, @intFromEnum(first_branch.body), {});
-        }
+        _ = self.isCompatibleWithExpected(first_body_var, expected_ret);
     }
 
     // The 1st branch's body is the type all other branches must match
@@ -5390,9 +5390,7 @@ fn checkIfElseExpr(
         // Check against expected return type BEFORE pairwise unification
         if (expected_branch_ret) |expected_ret| {
             const this_body_var = ModuleEnv.varFrom(branch.body);
-            if (!self.isCompatibleWithExpected(this_body_var, expected_ret)) {
-                try self.cir.store.erroneous_exprs.put(self.gpa, @intFromEnum(branch.body), {});
-            }
+            _ = self.isCompatibleWithExpected(this_body_var, expected_ret);
         }
 
         const body_var: Var = ModuleEnv.varFrom(branch.body);
@@ -5420,9 +5418,7 @@ fn checkIfElseExpr(
                 // Check against expected return type before setting to .err
                 if (expected_branch_ret) |expected_ret| {
                     const rem_body_var = ModuleEnv.varFrom(remaining_branch.body);
-                    if (!self.isCompatibleWithExpected(rem_body_var, expected_ret)) {
-                        try self.cir.store.erroneous_exprs.put(self.gpa, @intFromEnum(remaining_branch.body), {});
-                    }
+                    _ = self.isCompatibleWithExpected(rem_body_var, expected_ret);
                 }
 
                 try self.unifyWith(ModuleEnv.varFrom(remaining_branch.body), .err, env);
@@ -5441,9 +5437,7 @@ fn checkIfElseExpr(
     // Check final else against expected return type before pairwise unification
     if (expected_branch_ret) |expected_ret| {
         const final_else_body_var = ModuleEnv.varFrom(if_.final_else);
-        if (!self.isCompatibleWithExpected(final_else_body_var, expected_ret)) {
-            try self.cir.store.erroneous_exprs.put(self.gpa, @intFromEnum(if_.final_else), {});
-        }
+        _ = self.isCompatibleWithExpected(final_else_body_var, expected_ret);
     }
 
     const final_else_var: Var = ModuleEnv.varFrom(if_.final_else);
@@ -5552,9 +5546,7 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
     // Check first branch body against expected return type
     if (expected_match_ret) |expected_ret| {
         const first_body_var = ModuleEnv.varFrom(first_branch.value);
-        if (!self.isCompatibleWithExpected(first_body_var, expected_ret)) {
-            try self.cir.store.erroneous_exprs.put(self.gpa, @intFromEnum(first_branch.value), {});
-        }
+        _ = self.isCompatibleWithExpected(first_body_var, expected_ret);
     }
 
     const val_var = ModuleEnv.varFrom(first_branch.value);
@@ -5602,9 +5594,7 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
         // making it impossible to distinguish correct from incorrect branches afterward.
         if (expected_match_ret) |expected_ret| {
             const body_var = ModuleEnv.varFrom(branch.value);
-            if (!self.isCompatibleWithExpected(body_var, expected_ret)) {
-                try self.cir.store.erroneous_exprs.put(self.gpa, @intFromEnum(branch.value), {});
-            }
+            _ = self.isCompatibleWithExpected(body_var, expected_ret);
         }
 
         const branch_result = try self.unifyInContext(val_var, ModuleEnv.varFrom(branch.value), env, .{ .match_branch = .{
@@ -5643,9 +5633,7 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
                 // Check against expected return type before setting to .err
                 if (expected_match_ret) |expected_ret| {
                     const other_body_var = ModuleEnv.varFrom(other_branch.value);
-                    if (!self.isCompatibleWithExpected(other_body_var, expected_ret)) {
-                        try self.cir.store.erroneous_exprs.put(self.gpa, @intFromEnum(other_branch.value), {});
-                    }
+                    _ = self.isCompatibleWithExpected(other_body_var, expected_ret);
                 }
 
                 try self.unifyWith(ModuleEnv.varFrom(other_branch.value), .err, env);
@@ -6037,14 +6025,6 @@ fn mkBinopConstraint(
     );
 
     _ = try self.unify(constrained_var, lhs_var, env);
-
-    // Track this binop so we can mark it as erroneous if dispatch fails
-    if (binop_expr_idx) |idx| {
-        try self.binop_dispatch_tracking.append(self.gpa, .{
-            .expr_idx = idx,
-            .fn_var = constraint_fn_var,
-        });
-    }
 }
 
 /// Create a static dispatch fn like: `arg, arg -> ret` and assert the
@@ -6315,16 +6295,19 @@ fn checkAllConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     }
 }
 
-/// After constraint resolution, check tracked binop expressions for failed
-/// dispatch. The fn_var of the dispatch constraint is set to .err specifically
-/// when dispatch fails, making this a reliable indicator (unlike expression
-/// type vars which can be poisoned via union-find propagation).
-fn markErroneousBinopDispatches(self: *Self) Allocator.Error!void {
-    for (self.binop_dispatch_tracking.items) |entry| {
-        const resolved = self.types.resolveVar(entry.fn_var);
-        if (resolved.desc.content == .err) {
-            try self.cir.store.erroneous_exprs.put(self.gpa, @intFromEnum(entry.expr_idx), {});
-        }
+fn poisonErroneousTopLevelValueUses(self: *Self) Allocator.Error!void {
+    for (self.top_level_value_lookup_tracking.items) |entry| {
+        const pattern_var = ModuleEnv.varFrom(entry.pattern_idx);
+        if (self.types.resolveVar(pattern_var).desc.content != .err) continue;
+
+        if (self.cir.store.getExpr(entry.expr_idx) == .e_runtime_error) continue;
+
+        const ident = self.getPatternIdent(entry.pattern_idx) orelse continue;
+        const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_use = .{
+            .ident = ident,
+            .region = self.cir.store.getExprRegion(entry.expr_idx),
+        } });
+        self.cir.store.replaceExprWithRuntimeError(entry.expr_idx, diagnostic_idx);
     }
 }
 
@@ -6722,6 +6705,15 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                 }
                             },
                             .processing => {
+                                if (!isFunctionDef(&self.cir.store, self.cir.store.getExpr(def.expr))) {
+                                    if (builtin.mode == .Debug) {
+                                        std.debug.panic(
+                                            "frontend invariant violated: recursive non-function top-level method/value def {d} reached type checking",
+                                            .{@intFromEnum(processing_def.def_idx)},
+                                        );
+                                    } else unreachable;
+                                }
+
                                 // Create a fresh flex var at the current rank for
                                 // the method type. Using def_var directly (rank
                                 // outermost) would pull body vars to a lower rank
@@ -6729,20 +6721,16 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                 cycle_method_expr_var = try self.fresh(env, region);
 
                                 // Check if this is mutual recursion through dispatch.
-                                // Only trigger for function defs (closures/lambdas).
                                 if (self.current_processing_def) |current_def| {
                                     if (current_def != processing_def.def_idx) {
-                                        const ref_def = self.cir.store.getDef(processing_def.def_idx);
-                                        if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(ref_def.expr))) {
-                                            if (self.cycle_root_def == null) {
-                                                // First cycle detection: no prior cycle should be in progress.
-                                                std.debug.assert(!self.defer_generalize);
-                                                std.debug.assert(self.deferred_cycle_envs.items.len == 0);
-                                                std.debug.assert(self.deferred_def_unifications.items.len == 0);
-                                                self.cycle_root_def = processing_def.def_idx;
-                                            }
-                                            self.defer_generalize = true;
+                                        if (self.cycle_root_def == null) {
+                                            // First cycle detection: no prior cycle should be in progress.
+                                            std.debug.assert(!self.defer_generalize);
+                                            std.debug.assert(self.deferred_cycle_envs.items.len == 0);
+                                            std.debug.assert(self.deferred_def_unifications.items.len == 0);
+                                            self.cycle_root_def = processing_def.def_idx;
                                         }
+                                        self.defer_generalize = true;
                                     }
                                 }
                             },

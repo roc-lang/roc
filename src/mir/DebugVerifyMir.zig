@@ -356,8 +356,18 @@ fn ensureCallableLocalInvariant(
     const local_data = store.getLocal(local);
     const mono = store.monotype_store.getMonotype(local_data.monotype);
     if (mono == .func) {
+        const ref_source_local: ?MIR.LocalId = switch (store.getLocalDef(local)) {
+            .ref => |ref_data| switch (ref_data.op) {
+                .local => |source_local| source_local,
+                .field => |field| field.source,
+                .tag_payload => |payload| payload.source,
+                .nominal => |nominal| nominal.backing,
+                .discriminant => |discriminant| discriminant.source,
+            },
+            else => null,
+        };
         std.debug.panic(
-            "DebugVerifyMir invariant violated: source-level func monotype survived on local {d} in {s} {d}; monotype={d} mono_value={any} local_def={s} exact_callable={?any}",
+            "DebugVerifyMir invariant violated: executable local {d} in {s} {d} carried non-executable function monotype {d}; mono_value={any} local_def={s} local_def_value={any} callable_resolution={?any} ref_source_local={?d} ref_source_def={?s} ref_source_callable_resolution={?any}",
             .{
                 @intFromEnum(local),
                 context,
@@ -365,16 +375,20 @@ fn ensureCallableLocalInvariant(
                 @intFromEnum(local_data.monotype),
                 mono,
                 @tagName(store.getLocalDef(local)),
-                store.getLocalExactCallable(local),
+                store.getLocalDef(local),
+                store.resolveLocalCallable(local),
+                if (ref_source_local) |source_local| @intFromEnum(source_local) else null,
+                if (ref_source_local) |source_local| if (store.getLocalDefOpt(source_local)) |source_def| @tagName(source_def) else "none" else null,
+                if (ref_source_local) |source_local| store.resolveLocalCallable(source_local) else null,
             },
         );
     }
-    const exact_callable = store.getLocalExactCallable(local) orelse return;
-    const lambda = store.getLambdaAnyState(exact_callable.lambda);
-    if (exact_callable.requires_hidden_capture != (lambda.captures_param != null)) {
+    const callable = store.resolveLocalCallable(local) orelse return;
+    const lambda = store.getLambdaAnyState(callable.lambda);
+    if (callable.captures_local != (lambda.captures_param != null)) {
         std.debug.panic(
-            "DebugVerifyMir invariant violated: local {d} in {s} {d} had exact callable metadata inconsistent with lambda {d}",
-            .{ @intFromEnum(local), context, context_id, @intFromEnum(exact_callable.lambda) },
+            "DebugVerifyMir invariant violated: local {d} in {s} {d} had callable resolution inconsistent with lambda {d}",
+            .{ @intFromEnum(local), context, context_id, @intFromEnum(callable.lambda) },
         );
     }
 }

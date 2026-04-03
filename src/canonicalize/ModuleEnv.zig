@@ -806,6 +806,56 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .circular_value_definition => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            const ident_name = self.getIdent(data.ident);
+
+            var report = Report.init(allocator, "CIRCULAR VALUE DEFINITION", .runtime_error);
+            const owned_ident = try report.addOwnedString(ident_name);
+            try report.document.addReflowingText("The value ");
+            try report.document.addUnqualifiedSymbol(owned_ident);
+            try report.document.addReflowingText(" is part of a recursive non-function definition cycle.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Only functions can be recursive. Non-function top-level values must be fully computable without depending on themselves through other values.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
+        .erroneous_value_use => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            const ident_name = self.getIdent(data.ident);
+
+            var report = Report.init(allocator, "ERRONEOUS VALUE USE", .runtime_error);
+            const owned_ident = try report.addOwnedString(ident_name);
+            try report.document.addReflowingText("This use of ");
+            try report.document.addUnqualifiedSymbol(owned_ident);
+            try report.document.addReflowingText(" was rewritten to crash because the referenced top-level value failed type checking earlier.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Fix the earlier type error instead of trying to execute this value.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
         .qualified_ident_does_not_exist => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
             const ident_name = self.getIdent(data.ident);

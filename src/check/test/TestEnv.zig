@@ -598,6 +598,36 @@ pub fn assertOneTypeErrorMsg(self: *TestEnv, expected: []const u8) !void {
     try testing.expectEqualStrings(expected, report_buf.items);
 }
 
+pub fn assertOneCanError(self: *TestEnv, expected: []const u8) !void {
+    try self.assertNoParseProblems();
+
+    const diagnostics = try self.module_env.getDiagnostics();
+    defer self.gpa.free(diagnostics);
+
+    try testing.expectEqual(@as(usize, 1), diagnostics.len);
+    var report = try self.module_env.diagnosticToReport(diagnostics[0], self.gpa, self.module_env.module_name);
+    defer report.deinit();
+
+    try testing.expectEqualStrings(expected, report.title);
+}
+
+pub fn assertOneCanErrorMsg(self: *TestEnv, expected: []const u8) !void {
+    try self.assertNoParseProblems();
+
+    const diagnostics = try self.module_env.getDiagnostics();
+    defer self.gpa.free(diagnostics);
+
+    try testing.expectEqual(@as(usize, 1), diagnostics.len);
+    var report = try self.module_env.diagnosticToReport(diagnostics[0], self.gpa, self.module_env.module_name);
+    defer report.deinit();
+
+    var report_buf = try std.array_list.Managed(u8).initCapacity(self.gpa, 256);
+    defer report_buf.deinit();
+
+    try renderReportToMarkdownBuffer(&report_buf, &report);
+    try testing.expectEqualStrings(expected, report_buf.items);
+}
+
 /// Assert that the first type error matches the expected title (allows multiple errors).
 pub fn assertFirstTypeError(self: *TestEnv, expected: []const u8) !void {
     try self.assertNoParseProblems();

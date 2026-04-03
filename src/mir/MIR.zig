@@ -19,6 +19,7 @@
 //! patterns.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const builtins = @import("builtins");
 const Monotype = @import("corecir").Monotype;
@@ -97,13 +98,19 @@ pub const BorrowScopeId = enum(u32) {
     _,
 };
 
-/// One explicitly typed MIR local.
-pub const ExactCallable = struct {
+/// One exact callable value representable by executable MIR.
+///
+/// This is executable MIR fact. Any MIR local that is callable must expose
+/// that directly through its recorded executable local definition.
+pub const CallableResolution = struct {
     lambda: LambdaId,
-    requires_hidden_capture: bool,
+    captures_local: bool,
 };
 
 /// One explicitly typed MIR local.
+///
+/// Executable MIR locals never carry source-level function monotypes. Callable
+/// values use their executable runtime representation monotype instead.
 pub const Local = struct {
     monotype: Monotype.Idx,
     reassignable: bool = false,
@@ -114,6 +121,7 @@ pub const LocalDefKind = union(enum) {
     param: struct {
         lambda: LambdaId,
         index: u16,
+        callable: ?CallableResolution = null,
     },
     captures_param: struct {
         lambda: LambdaId,
@@ -121,9 +129,13 @@ pub const LocalDefKind = union(enum) {
     join_param: struct {
         join: JoinPointId,
         index: u16,
+        callable: ?CallableResolution = null,
     },
     symbol: Symbol,
-    ref: RefOp,
+    ref: struct {
+        op: RefOp,
+        result_callable: ?CallableResolution = null,
+    },
     literal: LiteralValue,
     lambda: LambdaId,
     closure: struct {
@@ -132,12 +144,13 @@ pub const LocalDefKind = union(enum) {
     },
     call: struct {
         callee: LocalId,
-        exact_lambda: LambdaId,
-        exact_requires_hidden_capture: bool,
+        callee_callable: CallableResolution,
+        result_callable: ?CallableResolution = null,
         args: LocalSpan,
     },
     low_level: struct {
         op: CIR.Expr.LowLevel,
+        result_callable: ?CallableResolution = null,
         args: LocalSpan,
     },
     list: LocalSpan,
@@ -148,10 +161,9 @@ pub const LocalDefKind = union(enum) {
     },
 };
 
-/// Canonical semantic record for one MIR local.
+/// Canonical executable definition for one MIR local.
 pub const LocalDef = struct {
     kind: ?LocalDefKind = null,
-    exact_callable: ?ExactCallable = null,
 };
 
 /// Span of LocalId values stored in Store.local_ids.
@@ -166,6 +178,20 @@ pub const LocalSpan = extern struct {
 
     /// Reports whether this span is empty.
     pub fn isEmpty(self: LocalSpan) bool {
+        return self.len == 0;
+    }
+};
+
+/// Span of optional callable-resolution entries stored in Store.callable_resolutions.
+pub const CallableResolutionSpan = extern struct {
+    start: u32,
+    len: u16,
+
+    pub fn empty() CallableResolutionSpan {
+        return .{ .start = 0, .len = 0 };
+    }
+
+    pub fn isEmpty(self: CallableResolutionSpan) bool {
         return self.len == 0;
     }
 };
@@ -237,6 +263,7 @@ pub const HostedLambda = struct {
 pub const Lambda = struct {
     fn_monotype: Monotype.Idx,
     params: LocalSpan,
+    param_callables: CallableResolutionSpan = .empty(),
     body: CFStmtId,
     ret_monotype: Monotype.Idx,
     debug_name: Symbol,
@@ -281,6 +308,7 @@ pub const CFStmt = union(enum) {
     assign_ref: struct {
         target: LocalId,
         op: RefOp,
+        result_callable: ?CallableResolution = null,
         next: CFStmtId,
     },
     assign_literal: struct {
@@ -302,14 +330,15 @@ pub const CFStmt = union(enum) {
     assign_call: struct {
         target: LocalId,
         callee: LocalId,
-        exact_lambda: LambdaId,
-        exact_requires_hidden_capture: bool,
+        callee_callable: CallableResolution,
+        result_callable: ?CallableResolution = null,
         args: LocalSpan,
         next: CFStmtId,
     },
     assign_low_level: struct {
         target: LocalId,
         op: CIR.Expr.LowLevel,
+        result_callable: ?CallableResolution = null,
         args: LocalSpan,
         next: CFStmtId,
     },
@@ -354,6 +383,7 @@ pub const CFStmt = union(enum) {
     join: struct {
         id: JoinPointId,
         params: LocalSpan,
+        param_callables: CallableResolutionSpan = .empty(),
         body: CFStmtId,
         remainder: CFStmtId,
     },
@@ -377,6 +407,7 @@ pub const Store = struct {
     cf_stmts: std.ArrayListUnmanaged(CFStmt),
     cf_stmt_states: std.ArrayListUnmanaged(EntryState),
     switch_branches: std.ArrayListUnmanaged(SwitchBranch),
+    callable_resolutions: std.ArrayListUnmanaged(?CallableResolution),
     locals: std.ArrayListUnmanaged(Local),
     local_defs: std.ArrayListUnmanaged(LocalDef),
     local_ids: std.ArrayListUnmanaged(LocalId),
@@ -393,6 +424,7 @@ pub const Store = struct {
             .cf_stmts = .empty,
             .cf_stmt_states = .empty,
             .switch_branches = .empty,
+            .callable_resolutions = .empty,
             .locals = .empty,
             .local_defs = .empty,
             .local_ids = .empty,
@@ -410,6 +442,7 @@ pub const Store = struct {
         self.cf_stmts.deinit(allocator);
         self.cf_stmt_states.deinit(allocator);
         self.switch_branches.deinit(allocator);
+        self.callable_resolutions.deinit(allocator);
         self.locals.deinit(allocator);
         self.local_defs.deinit(allocator);
         self.local_ids.deinit(allocator);
@@ -532,11 +565,24 @@ pub const Store = struct {
         return self.switch_branches.items[span.start..][0..span.len];
     }
 
+    pub fn addCallableResolutionSpan(self: *Store, allocator: Allocator, resolutions: []const ?CallableResolution) Allocator.Error!CallableResolutionSpan {
+        if (resolutions.len == 0) return CallableResolutionSpan.empty();
+        const start: u32 = @intCast(self.callable_resolutions.items.len);
+        try self.callable_resolutions.appendSlice(allocator, resolutions);
+        return .{ .start = start, .len = @intCast(resolutions.len) };
+    }
+
+    pub fn getCallableResolutionSpan(self: *const Store, span: CallableResolutionSpan) []const ?CallableResolution {
+        if (span.len == 0) return &.{};
+        return self.callable_resolutions.items[span.start..][0..span.len];
+    }
+
     pub fn reserveLambda(self: *Store, allocator: Allocator) Allocator.Error!LambdaId {
         const idx: u32 = @intCast(self.lambdas.items.len);
         try self.lambdas.append(allocator, .{
             .fn_monotype = .none,
             .params = .empty(),
+            .param_callables = .empty(),
             .body = @enumFromInt(0),
             .ret_monotype = .none,
             .debug_name = .none,
@@ -639,12 +685,39 @@ pub const Store = struct {
         return self.const_defs_by_symbol.get(symbol.raw());
     }
 
-    pub fn setLocalExactCallable(self: *Store, local: LocalId, exact_callable: ?ExactCallable) void {
-        self.local_defs.items[@intFromEnum(local)].exact_callable = exact_callable;
-    }
-
-    pub fn getLocalExactCallable(self: *const Store, local: LocalId) ?ExactCallable {
-        return self.local_defs.items[@intFromEnum(local)].exact_callable;
+    pub fn resolveLocalCallable(self: *const Store, local: LocalId) ?CallableResolution {
+        var current = local;
+        while (true) {
+            const def = self.getLocalDefOpt(current) orelse return null;
+            switch (def) {
+                .param => |param| return param.callable,
+                .captures_param => return null,
+                .join_param => |join_param| return join_param.callable,
+                .symbol => return null,
+                .ref => |ref_data| {
+                    if (ref_data.result_callable) |resolved| return resolved;
+                    switch (ref_data.op) {
+                        .local => |source| current = source,
+                        .nominal => |nominal| current = nominal.backing,
+                        .field, .tag_payload, .discriminant => return null,
+                    }
+                },
+                .literal => return null,
+                .lambda => |lambda_id| return .{
+                    .lambda = lambda_id,
+                    .captures_local = false,
+                },
+                .closure => |closure| return .{
+                    .lambda = closure.lambda,
+                    .captures_local = true,
+                },
+                .call => |call| return call.result_callable,
+                .low_level => |low_level| return low_level.result_callable,
+                .list => return null,
+                .struct_ => return null,
+                .tag => return null,
+            }
+        }
     }
 
     fn recordLocalDef(self: *Store, local: LocalId, def: LocalDefKind) Allocator.Error!void {
@@ -686,7 +759,10 @@ pub const Store = struct {
     fn recordCFStmtLocalDefs(self: *Store, stmt_id: CFStmtId, stmt: CFStmt) Allocator.Error!void {
         switch (stmt) {
             .assign_symbol => |assign| try self.recordLocalDef(assign.target, .{ .symbol = assign.symbol }),
-            .assign_ref => |assign| try self.recordLocalDef(assign.target, .{ .ref = assign.op }),
+            .assign_ref => |assign| try self.recordLocalDef(assign.target, .{ .ref = .{
+                .op = assign.op,
+                .result_callable = assign.result_callable,
+            } }),
             .assign_literal => |assign| try self.recordLocalDef(assign.target, .{ .literal = assign.literal }),
             .assign_lambda => |assign| try self.recordLocalDef(assign.target, .{ .lambda = assign.lambda }),
             .assign_closure => |assign| try self.recordLocalDef(assign.target, .{ .closure = .{
@@ -695,12 +771,13 @@ pub const Store = struct {
             } }),
             .assign_call => |assign| try self.recordLocalDef(assign.target, .{ .call = .{
                 .callee = assign.callee,
-                .exact_lambda = assign.exact_lambda,
-                .exact_requires_hidden_capture = assign.exact_requires_hidden_capture,
+                .callee_callable = assign.callee_callable,
+                .result_callable = assign.result_callable,
                 .args = assign.args,
             } }),
             .assign_low_level => |assign| try self.recordLocalDef(assign.target, .{ .low_level = .{
                 .op = assign.op,
+                .result_callable = assign.result_callable,
                 .args = assign.args,
             } }),
             .assign_list => |assign| try self.recordLocalDef(assign.target, .{ .list = assign.elems }),
@@ -710,10 +787,19 @@ pub const Store = struct {
                 .args = assign.args,
             } }),
             .join => |join_stmt| {
-                for (self.getLocalSpan(join_stmt.params), 0..) |param, i| {
+                const params = self.getLocalSpan(join_stmt.params);
+                const param_callables = self.getCallableResolutionSpan(join_stmt.param_callables);
+                if (builtin.mode == .Debug and !join_stmt.param_callables.isEmpty() and param_callables.len != params.len) {
+                    std.debug.panic(
+                        "MIR invariant violated: join {d} param-callable arity mismatch params={d} callables={d}",
+                        .{ @intFromEnum(join_stmt.id), params.len, param_callables.len },
+                    );
+                }
+                for (params, 0..) |param, i| {
                     try self.recordLocalDef(param, .{ .join_param = .{
                         .join = join_stmt.id,
                         .index = @intCast(i),
+                        .callable = if (join_stmt.param_callables.isEmpty()) null else param_callables[i],
                     } });
                 }
             },
@@ -733,10 +819,19 @@ pub const Store = struct {
     }
 
     fn recordLambdaLocalDefs(self: *Store, lambda_id: LambdaId, lambda: Lambda) Allocator.Error!void {
-        for (self.getLocalSpan(lambda.params), 0..) |param, i| {
+        const params = self.getLocalSpan(lambda.params);
+        const param_callables = self.getCallableResolutionSpan(lambda.param_callables);
+        if (builtin.mode == .Debug and !lambda.param_callables.isEmpty() and param_callables.len != params.len) {
+            std.debug.panic(
+                "MIR invariant violated: lambda {d} param-callable arity mismatch params={d} callables={d}",
+                .{ @intFromEnum(lambda_id), params.len, param_callables.len },
+            );
+        }
+        for (params, 0..) |param, i| {
             try self.recordLocalDef(param, .{ .param = .{
                 .lambda = lambda_id,
                 .index = @intCast(i),
+                .callable = if (lambda.param_callables.isEmpty()) null else param_callables[i],
             } });
         }
 

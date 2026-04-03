@@ -46,6 +46,18 @@ pub const Diagnostic = union(enum) {
         ident: Ident.Idx,
         region: Region,
     },
+    /// A top-level non-function value participates in a recursive SCC.
+    /// Only function values may be recursive.
+    circular_value_definition: struct {
+        ident: Ident.Idx,
+        region: Region,
+    },
+    /// This use-site was rewritten to crash because the referenced top-level
+    /// non-function value failed type checking earlier in the pipeline.
+    erroneous_value_use: struct {
+        ident: Ident.Idx,
+        region: Region,
+    },
     qualified_ident_does_not_exist: struct {
         ident: Ident.Idx, // The full qualified identifier (e.g., "Stdout.line!")
         region: Region,
@@ -323,6 +335,8 @@ pub const Diagnostic = union(enum) {
             .ident_already_in_scope => |d| d.region,
             .ident_not_in_scope => |d| d.region,
             .self_referential_definition => |d| d.region,
+            .circular_value_definition => |d| d.region,
+            .erroneous_value_use => |d| d.region,
             .qualified_ident_does_not_exist => |d| d.region,
             .invalid_top_level_statement => |d| d.region,
             .expr_not_canonicalized => |d| d.region,

@@ -318,14 +318,14 @@ fn mergeLoweredOrigins(left: LoweredOrigin, right: LoweredOrigin) LoweredOrigin 
     return .fresh;
 }
 
-fn requireExactCallableValue(self: *Self, local_id: MIR.LocalId) ResolvedCallable {
-    const exact_callable = self.mir_store.getLocalExactCallable(local_id) orelse std.debug.panic(
-        "MirToLir invariant violated: callable local {d} lacked explicit exact callable metadata",
+fn requireResolvedCallableValue(self: *Self, local_id: MIR.LocalId) ResolvedCallable {
+    const callable = self.mir_store.resolveLocalCallable(local_id) orelse std.debug.panic(
+        "MirToLir invariant violated: callable local {d} lacked executable callable resolution",
         .{@intFromEnum(local_id)},
     );
     return .{
-        .lambda = exact_callable.lambda,
-        .captures_local = if (exact_callable.requires_hidden_capture) local_id else null,
+        .lambda = callable.lambda,
+        .captures_local = if (callable.captures_local) local_id else null,
     };
 }
 
@@ -938,7 +938,7 @@ fn resolveMirLocalOrigin(
         .tag,
         .list,
         => .fresh,
-        .ref => |ref_op| switch (ref_op) {
+        .ref => |ref_data| switch (ref_data.op) {
             .local => |source| try self.aliasOrigin(
                 try self.resolveMirLocalOrigin(source, visited),
                 LIR.RefProjectionSpan.empty(),
@@ -981,8 +981,8 @@ fn resolveMirLocalOrigin(
         },
         .call => |call_result| blk: {
             const resolved = ResolvedCallable{
-                .lambda = call_result.exact_lambda,
-                .captures_local = if (call_result.exact_requires_hidden_capture) call_result.callee else null,
+                .lambda = call_result.callee_callable.lambda,
+                .captures_local = if (call_result.callee_callable.captures_local) call_result.callee else null,
             };
 
             const visible_args = self.mir_store.getLocalSpan(call_result.args);
@@ -1700,8 +1700,7 @@ fn lowerStmt(self: *Self, stmt_id: MIR.CFStmtId) Allocator.Error!CFStmtId {
             defer self.popMirTargetBinding(target_binding);
             break :blk try self.lowerDirectLambdaCall(
                 assign.callee,
-                assign.exact_lambda,
-                assign.exact_requires_hidden_capture,
+                assign.callee_callable,
                 self.mir_store.getLocalSpan(assign.args),
                 assign.target,
                 target_binding.target,
@@ -1846,16 +1845,15 @@ fn lowerJoinStmt(
 fn lowerDirectLambdaCall(
     self: *Self,
     callee_mir: MIR.LocalId,
-    exact_lambda: MIR.LambdaId,
-    exact_requires_hidden_capture: bool,
+    callable: MIR.CallableResolution,
     visible_args: []const MIR.LocalId,
     target: MIR.LocalId,
     lowered_target: LirLocalId,
     next: CFStmtId,
 ) Allocator.Error!CFStmtId {
     const resolved = ResolvedCallable{
-        .lambda = exact_lambda,
-        .captures_local = if (exact_requires_hidden_capture) callee_mir else null,
+        .lambda = callable.lambda,
+        .captures_local = if (callable.captures_local) callee_mir else null,
     };
     const lambda = self.mir_store.getLambda(resolved.lambda);
     if (resolved.captures_local == null and lambda.captures_param != null) {
@@ -2136,8 +2134,7 @@ fn lowerEntrypointCallableStmt(
             break :blk .{
                 .body = try self.lowerDirectLambdaCall(
                     assign.callee,
-                    assign.exact_lambda,
-                    assign.exact_requires_hidden_capture,
+                    assign.callee_callable,
                     self.mir_store.getLocalSpan(assign.args),
                     assign.target,
                     target_binding.target,
@@ -2342,7 +2339,7 @@ fn lowerEntrypointCallableStmt(
             .result_contract = .no_return,
         },
         .ret => |ret_stmt| try self.emitEntrypointCall(
-            self.requireExactCallableValue(ret_stmt.value),
+            self.requireResolvedCallableValue(ret_stmt.value),
             arg_locals,
             target,
             next,

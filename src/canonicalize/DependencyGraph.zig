@@ -376,8 +376,7 @@ pub fn computeSCCs(
     };
 }
 
-/// Returns indices of all top-level constants (definitions without function parameters).
-/// A constant is a definition whose expression is not a lambda, or is a zero-arg lambda.
+/// Returns indices of all top-level constants (definitions that are not functions).
 ///
 /// This is used to identify definitions that should be evaluated at compile time,
 /// as opposed to functions which are only evaluated when called.
@@ -396,9 +395,8 @@ pub fn getTopLevelConstants(
         const expr = cir.store.getExpr(def.expr);
 
         const is_constant = switch (expr) {
-            .e_lambda => |lambda| lambda.args.span.len == 0, // Zero-arg lambda is a constant
-            .e_closure => false, // Closures with captures are not constants
-            else => true, // Everything else (literals, records, etc.) is a constant
+            .e_lambda, .e_closure, .e_anno_only, .e_hosted_lambda => false,
+            else => true,
         };
 
         if (is_constant) {

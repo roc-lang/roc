@@ -55,8 +55,8 @@ pub const ResultContract = union(enum) {
 /// Exact callable-return contract for one MIR lambda or constant.
 pub const CallableContract = union(enum) {
     no_return,
-    exact_lambda: MIR.LambdaId,
-    exact_closure: MIR.LambdaId,
+    direct_lambda: MIR.LambdaId,
+    closure_lambda: MIR.LambdaId,
 };
 
 /// Finalized MIR result-summary table.
@@ -169,7 +169,7 @@ const JoinOriginState = struct {
 };
 
 const ActiveJoinMap = std.AutoHashMap(u32, JoinOriginState);
-const CallableResolution = MIR.ExactCallable;
+const CallableResolution = MIR.CallableResolution;
 
 const Analyzer = struct {
     allocator: Allocator,
@@ -407,49 +407,14 @@ const Analyzer = struct {
         env: *const LocalOriginMap,
         local_id: MIR.LocalId,
     ) Origin {
-        const resolved = self.mir_store.getLocalExactCallable(local_id) orelse {
+        const resolved = self.mir_store.resolveLocalCallable(local_id) orelse {
             return self.originForLocal(env, local_id);
         };
-        if (!resolved.requires_hidden_capture) {
+        if (!resolved.captures_local) {
             return .fresh;
         }
 
         return self.originForLocal(env, local_id);
-    }
-
-    fn monotypeMayContainCallable(self: *const Analyzer, mono_idx: Monotype.Idx) bool {
-        return switch (self.mir_store.monotype_store.getMonotype(mono_idx)) {
-            .func => true,
-            .record => |record| blk: {
-                for (self.mir_store.monotype_store.getFields(record.fields)) |field| {
-                    if (self.monotypeMayContainCallable(field.type_idx)) break :blk true;
-                }
-                break :blk false;
-            },
-            .tuple => |tuple_data| blk: {
-                for (self.mir_store.monotype_store.getIdxSpan(tuple_data.elems)) |elem| {
-                    if (self.monotypeMayContainCallable(elem)) break :blk true;
-                }
-                break :blk false;
-            },
-            .tag_union => |tag_union| blk: {
-                for (self.mir_store.monotype_store.getTags(tag_union.tags)) |tag| {
-                    for (self.mir_store.monotype_store.getIdxSpan(tag.payloads)) |payload| {
-                        if (self.monotypeMayContainCallable(payload)) break :blk true;
-                    }
-                }
-                break :blk false;
-            },
-            .box => |box_data| self.monotypeMayContainCallable(box_data.inner),
-            .list,
-            .prim,
-            .unit,
-            => false,
-            .recursive_placeholder => std.debug.panic(
-                "ResultSummary invariant violated: recursive_placeholder survived monotype construction",
-                .{},
-            ),
-        };
     }
 
     fn collectReturnedCallable(
@@ -486,9 +451,9 @@ const Analyzer = struct {
                 try self.collectReturnedCallable(join_stmt.remainder, out);
             },
             .ret => |ret_stmt| {
-                const resolved = self.mir_store.getLocalExactCallable(ret_stmt.value) orelse return;
+                const resolved = self.mir_store.resolveLocalCallable(ret_stmt.value) orelse return;
                 if (out.*) |current| {
-                    if (current.lambda != resolved.lambda or current.requires_hidden_capture != resolved.requires_hidden_capture) {
+                    if (current.lambda != resolved.lambda or current.captures_local != resolved.captures_local) {
                         std.debug.panic(
                             "ResultSummary invariant violated: callable body returned incompatible callable identities",
                             .{},
@@ -581,19 +546,16 @@ const Analyzer = struct {
                 return self.analyzeStmt(env, region, accumulator, assign.next);
             },
             .assign_call => |assign| {
-                const callee = CallableResolution{
-                    .lambda = assign.exact_lambda,
-                    .requires_hidden_capture = assign.exact_requires_hidden_capture,
-                };
+                const callee = assign.callee_callable;
 
                 const args = self.mir_store.getLocalSpan(assign.args);
-                const arg_origins = try self.allocator.alloc(Origin, args.len + @intFromBool(callee.requires_hidden_capture));
+                const arg_origins = try self.allocator.alloc(Origin, args.len + @intFromBool(callee.captures_local));
                 defer self.allocator.free(arg_origins);
 
                 for (args, 0..) |arg, i| {
                     arg_origins[i] = self.originForLocal(env, arg);
                 }
-                if (callee.requires_hidden_capture) {
+                if (callee.captures_local) {
                     arg_origins[args.len] = self.originForLocal(env, assign.callee);
                 }
 
@@ -913,10 +875,10 @@ pub fn build(
         try analyzer.collectReturnedCallable(mir_store.getLambda(lambda_id).body, &returned);
         table.lambda_callable_contracts.appendAssumeCapacity(
             if (returned) |resolved|
-                if (resolved.requires_hidden_capture)
-                    .{ .exact_closure = resolved.lambda }
+                if (resolved.captures_local)
+                    .{ .closure_lambda = resolved.lambda }
                 else
-                    .{ .exact_lambda = resolved.lambda }
+                    .{ .direct_lambda = resolved.lambda }
             else
                 .no_return,
         );
@@ -942,10 +904,10 @@ pub fn build(
         try analyzer.collectReturnedCallable(mir_store.getConstDef(const_id).body, &returned);
         table.const_callable_contracts.appendAssumeCapacity(
             if (returned) |resolved|
-                if (resolved.requires_hidden_capture)
-                    .{ .exact_closure = resolved.lambda }
+                if (resolved.captures_local)
+                    .{ .closure_lambda = resolved.lambda }
                 else
-                    .{ .exact_lambda = resolved.lambda }
+                    .{ .direct_lambda = resolved.lambda }
             else
                 .no_return,
         );
@@ -1010,7 +972,7 @@ fn collectReachableFromStmt(
             try collectReachableFromStmt(allocator, mir_store, current_lambda, stmt.next, reachable_lambdas, reachable_consts, visited_stmts);
         },
         .assign_call => |stmt| {
-            try collectReachableLambda(allocator, mir_store, stmt.exact_lambda, reachable_lambdas, reachable_consts, visited_stmts);
+            try collectReachableLambda(allocator, mir_store, stmt.callee_callable.lambda, reachable_lambdas, reachable_consts, visited_stmts);
             try collectReachableFromStmt(allocator, mir_store, current_lambda, stmt.next, reachable_lambdas, reachable_consts, visited_stmts);
         },
         .assign_low_level => |stmt| try collectReachableFromStmt(allocator, mir_store, current_lambda, stmt.next, reachable_lambdas, reachable_consts, visited_stmts),

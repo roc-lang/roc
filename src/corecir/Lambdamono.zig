@@ -831,6 +831,23 @@ fn Transform(comptime ResultPtr: type, comptime Driver: type) type {
                 }
                 unreachable;
             }
+            const common = expr.commonMut();
+            common.origin = if (self.result.getExprOriginExpr(source_context, module_idx, expr_idx)) |origin|
+                .{ .expr = origin }
+            else
+                .self;
+            common.callable = if (self.result.getExprIntroCallableInst(source_context, module_idx, expr_idx)) |callable_inst_id|
+                .{ .intro = .{
+                    .callable_inst = callable_inst_id,
+                    .callable_value = self.result.getExprCallableValue(source_context, module_idx, expr_idx) orelse std.debug.panic(
+                        "Lambdamono invariant violated: expr ctx={s} module={d} expr={d} had intro callable inst without callable value",
+                        .{ @tagName(source_context), module_idx, @intFromEnum(expr_idx) },
+                    ),
+                } }
+            else if (self.result.getExprCallableValue(source_context, module_idx, expr_idx)) |callable_value|
+                .{ .callable = callable_value }
+            else
+                null;
             return expr;
         }
 

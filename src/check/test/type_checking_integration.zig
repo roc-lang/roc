@@ -4843,6 +4843,43 @@ test "check type - mutually recursive functions - type mismatch error" {
     try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
+test "check can - recursive non-function top-level cycle is rejected before type checking" {
+    const source =
+        \\force : ({} -> I64) -> I64
+        \\force = \eval -> eval {}
+        \\
+        \\t1 = \_ -> force (\_ -> t2)
+        \\t2 = t1 {}
+    ;
+
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneCanError("CIRCULAR VALUE DEFINITION");
+}
+
+test "check type - monomorphic top-level numeric constant cannot be used at multiple types" {
+    const source =
+        \\x = 5
+        \\a : I64
+        \\a = x
+        \\b : U8
+        \\b = x
+    ;
+    try checkTypesModule(source, .fail_first, "TYPE MISMATCH");
+}
+
+test "check type - monomorphic top-level empty list cannot be used at multiple element types" {
+    const source =
+        \\xs = []
+        \\a : List(I64)
+        \\a = xs
+        \\b : List(Str)
+        \\b = xs
+    ;
+    try checkTypesModule(source, .fail_first, "TYPE MISMATCH");
+}
+
 test "check type - mutually recursive functions - three-way polymorphic" {
     const source =
         \\f = |n, x| {

@@ -104,10 +104,7 @@ const PlannedCaptureLocals = struct {
     }
 };
 
-const ExactCallableResolution = struct {
-    lambda: MIR.LambdaId,
-    requires_hidden_capture: bool,
-};
+const CallableResolution = MIR.CallableResolution;
 
 const LambdaEntryBindingState = struct {
     by_local: std.AutoHashMap(u32, void),
@@ -257,9 +254,6 @@ lowered_callable_insts: std.AutoHashMap(u32, MIR.LambdaId),
 /// lowering context that can affect the emitted callable body.
 lowered_callable_lambdas: std.AutoHashMap(CallableCacheKey, MIR.LambdaId),
 
-/// Recursion guard for named top-level constants lowered on demand.
-in_progress_const_defs: std.AutoHashMap(u64, void),
-
 /// Metadata for opaque symbol IDs; populated at symbol construction time.
 symbol_metadata: std.AutoHashMap(u64, SymbolMetadata),
 
@@ -285,6 +279,10 @@ in_progress_callable_insts: std.AutoHashMap(u32, MIR.LambdaId),
 /// Reserved callable skeletons for recursive callable-inst groups whose bodies are not
 /// fully lowered yet but already need stable lambda ids.
 reserved_callable_insts: std.AutoHashMap(u32, MIR.LambdaId),
+
+/// Pending exact callable resolutions for join params, accumulated from all
+/// incoming jumps before the join statement is recorded.
+pending_join_param_callables: std.AutoHashMap(u32, ?CallableResolution),
 
 /// Locals whose entry bindings are prepended after the body is lowered.
 current_lambda_entry_bound_locals: ?*LambdaEntryBindingState,
@@ -328,7 +326,6 @@ pub fn init(
         .nominal_cycle_breakers = std.AutoHashMap(types.Var, Monotype.Idx).init(allocator),
         .lowered_callable_insts = std.AutoHashMap(u32, MIR.LambdaId).init(allocator),
         .lowered_callable_lambdas = std.AutoHashMap(CallableCacheKey, MIR.LambdaId).init(allocator),
-        .in_progress_const_defs = std.AutoHashMap(u64, void).init(allocator),
         .symbol_metadata = std.AutoHashMap(u64, SymbolMetadata).init(allocator),
         .next_synthetic_ident = Ident.Idx.NONE.idx - 1,
         .next_statement_binding_scope = 1,
@@ -337,6 +334,7 @@ pub fn init(
         .current_body_local_floor = 0,
         .in_progress_callable_insts = std.AutoHashMap(u32, MIR.LambdaId).init(allocator),
         .reserved_callable_insts = std.AutoHashMap(u32, MIR.LambdaId).init(allocator),
+        .pending_join_param_callables = std.AutoHashMap(u32, ?CallableResolution).init(allocator),
         .current_lambda_entry_bound_locals = null,
         .current_prelude_bound_locals = null,
         .current_lambda_scope_boundary = null,
@@ -361,11 +359,11 @@ pub fn deinit(self: *Self) void {
     self.nominal_cycle_breakers.deinit();
     self.lowered_callable_insts.deinit();
     self.lowered_callable_lambdas.deinit();
-    self.in_progress_const_defs.deinit();
     self.symbol_metadata.deinit();
     self.binding_scope_parents.deinit();
     self.in_progress_callable_insts.deinit();
     self.reserved_callable_insts.deinit();
+    self.pending_join_param_callables.deinit();
     self.scratch_local_ids.deinit();
     self.scratch_ident_idxs.deinit();
     self.scratch_cf_stmt_ids.deinit();
@@ -804,6 +802,9 @@ fn lookupProgramExprMonotype(session: LowerSession, expr_idx: CIR.Expr.Idx) ?Pip
 }
 
 fn lookupProgramPatternMonotype(session: LowerSession, pattern_idx: CIR.Pattern.Idx) ?Pipeline.ResolvedMonotype {
+    if (lookupCurrentCallableParamCallableValue(session, pattern_idx)) |callable_value| {
+        return session.lower.callable_pipeline.getCallableValueRuntimeMonotype(callable_value);
+    }
     if (session.lower.lookupBindingSourceExprRef(pattern_idx)) |source_expr_ref| {
         return session.lower.resolveLowerExprSourceMonotype(source_expr_ref) catch unreachable;
     }
@@ -823,11 +824,39 @@ fn lookupProgramPatternMonotype(session: LowerSession, pattern_idx: CIR.Pattern.
     ) catch unreachable;
 }
 
+fn lookupCurrentCallableParamCallableValue(
+    session: LowerSession,
+    pattern_idx: CIR.Pattern.Idx,
+) ?Pipeline.CallableValue {
+    const callable_inst_id = switch (session.source_context) {
+        .callable_inst => |context_id| @as(Pipeline.CallableInstId, @enumFromInt(@intFromEnum(context_id))),
+        .root_expr, .provenance_expr, .template_expr => return null,
+    };
+
+    const callable_inst = session.lower.callable_pipeline.getCallableInst(callable_inst_id);
+    const template = session.lower.callable_pipeline.getCallableTemplate(callable_inst.template);
+    const param_patterns = session.lower.all_module_envs[template.module_idx].store.slicePatterns(template.arg_patterns);
+    const param_index = for (param_patterns, 0..) |param_pattern_idx, idx| {
+        if (param_pattern_idx == pattern_idx) break idx;
+    } else return null;
+
+    for (session.lower.callable_pipeline.getCallableParamSpecEntries(callable_inst.callable_param_specs)) |spec| {
+        if (spec.param_index != param_index) continue;
+        if (session.lower.callable_pipeline.getCallableParamProjectionEntries(spec.projections).len != 0) continue;
+        return spec.callable_value;
+    }
+
+    return null;
+}
+
 fn resolveProgramPatternCallableValue(
     session: LowerSession,
     pattern_idx: CIR.Pattern.Idx,
 ) Allocator.Error!?Pipeline.CallableValue {
     if (session.lower.lookupBindingCallableValue(pattern_idx)) |callable_value| {
+        return callable_value;
+    }
+    if (lookupCurrentCallableParamCallableValue(session, pattern_idx)) |callable_value| {
         return callable_value;
     }
     if (session.lower.lookupBindingSourceExprRef(pattern_idx)) |source_expr_ref| {
@@ -1771,6 +1800,28 @@ fn lowerNamedConstDefFromSourceExpr(
     expr_idx: CIR.Expr.Idx,
     symbol: MIR.Symbol,
 ) Allocator.Error!MIR.ConstDefId {
+    const lowered = try self.lowerConstDefBodyFromSourceExpr(session, expr_idx);
+    const id = try self.store.registerConstDef(self.allocator, .{
+        .symbol = symbol,
+        .body = lowered.body,
+        .monotype = lowered.monotype,
+        .source_region = lowered.source_region,
+    });
+    if (builtin.mode == .Debug) {
+        try DebugVerifyMir.verifyConst(self.allocator, self.store, id);
+    }
+    return id;
+}
+
+fn lowerConstDefBodyFromSourceExpr(
+    self: *Self,
+    session: LowerSession,
+    expr_idx: CIR.Expr.Idx,
+) Allocator.Error!struct {
+    body: MIR.CFStmtId,
+    monotype: Monotype.Idx,
+    source_region: Region,
+} {
     const module_env = self.all_module_envs[self.current_module_idx];
     const region = module_env.store.getExprRegion(expr_idx);
     const monotype = try self.sourceExprResultMonotype(session, expr_idx);
@@ -1780,20 +1831,20 @@ fn lowerNamedConstDefFromSourceExpr(
     const result_local = try self.freshSyntheticLocal(monotype, false);
     const ret_stmt = try self.store.addCFStmt(self.allocator, .{ .ret = .{ .value = result_local } });
     const body = try self.lowerCirExprInto(session, expr_idx, result_local, ret_stmt);
-
-    const id = try self.store.registerConstDef(self.allocator, .{
-        .symbol = symbol,
+    return .{
         .body = body,
         .monotype = monotype,
         .source_region = region,
-    });
-    if (builtin.mode == .Debug) {
-        try DebugVerifyMir.verifyConst(self.allocator, self.store, id);
-    }
-    return id;
+    };
 }
 
 fn freshSyntheticLocal(self: *Self, monotype: Monotype.Idx, reassignable: bool) Allocator.Error!MIR.LocalId {
+    if (builtin.mode == .Debug and self.store.monotype_store.getMonotype(monotype) == .func) {
+        std.debug.panic(
+            "statement-only MIR invariant violated: executable local cannot be created with source function monotype {d}",
+            .{@intFromEnum(monotype)},
+        );
+    }
     return self.store.addLocal(self.allocator, .{
         .monotype = monotype,
         .reassignable = reassignable,
@@ -1938,9 +1989,25 @@ fn lowerRefInto(
     op: MIR.RefOp,
     next: MIR.CFStmtId,
 ) Allocator.Error!MIR.CFStmtId {
+    const result_callable = switch (op) {
+        .local => |source| self.resolveLocalCallableResolution(source),
+        .nominal => |nominal| self.resolveLocalCallableResolution(nominal.backing),
+        .field, .tag_payload, .discriminant => null,
+    };
+    return self.lowerRefIntoWithCallable(target, op, result_callable, next);
+}
+
+fn lowerRefIntoWithCallable(
+    self: *Self,
+    target: MIR.LocalId,
+    op: MIR.RefOp,
+    result_callable: ?CallableResolution,
+    next: MIR.CFStmtId,
+) Allocator.Error!MIR.CFStmtId {
     return self.store.addCFStmt(self.allocator, .{ .assign_ref = .{
         .target = target,
         .op = op,
+        .result_callable = result_callable,
         .next = next,
     } });
 }
@@ -1966,72 +2033,63 @@ fn lowerLocalAliasInto(
             }
         }
     }
-    self.store.getLocalPtr(target).monotype = self.store.getLocal(source).monotype;
-    if (try self.resolveExactCallableResolutionForLocal(source)) |resolved| {
-        try self.bindExactLambdaLocal(target, resolved.lambda);
-    } else {
-        self.clearExactCallableLocal(target);
-    }
+    try self.requireLocalMonotype(target, self.store.getLocal(source).monotype, "lowerLocalAliasInto");
     return self.lowerRefInto(target, .{ .local = source }, next);
 }
 
-fn clearExactCallableLocal(self: *Self, local_id: MIR.LocalId) void {
-    self.store.setLocalExactCallable(local_id, null);
-}
-
-fn exactCallableResolutionsEqual(
-    left: ExactCallableResolution,
-    right: ExactCallableResolution,
+fn callableResolutionsEqual(
+    left: CallableResolution,
+    right: CallableResolution,
 ) bool {
     return left.lambda == right.lambda and
-        left.requires_hidden_capture == right.requires_hidden_capture;
+        left.captures_local == right.captures_local;
 }
 
-fn resolveExactCallableResolutionForLocal(
+fn resolveLocalCallableResolution(
     self: *Self,
     local_id: MIR.LocalId,
-) Allocator.Error!?ExactCallableResolution {
-    if (self.store.getLocalExactCallable(local_id)) |exact_callable| {
-        return .{
-            .lambda = exact_callable.lambda,
-            .requires_hidden_capture = exact_callable.requires_hidden_capture,
-        };
-    }
-
-    return null;
+) ?CallableResolution {
+    return self.store.resolveLocalCallable(local_id);
 }
 
-fn mergeExactCallableJoinIncoming(
+fn mergeJoinParamCallableResolution(
     self: *Self,
     dest_local: MIR.LocalId,
     source_local: MIR.LocalId,
 ) Allocator.Error!void {
-    const source_resolution = try self.resolveExactCallableResolutionForLocal(source_local) orelse return;
+    return self.mergeJoinParamCallableResolutionValue(
+        dest_local,
+        self.resolveLocalCallableResolution(source_local),
+    );
+}
 
-    if (self.store.getLocalExactCallable(dest_local)) |existing| {
-        const existing_resolution = ExactCallableResolution{
-            .lambda = existing.lambda,
-            .requires_hidden_capture = existing.requires_hidden_capture,
-        };
-        if (!exactCallableResolutionsEqual(existing_resolution, source_resolution)) {
-            std.debug.panic(
-                "statement-only MIR invariant violated: join local {d} merged incompatible exact callables {d}/{any} and {d}/{any}",
-                .{
-                    @intFromEnum(dest_local),
-                    @intFromEnum(existing.lambda),
-                    existing.requires_hidden_capture,
-                    @intFromEnum(source_resolution.lambda),
-                    source_resolution.requires_hidden_capture,
-                },
-            );
+fn mergeJoinParamCallableResolutionValue(
+    self: *Self,
+    dest_local: MIR.LocalId,
+    source_resolution: ?CallableResolution,
+) Allocator.Error!void {
+    const key = @intFromEnum(dest_local);
+
+    if (self.pending_join_param_callables.getPtr(key)) |existing| {
+        switch (existing.*) {
+            null => return,
+            else => |existing_resolution| {
+                if (source_resolution) |resolved| {
+                    if (!callableResolutionsEqual(existing_resolution, resolved)) {
+                        existing.* = null;
+                    }
+                } else {
+                    existing.* = null;
+                }
+            },
         }
         return;
     }
 
-    try self.bindExactLambdaLocal(dest_local, source_resolution.lambda);
+    try self.pending_join_param_callables.put(key, source_resolution);
 }
 
-fn seedExactCallableBindingLocal(
+fn bindCallableFactsForBindingLocal(
     self: *Self,
     session: LowerSession,
     pattern_idx: CIR.Pattern.Idx,
@@ -2046,10 +2104,9 @@ fn seedExactCallableBindingLocal(
         if (self.binding_records.getPtr(binding_key)) |binding| {
             if (!binding.shadowed) binding.callable_value = null;
         }
-        self.clearExactCallableLocal(local);
         if (comptime trace.enabled) {
             trace.log(
-                "seedExactCallableBindingLocal binding={d} local={d} callable_value=none monotype={s}",
+                "bindCallableFactsForBindingLocal binding={d} local={d} callable_value=none monotype={s}",
                 .{
                     @intFromEnum(pattern_idx),
                     @intFromEnum(local),
@@ -2059,7 +2116,6 @@ fn seedExactCallableBindingLocal(
         }
         return;
     };
-    try self.seedCallableValueLocal(local, callable_value);
     if (self.binding_records.getPtr(binding_key)) |binding| {
         if (binding.shadowed) unreachable;
         binding.explicit_monotype = self.store.getLocal(local).monotype;
@@ -2073,7 +2129,7 @@ fn seedExactCallableBindingLocal(
     }
     if (comptime trace.enabled) {
         trace.log(
-            "seedExactCallableBindingLocal binding={d} local={d} callable_value={s} monotype={s}",
+            "bindCallableFactsForBindingLocal binding={d} local={d} callable_value={s} monotype={s}",
             .{
                 @intFromEnum(pattern_idx),
                 @intFromEnum(local),
@@ -2084,12 +2140,12 @@ fn seedExactCallableBindingLocal(
     }
 }
 
-fn seedExactCallableParamLocals(
+fn buildCallableParamResolutions(
     self: *Self,
     session: LowerSession,
     param_patterns: []const CIR.Pattern.Idx,
     param_locals: []const MIR.LocalId,
-) Allocator.Error!void {
+) Allocator.Error!MIR.CallableResolutionSpan {
     if (param_patterns.len != param_locals.len) {
         std.debug.panic(
             "statement-only MIR invariant violated: lambda param pattern arity {d} != param local arity {d}",
@@ -2097,9 +2153,25 @@ fn seedExactCallableParamLocals(
         );
     }
 
+    const callable_resolutions = try self.allocator.alloc(?CallableResolution, param_patterns.len);
+    defer self.allocator.free(callable_resolutions);
+
     for (param_patterns, param_locals) |pattern_idx, param_local| {
-        try self.seedExactCallableBindingLocal(session, pattern_idx, param_local, null);
+        try self.bindCallableFactsForBindingLocal(session, pattern_idx, param_local, null);
     }
+
+    var any_callable = false;
+    for (param_patterns, param_locals, 0..) |pattern_idx, param_local, i| {
+        _ = param_local;
+        callable_resolutions[i] = if (try resolveProgramPatternCallableValue(session, pattern_idx)) |callable_value| blk: {
+            const resolved = try self.callableResolutionFromValue(callable_value);
+            if (resolved != null) any_callable = true;
+            break :blk resolved;
+        } else null;
+    }
+
+    if (!any_callable) return .empty();
+    return self.store.addCallableResolutionSpan(self.allocator, callable_resolutions);
 }
 
 fn lowerConcatLocalsInto(
@@ -2290,12 +2362,12 @@ fn lowerListInspectLocalInto(
         first_prefix,
         non_first_prefix,
     );
-    const prefix_join = try self.store.addCFStmt(self.allocator, .{ .join = .{
-        .id = prefix_join_id,
-        .params = try self.store.addLocalSpan(self.allocator, &.{prefix_local}),
-        .body = next_accum_stmt,
-        .remainder = prefix_switch,
-    } });
+    const prefix_join = try self.addJoinStmt(
+        prefix_join_id,
+        try self.store.addLocalSpan(self.allocator, &.{prefix_local}),
+        next_accum_stmt,
+        prefix_switch,
+    );
     const is_first_stmt = try self.store.addCFStmt(self.allocator, .{ .assign_low_level = .{
         .target = is_first_local,
         .op = .num_is_eq,
@@ -2323,12 +2395,12 @@ fn lowerListInspectLocalInto(
         .id = loop_head_id,
         .args = initial_head_args,
     } });
-    const head_join = try self.store.addCFStmt(self.allocator, .{ .join = .{
-        .id = loop_head_id,
-        .params = loop_head_params,
-        .body = cond_stmt,
-        .remainder = initial_jump,
-    } });
+    const head_join = try self.addJoinStmt(
+        loop_head_id,
+        loop_head_params,
+        cond_stmt,
+        initial_jump,
+    );
 
     const init_comma = try self.lowerStrLiteralInto(comma_local, ", ", head_join);
     const init_empty = try self.lowerStrLiteralInto(empty_local, "", init_comma);
@@ -2351,12 +2423,12 @@ fn lowerListInspectLocalInto(
         .next = init_zero,
     } });
 
-    return self.store.addCFStmt(self.allocator, .{ .join = .{
-        .id = loop_exit_id,
-        .params = try self.store.addLocalSpan(self.allocator, &.{target}),
-        .body = next,
-        .remainder = init_len,
-    } });
+    return self.addJoinStmt(
+        loop_exit_id,
+        try self.store.addLocalSpan(self.allocator, &.{target}),
+        next,
+        init_len,
+    );
 }
 
 fn lowerRecordInspectLocalInto(
@@ -2565,12 +2637,12 @@ fn lowerTagUnionInspectLocalInto(
         .default_branch = impossible_default,
     } });
     const switch_entry = try self.lowerRefInto(discrim_local, .{ .discriminant = .{ .source = source } }, switch_stmt);
-    return self.store.addCFStmt(self.allocator, .{ .join = .{
-        .id = join_id,
-        .params = try self.store.addLocalSpan(self.allocator, &.{target}),
-        .body = next,
-        .remainder = switch_entry,
-    } });
+    return self.addJoinStmt(
+        join_id,
+        try self.store.addLocalSpan(self.allocator, &.{target}),
+        next,
+        switch_entry,
+    );
 }
 
 fn boolTagNamesForMonotype(
@@ -2685,12 +2757,12 @@ fn lowerBoolInspectLocalInto(
         true_body,
         false_body,
     );
-    return self.store.addCFStmt(self.allocator, .{ .join = .{
-        .id = join_id,
-        .params = try self.store.addLocalSpan(self.allocator, &.{target}),
-        .body = next,
-        .remainder = switch_entry,
-    } });
+    return self.addJoinStmt(
+        join_id,
+        try self.store.addLocalSpan(self.allocator, &.{target}),
+        next,
+        switch_entry,
+    );
 }
 
 fn lowerStrInspectLocalInto(
@@ -2732,7 +2804,10 @@ fn lowerStrInspectLocalInto(
             break :blk try self.lowerTagUnionInspectLocalInto(source, source_mono, tag_union, target, next);
         },
         .box => |box_data| self.lowerBoxInspectLocalInto(source, box_data.inner, target, next),
-        .func => self.lowerStrLiteralInto(target, "<function>", next),
+        .func => std.debug.panic(
+            "statement-only MIR invariant violated: str_inspect received executable local {d} with source function monotype {d}",
+            .{ @intFromEnum(source), @intFromEnum(source_mono) },
+        ),
         .list => |list_data| self.lowerListInspectLocalInto(source, list_data, target, next),
         .recursive_placeholder => {
             std.debug.panic("recursive_placeholder survived monotype construction", .{});
@@ -2876,11 +2951,14 @@ fn planClosureEntryCaptureLocals(
         }
 
         const capture_monotype = switch (capture_field.storage) {
-            .runtime_field => |runtime_field| try self.importMonotypeFromStore(
-                &self.callable_pipeline.context_mono.monotype_store,
-                runtime_field.field_monotype.idx,
-                runtime_field.field_monotype.module_idx,
-                self.current_module_idx,
+            .runtime_field => |runtime_field| try self.executableMonotypeForCallableValue(
+                try self.importMonotypeFromStore(
+                    &self.callable_pipeline.context_mono.monotype_store,
+                    runtime_field.field_monotype.idx,
+                    runtime_field.field_monotype.module_idx,
+                    self.current_module_idx,
+                ),
+                capture_field.callable_value,
             ),
             .callable_only, .recursive_member => blk: {
                 const callable_value = capture_field.callable_value orelse std.debug.panic(
@@ -2902,7 +2980,6 @@ fn planClosureEntryCaptureLocals(
         }
 
         if (capture_field.callable_value) |callable_value| {
-            try self.seedCallableValueLocal(capture_local, callable_value);
             try self.bindBindingCallableValueInCurrentScope(capture_field.pattern_idx, callable_value);
         }
 
@@ -3029,52 +3106,6 @@ fn lowerLookupRequiredInto(
     );
 }
 
-fn ensureNamedConstDefRegistered(
-    self: *Self,
-    module_idx: u32,
-    def_idx: CIR.Def.Idx,
-    symbol: MIR.Symbol,
-) Allocator.Error!void {
-    if (self.store.getConstDefForSymbol(symbol)) |_| return;
-
-    const key = symbol.raw();
-    const gop = try self.in_progress_const_defs.getOrPut(key);
-    if (gop.found_existing) {
-        std.debug.panic(
-            "statement-only MIR TODO: recursive named constant lowering for symbol {d} is not implemented yet",
-            .{key},
-        );
-    }
-    defer _ = self.in_progress_const_defs.remove(key);
-
-    const saved_module_idx = self.current_module_idx;
-    const saved_binding_scope = self.current_binding_scope;
-    const saved_ident_store = self.mono_scratches.ident_store;
-    const saved_module_env = self.mono_scratches.module_env;
-    const saved_scratches_module_idx = self.mono_scratches.module_idx;
-
-    const target_env = self.all_module_envs[module_idx];
-    const def = target_env.store.getDef(def_idx);
-
-    self.current_module_idx = module_idx;
-    self.current_binding_scope = 0;
-    self.mono_scratches.ident_store = target_env.getIdentStoreConst();
-    self.mono_scratches.module_env = target_env;
-    self.mono_scratches.module_idx = module_idx;
-
-    defer self.current_module_idx = saved_module_idx;
-    defer self.current_binding_scope = saved_binding_scope;
-    defer self.mono_scratches.ident_store = saved_ident_store;
-    defer self.mono_scratches.module_env = saved_module_env;
-    defer self.mono_scratches.module_idx = saved_scratches_module_idx;
-
-    const def_session = self.lowerSession(.{ .root_expr = .{
-        .module_idx = module_idx,
-        .expr_idx = def.expr,
-    } });
-    _ = try self.lowerNamedConstDefFromSourceExpr(def_session, def.expr, symbol);
-}
-
 fn materializeTopLevelDefInto(
     self: *Self,
     _: LowerSession,
@@ -3128,24 +3159,24 @@ fn materializeTopLevelDefInto(
         .callable => |resolved_callable_value| switch (resolved_callable_value) {
             .direct => |callable_inst_id| {
                 const runtime_monotype = self.callable_pipeline.getCallableInstRuntimeMonotype(callable_inst_id);
-                self.store.getLocalPtr(target).monotype = try self.importMonotypeFromStore(
+                try self.requireLocalMonotype(target, try self.importMonotypeFromStore(
                     &self.callable_pipeline.context_mono.monotype_store,
                     runtime_monotype.idx,
                     runtime_monotype.module_idx,
                     saved_module_idx,
-                );
+                ), "materializeTopLevelDefInto.direct");
             },
             .packed_fn => |packed_fn| {
                 const runtime_monotype = self.callable_pipeline.getCallableValueRuntimeMonotype(.{ .packed_fn = packed_fn });
-                self.store.getLocalPtr(target).monotype = try self.importMonotypeFromStore(
+                try self.requireLocalMonotype(target, try self.importMonotypeFromStore(
                     &self.callable_pipeline.context_mono.monotype_store,
                     runtime_monotype.idx,
                     runtime_monotype.module_idx,
                     saved_module_idx,
-                );
+                ), "materializeTopLevelDefInto.packed_fn");
             },
         },
-        .non_callable => try self.refreshTargetLocalMonotypeFromExprIntoModule(
+        .non_callable => try self.requireTargetLocalMonotypeFromExprIntoModule(
             def_session,
             def.expr,
             module_idx,
@@ -3162,7 +3193,9 @@ fn materializeTopLevelDefInto(
         .non_callable => {},
     }
 
-    try self.ensureNamedConstDefRegistered(module_idx, def_idx, symbol);
+    if (self.store.getConstDefForSymbol(symbol) == null) {
+        _ = try self.lowerNamedConstDefFromSourceExpr(def_session, def.expr, symbol);
+    }
     return self.store.addCFStmt(self.allocator, .{ .assign_symbol = .{
         .target = target,
         .symbol = symbol,
@@ -3210,7 +3243,7 @@ fn lowerLambdaInto(
     defer self.current_lambda_entry_bound_locals = saved_lambda_entry_bound_locals;
 
     const param_patterns = arg_patterns;
-    const params = try self.lowerLambdaParamLocals(module_env, param_patterns, fn_monotype);
+    const params = try self.lowerLambdaParamLocals(session, module_env, param_patterns, fn_monotype);
     var stable_param_locals = try std.ArrayList(MIR.LocalId).initCapacity(self.allocator, self.store.getLocalSpan(params).len);
     defer stable_param_locals.deinit(self.allocator);
     stable_param_locals.appendSliceAssumeCapacity(self.store.getLocalSpan(params));
@@ -3219,6 +3252,7 @@ fn lowerLambdaInto(
         try self.predeclareBindingLocals(session, module_env, pattern_idx);
     }
 
+    const param_callables = try self.buildCallableParamResolutions(session, param_patterns, param_locals);
     const active_lambda = if (reserved_lambda) |reserved|
         reserved
     else blk: {
@@ -3227,6 +3261,7 @@ fn lowerLambdaInto(
     try self.store.installReservedLambdaPrototype(active_lambda, .{
         .fn_monotype = fn_monotype,
         .params = params,
+        .param_callables = param_callables,
         .body = @enumFromInt(0),
         .ret_monotype = ret_monotype,
         .debug_name = .none,
@@ -3237,11 +3272,10 @@ fn lowerLambdaInto(
     });
     try self.lowered_callable_lambdas.put(cache_key, active_lambda);
 
-    try self.seedExactCallableParamLocals(session, param_patterns, param_locals);
     if (comptime trace.enabled) {
         for (param_locals, 0..) |param_local, i| {
             trace.log(
-                "lowerLambdaInto expr={d} lambda_reserved={any} param_index={d} pattern={d} local={d} monotype={s} exact_callable={any}",
+                "lowerLambdaInto expr={d} lambda_reserved={any} param_index={d} pattern={d} local={d} monotype={s} callable_resolution={any}",
                 .{
                     @intFromEnum(expr_idx),
                     reserved_lambda,
@@ -3249,7 +3283,7 @@ fn lowerLambdaInto(
                     @intFromEnum(param_patterns[i]),
                     @intFromEnum(param_local),
                     @tagName(self.store.monotype_store.getMonotype(self.store.getLocal(param_local).monotype)),
-                    self.store.getLocalExactCallable(param_local),
+                    self.store.resolveLocalCallable(param_local),
                 },
             );
         }
@@ -3274,6 +3308,7 @@ fn lowerLambdaInto(
     const lowered_lambda = MIR.Lambda{
         .fn_monotype = fn_monotype,
         .params = params,
+        .param_callables = param_callables,
         .body = body,
         .ret_monotype = ret_monotype,
         .debug_name = .none,
@@ -3292,6 +3327,7 @@ fn lowerLambdaInto(
 
 fn lowerLambdaParamLocals(
     self: *Self,
+    session: LowerSession,
     module_env: *const ModuleEnv,
     cir_ids: []const CIR.Pattern.Idx,
     fn_monotype: Monotype.Idx,
@@ -3316,14 +3352,14 @@ fn lowerLambdaParamLocals(
     const scratch_top = self.scratch_local_ids.top();
     defer self.scratch_local_ids.clearFrom(scratch_top);
 
-    for (cir_ids, param_monotypes) |pattern_idx, monotype| {
+    for (cir_ids, param_monotypes) |pattern_idx, param_monotype| {
+        const monotype = try self.resolvePatternExecutableMonotype(session, pattern_idx, param_monotype);
         const param_reassignable = switch (module_env.store.getPattern(pattern_idx)) {
             .assign => |assign_pattern| assign_pattern.ident.attributes.reassignable,
             .as => |as_pattern| as_pattern.ident.attributes.reassignable,
             else => false,
         };
         const param_local = try self.freshSyntheticLocal(monotype, param_reassignable);
-        self.store.getLocalPtr(param_local).monotype = monotype;
         try self.predeclareBindingLocalsFromMonotype(module_env, pattern_idx, monotype, param_local);
         try self.scratch_local_ids.append(param_local);
     }
@@ -3369,10 +3405,10 @@ fn appendCaptureMaterialization(
             );
         },
         .bound_expr => |bound_expr| blk: {
-            const local = try self.freshSyntheticLocal(capture_monotype, false);
-            if (capture_field.callable_value) |callable_value| {
-                try self.seedCallableValueLocal(local, callable_value);
-            }
+            const local = try self.freshSyntheticLocal(
+                try self.executableMonotypeForCallableValue(capture_monotype, capture_field.callable_value),
+                false,
+            );
             try out.append(self.allocator, .{ .expr = .{
                 .local = local,
                 .expr_ref = bound_expr.expr_ref,
@@ -3463,7 +3499,7 @@ fn lowerReservedTrivialClosureLambda(
     self.current_lambda_entry_bound_locals = &lambda_entry_bound_locals;
     defer self.current_lambda_entry_bound_locals = saved_lambda_entry_bound_locals;
 
-    const params = try self.lowerLambdaParamLocals(module_env, param_patterns, fn_monotype);
+    const params = try self.lowerLambdaParamLocals(session, module_env, param_patterns, fn_monotype);
     var stable_param_locals = try std.ArrayList(MIR.LocalId).initCapacity(self.allocator, self.store.getLocalSpan(params).len);
     defer stable_param_locals.deinit(self.allocator);
     stable_param_locals.appendSliceAssumeCapacity(self.store.getLocalSpan(params));
@@ -3530,9 +3566,11 @@ fn lowerReservedTrivialClosureLambda(
         });
     }
 
+    const param_callables = try self.buildCallableParamResolutions(session, param_patterns, param_locals);
     try self.store.installReservedLambdaPrototype(reserved_lambda, .{
         .fn_monotype = fn_monotype,
         .params = params,
+        .param_callables = param_callables,
         .body = @enumFromInt(0),
         .ret_monotype = ret_monotype,
         .debug_name = .none,
@@ -3541,8 +3579,6 @@ fn lowerReservedTrivialClosureLambda(
         .recursion = .not_recursive,
         .hosted = null,
     });
-
-    try self.seedExactCallableParamLocals(session, param_patterns, param_locals);
 
     const result_local = try self.freshSyntheticLocal(ret_monotype, false);
     const ret_stmt = try self.store.addCFStmt(self.allocator, .{ .ret = .{ .value = result_local } });
@@ -3585,26 +3621,26 @@ fn lowerReservedTrivialClosureLambda(
                             key,
                             if (capture_pattern_by_local.get(key)) |pattern_idx| @intFromEnum(pattern_idx) else std.math.maxInt(u32),
                             @intFromEnum(callable_inst_id),
-                            @tagName(existing_ref),
-                            switch (existing_ref) {
+                            @tagName(existing_ref.op),
+                            switch (existing_ref.op) {
                                 .local => |source_local| @intFromEnum(source_local),
                                 .field => |field| @intFromEnum(field.source),
                                 .tag_payload => |payload| @intFromEnum(payload.source),
                                 .nominal => |nominal| @intFromEnum(nominal.backing),
                                 .discriminant => |discriminant| @intFromEnum(discriminant.source),
                             },
-                            if (self.store.getLocalDefOpt(switch (existing_ref) {
+                            if (self.store.getLocalDefOpt(switch (existing_ref.op) {
                                 .local => |source_local| source_local,
                                 .field => |field| field.source,
                                 .tag_payload => |payload| payload.source,
                                 .nominal => |nominal| nominal.backing,
                                 .discriminant => |discriminant| discriminant.source,
                             })) |source_def| @tagName(source_def) else "none",
-                            switch (existing_ref) {
+                            switch (existing_ref.op) {
                                 .field => |field| field.field_idx,
                                 else => std.math.maxInt(u32),
                             },
-                            switch (existing_ref) {
+                            switch (existing_ref.op) {
                                 .tag_payload => |payload| payload.payload_idx,
                                 else => std.math.maxInt(u16),
                             },
@@ -3625,7 +3661,7 @@ fn lowerReservedTrivialClosureLambda(
         recursive_i -= 1;
         const recursive_capture = recursive_captures.items[recursive_i];
         const member_lambda = try self.lowerResolvedCallableInstLambda(recursive_capture.callable_inst_id);
-        try self.bindExactLambdaLocal(recursive_capture.local, member_lambda);
+        try self.requireLocalMonotypeMatchesLambdaRuntime(recursive_capture.local, member_lambda);
         body = if (!self.callableInstRequiresHiddenCapture(recursive_capture.callable_inst_id))
             try self.store.addCFStmt(self.allocator, .{ .assign_lambda = .{
                 .target = recursive_capture.local,
@@ -3645,11 +3681,17 @@ fn lowerReservedTrivialClosureLambda(
         var i = nonrecursive_capture_locals.len;
         while (i > 0) {
             i -= 1;
-            body = try self.lowerRefInto(nonrecursive_capture_locals[i], .{ .field = .{
-                .source = local,
-                .field_idx = @intCast(i),
-                .ownership = .move,
-            } }, body);
+            const capture_pattern_idx = capture_pattern_by_local.get(@intFromEnum(nonrecursive_capture_locals[i])) orelse unreachable;
+            body = try self.lowerRefIntoWithCallable(
+                nonrecursive_capture_locals[i],
+                .{ .field = .{
+                    .source = local,
+                    .field_idx = @intCast(i),
+                    .ownership = .move,
+                } },
+                try self.callableResolutionForPattern(session, capture_pattern_idx),
+                body,
+            );
         }
     }
 
@@ -3673,7 +3715,7 @@ fn lowerReservedTrivialClosureLambda(
             );
         } else {
             const lambda_id = callable_only_capture.lambda_id orelse unreachable;
-            try self.bindExactLambdaLocal(callable_only_capture.local, lambda_id);
+            try self.requireLocalMonotypeMatchesLambdaRuntime(callable_only_capture.local, lambda_id);
             body = try self.store.addCFStmt(self.allocator, .{ .assign_lambda = .{
                 .target = callable_only_capture.local,
                 .lambda = lambda_id,
@@ -3685,6 +3727,7 @@ fn lowerReservedTrivialClosureLambda(
     try self.store.finalizeLambda(reserved_lambda, .{
         .fn_monotype = fn_monotype,
         .params = params,
+        .param_callables = param_callables,
         .body = body,
         .ret_monotype = ret_monotype,
         .debug_name = .none,
@@ -3708,7 +3751,7 @@ fn lowerResolvedCallableInstValueInto(
     next: MIR.CFStmtId,
 ) Allocator.Error!MIR.CFStmtId {
     const lambda_id = try self.lowerResolvedCallableInstLambda(callable_inst_id);
-    try self.bindExactCallableLocal(target, callable_inst_id);
+    try self.requireLocalMonotypeMatchesCallableInst(target, callable_inst_id, "lowerResolvedCallableInstValueInto");
     if (!self.callableInstRequiresHiddenCapture(callable_inst_id)) {
         return self.store.addCFStmt(self.allocator, .{ .assign_lambda = .{
             .target = target,
@@ -3763,7 +3806,6 @@ fn lowerResolvedCallableInstValueInto(
     }
 
     const runtime_captures = self.scratch_local_ids.sliceFromStart(capture_top);
-    try self.bindExactLambdaLocal(target, lambda_id);
     var current = if (runtime_captures.len == 0)
         try self.store.addCFStmt(self.allocator, .{ .assign_lambda = .{
             .target = target,
@@ -3805,9 +3847,6 @@ fn lowerCapturedSourceExprInto(
 ) Allocator.Error!MIR.CFStmtId {
     const projections = self.callable_pipeline.getValueProjectionEntries(source_expr_ref.projections);
     if (projections.len != 0) {
-        if (try self.resolveExprRefCallableValue(source_expr_ref)) |callable_value| {
-            try self.seedCallableValueLocal(target, callable_value);
-        }
         const base_expr_ref = Pipeline.ExprRef{
             .source_context = source_expr_ref.source_context,
             .module_idx = source_expr_ref.module_idx,
@@ -3827,7 +3866,15 @@ fn lowerCapturedSourceExprInto(
 
         var current_monotype = base_monotype;
         for (projections, 0..) |projection, i| {
-            const projected_monotype = try self.projectMonotypeByValueProjection(current_monotype, projection);
+            const projected_monotype = try self.executableMonotypeForCallableValue(
+                try self.projectMonotypeByValueProjection(current_monotype, projection),
+                try self.resolveProjectedExprCallableValue(
+                    base_expr_ref.source_context,
+                    base_expr_ref.module_idx,
+                    base_expr_ref.expr_idx,
+                    projections[0 .. i + 1],
+                ),
+            );
             if (i + 1 < projections.len) {
                 try self.scratch_local_ids.append(try self.freshSyntheticLocal(projected_monotype, false));
             }
@@ -3850,6 +3897,12 @@ fn lowerCapturedSourceExprInto(
                 projections[i],
                 source_local,
                 projected_local,
+                try self.callableResolutionFromValue(try self.resolveProjectedExprCallableValue(
+                    base_expr_ref.source_context,
+                    base_expr_ref.module_idx,
+                    base_expr_ref.expr_idx,
+                    projections[0 .. i + 1],
+                )),
                 entry,
             );
         }
@@ -3883,7 +3936,7 @@ fn lowerCapturedSourceExprInto(
         self.mono_scratches.module_idx = saved_mono_module_idx;
     }
 
-    try self.refreshTargetLocalMonotypeFromExprIntoModule(
+    try self.requireTargetLocalMonotypeFromExprIntoModule(
         source_session,
         source_expr_ref.expr_idx,
         source_expr_ref.module_idx,
@@ -3959,6 +4012,7 @@ fn lowerValueProjectionInto(
     projection: Pipeline.ValueProjection,
     source_local: MIR.LocalId,
     target_local: MIR.LocalId,
+    result_callable: ?CallableResolution,
     next: MIR.CFStmtId,
 ) Allocator.Error!MIR.CFStmtId {
     const source_monotype = self.store.getLocal(source_local).monotype;
@@ -3975,23 +4029,38 @@ fn lowerValueProjectionInto(
                 field_name,
                 self.store.monotype_store.getFields(record.fields),
             );
-            break :blk try self.lowerRefInto(target_local, .{ .field = .{
-                .source = source_local,
-                .field_idx = field_idx,
-                .ownership = .move,
-            } }, next);
+            break :blk try self.lowerRefIntoWithCallable(
+                target_local,
+                .{ .field = .{
+                    .source = source_local,
+                    .field_idx = field_idx,
+                    .ownership = .move,
+                } },
+                result_callable,
+                next,
+            );
         },
-        .tuple_elem => |elem_index| try self.lowerRefInto(target_local, .{ .field = .{
-            .source = source_local,
-            .field_idx = elem_index,
-            .ownership = .move,
-        } }, next),
-        .tag_payload => |payload| try self.lowerRefInto(target_local, .{ .tag_payload = .{
-            .source = source_local,
-            .payload_idx = payload.payload_index,
-            .tag_discriminant = @intCast(self.tagDiscriminantForMonotypeName(source_monotype, payload.tag_name)),
-            .ownership = .move,
-        } }, next),
+        .tuple_elem => |elem_index| try self.lowerRefIntoWithCallable(
+            target_local,
+            .{ .field = .{
+                .source = source_local,
+                .field_idx = elem_index,
+                .ownership = .move,
+            } },
+            result_callable,
+            next,
+        ),
+        .tag_payload => |payload| try self.lowerRefIntoWithCallable(
+            target_local,
+            .{ .tag_payload = .{
+                .source = source_local,
+                .payload_idx = payload.payload_index,
+                .tag_discriminant = @intCast(self.tagDiscriminantForMonotypeName(source_monotype, payload.tag_name)),
+                .ownership = .move,
+            } },
+            result_callable,
+            next,
+        ),
         .list_elem => |elem_index| blk: {
             const index_local = try self.freshSyntheticLocal(self.store.monotype_store.primIdx(.u64), false);
             const args = try self.store.addLocalSpan(self.allocator, &.{ source_local, index_local });
@@ -3999,6 +4068,7 @@ fn lowerValueProjectionInto(
             try self.store.finalizeCFStmt(stmt, .{ .assign_low_level = .{
                 .target = target_local,
                 .op = .list_get_unsafe,
+                .result_callable = result_callable,
                 .args = args,
                 .next = next,
             } });
@@ -4040,7 +4110,7 @@ fn resolveExprMonotypeInModule(
     return self.resolveMonotype(session, expr_idx);
 }
 
-fn refreshTargetLocalMonotypeFromExprIntoModule(
+fn requireTargetLocalMonotypeFromExprIntoModule(
     self: *Self,
     session: LowerSession,
     expr_idx: CIR.Expr.Idx,
@@ -4050,21 +4120,14 @@ fn refreshTargetLocalMonotypeFromExprIntoModule(
 ) Allocator.Error!void {
     const monotype = try self.resolveMonotype(session, expr_idx);
     if (monotype.isNone()) return;
-    self.store.getLocalPtr(target).monotype = if (expr_module_idx == target_module_idx)
-        monotype
-    else
-        try self.remapMonotypeBetweenModules(monotype, expr_module_idx, target_module_idx);
-}
-
-fn refreshTargetLocalMonotypeFromExpr(
-    self: *Self,
-    session: LowerSession,
-    expr_idx: CIR.Expr.Idx,
-    target: MIR.LocalId,
-) Allocator.Error!void {
-    const monotype = try self.resolveMonotype(session, expr_idx);
-    if (monotype.isNone()) return;
-    self.store.getLocalPtr(target).monotype = monotype;
+    try self.requireLocalMonotype(
+        target,
+        if (expr_module_idx == target_module_idx)
+            monotype
+        else
+            try self.remapMonotypeBetweenModules(monotype, expr_module_idx, target_module_idx),
+        "requireTargetLocalMonotypeFromExprIntoModule",
+    );
 }
 
 fn lowerResolvedCallableInstLambda(
@@ -4246,20 +4309,19 @@ fn lowerResolvedDispatchTargetCallInto(
 
     const callee_entry = switch (call_site) {
         .low_level => unreachable,
-        .direct => |exact_dispatch_callable_inst| blk: {
-            try self.bindCallResultExactCallableFromExpr(session, result_expr_idx, target);
+        .direct => |direct_dispatch_callable_inst| blk: {
             const call_stmt = try self.store.reserveCFStmt(self.allocator);
             const NormalizedDispatchCallee = struct {
                 entry: MIR.CFStmtId,
                 callee_local: MIR.LocalId,
             };
-            const normalized: NormalizedDispatchCallee = switch (target_callable_value orelse Pipeline.CallableValue{ .direct = exact_dispatch_callable_inst }) {
+            const normalized: NormalizedDispatchCallee = switch (target_callable_value orelse Pipeline.CallableValue{ .direct = direct_dispatch_callable_inst }) {
                 .direct => .{
                     .entry = call_stmt,
                     .callee_local = callee_local,
                 },
                 .packed_fn => |packed_fn| blk2: {
-                    const payload_resolved = self.callable_pipeline.getCallableInstRuntimeMonotype(exact_dispatch_callable_inst);
+                    const payload_resolved = self.callable_pipeline.getCallableInstRuntimeMonotype(direct_dispatch_callable_inst);
                     const payload_mono = try self.importMonotypeFromStore(
                         &self.callable_pipeline.context_mono.monotype_store,
                         payload_resolved.idx,
@@ -4270,7 +4332,7 @@ fn lowerResolvedDispatchTargetCallInto(
                     break :blk2 NormalizedDispatchCallee{
                         .entry = try self.lowerPackedCallablePayloadInto(
                             packed_fn,
-                            exact_dispatch_callable_inst,
+                            direct_dispatch_callable_inst,
                             callee_local,
                             payload_local,
                             call_stmt,
@@ -4279,11 +4341,13 @@ fn lowerResolvedDispatchTargetCallInto(
                     };
                 },
             };
+            const callee_callable = try self.callableResolutionFromInst(direct_dispatch_callable_inst);
+            const result_callable = try self.resolveCallResultCallableFromExpr(session, result_expr_idx, target);
             try self.store.finalizeCFStmt(call_stmt, .{ .assign_call = .{
                 .target = target,
                 .callee = normalized.callee_local,
-                .exact_lambda = try self.lowerResolvedCallableInstLambda(exact_dispatch_callable_inst),
-                .exact_requires_hidden_capture = self.callableInstRequiresHiddenCapture(exact_dispatch_callable_inst),
+                .callee_callable = callee_callable,
+                .result_callable = result_callable,
                 .args = args,
                 .next = next,
             } });
@@ -4294,7 +4358,7 @@ fn lowerResolvedDispatchTargetCallInto(
                 target_symbol,
                 callee_local,
                 normalized.entry,
-                .{ .callable = target_callable_value orelse Pipeline.CallableValue{ .direct = exact_dispatch_callable_inst } },
+                .{ .callable = target_callable_value orelse Pipeline.CallableValue{ .direct = direct_dispatch_callable_inst } },
             );
         },
         .indirect_call => |indirect_call| blk: {
@@ -4380,7 +4444,7 @@ fn lowerIndirectCallInto(
     const switch_branches = try self.allocator.alloc(MIR.SwitchBranch, variants.len - 1);
     defer self.allocator.free(switch_branches);
 
-    const exact_result_callable_inst_id = if (lookupProgramExprCallableValue(session, call_expr_idx)) |callable_value|
+    const direct_result_callable_inst_id = if (lookupProgramExprCallableValue(session, call_expr_idx)) |callable_value|
         switch (callable_value) {
             .direct => |callable_inst_id| callable_inst_id,
             .packed_fn => null,
@@ -4396,7 +4460,7 @@ fn lowerIndirectCallInto(
         target_mono,
         joined_result_local,
         join_id,
-        exact_result_callable_inst_id,
+        direct_result_callable_inst_id,
     );
 
     for (variants[1..], 0..) |variant_callable_inst_id, i| {
@@ -4416,7 +4480,7 @@ fn lowerIndirectCallInto(
                 target_mono,
                 joined_result_local,
                 join_id,
-                exact_result_callable_inst_id,
+                direct_result_callable_inst_id,
             ),
         };
     }
@@ -4429,12 +4493,12 @@ fn lowerIndirectCallInto(
     } });
     const discrim_entry = try self.lowerRefInto(discrim_local, .{ .discriminant = .{ .source = callee_local } }, switch_stmt);
 
-    return self.store.addCFStmt(self.allocator, .{ .join = .{
-        .id = join_id,
-        .params = try self.store.addLocalSpan(self.allocator, &.{joined_result_local}),
-        .body = join_body,
-        .remainder = discrim_entry,
-    } });
+    return self.addJoinStmt(
+        join_id,
+        try self.store.addLocalSpan(self.allocator, &.{joined_result_local}),
+        join_body,
+        discrim_entry,
+    );
 }
 
 fn lowerIndirectCallBranchInto(
@@ -4446,7 +4510,7 @@ fn lowerIndirectCallBranchInto(
     target_mono: Monotype.Idx,
     joined_result_local: MIR.LocalId,
     join_id: MIR.JoinPointId,
-    exact_result_callable_inst_id: ?Pipeline.CallableInstId,
+    direct_result_callable_inst_id: ?Pipeline.CallableInstId,
 ) Allocator.Error!MIR.CFStmtId {
     const payload_resolved = self.callable_pipeline.getCallableInstRuntimeMonotype(variant_callable_inst_id);
     const payload_mono = try self.importMonotypeFromStore(
@@ -4457,21 +4521,22 @@ fn lowerIndirectCallBranchInto(
     );
     const callee_payload_local = try self.freshSyntheticLocal(payload_mono, false);
     const branch_result_local = try self.freshSyntheticLocal(target_mono, false);
-    if (exact_result_callable_inst_id) |callable_inst_id| {
-        try self.bindExactCallableLocal(branch_result_local, callable_inst_id);
-    }
+    const result_callable = if (direct_result_callable_inst_id) |callable_inst_id| blk: {
+        try self.requireLocalMonotypeMatchesCallableInst(branch_result_local, callable_inst_id, "lowerIndirectCallBranchInto");
+        break :blk try self.callableResolutionFromInst(callable_inst_id);
+    } else null;
 
     const jump_stmt = try self.store.addCFStmt(self.allocator, .{ .jump = .{
         .id = join_id,
         .args = try self.store.addLocalSpan(self.allocator, &.{branch_result_local}),
     } });
-    try self.mergeExactCallableJoinIncoming(joined_result_local, branch_result_local);
+    try self.mergeJoinParamCallableResolutionValue(joined_result_local, result_callable);
 
     const call_entry = try self.store.addCFStmt(self.allocator, .{ .assign_call = .{
         .target = branch_result_local,
         .callee = callee_payload_local,
-        .exact_lambda = try self.lowerResolvedCallableInstLambda(variant_callable_inst_id),
-        .exact_requires_hidden_capture = self.callableInstRequiresHiddenCapture(variant_callable_inst_id),
+        .callee_callable = try self.callableResolutionFromInst(variant_callable_inst_id),
+        .result_callable = result_callable,
         .args = args,
         .next = jump_stmt,
     } });
@@ -4541,8 +4606,7 @@ fn lowerCallInto(
             );
             return lowered_args.entry;
         },
-        .direct => |exact_callable_inst_id| {
-            try self.bindCallResultExactCallableFromExpr(session, call_expr_idx, target);
+        .direct => |direct_callable_inst_id| {
             const arg_locals = try self.allocator.alloc(MIR.LocalId, cir_args.len);
             defer self.allocator.free(arg_locals);
             for (cir_args, 0..) |arg_idx, i| {
@@ -4553,15 +4617,17 @@ fn lowerCallInto(
             const normalized = try self.lowerDirectCallTargetInto(
                 session,
                 call.func,
-                exact_callable_inst_id,
+                direct_callable_inst_id,
                 callee_local,
                 call_stmt,
             );
+            const callee_callable = try self.callableResolutionFromInst(direct_callable_inst_id);
+            const result_callable = try self.resolveCallResultCallableFromExpr(session, call_expr_idx, target);
             try self.store.finalizeCFStmt(call_stmt, .{ .assign_call = .{
                 .target = target,
                 .callee = normalized.callee_local,
-                .exact_lambda = try self.lowerResolvedCallableInstLambda(exact_callable_inst_id),
-                .exact_requires_hidden_capture = self.callableInstRequiresHiddenCapture(exact_callable_inst_id),
+                .callee_callable = callee_callable,
+                .result_callable = result_callable,
                 .args = args,
                 .next = next,
             } });
@@ -4577,7 +4643,7 @@ fn lowerCallInto(
                 .{@intFromEnum(call.func)},
             );
             const needs_structural_callee_lowering = switch (callee_value) {
-                .direct => self.callableInstRequiresHiddenCapture(exact_callable_inst_id),
+                .direct => self.callableInstRequiresHiddenCapture(direct_callable_inst_id),
                 .packed_fn => false,
             };
             if (!needs_structural_callee_lowering) return lowered_args.entry;
@@ -4816,12 +4882,12 @@ fn lowerBinopInto(
             );
             const switch_stmt = try self.lowerSwitchOnDiscriminant(cond_local, cond_mono, tag_names.true_name, then_body, else_body);
             const switch_entry = try self.lowerCirExprInto(session, binop.lhs, cond_local, switch_stmt);
-            return self.store.addCFStmt(self.allocator, .{ .join = .{
-                .id = join_id,
-                .params = try self.store.addLocalSpan(self.allocator, &.{target}),
-                .body = next,
-                .remainder = switch_entry,
-            } });
+            return self.addJoinStmt(
+                join_id,
+                try self.store.addLocalSpan(self.allocator, &.{target}),
+                next,
+                switch_entry,
+            );
         },
         .@"or" => {
             const cond_mono = try self.resolveMonotype(session, binop.lhs);
@@ -4850,12 +4916,12 @@ fn lowerBinopInto(
             );
             const switch_stmt = try self.lowerSwitchOnDiscriminant(cond_local, cond_mono, tag_names.true_name, then_body, else_body);
             const switch_entry = try self.lowerCirExprInto(session, binop.lhs, cond_local, switch_stmt);
-            return self.store.addCFStmt(self.allocator, .{ .join = .{
-                .id = join_id,
-                .params = try self.store.addLocalSpan(self.allocator, &.{target}),
-                .body = next,
-                .remainder = switch_entry,
-            } });
+            return self.addJoinStmt(
+                join_id,
+                try self.store.addLocalSpan(self.allocator, &.{target}),
+                next,
+                switch_entry,
+            );
         },
         .eq, .ne => {
             const lhs_mono = try self.resolveMonotype(session, binop.lhs);
@@ -4932,7 +4998,7 @@ fn lowerDotAccessInto(
         }
 
         std.debug.panic(
-            "statement-only MIR TODO: dot-call field '{s}' has no resolved dispatch lowering",
+            "statement-only MIR invariant violated: dot-call field '{s}' had no resolved dispatch lowering",
             .{module_env.getIdent(da.field_name)},
         );
     }
@@ -4951,14 +5017,16 @@ fn lowerDotAccessInto(
         self.store.monotype_store.getFields(receiver_record.fields),
     );
     const receiver_local = try self.freshSyntheticLocal(receiver_mono, false);
-    if (lookupProgramExprCallableValue(session, expr_idx)) |callable_value| {
-        try self.seedCallableValueLocal(target, callable_value);
-    }
-    const field_stmt = try self.lowerRefInto(target, .{ .field = .{
-        .source = receiver_local,
-        .field_idx = field_idx,
-        .ownership = .move,
-    } }, next);
+    const field_stmt = try self.lowerRefIntoWithCallable(
+        target,
+        .{ .field = .{
+            .source = receiver_local,
+            .field_idx = field_idx,
+            .ownership = .move,
+        } },
+        try self.callableResolutionForExpr(session, expr_idx),
+        next,
+    );
 
     return self.lowerCirExprInto(session, da.receiver, receiver_local, field_stmt);
 }
@@ -4988,25 +5056,28 @@ fn lowerTupleAccessInto(
     }
 
     const tuple_local = try self.freshSyntheticLocal(tuple_mono, false);
-    if (lookupProgramExprCallableValue(session, expr_idx)) |callable_value| {
-        try self.seedCallableValueLocal(target, callable_value);
-    }
-    const field_stmt = try self.lowerRefInto(target, .{ .field = .{
-        .source = tuple_local,
-        .field_idx = tuple_access.elem_index,
-        .ownership = .move,
-    } }, next);
+    const field_stmt = try self.lowerRefIntoWithCallable(
+        target,
+        .{ .field = .{
+            .source = tuple_local,
+            .field_idx = tuple_access.elem_index,
+            .ownership = .move,
+        } },
+        try self.callableResolutionForExpr(session, expr_idx),
+        next,
+    );
 
     return self.lowerCirExprInto(session, tuple_access.tuple, tuple_local, field_stmt);
 }
 
-fn refreshLocalMonotypeFromCallableInst(
+fn executableMonotypeForCallableValue(
     self: *Self,
-    local_id: MIR.LocalId,
-    callable_inst_id: Pipeline.CallableInstId,
-) Allocator.Error!void {
-    const runtime_monotype = self.callable_pipeline.getCallableInstRuntimeMonotype(callable_inst_id);
-    self.store.getLocalPtr(local_id).monotype = try self.importMonotypeFromStore(
+    source_monotype: Monotype.Idx,
+    callable_value: ?Pipeline.CallableValue,
+) Allocator.Error!Monotype.Idx {
+    const value = callable_value orelse return source_monotype;
+    const runtime_monotype = self.callable_pipeline.getCallableValueRuntimeMonotype(value);
+    return self.importMonotypeFromStore(
         &self.callable_pipeline.context_mono.monotype_store,
         runtime_monotype.idx,
         runtime_monotype.module_idx,
@@ -5014,59 +5085,88 @@ fn refreshLocalMonotypeFromCallableInst(
     );
 }
 
-fn refreshLocalMonotypeFromCallableValue(
+fn resolvePatternExecutableMonotype(
     self: *Self,
-    local_id: MIR.LocalId,
-    callable_value: Pipeline.CallableValue,
-) Allocator.Error!void {
-    const runtime_monotype = self.callable_pipeline.getCallableValueRuntimeMonotype(callable_value);
-    self.store.getLocalPtr(local_id).monotype = try self.importMonotypeFromStore(
-        &self.callable_pipeline.context_mono.monotype_store,
-        runtime_monotype.idx,
-        runtime_monotype.module_idx,
-        self.current_module_idx,
+    session: LowerSession,
+    pattern_idx: CIR.Pattern.Idx,
+    source_monotype: Monotype.Idx,
+) Allocator.Error!Monotype.Idx {
+    return self.executableMonotypeForCallableValue(
+        source_monotype,
+        try resolveProgramPatternCallableValue(session, pattern_idx),
     );
 }
 
-fn seedCallableValueLocal(
-    self: *Self,
-    local_id: MIR.LocalId,
-    callable_value: Pipeline.CallableValue,
-) Allocator.Error!void {
-    try self.refreshLocalMonotypeFromCallableValue(local_id, callable_value);
-    switch (callable_value) {
-        .direct => |callable_inst_id| try self.bindExactCallableLocal(local_id, callable_inst_id),
-        .packed_fn => self.clearExactCallableLocal(local_id),
-    }
-}
-
-fn bindExactLambdaLocal(
+fn requireLocalMonotypeMatchesLambdaRuntime(
     self: *Self,
     local_id: MIR.LocalId,
     lambda_id: MIR.LambdaId,
 ) Allocator.Error!void {
     const lambda = self.store.getLambdaAnyState(lambda_id);
-    self.store.getLocalPtr(local_id).monotype = if (lambda.captures_param) |captures_param|
+    const expected_monotype = if (lambda.captures_param) |captures_param|
         self.store.getLocal(captures_param).monotype
     else
         self.store.monotype_store.unit_idx;
-    self.store.setLocalExactCallable(local_id, .{
-        .lambda = lambda_id,
-        .requires_hidden_capture = lambda.captures_param != null,
-    });
+    const actual_monotype = self.store.getLocal(local_id).monotype;
+    if (builtin.mode == .Debug and !try self.monotypesStructurallyEqual(actual_monotype, expected_monotype)) {
+        std.debug.panic(
+            "statement-only MIR invariant violated: local {d} monotype {d} did not match lambda {d} executable runtime monotype {d}",
+            .{
+                @intFromEnum(local_id),
+                @intFromEnum(actual_monotype),
+                @intFromEnum(lambda_id),
+                @intFromEnum(expected_monotype),
+            },
+        );
+    }
 }
 
-fn bindExactCallableLocal(
+fn requireLocalMonotype(
+    self: *Self,
+    local_id: MIR.LocalId,
+    expected_monotype: Monotype.Idx,
+    context: []const u8,
+) Allocator.Error!void {
+    const actual_monotype = self.store.getLocal(local_id).monotype;
+    if (builtin.mode == .Debug and !try self.monotypesStructurallyEqual(actual_monotype, expected_monotype)) {
+        std.debug.panic(
+            "statement-only MIR invariant violated: local {d} monotype {d} did not match required executable monotype {d} in {s}",
+            .{
+                @intFromEnum(local_id),
+                @intFromEnum(actual_monotype),
+                @intFromEnum(expected_monotype),
+                context,
+            },
+        );
+    }
+}
+
+fn requireLocalMonotypeMatchesCallableInst(
     self: *Self,
     local_id: MIR.LocalId,
     callable_inst_id: Pipeline.CallableInstId,
+    context: []const u8,
 ) Allocator.Error!void {
-    const lambda_id = try self.lowerResolvedCallableInstLambda(callable_inst_id);
-    try self.refreshLocalMonotypeFromCallableInst(local_id, callable_inst_id);
-    self.store.setLocalExactCallable(local_id, .{
-        .lambda = lambda_id,
-        .requires_hidden_capture = self.callableInstRequiresHiddenCapture(callable_inst_id),
-    });
+    const runtime_monotype = self.callable_pipeline.getCallableInstRuntimeMonotype(callable_inst_id);
+    const expected_monotype = try self.importMonotypeFromStore(
+        &self.callable_pipeline.context_mono.monotype_store,
+        runtime_monotype.idx,
+        runtime_monotype.module_idx,
+        self.current_module_idx,
+    );
+    const actual_monotype = self.store.getLocal(local_id).monotype;
+    if (builtin.mode == .Debug and !try self.monotypesStructurallyEqual(actual_monotype, expected_monotype)) {
+        std.debug.panic(
+            "statement-only MIR invariant violated: local {d} monotype {d} did not match callable inst {d} executable runtime monotype {d} in {s}",
+            .{
+                @intFromEnum(local_id),
+                @intFromEnum(actual_monotype),
+                @intFromEnum(callable_inst_id),
+                @intFromEnum(expected_monotype),
+                context,
+            },
+        );
+    }
 }
 
 fn packedCallableTagName(
@@ -5090,7 +5190,6 @@ fn lowerPackedCallableIntroInto(
     target: MIR.LocalId,
     next: MIR.CFStmtId,
 ) Allocator.Error!MIR.CFStmtId {
-    self.clearExactCallableLocal(target);
     const tag_name = try self.packedCallableTagName(packed_fn, callable_inst_id);
     const payload_resolved = self.callable_pipeline.getCallableInstRuntimeMonotype(callable_inst_id);
     const payload_mono = try self.importMonotypeFromStore(
@@ -5177,24 +5276,62 @@ fn lowerPackedCallablePayloadInto(
     } }, next);
 }
 
-fn bindCallResultExactCallableFromExpr(
+fn resolveCallResultCallableFromExpr(
     self: *Self,
     session: LowerSession,
     result_expr_idx: CIR.Expr.Idx,
     local_id: MIR.LocalId,
-) Allocator.Error!void {
+) Allocator.Error!?CallableResolution {
+    _ = local_id;
     if (lookupProgramExprCallableValue(session, result_expr_idx)) |callable_value| {
-        try self.seedCallableValueLocal(local_id, callable_value);
-    } else {
-        self.clearExactCallableLocal(local_id);
+        return self.callableResolutionFromValue(callable_value);
     }
+    return null;
+}
+
+fn callableResolutionFromInst(
+    self: *Self,
+    callable_inst_id: Pipeline.CallableInstId,
+) Allocator.Error!CallableResolution {
+    return .{
+        .lambda = try self.lowerResolvedCallableInstLambda(callable_inst_id),
+        .captures_local = self.callableInstRequiresHiddenCapture(callable_inst_id),
+    };
+}
+
+fn callableResolutionFromValue(
+    self: *Self,
+    callable_value: Pipeline.CallableValue,
+) Allocator.Error!?CallableResolution {
+    return switch (callable_value) {
+        .direct => |callable_inst_id| try self.callableResolutionFromInst(callable_inst_id),
+        .packed_fn => null,
+    };
+}
+
+fn callableResolutionForPattern(
+    self: *Self,
+    session: LowerSession,
+    pattern_idx: CIR.Pattern.Idx,
+) Allocator.Error!?CallableResolution {
+    const callable_value = try resolveProgramPatternCallableValue(session, pattern_idx) orelse return null;
+    return self.callableResolutionFromValue(callable_value);
+}
+
+fn callableResolutionForExpr(
+    self: *Self,
+    session: LowerSession,
+    expr_idx: CIR.Expr.Idx,
+) Allocator.Error!?CallableResolution {
+    const callable_value = lookupProgramExprCallableValue(session, expr_idx) orelse return null;
+    return self.callableResolutionFromValue(callable_value);
 }
 
 fn lowerDirectCallTargetInto(
     self: *Self,
     session: LowerSession,
     callee_expr_idx: CIR.Expr.Idx,
-    exact_callable_inst_id: Pipeline.CallableInstId,
+    direct_callable_inst_id: Pipeline.CallableInstId,
     lowered_callee_local: MIR.LocalId,
     next: MIR.CFStmtId,
 ) Allocator.Error!struct { entry: MIR.CFStmtId, callee_local: MIR.LocalId } {
@@ -5205,19 +5342,19 @@ fn lowerDirectCallTargetInto(
 
     return switch (callable_value) {
         .direct => .{
-            .entry = if (self.callableInstRequiresHiddenCapture(exact_callable_inst_id))
+            .entry = if (self.callableInstRequiresHiddenCapture(direct_callable_inst_id))
                 next
             else
                 try self.lowerResolvedCallableInstValueInto(
                     session,
-                    exact_callable_inst_id,
+                    direct_callable_inst_id,
                     lowered_callee_local,
                     next,
                 ),
             .callee_local = lowered_callee_local,
         },
         .packed_fn => |packed_fn| blk: {
-            const payload_resolved = self.callable_pipeline.getCallableInstRuntimeMonotype(exact_callable_inst_id);
+            const payload_resolved = self.callable_pipeline.getCallableInstRuntimeMonotype(direct_callable_inst_id);
             const payload_mono = try self.importMonotypeFromStore(
                 &self.callable_pipeline.context_mono.monotype_store,
                 payload_resolved.idx,
@@ -5228,7 +5365,7 @@ fn lowerDirectCallTargetInto(
             break :blk .{
                 .entry = try self.lowerPackedCallablePayloadInto(
                     packed_fn,
-                    exact_callable_inst_id,
+                    direct_callable_inst_id,
                     lowered_callee_local,
                     payload_local,
                     next,
@@ -5482,7 +5619,10 @@ fn lowerListPatternMatchLocalInto(
     var suffix_i = suffix_len;
     while (suffix_i > 0) {
         suffix_i -= 1;
-        const elem_local = try self.freshSyntheticLocal(list_data.elem, false);
+        const elem_local = try self.freshSyntheticLocal(
+            try self.resolvePatternExecutableMonotype(session, pattern_idx, list_data.elem),
+            false,
+        );
         const index_local = try self.freshSyntheticLocal(u64_mono, false);
         const offset_local = try self.freshSyntheticLocal(u64_mono, false);
         const pattern_idx = elem_patterns[prefix_len + suffix_i];
@@ -5504,12 +5644,13 @@ fn lowerListPatternMatchLocalInto(
             body,
             on_fail,
         );
-        body = try self.store.addCFStmt(self.allocator, .{ .assign_low_level = .{
-            .target = elem_local,
-            .op = .list_get_unsafe,
-            .args = try self.store.addLocalSpan(self.allocator, &.{ source_local, index_local }),
-            .next = body,
-        } });
+                body = try self.store.addCFStmt(self.allocator, .{ .assign_low_level = .{
+                    .target = elem_local,
+                    .op = .list_get_unsafe,
+                    .result_callable = try self.callableResolutionForPattern(session, pattern_idx),
+                    .args = try self.store.addLocalSpan(self.allocator, &.{ source_local, index_local }),
+                    .next = body,
+                } });
         body = try self.store.addCFStmt(self.allocator, .{ .assign_low_level = .{
             .target = index_local,
             .op = .num_minus,
@@ -5522,7 +5663,10 @@ fn lowerListPatternMatchLocalInto(
     var prefix_i = prefix_len;
     while (prefix_i > 0) {
         prefix_i -= 1;
-        const elem_local = try self.freshSyntheticLocal(list_data.elem, false);
+        const elem_local = try self.freshSyntheticLocal(
+            try self.resolvePatternExecutableMonotype(session, pattern_idx, list_data.elem),
+            false,
+        );
         const index_local = try self.freshSyntheticLocal(u64_mono, false);
         const pattern_idx = elem_patterns[prefix_i];
         const elem_source_expr_ref = if (source_expr_ref) |source|
@@ -5542,6 +5686,7 @@ fn lowerListPatternMatchLocalInto(
         body = try self.store.addCFStmt(self.allocator, .{ .assign_low_level = .{
             .target = elem_local,
             .op = .list_get_unsafe,
+            .result_callable = try self.callableResolutionForPattern(session, pattern_idx),
             .args = try self.store.addLocalSpan(self.allocator, &.{ source_local, index_local }),
             .next = body,
         } });
@@ -5673,16 +5818,16 @@ fn lowerBindingInto(
         next,
     );
     self.current_binding_scope = saved_scope;
-    const join_stmt = try self.store.addCFStmt(self.allocator, .{ .join = .{
-        .id = after_expr_join_id,
-        .params = try self.buildJoinParamSpanWithValueExcluding(
+    const join_stmt = try self.addJoinStmt(
+        after_expr_join_id,
+        try self.buildJoinParamSpanWithValueExcluding(
             joined_source_local,
             continuation_scope,
             excluded_patterns,
         ),
-        .body = bound,
-        .remainder = lowered.entry,
-    } });
+        bound,
+        lowered.entry,
+    );
     return join_stmt;
 }
 
@@ -5711,12 +5856,12 @@ fn lowerExprIntoContinuationScope(
         .args = try self.buildCarriedJumpArgsExcluding(lowered.exit_scope, continuation_scope, excluded_patterns),
     } });
 
-    return self.store.addCFStmt(self.allocator, .{ .join = .{
-        .id = after_expr_join_id,
-        .params = try self.buildJoinParamSpanExcluding(continuation_scope, excluded_patterns),
-        .body = next,
-        .remainder = lowered.entry,
-    } });
+    return self.addJoinStmt(
+        after_expr_join_id,
+        try self.buildJoinParamSpanExcluding(continuation_scope, excluded_patterns),
+        next,
+        lowered.entry,
+    );
 }
 
 fn lowerExprIntoContinuationScopeWithValue(
@@ -5751,48 +5896,17 @@ fn lowerExprIntoContinuationScopeWithValue(
         ),
     } });
 
-    const join_stmt = try self.store.addCFStmt(self.allocator, .{ .join = .{
-        .id = after_expr_join_id,
-        .params = try self.buildJoinParamSpanWithValueExcluding(
+    const join_stmt = try self.addJoinStmt(
+        after_expr_join_id,
+        try self.buildJoinParamSpanWithValueExcluding(
             joined_target,
             continuation_scope,
             excluded_patterns,
         ),
-        .body = next,
-        .remainder = lowered.entry,
-    } });
+        next,
+        lowered.entry,
+    );
     return join_stmt;
-}
-
-fn markDirectCallableBackedBindingIfNeeded(
-    self: *Self,
-    module_env: *const ModuleEnv,
-    pattern_idx: CIR.Pattern.Idx,
-    expr_idx: CIR.Expr.Idx,
-    source_mono: Monotype.Idx,
-) Allocator.Error!void {
-    if (directCallableDefinitionExpr(module_env, expr_idx) == null) return;
-
-    if (builtin.mode == .Debug) {
-        _ = pattern_idx;
-        if (self.store.monotype_store.getMonotype(source_mono) != .func) return;
-    }
-}
-
-fn directCallableDefinitionExpr(
-    module_env: *const ModuleEnv,
-    expr_idx: CIR.Expr.Idx,
-) ?CIR.Expr.Idx {
-    return switch (module_env.store.getExpr(expr_idx)) {
-        .e_lambda, .e_closure, .e_hosted_lambda => expr_idx,
-        .e_block => |block| directCallableDefinitionExpr(module_env, block.final_expr),
-        .e_dbg => |dbg_expr| directCallableDefinitionExpr(module_env, dbg_expr.expr),
-        .e_expect => |expect_expr| directCallableDefinitionExpr(module_env, expect_expr.body),
-        .e_return => |return_expr| directCallableDefinitionExpr(module_env, return_expr.expr),
-        .e_nominal => |nominal_expr| directCallableDefinitionExpr(module_env, nominal_expr.backing_expr),
-        .e_nominal_external => |nominal_expr| directCallableDefinitionExpr(module_env, nominal_expr.backing_expr),
-        else => null,
-    };
 }
 
 fn directBindingTargetLocal(
@@ -5916,7 +6030,10 @@ fn lowerPatternMatchLocalInto(
             var i = payload_patterns.len;
             while (i > 0) {
                 i -= 1;
-                const payload_local = try self.freshSyntheticLocal(payload_monos[i], false);
+                const payload_local = try self.freshSyntheticLocal(
+                    try self.resolvePatternExecutableMonotype(session, payload_patterns[i], payload_monos[i]),
+                    false,
+                );
                 const payload_source_expr_ref = if (source_expr_ref) |source|
                     try self.extendLowerExprSourceRef(source, .{ .tag_payload = .{
                         .tag_name = .{
@@ -5927,7 +6044,7 @@ fn lowerPatternMatchLocalInto(
                     } })
                 else
                     null;
-                try self.seedExactCallableBindingLocal(session, payload_patterns[i], payload_local, payload_source_expr_ref);
+                try self.bindCallableFactsForBindingLocal(session, payload_patterns[i], payload_local, payload_source_expr_ref);
                 body = try self.lowerPatternMatchLocalInto(
                     session,
                     module_env,
@@ -5937,12 +6054,17 @@ fn lowerPatternMatchLocalInto(
                     body,
                     on_fail,
                 );
-                body = try self.lowerRefInto(payload_local, .{ .tag_payload = .{
-                    .source = source_local,
-                    .payload_idx = @intCast(i),
-                    .tag_discriminant = @intCast(tag_discriminant),
-                    .ownership = .move,
-                } }, body);
+                body = try self.lowerRefIntoWithCallable(
+                    payload_local,
+                    .{ .tag_payload = .{
+                        .source = source_local,
+                        .payload_idx = @intCast(i),
+                        .tag_discriminant = @intCast(tag_discriminant),
+                        .ownership = .move,
+                    } },
+                    try self.callableResolutionForPattern(session, payload_patterns[i]),
+                    body,
+                );
             }
 
             break :blk try self.lowerSwitchOnDiscriminant(
@@ -5965,7 +6087,14 @@ fn lowerPatternMatchLocalInto(
                         i -= 1;
                         const destruct = module_env.store.getRecordDestruct(cir_destructs[i]);
                         const field_idx = self.recordFieldIndexByName(destruct.label, mono_fields);
-                        const field_local = try self.freshSyntheticLocal(mono_fields[field_idx].type_idx, false);
+                        const field_local = try self.freshSyntheticLocal(
+                            try self.resolvePatternExecutableMonotype(
+                                session,
+                                destruct.kind.toPatternIdx(),
+                                mono_fields[field_idx].type_idx,
+                            ),
+                            false,
+                        );
                         const field_source_expr_ref = if (source_expr_ref) |source|
                             try self.extendLowerExprSourceRef(source, .{ .field = .{
                                 .module_idx = self.current_module_idx,
@@ -5973,7 +6102,7 @@ fn lowerPatternMatchLocalInto(
                             } })
                         else
                             null;
-                        try self.seedExactCallableBindingLocal(
+                        try self.bindCallableFactsForBindingLocal(
                             session,
                             destruct.kind.toPatternIdx(),
                             field_local,
@@ -5988,11 +6117,16 @@ fn lowerPatternMatchLocalInto(
                             body,
                             on_fail,
                         );
-                        body = try self.lowerRefInto(field_local, .{ .field = .{
-                            .source = source_local,
-                            .field_idx = @intCast(field_idx),
-                            .ownership = .move,
-                        } }, body);
+                        body = try self.lowerRefIntoWithCallable(
+                            field_local,
+                            .{ .field = .{
+                                .source = source_local,
+                                .field_idx = @intCast(field_idx),
+                                .ownership = .move,
+                            } },
+                            try self.callableResolutionForPattern(session, destruct.kind.toPatternIdx()),
+                            body,
+                        );
                     }
                     break :blk body;
                 },
@@ -6043,12 +6177,15 @@ fn lowerPatternMatchLocalInto(
             var i = elem_patterns.len;
             while (i > 0) {
                 i -= 1;
-                const elem_local = try self.freshSyntheticLocal(elem_monos[i], false);
+                const elem_local = try self.freshSyntheticLocal(
+                    try self.resolvePatternExecutableMonotype(session, elem_patterns[i], elem_monos[i]),
+                    false,
+                );
                 const elem_source_expr_ref = if (source_expr_ref) |source|
                     try self.extendLowerExprSourceRef(source, .{ .tuple_elem = @intCast(i) })
                 else
                     null;
-                try self.seedExactCallableBindingLocal(session, elem_patterns[i], elem_local, elem_source_expr_ref);
+                try self.bindCallableFactsForBindingLocal(session, elem_patterns[i], elem_local, elem_source_expr_ref);
                 body = try self.lowerPatternMatchLocalInto(
                     session,
                     module_env,
@@ -6058,11 +6195,16 @@ fn lowerPatternMatchLocalInto(
                     body,
                     on_fail,
                 );
-                body = try self.lowerRefInto(elem_local, .{ .field = .{
-                    .source = source_local,
-                    .field_idx = @intCast(i),
-                    .ownership = .move,
-                } }, body);
+                body = try self.lowerRefIntoWithCallable(
+                    elem_local,
+                    .{ .field = .{
+                        .source = source_local,
+                        .field_idx = @intCast(i),
+                        .ownership = .move,
+                    } },
+                    try self.callableResolutionForPattern(session, elem_patterns[i]),
+                    body,
+                );
             }
             break :blk body;
         },
@@ -6076,7 +6218,7 @@ fn lowerPatternMatchLocalInto(
             on_fail,
         ),
         .runtime_error => std.debug.panic(
-            "statement-only MIR TODO: runtime-error patterns are not implemented in pattern-free MIR lowering",
+            "statement-only MIR invariant violated: runtime-error pattern reached pattern-free MIR lowering",
             .{},
         ),
     };
@@ -6191,19 +6333,19 @@ fn lowerWhileStmtInto(
         .args = try self.buildCarriedJumpArgs(before_scope, head_scope),
     } });
 
-    const head_join = try self.store.addCFStmt(self.allocator, .{ .join = .{
-        .id = loop_head_id,
-        .params = try self.buildJoinParamSpan(head_scope),
-        .body = lowered_cond.entry,
-        .remainder = initial_jump,
-    } });
+    const head_join = try self.addJoinStmt(
+        loop_head_id,
+        try self.buildJoinParamSpan(head_scope),
+        lowered_cond.entry,
+        initial_jump,
+    );
 
-    return self.store.addCFStmt(self.allocator, .{ .join = .{
-        .id = loop_exit_id,
-        .params = try self.buildJoinParamSpan(after_scope),
-        .body = next,
-        .remainder = head_join,
-    } });
+    return self.addJoinStmt(
+        loop_exit_id,
+        try self.buildJoinParamSpan(after_scope),
+        next,
+        head_join,
+    );
 }
 
 fn lowerForStmtInto(
@@ -6256,7 +6398,10 @@ fn lowerForStmtInto(
 
     const one_local = try self.freshSyntheticLocal(u64_mono, false);
     const next_index_local = try self.freshSyntheticLocal(u64_mono, false);
-    const item_local = try self.freshSyntheticLocal(item_mono, false);
+    const item_local = try self.freshSyntheticLocal(
+        try self.resolvePatternExecutableMonotype(session, for_stmt.patt, item_mono),
+        false,
+    );
     const body_value = try self.freshSyntheticLocal(try self.resolveMonotype(session, for_stmt.body), false);
     const loop_back = try self.store.reserveCFStmt(self.allocator);
     const increment_stmt = try self.store.addCFStmt(self.allocator, .{ .assign_low_level = .{
@@ -6293,6 +6438,7 @@ fn lowerForStmtInto(
     const get_item = try self.store.addCFStmt(self.allocator, .{ .assign_low_level = .{
         .target = item_local,
         .op = .list_get_unsafe,
+        .result_callable = try self.callableResolutionForPattern(session, for_stmt.patt),
         .args = try self.store.addLocalSpan(self.allocator, &.{ head_list_local, head_index_local }),
         .next = bind_item,
     } });
@@ -6339,22 +6485,22 @@ fn lowerForStmtInto(
     defer self.current_binding_scope = saved_scope;
     const init_list = try self.lowerCirExprInto(session, for_stmt.expr, init_list_local, init_len);
 
-    const head_join = try self.store.addCFStmt(self.allocator, .{ .join = .{
-        .id = loop_head_id,
-        .params = try self.buildJoinParamSpanWithExtraLocals(
+    const head_join = try self.addJoinStmt(
+        loop_head_id,
+        try self.buildJoinParamSpanWithExtraLocals(
             head_scope,
             &.{ head_list_local, head_len_local, head_index_local },
         ),
-        .body = cond_stmt,
-        .remainder = init_list,
-    } });
+        cond_stmt,
+        init_list,
+    );
 
-    return self.store.addCFStmt(self.allocator, .{ .join = .{
-        .id = loop_exit_id,
-        .params = try self.buildJoinParamSpan(after_scope),
-        .body = next,
-        .remainder = head_join,
-    } });
+    return self.addJoinStmt(
+        loop_exit_id,
+        try self.buildJoinParamSpan(after_scope),
+        next,
+        head_join,
+    );
 }
 
 fn lowerBlockStmtInto(
@@ -6513,12 +6659,6 @@ fn predeclareTrivialBlockStmtPatterns(
                 try self.debugAssertNoUnitPrimBinding(session, module_env, decl.pattern, decl.expr, source_mono, stmt_idx, "s_decl");
             }
             try self.predeclareBindingLocals(session, module_env, decl.pattern);
-            try self.markDirectCallableBackedBindingIfNeeded(
-                module_env,
-                decl.pattern,
-                decl.expr,
-                source_mono,
-            );
         },
         .s_var => |var_decl| {
             if (shouldOmitCallableBindingExpr(session, module_env, var_decl.expr)) return;
@@ -6545,12 +6685,6 @@ fn predeclareTrivialBlockStmtPatterns(
             }
             try self.predeclareBindingLocals(session, module_env, var_decl.pattern_idx);
             self.setBindingLocalsReassignable(session, module_env, var_decl.pattern_idx, true);
-            try self.markDirectCallableBackedBindingIfNeeded(
-                module_env,
-                var_decl.pattern_idx,
-                var_decl.expr,
-                source_mono,
-            );
         },
         .s_reassign => |reassign| {
             if (shouldOmitCallableBindingExpr(session, module_env, reassign.expr)) return;
@@ -6577,12 +6711,6 @@ fn predeclareTrivialBlockStmtPatterns(
             }
             try self.predeclareBindingLocals(session, module_env, reassign.pattern_idx);
             self.setBindingLocalsReassignable(session, module_env, reassign.pattern_idx, true);
-            try self.markDirectCallableBackedBindingIfNeeded(
-                module_env,
-                reassign.pattern_idx,
-                reassign.expr,
-                source_mono,
-            );
         },
         else => {},
     }
@@ -6817,7 +6945,7 @@ fn predeclareBindingLocalsFromMonotype(
                 const binding = self.binding_records.getPtr(key) orelse unreachable;
                 if (binding.shadowed) unreachable;
                 binding.explicit_monotype = monotype;
-                self.store.getLocalPtr(local).monotype = monotype;
+                try self.requireLocalMonotype(local, monotype, "predeclareBindingLocalsFromMonotype.assign");
             } else {
                 _ = try self.patternToLocalWithMonotype(pattern_idx, monotype);
             }
@@ -6829,7 +6957,7 @@ fn predeclareBindingLocalsFromMonotype(
                 const binding = self.binding_records.getPtr(key) orelse unreachable;
                 if (binding.shadowed) unreachable;
                 binding.explicit_monotype = monotype;
-                self.store.getLocalPtr(local).monotype = monotype;
+                try self.requireLocalMonotype(local, monotype, "predeclareBindingLocalsFromMonotype.as");
             } else {
                 _ = try self.patternToLocalWithMonotype(pattern_idx, monotype);
             }
@@ -7030,7 +7158,7 @@ fn buildCarriedJumpArgsWithValue(
     const args = try self.allocator.alloc(MIR.LocalId, dest_bindings.len + 1);
     defer self.allocator.free(args);
     args[0] = value_local;
-    try self.mergeExactCallableJoinIncoming(dest_value_local, value_local);
+    try self.mergeJoinParamCallableResolution(dest_value_local, value_local);
     var source_i: usize = 0;
     for (dest_bindings, 0..) |dest_binding, i| {
         args[i + 1] = findVisibleBindingLocal(
@@ -7039,7 +7167,7 @@ fn buildCarriedJumpArgsWithValue(
             dest_binding.pattern_idx,
             "statement-only MIR join invariant violated: source scope is missing a carried binding required by destination scope",
         );
-        try self.mergeExactCallableJoinIncoming(dest_binding.local, args[i + 1]);
+        try self.mergeJoinParamCallableResolution(dest_binding.local, args[i + 1]);
     }
     return self.store.addLocalSpan(self.allocator, args);
 }
@@ -7068,7 +7196,7 @@ fn buildCarriedJumpArgsWithValueExcluding(
     const args = try self.allocator.alloc(MIR.LocalId, count);
     defer self.allocator.free(args);
     args[0] = value_local;
-    try self.mergeExactCallableJoinIncoming(dest_value_local, value_local);
+    try self.mergeJoinParamCallableResolution(dest_value_local, value_local);
     var source_i: usize = 0;
     var arg_i: usize = 1;
     for_bindings: for (dest_bindings) |dest_binding| {
@@ -7081,7 +7209,7 @@ fn buildCarriedJumpArgsWithValueExcluding(
             dest_binding.pattern_idx,
             "statement-only MIR join invariant violated: source scope is missing a carried binding required by destination scope",
         );
-        try self.mergeExactCallableJoinIncoming(dest_binding.local, args[arg_i]);
+        try self.mergeJoinParamCallableResolution(dest_binding.local, args[arg_i]);
         arg_i += 1;
     }
     return self.store.addLocalSpan(self.allocator, args);
@@ -7107,7 +7235,7 @@ fn buildCarriedJumpArgs(
             dest_binding.pattern_idx,
             "statement-only MIR join invariant violated: source scope is missing a carried binding required by destination scope",
         );
-        try self.mergeExactCallableJoinIncoming(dest_binding.local, args[i]);
+        try self.mergeJoinParamCallableResolution(dest_binding.local, args[i]);
     }
     return self.store.addLocalSpan(self.allocator, args);
 }
@@ -7145,7 +7273,7 @@ fn buildCarriedJumpArgsExcluding(
             dest_binding.pattern_idx,
             "statement-only MIR join invariant violated: source scope is missing a carried binding required by destination scope",
         );
-        try self.mergeExactCallableJoinIncoming(dest_binding.local, args[arg_i]);
+        try self.mergeJoinParamCallableResolution(dest_binding.local, args[arg_i]);
         arg_i += 1;
     }
     return self.store.addLocalSpan(self.allocator, args);
@@ -7264,7 +7392,7 @@ fn buildCarriedJumpArgsWithExtraLocals(
             dest_binding.pattern_idx,
             "statement-only MIR loop invariant violated: source scope is missing a carried binding required by destination scope",
         );
-        try self.mergeExactCallableJoinIncoming(dest_binding.local, args[i]);
+        try self.mergeJoinParamCallableResolution(dest_binding.local, args[i]);
     }
     @memcpy(args[dest_bindings.len..], extra_locals);
     return self.store.addLocalSpan(self.allocator, args);
@@ -7285,6 +7413,46 @@ fn buildJoinParamSpanWithExtraLocals(
     }
     @memcpy(params[bindings.len..], extra_locals);
     return self.store.addLocalSpan(self.allocator, params);
+}
+
+fn buildJoinParamCallableSpan(
+    self: *Self,
+    params: MIR.LocalSpan,
+) Allocator.Error!MIR.CallableResolutionSpan {
+    const param_locals = self.store.getLocalSpan(params);
+    if (param_locals.len == 0) return .empty();
+
+    const resolved = try self.allocator.alloc(?CallableResolution, param_locals.len);
+    defer self.allocator.free(resolved);
+
+    var any_callable = false;
+    for (param_locals, 0..) |param_local, i| {
+        const key = @intFromEnum(param_local);
+        resolved[i] = if (self.pending_join_param_callables.fetchRemove(key)) |entry|
+            entry.value
+        else
+            self.resolveLocalCallableResolution(param_local);
+        if (resolved[i] != null) any_callable = true;
+    }
+
+    if (!any_callable) return .empty();
+    return self.store.addCallableResolutionSpan(self.allocator, resolved);
+}
+
+fn addJoinStmt(
+    self: *Self,
+    id: MIR.JoinPointId,
+    params: MIR.LocalSpan,
+    body: MIR.CFStmtId,
+    remainder: MIR.CFStmtId,
+) Allocator.Error!MIR.CFStmtId {
+    return self.store.addCFStmt(self.allocator, .{ .join = .{
+        .id = id,
+        .params = params,
+        .param_callables = try self.buildJoinParamCallableSpan(params),
+        .body = body,
+        .remainder = remainder,
+    } });
 }
 
 fn lowerExprSequenceIntoContinuationWithValues(
@@ -7443,12 +7611,12 @@ fn lowerBoolBranchChainIntoWithExitScope(
     }
 
     const join_body = try self.lowerLocalAliasInto(target, joined_value_local, next);
-    const entry = try self.store.addCFStmt(self.allocator, .{ .join = .{
-        .id = join_id,
-        .params = try self.buildJoinParamSpanWithValue(joined_value_local, join_scope),
-        .body = join_body,
-        .remainder = lowered_cond.entry,
-    } });
+    const entry = try self.addJoinStmt(
+        join_id,
+        try self.buildJoinParamSpanWithValue(joined_value_local, join_scope),
+        join_body,
+        lowered_cond.entry,
+    );
 
     return .{
         .entry = entry,
@@ -7601,12 +7769,12 @@ fn lowerBlockIntoWithExitScope(
             ),
         } });
         const after_final_join_body = try self.lowerLocalAliasInto(target, joined_final_local, next);
-        entry = try self.store.addCFStmt(self.allocator, .{ .join = .{
-            .id = after_final_join_id,
-            .params = try self.buildJoinParamSpanWithValue(joined_final_local, exit_scope),
-            .body = after_final_join_body,
-            .remainder = lowered_final.entry,
-        } });
+        entry = try self.addJoinStmt(
+            after_final_join_id,
+            try self.buildJoinParamSpanWithValue(joined_final_local, exit_scope),
+            after_final_join_body,
+            lowered_final.entry,
+        );
         final_exit_scope = exit_scope;
     }
     var i = stmts.len;
@@ -7678,12 +7846,12 @@ fn lowerMatchIntoWithExitScope(
         branch_degenerate_failure,
     );
 
-    const dispatch_join = try self.store.addCFStmt(self.allocator, .{ .join = .{
-        .id = dispatch_join_id,
-        .params = try self.buildJoinParamSpanWithValue(dispatch_join_cond_local, dispatch_scope),
-        .body = chain.entry,
-        .remainder = lowered_cond.entry,
-    } });
+    const dispatch_join = try self.addJoinStmt(
+        dispatch_join_id,
+        try self.buildJoinParamSpanWithValue(dispatch_join_cond_local, dispatch_scope),
+        chain.entry,
+        lowered_cond.entry,
+    );
 
     if (!chain.reaches_result_join) {
         return .{
@@ -7694,12 +7862,12 @@ fn lowerMatchIntoWithExitScope(
     }
 
     const result_join_body = try self.lowerLocalAliasInto(target, joined_result_local, next);
-    const result_join_stmt = try self.store.addCFStmt(self.allocator, .{ .join = .{
-            .id = join_id,
-            .params = try self.buildJoinParamSpanWithValue(joined_result_local, join_scope),
-            .body = result_join_body,
-            .remainder = dispatch_join,
-        } });
+    const result_join_stmt = try self.addJoinStmt(
+        join_id,
+        try self.buildJoinParamSpanWithValue(joined_result_local, join_scope),
+        result_join_body,
+        dispatch_join,
+    );
     return .{
         .entry = result_join_stmt,
         .exit_scope = join_scope,
@@ -7911,12 +8079,12 @@ fn lowerMatchBranchChainInto(
     }
 
     return .{
-        .entry = try self.store.addCFStmt(self.allocator, .{ .join = .{
-            .id = rest_join_id,
-            .params = rest_join_params,
-            .body = rest.entry,
-            .remainder = branch_entry,
-        } }),
+        .entry = try self.addJoinStmt(
+            rest_join_id,
+            rest_join_params,
+            rest.entry,
+            branch_entry,
+        ),
         .reaches_result_join = branch_reaches_result_join or rest.reaches_result_join,
     };
 }
@@ -8148,7 +8316,10 @@ fn lowerCirExprInto(
                     );
                 }
                 provided[canonical_idx] = true;
-                ordered_locals[canonical_idx] = try self.freshSyntheticLocal(mono_fields[canonical_idx].type_idx, false);
+                ordered_locals[canonical_idx] = try self.freshSyntheticLocal(
+                    try self.resolveMonotype(session, field.value),
+                    false,
+                );
             }
 
             for (mono_fields, 0..) |mono_field, i| {
@@ -8161,7 +8332,22 @@ fn lowerCirExprInto(
                 }
 
                 _ = self.recordFieldIndexByName(mono_field.name, ext_fields);
-                ordered_locals[i] = try self.freshSyntheticLocal(mono_field.type_idx, false);
+                const field_projection: Pipeline.ValueProjection = .{ .field = .{
+                    .module_idx = mono_field.name.module_idx,
+                    .ident = mono_field.name.ident,
+                } };
+                ordered_locals[i] = try self.freshSyntheticLocal(
+                    try self.executableMonotypeForCallableValue(
+                        mono_field.type_idx,
+                        try self.resolveProjectedExprCallableValue(
+                            session.source_context,
+                            self.current_module_idx,
+                            ext_expr.?,
+                            &.{field_projection},
+                        ),
+                    ),
+                    false,
+                );
             }
 
             const top = self.scratch_local_ids.top();
@@ -8189,13 +8375,23 @@ fn lowerCirExprInto(
                     i -= 1;
                     if (provided[i]) continue;
                     const ext_field_idx = self.recordFieldIndexByName(mono_fields[i].name, ext_fields);
-                    lowered_next = try self.lowerRefInto(
+                    const field_projection: Pipeline.ValueProjection = .{ .field = .{
+                        .module_idx = mono_fields[i].name.module_idx,
+                        .ident = mono_fields[i].name.ident,
+                    } };
+                    lowered_next = try self.lowerRefIntoWithCallable(
                         ordered_locals[i].?,
                         .{ .field = .{
                             .source = extension_local,
                             .field_idx = ext_field_idx,
                             .ownership = .move,
                         } },
+                        try self.callableResolutionFromValue(try self.resolveProjectedExprCallableValue(
+                            session.source_context,
+                            self.current_module_idx,
+                            ext_expr_idx.?,
+                            &.{field_projection},
+                        )),
                         lowered_next,
                     );
                 }
@@ -8423,7 +8619,7 @@ fn patternToLocal(self: *Self, session: LowerSession, pattern_idx: CIR.Pattern.I
     if (self.binding_records.get(key)) |binding| {
         if (!binding.shadowed) {
             if (binding.explicit_monotype) |monotype| {
-                self.store.getLocalPtr(binding.local.?).monotype = monotype;
+                self.requireLocalMonotype(binding.local.?, monotype, "patternToLocal") catch unreachable;
             }
             return binding.local.?;
         }
@@ -8477,7 +8673,7 @@ fn patternToLocalWithMonotype(
 
     if (self.binding_records.getPtr(key)) |binding| {
         if (!binding.shadowed) {
-            self.store.getLocalPtr(binding.local.?).monotype = monotype;
+            try self.requireLocalMonotype(binding.local.?, monotype, "patternToLocalWithMonotype");
             binding.explicit_monotype = monotype;
             return binding.local.?;
         }
@@ -8584,7 +8780,7 @@ fn lookupExistingBindingLocalAtScope(
     ) orelse return null;
     const key = bindingScopeKey(self.current_module_idx, binding_scope, pattern_idx);
     if (self.binding_records.get(key)) |binding| if (!binding.shadowed) if (binding.explicit_monotype) |monotype| {
-        self.store.getLocalPtr(local).monotype = monotype;
+        self.requireLocalMonotype(local, monotype, "lookupExistingBindingLocalAtScope") catch unreachable;
     };
     return local;
 }
@@ -8809,7 +9005,7 @@ fn lookupExistingBindingLocalInAncestorScopesWithScope(
             if (module_idx == self.current_module_idx) {
                 const key = bindingScopeKey(module_idx, scope, pattern_idx);
                 if (self.binding_records.get(key)) |current_binding| if (!current_binding.shadowed) if (current_binding.explicit_monotype) |monotype| {
-                    self.store.getLocalPtr(local).monotype = monotype;
+                    self.requireLocalMonotype(local, monotype, "lookupExistingBindingLocalInAncestorScopesWithScope") catch unreachable;
                 };
             }
             return .{
@@ -9134,33 +9330,33 @@ fn monotypesStructurallyEqualRec(
     };
 }
 
-/// Get the exact staged monotype for a CIR expression in the active source context.
+/// Get the exact executable monotype for a CIR expression in the active source context.
 fn resolveMonotype(self: *Self, session: LowerSession, expr_idx: CIR.Expr.Idx) Allocator.Error!Monotype.Idx {
-    if (lookupProgramExprMonotype(session, expr_idx)) |mono| {
-        return self.importMonotypeFromStore(
-            &self.callable_pipeline.context_mono.monotype_store,
-            mono.idx,
-            mono.module_idx,
-            self.current_module_idx,
-        );
-    }
     if (lookupProgramExprCallableValue(session, expr_idx)) |callable_value| {
         const mono = self.callable_pipeline.getCallableValueRuntimeMonotype(callable_value);
-        return self.importMonotypeFromStore(
+        return self.requireExecutableMonotype(try self.importMonotypeFromStore(
             &self.callable_pipeline.context_mono.monotype_store,
             mono.idx,
             mono.module_idx,
             self.current_module_idx,
-        );
+        ));
     }
     if (lookupProgramExprIntroCallableInst(session, expr_idx)) |intro_callable_inst| {
         const mono = self.callable_pipeline.getCallableInstRuntimeMonotype(intro_callable_inst);
-        return self.importMonotypeFromStore(
+        return self.requireExecutableMonotype(try self.importMonotypeFromStore(
             &self.callable_pipeline.context_mono.monotype_store,
             mono.idx,
             mono.module_idx,
             self.current_module_idx,
-        );
+        ));
+    }
+    if (lookupProgramExprMonotype(session, expr_idx)) |mono| {
+        return self.requireExecutableMonotype(try self.importMonotypeFromStore(
+            &self.callable_pipeline.context_mono.monotype_store,
+            mono.idx,
+            mono.module_idx,
+            self.current_module_idx,
+        ));
     }
 
     const module_env = self.all_module_envs[self.current_module_idx];
@@ -9188,20 +9384,20 @@ fn resolveMonotype(self: *Self, session: LowerSession, expr_idx: CIR.Expr.Idx) A
         .e_lookup_local => |lookup| {
             if (try resolveProgramPatternCallableValue(session, lookup.pattern_idx)) |callable_value| {
                 const mono = self.callable_pipeline.getCallableValueRuntimeMonotype(callable_value);
-                return self.importMonotypeFromStore(
+                return self.requireExecutableMonotype(try self.importMonotypeFromStore(
                     &self.callable_pipeline.context_mono.monotype_store,
                     mono.idx,
                     mono.module_idx,
                     self.current_module_idx,
-                );
+                ));
             }
             if (lookupProgramPatternMonotype(session, lookup.pattern_idx)) |mono| {
-                return self.importMonotypeFromStore(
+                return self.requireExecutableMonotype(try self.importMonotypeFromStore(
                     &self.callable_pipeline.context_mono.monotype_store,
                     mono.idx,
                     mono.module_idx,
                     self.current_module_idx,
-                );
+                ));
             }
         },
         else => {},
@@ -9226,18 +9422,18 @@ fn resolveMonotype(self: *Self, session: LowerSession, expr_idx: CIR.Expr.Idx) A
     );
 }
 
-fn currentCommonIdents(self: *const Self) ModuleEnv.CommonIdents {
-    return self.all_module_envs[self.current_module_idx].idents;
+fn requireExecutableMonotype(self: *Self, monotype: Monotype.Idx) Monotype.Idx {
+    if (builtin.mode == .Debug and self.store.monotype_store.getMonotype(monotype) == .func) {
+        std.debug.panic(
+            "statement-only MIR invariant violated: executable monotype resolver produced source function monotype {d}",
+            .{@intFromEnum(monotype)},
+        );
+    }
+    return monotype;
 }
 
-fn refreshBindingLocalMonotype(
-    self: *Self,
-    session: LowerSession,
-    pattern_idx: CIR.Pattern.Idx,
-    local: MIR.LocalId,
-) Allocator.Error!void {
-    const monotype = try self.requirePatternMonotype(session, pattern_idx);
-    self.store.getLocalPtr(local).monotype = monotype;
+fn currentCommonIdents(self: *const Self) ModuleEnv.CommonIdents {
+    return self.all_module_envs[self.current_module_idx].idents;
 }
 
 fn requirePatternMonotype(
@@ -9264,26 +9460,26 @@ fn requirePatternMonotype(
             };
 
         if (!source_resolved.isNone()) {
-            var monotype = try self.importMonotypeFromStore(
+            var monotype = self.requireExecutableMonotype(try self.importMonotypeFromStore(
                 &self.callable_pipeline.context_mono.monotype_store,
                 source_resolved.idx,
                 source_resolved.module_idx,
                 self.current_module_idx,
-            );
+            ));
             for (source_expr_ref.projections) |projection| {
                 monotype = try self.projectMonotypeByValueProjection(monotype, projection);
             }
-            return monotype;
+            return self.requireExecutableMonotype(monotype);
         }
     }
 
     if (lookupProgramPatternMonotype(session, pattern_idx)) |resolved| {
-        return self.importMonotypeFromStore(
+        return self.requireExecutableMonotype(try self.importMonotypeFromStore(
             &self.callable_pipeline.context_mono.monotype_store,
             resolved.idx,
             resolved.module_idx,
             self.current_module_idx,
-        );
+        ));
     }
 
     std.debug.panic(
