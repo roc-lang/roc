@@ -260,6 +260,26 @@ pub const Result = struct {
         };
     }
 
+    pub fn contextTypeVarKeyMatchesSourceContext(
+        source_context: SourceContext,
+        key: ContextTypeVarKey,
+    ) bool {
+        return switch (source_context) {
+            .callable_inst => |context_id| key.source_context_kind == .callable_inst and
+                key.source_context_module_idx == std.math.maxInt(u32) and
+                key.source_context_raw == @intFromEnum(context_id),
+            .root_expr => |root| key.source_context_kind == .root_expr and
+                key.source_context_module_idx == root.module_idx and
+                key.source_context_raw == @intFromEnum(root.expr_idx),
+            .provenance_expr => |source| key.source_context_kind == .provenance_expr and
+                key.source_context_module_idx == source.module_idx and
+                key.source_context_raw == @intFromEnum(source.expr_idx),
+            .template_expr => |template| key.source_context_kind == .template_expr and
+                key.source_context_module_idx == template.module_idx and
+                key.source_context_raw == @intFromEnum(template.expr_idx),
+        };
+    }
+
     pub fn getContextTypeVarMonotype(
         self: *const Result,
         source_context: SourceContext,
@@ -701,6 +721,30 @@ pub fn recordTypeVarMonotypeForSourceContext(
     );
 }
 
+pub fn recordTypeScopeMonotype(
+    driver: anytype,
+    result: anytype,
+    module_idx: u32,
+    type_var: types.Var,
+    monotype: Monotype.Idx,
+    monotype_module_idx: u32,
+) Allocator.Error!void {
+    if (monotype.isNone()) return;
+    const resolved_var = driver.all_module_envs[module_idx].types.resolveVar(type_var).var_;
+    const key: BoundTypeVarKey = .{
+        .module_idx = module_idx,
+        .type_var = resolved_var,
+    };
+    try mergeResolvedMonotypeMap(
+        driver,
+        result,
+        &result.context_mono.type_scope_monotypes,
+        key,
+        resolvedMonotype(monotype, monotype_module_idx),
+        "type-scope",
+    );
+}
+
 pub fn mergeContextExprMonotype(
     driver: anytype,
     result: anytype,
@@ -782,7 +826,7 @@ pub fn recordExprMonotypeResolved(
     const key = Result.contextExprKey(source_context, module_idx, expr_idx);
     const resolved = resolvedMonotype(monotype, monotype_module_idx);
     if (result.lambdamono.getExprId(source_context, module_idx, expr_idx)) |expr_id| {
-        const program_expr = &result.lambdamono.exprs.items[@intFromEnum(expr_id)];
+        const program_expr = result.lambdamono.getExpr(expr_id);
         const existing_program_mono = program_expr.monotype;
         if (!try driver.monotypesStructurallyEqualAcrossModules(
             result,
@@ -1175,7 +1219,7 @@ pub fn seedRecordedContextTypeVarSpecializations(
     while (it.next()) |entry| {
         const key = entry.key_ptr.*;
         if (key.module_idx != module_idx) continue;
-        if (!driver.contextTypeVarKeyMatchesSourceContext(source_context, key)) continue;
+        if (!Result.contextTypeVarKeyMatchesSourceContext(source_context, key)) continue;
         if (entry.value_ptr.module_idx != module_idx) continue;
         try specializations.put(key.type_var, entry.value_ptr.idx);
     }
