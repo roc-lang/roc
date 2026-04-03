@@ -1286,6 +1286,72 @@ pub fn seedClosureCaptureCallableValues(
     }
 }
 
+pub fn seedClosureCapturePatternMonotypes(
+    driver: anytype,
+    result: anytype,
+    enclosing_source_context: SourceContext,
+    module_idx: u32,
+    closure_expr: CIR.Expr.Closure,
+    closure_callable_inst_id: CallableInstId,
+) std.mem.Allocator.Error!void {
+    const module_env = driver.all_module_envs[module_idx];
+    const closure_source_context: SourceContext = .{
+        .callable_inst = @enumFromInt(@intFromEnum(closure_callable_inst_id)),
+    };
+    const closure_thread = SemanticThread.trackedThread(closure_source_context);
+
+    for (module_env.store.sliceCaptures(closure_expr.captures)) |capture_idx| {
+        const capture = module_env.store.getCapture(capture_idx);
+        const capture_context_callable_inst = closureCaptureAnalysisCallableInst(
+            enclosing_source_context,
+            closure_callable_inst_id,
+        );
+        const capture_value_source = contextualizeCaptureValueSource(
+            capture_context_callable_inst,
+            (try captureValueSourceForClosurePattern(
+                driver,
+                result,
+                enclosing_source_context,
+                module_env,
+                module_idx,
+                capture.pattern_idx,
+            )) orelse continue,
+        );
+        const capture_mono = try resolveCaptureValueSourceMonotype(
+            driver,
+            result,
+            capture_context_callable_inst,
+            capture_value_source,
+            null,
+        );
+        if (capture_mono.isNone()) {
+            std.debug.panic(
+                "Lambdasolved invariant violated: missing exact capture monotype while seeding closure callable_inst={d} module={d} pattern={d}",
+                .{
+                    @intFromEnum(closure_callable_inst_id),
+                    module_idx,
+                    @intFromEnum(capture.pattern_idx),
+                },
+            );
+        }
+        try cm.recordTypeVarMonotypeForThread(
+            driver,
+            result,
+            closure_thread,
+            module_idx,
+            ModuleEnv.varFrom(capture.pattern_idx),
+            capture_mono.idx,
+            capture_mono.module_idx,
+        );
+        try cm.mergeContextPatternMonotype(
+            driver,
+            result,
+            cm.Result.contextPatternKey(closure_source_context, module_idx, capture.pattern_idx),
+            capture_mono,
+        );
+    }
+}
+
 pub fn seedClosureCapturePatternSources(
     driver: anytype,
     result: anytype,
@@ -1501,12 +1567,19 @@ pub fn collectCallableParamSpecsFromArgument(
     projections: *std.ArrayListUnmanaged(ValueProjection.Projection),
     out: anytype,
 ) std.mem.Allocator.Error!bool {
-    try propagateDemandedValueMonotypeToValueExpr(
+    try propagateDemandedValueMonotypeToExprRef(
         driver,
         result,
-        source_context,
-        module_idx,
-        expr_idx,
+        .{
+            .source_context = source_context,
+            .module_idx = module_idx,
+            .expr_idx = expr_idx,
+            .projections = try Lambdamono.addCallableParamProjectionEntries(
+                driver,
+                result,
+                projections.items,
+            ),
+        },
         monotype,
         monotype_module_idx,
     );
@@ -2313,6 +2386,14 @@ fn realizeCallableInst(
             else => unreachable,
         };
         try seedClosureCapturePatternSources(
+            driver,
+            result,
+            defining_source_context,
+            template.module_idx,
+            closure_expr,
+            callable_inst_id,
+        );
+        try seedClosureCapturePatternMonotypes(
             driver,
             result,
             defining_source_context,
@@ -5388,53 +5469,36 @@ pub fn writeExprCallableValue(
 ) std.mem.Allocator.Error!void {
     const semantics = try Lambdamono.ensureProgramExpr(driver, result, source_context, module_idx, expr_idx);
     const owns_callable_intro = result.getExprTemplateId(source_context, module_idx, expr_idx) != null;
-    const common = semantics.common().*;
-    const next_expr: Lambdamono.Expr = switch (callable_value) {
+    const next_callable: Lambdamono.ExprCallableSemantics = switch (callable_value) {
         .direct => |callable_inst_id| if (owns_callable_intro)
-            .{ .callable_intro = .{
-                .common = common,
-                .intro = .{
-                    .callable_value = callable_value,
-                    .callable_inst = callable_inst_id,
-                },
+            .{ .intro = .{
+                .callable_value = callable_value,
+                .callable_inst = callable_inst_id,
             } }
         else
-            .{ .callable_value = .{
-                .common = common,
-                .callable_value = callable_value,
-            } },
+            .{ .callable = callable_value },
         .packed_fn => |packed_fn| blk: {
             if (owns_callable_intro) {
-                switch (semantics.getCallable() orelse break :blk .{ .callable_value = .{
-                    .common = common,
-                    .callable_value = callable_value,
-                } }) {
+                switch (semantics.getCallable() orelse break :blk .{ .callable = callable_value }) {
                     .callable => |existing_callable_value| switch (existing_callable_value) {
-                        .direct => |callable_inst_id| break :blk .{ .callable_intro = .{
-                            .common = common,
-                            .intro = .{
+                        .direct => |callable_inst_id| break :blk .{ .intro = .{
                                 .callable_value = .{ .packed_fn = packed_fn },
                                 .callable_inst = callable_inst_id,
-                            },
-                        } },
+                            } },
                         .packed_fn => {},
                     },
-                    .intro => |existing_intro| break :blk .{ .callable_intro = .{
-                        .common = common,
-                        .intro = .{
+                    .intro => |existing_intro| break :blk .{ .intro = .{
                             .callable_value = .{ .packed_fn = packed_fn },
                             .callable_inst = existing_intro.callable_inst,
-                        },
-                    } },
+                        } },
                 }
             }
-            break :blk .{ .callable_value = .{
-                .common = common,
-                .callable_value = callable_value,
-            } };
+            break :blk .{ .callable = callable_value };
         },
     };
-    if (!std.meta.eql(semantics.*, next_expr)) semantics.* = next_expr;
+    if (!std.meta.eql(semantics.common().callable, next_callable)) {
+        semantics.commonMut().callable = next_callable;
+    }
 }
 
 pub fn writeCallableParamValue(

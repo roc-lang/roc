@@ -33,19 +33,6 @@ const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
 const Allocators = base.Allocators;
 
-/// Wrap a CIR expression in `Str.inspect(expr)` by creating an `e_run_low_level(.str_inspect, [expr])` node.
-fn wrapInStrInspect(module_env: *ModuleEnv, inner_expr: CIR.Expr.Idx) !CIR.Expr.Idx {
-    try module_env.store.ensureScratch();
-    const top = module_env.store.scratchExprTop();
-    try module_env.store.addScratchExpr(inner_expr);
-    const args_span = try module_env.store.exprSpanFrom(top);
-    const region = module_env.store.getExprRegion(inner_expr);
-    return module_env.addExpr(.{ .e_run_low_level = .{
-        .op = .str_inspect,
-        .args = args_span,
-    } }, region);
-}
-
 // Use std.testing.allocator for dev backend tests (tracks leaks)
 const test_allocator = std.testing.allocator;
 
@@ -72,7 +59,21 @@ const ParsedExprResources = struct {
     builtin_module: LoadedModule,
     builtin_indices: CIR.BuiltinIndices,
     builtin_types: BuiltinTypes,
+    owned_source: ?[]const u8 = null,
 };
+
+fn allocInspectedExprSource(allocator: std.mem.Allocator, source: []const u8) ![]u8 {
+    return std.fmt.allocPrint(allocator, "Str.inspect(({s}))", .{source});
+}
+
+fn parseAndCanonicalizeInspectedExpr(allocator: std.mem.Allocator, source: []const u8) !ParsedExprResources {
+    const inspected_source = try allocInspectedExprSource(allocator, source);
+    errdefer allocator.free(inspected_source);
+
+    var resources = try parseAndCanonicalizeExpr(allocator, inspected_source);
+    resources.owned_source = inspected_source;
+    return resources;
+}
 
 fn renderReportToMarkdownBuffer(buf: *std.array_list.Managed(u8), report: anytype) !void {
     buf.clearRetainingCapacity();
@@ -305,15 +306,34 @@ noinline fn executeAndFormat(
 
 /// Compare interpreter output against the dev, wasm, and llvm backend outputs.
 pub fn compareWithDevEvaluator(allocator: std.mem.Allocator, interpreter_str: []const u8, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) !void {
-    const inspect_expr = wrapInStrInspect(module_env, expr_idx) catch return error.EvaluatorMismatch;
+    _ = expr_idx;
+    _ = builtin_module_env;
 
-    const dev_str = try devEvaluatorStr(allocator, module_env, inspect_expr, builtin_module_env);
+    const inspected_resources = try parseAndCanonicalizeInspectedExpr(allocator, module_env.common.source);
+    defer cleanupParseAndCanonical(allocator, inspected_resources);
+
+    const dev_str = try devEvaluatorStr(
+        allocator,
+        inspected_resources.module_env,
+        inspected_resources.expr_idx,
+        inspected_resources.builtin_module.env,
+    );
     defer allocator.free(dev_str);
 
-    const wasm_str = try wasmEvaluatorStr(allocator, module_env, inspect_expr, builtin_module_env);
+    const wasm_str = try wasmEvaluatorStr(
+        allocator,
+        inspected_resources.module_env,
+        inspected_resources.expr_idx,
+        inspected_resources.builtin_module.env,
+    );
     defer allocator.free(wasm_str);
 
-    const llvm_str = try llvmEvaluatorStr(allocator, module_env, inspect_expr, builtin_module_env);
+    const llvm_str = try llvmEvaluatorStr(
+        allocator,
+        inspected_resources.module_env,
+        inspected_resources.expr_idx,
+        inspected_resources.builtin_module.env,
+    );
     defer allocator.free(llvm_str);
 
     if (!numericStringsEqual(interpreter_str, dev_str) or
@@ -357,9 +377,18 @@ pub fn compareWithLlvmEvaluator(
     expr_idx: CIR.Expr.Idx,
     builtin_module_env: *const ModuleEnv,
 ) !void {
-    const inspect_expr = wrapInStrInspect(module_env, expr_idx) catch return error.EvaluatorMismatch;
+    _ = expr_idx;
+    _ = builtin_module_env;
 
-    const llvm_str = try llvmEvaluatorStr(allocator, module_env, inspect_expr, builtin_module_env);
+    const inspected_resources = try parseAndCanonicalizeInspectedExpr(allocator, module_env.common.source);
+    defer cleanupParseAndCanonical(allocator, inspected_resources);
+
+    const llvm_str = try llvmEvaluatorStr(
+        allocator,
+        inspected_resources.module_env,
+        inspected_resources.expr_idx,
+        inspected_resources.builtin_module.env,
+    );
     defer allocator.free(llvm_str);
 
     if (numericStringsEqual(interpreter_str, llvm_str)) return;
@@ -401,15 +430,34 @@ fn compareFloatWithBackends(
     builtin_module_env: *const ModuleEnv,
     comptime T: type,
 ) !void {
-    const inspect_expr = wrapInStrInspect(module_env, expr_idx) catch return error.EvaluatorMismatch;
+    _ = expr_idx;
+    _ = builtin_module_env;
 
-    const dev_str = try devEvaluatorStr(allocator, module_env, inspect_expr, builtin_module_env);
+    const inspected_resources = try parseAndCanonicalizeInspectedExpr(allocator, module_env.common.source);
+    defer cleanupParseAndCanonical(allocator, inspected_resources);
+
+    const dev_str = try devEvaluatorStr(
+        allocator,
+        inspected_resources.module_env,
+        inspected_resources.expr_idx,
+        inspected_resources.builtin_module.env,
+    );
     defer allocator.free(dev_str);
 
-    const wasm_str = try wasmEvaluatorStr(allocator, module_env, inspect_expr, builtin_module_env);
+    const wasm_str = try wasmEvaluatorStr(
+        allocator,
+        inspected_resources.module_env,
+        inspected_resources.expr_idx,
+        inspected_resources.builtin_module.env,
+    );
     defer allocator.free(wasm_str);
 
-    const llvm_str = try llvmEvaluatorStr(allocator, module_env, inspect_expr, builtin_module_env);
+    const llvm_str = try llvmEvaluatorStr(
+        allocator,
+        inspected_resources.module_env,
+        inspected_resources.expr_idx,
+        inspected_resources.builtin_module.env,
+    );
     defer allocator.free(llvm_str);
 
     if (!floatStringsEquivalent(T, interpreter_str, dev_str) or
@@ -553,10 +601,18 @@ pub fn lirInterpreterEval(allocator: std.mem.Allocator, module_env: *ModuleEnv, 
 /// The interpreter lowers CIR → MIR → LIR → RC, then interprets the LIR directly.
 /// Returns an error if any stage fails (lowering, evaluation, or formatting).
 pub fn lirInterpreterStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) ![]const u8 {
-    // Wrap in Str.inspect — same approach as devEvaluatorStr/wasmEvaluatorStr.
-    // This lets Roc's own inspect implementation handle field names, tag names, etc.
-    const inspect_expr = try wrapInStrInspect(module_env, expr_idx);
-    return lirInterpreterInspectedStr(allocator, module_env, inspect_expr, builtin_module_env);
+    _ = expr_idx;
+    _ = builtin_module_env;
+
+    const inspected_resources = try parseAndCanonicalizeInspectedExpr(allocator, module_env.common.source);
+    defer cleanupParseAndCanonical(allocator, inspected_resources);
+
+    return lirInterpreterInspectedStr(
+        allocator,
+        inspected_resources.module_env,
+        inspected_resources.expr_idx,
+        inspected_resources.builtin_module.env,
+    );
 }
 
 /// Evaluate an already-Str.inspect-wrapped expression using the LIR interpreter.
@@ -2794,11 +2850,10 @@ pub fn runExpectUnit(src: []const u8) !void {
 /// Run an expression through the dev evaluator only and assert on the formatted string output.
 /// The dev evaluator currently expects expressions to be wrapped in Str.inspect before execution.
 pub fn runDevOnlyExpectStr(src: []const u8, expected_str: []const u8) !void {
-    const resources = try parseAndCanonicalizeExpr(test_allocator, src);
+    const resources = try parseAndCanonicalizeInspectedExpr(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
 
-    const inspect_expr = wrapInStrInspect(resources.module_env, resources.expr_idx) catch return error.EvaluatorMismatch;
-    const dev_str = devEvaluatorStr(test_allocator, resources.module_env, inspect_expr, resources.builtin_module.env) catch |err| {
+    const dev_str = devEvaluatorStr(test_allocator, resources.module_env, resources.expr_idx, resources.builtin_module.env) catch |err| {
         std.debug.print("\nDev evaluator failed for '{s}': {}\n", .{ src, err });
         return err;
     };
@@ -3024,6 +3079,7 @@ fn parseAndCanonicalizeExprInternal(
             .builtin_module = builtin_module,
             .builtin_indices = builtin_indices,
             .builtin_types = builtin_types,
+            .owned_source = null,
         };
     };
     const canonical_expr_idx = canonical_expr.get_idx();
@@ -3072,6 +3128,7 @@ fn parseAndCanonicalizeExprInternal(
         .builtin_module = builtin_module,
         .builtin_indices = builtin_indices,
         .builtin_types = builtin_types,
+        .owned_source = null,
     };
 }
 
@@ -3094,6 +3151,9 @@ pub fn cleanupParseAndCanonical(allocator: std.mem.Allocator, resources: anytype
     resources.parse_ast.deinit();
     // module_env.source is not owned by module_env - don't free it
     resources.module_env.deinit();
+    if (resources.owned_source) |owned_source| {
+        allocator.free(owned_source);
+    }
     allocator.destroy(resources.checker);
     allocator.destroy(resources.can);
     allocator.destroy(resources.module_env);

@@ -1042,18 +1042,11 @@ pub const ExprCommon = struct {
     child_exprs: ExprIdSpan = .empty(),
     child_stmts: StmtIdSpan = .empty(),
     origin: ValueOrigin = .self,
+    callable: ?ExprCallableSemantics = null,
 };
 
 pub const Expr = union(enum) {
     plain: ExprCommon,
-    callable_value: struct {
-        common: ExprCommon,
-        callable_value: CallableValue,
-    },
-    callable_intro: struct {
-        common: ExprCommon,
-        intro: CallableIntro,
-    },
     direct_call: struct {
         common: ExprCommon,
         callable_inst: CallableInstId,
@@ -1086,8 +1079,6 @@ pub const Expr = union(enum) {
     pub fn common(self: *const Expr) *const ExprCommon {
         return switch (self.*) {
             .plain => |*plain_common| plain_common,
-            .callable_value => |*value| &value.common,
-            .callable_intro => |*intro| &intro.common,
             .direct_call => |*call| &call.common,
             .indirect_call => |*call| &call.common,
             .low_level_call => |*call| &call.common,
@@ -1101,8 +1092,6 @@ pub const Expr = union(enum) {
     pub fn commonMut(self: *Expr) *ExprCommon {
         return switch (self.*) {
             .plain => |*plain_common| plain_common,
-            .callable_value => |*value| &value.common,
-            .callable_intro => |*intro| &intro.common,
             .direct_call => |*call| &call.common,
             .indirect_call => |*call| &call.common,
             .low_level_call => |*call| &call.common,
@@ -1114,26 +1103,21 @@ pub const Expr = union(enum) {
     }
 
     pub fn getCallableValue(self: *const Expr) ?CallableValue {
-        return switch (self.*) {
-            .callable_value => |value| value.callable_value,
-            .callable_intro => |intro| intro.intro.callable_value,
-            else => null,
+        return switch (self.common().callable orelse return null) {
+            .callable => |callable_value| callable_value,
+            .intro => |intro| intro.callable_value,
         };
     }
 
     pub fn getCallableIntro(self: *const Expr) ?CallableIntro {
-        return switch (self.*) {
-            .callable_intro => |intro| intro.intro,
-            else => null,
+        return switch (self.common().callable orelse return null) {
+            .intro => |intro| intro,
+            .callable => null,
         };
     }
 
     pub fn getCallable(self: *const Expr) ?ExprCallableSemantics {
-        return switch (self.*) {
-            .callable_value => |value| .{ .callable = value.callable_value },
-            .callable_intro => |intro| .{ .intro = intro.intro },
-            else => null,
-        };
+        return self.common().callable;
     }
 
     pub fn getDirectCall(self: *const Expr) ?CallableInstId {
@@ -1799,7 +1783,7 @@ fn ProgramAssembler(comptime ResultPtr: type, comptime Driver: type) type {
             var callable_inst_idx: usize = 0;
             while (callable_inst_idx < self.result.lambdamono.callable_insts.items.len) : (callable_inst_idx += 1) {
                 const callable_inst_id: CallableInstId = @enumFromInt(callable_inst_idx);
-                try requireCallableInstRealized(self.driver, self.result, callable_inst_id);
+                if (!callableInstHasRealizedRuntimeExpr(self.result, callable_inst_id)) continue;
                 const callable_inst = self.result.getCallableInst(callable_inst_id).*;
                 const template = self.result.getCallableTemplate(callable_inst.template);
                 switch (template.kind) {

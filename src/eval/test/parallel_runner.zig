@@ -500,11 +500,16 @@ const ParsedResources = struct {
     builtin_types: BuiltinTypes,
     /// When false, builtins are borrowed from PreloadedBuiltins and must not be freed.
     owns_builtins: bool = true,
+    owned_source: ?[]const u8 = null,
     // Frontend phase timings
     parse_ns: u64 = 0,
     canonicalize_ns: u64 = 0,
     typecheck_ns: u64 = 0,
 };
+
+fn allocInspectedExprSource(allocator: std.mem.Allocator, source: []const u8) ![]u8 {
+    return std.fmt.allocPrint(allocator, "Str.inspect(({s}))", .{source});
+}
 
 fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8, preloaded: *const PreloadedBuiltins) !ParsedResources {
     // Phase 1: Parse
@@ -576,10 +581,20 @@ fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8, pr
         .builtin_indices = builtin_indices,
         .builtin_types = bts,
         .owns_builtins = false,
+        .owned_source = null,
         .parse_ns = parse_elapsed,
         .canonicalize_ns = can_elapsed,
         .typecheck_ns = check_elapsed,
     };
+}
+
+fn parseAndCanonicalizeInspectedExpr(allocator: std.mem.Allocator, source: []const u8, preloaded: *const PreloadedBuiltins) !ParsedResources {
+    const inspected_source = try allocInspectedExprSource(allocator, source);
+    errdefer allocator.free(inspected_source);
+
+    var resources = try parseAndCanonicalizeExpr(allocator, inspected_source, preloaded);
+    resources.owned_source = inspected_source;
+    return resources;
 }
 
 fn cleanupResources(allocator: std.mem.Allocator, resources: ParsedResources) void {
@@ -591,24 +606,12 @@ fn cleanupResources(allocator: std.mem.Allocator, resources: ParsedResources) vo
     resources.can.deinit();
     resources.parse_ast.deinit();
     resources.module_env.deinit();
+    if (resources.owned_source) |owned_source| {
+        allocator.free(owned_source);
+    }
     allocator.destroy(resources.checker);
     allocator.destroy(resources.can);
     allocator.destroy(resources.module_env);
-}
-
-//
-// Str.inspect wrapping — converts CIR expression to Str.inspect(expr)
-//
-
-fn wrapInStrInspect(module_env: *ModuleEnv, inner_expr: CIR.Expr.Idx) !CIR.Expr.Idx {
-    const top = module_env.store.scratchExprTop();
-    try module_env.store.addScratchExpr(inner_expr);
-    const args_span = try module_env.store.exprSpanFrom(top);
-    const region = module_env.store.getExprRegion(inner_expr);
-    return module_env.addExpr(.{ .e_run_low_level = .{
-        .op = .str_inspect,
-        .args = args_span,
-    } }, region);
 }
 
 //
@@ -677,16 +680,13 @@ fn runSingleTestInner(allocator: std.mem.Allocator, tc: TestCase, preloaded: *co
 fn runValueTest(allocator: std.mem.Allocator, src: []const u8, expected: TestCase.Expected, skip: TestCase.Skip, preloaded: *const PreloadedBuiltins) !TestOutcome {
     const resources = try parseAndCanonicalizeExpr(allocator, src, preloaded);
     defer cleanupResources(allocator, resources);
+    const inspected_resources = try parseAndCanonicalizeInspectedExpr(allocator, src, preloaded);
+    defer cleanupResources(allocator, inspected_resources);
 
     const timings = EvalTimings{
         .parse_ns = resources.parse_ns,
         .canonicalize_ns = resources.canonicalize_ns,
         .typecheck_ns = resources.typecheck_ns,
-    };
-
-    // Run all non-skipped backends via Str.inspect and compare
-    const inspect_expr = wrapInStrInspect(resources.module_env, resources.expr_idx) catch {
-        return .{ .status = .fail, .message = "failed to wrap in Str.inspect", .timings = timings };
     };
 
     const display_expected: ?[]const u8 = expected.format(allocator);
@@ -718,7 +718,12 @@ fn runValueTest(allocator: std.mem.Allocator, src: []const u8, expected: TestCas
 
         trace.log("starting backend {s} for source {s}", .{ BACKEND_NAMES[i], src });
         var timer = Timer.start() catch unreachable;
-        const fork_result = forkAndEval(eval_fns[i], resources.module_env, inspect_expr, resources.builtin_module.env);
+        const fork_result = forkAndEval(
+            eval_fns[i],
+            inspected_resources.module_env,
+            inspected_resources.expr_idx,
+            inspected_resources.builtin_module.env,
+        );
         const dur = timer.read();
         trace.log("finished backend {s} for source {s} in {d}ns", .{ BACKEND_NAMES[i], src, dur });
 

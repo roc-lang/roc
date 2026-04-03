@@ -11682,7 +11682,20 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .ret => |r| {
                     const value_loc = try self.emitValueLocal(r.value);
                     if (value_loc == .noreturn) return;
-                    const ret_layout = self.valueLayout(r.value);
+                    const value_layout = self.valueLayout(r.value);
+                    const ret_layout = self.early_return_ret_layout orelse value_layout;
+                    if (builtin.mode == .Debug and
+                        !(try self.layoutsStructurallyCompatible(ret_layout, value_layout)))
+                    {
+                        std.debug.panic(
+                            "Dev/codegen invariant violated: proc return local layout {} did not match proc ret_layout {} at stmt {d}",
+                            .{
+                                @intFromEnum(value_layout),
+                                @intFromEnum(ret_layout),
+                                if (self.current_stmt_id) |current_stmt_id| @intFromEnum(current_stmt_id) else std.math.maxInt(u32),
+                            },
+                        );
+                    }
                     const preserved_return_loc = self.normalizeResultLocForLayout(value_loc, ret_layout);
 
                     if (self.ret_ptr_slot) |ret_slot| {
