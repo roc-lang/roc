@@ -577,7 +577,8 @@ pub const Pass = struct {
             while (it.next()) |entry| {
                 const platform_var = entry.key_ptr.*;
                 const caller_var = entry.value_ptr.*;
-                const caller_mono = try self.monotypeFromTypeVarInStore(
+                const caller_mono = try ContextMono.monotypeFromTypeVarInStore(
+                    self,
                     result,
                     caller_module_idx,
                     caller_types,
@@ -3509,63 +3510,6 @@ const MaterializeCallableValueFailure = enum {
         _ = try self.requireCallableInst(result, templateSourceContext(result.getCallableTemplate(template_id).*) , template_id, fn_monotype, source_module_idx);
     }
 
-    fn resolveTypeVarMonotypeWithBindings(
-        self: *Pass,
-        result: *Result,
-        module_idx: u32,
-        store_types: *const types.Store,
-        var_: types.Var,
-        bindings: *std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
-    ) Allocator.Error!Monotype.Idx {
-        var exact_specializations = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
-        defer exact_specializations.deinit();
-
-        var bindings_it = bindings.iterator();
-        while (bindings_it.next()) |entry| {
-            if (entry.key_ptr.module_idx != module_idx) continue;
-
-            if (exact_specializations.get(entry.key_ptr.type_var)) |existing| {
-                if (entry.value_ptr.module_idx != module_idx or
-                    !try ContextMono.monotypesStructurallyEqual(self, result, existing, entry.value_ptr.idx))
-                {
-                    if (std.debug.runtime_safety) {
-                        std.debug.panic(
-                            "Pipeline: conflicting exact binding for type var root {d} in module {d}",
-                            .{ @intFromEnum(entry.key_ptr.type_var), module_idx },
-                        );
-                    }
-                    unreachable;
-                }
-                continue;
-            }
-
-            try exact_specializations.put(entry.key_ptr.type_var, entry.value_ptr.idx);
-        }
-
-        try self.seedRecordedTypeScopeSpecializations(result, module_idx, &exact_specializations);
-
-        var nominal_cycle_breakers = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
-        defer nominal_cycle_breakers.deinit();
-
-        var scratches = try Monotype.Store.Scratches.init(self.allocator);
-        defer scratches.deinit();
-
-        const module_env = self.all_module_envs[module_idx];
-        scratches.ident_store = module_env.getIdentStoreConst();
-        scratches.module_env = module_env;
-        scratches.module_idx = module_idx;
-        scratches.all_module_envs = self.all_module_envs;
-        return result.context_mono.monotype_store.fromTypeVarExact(
-            self.allocator,
-            store_types,
-            var_,
-            module_env.idents,
-            &exact_specializations,
-            &nominal_cycle_breakers,
-            &scratches,
-        );
-    }
-
     fn remapMonotypeBetweenModules(
         self: *Pass,
         result: *Result,
@@ -3828,29 +3772,6 @@ const MaterializeCallableValueFailure = enum {
         }
     }
 
-    fn seedRecordedTypeScopeSpecializations(
-        _: *Pass,
-        result: *Result,
-        module_idx: u32,
-        bindings: *std.AutoHashMap(types.Var, Monotype.Idx),
-    ) Allocator.Error!void {
-        var it = result.context_mono.type_scope_monotypes.iterator();
-        while (it.next()) |entry| {
-            if (entry.key_ptr.module_idx != module_idx) continue;
-            if (entry.value_ptr.module_idx != module_idx) {
-                std.debug.panic(
-                    "Pipeline invariant violated: type-scope monotype module mismatch key_module={d} value_module={d} type_var={d}",
-                    .{
-                        module_idx,
-                        entry.value_ptr.module_idx,
-                        @intFromEnum(entry.key_ptr.type_var),
-                    },
-                );
-            }
-            try bindings.put(entry.key_ptr.type_var, entry.value_ptr.idx);
-        }
-    }
-
     fn flatRecordRepresentsEmpty(store_types: *const types.Store, record: types.Record) bool {
         var current_row = record;
 
@@ -3878,40 +3799,6 @@ const MaterializeCallableValueFailure = enum {
                 }
             }
         }
-    }
-
-    fn monotypeFromTypeVarInStore(
-        self: *Pass,
-        result: *Result,
-        module_idx: u32,
-        store_types: *const types.Store,
-        var_: types.Var,
-    ) Allocator.Error!Monotype.Idx {
-        var specializations = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
-        defer specializations.deinit();
-
-        try self.seedRecordedTypeScopeSpecializations(result, module_idx, &specializations);
-
-        var nominal_cycle_breakers = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
-        defer nominal_cycle_breakers.deinit();
-
-        var scratches = try Monotype.Store.Scratches.init(self.allocator);
-        defer scratches.deinit();
-
-        const module_env = self.all_module_envs[module_idx];
-        scratches.ident_store = module_env.getIdentStoreConst();
-        scratches.module_env = module_env;
-        scratches.module_idx = module_idx;
-        scratches.all_module_envs = self.all_module_envs;
-        return result.context_mono.monotype_store.fromTypeVarExact(
-            self.allocator,
-            store_types,
-            var_,
-            module_env.idents,
-            &specializations,
-            &nominal_cycle_breakers,
-            &scratches,
-        );
     }
 
     fn bindFlatTypeMonotypesInStore(
@@ -4226,7 +4113,8 @@ const MaterializeCallableValueFailure = enum {
                                         module_idx,
                                     );
 
-                                    const method_func_mono = try self.resolveTypeVarMonotypeWithBindings(
+                                    const method_func_mono = try ContextMono.resolveTypeVarMonotypeWithBindings(
+                                        self,
                                         result,
                                         method_info.module_idx,
                                         &method_info.target_env.types,

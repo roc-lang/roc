@@ -1047,6 +1047,120 @@ pub fn seedRecordedContextTypeVarSpecializations(
     }
 }
 
+pub fn seedRecordedTypeScopeSpecializations(
+    _: anytype,
+    result: anytype,
+    module_idx: u32,
+    bindings: *std.AutoHashMap(types.Var, Monotype.Idx),
+) Allocator.Error!void {
+    var it = result.context_mono.type_scope_monotypes.iterator();
+    while (it.next()) |entry| {
+        if (entry.key_ptr.module_idx != module_idx) continue;
+        if (entry.value_ptr.module_idx != module_idx) {
+            std.debug.panic(
+                "ContextMono invariant violated: type-scope monotype module mismatch key_module={d} value_module={d} type_var={d}",
+                .{
+                    module_idx,
+                    entry.value_ptr.module_idx,
+                    @intFromEnum(entry.key_ptr.type_var),
+                },
+            );
+        }
+        try bindings.put(entry.key_ptr.type_var, entry.value_ptr.idx);
+    }
+}
+
+pub fn monotypeFromTypeVarInStore(
+    driver: anytype,
+    result: anytype,
+    module_idx: u32,
+    store_types: *const types.Store,
+    var_: types.Var,
+) Allocator.Error!Monotype.Idx {
+    var specializations = std.AutoHashMap(types.Var, Monotype.Idx).init(driver.allocator);
+    defer specializations.deinit();
+
+    try seedRecordedTypeScopeSpecializations(driver, result, module_idx, &specializations);
+
+    var nominal_cycle_breakers = std.AutoHashMap(types.Var, Monotype.Idx).init(driver.allocator);
+    defer nominal_cycle_breakers.deinit();
+
+    var scratches = try Monotype.Store.Scratches.init(driver.allocator);
+    defer scratches.deinit();
+
+    const module_env = driver.all_module_envs[module_idx];
+    scratches.ident_store = module_env.getIdentStoreConst();
+    scratches.module_env = module_env;
+    scratches.module_idx = module_idx;
+    scratches.all_module_envs = driver.all_module_envs;
+    return result.context_mono.monotype_store.fromTypeVarExact(
+        driver.allocator,
+        store_types,
+        var_,
+        module_env.idents,
+        &specializations,
+        &nominal_cycle_breakers,
+        &scratches,
+    );
+}
+
+pub fn resolveTypeVarMonotypeWithBindings(
+    driver: anytype,
+    result: anytype,
+    module_idx: u32,
+    store_types: *const types.Store,
+    var_: types.Var,
+    bindings: *std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
+) Allocator.Error!Monotype.Idx {
+    var exact_specializations = std.AutoHashMap(types.Var, Monotype.Idx).init(driver.allocator);
+    defer exact_specializations.deinit();
+
+    var bindings_it = bindings.iterator();
+    while (bindings_it.next()) |entry| {
+        if (entry.key_ptr.module_idx != module_idx) continue;
+
+        if (exact_specializations.get(entry.key_ptr.type_var)) |existing| {
+            if (entry.value_ptr.module_idx != module_idx or
+                !try monotypesStructurallyEqual(driver, result, existing, entry.value_ptr.idx))
+            {
+                if (std.debug.runtime_safety) {
+                    std.debug.panic(
+                        "ContextMono: conflicting exact binding for type var root {d} in module {d}",
+                        .{ @intFromEnum(entry.key_ptr.type_var), module_idx },
+                    );
+                }
+                unreachable;
+            }
+            continue;
+        }
+
+        try exact_specializations.put(entry.key_ptr.type_var, entry.value_ptr.idx);
+    }
+
+    try seedRecordedTypeScopeSpecializations(driver, result, module_idx, &exact_specializations);
+
+    var nominal_cycle_breakers = std.AutoHashMap(types.Var, Monotype.Idx).init(driver.allocator);
+    defer nominal_cycle_breakers.deinit();
+
+    var scratches = try Monotype.Store.Scratches.init(driver.allocator);
+    defer scratches.deinit();
+
+    const module_env = driver.all_module_envs[module_idx];
+    scratches.ident_store = module_env.getIdentStoreConst();
+    scratches.module_env = module_env;
+    scratches.module_idx = module_idx;
+    scratches.all_module_envs = driver.all_module_envs;
+    return result.context_mono.monotype_store.fromTypeVarExact(
+        driver.allocator,
+        store_types,
+        var_,
+        module_env.idents,
+        &exact_specializations,
+        &nominal_cycle_breakers,
+        &scratches,
+    );
+}
+
 pub fn monotypeFromTypeVarInSourceContext(
     driver: anytype,
     result: anytype,
@@ -1081,7 +1195,7 @@ pub fn monotypeFromTypeVarInSourceContextWithExtraBindings(
     defer exact_specializations.deinit();
 
     try seedRecordedContextTypeVarSpecializations(driver, result, source_context, module_idx, &exact_specializations);
-    try driver.seedRecordedTypeScopeSpecializations(result, module_idx, &exact_specializations);
+    try seedRecordedTypeScopeSpecializations(driver, result, module_idx, &exact_specializations);
 
     var extra_it = extra_bindings.iterator();
     while (extra_it.next()) |entry| {
@@ -1154,7 +1268,7 @@ pub fn monotypeFromTypeVarWithLanguageDefaultingInSourceContextWithExtraBindings
     defer exact_specializations.deinit();
 
     try seedRecordedContextTypeVarSpecializations(driver, result, source_context, module_idx, &exact_specializations);
-    try driver.seedRecordedTypeScopeSpecializations(result, module_idx, &exact_specializations);
+    try seedRecordedTypeScopeSpecializations(driver, result, module_idx, &exact_specializations);
 
     var extra_it = extra_bindings.iterator();
     while (extra_it.next()) |entry| {
