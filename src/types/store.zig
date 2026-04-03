@@ -29,6 +29,7 @@ const FlatType = types.FlatType;
 const NominalType = types.NominalType;
 const Record = types.Record;
 const StaticDispatchConstraint = types.StaticDispatchConstraint;
+const StaticDispatchSiteRequirement = types.StaticDispatchSiteRequirement;
 
 const SERIALIZATION_ALIGNMENT = collections.SERIALIZATION_ALIGNMENT;
 
@@ -88,6 +89,7 @@ pub const Store = struct {
     record_fields: RecordFieldSafeMultiList,
     tags: TagSafeMultiList,
     static_dispatch_constraints: StaticDispatchConstraint.SafeList,
+    static_dispatch_site_requirements: StaticDispatchSiteRequirement.SafeList,
 
     /// Count of flex vars that currently have a from_numeral constraint.
     /// Used to skip the finalization walk when no numeric defaults need resolving.
@@ -126,6 +128,7 @@ pub const Store = struct {
             .record_fields = try RecordFieldSafeMultiList.initCapacity(gpa, child_capacity),
             .tags = try TagSafeMultiList.initCapacity(gpa, child_capacity),
             .static_dispatch_constraints = try StaticDispatchConstraint.SafeList.initCapacity(gpa, child_capacity),
+            .static_dispatch_site_requirements = try StaticDispatchSiteRequirement.SafeList.initCapacity(gpa, child_capacity),
             .from_numeral_flex_count = 0,
         };
     }
@@ -155,6 +158,7 @@ pub const Store = struct {
         self.record_fields.deinit(self.gpa);
         self.tags.deinit(self.gpa);
         self.static_dispatch_constraints.deinit(self.gpa);
+        self.static_dispatch_site_requirements.deinit(self.gpa);
     }
 
     /// Return the number of type variables in the store.
@@ -180,6 +184,8 @@ pub const Store = struct {
         tags_len: usize,
         /// Length of static_dispatch_constraints list at snapshot time
         static_dispatch_constraints_len: usize,
+        /// Length of static_dispatch_site_requirements list at snapshot time
+        static_dispatch_site_requirements_len: usize,
 
         /// Free the memory held by this snapshot
         pub fn deinit(self: *Snapshot, gpa: Allocator) void {
@@ -198,6 +204,7 @@ pub const Store = struct {
             .record_fields_len = self.record_fields.items.len,
             .tags_len = self.tags.items.len,
             .static_dispatch_constraints_len = self.static_dispatch_constraints.items.items.len,
+            .static_dispatch_site_requirements_len = self.static_dispatch_site_requirements.items.items.len,
         };
     }
 
@@ -220,6 +227,7 @@ pub const Store = struct {
         self.record_fields.items.shrinkRetainingCapacity(snap.record_fields_len);
         self.tags.items.shrinkRetainingCapacity(snap.tags_len);
         self.static_dispatch_constraints.items.shrinkRetainingCapacity(snap.static_dispatch_constraints_len);
+        self.static_dispatch_site_requirements.items.shrinkRetainingCapacity(snap.static_dispatch_site_requirements_len);
     }
 
     // fresh variables //
@@ -598,6 +606,10 @@ pub const Store = struct {
         return try self.static_dispatch_constraints.appendSlice(self.gpa, s);
     }
 
+    pub fn appendStaticDispatchSiteRequirements(self: *Self, s: []const StaticDispatchSiteRequirement) std.mem.Allocator.Error!StaticDispatchSiteRequirement.SafeList.Range {
+        return try self.static_dispatch_site_requirements.appendSlice(self.gpa, s);
+    }
+
     // sub list getters //
 
     /// Given a range, get a slice of vars from the backing array
@@ -637,6 +649,15 @@ pub const Store = struct {
 
     pub fn getStaticDispatchConstraintAt(self: *const Self, idx: usize) StaticDispatchConstraint {
         return self.static_dispatch_constraints.items.items[idx];
+    }
+
+    pub fn findStaticDispatchSiteRequirement(self: *const Self, expr_var: Var, method_name: base.Ident.Idx) ?StaticDispatchSiteRequirement {
+        for (self.static_dispatch_site_requirements.items.items) |requirement| {
+            if (requirement.expr_var == expr_var and requirement.method_name.eql(method_name)) {
+                return requirement;
+            }
+        }
+        return null;
     }
 
     // helpers - alias types //
@@ -875,6 +896,7 @@ pub const Store = struct {
         record_fields: RecordFieldSafeMultiList.Serialized,
         tags: TagSafeMultiList.Serialized,
         static_dispatch_constraints: StaticDispatchConstraint.SafeList.Serialized,
+        static_dispatch_site_requirements: StaticDispatchSiteRequirement.SafeList.Serialized,
 
         /// Serialize a Store into this Serialized struct, appending data to the writer
         pub fn serialize(
@@ -890,6 +912,7 @@ pub const Store = struct {
             try self.record_fields.serialize(&store.record_fields, allocator, writer);
             try self.tags.serialize(&store.tags, allocator, writer);
             try self.static_dispatch_constraints.serialize(&store.static_dispatch_constraints, allocator, writer);
+            try self.static_dispatch_site_requirements.serialize(&store.static_dispatch_site_requirements, allocator, writer);
 
             // Set gpa to all zeros; the space needs to be here,
             // but the value will be set separately during deserialization.
@@ -909,6 +932,7 @@ pub const Store = struct {
                 .record_fields = self.record_fields.deserializeInto(base_addr),
                 .tags = self.tags.deserializeInto(base_addr),
                 .static_dispatch_constraints = self.static_dispatch_constraints.deserializeInto(base_addr),
+                .static_dispatch_site_requirements = self.static_dispatch_site_requirements.deserializeInto(base_addr),
                 .from_numeral_flex_count = 0,
             };
         }
@@ -924,6 +948,7 @@ pub const Store = struct {
                 .record_fields = try self.record_fields.deserializeWithCopy(base_addr, gpa),
                 .tags = try self.tags.deserializeWithCopy(base_addr, gpa),
                 .static_dispatch_constraints = try self.static_dispatch_constraints.deserializeWithCopy(base_addr, gpa),
+                .static_dispatch_site_requirements = try self.static_dispatch_site_requirements.deserializeWithCopy(base_addr, gpa),
                 .from_numeral_flex_count = 0,
             };
         }
@@ -947,6 +972,7 @@ pub const Store = struct {
             .record_fields = (try self.record_fields.serialize(allocator, writer)).*,
             .tags = (try self.tags.serialize(allocator, writer)).*,
             .static_dispatch_constraints = (try self.static_dispatch_constraints.serialize(allocator, writer)).*,
+            .static_dispatch_site_requirements = (try self.static_dispatch_site_requirements.serialize(allocator, writer)).*,
             .from_numeral_flex_count = 0,
         };
 
@@ -961,6 +987,7 @@ pub const Store = struct {
         self.record_fields.relocate(offset);
         self.tags.relocate(offset);
         self.static_dispatch_constraints.relocate(offset);
+        self.static_dispatch_site_requirements.relocate(offset);
     }
 
     /// Calculate the size needed to serialize this Store
@@ -971,9 +998,10 @@ pub const Store = struct {
         const tags_size = self.tags.serializedSize();
         const vars_size = self.vars.serializedSize();
         const static_dispatch_constraints_size = self.static_dispatch_constraints.serializedSize();
+        const static_dispatch_site_requirements_size = self.static_dispatch_site_requirements.serializedSize();
 
         // Add alignment padding for each component
-        var total_size: usize = @sizeOf(u32) * 6; // size headers
+        var total_size: usize = @sizeOf(u32) * 7; // size headers
         total_size = std.mem.alignForward(usize, total_size, SERIALIZATION_ALIGNMENT);
 
         total_size += slots_size;
@@ -994,13 +1022,16 @@ pub const Store = struct {
         total_size += static_dispatch_constraints_size;
         total_size = std.mem.alignForward(usize, total_size, SERIALIZATION_ALIGNMENT);
 
+        total_size += static_dispatch_site_requirements_size;
+        total_size = std.mem.alignForward(usize, total_size, SERIALIZATION_ALIGNMENT);
+
         // Align to SERIALIZATION_ALIGNMENT to maintain alignment for subsequent data
         return std.mem.alignForward(usize, total_size, SERIALIZATION_ALIGNMENT.toByteUnits());
     }
 
     /// Deserialize a Store from the provided buffer
     pub fn deserializeFrom(buffer: []const u8, allocator: Allocator) !Self {
-        if (buffer.len < @sizeOf(u32) * 6) return error.BufferTooSmall;
+        if (buffer.len < @sizeOf(u32) * 7) return error.BufferTooSmall;
 
         var offset: usize = 0;
 
@@ -1021,6 +1052,9 @@ pub const Store = struct {
         offset += @sizeOf(u32);
 
         const static_dispatch_constraints_size = @as(*const u32, @ptrCast(@alignCast(buffer.ptr + offset))).*;
+        offset += @sizeOf(u32);
+
+        const static_dispatch_site_requirements_size = @as(*const u32, @ptrCast(@alignCast(buffer.ptr + offset))).*;
         offset += @sizeOf(u32);
 
         // Deserialize data
@@ -1054,6 +1088,11 @@ pub const Store = struct {
         const static_dispatch_constraints = try StaticDispatchConstraint.SafeList.deserializeFrom(static_dispatch_constraints_buffer, allocator);
         offset += static_dispatch_constraints_size;
 
+        offset = std.mem.alignForward(usize, offset, SERIALIZATION_ALIGNMENT.toByteUnits());
+        const static_dispatch_site_requirements_buffer = @as([]align(SERIALIZATION_ALIGNMENT.toByteUnits()) const u8, @alignCast(buffer[offset .. offset + static_dispatch_site_requirements_size]));
+        const static_dispatch_site_requirements = try StaticDispatchSiteRequirement.SafeList.deserializeFrom(static_dispatch_site_requirements_buffer, allocator);
+        offset += static_dispatch_site_requirements_size;
+
         return Self{
             .gpa = allocator,
             .slots = slots,
@@ -1062,6 +1101,7 @@ pub const Store = struct {
             .tags = tags,
             .vars = vars,
             .static_dispatch_constraints = static_dispatch_constraints,
+            .static_dispatch_site_requirements = static_dispatch_site_requirements,
         };
     }
 };

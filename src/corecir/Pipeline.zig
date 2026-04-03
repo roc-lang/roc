@@ -138,7 +138,6 @@ const TypeScopeContext = struct {
     caller_module_idx: u32,
     scope: *const types.TypeScope,
 };
-const SemanticThread = Lambdasolved.SemanticThread;
 
 const ContextExprVisitKey = ContextExprKey;
 const CallResultCallableInstKey = Lambdasolved.CallResultCallableInstKey;
@@ -203,7 +202,7 @@ pub const Result = struct {
         return self.lambdamono.getExpr(expr_id).getOriginExpr();
     }
 
-    fn getExprSourceExprById(self: *const Result, expr_id: Lambdamono.ExprId) CIR.Expr.Idx {
+    pub fn getExprSourceExprById(self: *const Result, expr_id: Lambdamono.ExprId) CIR.Expr.Idx {
         return self.lambdamono.getExpr(expr_id).common().source_expr;
     }
 

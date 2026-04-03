@@ -428,11 +428,12 @@ pub fn requireProgramExprSemanticShape(
     expr: CIR.Expr,
 ) Allocator.Error!void {
     switch (expr) {
-        .e_lookup_local, .e_lookup_external, .e_lookup_required => {
+        .e_lookup_local => {},
+        .e_lookup_external, .e_lookup_required => {
             if (result.getExprLookupResolution(source_context, module_idx, expr_idx) == null) {
                 if (std.debug.runtime_safety) {
                     std.debug.panic(
-                        "Lambdamono invariant violated: lookup expr ctx={s} module={d} expr={d} reached assembly without lookup semantics",
+                        "Lambdamono invariant violated: non-local lookup expr ctx={s} module={d} expr={d} reached assembly without lookup semantics",
                         .{ @tagName(source_context), module_idx, @intFromEnum(expr_idx) },
                     );
                 }

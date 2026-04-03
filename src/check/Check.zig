@@ -4765,6 +4765,11 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         .origin = .method_call,
                     };
                     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
+                    _ = try self.types.appendStaticDispatchSiteRequirements(&.{.{
+                        .expr_var = expr_var,
+                        .method_name = dot_access.field_name,
+                        .fn_var = constraint_fn_var,
+                    }});
 
                     // Create our constrained flex, and unify it with the receiver
                     // Use field_name_region so error messages point at the method name, not the whole expression
@@ -4951,6 +4956,11 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     .origin = .method_call,
                 };
                 const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
+                _ = try self.types.appendStaticDispatchSiteRequirements(&.{.{
+                    .expr_var = expr_var,
+                    .method_name = tvd.method_name,
+                    .fn_var = constraint_fn_var,
+                }});
 
                 // Create a constrained flex and unify it with the type variable
                 const constrained_var = try self.freshFromContent(
@@ -6011,6 +6021,13 @@ fn mkBinopConstraint(
         .origin = .desugared_binop,
     };
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
+    if (binop_expr_idx) |idx| {
+        _ = try self.types.appendStaticDispatchSiteRequirements(&.{.{
+            .expr_var = ModuleEnv.varFrom(idx),
+            .method_name = method_name,
+            .fn_var = constraint_fn_var,
+        }});
+    }
 
     // Create a constrained flex and unify it with the lhs (receiver)
     const constrained_var = try self.freshFromContent(
@@ -6061,6 +6078,13 @@ fn mkUnaryOp(
         .origin = .desugared_unaryop,
     };
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
+    if (unary_expr_idx) |idx| {
+        _ = try self.types.appendStaticDispatchSiteRequirements(&.{.{
+            .expr_var = ModuleEnv.varFrom(idx),
+            .method_name = method_name,
+            .fn_var = constraint_fn_var,
+        }});
+    }
 
     // Create a constrained flex and unify it with the arg
     const constrained_var = try self.freshFromContent(
@@ -6625,7 +6649,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
             while (constraint_i < constraints_len) : (constraint_i += 1) {
                 // Re-fetch by index each iteration because nested unification can append
                 // constraints and reallocate the backing array.
-                var constraint = self.types.static_dispatch_constraints.items.items[constraints_start + constraint_i];
+                const constraint = self.types.static_dispatch_constraints.items.items[constraints_start + constraint_i];
                 const constraint_fn_resolved = self.types.resolveVar(constraint.fn_var).desc.content;
                 if (constraint_fn_resolved == .err) {
                     // If this constraint is already an error, the skip this pass

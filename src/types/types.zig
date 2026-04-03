@@ -804,6 +804,14 @@ pub const StaticDispatchConstraint = struct {
     }
 };
 
+pub const StaticDispatchSiteRequirement = struct {
+    expr_var: Var,
+    method_name: Ident.Idx,
+    fn_var: Var,
+
+    pub const SafeList = MkSafeList(@This());
+};
+
 /// Two record fields
 pub const TwoStaticDispatchConstraints = struct {
     a: StaticDispatchConstraint,

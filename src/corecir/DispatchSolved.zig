@@ -284,78 +284,19 @@ pub fn extractExactDispatchSiteForExpr(
     method_name: Ident.Idx,
 ) Allocator.Error!?ExactDispatchSite {
     const module_env = driver.all_module_envs[module_idx];
-    const receiver_type_var = dispatchConstraintReceiverTypeVar(driver, module_idx, expr_idx, method_name) orelse return null;
-    var matched: ?ExactDispatchSite = null;
-    var saw_unresolved_match = false;
-
-    for (dispatchConstraintsForTypeVar(driver, module_idx, receiver_type_var)) |constraint| {
-        if (!constraint.fn_name.eql(method_name)) continue;
-        const fn_monotype = try ContextMono.resolveTypeVarMonotypeResolved(
-            driver,
-            result,
-            thread,
-            module_idx,
-            constraint.fn_var,
-        );
-        if (fn_monotype.isNone()) {
-            saw_unresolved_match = true;
-            continue;
-        }
-
-        if (matched) |existing| {
-            if (existing.fn_var == constraint.fn_var) {
-                continue;
-            }
-
-            const existing_mono = try ContextMono.resolveTypeVarMonotypeResolved(
-                driver,
-                result,
-                thread,
-                module_idx,
-                existing.fn_var,
-            );
-            const next_mono = fn_monotype;
-
-            if (!existing_mono.isNone() and !next_mono.isNone() and
-                try ContextMono.monotypesStructurallyEqualAcrossModules(
-                    driver,
-                    result,
-                    existing_mono.idx,
-                    existing_mono.module_idx,
-                    next_mono.idx,
-                    next_mono.module_idx,
-                ))
-            {
-                matched = existing;
-                continue;
-            }
-
-            if (std.debug.runtime_safety) {
-                std.debug.panic(
-                    "DispatchSolved invariant violated: dispatch expr={d} method='{s}' had multiple non-equivalent exact dispatch sites (existing_var={d} existing_mono={d}@{d} next_var={d} next_mono={d}@{d})",
-                    .{
-                        @intFromEnum(expr_idx),
-                        module_env.getIdent(method_name),
-                        @intFromEnum(existing.fn_var),
-                        @intFromEnum(existing_mono.idx),
-                        existing_mono.module_idx,
-                        @intFromEnum(constraint.fn_var),
-                        @intFromEnum(next_mono.idx),
-                        next_mono.module_idx,
-                    },
-                );
-            }
-            unreachable;
-        } else {
-            matched = .{
-                .method_name = constraint.fn_name,
-                .fn_var = constraint.fn_var,
-            };
-        }
-    }
-
-    if (saw_unresolved_match) return null;
-    return matched;
+    const requirement = module_env.types.findStaticDispatchSiteRequirement(ModuleEnv.varFrom(expr_idx), method_name) orelse return null;
+    const fn_monotype = try ContextMono.resolveTypeVarMonotypeResolved(
+        driver,
+        result,
+        thread,
+        module_idx,
+        requirement.fn_var,
+    );
+    if (fn_monotype.isNone()) return null;
+    return .{
+        .method_name = requirement.method_name,
+        .fn_var = requirement.fn_var,
+    };
 }
 
 pub fn ensureRecordedExactDispatchSiteForExpr(
