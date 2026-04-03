@@ -207,7 +207,7 @@ pub const Result = struct {
         return self.lambdamono.getExpr(expr_id).common().source_expr;
     }
 
-    fn getExprChildExprsById(self: *const Result, expr_id: Lambdamono.ExprId) Lambdamono.ExprIdSpan {
+    pub fn getExprChildExprsById(self: *const Result, expr_id: Lambdamono.ExprId) Lambdamono.ExprIdSpan {
         return self.lambdamono.getExpr(expr_id).common().child_exprs;
     }
 
@@ -335,7 +335,7 @@ pub const Result = struct {
         return self.getExprMonotype(source.source_context, source.module_idx, source.expr_idx);
     }
 
-    fn getCallableTemplate(self: *const Result, callable_template_id: CallableTemplateId) *const CallableTemplate {
+    pub fn getCallableTemplate(self: *const Result, callable_template_id: CallableTemplateId) *const CallableTemplate {
         return self.template_catalog.getCallableTemplate(callable_template_id);
     }
 
@@ -492,6 +492,23 @@ pub const Result = struct {
         return null;
     }
 
+    pub fn requireExprTemplateId(
+        self: *const Result,
+        source_context: SourceContext,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) CallableTemplateId {
+        return self.getExprTemplateId(source_context, module_idx, expr_idx) orelse {
+            if (std.debug.runtime_safety) {
+                std.debug.panic(
+                    "Pipeline.Result invariant violated: expr {d} in module {d} under source context {s} had no registered callable template",
+                    .{ @intFromEnum(expr_idx), module_idx, @tagName(source_context) },
+                );
+            }
+            unreachable;
+        };
+    }
+
     pub fn getExprLookupResolution(
         self: *const Result,
         source_context: SourceContext,
@@ -635,7 +652,8 @@ pub const Pass = struct {
             self.allocator,
             self.current_module_idx,
             exprs,
-            Lambdasolved.rootAnalysisDriver(self, result),
+            self,
+            result,
         );
         trace.log("assembleLambdamono start", .{});
         try Lambdamono.assembleRoots(
@@ -643,7 +661,7 @@ pub const Pass = struct {
             self.all_module_envs,
             self.current_module_idx,
             result,
-            Lambdamono.programAssemblyDriver(self),
+            self,
             exprs,
         );
         trace.log("assembleLambdamono done", .{});
@@ -661,7 +679,8 @@ pub const Pass = struct {
             self.allocator,
             self.current_module_idx,
             root_exprs,
-            Lambdasolved.rootAnalysisDriver(self, &result),
+            self,
+            &result,
         );
         trace.log("assembleLambdamono start", .{});
         try Lambdamono.assembleRoots(
@@ -669,7 +688,7 @@ pub const Pass = struct {
             self.all_module_envs,
             self.current_module_idx,
             &result,
-            Lambdamono.programAssemblyDriver(self),
+            self,
             root_exprs,
         );
         trace.log("assembleLambdamono done", .{});
@@ -823,7 +842,8 @@ pub fn runModuleWithTypeScope(
         allocator,
         current_module_idx,
         root_exprs,
-        Lambdasolved.rootAnalysisDriver(&pass, &result),
+        &pass,
+        &result,
     );
     trace.log("assembleLambdamono start", .{});
     try Lambdamono.assembleRoots(
@@ -831,7 +851,7 @@ pub fn runModuleWithTypeScope(
         all_module_envs,
         current_module_idx,
         &result,
-        Lambdamono.programAssemblyDriver(&pass),
+        &pass,
         root_exprs,
     );
     trace.log("assembleLambdamono done", .{});

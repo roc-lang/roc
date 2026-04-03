@@ -16,6 +16,7 @@ const builtin = @import("builtin");
 const base = @import("base");
 const can = @import("can");
 const types = @import("types");
+const DispatchSolved = @import("DispatchSolved.zig");
 const Monotype = @import("Monotype.zig");
 
 const Allocator = std.mem.Allocator;
@@ -123,13 +124,14 @@ pub const Result = struct {
             .monotype_store = try Monotype.Store.init(allocator),
             .subst_entries = .empty,
             .substs = .empty,
-            .empty_subst_id = @enumFromInt(0),
+            .empty_subst_id = undefined,
             .context_expr_monotypes = .empty,
             .context_pattern_monotypes = .empty,
             .context_type_var_monotypes = .empty,
             .type_scope_monotypes = .empty,
         };
         try result.substs.append(allocator, .{ .entries = TypeSubstSpan.empty() });
+        result.empty_subst_id = @enumFromInt(result.substs.items.len - 1);
         return result;
     }
 
@@ -671,7 +673,8 @@ pub fn mergeResolvedMonotypeMap(
     }
 
     const existing = gop.value_ptr.*;
-    if (try driver.monotypesStructurallyEqualAcrossModules(
+    if (try monotypesStructurallyEqualAcrossModules(
+        driver,
         result,
         existing.idx,
         existing.module_idx,
@@ -827,8 +830,9 @@ pub fn recordExprMonotypeResolved(
     const resolved = resolvedMonotype(monotype, monotype_module_idx);
     if (result.lambdamono.getExprId(source_context, module_idx, expr_idx)) |expr_id| {
         const program_expr = result.lambdamono.getExpr(expr_id);
-        const existing_program_mono = program_expr.monotype;
-        if (!try driver.monotypesStructurallyEqualAcrossModules(
+        const existing_program_mono = program_expr.common().monotype;
+        if (!try monotypesStructurallyEqualAcrossModules(
+            driver,
             result,
             existing_program_mono.idx,
             existing_program_mono.module_idx,
@@ -854,7 +858,8 @@ pub fn recordExprMonotypeResolved(
         monotype_module_idx,
     );
     if (result.context_mono.context_expr_monotypes.get(key)) |existing| {
-        if (try driver.monotypesStructurallyEqualAcrossModules(
+        if (try monotypesStructurallyEqualAcrossModules(
+            driver,
             result,
             existing.idx,
             existing.module_idx,

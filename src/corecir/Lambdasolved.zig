@@ -45,6 +45,7 @@ pub const CaptureValueSource = Lambdamono.CaptureValueSource;
 pub const CaptureStorage = Lambdamono.CaptureStorage;
 pub const CaptureField = Lambdamono.CaptureField;
 pub const CaptureFieldSpan = Lambdamono.CaptureFieldSpan;
+pub const CallableParamSpecEntry = Lambdamono.CallableParamSpecEntry;
 pub const CallableValue = Lambdamono.CallableValue;
 pub const CallSite = Lambdamono.CallSite;
 pub const ExprRef = Lambdamono.ExprRef;
@@ -95,14 +96,14 @@ pub const SemanticThread = struct {
     }
 
     pub fn requireCallableInst(self: SemanticThread) CallableInstId {
-        return self.callableInst() orelse blk: {
+        return self.callableInst() orelse {
             if (std.debug.runtime_safety) {
                 std.debug.panic(
                     "Lambdasolved invariant violated: source context {s} had no callable inst",
                     .{@tagName(self.source_context)},
                 );
             }
-            break :blk unreachable;
+            unreachable;
         };
     }
 
@@ -279,28 +280,6 @@ pub const RootAnalysisState = struct {
         try worker.run();
     }
 
-    pub fn scanRoots(
-        self: *RootAnalysisState,
-        current_module_idx: u32,
-        root_exprs: []const CIR.Expr.Idx,
-        scanner: anytype,
-    ) std.mem.Allocator.Error!void {
-        const Scanner = @TypeOf(scanner);
-        comptime {
-            if (!@hasDecl(Scanner, "scan")) {
-                @compileError("RootAnalysisState.scanRoots requires a scanner value with a scan(root: RootExprContext) method");
-            }
-        }
-
-        for (root_exprs) |expr_idx| {
-            self.clearPerScan();
-            try scanner.scan(.{
-                .module_idx = current_module_idx,
-                .expr_idx = expr_idx,
-            });
-        }
-    }
-
     pub fn beginValueDefExpr(
         self: *RootAnalysisState,
         allocator: std.mem.Allocator,
@@ -362,55 +341,32 @@ pub const RootAnalysisState = struct {
     }
 };
 
-fn RootRunner(comptime Driver: type) type {
-    return struct {
-        allocator: std.mem.Allocator,
-        current_module_idx: u32,
-        root_analysis: RootAnalysisState,
-        driver: Driver,
-
-        const Self = @This();
-
-        fn init(
-            allocator: std.mem.Allocator,
-            current_module_idx: u32,
-            driver: Driver,
-        ) Self {
-            return .{
-                .allocator = allocator,
-                .current_module_idx = current_module_idx,
-                .root_analysis = RootAnalysisState.init(),
-                .driver = driver,
-            };
-        }
-
-        fn deinit(self: *Self) void {
-            self.root_analysis.deinit(self.allocator);
-        }
-
-        fn scan(self: *Self, root: RootExprContext) std.mem.Allocator.Error!void {
-            try self.driver.scanRootExpr(&self.root_analysis, root);
-        }
-
-        fn run(self: *Self, root_exprs: []const CIR.Expr.Idx) std.mem.Allocator.Error!void {
-            try self.root_analysis.scanRoots(self.current_module_idx, root_exprs, self);
-        }
-    };
-}
-
 pub fn analyzeRoots(
     allocator: std.mem.Allocator,
     current_module_idx: u32,
     root_exprs: []const CIR.Expr.Idx,
-    driver: anytype,
+    pass: anytype,
+    result: anytype,
 ) std.mem.Allocator.Error!void {
-    var runner = RootRunner(@TypeOf(driver)).init(
-        allocator,
-        current_module_idx,
-        driver,
-    );
-    defer runner.deinit();
-    try runner.run(root_exprs);
+    var root_analysis = RootAnalysisState.init();
+    defer root_analysis.deinit(allocator);
+
+    for (root_exprs) |expr_idx| {
+        root_analysis.clearPerScan();
+        try scanCirValueExpr(
+            pass,
+            &root_analysis,
+            result,
+            SemanticThread.trackedThread(.{
+                .root_expr = .{
+                    .module_idx = current_module_idx,
+                    .expr_idx = expr_idx,
+                },
+            }),
+            current_module_idx,
+            expr_idx,
+        );
+    }
 }
 
 pub fn withRootAnalysis(
@@ -440,35 +396,6 @@ pub fn exprVisitStillPendingForThread(
     return root_analysis.exprVisitStillPending(cm.Result.contextExprKey(thread.requireSourceContext(), module_idx, expr_idx));
 }
 
-fn RootAnalysisDriver(comptime PassPtr: type, comptime ResultPtr: type) type {
-    return struct {
-        pass: PassPtr,
-        result: ResultPtr,
-
-        fn scanRootExpr(
-            self: @This(),
-            root_analysis: *RootAnalysisState,
-            root: RootExprContext,
-        ) std.mem.Allocator.Error!void {
-            try scanCirValueExpr(
-                self.pass,
-                root_analysis,
-                self.result,
-                SemanticThread.trackedThread(.{ .root_expr = root }),
-                root.module_idx,
-                root.expr_idx,
-            );
-        }
-    };
-}
-
-pub fn rootAnalysisDriver(pass: anytype, result: anytype) RootAnalysisDriver(@TypeOf(pass), @TypeOf(result)) {
-    return .{
-        .pass = pass,
-        .result = result,
-    };
-}
-
 pub fn scanDemandedValueDefExpr(
     driver: anytype,
     root_analysis: *RootAnalysisState,
@@ -487,7 +414,8 @@ pub fn scanDemandedValueDefExpr(
         expr_idx_inner: CIR.Expr.Idx,
 
         fn run(self: @This()) std.mem.Allocator.Error!void {
-            try self.driver_inner.scanCirValueExpr(
+            try scanCirValueExpr(
+                self.driver_inner,
                 self.root_analysis_inner,
                 self.result_inner,
                 self.thread_inner,
@@ -1425,7 +1353,8 @@ pub fn realizeCallableArgSemantics(
         fn run(self: @This(), root_analysis: *RootAnalysisState) std.mem.Allocator.Error!void {
             const module_env = self.driver_inner.all_module_envs[self.module_idx_inner];
             for (module_env.store.sliceExpr(self.args_inner)) |arg_expr_idx| {
-                try self.driver_inner.scanCirValueExpr(
+                try scanCirValueExpr(
+                    self.driver_inner,
                     root_analysis,
                     self.result_inner,
                     self.thread_inner,
@@ -1506,7 +1435,8 @@ pub fn collectCallableParamSpecsFromFunctionArgument(
         fn run(self: *@This(), root_analysis: *RootAnalysisState) std.mem.Allocator.Error!void {
             var demand_visiting: std.AutoHashMapUnmanaged(ContextExprKey, void) = .empty;
             defer demand_visiting.deinit(self.driver_inner.allocator);
-            try self.driver_inner.scanCirValueExpr(
+            try scanCirValueExpr(
+                self.driver_inner,
                 root_analysis,
                 self.result_inner,
                 SemanticThread.trackedThread(self.source_context_inner),
@@ -1659,6 +1589,7 @@ pub fn collectCallableParamSpecsFromArgument(
     out: anytype,
 ) std.mem.Allocator.Error!bool {
     try propagateDemandedValueMonotypeToValueExpr(
+        driver,
         result,
         source_context,
         module_idx,
@@ -1750,6 +1681,7 @@ pub fn bindCurrentCallFromCallableInst(
         if (result.context_mono.monotype_store.getMonotype(param_mono) != .func) {
             try cm.recordExprMonotypeForThread(driver, result, thread, module_idx, arg_expr_idx, param_mono, callable_inst.fn_monotype_module_idx);
             try propagateDemandedValueMonotypeToValueExpr(
+                driver,
                 result,
                 thread.requireSourceContext(),
                 module_idx,
@@ -1788,6 +1720,7 @@ pub fn bindCurrentCallFromFnMonotype(
         if (result.context_mono.monotype_store.getMonotype(param_mono) != .func) {
             try cm.recordExprMonotypeForThread(driver, result, thread, module_idx, arg_expr_idx, param_mono, fn_monotype_module_idx);
             try propagateDemandedValueMonotypeToValueExpr(
+                driver,
                 result,
                 thread.requireSourceContext(),
                 module_idx,
@@ -6845,14 +6778,14 @@ pub fn recordCallResultCallableValueFromCallee(
                 visiting_worker: *std.AutoHashMapUnmanaged(ContextExprKey, void),
                 variant_builder_worker: @TypeOf(variant_builder),
 
-                fn run(self: @This()) std.mem.Allocator.Error!void {
-                    const callable_def = self.result_worker.getCallableDefForInst(self.callee_callable_inst_id_worker);
-                    if (self.result_worker.getExprCallableValue(
+                fn run(worker: @This()) std.mem.Allocator.Error!void {
+                    const callable_def = worker.result_worker.getCallableDefForInst(worker.callee_callable_inst_id_worker);
+                    if (worker.result_worker.getExprCallableValue(
                         callable_def.body_expr.source_context,
                         callable_def.body_expr.module_idx,
                         callable_def.body_expr.expr_idx,
                     ) == null) {
-                        const template_id = self.result_worker.getExprTemplateId(
+                        const template_id = worker.result_worker.getExprTemplateId(
                             callable_def.body_expr.source_context,
                             callable_def.body_expr.module_idx,
                             callable_def.body_expr.expr_idx,
@@ -6860,19 +6793,19 @@ pub fn recordCallResultCallableValueFromCallee(
                             "Lambdasolved invariant violated: function-valued body expr {d} for callable inst {d} had no executable callable value fact and no registered callable template",
                             .{
                                 @intFromEnum(callable_def.body_expr.expr_idx),
-                                @intFromEnum(self.callee_callable_inst_id_worker),
+                                @intFromEnum(worker.callee_callable_inst_id_worker),
                             },
                         );
-                        const materialize_failure = try self.driver_worker.materializeExprCallableValueWithKnownFnMonotype(
-                            self.result_worker,
+                        const materialize_failure = try worker.driver_worker.materializeExprCallableValueWithKnownFnMonotype(
+                            worker.result_worker,
                             callable_def.body_expr.source_context,
                             callable_def.body_expr.module_idx,
                             callable_def.body_expr.expr_idx,
                             template_id,
-                            cm.resolvedMonotype(self.callee_fn_ret_worker, self.callee_fn_module_idx_worker),
+                            cm.resolvedMonotype(worker.callee_fn_ret_worker, worker.callee_fn_module_idx_worker),
                         );
                         if (std.debug.runtime_safety and
-                            self.result_worker.getExprCallableValue(
+                            worker.result_worker.getExprCallableValue(
                                 callable_def.body_expr.source_context,
                                 callable_def.body_expr.module_idx,
                                 callable_def.body_expr.expr_idx,
@@ -6882,20 +6815,20 @@ pub fn recordCallResultCallableValueFromCallee(
                                 "Lambdasolved invariant violated: function-valued body expr {d} for callable inst {d} failed to materialize callable value; reason={?s} template={d}",
                                 .{
                                     @intFromEnum(callable_def.body_expr.expr_idx),
-                                    @intFromEnum(self.callee_callable_inst_id_worker),
+                                    @intFromEnum(worker.callee_callable_inst_id_worker),
                                     if (materialize_failure) |failure| @tagName(failure) else null,
                                     @intFromEnum(template_id),
                                 },
                             );
                         }
                     }
-                    try self.driver_worker.includeExprCallableValue(
-                        self.result_worker,
+                    try worker.driver_worker.includeExprCallableValue(
+                        worker.result_worker,
                         callable_def.body_expr.source_context,
                         callable_def.body_expr.module_idx,
                         callable_def.body_expr.expr_idx,
-                        self.visiting_worker,
-                        self.variant_builder_worker,
+                        worker.visiting_worker,
+                        worker.variant_builder_worker,
                     );
                 }
             };
@@ -6988,7 +6921,7 @@ pub fn callableInstSatisfiesCallSiteRequirements(
         )) return false;
     }
 
-    return callableParamSpecsEqual(
+    return Lambdamono.callableParamSpecsEqual(
         result,
         result.lambdamono.getCallableParamSpecEntries(result.getCallableInst(callable_inst_id).callable_param_specs),
         required_callable_param_specs,
@@ -7222,80 +7155,83 @@ pub fn resolveDirectCallSite(
             );
             return;
         }
-        if (std.debug.runtime_safety) switch (callee_expr) {
-            .e_lookup_external, .e_lookup_required => {
-                const arg_exprs = module_env.store.sliceExpr(call_expr.args);
-                var arg_monos = std.ArrayList(cm.ResolvedMonotype).empty;
-                defer arg_monos.deinit(driver.allocator);
-                for (arg_exprs) |arg_expr_idx| {
-                    try arg_monos.append(
-                        driver.allocator,
-                        try cm.requireFullyBoundExprMonotype(
+        if (std.debug.runtime_safety) {
+            switch (callee_expr) {
+                .e_lookup_external, .e_lookup_required => {
+                    const arg_exprs = module_env.store.sliceExpr(call_expr.args);
+                    var arg_monos = std.ArrayList(cm.ResolvedMonotype).empty;
+                    defer arg_monos.deinit(driver.allocator);
+                    for (arg_exprs) |arg_expr_idx| {
+                        try arg_monos.append(
+                            driver.allocator,
+                            try cm.requireFullyBoundExprMonotype(
+                                driver,
+                                result,
+                                thread,
+                                module_idx,
+                                arg_expr_idx,
+                            ),
+                        );
+                    }
+                    const exact_call_fn_monotype = cm.resolvedMonotype(
+                        try resolveDirectCallFnMonotype(
                             driver,
                             result,
                             thread,
                             module_idx,
-                            arg_expr_idx,
+                            call_expr_idx,
+                            call_expr,
                         ),
+                        module_idx,
                     );
-                }
-                const exact_call_fn_monotype = cm.resolvedMonotype(
-                    try resolveDirectCallFnMonotype(
-                        driver,
-                        result,
-                        thread,
-                        module_idx,
-                        call_expr_idx,
-                        call_expr,
-                    ),
-                    module_idx,
-                );
-                const template = result.getCallableTemplate(template_id);
-                std.debug.panic(
-                    "Lambdasolved invariant violated: exact direct-call specialization failed for external callee expr {d} in module {d}; source_context={s} template={d} template_kind={s} template_owner={s} template_source_context={s} call_fn_monotype={any} arg_monotypes={any}",
-                    .{
-                        @intFromEnum(callee_expr_idx),
-                        module_idx,
-                        @tagName(thread.requireSourceContext()),
-                        @intFromEnum(template_id),
-                        @tagName(template.kind),
-                        @tagName(template.owner),
-                        @tagName(template_source_context),
-                        exact_call_fn_monotype,
-                        arg_monos.items,
-                    },
-                );
-            },
-            else => {},
+                    const template = result.getCallableTemplate(template_id);
+                    std.debug.panic(
+                        "Lambdasolved invariant violated: exact direct-call specialization failed for external callee expr {d} in module {d}; source_context={s} template={d} template_kind={s} template_owner={s} template_source_context={s} call_fn_monotype={any} arg_monotypes={any}",
+                        .{
+                            @intFromEnum(callee_expr_idx),
+                            module_idx,
+                            @tagName(thread.requireSourceContext()),
+                            @intFromEnum(template_id),
+                            @tagName(template.kind),
+                            @tagName(template.owner),
+                            @tagName(template_source_context),
+                            exact_call_fn_monotype,
+                            arg_monos.items,
+                        },
+                    );
+                },
+                else => {},
+            }
         }
     }
 
-    if (std.debug.runtime_safety) switch (callee_expr) {
-        .e_lookup_external, .e_lookup_required => {
-            const current_call_site = getCallSiteForThread(result, thread, module_idx, call_expr_idx);
-            const template_source_context = if (resolved_template_id) |template_id|
-                requireTemplateDemandSourceContextForExpr(
-                    driver,
-                    result,
-                    thread.requireSourceContext(),
-                    module_idx,
-                    callee_expr_idx,
-                    template_id,
-                )
-            else
-                null;
-            switch (current_call_site orelse {
-                std.debug.panic(
-                    "Lambdasolved invariant violated: external callee expr {d} in module {d} reached callable-value materialization with no exact call-site; source_context={s} resolved_template={?d} template_source_context={?s}",
-                    .{
-                        @intFromEnum(callee_expr_idx),
+    if (std.debug.runtime_safety) {
+        switch (callee_expr) {
+            .e_lookup_external, .e_lookup_required => {
+                const current_call_site = getCallSiteForThread(result, thread, module_idx, call_expr_idx);
+                const template_source_context = if (resolved_template_id) |template_id|
+                    requireTemplateDemandSourceContextForExpr(
+                        driver,
+                        result,
+                        thread.requireSourceContext(),
                         module_idx,
-                        @tagName(thread.requireSourceContext()),
-                        if (resolved_template_id) |template_id| @intFromEnum(template_id) else null,
-                        if (template_source_context) |ctx| @tagName(ctx) else null,
-                    },
-                );
-            }) {
+                        callee_expr_idx,
+                        template_id,
+                    )
+                else
+                    null;
+                switch (current_call_site orelse {
+                    std.debug.panic(
+                        "Lambdasolved invariant violated: external callee expr {d} in module {d} reached callable-value materialization with no exact call-site; source_context={s} resolved_template={?d} template_source_context={?s}",
+                        .{
+                            @intFromEnum(callee_expr_idx),
+                            module_idx,
+                            @tagName(thread.requireSourceContext()),
+                            if (resolved_template_id) |template_id| @intFromEnum(template_id) else null,
+                            if (template_source_context) |ctx| @tagName(ctx) else null,
+                        },
+                    );
+                }) {
                 .direct => {},
                 .indirect_call => |indirect| std.debug.panic(
                     "Lambdasolved invariant violated: external callee expr {d} in module {d} resolved to indirect_call; source_context={s} resolved_template={?d} template_source_context={?s} variants={d}",
@@ -7309,10 +7245,11 @@ pub fn resolveDirectCallSite(
                     },
                 ),
                 .low_level => unreachable,
-            }
-        },
-        else => {},
-    };
+                }
+            },
+            else => {},
+        }
+    }
 
     if (calleeUsesFirstClassCallableValuePath(callee_expr)) {
         var callee_visiting: std.AutoHashMapUnmanaged(ContextExprKey, void) = .empty;
@@ -7829,7 +7766,7 @@ pub fn realizeStructuredExprCallableSemantics(
                 source_context,
                 module_idx,
                 expr_idx,
-            ) orelse blk: {
+            ) orelse {
                 if (std.debug.runtime_safety) {
                     std.debug.panic(
                         "Lambdasolved invariant violated: callable expr {d} in module {d} under source context {s} reached callable-value realization without a registered template",
@@ -7840,7 +7777,7 @@ pub fn realizeStructuredExprCallableSemantics(
                         },
                     );
                 }
-                break :blk unreachable;
+                unreachable;
             };
             try materializeLookupExprCallableValue(
                 driver,

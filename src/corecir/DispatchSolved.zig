@@ -198,9 +198,8 @@ fn dispatchMethodIdentForBinop(module_env: *const ModuleEnv, op: CIR.Expr.Binop.
         .eq, .ne => module_env.idents.is_eq,
         .lt => module_env.idents.is_lt,
         .gt => module_env.idents.is_gt,
-        .lte => module_env.idents.is_lte,
-        .gte => module_env.idents.is_gte,
-        .pizza => null,
+        .le => module_env.idents.is_lte,
+        .ge => module_env.idents.is_gte,
     };
 }
 
@@ -291,7 +290,13 @@ pub fn extractExactDispatchSiteForExpr(
 
     for (dispatchConstraintsForTypeVar(driver, module_idx, receiver_type_var)) |constraint| {
         if (!constraint.fn_name.eql(method_name)) continue;
-        const fn_monotype = try driver.resolveTypeVarMonotypeResolved(result, thread, module_idx, constraint.fn_var);
+        const fn_monotype = try ContextMono.resolveTypeVarMonotypeResolved(
+            driver,
+            result,
+            thread,
+            module_idx,
+            constraint.fn_var,
+        );
         if (fn_monotype.isNone()) {
             saw_unresolved_match = true;
             continue;
@@ -302,11 +307,18 @@ pub fn extractExactDispatchSiteForExpr(
                 continue;
             }
 
-            const existing_mono = try driver.resolveTypeVarMonotypeResolved(result, thread, module_idx, existing.fn_var);
+            const existing_mono = try ContextMono.resolveTypeVarMonotypeResolved(
+                driver,
+                result,
+                thread,
+                module_idx,
+                existing.fn_var,
+            );
             const next_mono = fn_monotype;
 
             if (!existing_mono.isNone() and !next_mono.isNone() and
-                try driver.monotypesStructurallyEqualAcrossModules(
+                try ContextMono.monotypesStructurallyEqualAcrossModules(
+                    driver,
                     result,
                     existing_mono.idx,
                     existing_mono.module_idx,

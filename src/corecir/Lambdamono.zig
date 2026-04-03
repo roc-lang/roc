@@ -399,8 +399,7 @@ pub fn exprHasExactProgramSemantics(
 }
 
 fn exprNeedsCallableShape(result: anytype, source_context: SourceContext, module_idx: u32, expr_idx: CIR.Expr.Idx) bool {
-    const monotype = result.getExprMonotype(source_context, module_idx, expr_idx);
-    if (monotype.isNone()) {
+    const monotype = result.getExprMonotype(source_context, module_idx, expr_idx) orelse {
         if (std.debug.runtime_safety) {
             std.debug.panic(
                 "Lambdamono invariant violated: expr ctx={s} module={d} expr={d} had no exact monotype during executable assembly",
@@ -408,7 +407,7 @@ fn exprNeedsCallableShape(result: anytype, source_context: SourceContext, module
             );
         }
         unreachable;
-    }
+    };
     return switch (result.context_mono.monotype_store.getMonotype(monotype.idx)) {
         .func => true,
         else => result.getExprTemplateId(source_context, module_idx, expr_idx) != null,
@@ -927,7 +926,7 @@ fn callableParamProjectionsEqual(
     return true;
 }
 
-fn callableParamSpecsEqual(
+pub fn callableParamSpecsEqual(
     result: anytype,
     lhs: []const CallableParamSpecEntry,
     rhs: []const CallableParamSpecEntry,
@@ -942,62 +941,6 @@ fn callableParamSpecsEqual(
         if (!std.meta.eql(lhs_entry.callable_value, rhs_entry.callable_value)) return false;
     }
     return true;
-}
-
-fn ProgramAssemblyDriver(comptime PassPtr: type) type {
-    return struct {
-        pass: PassPtr,
-
-        fn requireCallableInstRealized(
-            self: @This(),
-            result: anytype,
-            callable_inst_id: CallableInstId,
-        ) Allocator.Error!void {
-            return requireCallableInstRealized(self.pass, result, callable_inst_id);
-        }
-
-        fn ensureProgramExpr(
-            self: @This(),
-            result: anytype,
-            source_context: SourceContext,
-            module_idx: u32,
-            expr_idx: CIR.Expr.Idx,
-        ) Allocator.Error!*Expr {
-            return ensureProgramExpr(self.pass, result, source_context, module_idx, expr_idx);
-        }
-
-        fn exprHasExactProgramSemantics(
-            self: @This(),
-            result: anytype,
-            source_context: SourceContext,
-            module_idx: u32,
-            expr_idx: CIR.Expr.Idx,
-        ) Allocator.Error!bool {
-            return exprHasExactProgramSemantics(self.pass, result, source_context, module_idx, expr_idx);
-        }
-
-        fn requireProgramExprSemanticShape(
-            self: @This(),
-            result: anytype,
-            source_context: SourceContext,
-            module_idx: u32,
-            expr_idx: CIR.Expr.Idx,
-            expr: CIR.Expr,
-        ) Allocator.Error!void {
-            return requireProgramExprSemanticShape(
-                self.pass,
-                result,
-                source_context,
-                module_idx,
-                expr_idx,
-                expr,
-            );
-        }
-    };
-}
-
-pub fn programAssemblyDriver(pass: anytype) ProgramAssemblyDriver(@TypeOf(pass)) {
-    return .{ .pass = pass };
 }
 
 pub const CaptureValueSource = union(enum) {
@@ -1046,6 +989,10 @@ pub const CaptureFieldSpan = extern struct {
 
     pub fn empty() CaptureFieldSpan {
         return .{ .start = 0, .len = 0 };
+    }
+
+    pub fn isEmpty(self: CaptureFieldSpan) bool {
+        return self.len == 0;
     }
 };
 
@@ -1137,7 +1084,7 @@ pub const Expr = union(enum) {
 
     pub fn common(self: *const Expr) *const ExprCommon {
         return switch (self.*) {
-            .plain => |*common| common,
+            .plain => |*plain_common| plain_common,
             .callable_value => |*value| &value.common,
             .callable_intro => |*intro| &intro.common,
             .direct_call => |*call| &call.common,
@@ -1152,7 +1099,7 @@ pub const Expr = union(enum) {
 
     pub fn commonMut(self: *Expr) *ExprCommon {
         return switch (self.*) {
-            .plain => |*common| common,
+            .plain => |*plain_common| plain_common,
             .callable_value => |*value| &value.common,
             .callable_intro => |*intro| &intro.common,
             .direct_call => |*call| &call.common,
@@ -1824,12 +1771,12 @@ pub const Program = struct {
     }
 };
 
-fn ProgramAssembler(comptime ResultPtr: type, comptime Driver: type) type {
+fn ProgramAssembler(comptime ResultPtr: type, comptime PassPtr: type) type {
     return struct {
         allocator: Allocator,
         all_module_envs: []const *ModuleEnv,
         result: ResultPtr,
-        driver: Driver,
+        pass: PassPtr,
         assembly: *AssemblyState,
 
         const Self = @This();
@@ -1851,7 +1798,7 @@ fn ProgramAssembler(comptime ResultPtr: type, comptime Driver: type) type {
             var callable_inst_idx: usize = 0;
             while (callable_inst_idx < self.result.lambdamono.callable_insts.items.len) : (callable_inst_idx += 1) {
                 const callable_inst_id: CallableInstId = @enumFromInt(callable_inst_idx);
-                try self.driver.requireCallableInstRealized(self.result, callable_inst_id);
+                try requireCallableInstRealized(self.pass, self.result, callable_inst_id);
                 const callable_inst = self.result.getCallableInst(callable_inst_id).*;
                 const template = self.result.getCallableTemplate(callable_inst.template);
                 switch (template.kind) {
@@ -1893,12 +1840,7 @@ fn ProgramAssembler(comptime ResultPtr: type, comptime Driver: type) type {
             expr_idx: CIR.Expr.Idx,
         ) Allocator.Error!void {
             if (self.result.getExprTemplateId(source_context, module_idx, expr_idx) != null) {
-                if (!try self.driver.exprHasExactProgramSemantics(
-                    self.result,
-                    source_context,
-                    module_idx,
-                    expr_idx,
-                )) return;
+                if (!try exprHasExactProgramSemantics(self.pass, self.result, source_context, module_idx, expr_idx)) return;
             }
 
             try child_exprs.append(
@@ -1915,7 +1857,7 @@ fn ProgramAssembler(comptime ResultPtr: type, comptime Driver: type) type {
         ) Allocator.Error!ExprId {
             const key = ContextMono.Result.contextExprKey(source_context, module_idx, expr_idx);
             const expr_id = self.result.lambdamono.expr_ids_by_key.get(key) orelse blk: {
-                _ = try self.driver.ensureProgramExpr(self.result, source_context, module_idx, expr_idx);
+                _ = try ensureProgramExpr(self.pass, self.result, source_context, module_idx, expr_idx);
                 break :blk self.result.lambdamono.expr_ids_by_key.get(key).?;
             };
             if (self.assembly.isExprAssembled(key)) return expr_id;
@@ -1924,13 +1866,7 @@ fn ProgramAssembler(comptime ResultPtr: type, comptime Driver: type) type {
 
             const module_env = self.all_module_envs[module_idx];
             const expr = module_env.store.getExpr(expr_idx);
-            try self.driver.requireProgramExprSemanticShape(
-                self.result,
-                source_context,
-                module_idx,
-                expr_idx,
-                expr,
-            );
+            try requireProgramExprSemanticShape(self.pass, self.result, source_context, module_idx, expr_idx, expr);
             var child_exprs = std.ArrayList(ExprId).empty;
             defer child_exprs.deinit(self.allocator);
             var child_stmts = std.ArrayList(StmtId).empty;
@@ -2083,17 +2019,17 @@ fn ProgramAssembler(comptime ResultPtr: type, comptime Driver: type) type {
 
             switch (stmt) {
                 .s_decl => |decl| {
-                    if (try self.driver.exprHasExactProgramSemantics(self.result, source_context, module_idx, decl.expr)) {
+                    if (try exprHasExactProgramSemantics(self.pass, self.result, source_context, module_idx, decl.expr)) {
                         try child_exprs.append(self.allocator, try self.assembleProgramExprNode(source_context, module_idx, decl.expr));
                     }
                 },
                 .s_var => |var_decl| {
-                    if (try self.driver.exprHasExactProgramSemantics(self.result, source_context, module_idx, var_decl.expr)) {
+                    if (try exprHasExactProgramSemantics(self.pass, self.result, source_context, module_idx, var_decl.expr)) {
                         try child_exprs.append(self.allocator, try self.assembleProgramExprNode(source_context, module_idx, var_decl.expr));
                     }
                 },
                 .s_reassign => |reassign| {
-                    if (try self.driver.exprHasExactProgramSemantics(self.result, source_context, module_idx, reassign.expr)) {
+                    if (try exprHasExactProgramSemantics(self.pass, self.result, source_context, module_idx, reassign.expr)) {
                         try child_exprs.append(self.allocator, try self.assembleProgramExprNode(source_context, module_idx, reassign.expr));
                     }
                 },
@@ -2137,17 +2073,17 @@ pub fn assembleRoots(
     all_module_envs: []const *ModuleEnv,
     current_module_idx: u32,
     result: anytype,
-    driver: anytype,
+    pass: anytype,
     root_exprs: []const CIR.Expr.Idx,
 ) Allocator.Error!void {
     var assembly = AssemblyState.init();
     defer assembly.deinit(allocator);
 
-    var assembler = ProgramAssembler(@TypeOf(result), @TypeOf(driver)){
+    var assembler = ProgramAssembler(@TypeOf(result), @TypeOf(pass)){
         .allocator = allocator,
         .all_module_envs = all_module_envs,
         .result = result,
-        .driver = driver,
+        .pass = pass,
         .assembly = &assembly,
     };
     try assembler.assembleRoots(current_module_idx, root_exprs);
@@ -2203,14 +2139,14 @@ pub fn updateCallableDefRuntimeSemantics(
         .empty()
     else if (captureFieldsEqual(existing_capture_fields, capture_fields))
         callable_def.captures
-    else if (!callable_def.captures.isEmpty()) blk: {
+    else if (!callable_def.captures.isEmpty()) {
         if (std.debug.runtime_safety) {
             std.debug.panic(
                 "Lambdamono invariant violated: callable inst {d} attempted to rewrite finalized capture fields",
                 .{@intFromEnum(callable_inst_id)},
             );
         }
-        break :blk unreachable;
+        unreachable;
     } else try result.lambdamono.appendCaptureFields(driver.allocator, capture_fields);
 
     result.lambdamono.setCallableInstRuntimeValue(callable_inst_id, runtime_value);
@@ -2219,6 +2155,14 @@ pub fn updateCallableDefRuntimeSemantics(
 pub fn getCaptureFields(program: *const Program, span: CaptureFieldSpan) []const CaptureField {
     if (span.len == 0) return &.{};
     return program.capture_fields.items[span.start..][0..span.len];
+}
+
+fn captureFieldsEqual(lhs: []const CaptureField, rhs: []const CaptureField) bool {
+    if (lhs.len != rhs.len) return false;
+    for (lhs, rhs) |lhs_field, rhs_field| {
+        if (!std.meta.eql(lhs_field, rhs_field)) return false;
+    }
+    return true;
 }
 
 pub fn getCallableVariants(program: *const Program, span: CallableVariantSpan) []const CallableInstId {

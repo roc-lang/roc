@@ -370,14 +370,14 @@ pub const Result = struct {
         const existing = self.lookupCallableTemplateBySource(source);
         if (existing) |template_id| return template_id;
         const module_env = all_module_envs[module_idx];
-        const boundary = callableBoundaryInfo(all_module_envs, module_idx, cir_expr) orelse blk: {
+        const boundary = callableBoundaryInfo(all_module_envs, module_idx, cir_expr) orelse {
             if (std.debug.runtime_safety) {
                 std.debug.panic(
                     "TemplateCatalog invariant violated: registering callable template for non-callable boundary expr {d} in module {d}",
                     .{ @intFromEnum(cir_expr), module_idx },
                 );
             }
-            break :blk unreachable;
+            unreachable;
         };
 
         const owner: CallableTemplateOwner = if (kind == .closure)
