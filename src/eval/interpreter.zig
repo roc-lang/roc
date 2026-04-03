@@ -196,10 +196,6 @@ pub const Interpreter = struct {
     /// RocOps environment for builtin dispatch.
     roc_env: *InterpreterRocEnv,
     roc_ops: RocOps,
-    /// When executing an entrypoint in `roc run --allow-errors`, tolerate
-    /// compile-placeholder runtime_error nodes by materializing zero/default values
-    /// instead of aborting the whole program immediately.
-    recover_runtime_placeholders: bool = false,
     /// Bound recursive function-call depth so the interpreter reports a Roc crash
     /// instead of overflowing the native stack.
     call_depth: usize = 0,
@@ -296,7 +292,6 @@ pub const Interpreter = struct {
         ret_layout: ?layout_mod.Idx = null,
         arg_ptr: ?*anyopaque = null,
         ret_ptr: ?*anyopaque = null,
-        recover_runtime_placeholders: bool = false,
     };
 
     pub fn init(
@@ -393,12 +388,6 @@ pub const Interpreter = struct {
         return Value.fromSlice(slice);
     }
 
-    fn placeholderValueForLayout(self: *LirInterpreter, layout_idx: layout_mod.Idx) Error!Value {
-        if (layout_idx == .zst) return Value.zst;
-        if (layout_idx == .str) return self.makeRocStr("");
-        return self.alloc(layout_idx);
-    }
-
     /// Allocate heap data through roc_ops with a refcount header.
     /// Use this for data that RocList.bytes or RocStr.bytes will point to,
     /// so builtins can safely call isUnique()/decref() on it.
@@ -466,10 +455,6 @@ pub const Interpreter = struct {
     /// Evaluate a proc-root LIR program using the RocOps bound at initialization time.
     pub fn eval(self: *LirInterpreter, request: EvalRequest) Error!EvalResult {
         self.roc_env.resetForEval();
-
-        const prev_recover_runtime_placeholders = self.recover_runtime_placeholders;
-        self.recover_runtime_placeholders = request.recover_runtime_placeholders;
-        defer self.recover_runtime_placeholders = prev_recover_runtime_placeholders;
 
         var eval_jmp_buf: JmpBuf = undefined;
         const prev_jmp_buf = self.roc_env.installJumpBuf(&eval_jmp_buf);
@@ -669,9 +654,6 @@ pub const Interpreter = struct {
                     current = expect_stmt.next;
                 },
                 .runtime_error => {
-                    if (self.recover_runtime_placeholders) {
-                        return .{ .returned = try self.placeholderValueForLayout(frame.ret_layout) };
-                    }
                     return self.runtimeError("RuntimeError");
                 },
                 .incref => |inc| {
@@ -1819,13 +1801,6 @@ pub const Interpreter = struct {
                 // Use the safe listAppend which reserves capacity first,
                 // matching the dev codegen (LirCodeGen) behavior.
                 const info = self.listElemInfo(arg_layout);
-                if (builtin.mode == .Debug and info.rc) {
-                    const rl = valueToRocList(args[0]);
-                    std.debug.print(
-                        "interp list_append_unsafe: list_bytes=0x{x} len={d} cap={d} elem_ptr=0x{x} elem_width={d}\n",
-                        .{ @intFromPtr(rl.bytes), rl.len(), rl.capacity_or_alloc_ptr, @intFromPtr(args[1].ptr), info.width },
-                    );
-                }
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
@@ -1842,17 +1817,6 @@ pub const Interpreter = struct {
                     &builtins.list.copy_fallback,
                     &self.roc_ops,
                 );
-                if (builtin.mode == .Debug and info.rc and info.width == 24 and result.bytes != null and result.len() > 0) {
-                    const last_ptr = result.bytes.? + (result.len() - 1) * info.width;
-                    std.debug.print(
-                        "  append bytes: {x} {x} {x} {x} {x} {x} {x} {x} {x} {x} {x} {x} {x} {x} {x} {x} {x} {x} {x} {x} {x} {x} {x} {x}\n",
-                        .{
-                            last_ptr[0], last_ptr[1], last_ptr[2], last_ptr[3], last_ptr[4], last_ptr[5], last_ptr[6], last_ptr[7],
-                            last_ptr[8], last_ptr[9], last_ptr[10], last_ptr[11], last_ptr[12], last_ptr[13], last_ptr[14], last_ptr[15],
-                            last_ptr[16], last_ptr[17], last_ptr[18], last_ptr[19], last_ptr[20], last_ptr[21], last_ptr[22], last_ptr[23],
-                        },
-                    );
-                }
                 break :blk self.rocListToValue(result, ll.ret_layout);
             },
             .list_concat => blk: {

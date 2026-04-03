@@ -224,7 +224,7 @@ fn verifyStmt(
         .assign_tag => |assign| {
             try ensureLocalsUsable(store, env, store.getLocalSpan(assign.args), stmt_id, owner_kind, owner_id);
             try ensureStmtDefMatches(store, assign.target, .tag, stmt_id, owner_kind, owner_id);
-            try ensureFunctionLocalHasExactCallable(store, assign.target, "stmt target", stmt_id);
+            try ensureCallableLocalInvariant(store, assign.target, "stmt target", stmt_id);
             try env.put(localKey(assign.target), {});
             try verifyStmt(allocator, store, assign.next, env, joins, active_joins, owner_kind, owner_id);
         },
@@ -326,7 +326,7 @@ fn cloneLocalSet(allocator: Allocator, set: *const LocalSet) Allocator.Error!Loc
 fn ensureStmtDefMatches(
     store: *const MIR.Store,
     local: MIR.LocalId,
-    expected_tag: std.meta.Tag(MIR.LocalDef),
+    expected_tag: std.meta.Tag(MIR.LocalDefKind),
     stmt_id: MIR.CFStmtId,
     owner_kind: []const u8,
     owner_id: u64,
@@ -354,10 +354,19 @@ fn ensureCallableLocalInvariant(
     context_id: anytype,
 ) Allocator.Error!void {
     const local_data = store.getLocal(local);
-    if (store.monotype_store.getMonotype(local_data.monotype) == .func) {
+    const mono = store.monotype_store.getMonotype(local_data.monotype);
+    if (mono == .func) {
         std.debug.panic(
-            "DebugVerifyMir invariant violated: source-level func monotype survived on local {d} in {s} {d}",
-            .{ @intFromEnum(local), context, context_id },
+            "DebugVerifyMir invariant violated: source-level func monotype survived on local {d} in {s} {d}; monotype={d} mono_value={any} local_def={s} exact_callable={?any}",
+            .{
+                @intFromEnum(local),
+                context,
+                context_id,
+                @intFromEnum(local_data.monotype),
+                mono,
+                @tagName(store.getLocalDef(local)),
+                store.getLocalExactCallable(local),
+            },
         );
     }
     const exact_callable = store.getLocalExactCallable(local) orelse return;
@@ -425,6 +434,7 @@ fn ensureLocalUsable(
                 @tagName(store.getLocalDef(local)),
             },
         );
+        dumpStmtPredecessors(store, stmt_id);
         dumpStmtWindow(store, stmt_id, 8);
         std.debug.panic(
             "DebugVerifyMir invariant violated: stmt {d} in {s} {d} uses local {d} before it is available on that path",
@@ -440,10 +450,104 @@ fn dumpStmtWindow(store: *const MIR.Store, center: MIR.CFStmtId, radius: u32) vo
     var idx = start;
     while (idx < end) : (idx += 1) {
         const stmt_id: MIR.CFStmtId = @enumFromInt(@as(u32, @intCast(idx)));
-        std.debug.print(
+        dumpStmt(store, stmt_id);
+    }
+}
+
+fn dumpStmt(store: *const MIR.Store, stmt_id: MIR.CFStmtId) void {
+    switch (store.getCFStmt(stmt_id)) {
+        .assign_ref => |assign| std.debug.print(
+            "  MIR stmt {d}: assign_ref target={d} op={any} next={d}\n",
+            .{ @intFromEnum(stmt_id), @intFromEnum(assign.target), assign.op, @intFromEnum(assign.next) },
+        ),
+        .assign_low_level => |assign| std.debug.print(
+            "  MIR stmt {d}: assign_low_level target={d} op={s} args={any} next={d}\n",
+            .{
+                @intFromEnum(stmt_id),
+                @intFromEnum(assign.target),
+                @tagName(assign.op),
+                store.getLocalSpan(assign.args),
+                @intFromEnum(assign.next),
+            },
+        ),
+        .assign_call => |assign| std.debug.print(
+            "  MIR stmt {d}: assign_call target={d} callee={d} args={any} next={d}\n",
+            .{
+                @intFromEnum(stmt_id),
+                @intFromEnum(assign.target),
+                @intFromEnum(assign.callee),
+                store.getLocalSpan(assign.args),
+                @intFromEnum(assign.next),
+            },
+        ),
+        .assign_literal => |assign| std.debug.print(
+            "  MIR stmt {d}: assign_literal target={d} literal={any} next={d}\n",
+            .{ @intFromEnum(stmt_id), @intFromEnum(assign.target), assign.literal, @intFromEnum(assign.next) },
+        ),
+        .switch_stmt => |switch_stmt| std.debug.print(
+            "  MIR stmt {d}: switch scrutinee={d} branches={d} default={d}\n",
+            .{
+                @intFromEnum(stmt_id),
+                @intFromEnum(switch_stmt.scrutinee),
+                store.getSwitchBranches(switch_stmt.branches).len,
+                @intFromEnum(switch_stmt.default_branch),
+            },
+        ),
+        .join => |join| std.debug.print(
+            "  MIR stmt {d}: join id={d} params={any} body={d} remainder={d}\n",
+            .{
+                @intFromEnum(stmt_id),
+                @intFromEnum(join.id),
+                store.getLocalSpan(join.params),
+                @intFromEnum(join.body),
+                @intFromEnum(join.remainder),
+            },
+        ),
+        .jump => |jump| std.debug.print(
+            "  MIR stmt {d}: jump id={d} args={any}\n",
+            .{ @intFromEnum(stmt_id), @intFromEnum(jump.id), store.getLocalSpan(jump.args) },
+        ),
+        else => std.debug.print(
             "  MIR stmt {d}: {any}\n",
-            .{ idx, store.getCFStmt(stmt_id) },
-        );
+            .{ @intFromEnum(stmt_id), store.getCFStmt(stmt_id) },
+        ),
+    }
+}
+
+fn dumpStmtPredecessors(store: *const MIR.Store, target: MIR.CFStmtId) void {
+    std.debug.print("  MIR predecessors for stmt {d}:\n", .{@intFromEnum(target)});
+    for (store.cf_stmts.items, 0..) |stmt, idx| {
+        const stmt_id: MIR.CFStmtId = @enumFromInt(@as(u32, @intCast(idx)));
+        switch (stmt) {
+            .assign_symbol => |assign| if (assign.next == target) dumpStmt(store, stmt_id),
+            .assign_ref => |assign| if (assign.next == target) dumpStmt(store, stmt_id),
+            .assign_literal => |assign| if (assign.next == target) dumpStmt(store, stmt_id),
+            .assign_lambda => |assign| if (assign.next == target) dumpStmt(store, stmt_id),
+            .assign_closure => |assign| if (assign.next == target) dumpStmt(store, stmt_id),
+            .assign_call => |assign| if (assign.next == target) dumpStmt(store, stmt_id),
+            .assign_low_level => |assign| if (assign.next == target) dumpStmt(store, stmt_id),
+            .assign_list => |assign| if (assign.next == target) dumpStmt(store, stmt_id),
+            .assign_struct => |assign| if (assign.next == target) dumpStmt(store, stmt_id),
+            .assign_tag => |assign| if (assign.next == target) dumpStmt(store, stmt_id),
+            .debug => |debug_stmt| if (debug_stmt.next == target) dumpStmt(store, stmt_id),
+            .expect => |expect_stmt| if (expect_stmt.next == target) dumpStmt(store, stmt_id),
+            .switch_stmt => |switch_stmt| {
+                if (switch_stmt.default_branch == target) dumpStmt(store, stmt_id);
+                for (store.getSwitchBranches(switch_stmt.branches)) |branch| {
+                    if (branch.body == target) {
+                        dumpStmt(store, stmt_id);
+                        break;
+                    }
+                }
+            },
+            .borrow_scope => |scope| {
+                if (scope.body == target or scope.remainder == target) dumpStmt(store, stmt_id);
+            },
+            .join => |join_stmt| {
+                if (join_stmt.body == target or join_stmt.remainder == target) dumpStmt(store, stmt_id);
+            },
+            else => {},
+        }
     }
 }
 

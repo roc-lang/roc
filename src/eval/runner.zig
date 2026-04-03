@@ -280,7 +280,6 @@ fn runViaInterpreter(
         .ret_layout = ret_layout,
         .arg_ptr = args_ptr,
         .ret_ptr = result_ptr,
-        .recover_runtime_placeholders = true,
     }) catch {
         return error.EvalFailed;
     };

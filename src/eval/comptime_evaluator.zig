@@ -1092,7 +1092,6 @@ pub const ComptimeEvaluator = struct {
             .ret_layout = ret_layout_idx,
             .arg_ptr = @ptrCast(arg_buf.ptr),
             .ret_ptr = @ptrCast(ret_buf.ptr),
-            .recover_runtime_placeholders = true,
         }) catch |err| {
             const crash_msg = interp.getCrashMessage() orelse @errorName(err);
             const error_msg = try self.problems.putFmtExtraString(

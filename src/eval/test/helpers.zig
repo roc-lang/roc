@@ -1,6 +1,7 @@
 //! Tests for the expression evaluator
 const std = @import("std");
 const builtin = @import("builtin");
+const build_options = @import("build_options");
 const parse = @import("parse");
 const types = @import("types");
 const base = @import("base");
@@ -50,6 +51,16 @@ const test_allocator = std.testing.allocator;
 
 /// Use std.testing.allocator for interpreter tests so leaks fail tests.
 pub const interpreter_allocator = test_allocator;
+
+const trace = struct {
+    const enabled = if (@hasDecl(build_options, "trace_eval")) build_options.trace_eval else false;
+
+    fn log(comptime fmt: []const u8, args: anytype) void {
+        if (comptime enabled) {
+            std.debug.print("[eval-helpers] " ++ fmt ++ "\n", args);
+        }
+    }
+};
 
 const ParsedExprResources = struct {
     module_env: *ModuleEnv,
@@ -551,6 +562,7 @@ pub fn lirInterpreterStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, e
 /// Evaluate an already-Str.inspect-wrapped expression using the LIR interpreter.
 /// Same signature as devEvaluatorStr — used by the parallel test runner's runBackend.
 pub fn lirInterpreterInspectedStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, inspect_expr: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) ![]const u8 {
+    trace.log("interpreter lowering start expr={d}", .{@intFromEnum(inspect_expr)});
     var lir_prog = LirProgram.init(allocator, base.target.TargetUsize.native);
     defer lir_prog.deinit();
 
@@ -559,6 +571,7 @@ pub fn lirInterpreterInspectedStr(allocator: std.mem.Allocator, module_env: *Mod
 
     var lower_result = try lir_prog.lowerExpr(module_env, inspect_expr, &all_module_envs, null);
     defer lower_result.deinit();
+    trace.log("interpreter lowering done expr={d} root_proc={d}", .{ @intFromEnum(inspect_expr), @intFromEnum(lower_result.root_proc_id) });
 
     var test_env = TestEnv.init(allocator);
     defer test_env.deinit();
@@ -566,9 +579,11 @@ pub fn lirInterpreterInspectedStr(allocator: std.mem.Allocator, module_env: *Mod
     var interp = try Interpreter.init(allocator, &lower_result.lir_store, lower_result.layout_store, test_env.get_ops());
     defer interp.deinit();
 
+    trace.log("interpreter eval start expr={d}", .{@intFromEnum(inspect_expr)});
     const eval_result = try interp.eval(.{
         .proc_id = lower_result.root_proc_id,
     });
+    trace.log("interpreter eval done expr={d}", .{@intFromEnum(inspect_expr)});
 
     const value = switch (eval_result) {
         .value => |v| v,

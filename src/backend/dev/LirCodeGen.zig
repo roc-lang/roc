@@ -4182,12 +4182,96 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const size = self.getLayoutSize(layout_idx);
             switch (stable_loc) {
                 .stack => |stack_loc| try self.copyBytesToStackOffset(stack_loc.offset, normalized, size),
-                .stack_i128 => |offset| try self.copyBytesToStackOffset(offset, normalized, 16),
+                .stack_i128 => |offset| {
+                    const runtime_layout_idx = self.runtimeRepresentationLayoutIdx(layout_idx);
+                    try self.storeWideScalarToStackOffset(
+                        offset,
+                        normalized,
+                        switch (runtime_layout_idx) {
+                            .u128 => .unsigned,
+                            .i128, .dec => .signed,
+                            else => std.debug.panic(
+                                "LirCodeGen invariant violated: stack_i128 stable location used for non-wide layout {d}",
+                                .{@intFromEnum(runtime_layout_idx)},
+                            ),
+                        },
+                    );
+                },
                 .stack_str => |offset| try self.copyBytesToStackOffset(offset, normalized, roc_str_size),
                 .list_stack => |list_loc| try self.copyBytesToStackOffset(list_loc.struct_offset, normalized, roc_list_size),
                 else => std.debug.panic(
                     "LirCodeGen invariant violated: assigned locals must use stack-backed stable locations, found {s}",
                     .{@tagName(stable_loc)},
+                ),
+            }
+        }
+
+        fn storeWideScalarToStackOffset(
+            self: *Self,
+            dest_offset: i32,
+            loc: ValueLocation,
+            signedness: std.builtin.Signedness,
+        ) Allocator.Error!void {
+            switch (loc) {
+                .immediate_i128 => |val| {
+                    const low: u64 = @truncate(@as(u128, @bitCast(val)));
+                    const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
+                    const reg = try self.allocTempGeneral();
+                    defer self.codegen.freeGeneral(reg);
+                    try self.codegen.emitLoadImm(reg, @bitCast(low));
+                    try self.codegen.emitStoreStack(.w64, dest_offset, reg);
+                    try self.codegen.emitLoadImm(reg, @bitCast(high));
+                    try self.codegen.emitStoreStack(.w64, dest_offset + 8, reg);
+                },
+                .immediate_i64 => |val| {
+                    const low: u64 = @bitCast(val);
+                    const high: u64 = switch (signedness) {
+                        .signed => if (val < 0) std.math.maxInt(u64) else 0,
+                        .unsigned => 0,
+                    };
+                    const reg = try self.allocTempGeneral();
+                    defer self.codegen.freeGeneral(reg);
+                    try self.codegen.emitLoadImm(reg, @bitCast(low));
+                    try self.codegen.emitStoreStack(.w64, dest_offset, reg);
+                    try self.codegen.emitLoadImm(reg, @bitCast(high));
+                    try self.codegen.emitStoreStack(.w64, dest_offset + 8, reg);
+                },
+                .general_reg => |reg| {
+                    const high_reg = try self.allocTempGeneral();
+                    defer self.codegen.freeGeneral(high_reg);
+                    try self.codegen.emitStoreStack(.w64, dest_offset, reg);
+                    switch (signedness) {
+                        .signed => {
+                            if (comptime target.toCpuArch() == .aarch64) {
+                                try self.codegen.emit.asrRegRegImm(.w64, high_reg, reg, 63);
+                            } else {
+                                try self.emitMovRegReg(high_reg, reg);
+                                try self.codegen.emit.sarRegImm8(.w64, high_reg, 63);
+                            }
+                        },
+                        .unsigned => try self.codegen.emitLoadImm(high_reg, 0),
+                    }
+                    try self.codegen.emitStoreStack(.w64, dest_offset + 8, high_reg);
+                },
+                .stack_i128 => |src_offset| {
+                    const temp_reg = try self.allocTempGeneral();
+                    defer self.codegen.freeGeneral(temp_reg);
+                    try self.codegen.emitLoadStack(.w64, temp_reg, src_offset);
+                    try self.codegen.emitStoreStack(.w64, dest_offset, temp_reg);
+                    try self.codegen.emitLoadStack(.w64, temp_reg, src_offset + 8);
+                    try self.codegen.emitStoreStack(.w64, dest_offset + 8, temp_reg);
+                },
+                .stack => |stack_loc| {
+                    const temp_reg = try self.allocTempGeneral();
+                    defer self.codegen.freeGeneral(temp_reg);
+                    try self.codegen.emitLoadStack(.w64, temp_reg, stack_loc.offset);
+                    try self.codegen.emitStoreStack(.w64, dest_offset, temp_reg);
+                    try self.codegen.emitLoadStack(.w64, temp_reg, stack_loc.offset + 8);
+                    try self.codegen.emitStoreStack(.w64, dest_offset + 8, temp_reg);
+                },
+                else => std.debug.panic(
+                    "LirCodeGen invariant violated: unsupported wide scalar spill from {s}",
+                    .{@tagName(loc)},
                 ),
             }
         }

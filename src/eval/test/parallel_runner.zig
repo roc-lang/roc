@@ -49,6 +49,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const build_options = @import("build_options");
 const coverage_options = @import("coverage_options");
 const base = @import("base");
 const parse = @import("parse");
@@ -73,6 +74,16 @@ const BuiltinTypes = eval_mod.BuiltinTypes;
 const LoadedModule = eval_mod.builtin_loading.LoadedModule;
 const deserializeBuiltinIndices = eval_mod.builtin_loading.deserializeBuiltinIndices;
 const loadCompiledModule = eval_mod.builtin_loading.loadCompiledModule;
+
+const trace = struct {
+    const enabled = if (@hasDecl(build_options, "trace_eval")) build_options.trace_eval else false;
+
+    fn log(comptime fmt: []const u8, args: anytype) void {
+        if (comptime enabled) {
+            std.debug.print("[eval-test] " ++ fmt ++ "\n", args);
+        }
+    }
+};
 
 /// Pre-loaded builtin data, shared across all tests. In fork mode, loaded
 /// once in the parent and inherited by children via copy-on-write.
@@ -705,9 +716,11 @@ fn runValueTest(allocator: std.mem.Allocator, src: []const u8, expected: TestCas
             continue;
         }
 
+        trace.log("starting backend {s} for source {s}", .{ BACKEND_NAMES[i], src });
         var timer = Timer.start() catch unreachable;
         const fork_result = forkAndEval(eval_fns[i], resources.module_env, inspect_expr, resources.builtin_module.env);
         const dur = timer.read();
+        trace.log("finished backend {s} for source {s} in {d}ns", .{ BACKEND_NAMES[i], src, dur });
 
         switch (fork_result) {
             .success => |str| {
