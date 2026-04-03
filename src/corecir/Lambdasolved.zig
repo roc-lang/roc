@@ -1589,6 +1589,63 @@ pub fn collectDirectCallCallableParamSpecs(
     return true;
 }
 
+pub fn ensureCallableInstRealized(
+    driver: anytype,
+    result: anytype,
+    callable_inst_id: CallableInstId,
+) std.mem.Allocator.Error!void {
+    const callable_def = result.getCallableDefForInst(callable_inst_id);
+    if (result.getExprCallableValue(
+        callable_def.runtime_expr.source_context,
+        callable_def.runtime_expr.module_idx,
+        callable_def.runtime_expr.expr_idx,
+    ) != null) return;
+    try realizeCallableInstWithFreshRootAnalysis(driver, result, callable_inst_id);
+}
+
+pub fn requireCallableInst(
+    driver: anytype,
+    result: anytype,
+    defining_source_context: SourceContext,
+    template_id: CallableTemplateId,
+    fn_monotype: Monotype.Idx,
+    fn_monotype_module_idx: u32,
+) std.mem.Allocator.Error!CallableInstId {
+    const callable_inst_id = (try Lambdamono.ensureCallableInstRecord(
+        driver,
+        result,
+        defining_source_context,
+        template_id,
+        fn_monotype,
+        fn_monotype_module_idx,
+        &.{},
+    )).id;
+    try ensureCallableInstRealized(driver, result, callable_inst_id);
+    return callable_inst_id;
+}
+
+pub fn requireCallableInstWithCallableParamSpecs(
+    driver: anytype,
+    result: anytype,
+    defining_source_context: SourceContext,
+    template_id: CallableTemplateId,
+    fn_monotype: Monotype.Idx,
+    fn_monotype_module_idx: u32,
+    callable_param_specs: []const Lambdamono.CallableParamSpecEntry,
+) std.mem.Allocator.Error!CallableInstId {
+    const callable_inst_id = (try Lambdamono.ensureCallableInstRecord(
+        driver,
+        result,
+        defining_source_context,
+        template_id,
+        fn_monotype,
+        fn_monotype_module_idx,
+        callable_param_specs,
+    )).id;
+    try ensureCallableInstRealized(driver, result, callable_inst_id);
+    return callable_inst_id;
+}
+
 pub fn collectCallableParamSpecsFromArgument(
     driver: anytype,
     result: anytype,
@@ -1814,7 +1871,7 @@ pub fn specializeDirectCallExactCallable(
         }
     }
 
-    return try Lambdamono.requireCallableInstWithCallableParamSpecs(
+    return try requireCallableInstWithCallableParamSpecs(
         driver,
         result,
         defining_source_context,
@@ -2045,7 +2102,7 @@ pub fn finalizeResolvedDirectCallCallableInst(
     callee_expr: anytype,
     callable_inst_id: CallableInstId,
 ) std.mem.Allocator.Error!void {
-    try Lambdamono.ensureCallableInstRealized(driver, result, callable_inst_id);
+    try ensureCallableInstRealized(driver, result, callable_inst_id);
     const module_env = driver.all_module_envs[module_idx];
     const source_context = thread.requireSourceContext();
 
@@ -2996,7 +3053,7 @@ fn specializeDispatchExactCallable(
     );
     if (!callable_param_specs_complete) return null;
 
-    const callable_inst_id = try Lambdamono.requireCallableInstWithCallableParamSpecs(
+    const callable_inst_id = try requireCallableInstWithCallableParamSpecs(
         driver,
         result,
         defining_source_context,
@@ -3065,7 +3122,7 @@ fn ensureBuiltinBoxUnboxCallableInst(
         .effectful = false,
     } });
 
-    _ = try Lambdamono.requireCallableInst(
+    _ = try requireCallableInst(
         driver,
         result,
         templateSourceContext(result.getCallableTemplate(template_id).*),
@@ -3166,7 +3223,7 @@ fn resolveStrInspectHelperCallableInstsForTypeVarWithSeen(
                                     &bindings,
                                 );
                                 if (!method_func_mono.isNone()) {
-                                    _ = try Lambdamono.requireCallableInst(
+                                    _ = try requireCallableInst(
                                         driver,
                                         result,
                                         templateSourceContext(result.getCallableTemplate(method_info.template_id).*),
@@ -6762,7 +6819,7 @@ pub fn recordCallResultCallableValueFromCallee(
         variant_builder_inner: @TypeOf(variant_builder),
 
         fn run(self: @This(), root_analysis: *RootAnalysisState) std.mem.Allocator.Error!void {
-            try self.driver_inner.ensureCallableInstRealized(self.result_inner, self.callee_callable_inst_id_inner);
+            try ensureCallableInstRealized(self.driver_inner, self.result_inner, self.callee_callable_inst_id_inner);
             const callee_callable_inst = self.result_inner.getCallableInst(self.callee_callable_inst_id_inner);
             const callee_fn_mono = switch (self.result_inner.context_mono.monotype_store.getMonotype(callee_callable_inst.fn_monotype)) {
                 .func => |func| func,
@@ -8065,7 +8122,7 @@ pub fn realizeDispatchExprSemantics(
 
         const fn_monotype = try cm.resolveTypeVarMonotypeResolved(driver, result, thread, module_idx, resolved_target.fn_var);
         if (!fn_monotype.isNone()) {
-            break :blk try Lambdamono.requireCallableInst(
+            break :blk try requireCallableInst(
                 driver,
                 result,
                 thread.requireSourceContext(),

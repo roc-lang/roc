@@ -495,28 +495,6 @@ pub fn requireProgramExprSemanticShape(
     }
 }
 
-pub fn ensureCallableInstRealized(
-    driver: anytype,
-    result: anytype,
-    callable_inst_id: CallableInstId,
-) Allocator.Error!void {
-    const callable_inst = result.getCallableInst(callable_inst_id);
-    const template = result.getCallableTemplate(callable_inst.template);
-    const callable_source_context: SourceContext = .{
-        .callable_inst = @enumFromInt(@intFromEnum(callable_inst_id)),
-    };
-    if (result.getExprCallableValue(
-        callable_source_context,
-        template.module_idx,
-        template.runtime_expr,
-    ) != null) return;
-    try Lambdasolved.realizeCallableInstWithFreshRootAnalysis(
-        driver,
-        result,
-        callable_inst_id,
-    );
-}
-
 pub fn requireCallableInstRealized(
     _: anytype,
     result: anytype,
@@ -547,49 +525,6 @@ pub const EnsuredCallableInst = struct {
     id: CallableInstId,
     created: bool,
 };
-
-pub fn requireCallableInst(
-    driver: anytype,
-    result: anytype,
-    defining_source_context: SourceContext,
-    template_id: Lambdasolved.CallableTemplateId,
-    fn_monotype: Monotype.Idx,
-    fn_monotype_module_idx: u32,
-) Allocator.Error!CallableInstId {
-    const ensured = try ensureCallableInstRecord(
-        driver,
-        result,
-        defining_source_context,
-        template_id,
-        fn_monotype,
-        fn_monotype_module_idx,
-        &.{},
-    );
-    try ensureCallableInstRealized(driver, result, ensured.id);
-    return ensured.id;
-}
-
-pub fn requireCallableInstWithCallableParamSpecs(
-    driver: anytype,
-    result: anytype,
-    defining_source_context: SourceContext,
-    template_id: Lambdasolved.CallableTemplateId,
-    fn_monotype: Monotype.Idx,
-    fn_monotype_module_idx: u32,
-    callable_param_specs: []const CallableParamSpecEntry,
-) Allocator.Error!CallableInstId {
-    const ensured = try ensureCallableInstRecord(
-        driver,
-        result,
-        defining_source_context,
-        template_id,
-        fn_monotype,
-        fn_monotype_module_idx,
-        callable_param_specs,
-    );
-    try ensureCallableInstRealized(driver, result, ensured.id);
-    return ensured.id;
-}
 
 pub fn ensureCallableInstRecord(
     driver: anytype,
