@@ -1649,6 +1649,7 @@ pub fn collectCallableParamSpecsFromFunctionArgument(
     driver: anytype,
     visit_memo: *VisitMemo,
     result: anytype,
+    thread: SemanticThread,
     source_context: SourceContext,
     module_idx: u32,
     expr_idx: CIR.Expr.Idx,
@@ -1665,6 +1666,7 @@ pub fn collectCallableParamSpecsFromFunctionArgument(
         driver,
         visit_memo,
         result,
+        thread,
         .{
             .source_context = source_context,
             .module_idx = module_idx,
@@ -1684,7 +1686,7 @@ pub fn collectCallableParamSpecsFromFunctionArgument(
         driver,
         visit_memo,
         result,
-        null,
+        thread,
         source_context,
         module_idx,
         expr_idx,
@@ -1710,6 +1712,7 @@ pub fn collectDirectCallCallableParamSpecs(
     driver: anytype,
     visit_memo: *VisitMemo,
     result: anytype,
+    thread: SemanticThread,
     source_context: SourceContext,
     caller_module_idx: u32,
     fn_monotype: anytype,
@@ -1732,6 +1735,7 @@ pub fn collectDirectCallCallableParamSpecs(
             driver,
             visit_memo,
             result,
+            thread,
             source_context,
             caller_module_idx,
             arg_expr_idx,
@@ -1849,6 +1853,7 @@ pub fn collectCallableParamSpecsFromArgument(
     driver: anytype,
     visit_memo: *VisitMemo,
     result: anytype,
+    thread: SemanticThread,
     source_context: SourceContext,
     module_idx: u32,
     expr_idx: CIR.Expr.Idx,
@@ -1864,6 +1869,7 @@ pub fn collectCallableParamSpecsFromArgument(
                 driver,
                 visit_memo,
                 result,
+                thread,
                 source_context,
                 module_idx,
                 expr_idx,
@@ -1906,6 +1912,7 @@ pub fn collectCallableParamSpecsFromArgument(
                     driver,
                     visit_memo,
                     result,
+                    thread,
                     source_context,
                     module_idx,
                     expr_idx,
@@ -1928,6 +1935,7 @@ pub fn collectCallableParamSpecsFromArgument(
                     driver,
                     visit_memo,
                     result,
+                    thread,
                     source_context,
                     module_idx,
                     expr_idx,
@@ -2058,6 +2066,7 @@ pub fn specializeDirectCallExactCallable(
         driver,
         visit_memo,
         result,
+        thread,
         thread.requireSourceContext(),
         module_idx,
         fn_monotype,
@@ -3739,6 +3748,7 @@ fn specializeDispatchExactCallable(
         driver,
         visit_memo,
         result,
+        thread,
         thread.requireSourceContext(),
         module_idx,
         fn_monotype,
@@ -5445,6 +5455,7 @@ pub fn propagateDemandedCallableFnMonotypeToValueExpr(
     driver: anytype,
     visit_memo: *VisitMemo,
     result: anytype,
+    thread: SemanticThread,
     source_context: SourceContext,
     module_idx: u32,
     expr_idx: CIR.Expr.Idx,
@@ -5471,6 +5482,7 @@ pub fn propagateDemandedCallableFnMonotypeToValueExpr(
                 driver,
                 visit_memo,
                 result,
+                thread,
                 source.source_context,
                 source.module_idx,
                 source.expr_idx,
@@ -5487,7 +5499,7 @@ pub fn propagateDemandedCallableFnMonotypeToValueExpr(
             driver,
             visit_memo,
             result,
-            null,
+            thread,
             source_context,
             module_idx,
             expr_idx,
@@ -5505,6 +5517,7 @@ pub fn propagateDemandedCallableFnMonotypeToValueExpr(
                     driver,
                     visit_memo,
                     result,
+                    thread,
                     source_context,
                     module_idx,
                     branch.body,
@@ -5517,6 +5530,7 @@ pub fn propagateDemandedCallableFnMonotypeToValueExpr(
                 driver,
                 visit_memo,
                 result,
+                thread,
                 source_context,
                 module_idx,
                 if_expr.final_else,
@@ -5532,6 +5546,7 @@ pub fn propagateDemandedCallableFnMonotypeToValueExpr(
                     driver,
                     visit_memo,
                     result,
+                    thread,
                     source_context,
                     module_idx,
                     branch.value,
@@ -5549,6 +5564,7 @@ fn propagateDemandedCallableFnMonotypeToExprRef(
     driver: anytype,
     visit_memo: *VisitMemo,
     result: anytype,
+    thread: SemanticThread,
     expr_ref: ExprRef,
     fn_monotype: Monotype.Idx,
     fn_monotype_module_idx: u32,
@@ -5558,6 +5574,7 @@ fn propagateDemandedCallableFnMonotypeToExprRef(
         driver,
         visit_memo,
         result,
+        thread,
         expr_ref.source_context,
         expr_ref.module_idx,
         expr_ref.expr_idx,
@@ -5572,6 +5589,7 @@ fn propagateDemandedCallableFnMonotypeToExprRefProjections(
     driver: anytype,
     visit_memo: *VisitMemo,
     result: anytype,
+    thread: SemanticThread,
     source_context: SourceContext,
     module_idx: u32,
     expr_idx: CIR.Expr.Idx,
@@ -5585,6 +5603,7 @@ fn propagateDemandedCallableFnMonotypeToExprRefProjections(
             driver,
             visit_memo,
             result,
+            thread,
             source_context,
             module_idx,
             expr_idx,
@@ -5605,6 +5624,7 @@ fn propagateDemandedCallableFnMonotypeToExprRefProjections(
             driver,
             visit_memo,
             result,
+            thread,
             origin.source_context,
             origin.module_idx,
             origin.expr_idx,
@@ -5629,6 +5649,7 @@ fn propagateDemandedCallableFnMonotypeToExprRefProjections(
                         driver,
                         visit_memo,
                         result,
+                        thread,
                         source_context,
                         module_idx,
                         field.value,
@@ -5649,6 +5670,7 @@ fn propagateDemandedCallableFnMonotypeToExprRefProjections(
                     driver,
                     visit_memo,
                     result,
+                    thread,
                     source_context,
                     module_idx,
                     elems[elem_index],
@@ -5675,6 +5697,7 @@ fn propagateDemandedCallableFnMonotypeToExprRefProjections(
                     driver,
                     visit_memo,
                     result,
+                    thread,
                     source_context,
                     module_idx,
                     args[payload.payload_index],
@@ -5694,6 +5717,7 @@ fn propagateDemandedCallableFnMonotypeToExprRefProjections(
                     driver,
                     visit_memo,
                     result,
+                    thread,
                     source_context,
                     module_idx,
                     elems[elem_index],
@@ -6178,6 +6202,69 @@ fn extendThreadWithValueBindings(
         .bindings = bindings_copy,
     };
     return thread.withValueEnv(env);
+}
+
+fn materializeExprCallableSemanticsIfNeeded(
+    driver: anytype,
+    visit_memo: *VisitMemo,
+    result: anytype,
+    thread: SemanticThread,
+    module_idx: u32,
+    expr_idx: CIR.Expr.Idx,
+) std.mem.Allocator.Error!void {
+    const source_context = thread.requireSourceContext();
+    if (readExprCallableValue(result, source_context, module_idx, expr_idx) != null or
+        readExprCallSite(result, source_context, module_idx, expr_idx) != null or
+        result.getExprIntroCallableInst(source_context, module_idx, expr_idx) != null)
+    {
+        return;
+    }
+
+    const resolved = (try cm.resolveExprMonotypeResolved(
+        driver,
+        result,
+        thread,
+        module_idx,
+        expr_idx,
+    )) orelse return;
+    if (result.context_mono.monotype_store.getMonotype(resolved.idx) != .func and
+        result.getExprTemplateId(source_context, module_idx, expr_idx) == null)
+    {
+        return;
+    }
+
+    var visiting: std.AutoHashMapUnmanaged(ContextExprKey, void) = .empty;
+    defer visiting.deinit(driver.allocator);
+    try realizeStructuredExprCallableSemantics(
+        driver,
+        visit_memo,
+        result,
+        thread,
+        source_context,
+        module_idx,
+        expr_idx,
+        &visiting,
+    );
+}
+
+fn materializeExprSpanCallableSemanticsIfNeeded(
+    driver: anytype,
+    visit_memo: *VisitMemo,
+    result: anytype,
+    thread: SemanticThread,
+    module_idx: u32,
+    exprs: []const CIR.Expr.Idx,
+) std.mem.Allocator.Error!void {
+    for (exprs) |child_expr_idx| {
+        try materializeExprCallableSemanticsIfNeeded(
+            driver,
+            visit_memo,
+            result,
+            thread,
+            module_idx,
+            child_expr_idx,
+        );
+    }
 }
 
 fn appendPatternValueBindingsFromSourceExpr(
@@ -6667,6 +6754,158 @@ fn prebindBlockStmtValueBindings(
     return bound_thread;
 }
 
+const RecursiveBlockCallableEntry = struct {
+    pattern_idx: CIR.Pattern.Idx,
+    template_id: CallableTemplateId,
+    fn_monotype: ResolvedMonotype,
+    callable_inst_id: ?CallableInstId = null,
+};
+
+fn prebindBlockRecursiveCallableBindings(
+    driver: anytype,
+    visit_memo: *VisitMemo,
+    result: anytype,
+    thread: SemanticThread,
+    module_idx: u32,
+    stmts: []const CIR.Statement.Idx,
+) std.mem.Allocator.Error!SemanticThread {
+    const module_env = driver.all_module_envs[module_idx];
+    var entries = std.ArrayListUnmanaged(RecursiveBlockCallableEntry).empty;
+    defer entries.deinit(driver.allocator);
+    var entry_index_by_pattern = std.AutoHashMapUnmanaged(CIR.Pattern.Idx, usize).empty;
+    defer entry_index_by_pattern.deinit(driver.allocator);
+
+    for (stmts) |stmt_idx| {
+        const stmt = module_env.store.getStatement(stmt_idx);
+        const pattern_idx, const expr_idx = switch (stmt) {
+            .s_decl => |decl| .{ decl.pattern, decl.expr },
+            .s_var => |var_decl| .{ var_decl.pattern_idx, var_decl.expr },
+            else => continue,
+        };
+        const template_id = result.getExprTemplateId(thread.requireSourceContext(), module_idx, expr_idx) orelse continue;
+        const template = result.getCallableTemplate(template_id);
+        if (template.kind != .closure) continue;
+        const fn_monotype = try resolveTemplateFnMonotypeForThread(driver, result, thread, template_id) orelse continue;
+        try entry_index_by_pattern.put(driver.allocator, pattern_idx, entries.items.len);
+        try entries.append(driver.allocator, .{
+            .pattern_idx = pattern_idx,
+            .template_id = template_id,
+            .fn_monotype = fn_monotype,
+        });
+    }
+
+    if (entries.items.len == 0) return thread;
+
+    const n = entries.items.len;
+    const reach = try driver.allocator.alloc(bool, n * n);
+    defer driver.allocator.free(reach);
+    @memset(reach, false);
+
+    for (entries.items, 0..) |entry, i| {
+        const template = result.getCallableTemplate(entry.template_id);
+        const closure_expr = switch (module_env.store.getExpr(template.runtime_expr)) {
+            .e_closure => |closure| closure,
+            else => continue,
+        };
+        for (module_env.store.sliceCaptures(closure_expr.captures)) |capture_idx| {
+            const capture = module_env.store.getCapture(capture_idx);
+            const target_index = entry_index_by_pattern.get(capture.pattern_idx) orelse continue;
+            reach[i * n + target_index] = true;
+        }
+    }
+
+    var k: usize = 0;
+    while (k < n) : (k += 1) {
+        var i: usize = 0;
+        while (i < n) : (i += 1) {
+            if (!reach[i * n + k]) continue;
+            var j: usize = 0;
+            while (j < n) : (j += 1) {
+                if (reach[k * n + j]) {
+                    reach[i * n + j] = true;
+                }
+            }
+        }
+    }
+
+    var assigned = try driver.allocator.alloc(bool, n);
+    defer driver.allocator.free(assigned);
+    @memset(assigned, false);
+
+    var recursive_bindings = std.ArrayListUnmanaged(CallableLexicalBinding).empty;
+    defer recursive_bindings.deinit(driver.allocator);
+    var recursive_group_ids = std.ArrayListUnmanaged(CallableInstId).empty;
+    defer recursive_group_ids.deinit(driver.allocator);
+    var recursive_group_spans = std.ArrayListUnmanaged(Lambdamono.CallableInstIdSpan).empty;
+    defer recursive_group_spans.deinit(driver.allocator);
+
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        if (assigned[i]) continue;
+        if (!reach[i * n + i]) continue;
+
+        const group_start: u32 = @intCast(recursive_group_ids.items.len);
+        var j: usize = i;
+        while (j < n) : (j += 1) {
+            if (!(reach[i * n + j] and reach[j * n + i])) continue;
+            assigned[j] = true;
+
+            const entry = &entries.items[j];
+            const callable_inst_id = (try ensureCallableInstRecord(
+                driver,
+                result,
+                thread.requireSourceContext(),
+                entry.template_id,
+                entry.fn_monotype.idx,
+                entry.fn_monotype.module_idx,
+                &.{},
+            )).id;
+            entry.callable_inst_id = callable_inst_id;
+            try recursive_bindings.append(driver.allocator, .{
+                .module_idx = module_idx,
+                .pattern_idx = entry.pattern_idx,
+                .callable_value = .{ .direct = callable_inst_id },
+            });
+            try recursive_group_ids.append(driver.allocator, callable_inst_id);
+        }
+
+        const group_len: u16 = @intCast(recursive_group_ids.items.len - group_start);
+        if (group_len != 0) {
+            try recursive_group_spans.append(driver.allocator, .{
+                .start = group_start,
+                .len = group_len,
+            });
+        }
+    }
+
+    if (recursive_bindings.items.len == 0) return thread;
+
+    const bound_thread = try extendThreadWithCallableBindings(
+        driver,
+        thread,
+        recursive_bindings.items,
+    );
+
+    for (recursive_group_spans.items) |span| {
+        try result.lambdasolved.recordCallableInstRecursiveGroup(
+            driver.allocator,
+            recursive_group_ids.items[span.start..][0..span.len],
+        );
+    }
+    for (entries.items) |entry| {
+        const callable_inst_id = entry.callable_inst_id orelse continue;
+        try ensureCallableInstCaptureBindingsFromThread(
+            driver,
+            visit_memo,
+            result,
+            bound_thread,
+            callable_inst_id,
+        );
+    }
+
+    return bound_thread;
+}
+
 pub fn includeExprCallableValue(
     driver: anytype,
     visit_memo: *VisitMemo,
@@ -7125,10 +7364,16 @@ fn scanCirExprChildren(
             expr,
         ),
         .e_str => |str_expr| try scanCirValueExprSpanWithDirectCallResolution(driver, visit_memo, result, thread, module_idx, module_env.store.sliceExpr(str_expr.span), resolve_direct_calls),
-        .e_list => |list_expr| try scanCirValueExprSpanWithDirectCallResolution(driver, visit_memo, result, thread, module_idx, module_env.store.sliceExpr(list_expr.elems), resolve_direct_calls),
+        .e_list => |list_expr| {
+            const elems = module_env.store.sliceExpr(list_expr.elems);
+            try scanCirValueExprSpanWithDirectCallResolution(driver, visit_memo, result, thread, module_idx, elems, resolve_direct_calls);
+            try materializeExprSpanCallableSemanticsIfNeeded(driver, visit_memo, result, thread, module_idx, elems);
+        },
         .e_tuple => |tuple_expr| {
             try recordDemandedTupleElemMonotypes(driver, result, thread, module_idx, expr_idx, tuple_expr);
-            try scanCirValueExprSpanWithDirectCallResolution(driver, visit_memo, result, thread, module_idx, module_env.store.sliceExpr(tuple_expr.elems), resolve_direct_calls);
+            const elems = module_env.store.sliceExpr(tuple_expr.elems);
+            try scanCirValueExprSpanWithDirectCallResolution(driver, visit_memo, result, thread, module_idx, elems, resolve_direct_calls);
+            try materializeExprSpanCallableSemanticsIfNeeded(driver, visit_memo, result, thread, module_idx, elems);
         },
         .e_match => |match_expr| {
             try scanCirExprWithDirectCallResolution(driver, visit_memo, result, thread, module_idx, match_expr.cond, resolve_direct_calls);
@@ -7253,6 +7498,7 @@ fn scanCirExprChildren(
         .e_record => |record_expr| {
             if (record_expr.ext) |ext_expr| {
                 try scanCirExprWithDirectCallResolution(driver, visit_memo, result, thread, module_idx, ext_expr, resolve_direct_calls);
+                try materializeExprCallableSemanticsIfNeeded(driver, visit_memo, result, thread, module_idx, ext_expr);
             }
 
             try recordDemandedRecordFieldMonotypes(driver, result, thread, module_idx, expr_idx, record_expr);
@@ -7261,6 +7507,7 @@ fn scanCirExprChildren(
             for (fields) |field_idx| {
                 const field = module_env.store.getRecordField(field_idx);
                 try scanCirValueExprWithDirectCallResolution(driver, visit_memo, result, thread, module_idx, field.value, resolve_direct_calls);
+                try materializeExprCallableSemanticsIfNeeded(driver, visit_memo, result, thread, module_idx, field.value);
             }
         },
         .e_block => |block_expr| {
@@ -7286,8 +7533,13 @@ fn scanCirExprChildren(
                 expr_idx,
                 exprRefAliasOrSelf(result, block_thread.requireSourceContext(), module_idx, block_expr.final_expr),
             );
+            try materializeExprCallableSemanticsIfNeeded(driver, visit_memo, result, block_thread, module_idx, expr_idx);
         },
-        .e_tag => |tag_expr| try scanCirValueExprSpanWithDirectCallResolution(driver, visit_memo, result, thread, module_idx, module_env.store.sliceExpr(tag_expr.args), resolve_direct_calls),
+        .e_tag => |tag_expr| {
+            const args = module_env.store.sliceExpr(tag_expr.args);
+            try scanCirValueExprSpanWithDirectCallResolution(driver, visit_memo, result, thread, module_idx, args, resolve_direct_calls);
+            try materializeExprSpanCallableSemanticsIfNeeded(driver, visit_memo, result, thread, module_idx, args);
+        },
         .e_nominal => |nominal_expr| {
             try scanCirValueExprWithDirectCallResolution(driver, visit_memo, result, thread, module_idx, nominal_expr.backing_expr, resolve_direct_calls);
             try recordExprSourceExpr(
@@ -7298,6 +7550,7 @@ fn scanCirExprChildren(
                 expr_idx,
                 exprRefAliasOrSelf(result, thread.requireSourceContext(), module_idx, nominal_expr.backing_expr),
             );
+            try materializeExprCallableSemanticsIfNeeded(driver, visit_memo, result, thread, module_idx, expr_idx);
         },
         .e_nominal_external => |nominal_expr| {
             try scanCirValueExprWithDirectCallResolution(driver, visit_memo, result, thread, module_idx, nominal_expr.backing_expr, resolve_direct_calls);
@@ -7309,6 +7562,7 @@ fn scanCirExprChildren(
                 expr_idx,
                 exprRefAliasOrSelf(result, thread.requireSourceContext(), module_idx, nominal_expr.backing_expr),
             );
+            try materializeExprCallableSemanticsIfNeeded(driver, visit_memo, result, thread, module_idx, expr_idx);
         },
         .e_closure => |closure_expr| {
             const lambda_expr = module_env.store.getExpr(closure_expr.lambda_idx);
@@ -7359,6 +7613,7 @@ fn scanCirExprChildren(
                     .ident = dot_expr.field_name,
                 } });
                 try recordExprSourceExpr(driver, result, thread.requireSourceContext(), module_idx, expr_idx, field_source);
+                try materializeExprCallableSemanticsIfNeeded(driver, visit_memo, result, thread, module_idx, expr_idx);
             }
         },
         .e_tuple_access => |tuple_access| {
@@ -7366,6 +7621,7 @@ fn scanCirExprChildren(
             const tuple_source = exprRefAliasOrSelf(result, thread.requireSourceContext(), module_idx, tuple_access.tuple);
             const elem_source = try extendExprRef(driver, result, tuple_source, .{ .tuple_elem = tuple_access.elem_index });
             try recordExprSourceExpr(driver, result, thread.requireSourceContext(), module_idx, expr_idx, elem_source);
+            try materializeExprCallableSemanticsIfNeeded(driver, visit_memo, result, thread, module_idx, expr_idx);
         },
         .e_dbg => |dbg_expr| {
             try propagateDemandedValueResultMonotypeToChild(driver, result, thread, module_idx, expr_idx, dbg_expr.expr);
@@ -7378,6 +7634,7 @@ fn scanCirExprChildren(
                 expr_idx,
                 exprRefAliasOrSelf(result, thread.requireSourceContext(), module_idx, dbg_expr.expr),
             );
+            try materializeExprCallableSemanticsIfNeeded(driver, visit_memo, result, thread, module_idx, expr_idx);
         },
         .e_expect => |expect_expr| {
             try propagateDemandedValueResultMonotypeToChild(driver, result, thread, module_idx, expr_idx, expect_expr.body);
@@ -7390,6 +7647,7 @@ fn scanCirExprChildren(
                 expr_idx,
                 exprRefAliasOrSelf(result, thread.requireSourceContext(), module_idx, expect_expr.body),
             );
+            try materializeExprCallableSemanticsIfNeeded(driver, visit_memo, result, thread, module_idx, expr_idx);
         },
         .e_return => |return_expr| {
             try scanCirValueExprWithDirectCallResolution(driver, visit_memo, result, thread, module_idx, return_expr.expr, resolve_direct_calls);
@@ -7401,6 +7659,7 @@ fn scanCirExprChildren(
                 expr_idx,
                 exprRefAliasOrSelf(result, thread.requireSourceContext(), module_idx, return_expr.expr),
             );
+            try materializeExprCallableSemanticsIfNeeded(driver, visit_memo, result, thread, module_idx, expr_idx);
         },
         .e_type_var_dispatch => |dispatch_expr| {
             try scanCirExprSpanWithDirectCallResolution(driver, visit_memo, result, thread, module_idx, module_env.store.sliceExpr(dispatch_expr.args), resolve_direct_calls);
@@ -7685,13 +7944,61 @@ fn resolveDemandedFnMonotypeFromCallShape(
     const param_vars = shape_types.sliceVars(resolved_func.func.args);
     if (param_vars.len != actual_args.len) return null;
 
+    const Worker = struct {
+        fn exactExprMonotypeWithoutDefaulting(
+            driver_worker: @TypeOf(driver),
+            result_worker: @TypeOf(result),
+            thread_worker: SemanticThread,
+            module_idx_worker: u32,
+            expr_idx_worker: CIR.Expr.Idx,
+        ) std.mem.Allocator.Error!?cm.ResolvedMonotype {
+            const source_context_worker = thread_worker.requireSourceContext();
+            if (cm.lookupExprMonotypeForSourceContext(
+                result_worker,
+                source_context_worker,
+                module_idx_worker,
+                expr_idx_worker,
+            )) |resolved| {
+                return resolved;
+            }
+
+            const module_env_worker = driver_worker.all_module_envs[module_idx_worker];
+            const mono = try cm.monotypeFromTypeVarInSourceContext(
+                driver_worker,
+                result_worker,
+                source_context_worker,
+                module_idx_worker,
+                &module_env_worker.types,
+                ModuleEnv.varFrom(expr_idx_worker),
+            );
+            if (mono.isNone()) return null;
+            const resolved = cm.resolvedMonotype(mono, module_idx_worker);
+            try cm.recordExprMonotypeForThread(
+                driver_worker,
+                result_worker,
+                thread_worker,
+                module_idx_worker,
+                expr_idx_worker,
+                resolved.idx,
+                resolved.module_idx,
+            );
+            return resolved;
+        }
+    };
+
     var bindings = std.AutoHashMap(cm.BoundTypeVarKey, ResolvedMonotype).init(driver.allocator);
     defer bindings.deinit();
     var ordered_entries = std.ArrayList(cm.TypeSubstEntry).empty;
     defer ordered_entries.deinit(driver.allocator);
 
     for (param_vars, actual_args) |param_var, arg_expr_idx| {
-        const arg_mono = (try cm.resolveExprMonotypeResolved(driver, result, thread, module_idx, arg_expr_idx)) orelse return null;
+        const arg_mono = (try Worker.exactExprMonotypeWithoutDefaulting(
+            driver,
+            result,
+            thread,
+            module_idx,
+            arg_expr_idx,
+        )) orelse return null;
         if (arg_mono.isNone()) return null;
         try cm.bindTypeVarMonotypes(
             driver,
@@ -7706,19 +8013,27 @@ fn resolveDemandedFnMonotypeFromCallShape(
         );
     }
 
-    const ret_mono = (try cm.resolveExprMonotypeResolved(driver, result, thread, module_idx, call_expr_idx)) orelse return null;
-    if (ret_mono.isNone()) return null;
-    try cm.bindTypeVarMonotypes(
+    if (try Worker.exactExprMonotypeWithoutDefaulting(
         driver,
         result,
-        shape_module_idx,
-        shape_types,
-        &bindings,
-        &ordered_entries,
-        resolved_func.func.ret,
-        ret_mono.idx,
-        ret_mono.module_idx,
-    );
+        thread,
+        module_idx,
+        call_expr_idx,
+    )) |ret_mono| {
+        if (!ret_mono.isNone()) {
+            try cm.bindTypeVarMonotypes(
+                driver,
+                result,
+                shape_module_idx,
+                shape_types,
+                &bindings,
+                &ordered_entries,
+                resolved_func.func.ret,
+                ret_mono.idx,
+                ret_mono.module_idx,
+            );
+        }
+    }
 
     const exact_fn_mono = try cm.resolveTypeVarMonotypeWithBindings(
         driver,
@@ -7810,6 +8125,7 @@ pub fn resolveDirectCallSite(
             driver,
             visit_memo,
             result,
+            thread,
             thread.requireSourceContext(),
             module_idx,
             callee_expr_idx,
@@ -7873,6 +8189,7 @@ pub fn resolveDirectCallSite(
             driver,
             visit_memo,
             result,
+            thread,
             thread.requireSourceContext(),
             module_idx,
             desired_fn_monotype.?.idx,
