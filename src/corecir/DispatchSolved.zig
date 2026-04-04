@@ -29,6 +29,7 @@ pub const DispatchExprTarget = struct {
 pub const ExactDispatchSite = struct {
     method_name: Ident.Idx,
     fn_var: types.Var,
+    fn_monotype: ContextMono.ResolvedMonotype,
 };
 
 pub const ResolvedDispatchTarget = struct {
@@ -285,7 +286,7 @@ pub fn extractExactDispatchSiteForExpr(
 ) Allocator.Error!?ExactDispatchSite {
     const module_env = driver.all_module_envs[module_idx];
     const requirement = module_env.types.findStaticDispatchSiteRequirement(ModuleEnv.varFrom(expr_idx), method_name) orelse return null;
-    const fn_monotype = try ContextMono.resolveTypeVarMonotypeResolved(
+    const fn_monotype = try ContextMono.resolveTypeVarExactMonotypeResolved(
         driver,
         result,
         thread,
@@ -296,6 +297,7 @@ pub fn extractExactDispatchSiteForExpr(
     return .{
         .method_name = requirement.method_name,
         .fn_var = requirement.fn_var,
+        .fn_monotype = fn_monotype,
     };
 }
 

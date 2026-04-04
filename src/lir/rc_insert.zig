@@ -653,14 +653,8 @@ pub const RcInsertPass = struct {
                     );
                 }
 
-                for (args, params, 0..) |arg, param, i| {
+                for (args, params, 0..) |arg, _, i| {
                     seen[i] = true;
-                    if (self.forwardingAliasRepresentative(arg)) |resolved_root| {
-                        if (resolved_root == param) continue;
-                        if (self.forwardingAliasRepresentative(param)) |param_root| {
-                            if (resolved_root == param_root) continue;
-                        }
-                    }
                     const carries_ownership = self.localCarriesOwnedValue(arg);
                     all_owned[i] = all_owned[i] and carries_ownership;
                 }
@@ -1146,6 +1140,8 @@ pub const RcInsertPass = struct {
     }
 
     fn analyzeProcParamUseKinds(self: *RcInsertPass, proc_index: usize, proc: LIR.LirProcSpec) Allocator.Error![]UseKind {
+        self.clearAnalysisState();
+
         const params = self.store.getLocalSpan(proc.args);
         const seed_use_kinds = if (proc_index < self.proc_param_use_kinds.items.len and self.proc_param_use_kinds.items[proc_index].len == params.len)
             self.proc_param_use_kinds.items[proc_index]

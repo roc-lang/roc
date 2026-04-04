@@ -2137,6 +2137,64 @@ pub fn bindCurrentCallFromFnMonotype(
     _ = call_expr_idx;
 }
 
+fn bindCurrentDispatchFromFnMonotype(
+    driver: anytype,
+    result: anytype,
+    thread: SemanticThread,
+    module_idx: u32,
+    expr_idx: CIR.Expr.Idx,
+    expr: CIR.Expr,
+    fn_monotype: Monotype.Idx,
+    fn_monotype_module_idx: u32,
+) std.mem.Allocator.Error!void {
+    const fn_mono = switch (result.context_mono.monotype_store.getMonotype(fn_monotype)) {
+        .func => |func| func,
+        else => return,
+    };
+
+    var actual_args = std.ArrayList(CIR.Expr.Idx).empty;
+    defer actual_args.deinit(driver.allocator);
+    try appendDispatchActualArgsFromExpr(driver, module_idx, expr, &actual_args);
+
+    if (actual_args.items.len != fn_mono.args.len) return;
+
+    for (actual_args.items, 0..) |arg_expr_idx, i| {
+        const param_mono = result.context_mono.monotype_store.getIdxSpanItem(fn_mono.args, i);
+        if (result.context_mono.monotype_store.getMonotype(param_mono) != .func) {
+            try cm.recordExprMonotypeForThread(
+                driver,
+                result,
+                thread,
+                module_idx,
+                arg_expr_idx,
+                param_mono,
+                fn_monotype_module_idx,
+            );
+            try propagateDemandedValueMonotypeToValueExpr(
+                driver,
+                result,
+                thread.requireSourceContext(),
+                module_idx,
+                arg_expr_idx,
+                param_mono,
+                fn_monotype_module_idx,
+            );
+        }
+    }
+
+    if (result.context_mono.monotype_store.getMonotype(fn_mono.ret) != .func) {
+        try cm.recordExprMonotypeForThread(
+            driver,
+            result,
+            thread,
+            module_idx,
+            expr_idx,
+            fn_mono.ret,
+            fn_monotype_module_idx,
+        );
+    }
+}
+
 fn propagateDemandedArgMonotypeForCallThread(
     driver: anytype,
     result: anytype,
@@ -3887,6 +3945,21 @@ fn specializeDispatchExactCallable(
     var actual_args = std.ArrayList(CIR.Expr.Idx).empty;
     defer actual_args.deinit(driver.allocator);
     try appendDispatchActualArgsFromExpr(driver, module_idx, expr, &actual_args);
+    const module_env = driver.all_module_envs[module_idx];
+    const method_name = switch (expr) {
+        .e_binop => |binop_expr| dispatchMethodIdentForExprBinop(module_env, binop_expr.op).?,
+        .e_dot_access => |dot_expr| dot_expr.field_name,
+        .e_type_var_dispatch => |dispatch_expr| dispatch_expr.method_name,
+        else => unreachable,
+    };
+    const site = DispatchSolved.exactDispatchSiteForExpr(
+        driver,
+        result,
+        thread,
+        module_idx,
+        expr_idx,
+        method_name,
+    ) orelse return null;
     const defining_source_context = requireTemplateDemandSourceContextForExpr(
         driver,
         visit_memo,
@@ -3912,17 +3985,8 @@ fn specializeDispatchExactCallable(
         }
         unreachable;
     }
-    const exact_desired_fn_monotype = (try resolveDemandedTemplateFnMonotypeFromCallShape(
-        driver,
-        result,
-        thread,
-        module_idx,
-        expr_idx,
-        actual_args.items,
-        template_id,
-    )) orelse return null;
-    const fn_monotype = exact_desired_fn_monotype.idx;
-    const fn_monotype_module_idx = exact_desired_fn_monotype.module_idx;
+    const fn_monotype = site.fn_monotype.idx;
+    const fn_monotype_module_idx = site.fn_monotype.module_idx;
 
     var callable_param_specs = std.ArrayListUnmanaged(Lambdamono.CallableParamSpecEntry).empty;
     defer callable_param_specs.deinit(driver.allocator);
@@ -3987,9 +4051,94 @@ fn resolveDemandedDispatchFnMonotype(
     fn_var: types.Var,
 ) std.mem.Allocator.Error!?cm.ResolvedMonotype {
     const module_env = driver.all_module_envs[module_idx];
+    const method_name = switch (expr) {
+        .e_binop => |binop_expr| dispatchMethodIdentForExprBinop(module_env, binop_expr.op) orelse return null,
+        .e_unary_minus => module_env.idents.negate,
+        .e_dot_access => |dot_expr| if (dot_expr.args != null) dot_expr.field_name else return null,
+        .e_type_var_dispatch => |dispatch_expr| dispatch_expr.method_name,
+        else => return null,
+    };
     var actual_args = std.ArrayList(CIR.Expr.Idx).empty;
     defer actual_args.deinit(driver.allocator);
     try appendDispatchActualArgsFromExpr(driver, module_idx, expr, &actual_args);
+    if (DispatchSolved.exactDispatchSiteForExpr(
+        driver,
+        result,
+        thread,
+        module_idx,
+        expr_idx,
+        method_name,
+    )) |site| {
+        if (std.debug.runtime_safety and site.fn_var != fn_var) {
+            std.debug.panic(
+                "Lambdasolved invariant violated: dispatch expr {d} in module {d} requested fn var {d} but cached exact dispatch site owned fn var {d}",
+                .{
+                    @intFromEnum(expr_idx),
+                    module_idx,
+                    @intFromEnum(fn_var),
+                    @intFromEnum(site.fn_var),
+                },
+            );
+        }
+        return site.fn_monotype;
+    }
+    const receiver_exact: ?cm.ResolvedMonotype = switch (expr) {
+        .e_binop => |binop_expr| try cm.resolveExprExactMonotypeResolved(
+            driver,
+            result,
+            thread,
+            module_idx,
+            binop_expr.lhs,
+        ),
+        .e_unary_minus => |unary_expr| try cm.resolveExprExactMonotypeResolved(
+            driver,
+            result,
+            thread,
+            module_idx,
+            unary_expr.expr,
+        ),
+        .e_dot_access => |dot_expr| try cm.resolveExprExactMonotypeResolved(
+            driver,
+            result,
+            thread,
+            module_idx,
+            dot_expr.receiver,
+        ),
+        .e_type_var_dispatch => |dispatch_expr| blk: {
+            const alias_stmt = module_env.store.getStatement(dispatch_expr.type_var_alias_stmt).s_type_var_alias;
+            const receiver_type_var = ModuleEnv.varFrom(alias_stmt.type_var_anno);
+            const resolved = try cm.resolveTypeVarExactMonotypeResolved(
+                driver,
+                result,
+                thread,
+                module_idx,
+                receiver_type_var,
+            );
+            break :blk if (resolved.isNone()) null else resolved;
+        },
+        else => null,
+    };
+    if (receiver_exact) |receiver_mono| {
+        if (try DispatchSolved.lookupAssociatedMethodTemplateForMonotype(
+            driver,
+            result,
+            module_idx,
+            receiver_mono.idx,
+            method_name,
+        )) |method_info| {
+            if (try resolveDemandedTemplateFnMonotypeFromCallShape(
+                driver,
+                result,
+                thread,
+                module_idx,
+                expr_idx,
+                actual_args.items,
+                method_info.template_id,
+            )) |resolved| {
+                return resolved;
+            }
+        }
+    }
     return resolveDemandedFnMonotypeFromCallShape(
         driver,
         result,
@@ -4001,6 +4150,54 @@ fn resolveDemandedDispatchFnMonotype(
         expr_idx,
         actual_args.items,
     );
+}
+
+fn ensureRecordedExactDispatchSiteFromDemandedFnMonotype(
+    driver: anytype,
+    result: anytype,
+    thread: SemanticThread,
+    module_idx: u32,
+    expr_idx: CIR.Expr.Idx,
+    expr: CIR.Expr,
+    method_name: Ident.Idx,
+) std.mem.Allocator.Error!?DispatchSolved.ExactDispatchSite {
+    if (DispatchSolved.exactDispatchSiteForExpr(
+        driver,
+        result,
+        thread,
+        module_idx,
+        expr_idx,
+        method_name,
+    )) |site| {
+        return site;
+    }
+
+    const requirement = driver.all_module_envs[module_idx].types.findStaticDispatchSiteRequirement(
+        ModuleEnv.varFrom(expr_idx),
+        method_name,
+    ) orelse return null;
+    const fn_monotype = (try resolveDemandedDispatchFnMonotype(
+        driver,
+        result,
+        thread,
+        module_idx,
+        expr_idx,
+        expr,
+        requirement.fn_var,
+    )) orelse return null;
+    const site: DispatchSolved.ExactDispatchSite = .{
+        .method_name = method_name,
+        .fn_var = requirement.fn_var,
+        .fn_monotype = fn_monotype,
+    };
+    try result.dispatch_solved.recordExactDispatchSite(
+        driver.allocator,
+        thread.requireSourceContext(),
+        module_idx,
+        expr_idx,
+        site,
+    );
+    return site;
 }
 
 fn ensureBuiltinBoxUnboxCallableInst(
@@ -7579,7 +7776,6 @@ fn scanCirExprChildren(
                 call_expr.func,
                 resolve_direct_calls,
             );
-            try scanCirValueExprSpanWithDirectCallResolution(driver, visit_memo, result, thread, module_idx, arg_exprs, resolve_direct_calls);
             if (try resolveDemandedDirectCallFnMonotype(
                 driver,
                 visit_memo,
@@ -7600,6 +7796,7 @@ fn scanCirExprChildren(
                     resolved_fn_monotype.module_idx,
                 );
             }
+            try scanCirValueExprSpanWithDirectCallResolution(driver, visit_memo, result, thread, module_idx, arg_exprs, resolve_direct_calls);
             if (result.getExprLowLevelOp(thread.requireSourceContext(), module_idx, call_expr.func)) |low_level_op| {
                 if (low_level_op == .str_inspect and arg_exprs.len != 0) {
                     try resolveStrInspectHelperCallableInstsForTypeVar(
@@ -7744,6 +7941,26 @@ fn scanCirExprChildren(
         .e_dot_access => |dot_expr| {
             try scanCirExprWithDirectCallResolution(driver, visit_memo, result, thread, module_idx, dot_expr.receiver, resolve_direct_calls);
             if (dot_expr.args) |args| {
+                if (try ensureRecordedExactDispatchSiteFromDemandedFnMonotype(
+                    driver,
+                    result,
+                    thread,
+                    module_idx,
+                    expr_idx,
+                    expr,
+                    dot_expr.field_name,
+                )) |site| {
+                    try bindCurrentDispatchFromFnMonotype(
+                        driver,
+                        result,
+                        thread,
+                        module_idx,
+                        expr_idx,
+                        expr,
+                        site.fn_monotype.idx,
+                        site.fn_monotype.module_idx,
+                    );
+                }
                 try scanCirExprSpanWithDirectCallResolution(driver, visit_memo, result, thread, module_idx, module_env.store.sliceExpr(args), resolve_direct_calls);
                 try realizeDispatchExprSemantics(driver, visit_memo, result, thread, module_idx, expr_idx, expr);
             } else {
@@ -8106,7 +8323,7 @@ fn resolveDemandedFnMonotypeFromCallShape(
     defer ordered_entries.deinit(driver.allocator);
 
     for (param_vars, actual_args) |param_var, arg_expr_idx| {
-        const arg_mono = (try cm.resolveExprMonotypeResolved(
+        const arg_mono = (try cm.resolveExprExactMonotypeResolved(
             driver,
             result,
             thread,
@@ -8325,27 +8542,6 @@ pub fn resolveDirectCallSite(
     const callee_expr_idx = call_expr.func;
     const module_env = driver.all_module_envs[module_idx];
     const callee_expr = module_env.store.getExpr(callee_expr_idx);
-    const desired_fn_monotype = try resolveDemandedDirectCallFnMonotype(
-        driver,
-        visit_memo,
-        result,
-        thread,
-        module_idx,
-        call_expr_idx,
-        call_expr,
-    );
-    if (desired_fn_monotype) |resolved_fn_monotype| {
-        try bindCurrentCallFromFnMonotype(
-            driver,
-            result,
-            thread,
-            module_idx,
-            call_expr_idx,
-            call_expr,
-            resolved_fn_monotype.idx,
-            resolved_fn_monotype.module_idx,
-        );
-    }
     try materializeExprCallableSemanticsIfNeeded(
         driver,
         visit_memo,
@@ -8366,6 +8562,27 @@ pub fn resolveDirectCallSite(
                 );
             }
         }
+    }
+    const desired_fn_monotype = try resolveDemandedDirectCallFnMonotype(
+        driver,
+        visit_memo,
+        result,
+        thread,
+        module_idx,
+        call_expr_idx,
+        call_expr,
+    );
+    if (desired_fn_monotype) |resolved_fn_monotype| {
+        try bindCurrentCallFromFnMonotype(
+            driver,
+            result,
+            thread,
+            module_idx,
+            call_expr_idx,
+            call_expr,
+            resolved_fn_monotype.idx,
+            resolved_fn_monotype.module_idx,
+        );
     }
     if (resolved_template_id == null and desired_fn_monotype != null) {
         var visiting: std.AutoHashMapUnmanaged(ContextExprKey, void) = .empty;
@@ -8390,6 +8607,19 @@ pub fn resolveDirectCallSite(
         result.getExprLowLevelOp(thread.requireSourceContext(), module_idx, call_expr.func);
     if (resolved_low_level_op) |low_level_op| {
         const arg_exprs = module_env.store.sliceExpr(call_expr.args);
+        const low_level_fn_monotype = desired_fn_monotype orelse {
+            if (std.debug.runtime_safety) {
+                std.debug.panic(
+                    "Lambdasolved invariant violated: low-level call expr {d} in module {d} had no exact fn monotype when recording call-site semantics (op={s})",
+                    .{
+                        @intFromEnum(call_expr_idx),
+                        module_idx,
+                        @tagName(low_level_op),
+                    },
+                );
+            }
+            unreachable;
+        };
         try recordExprCallSite(
             driver,
             result,
@@ -8398,10 +8628,7 @@ pub fn resolveDirectCallSite(
             call_expr_idx,
             .{ .low_level = .{
                 .op = low_level_op,
-                .fn_monotype = desired_fn_monotype orelse std.debug.panic(
-                    "Lambdasolved invariant violated: low-level call expr {d} in module {d} had no exact fn monotype when recording call-site semantics",
-                    .{ @intFromEnum(call_expr_idx), module_idx },
-                ),
+                .fn_monotype = low_level_fn_monotype,
             } },
         );
         if (low_level_op == .str_inspect and arg_exprs.len != 0) {
@@ -9911,9 +10138,17 @@ pub fn resolveDispatchTargetForExpr(
     method_name: Ident.Idx,
 ) std.mem.Allocator.Error!DispatchSolved.ResolvedDispatchTarget {
     const module_env = driver.all_module_envs[module_idx];
-    const site = DispatchSolved.exactDispatchSiteForExpr(driver, result, thread, module_idx, expr_idx, method_name) orelse {
+    const expr = module_env.store.getExpr(expr_idx);
+    const site = (try ensureRecordedExactDispatchSiteFromDemandedFnMonotype(
+        driver,
+        result,
+        thread,
+        module_idx,
+        expr_idx,
+        expr,
+        method_name,
+    )) orelse {
         if (std.debug.runtime_safety) {
-            const expr = module_env.store.getExpr(expr_idx);
             const receiver_monotype: ?ResolvedMonotype = switch (expr) {
                 .e_dot_access => |dot_expr| if (dot_expr.args != null)
                     try cm.resolveExprMonotypeResolved(driver, result, thread, module_idx, dot_expr.receiver)
@@ -9995,7 +10230,7 @@ pub fn resolveDispatchTargetForExpr(
         thread,
         module_idx,
         expr_idx,
-        module_env.store.getExpr(expr_idx),
+        expr,
         site.fn_var,
     )) orelse cm.resolvedMonotype(Monotype.Idx.none, module_idx);
     const resolved_target = try resolveDispatchTargetFromExactSite(
@@ -10004,7 +10239,7 @@ pub fn resolveDispatchTargetForExpr(
         thread,
         module_idx,
         expr_idx,
-        module_env.store.getExpr(expr_idx),
+        expr,
         method_name,
         site.fn_var,
     ) orelse {
