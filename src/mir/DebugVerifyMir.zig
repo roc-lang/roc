@@ -387,8 +387,16 @@ fn ensureCallableLocalInvariant(
     const lambda = store.getLambdaAnyState(callable.lambda);
     if (callable.captures_local != (lambda.captures_param != null)) {
         std.debug.panic(
-            "DebugVerifyMir invariant violated: local {d} in {s} {d} had callable resolution inconsistent with lambda {d}",
-            .{ @intFromEnum(local), context, context_id, @intFromEnum(callable.lambda) },
+            "DebugVerifyMir invariant violated: local {d} in {s} {d} had callable resolution inconsistent with lambda {d}; local_mono={d} callable.captures_local={} lambda.captures_param={?d}",
+            .{
+                @intFromEnum(local),
+                context,
+                context_id,
+                @intFromEnum(callable.lambda),
+                @intFromEnum(local_data.monotype),
+                callable.captures_local,
+                if (lambda.captures_param) |captures_param| @intFromEnum(captures_param) else null,
+            },
         );
     }
 }

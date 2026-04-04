@@ -235,7 +235,7 @@ lowered_callable_insts: std.AutoHashMap(u32, MIR.LambdaId),
 
 /// Cache for direct statement-lowered lambda expressions keyed by the full
 /// lowering context that can affect the emitted callable body.
-lowered_callable_lambdas: std.AutoHashMap(CallableCacheKey, MIR.LambdaId),
+    lowered_callable_lambdas: std.AutoHashMap(u32, MIR.LambdaId),
 
 /// Metadata for opaque symbol IDs; populated at symbol construction time.
 symbol_metadata: std.AutoHashMap(u64, SymbolMetadata),
@@ -308,7 +308,7 @@ pub fn init(
         .binding_records = std.AutoHashMap(u128, BindingRecord).init(allocator),
         .nominal_cycle_breakers = std.AutoHashMap(types.Var, Monotype.Idx).init(allocator),
         .lowered_callable_insts = std.AutoHashMap(u32, MIR.LambdaId).init(allocator),
-        .lowered_callable_lambdas = std.AutoHashMap(CallableCacheKey, MIR.LambdaId).init(allocator),
+        .lowered_callable_lambdas = std.AutoHashMap(u32, MIR.LambdaId).init(allocator),
         .symbol_metadata = std.AutoHashMap(u64, SymbolMetadata).init(allocator),
         .next_synthetic_ident = Ident.Idx.NONE.idx - 1,
         .next_statement_binding_scope = 1,
@@ -410,6 +410,17 @@ const LowerSession = struct {
                 "Lower invariant violated: operation required callable-inst context but active source context was {s}",
                 .{@tagName(self.source_context)},
             ),
+        };
+    }
+
+    fn moduleIdx(self: LowerSession) u32 {
+        return switch (self.source_context) {
+            .callable_inst => |context_id| self.lower.callable_pipeline.getCallableDefForInst(
+                @as(Pipeline.CallableInstId, @enumFromInt(@intFromEnum(context_id))),
+            ).module_idx,
+            .root_expr => |root| root.module_idx,
+            .provenance_expr => |source| source.module_idx,
+            .template_expr => |template| template.module_idx,
         };
     }
 
@@ -725,61 +736,17 @@ fn appendSeenIndex(
     try seen_indices.append(allocator, idx);
 }
 
-const CallableCacheKey = struct {
-    source_context_kind: enum(u2) { callable_inst, root_expr, provenance_expr, template_expr },
-    source_context_module_idx: u32,
-    source_context_raw: u32,
-    module_idx: u32,
-    expr_idx: CIR.Expr.Idx,
-    fn_monotype: Monotype.Idx,
-    parent_binding_scope: u64,
-};
-
-fn makeCallableCacheKey(
-    session: LowerSession,
-    expr_idx: CIR.Expr.Idx,
-    fn_monotype: Monotype.Idx,
-) CallableCacheKey {
-    const self = session.lower;
-    const source_context = session.source_context;
-    return .{
-        .source_context_kind = switch (source_context) {
-            .callable_inst => .callable_inst,
-            .root_expr => .root_expr,
-            .provenance_expr => .provenance_expr,
-            .template_expr => .template_expr,
-        },
-        .source_context_module_idx = switch (source_context) {
-            .callable_inst => std.math.maxInt(u32),
-            .root_expr => |root| root.module_idx,
-            .provenance_expr => |source| source.module_idx,
-            .template_expr => |template| template.module_idx,
-        },
-        .source_context_raw = switch (source_context) {
-            .callable_inst => |callable_inst| @intFromEnum(callable_inst),
-            .root_expr => |root| @intFromEnum(root.expr_idx),
-            .provenance_expr => |source| @intFromEnum(source.expr_idx),
-            .template_expr => |template| @intFromEnum(template.expr_idx),
-        },
-        .module_idx = self.current_module_idx,
-        .expr_idx = expr_idx,
-        .fn_monotype = fn_monotype,
-        .parent_binding_scope = self.current_binding_scope,
-    };
-}
-
 fn lookupLoweredCallableLambdaCache(
-    session: LowerSession,
-    expr_idx: CIR.Expr.Idx,
-    fn_monotype: Monotype.Idx,
+    self: *Self,
+    callable_inst_id: Pipeline.CallableInstId,
 ) Allocator.Error!?MIR.LambdaId {
-    return session.lower.lowered_callable_lambdas.get(makeCallableCacheKey(session, expr_idx, fn_monotype));
+    return self.lowered_callable_lambdas.get(@intFromEnum(callable_inst_id));
 }
 
 fn lookupProgramExprMonotype(session: LowerSession, expr_idx: CIR.Expr.Idx) ?Pipeline.ResolvedMonotype {
     return session.lower.callable_pipeline.getExprMonotype(
         session.source_context,
-        session.lower.current_module_idx,
+        session.moduleIdx(),
         expr_idx,
     );
 }
@@ -828,7 +795,7 @@ fn resolveProgramExprMonotype(
         session.lower,
         session.lower.callable_pipeline,
         SourceContextThread{ .source_context = session.source_context },
-        session.lower.current_module_idx,
+        session.moduleIdx(),
         expr_idx,
     );
 }
@@ -898,9 +865,22 @@ fn resolveProgramPatternCallableValue(
 }
 
 fn lookupProgramExprCallableValue(session: LowerSession, expr_idx: CIR.Expr.Idx) ?Pipeline.CallableValue {
+    const module_env = session.lower.all_module_envs[session.moduleIdx()];
+    switch (module_env.store.getExpr(expr_idx)) {
+        .e_lookup_local => |lookup| {
+            if (session.lower.lookupBindingCallableValue(lookup.pattern_idx)) |callable_value| {
+                return callable_value;
+            }
+            if (lookupCurrentCallableParamCallableValue(session, lookup.pattern_idx)) |callable_value| {
+                return callable_value;
+            }
+        },
+        else => {},
+    }
+
     return session.lower.callable_pipeline.getExprCallableValue(
         session.source_context,
-        session.lower.current_module_idx,
+        session.moduleIdx(),
         expr_idx,
     );
 }
@@ -1072,7 +1052,7 @@ fn resolveProjectedExprCallableValue(
 fn lookupProgramExprIntroCallableInst(session: LowerSession, expr_idx: CIR.Expr.Idx) ?Pipeline.CallableInstId {
     return session.lower.callable_pipeline.getExprIntroCallableInst(
         session.source_context,
-        session.lower.current_module_idx,
+        session.moduleIdx(),
         expr_idx,
     );
 }
@@ -1083,7 +1063,7 @@ fn lookupProgramExprLookupResolution(
 ) ?Pipeline.LookupResolution {
     return session.lower.callable_pipeline.getLookupResolution(
         session.source_context,
-        session.lower.current_module_idx,
+        session.moduleIdx(),
         expr_idx,
     );
 }
@@ -1091,7 +1071,7 @@ fn lookupProgramExprLookupResolution(
 fn lookupProgramExprCallSite(session: LowerSession, expr_idx: CIR.Expr.Idx) ?Pipeline.CallSite {
     return session.lower.callable_pipeline.getExprCallSite(
         session.source_context,
-        session.lower.current_module_idx,
+        session.moduleIdx(),
         expr_idx,
     );
 }
@@ -1102,7 +1082,7 @@ fn lookupProgramExprDispatchTarget(
 ) ?Pipeline.DispatchExprTarget {
     return session.lower.callable_pipeline.getDispatchExprTarget(
         session.source_context,
-        session.lower.current_module_idx,
+        session.moduleIdx(),
         expr_idx,
     );
 }
@@ -1113,7 +1093,7 @@ fn lookupProgramExprDispatchIntrinsic(
 ) ?Pipeline.DispatchIntrinsic {
     return session.lower.callable_pipeline.getDispatchExprIntrinsic(
         session.source_context,
-        session.lower.current_module_idx,
+        session.moduleIdx(),
         expr_idx,
     );
 }
@@ -2182,6 +2162,26 @@ fn buildCallableParamResolutions(
         _ = param_local;
         callable_resolutions[i] = if (try resolveProgramPatternCallableValue(session, pattern_idx)) |callable_value| blk: {
             const resolved = try self.callableResolutionFromValue(callable_value);
+            if (builtin.mode == .Debug and resolved != null) {
+                const resolved_callable = resolved.?;
+                const resolved_lambda = self.store.getLambdaAnyState(resolved_callable.lambda);
+                if (resolved_callable.captures_local != (resolved_lambda.captures_param != null)) {
+                    std.debug.panic(
+                        "statement-only MIR invariant violated: param pattern {d} in active callable ctx={?d} resolved callable value {any} to lambda {d} with mismatched captures; captures_local={} lambda.captures_param={?d}",
+                        .{
+                            @intFromEnum(pattern_idx),
+                            switch (session.source_context) {
+                                .callable_inst => |context_id| @intFromEnum(@as(Pipeline.CallableInstId, @enumFromInt(@intFromEnum(context_id)))),
+                                .root_expr, .provenance_expr, .template_expr => null,
+                            },
+                            callable_value,
+                            @intFromEnum(resolved_callable.lambda),
+                            resolved_callable.captures_local,
+                            if (resolved_lambda.captures_param) |captures_param| @intFromEnum(captures_param) else null,
+                        },
+                    );
+                }
+            }
             if (resolved != null) any_callable = true;
             break :blk resolved;
         } else null;
@@ -3225,14 +3225,15 @@ fn lowerLambdaInto(
     session: LowerSession,
     module_env: *const ModuleEnv,
     expr_idx: CIR.Expr.Idx,
+    callable_inst_id: Pipeline.CallableInstId,
     arg_patterns: []const CIR.Pattern.Idx,
     body_expr_idx: CIR.Expr.Idx,
     fn_monotype: Monotype.Idx,
     ret_monotype: Monotype.Idx,
     reserved_lambda: ?MIR.LambdaId,
 ) Allocator.Error!MIR.LambdaId {
-    const cache_key = makeCallableCacheKey(session, expr_idx, fn_monotype);
-    if (try lookupLoweredCallableLambdaCache(session, expr_idx, fn_monotype)) |cached| {
+    const cache_key = @intFromEnum(callable_inst_id);
+    if (try lookupLoweredCallableLambdaCache(self, callable_inst_id)) |cached| {
         if (reserved_lambda) |reserved| {
             if (cached == reserved) return cached;
         } else {
@@ -3495,8 +3496,8 @@ fn lowerReservedTrivialClosureLambda(
     callable_inst_id: Pipeline.CallableInstId,
     reserved_lambda: MIR.LambdaId,
 ) Allocator.Error!MIR.LambdaId {
-    const cache_key = makeCallableCacheKey(session, expr_idx, fn_monotype);
-    if (try lookupLoweredCallableLambdaCache(session, expr_idx, fn_monotype)) |cached| {
+    const cache_key = @intFromEnum(callable_inst_id);
+    if (try lookupLoweredCallableLambdaCache(self, callable_inst_id)) |cached| {
         if (cached == reserved_lambda) {
             if (self.in_progress_callable_insts.get(@intFromEnum(callable_inst_id)) != null) return cached;
             if (self.reserved_callable_insts.get(@intFromEnum(callable_inst_id)) == null) return cached;
@@ -3605,27 +3606,6 @@ fn lowerReservedTrivialClosureLambda(
         });
     }
 
-    const param_callables = try self.buildCallableParamResolutions(session, param_patterns, param_locals);
-    try self.store.installReservedLambdaPrototype(reserved_lambda, .{
-        .fn_monotype = fn_monotype,
-        .params = params,
-        .param_callables = param_callables,
-        .body = @enumFromInt(0),
-        .ret_monotype = ret_monotype,
-        .debug_name = .none,
-        .source_region = module_env.store.getExprRegion(expr_idx),
-        .captures_param = null,
-        .recursion = .not_recursive,
-        .hosted = null,
-    });
-
-    const result_local = try self.freshSyntheticLocal(ret_monotype, false);
-    const ret_stmt = try self.store.addCFStmt(self.allocator, .{ .ret = .{ .value = result_local } });
-    const lambda_body_scope = self.freshChildBindingScope(lambda_entry_scope);
-    self.current_binding_scope = lambda_body_scope;
-    var body = try self.lowerCirExprInto(session, body_expr_idx, result_local, ret_stmt);
-    self.current_binding_scope = lambda_entry_scope;
-
     const nonrecursive_capture_locals = self.scratch_local_ids.sliceFromStart(capture_top);
     const captures_tuple_monotype = if (nonrecursive_capture_locals.len == 0)
         Monotype.Idx.none
@@ -3638,6 +3618,40 @@ fn lowerReservedTrivialClosureLambda(
         try self.freshSyntheticLocal(captures_tuple_monotype, false);
 
     const nonrecursive_capture_span = try self.store.addLocalSpan(self.allocator, nonrecursive_capture_locals);
+
+    try self.store.installReservedLambdaPrototype(reserved_lambda, .{
+        .fn_monotype = fn_monotype,
+        .params = params,
+        .param_callables = .empty(),
+        .body = @enumFromInt(0),
+        .ret_monotype = ret_monotype,
+        .debug_name = .none,
+        .source_region = module_env.store.getExprRegion(expr_idx),
+        .captures_param = captures_param_local,
+        .recursion = .not_recursive,
+        .hosted = null,
+    });
+
+    const param_callables = try self.buildCallableParamResolutions(session, param_patterns, param_locals);
+    try self.store.installReservedLambdaPrototype(reserved_lambda, .{
+        .fn_monotype = fn_monotype,
+        .params = params,
+        .param_callables = param_callables,
+        .body = @enumFromInt(0),
+        .ret_monotype = ret_monotype,
+        .debug_name = .none,
+        .source_region = module_env.store.getExprRegion(expr_idx),
+        .captures_param = captures_param_local,
+        .recursion = .not_recursive,
+        .hosted = null,
+    });
+
+    const result_local = try self.freshSyntheticLocal(ret_monotype, false);
+    const ret_stmt = try self.store.addCFStmt(self.allocator, .{ .ret = .{ .value = result_local } });
+    const lambda_body_scope = self.freshChildBindingScope(lambda_entry_scope);
+    self.current_binding_scope = lambda_body_scope;
+    var body = try self.lowerCirExprInto(session, body_expr_idx, result_local, ret_stmt);
+    self.current_binding_scope = lambda_entry_scope;
 
     if (builtin.mode == .Debug and captures_param_local != null) {
         var seen_nonrecursive_capture_locals = std.AutoHashMap(u32, void).init(self.allocator);
@@ -3726,7 +3740,7 @@ fn lowerReservedTrivialClosureLambda(
                 .{ .field = .{
                     .source = local,
                     .field_idx = @intCast(i),
-                    .ownership = .move,
+                    .ownership = .borrow,
                 } },
                 try self.callableResolutionForPattern(session, capture_pattern_idx),
                 body,
@@ -3825,19 +3839,29 @@ fn lowerResolvedCallableInstValueInto(
 
     const capture_top = self.scratch_local_ids.top();
     defer self.scratch_local_ids.clearFrom(capture_top);
+    var capture_bindings = std.ArrayList(struct {
+        source: MIR.LocalId,
+        captured: MIR.LocalId,
+    }).empty;
+    defer capture_bindings.deinit(self.allocator);
 
     for (self.callable_pipeline.getCaptureFields(callable_def.captures)) |capture_field| {
         switch (capture_field.storage) {
             .runtime_field => {
-                const capture_local = try self.appendCaptureMaterialization(capture_field);
-                try self.scratch_local_ids.append(capture_local);
+                const source_local = try self.appendCaptureMaterialization(capture_field);
+                const captured_local = try self.freshSyntheticLocal(self.store.getLocal(source_local).monotype, false);
+                try capture_bindings.append(self.allocator, .{
+                    .source = source_local,
+                    .captured = captured_local,
+                });
+                try self.scratch_local_ids.append(captured_local);
             },
             .callable_only, .recursive_member => {},
         }
     }
 
     const runtime_captures = self.scratch_local_ids.sliceFromStart(capture_top);
-    const current = if (runtime_captures.len == 0)
+    var current = if (runtime_captures.len == 0)
         try self.store.addCFStmt(self.allocator, .{ .assign_lambda = .{
             .target = target,
             .lambda = lambda_id,
@@ -3850,6 +3874,13 @@ fn lowerResolvedCallableInstValueInto(
             .captures = try self.store.addLocalSpan(self.allocator, runtime_captures),
             .next = next,
         } });
+
+    var binding_i = capture_bindings.items.len;
+    while (binding_i > 0) {
+        binding_i -= 1;
+        const binding = capture_bindings.items[binding_i];
+        current = try self.lowerLocalAliasInto(binding.captured, binding.source, current);
+    }
 
     return current;
 }
@@ -4227,6 +4258,7 @@ fn lowerResolvedCallableInstLambda(
             session,
             module_env,
             runtime_expr_idx,
+            callable_inst_id,
             self.callable_pipeline.getPatternIds(callable_def.arg_patterns),
             self.callableDefBodyExpr(callable_def).common().source_expr,
             fn_monotype,
@@ -4237,6 +4269,7 @@ fn lowerResolvedCallableInstLambda(
             session,
             module_env,
             runtime_expr_idx,
+            callable_inst_id,
             self.callable_pipeline.getPatternIds(callable_def.arg_patterns),
             self.callableDefBodyExpr(callable_def).common().source_expr,
             fn_monotype,
@@ -4244,6 +4277,25 @@ fn lowerResolvedCallableInstLambda(
             reserved_lambda,
         ),
     };
+
+    if (builtin.mode == .Debug) {
+        const lowered_lambda = self.store.getLambdaAnyState(lambda_id);
+        const lowered_callable_inst = self.callable_pipeline.getCallableInst(callable_inst_id);
+        if (self.callableInstRequiresHiddenCapture(callable_inst_id) != (lowered_lambda.captures_param != null)) {
+            std.debug.panic(
+                "statement-only MIR invariant violated: callable inst {d} lowered to lambda {d} with mismatched captures; runtime_kind={s} runtime_value={s} template={d} capture_fields={d} lambda.captures_param={?d}",
+                .{
+                    @intFromEnum(callable_inst_id),
+                    @intFromEnum(lambda_id),
+                    @tagName(callable_def.runtime_kind),
+                    @tagName(lowered_callable_inst.runtime_value),
+                    @intFromEnum(lowered_callable_inst.template),
+                    self.callable_pipeline.getCaptureFields(callable_def.captures).len,
+                    if (lowered_lambda.captures_param) |captures_param| @intFromEnum(captures_param) else null,
+                },
+            );
+        }
+    }
 
     _ = self.reserved_callable_insts.remove(callable_inst_key);
     try self.lowered_callable_insts.put(callable_inst_key, lambda_id);

@@ -2977,45 +2977,6 @@ fn resolveTemplateDefiningSourceContext(
             }
 
             if (std.debug.runtime_safety) {
-                std.debug.print(
-                    "resolveTemplateDefiningSourceContext debug: target_template_expr={d} target_owner_template={d} active_source_context={s}\n",
-                    .{
-                        @intFromEnum(template.cir_expr),
-                        @intFromEnum(lexical_owner_template),
-                        @tagName(active_source_context),
-                    },
-                );
-                const target_owner = result.getCallableTemplate(lexical_owner_template);
-                std.debug.print(
-                    "  owner_template kind={s} module={d} cir_expr={d} runtime_expr={d} owner={s}\n",
-                    .{
-                        @tagName(target_owner.kind),
-                        target_owner.module_idx,
-                        @intFromEnum(target_owner.cir_expr),
-                        @intFromEnum(target_owner.runtime_expr),
-                        @tagName(target_owner.owner),
-                    },
-                );
-                if (sourceContextCallableInstId(active_source_context)) |first_debug_current| {
-                    var debug_current = first_debug_current;
-                    while (true) {
-                        const debug_callable_inst = result.getCallableInst(debug_current);
-                        const debug_template = result.getCallableTemplate(debug_callable_inst.template);
-                        std.debug.print(
-                            "  callable_inst={d} template={d} kind={s} module={d} cir_expr={d} runtime_expr={d} defining_ctx={s}\n",
-                            .{
-                                @intFromEnum(debug_current),
-                                @intFromEnum(debug_callable_inst.template),
-                                @tagName(debug_template.kind),
-                                debug_template.module_idx,
-                                @intFromEnum(debug_template.cir_expr),
-                                @intFromEnum(debug_template.runtime_expr),
-                                @tagName(debug_callable_inst.defining_source_context),
-                            },
-                        );
-                        debug_current = sourceContextCallableInstId(debug_callable_inst.defining_source_context) orelse break;
-                    }
-                }
                 std.debug.panic(
                     "Lambdasolved invariant violated: template expr={d} could not resolve lexical owner template={d} from active callable inst={d}",
                     .{
@@ -7913,16 +7874,13 @@ pub fn requireTemplateDemandSourceContextForExpr(
     if (!templateRequiresConcreteOwnerCallableInst(result, template_id)) {
         return source_context;
     }
-    if (switch (source_context) {
-        .callable_inst => true,
-        .root_expr, .provenance_expr, .template_expr => false,
-    }) {
-        return source_context;
-    }
-
     if (getValueExprCallableValueForSourceContext(driver, visit_memo, result, source_context, module_idx, expr_idx)) |callable_value| {
         switch (callable_value) {
-            .direct => |callable_inst_id| return result.getCallableInst(callable_inst_id).defining_source_context,
+            .direct => |callable_inst_id| {
+                if (result.getCallableInst(callable_inst_id).template == template_id) {
+                    return result.getCallableInst(callable_inst_id).defining_source_context;
+                }
+            },
             .packed_fn => {},
         }
     }
@@ -7943,10 +7901,21 @@ pub fn requireTemplateDemandSourceContextForExpr(
             source.expr_idx,
         )) |callable_value| {
             switch (callable_value) {
-                .direct => |callable_inst_id| return result.getCallableInst(callable_inst_id).defining_source_context,
+                .direct => |callable_inst_id| {
+                    if (result.getCallableInst(callable_inst_id).template == template_id) {
+                        return result.getCallableInst(callable_inst_id).defining_source_context;
+                    }
+                },
                 .packed_fn => {},
             }
         }
+    }
+
+    if (switch (source_context) {
+        .callable_inst => true,
+        .root_expr, .provenance_expr, .template_expr => false,
+    }) {
+        return source_context;
     }
 
     if (std.debug.runtime_safety) {

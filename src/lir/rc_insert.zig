@@ -1729,6 +1729,7 @@ pub const RcInsertPass = struct {
     }
 
     fn localTransfersOwnership(self: *const RcInsertPass, value: LocalId, owner: LocalId) bool {
+        if (!self.localCarriesOwnedValue(value)) return false;
         if (self.localForwardsOwnership(value, owner)) return true;
 
         const value_root = self.ownershipRootForConsumedValue(value) orelse return false;
@@ -1973,6 +1974,7 @@ pub const RcInsertPass = struct {
     }
 
     fn localForwardsOwnership(self: *const RcInsertPass, value: LocalId, owner: LocalId) bool {
+        if (!self.localCarriesOwnedValue(value)) return false;
         return self.localForwardsOwnershipRec(value, owner, 0);
     }
 
@@ -2797,10 +2799,20 @@ pub const RcInsertPass = struct {
 
         var consume_args: std.ArrayListUnmanaged(LocalId) = .empty;
         defer consume_args.deinit(self.allocator);
+        var consumed_borrow_args: std.ArrayListUnmanaged(LocalId) = .empty;
+        defer consumed_borrow_args.deinit(self.allocator);
         for (args, param_use_kinds) |arg, use_kind| {
-            if (use_kind == .consume) try consume_args.append(self.allocator, arg);
+            if (use_kind != .consume) continue;
+            try consume_args.append(self.allocator, arg);
+            if (!self.localCarriesOwnedValue(arg)) {
+                try consumed_borrow_args.append(self.allocator, arg);
+            }
         }
-        return self.prependConsumeArgIncrefs(consume_args.items, rewritten);
+        const with_consumed_borrow_increfs = try self.prependRetainedBorrowArgIncrefs(
+            consumed_borrow_args.items,
+            rewritten,
+        );
+        return self.prependConsumeArgIncrefs(consume_args.items, with_consumed_borrow_increfs);
     }
 
     fn processAssignLowLevel(self: *RcInsertPass, assign: AssignLowLevelStmt) Allocator.Error!CFStmtId {
@@ -2816,11 +2828,16 @@ pub const RcInsertPass = struct {
 
         var consume_args: std.ArrayListUnmanaged(LocalId) = .empty;
         defer consume_args.deinit(self.allocator);
+        var consumed_borrow_args: std.ArrayListUnmanaged(LocalId) = .empty;
+        defer consumed_borrow_args.deinit(self.allocator);
         var retained_borrow_args: std.ArrayListUnmanaged(LocalId) = .empty;
         defer retained_borrow_args.deinit(self.allocator);
         for (args, arg_ownership) |arg, ownership| {
             if (ownership == .consume) {
                 try consume_args.append(self.allocator, arg);
+                if (!self.localCarriesOwnedValue(arg)) {
+                    try consumed_borrow_args.append(self.allocator, arg);
+                }
             }
         }
         for (args, arg_ownership, 0..) |arg, ownership, i| {
@@ -2832,21 +2849,58 @@ pub const RcInsertPass = struct {
             retained_borrow_args.items,
             rewritten,
         );
-        return self.prependConsumeArgIncrefs(consume_args.items, with_retained_borrow_increfs);
+        const with_consumed_borrow_increfs = try self.prependRetainedBorrowArgIncrefs(
+            consumed_borrow_args.items,
+            with_retained_borrow_increfs,
+        );
+        return self.prependConsumeArgIncrefs(consume_args.items, with_consumed_borrow_increfs);
     }
 
     fn processAssignList(self: *RcInsertPass, assign: AssignListStmt) Allocator.Error!CFStmtId {
         const rewritten = try self.wrapAssignLike(.{ .assign_list = assign }, assign.target, assign.next);
-        return self.prependConsumeArgIncrefs(self.store.getLocalSpan(assign.elems), rewritten);
+        const elems = self.store.getLocalSpan(assign.elems);
+        var retained_borrow_args: std.ArrayListUnmanaged(LocalId) = .empty;
+        defer retained_borrow_args.deinit(self.allocator);
+        for (elems) |elem| {
+            if (self.localCarriesOwnedValue(elem)) continue;
+            try retained_borrow_args.append(self.allocator, elem);
+        }
+        const with_retained_borrow_increfs = try self.prependRetainedBorrowArgIncrefs(
+            retained_borrow_args.items,
+            rewritten,
+        );
+        return self.prependConsumeArgIncrefs(elems, with_retained_borrow_increfs);
     }
 
     fn processAssignStruct(self: *RcInsertPass, assign: AssignStructStmt) Allocator.Error!CFStmtId {
         const rewritten = try self.wrapAssignLike(.{ .assign_struct = assign }, assign.target, assign.next);
-        return self.prependConsumeArgIncrefs(self.store.getLocalSpan(assign.fields), rewritten);
+        const fields = self.store.getLocalSpan(assign.fields);
+        var retained_borrow_args: std.ArrayListUnmanaged(LocalId) = .empty;
+        defer retained_borrow_args.deinit(self.allocator);
+        for (fields) |field| {
+            if (self.localCarriesOwnedValue(field)) continue;
+            try retained_borrow_args.append(self.allocator, field);
+        }
+        const with_retained_borrow_increfs = try self.prependRetainedBorrowArgIncrefs(
+            retained_borrow_args.items,
+            rewritten,
+        );
+        return self.prependConsumeArgIncrefs(fields, with_retained_borrow_increfs);
     }
 
     fn processAssignTag(self: *RcInsertPass, assign: AssignTagStmt) Allocator.Error!CFStmtId {
         const rewritten = try self.wrapAssignLike(.{ .assign_tag = assign }, assign.target, assign.next);
-        return self.prependConsumeArgIncrefs(self.store.getLocalSpan(assign.args), rewritten);
+        const args = self.store.getLocalSpan(assign.args);
+        var retained_borrow_args: std.ArrayListUnmanaged(LocalId) = .empty;
+        defer retained_borrow_args.deinit(self.allocator);
+        for (args) |arg| {
+            if (self.localCarriesOwnedValue(arg)) continue;
+            try retained_borrow_args.append(self.allocator, arg);
+        }
+        const with_retained_borrow_increfs = try self.prependRetainedBorrowArgIncrefs(
+            retained_borrow_args.items,
+            rewritten,
+        );
+        return self.prependConsumeArgIncrefs(args, with_retained_borrow_increfs);
     }
 };
