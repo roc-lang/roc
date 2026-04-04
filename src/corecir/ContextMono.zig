@@ -1259,7 +1259,37 @@ pub fn resolveTypeVarMonotypeWithBindings(
         try exact_specializations.put(entry.key_ptr.type_var, entry.value_ptr.idx);
     }
 
+    if (std.debug.runtime_safety and module_idx == 1 and @intFromEnum(var_) == 1) {
+        var it = exact_specializations.iterator();
+        while (it.next()) |entry| {
+            std.debug.print(
+                "resolveTypeVarMonotypeWithBindings pre-seed type_var={d} mono={d}@{d} repr={any}\n",
+                .{
+                    @intFromEnum(entry.key_ptr.*),
+                    @intFromEnum(entry.value_ptr.*),
+                    module_idx,
+                    result.context_mono.monotype_store.getMonotype(entry.value_ptr.*),
+                },
+            );
+        }
+    }
+
     try seedRecordedTypeScopeSpecializations(driver, result, module_idx, &exact_specializations);
+
+    if (std.debug.runtime_safety and module_idx == 1 and @intFromEnum(var_) == 1) {
+        var it = exact_specializations.iterator();
+        while (it.next()) |entry| {
+            std.debug.print(
+                "resolveTypeVarMonotypeWithBindings post-seed type_var={d} mono={d}@{d} repr={any}\n",
+                .{
+                    @intFromEnum(entry.key_ptr.*),
+                    @intFromEnum(entry.value_ptr.*),
+                    module_idx,
+                    result.context_mono.monotype_store.getMonotype(entry.value_ptr.*),
+                },
+            );
+        }
+    }
 
     var nominal_cycle_breakers = std.AutoHashMap(types.Var, Monotype.Idx).init(driver.allocator);
     defer nominal_cycle_breakers.deinit();
