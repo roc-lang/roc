@@ -236,18 +236,6 @@ pub const RcInsertPass = struct {
     }
 
     fn localCarriesOwnedValue(self: *const RcInsertPass, local: LocalId) bool {
-        const initial_def_kind = self.local_definition_kinds.get(localKey(local)) orelse std.debug.panic(
-            "RcInsertPass invariant violated: missing definition kind for local {d}",
-            .{@intFromEnum(local)},
-        );
-        switch (initial_def_kind) {
-            .join_param => {
-                return self.promoted_fresh_join_params.contains(localKey(local)) or
-                    self.owning_join_params.contains(localKey(local));
-            },
-            else => {},
-        }
-
         var current = local;
         var steps: u32 = 0;
 
@@ -655,6 +643,9 @@ pub const RcInsertPass = struct {
 
                 for (args, params, 0..) |arg, _, i| {
                     seen[i] = true;
+                    if (self.forwardingAliasRepresentative(arg)) |resolved_root| {
+                        if (resolved_root == params[i]) continue;
+                    }
                     const carries_ownership = self.localCarriesOwnedValue(arg);
                     all_owned[i] = all_owned[i] and carries_ownership;
                 }
