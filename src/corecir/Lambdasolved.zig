@@ -9804,7 +9804,22 @@ fn realizeDispatchExprSemantics(
             actual_args.items,
             template_id,
         )) |fn_monotype| {
-            break :blk try requireCallableInst(
+            var callable_param_specs = std.ArrayListUnmanaged(CallableParamSpecEntry).empty;
+            defer callable_param_specs.deinit(driver.allocator);
+            const callable_param_specs_complete = try collectDirectCallCallableParamSpecs(
+                driver,
+                visit_memo,
+                result,
+                thread,
+                thread.requireSourceContext(),
+                module_idx,
+                fn_monotype.idx,
+                fn_monotype.module_idx,
+                actual_args.items,
+                &callable_param_specs,
+            );
+            if (!callable_param_specs_complete) return;
+            break :blk try requireCallableInstWithCallableParamSpecs(
                 driver,
                 visit_memo,
                 result,
@@ -9813,6 +9828,7 @@ fn realizeDispatchExprSemantics(
                 template_id,
                 fn_monotype.idx,
                 fn_monotype.module_idx,
+                callable_param_specs.items,
             );
         }
 

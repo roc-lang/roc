@@ -503,19 +503,41 @@ fn extendLowerExprSourceRef(
     };
 }
 
-fn callableDefBodyExpr(self: *const Self, callable_def: *const Pipeline.CallableDef) *const corecir.Lambdamono.Expr {
-    return self.callable_pipeline.getProgramExprForRef(callable_def.body_expr);
-}
-
 fn callableDefBodyRetMonotype(
     self: *Self,
     callable_def: *const Pipeline.CallableDef,
 ) Allocator.Error!Monotype.Idx {
-    const body_expr = self.callableDefBodyExpr(callable_def);
-    const resolved = if (body_expr.getCallable()) |callable_semantics| switch (callable_semantics) {
-        .callable => |callable_value| self.callable_pipeline.getCallableValueRuntimeMonotype(callable_value),
-        .intro => |intro| self.callable_pipeline.getCallableValueRuntimeMonotype(intro.callable_value),
-    } else body_expr.common().monotype;
+    const body_expr_ref = callable_def.body_expr;
+    const SourceContextThread = struct {
+        source_context: Pipeline.SourceContext,
+
+        pub fn requireSourceContext(thread: @This()) Pipeline.SourceContext {
+            return thread.source_context;
+        }
+    };
+    const resolved = if (self.callable_pipeline.getExprCallableValue(
+        body_expr_ref.source_context,
+        body_expr_ref.module_idx,
+        body_expr_ref.expr_idx,
+    )) |callable_value|
+        self.callable_pipeline.getCallableValueRuntimeMonotype(callable_value)
+    else
+        (try corecir.ContextMono.resolveExprMonotypeResolved(
+            self,
+            self.callable_pipeline,
+            SourceContextThread{ .source_context = body_expr_ref.source_context },
+            body_expr_ref.module_idx,
+            body_expr_ref.expr_idx,
+        )) orelse if (std.debug.runtime_safety) {
+            std.debug.panic(
+                "statement-only MIR invariant violated: callable def body had no resolved executable monotype (ctx={s} module={d} expr={d})",
+                .{
+                    @tagName(body_expr_ref.source_context),
+                    body_expr_ref.module_idx,
+                    @intFromEnum(body_expr_ref.expr_idx),
+                },
+            );
+        } else unreachable;
     return self.importMonotypeFromStore(
         &self.callable_pipeline.context_mono.monotype_store,
         resolved.idx,
@@ -3674,8 +3696,7 @@ fn lowerReservedTrivialClosureLambda(
     }
     try self.lowered_callable_lambdas.put(cache_key, reserved_lambda);
 
-    const body_program_expr = self.callableDefBodyExpr(callable_def);
-    const body_expr_idx = body_program_expr.common().source_expr;
+    const body_expr_idx = callable_def.body_expr.expr_idx;
     const param_patterns = self.callable_pipeline.getPatternIds(callable_def.arg_patterns);
     const ret_monotype = try self.callableDefBodyRetMonotype(callable_def);
 
@@ -4424,7 +4445,7 @@ fn lowerResolvedCallableInstLambda(
             runtime_expr_idx,
             callable_inst_id,
             self.callable_pipeline.getPatternIds(callable_def.arg_patterns),
-            self.callableDefBodyExpr(callable_def).common().source_expr,
+            callable_def.body_expr.expr_idx,
             fn_monotype,
             body_ret_monotype,
             reserved_lambda,
@@ -4435,7 +4456,7 @@ fn lowerResolvedCallableInstLambda(
             runtime_expr_idx,
             callable_inst_id,
             self.callable_pipeline.getPatternIds(callable_def.arg_patterns),
-            self.callableDefBodyExpr(callable_def).common().source_expr,
+            callable_def.body_expr.expr_idx,
             fn_monotype,
             body_ret_monotype,
             reserved_lambda,
@@ -4817,10 +4838,99 @@ fn lowerCallInto(
     target: MIR.LocalId,
     next: MIR.CFStmtId,
 ) Allocator.Error!MIR.CFStmtId {
-    const call_site = lookupProgramExprCallSite(session, call_expr_idx) orelse std.debug.panic(
-        "statement-only MIR invariant violated: call expr {d} had no specialized call-site semantics",
-        .{@intFromEnum(call_expr_idx)},
-    );
+    const call_site = lookupProgramExprCallSite(session, call_expr_idx) orelse blk: {
+        if (lookupProgramExprCallableValue(session, call.func)) |callable_value| {
+            break :blk switch (callable_value) {
+                .direct => |callable_inst_id| Pipeline.CallSite{ .direct = callable_inst_id },
+                .packed_fn => |packed_fn| Pipeline.CallSite{ .indirect_call = .{ .packed_fn = packed_fn } },
+            };
+        }
+        if (self.callable_pipeline.getExprLowLevelOp(
+            session.source_context,
+            session.moduleIdx(),
+            call.func,
+        )) |low_level_op| {
+            break :blk Pipeline.CallSite{ .low_level = .{ .op = low_level_op } };
+        }
+        if (std.debug.runtime_safety) {
+            const callee_expr = module_env.store.getExpr(call.func);
+            const current_callable_inst = switch (session.source_context) {
+                .callable_inst => |context_id| @as(Pipeline.CallableInstId, @enumFromInt(@intFromEnum(context_id))),
+                .root_expr, .provenance_expr, .template_expr => null,
+            };
+            const current_callable_template_expr: ?u32 = if (current_callable_inst) |callable_inst_id|
+                @intFromEnum(self.callable_pipeline.getCallableTemplate(self.callable_pipeline.getCallableInst(callable_inst_id).template).cir_expr)
+            else
+                null;
+            const current_callable_param_specs_len: ?usize = if (current_callable_inst) |callable_inst_id|
+                self.callable_pipeline.getCallableParamSpecEntries(
+                    self.callable_pipeline.getCallableInst(callable_inst_id).callable_param_specs,
+                ).len
+            else
+                null;
+            const current_callable_fn_monotype_kind: ?[]const u8 = if (current_callable_inst) |callable_inst_id|
+                @tagName(self.callable_pipeline.context_mono.monotype_store.getMonotype(
+                    self.callable_pipeline.getCallableInst(callable_inst_id).fn_monotype,
+                ))
+            else
+                null;
+            const current_callable_param_count: ?usize = if (current_callable_inst) |callable_inst_id| count_blk: {
+                const fn_mono = switch (self.callable_pipeline.context_mono.monotype_store.getMonotype(
+                    self.callable_pipeline.getCallableInst(callable_inst_id).fn_monotype,
+                )) {
+                    .func => |func| func,
+                    else => break :count_blk null,
+                };
+                break :count_blk fn_mono.args.len;
+            } else null;
+            const current_callable_third_param_kind: ?[]const u8 = if (current_callable_inst) |callable_inst_id| third_param_blk: {
+                const fn_mono = switch (self.callable_pipeline.context_mono.monotype_store.getMonotype(
+                    self.callable_pipeline.getCallableInst(callable_inst_id).fn_monotype,
+                )) {
+                    .func => |func| func,
+                    else => break :third_param_blk null,
+                };
+                if (fn_mono.args.len <= 2) break :third_param_blk null;
+                break :third_param_blk @tagName(self.callable_pipeline.context_mono.monotype_store.getMonotype(
+                    self.callable_pipeline.context_mono.monotype_store.getIdxSpanItem(fn_mono.args, 2),
+                ));
+            } else null;
+            const lookup_pattern: ?u32 = switch (callee_expr) {
+                .e_lookup_local => |lookup| @intFromEnum(lookup.pattern_idx),
+                else => null,
+            };
+            const current_param_callable_value: ?Pipeline.CallableValue = switch (callee_expr) {
+                .e_lookup_local => |lookup| lookupCurrentCallableParamCallableValue(session, lookup.pattern_idx),
+                else => null,
+            };
+            std.debug.panic(
+                "statement-only MIR invariant violated: call expr {d} had no specialized call-site semantics; source_context={s} callable_inst={?d} current_template_expr={?d} current_callable_param_specs_len={?d} current_callable_fn_monotype_kind={?s} current_callable_param_count={?d} current_callable_third_param_kind={?s} callee_expr={d} callee_tag={s} callee_lookup_pattern={?d} current_param_callable_value={?any} explicit_callable_value={?any} low_level_op={?s}",
+                .{
+                    @intFromEnum(call_expr_idx),
+                    @tagName(session.source_context),
+                    if (current_callable_inst) |callable_inst_id| @intFromEnum(callable_inst_id) else null,
+                    current_callable_template_expr,
+                    current_callable_param_specs_len,
+                    current_callable_fn_monotype_kind,
+                    current_callable_param_count,
+                    current_callable_third_param_kind,
+                    @intFromEnum(call.func),
+                    @tagName(callee_expr),
+                    lookup_pattern,
+                    current_param_callable_value,
+                    lookupProgramExprCallableValue(session, call.func),
+                    if (self.callable_pipeline.getExprLowLevelOp(session.source_context, session.moduleIdx(), call.func)) |low_level_op|
+                        @tagName(low_level_op)
+                    else
+                        null,
+                },
+            );
+        }
+        std.debug.panic(
+            "statement-only MIR invariant violated: call expr {d} had no specialized call-site semantics",
+            .{@intFromEnum(call_expr_idx)},
+        );
+    };
     const cir_args = module_env.store.sliceExpr(call.args);
     switch (call_site) {
         .low_level => |ll_call| return self.lowerLowLevelExprCallInto(session, ll_call, cir_args, target, next),
@@ -7250,13 +7360,13 @@ fn debugAssertNoUnitPrimBinding(
     else
         std.math.maxInt(u32);
     const callsite_template_body_expr: u32 = if (maybe_callsite_inst) |callsite_inst|
-        @intFromEnum(self.callableDefBodyExpr(self.callable_pipeline.getCallableDefForInst(callsite_inst)).common().source_expr)
+        @intFromEnum(self.callable_pipeline.getCallableDefForInst(callsite_inst).body_expr.expr_idx)
     else
         std.math.maxInt(u32);
     const callsite_template_body_tag: []const u8 = if (maybe_callsite_inst) |callsite_inst| blk: {
         const callable_def = self.callable_pipeline.getCallableDefForInst(callsite_inst);
         const template_env = self.all_module_envs[callable_def.module_idx];
-        break :blk @tagName(template_env.store.getExpr(self.callableDefBodyExpr(callable_def).common().source_expr));
+        break :blk @tagName(template_env.store.getExpr(callable_def.body_expr.expr_idx));
     } else "none";
     const callsite_callable_kind: []const u8 = if (maybe_callsite_inst) |callsite_inst|
         callableRuntimeValueKindText(self.callable_pipeline.getCallableInst(callsite_inst).runtime_value)
