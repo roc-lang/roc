@@ -1475,7 +1475,8 @@ const all_syntax_common_suffix =
     "\"other color\"\n" ++
     "\"Names: Alice, Bob, Charlie\"\n" ++
     "\"A\"\n" ++
-    "\"other letter\"\n";
+    "\"other letter\"\n" ++
+    "True\n";
 
 const all_syntax_expected_stdout =
     all_syntax_common_prefix ++
