@@ -53,6 +53,7 @@ const OwnedInputSpan = struct {
 const JoinInfo = struct {
     params: LIR.LocalSpan,
     body: CFStmtId,
+    remainder: CFStmtId,
 };
 
 const LocalDefinitionKind = union(enum) {
@@ -415,8 +416,15 @@ pub const RcInsertPass = struct {
                 }
 
                 for (args, 0..) |arg, i| {
-                    seen[i] = true;
                     const root = self.forwardingAliasRepresentative(arg);
+                    if (root) |resolved_root| {
+                        // Treat self-recursive loop backedges as neutral. This matches the
+                        // `cor` model, where the recursive env slot is the same carried
+                        // binding across iterations rather than a conflicting new owner.
+                        if (resolved_root == params[i]) continue;
+                    }
+
+                    seen[i] = true;
                     if (!consistent[i]) continue;
                     if (roots[i]) |existing| {
                         if (root == null or root.? != existing) {
@@ -1541,6 +1549,7 @@ pub const RcInsertPass = struct {
                 try self.joins_by_id.put(@intFromEnum(join.id), .{
                     .params = join.params,
                     .body = join.body,
+                    .remainder = join.remainder,
                 });
                 try self.recordJoinParamDefinitions(join.params);
                 try self.collectAliasSemanticsInStmt(join.body);
@@ -2014,6 +2023,8 @@ pub const RcInsertPass = struct {
         external_jump_target: ?LIR.JoinPointId,
     ) Allocator.Error!CFStmtId {
         var rewritten = next;
+        var closed_roots: std.ArrayListUnmanaged(u64) = .empty;
+        defer closed_roots.deinit(self.allocator);
         for (params) |param| {
             if (!self.layoutNeedsRc(self.localLayout(param))) continue;
             if (!self.localCarriesOwnedValue(param)) continue;
@@ -2049,6 +2060,19 @@ pub const RcInsertPass = struct {
                 }
             }
             if (forwarded) continue;
+
+            if (param_root) |root| {
+                const root_key = localKey(root);
+                var already_closed = false;
+                for (closed_roots.items) |seen_root_key| {
+                    if (seen_root_key == root_key) {
+                        already_closed = true;
+                        break;
+                    }
+                }
+                if (already_closed) continue;
+                try closed_roots.append(self.allocator, root_key);
+            }
 
             if (external_jump_target) |target_join_id| {
                 if (param_root) |root| {
@@ -2160,7 +2184,8 @@ pub const RcInsertPass = struct {
             "RcInsertPass invariant violated: missing join info for join {d}",
             .{@intFromEnum(join_id)},
         );
-        return self.stmtUsesOwnershipRoot(join_info.body, root);
+        return self.stmtUsesOwnershipRoot(join_info.body, root) or
+            self.stmtUsesOwnershipRoot(join_info.remainder, root);
     }
 
     fn appendReachableJoinIds(
