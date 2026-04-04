@@ -8263,7 +8263,13 @@ pub fn resolveDirectCallSite(
             thread.requireSourceContext(),
             module_idx,
             call_expr_idx,
-            .{ .low_level = low_level_op },
+            .{ .low_level = .{
+                .op = low_level_op,
+                .fn_monotype = desired_fn_monotype orelse std.debug.panic(
+                    "Lambdasolved invariant violated: low-level call expr {d} in module {d} had no exact fn monotype when recording call-site semantics",
+                    .{ @intFromEnum(call_expr_idx), module_idx },
+                ),
+            } },
         );
         if (low_level_op == .str_inspect and arg_exprs.len != 0) {
             try resolveStrInspectHelperCallableInstsForTypeVar(
@@ -10134,24 +10140,41 @@ pub fn commitDirectDispatchExprSemantics(
             target_def,
         );
     }
-    try setExprDirectCallSite(
-        driver,
-        result,
-        thread.requireSourceContext(),
-        module_idx,
-        expr_idx,
-        callable_inst_id,
-    );
     const callable_inst = result.getCallableInst(callable_inst_id);
     const template = result.getCallableTemplate(callable_inst.template);
-    try setExprDirectCallable(
-        driver,
-        result,
-        thread.requireSourceContext(),
-        template.module_idx,
-        template.cir_expr,
-        callable_inst_id,
-    );
+    if (template.low_level_op) |low_level_op| {
+        try recordExprCallSite(
+            driver,
+            result,
+            thread.requireSourceContext(),
+            module_idx,
+            expr_idx,
+            .{ .low_level = .{
+                .op = low_level_op,
+                .fn_monotype = .{
+                    .idx = callable_inst.fn_monotype,
+                    .module_idx = callable_inst.fn_monotype_module_idx,
+                },
+            } },
+        );
+    } else {
+        try setExprDirectCallSite(
+            driver,
+            result,
+            thread.requireSourceContext(),
+            module_idx,
+            expr_idx,
+            callable_inst_id,
+        );
+        try setExprDirectCallable(
+            driver,
+            result,
+            thread.requireSourceContext(),
+            template.module_idx,
+            template.cir_expr,
+            callable_inst_id,
+        );
+    }
     var actual_args = std.ArrayList(CIR.Expr.Idx).empty;
     defer actual_args.deinit(driver.allocator);
     try appendDispatchActualArgsFromExpr(driver, module_idx, expr, &actual_args);

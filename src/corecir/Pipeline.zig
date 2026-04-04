@@ -85,6 +85,7 @@ const trace = struct {
 };
 pub const PackedFn = Lambdamono.PackedFn;
 pub const IndirectCall = Lambdamono.IndirectCall;
+pub const LowLevelCall = Lambdamono.LowLevelCall;
 pub const CallableValue = Lambdamono.CallableValue;
 pub const CallSite = Lambdamono.CallSite;
 pub const LookupResolution = Lambdamono.LookupResolution;

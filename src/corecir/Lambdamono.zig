@@ -56,6 +56,11 @@ pub const PackedFn = struct {
     runtime_monotype: ContextMono.ResolvedMonotype,
 };
 
+pub const LowLevelCall = struct {
+    op: CIR.Expr.LowLevel,
+    fn_monotype: ContextMono.ResolvedMonotype,
+};
+
 pub const IndirectCall = struct {
     packed_fn: PackedFn,
 };
@@ -132,7 +137,7 @@ pub const CallableValue = union(enum) {
 pub const CallSite = union(enum) {
     direct: CallableInstId,
     indirect_call: IndirectCall,
-    low_level: CIR.Expr.LowLevel,
+    low_level: LowLevelCall,
 };
 
 pub fn exactCallableInstFromValue(callable_value: CallableValue) ?CallableInstId {
@@ -547,7 +552,7 @@ pub const Expr = union(enum) {
     },
     low_level_call: struct {
         common: ExprCommon,
-        low_level: CIR.Expr.LowLevel,
+        low_level: LowLevelCall,
     },
     lookup_expr: struct {
         common: ExprCommon,
@@ -624,7 +629,7 @@ pub const Expr = union(enum) {
         };
     }
 
-    pub fn getLowLevelCall(self: *const Expr) ?CIR.Expr.LowLevel {
+    pub fn getLowLevelCall(self: *const Expr) ?LowLevelCall {
         return switch (self.*) {
             .low_level_call => |call| call.low_level,
             else => null,

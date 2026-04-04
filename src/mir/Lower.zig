@@ -755,16 +755,6 @@ fn resolveProgramExprMonotype(
     session: LowerSession,
     expr_idx: CIR.Expr.Idx,
 ) Allocator.Error!?Pipeline.ResolvedMonotype {
-    const module_env = session.lower.all_module_envs[session.moduleIdx()];
-    switch (module_env.store.getExpr(expr_idx)) {
-        .e_lookup_local => |lookup| {
-            if (lookupProgramPatternMonotype(session, lookup.pattern_idx)) |mono| {
-                return mono;
-            }
-        },
-        else => {},
-    }
-
     if (lookupProgramExprCallableValue(session, expr_idx)) |callable_value| {
         return session.lower.callable_pipeline.getCallableValueRuntimeMonotype(callable_value);
     }
@@ -772,14 +762,9 @@ fn resolveProgramExprMonotype(
         switch (call_site) {
             .direct => |direct_callable_inst_id| {
                 const callable_inst = session.lower.callable_pipeline.getCallableInst(direct_callable_inst_id);
-                const fn_mono = switch (session.lower.callable_pipeline.context_mono.monotype_store.getMonotype(callable_inst.fn_monotype)) {
-                    .func => |func| func,
-                    else => unreachable,
-                };
-                return .{
-                    .idx = fn_mono.ret,
-                    .module_idx = callable_inst.fn_monotype_module_idx,
-                };
+                const callable_def = session.lower.callable_pipeline.getCallableDef(callable_inst.callable_def);
+                const body_expr = session.lower.callable_pipeline.getProgramExprForRef(callable_def.body_expr);
+                return body_expr.common().monotype;
             },
             .indirect_call => |indirect_call| {
                 const fn_mono = switch (session.lower.callable_pipeline.context_mono.monotype_store.getMonotype(indirect_call.packed_fn.fn_monotype.idx)) {
@@ -793,6 +778,15 @@ fn resolveProgramExprMonotype(
             },
             .low_level => {},
         }
+    }
+    const module_env = session.lower.all_module_envs[session.moduleIdx()];
+    switch (module_env.store.getExpr(expr_idx)) {
+        .e_lookup_local => |lookup| {
+            if (lookupProgramPatternMonotype(session, lookup.pattern_idx)) |mono| {
+                return mono;
+            }
+        },
+        else => {},
     }
     const SourceContextThread = struct {
         source_context: Pipeline.SourceContext,
@@ -3103,17 +3097,28 @@ fn prepareCallArgLocalsFromResolvedFnMonotype(
 
 fn prepareCallArgLocalsFromCallSite(
     self: *Self,
+    session: LowerSession,
     call_site: Pipeline.CallSite,
     exprs: []const CIR.Expr.Idx,
     arg_locals: []MIR.LocalId,
     prepared: *PreparedCallArgs,
 ) Allocator.Error!void {
-    return self.prepareCallArgLocalsFromResolvedFnMonotype(
-        self.resolvedFnMonotypeForCallSite(call_site),
-        exprs,
-        arg_locals,
-        prepared,
-    );
+    _ = call_site;
+
+    for (exprs, 0..) |expr_idx, i| {
+        const arg_monotype = try self.resolveMonotype(session, expr_idx);
+        if (self.reusableLexicalLocalForExpr(expr_idx)) |local| {
+            if (self.store.getLocal(local).monotype == arg_monotype) {
+                arg_locals[i] = local;
+                continue;
+            }
+        }
+
+        const local = try self.freshSyntheticLocal(arg_monotype, false);
+        arg_locals[i] = local;
+        try prepared.exprs_to_lower.append(self.allocator, expr_idx);
+        try prepared.locals_to_lower.append(self.allocator, local);
+    }
 }
 
 fn prepareCallArgLocalsFromUniformMonotype(
@@ -4642,7 +4647,7 @@ fn lowerResolvedDispatchTargetCallInto(
     defer self.allocator.free(arg_locals);
     var prepared_args: PreparedCallArgs = .{};
     defer prepared_args.deinit(self.allocator);
-    try self.prepareCallArgLocalsFromCallSite(call_site, actual_arg_exprs.items, arg_locals, &prepared_args);
+    try self.prepareCallArgLocalsFromCallSite(session, call_site, actual_arg_exprs.items, arg_locals, &prepared_args);
     const args = try self.store.addLocalSpan(self.allocator, arg_locals);
 
     const callee_entry = switch (call_site) {
@@ -4943,7 +4948,7 @@ fn lowerCallInto(
             );
             var prepared_args: PreparedCallArgs = .{};
             defer prepared_args.deinit(self.allocator);
-            try self.prepareCallArgLocalsFromCallSite(call_site, cir_args, arg_locals, &prepared_args);
+            try self.prepareCallArgLocalsFromCallSite(session, call_site, cir_args, arg_locals, &prepared_args);
             const args = try self.store.addLocalSpan(self.allocator, arg_locals);
             const callee_callable = try self.callableResolutionFromInst(direct_callable_inst_id);
             const result_callable = try self.resolveCallResultCallableFromExpr(session, call_expr_idx, target);
@@ -4988,7 +4993,7 @@ fn lowerCallInto(
             defer self.allocator.free(arg_locals);
             var prepared_args: PreparedCallArgs = .{};
             defer prepared_args.deinit(self.allocator);
-            try self.prepareCallArgLocalsFromCallSite(call_site, cir_args, arg_locals, &prepared_args);
+            try self.prepareCallArgLocalsFromCallSite(session, call_site, cir_args, arg_locals, &prepared_args);
             const args = try self.store.addLocalSpan(self.allocator, arg_locals);
             const call_entry = try self.lowerIndirectCallInto(
                 session,
@@ -9876,6 +9881,25 @@ fn importResolvedExecutableMonotypeForExpr(
     expr_idx: CIR.Expr.Idx,
     resolved: Pipeline.ResolvedMonotype,
 ) Allocator.Error!Monotype.Idx {
+    if (builtin.mode == .Debug and self.callable_pipeline.context_mono.monotype_store.getMonotype(resolved.idx) == .recursive_placeholder) {
+        const module_env = self.all_module_envs[self.current_module_idx];
+        const expr = module_env.store.getExpr(expr_idx);
+        const expr_region = module_env.store.getExprRegion(expr_idx);
+        const source_text = module_env.getSourceAll();
+        const snippet_start = @min(expr_region.start.offset, source_text.len);
+        const snippet_end = @min(expr_region.end.offset, source_text.len);
+        std.debug.panic(
+            "statement-only MIR invariant violated: expr {d} kind={s} imported recursive_placeholder from resolved monotype {d}@{d} snippet=\"{s}\" source_context={s}",
+            .{
+                @intFromEnum(expr_idx),
+                @tagName(expr),
+                @intFromEnum(resolved.idx),
+                resolved.module_idx,
+                source_text[snippet_start..snippet_end],
+                @tagName(session.source_context),
+            },
+        );
+    }
     const imported = try self.importMonotypeFromStore(
         &self.callable_pipeline.context_mono.monotype_store,
         resolved.idx,
@@ -9907,6 +9931,9 @@ fn importResolvedExecutableMonotypeForExpr(
 
 /// Get the exact executable monotype for a CIR expression in the active source context.
 fn resolveMonotype(self: *Self, session: LowerSession, expr_idx: CIR.Expr.Idx) Allocator.Error!Monotype.Idx {
+    if (self.reusableLexicalLocalForExpr(expr_idx)) |local| {
+        return self.store.getLocal(local).monotype;
+    }
     if (lookupProgramExprCallableValue(session, expr_idx)) |callable_value| {
         const mono = self.callable_pipeline.getCallableValueRuntimeMonotype(callable_value);
         return self.requireExecutableMonotype(try self.importResolvedExecutableMonotypeForExpr(session, expr_idx, mono));
