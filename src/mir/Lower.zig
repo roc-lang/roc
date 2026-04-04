@@ -4270,6 +4270,12 @@ fn lowerResolvedDispatchTargetCallInto(
     var actual_arg_exprs = std.ArrayList(CIR.Expr.Idx).empty;
     defer actual_arg_exprs.deinit(self.allocator);
     try self.appendDispatchActualArgExprs(session, result_expr_idx, &actual_arg_exprs);
+    if (builtin.mode == .Debug) {
+        std.debug.print(
+            "lowerResolvedDispatchTargetCallInto expr={d} args={d}\n",
+            .{ @intFromEnum(result_expr_idx), actual_arg_exprs.items.len },
+        );
+    }
 
     _ = try self.dispatchTargetEffectful(dispatch_target);
     const call_site = lookupProgramExprCallSite(session, result_expr_idx) orelse std.debug.panic(

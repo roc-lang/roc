@@ -1890,6 +1890,18 @@ fn lowerDirectLambdaCall(
         );
     }
     const call_arg_count = visible_args.len + @intFromBool(resolved.captures_local != null);
+    if (builtin.mode == .Debug) {
+        std.debug.print(
+            "lowerDirectLambdaCall proc={d} lambda={d} visible_args={d} captures_local={} total_args={d}\n",
+            .{
+                @intFromEnum(lowered_proc),
+                @intFromEnum(resolved.lambda),
+                visible_args.len,
+                resolved.captures_local != null,
+                call_arg_count,
+            },
+        );
+    }
     const call_args = try self.allocator.alloc(LirLocalId, call_arg_count);
     defer self.allocator.free(call_args);
 
@@ -2436,6 +2448,18 @@ fn lowerLambda(self: *Self, lambda_id: MIR.LambdaId) Allocator.Error!LirProcSpec
             .index = hosted.index,
         } else null,
     });
+    if (builtin.mode == .Debug) {
+        std.debug.print(
+            "lowerLambda proc={d} lambda={d} value_params={d} captures_param={} total_args={d}\n",
+            .{
+                @intFromEnum(lir_proc_id),
+                @intFromEnum(lambda_id),
+                value_params.len,
+                lambda.captures_param != null,
+                arg_count,
+            },
+        );
+    }
     try self.lowered_lambdas.put(proc_key, lir_proc_id);
 
     var local_map = MirToLirLocalMap.init(self.allocator);
