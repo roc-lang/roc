@@ -1824,17 +1824,22 @@ pub fn resolveExprExactMonotypeResolved(
         switch (expr) {
             .e_lookup_local => |lookup| {
                 if (thread.lookupValueBinding(module_idx, lookup.pattern_idx)) |source| {
-                    if (try resolveExprMonotypeFromValueBinding(driver, result, source, true)) |resolved| {
-                        try recordExprMonotypeResolved(
-                            driver,
-                            result,
-                            source_context,
-                            module_idx,
-                            expr_idx,
-                            resolved.idx,
-                            resolved.module_idx,
-                        );
-                        return resolved;
+                    switch (source) {
+                        .specialized_param, .lexical_binding => {
+                            if (try resolveExprMonotypeFromValueBinding(driver, result, source, true)) |resolved| {
+                                try recordExprMonotypeResolved(
+                                    driver,
+                                    result,
+                                    source_context,
+                                    module_idx,
+                                    expr_idx,
+                                    resolved.idx,
+                                    resolved.module_idx,
+                                );
+                                return resolved;
+                            }
+                        },
+                        .bound_expr => {},
                     }
                 }
             },
@@ -1881,7 +1886,10 @@ pub fn resolveExprMonotypeResolved(
         switch (expr) {
             .e_lookup_local => |lookup| {
                 if (thread.lookupValueBinding(module_idx, lookup.pattern_idx)) |source| {
-                    return try resolveExprMonotypeFromValueBinding(driver, result, source, false);
+                    switch (source) {
+                        .specialized_param, .lexical_binding => return try resolveExprMonotypeFromValueBinding(driver, result, source, false),
+                        .bound_expr => {},
+                    }
                 }
             },
             else => {},

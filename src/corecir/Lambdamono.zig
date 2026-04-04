@@ -58,7 +58,6 @@ pub const PackedFn = struct {
 
 pub const LowLevelCall = struct {
     op: CIR.Expr.LowLevel,
-    fn_monotype: ContextMono.ResolvedMonotype,
 };
 
 pub const IndirectCall = struct {

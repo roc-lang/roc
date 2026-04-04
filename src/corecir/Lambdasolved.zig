@@ -8428,7 +8428,7 @@ pub fn resolveDemandedDirectCallFnMonotype(
                     source_expr_ref.module_idx,
                     source_expr_ref.expr_idx,
                 )) |template_id| {
-                    return try resolveDemandedTemplateFnMonotypeFromCallShape(
+                    if (try resolveDemandedTemplateFnMonotypeFromCallShape(
                         driver,
                         result,
                         thread,
@@ -8436,7 +8436,9 @@ pub fn resolveDemandedDirectCallFnMonotype(
                         call_expr_idx,
                         arg_exprs,
                         template_id,
-                    );
+                    )) |resolved| {
+                        return resolved;
+                    }
                 }
                 const source_thread = SemanticThread.trackedThread(source_expr_ref.source_context);
                 if (try cm.resolveExprExactMonotypeResolved(
@@ -8468,6 +8470,17 @@ pub fn resolveDemandedDirectCallFnMonotype(
         }
     }
     if (try cm.resolveExprExactMonotypeResolved(
+        driver,
+        result,
+        thread,
+        module_idx,
+        call_expr.func,
+    )) |callee_mono| {
+        if (cm.resolvedIfFunctionMonotype(result, callee_mono)) |fn_monotype| {
+            return fn_monotype;
+        }
+    }
+    if (try cm.resolveExprMonotypeResolved(
         driver,
         result,
         thread,
@@ -8607,19 +8620,6 @@ pub fn resolveDirectCallSite(
         result.getExprLowLevelOp(thread.requireSourceContext(), module_idx, call_expr.func);
     if (resolved_low_level_op) |low_level_op| {
         const arg_exprs = module_env.store.sliceExpr(call_expr.args);
-        const low_level_fn_monotype = desired_fn_monotype orelse {
-            if (std.debug.runtime_safety) {
-                std.debug.panic(
-                    "Lambdasolved invariant violated: low-level call expr {d} in module {d} had no exact fn monotype when recording call-site semantics (op={s})",
-                    .{
-                        @intFromEnum(call_expr_idx),
-                        module_idx,
-                        @tagName(low_level_op),
-                    },
-                );
-            }
-            unreachable;
-        };
         try recordExprCallSite(
             driver,
             result,
@@ -8628,7 +8628,6 @@ pub fn resolveDirectCallSite(
             call_expr_idx,
             .{ .low_level = .{
                 .op = low_level_op,
-                .fn_monotype = low_level_fn_monotype,
             } },
         );
         if (low_level_op == .str_inspect and arg_exprs.len != 0) {
@@ -10519,10 +10518,6 @@ pub fn commitDirectDispatchExprSemantics(
             expr_idx,
             .{ .low_level = .{
                 .op = low_level_op,
-                .fn_monotype = .{
-                    .idx = callable_inst.fn_monotype,
-                    .module_idx = callable_inst.fn_monotype_module_idx,
-                },
             } },
         );
     } else {
