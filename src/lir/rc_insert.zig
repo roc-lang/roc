@@ -348,7 +348,6 @@ pub const RcInsertPass = struct {
             if (!param_seen or !is_consistent) continue;
             const root = maybe_root orelse continue;
             if (root == param) continue;
-
             const key = localKey(param);
             const gop = try self.local_alias_sources.getOrPut(key);
             if (gop.found_existing) {
@@ -558,19 +557,45 @@ pub const RcInsertPass = struct {
         defer self.allocator.free(seen);
         const all_owned = try self.allocator.alloc(bool, params.len);
         defer self.allocator.free(all_owned);
+        const incoming_args = try self.allocator.alloc(?LocalId, params.len);
+        defer self.allocator.free(incoming_args);
+        var incoming_jump_count: u32 = 0;
         @memset(seen, false);
         @memset(all_owned, true);
+        for (incoming_args) |*arg| arg.* = null;
 
-        try self.scanIncomingJumpsForJoin(join.remainder, join.id, params, seen, all_owned);
+        try self.scanIncomingJumpsForJoin(join.body, join.id, params, seen, all_owned, &incoming_jump_count, incoming_args);
+        try self.scanIncomingJumpsForJoin(join.remainder, join.id, params, seen, all_owned, &incoming_jump_count, incoming_args);
 
-        for (params, seen, all_owned) |param, param_seen, param_owned| {
+        for (params, seen, all_owned, incoming_args) |param, param_seen, param_owned, maybe_incoming_arg| {
             if (!param_seen or !param_owned) continue;
+
+            const carries_into_owned_slot = if (incoming_jump_count > 1)
+                true
+            else if (maybe_incoming_arg) |incoming_arg|
+                self.localDefinitionIntroducesFreshOwnership(incoming_arg)
+            else
+                false;
+
+            if (!carries_into_owned_slot) continue;
             const gop = try self.owning_join_params.getOrPut(localKey(param));
             if (!gop.found_existing) {
                 gop.value_ptr.* = {};
                 changed.* = true;
             }
         }
+    }
+
+    fn localDefinitionIntroducesFreshOwnership(self: *const RcInsertPass, local: LocalId) bool {
+        const def_kind = self.local_definition_kinds.get(localKey(local)) orelse std.debug.panic(
+            "RcInsertPass invariant violated: missing definition kind for local {d}",
+            .{@intFromEnum(local)},
+        );
+        return switch (def_kind) {
+            .stmt_result => |semantics| semantics == .fresh,
+            .join_param => self.localCarriesOwnedValue(local),
+            else => false,
+        };
     }
 
     fn scanIncomingJumpsForJoin(
@@ -580,37 +605,52 @@ pub const RcInsertPass = struct {
         params: []const LocalId,
         seen: []bool,
         all_owned: []bool,
+        incoming_jump_count: *u32,
+        incoming_args: []?LocalId,
     ) Allocator.Error!void {
         switch (self.store.getCFStmt(stmt_id)) {
-            .assign_symbol => |assign| try self.scanIncomingJumpsForJoin(assign.next, join_id, params, seen, all_owned),
-            .assign_ref => |assign| try self.scanIncomingJumpsForJoin(assign.next, join_id, params, seen, all_owned),
-            .assign_literal => |assign| try self.scanIncomingJumpsForJoin(assign.next, join_id, params, seen, all_owned),
-            .assign_call => |assign| try self.scanIncomingJumpsForJoin(assign.next, join_id, params, seen, all_owned),
-            .assign_low_level => |assign| try self.scanIncomingJumpsForJoin(assign.next, join_id, params, seen, all_owned),
-            .assign_list => |assign| try self.scanIncomingJumpsForJoin(assign.next, join_id, params, seen, all_owned),
-            .assign_struct => |assign| try self.scanIncomingJumpsForJoin(assign.next, join_id, params, seen, all_owned),
-            .assign_tag => |assign| try self.scanIncomingJumpsForJoin(assign.next, join_id, params, seen, all_owned),
-            .debug => |debug_stmt| try self.scanIncomingJumpsForJoin(debug_stmt.next, join_id, params, seen, all_owned),
-            .expect => |expect_stmt| try self.scanIncomingJumpsForJoin(expect_stmt.next, join_id, params, seen, all_owned),
-            .incref => |inc| try self.scanIncomingJumpsForJoin(inc.next, join_id, params, seen, all_owned),
-            .decref => |dec| try self.scanIncomingJumpsForJoin(dec.next, join_id, params, seen, all_owned),
-            .free => |free_stmt| try self.scanIncomingJumpsForJoin(free_stmt.next, join_id, params, seen, all_owned),
+            .assign_symbol => |assign| try self.scanIncomingJumpsForJoin(assign.next, join_id, params, seen, all_owned, incoming_jump_count, incoming_args),
+            .assign_ref => |assign| try self.scanIncomingJumpsForJoin(assign.next, join_id, params, seen, all_owned, incoming_jump_count, incoming_args),
+            .assign_literal => |assign| try self.scanIncomingJumpsForJoin(assign.next, join_id, params, seen, all_owned, incoming_jump_count, incoming_args),
+            .assign_call => |assign| try self.scanIncomingJumpsForJoin(assign.next, join_id, params, seen, all_owned, incoming_jump_count, incoming_args),
+            .assign_low_level => |assign| try self.scanIncomingJumpsForJoin(assign.next, join_id, params, seen, all_owned, incoming_jump_count, incoming_args),
+            .assign_list => |assign| try self.scanIncomingJumpsForJoin(assign.next, join_id, params, seen, all_owned, incoming_jump_count, incoming_args),
+            .assign_struct => |assign| try self.scanIncomingJumpsForJoin(assign.next, join_id, params, seen, all_owned, incoming_jump_count, incoming_args),
+            .assign_tag => |assign| try self.scanIncomingJumpsForJoin(assign.next, join_id, params, seen, all_owned, incoming_jump_count, incoming_args),
+            .debug => |debug_stmt| try self.scanIncomingJumpsForJoin(debug_stmt.next, join_id, params, seen, all_owned, incoming_jump_count, incoming_args),
+            .expect => |expect_stmt| try self.scanIncomingJumpsForJoin(expect_stmt.next, join_id, params, seen, all_owned, incoming_jump_count, incoming_args),
+            .incref => |inc| try self.scanIncomingJumpsForJoin(inc.next, join_id, params, seen, all_owned, incoming_jump_count, incoming_args),
+            .decref => |dec| try self.scanIncomingJumpsForJoin(dec.next, join_id, params, seen, all_owned, incoming_jump_count, incoming_args),
+            .free => |free_stmt| try self.scanIncomingJumpsForJoin(free_stmt.next, join_id, params, seen, all_owned, incoming_jump_count, incoming_args),
             .switch_stmt => |switch_stmt| {
                 for (self.store.getCFSwitchBranches(switch_stmt.branches)) |branch| {
-                    try self.scanIncomingJumpsForJoin(branch.body, join_id, params, seen, all_owned);
+                    try self.scanIncomingJumpsForJoin(branch.body, join_id, params, seen, all_owned, incoming_jump_count, incoming_args);
                 }
-                try self.scanIncomingJumpsForJoin(switch_stmt.default_branch, join_id, params, seen, all_owned);
+                try self.scanIncomingJumpsForJoin(switch_stmt.default_branch, join_id, params, seen, all_owned, incoming_jump_count, incoming_args);
             },
             .borrow_scope => |scope| {
-                try self.scanIncomingJumpsForJoin(scope.body, join_id, params, seen, all_owned);
-                try self.scanIncomingJumpsForJoin(scope.remainder, join_id, params, seen, all_owned);
+                try self.scanIncomingJumpsForJoin(scope.body, join_id, params, seen, all_owned, incoming_jump_count, incoming_args);
+                try self.scanIncomingJumpsForJoin(scope.remainder, join_id, params, seen, all_owned, incoming_jump_count, incoming_args);
             },
             .join => |nested_join| {
-                try self.scanIncomingJumpsForJoin(nested_join.body, join_id, params, seen, all_owned);
-                try self.scanIncomingJumpsForJoin(nested_join.remainder, join_id, params, seen, all_owned);
+                try self.scanIncomingJumpsForJoin(nested_join.body, join_id, params, seen, all_owned, incoming_jump_count, incoming_args);
+                try self.scanIncomingJumpsForJoin(nested_join.remainder, join_id, params, seen, all_owned, incoming_jump_count, incoming_args);
             },
             .jump => |jump| {
                 if (jump.target != join_id) return;
+                if (incoming_jump_count.* == 0) {
+                    const args = self.store.getLocalSpan(jump.args);
+                    if (builtin.mode == .Debug and args.len != incoming_args.len) {
+                        std.debug.panic(
+                            "RcInsertPass invariant violated: jump to join {d} passed {d} args while incoming-arg scan expected {d}",
+                            .{ @intFromEnum(join_id), args.len, incoming_args.len },
+                        );
+                    }
+                    for (args, 0..) |arg, i| {
+                        incoming_args[i] = arg;
+                    }
+                }
+                incoming_jump_count.* += 1;
 
                 const args = self.store.getLocalSpan(jump.args);
                 if (builtin.mode == .Debug and args.len != params.len) {
@@ -621,8 +661,10 @@ pub const RcInsertPass = struct {
                 }
 
                 for (args, params, 0..) |arg, param, i| {
-                    _ = param;
                     seen[i] = true;
+                    if (self.forwardingAliasRepresentative(arg)) |resolved_root| {
+                        if (resolved_root == param) continue;
+                    }
                     const carries_ownership = self.localCarriesOwnedValue(arg);
                     all_owned[i] = all_owned[i] and carries_ownership;
                 }
@@ -1883,7 +1925,17 @@ pub const RcInsertPass = struct {
             .scope_exit => stmt_id,
             .jump => |jump| blk: {
                 for (internal_join_ids) |internal_join_id| {
-                    if (jump.target == internal_join_id) break :blk stmt_id;
+                    if (jump.target != internal_join_id) continue;
+
+                    if (self.ownershipRootForConsumedValue(value)) |root| {
+                        if (self.joinBodyUsesOwnershipRoot(jump.target, root)) break :blk stmt_id;
+                    }
+
+                    break :blk try self.prependLocalDecrefIfNotForwarded(
+                        value,
+                        self.store.getLocalSpan(jump.args),
+                        stmt_id,
+                    );
                 }
                 break :blk try self.prependLocalDecrefIfNotForwarded(
                     value,
@@ -2184,8 +2236,7 @@ pub const RcInsertPass = struct {
             "RcInsertPass invariant violated: missing join info for join {d}",
             .{@intFromEnum(join_id)},
         );
-        return self.stmtUsesOwnershipRoot(join_info.body, root) or
-            self.stmtUsesOwnershipRoot(join_info.remainder, root);
+        return self.stmtUsesOwnershipRoot(join_info.body, root);
     }
 
     fn appendReachableJoinIds(
