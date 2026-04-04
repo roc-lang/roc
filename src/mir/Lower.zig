@@ -140,13 +140,6 @@ const LambdaEntryBindingState = struct {
     }
 };
 
-const CaptureMaterialization = union(enum) {
-    expr: struct {
-        local: MIR.LocalId,
-        expr_ref: Pipeline.ExprRef,
-    },
-};
-
 const LowerExprSourceRef = struct {
     source_context: Pipeline.SourceContext,
     module_idx: u32,
@@ -1108,13 +1101,11 @@ fn lowerProgramCallableIntroInto(
     if (lookupProgramExprCallableValue(session, expr_idx)) |callable_value| {
         return switch (callable_value) {
             .direct => |callable_inst_id| self.lowerResolvedCallableInstValueInto(
-                session,
                 callable_inst_id,
                 target,
                 next,
             ),
             .packed_fn => |packed_fn| self.lowerPackedCallableIntroInto(
-                session,
                 packed_fn,
                 lookupProgramExprIntroCallableInst(session, expr_idx) orelse std.debug.panic(
                     "statement-only MIR invariant violated: {s} expr {d} specialized to packed callable semantics without explicit intro callable inst",
@@ -1128,7 +1119,6 @@ fn lowerProgramCallableIntroInto(
 
     if (lookupProgramExprIntroCallableInst(session, expr_idx)) |callable_inst_id| {
         return self.lowerResolvedCallableInstValueInto(
-            session,
             callable_inst_id,
             target,
             next,
@@ -3186,7 +3176,7 @@ fn materializeTopLevelDefInto(
 
     switch (normalized_callable_semantics) {
         .callable => |resolved_callable_value| switch (resolved_callable_value) {
-            .direct => |resolved_callable_inst| return self.lowerResolvedCallableInstValueInto(def_session, resolved_callable_inst, target, next),
+            .direct => |resolved_callable_inst| return self.lowerResolvedCallableInstValueInto(resolved_callable_inst, target, next),
             .packed_fn => |packed_fn| return self.lowerExprAsPackedCallableInto(def_session, def.expr, packed_fn, target, next),
         },
         .non_callable => {},
@@ -3368,16 +3358,8 @@ fn lowerLambdaParamLocals(
 
 fn appendCaptureMaterialization(
     self: *Self,
-    out: *std.ArrayList(CaptureMaterialization),
     capture_field: Pipeline.CaptureField,
 ) Allocator.Error!MIR.LocalId {
-    const capture_monotype =
-        try self.importMonotypeFromStore(
-            &self.callable_pipeline.context_mono.monotype_store,
-            capture_field.local_monotype.idx,
-            capture_field.local_monotype.module_idx,
-            self.current_module_idx,
-        );
     const capture_local = switch (capture_field.source) {
         .specialized_param => |source| blk: {
             const callable_inst = self.callable_pipeline.getCallableInst(source.callable_inst);
@@ -3436,15 +3418,30 @@ fn appendCaptureMaterialization(
             );
         },
         .bound_expr => |bound_expr| blk: {
-            const local = try self.freshSyntheticLocal(
-                try self.executableMonotypeForCallableValue(capture_monotype, capture_field.callable_value),
-                false,
+            if (bound_expr.expr_ref.module_idx != self.current_module_idx) {
+                std.debug.panic(
+                    "statement-only MIR invariant violated: bound capture pattern {d} pointed at module {d} while lowering module {d}",
+                    .{
+                        @intFromEnum(capture_field.pattern_idx),
+                        bound_expr.expr_ref.module_idx,
+                        self.current_module_idx,
+                    },
+                );
+            }
+            if (self.lookupExistingBindingLocalWithinCurrentLambda(capture_field.pattern_idx)) |existing| {
+                break :blk existing;
+            }
+            if (self.lookupUsableBindingLocalInAncestorScopes(
+                self.current_module_idx,
+                self.current_binding_scope,
+                capture_field.pattern_idx,
+            )) |existing| {
+                break :blk existing;
+            }
+            std.debug.panic(
+                "statement-only MIR invariant violated: bound capture pattern {d} had no reusable local in scope",
+                .{@intFromEnum(capture_field.pattern_idx)},
             );
-            try out.append(self.allocator, .{ .expr = .{
-                .local = local,
-                .expr_ref = bound_expr.expr_ref,
-            } });
-            break :blk local;
         },
     };
     return capture_local;
@@ -3739,7 +3736,6 @@ fn lowerReservedTrivialClosureLambda(
         const callable_only_capture = callable_only_captures.items[callable_only_i];
         if (callable_only_capture.callable_inst_id) |capture_callable_inst_id| {
             body = try self.lowerResolvedCallableInstValueInto(
-                session,
                 capture_callable_inst_id,
                 callable_only_capture.local,
                 body,
@@ -3776,7 +3772,6 @@ fn lowerReservedTrivialClosureLambda(
 
 fn lowerResolvedCallableInstValueInto(
     self: *Self,
-    session: LowerSession,
     callable_inst_id: Pipeline.CallableInstId,
     target: MIR.LocalId,
     next: MIR.CFStmtId,
@@ -3820,16 +3815,10 @@ fn lowerResolvedCallableInstValueInto(
     const capture_top = self.scratch_local_ids.top();
     defer self.scratch_local_ids.clearFrom(capture_top);
 
-    var capture_materializations = std.ArrayList(CaptureMaterialization).empty;
-    defer capture_materializations.deinit(self.allocator);
-
     for (self.callable_pipeline.getCaptureFields(callable_def.captures)) |capture_field| {
         switch (capture_field.storage) {
             .runtime_field => {
-                const capture_local = try self.appendCaptureMaterialization(
-                    &capture_materializations,
-                    capture_field,
-                );
+                const capture_local = try self.appendCaptureMaterialization(capture_field);
                 try self.scratch_local_ids.append(capture_local);
             },
             .callable_only, .recursive_member => {},
@@ -3837,7 +3826,7 @@ fn lowerResolvedCallableInstValueInto(
     }
 
     const runtime_captures = self.scratch_local_ids.sliceFromStart(capture_top);
-    var current = if (runtime_captures.len == 0)
+    const current = if (runtime_captures.len == 0)
         try self.store.addCFStmt(self.allocator, .{ .assign_lambda = .{
             .target = target,
             .lambda = lambda_id,
@@ -3850,21 +3839,6 @@ fn lowerResolvedCallableInstValueInto(
             .captures = try self.store.addLocalSpan(self.allocator, runtime_captures),
             .next = next,
         } });
-
-    var i = capture_materializations.items.len;
-    while (i > 0) {
-        i -= 1;
-        switch (capture_materializations.items[i]) {
-            .expr => |materialization| {
-                current = try self.lowerCapturedSourceExprInto(
-                    session,
-                    materialization.expr_ref,
-                    materialization.local,
-                    current,
-                );
-            },
-        }
-    }
 
     return current;
 }
@@ -5240,7 +5214,6 @@ fn packedCallableTagName(
 
 fn lowerPackedCallableIntroInto(
     self: *Self,
-    session: LowerSession,
     packed_fn: Pipeline.PackedFn,
     callable_inst_id: Pipeline.CallableInstId,
     target: MIR.LocalId,
@@ -5271,7 +5244,7 @@ fn lowerPackedCallableIntroInto(
         .args = try self.store.addLocalSpan(self.allocator, &.{payload_local}),
         .next = next,
     } });
-    return self.lowerResolvedCallableInstValueInto(session, callable_inst_id, payload_local, tag_stmt);
+    return self.lowerResolvedCallableInstValueInto(callable_inst_id, payload_local, tag_stmt);
 }
 
 fn lowerExprAsPackedCallableInto(
@@ -5289,7 +5262,6 @@ fn lowerExprAsPackedCallableInto(
 
     return switch (callable_value) {
         .direct => |callable_inst_id| self.lowerPackedCallableIntroInto(
-            session,
             packed_fn,
             callable_inst_id,
             target,
@@ -5402,7 +5374,6 @@ fn lowerDirectCallTargetInto(
                 next
             else
                 try self.lowerResolvedCallableInstValueInto(
-                    session,
                     direct_callable_inst_id,
                     lowered_callee_local,
                     next,

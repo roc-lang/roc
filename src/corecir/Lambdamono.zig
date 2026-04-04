@@ -1139,6 +1139,10 @@ fn Transform(comptime ResultPtr: type, comptime Driver: type) type {
                 callable_def.body_expr.expr_idx,
             );
             for (self.result.getCaptureFields(callable_def.captures)) |capture_field| {
+                if (capture_field.callable_value) |callable_value| {
+                    try self.ensureCallableValueBodyGraphs(callable_value);
+                    continue;
+                }
                 switch (capture_field.source) {
                     .bound_expr => |bound_expr| try self.ensureProgramExprRefNode(bound_expr.expr_ref),
                     .specialized_param, .lexical_binding => {},
