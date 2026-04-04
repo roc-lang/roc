@@ -40,11 +40,11 @@ const trace = struct {
 
         for (store.getProcSpecs(), 0..) |proc, i| {
             std.debug.print(
-                "[cir-to-lir] proc {d} name={d} args={any} body={d} root={} result={s}\n",
+                "[cir-to-lir] proc {d} name={d} args={f} body={d} root={} result={s}\n",
                 .{
                     i,
                     proc.name.raw(),
-                    fmtLocalSpan(store.getLocalSpan(proc.args)),
+                    fmtLocalSpan(store, store.getLocalSpan(proc.args)),
                     @intFromEnum(proc.body),
                     i == @intFromEnum(root_proc),
                     @tagName(proc.result_contract),
@@ -59,13 +59,13 @@ const trace = struct {
         switch (store.getCFStmt(stmt_id)) {
             .assign_call => |assign| {
                 std.debug.print(
-                    "[cir-to-lir] {s}stmt {d}: assign_call target={d} proc={d} args={any} result={s} next={d}\n",
+                    "[cir-to-lir] {s}stmt {d}: assign_call target={f} proc={d} args={f} result={s} next={d}\n",
                     .{
                         indentSpaces(indent),
                         @intFromEnum(stmt_id),
-                        @intFromEnum(assign.target),
+                        fmtLocal(store, assign.target),
                         @intFromEnum(assign.proc),
-                        fmtLocalSpan(store.getLocalSpan(assign.args)),
+                        fmtLocalSpan(store, store.getLocalSpan(assign.args)),
                         @tagName(assign.result),
                         @intFromEnum(assign.next),
                     },
@@ -74,13 +74,13 @@ const trace = struct {
             },
             .assign_low_level => |assign| {
                 std.debug.print(
-                    "[cir-to-lir] {s}stmt {d}: assign_low_level target={d} op={s} args={any} result={s} next={d}\n",
+                    "[cir-to-lir] {s}stmt {d}: assign_low_level target={f} op={s} args={f} result={s} next={d}\n",
                     .{
                         indentSpaces(indent),
                         @intFromEnum(stmt_id),
-                        @intFromEnum(assign.target),
+                        fmtLocal(store, assign.target),
                         @tagName(assign.op),
-                        fmtLocalSpan(store.getLocalSpan(assign.args)),
+                        fmtLocalSpan(store, store.getLocalSpan(assign.args)),
                         @tagName(assign.result),
                         @intFromEnum(assign.next),
                     },
@@ -89,11 +89,11 @@ const trace = struct {
             },
             .assign_ref => |assign| {
                 std.debug.print(
-                    "[cir-to-lir] {s}stmt {d}: assign_ref target={d} op={s} result={s} next={d}\n",
+                    "[cir-to-lir] {s}stmt {d}: assign_ref target={f} op={s} result={s} next={d}\n",
                     .{
                         indentSpaces(indent),
                         @intFromEnum(stmt_id),
-                        @intFromEnum(assign.target),
+                        fmtLocal(store, assign.target),
                         @tagName(assign.op),
                         @tagName(assign.result),
                         @intFromEnum(assign.next),
@@ -103,11 +103,11 @@ const trace = struct {
             },
             .assign_literal => |assign| {
                 std.debug.print(
-                    "[cir-to-lir] {s}stmt {d}: assign_literal target={d} result={s} next={d}\n",
+                    "[cir-to-lir] {s}stmt {d}: assign_literal target={f} result={s} next={d}\n",
                     .{
                         indentSpaces(indent),
                         @intFromEnum(stmt_id),
-                        @intFromEnum(assign.target),
+                        fmtLocal(store, assign.target),
                         @tagName(assign.result),
                         @intFromEnum(assign.next),
                     },
@@ -116,12 +116,12 @@ const trace = struct {
             },
             .assign_list => |assign| {
                 std.debug.print(
-                    "[cir-to-lir] {s}stmt {d}: assign_list target={d} elems={any} next={d}\n",
+                    "[cir-to-lir] {s}stmt {d}: assign_list target={f} elems={f} next={d}\n",
                     .{
                         indentSpaces(indent),
                         @intFromEnum(stmt_id),
-                        @intFromEnum(assign.target),
-                        fmtLocalSpan(store.getLocalSpan(assign.elems)),
+                        fmtLocal(store, assign.target),
+                        fmtLocalSpan(store, store.getLocalSpan(assign.elems)),
                         @intFromEnum(assign.next),
                     },
                 );
@@ -129,12 +129,12 @@ const trace = struct {
             },
             .assign_struct => |assign| {
                 std.debug.print(
-                    "[cir-to-lir] {s}stmt {d}: assign_struct target={d} fields={any} next={d}\n",
+                    "[cir-to-lir] {s}stmt {d}: assign_struct target={f} fields={f} next={d}\n",
                     .{
                         indentSpaces(indent),
                         @intFromEnum(stmt_id),
-                        @intFromEnum(assign.target),
-                        fmtLocalSpan(store.getLocalSpan(assign.fields)),
+                        fmtLocal(store, assign.target),
+                        fmtLocalSpan(store, store.getLocalSpan(assign.fields)),
                         @intFromEnum(assign.next),
                     },
                 );
@@ -142,13 +142,13 @@ const trace = struct {
             },
             .assign_tag => |assign| {
                 std.debug.print(
-                    "[cir-to-lir] {s}stmt {d}: assign_tag target={d} discr={d} args={any} next={d}\n",
+                    "[cir-to-lir] {s}stmt {d}: assign_tag target={f} discr={d} args={f} next={d}\n",
                     .{
                         indentSpaces(indent),
                         @intFromEnum(stmt_id),
-                        @intFromEnum(assign.target),
+                        fmtLocal(store, assign.target),
                         assign.discriminant,
-                        fmtLocalSpan(store.getLocalSpan(assign.args)),
+                        fmtLocalSpan(store, store.getLocalSpan(assign.args)),
                         @intFromEnum(assign.next),
                     },
                 );
@@ -156,12 +156,12 @@ const trace = struct {
             },
             .join => |join| {
                 std.debug.print(
-                    "[cir-to-lir] {s}stmt {d}: join id={d} params={any} remainder={d} body={d}\n",
+                    "[cir-to-lir] {s}stmt {d}: join id={d} params={f} remainder={d} body={d}\n",
                     .{
                         indentSpaces(indent),
                         @intFromEnum(stmt_id),
                         @intFromEnum(join.id),
-                        fmtLocalSpan(store.getLocalSpan(join.params)),
+                        fmtLocalSpan(store, store.getLocalSpan(join.params)),
                         @intFromEnum(join.remainder),
                         @intFromEnum(join.body),
                     },
@@ -171,22 +171,22 @@ const trace = struct {
             },
             .jump => |jump| {
                 std.debug.print(
-                    "[cir-to-lir] {s}stmt {d}: jump target={d} args={any}\n",
+                    "[cir-to-lir] {s}stmt {d}: jump target={d} args={f}\n",
                     .{
                         indentSpaces(indent),
                         @intFromEnum(stmt_id),
                         @intFromEnum(jump.target),
-                        fmtLocalSpan(store.getLocalSpan(jump.args)),
+                        fmtLocalSpan(store, store.getLocalSpan(jump.args)),
                     },
                 );
             },
             .switch_stmt => |switch_stmt| {
                 std.debug.print(
-                    "[cir-to-lir] {s}stmt {d}: switch cond={d} default={d}\n",
+                    "[cir-to-lir] {s}stmt {d}: switch cond={f} default={d}\n",
                     .{
                         indentSpaces(indent),
                         @intFromEnum(stmt_id),
-                        @intFromEnum(switch_stmt.cond),
+                        fmtLocal(store, switch_stmt.cond),
                         @intFromEnum(switch_stmt.default_branch),
                     },
                 );
@@ -201,17 +201,17 @@ const trace = struct {
             },
             .ret => |ret| {
                 std.debug.print(
-                    "[cir-to-lir] {s}stmt {d}: ret value={d}\n",
-                    .{ indentSpaces(indent), @intFromEnum(stmt_id), @intFromEnum(ret.value) },
+                    "[cir-to-lir] {s}stmt {d}: ret value={f}\n",
+                    .{ indentSpaces(indent), @intFromEnum(stmt_id), fmtLocal(store, ret.value) },
                 );
             },
             .incref => |inc| {
                 std.debug.print(
-                    "[cir-to-lir] {s}stmt {d}: incref value={d} count={d} next={d}\n",
+                    "[cir-to-lir] {s}stmt {d}: incref value={f} count={d} next={d}\n",
                     .{
                         indentSpaces(indent),
                         @intFromEnum(stmt_id),
-                        @intFromEnum(inc.value),
+                        fmtLocal(store, inc.value),
                         inc.count,
                         @intFromEnum(inc.next),
                     },
@@ -220,11 +220,11 @@ const trace = struct {
             },
             .decref => |dec| {
                 std.debug.print(
-                    "[cir-to-lir] {s}stmt {d}: decref value={d} next={d}\n",
+                    "[cir-to-lir] {s}stmt {d}: decref value={f} next={d}\n",
                     .{
                         indentSpaces(indent),
                         @intFromEnum(stmt_id),
-                        @intFromEnum(dec.value),
+                        fmtLocal(store, dec.value),
                         @intFromEnum(dec.next),
                     },
                 );
@@ -232,11 +232,11 @@ const trace = struct {
             },
             .free => |free_stmt| {
                 std.debug.print(
-                    "[cir-to-lir] {s}stmt {d}: free value={d} next={d}\n",
+                    "[cir-to-lir] {s}stmt {d}: free value={f} next={d}\n",
                     .{
                         indentSpaces(indent),
                         @intFromEnum(stmt_id),
-                        @intFromEnum(free_stmt.value),
+                        fmtLocal(store, free_stmt.value),
                         @intFromEnum(free_stmt.next),
                     },
                 );
@@ -288,23 +288,38 @@ const trace = struct {
         return "                                                                "[0..count];
     }
 
-    fn fmtLocalSpan(locals: []const lir.LocalId) LocalSpanFmt {
-        return .{ .locals = locals };
+    fn fmtLocal(store: *const LirStore, local: lir.LocalId) LocalFmt {
+        return .{ .store = store, .local = local };
     }
 
+    fn fmtLocalSpan(store: *const LirStore, locals: []const lir.LocalId) LocalSpanFmt {
+        return .{ .store = store, .locals = locals };
+    }
+
+    const LocalFmt = struct {
+        store: *const LirStore,
+        local: lir.LocalId,
+
+        pub fn format(self: LocalFmt, writer: anytype) !void {
+            try writer.print("{d}:{d}", .{
+                @intFromEnum(self.local),
+                @intFromEnum(self.store.getLocal(self.local).layout_idx),
+            });
+        }
+    };
+
     const LocalSpanFmt = struct {
+        store: *const LirStore,
         locals: []const lir.LocalId,
 
-        pub fn format(
-            self: LocalSpanFmt,
-            comptime _: []const u8,
-            _: std.fmt.FormatOptions,
-            writer: anytype,
-        ) !void {
+        pub fn format(self: LocalSpanFmt, writer: anytype) !void {
             try writer.writeByte('{');
             for (self.locals, 0..) |local, i| {
                 if (i != 0) try writer.writeAll(", ");
-                try writer.print("{d}", .{@intFromEnum(local)});
+                try writer.print("{d}:{d}", .{
+                    @intFromEnum(local),
+                    @intFromEnum(self.store.getLocal(local).layout_idx),
+                });
             }
             try writer.writeByte('}');
         }

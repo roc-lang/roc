@@ -1732,7 +1732,10 @@ pub const Interpreter = struct {
             .u32_to_str => self.numToStr(u32, args[0], ll.ret_layout),
             .i32_to_str => self.numToStr(i32, args[0], ll.ret_layout),
             .u64_to_str => self.numToStr(u64, args[0], ll.ret_layout),
-            .i64_to_str => self.numToStr(i64, args[0], ll.ret_layout),
+            .i64_to_str => blk: {
+                trace.log("i64_to_str: arg={d} ret_layout={any}", .{ args[0].read(i64), ll.ret_layout });
+                break :blk self.numToStr(i64, args[0], ll.ret_layout);
+            },
             .u128_to_str => self.numToStr(u128, args[0], ll.ret_layout),
             .i128_to_str => self.numToStr(i128, args[0], ll.ret_layout),
             .dec_to_str => blk: {
@@ -2445,6 +2448,13 @@ pub const Interpreter = struct {
         const size = self.helper.sizeOf(arg_layout);
         const is_division_like = op == .div or op == .div_trunc or op == .rem or op == .mod;
 
+        trace.log("numBinOp: op={s} arg_layout={any} ret_layout={any} size={d}", .{
+            @tagName(op),
+            arg_layout,
+            ret_layout,
+            size,
+        });
+
         if (is_division_like) {
             switch (size) {
                 1 => {
@@ -2512,10 +2522,13 @@ pub const Interpreter = struct {
             8 => {
                 const l = self.layout_store.getLayout(arg_layout);
                 if (l.tag == .scalar and l.data.scalar.tag == .frac) {
+                    trace.log("numBinOp f64: a={d} b={d}", .{ a.read(f64), b.read(f64) });
                     val.write(f64, floatBinOp(f64, a.read(f64), b.read(f64), op));
                 } else if (isUnsigned(arg_layout)) {
+                    trace.log("numBinOp u64: a={d} b={d}", .{ a.read(u64), b.read(u64) });
                     val.write(u64, intBinOp(u64, a.read(u64), b.read(u64), op));
                 } else {
+                    trace.log("numBinOp i64: a={d} b={d}", .{ a.read(i64), b.read(i64) });
                     val.write(i64, intBinOp(i64, a.read(i64), b.read(i64), op));
                 }
             },
