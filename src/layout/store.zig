@@ -1610,6 +1610,7 @@ pub const Store = struct {
                 },
                 // flex and rigid are valid terminal extensions for open unions
                 .flex, .rigid => break,
+                .polarity_ext => unreachable,
                 else => unreachable,
             }
         }
@@ -1698,6 +1699,7 @@ pub const Store = struct {
                 },
                 .flex => |_| break,
                 .rigid => |_| break,
+                .polarity_ext => unreachable,
                 else => unreachable,
             }
         }
@@ -2286,6 +2288,7 @@ pub const Store = struct {
                                         .empty_record, .empty_tag_union => true,
                                         else => false,
                                     },
+                                    .polarity_ext => unreachable,
                                     else => false,
                                 };
 
@@ -2341,6 +2344,7 @@ pub const Store = struct {
                                                     },
                                                     // A mapped flex/rigid should be computed, not assumed ZST
                                                     .flex, .rigid => false,
+                                                    .polarity_ext => unreachable,
                                                     else => false,
                                                 };
                                             }
@@ -2368,6 +2372,7 @@ pub const Store = struct {
                                                     },
                                                     // A mapped flex/rigid should be computed, not assumed ZST
                                                     .flex, .rigid => false,
+                                                    .polarity_ext => unreachable,
                                                     else => false,
                                                 };
                                             }
@@ -2876,6 +2881,7 @@ pub const Store = struct {
                         current = self.getTypesStore().resolveVar(backing_var);
                         continue;
                     },
+                    .polarity_ext => unreachable,
                     // .err is a "poison" type from type-checking failures.
                     // Treat it as ZST so downstream passes can proceed gracefully
                     // instead of crashing; the expression will fail at a later stage

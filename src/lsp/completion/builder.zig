@@ -1058,6 +1058,7 @@ pub const CompletionBuilder = struct {
                     .nominal_type => |nominal| nominal.ident.ident_idx,
                     else => null,
                 },
+                .polarity_ext => null,
                 else => null,
             };
 
@@ -1098,6 +1099,7 @@ pub const CompletionBuilder = struct {
                     content = resolved.desc.content;
                     continue;
                 },
+                .polarity_ext => break,
                 else => break,
             }
         }

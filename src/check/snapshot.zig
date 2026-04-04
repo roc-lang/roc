@@ -275,7 +275,7 @@ pub const Store = struct {
                 .flex => |flex| flex.name,
                 .rigid => |rigid| switch (rigid.name) {
                     .name => |ident_idx| ident_idx,
-                    .polarity_open, .polarity_deferred => null,
+                    .polarity_pending => null,
                 },
                 .alias => |alias| alias.ident.ident_idx,
                 .structure => |flat_type| switch (flat_type) {
@@ -285,6 +285,7 @@ pub const Store = struct {
                     // These don't have a direct name, so we fall back to contextual naming.
                     .record, .record_unbound, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => null,
                 },
+                .polarity_ext => null,
                 // Error types shouldn't create cycles
                 .err => unreachable,
             };
@@ -367,6 +368,7 @@ pub const Store = struct {
             .rigid => |rigid| SnapshotContent{ .rigid = try self.deepCopyRigid(store, type_writer, rigid) },
             .alias => |alias| SnapshotContent{ .alias = try self.deepCopyAlias(store, type_writer, alias) },
             .structure => |flat_type| SnapshotContent{ .structure = try self.deepCopyFlatType(store, type_writer, flat_type, root_var) },
+            .polarity_ext => SnapshotContent.err, // Treat polarity_ext as opaque/anonymous
             .err => SnapshotContent.err,
         };
 

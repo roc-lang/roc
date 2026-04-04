@@ -79,6 +79,7 @@ fn copyContent(
         .rigid => |rigid| Content{ .rigid = try copyRigid(source_store, dest_store, rigid, var_mapping, source_idents, dest_idents, allocator) },
         .alias => |alias| Content{ .alias = try copyAlias(source_store, dest_store, alias, var_mapping, source_idents, dest_idents, allocator) },
         .structure => |flat_type| Content{ .structure = try copyFlatType(source_store, dest_store, flat_type, var_mapping, source_idents, dest_idents, allocator) },
+        .polarity_ext => Content.polarity_ext,
         .err => Content.err,
     };
 }
@@ -135,8 +136,7 @@ fn copyRigid(
             const name_bytes = source_idents.getText(ident_idx);
             break :blk .{ .name = try dest_idents.insert(allocator, base.Ident.for_text(name_bytes)) };
         },
-        .polarity_open => .polarity_open,
-        .polarity_deferred => .polarity_deferred,
+        .polarity_pending => .polarity_pending,
     };
 
     // Copy the constraints

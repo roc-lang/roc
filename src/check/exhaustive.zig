@@ -736,7 +736,7 @@ fn getUnionFromType(
         // Polymorphic types (flex/rigid vars) cannot be treated as unions because
         // we don't know what constructors they have. This is correct behavior -
         // the caller should handle this by skipping exhaustiveness checking.
-        .flex, .rigid => return .not_a_union,
+        .flex, .rigid, .polarity_ext => return .not_a_union,
         // Structure might contain tag union or nominal type info
         .structure => |flat_type| {
             switch (flat_type) {
@@ -819,8 +819,8 @@ fn buildUnionFromTagUnion(
                 has_flex = true;
                 break;
             },
-            .rigid => {
-                // Rigid extension = open union (for exhaustiveness), stop here
+            .rigid, .polarity_ext => {
+                // Rigid/polarity extension = open union (for exhaustiveness), stop here
                 is_open = true;
                 has_flex = false;
                 break;
@@ -984,8 +984,8 @@ fn isTypeInhabited(type_store: *TypeStore, builtin_idents: BuiltinIdents, type_v
                 }
 
                 switch (content) {
-                    // Flex and rigid variables are unconstrained - assume inhabited
-                    .flex, .rigid => try results.append(gpa, true),
+                    // Flex, rigid, and polarity extension variables are unconstrained - assume inhabited
+                    .flex, .rigid, .polarity_ext => try results.append(gpa, true),
 
                     // Error types are treated as inhabited (we don't want to cascade errors)
                     .err => try results.append(gpa, true),
@@ -1349,7 +1349,7 @@ fn isOpenExtension(type_store: *TypeStore, ext: Var) bool {
         // Both flex and rigid extensions mean the union is open:
         // - Flex: type not fully constrained, could unify with more tags
         // - Rigid: user explicitly marked it as open (e.g., [A, B]a)
-        .flex, .rigid => true,
+        .flex, .rigid, .polarity_ext => true,
         // Empty tag union means it's closed - no additional tags possible
         .structure => |flat_type| switch (flat_type) {
             .empty_tag_union => false,

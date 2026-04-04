@@ -985,6 +985,7 @@ pub const SyntaxChecker = struct {
                     else => return null,
                 }
             },
+            .polarity_ext => return null,
             else => return null,
         }
     }

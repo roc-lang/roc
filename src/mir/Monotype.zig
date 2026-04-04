@@ -505,6 +505,7 @@ pub const Store = struct {
                 const backing_var = types_store.getAliasBackingVar(alias);
                 return try self.fromTypeVar(allocator, types_store, backing_var, common_idents, specializations, nominal_cycle_breakers, scratches);
             },
+            .polarity_ext => unreachable,
             .structure => |flat_type| {
                 return try self.fromFlatType(allocator, types_store, resolved.var_, flat_type, common_idents, specializations, nominal_cycle_breakers, scratches);
             },
@@ -617,6 +618,7 @@ pub const Store = struct {
                                 }
                                 break :rows; // Rigid record — treat as closed with collected fields
                             },
+                            .polarity_ext => unreachable,
                             .err => {
                                 if (std.debug.runtime_safety) {
                                     std.debug.panic(
@@ -732,6 +734,7 @@ pub const Store = struct {
                                 }
                                 break :rows; // Rigid tag union — treat as closed with collected tags
                             },
+                            .polarity_ext => unreachable,
                             .err => {
                                 if (std.debug.runtime_safety) {
                                     std.debug.panic(
@@ -919,6 +922,7 @@ pub const Store = struct {
         return switch (resolved.desc.content) {
             .flex => |flex| if (flex.name) |name| lookupNamedSpecialization(scratches, name) else null,
             .rigid => |rigid| if (rigid.name == .name) lookupNamedSpecialization(scratches, rigid.name.name) else null,
+            .polarity_ext => unreachable,
             else => null,
         };
     }
@@ -1041,6 +1045,7 @@ pub const Store = struct {
         return switch (resolved.desc.content) {
             .rigid => |rigid| if (rigid.name == .name) module_env.getIdent(rigid.name.name) else null,
             .flex => |flex| if (flex.name) |name| module_env.getIdent(name) else null,
+            .polarity_ext => unreachable,
             else => null,
         };
     }

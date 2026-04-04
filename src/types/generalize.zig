@@ -402,6 +402,9 @@ pub const Generalizer = struct {
                     },
                 }
             },
+            .polarity_ext => {
+                return group_rank;
+            },
             .err => return group_rank,
         };
     }

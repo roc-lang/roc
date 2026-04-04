@@ -2503,6 +2503,7 @@ pub const Store = struct {
                         current = self.getTypesStore().resolveVar(backing_var);
                         continue;
                     },
+                    .polarity_ext => unreachable,
                     // .err is a "poison" type from type-checking failures.
                     // Treat it as ZST so downstream passes can proceed gracefully
                     // instead of crashing; the expression will fail at a later stage

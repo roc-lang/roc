@@ -8901,6 +8901,7 @@ pub const Interpreter = struct {
                 }
                 try rigids.append(allocator, resolved.var_);
             },
+            .polarity_ext => unreachable,
             .structure => |flat| switch (flat) {
                 .tag_union => |tu| {
                     const tags = module.types.getTagsSlice(tu.tags);
@@ -8962,6 +8963,7 @@ pub const Interpreter = struct {
                 }
                 try rigids.append(allocator, resolved.var_);
             },
+            .polarity_ext => unreachable,
             .structure => |flat| switch (flat) {
                 .tag_union => |tu| {
                     const tags = self.runtime_types.getTagsSlice(tu.tags);
@@ -9330,6 +9332,7 @@ pub const Interpreter = struct {
 
         const out_var = blk: {
             switch (resolved.desc.content) {
+                .polarity_ext => unreachable,
                 .structure => |flat| {
                     switch (flat) {
                         .tag_union => |tu| {
@@ -9720,8 +9723,7 @@ pub const Interpreter = struct {
                             const source_name_str = module.getIdent(ident_idx);
                             break :blk_name .{ .name = try self.runtime_layout_store.getMutableEnv().?.insertIdent(base_pkg.Ident.for_text(source_name_str)) };
                         },
-                        .polarity_open => .polarity_open,
-                        .polarity_deferred => .polarity_deferred,
+                        .polarity_pending => .polarity_pending,
                     };
 
                     // Translate static dispatch constraints if present
@@ -16926,6 +16928,7 @@ pub const Interpreter = struct {
                                             switch (arg_resolved.desc.content) {
                                                 .flex => |flex| if (flex.constraints.count == 0) break :is_concrete false,
                                                 .rigid => |rigid| if (rigid.constraints.count == 0) break :is_concrete false,
+                                                .polarity_ext => unreachable,
                                                 else => {},
                                             }
                                         }
@@ -16935,6 +16938,7 @@ pub const Interpreter = struct {
                                 },
                                 .flex => |flex| flex.constraints.count > 0,
                                 .rigid => |rigid| rigid.constraints.count > 0,
+                                .polarity_ext => unreachable,
                                 // Error types are not concrete - fall back to lambda's return type
                                 .err => false,
                                 .alias => true,
@@ -18721,6 +18725,7 @@ pub const Interpreter = struct {
                         .structure => method_resolved.desc.content.unwrapFunc(),
                         // Polymorphic method - type variable doesn't provide concrete param types
                         .flex, .rigid => break :blk null,
+                        .polarity_ext => unreachable,
                         .alias => |alias| inner: {
                             // Follow alias to get the underlying function type
                             const backing = self.runtime_types.getAliasBackingVar(alias);
@@ -18729,6 +18734,7 @@ pub const Interpreter = struct {
                                 .structure => break :inner backing_resolved.desc.content.unwrapFunc(),
                                 // Polymorphic backing - no concrete param types
                                 .flex, .rigid => break :blk null,
+                                .polarity_ext => unreachable,
                                 // Nested alias shouldn't happen after resolveVar
                                 .alias => unreachable,
                                 .err => unreachable,
@@ -18769,6 +18775,7 @@ pub const Interpreter = struct {
                         switch (resolved.desc.content) {
                             .structure => break :blk expected, // Concrete type - use it
                             .flex, .rigid => {}, // Type variable - fall through to use argument's type
+                            .polarity_ext => unreachable,
                             .alias => {
                                 // Follow alias to check underlying type
                                 const backing = self.runtime_types.getAliasBackingVar(resolved.desc.content.alias);
@@ -18823,6 +18830,7 @@ pub const Interpreter = struct {
                             switch (resolved.desc.content) {
                                 .structure => break :blk expected,
                                 .flex, .rigid => {},
+                                .polarity_ext => unreachable,
                                 .alias => {
                                     const backing = self.runtime_types.getAliasBackingVar(resolved.desc.content.alias);
                                     const backing_resolved = self.runtime_types.resolveVar(backing);

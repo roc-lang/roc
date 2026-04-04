@@ -93,14 +93,26 @@ pub const Instantiator = struct {
         }
 
         switch (resolved.desc.content) {
+            .polarity_ext => {
+                // At call sites (fresh_flex), polarity_ext becomes a flex var so
+                // exhaustive matches can close the tag union. In other contexts
+                // (fresh_rigid, substitute_rigids), preserve polarity_ext.
+                const fresh_content: Content = switch (self.rigid_behavior) {
+                    .fresh_flex => .{ .flex = Flex.init() },
+                    else => .polarity_ext,
+                };
+                const fresh_var = try self.store.freshFromContentWithRank(fresh_content, self.current_rank);
+                try self.var_map.put(resolved_var, fresh_var);
+                return fresh_var;
+            },
             .rigid => |rigid| {
-                // Handle polarity_deferred rigids: resolve based on polarity context
-                if (rigid.name == .polarity_deferred) {
+                // Handle polarity_pending rigids: resolve based on polarity context
+                if (rigid.name == .polarity_pending) {
                     if (self.polarity) |pol| {
                         const fresh_content: Content = switch (pol) {
-                            .pos => .{ .rigid = Rigid.initPolarityOpen() },
+                            .pos => .polarity_ext,
                             .neg, .in_opaque => .{ .structure = .empty_tag_union },
-                            .in_alias => .{ .rigid = Rigid.initPolarityDeferred() },
+                            .in_alias => .{ .rigid = Rigid.initPolarityPending() },
                         };
                         const fresh_var = try self.store.freshFromContentWithRank(fresh_content, self.current_rank);
                         try self.var_map.put(resolved_var, fresh_var);
@@ -140,8 +152,8 @@ pub const Instantiator = struct {
                                             );
                                         }
                                     },
-                                    .polarity_open, .polarity_deferred => {
-                                        // polarity vars should not appear in substitute_rigids context
+                                    .polarity_pending => {
+                                        // polarity_pending vars should not appear in substitute_rigids context
                                         // (they're anonymous, not user-named rigids)
                                         break :inner_blk try self.store.freshFromContentWithRank(
                                             .{ .flex = Flex.init() },
@@ -171,7 +183,7 @@ pub const Instantiator = struct {
                 const fresh_content = switch (fresh_type) {
                     .flex => Content{ .flex = Flex{ .name = switch (rigid.name) {
                         .name => |ident_idx| ident_idx,
-                        .polarity_open, .polarity_deferred => null,
+                        .polarity_pending => null,
                     }, .constraints = fresh_constraints } },
                     .rigid => Content{ .rigid = Rigid{ .name = rigid.name, .constraints = fresh_constraints } },
                 };
@@ -214,9 +226,9 @@ pub const Instantiator = struct {
     fn instantiateContent(self: *Self, content: Content) std.mem.Allocator.Error!Content {
         return switch (content) {
             .flex => |flex| Content{ .flex = try self.instantiateFlex(flex) },
-            .rigid => {
-                // Rigids should be handled by `instantiateVar`
-                // If we have run into one here, it is  abug
+            .rigid, .polarity_ext => {
+                // Rigids and polarity_ext should be handled by `instantiateVar`
+                // If we have run into one here, it is a bug
                 unreachable;
             },
             .alias => |alias| {

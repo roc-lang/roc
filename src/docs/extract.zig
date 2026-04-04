@@ -1245,7 +1245,7 @@ fn extractDocTypeInner(
         .rigid => |rigid| {
             const var_name = switch (rigid.name) {
                 .name => |ident_idx| idents.getText(ident_idx),
-                .polarity_open, .polarity_deferred => "",
+                .polarity_pending => "",
             };
 
             // Collect constraints for where clause
@@ -1304,6 +1304,9 @@ fn extractDocTypeInner(
         },
         .structure => |flat_type| {
             return try extractFlatType(ctx, flat_type);
+        },
+        .polarity_ext => {
+            return try allocDocType(gpa, .{ .type_var = "" });
         },
         .err => {
             return try allocDocType(gpa, .@"error");
@@ -1476,7 +1479,7 @@ fn extractRecord(
             .rigid => |rigid| {
                 const var_name = switch (rigid.name) {
                     .name => |ident_idx| idents.getText(ident_idx),
-                    .polarity_open, .polarity_deferred => "",
+                    .polarity_pending => "",
                 };
 
                 const constraints = types.sliceStaticDispatchConstraints(rigid.constraints);
@@ -1513,6 +1516,10 @@ fn extractRecord(
                     .empty_record => break,
                     else => break,
                 }
+            },
+            .polarity_ext => {
+                ext_doc_type = try allocDocType(gpa, .{ .type_var = "" });
+                break;
             },
             else => break,
         }
@@ -1645,7 +1652,7 @@ fn extractTagUnion(
         .rigid => |rigid| {
             const var_name = switch (rigid.name) {
                 .name => |ident_idx| idents.getText(ident_idx),
-                .polarity_open, .polarity_deferred => "",
+                .polarity_pending => "",
             };
             ext_type = try allocDocType(gpa, .{ .type_var = try gpa.dupe(u8, var_name) });
 
@@ -1666,6 +1673,9 @@ fn extractTagUnion(
         },
         .alias => {
             ext_type = try extractDocTypeInner(ctx, tag_union.ext);
+        },
+        .polarity_ext => {
+            ext_type = try allocDocType(gpa, .{ .type_var = "" });
         },
         .err => {},
     }

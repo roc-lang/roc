@@ -144,6 +144,7 @@ pub const Resolver = struct {
             .flex => |flex| return self.resolveUnboundFlex(current_module_idx, flex.constraints, parent_context, build_state),
             .rigid => |rigid| return self.resolveUnboundRigid(current_module_idx, rigid.constraints, parent_context, build_state),
             .alias => unreachable,
+            .polarity_ext => unreachable,
             .err => return .{ .canonical = .zst },
             .structure => |flat_type| {
                 const resolved_ref = switch (flat_type) {
@@ -532,6 +533,7 @@ pub const Resolver = struct {
                         else => unreachable,
                     },
                     .flex, .rigid => break :rows,
+                    .polarity_ext => unreachable,
                     .err => unreachable,
                 }
             }
@@ -573,6 +575,7 @@ pub const Resolver = struct {
                         else => unreachable,
                     },
                     .flex, .rigid => break :rows,
+                    .polarity_ext => unreachable,
                     .err => unreachable,
                 }
             }
@@ -649,6 +652,7 @@ pub const Resolver = struct {
                         }
                     }
                 },
+                .polarity_ext => unreachable,
                 else => {},
             }
             break;

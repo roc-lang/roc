@@ -40,7 +40,7 @@ const TypeContext = enum {
 };
 
 pub const DisplayMode = enum {
-    /// User-facing: elide polarity_open extensions in Pos position.
+    /// User-facing: elide polarity_ext extensions in Pos position.
     /// Open types show as [A, B], closed types show as [A, B].
     user_facing,
     /// Test/debug: always show openness explicitly.
@@ -436,11 +436,7 @@ fn writeVarWithContext(self: *TypeWriter, writer: *ByteWrite, var_: Var, context
                     .name => |ident_idx| {
                         _ = try writer.write(self.getIdent(ident_idx));
                     },
-                    .polarity_open => {},
-                    .polarity_deferred => {
-                        std.debug.assert(false);
-                        _ = try writer.write("<unresolved>");
-                    },
+                    .polarity_pending => {},
                 }
 
                 // Useful in debugging to see if a var is rigid or not
@@ -464,6 +460,10 @@ fn writeVarWithContext(self: *TypeWriter, writer: *ByteWrite, var_: Var, context
                 if (should_wrap_in_parens) {
                     _ = try writer.write(")");
                 }
+            },
+            .polarity_ext => {
+                // polarity_ext is only meaningful as a tag union/record extension.
+                // As a standalone content, display nothing (similar to empty rigid).
             },
             .err => {
                 _ = try writer.write("Error");
@@ -620,6 +620,9 @@ fn writeRecord(self: *TypeWriter, writer: *ByteWrite, record: Record, root_var: 
                 unbound_ext_occurrences = try self.countVarOccurrences(unbound_var, root_var);
                 break :blk unbound_ext_occurrences > 1;
             },
+            .polarity_ext => blk: {
+                break :blk self.display_mode == .explicit;
+            },
             .invalid, .empty_record => false,
         };
         if (!has_ext) {
@@ -663,18 +666,13 @@ fn writeRecord(self: *TypeWriter, writer: *ByteWrite, record: Record, root_var: 
         },
         .rigid => |rigid| {
             switch (rigid.name) {
-                .polarity_open => {
+                .polarity_pending => {
                     // In explicit mode, show ".." for open records
                     // In user_facing mode, elide the extension
                     if (self.display_mode == .explicit) {
                         if (num_fields > 0) _ = try writer.write(", ");
                         _ = try writer.write("..");
                     }
-                },
-                .polarity_deferred => {
-                    std.debug.assert(false);
-                    if (num_fields > 0) _ = try writer.write(", ");
-                    _ = try writer.write("..<unresolved>");
                 },
                 .name => |ident_idx| {
                     if (num_fields > 0) _ = try writer.write(", ");
@@ -701,6 +699,12 @@ fn writeRecord(self: *TypeWriter, writer: *ByteWrite, record: Record, root_var: 
                 try self.writeFlexVarName(writer, unbound_var, .RecordExtension, root_var);
             }
         },
+        .polarity_ext => {
+            if (self.display_mode == .explicit) {
+                if (num_fields > 0) _ = try writer.write(", ");
+                _ = try writer.write("..");
+            }
+        },
         .invalid, .empty_record => {},
     }
 
@@ -713,6 +717,7 @@ fn gatherRecordFields(self: *TypeWriter, fields: RecordField.SafeMultiList.Range
     rigid: types_mod.Rigid,
     empty_record,
     unbound: Var,
+    polarity_ext,
     invalid,
 } {
     const slice = self.types.getRecordFieldsSlice(fields);
@@ -732,6 +737,9 @@ fn gatherRecordFields(self: *TypeWriter, fields: RecordField.SafeMultiList.Range
             },
             .rigid => |rigid| {
                 return .{ .rigid = rigid };
+            },
+            .polarity_ext => {
+                return .polarity_ext;
             },
             .alias => |alias| {
                 ext = self.types.getAliasBackingVar(alias);
@@ -768,6 +776,7 @@ fn gatherTags(self: *TypeWriter, tags: Tag.SafeMultiList.Range, initial_ext: Var
     flex: struct { var_: Var, payload: types_mod.Flex },
     rigid: types_mod.Rigid,
     empty_tag_union,
+    polarity_ext,
     err,
     alias: Var,
     invalid,
@@ -789,6 +798,9 @@ fn gatherTags(self: *TypeWriter, tags: Tag.SafeMultiList.Range, initial_ext: Var
             },
             .rigid => |rigid| {
                 return .{ .rigid = rigid };
+            },
+            .polarity_ext => {
+                return .polarity_ext;
             },
             .alias => |alias| {
                 ext = self.types.getAliasBackingVar(alias);
@@ -905,18 +917,13 @@ fn writeTagUnion(self: *TypeWriter, writer: *ByteWrite, tag_union: TagUnion, roo
         },
         .rigid => |rigid| {
             switch (rigid.name) {
-                .polarity_open => {
+                .polarity_pending => {
                     // In explicit mode, show ".." for open tag unions
                     // In user_facing mode, elide the extension
                     if (self.display_mode == .explicit) {
                         if (num_tags > 0) _ = try writer.write(", ");
                         _ = try writer.write("..");
                     }
-                },
-                .polarity_deferred => {
-                    std.debug.assert(false);
-                    if (num_tags > 0) _ = try writer.write(", ");
-                    _ = try writer.write("..<unresolved>");
                 },
                 .name => |ident_idx| {
                     if (num_tags > 0) _ = try writer.write(", ");
@@ -931,6 +938,12 @@ fn writeTagUnion(self: *TypeWriter, writer: *ByteWrite, tag_union: TagUnion, roo
 
             for (self.types.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
                 try self.appendStaticDispatchConstraint(tag_union.ext, constraint);
+            }
+        },
+        .polarity_ext => {
+            if (self.display_mode == .explicit) {
+                if (num_tags > 0) _ = try writer.write(", ");
+                _ = try writer.write("..");
             }
         },
         .empty_tag_union, .err, .invalid => {},
@@ -1088,6 +1101,7 @@ fn countVar(self: *TypeWriter, search_var: Var, current_var: Var, count: *usize)
         .structure => |flat_type| {
             try self.countVarInFlatType(search_var, flat_type, count);
         },
+        .polarity_ext => {},
         .err => {},
     }
 }

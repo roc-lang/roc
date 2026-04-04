@@ -896,6 +896,7 @@ const TypeTable = struct {
             },
             .flex => return .{ .unknown = self.gpa.dupe(u8, "flex") catch "" },
             .rigid => return .{ .unknown = self.gpa.dupe(u8, "rigid") catch "" },
+            .polarity_ext => unreachable,
             .err => return .{ .unknown = self.gpa.dupe(u8, "error") catch "" },
         }
     }

@@ -147,6 +147,7 @@ pub const Content = union(enum) {
 
     flex: Flex,
     rigid: Rigid,
+    polarity_ext,
     alias: Alias,
     structure: FlatType,
     err,
@@ -262,23 +263,14 @@ pub const Flex = struct {
 
 /// A rigid var, with optional static dispatch constraints
 pub const Rigid = struct {
-    /// The name/kind of this rigid variable.
-    /// This is purely metadata for display and alias instantiation logic.
-    /// It does NOT affect unification behavior - all rigid variants unify
-    /// identically (can only unify with themselves, never with concrete types).
     name: Name,
     constraints: StaticDispatchConstraint.SafeList.Range,
 
     /// Classifies the origin of this rigid variable.
-    /// Does not affect unification behavior; purely metadata for
-    /// display, diagnostics, and alias instantiation logic.
     pub const Name = union(enum) {
-        /// Created by polarity system in Pos position - anonymous open extension.
-        polarity_open,
-
-        /// Created by polarity system in alias bodies - must be resolved to
-        /// polarity_open or EmptyTagUnion at the alias use site based on polarity.
-        polarity_deferred,
+        /// Pending polarity resolution — resolved at alias use-site
+        /// during instantiation based on polarity context.
+        polarity_pending,
 
         /// User-written named rigid variable (e.g., `a` in `[A, B, ..a]`).
         name: Ident.Idx,
@@ -288,12 +280,8 @@ pub const Rigid = struct {
         return .{ .name = .{ .name = ident }, .constraints = StaticDispatchConstraint.SafeList.Range.empty() };
     }
 
-    pub fn initPolarityOpen() Rigid {
-        return .{ .name = .polarity_open, .constraints = StaticDispatchConstraint.SafeList.Range.empty() };
-    }
-
-    pub fn initPolarityDeferred() Rigid {
-        return .{ .name = .polarity_deferred, .constraints = StaticDispatchConstraint.SafeList.Range.empty() };
+    pub fn initPolarityPending() Rigid {
+        return .{ .name = .polarity_pending, .constraints = StaticDispatchConstraint.SafeList.Range.empty() };
     }
 
     pub fn withConstraints(self: Rigid, constraints: StaticDispatchConstraint.SafeList.Range) Rigid {

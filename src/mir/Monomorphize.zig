@@ -3468,6 +3468,7 @@ pub const Pass = struct {
         return switch (resolved.desc.content) {
             .err => true,
             .flex, .rigid => false,
+            .polarity_ext => unreachable,
             .alias => |alias| self.typeVarContainsError(
                 store_types,
                 store_types.getAliasBackingVar(alias),
@@ -3543,6 +3544,7 @@ pub const Pass = struct {
                         ext_var = store_types.getAliasBackingVar(alias);
                         continue;
                     },
+                    .polarity_ext => unreachable,
                     .flex, .rigid => return false,
                     .structure => |ext_flat| switch (ext_flat) {
                         .record => |next_row| {
@@ -3591,6 +3593,7 @@ pub const Pass = struct {
                         ext_var = store_types.getAliasBackingVar(alias);
                         continue;
                     },
+                    .polarity_ext => unreachable,
                     .flex, .rigid => return false,
                     .structure => |ext_flat| switch (ext_flat) {
                         .tag_union => |next_row| {
@@ -7116,6 +7119,7 @@ pub const Pass = struct {
 
         switch (resolved.desc.content) {
             .flex, .rigid => try bindings.put(resolved.var_, monotype),
+            .polarity_ext => unreachable,
             .alias => |alias| try self.bindTypeVarMonotypesInStore(
                 result,
                 module_idx,
@@ -7260,6 +7264,7 @@ pub const Pass = struct {
                         .empty_record => return true,
                         else => return false,
                     },
+                    .polarity_ext => unreachable,
                     .flex, .rigid, .err => return false,
                 }
             }
@@ -7438,6 +7443,7 @@ pub const Pass = struct {
                                 ext_var = store_types.getAliasBackingVar(alias);
                                 continue;
                             },
+                            .polarity_ext => unreachable,
                             .structure => |ext_flat| switch (ext_flat) {
                                 .record => |next_row| {
                                     current_row = next_row;
@@ -7727,6 +7733,7 @@ pub const Pass = struct {
                         .empty_record => break :rows,
                         else => break :rows,
                     },
+                    .polarity_ext => unreachable,
                     .flex, .rigid, .err => break :rows,
                 }
             }
@@ -7767,6 +7774,7 @@ pub const Pass = struct {
                         .empty_tag_union => break :rows,
                         else => break :rows,
                     },
+                    .polarity_ext => unreachable,
                     .flex, .rigid, .err => break :rows,
                 }
             }
@@ -9563,6 +9571,7 @@ pub const Pass = struct {
                     .monotype = resolved_mono,
                 });
             },
+            .polarity_ext => unreachable,
             .alias => |alias| try self.bindTypeVarMonotypes(
                 result,
                 template_module_idx,
@@ -9792,6 +9801,7 @@ pub const Pass = struct {
                                 ext_var = template_types.getAliasBackingVar(alias);
                                 continue;
                             },
+                            .polarity_ext => unreachable,
                             .structure => |ext_flat| switch (ext_flat) {
                                 .record => |next_row| {
                                     current_row = next_row;
@@ -9975,6 +9985,7 @@ pub const Pass = struct {
                                     return;
                                 },
                             },
+                            .polarity_ext => unreachable,
                             .flex, .rigid => {
                                 try self.bindTagUnionRowTail(
                                     result,
@@ -10373,6 +10384,7 @@ pub const Pass = struct {
 
         return switch (resolved.desc.content) {
             .flex, .rigid => false,
+            .polarity_ext => unreachable,
             .alias => |alias| self.typeVarFullyBoundWithBindings(
                 result,
                 module_idx,
@@ -10411,6 +10423,7 @@ pub const Pass = struct {
 
         return switch (resolved.desc.content) {
             .flex, .rigid => true,
+            .polarity_ext => unreachable,
             .alias => |alias| self.typeVarMonomorphizableWithBindings(
                 result,
                 module_idx,
@@ -10452,6 +10465,7 @@ pub const Pass = struct {
 
         return switch (resolved.desc.content) {
             .flex, .rigid => true,
+            .polarity_ext => unreachable,
             .alias => |alias| self.typeVarMonomorphizableWithoutBindings(
                 result,
                 module_idx,

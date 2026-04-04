@@ -204,6 +204,7 @@ const CheckOccurs = struct {
                     // self-referential constraints. Only structural content is checked.
                 },
                 .rigid => {},
+                .polarity_ext => {},
                 .err => {},
             }
             self.scratch.popSeen();

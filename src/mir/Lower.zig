@@ -1354,6 +1354,7 @@ fn lowerStrInspectExpr(
             .empty_tag_union => self.emitMirStrLiteral("<empty_tag_union>", region),
             .fn_pure, .fn_effectful, .fn_unbound => self.emitMirStrLiteral("<function>", region),
         },
+        .polarity_ext => unreachable,
         .flex, .rigid => {
             // When the type variable is unresolved (e.g. polymorphic parameter),
             // use the monotype of the already-lowered value expression which has
@@ -1472,6 +1473,7 @@ fn bindTypeVarMonotypesInStore(
 
     switch (resolved.desc.content) {
         .flex, .rigid => try bindings.put(resolved.var_, monotype),
+        .polarity_ext => unreachable,
         .alias => |alias| try self.bindTypeVarMonotypesInStore(
             store_types,
             common_idents,
@@ -1775,6 +1777,7 @@ fn bindFlatTypeMonotypesInStore(
                                 .{@tagName(ext_flat)},
                             ),
                         },
+                        .polarity_ext => unreachable,
                         .flex, .rigid => {
                             try self.bindRecordRowTailInStore(store_types, common_idents, bindings, ext_var, mono_fields, seen_field_indices.items);
                             break :rows;
@@ -1893,6 +1896,7 @@ fn bindFlatTypeMonotypesInStore(
                                 .{@tagName(ext_flat)},
                             ),
                         },
+                        .polarity_ext => unreachable,
                         .flex, .rigid => {
                             try self.bindTagUnionRowTailInStore(store_types, common_idents, bindings, ext_var, mono_tags, seen_tag_indices.items);
                             break :rows;
@@ -2090,6 +2094,7 @@ fn lowerStrInspectRecord(
                     ext_var = type_env.types.getAliasBackingVar(alias);
                     continue;
                 },
+                .polarity_ext => unreachable,
                 .structure => |ext_flat| switch (ext_flat) {
                     .record => |next_row| {
                         current_row = next_row;
@@ -2260,6 +2265,7 @@ fn lowerStrInspectTagUnion(
                         .{@tagName(ext_flat)},
                     ),
                 },
+                .polarity_ext => unreachable,
                 .flex, .rigid => break :rows,
                 .err => unreachable,
             }
@@ -7464,6 +7470,7 @@ fn flatRecordRepresentsEmpty(store_types: *const types.Store, record: types.Reco
                     .empty_record => return true,
                     else => return false,
                 },
+                .polarity_ext => unreachable,
                 .flex, .rigid, .err => return false,
             }
         }
@@ -7758,6 +7765,7 @@ fn bindTypeVarMonotypes(self: *Self, type_var: types.Var, monotype: Monotype.Idx
         .flex, .rigid => {
             try self.type_var_seen.put(resolved.var_, monotype);
         },
+        .polarity_ext => unreachable,
         .alias => |alias| {
             const backing_var = self.types_store.getAliasBackingVar(alias);
             try self.bindTypeVarMonotypes(backing_var, monotype);
@@ -7923,6 +7931,7 @@ fn bindFlatTypeMonotypes(self: *Self, flat_type: types.FlatType, monotype: Monot
                                 .{@tagName(ext_flat)},
                             ),
                         },
+                        .polarity_ext => unreachable,
                         .flex, .rigid => {
                             try self.bindRecordRowTail(ext_var, mono_fields, seen_field_indices.items);
                             for (mono_fields, 0..) |_, field_idx| {
@@ -8055,6 +8064,7 @@ fn bindFlatTypeMonotypes(self: *Self, flat_type: types.FlatType, monotype: Monot
                                 .{@tagName(ext_flat)},
                             ),
                         },
+                        .polarity_ext => unreachable,
                         .flex, .rigid => {
                             try self.bindTagUnionRowTail(ext_var, mono_tags, seen_tag_indices.items);
                             for (mono_tags, 0..) |_, tag_idx| {

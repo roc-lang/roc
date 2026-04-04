@@ -1874,3 +1874,17 @@ test "check type - polarity - pressure test - aoc day9 gleam port" {
     ;
     try checkTypesModule(source, .{ .pass = .{ .def = "run" } }, "List(Str) -> Try(I64, Str)");
 }
+
+test "check type - polarity - composed open returns" {
+    try checkTypesModule(
+        \\foo : Str -> [A, B]
+        \\foo = |_s| A
+        \\
+        \\bar : Str -> [A, B]
+        \\bar = |_s| B
+        \\
+        \\baz = |s| match Bool.True { True => foo(s), False => bar(s) }
+    , .{ .pass = .{ .def = "baz" } },
+        "Str -> [A, B, ..]"
+    );
+}

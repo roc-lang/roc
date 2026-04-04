@@ -2696,7 +2696,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
 
                         const decl_arg_name = switch (decl_arg_rigid.name) {
                             .name => |ident_idx| ident_idx,
-                            .polarity_open, .polarity_deferred => unreachable,
+                            .polarity_pending => unreachable,
                         };
                         try self.rigid_var_substitutions.put(self.gpa, decl_arg_name, anno_arg_var);
                     }
@@ -2746,7 +2746,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                                     try self.unifyWith(anno_var, .err, env);
                                     return;
                                 },
-                                .flex, .rigid => {
+                                .flex, .rigid, .polarity_ext => {
                                     // External type resolved to a flex or rigid.
                                     // This can happen when the external type is polymorphic but hasn't been
                                     // instantiated yet. We need to use the variable as-is, but this means
@@ -2780,7 +2780,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
 
                             const decl_arg_name = switch (decl_arg_rigid.name) {
                                 .name => |ident_idx| ident_idx,
-                                .polarity_open, .polarity_deferred => unreachable,
+                                .polarity_pending => unreachable,
                             };
                             try self.rigid_var_substitutions.put(self.gpa, decl_arg_name, anno_arg_var);
                         }
@@ -2917,9 +2917,9 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                         },
                     };
                     const pol_ext = switch (polarity) {
-                        .pos => try self.freshFromContent(.{ .rigid = types_mod.Rigid.initPolarityOpen() }, env, anno_region),
+                        .pos => try self.freshFromContent(.polarity_ext, env, anno_region),
                         .neg, .in_opaque => try self.freshFromContent(.{ .structure = .empty_tag_union }, env, anno_region),
-                        .in_alias => try self.freshFromContent(.{ .rigid = types_mod.Rigid.initPolarityDeferred() }, env, anno_region),
+                        .in_alias => try self.freshFromContent(.{ .rigid = types_mod.Rigid.initPolarityPending() }, env, anno_region),
                     };
                     break :inner_blk pol_ext;
                 }
@@ -7061,7 +7061,7 @@ fn varSupportsIsEq(self: *Self, var_: Var) bool {
         // Flex/rigid vars: we optimistically assume they support is_eq.
         // This is sound because if the variable is later unified with a type
         // that doesn't support is_eq (like a function), unification will fail.
-        .flex, .rigid => true,
+        .flex, .rigid, .polarity_ext => true,
         // Aliases: check the underlying type
         .alias => |alias| self.varSupportsIsEq(self.types.getAliasBackingVar(alias)),
         // Error types: allow them to proceed
@@ -7177,7 +7177,7 @@ fn varContainsError(self: *Self, var_: Var, visited: *std.AutoHashMap(Var, void)
 
     return switch (resolved.desc.content) {
         .err => true,
-        .flex, .rigid => false,
+        .flex, .rigid, .polarity_ext => false,
         .alias => |alias| self.varContainsError(self.types.getAliasBackingVar(alias), visited),
         .structure => |flat_type| self.flatTypeContainsError(flat_type, visited),
     };

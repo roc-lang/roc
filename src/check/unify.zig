@@ -379,6 +379,9 @@ const Unifier = struct {
             .rigid => |rigid| {
                 try self.unifyRigid(vars, rigid, vars.b.desc.content);
             },
+            .polarity_ext => {
+                try self.unifyPolarityExt(vars, vars.b.desc.content);
+            },
             .alias => |a_alias| {
                 try self.unifyAlias(vars, a_alias, vars.b.desc.content);
             },
@@ -431,6 +434,10 @@ const Unifier = struct {
                 try self.recordDeferredConstraint(vars, a_flex.constraints);
                 self.merge(vars, .{ .rigid = b_rigid });
             },
+            .polarity_ext => {
+                try self.recordDeferredConstraint(vars, a_flex.constraints);
+                self.merge(vars, .polarity_ext);
+            },
             .alias => |b_alias| {
                 if (a_flex.constraints.len() == 0) {
                     self.merge(vars, b_content);
@@ -464,18 +471,40 @@ const Unifier = struct {
                 self.merge(vars, .{ .rigid = a_rigid });
             },
             .rigid => return error.TypeMismatch,
+            .polarity_ext => return error.TypeMismatch,
             .alias => return error.TypeMismatch,
+            .structure => return error.TypeMismatch,
+            .err => self.merge(vars, .err),
+        }
+    }
+
+    // Unify polarity_ext //
+
+    /// Unify when `a` was a polarity_ext (open tag union extension).
+    /// polarity_ext can unify with: flex (polarity_ext wins), polarity_ext (merge),
+    /// empty_tag_union (closes to empty), and err. Everything else is TypeMismatch.
+    fn unifyPolarityExt(self: *Self, vars: *const ResolvedVarDescs, b_content: Content) Error!void {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
+        switch (b_content) {
+            .flex => |b_flex| {
+                try self.recordDeferredConstraint(vars, b_flex.constraints);
+                self.merge(vars, .polarity_ext);
+            },
+            .polarity_ext => {
+                // Two polarity_ext vars: both say "maybe more tags." Merge.
+                self.merge(vars, .polarity_ext);
+            },
             .structure => |b_flat_type| {
-                // A polarity_open rigid extension can unify with empty_tag_union.
-                // This is needed when a function's return annotation is implicitly open
-                // (polarity_open) but the body returns a closed type — the body satisfies
-                // the "at least these tags" contract of the annotation.
-                if (a_rigid.name == .polarity_open and b_flat_type == .empty_tag_union) {
+                if (b_flat_type == .empty_tag_union) {
+                    // Closed body satisfies open annotation.
                     self.merge(vars, Content{ .structure = .empty_tag_union });
                 } else {
                     return error.TypeMismatch;
                 }
             },
+            .rigid, .alias => return error.TypeMismatch,
             .err => self.merge(vars, .err),
         }
     }
@@ -501,6 +530,7 @@ const Unifier = struct {
             .rigid => |_| {
                 try self.unifyGuarded(backing_var, vars.b.var_);
             },
+            .polarity_ext => return error.TypeMismatch,
             .alias => |b_alias| {
                 const b_backing_var = self.types_store.getAliasBackingVar(b_alias);
                 if (a_alias.origin_module.eql(b_alias.origin_module) and
@@ -607,9 +637,9 @@ const Unifier = struct {
                 try self.recordDeferredConstraint(vars, b_flex.constraints);
                 self.merge(vars, Content{ .structure = a_flat_type });
             },
-            .rigid => |b_rigid| {
-                // Symmetric case of polarity_open + empty_tag_union in unifyRigid.
-                if (b_rigid.name == .polarity_open and a_flat_type == .empty_tag_union) {
+            .rigid => return error.TypeMismatch,
+            .polarity_ext => {
+                if (a_flat_type == .empty_tag_union) {
                     self.merge(vars, Content{ .structure = .empty_tag_union });
                 } else {
                     return error.TypeMismatch;
