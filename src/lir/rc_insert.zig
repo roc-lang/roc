@@ -664,6 +664,9 @@ pub const RcInsertPass = struct {
                     seen[i] = true;
                     if (self.forwardingAliasRepresentative(arg)) |resolved_root| {
                         if (resolved_root == param) continue;
+                        if (self.forwardingAliasRepresentative(param)) |param_root| {
+                            if (resolved_root == param_root) continue;
+                        }
                     }
                     const carries_ownership = self.localCarriesOwnedValue(arg);
                     all_owned[i] = all_owned[i] and carries_ownership;

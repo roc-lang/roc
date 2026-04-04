@@ -5877,6 +5877,21 @@ fn scanStmt(
                 }
             }
             const source_expr_ref = exprRefAliasOrSelf(result, thread.requireSourceContext(), module_idx, decl.expr);
+            var callable_bindings: std.ArrayListUnmanaged(CallableLexicalBinding) = .empty;
+            defer callable_bindings.deinit(driver.allocator);
+            var callable_visiting: std.AutoHashMapUnmanaged(ContextExprKey, void) = .empty;
+            defer callable_visiting.deinit(driver.allocator);
+            try appendPatternCallableBindingsFromSourceExpr(
+                driver,
+                visit_memo,
+                result,
+                thread,
+                module_idx,
+                decl.pattern,
+                source_expr_ref,
+                &callable_bindings,
+                &callable_visiting,
+            );
             var value_bindings: std.ArrayListUnmanaged(ValueLexicalBinding) = .empty;
             defer value_bindings.deinit(driver.allocator);
             try appendPatternValueBindingsFromSourceExpr(
@@ -5887,7 +5902,8 @@ fn scanStmt(
                 source_expr_ref,
                 &value_bindings,
             );
-            return extendThreadWithValueBindings(driver, thread, value_bindings.items);
+            const callable_bound_thread = try extendThreadWithCallableBindings(driver, thread, callable_bindings.items);
+            return extendThreadWithValueBindings(driver, callable_bound_thread, value_bindings.items);
         },
         .s_var => |var_decl| {
             try propagatePatternDemandToExpr(driver, result, thread, module_idx, var_decl.pattern_idx, var_decl.expr);
@@ -5905,6 +5921,21 @@ fn scanStmt(
                 }
             }
             const source_expr_ref = exprRefAliasOrSelf(result, thread.requireSourceContext(), module_idx, var_decl.expr);
+            var callable_bindings: std.ArrayListUnmanaged(CallableLexicalBinding) = .empty;
+            defer callable_bindings.deinit(driver.allocator);
+            var callable_visiting: std.AutoHashMapUnmanaged(ContextExprKey, void) = .empty;
+            defer callable_visiting.deinit(driver.allocator);
+            try appendPatternCallableBindingsFromSourceExpr(
+                driver,
+                visit_memo,
+                result,
+                thread,
+                module_idx,
+                var_decl.pattern_idx,
+                source_expr_ref,
+                &callable_bindings,
+                &callable_visiting,
+            );
             var value_bindings: std.ArrayListUnmanaged(ValueLexicalBinding) = .empty;
             defer value_bindings.deinit(driver.allocator);
             try appendPatternValueBindingsFromSourceExpr(
@@ -5915,7 +5946,8 @@ fn scanStmt(
                 source_expr_ref,
                 &value_bindings,
             );
-            return extendThreadWithValueBindings(driver, thread, value_bindings.items);
+            const callable_bound_thread = try extendThreadWithCallableBindings(driver, thread, callable_bindings.items);
+            return extendThreadWithValueBindings(driver, callable_bound_thread, value_bindings.items);
         },
         .s_reassign => |reassign| {
             try propagatePatternDemandToExpr(driver, result, thread, module_idx, reassign.pattern_idx, reassign.expr);
@@ -8313,12 +8345,19 @@ pub fn resolveDirectCallSite(
 
     if (!calleeUsesFirstClassCallableValuePath(callee_expr)) {
         if (std.debug.runtime_safety) {
+            const callee_region = module_env.store.getExprRegion(callee_expr_idx);
+            const module_source = module_env.getSourceAll();
+            const snippet_start = @min(callee_region.start.offset, module_source.len);
+            const snippet_end = @min(callee_region.end.offset, module_source.len);
             std.debug.panic(
-                "Lambdasolved invariant violated: non-first-class callee expr {d} in module {d} under source context {s} reached direct-call specialization without a registered callable template or explicit callable value",
+                "Lambdasolved invariant violated: non-first-class callee expr {d} kind={s} in module {d} under source context {s} reached direct-call specialization without a registered callable template or explicit callable value; region={any} snippet=\"{s}\"",
                 .{
                     @intFromEnum(callee_expr_idx),
+                    @tagName(callee_expr),
                     module_idx,
                     @tagName(thread.requireSourceContext()),
+                    callee_region,
+                    module_source[snippet_start..snippet_end],
                 },
             );
         }
