@@ -817,34 +817,60 @@ fn loweredOriginToResultSemantics(origin: LoweredOrigin) ResultSemantics {
     };
 }
 
-fn projectedResultSemantics(
+const ProjectedAssignInfo = struct {
+    result: ResultSemantics,
+    retain_target: bool,
+};
+
+fn projectedAssignInfo(
     self: *Self,
     source: MIR.LocalId,
     extra_projections: LIR.RefProjectionSpan,
     ownership: MIR.ProjectionOwnership,
-) Allocator.Error!ResultSemantics {
+) Allocator.Error!ProjectedAssignInfo {
     var visited = std.AutoHashMap(u32, void).init(self.allocator);
     defer visited.deinit();
 
     const source_origin = try self.resolveMirLocalOrigin(source, &visited);
     return switch (ownership) {
-        .borrow => loweredOriginToResultSemantics(
-            try self.borrowOrigin(source_origin, self.current_borrow_region, extra_projections),
-        ),
-        // Partial projections cannot safely forward ownership from a parent
-        // aggregate. When the source itself is fresh, keep the borrow rooted in
-        // that concrete source local so RC insertion can close only the parent.
-        .move => switch (source_origin) {
-            .fresh => borrowSemantics(
-                try self.mapMirLocal(source),
-                extra_projections,
-                self.current_borrow_region,
-            ),
-            else => loweredOriginToResultSemantics(
+        .borrow => .{
+            .result = loweredOriginToResultSemantics(
                 try self.borrowOrigin(source_origin, self.current_borrow_region, extra_projections),
             ),
+            .retain_target = false,
+        },
+        // Moving a projected RC value out of a fresh aggregate must retain that
+        // projection independently; the parent aggregate will still be decref'd.
+        .move => switch (source_origin) {
+            .fresh => .{
+                .result = .fresh,
+                .retain_target = true,
+            },
+            else => .{
+                .result = loweredOriginToResultSemantics(
+                    try self.borrowOrigin(source_origin, self.current_borrow_region, extra_projections),
+                ),
+                .retain_target = false,
+            },
         },
     };
+}
+
+fn wrapProjectedAssignNext(
+    self: *Self,
+    target: LirLocalId,
+    info: ProjectedAssignInfo,
+    next: CFStmtId,
+) Allocator.Error!CFStmtId {
+    const target_layout = self.lir_store.getLocal(target).layout_idx;
+    if (!info.retain_target or !self.layout_store.layoutContainsRefcounted(self.layout_store.getLayout(target_layout))) {
+        return next;
+    }
+    return self.lir_store.addCFStmt(.{ .incref = .{
+        .value = target,
+        .count = 1,
+        .next = next,
+    } });
 }
 
 fn lowerSummaryCallResultOrigin(
@@ -1631,34 +1657,38 @@ fn lowerStmt(self: *Self, stmt_id: MIR.CFStmtId) Allocator.Error!CFStmtId {
                 ),
                 .field => |field| blk_field: {
                     const lowered_source = try self.mapMirLocal(field.source);
+                    const info = try self.projectedAssignInfo(
+                        field.source,
+                        try self.singleProjectionSpan(.{ .field = @intCast(field.field_idx) }),
+                        field.ownership,
+                    );
                     break :blk_field try self.emitAssignRef(
                         target_binding.target,
-                        try self.projectedResultSemantics(
-                            field.source,
-                            try self.singleProjectionSpan(.{ .field = @intCast(field.field_idx) }),
-                            field.ownership,
-                        ),
+                        info.result,
                         .{ .field = .{
                             .source = lowered_source,
                             .field_idx = @intCast(field.field_idx),
                         } },
-                        lowered_next,
+                        try self.wrapProjectedAssignNext(target_binding.target, info, lowered_next),
                     );
                 },
-                .tag_payload => |payload| try self.emitAssignRef(
-                    target_binding.target,
-                    try self.projectedResultSemantics(
+                .tag_payload => |payload| blk_payload: {
+                    const info = try self.projectedAssignInfo(
                         payload.source,
                         try self.singleProjectionSpan(.{ .tag_payload = @intCast(payload.payload_idx) }),
                         payload.ownership,
-                    ),
-                    .{ .tag_payload = .{
-                        .source = try self.mapMirLocal(payload.source),
-                        .payload_idx = @intCast(payload.payload_idx),
-                        .tag_discriminant = @intCast(payload.tag_discriminant),
-                    } },
-                    lowered_next,
-                ),
+                    );
+                    break :blk_payload try self.emitAssignRef(
+                        target_binding.target,
+                        info.result,
+                        .{ .tag_payload = .{
+                            .source = try self.mapMirLocal(payload.source),
+                            .payload_idx = @intCast(payload.payload_idx),
+                            .tag_discriminant = @intCast(payload.tag_discriminant),
+                        } },
+                        try self.wrapProjectedAssignNext(target_binding.target, info, lowered_next),
+                    );
+                },
                 .nominal => |nominal| try self.emitAssignRef(
                     target_binding.target,
                     aliasSemantics(
@@ -2062,33 +2092,39 @@ fn lowerEntrypointCallableStmt(
                         .{ .discriminant = .{ .source = try self.mapMirLocal(discriminant.source) } },
                         lowered_next.body,
                     ),
-                    .field => |field| try self.emitAssignRef(
-                        target_binding.target,
-                        try self.projectedResultSemantics(
+                    .field => |field| blk_field: {
+                        const info = try self.projectedAssignInfo(
                             field.source,
                             try self.singleProjectionSpan(.{ .field = @intCast(field.field_idx) }),
                             field.ownership,
-                        ),
-                        .{ .field = .{
-                            .source = try self.mapMirLocal(field.source),
-                            .field_idx = @intCast(field.field_idx),
-                        } },
-                        lowered_next.body,
-                    ),
-                    .tag_payload => |payload| try self.emitAssignRef(
-                        target_binding.target,
-                        try self.projectedResultSemantics(
+                        );
+                        break :blk_field try self.emitAssignRef(
+                            target_binding.target,
+                            info.result,
+                            .{ .field = .{
+                                .source = try self.mapMirLocal(field.source),
+                                .field_idx = @intCast(field.field_idx),
+                            } },
+                            try self.wrapProjectedAssignNext(target_binding.target, info, lowered_next.body),
+                        );
+                    },
+                    .tag_payload => |payload| blk_payload: {
+                        const info = try self.projectedAssignInfo(
                             payload.source,
                             try self.singleProjectionSpan(.{ .tag_payload = @intCast(payload.payload_idx) }),
                             payload.ownership,
-                        ),
-                        .{ .tag_payload = .{
-                            .source = try self.mapMirLocal(payload.source),
-                            .payload_idx = @intCast(payload.payload_idx),
-                            .tag_discriminant = @intCast(payload.tag_discriminant),
-                        } },
-                        lowered_next.body,
-                    ),
+                        );
+                        break :blk_payload try self.emitAssignRef(
+                            target_binding.target,
+                            info.result,
+                            .{ .tag_payload = .{
+                                .source = try self.mapMirLocal(payload.source),
+                                .payload_idx = @intCast(payload.payload_idx),
+                                .tag_discriminant = @intCast(payload.tag_discriminant),
+                            } },
+                            try self.wrapProjectedAssignNext(target_binding.target, info, lowered_next.body),
+                        );
+                    },
                     .nominal => |nominal| try self.emitAssignRef(
                         target_binding.target,
                         aliasSemantics(

@@ -1558,7 +1558,10 @@ pub const RcInsertPass = struct {
             },
             .debug => |stmt_debug| try self.collectAliasSemanticsInStmt(stmt_debug.next),
             .expect => |stmt_expect| try self.collectAliasSemanticsInStmt(stmt_expect.next),
-            .runtime_error, .incref, .decref, .free, .scope_exit, .jump, .ret, .crash => {},
+            .runtime_error, .scope_exit, .jump, .ret, .crash => {},
+            .incref => |inc| try self.collectAliasSemanticsInStmt(inc.next),
+            .decref => |dec| try self.collectAliasSemanticsInStmt(dec.next),
+            .free => |free_stmt| try self.collectAliasSemanticsInStmt(free_stmt.next),
             .switch_stmt => |switch_stmt| {
                 for (self.store.getCFSwitchBranches(switch_stmt.branches)) |branch| {
                     try self.collectAliasSemanticsInStmt(branch.body);
