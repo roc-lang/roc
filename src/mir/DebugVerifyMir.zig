@@ -358,7 +358,7 @@ fn ensureCallableLocalInvariant(
     if (mono == .func) {
         const ref_source_local: ?MIR.LocalId = switch (store.getLocalDef(local)) {
             .ref => |ref_data| switch (ref_data.op) {
-                .local => |source_local| source_local,
+                .local => |local_ref| local_ref.source,
                 .field => |field| field.source,
                 .tag_payload => |payload| payload.source,
                 .nominal => |nominal| nominal.backing,
@@ -410,7 +410,7 @@ fn ensureRefSourcesUsable(
     owner_id: u64,
 ) Allocator.Error!void {
     const source = switch (op) {
-        .local => |local| local,
+        .local => |local_ref| local_ref.source,
         .discriminant => |disc| disc.source,
         .field => |field| field.source,
         .tag_payload => |payload| payload.source,

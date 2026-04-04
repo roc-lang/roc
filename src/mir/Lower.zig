@@ -2009,7 +2009,7 @@ fn lowerRefInto(
     next: MIR.CFStmtId,
 ) Allocator.Error!MIR.CFStmtId {
     const result_callable = switch (op) {
-        .local => |source| self.resolveLocalCallableResolution(source),
+        .local => |local_ref| self.resolveLocalCallableResolution(local_ref.source),
         .nominal => |nominal| self.resolveLocalCallableResolution(nominal.backing),
         .field, .tag_payload, .discriminant => null,
     };
@@ -2053,7 +2053,23 @@ fn lowerLocalAliasInto(
         }
     }
     try self.requireLocalMonotype(target, self.store.getLocal(source).monotype, "lowerLocalAliasInto");
-    return self.lowerRefInto(target, .{ .local = source }, next);
+    return self.lowerRefInto(target, .{ .local = .{
+        .source = source,
+        .ownership = .move,
+    } }, next);
+}
+
+fn lowerLocalBorrowInto(
+    self: *Self,
+    target: MIR.LocalId,
+    source: MIR.LocalId,
+    next: MIR.CFStmtId,
+) Allocator.Error!MIR.CFStmtId {
+    try self.requireLocalMonotype(target, self.store.getLocal(source).monotype, "lowerLocalBorrowInto");
+    return self.lowerRefInto(target, .{ .local = .{
+        .source = source,
+        .ownership = .borrow,
+    } }, next);
 }
 
 fn callableResolutionsEqual(
@@ -2302,6 +2318,7 @@ fn lowerListInspectLocalInto(
     const comma_local = try self.freshSyntheticLocal(str_mono, false);
     const accum_local = try self.freshSyntheticLocal(str_mono, false);
     const index_local = try self.freshSyntheticLocal(u64_mono, false);
+    const inspect_source_local = try self.freshSyntheticLocal(self.store.getLocal(source).monotype, false);
     const next_accum_local = try self.freshSyntheticLocal(str_mono, false);
     const next_index_local = try self.freshSyntheticLocal(u64_mono, false);
     const elem_local = try self.freshSyntheticLocal(list_data.elem, false);
@@ -2395,7 +2412,7 @@ fn lowerListInspectLocalInto(
     const get_elem = try self.store.addCFStmt(self.allocator, .{ .assign_low_level = .{
         .target = elem_local,
         .op = .list_get_unsafe,
-        .args = try self.store.addLocalSpan(self.allocator, &.{ source, index_local }),
+        .args = try self.store.addLocalSpan(self.allocator, &.{ inspect_source_local, index_local }),
         .next = inspect_elem,
     } });
     const true_body = get_elem;
@@ -2436,15 +2453,16 @@ fn lowerListInspectLocalInto(
     const init_len = try self.store.addCFStmt(self.allocator, .{ .assign_low_level = .{
         .target = len_local,
         .op = .list_len,
-        .args = try self.store.addLocalSpan(self.allocator, &.{source}),
+        .args = try self.store.addLocalSpan(self.allocator, &.{inspect_source_local}),
         .next = init_zero,
     } });
+    const init_source = try self.lowerLocalBorrowInto(inspect_source_local, source, init_len);
 
     return self.addJoinStmt(
         loop_exit_id,
         try self.store.addLocalSpan(self.allocator, &.{target}),
         next,
-        init_len,
+        init_source,
     );
 }
 
@@ -2859,21 +2877,7 @@ fn lowerLookupLocalInto(
     next: MIR.CFStmtId,
 ) Allocator.Error!MIR.CFStmtId {
     const lookup_resolution = lookupProgramExprLookupResolution(session, expr_idx);
-    const usable_source_local = blk: {
-        if (self.lookupUsableBindingLocalAtScope(self.current_binding_scope, lookup.pattern_idx)) |local| {
-            break :blk local;
-        }
-
-        if (self.current_lambda_scope_boundary != null) {
-            break :blk self.lookupExistingBindingLocalWithinCurrentLambda(lookup.pattern_idx);
-        }
-
-        break :blk self.lookupUsableBindingLocalInAncestorScopes(
-            self.current_module_idx,
-            self.current_binding_scope,
-            lookup.pattern_idx,
-        );
-    };
+    const usable_source_local = self.reusableLexicalLocalForLookupPattern(lookup.pattern_idx);
 
     if (usable_source_local) |source| {
         return self.lowerLocalAliasInto(target, source, next);
@@ -2941,6 +2945,110 @@ fn lowerLookupLocalInto(
         );
     }
     unreachable;
+}
+
+fn reusableLexicalLocalForLookupPattern(
+    self: *Self,
+    pattern_idx: CIR.Pattern.Idx,
+) ?MIR.LocalId {
+    if (self.lookupUsableBindingLocalAtScope(self.current_binding_scope, pattern_idx)) |local| {
+        return local;
+    }
+
+    if (self.current_lambda_scope_boundary != null) {
+        return self.lookupExistingBindingLocalWithinCurrentLambda(pattern_idx);
+    }
+
+    return self.lookupUsableBindingLocalInAncestorScopes(
+        self.current_module_idx,
+        self.current_binding_scope,
+        pattern_idx,
+    );
+}
+
+fn reusableLexicalLocalForExpr(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+) ?MIR.LocalId {
+    return switch (self.all_module_envs[self.current_module_idx].store.getExpr(expr_idx)) {
+        .e_lookup_local => |lookup| self.reusableLexicalLocalForLookupPattern(lookup.pattern_idx),
+        else => null,
+    };
+}
+
+const PreparedCallArgs = struct {
+    exprs_to_lower: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty,
+    locals_to_lower: std.ArrayListUnmanaged(MIR.LocalId) = .empty,
+
+    fn deinit(self: *PreparedCallArgs, allocator: Allocator) void {
+        self.exprs_to_lower.deinit(allocator);
+        self.locals_to_lower.deinit(allocator);
+    }
+};
+
+fn prepareCallArgLocals(
+    self: *Self,
+    session: LowerSession,
+    exprs: []const CIR.Expr.Idx,
+    arg_locals: []MIR.LocalId,
+    prepared: *PreparedCallArgs,
+) Allocator.Error!void {
+    for (exprs, 0..) |expr_idx, i| {
+        if (self.reusableLexicalLocalForExpr(expr_idx)) |local| {
+            arg_locals[i] = local;
+            continue;
+        }
+
+        const local = try self.freshSyntheticLocal(try self.resolveMonotype(session, expr_idx), false);
+        arg_locals[i] = local;
+        try prepared.exprs_to_lower.append(self.allocator, expr_idx);
+        try prepared.locals_to_lower.append(self.allocator, local);
+    }
+}
+
+fn lowerLowLevelExprCallInto(
+    self: *Self,
+    session: LowerSession,
+    low_level_op: CIR.Expr.LowLevel,
+    arg_exprs: []const CIR.Expr.Idx,
+    target: MIR.LocalId,
+    next: MIR.CFStmtId,
+) Allocator.Error!MIR.CFStmtId {
+    if (low_level_op == .str_inspect) {
+        if (arg_exprs.len != 1) {
+            std.debug.panic(
+                "statement-only MIR str_inspect call expected 1 arg, got {d}",
+                .{arg_exprs.len},
+            );
+        }
+
+        const source_mono = try self.resolveMonotype(session, arg_exprs[0]);
+        const source_local = try self.freshSyntheticLocal(source_mono, false);
+        const inspect_stmt = try self.lowerStrInspectLocalInto(source_local, source_mono, target, next);
+        return self.lowerCirExprInto(session, arg_exprs[0], source_local, inspect_stmt);
+    }
+
+    const assign_stmt = try self.store.reserveCFStmt(self.allocator);
+    const arg_locals = try self.allocator.alloc(MIR.LocalId, arg_exprs.len);
+    defer self.allocator.free(arg_locals);
+    var prepared_args: PreparedCallArgs = .{};
+    defer prepared_args.deinit(self.allocator);
+    try self.prepareCallArgLocals(session, arg_exprs, arg_locals, &prepared_args);
+    const args = try self.store.addLocalSpan(self.allocator, arg_locals);
+    try self.store.finalizeCFStmt(assign_stmt, .{ .assign_low_level = .{
+        .target = target,
+        .op = low_level_op,
+        .args = args,
+        .next = next,
+    } });
+    if (prepared_args.exprs_to_lower.items.len == 0) return assign_stmt;
+    const lowered_args = try self.lowerExprSequenceIntoContinuationWithValues(
+        session,
+        prepared_args.exprs_to_lower.items,
+        prepared_args.locals_to_lower.items,
+        assign_stmt,
+    );
+    return lowered_args.entry;
 }
 
 fn planClosureEntryCaptureLocals(
@@ -3676,14 +3784,14 @@ fn lowerReservedTrivialClosureLambda(
                             @intFromEnum(callable_inst_id),
                             @tagName(existing_ref.op),
                             switch (existing_ref.op) {
-                                .local => |source_local| @intFromEnum(source_local),
+                                .local => |local_ref| @intFromEnum(local_ref.source),
                                 .field => |field| @intFromEnum(field.source),
                                 .tag_payload => |payload| @intFromEnum(payload.source),
                                 .nominal => |nominal| @intFromEnum(nominal.backing),
                                 .discriminant => |discriminant| @intFromEnum(discriminant.source),
                             },
                             if (self.store.getLocalDefOpt(switch (existing_ref.op) {
-                                .local => |source_local| source_local,
+                                .local => |local_ref| local_ref.source,
                                 .field => |field| field.source,
                                 .tag_payload => |payload| payload.source,
                                 .nominal => |nominal| nominal.backing,
@@ -4334,6 +4442,21 @@ fn lowerResolvedDispatchTargetCallInto(
     defer actual_arg_exprs.deinit(self.allocator);
     try self.appendDispatchActualArgExprs(session, result_expr_idx, &actual_arg_exprs);
 
+    const target_template_id = self.callable_pipeline.template_catalog.requireExternalCallableTemplate(
+        dispatch_target.module_idx,
+        @intCast(@intFromEnum(dispatch_target.def_idx)),
+        "dispatch MIR lowering",
+    );
+    if (self.callable_pipeline.getCallableTemplate(target_template_id).low_level_op) |low_level_op| {
+        return self.lowerLowLevelExprCallInto(
+            session,
+            low_level_op,
+            actual_arg_exprs.items,
+            target,
+            next,
+        );
+    }
+
     _ = try self.dispatchTargetEffectful(dispatch_target);
     const call_site = lookupProgramExprCallSite(session, result_expr_idx) orelse std.debug.panic(
         "statement-only MIR invariant violated: resolved dispatch expr {d} target module={d} def={d} had no call-site semantics in context={d} root_expr={d}",
@@ -4637,46 +4760,14 @@ fn lowerCallInto(
     );
     const cir_args = module_env.store.sliceExpr(call.args);
     switch (call_site) {
-        .low_level => |ll_op| {
-            if (ll_op == .str_inspect) {
-                if (cir_args.len != 1) {
-                    std.debug.panic(
-                        "statement-only MIR str_inspect call expected 1 arg, got {d}",
-                        .{cir_args.len},
-                    );
-                }
-
-                const source_mono = try self.resolveMonotype(session, cir_args[0]);
-                const source_local = try self.freshSyntheticLocal(source_mono, false);
-                const inspect_stmt = try self.lowerStrInspectLocalInto(source_local, source_mono, target, next);
-                return self.lowerCirExprInto(session, cir_args[0], source_local, inspect_stmt);
-            }
-
-            const assign_stmt = try self.store.reserveCFStmt(self.allocator);
-            const arg_locals = try self.allocator.alloc(MIR.LocalId, cir_args.len);
-            defer self.allocator.free(arg_locals);
-            for (cir_args, 0..) |arg_idx, i| {
-                arg_locals[i] = try self.freshSyntheticLocal(
-                    try self.resolveMonotype(session, arg_idx),
-                    false,
-                );
-            }
-            const args = try self.store.addLocalSpan(self.allocator, arg_locals);
-            try self.store.finalizeCFStmt(assign_stmt, .{ .assign_low_level = .{
-                .target = target,
-                .op = ll_op,
-                .args = args,
-                .next = next,
-            } });
-            const lowered_args = try self.lowerExprSequenceIntoContinuationWithValues(
-                session,
-                cir_args,
-                arg_locals,
-                assign_stmt,
-            );
-            return lowered_args.entry;
-        },
+        .low_level => |ll_op| return self.lowerLowLevelExprCallInto(session, ll_op, cir_args, target, next),
         .direct => |direct_callable_inst_id| {
+            const direct_callable_inst = self.callable_pipeline.getCallableInst(direct_callable_inst_id);
+            const direct_template = self.callable_pipeline.getCallableTemplate(direct_callable_inst.template);
+            if (direct_template.low_level_op) |ll_op| {
+                return self.lowerLowLevelExprCallInto(session, ll_op, cir_args, target, next);
+            }
+
             const callee_value = lookupProgramExprCallableValue(session, call.func) orelse std.debug.panic(
                 "statement-only MIR invariant violated: direct call callee expr {d} had no callable value semantics",
                 .{@intFromEnum(call.func)},
@@ -4691,10 +4782,6 @@ fn lowerCallInto(
             const callee_local = try self.freshSyntheticLocal(callee_monotype, false);
             const arg_locals = try self.allocator.alloc(MIR.LocalId, cir_args.len);
             defer self.allocator.free(arg_locals);
-            for (cir_args, 0..) |arg_idx, i| {
-                arg_locals[i] = try self.freshSyntheticLocal(try self.resolveMonotype(session, arg_idx), false);
-            }
-            const args = try self.store.addLocalSpan(self.allocator, arg_locals);
             const call_stmt = try self.store.reserveCFStmt(self.allocator);
             const normalized = try self.lowerDirectCallTargetInto(
                 session,
@@ -4703,6 +4790,10 @@ fn lowerCallInto(
                 callee_local,
                 call_stmt,
             );
+            var prepared_args: PreparedCallArgs = .{};
+            defer prepared_args.deinit(self.allocator);
+            try self.prepareCallArgLocals(session, cir_args, arg_locals, &prepared_args);
+            const args = try self.store.addLocalSpan(self.allocator, arg_locals);
             const callee_callable = try self.callableResolutionFromInst(direct_callable_inst_id);
             const result_callable = try self.resolveCallResultCallableFromExpr(session, call_expr_idx, target);
             try self.store.finalizeCFStmt(call_stmt, .{ .assign_call = .{
@@ -4713,23 +4804,25 @@ fn lowerCallInto(
                 .args = args,
                 .next = next,
             } });
-
-            const lowered_args = try self.lowerExprSequenceIntoContinuationWithValues(
-                session,
-                cir_args,
-                arg_locals,
-                normalized.entry,
-            );
+            const lowered_entry = if (prepared_args.exprs_to_lower.items.len == 0)
+                normalized.entry
+            else
+                (try self.lowerExprSequenceIntoContinuationWithValues(
+                    session,
+                    prepared_args.exprs_to_lower.items,
+                    prepared_args.locals_to_lower.items,
+                    normalized.entry,
+                )).entry;
             const needs_structural_callee_lowering = switch (callee_value) {
                 .direct => self.callableInstRequiresHiddenCapture(direct_callable_inst_id),
                 .packed_fn => false,
             };
-            if (!needs_structural_callee_lowering) return lowered_args.entry;
+            if (!needs_structural_callee_lowering) return lowered_entry;
             return switch (module_env.store.getExpr(call.func)) {
-                .e_lookup_local => |lookup| try self.lowerLookupLocalInto(session, call.func, lookup, callee_local, lowered_args.entry),
-                .e_lookup_external => |lookup| try self.lowerLookupExternalInto(session, call.func, module_env, lookup, callee_local, lowered_args.entry),
-                .e_lookup_required => |lookup| try self.lowerLookupRequiredInto(session, call.func, module_env, lookup, callee_local, lowered_args.entry),
-                else => try self.lowerCirExprInto(session, call.func, callee_local, lowered_args.entry),
+                .e_lookup_local => |lookup| try self.lowerLookupLocalInto(session, call.func, lookup, callee_local, lowered_entry),
+                .e_lookup_external => |lookup| try self.lowerLookupExternalInto(session, call.func, module_env, lookup, callee_local, lowered_entry),
+                .e_lookup_required => |lookup| try self.lowerLookupRequiredInto(session, call.func, module_env, lookup, callee_local, lowered_entry),
+                else => try self.lowerCirExprInto(session, call.func, callee_local, lowered_entry),
             };
         },
         .indirect_call => |indirect_call| {
@@ -4742,9 +4835,9 @@ fn lowerCallInto(
             const callee_local = try self.freshSyntheticLocal(callee_monotype, false);
             const arg_locals = try self.allocator.alloc(MIR.LocalId, cir_args.len);
             defer self.allocator.free(arg_locals);
-            for (cir_args, 0..) |arg_idx, i| {
-                arg_locals[i] = try self.freshSyntheticLocal(try self.resolveMonotype(session, arg_idx), false);
-            }
+            var prepared_args: PreparedCallArgs = .{};
+            defer prepared_args.deinit(self.allocator);
+            try self.prepareCallArgLocals(session, cir_args, arg_locals, &prepared_args);
             const args = try self.store.addLocalSpan(self.allocator, arg_locals);
             const call_entry = try self.lowerIndirectCallInto(
                 session,
@@ -4755,19 +4848,21 @@ fn lowerCallInto(
                 target,
                 next,
             );
-
-            const lowered_args = try self.lowerExprSequenceIntoContinuationWithValues(
-                session,
-                cir_args,
-                arg_locals,
-                call_entry,
-            );
+            const lowered_entry = if (prepared_args.exprs_to_lower.items.len == 0)
+                call_entry
+            else
+                (try self.lowerExprSequenceIntoContinuationWithValues(
+                    session,
+                    prepared_args.exprs_to_lower.items,
+                    prepared_args.locals_to_lower.items,
+                    call_entry,
+                )).entry;
             return self.lowerExprAsPackedCallableInto(
                 session,
                 call.func,
                 indirect_call.packed_fn,
                 callee_local,
-                lowered_args.entry,
+                lowered_entry,
             );
         },
     }

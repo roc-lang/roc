@@ -507,7 +507,14 @@ const Analyzer = struct {
             },
             .assign_ref => |assign| {
                 const origin = switch (assign.op) {
-                    .local => |source| self.runtimeOriginForAliasedLocal(env, source),
+                    .local => |local_ref| switch (local_ref.ownership) {
+                        .move => self.runtimeOriginForAliasedLocal(env, local_ref.source),
+                        .borrow => try self.borrowOrigin(
+                            self.originForLocal(env, local_ref.source),
+                            region,
+                            RefProjectionSpan.empty(),
+                        ),
+                    },
                     .discriminant => .fresh,
                     .field => |field| blk: {
                         const source_origin = self.originForLocal(env, field.source);

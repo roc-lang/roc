@@ -8213,6 +8213,14 @@ pub fn resolveDirectCallSite(
             resolved_fn_monotype.module_idx,
         );
     }
+    try materializeExprCallableSemanticsIfNeeded(
+        driver,
+        visit_memo,
+        result,
+        thread,
+        module_idx,
+        callee_expr_idx,
+    );
     var resolved_template_id = result.getExprTemplateId(thread.requireSourceContext(), module_idx, callee_expr_idx);
     if (resolved_template_id == null and callee_expr == .e_lookup_local) {
         const lookup = callee_expr.e_lookup_local;
@@ -8243,7 +8251,11 @@ pub fn resolveDirectCallSite(
         );
         resolved_template_id = result.getExprTemplateId(thread.requireSourceContext(), module_idx, callee_expr_idx);
     }
-    if (result.getExprLowLevelOp(thread.requireSourceContext(), module_idx, call_expr.func)) |low_level_op| {
+    const resolved_low_level_op = if (resolved_template_id) |template_id|
+        result.getCallableTemplate(template_id).low_level_op
+    else
+        result.getExprLowLevelOp(thread.requireSourceContext(), module_idx, call_expr.func);
+    if (resolved_low_level_op) |low_level_op| {
         const arg_exprs = module_env.store.sliceExpr(call_expr.args);
         try recordExprCallSite(
             driver,

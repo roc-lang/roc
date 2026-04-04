@@ -34,6 +34,281 @@ const trace = struct {
             std.debug.print("[cir-to-lir] " ++ fmt ++ "\n", args);
         }
     }
+
+    fn dumpLirProgram(store: *const LirStore, root_proc: LirProcSpecId) void {
+        if (comptime !enabled) return;
+
+        for (store.getProcSpecs(), 0..) |proc, i| {
+            std.debug.print(
+                "[cir-to-lir] proc {d} name={d} args={any} body={d} root={} result={s}\n",
+                .{
+                    i,
+                    proc.name.raw(),
+                    fmtLocalSpan(store.getLocalSpan(proc.args)),
+                    @intFromEnum(proc.body),
+                    i == @intFromEnum(root_proc),
+                    @tagName(proc.result_contract),
+                },
+            );
+            dumpStmt(store, proc.body, 1);
+        }
+    }
+
+    fn dumpStmt(store: *const LirStore, stmt_id: lir.CFStmtId, depth: usize) void {
+        const indent = depth * 2;
+        switch (store.getCFStmt(stmt_id)) {
+            .assign_call => |assign| {
+                std.debug.print(
+                    "[cir-to-lir] {s}stmt {d}: assign_call target={d} proc={d} args={any} result={s} next={d}\n",
+                    .{
+                        indentSpaces(indent),
+                        @intFromEnum(stmt_id),
+                        @intFromEnum(assign.target),
+                        @intFromEnum(assign.proc),
+                        fmtLocalSpan(store.getLocalSpan(assign.args)),
+                        @tagName(assign.result),
+                        @intFromEnum(assign.next),
+                    },
+                );
+                dumpStmt(store, assign.next, depth);
+            },
+            .assign_low_level => |assign| {
+                std.debug.print(
+                    "[cir-to-lir] {s}stmt {d}: assign_low_level target={d} op={s} args={any} result={s} next={d}\n",
+                    .{
+                        indentSpaces(indent),
+                        @intFromEnum(stmt_id),
+                        @intFromEnum(assign.target),
+                        @tagName(assign.op),
+                        fmtLocalSpan(store.getLocalSpan(assign.args)),
+                        @tagName(assign.result),
+                        @intFromEnum(assign.next),
+                    },
+                );
+                dumpStmt(store, assign.next, depth);
+            },
+            .assign_ref => |assign| {
+                std.debug.print(
+                    "[cir-to-lir] {s}stmt {d}: assign_ref target={d} op={s} result={s} next={d}\n",
+                    .{
+                        indentSpaces(indent),
+                        @intFromEnum(stmt_id),
+                        @intFromEnum(assign.target),
+                        @tagName(assign.op),
+                        @tagName(assign.result),
+                        @intFromEnum(assign.next),
+                    },
+                );
+                dumpStmt(store, assign.next, depth);
+            },
+            .assign_literal => |assign| {
+                std.debug.print(
+                    "[cir-to-lir] {s}stmt {d}: assign_literal target={d} result={s} next={d}\n",
+                    .{
+                        indentSpaces(indent),
+                        @intFromEnum(stmt_id),
+                        @intFromEnum(assign.target),
+                        @tagName(assign.result),
+                        @intFromEnum(assign.next),
+                    },
+                );
+                dumpStmt(store, assign.next, depth);
+            },
+            .assign_list => |assign| {
+                std.debug.print(
+                    "[cir-to-lir] {s}stmt {d}: assign_list target={d} elems={any} next={d}\n",
+                    .{
+                        indentSpaces(indent),
+                        @intFromEnum(stmt_id),
+                        @intFromEnum(assign.target),
+                        fmtLocalSpan(store.getLocalSpan(assign.elems)),
+                        @intFromEnum(assign.next),
+                    },
+                );
+                dumpStmt(store, assign.next, depth);
+            },
+            .assign_struct => |assign| {
+                std.debug.print(
+                    "[cir-to-lir] {s}stmt {d}: assign_struct target={d} fields={any} next={d}\n",
+                    .{
+                        indentSpaces(indent),
+                        @intFromEnum(stmt_id),
+                        @intFromEnum(assign.target),
+                        fmtLocalSpan(store.getLocalSpan(assign.fields)),
+                        @intFromEnum(assign.next),
+                    },
+                );
+                dumpStmt(store, assign.next, depth);
+            },
+            .assign_tag => |assign| {
+                std.debug.print(
+                    "[cir-to-lir] {s}stmt {d}: assign_tag target={d} discr={d} args={any} next={d}\n",
+                    .{
+                        indentSpaces(indent),
+                        @intFromEnum(stmt_id),
+                        @intFromEnum(assign.target),
+                        assign.discriminant,
+                        fmtLocalSpan(store.getLocalSpan(assign.args)),
+                        @intFromEnum(assign.next),
+                    },
+                );
+                dumpStmt(store, assign.next, depth);
+            },
+            .join => |join| {
+                std.debug.print(
+                    "[cir-to-lir] {s}stmt {d}: join id={d} params={any} remainder={d} body={d}\n",
+                    .{
+                        indentSpaces(indent),
+                        @intFromEnum(stmt_id),
+                        @intFromEnum(join.id),
+                        fmtLocalSpan(store.getLocalSpan(join.params)),
+                        @intFromEnum(join.remainder),
+                        @intFromEnum(join.body),
+                    },
+                );
+                dumpStmt(store, join.body, depth + 1);
+                dumpStmt(store, join.remainder, depth);
+            },
+            .jump => |jump| {
+                std.debug.print(
+                    "[cir-to-lir] {s}stmt {d}: jump target={d} args={any}\n",
+                    .{
+                        indentSpaces(indent),
+                        @intFromEnum(stmt_id),
+                        @intFromEnum(jump.target),
+                        fmtLocalSpan(store.getLocalSpan(jump.args)),
+                    },
+                );
+            },
+            .switch_stmt => |switch_stmt| {
+                std.debug.print(
+                    "[cir-to-lir] {s}stmt {d}: switch cond={d} default={d}\n",
+                    .{
+                        indentSpaces(indent),
+                        @intFromEnum(stmt_id),
+                        @intFromEnum(switch_stmt.cond),
+                        @intFromEnum(switch_stmt.default_branch),
+                    },
+                );
+                for (store.getCFSwitchBranches(switch_stmt.branches)) |branch| {
+                    std.debug.print(
+                        "[cir-to-lir] {s}  branch value={d} body={d}\n",
+                        .{ indentSpaces(indent), branch.value, @intFromEnum(branch.body) },
+                    );
+                    dumpStmt(store, branch.body, depth + 1);
+                }
+                dumpStmt(store, switch_stmt.default_branch, depth + 1);
+            },
+            .ret => |ret| {
+                std.debug.print(
+                    "[cir-to-lir] {s}stmt {d}: ret value={d}\n",
+                    .{ indentSpaces(indent), @intFromEnum(stmt_id), @intFromEnum(ret.value) },
+                );
+            },
+            .incref => |inc| {
+                std.debug.print(
+                    "[cir-to-lir] {s}stmt {d}: incref value={d} count={d} next={d}\n",
+                    .{
+                        indentSpaces(indent),
+                        @intFromEnum(stmt_id),
+                        @intFromEnum(inc.value),
+                        inc.count,
+                        @intFromEnum(inc.next),
+                    },
+                );
+                dumpStmt(store, inc.next, depth);
+            },
+            .decref => |dec| {
+                std.debug.print(
+                    "[cir-to-lir] {s}stmt {d}: decref value={d} next={d}\n",
+                    .{
+                        indentSpaces(indent),
+                        @intFromEnum(stmt_id),
+                        @intFromEnum(dec.value),
+                        @intFromEnum(dec.next),
+                    },
+                );
+                dumpStmt(store, dec.next, depth);
+            },
+            .free => |free_stmt| {
+                std.debug.print(
+                    "[cir-to-lir] {s}stmt {d}: free value={d} next={d}\n",
+                    .{
+                        indentSpaces(indent),
+                        @intFromEnum(stmt_id),
+                        @intFromEnum(free_stmt.value),
+                        @intFromEnum(free_stmt.next),
+                    },
+                );
+                dumpStmt(store, free_stmt.next, depth);
+            },
+            .borrow_scope => |scope| {
+                std.debug.print(
+                    "[cir-to-lir] {s}stmt {d}: borrow_scope id={d} body={d} remainder={d}\n",
+                    .{
+                        indentSpaces(indent),
+                        @intFromEnum(stmt_id),
+                        @intFromEnum(scope.id),
+                        @intFromEnum(scope.body),
+                        @intFromEnum(scope.remainder),
+                    },
+                );
+                dumpStmt(store, scope.body, depth + 1);
+                dumpStmt(store, scope.remainder, depth);
+            },
+            .runtime_error => {
+                std.debug.print("[cir-to-lir] {s}stmt {d}: runtime_error\n", .{ indentSpaces(indent), @intFromEnum(stmt_id) });
+            },
+            .crash => |crash| {
+                std.debug.print(
+                    "[cir-to-lir] {s}stmt {d}: crash msg={d}\n",
+                    .{ indentSpaces(indent), @intFromEnum(stmt_id), @intFromEnum(crash.msg) },
+                );
+            },
+            .scope_exit => |scope_exit| {
+                std.debug.print(
+                    "[cir-to-lir] {s}stmt {d}: scope_exit id={d}\n",
+                    .{
+                        indentSpaces(indent),
+                        @intFromEnum(stmt_id),
+                        @intFromEnum(scope_exit.id),
+                    },
+                );
+            },
+            else => |other| {
+                std.debug.print(
+                    "[cir-to-lir] {s}stmt {d}: {s}\n",
+                    .{ indentSpaces(indent), @intFromEnum(stmt_id), @tagName(other) },
+                );
+            },
+        }
+    }
+
+    fn indentSpaces(count: usize) []const u8 {
+        return "                                                                "[0..count];
+    }
+
+    fn fmtLocalSpan(locals: []const lir.LocalId) LocalSpanFmt {
+        return .{ .locals = locals };
+    }
+
+    const LocalSpanFmt = struct {
+        locals: []const lir.LocalId,
+
+        pub fn format(
+            self: LocalSpanFmt,
+            comptime _: []const u8,
+            _: std.fmt.FormatOptions,
+            writer: anytype,
+        ) !void {
+            try writer.writeByte('{');
+            for (self.locals, 0..) |local, i| {
+                if (i != 0) try writer.writeAll(", ");
+                try writer.print("{d}", .{@intFromEnum(local)});
+            }
+            try writer.writeByte('}');
+        }
+    };
 };
 
 /// Find the index of a module environment in the all-module-env slice.
@@ -321,6 +596,7 @@ pub const LirProgram = struct {
         trace.log("rc insert start expr={d}", .{@intFromEnum(expr_idx)});
         try rc_pass.insertRcOpsForAllProcs();
         trace.log("rc insert done expr={d}", .{@intFromEnum(expr_idx)});
+        trace.dumpLirProgram(&lir_store, root_proc_id);
         const cir_expr = module_env.store.getExpr(expr_idx);
         const tuple_len: usize = if (cir_expr == .e_tuple)
             module_env.store.exprSlice(cir_expr.e_tuple.elems).len

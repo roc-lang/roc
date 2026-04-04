@@ -939,10 +939,17 @@ fn resolveMirLocalOrigin(
         .list,
         => .fresh,
         .ref => |ref_data| switch (ref_data.op) {
-            .local => |source| try self.aliasOrigin(
-                try self.resolveMirLocalOrigin(source, visited),
-                LIR.RefProjectionSpan.empty(),
-            ),
+            .local => |local_ref| switch (local_ref.ownership) {
+                .move => try self.aliasOrigin(
+                    try self.resolveMirLocalOrigin(local_ref.source, visited),
+                    LIR.RefProjectionSpan.empty(),
+                ),
+                .borrow => try self.borrowOrigin(
+                    try self.resolveMirLocalOrigin(local_ref.source, visited),
+                    self.current_borrow_region,
+                    LIR.RefProjectionSpan.empty(),
+                ),
+            },
             .nominal => |nominal| try self.aliasOrigin(
                 try self.resolveMirLocalOrigin(nominal.backing, visited),
                 try self.singleProjectionSpan(.nominal),
@@ -1593,7 +1600,8 @@ fn lowerStmt(self: *Self, stmt_id: MIR.CFStmtId) Allocator.Error!CFStmtId {
         },
         .assign_ref => |assign| blk: {
             if (assign.op == .local) {
-                const source = assign.op.local;
+                const local_ref = assign.op.local;
+                const source = local_ref.source;
                 const lowered_source = try self.mapMirLocal(source);
                 const source_layout = self.lir_store.getLocal(lowered_source).layout_idx;
                 const target_binding = try self.pushMirTargetBindingWithLayout(assign.target, source_layout);
@@ -1601,7 +1609,10 @@ fn lowerStmt(self: *Self, stmt_id: MIR.CFStmtId) Allocator.Error!CFStmtId {
                 defer self.popMirTargetBinding(target_binding);
                 break :blk try self.emitAssignRef(
                     target_binding.target,
-                    aliasSemantics(lowered_source, LIR.RefProjectionSpan.empty()),
+                    switch (local_ref.ownership) {
+                        .move => aliasSemantics(lowered_source, LIR.RefProjectionSpan.empty()),
+                        .borrow => borrowSemantics(lowered_source, LIR.RefProjectionSpan.empty(), self.current_borrow_region),
+                    },
                     .{ .local = lowered_source },
                     lowered_next,
                 );
@@ -2018,7 +2029,8 @@ fn lowerEntrypointCallableStmt(
         },
         .assign_ref => |assign| blk: {
             if (assign.op == .local) {
-                const source = assign.op.local;
+                const local_ref = assign.op.local;
+                const source = local_ref.source;
                 const lowered_source = try self.mapMirLocal(source);
                 const source_layout = self.lir_store.getLocal(lowered_source).layout_idx;
                 const target_binding = try self.pushMirTargetBindingWithLayout(assign.target, source_layout);
@@ -2027,7 +2039,10 @@ fn lowerEntrypointCallableStmt(
                 break :blk .{
                     .body = try self.emitAssignRef(
                         target_binding.target,
-                        aliasSemantics(lowered_source, LIR.RefProjectionSpan.empty()),
+                        switch (local_ref.ownership) {
+                            .move => aliasSemantics(lowered_source, LIR.RefProjectionSpan.empty()),
+                            .borrow => borrowSemantics(lowered_source, LIR.RefProjectionSpan.empty(), self.current_borrow_region),
+                        },
                         .{ .local = lowered_source },
                         lowered_next.body,
                     ),

@@ -204,7 +204,10 @@ pub const ProjectionOwnership = enum {
 
 /// One reference-producing MIR operation.
 pub const RefOp = union(enum) {
-    local: LocalId,
+    local: struct {
+        source: LocalId,
+        ownership: ProjectionOwnership = .move,
+    },
     discriminant: struct {
         source: LocalId,
     },
@@ -697,7 +700,7 @@ pub const Store = struct {
                 .ref => |ref_data| {
                     if (ref_data.result_callable) |resolved| return resolved;
                     switch (ref_data.op) {
-                        .local => |source| current = source,
+                        .local => |local_ref| current = local_ref.source,
                         .nominal => |nominal| current = nominal.backing,
                         .field, .tag_payload, .discriminant => return null,
                     }

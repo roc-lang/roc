@@ -568,16 +568,8 @@ pub const RcInsertPass = struct {
         try self.scanIncomingJumpsForJoin(join.remainder, join.id, params, seen, all_owned, &incoming_jump_count, incoming_args);
 
         for (params, seen, all_owned, incoming_args) |param, param_seen, param_owned, maybe_incoming_arg| {
+            _ = maybe_incoming_arg;
             if (!param_seen or !param_owned) continue;
-
-            const carries_into_owned_slot = if (incoming_jump_count > 1)
-                true
-            else if (maybe_incoming_arg) |incoming_arg|
-                self.localDefinitionIntroducesFreshOwnership(incoming_arg)
-            else
-                false;
-
-            if (!carries_into_owned_slot) continue;
             const gop = try self.owning_join_params.getOrPut(localKey(param));
             if (!gop.found_existing) {
                 gop.value_ptr.* = {};
@@ -1921,6 +1913,12 @@ pub const RcInsertPass = struct {
                 try self.appendReachableJoinIds(join.body, &body_internal_join_ids);
                 try self.appendReachableJoinIds(join.remainder, &body_internal_join_ids);
 
+                var remainder_internal_join_ids = std.ArrayListUnmanaged(LIR.JoinPointId).empty;
+                defer remainder_internal_join_ids.deinit(self.allocator);
+                try remainder_internal_join_ids.appendSlice(self.allocator, nested_join_ids);
+                try self.appendReachableJoinIds(join.body, &remainder_internal_join_ids);
+                try self.appendReachableJoinIds(join.remainder, &remainder_internal_join_ids);
+
                 const join_params = self.store.getLocalSpan(join.params);
                 var forwarded_join_params = std.ArrayListUnmanaged(LocalId).empty;
                 defer forwarded_join_params.deinit(self.allocator);
@@ -1941,7 +1939,7 @@ pub const RcInsertPass = struct {
                     .id = join.id,
                     .params = join.params,
                     .body = rewritten_body,
-                    .remainder = try self.closeLocalOnExitRec(value, nested_join_ids, join.remainder),
+                    .remainder = try self.closeLocalOnExitRec(value, remainder_internal_join_ids.items, join.remainder),
                 } });
             },
             .ret => |ret_stmt| blk: {
@@ -1953,16 +1951,7 @@ pub const RcInsertPass = struct {
             .jump => |jump| blk: {
                 for (internal_join_ids) |internal_join_id| {
                     if (jump.target != internal_join_id) continue;
-
-                    if (self.ownershipRootForConsumedValue(value)) |root| {
-                        if (self.joinBodyUsesOwnershipRoot(jump.target, root)) break :blk stmt_id;
-                    }
-
-                    break :blk try self.prependLocalDecrefIfNotForwarded(
-                        value,
-                        self.store.getLocalSpan(jump.args),
-                        stmt_id,
-                    );
+                    break :blk stmt_id;
                 }
                 break :blk try self.prependLocalDecrefIfNotForwarded(
                     value,
@@ -2173,7 +2162,26 @@ pub const RcInsertPass = struct {
     }
 
     fn localUseTouchesOwnershipRoot(self: *const RcInsertPass, local: LocalId, root: LocalId) bool {
-        return self.localTransfersOwnership(local, root);
+        if (self.localTransfersOwnership(local, root)) return true;
+
+        var current = local;
+        var steps: u32 = 0;
+        while (self.local_alias_sources.get(localKey(current))) |source| {
+            const alias_owner: LocalId = @enumFromInt(@as(u32, @intCast(source.owner_key)));
+            if (alias_owner == root) return true;
+            if (self.localForwardsOwnership(alias_owner, root)) return true;
+            if (!source.forwards_ownership) return false;
+            current = alias_owner;
+            steps += 1;
+            if (builtin.mode == .Debug and steps > 1024) {
+                std.debug.panic(
+                    "RcInsertPass invariant violated: local-use ownership-root walk did not converge for local {d} root {d}",
+                    .{ @intFromEnum(local), @intFromEnum(root) },
+                );
+            }
+        }
+
+        return false;
     }
 
     fn stmtUsesOwnershipRoot(self: *const RcInsertPass, stmt_id: CFStmtId, root: LocalId) bool {
@@ -2471,6 +2479,7 @@ pub const RcInsertPass = struct {
                 var remainder_internal_join_ids = std.ArrayListUnmanaged(LIR.JoinPointId).empty;
                 defer remainder_internal_join_ids.deinit(self.allocator);
                 try remainder_internal_join_ids.appendSlice(self.allocator, nested_join_ids);
+                try self.appendReachableJoinIds(join.body, &remainder_internal_join_ids);
                 try self.appendReachableJoinIds(join.remainder, &remainder_internal_join_ids);
 
                 const nested_params = self.store.getLocalSpan(join.params);
