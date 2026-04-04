@@ -1650,6 +1650,57 @@ pub fn monotypeFromTypeVarWithLanguageDefaultingInSourceContextWithExtraBindings
     );
 }
 
+pub fn monotypeFromTypeVarWithLanguageDefaultingInStoreWithExtraBindings(
+    driver: anytype,
+    result: anytype,
+    module_idx: u32,
+    store_types: *const types.Store,
+    var_: types.Var,
+    extra_bindings: *const std.AutoHashMap(BoundTypeVarKey, ResolvedMonotype),
+) Allocator.Error!Monotype.Idx {
+    var exact_specializations = std.AutoHashMap(types.Var, Monotype.Idx).init(driver.allocator);
+    defer exact_specializations.deinit();
+
+    try seedRecordedTypeScopeSpecializations(driver, result, module_idx, &exact_specializations);
+
+    var extra_it = extra_bindings.iterator();
+    while (extra_it.next()) |entry| {
+        if (entry.key_ptr.module_idx != module_idx) continue;
+        const canonical_mono = if (entry.value_ptr.module_idx == module_idx)
+            entry.value_ptr.idx
+        else
+            try remapMonotypeBetweenModules(
+                driver,
+                result,
+                entry.value_ptr.idx,
+                entry.value_ptr.module_idx,
+                module_idx,
+            );
+        try exact_specializations.put(entry.key_ptr.type_var, canonical_mono);
+    }
+
+    var nominal_cycle_breakers = std.AutoHashMap(types.Var, Monotype.Idx).init(driver.allocator);
+    defer nominal_cycle_breakers.deinit();
+
+    var scratches = try Monotype.Store.Scratches.init(driver.allocator);
+    defer scratches.deinit();
+
+    const module_env = driver.all_module_envs[module_idx];
+    scratches.ident_store = module_env.getIdentStoreConst();
+    scratches.module_env = module_env;
+    scratches.module_idx = module_idx;
+    scratches.all_module_envs = driver.all_module_envs;
+    return (@constCast(&result.context_mono.monotype_store)).fromTypeVar(
+        driver.allocator,
+        store_types,
+        var_,
+        module_env.idents,
+        &exact_specializations,
+        &nominal_cycle_breakers,
+        &scratches,
+    );
+}
+
 pub fn resolveTypeVarExactMonotypeResolved(
     driver: anytype,
     result: anytype,
@@ -1823,9 +1874,28 @@ pub fn resolveExprExactMonotypeResolved(
     if (@hasDecl(Thread, "lookupValueBinding")) {
         switch (expr) {
             .e_lookup_local => |lookup| {
+                const binding_exact = try resolveTypeVarExactMonotypeResolved(
+                    driver,
+                    result,
+                    thread,
+                    module_idx,
+                    ModuleEnv.varFrom(lookup.pattern_idx),
+                );
+                if (!binding_exact.isNone()) {
+                    try recordExprMonotypeResolved(
+                        driver,
+                        result,
+                        source_context,
+                        module_idx,
+                        expr_idx,
+                        binding_exact.idx,
+                        binding_exact.module_idx,
+                    );
+                    return binding_exact;
+                }
                 if (thread.lookupValueBinding(module_idx, lookup.pattern_idx)) |source| {
                     switch (source) {
-                        .specialized_param, .lexical_binding => {
+                        .bound_expr, .specialized_param, .lexical_binding => {
                             if (try resolveExprMonotypeFromValueBinding(driver, result, source, true)) |resolved| {
                                 try recordExprMonotypeResolved(
                                     driver,
@@ -1839,7 +1909,6 @@ pub fn resolveExprExactMonotypeResolved(
                                 return resolved;
                             }
                         },
-                        .bound_expr => {},
                     }
                 }
             },
@@ -1885,10 +1954,19 @@ pub fn resolveExprMonotypeResolved(
     if (@hasDecl(Thread, "lookupValueBinding")) {
         switch (expr) {
             .e_lookup_local => |lookup| {
+                const binding_mono = try resolveTypeVarMonotypeResolved(
+                    driver,
+                    result,
+                    thread,
+                    module_idx,
+                    ModuleEnv.varFrom(lookup.pattern_idx),
+                );
+                if (!binding_mono.isNone()) {
+                    return binding_mono;
+                }
                 if (thread.lookupValueBinding(module_idx, lookup.pattern_idx)) |source| {
                     switch (source) {
-                        .specialized_param, .lexical_binding => return try resolveExprMonotypeFromValueBinding(driver, result, source, false),
-                        .bound_expr => {},
+                        .bound_expr, .specialized_param, .lexical_binding => return try resolveExprMonotypeFromValueBinding(driver, result, source, false),
                     }
                 }
             },

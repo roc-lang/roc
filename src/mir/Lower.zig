@@ -762,9 +762,14 @@ fn resolveProgramExprMonotype(
         switch (call_site) {
             .direct => |direct_callable_inst_id| {
                 const callable_inst = session.lower.callable_pipeline.getCallableInst(direct_callable_inst_id);
-                const callable_def = session.lower.callable_pipeline.getCallableDef(callable_inst.callable_def);
-                const body_expr = session.lower.callable_pipeline.getProgramExprForRef(callable_def.body_expr);
-                return body_expr.common().monotype;
+                const fn_mono = switch (session.lower.callable_pipeline.context_mono.monotype_store.getMonotype(callable_inst.fn_monotype)) {
+                    .func => |func| func,
+                    else => unreachable,
+                };
+                return .{
+                    .idx = fn_mono.ret,
+                    .module_idx = callable_inst.fn_monotype_module_idx,
+                };
             },
             .indirect_call => |indirect_call| {
                 const fn_mono = switch (session.lower.callable_pipeline.context_mono.monotype_store.getMonotype(indirect_call.packed_fn.fn_monotype.idx)) {
@@ -3431,9 +3436,6 @@ fn lowerLambdaInto(
     defer stable_param_locals.deinit(self.allocator);
     stable_param_locals.appendSliceAssumeCapacity(self.store.getLocalSpan(params));
     const param_locals = stable_param_locals.items;
-    for (param_patterns) |pattern_idx| {
-        try self.predeclareBindingLocals(session, module_env, pattern_idx);
-    }
 
     const param_callables = try self.buildCallableParamResolutions(session, param_patterns, param_locals);
     const active_lambda = if (reserved_lambda) |reserved|
@@ -3709,9 +3711,6 @@ fn lowerReservedTrivialClosureLambda(
     defer stable_param_locals.deinit(self.allocator);
     stable_param_locals.appendSliceAssumeCapacity(self.store.getLocalSpan(params));
     const param_locals = stable_param_locals.items;
-    for (param_patterns) |pattern_idx| {
-        try self.predeclareBindingLocals(session, module_env, pattern_idx);
-    }
 
     const capture_top = self.scratch_local_ids.top();
     defer self.scratch_local_ids.clearFrom(capture_top);
@@ -6806,7 +6805,12 @@ fn lowerForStmtInto(
     defer loop_prelude_bound_locals.deinit();
     self.current_prelude_bound_locals = &loop_prelude_bound_locals;
     defer self.current_prelude_bound_locals = saved_prelude_bound_locals;
-    try self.predeclareBindingLocals(session, module_env, for_stmt.patt);
+    try self.predeclareBindingLocalsFromMonotype(
+        module_env,
+        for_stmt.patt,
+        self.store.getLocal(item_local).monotype,
+        item_local,
+    );
     try self.markBindingLocalsPreludeBound(module_env, for_stmt.patt);
     const lowered_body = try self.lowerExprWithExitScope(session, for_stmt.body, body_value, increment_stmt);
     try self.store.finalizeCFStmt(loop_back, .{ .jump = .{
@@ -7298,20 +7302,6 @@ fn debugAssertNoUnitPrimBinding(
             session.rootExprRawForDebug(),
         },
     );
-}
-
-fn predeclareBindingLocals(
-    self: *Self,
-    session: LowerSession,
-    module_env: *const ModuleEnv,
-    pattern_idx: CIR.Pattern.Idx,
-) Allocator.Error!void {
-    var bindings = std.ArrayList(BindingNode).empty;
-    defer bindings.deinit(self.allocator);
-    try self.collectBindingNodes(module_env, pattern_idx, &bindings);
-    for (bindings.items) |binding| {
-        _ = try self.patternToLocal(session, binding.pattern_idx);
-    }
 }
 
 fn predeclareBindingLocalsFromMonotype(
@@ -8403,7 +8393,12 @@ fn lowerMatchBranchChainInto(
                 self.current_prelude_bound_locals = &branch_prelude_bound_locals;
                 defer self.current_prelude_bound_locals = saved_prelude_bound_locals;
 
-                try self.predeclareBindingLocals(session, module_env, branch_pattern.pattern);
+                try self.predeclareBindingLocalsFromMonotype(
+                    module_env,
+                    branch_pattern.pattern,
+                    cond_mono,
+                    null,
+                );
                 try self.markBindingLocalsPreludeBound(module_env, branch_pattern.pattern);
                 if (representative_pattern_idx) |representative_pattern| {
                     try self.bindRepresentativeBindingLocalsToBranchPattern(
