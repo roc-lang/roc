@@ -1812,24 +1812,6 @@ pub fn resolveExprMonotypeResolved(
         return typevar_resolved;
     }
 
-    if (std.debug.runtime_safety) {
-        switch (expr) {
-            .e_tag, .e_empty_list, .e_lambda, .e_closure, .e_hosted_lambda => {
-                const resolved_var = module_env.types.resolveVar(ModuleEnv.varFrom(expr_idx));
-                std.debug.print(
-                    "[contextmono] resolveExprMonotypeResolved none expr={d} kind={s} ctx={s} typevar_content={s}\n",
-                    .{
-                        @intFromEnum(expr_idx),
-                        @tagName(expr),
-                        @tagName(source_context),
-                        @tagName(resolved_var.desc.content),
-                    },
-                );
-            },
-            else => {},
-        }
-    }
-
     return try lookupRecordedExprMonotypeIfReadyForSourceContext(
         driver,
         result,

@@ -434,22 +434,6 @@ fn scanDemandedValueDefExpr(
                 self.module_idx_inner,
                 self.expr_idx_inner,
             );
-
-            if (self.result_inner.getExprTemplateId(
-                self.thread_inner.requireSourceContext(),
-                self.module_idx_inner,
-                self.expr_idx_inner,
-            )) |template_id| {
-                try materializeDemandedExprCallableInst(
-                    self.driver_inner,
-                    self.visit_memo_inner,
-                    self.result_inner,
-                    self.thread_inner,
-                    self.module_idx_inner,
-                    self.expr_idx_inner,
-                    template_id,
-                );
-            }
         }
     };
 
@@ -539,7 +523,6 @@ fn scanCirExprWithDirectCallResolution(
         thread,
         module_idx,
         expr_idx,
-        false,
         resolve_direct_calls,
     );
 }
@@ -560,7 +543,6 @@ fn scanCirValueExprWithDirectCallResolution(
         thread,
         module_idx,
         expr_idx,
-        true,
         resolve_direct_calls,
     );
 }
@@ -1593,12 +1575,7 @@ fn ensureCallableInstRealized(
     result: anytype,
     callable_inst_id: CallableInstId,
 ) std.mem.Allocator.Error!void {
-    const callable_def = result.getCallableDefForInst(callable_inst_id);
-    if (result.getExprCallableValue(
-        callable_def.runtime_expr.source_context,
-        callable_def.runtime_expr.module_idx,
-        callable_def.runtime_expr.expr_idx,
-    ) != null) return;
+    if (callableInstHasRealizedRuntimeExpr(result, callable_inst_id)) return;
     try realizeCallableInst(driver, visit_memo, result, callable_inst_id);
 }
 
@@ -1880,15 +1857,6 @@ pub fn specializeDirectCallExactCallable(
     )) orelse return null;
     const fn_monotype = exact_desired_fn_monotype.idx;
     const fn_monotype_module_idx = exact_desired_fn_monotype.module_idx;
-    if (std.debug.runtime_safety) {
-        std.debug.print(
-            "[direct-call-specialize] call_expr={d} fn_mono={any}\n",
-            .{
-                @intFromEnum(call_expr_idx),
-                result.context_mono.monotype_store.getMonotype(fn_monotype),
-            },
-        );
-    }
 
     var callable_param_specs = std.ArrayListUnmanaged(Lambdamono.CallableParamSpecEntry).empty;
     defer callable_param_specs.deinit(driver.allocator);
@@ -2428,16 +2396,12 @@ fn realizeCallableInst(
     result: anytype,
     callable_inst_id: CallableInstId,
 ) std.mem.Allocator.Error!void {
+    if (callableInstHasRealizedRuntimeExpr(result, callable_inst_id)) return;
     const callable_inst = result.getCallableInst(callable_inst_id).*;
     const template = result.getCallableTemplate(callable_inst.template).*;
     const callable_source_context: SourceContext = .{
         .callable_inst = @enumFromInt(@intFromEnum(callable_inst_id)),
     };
-    if (result.getExprCallableValue(
-        callable_source_context,
-        template.module_idx,
-        template.runtime_expr,
-    ) != null) return;
 
     const module_env = driver.all_module_envs[template.module_idx];
 
@@ -2620,11 +2584,7 @@ fn sourceContextCallableInstId(source_context: SourceContext) ?CallableInstId {
 
 fn callableInstHasRealizedRuntimeExpr(result: anytype, callable_inst_id: CallableInstId) bool {
     const callable_def = result.getCallableDefForInst(callable_inst_id);
-    return result.getExprCallableValue(
-        callable_def.runtime_expr.source_context,
-        callable_def.runtime_expr.module_idx,
-        callable_def.runtime_expr.expr_idx,
-    ) != null;
+    return callable_def.realized;
 }
 
 fn resolveTemplateDefiningSourceContext(
@@ -2885,6 +2845,7 @@ fn ensureCallableInstRecord(
         .fn_monotype = cm.resolvedMonotype(canonical_fn_monotype, canonical_fn_monotype_module_idx),
         .captures = .empty(),
         .source_region = template.source_region,
+        .realized = false,
     });
     try result.lambdasolved.callable_insts.append(driver.allocator, .{
         .template = template_id,
@@ -3094,6 +3055,7 @@ fn updateCallableDefRuntimeSemantics(
     if (!std.meta.eql(result.lambdasolved.callable_insts.items[@intFromEnum(callable_inst_id)].runtime_value, runtime_value)) {
         result.lambdasolved.callable_insts.items[@intFromEnum(callable_inst_id)].runtime_value = runtime_value;
     }
+    callable_def.realized = true;
 }
 
 fn calleeUsesFirstClassCallableValuePath(expr: CIR.Expr) bool {
@@ -3573,16 +3535,6 @@ fn specializeDispatchExactCallable(
         fn_monotype_module_idx,
         callable_param_specs.items,
     );
-    if (std.debug.runtime_safety) {
-        const created = result.getCallableInst(callable_inst_id);
-        std.debug.print(
-            "[direct-call-specialize] callable_inst={d} stored_fn_mono={any}\n",
-            .{
-                @intFromEnum(callable_inst_id),
-                result.context_mono.monotype_store.getMonotype(created.fn_monotype),
-            },
-        );
-    }
     return callable_inst_id;
 }
 
@@ -5804,7 +5756,6 @@ fn scanCirExprInternal(
     thread: SemanticThread,
     module_idx: u32,
     expr_idx: CIR.Expr.Idx,
-    materialize_if_callable: bool,
     resolve_direct_calls: bool,
 ) std.mem.Allocator.Error!void {
     const module_env = driver.all_module_envs[module_idx];
@@ -5829,7 +5780,7 @@ fn scanCirExprInternal(
         else => null,
     };
     if (callable_kind) |kind| {
-        const template_id = try result.template_catalog.registerCallableTemplate(
+        _ = try result.template_catalog.registerCallableTemplate(
             driver.allocator,
             driver.all_module_envs,
             callableTemplateOwnerForSourceContext(result, thread.requireSourceContext()),
@@ -5842,13 +5793,6 @@ fn scanCirExprInternal(
             kind,
             module_env.store.getExprRegion(expr_idx),
         );
-        if (materialize_if_callable) {
-            try materializeDemandedExprCallableInst(driver, visit_memo, result, thread, module_idx, expr_idx, template_id);
-            if (thread.callableInst() == null) {
-                try completeCurrentExprMonotype(driver, result, thread, module_idx, expr_idx);
-                return;
-            }
-        }
     }
 
     const visit_key = cm.Result.contextExprKey(thread.requireSourceContext(), module_idx, expr_idx);
@@ -5860,7 +5804,6 @@ fn scanCirExprInternal(
         module_idx: u32,
         expr_idx: CIR.Expr.Idx,
         expr: CIR.Expr,
-        materialize_if_callable: bool,
         resolve_direct_calls: bool,
 
         fn run(self: @This()) std.mem.Allocator.Error!void {
@@ -5874,24 +5817,6 @@ fn scanCirExprInternal(
                 self.expr,
                 self.resolve_direct_calls,
             );
-
-            if (self.materialize_if_callable and
-                self.result.getExprTemplateId(self.thread.requireSourceContext(), self.module_idx, self.expr_idx) == null)
-            {
-                if (getValueExprCallableValueForThread(self.driver, self.visit_memo, self.result, self.thread, self.module_idx, self.expr_idx) == null) {
-                    var visiting: std.AutoHashMapUnmanaged(ContextExprKey, void) = .empty;
-                    defer visiting.deinit(self.driver.allocator);
-                    try realizeStructuredExprCallableSemantics(
-                        self.driver,
-                        self.visit_memo,
-                        self.result,
-                        self.thread.requireSourceContext(),
-                        self.module_idx,
-                        self.expr_idx,
-                        &visiting,
-                    );
-                }
-            }
 
             try completeCurrentExprMonotype(
                 self.driver,
@@ -5914,7 +5839,6 @@ fn scanCirExprInternal(
             .module_idx = module_idx,
             .expr_idx = expr_idx,
             .expr = expr,
-            .materialize_if_callable = materialize_if_callable,
             .resolve_direct_calls = resolve_direct_calls,
         },
     );
@@ -5936,38 +5860,6 @@ pub fn completeCurrentExprMonotype(
         expr_idx,
         resolved.idx,
         resolved.module_idx,
-    );
-}
-
-pub fn materializeDemandedExprCallableInst(
-    driver: anytype,
-    visit_memo: *VisitMemo,
-    result: anytype,
-    thread: SemanticThread,
-    module_idx: u32,
-    expr_idx: CIR.Expr.Idx,
-    template_id: CallableTemplateId,
-) std.mem.Allocator.Error!void {
-    const source_context = thread.requireSourceContext();
-
-    const fn_monotype = try cm.lookupRecordedExprMonotypeIfReadyForSourceContext(
-        driver,
-        result,
-        thread,
-        source_context,
-        module_idx,
-        expr_idx,
-    ) orelse return;
-    if (result.context_mono.monotype_store.getMonotype(fn_monotype.idx) != .func) return;
-    _ = try materializeExprCallableValueWithKnownFnMonotype(
-        driver,
-        visit_memo,
-        result,
-        source_context,
-        module_idx,
-        expr_idx,
-        template_id,
-        fn_monotype,
     );
 }
 
@@ -6366,24 +6258,20 @@ pub fn bindBindingCallableValueCallableInsts(
     pattern_idx: CIR.Pattern.Idx,
     expr_idx: CIR.Expr.Idx,
 ) std.mem.Allocator.Error!void {
-    if (result.getExprTemplateId(thread.requireSourceContext(), module_idx, expr_idx)) |template_id| {
-        try materializeLookupExprCallableValue(driver, visit_memo, result, thread, module_idx, expr_idx, template_id);
-    } else {
-        var visiting: std.AutoHashMapUnmanaged(ContextExprKey, void) = .empty;
-        defer visiting.deinit(driver.allocator);
-        var variant_builder = CallableVariantBuilder.init();
-        defer variant_builder.deinit(driver.allocator);
-        try includeExprCallableValue(
-            driver,
-            visit_memo,
-            result,
-            thread.requireSourceContext(),
-            module_idx,
-            expr_idx,
-            &visiting,
-            &variant_builder,
-        );
-    }
+    var visiting: std.AutoHashMapUnmanaged(ContextExprKey, void) = .empty;
+    defer visiting.deinit(driver.allocator);
+    var variant_builder = CallableVariantBuilder.init();
+    defer variant_builder.deinit(driver.allocator);
+    try includeExprCallableValue(
+        driver,
+        visit_memo,
+        result,
+        thread.requireSourceContext(),
+        module_idx,
+        expr_idx,
+        &visiting,
+        &variant_builder,
+    );
 
     const callable_value = getValueExprCallableValueForSourceContext(
         driver,
@@ -7272,6 +7160,12 @@ fn recordCallResultCallableValueFromCallee(
         variant_builder_worker: @TypeOf(variant_builder),
 
         fn run(worker: @This()) std.mem.Allocator.Error!void {
+            try ensureCallableInstRealized(
+                worker.driver_worker,
+                worker.visit_memo_worker,
+                worker.result_worker,
+                worker.callee_callable_inst_id_worker,
+            );
             const callable_def = worker.result_worker.getCallableDefForInst(worker.callee_callable_inst_id_worker);
             if (worker.result_worker.getExprCallableValue(
                 callable_def.body_expr.source_context,
@@ -7481,65 +7375,6 @@ fn resolveDemandedFnMonotypeFromCallShape(
 
     for (param_vars, actual_args) |param_var, arg_expr_idx| {
         const arg_mono = (try cm.resolveExprMonotypeResolved(driver, result, thread, module_idx, arg_expr_idx)) orelse return null;
-        if (std.debug.runtime_safety and result.context_mono.monotype_store.getMonotype(arg_mono.idx) == .unit) {
-            const module_env = driver.all_module_envs[module_idx];
-            const arg_expr = module_env.store.getExpr(arg_expr_idx);
-            const arg_var = module_env.types.resolveVar(ModuleEnv.varFrom(arg_expr_idx));
-            const binding_debug = switch (arg_expr) {
-                .e_lookup_local => |lookup|
-                    if (thread.lookupValueBinding(module_idx, lookup.pattern_idx)) |source| blk: {
-                        switch (source) {
-                            .bound_expr => break :blk "bound_expr",
-                            .specialized_param => |specialized_param| {
-                                const callable_inst = result.getCallableInst(specialized_param.callable_inst);
-                                const fn_mono = result.context_mono.monotype_store.getMonotype(callable_inst.fn_monotype);
-                                std.debug.print(
-                                    "[call-shape] specialized param callable_inst={d} param_index={d} stored_fn_mono={any}\n",
-                                    .{
-                                        @intFromEnum(specialized_param.callable_inst),
-                                        specialized_param.param_index,
-                                        fn_mono,
-                                    },
-                                );
-                                break :blk "specialized_param";
-                            },
-                            .lexical_binding => break :blk "lexical_binding",
-                        }
-                    } else "none",
-                else => "n/a",
-            };
-            std.debug.print(
-                "[call-shape] unit arg monotype expr={d} tag={s} root={d} content={s} binding={s}\n",
-                .{
-                    @intFromEnum(arg_expr_idx),
-                    @tagName(arg_expr),
-                    @intFromEnum(arg_var.var_),
-                    @tagName(arg_var.desc.content),
-                    binding_debug,
-                },
-            );
-            switch (arg_var.desc.content) {
-                .flex => |flex| {
-                    std.debug.print("[call-shape] flex constraints len={d}\n", .{flex.constraints.len()});
-                    for (module_env.types.sliceStaticDispatchConstraints(flex.constraints)) |constraint| {
-                        std.debug.print(
-                            "[call-shape] flex constraint fn={s} origin={s}\n",
-                            .{ module_env.getIdent(constraint.fn_name), @tagName(constraint.origin) },
-                        );
-                    }
-                },
-                .rigid => |rigid| {
-                    std.debug.print("[call-shape] rigid constraints len={d}\n", .{rigid.constraints.len()});
-                    for (module_env.types.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
-                        std.debug.print(
-                            "[call-shape] rigid constraint fn={s} origin={s}\n",
-                            .{ module_env.getIdent(constraint.fn_name), @tagName(constraint.origin) },
-                        );
-                    }
-                },
-                else => {},
-            }
-        }
         if (arg_mono.isNone()) return null;
         try cm.bindTypeVarMonotypes(
             driver,
@@ -8369,35 +8204,7 @@ fn realizeStructuredExprCallableSemantics(
                 );
             }
         },
-        .e_closure, .e_lambda, .e_hosted_lambda => {
-            const template_id = result.getExprTemplateId(
-                source_context,
-                module_idx,
-                expr_idx,
-            ) orelse {
-                if (std.debug.runtime_safety) {
-                    std.debug.panic(
-                        "Lambdasolved invariant violated: callable expr {d} in module {d} under source context {s} reached callable-value realization without a registered template",
-                        .{
-                            @intFromEnum(expr_idx),
-                            module_idx,
-                            @tagName(source_context),
-                        },
-                    );
-                }
-                unreachable;
-            };
-            try materializeLookupExprCallableValue(
-                driver,
-                visit_memo,
-                result,
-                SemanticThread.trackedThread(source_context),
-                module_idx,
-                expr_idx,
-                template_id,
-            );
-            return;
-        },
+        .e_closure, .e_lambda, .e_hosted_lambda => return,
         else => {},
     }
 

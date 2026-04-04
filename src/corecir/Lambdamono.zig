@@ -461,6 +461,7 @@ pub const CallableDef = struct {
     fn_monotype: ContextMono.ResolvedMonotype,
     captures: CaptureFieldSpan = .empty(),
     source_region: Region,
+    realized: bool = false,
 };
 
 pub const ValueOrigin = union(enum) {
@@ -885,6 +886,12 @@ fn Transform(comptime ResultPtr: type, comptime Driver: type) type {
                     expr_idx,
                 );
             }
+
+            for (self.result.lambdasolved.callable_insts.items, 0..) |_, i| {
+                const callable_inst_id: CallableInstId = @enumFromInt(i);
+                if (!callableInstHasRealizedRuntimeExpr(self.result, callable_inst_id)) continue;
+                try self.ensureCallableInstBodyGraph(callable_inst_id);
+            }
         }
 
         fn assembleProgramExprNode(
@@ -1211,9 +1218,5 @@ pub fn run(
 
 fn callableInstHasRealizedRuntimeExpr(result: anytype, callable_inst_id: CallableInstId) bool {
     const callable_def = result.getCallableDefForInst(callable_inst_id);
-    return result.getExprCallableValue(
-        callable_def.runtime_expr.source_context,
-        callable_def.runtime_expr.module_idx,
-        callable_def.runtime_expr.expr_idx,
-    ) != null;
+    return callable_def.realized;
 }
