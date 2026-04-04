@@ -794,6 +794,29 @@ fn lookupProgramExprMonotype(session: LowerSession, expr_idx: CIR.Expr.Idx) ?Pip
     );
 }
 
+fn resolveProgramExprMonotype(
+    session: LowerSession,
+    expr_idx: CIR.Expr.Idx,
+) Allocator.Error!?Pipeline.ResolvedMonotype {
+    if (lookupProgramExprCallableValue(session, expr_idx)) |callable_value| {
+        return session.lower.callable_pipeline.getCallableValueRuntimeMonotype(callable_value);
+    }
+    const SourceContextThread = struct {
+        source_context: Pipeline.SourceContext,
+
+        pub fn requireSourceContext(self: @This()) Pipeline.SourceContext {
+            return self.source_context;
+        }
+    };
+    return corecir.ContextMono.resolveExprMonotypeResolved(
+        session.lower,
+        session.lower.callable_pipeline,
+        SourceContextThread{ .source_context = session.source_context },
+        session.lower.current_module_idx,
+        expr_idx,
+    );
+}
+
 fn lookupProgramPatternMonotype(session: LowerSession, pattern_idx: CIR.Pattern.Idx) ?Pipeline.ResolvedMonotype {
     if (lookupCurrentCallableParamCallableValue(session, pattern_idx)) |callable_value| {
         return session.lower.callable_pipeline.getCallableValueRuntimeMonotype(callable_value);
@@ -896,12 +919,22 @@ fn resolveLowerExprSourceMonotype(
 ) Allocator.Error!?Pipeline.ResolvedMonotype {
     var source_resolved = if (try self.resolveLowerExprSourceCallableValue(expr_ref)) |callable_value|
         self.callable_pipeline.getCallableValueRuntimeMonotype(callable_value)
-    else
-        self.callable_pipeline.getExprMonotype(
-            expr_ref.source_context,
+    else blk: {
+        const SourceContextThread = struct {
+            source_context: Pipeline.SourceContext,
+
+            pub fn requireSourceContext(thread: @This()) Pipeline.SourceContext {
+                return thread.source_context;
+            }
+        };
+        break :blk (try corecir.ContextMono.resolveExprMonotypeResolved(
+            self,
+            self.callable_pipeline,
+            SourceContextThread{ .source_context = expr_ref.source_context },
             expr_ref.module_idx,
             expr_ref.expr_idx,
-        ) orelse return null;
+        )) orelse return null;
+    };
 
     for (expr_ref.projections) |projection| {
         source_resolved = try corecir.ContextMono.projectResolvedMonotypeByValueProjection(
@@ -9492,7 +9525,7 @@ fn resolveMonotype(self: *Self, session: LowerSession, expr_idx: CIR.Expr.Idx) A
             self.current_module_idx,
         ));
     }
-    if (lookupProgramExprMonotype(session, expr_idx)) |mono| {
+    if (try resolveProgramExprMonotype(session, expr_idx)) |mono| {
         return self.requireExecutableMonotype(try self.importMonotypeFromStore(
             &self.callable_pipeline.context_mono.monotype_store,
             mono.idx,
@@ -9545,7 +9578,7 @@ fn resolveMonotype(self: *Self, session: LowerSession, expr_idx: CIR.Expr.Idx) A
         else => {},
     }
     std.debug.panic(
-        "statement-only MIR invariant violated: missing exact monotype for expr {d} kind={s} region={any} snippet=\"{s}\" in module {d} source_context={s} callable_inst={d} root_source_expr={d} program_expr={s} context_expr_mono={s} origin_ctx={s} origin_module={d} origin_expr={d}",
+        "statement-only MIR invariant violated: missing executable monotype for expr {d} kind={s} region={any} snippet=\"{s}\" in module {d} source_context={s} callable_inst={d} root_source_expr={d} program_expr={s} context_expr_mono={s} origin_ctx={s} origin_module={d} origin_expr={d}",
         .{
             @intFromEnum(expr_idx),
             @tagName(expr),
