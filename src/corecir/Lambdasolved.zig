@@ -1047,6 +1047,21 @@ pub fn resolveBoundCaptureExprMonotype(
     result: anytype,
     bound_expr: @FieldType(CaptureValueSource, "bound_expr"),
 ) std.mem.Allocator.Error!?ResolvedMonotype {
+    if (std.debug.runtime_safety) {
+        const all_module_envs_len = driver.all_module_envs.len;
+        if (bound_expr.expr_ref.module_idx >= all_module_envs_len) {
+            std.debug.panic(
+                "Lambdasolved invariant violated: bound capture expr ref had invalid module_idx={d} expr_idx={d} source_context={s} projections={d} all_module_envs_len={d}",
+                .{
+                    bound_expr.expr_ref.module_idx,
+                    @intFromEnum(bound_expr.expr_ref.expr_idx),
+                    @tagName(bound_expr.expr_ref.source_context),
+                    bound_expr.expr_ref.projections.len,
+                    all_module_envs_len,
+                },
+            );
+        }
+    }
     const source_thread = SemanticThread.trackedThread(bound_expr.expr_ref.source_context);
     var source_mono = (try cm.resolveExprMonotypeResolved(
         driver,
@@ -7050,19 +7065,37 @@ fn prebindBlockRecursiveCallableBindings(
     }
     for (entries.items) |entry| {
         const callable_inst_id = entry.callable_inst_id orelse continue;
-        const capture_thread = try captureBindingThreadForCallableInst(
-            driver,
-            result,
-            bound_thread,
-            callable_inst_id,
-        );
-        try ensureCallableInstCaptureBindingsFromThread(
+        const template = result.getCallableTemplate(entry.template_id);
+        const closure_expr = switch (module_env.store.getExpr(template.runtime_expr)) {
+            .e_closure => |closure| closure,
+            else => unreachable,
+        };
+        var capture_bindings = std.ArrayListUnmanaged(ValueLexicalBinding).empty;
+        defer capture_bindings.deinit(driver.allocator);
+        try collectClosureCaptureValueBindings(
             driver,
             visit_memo,
             result,
-            capture_thread,
-            callable_inst_id,
+            bound_thread,
+            template.module_idx,
+            template.runtime_expr,
+            closure_expr,
+            &capture_bindings,
         );
+        try result.lambdasolved.recordClosureCaptureBindingsForExpr(
+            driver.allocator,
+            bound_thread.requireSourceContext(),
+            template.module_idx,
+            template.runtime_expr,
+            capture_bindings.items,
+        );
+        if (capture_bindings.items.len != 0) {
+            try result.lambdasolved.recordCallableInstCaptureBindings(
+                driver.allocator,
+                callable_inst_id,
+                capture_bindings.items,
+            );
+        }
     }
 
     return bound_thread;
@@ -10400,12 +10433,7 @@ pub const Result = struct {
             return;
         }
 
-        const start: u32 = @intCast(self.capture_binding_entries.items.len);
-        try self.capture_binding_entries.appendSlice(allocator, capture_bindings);
-        entry.value_ptr.* = .{
-            .start = start,
-            .len = @intCast(capture_bindings.len),
-        };
+        entry.value_ptr.* = try self.internCaptureBindingSlice(allocator, capture_bindings);
     }
 
     pub fn getClosureCaptureBindingsForExpr(
@@ -10661,12 +10689,7 @@ pub const Result = struct {
             return;
         }
 
-        const start: u32 = @intCast(self.capture_binding_entries.items.len);
-        try self.capture_binding_entries.appendSlice(allocator, capture_bindings);
-        span_ptr.* = .{
-            .start = start,
-            .len = @intCast(capture_bindings.len),
-        };
+        span_ptr.* = try self.internCaptureBindingSlice(allocator, capture_bindings);
     }
 
     pub fn getCallableInstCaptureBindings(
@@ -10676,6 +10699,48 @@ pub const Result = struct {
         const span = self.callable_inst_capture_bindings.items[@intFromEnum(callable_inst_id)];
         if (span.len == 0) return &.{};
         return self.capture_binding_entries.items[span.start..][0..span.len];
+    }
+
+    fn internCaptureBindingSlice(
+        self: *Result,
+        allocator: std.mem.Allocator,
+        capture_bindings: []const ValueLexicalBinding,
+    ) std.mem.Allocator.Error!ValueLexicalBindingSpan {
+        if (capture_bindings.len == 0) return .empty();
+
+        if (self.captureBindingSliceSpan(capture_bindings)) |existing_span| {
+            return existing_span;
+        }
+
+        const start: u32 = @intCast(self.capture_binding_entries.items.len);
+        try self.capture_binding_entries.appendSlice(allocator, capture_bindings);
+        return .{
+            .start = start,
+            .len = @intCast(capture_bindings.len),
+        };
+    }
+
+    fn captureBindingSliceSpan(
+        self: *const Result,
+        capture_bindings: []const ValueLexicalBinding,
+    ) ?ValueLexicalBindingSpan {
+        if (capture_bindings.len == 0 or self.capture_binding_entries.items.len == 0) return null;
+
+        const base_ptr = @intFromPtr(self.capture_binding_entries.items.ptr);
+        const slice_ptr = @intFromPtr(capture_bindings.ptr);
+        const elem_size = @sizeOf(ValueLexicalBinding);
+        const byte_len = self.capture_binding_entries.items.len * elem_size;
+
+        if (slice_ptr < base_ptr or slice_ptr >= base_ptr + byte_len) return null;
+        const byte_offset = slice_ptr - base_ptr;
+        if (byte_offset % elem_size != 0) return null;
+
+        const start = byte_offset / elem_size;
+        if (start + capture_bindings.len > self.capture_binding_entries.items.len) return null;
+        return .{
+            .start = @intCast(start),
+            .len = @intCast(capture_bindings.len),
+        };
     }
 
     pub fn appendCaptureFields(

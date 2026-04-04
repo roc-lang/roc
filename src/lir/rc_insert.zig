@@ -1146,7 +1146,6 @@ pub const RcInsertPass = struct {
     }
 
     fn analyzeProcParamUseKinds(self: *RcInsertPass, proc_index: usize, proc: LIR.LirProcSpec) Allocator.Error![]UseKind {
-        self.clearAnalysisState();
         const params = self.store.getLocalSpan(proc.args);
         const seed_use_kinds = if (proc_index < self.proc_param_use_kinds.items.len and self.proc_param_use_kinds.items[proc_index].len == params.len)
             self.proc_param_use_kinds.items[proc_index]
