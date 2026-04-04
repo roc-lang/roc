@@ -404,9 +404,10 @@ pub const CaptureValueSource = union(enum) {
         param_index: u16,
     },
     lexical_binding: struct {
-        callable_inst: CallableInstId,
+        callable_inst: ?CallableInstId = null,
         module_idx: u32,
         pattern_idx: CIR.Pattern.Idx,
+        callable_value: ?CallableValue = null,
     },
     bound_expr: struct {
         expr_ref: ExprRef,

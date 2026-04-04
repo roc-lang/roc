@@ -1764,11 +1764,14 @@ pub fn resolveExprMonotypeResolved(
                             );
                         },
                         .lexical_binding => |lexical_binding| blk: {
+                            if (lexical_binding.callable_value) |callable_value| {
+                                break :blk result.getCallableValueSourceMonotype(callable_value);
+                            }
                             break :blk try resolveTypeVarMonotypeResolved(
                                 driver,
                                 result,
                                 SourceContextThread{ .source_context = .{
-                                    .callable_inst = @enumFromInt(@intFromEnum(lexical_binding.callable_inst)),
+                                    .callable_inst = @enumFromInt(@intFromEnum(lexical_binding.callable_inst orelse unreachable)),
                                 } },
                                 lexical_binding.module_idx,
                                 ModuleEnv.varFrom(lexical_binding.pattern_idx),
@@ -1861,6 +1864,9 @@ pub fn resolvePatternMonotypeResolved(
                     );
                 },
                 .lexical_binding => |lexical_binding| {
+                    if (lexical_binding.callable_value) |callable_value| {
+                        return result.getCallableValueSourceMonotype(callable_value);
+                    }
                     const SourceContextThread = struct {
                         source_context: SourceContext,
 
@@ -1872,7 +1878,7 @@ pub fn resolvePatternMonotypeResolved(
                         driver,
                         result,
                         SourceContextThread{ .source_context = .{
-                            .callable_inst = @enumFromInt(@intFromEnum(lexical_binding.callable_inst)),
+                            .callable_inst = @enumFromInt(@intFromEnum(lexical_binding.callable_inst orelse unreachable)),
                         } },
                         lexical_binding.module_idx,
                         ModuleEnv.varFrom(lexical_binding.pattern_idx),

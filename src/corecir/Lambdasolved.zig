@@ -648,12 +648,10 @@ fn scanClosureCaptureSources(
     const module_env = driver.all_module_envs[module_idx];
     const source_context = thread.requireSourceContext();
 
-    const current_template = switch (source_context) {
-        .callable_inst => |context_id| result.getCallableTemplate(
-            result.getCallableInst(@enumFromInt(@intFromEnum(context_id))).template,
-        ).*,
-        .root_expr, .provenance_expr, .template_expr => null,
-    };
+    const current_template = if (result.getExprTemplateId(source_context, module_idx, closure_expr_idx)) |template_id|
+        result.getCallableTemplate(template_id).*
+    else
+        null;
 
     for (module_env.store.sliceCaptures(closure_expr.captures)) |capture_idx| {
         const capture = module_env.store.getCapture(capture_idx);
@@ -708,12 +706,10 @@ fn collectClosureCaptureValueBindings(
     const module_env = driver.all_module_envs[module_idx];
     const source_context = thread.requireSourceContext();
 
-    const current_template = switch (source_context) {
-        .callable_inst => |context_id| result.getCallableTemplate(
-            result.getCallableInst(@enumFromInt(@intFromEnum(context_id))).template,
-        ).*,
-        .root_expr, .provenance_expr, .template_expr => null,
-    };
+    const current_template = if (result.getExprTemplateId(source_context, module_idx, closure_expr_idx)) |template_id|
+        result.getCallableTemplate(template_id).*
+    else
+        null;
 
     for (module_env.store.sliceCaptures(closure_expr.captures)) |capture_idx| {
         const capture = module_env.store.getCapture(capture_idx);
@@ -897,7 +893,23 @@ pub fn captureValueSourceForClosurePattern(
         return null;
     }
     if (thread.lookupValueBinding(module_idx, pattern_idx)) |source| {
+        if (source == .lexical_binding) {
+            if (thread.lookupCallableBinding(module_idx, pattern_idx)) |callable_value| {
+                var lexical = source.lexical_binding;
+                lexical.callable_value = callable_value;
+                if (lexical.callable_inst == null) lexical.callable_inst = thread.callableInst();
+                return .{ .lexical_binding = lexical };
+            }
+        }
         return source;
+    }
+    if (thread.lookupCallableBinding(module_idx, pattern_idx)) |callable_value| {
+        return .{ .lexical_binding = .{
+            .callable_inst = thread.callableInst(),
+            .module_idx = module_idx,
+            .pattern_idx = pattern_idx,
+            .callable_value = callable_value,
+        } };
     }
     _ = result;
     const lexical_callable_inst = thread.callableInst() orelse {
@@ -913,6 +925,7 @@ pub fn captureValueSourceForClosurePattern(
         .callable_inst = lexical_callable_inst,
         .module_idx = module_idx,
         .pattern_idx = pattern_idx,
+        .callable_value = null,
     } };
 }
 
@@ -942,16 +955,25 @@ fn resolveLexicalBindingThread(
     lexical_binding: @FieldType(CaptureValueSource, "lexical_binding"),
     lexical_thread: ?SemanticThread,
 ) std.mem.Allocator.Error!SemanticThread {
+    const lexical_callable_inst = lexical_binding.callable_inst orelse {
+        if (std.debug.runtime_safety) {
+            std.debug.panic(
+                "Lambdasolved invariant violated: lexical binding pattern {d} in module {d} required deferred callable-inst reconstruction without explicit callable-inst owner",
+                .{ @intFromEnum(lexical_binding.pattern_idx), lexical_binding.module_idx },
+            );
+        }
+        unreachable;
+    };
     return if (lexical_thread) |thread|
         if (thread.callableInst()) |thread_callable_inst|
-            if (thread_callable_inst == lexical_binding.callable_inst)
+            if (thread_callable_inst == lexical_callable_inst)
                 thread
             else
-                try threadForCallableInst(driver, result, lexical_binding.callable_inst)
+                try threadForCallableInst(driver, result, lexical_callable_inst)
         else
-            try threadForCallableInst(driver, result, lexical_binding.callable_inst)
+            try threadForCallableInst(driver, result, lexical_callable_inst)
     else
-        try threadForCallableInst(driver, result, lexical_binding.callable_inst);
+        try threadForCallableInst(driver, result, lexical_callable_inst);
 }
 
 pub fn resolveCaptureValueSourceMonotype(
@@ -986,6 +1008,9 @@ pub fn resolveCaptureValueSourceMonotype(
         },
         .specialized_param => |specialized_param| requireSpecializedParamMonotype(result, specialized_param),
         .lexical_binding => |lexical| blk: {
+            if (lexical.callable_value) |callable_value| {
+                break :blk result.getCallableValueSourceMonotype(callable_value);
+            }
             const resolved_lexical_thread = try resolveLexicalBindingThread(
                 driver,
                 result,
@@ -1006,7 +1031,7 @@ pub fn resolveCaptureValueSourceMonotype(
                     .{
                         lexical.module_idx,
                         @intFromEnum(lexical.pattern_idx),
-                        @intFromEnum(lexical.callable_inst),
+                        @intFromEnum(lexical.callable_inst orelse unreachable),
                         @intFromEnum(capture_context_callable_inst),
                     },
                 );
@@ -1093,6 +1118,9 @@ pub fn resolveCaptureCallableValue(
             break :blk resolveSpecializedParamCallableValue(result, specialized_param, &.{});
         },
         .lexical_binding => |lexical| blk: {
+            if (lexical.callable_value) |callable_value| {
+                break :blk callable_value;
+            }
             const resolved_lexical_thread = try resolveLexicalBindingThread(
                 driver,
                 result,
@@ -1121,15 +1149,15 @@ pub fn resolveCaptureCallableValue(
                 if (!pattern_mono.isNone()) {
                     if (result.context_mono.monotype_store.getMonotype(pattern_mono.idx) == .func) {
                         const current_template =
-                            result.getCallableTemplate(result.getCallableInst(lexical.callable_inst).template).*;
+                            result.getCallableTemplate(result.getCallableInst(lexical.callable_inst orelse unreachable).template).*;
                         std.debug.panic(
                             "Lambdasolved invariant violated: lexical function capture pattern {d} in module {d} under lexical callable_inst {d} had no callable value while seeding closure callable_inst {d}; callable_param_specs={d} template_expr={d} template_arg_patterns={any}",
                             .{
                                 @intFromEnum(lexical.pattern_idx),
                                 lexical.module_idx,
-                                @intFromEnum(lexical.callable_inst),
+                                @intFromEnum(lexical.callable_inst orelse unreachable),
                                 @intFromEnum(capture_context_callable_inst),
-                                result.getCallableParamSpecEntries(result.getCallableInst(lexical.callable_inst).callable_param_specs).len,
+                                result.getCallableParamSpecEntries(result.getCallableInst(lexical.callable_inst orelse unreachable).callable_param_specs).len,
                                 @intFromEnum(current_template.cir_expr),
                                 driver.all_module_envs[current_template.module_idx].store.slicePatterns(current_template.arg_patterns),
                             },
@@ -2327,6 +2355,7 @@ fn appendCallableInstBoundaryValueBindings(
                 .callable_inst = callable_inst_id,
                 .module_idx = template.module_idx,
                 .pattern_idx = binding_pattern,
+                .callable_value = .{ .direct = callable_inst_id },
             } },
         }),
         .anonymous => {},
@@ -4066,6 +4095,10 @@ fn resolveBoundBindingCallableValueForThread(
     } else if (thread.lookupValueBinding(module_idx, pattern_idx)) |source| {
         var visiting: std.AutoHashMapUnmanaged(ContextExprKey, void) = .empty;
         defer visiting.deinit(driver.allocator);
+        switch (source) {
+            .lexical_binding => |lexical| if (lexical.callable_value) |callable_value| return callable_value,
+            .bound_expr, .specialized_param => {},
+        }
         const context_callable_inst = thread.callableInst() orelse return switch (source) {
             .bound_expr => |bound_expr| resolveExprRefCallableValue(driver, visit_memo, result, bound_expr.expr_ref, &visiting) catch unreachable,
             .specialized_param => |specialized_param| resolveSpecializedParamCallableValue(result, specialized_param, &.{}),
@@ -4076,7 +4109,7 @@ fn resolveBoundBindingCallableValueForThread(
                 if (specialized_param.callable_inst == context_callable_inst)
                     return resolveSpecializedParamCallableValue(result, specialized_param, &.{}),
             .lexical_binding => |lexical|
-                if (lexical.callable_inst == context_callable_inst and lexical.module_idx == module_idx and lexical.pattern_idx == pattern_idx)
+                if (lexical.callable_inst != null and lexical.callable_inst.? == context_callable_inst and lexical.module_idx == module_idx and lexical.pattern_idx == pattern_idx)
                     return null,
             .bound_expr => {},
         }
@@ -4359,6 +4392,18 @@ pub fn resolveProjectedExprCallableValue(
                         module_idx,
                         field.value,
                         rest,
+                        visiting,
+                    );
+                }
+                if (record_expr.ext) |ext_expr_idx| {
+                    return resolveProjectedExprCallableValue(
+                        driver,
+                        visit_memo,
+                        result,
+                        source_context,
+                        module_idx,
+                        ext_expr_idx,
+                        projections,
                         visiting,
                     );
                 }
@@ -4917,6 +4962,18 @@ fn propagateDemandedValueMonotypeToExprRefProjections(
                             monotype_module_idx,
                         );
                     }
+                }
+                if (record_expr.ext) |ext_expr_idx| {
+                    return propagateDemandedValueMonotypeToExprRefProjections(
+                        driver,
+                        result,
+                        source_context,
+                        module_idx,
+                        ext_expr_idx,
+                        projections,
+                        monotype,
+                        monotype_module_idx,
+                    );
                 }
                 std.debug.panic(
                     "Lambdasolved invariant violated: field projection demand for expr {d} in module {d} could not find field {d}",
@@ -7166,7 +7223,7 @@ fn recordCallResultCallableValueFromCallee(
                 worker.result_worker,
                 worker.callee_callable_inst_id_worker,
             );
-            const callable_def = worker.result_worker.getCallableDefForInst(worker.callee_callable_inst_id_worker);
+            const callable_def = worker.result_worker.getCallableDefForInst(worker.callee_callable_inst_id_worker).*;
             if (worker.result_worker.getExprCallableValue(
                 callable_def.body_expr.source_context,
                 callable_def.body_expr.module_idx,
