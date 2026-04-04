@@ -408,7 +408,6 @@ pub const Result = struct {
         }
         return template_id;
     }
-
 };
 
 pub fn run(
@@ -434,6 +433,27 @@ pub fn run(
                 def.pattern,
                 &.{
                     .{ .external_def = externalDefTemplateSource(resolved_module_idx, @intCast(@intFromEnum(def_idx))) },
+                    .{ .local_pattern = localPatternTemplateSource(resolved_module_idx, def.pattern) },
+                },
+            );
+        }
+
+        for (module_env.method_idents.entries.items) |entry| {
+            const method_node_idx = module_env.getExposedNodeIndexById(entry.value) orelse continue;
+            if (!module_env.store.isDefNode(method_node_idx)) continue;
+
+            const def_idx: CIR.Def.Idx = @enumFromInt(method_node_idx);
+            const def = module_env.store.getDef(def_idx);
+            _ = try result.preRegisterCallableTemplateForDefExpr(
+                allocator,
+                all_module_envs,
+                .root_scope,
+                resolved_module_idx,
+                def.expr,
+                ModuleEnv.varFrom(def.pattern),
+                def.pattern,
+                &.{
+                    .{ .external_def = externalDefTemplateSource(resolved_module_idx, method_node_idx) },
                     .{ .local_pattern = localPatternTemplateSource(resolved_module_idx, def.pattern) },
                 },
             );

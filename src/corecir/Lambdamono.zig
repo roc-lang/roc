@@ -384,9 +384,36 @@ pub fn requireProgramExprSemanticShape(
         .e_call => {
             if (result.getExprCallSite(source_context, module_idx, expr_idx) == null) {
                 if (std.debug.runtime_safety) {
+                    const call_expr = expr.e_call;
+                    const callee_expr = driver.all_module_envs[module_idx].store.getExpr(call_expr.func);
+                    const call_origin = result.getExprOriginExpr(source_context, module_idx, expr_idx);
+                    const callee_origin = result.getExprOriginExpr(source_context, module_idx, call_expr.func);
+                    const callee_lookup = result.getExprLookupResolution(source_context, module_idx, call_expr.func);
+                    const callee_template = result.getExprTemplateId(source_context, module_idx, call_expr.func);
+                    const callee_callable = result.getExprCallableValue(source_context, module_idx, call_expr.func);
+                    const callee_intro = result.getExprIntroCallableInst(source_context, module_idx, call_expr.func);
+                    const source_context_raw: u32 = switch (source_context) {
+                        .root_expr => |root| @intFromEnum(root.expr_idx),
+                        .callable_inst => |callable_inst| @intFromEnum(@as(CallableInstId, @enumFromInt(@intFromEnum(callable_inst)))),
+                        .template_expr => |template| @intFromEnum(template.expr_idx),
+                        .provenance_expr => |provenance| @intFromEnum(provenance.expr_idx),
+                    };
                     std.debug.panic(
-                        "Lambdamono invariant violated: call expr ctx={s} module={d} expr={d} reached assembly without call-site semantics",
-                        .{ @tagName(source_context), module_idx, @intFromEnum(expr_idx) },
+                        "Lambdamono invariant violated: call expr ctx={s} ctx_raw={d} module={d} expr={d} call_origin={?any} callee_expr={d} callee_tag={s} callee_origin={?any} callee_lookup={?any} callee_template={?d} callee_callable={?any} callee_intro={?d} reached assembly without call-site semantics",
+                        .{
+                            @tagName(source_context),
+                            source_context_raw,
+                            module_idx,
+                            @intFromEnum(expr_idx),
+                            call_origin,
+                            @intFromEnum(call_expr.func),
+                            @tagName(callee_expr),
+                            callee_origin,
+                            callee_lookup,
+                            if (callee_template) |template_id| @intFromEnum(template_id) else null,
+                            callee_callable,
+                            if (callee_intro) |callable_inst_id| @intFromEnum(callable_inst_id) else null,
+                        },
                     );
                 }
                 unreachable;
