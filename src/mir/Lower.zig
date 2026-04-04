@@ -6251,6 +6251,111 @@ fn lowerPatternMatchLocalInto(
     };
 }
 
+fn patternIsIrrefutableForMonotype(
+    self: *Self,
+    module_env: *const ModuleEnv,
+    pattern_idx: CIR.Pattern.Idx,
+    source_mono: Monotype.Idx,
+) bool {
+    return switch (module_env.store.getPattern(pattern_idx)) {
+        .assign, .underscore => true,
+        .as => |as_pattern| self.patternIsIrrefutableForMonotype(module_env, as_pattern.pattern, source_mono),
+        .nominal => |nom| self.patternIsIrrefutableForMonotype(module_env, nom.backing_pattern, source_mono),
+        .nominal_external => |nom| self.patternIsIrrefutableForMonotype(module_env, nom.backing_pattern, source_mono),
+        .num_literal,
+        .str_literal,
+        .dec_literal,
+        .small_dec_literal,
+        .frac_f32_literal,
+        .frac_f64_literal,
+        .runtime_error,
+        => false,
+        .record_destructure => |record_pat| switch (self.store.monotype_store.getMonotype(source_mono)) {
+            .record => |record_mono| blk: {
+                const mono_fields = self.store.monotype_store.getFields(record_mono.fields);
+                for (module_env.store.sliceRecordDestructs(record_pat.destructs)) |destruct_idx| {
+                    const destruct = module_env.store.getRecordDestruct(destruct_idx);
+                    const field_idx = self.recordFieldIndexByName(destruct.label, mono_fields);
+                    if (!self.patternIsIrrefutableForMonotype(
+                        module_env,
+                        destruct.kind.toPatternIdx(),
+                        mono_fields[field_idx].type_idx,
+                    )) break :blk false;
+                }
+                break :blk true;
+            },
+            .unit => blk: {
+                for (module_env.store.sliceRecordDestructs(record_pat.destructs)) |destruct_idx| {
+                    const destruct = module_env.store.getRecordDestruct(destruct_idx);
+                    if (!self.patternIsIrrefutableForMonotype(
+                        module_env,
+                        destruct.kind.toPatternIdx(),
+                        self.store.monotype_store.unit_idx,
+                    )) break :blk false;
+                }
+                break :blk true;
+            },
+            else => false,
+        },
+        .tuple => |tuple_pat| switch (self.store.monotype_store.getMonotype(source_mono)) {
+            .tuple => |tuple_mono| blk: {
+                const elem_patterns = module_env.store.slicePatterns(tuple_pat.patterns);
+                const elem_monos = self.store.monotype_store.getIdxSpan(tuple_mono.elems);
+                if (elem_patterns.len != elem_monos.len) break :blk false;
+                for (elem_patterns, elem_monos) |elem_pattern_idx, elem_mono| {
+                    if (!self.patternIsIrrefutableForMonotype(module_env, elem_pattern_idx, elem_mono)) break :blk false;
+                }
+                break :blk true;
+            },
+            else => false,
+        },
+        .applied_tag => |tag_pat| switch (self.store.monotype_store.getMonotype(source_mono)) {
+            .tag_union => |tag_union_mono| blk: {
+                const tags = self.store.monotype_store.getTags(tag_union_mono.tags);
+                if (tags.len != 1) break :blk false;
+                if (!self.identsTagNameEquivalent(tags[0].name.ident, tag_pat.name)) break :blk false;
+                const payload_patterns = module_env.store.slicePatterns(tag_pat.args);
+                const payload_monos = self.store.monotype_store.getIdxSpan(tags[0].payloads);
+                if (payload_patterns.len != payload_monos.len) break :blk false;
+                for (payload_patterns, payload_monos) |payload_pattern_idx, payload_mono| {
+                    if (!self.patternIsIrrefutableForMonotype(module_env, payload_pattern_idx, payload_mono)) break :blk false;
+                }
+                break :blk true;
+            },
+            else => false,
+        },
+        .list => |list_pat| blk: {
+            const elem_patterns = module_env.store.slicePatterns(list_pat.patterns);
+            const prefix_len: usize = if (list_pat.rest_info) |rest| @intCast(rest.index) else elem_patterns.len;
+            if (prefix_len != 0 or elem_patterns.len != prefix_len) break :blk false;
+            if (list_pat.rest_info) |rest| {
+                if (rest.pattern) |rest_pattern_idx| {
+                    break :blk self.patternIsIrrefutableForMonotype(module_env, rest_pattern_idx, source_mono);
+                }
+            }
+            break :blk true;
+        },
+    };
+}
+
+fn matchBranchIsIrrefutable(
+    self: *Self,
+    module_env: *const ModuleEnv,
+    cir_branch: CIR.Expr.Match.Branch,
+    cond_mono: Monotype.Idx,
+) bool {
+    if (cir_branch.guard != null) return false;
+    const branch_pattern_indices = module_env.store.sliceMatchBranchPatterns(cir_branch.patterns);
+    if (branch_pattern_indices.len == 0) return true;
+    for (branch_pattern_indices) |branch_pattern_idx| {
+        const branch_pattern = module_env.store.getMatchBranchPattern(branch_pattern_idx);
+        if (self.patternIsIrrefutableForMonotype(module_env, branch_pattern.pattern, cond_mono)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 fn lowerBindingLocalInto(
     self: *Self,
     session: LowerSession,
@@ -8103,6 +8208,13 @@ fn lowerMatchBranchChainInto(
                 );
             };
         }
+    }
+
+    if (self.matchBranchIsIrrefutable(module_env, cir_branch, cond_mono)) {
+        return .{
+            .entry = branch_entry,
+            .reaches_result_join = branch_reaches_result_join,
+        };
     }
 
     return .{

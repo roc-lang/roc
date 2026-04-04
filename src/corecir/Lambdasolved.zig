@@ -7520,6 +7520,14 @@ fn scanCirExprChildren(
                 module_idx,
                 stmts,
             );
+            block_thread = try prebindBlockRecursiveCallableBindings(
+                driver,
+                visit_memo,
+                result,
+                block_thread,
+                module_idx,
+                stmts,
+            );
             for (stmts) |stmt_idx| {
                 block_thread = try scanStmt(driver, visit_memo, result, block_thread, module_idx, stmt_idx, resolve_direct_calls);
             }
