@@ -18,6 +18,19 @@ const ModuleEnv = can.ModuleEnv;
 /// callable semantics.
 pub const CallableInstId = Lambdasolved.CallableInstId;
 
+pub const CallableInstIdSpan = extern struct {
+    start: u32,
+    len: u16,
+
+    pub fn empty() CallableInstIdSpan {
+        return .{ .start = 0, .len = 0 };
+    }
+
+    pub fn isEmpty(self: CallableInstIdSpan) bool {
+        return self.len == 0;
+    }
+};
+
 pub const CallableInst = struct {
     template: Lambdasolved.CallableTemplateId,
     subst: ContextMono.TypeSubstId,
@@ -27,6 +40,7 @@ pub const CallableInst = struct {
     callable_def: CallableDefId,
     runtime_value: RuntimeValue,
     callable_param_specs: CallableParamSpecSpan = .empty(),
+    recursive_group: CallableInstIdSpan = .empty(),
 };
 
 pub const RuntimeValue = union(enum) {

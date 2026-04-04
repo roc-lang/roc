@@ -51,13 +51,6 @@ pub const ExprRef = Lambdamono.ExprRef;
 const DispatchExprTarget = DispatchSolved.DispatchExprTarget;
 const DispatchIntrinsic = Lambdamono.DispatchIntrinsic;
 
-const MaterializeCallableValueFailure = enum {
-    non_function_monotype,
-    requires_owner_callable_inst,
-    nested_callable_value_shape,
-    requires_callable_param_specs,
-};
-
 pub const CallResultCallableInstKey = struct {
     context_expr: ContextExprKey,
     callee_callable_inst_raw: u32,
@@ -464,21 +457,27 @@ fn scanDemandedValueDefExpr(
     );
 }
 
-fn scanDemandedValueDefExprInSourceContext(
+fn scanDemandedValueDefExprForExprRef(
     driver: anytype,
     visit_memo: *VisitMemo,
     result: anytype,
-    source_context: SourceContext,
-    module_idx: u32,
-    expr_idx: CIR.Expr.Idx,
+    thread: ?SemanticThread,
+    expr_ref: ExprRef,
 ) std.mem.Allocator.Error!void {
+    const demand_thread = if (thread) |current_thread|
+        if (sourceContextsEqual(current_thread.requireSourceContext(), expr_ref.source_context))
+            current_thread
+        else
+            try threadForSourceContext(driver, result, expr_ref.source_context)
+    else
+        try threadForSourceContext(driver, result, expr_ref.source_context);
     try scanDemandedValueDefExpr(
         driver,
         visit_memo,
         result,
-        SemanticThread.trackedThread(source_context),
-        module_idx,
-        expr_idx,
+        demand_thread,
+        expr_ref.module_idx,
+        expr_ref.expr_idx,
     );
 }
 
@@ -693,13 +692,12 @@ fn scanClosureCaptureSources(
             break :blk source;
         };
         switch (capture_source) {
-            .bound_expr => |bound_expr| try scanDemandedValueDefExprInSourceContext(
+            .bound_expr => |bound_expr| try scanDemandedValueDefExprForExprRef(
                 driver,
                 visit_memo,
                 result,
-                bound_expr.expr_ref.source_context,
-                bound_expr.expr_ref.module_idx,
-                bound_expr.expr_ref.expr_idx,
+                thread,
+                bound_expr.expr_ref,
             ),
             .specialized_param, .lexical_binding => {},
         }
@@ -714,14 +712,16 @@ fn materializeTemplateExprCallableValueForThread(
     module_idx: u32,
     expr_idx: CIR.Expr.Idx,
 ) std.mem.Allocator.Error!void {
-    if (thread.callableInst() != null) return;
     if (readExprCallableValue(result, thread.requireSourceContext(), module_idx, expr_idx) != null) return;
     const template_id = result.getExprTemplateId(thread.requireSourceContext(), module_idx, expr_idx) orelse return;
-    const fn_monotype = cm.resolvedIfFunctionMonotype(
+    const template = result.getCallableTemplate(template_id);
+    const fn_monotype = try resolveTemplateFnMonotypeForThread(
+        driver,
         result,
-        try cm.resolveExprMonotypeResolved(driver, result, thread, module_idx, expr_idx) orelse return,
+        thread,
+        template_id,
     ) orelse return;
-    _ = try materializeExprCallableValueWithKnownFnMonotype(
+    const callable_inst_id = try introduceExprCallableValueWithKnownFnMonotype(
         driver,
         visit_memo,
         result,
@@ -732,6 +732,54 @@ fn materializeTemplateExprCallableValueForThread(
         template_id,
         fn_monotype,
     );
+    if (template.binding == .anonymous) {
+        const introduced_callable_inst_id = callable_inst_id orelse return;
+        try ensureCallableValueVariantsRealizedFromThread(
+            driver,
+            visit_memo,
+            result,
+            thread,
+            .{ .direct = introduced_callable_inst_id },
+        );
+    }
+}
+
+fn resolveTemplateFnMonotypeForThread(
+    driver: anytype,
+    result: anytype,
+    thread: SemanticThread,
+    template_id: CallableTemplateId,
+) std.mem.Allocator.Error!?ResolvedMonotype {
+    const template = result.getCallableTemplate(template_id);
+    const source_context = thread.requireSourceContext();
+    const types_store = &driver.all_module_envs[template.module_idx].types;
+    if (template.binding == .pattern) {
+        const binding_monotype = try cm.monotypeFromTypeVarInSourceContext(
+            driver,
+            result,
+            source_context,
+            template.module_idx,
+            types_store,
+            ModuleEnv.varFrom(template.binding.pattern),
+        );
+        if (!binding_monotype.isNone()) {
+            const resolved = cm.resolvedMonotype(binding_monotype, template.module_idx);
+            if (cm.resolvedIfFunctionMonotype(result, resolved)) |fn_monotype| {
+                return fn_monotype;
+            }
+        }
+    }
+
+    const root_monotype = try cm.monotypeFromTypeVarInSourceContext(
+        driver,
+        result,
+        source_context,
+        template.module_idx,
+        types_store,
+        template.type_root,
+    );
+    if (root_monotype.isNone()) return null;
+    return cm.resolvedIfFunctionMonotype(result, cm.resolvedMonotype(root_monotype, template.module_idx));
 }
 
 fn collectClosureCaptureValueBindings(
@@ -780,13 +828,12 @@ fn collectClosureCaptureValueBindings(
         };
 
         switch (capture_source) {
-            .bound_expr => |bound_expr| try scanDemandedValueDefExprInSourceContext(
+            .bound_expr => |bound_expr| try scanDemandedValueDefExprForExprRef(
                 driver,
                 visit_memo,
                 result,
-                bound_expr.expr_ref.source_context,
-                bound_expr.expr_ref.module_idx,
-                bound_expr.expr_ref.expr_idx,
+                thread,
+                bound_expr.expr_ref,
             ),
             .specialized_param, .lexical_binding => {},
         }
@@ -810,11 +857,12 @@ fn ensureCallableInstCaptureBindingsFromThread(
     if (template.kind != .closure) return;
     if (result.lambdasolved.getCallableInstCaptureBindings(callable_inst_id).len != 0) return;
 
-    const closure_expr = switch (driver.all_module_envs[template.module_idx].store.getExpr(template.runtime_expr)) {
+    const module_env = driver.all_module_envs[template.module_idx];
+    const closure_expr = switch (module_env.store.getExpr(template.runtime_expr)) {
         .e_closure => |closure| closure,
         else => unreachable,
     };
-    if (driver.all_module_envs[template.module_idx].store.sliceCaptures(closure_expr.captures).len == 0) return;
+    if (module_env.store.sliceCaptures(closure_expr.captures).len == 0) return;
 
     var capture_bindings = std.ArrayListUnmanaged(ValueLexicalBinding).empty;
     defer capture_bindings.deinit(driver.allocator);
@@ -829,6 +877,14 @@ fn ensureCallableInstCaptureBindingsFromThread(
         &capture_bindings,
     );
     if (capture_bindings.items.len == 0) {
+        if (closureHasOnlySelfRecursiveCaptures(module_env, template, closure_expr)) {
+            try result.lambdasolved.recordCallableInstCaptureBindings(
+                driver.allocator,
+                callable_inst_id,
+                &.{},
+            );
+            return;
+        }
         if (std.debug.runtime_safety) {
             std.debug.panic(
                 "Lambdasolved invariant violated: closure callable inst {d} template expr {d} in module {d} had captures but no enclosing-thread capture bindings were recorded",
@@ -848,6 +904,24 @@ fn ensureCallableInstCaptureBindingsFromThread(
     );
 }
 
+fn closureHasOnlySelfRecursiveCaptures(
+    module_env: *const ModuleEnv,
+    template: CallableTemplate,
+    closure_expr: CIR.Expr.Closure,
+) bool {
+    const binding_pattern = switch (template.binding) {
+        .pattern => |pattern_idx| pattern_idx,
+        .anonymous => return false,
+    };
+    const captures = module_env.store.sliceCaptures(closure_expr.captures);
+    if (captures.len == 0) return false;
+    for (captures) |capture_idx| {
+        const capture = module_env.store.getCapture(capture_idx);
+        if (capture.pattern_idx != binding_pattern) return false;
+    }
+    return true;
+}
+
 pub fn findDefByPattern(module_env: *const ModuleEnv, pattern_idx: CIR.Pattern.Idx) ?CIR.Def.Idx {
     const defs = module_env.store.sliceDefs(module_env.all_defs);
     for (defs) |def_idx| {
@@ -856,54 +930,17 @@ pub fn findDefByPattern(module_env: *const ModuleEnv, pattern_idx: CIR.Pattern.I
     return null;
 }
 
-fn callableInstCaptureGraphReaches(
-    driver: anytype,
-    result: anytype,
-    from_callable_inst_id: CallableInstId,
-    target_callable_inst_id: CallableInstId,
-    visited: *std.AutoHashMapUnmanaged(u32, void),
-) std.mem.Allocator.Error!bool {
-    if (from_callable_inst_id == target_callable_inst_id) return true;
-
-    const from_key = @intFromEnum(from_callable_inst_id);
-    const entry = try visited.getOrPut(driver.allocator, from_key);
-    if (entry.found_existing) return false;
-
-    const callable_def = result.getCallableDefForInst(from_callable_inst_id);
-    for (result.getCaptureFields(callable_def.captures)) |capture_field| {
-        if (capture_field.callable_value) |callable_value| {
-            for (result.getCallableValueVariants(callable_value)) |capture_callable_inst_id| {
-                if (try callableInstCaptureGraphReaches(
-                    driver,
-                    result,
-                    capture_callable_inst_id,
-                    target_callable_inst_id,
-                    visited,
-                )) {
-                    return true;
-                }
-            }
-        }
-    }
-
-    return false;
-}
-
-fn callableInstSharesRecursiveEnvironment(
-    driver: anytype,
+fn callableInstsShareRecursiveGroup(
     result: anytype,
     callable_inst_id: CallableInstId,
     capture_callable_inst_id: CallableInstId,
-) std.mem.Allocator.Error!bool {
-    var visited: std.AutoHashMapUnmanaged(u32, void) = .empty;
-    defer visited.deinit(driver.allocator);
-    return callableInstCaptureGraphReaches(
-        driver,
-        result,
-        capture_callable_inst_id,
-        callable_inst_id,
-        &visited,
-    );
+) bool {
+    const recursive_group = result.getCallableInst(callable_inst_id).recursive_group;
+    if (recursive_group.isEmpty()) return false;
+    for (result.lambdasolved.getCallableInstGroupEntries(recursive_group)) |group_member| {
+        if (group_member == capture_callable_inst_id) return true;
+    }
+    return false;
 }
 
 pub fn closureCaptureAnalysisCallableInst(
@@ -983,13 +1020,22 @@ pub fn captureValueSourceForClosurePattern(
         return null;
     }
     if (thread.lookupValueBinding(module_idx, pattern_idx)) |source| {
-        if (source == .lexical_binding) {
-            if (thread.lookupCallableBinding(module_idx, pattern_idx)) |callable_value| {
-                var lexical = source.lexical_binding;
-                lexical.callable_value = callable_value;
-                if (lexical.callable_inst == null) lexical.callable_inst = thread.callableInst();
-                return .{ .lexical_binding = lexical };
-            }
+        if (thread.lookupCallableBinding(module_idx, pattern_idx)) |callable_value| {
+            const lexical_binding: @FieldType(CaptureValueSource, "lexical_binding") = switch (source) {
+                .lexical_binding => |lexical| blk: {
+                    var updated = lexical;
+                    updated.callable_value = callable_value;
+                    if (updated.callable_inst == null) updated.callable_inst = thread.callableInst();
+                    break :blk updated;
+                },
+                .bound_expr, .specialized_param => .{
+                    .callable_inst = thread.callableInst(),
+                    .module_idx = module_idx,
+                    .pattern_idx = pattern_idx,
+                    .callable_value = callable_value,
+                },
+            };
+            return .{ .lexical_binding = lexical_binding };
         }
         return source;
     }
@@ -1160,16 +1206,13 @@ pub fn resolveCaptureCallableValue(
                     materialization_expr_ref.expr_idx,
                 );
                 if (maybe_template_id) |template_id| {
-                    const fn_monotype = cm.resolvedIfFunctionMonotype(result,
-                        try cm.resolveExprMonotypeResolved(
-                            driver,
-                            result,
-                            SemanticThread.trackedThread(materialization_expr_ref.source_context),
-                            materialization_expr_ref.module_idx,
-                            materialization_expr_ref.expr_idx,
-                        ) orelse break :blk null,
+                    const fn_monotype = try resolveTemplateFnMonotypeForThread(
+                        driver,
+                        result,
+                        SemanticThread.trackedThread(materialization_expr_ref.source_context),
+                        template_id,
                     ) orelse break :blk null;
-                    _ = try materializeExprCallableValueWithKnownFnMonotype(
+                    _ = try introduceExprCallableValueWithKnownFnMonotype(
                         driver,
                         visit_memo,
                         result,
@@ -1381,8 +1424,7 @@ pub fn finalizeCallableDefForCallableInst(
                         );
                         switch (capture_template.binding) {
                             .pattern => |binding_pattern| if (binding_pattern == capture.pattern_idx and
-                                try callableInstSharesRecursiveEnvironment(
-                                    driver,
+                                callableInstsShareRecursiveGroup(
                                     result,
                                     closure_callable_inst_id,
                                     capture_callable_inst_id,
@@ -1403,11 +1445,25 @@ pub fn finalizeCallableDefForCallableInst(
                     .{ @intFromEnum(capture.pattern_idx), @intFromEnum(closure_callable_inst_id) },
                 );
                 switch (callable_value) {
-                    .direct => |capture_callable_inst_id| switch (result.getCallableInst(capture_callable_inst_id).runtime_value) {
-                        .direct_lambda => break :blk .callable_only,
-                        .closure => |closure_value| break :blk .{ .runtime_field = .{
-                            .field_monotype = closure_value.capture_tuple_monotype,
-                        } },
+                    .direct => |capture_callable_inst_id| {
+                        if (!callableInstsShareRecursiveGroup(
+                            result,
+                            closure_callable_inst_id,
+                            capture_callable_inst_id,
+                        )) {
+                            try ensureCallableInstRealized(
+                                driver,
+                                visit_memo,
+                                result,
+                                capture_callable_inst_id,
+                            );
+                        }
+                        switch (result.getCallableInst(capture_callable_inst_id).runtime_value) {
+                            .direct_lambda => break :blk .callable_only,
+                            .closure => |closure_value| break :blk .{ .runtime_field = .{
+                                .field_monotype = closure_value.capture_tuple_monotype,
+                            } },
+                        }
                     },
                     .packed_fn => |packed_fn| break :blk .{ .runtime_field = .{
                         .field_monotype = packed_fn.runtime_monotype,
@@ -1986,6 +2042,7 @@ pub fn specializeDirectCallExactCallable(
     const arg_exprs = driver.all_module_envs[module_idx].store.sliceExpr(call_expr.args);
     const exact_desired_fn_monotype = (try resolveDemandedDirectCallFnMonotype(
         driver,
+        visit_memo,
         result,
         thread,
         module_idx,
@@ -2173,6 +2230,7 @@ pub fn assignCallableArgCallableInstsFromCallMonotype(
 
     const call_fn_monotype = try resolveDemandedDirectCallFnMonotype(
         driver,
+        visit_memo,
         result,
         thread,
         module_idx,
@@ -2602,7 +2660,8 @@ fn realizeCallableInst(
         };
         const stored_capture_bindings = result.lambdasolved.getCallableInstCaptureBindings(callable_inst_id);
         if (stored_capture_bindings.len == 0 and
-            driver.all_module_envs[template.module_idx].store.sliceCaptures(closure_expr.captures).len != 0)
+            module_env.store.sliceCaptures(closure_expr.captures).len != 0 and
+            !closureHasOnlySelfRecursiveCaptures(module_env, template, closure_expr))
         {
             if (std.debug.runtime_safety) {
                 std.debug.panic(
@@ -2692,6 +2751,16 @@ fn realizeCallableInst(
             );
         },
         .top_level_def => unreachable,
+    }
+
+    if (result.getExprCallableValue(callable_source_context, template.module_idx, template.body_expr)) |body_callable_value| {
+        try ensureCallableValueVariantsRealizedFromThread(
+            driver,
+            visit_memo,
+            result,
+            thread,
+            body_callable_value,
+        );
     }
 
     try setExprDirectCallable(driver,
@@ -2933,24 +3002,6 @@ fn ensureCallableInstRecord(
             template.module_idx,
         );
     const canonical_fn_monotype_module_idx = template.module_idx;
-    if (std.debug.runtime_safety) {
-        std.debug.print(
-            "ensureCallableInstRecord: template={d} kind={s} module={d} cir_expr={d} runtime_expr={d} type_root={d} fn_mono={d}@{d} fn_kind={any} binding={any} owner={any}\n",
-            .{
-                @intFromEnum(template_id),
-                @tagName(template.kind),
-                template.module_idx,
-                @intFromEnum(template.cir_expr),
-                @intFromEnum(template.runtime_expr),
-                @intFromEnum(template.type_root),
-                @intFromEnum(canonical_fn_monotype),
-                canonical_fn_monotype_module_idx,
-                result.context_mono.monotype_store.getMonotype(canonical_fn_monotype),
-                template.binding,
-                template.owner,
-            },
-        );
-    }
     const subst_id = if (driver.all_module_envs[template.module_idx].types.needsInstantiation(template.type_root))
         try cm.ensureTypeSubst(
             driver,
@@ -4504,17 +4555,13 @@ pub fn resolveProjectedExprCallableValue(
                 current_thread
             else
                 try threadForSourceContext(driver, result, source_context);
-            const fn_monotype = cm.resolvedIfFunctionMonotype(
+            const fn_monotype = try resolveTemplateFnMonotypeForThread(
+                driver,
                 result,
-                try cm.resolveExprMonotypeResolved(
-                    driver,
-                    result,
-                    demand_thread,
-                    module_idx,
-                    expr_idx,
-                ) orelse return null,
+                demand_thread,
+                template_id,
             ) orelse return null;
-            _ = try materializeExprCallableValueWithKnownFnMonotype(
+            _ = try introduceExprCallableValueWithKnownFnMonotype(
                 driver,
                 visit_memo,
                 result,
@@ -4696,15 +4743,14 @@ pub fn copyExprCallableValueFromRef(
     var resolved_callable_value = try resolveExprRefCallableValue(driver, visit_memo, result, thread, source, visiting);
     if (resolved_callable_value == null and source.projections.isEmpty()) {
         if (result.getExprTemplateId(source.source_context, source.module_idx, source.expr_idx)) |template_id| {
-            const target_fn_monotype = (try cm.resolveExprMonotypeResolved(
+            const source_fn_monotype = try resolveTemplateFnMonotypeForThread(
                 driver,
                 result,
-                SemanticThread.trackedThread(target_source_context),
-                target_module_idx,
-                target_expr_idx,
-            )) orelse return;
+                SemanticThread.trackedThread(source.source_context),
+                template_id,
+            ) orelse return;
             {
-                const materialize_failure = try materializeExprCallableValueWithKnownFnMonotype(
+                const materialize_callable_inst = try introduceExprCallableValueWithKnownFnMonotype(
                     driver,
                     visit_memo,
                     result,
@@ -4713,7 +4759,7 @@ pub fn copyExprCallableValueFromRef(
                     source.module_idx,
                     source.expr_idx,
                     template_id,
-                    target_fn_monotype,
+                    source_fn_monotype,
                 );
                 resolved_callable_value = try resolveExprRefCallableValue(driver, visit_memo, result, thread, source, visiting);
                 if (resolved_callable_value == null and std.debug.runtime_safety) {
@@ -4726,9 +4772,9 @@ pub fn copyExprCallableValueFromRef(
                             @intFromEnum(target_expr_idx),
                             target_module_idx,
                             @tagName(target_source_context),
-                            @intFromEnum(target_fn_monotype.idx),
-                            target_fn_monotype.module_idx,
-                            if (materialize_failure) |failure| @tagName(failure) else null,
+                            @intFromEnum(source_fn_monotype.idx),
+                            source_fn_monotype.module_idx,
+                            if (materialize_callable_inst != null) "introduced" else null,
                             @intFromEnum(template_id),
                             @tagName(driver.all_module_envs[target_module_idx].store.getExpr(target_expr_idx)),
                         },
@@ -5438,7 +5484,7 @@ pub fn propagateDemandedCallableFnMonotypeToValueExpr(
     }
 
     if (result.getExprTemplateId(source_context, module_idx, expr_idx)) |template_id| {
-        _ = try materializeExprCallableValueWithKnownFnMonotype(
+        _ = try introduceExprCallableValueWithKnownFnMonotype(
             driver,
             visit_memo,
             result,
@@ -6708,6 +6754,237 @@ pub fn preRegisterBlockCallableStmtTemplates(
     }
 }
 
+fn prebindBlockCallableStmtBindings(
+    driver: anytype,
+    visit_memo: *VisitMemo,
+    result: anytype,
+    thread: SemanticThread,
+    module_idx: u32,
+    stmts: []const CIR.Statement.Idx,
+) std.mem.Allocator.Error!SemanticThread {
+    const module_env = driver.all_module_envs[module_idx];
+    var bound_thread = thread;
+    var introduced_callable_insts = std.ArrayListUnmanaged(CallableInstId).empty;
+    defer introduced_callable_insts.deinit(driver.allocator);
+
+    for (stmts) |stmt_idx| {
+        const stmt = module_env.store.getStatement(stmt_idx);
+        const pattern_idx, const expr_idx = switch (stmt) {
+            .s_decl => |decl| .{ decl.pattern, decl.expr },
+            .s_var => |var_decl| .{ var_decl.pattern_idx, var_decl.expr },
+            else => continue,
+        };
+        const source_expr_ref = exprRefAliasOrSelf(result, bound_thread.requireSourceContext(), module_idx, expr_idx);
+        var prebound_callable = false;
+        if (result.getExprTemplateId(bound_thread.requireSourceContext(), module_idx, expr_idx)) |template_id| {
+            const template = result.getCallableTemplate(template_id);
+            switch (template.binding) {
+                .pattern => |binding_pattern| if (binding_pattern == pattern_idx) {
+                    const maybe_fn_monotype = try resolveTemplateFnMonotypeForThread(
+                        driver,
+                        result,
+                        bound_thread,
+                        template_id,
+                    );
+                    if (maybe_fn_monotype) |fn_monotype| {
+                        if (try introduceExprCallableValueWithKnownFnMonotype(
+                            driver,
+                            visit_memo,
+                            result,
+                            bound_thread,
+                            bound_thread.requireSourceContext(),
+                            module_idx,
+                            expr_idx,
+                            template_id,
+                            fn_monotype,
+                        )) |callable_inst_id| {
+                            prebound_callable = true;
+                            try introduced_callable_insts.append(driver.allocator, callable_inst_id);
+                        }
+                    }
+                },
+                .anonymous => {},
+            }
+        }
+        var value_bindings: std.ArrayListUnmanaged(ValueLexicalBinding) = .empty;
+        defer value_bindings.deinit(driver.allocator);
+        try appendPatternValueBindingsFromSourceExpr(
+            driver,
+            result,
+            module_idx,
+            pattern_idx,
+            source_expr_ref,
+            &value_bindings,
+        );
+        const next_thread = try extendThreadWithValueBindings(driver, bound_thread, value_bindings.items);
+        if (prebound_callable) {
+            var callable_bindings: std.ArrayListUnmanaged(CallableLexicalBinding) = .empty;
+            defer callable_bindings.deinit(driver.allocator);
+            var visiting: std.AutoHashMapUnmanaged(ContextExprKey, void) = .empty;
+            defer visiting.deinit(driver.allocator);
+            try appendPatternCallableBindingsFromSourceExpr(
+                driver,
+                visit_memo,
+                result,
+                next_thread,
+                module_idx,
+                pattern_idx,
+                source_expr_ref,
+                &callable_bindings,
+                &visiting,
+            );
+            bound_thread = try extendThreadWithCallableBindings(driver, next_thread, callable_bindings.items);
+        } else {
+            bound_thread = next_thread;
+        }
+    }
+
+    try recordBlockCallableRecursiveGroups(
+        driver,
+        result,
+        module_idx,
+        introduced_callable_insts.items,
+    );
+
+    return bound_thread;
+}
+
+fn blockCallableBindingPattern(
+    result: anytype,
+    callable_inst_id: CallableInstId,
+) ?CIR.Pattern.Idx {
+    return switch (result.getCallableTemplate(result.getCallableInst(callable_inst_id).template).binding) {
+        .pattern => |pattern_idx| pattern_idx,
+        .anonymous => null,
+    };
+}
+
+fn blockCallableDirectlyCapturesPattern(
+    driver: anytype,
+    result: anytype,
+    module_idx: u32,
+    callable_inst_id: CallableInstId,
+    target_pattern_idx: CIR.Pattern.Idx,
+) bool {
+    const template = result.getCallableTemplate(result.getCallableInst(callable_inst_id).template);
+    if (template.module_idx != module_idx) return false;
+    const closure_expr = switch (driver.all_module_envs[module_idx].store.getExpr(template.runtime_expr)) {
+        .e_closure => |closure| closure,
+        else => return false,
+    };
+    for (driver.all_module_envs[module_idx].store.sliceCaptures(closure_expr.captures)) |capture_idx| {
+        if (driver.all_module_envs[module_idx].store.getCapture(capture_idx).pattern_idx == target_pattern_idx) {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn blockCallableReachesBlockCallable(
+    driver: anytype,
+    result: anytype,
+    module_idx: u32,
+    introduced_callable_insts: []const CallableInstId,
+    from_callable_inst_id: CallableInstId,
+    target_callable_inst_id: CallableInstId,
+    visited: *std.AutoHashMapUnmanaged(u32, void),
+) std.mem.Allocator.Error!bool {
+    if (from_callable_inst_id == target_callable_inst_id) return true;
+
+    const from_key = @intFromEnum(from_callable_inst_id);
+    const gop = try visited.getOrPut(driver.allocator, from_key);
+    if (gop.found_existing) return false;
+
+    for (introduced_callable_insts) |candidate_callable_inst_id| {
+        const candidate_pattern_idx = blockCallableBindingPattern(result, candidate_callable_inst_id) orelse continue;
+        if (!blockCallableDirectlyCapturesPattern(
+            driver,
+            result,
+            module_idx,
+            from_callable_inst_id,
+            candidate_pattern_idx,
+        )) continue;
+        if (try blockCallableReachesBlockCallable(
+            driver,
+            result,
+            module_idx,
+            introduced_callable_insts,
+            candidate_callable_inst_id,
+            target_callable_inst_id,
+            visited,
+        )) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+fn recordBlockCallableRecursiveGroups(
+    driver: anytype,
+    result: anytype,
+    module_idx: u32,
+    introduced_callable_insts: []const CallableInstId,
+) std.mem.Allocator.Error!void {
+    var grouped: std.AutoHashMapUnmanaged(u32, void) = .empty;
+    defer grouped.deinit(driver.allocator);
+
+    for (introduced_callable_insts) |callable_inst_id| {
+        if (grouped.contains(@intFromEnum(callable_inst_id))) continue;
+
+        var group = std.ArrayListUnmanaged(CallableInstId).empty;
+        defer group.deinit(driver.allocator);
+
+        const self_pattern_idx = blockCallableBindingPattern(result, callable_inst_id) orelse continue;
+        const self_recursive = blockCallableDirectlyCapturesPattern(
+            driver,
+            result,
+            module_idx,
+            callable_inst_id,
+            self_pattern_idx,
+        );
+
+        for (introduced_callable_insts) |candidate_callable_inst_id| {
+            var forward_visited: std.AutoHashMapUnmanaged(u32, void) = .empty;
+            defer forward_visited.deinit(driver.allocator);
+            if (!try blockCallableReachesBlockCallable(
+                driver,
+                result,
+                module_idx,
+                introduced_callable_insts,
+                callable_inst_id,
+                candidate_callable_inst_id,
+                &forward_visited,
+            )) continue;
+
+            var backward_visited: std.AutoHashMapUnmanaged(u32, void) = .empty;
+            defer backward_visited.deinit(driver.allocator);
+            if (!try blockCallableReachesBlockCallable(
+                driver,
+                result,
+                module_idx,
+                introduced_callable_insts,
+                candidate_callable_inst_id,
+                callable_inst_id,
+                &backward_visited,
+            )) continue;
+
+            try group.append(driver.allocator, candidate_callable_inst_id);
+        }
+
+        if (group.items.len == 1 and !self_recursive) continue;
+        if (group.items.len == 0) continue;
+
+        try result.lambdasolved.recordCallableInstRecursiveGroup(
+            driver.allocator,
+            group.items,
+        );
+        for (group.items) |group_member| {
+            try grouped.put(driver.allocator, @intFromEnum(group_member), {});
+        }
+    }
+}
+
 pub fn includeExprCallableValue(
     driver: anytype,
     visit_memo: *VisitMemo,
@@ -6734,7 +7011,30 @@ pub fn includeExprCallableValue(
     }
 }
 
-fn materializeExprCallableValueWithKnownFnMonotype(
+fn recordPackedCallableShapeForExprIfCallable(
+    driver: anytype,
+    result: anytype,
+    source_context: SourceContext,
+    module_idx: u32,
+    expr_idx: CIR.Expr.Idx,
+    packed_fn: Lambdamono.PackedFn,
+) std.mem.Allocator.Error!void {
+    if (result.getExprCallableValue(source_context, module_idx, expr_idx) == null and
+        result.getExprIntroCallableInst(source_context, module_idx, expr_idx) == null)
+    {
+        return;
+    }
+    try recordExprCallableValue(
+        driver,
+        result,
+        source_context,
+        module_idx,
+        expr_idx,
+        .{ .packed_fn = packed_fn },
+    );
+}
+
+fn introduceExprCallableValueWithKnownFnMonotype(
     driver: anytype,
     visit_memo: *VisitMemo,
     result: anytype,
@@ -6744,20 +7044,16 @@ fn materializeExprCallableValueWithKnownFnMonotype(
     expr_idx: CIR.Expr.Idx,
     template_id: CallableTemplateId,
     fn_monotype: ResolvedMonotype,
-) std.mem.Allocator.Error!?MaterializeCallableValueFailure {
+) std.mem.Allocator.Error!?CallableInstId {
     if (fn_monotype.isNone()) return null;
     if (result.context_mono.monotype_store.getMonotype(fn_monotype.idx) != .func) {
-        return .non_function_monotype;
+        return null;
     }
     if (templateRequiresConcreteOwnerCallableInst(result, template_id) and
         sourceContextCallableInstId(source_context) == null)
     {
-        return .requires_owner_callable_inst;
+        return null;
     }
-    if (try monotypeContainsNestedCallableValueShape(driver, result, fn_monotype)) {
-        return .nested_callable_value_shape;
-    }
-
     const callable_inst_id = (try ensureCallableInstRecord(
         driver,
         result,
@@ -6767,17 +7063,16 @@ fn materializeExprCallableValueWithKnownFnMonotype(
         fn_monotype.module_idx,
         &.{},
     )).id;
-    try ensureCallableInstCaptureBindingsFromThread(
-        driver,
-        visit_memo,
-        result,
-        if (thread) |current_thread| current_thread else try threadForSourceContext(driver, result, source_context),
-        callable_inst_id,
-    );
-    if (!try callableInstReadyForRealization(driver, result, callable_inst_id)) {
-        return .requires_callable_param_specs;
+    const template = result.getCallableTemplate(template_id);
+    if (template.binding == .anonymous) {
+        try ensureCallableInstCaptureBindingsFromThread(
+            driver,
+            visit_memo,
+            result,
+            if (thread) |current_thread| current_thread else try threadForSourceContext(driver, result, source_context),
+            callable_inst_id,
+        );
     }
-    try ensureCallableInstRealized(driver, visit_memo, result, callable_inst_id);
     try setExprDirectCallable(
         driver,
         result,
@@ -6786,7 +7081,28 @@ fn materializeExprCallableValueWithKnownFnMonotype(
         expr_idx,
         callable_inst_id,
     );
-    return null;
+    return callable_inst_id;
+}
+
+fn ensureCallableValueVariantsRealizedFromThread(
+    driver: anytype,
+    visit_memo: *VisitMemo,
+    result: anytype,
+    thread: SemanticThread,
+    callable_value: CallableValue,
+) std.mem.Allocator.Error!void {
+    for (result.getCallableValueVariants(callable_value)) |callable_inst_id| {
+        try ensureCallableInstCaptureBindingsFromThread(
+            driver,
+            visit_memo,
+            result,
+            thread,
+            callable_inst_id,
+        );
+        if (try callableInstReadyForRealization(driver, result, callable_inst_id)) {
+            try ensureCallableInstRealized(driver, visit_memo, result, callable_inst_id);
+        }
+    }
 }
 
 pub fn propagateLookupSourceExprCallableValue(
@@ -6820,8 +7136,11 @@ pub fn materializeLookupExprCallableValue(
 ) std.mem.Allocator.Error!void {
     const module_env = driver.all_module_envs[module_idx];
     const template = result.getCallableTemplate(template_id).*;
-    const desired_fn_monotype = cm.resolvedIfFunctionMonotype(result,
-        try cm.resolveExprMonotypeResolved(driver, result, thread, module_idx, expr_idx),
+    const desired_fn_monotype = try resolveTemplateFnMonotypeForThread(
+        driver,
+        result,
+        thread,
+        template_id,
     );
     const existing_callable_inst_id = if (module_env.store.getExpr(expr_idx) == .e_lookup_local) blk: {
         const lookup = module_env.store.getExpr(expr_idx).e_lookup_local;
@@ -6851,9 +7170,6 @@ pub fn materializeLookupExprCallableValue(
         if (templateRequiresConcreteOwnerCallableInst(result, template_id) and
             thread.callableInst() == null)
         {
-            return;
-        }
-        if (try monotypeContainsNestedCallableValueShape(driver, result, fn_monotype)) {
             return;
         }
         break :blk (try ensureCallableInstRecord(
@@ -7216,6 +7532,7 @@ fn scanCirExprChildren(
             );
             if (try resolveDemandedDirectCallFnMonotype(
                 driver,
+                visit_memo,
                 result,
                 thread,
                 module_idx,
@@ -7267,7 +7584,14 @@ fn scanCirExprChildren(
         .e_block => |block_expr| {
             const stmts = module_env.store.sliceStatements(block_expr.stmts);
             try preRegisterBlockCallableStmtTemplates(driver, result, thread, module_idx, stmts);
-            var block_thread = thread;
+            var block_thread = try prebindBlockCallableStmtBindings(
+                driver,
+                visit_memo,
+                result,
+                thread,
+                module_idx,
+                stmts,
+            );
             for (stmts) |stmt_idx| {
                 block_thread = try scanStmt(driver, visit_memo, result, block_thread, module_idx, stmt_idx, resolve_direct_calls);
             }
@@ -7496,31 +7820,6 @@ fn recordCallResultCallableValueFromCallee(
                 callable_def.body_expr.module_idx,
                 callable_def.body_expr.expr_idx,
             ) == null) {
-                if (std.debug.runtime_safety) {
-                    const body_thread = try threadForSourceContext(
-                        worker.driver_worker,
-                        worker.result_worker,
-                        callable_def.body_expr.source_context,
-                    );
-                    const body_mono = try cm.resolveExprMonotypeResolved(
-                        worker.driver_worker,
-                        worker.result_worker,
-                        body_thread,
-                        callable_def.body_expr.module_idx,
-                        callable_def.body_expr.expr_idx,
-                    );
-                    std.debug.print(
-                        "recordCallResultCallableValueFromCallee: callee={d} body_expr={d} source_ctx={s} ret={d}@{d} body_mono={any}\n",
-                        .{
-                            @intFromEnum(worker.callee_callable_inst_id_worker),
-                            @intFromEnum(callable_def.body_expr.expr_idx),
-                            @tagName(callable_def.body_expr.source_context),
-                            @intFromEnum(worker.callee_fn_ret_worker),
-                            worker.callee_fn_module_idx_worker,
-                            body_mono,
-                        },
-                    );
-                }
                 const template_id = worker.result_worker.getExprTemplateId(
                     callable_def.body_expr.source_context,
                     callable_def.body_expr.module_idx,
@@ -7532,7 +7831,7 @@ fn recordCallResultCallableValueFromCallee(
                         @intFromEnum(worker.callee_callable_inst_id_worker),
                     },
                 );
-                const materialize_failure = try materializeExprCallableValueWithKnownFnMonotype(
+                const materialize_callable_inst = try introduceExprCallableValueWithKnownFnMonotype(
                     worker.driver_worker,
                     worker.visit_memo_worker,
                     worker.result_worker,
@@ -7559,7 +7858,7 @@ fn recordCallResultCallableValueFromCallee(
                         .{
                             @intFromEnum(callable_def.body_expr.expr_idx),
                             @intFromEnum(worker.callee_callable_inst_id_worker),
-                            if (materialize_failure) |failure| @tagName(failure) else null,
+                            if (materialize_callable_inst != null) "introduced" else null,
                             @intFromEnum(template_id),
                         },
                     );
@@ -7776,22 +8075,34 @@ fn resolveDemandedFnMonotypeFromCallShape(
 
 pub fn resolveDemandedDirectCallFnMonotype(
     driver: anytype,
+    visit_memo: *VisitMemo,
     result: anytype,
     thread: SemanticThread,
     module_idx: u32,
     call_expr_idx: CIR.Expr.Idx,
     call_expr: anytype,
 ) std.mem.Allocator.Error!?cm.ResolvedMonotype {
-    _ = call_expr_idx;
-    return cm.resolvedIfFunctionMonotype(
+    if (getValueExprCallableValueForThread(driver, visit_memo, result, thread, module_idx, call_expr.func)) |callable_value| {
+        return switch (callable_value) {
+            .direct => |callable_inst_id| .{
+                .idx = result.getCallableInst(callable_inst_id).fn_monotype,
+                .module_idx = result.getCallableInst(callable_inst_id).fn_monotype_module_idx,
+            },
+            .packed_fn => |packed_fn| packed_fn.fn_monotype,
+        };
+    }
+
+    const module_env = driver.all_module_envs[module_idx];
+    return resolveDemandedFnMonotypeFromCallShape(
+        driver,
         result,
-        try cm.resolveExprMonotypeResolved(
-            driver,
-            result,
-            thread,
-            module_idx,
-            call_expr.func,
-        ),
+        thread,
+        module_idx,
+        &module_env.types,
+        ModuleEnv.varFrom(call_expr.func),
+        module_idx,
+        call_expr_idx,
+        module_env.store.sliceExpr(call_expr.args),
     );
 }
 
@@ -7809,6 +8120,7 @@ pub fn resolveDirectCallSite(
     const callee_expr = module_env.store.getExpr(callee_expr_idx);
     const desired_fn_monotype = try resolveDemandedDirectCallFnMonotype(
         driver,
+        visit_memo,
         result,
         thread,
         module_idx,
@@ -7906,6 +8218,105 @@ pub fn resolveDirectCallSite(
             &required_callable_param_specs,
         );
         if (!specs_complete) return;
+    }
+
+    if (getValueExprCallableInstForThread(driver, visit_memo, result, thread, module_idx, callee_expr_idx)) |callable_inst_id| {
+        const satisfies = try callableInstSatisfiesCallSiteRequirements(
+            driver,
+            result,
+            callable_inst_id,
+            desired_fn_monotype.?,
+            resolved_template_id,
+            required_callable_param_specs.items,
+        );
+        if (satisfies) {
+            try finalizeResolvedDirectCallCallableInst(
+                driver,
+                visit_memo,
+                result,
+                thread,
+                module_idx,
+                call_expr_idx,
+                call_expr,
+                callee_expr,
+                callable_inst_id,
+            );
+            return;
+        }
+    }
+
+    if (getValueExprCallableValueForThread(driver, visit_memo, result, thread, module_idx, callee_expr_idx)) |callable_value| {
+        var all_satisfy = true;
+        for (result.getCallableValueVariants(callable_value)) |callable_inst_id| {
+            if (!try callableInstSatisfiesCallSiteRequirements(
+                driver,
+                result,
+                callable_inst_id,
+                desired_fn_monotype,
+                resolved_template_id,
+                required_callable_param_specs.items,
+            )) {
+                all_satisfy = false;
+                break;
+            }
+        }
+
+        if (all_satisfy) {
+            var visiting: std.AutoHashMapUnmanaged(ContextExprKey, void) = .empty;
+            defer visiting.deinit(driver.allocator);
+            var variant_builder = CallableVariantBuilder.init();
+            defer variant_builder.deinit(driver.allocator);
+            var call_variant_builder = CallableVariantBuilder.init();
+            defer call_variant_builder.deinit(driver.allocator);
+            try call_variant_builder.includeCallableValue(driver, result, callable_value);
+            try recordExprCallSite(
+                driver,
+                result,
+                thread.requireSourceContext(),
+                module_idx,
+                call_expr_idx,
+                (try call_variant_builder.finishCallSite(driver, result)).?,
+            );
+            for (result.getCallableValueVariants(callable_value)) |callable_inst_id| {
+                try recordCallResultCallableValueFromCallee(
+                    driver,
+                    visit_memo,
+                    result,
+                    thread.requireSourceContext(),
+                    module_idx,
+                    call_expr_idx,
+                    callable_inst_id,
+                    &visiting,
+                    &variant_builder,
+                );
+            }
+            if (try variant_builder.finishValue(driver, result)) |call_result_value| {
+                try setExprCallableValue(driver,
+                    result,
+                    thread.requireSourceContext(),
+                    module_idx,
+                    call_expr_idx,
+                    call_result_value,
+                );
+            }
+            if (readExprCallSite(result, thread.requireSourceContext(), module_idx, call_expr_idx)) |call_site| {
+                switch (call_site) {
+                    .direct => |direct_callable_inst_id| try finalizeResolvedDirectCallCallableInst(
+                        driver,
+                        visit_memo,
+                        result,
+                        thread,
+                        module_idx,
+                        call_expr_idx,
+                        call_expr,
+                        callee_expr,
+                        direct_callable_inst_id,
+                    ),
+                    .indirect_call, .low_level => {},
+                }
+            }
+            return;
+        }
     }
 
     if (resolved_template_id) |template_id| {
@@ -8582,6 +8993,46 @@ fn realizeStructuredExprCallableSemantics(
     }
 
     if (try variant_builder.finishValue(driver, result)) |callable_value| {
+        switch (callable_value) {
+            .packed_fn => |packed_fn| switch (expr) {
+                .e_if => |if_expr| {
+                    for (module_env.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
+                        const branch = module_env.store.getIfBranch(branch_idx);
+                        try recordPackedCallableShapeForExprIfCallable(
+                            driver,
+                            result,
+                            source_context,
+                            module_idx,
+                            branch.body,
+                            packed_fn,
+                        );
+                    }
+                    try recordPackedCallableShapeForExprIfCallable(
+                        driver,
+                        result,
+                        source_context,
+                        module_idx,
+                        if_expr.final_else,
+                        packed_fn,
+                    );
+                },
+                .e_match => |match_expr| {
+                    for (module_env.store.sliceMatchBranches(match_expr.branches)) |branch_idx| {
+                        const branch = module_env.store.getMatchBranch(branch_idx);
+                        try recordPackedCallableShapeForExprIfCallable(
+                            driver,
+                            result,
+                            source_context,
+                            module_idx,
+                            branch.value,
+                            packed_fn,
+                        );
+                    }
+                },
+                else => {},
+            },
+            .direct => {},
+        }
         try setExprCallableValue(driver,
             result,
             source_context,
@@ -9672,6 +10123,11 @@ const CallableVariantGroup = struct {
     variants: Lambdamono.CallableVariantSpan,
 };
 
+const PackedFnKey = struct {
+    variant_group: Lambdamono.CallableVariantGroupId,
+    module_idx: u32,
+};
+
 pub const SolvedExprSemantics = struct {
     callable: ?Lambdamono.ExprCallableSemantics = null,
     origin: Lambdamono.ValueOrigin = .self,
@@ -9690,9 +10146,11 @@ pub const Result = struct {
     capture_binding_entries: std.ArrayListUnmanaged(ValueLexicalBinding),
     callable_inst_capture_bindings: std.ArrayListUnmanaged(ValueLexicalBindingSpan),
     capture_fields: std.ArrayListUnmanaged(Lambdamono.CaptureField),
+    callable_inst_group_entries: std.ArrayListUnmanaged(CallableInstId),
     callable_variant_groups: std.ArrayListUnmanaged(CallableVariantGroup),
     direct_callable_variant_group_ids_by_callable_inst: std.AutoHashMapUnmanaged(CallableInstId, Lambdamono.CallableVariantGroupId),
     callable_variant_entries: std.ArrayListUnmanaged(CallableInstId),
+    packed_fn_by_key: std.AutoHashMapUnmanaged(PackedFnKey, Lambdamono.PackedFn),
 
     pub fn init(allocator: std.mem.Allocator) !Result {
         _ = allocator;
@@ -9706,9 +10164,11 @@ pub const Result = struct {
             .capture_binding_entries = .empty,
             .callable_inst_capture_bindings = .empty,
             .capture_fields = .empty,
+            .callable_inst_group_entries = .empty,
             .callable_variant_groups = .empty,
             .direct_callable_variant_group_ids_by_callable_inst = .empty,
             .callable_variant_entries = .empty,
+            .packed_fn_by_key = .empty,
         };
     }
 
@@ -9722,9 +10182,11 @@ pub const Result = struct {
         self.capture_binding_entries.deinit(allocator);
         self.callable_inst_capture_bindings.deinit(allocator);
         self.capture_fields.deinit(allocator);
+        self.callable_inst_group_entries.deinit(allocator);
         self.callable_variant_groups.deinit(allocator);
         self.direct_callable_variant_group_ids_by_callable_inst.deinit(allocator);
         self.callable_variant_entries.deinit(allocator);
+        self.packed_fn_by_key.deinit(allocator);
     }
 
     pub fn getExprSemantics(
@@ -9828,10 +10290,24 @@ pub const Result = struct {
         const semantics = try self.getExprSemanticsPtr(allocator, source_context, module_idx, expr_idx);
         const owns_callable_semantics = self.getExprIntroCallableInst(source_context, module_idx, expr_idx) != null or self.getExprCallableValue(source_context, module_idx, expr_idx) != null;
         const next_callable: Lambdamono.ExprCallableSemantics = switch (callable_value) {
-            .direct => |callable_inst_id| if (self.getExprIntroCallableInst(source_context, module_idx, expr_idx) != null)
-                .{ .intro = .{ .callable_value = callable_value, .callable_inst = callable_inst_id } }
-            else
-                .{ .callable = callable_value },
+            .direct => |callable_inst_id| blk: {
+                if (semantics.callable) |existing_callable| {
+                    switch (existing_callable) {
+                        .intro => |existing_intro| switch (existing_intro.callable_value) {
+                            .packed_fn => break :blk .{ .intro = .{
+                                .callable_value = existing_intro.callable_value,
+                                .callable_inst = callable_inst_id,
+                            } },
+                            .direct => {},
+                        },
+                        .callable => {},
+                    }
+                }
+                if (self.getExprIntroCallableInst(source_context, module_idx, expr_idx) != null) {
+                    break :blk .{ .intro = .{ .callable_value = callable_value, .callable_inst = callable_inst_id } };
+                }
+                break :blk .{ .callable = callable_value };
+            },
             .packed_fn => |packed_fn| blk: {
                 if (owns_callable_semantics) {
                     switch (semantics.callable orelse break :blk .{ .callable = callable_value }) {
@@ -9993,6 +10469,56 @@ pub const Result = struct {
     pub fn getCaptureFields(self: *const Result, span: Lambdamono.CaptureFieldSpan) []const Lambdamono.CaptureField {
         if (span.len == 0) return &.{};
         return self.capture_fields.items[span.start..][0..span.len];
+    }
+
+    pub fn recordCallableInstRecursiveGroup(
+        self: *Result,
+        allocator: std.mem.Allocator,
+        callable_inst_ids: []const CallableInstId,
+    ) std.mem.Allocator.Error!void {
+        if (callable_inst_ids.len == 0) return;
+        const start: u32 = @intCast(self.callable_inst_group_entries.items.len);
+        try self.callable_inst_group_entries.appendSlice(allocator, callable_inst_ids);
+        const span: Lambdamono.CallableInstIdSpan = .{
+            .start = start,
+            .len = @intCast(callable_inst_ids.len),
+        };
+        for (callable_inst_ids) |callable_inst_id| {
+            const callable_inst = &self.callable_insts.items[@intFromEnum(callable_inst_id)];
+            if (!callable_inst.recursive_group.isEmpty()) {
+                const existing = self.getCallableInstGroupEntries(callable_inst.recursive_group);
+                if (existing.len != callable_inst_ids.len) {
+                    if (std.debug.runtime_safety) {
+                        std.debug.panic(
+                            "Lambdasolved invariant violated: callable inst {d} attempted to rewrite recursive group size",
+                            .{@intFromEnum(callable_inst_id)},
+                        );
+                    }
+                    unreachable;
+                }
+                for (existing, callable_inst_ids) |lhs, rhs| {
+                    if (lhs != rhs) {
+                        if (std.debug.runtime_safety) {
+                            std.debug.panic(
+                                "Lambdasolved invariant violated: callable inst {d} attempted to rewrite recursive group membership",
+                                .{@intFromEnum(callable_inst_id)},
+                            );
+                        }
+                        unreachable;
+                    }
+                }
+                continue;
+            }
+            callable_inst.recursive_group = span;
+        }
+    }
+
+    pub fn getCallableInstGroupEntries(
+        self: *const Result,
+        span: Lambdamono.CallableInstIdSpan,
+    ) []const CallableInstId {
+        if (span.len == 0) return &.{};
+        return self.callable_inst_group_entries.items[span.start..][0..span.len];
     }
 
     pub fn appendPatternEntries(
@@ -10236,6 +10762,14 @@ pub const Result = struct {
         context_mono: *cm.Result,
         callable_inst_ids: []const CallableInstId,
     ) std.mem.Allocator.Error!Lambdamono.PackedFn {
+        const variant_group = try self.internCallableVariantGroup(allocator, callable_inst_ids);
+        const packed_fn_key: PackedFnKey = .{
+            .variant_group = variant_group,
+            .module_idx = current_module_idx,
+        };
+        if (self.packed_fn_by_key.get(packed_fn_key)) |packed_fn| {
+            return packed_fn;
+        }
         const fn_monotype = try self.requireUniformPackedCallableFnMonotype(
             allocator,
             all_module_envs,
@@ -10249,12 +10783,13 @@ pub const Result = struct {
             context_mono,
             callable_inst_ids,
         );
-        const variant_group = try self.internCallableVariantGroup(allocator, callable_inst_ids);
-        return .{
+        const packed_fn: Lambdamono.PackedFn = .{
             .variant_group = variant_group,
             .fn_monotype = fn_monotype,
             .runtime_monotype = runtime_monotype,
         };
+        try self.packed_fn_by_key.put(allocator, packed_fn_key, packed_fn);
+        return packed_fn;
     }
 
     pub fn makeIndirectCallForCallableInsts(
