@@ -4960,6 +4960,35 @@ pub fn resolveProjectedExprCallableValue(
         );
     }
 
+    if (readExprCallSite(result, source_context, module_idx, expr_idx)) |call_site| {
+        var variant_builder = CallableVariantBuilder.init();
+        defer variant_builder.deinit(driver.allocator);
+        for (result.getCallSiteVariants(call_site)) |callee_callable_inst_id| {
+            try ensureCallableInstRealized(driver, visit_memo, result, callee_callable_inst_id);
+            const callable_def = result.getCallableDefForInst(callee_callable_inst_id).*;
+            const combined_projections = try appendValueProjectionEntries(
+                driver,
+                result,
+                callable_def.body_expr.projections,
+                projections,
+            );
+            if (try resolveProjectedExprCallableValue(
+                driver,
+                visit_memo,
+                result,
+                null,
+                callable_def.body_expr.source_context,
+                callable_def.body_expr.module_idx,
+                callable_def.body_expr.expr_idx,
+                result.getValueProjectionEntries(combined_projections),
+                visiting,
+            )) |callable_value| {
+                try variant_builder.includeCallableValue(driver, result, callable_value);
+            }
+        }
+        return try variant_builder.finishValue(driver, result);
+    }
+
     const module_env = driver.all_module_envs[module_idx];
     const expr = module_env.store.getExpr(expr_idx);
     const projection = projections[0];
@@ -5980,6 +6009,38 @@ fn propagateDemandedCallableFnMonotypeToExprRefProjections(
             fn_monotype_module_idx,
             visiting,
         );
+    }
+
+    if (readExprCallSite(result, source_context, module_idx, expr_idx)) |call_site| {
+        for (result.getCallSiteVariants(call_site)) |callee_callable_inst_id| {
+            try ensureCallableInstRealized(driver, visit_memo, result, callee_callable_inst_id);
+            const callable_def = result.getCallableDefForInst(callee_callable_inst_id).*;
+            const combined_projections = try appendValueProjectionEntries(
+                driver,
+                result,
+                callable_def.body_expr.projections,
+                projections,
+            );
+            const body_thread = try threadForSourceContext(
+                driver,
+                result,
+                callable_def.body_expr.source_context,
+            );
+            try propagateDemandedCallableFnMonotypeToExprRefProjections(
+                driver,
+                visit_memo,
+                result,
+                body_thread,
+                callable_def.body_expr.source_context,
+                callable_def.body_expr.module_idx,
+                callable_def.body_expr.expr_idx,
+                result.getValueProjectionEntries(combined_projections),
+                fn_monotype,
+                fn_monotype_module_idx,
+                visiting,
+            );
+        }
+        return;
     }
 
     const module_env = driver.all_module_envs[module_idx];
@@ -7958,7 +8019,7 @@ fn scanCirExprChildren(
                 }
                 try resolveDirectCallSite(driver, visit_memo, result, thread, module_idx, expr_idx, call_expr);
                 if (std.debug.runtime_safety and readExprCallSite(result, thread.requireSourceContext(), module_idx, expr_idx) == null) {
-                    const callee_template = if (result.getExprTemplateId(thread.requireSourceContext(), module_idx, call_expr.func)) |template_id|
+                    const debug_callee_template = if (result.getExprTemplateId(thread.requireSourceContext(), module_idx, call_expr.func)) |template_id|
                         template_id
                     else if (result.getExprOriginExpr(thread.requireSourceContext(), module_idx, call_expr.func)) |origin|
                         result.getExprTemplateId(origin.source_context, origin.module_idx, origin.expr_idx)
@@ -7997,7 +8058,7 @@ fn scanCirExprChildren(
                             @tagName(thread.requireSourceContext()),
                             @intFromEnum(call_expr.func),
                             @tagName(module_env.store.getExpr(call_expr.func)),
-                            if (callee_template) |template_id| @intFromEnum(template_id) else null,
+                            if (debug_callee_template) |template_id| @intFromEnum(template_id) else null,
                             desired_fn_monotype,
                             callee_callable_value,
                             if (callee_callable_inst) |callable_inst_id| @intFromEnum(callable_inst_id) else null,
