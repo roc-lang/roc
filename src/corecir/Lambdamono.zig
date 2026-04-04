@@ -271,6 +271,19 @@ pub fn requireProgramExprMonotype(
     module_idx: u32,
     expr_idx: CIR.Expr.Idx,
 ) Allocator.Error!ContextMono.ResolvedMonotype {
+    if (try ContextMono.lookupRecordedExprMonotypeIfReadyForSourceContext(
+        driver,
+        result,
+        SemanticThread.trackedThread(source_context),
+        source_context,
+        module_idx,
+        expr_idx,
+    )) |resolved| {
+        return resolved;
+    }
+    if (result.getExprCallableValue(source_context, module_idx, expr_idx)) |callable_value| {
+        return result.getCallableValueRuntimeMonotype(callable_value);
+    }
     return ContextMono.requireRecordedExprMonotypeForSourceContext(
         driver,
         result,
@@ -297,11 +310,13 @@ pub fn exprHasExactProgramSemantics(
         module_idx,
         expr_idx,
     );
-    return monotype != null;
+    return monotype != null or result.getExprCallableValue(source_context, module_idx, expr_idx) != null;
 }
 
 fn exprNeedsCallableShape(result: anytype, source_context: SourceContext, module_idx: u32, expr_idx: CIR.Expr.Idx) bool {
-    const monotype = result.getExprMonotype(source_context, module_idx, expr_idx) orelse {
+    const monotype = result.getExprMonotype(source_context, module_idx, expr_idx) orelse if (result.getExprCallableValue(source_context, module_idx, expr_idx)) |callable_value|
+        result.getCallableValueRuntimeMonotype(callable_value)
+    else {
         if (std.debug.runtime_safety) {
             std.debug.panic(
                 "Lambdamono invariant violated: expr ctx={s} module={d} expr={d} had no exact monotype during executable assembly",

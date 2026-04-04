@@ -785,27 +785,6 @@ pub fn recordExprMonotypeResolved(
     monotype_module_idx: u32,
 ) Allocator.Error!void {
     if (monotype.isNone()) return;
-    if (std.debug.runtime_safety) {
-        const module_env = driver.all_module_envs[module_idx];
-        const expr_region = module_env.store.getExprRegion(expr_idx);
-        const source = module_env.getSourceAll();
-        const snippet_start = @min(expr_region.start.offset, source.len);
-        const snippet_end = @min(expr_region.end.offset, source.len);
-        const snippet = source[snippet_start..snippet_end];
-        if (std.mem.eql(u8, snippet, "List.with_capacity(1)")) {
-            std.debug.print(
-                "record exact expr mono: ctx={s} expr={d}@{d} mono={d}@{d}:{any}\n",
-                .{
-                    @tagName(source_context),
-                    module_idx,
-                    @intFromEnum(expr_idx),
-                    @intFromEnum(monotype),
-                    monotype_module_idx,
-                    result.context_mono.monotype_store.getMonotype(monotype),
-                },
-            );
-        }
-    }
     const key = Result.contextExprKey(source_context, module_idx, expr_idx);
     const resolved = resolvedMonotype(monotype, monotype_module_idx);
     try recordTypeVarMonotypeForSourceContext(

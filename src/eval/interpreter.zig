@@ -1964,13 +1964,6 @@ pub const Interpreter = struct {
                 break :blk val;
             },
             .list_with_capacity => blk: {
-                if (builtin.mode == .Debug) {
-                    const ret_layout = self.layout_store.getLayout(ll.ret_layout);
-                    std.debug.print(
-                        "interp list_with_capacity: ret_layout={d} tag={s}\n",
-                        .{ @intFromEnum(ll.ret_layout), @tagName(ret_layout.tag) },
-                    );
-                }
                 const elem_layout = self.listElemLayout(ll.ret_layout);
                 const sa = self.helper.sizeAlignOf(elem_layout);
                 const elems_rc = self.helper.containsRefcounted(elem_layout);

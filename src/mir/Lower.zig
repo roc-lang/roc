@@ -4270,12 +4270,6 @@ fn lowerResolvedDispatchTargetCallInto(
     var actual_arg_exprs = std.ArrayList(CIR.Expr.Idx).empty;
     defer actual_arg_exprs.deinit(self.allocator);
     try self.appendDispatchActualArgExprs(session, result_expr_idx, &actual_arg_exprs);
-    if (builtin.mode == .Debug) {
-        std.debug.print(
-            "lowerResolvedDispatchTargetCallInto expr={d} args={d}\n",
-            .{ @intFromEnum(result_expr_idx), actual_arg_exprs.items.len },
-        );
-    }
 
     _ = try self.dispatchTargetEffectful(dispatch_target);
     const call_site = lookupProgramExprCallSite(session, result_expr_idx) orelse std.debug.panic(
@@ -4421,9 +4415,10 @@ fn appendDispatchActualArgExprs(
         "statement-only MIR invariant violated: dispatch expr {d} in module {d} had no specialized program node",
         .{ @intFromEnum(expr_idx), self.current_module_idx },
     );
-    for (self.callable_pipeline.lambdamono.getExprChildren(
+    const child_expr_ids = self.callable_pipeline.lambdamono.getExprChildren(
         self.callable_pipeline.lambdamono.getExpr(expr_id).common().child_exprs,
-    )) |child_expr_id| {
+    );
+    for (child_expr_ids) |child_expr_id| {
         try actual_arg_exprs.append(
             self.allocator,
             self.callable_pipeline.lambdamono.getExpr(child_expr_id).common().source_expr,

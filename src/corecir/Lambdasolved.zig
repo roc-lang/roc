@@ -7809,12 +7809,6 @@ fn resolveDemandedFnMonotypeFromCallShape(
     var ordered_entries = std.ArrayList(cm.TypeSubstEntry).empty;
     defer ordered_entries.deinit(driver.allocator);
 
-    const debug_module_env = driver.all_module_envs[module_idx];
-    const debug_source = debug_module_env.getSourceAll();
-    const debug_call_region = debug_module_env.store.getExprRegion(call_expr_idx);
-    const debug_call_start = @min(debug_call_region.start.offset, debug_source.len);
-    const debug_call_end = @min(debug_call_region.end.offset, debug_source.len);
-
     for (param_vars, actual_args) |param_var, arg_expr_idx| {
         const arg_mono = (try cm.resolveExprExactMonotypeResolved(
             driver,
@@ -7822,51 +7816,8 @@ fn resolveDemandedFnMonotypeFromCallShape(
             thread,
             module_idx,
             arg_expr_idx,
-        )) orelse {
-            if (std.debug.runtime_safety) {
-                const arg_region = debug_module_env.store.getExprRegion(arg_expr_idx);
-                const arg_start = @min(arg_region.start.offset, debug_source.len);
-                const arg_end = @min(arg_region.end.offset, debug_source.len);
-                std.debug.print(
-                    "call-shape exact arg missing: call=\"{s}\" arg=\"{s}\" param_var={d}\n",
-                    .{
-                        debug_source[debug_call_start..debug_call_end],
-                        debug_source[arg_start..arg_end],
-                        @intFromEnum(param_var),
-                    },
-                );
-            }
-            continue;
-        };
-        if (arg_mono.isNone()) {
-            if (std.debug.runtime_safety) {
-                const arg_region = debug_module_env.store.getExprRegion(arg_expr_idx);
-                const arg_start = @min(arg_region.start.offset, debug_source.len);
-                const arg_end = @min(arg_region.end.offset, debug_source.len);
-                std.debug.print(
-                    "call-shape exact arg none: call=\"{s}\" arg=\"{s}\" param_var={d}\n",
-                    .{
-                        debug_source[debug_call_start..debug_call_end],
-                        debug_source[arg_start..arg_end],
-                        @intFromEnum(param_var),
-                    },
-                );
-            }
-            continue;
-        }
-        if (std.debug.runtime_safety) {
-            const arg_region = debug_module_env.store.getExprRegion(arg_expr_idx);
-            const arg_start = @min(arg_region.start.offset, debug_source.len);
-            const arg_end = @min(arg_region.end.offset, debug_source.len);
-            std.debug.print(
-                "call-shape exact arg: call=\"{s}\" arg=\"{s}\" mono={any}\n",
-                .{
-                    debug_source[debug_call_start..debug_call_end],
-                    debug_source[arg_start..arg_end],
-                    result.context_mono.monotype_store.getMonotype(arg_mono.idx),
-                },
-            );
-        }
+        )) orelse continue;
+        if (arg_mono.isNone()) continue;
         try cm.bindTypeVarMonotypes(
             driver,
             result,
@@ -7892,15 +7843,6 @@ fn resolveDemandedFnMonotypeFromCallShape(
     if (exact_fn_mono.isNone()) {
         if (cm.lookupExprMonotypeForThread(result, thread, module_idx, call_expr_idx)) |ret_mono| {
             if (!ret_mono.isNone()) {
-                if (std.debug.runtime_safety) {
-                    std.debug.print(
-                        "call-shape exact ret: call=\"{s}\" mono={any}\n",
-                        .{
-                            debug_source[debug_call_start..debug_call_end],
-                            result.context_mono.monotype_store.getMonotype(ret_mono.idx),
-                        },
-                    );
-                }
                 try cm.bindTypeVarMonotypes(
                     driver,
                     result,
@@ -7925,15 +7867,6 @@ fn resolveDemandedFnMonotypeFromCallShape(
         }
     }
     if (exact_fn_mono.isNone()) return null;
-    if (std.debug.runtime_safety) {
-        std.debug.print(
-            "call-shape resolved fn: call=\"{s}\" mono={any}\n",
-            .{
-                debug_source[debug_call_start..debug_call_end],
-                result.context_mono.monotype_store.getMonotype(exact_fn_mono),
-            },
-        );
-    }
     return cm.resolvedMonotype(exact_fn_mono, shape_module_idx);
 }
 
