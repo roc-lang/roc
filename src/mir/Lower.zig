@@ -235,7 +235,7 @@ lowered_callable_insts: std.AutoHashMap(u32, MIR.LambdaId),
 
 /// Cache for direct statement-lowered lambda expressions keyed by the full
 /// lowering context that can affect the emitted callable body.
-    lowered_callable_lambdas: std.AutoHashMap(u32, MIR.LambdaId),
+lowered_callable_lambdas: std.AutoHashMap(u32, MIR.LambdaId),
 
 /// Metadata for opaque symbol IDs; populated at symbol construction time.
 symbol_metadata: std.AutoHashMap(u64, SymbolMetadata),
@@ -3070,7 +3070,7 @@ fn lowerLowLevelExprCallInto(
     arg_exprs: []const CIR.Expr.Idx,
     target: MIR.LocalId,
     next: MIR.CFStmtId,
-    ) Allocator.Error!MIR.CFStmtId {
+) Allocator.Error!MIR.CFStmtId {
     if (low_level_call.op == .str_inspect) {
         if (arg_exprs.len != 1) {
             std.debug.panic(
@@ -4561,7 +4561,7 @@ fn lowerResolvedDispatchTargetCallInto(
     defer self.allocator.free(arg_locals);
     var prepared_args: PreparedCallArgs = .{};
     defer prepared_args.deinit(self.allocator);
-            try self.prepareCallArgLocalsFromExprs(session, actual_arg_exprs.items, arg_locals, &prepared_args);
+    try self.prepareCallArgLocalsFromExprs(session, actual_arg_exprs.items, arg_locals, &prepared_args);
     const args = try self.store.addLocalSpan(self.allocator, arg_locals);
 
     const callee_entry = switch (call_site) {
@@ -5911,13 +5911,13 @@ fn lowerListPatternMatchLocalInto(
             body,
             on_fail,
         );
-                body = try self.store.addCFStmt(self.allocator, .{ .assign_low_level = .{
-                    .target = elem_local,
-                    .op = .list_get_unsafe,
-                    .result_callable = try self.callableResolutionForPattern(session, pattern_idx),
-                    .args = try self.store.addLocalSpan(self.allocator, &.{ source_local, index_local }),
-                    .next = body,
-                } });
+        body = try self.store.addCFStmt(self.allocator, .{ .assign_low_level = .{
+            .target = elem_local,
+            .op = .list_get_unsafe,
+            .result_callable = try self.callableResolutionForPattern(session, pattern_idx),
+            .args = try self.store.addLocalSpan(self.allocator, &.{ source_local, index_local }),
+            .next = body,
+        } });
         body = try self.store.addCFStmt(self.allocator, .{ .assign_low_level = .{
             .target = index_local,
             .op = .num_minus,
@@ -6209,7 +6209,7 @@ fn lowerPatternMatchLocalInto(
             if (source_expr_ref) |source| {
                 try self.bindBindingSourceExprRefInCurrentScope(pattern_idx, source);
             }
-            const local = try self.patternToLocal(session, pattern_idx);
+            const local = try self.patternToLocalWithMonotype(pattern_idx, source_mono);
             if (local == source_local) return on_match;
             return self.lowerLocalAliasInto(local, source_local, on_match);
         },
@@ -6218,7 +6218,7 @@ fn lowerPatternMatchLocalInto(
             if (source_expr_ref) |source| {
                 try self.bindBindingSourceExprRefInCurrentScope(pattern_idx, source);
             }
-            const local = try self.patternToLocal(session, pattern_idx);
+            const local = try self.patternToLocalWithMonotype(pattern_idx, source_mono);
             const alias_stmt = if (local == source_local)
                 on_match
             else
@@ -6902,38 +6902,38 @@ fn lowerBlockStmtInto(
             next
         else
             self.lowerBindingInto(
-            session,
-            module_env,
-            decl.pattern,
-            decl.expr,
-            false,
-            before_binding_scope,
-            next,
-        ),
+                session,
+                module_env,
+                decl.pattern,
+                decl.expr,
+                false,
+                before_binding_scope,
+                next,
+            ),
         .s_var => |var_decl| if (shouldOmitCallableBindingExpr(session, module_env, var_decl.expr))
             next
         else
             self.lowerBindingInto(
-            session,
-            module_env,
-            var_decl.pattern_idx,
-            var_decl.expr,
-            true,
-            before_binding_scope,
-            next,
-        ),
+                session,
+                module_env,
+                var_decl.pattern_idx,
+                var_decl.expr,
+                true,
+                before_binding_scope,
+                next,
+            ),
         .s_reassign => |reassign| if (shouldOmitCallableBindingExpr(session, module_env, reassign.expr))
             next
         else
             self.lowerBindingInto(
-            session,
-            module_env,
-            reassign.pattern_idx,
-            reassign.expr,
-            false,
-            before_binding_scope,
-            next,
-        ),
+                session,
+                module_env,
+                reassign.pattern_idx,
+                reassign.expr,
+                false,
+                before_binding_scope,
+                next,
+            ),
         .s_expr => |expr_stmt| blk: {
             const value_local = try self.freshSyntheticLocal(try self.resolveMonotype(session, expr_stmt.expr), false);
             break :blk try self.lowerExprIntoContinuationScope(

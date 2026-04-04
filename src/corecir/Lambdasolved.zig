@@ -1919,53 +1919,6 @@ pub fn collectCallableParamSpecsFromArgument(
         else => {},
     }
 
-    const module_env = driver.all_module_envs[module_idx];
-    const projection_entries = try addCallableParamProjectionEntries(
-        driver,
-        result,
-        projections.items,
-    );
-    const source_expr_ref: ?ExprRef = blk: {
-        const expr = module_env.store.getExpr(expr_idx);
-        if (expr == .e_lookup_local) {
-            const lookup = expr.e_lookup_local;
-            if (thread.lookupValueBinding(module_idx, lookup.pattern_idx)) |source| {
-                switch (source) {
-                    .bound_expr => |bound_expr| break :blk .{
-                        .source_context = bound_expr.expr_ref.source_context,
-                        .module_idx = bound_expr.expr_ref.module_idx,
-                        .expr_idx = bound_expr.expr_ref.expr_idx,
-                        .projections = if (bound_expr.expr_ref.projections.isEmpty())
-                            projection_entries
-                        else
-                            try appendValueProjectionEntries(
-                                driver,
-                                result,
-                                bound_expr.expr_ref.projections,
-                                result.getValueProjectionEntries(projection_entries),
-                            ),
-                    },
-                    .lexical_binding, .specialized_param => break :blk null,
-                }
-            }
-        }
-        break :blk .{
-            .source_context = source_context,
-            .module_idx = module_idx,
-            .expr_idx = expr_idx,
-            .projections = projection_entries,
-        };
-    };
-    if (source_expr_ref) |expr_ref| {
-        try propagateDemandedValueMonotypeToExprRef(
-            driver,
-            result,
-            expr_ref,
-            monotype,
-            monotype_module_idx,
-        );
-    }
-
     if (result.context_mono.monotype_store.isOpaque(monotype)) return true;
 
     switch (result.context_mono.monotype_store.getMonotype(monotype)) {
@@ -8505,6 +8458,33 @@ pub fn resolveDemandedDirectCallFnMonotype(
                         return resolved;
                     }
                 }
+                switch (driver.all_module_envs[source_expr_ref.module_idx].store.getExpr(source_expr_ref.expr_idx)) {
+                    .e_lambda, .e_closure, .e_hosted_lambda => {
+                        const source_thread = SemanticThread.trackedThread(source_expr_ref.source_context);
+                        if (try cm.resolveExprMonotypeResolved(
+                            driver,
+                            result,
+                            source_thread,
+                            source_expr_ref.module_idx,
+                            source_expr_ref.expr_idx,
+                        )) |source_mono| {
+                            if (cm.resolvedIfFunctionMonotype(result, source_mono)) |fn_mono| {
+                                if (fn_mono.module_idx == module_idx) return fn_mono;
+                                return cm.resolvedMonotype(
+                                    try cm.remapMonotypeBetweenModules(
+                                        driver,
+                                        result,
+                                        fn_mono.idx,
+                                        fn_mono.module_idx,
+                                        module_idx,
+                                    ),
+                                    module_idx,
+                                );
+                            }
+                        }
+                    },
+                    else => {},
+                }
             }
         }
     }
@@ -8640,7 +8620,9 @@ pub fn resolveDirectCallSite(
         call_expr_idx,
         call_expr,
     );
-    if (resolved_template_id == null and desired_fn_monotype != null) {
+    if (desired_fn_monotype != null and
+        getValueExprCallableValueForThread(driver, visit_memo, result, thread, module_idx, callee_expr_idx) == null)
+    {
         var visiting: std.AutoHashMapUnmanaged(ContextExprKey, void) = .empty;
         defer visiting.deinit(driver.allocator);
         try propagateDemandedCallableFnMonotypeToValueExpr(
