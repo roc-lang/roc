@@ -18,7 +18,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const base = @import("base");
-const build_options = @import("build_options");
 const builtins = @import("builtins");
 const can = @import("can");
 const corecir = @import("corecir");
@@ -38,15 +37,6 @@ const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
 
 const Self = @This();
-
-const trace = struct {
-    const enabled = build_options.trace_eval;
-
-    fn log(comptime fmt: []const u8, args: anytype) void {
-        if (!enabled) return;
-        std.debug.print("[mir-lower] " ++ fmt ++ "\n", args);
-    }
-};
 
 const SymbolMetadata = union(enum) {
     local_ident: struct {
@@ -800,6 +790,32 @@ fn resolveProgramExprMonotype(
 ) Allocator.Error!?Pipeline.ResolvedMonotype {
     if (lookupProgramExprCallableValue(session, expr_idx)) |callable_value| {
         return session.lower.callable_pipeline.getCallableValueRuntimeMonotype(callable_value);
+    }
+    if (lookupProgramExprCallSite(session, expr_idx)) |call_site| {
+        switch (call_site) {
+            .direct => |direct_callable_inst_id| {
+                const callable_inst = session.lower.callable_pipeline.getCallableInst(direct_callable_inst_id);
+                const fn_mono = switch (session.lower.callable_pipeline.context_mono.monotype_store.getMonotype(callable_inst.fn_monotype)) {
+                    .func => |func| func,
+                    else => unreachable,
+                };
+                return .{
+                    .idx = fn_mono.ret,
+                    .module_idx = callable_inst.fn_monotype_module_idx,
+                };
+            },
+            .indirect_call => |indirect_call| {
+                const fn_mono = switch (session.lower.callable_pipeline.context_mono.monotype_store.getMonotype(indirect_call.packed_fn.fn_monotype.idx)) {
+                    .func => |func| func,
+                    else => unreachable,
+                };
+                return .{
+                    .idx = fn_mono.ret,
+                    .module_idx = indirect_call.packed_fn.fn_monotype.module_idx,
+                };
+            },
+            .low_level => {},
+        }
     }
     const SourceContextThread = struct {
         source_context: Pipeline.SourceContext,
@@ -2126,16 +2142,6 @@ fn bindCallableFactsForBindingLocal(
         if (self.binding_records.getPtr(binding_key)) |binding| {
             if (!binding.shadowed) binding.callable_value = null;
         }
-        if (comptime trace.enabled) {
-            trace.log(
-                "bindCallableFactsForBindingLocal binding={d} local={d} callable_value=none monotype={s}",
-                .{
-                    @intFromEnum(pattern_idx),
-                    @intFromEnum(local),
-                    @tagName(self.store.monotype_store.getMonotype(self.store.getLocal(local).monotype)),
-                },
-            );
-        }
         return;
     };
     if (self.binding_records.getPtr(binding_key)) |binding| {
@@ -2148,17 +2154,6 @@ fn bindCallableFactsForBindingLocal(
             .explicit_monotype = self.store.getLocal(local).monotype,
             .callable_value = callable_value,
         });
-    }
-    if (comptime trace.enabled) {
-        trace.log(
-            "bindCallableFactsForBindingLocal binding={d} local={d} callable_value={s} monotype={s}",
-            .{
-                @intFromEnum(pattern_idx),
-                @intFromEnum(local),
-                @tagName(callable_value),
-                @tagName(self.store.monotype_store.getMonotype(self.store.getLocal(local).monotype)),
-            },
-        );
     }
 }
 
@@ -3293,23 +3288,6 @@ fn lowerLambdaInto(
         .hosted = null,
     });
     try self.lowered_callable_lambdas.put(cache_key, active_lambda);
-
-    if (comptime trace.enabled) {
-        for (param_locals, 0..) |param_local, i| {
-            trace.log(
-                "lowerLambdaInto expr={d} lambda_reserved={any} param_index={d} pattern={d} local={d} monotype={s} callable_resolution={any}",
-                .{
-                    @intFromEnum(expr_idx),
-                    reserved_lambda,
-                    i,
-                    @intFromEnum(param_patterns[i]),
-                    @intFromEnum(param_local),
-                    @tagName(self.store.monotype_store.getMonotype(self.store.getLocal(param_local).monotype)),
-                    self.store.resolveLocalCallable(param_local),
-                },
-            );
-        }
-    }
 
     const result_local = try self.freshSyntheticLocal(ret_monotype, false);
     const ret_stmt = try self.store.addCFStmt(self.allocator, .{ .ret = .{ .value = result_local } });
@@ -5625,6 +5603,15 @@ fn lowerListPatternMatchLocalInto(
         );
     }
     const suffix_len = elem_patterns.len - prefix_len;
+    var list_pattern_is_irrefutable = false;
+    if (prefix_len == 0 and suffix_len == 0) {
+        if (list_pat.rest_info) |rest| {
+            list_pattern_is_irrefutable = if (rest.pattern) |rest_pattern_idx|
+                self.patternIsIrrefutableForMonotype(module_env, rest_pattern_idx, source_mono)
+            else
+                true;
+        }
+    }
 
     const u64_mono = self.store.monotype_store.primIdx(.u64);
     const bool_mono = try self.store.monotype_store.addBoolTagUnion(
@@ -5752,6 +5739,10 @@ fn lowerListPatternMatchLocalInto(
             .next = body,
         } });
         body = try self.lowerU64LiteralInto(index_local, @intCast(prefix_i), body);
+    }
+
+    if (list_pattern_is_irrefutable) {
+        return body;
     }
 
     const tag_names = boolTagNamesForMonotype(self, bool_mono) orelse std.debug.panic(
@@ -6074,6 +6065,11 @@ fn lowerPatternMatchLocalInto(
             on_fail,
         ),
         .applied_tag => |tag| blk: {
+            const tag_pattern_is_irrefutable = self.patternIsIrrefutableForMonotype(
+                module_env,
+                pattern_idx,
+                source_mono,
+            );
             const payload_monos = self.tagPayloadMonotypesByName(source_mono, tag.name);
             const payload_patterns = module_env.store.slicePatterns(tag.args);
             const tag_discriminant = self.tagDiscriminantForMonotypeName(
@@ -6126,6 +6122,10 @@ fn lowerPatternMatchLocalInto(
                     try self.callableResolutionForPattern(session, payload_patterns[i]),
                     body,
                 );
+            }
+
+            if (tag_pattern_is_irrefutable) {
+                break :blk body;
             }
 
             break :blk try self.lowerSwitchOnDiscriminant(
@@ -6362,10 +6362,9 @@ fn patternIsIrrefutableForMonotype(
             const elem_patterns = module_env.store.slicePatterns(list_pat.patterns);
             const prefix_len: usize = if (list_pat.rest_info) |rest| @intCast(rest.index) else elem_patterns.len;
             if (prefix_len != 0 or elem_patterns.len != prefix_len) break :blk false;
-            if (list_pat.rest_info) |rest| {
-                if (rest.pattern) |rest_pattern_idx| {
-                    break :blk self.patternIsIrrefutableForMonotype(module_env, rest_pattern_idx, source_mono);
-                }
+            const rest = list_pat.rest_info orelse break :blk false;
+            if (rest.pattern) |rest_pattern_idx| {
+                break :blk self.patternIsIrrefutableForMonotype(module_env, rest_pattern_idx, source_mono);
             }
             break :blk true;
         },
@@ -8064,33 +8063,41 @@ fn lowerMatchBranchChainInto(
     }
 
     const cir_branch = module_env.store.getMatchBranch(branch_indices[0]);
-    const rest_scope = self.freshChildBindingScope(input_scope);
-    try self.predeclareVisibleReassignableBindingsInScope(input_scope, rest_scope);
-    const rest = try self.lowerMatchBranchChainInto(
-        session,
-        module_env,
-        branch_indices[1..],
-        rest_scope,
-        cond_local,
-        cond_source_expr_ref,
-        cond_mono,
-        result_local,
-        result_join_id,
-        result_join_scope,
-        on_exhausted,
-        branch_degenerate_failure,
-    );
-    const rest_join_id = self.freshJoinPointId();
-    const rest_join_params = try self.buildJoinParamSpan(rest_scope);
-    const pattern_fail_jump = try self.store.addCFStmt(self.allocator, .{ .jump = .{
-        .id = rest_join_id,
-        .args = try self.buildCarriedJumpArgs(input_scope, rest_scope),
-    } });
+    const branch_is_irrefutable = self.matchBranchIsIrrefutable(module_env, cir_branch, cond_mono);
+    var rest_scope: u64 = undefined;
+    var rest: MatchBranchChainResult = undefined;
+    var rest_join_id: MIR.JoinPointId = undefined;
+    var rest_join_params: MIR.LocalSpan = undefined;
+    var pattern_fail_target = branch_degenerate_failure;
+    if (!branch_is_irrefutable) {
+        rest_scope = self.freshChildBindingScope(input_scope);
+        try self.predeclareVisibleReassignableBindingsInScope(input_scope, rest_scope);
+        rest = try self.lowerMatchBranchChainInto(
+            session,
+            module_env,
+            branch_indices[1..],
+            rest_scope,
+            cond_local,
+            cond_source_expr_ref,
+            cond_mono,
+            result_local,
+            result_join_id,
+            result_join_scope,
+            on_exhausted,
+            branch_degenerate_failure,
+        );
+        rest_join_id = self.freshJoinPointId();
+        rest_join_params = try self.buildJoinParamSpan(rest_scope);
+        pattern_fail_target = try self.store.addCFStmt(self.allocator, .{ .jump = .{
+            .id = rest_join_id,
+            .args = try self.buildCarriedJumpArgs(input_scope, rest_scope),
+        } });
+    }
 
     const branch_pattern_indices = module_env.store.sliceMatchBranchPatterns(cir_branch.patterns);
     const result_mono = self.store.getLocal(result_local).monotype;
 
-    var branch_entry = pattern_fail_jump;
+    var branch_entry = pattern_fail_target;
     var branch_reaches_result_join = false;
     if (branch_pattern_indices.len == 0) {
         const branch_scope = self.freshChildBindingScope(input_scope);
@@ -8133,10 +8140,13 @@ fn lowerMatchBranchChainInto(
             if (!lowered_guard.falls_through) {
                 break :blk lowered_guard.entry;
             }
-            const guard_false_jump = try self.store.addCFStmt(self.allocator, .{ .jump = .{
-                .id = rest_join_id,
-                .args = try self.buildCarriedJumpArgs(lowered_guard.exit_scope, rest_scope),
-            } });
+            const guard_false_jump = if (branch_is_irrefutable)
+                branch_degenerate_failure
+            else
+                try self.store.addCFStmt(self.allocator, .{ .jump = .{
+                    .id = rest_join_id,
+                    .args = try self.buildCarriedJumpArgs(lowered_guard.exit_scope, rest_scope),
+                } });
             try self.store.finalizeCFStmt(guard_switch_placeholder, .{ .switch_stmt = .{
                 .scrutinee = guard_discrim_local,
                 .branches = try self.store.addSwitchBranches(self.allocator, &.{.{
@@ -8145,7 +8155,9 @@ fn lowerMatchBranchChainInto(
                 }}),
                 .default_branch = guard_false_jump,
             } });
-            branch_reaches_result_join = branch_reaches_result_join or rest.reaches_result_join;
+            if (!branch_is_irrefutable) {
+                branch_reaches_result_join = branch_reaches_result_join or rest.reaches_result_join;
+            }
             break :blk lowered_guard.entry;
         } else lowered_branch_value.entry;
     } else {
@@ -8215,10 +8227,13 @@ fn lowerMatchBranchChainInto(
                     if (!lowered_guard.falls_through) {
                         break :guard_blk lowered_guard.entry;
                     }
-                    const guard_false_jump = try self.store.addCFStmt(self.allocator, .{ .jump = .{
-                        .id = rest_join_id,
-                        .args = try self.buildCarriedJumpArgs(lowered_guard.exit_scope, rest_scope),
-                    } });
+                    const guard_false_jump = if (branch_is_irrefutable)
+                        branch_degenerate_failure
+                    else
+                        try self.store.addCFStmt(self.allocator, .{ .jump = .{
+                            .id = rest_join_id,
+                            .args = try self.buildCarriedJumpArgs(lowered_guard.exit_scope, rest_scope),
+                        } });
                     try self.store.finalizeCFStmt(guard_switch_placeholder, .{ .switch_stmt = .{
                         .scrutinee = guard_discrim_local,
                         .branches = try self.store.addSwitchBranches(self.allocator, &.{.{
@@ -8227,7 +8242,9 @@ fn lowerMatchBranchChainInto(
                         }}),
                         .default_branch = guard_false_jump,
                     } });
-                    branch_reaches_result_join = branch_reaches_result_join or rest.reaches_result_join;
+                    if (!branch_is_irrefutable) {
+                        branch_reaches_result_join = branch_reaches_result_join or rest.reaches_result_join;
+                    }
                     break :guard_blk lowered_guard.entry;
                 } else lowered_branch_value.entry;
 
@@ -8244,7 +8261,7 @@ fn lowerMatchBranchChainInto(
         }
     }
 
-    if (self.matchBranchIsIrrefutable(module_env, cir_branch, cond_mono)) {
+    if (branch_is_irrefutable) {
         return .{
             .entry = branch_entry,
             .reaches_result_join = branch_reaches_result_join,

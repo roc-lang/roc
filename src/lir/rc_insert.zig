@@ -587,14 +587,15 @@ pub const RcInsertPass = struct {
     }
 
     fn localDefinitionIntroducesFreshOwnership(self: *const RcInsertPass, local: LocalId) bool {
-        const def_kind = self.local_definition_kinds.get(localKey(local)) orelse std.debug.panic(
+        const root = self.ownershipRootForConsumedValue(local) orelse return false;
+        const def_kind = self.local_definition_kinds.get(localKey(root)) orelse std.debug.panic(
             "RcInsertPass invariant violated: missing definition kind for local {d}",
-            .{@intFromEnum(local)},
+            .{@intFromEnum(root)},
         );
         return switch (def_kind) {
             .stmt_result => |semantics| semantics == .fresh,
-            .join_param => self.localCarriesOwnedValue(local),
-            else => false,
+            .join_param => self.localCarriesOwnedValue(root),
+            .proc_param => false,
         };
     }
 
@@ -1913,10 +1914,32 @@ pub const RcInsertPass = struct {
                 @memcpy(nested_join_ids[0..internal_join_ids.len], internal_join_ids);
                 nested_join_ids[internal_join_ids.len] = join.id;
 
+                var body_internal_join_ids = std.ArrayListUnmanaged(LIR.JoinPointId).empty;
+                defer body_internal_join_ids.deinit(self.allocator);
+                try body_internal_join_ids.appendSlice(self.allocator, nested_join_ids);
+                try self.appendReachableJoinIds(join.body, &body_internal_join_ids);
+                try self.appendReachableJoinIds(join.remainder, &body_internal_join_ids);
+
+                const join_params = self.store.getLocalSpan(join.params);
+                var forwarded_join_params = std.ArrayListUnmanaged(LocalId).empty;
+                defer forwarded_join_params.deinit(self.allocator);
+                for (join_params) |join_param| {
+                    if (!self.localTransfersOwnership(join_param, value)) continue;
+                    try forwarded_join_params.append(self.allocator, join_param);
+                }
+                var rewritten_body = try self.closeLocalOnExitRec(value, nested_join_ids, join.body);
+                if (forwarded_join_params.items.len > 0) {
+                    rewritten_body = try self.closeJoinParamsOnExit(
+                        forwarded_join_params.items,
+                        body_internal_join_ids.items,
+                        rewritten_body,
+                    );
+                }
+
                 break :blk try self.store.addCFStmt(.{ .join = .{
                     .id = join.id,
                     .params = join.params,
-                    .body = try self.closeLocalOnExitRec(value, nested_join_ids, join.body),
+                    .body = rewritten_body,
                     .remainder = try self.closeLocalOnExitRec(value, nested_join_ids, join.remainder),
                 } });
             },
@@ -2624,7 +2647,6 @@ pub const RcInsertPass = struct {
         const use_count = self.symbol_use_counts.get(localKey(target)) orelse 0;
         var next = next_processed;
         const target_layout = self.localLayout(target);
-
         if (self.layoutNeedsRc(target_layout) and use_count > 0) {
             if (resultIsFresh(stmt)) {
                 next = try self.closeLocalOnExit(target, next);

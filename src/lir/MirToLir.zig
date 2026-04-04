@@ -984,6 +984,7 @@ fn resolveMirLocalOrigin(
                 .lambda = call_result.callee_callable.lambda,
                 .captures_local = if (call_result.callee_callable.captures_local) call_result.callee else null,
             };
+            const lambda_contract = self.analyses.getLambdaResultContract(resolved.lambda);
 
             const visible_args = self.mir_store.getLocalSpan(call_result.args);
             const arg_count = visible_args.len + @intFromBool(resolved.captures_local != null);
@@ -1002,7 +1003,7 @@ fn resolveMirLocalOrigin(
             }
 
             break :blk try self.lowerSummaryCallResultOrigin(
-                self.analyses.getLambdaResultContract(resolved.lambda),
+                lambda_contract,
                 arg_origins,
                 arg_owners,
             );
