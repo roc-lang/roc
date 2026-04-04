@@ -30,9 +30,9 @@ const setupSidebarNav = () => {
     }
 
     // Handle sidebar group name clicks — toggle expanded and navigate
-    const groupName = e.target.closest(".sidebar-group-name");
+    const groupName = e.target.closest(".sidebar-type-name");
     if (groupName) {
-      const group = groupName.closest(".sidebar-group");
+      const group = groupName.closest(".sidebar-type");
       if (group) {
         group.classList.toggle("expanded");
       }
@@ -46,7 +46,7 @@ const setupSidebarNav = () => {
     const subEntries = activeModule.parentElement?.querySelector(".sidebar-sub-entries");
     if (subEntries) {
       // Mark groups in active module as expanded
-      subEntries.querySelectorAll(".sidebar-group").forEach((group) => {
+      subEntries.querySelectorAll(".sidebar-type").forEach((group) => {
         group.classList.add("expanded");
       });
     }

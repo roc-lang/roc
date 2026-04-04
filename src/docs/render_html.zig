@@ -217,8 +217,24 @@ fn writeHtmlHead(w: Writer, title: []const u8, base: []const u8) !void {
     try w.writeAll("</head>\n");
 }
 
+const link_svg_defs =
+    \\<svg xmlns="http://www.w3.org/2000/svg" style="display:none">
+    \\  <defs>
+    \\    <symbol id="link-icon" viewBox="0 0 640 512">
+    \\      <path d="M562.8 267.7c56.5-56.5 56.5-148 0-204.5c-50-50-128.8-56.5-186.3-15.4l-1.6 1.1c-14.4 10.3-17.7 30.3-7.4 44.6s30.3 17.7 44.6 7.4l1.6-1.1c32.1-22.9 76-19.3 103.8 8.6c31.5 31.5 31.5 82.5 0 114L405.3 334.8c-31.5 31.5-82.5 31.5-114 0c-27.9-27.9-31.5-71.8-8.6-103.8l1.1-1.6c10.3-14.4 6.9-34.4-7.4-44.6s-34.4-6.9-44.6 7.4l-1.1 1.6C189.5 251.2 196 330 246 380c56.5 56.5 148 56.5 204.5 0L562.8 267.7zM43.2 244.3c-56.5 56.5-56.5 148 0 204.5c50 50 128.8 56.5 186.3 15.4l1.6-1.1c14.4-10.3 17.7-30.3 7.4-44.6s-30.3-17.7-44.6-7.4l-1.6 1.1c-32.1 22.9-76 19.3-103.8-8.6C57 372 57 321 88.5 289.5L200.7 177.2c31.5-31.5 82.5-31.5 114 0c27.9 27.9 31.5 71.8 8.6 103.9l-1.1 1.6c-10.3 14.4-6.9 34.4 7.4 44.6s34.4 6.9 44.6-7.4l1.1-1.6C416.5 260.8 410 182 360 132c-56.5-56.5-148-56.5-204.5 0L43.2 244.3z"/>
+    \\    </symbol>
+    \\  </defs>
+    \\</svg>
+;
+
+const link_svg_use =
+    \\<svg class="link-icon"><use href="#link-icon"/></svg>
+;
+
 fn writeBodyOpen(w: Writer) !void {
     try w.writeAll("<body>\n");
+    try w.writeAll(link_svg_defs);
+    try w.writeAll("\n");
 }
 
 fn writeBodyClose(w: Writer) !void {
@@ -426,18 +442,45 @@ fn renderEntryTree(
             try writeHtmlEscaped(w, node.full_path);
             try w.writeAll("\">\n");
 
-            // Signature block - styled as code, not a heading
             const anchor_id = node.full_path;
-            try w.writeAll("            <div class=\"entry-signature\">\n");
-            try w.writeAll("                <code class=\"entry-signature-code\">");
-            try renderEntrySignature(w, ctx, entry);
-            try w.writeAll("</code>\n");
-            try w.writeAll("                <a href=\"#");
-            try writeHtmlEscaped(w, anchor_id);
-            try w.writeAll("\" class=\"entry-anchor\" aria-label=\"Permalink to ");
-            try writeHtmlEscaped(w, node.name);
-            try w.writeAll("\">🔗</a>\n");
-            try w.writeAll("            </div>\n");
+            if (entry.kind == .@"opaque" or entry.kind == .nominal) {
+                // Types rendered as a heading, with an optional type definition below.
+                // Heading level scales with depth: depth 1 -> h2, depth 2 -> h3, etc.
+                const heading_level: u8 = @intCast(@min(depth + 1, 6));
+                try w.print("            <h{d}>", .{heading_level});
+                try writeHtmlEscaped(w, node.name);
+                try w.writeAll(" <a href=\"#");
+                try writeHtmlEscaped(w, anchor_id);
+                try w.writeAll("\" class=\"entry-anchor\" aria-label=\"Permalink to ");
+                try writeHtmlEscaped(w, node.name);
+                try w.writeAll("\">");
+                try w.writeAll(link_svg_use);
+                try w.print("</a></h{d}>\n", .{heading_level});
+
+                // Nominal types also show their type definition below the heading
+                if (entry.kind == .nominal) {
+                    if (entry.type_signature) |sig| {
+                        try w.writeAll("            <code class=\"entry-type-def\">");
+                        try w.writeAll(":= ");
+                        try renderDocTypeHtml(w, ctx, sig, false);
+                        try w.writeAll("</code>\n");
+                    }
+                }
+            } else {
+                // Signature block - styled as code, not a heading
+                try w.writeAll("            <div class=\"entry-signature\">\n");
+                try w.writeAll("                <code class=\"entry-signature-code\">");
+                try renderEntrySignature(w, ctx, entry);
+                try w.writeAll("</code>\n");
+                try w.writeAll("                <a href=\"#");
+                try writeHtmlEscaped(w, anchor_id);
+                try w.writeAll("\" class=\"entry-anchor\" aria-label=\"Permalink to ");
+                try writeHtmlEscaped(w, node.name);
+                try w.writeAll("\">");
+                try w.writeAll(link_svg_use);
+                try w.writeAll("</a>\n");
+                try w.writeAll("            </div>\n");
+            }
 
             // Doc comment
             if (entry.doc_comment) |doc| {
@@ -490,17 +533,17 @@ fn renderSidebarTree(
     // Skip root node
     if (depth > 0) {
         if (node.children.items.len > 0) {
-            // Render as collapsible group
+            // Render as a type section with expandable sub-entries
             try w.writeAll("                        ");
             for (0..depth - 1) |_| {
                 try w.writeAll("  ");
             }
-            try w.writeAll("<div class=\"sidebar-group\">\n");
+            try w.writeAll("<div class=\"sidebar-type\">\n");
             try w.writeAll("                        ");
             for (0..depth - 1) |_| {
                 try w.writeAll("  ");
             }
-            try w.writeAll("  <a class=\"sidebar-group-name\" href=\"#");
+            try w.writeAll("  <a class=\"sidebar-type-name\" href=\"#");
             try writeHtmlEscaped(w, node.full_path);
             try w.writeAll("\">");
             try writeHtmlEscaped(w, node.name);
@@ -528,15 +571,19 @@ fn renderSidebarTree(
             try w.writeAll("</div>\n");
         } else if (node.is_leaf) {
             if (depth == 1 and node.is_type) {
-                // Top-level type with no children — render as a standalone
-                // group name (not an indented link) so it sits at the same
-                // visual level as sibling groups like Bool, List, etc.
+                // Top-level type with no children — render with the same
+                // structure as types that have children so they all share
+                // a consistent visual style in the sidebar.
                 try w.writeAll("                        ");
-                try w.writeAll("<a class=\"sidebar-group-link\" href=\"#");
+                try w.writeAll("<div class=\"sidebar-type\">\n");
+                try w.writeAll("                        ");
+                try w.writeAll("  <a class=\"sidebar-type-name\" href=\"#");
                 try writeHtmlEscaped(w, node.full_path);
                 try w.writeAll("\">");
                 try writeHtmlEscaped(w, node.name);
                 try w.writeAll("</a>\n");
+                try w.writeAll("                        ");
+                try w.writeAll("</div>\n");
             } else {
                 // Render as link
                 try w.writeAll("                        ");
@@ -613,7 +660,7 @@ fn renderSidebar(w: Writer, ctx: *const RenderContext, gpa: Allocator, base: []c
         try w.writeAll(base);
         try writeHtmlEscaped(w, mod.name);
         try w.writeAll("/\">");
-        try w.writeAll("<button class=\"entry-toggle\">&#9656;</button>");
+        try w.writeAll("<button class=\"entry-toggle\">&#9654;</button>");
         try w.writeAll("<span>");
         try writeHtmlEscaped(w, mod.name);
         try w.writeAll("</span></a>\n");

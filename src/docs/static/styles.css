@@ -102,6 +102,19 @@ table tr td {
   flex: 1;
 }
 
+/* Type definition block shown below heading for nominal types (e.g. Try := ...) */
+.entry-type-def {
+  display: block;
+  font-family: var(--font-mono);
+  background-color: var(--violet-bg);
+  color: var(--text-color);
+  padding: 12px 16px;
+  margin-bottom: 16px;
+  white-space: pre-wrap;
+  font-size: var(--font-base);
+  line-height: 1.5;
+}
+
 .entry-signature-code strong {
     color: var(--text-color);
     font-weight: var(--weight-semibold);
@@ -111,15 +124,25 @@ table tr td {
   visibility: hidden;
   flex-shrink: 0;
   display: inline-block;
-  width: 18px;
-  height: 14px;
   color: var(--violet);
   text-decoration: none;
-  font-size: 14px;
   user-select: none;
+  transition: visibility 2s;
 }
 
-.entry-signature:hover .entry-anchor {
+.entry-anchor .link-icon {
+  width: 18px;
+  height: 18px;
+  fill: currentColor;
+  vertical-align: middle;
+}
+
+.entry-signature:hover .entry-anchor,
+.entry h2:hover .entry-anchor,
+.entry h3:hover .entry-anchor,
+.entry h4:hover .entry-anchor,
+.entry h5:hover .entry-anchor,
+.entry h6:hover .entry-anchor {
   visibility: visible;
 }
 
@@ -199,7 +222,7 @@ table tr td {
 .entry-value > .entry-signature {
     font-weight: var(--weight-normal);
     background-color: transparent;
-    border-left: 3px solid rgb(from var(--violet) r g b / .50);
+    border-left: 4px solid rgb(from var(--violet) r g b);
     font-size: var(--font-base);
     line-height: 1.5;
 }
@@ -446,35 +469,13 @@ footer p {
     text-decoration: none;
 }
 
-/* Top-level type entries in sidebar that have no children (e.g. Dict) */
-.sidebar-group-link {
-    font-weight: var(--weight-medium);
-    font-size: var(--font-sm);
-    display: inline-block;
-    padding: 8px 16px;
-    width: 100%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    box-sizing: border-box;
-    color: var(--text-color) !important;
-    border-left: none !important;
-    margin-left: 0 !important;
-    padding-left: 16px !important;
-}
-
-.sidebar-group-link:hover {
-    color: var(--violet) !important;
-    text-decoration: none;
-}
-
-.sidebar-group {
+.sidebar-type {
     margin-left: 0;
 }
 
-.sidebar-group-name {
+.sidebar-type-name {
     font-weight: var(--weight-medium);
-    font-size: var(--font-sm);
+    font-size: var(--font-base);
     cursor: pointer;
     text-decoration: none;
     color: inherit;
@@ -487,18 +488,18 @@ footer p {
     box-sizing: border-box;
 }
 
-.sidebar-group-name:hover {
+.sidebar-type-name:hover {
     color: var(--violet);
 }
 
-.sidebar-group > .sidebar-sub-entries {
+.sidebar-type > .sidebar-sub-entries {
     max-height: 0;
     overflow: hidden;
     margin-left: 0;
     transition: max-height 200ms ease-out;
 }
 
-.sidebar-group.expanded > .sidebar-sub-entries {
+.sidebar-type.expanded > .sidebar-sub-entries {
     max-height: 10000px;
     transition: max-height 200ms ease-in;
 }
@@ -553,7 +554,7 @@ a.sidebar-module-link {
   font-family: var(--font-mono);
   font-weight: var(--weight-normal);
   display: flex;
-  flex-direction: row-reverse;
+  flex-direction: row;
   justify-content: space-between;
   align-items: center;
   width: 100%;

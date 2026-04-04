@@ -7035,7 +7035,14 @@ fn rocDocs(ctx: *CliContext, args: cli_args.DocsArgs) !void {
     // Generate documentation for all packages and modules
     try generateDocs(ctx, &result_with_env.build_env, args.path, args.output);
 
-    stdout.print("\nDocumentation generation complete for {s}\n", .{args.path}) catch {};
+    const output_display_path = if (std.fs.path.isAbsolute(args.output) or
+        std.mem.startsWith(u8, args.output, "./") or
+        std.mem.startsWith(u8, args.output, "../"))
+        args.output
+    else
+        try std.fmt.allocPrint(ctx.arena, "./{s}", .{args.output});
+
+    stdout.print("\nGenerated docs for {s}\nOutput in {s}\n", .{ args.path, output_display_path }) catch {};
 
     // Start HTTP server if --serve flag is enabled
     if (args.serve) {
