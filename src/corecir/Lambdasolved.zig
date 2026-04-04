@@ -7457,6 +7457,7 @@ fn scanCirExprChildren(
                 call_expr.func,
                 resolve_direct_calls,
             );
+            try scanCirValueExprSpanWithDirectCallResolution(driver, visit_memo, result, thread, module_idx, arg_exprs, resolve_direct_calls);
             if (try resolveDemandedDirectCallFnMonotype(
                 driver,
                 visit_memo,
@@ -7489,7 +7490,6 @@ fn scanCirExprChildren(
                     );
                 }
             }
-            try scanCirValueExprSpanWithDirectCallResolution(driver, visit_memo, result, thread, module_idx, arg_exprs, resolve_direct_calls);
             if (resolve_direct_calls) {
                 try resolveDirectCallSite(driver, visit_memo, result, thread, module_idx, expr_idx, call_expr);
                 try assignCallableArgCallableInstsFromCallMonotype(driver, visit_memo, result, thread, module_idx, expr_idx, call_expr);
@@ -7960,25 +7960,25 @@ fn resolveDemandedFnMonotypeFromCallShape(
             module_idx_worker: u32,
             expr_idx_worker: CIR.Expr.Idx,
         ) std.mem.Allocator.Error!?cm.ResolvedMonotype {
-            const source_context_worker = thread_worker.requireSourceContext();
-            if (cm.lookupExprMonotypeForSourceContext(
-                result_worker,
-                source_context_worker,
-                module_idx_worker,
-                expr_idx_worker,
-            )) |resolved| {
-                return resolved;
-            }
-
             const module_env_worker = driver_worker.all_module_envs[module_idx_worker];
-            const mono = try cm.monotypeFromTypeVarInSourceContext(
-                driver_worker,
-                result_worker,
-                source_context_worker,
-                module_idx_worker,
-                &module_env_worker.types,
-                ModuleEnv.varFrom(expr_idx_worker),
-            );
+            const source_context_worker = thread_worker.requireSourceContext();
+            const mono = switch (source_context_worker) {
+                .callable_inst => try cm.monotypeFromTypeVarInSourceContext(
+                    driver_worker,
+                    result_worker,
+                    source_context_worker,
+                    module_idx_worker,
+                    &module_env_worker.types,
+                    ModuleEnv.varFrom(expr_idx_worker),
+                ),
+                .root_expr, .provenance_expr, .template_expr => try cm.monotypeFromTypeVarInStore(
+                    driver_worker,
+                    result_worker,
+                    module_idx_worker,
+                    &module_env_worker.types,
+                    ModuleEnv.varFrom(expr_idx_worker),
+                ),
+            };
             if (mono.isNone()) return null;
             const resolved = cm.resolvedMonotype(mono, module_idx_worker);
             try cm.recordExprMonotypeForThread(
