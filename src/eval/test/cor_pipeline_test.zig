@@ -6,14 +6,9 @@ const helpers = @import("helpers.zig");
 const testing = std.testing;
 
 fn expectInspect(comptime source: []const u8, expected: []const u8) !void {
-    const resources = try helpers.parseAndCanonicalizeInspectedExpr(testing.allocator, source);
-    defer helpers.cleanupParseAndCanonical(testing.allocator, resources);
-    const actual = try helpers.lirInterpreterInspectedStr(
-        testing.allocator,
-        resources.module_env,
-        resources.expr_idx,
-        resources.builtin_module.env,
-    );
+    var compiled = try helpers.compileInspectedExpr(testing.allocator, source);
+    defer compiled.deinit(testing.allocator);
+    const actual = try helpers.lirInterpreterInspectedStr(testing.allocator, &compiled.lowered);
     defer testing.allocator.free(actual);
     try testing.expectEqualStrings(expected, actual);
 }

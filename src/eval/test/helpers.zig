@@ -49,12 +49,22 @@ pub const ParsedResources = struct {
     typecheck_ns: u64 = 0,
 };
 
-const LoweredProgram = struct {
+pub const LoweredProgram = struct {
     lir_result: FromIr.Result,
     main_proc: lir.LIR.LirProcSpecId,
 
-    fn deinit(self: *LoweredProgram) void {
+    pub fn deinit(self: *LoweredProgram) void {
         self.lir_result.deinit();
+    }
+};
+
+pub const CompiledInspectedExpr = struct {
+    resources: ParsedResources,
+    lowered: LoweredProgram,
+
+    pub fn deinit(self: *CompiledInspectedExpr, allocator: std.mem.Allocator) void {
+        self.lowered.deinit();
+        cleanupParseAndCanonical(allocator, self.resources);
     }
 };
 
@@ -171,6 +181,22 @@ pub fn parseAndCanonicalizeInspectedExpr(allocator: std.mem.Allocator, source: [
     return parseAndCanonicalizeExpr(allocator, inspected_source);
 }
 
+pub fn compileInspectedExpr(allocator: std.mem.Allocator, source: []const u8) !CompiledInspectedExpr {
+    const resources = try parseAndCanonicalizeInspectedExpr(allocator, source);
+    errdefer cleanupParseAndCanonical(allocator, resources);
+
+    const lowered = try lowerParsedExprToLir(allocator, resources.module_env, resources.builtin_module.env);
+    errdefer {
+        var lowered_mut = lowered;
+        lowered_mut.deinit();
+    }
+
+    return .{
+        .resources = resources,
+        .lowered = lowered,
+    };
+}
+
 pub fn cleanupParseAndCanonical(allocator: std.mem.Allocator, resources: ParsedResources) void {
     resources.checker.deinit();
     resources.can.deinit();
@@ -185,16 +211,18 @@ pub fn cleanupParseAndCanonical(allocator: std.mem.Allocator, resources: ParsedR
     allocator.destroy(resources.module_env);
 }
 
-pub fn lirInterpreterInspectedStr(
+pub fn lowerParsedExprToLir(
     allocator: std.mem.Allocator,
     module_env: *ModuleEnv,
-    expr_idx: CIR.Expr.Idx,
     builtin_module_env: *const ModuleEnv,
-) ![]u8 {
-    _ = expr_idx;
-    var lowered = try lowerToLir(allocator, module_env, builtin_module_env);
-    defer lowered.deinit();
+) !LoweredProgram {
+    return lowerToLir(allocator, module_env, builtin_module_env);
+}
 
+pub fn lirInterpreterInspectedStr(
+    allocator: std.mem.Allocator,
+    lowered: *const LoweredProgram,
+) ![]u8 {
     var runtime_env = RuntimeEnv.init(allocator);
     defer runtime_env.deinit();
 
@@ -219,14 +247,8 @@ pub fn lirInterpreterInspectedStr(
 
 pub fn devEvaluatorInspectedStr(
     allocator: std.mem.Allocator,
-    module_env: *ModuleEnv,
-    expr_idx: CIR.Expr.Idx,
-    builtin_module_env: *const ModuleEnv,
+    lowered: *const LoweredProgram,
 ) ![]u8 {
-    _ = expr_idx;
-    var lowered = try lowerToLir(allocator, module_env, builtin_module_env);
-    defer lowered.deinit();
-
     var codegen = try HostLirCodeGen.init(
         allocator,
         &lowered.lir_result.store,
@@ -264,14 +286,10 @@ pub fn devEvaluatorInspectedStr(
 
 pub fn wasmEvaluatorInspectedStr(
     allocator: std.mem.Allocator,
-    module_env: *ModuleEnv,
-    expr_idx: CIR.Expr.Idx,
-    builtin_module_env: *const ModuleEnv,
+    lowered: *const LoweredProgram,
 ) ![]u8 {
     _ = allocator;
-    _ = module_env;
-    _ = expr_idx;
-    _ = builtin_module_env;
+    _ = lowered;
     @panic("TODO: wasm eval backend not implemented for the cor-style inspect-only pipeline");
 }
 
