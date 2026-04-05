@@ -30,6 +30,8 @@ pub const interpreter = @import("interpreter.zig");
 pub const Interpreter = interpreter.Interpreter;
 /// Test environment providing RocOps with allocation tracking.
 pub const TestEnv = @import("test/TestEnv.zig");
+/// Shared cor-style eval test helpers.
+pub const test_helpers = @import("test/helpers.zig");
 
 test "eval tests" {
     std.testing.refAllDecls(@This());
@@ -43,8 +45,7 @@ test "eval tests" {
     std.testing.refAllDecls(@import("value_to_cir.zig"));
     std.testing.refAllDecls(@import("stack.zig"));
     std.testing.refAllDecls(@import("test/TestEnv.zig"));
-    std.testing.refAllDecls(@import("test/anno_only_interp_test.zig"));
-    std.testing.refAllDecls(@import("test/comptime_eval_test.zig"));
-    std.testing.refAllDecls(@import("test/low_level_interp_test.zig"));
+    std.testing.refAllDecls(@import("test/helpers.zig"));
+    std.testing.refAllDecls(@import("test/cor_pipeline_test.zig"));
     std.testing.refAllDecls(@import("test/stack_test.zig"));
 }

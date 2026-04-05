@@ -1,144 +1,48 @@
-//! Focused eval tests for the new cor-style lowering pipeline.
+//! Focused eval tests for the cor-style lowering pipeline.
 
 const std = @import("std");
-const base = @import("base");
-const can = @import("can");
-const check_test_env = @import("check_test_env");
-const monotype = @import("monotype");
-const monotype_lifted = @import("monotype_lifted");
-const lambdasolved = @import("lambdasolved");
-const lambdamono = @import("lambdamono");
-const ir = @import("ir");
-const lir = @import("lir");
-const layout = @import("layout");
-
-const FromIr = lir.FromIr;
-const Interpreter = @import("../interpreter.zig").Interpreter;
-const RuntimeEnv = @import("TestEnv.zig");
-const CheckTestEnv = check_test_env.TestEnv;
+const helpers = @import("helpers.zig");
 
 const testing = std.testing;
 
-fn entryProcId(result: *const FromIr.Result) !lir.LIR.LirProcSpecId {
-    if (result.root_procs.items.len == 0) return error.NoRootProc;
-    return result.root_procs.items[result.root_procs.items.len - 1];
-}
-
-fn evalI64Expr(comptime source: []const u8) !i64 {
-    var test_env = try CheckTestEnv.initExpr("Test", source);
-    defer test_env.deinit();
-    try test_env.assertNoErrors();
-
-    const all_module_envs = [_]*const can.ModuleEnv{
-        test_env.module_env,
-        test_env.builtin_module.env,
-    };
-    test_env.module_env.imports.resolveImports(test_env.module_env, &all_module_envs);
-
-    var mono_lowerer = monotype.Lower.Lowerer.init(testing.allocator, &all_module_envs, 1);
-    defer mono_lowerer.deinit();
-    const mono = try mono_lowerer.run(0);
-    const lifted = try monotype_lifted.Lower.run(testing.allocator, mono);
-    const solved = try lambdasolved.Lower.run(testing.allocator, lifted);
-    const executable = try lambdamono.Lower.run(testing.allocator, solved);
-    const lowered_ir = try ir.Lower.run(testing.allocator, executable);
-    var lowered_lir = try FromIr.run(
+fn expectInspect(comptime source: []const u8, expected: []const u8) !void {
+    const resources = try helpers.parseAndCanonicalizeInspectedExpr(testing.allocator, source);
+    defer helpers.cleanupParseAndCanonical(testing.allocator, resources);
+    const actual = try helpers.lirInterpreterInspectedStr(
         testing.allocator,
-        &all_module_envs,
-        null,
-        base.target.TargetUsize.native,
-        lowered_ir,
+        resources.module_env,
+        resources.expr_idx,
+        resources.builtin_module.env,
     );
-    defer lowered_lir.deinit();
-
-    var runtime_env = RuntimeEnv.init(testing.allocator);
-    defer runtime_env.deinit();
-    const roc_ops = runtime_env.get_ops();
-
-    var interp = try Interpreter.init(testing.allocator, &lowered_lir.store, &lowered_lir.layouts, roc_ops);
-    defer interp.deinit();
-
-    const main_proc = try entryProcId(&lowered_lir);
-    const result = try interp.eval(.{ .proc_id = main_proc });
-    const ret_layout = lowered_lir.store.getProcSpec(main_proc).ret_layout;
-    try testing.expectEqual(layout.Idx.i64, ret_layout);
-    return result.value.read(i64);
-}
-
-fn evalBoolExpr(comptime source: []const u8) !bool {
-    var test_env = try CheckTestEnv.initExpr("Test", source);
-    defer test_env.deinit();
-    try test_env.assertNoErrors();
-
-    const all_module_envs = [_]*const can.ModuleEnv{
-        test_env.module_env,
-        test_env.builtin_module.env,
-    };
-    test_env.module_env.imports.resolveImports(test_env.module_env, &all_module_envs);
-
-    var mono_lowerer = monotype.Lower.Lowerer.init(testing.allocator, &all_module_envs, 1);
-    defer mono_lowerer.deinit();
-    const mono = try mono_lowerer.run(0);
-    const lifted = try monotype_lifted.Lower.run(testing.allocator, mono);
-    const solved = try lambdasolved.Lower.run(testing.allocator, lifted);
-    const executable = try lambdamono.Lower.run(testing.allocator, solved);
-    const lowered_ir = try ir.Lower.run(testing.allocator, executable);
-    var lowered_lir = try FromIr.run(
-        testing.allocator,
-        &all_module_envs,
-        null,
-        base.target.TargetUsize.native,
-        lowered_ir,
-    );
-    defer lowered_lir.deinit();
-
-    var runtime_env = RuntimeEnv.init(testing.allocator);
-    defer runtime_env.deinit();
-    const roc_ops = runtime_env.get_ops();
-
-    var interp = try Interpreter.init(testing.allocator, &lowered_lir.store, &lowered_lir.layouts, roc_ops);
-    defer interp.deinit();
-
-    const main_proc = try entryProcId(&lowered_lir);
-    const result = try interp.eval(.{ .proc_id = main_proc });
-    const ret_layout = lowered_lir.store.getProcSpec(main_proc).ret_layout;
-    try testing.expectEqual(layout.Idx.bool, ret_layout);
-    return result.value.read(u8) != 0;
-}
-
-fn expectI64(comptime source: []const u8, expected: i64) !void {
-    try testing.expectEqual(expected, try evalI64Expr(source));
-}
-
-fn expectBool(comptime source: []const u8, expected: bool) !void {
-    try testing.expectEqual(expected, try evalBoolExpr(source));
+    defer testing.allocator.free(actual);
+    try testing.expectEqualStrings(expected, actual);
 }
 
 test "cor pipeline - recursive lambda factorial" {
-    try expectI64(
+    try expectInspect(
         \\{
         \\    factorial = |n| if (n <= 1.I64) 1.I64 else n * factorial(n - 1.I64)
         \\    factorial(5.I64)
         \\}
         ,
-        120,
+        "120",
     );
 }
 
 test "cor pipeline - mutual recursion in local lambdas" {
-    try expectBool(
+    try expectInspect(
         \\{
         \\    is_even = |n| if (n == 0.I64) True else is_odd(n - 1.I64)
         \\    is_odd = |n| if (n == 0.I64) False else is_even(n - 1.I64)
         \\    is_even(6.I64)
         \\}
         ,
-        true,
+        "True",
     );
 }
 
 test "cor pipeline - for loop sums list" {
-    try expectI64(
+    try expectInspect(
         \\{
         \\    var $sum = 0.I64
         \\    for item in [10.I64, 20.I64, 30.I64] {
@@ -147,12 +51,12 @@ test "cor pipeline - for loop sums list" {
         \\    $sum
         \\}
         ,
-        60,
+        "60",
     );
 }
 
 test "cor pipeline - for loop in lambda body" {
-    try expectI64(
+    try expectInspect(
         \\{
         \\    sum = |xs| {
         \\        var $sum = 0.I64
@@ -164,12 +68,12 @@ test "cor pipeline - for loop in lambda body" {
         \\    sum([1.I64, 2.I64, 3.I64, 4.I64])
         \\}
         ,
-        10,
+        "10",
     );
 }
 
 test "cor pipeline - recursive lambda with record" {
-    try expectI64(
+    try expectInspect(
         \\{
         \\    f = |n|
         \\        if n <= 0.I64
@@ -179,12 +83,12 @@ test "cor pipeline - recursive lambda with record" {
         \\    f(100.I64)
         \\}
         ,
-        5050,
+        "5050",
     );
 }
 
 test "cor pipeline - for loop early return" {
-    try expectBool(
+    try expectInspect(
         \\{
         \\    f = |list| {
         \\        for _item in list {
@@ -195,12 +99,12 @@ test "cor pipeline - for loop early return" {
         \\    f([1.I64, 2.I64, 3.I64])
         \\}
         ,
-        true,
+        "True",
     );
 }
 
 test "cor pipeline - for loop closure early return" {
-    try expectBool(
+    try expectInspect(
         \\{
         \\    f = |list, pred| {
         \\        for item in list {
@@ -211,6 +115,6 @@ test "cor pipeline - for loop closure early return" {
         \\    f([1.I64, 2.I64, 3.I64], |_x| True)
         \\}
         ,
-        true,
+        "True",
     );
 }

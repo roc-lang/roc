@@ -66,8 +66,9 @@ Interpreter-specific coverage lives in `src/eval/test/`:
   evaluate Roc expressions.
 - `arithmetic_comprehensive_test.zig` — Comprehensive numeric operation tests.
 - `list_refcount_*.zig` — Reference counting tests for list operations.
-- `closure_test.zig`, `low_level_interp_test.zig`, `anno_only_interp_test.zig`
-  — Targeted test suites for specific interpreter features.
+- `cor_pipeline_test.zig`, `parallel_runner.zig`, `anno_only_interp_test.zig`
+  — Targeted test suites for cor-style lowering, inspect-only backend parity,
+  and interpreter-specific features.
 
 Run tests with:
 
