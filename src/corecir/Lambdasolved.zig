@@ -924,6 +924,52 @@ fn bindingSourceExprRef(source: CaptureValueSource) ?ExprRef {
     };
 }
 
+fn directCalleeLowLevelOp(
+    driver: anytype,
+    result: anytype,
+    thread: SemanticThread,
+    module_idx: u32,
+    expr_idx: CIR.Expr.Idx,
+) ?CIR.Expr.LowLevel {
+    const source_context = thread.requireSourceContext();
+    if (result.getExprLowLevelOp(source_context, module_idx, expr_idx)) |low_level_op| {
+        return low_level_op;
+    }
+    if (result.getExprOriginExpr(source_context, module_idx, expr_idx)) |origin| {
+        if (result.getExprLowLevelOp(origin.source_context, origin.module_idx, origin.expr_idx)) |low_level_op| {
+            return low_level_op;
+        }
+    }
+
+    const module_env = driver.all_module_envs[module_idx];
+    const expr = module_env.store.getExpr(expr_idx);
+    if (expr == .e_lookup_local) {
+        const lookup = expr.e_lookup_local;
+        if (thread.lookupValueBinding(module_idx, lookup.pattern_idx)) |source| {
+            if (bindingSourceExprRef(source)) |source_expr_ref| {
+                if (result.getExprLowLevelOp(
+                    source_expr_ref.source_context,
+                    source_expr_ref.module_idx,
+                    source_expr_ref.expr_idx,
+                )) |low_level_op| {
+                    return low_level_op;
+                }
+                if (result.getExprOriginExpr(
+                    source_expr_ref.source_context,
+                    source_expr_ref.module_idx,
+                    source_expr_ref.expr_idx,
+                )) |origin| {
+                    if (result.getExprLowLevelOp(origin.source_context, origin.module_idx, origin.expr_idx)) |low_level_op| {
+                        return low_level_op;
+                    }
+                }
+            }
+        }
+    }
+
+    return null;
+}
+
 fn requireSpecializedParamMonotype(
     result: anytype,
     specialized_param: @FieldType(CaptureValueSource, "specialized_param"),
@@ -2848,7 +2894,15 @@ fn resolveTemplateDefiningSourceContext(
             .module_idx = template.module_idx,
             .expr_idx = template.cir_expr,
         } },
-        .lambda, .hosted_lambda, .closure => {},
+        .lambda, .hosted_lambda => {
+            if (template.owner == .root_scope) {
+                return .{ .template_expr = .{
+                    .module_idx = template.module_idx,
+                    .expr_idx = template.cir_expr,
+                } };
+            }
+        },
+        .closure => {},
     }
 
     switch (template.owner) {
@@ -2858,13 +2912,7 @@ fn resolveTemplateDefiningSourceContext(
                 .callable_inst => |context_id| {
                     current = result.getCallableInst(@as(CallableInstId, @enumFromInt(@intFromEnum(context_id)))).defining_source_context;
                 },
-                .root_expr, .provenance_expr => return current,
-                .template_expr => {
-                    std.debug.panic(
-                        "Lambdasolved invariant violated: template expr={d} in module {d} reached callable inst creation from template_expr context",
-                        .{ @intFromEnum(template.cir_expr), template.module_idx },
-                    );
-                },
+                .root_expr, .provenance_expr, .template_expr => return current,
             };
         },
         .lexical_template => |lexical_owner_template| {
@@ -7669,7 +7717,7 @@ fn scanCirExprChildren(
                 resolve_direct_calls,
             );
             try scanCirValueExprSpanWithDirectCallResolution(driver, visit_memo, result, thread, module_idx, arg_exprs, resolve_direct_calls);
-            if (result.getExprLowLevelOp(thread.requireSourceContext(), module_idx, call_expr.func)) |low_level_op| {
+            if (directCalleeLowLevelOp(driver, result, thread, module_idx, call_expr.func)) |low_level_op| {
                 if (low_level_op == .str_inspect and arg_exprs.len != 0) {
                     try resolveStrInspectHelperCallableInstsForTypeVar(
                         driver,
@@ -8593,7 +8641,7 @@ pub fn resolveDirectCallSite(
     const resolved_low_level_op = if (resolved_template_id) |template_id|
         result.getCallableTemplate(template_id).low_level_op
     else
-        result.getExprLowLevelOp(thread.requireSourceContext(), module_idx, call_expr.func);
+        directCalleeLowLevelOp(driver, result, thread, module_idx, call_expr.func);
     if (resolved_low_level_op) |low_level_op| {
         const arg_exprs = module_env.store.sliceExpr(call_expr.args);
         try recordExprCallSite(
@@ -9299,7 +9347,13 @@ fn realizeStructuredExprCallableSemantics(
                     .direct, .indirect_call => {},
                 }
             }
-            if (result.getExprLowLevelOp(source_context, module_idx, call_expr.func) != null) return;
+            if (directCalleeLowLevelOp(
+                driver,
+                result,
+                SemanticThread.trackedThread(source_context),
+                module_idx,
+                call_expr.func,
+            ) != null) return;
 
             const call_site = readExprCallSite(result, source_context, module_idx, expr_idx);
             const resolved_call_site = call_site orelse {
