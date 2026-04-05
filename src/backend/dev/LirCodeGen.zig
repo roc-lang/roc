@@ -4586,10 +4586,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .tag_discriminant = payload.tag_discriminant,
                     .target_layout = target_layout,
                 }),
-                .tag_payload_struct => |_| std.debug.panic(
-                    "Dev/codegen TODO: tag_payload_struct lowering is not implemented yet",
-                    .{},
-                ),
+                .tag_payload_struct => |payload| try self.generateTagPayloadStructAccess(.{
+                    .source = payload.source,
+                    .tag_discriminant = payload.tag_discriminant,
+                    .target_layout = target_layout,
+                }),
                 .nominal => |nominal| try self.emitValueLocal(nominal.backing_ref),
             };
         }
@@ -8279,6 +8280,62 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
+        fn generateTagPayloadStructAccess(self: *Self, tps: anytype) Allocator.Error!ValueLocation {
+            const ls = self.layout_store;
+            const raw_value_loc = try self.emitValueLocal(tps.source);
+            const source_layout_idx = self.localLayout(tps.source);
+            const union_layout = ls.getLayout(source_layout_idx);
+            const payload_layout_idx = switch (union_layout.tag) {
+                .tag_union => blk: {
+                    const variants = ls.getTagUnionVariants(ls.getTagUnionData(union_layout.data.tag_union.idx));
+                    break :blk variants.get(tps.tag_discriminant).payload_layout;
+                },
+                .box => blk: {
+                    const inner_layout = ls.getLayout(union_layout.data.box);
+                    if (inner_layout.tag != .tag_union) {
+                        return raw_value_loc;
+                    }
+                    const variants = ls.getTagUnionVariants(ls.getTagUnionData(inner_layout.data.tag_union.idx));
+                    break :blk variants.get(tps.tag_discriminant).payload_layout;
+                },
+                else => tps.target_layout,
+            };
+            const payload_size = ls.layoutSizeAlign(ls.getLayout(payload_layout_idx)).size;
+
+            if (union_layout.tag == .tag_union) {
+                const value_loc = try self.materializeValueToStackForLayout(raw_value_loc, source_layout_idx);
+                const base_offset: i32 = switch (value_loc) {
+                    .stack => |s| s.offset,
+                    .stack_i128 => |off| off,
+                    .stack_str => |off| off,
+                    .list_stack => |ls_info| ls_info.struct_offset,
+                    else => unreachable,
+                };
+                return self.fieldLocationFromLayout(base_offset, payload_size, payload_layout_idx);
+            } else if (union_layout.tag == .box) {
+                const inner_layout = ls.getLayout(union_layout.data.box);
+                if (inner_layout.tag == .tag_union) {
+                    const box_ptr_reg = try self.ensureInGeneralReg(raw_value_loc);
+                    const dest_offset = self.codegen.allocStackSlot(payload_size);
+                    var copied: u32 = 0;
+                    while (copied < payload_size) : (copied += 8) {
+                        const temp_reg = try self.allocTempGeneral();
+                        try self.emitLoad(.w64, temp_reg, box_ptr_reg, @intCast(copied));
+                        try self.emitStore(.w64, frame_ptr, dest_offset + @as(i32, @intCast(copied)), temp_reg);
+                        self.codegen.freeGeneral(temp_reg);
+                    }
+                    self.codegen.freeGeneral(box_ptr_reg);
+                    return self.fieldLocationFromLayout(dest_offset, payload_size, payload_layout_idx);
+                } else {
+                    return raw_value_loc;
+                }
+            } else if (union_layout.tag == .scalar or union_layout.tag == .zst) {
+                return raw_value_loc;
+            } else {
+                unreachable;
+            }
+        }
+
         /// Generate code for explicit tag-discriminant access.
         fn generateDiscriminantAccess(self: *Self, disc: anytype) Allocator.Error!ValueLocation {
             const ls = self.layout_store;
@@ -11466,6 +11523,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 try self.moveOneRegToReturn(loc);
                             }
                         },
+                        .opaque_ptr => try self.moveOneRegToReturn(loc),
                     }
                 },
                 // Structs and tag unions: size determines register count

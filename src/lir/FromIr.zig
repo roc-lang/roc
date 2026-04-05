@@ -120,6 +120,7 @@ const Lowerer = struct {
         const proc_id = self.proc_ids_by_symbol.get(def.name.raw()) orelse debugPanic("lir.from_ir.lowerDef missing proc placeholder");
         var proc = ProcLowerer.init(self, proc_id);
         defer proc.deinit();
+        try proc.indexStructFieldDefs(def.body);
 
         const args = self.input.store.sliceVarSpan(def.args);
         const arg_locals = try proc.lowerVarSpan(args);
@@ -145,10 +146,17 @@ const Lowerer = struct {
         if (self.ir_to_layout.get(@intFromEnum(id))) |existing| return existing;
         if (self.active_layouts.get(@intFromEnum(id))) |active| return active;
 
+        const content = self.input.layouts.getContent(id);
+        if (content == .primitive) {
+            const lowered = try self.lowerLayoutContent(content);
+            try self.ir_to_layout.put(@intFromEnum(id), lowered);
+            return lowered;
+        }
+
         const placeholder = try self.layouts.reserveLayout(layout_mod.Layout.box(.zst));
         try self.active_layouts.put(@intFromEnum(id), placeholder);
 
-        const lowered = try self.lowerLayoutContent(self.input.layouts.getContent(id));
+        const lowered = try self.lowerLayoutContent(content);
         const lowered_layout = self.layouts.getLayout(lowered);
         self.layouts.updateLayout(placeholder, lowered_layout);
 
@@ -203,6 +211,21 @@ const Lowerer = struct {
         };
     }
 
+    fn lowerStringId(self: *Lowerer, idx: base.StringLiteral.Idx) std.mem.Allocator.Error!base.StringLiteral.Idx {
+        return self.store.insertString(self.input.strings.get(idx));
+    }
+
+    fn lowerLiteral(self: *Lowerer, lit: ir.Ast.Lit) std.mem.Allocator.Error!LIR.LiteralValue {
+        return switch (lit) {
+            .int => |value| .{ .i128_literal = .{ .value = value, .layout_idx = .i128 } },
+            .f32 => |value| .{ .f32_literal = value },
+            .f64 => |value| .{ .f64_literal = value },
+            .dec => |value| .{ .dec_literal = value },
+            .str => |value| .{ .str_literal = try self.lowerStringId(value) },
+            .bool => |value| .{ .bool_literal = value },
+        };
+    }
+
     fn nextJoin(self: *Lowerer) LIR.JoinPointId {
         const id: LIR.JoinPointId = @enumFromInt(self.next_join_id);
         self.next_join_id += 1;
@@ -214,20 +237,44 @@ const ProcLowerer = struct {
     parent: *Lowerer,
     proc_id: LIR.LirProcSpecId,
     locals_by_symbol: std.AutoHashMap(u32, LIR.LocalId),
-    struct_fields_by_local: std.AutoHashMap(u32, LIR.LocalSpan),
+    struct_fields_by_symbol: std.AutoHashMap(u32, ir.Ast.Span(ir.Ast.Var)),
 
     fn init(parent: *Lowerer, proc_id: LIR.LirProcSpecId) ProcLowerer {
         return .{
             .parent = parent,
             .proc_id = proc_id,
             .locals_by_symbol = std.AutoHashMap(u32, LIR.LocalId).init(parent.allocator),
-            .struct_fields_by_local = std.AutoHashMap(u32, LIR.LocalSpan).init(parent.allocator),
+            .struct_fields_by_symbol = std.AutoHashMap(u32, ir.Ast.Span(ir.Ast.Var)).init(parent.allocator),
         };
     }
 
     fn deinit(self: *ProcLowerer) void {
-        self.struct_fields_by_local.deinit();
+        self.struct_fields_by_symbol.deinit();
         self.locals_by_symbol.deinit();
+    }
+
+    fn indexStructFieldDefs(self: *ProcLowerer, block_id: ir.Ast.BlockId) std.mem.Allocator.Error!void {
+        const block = self.parent.input.store.getBlock(block_id);
+        for (self.parent.input.store.sliceStmtSpan(block.stmts)) |stmt_id| {
+            const stmt = self.parent.input.store.getStmt(stmt_id);
+            switch (stmt) {
+                .let_ => |let_stmt| {
+                    switch (self.parent.input.store.getExpr(let_stmt.expr)) {
+                        .make_struct => |fields| try self.struct_fields_by_symbol.put(let_stmt.bind.symbol.raw(), fields),
+                        else => {},
+                    }
+                },
+                .switch_ => |switch_stmt| {
+                    for (self.parent.input.store.sliceBranchSpan(switch_stmt.branches)) |branch_id| {
+                        const branch = self.parent.input.store.getBranch(branch_id);
+                        try self.indexStructFieldDefs(branch.block);
+                    }
+                    try self.indexStructFieldDefs(switch_stmt.default_block);
+                },
+                .for_list => |for_stmt| try self.indexStructFieldDefs(for_stmt.body),
+                .set, .expect => {},
+            }
+        }
     }
 
     fn lowerVar(self: *ProcLowerer, value: ir.Ast.Var) std.mem.Allocator.Error!LIR.LocalId {
@@ -273,7 +320,7 @@ const ProcLowerer = struct {
                 .loop_continue => try self.parent.store.addCFStmt(.loop_continue),
             },
             .return_ => |value| try self.parent.store.addCFStmt(.{ .ret = .{ .value = try self.lowerVar(value) } }),
-            .crash => |msg| try self.parent.store.addCFStmt(.{ .crash = .{ .msg = msg } }),
+            .crash => |msg| try self.parent.store.addCFStmt(.{ .crash = .{ .msg = try self.parent.lowerStringId(msg) } }),
             .runtime_error => try self.parent.store.addCFStmt(.runtime_error),
         };
     }
@@ -353,7 +400,7 @@ const ProcLowerer = struct {
             .lit => |lit| try self.parent.store.addCFStmt(.{ .assign_literal = .{
                 .target = target,
                 .result = .fresh,
-                .value = lowerLiteral(lit),
+                .value = try self.parent.lowerLiteral(lit),
                 .next = next,
             } }),
             .fn_ptr => |name| try self.parent.store.addCFStmt(.{ .assign_literal = .{
@@ -394,7 +441,6 @@ const ProcLowerer = struct {
                 const locals = try self.lowerVarSpan(self.parent.input.store.sliceVarSpan(fields));
                 defer self.parent.allocator.free(locals);
                 const span = try self.parent.store.addLocalSpan(locals);
-                try self.struct_fields_by_local.put(@intFromEnum(target), span);
                 break :blk try self.parent.store.addCFStmt(.{ .assign_struct = .{
                     .target = target,
                     .result = .fresh,
@@ -459,8 +505,11 @@ const ProcLowerer = struct {
 
     fn lowerUnionArgs(self: *ProcLowerer, payload: ?ir.Ast.Var) std.mem.Allocator.Error!LIR.LocalSpan {
         if (payload == null) return LIR.LocalSpan.empty();
-        const payload_local = try self.lowerVar(payload.?);
-        return self.struct_fields_by_local.get(@intFromEnum(payload_local)) orelse debugPanic("lir.from_ir.lowerUnionArgs missing payload struct fields");
+        const fields = self.struct_fields_by_symbol.get(payload.?.symbol.raw()) orelse
+            debugPanic("lir.from_ir.lowerUnionArgs missing payload struct fields");
+        const locals = try self.lowerVarSpan(self.parent.input.store.sliceVarSpan(fields));
+        defer self.parent.allocator.free(locals);
+        return try self.parent.store.addLocalSpan(locals);
     }
 
     fn lookupProcId(self: *ProcLowerer, symbol: ir.Ast.Symbol) LIR.LirProcSpecId {
@@ -470,17 +519,6 @@ const ProcLowerer = struct {
 
 fn lirSymbol(symbol: ir.Ast.Symbol) LIR.Symbol {
     return LIR.Symbol.fromRaw(symbol.raw());
-}
-
-fn lowerLiteral(lit: ir.Ast.Lit) LIR.LiteralValue {
-    return switch (lit) {
-        .int => |value| .{ .i128_literal = .{ .value = value, .layout_idx = .i128 } },
-        .f32 => |value| .{ .f32_literal = value },
-        .f64 => |value| .{ .f64_literal = value },
-        .dec => |value| .{ .dec_literal = value },
-        .str => |value| .{ .str_literal = value },
-        .bool => |value| .{ .bool_literal = value },
-    };
 }
 
 fn debugPanic(comptime msg: []const u8) noreturn {

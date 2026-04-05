@@ -859,11 +859,10 @@ fn mkNumberTypeContent(self: *Self, type_name: []const u8, env: *Env) Allocator.
     else
         self.builtin_ctx.module_name; // We're compiling Builtin module itself
 
-    // Use fully-qualified type name "Builtin.Num.U8" etc.
-    // This allows method lookup to work correctly (getMethodIdent builds "Builtin.Num.U8.method_name")
-    const qualified_type_name = try std.fmt.allocPrint(self.gpa, "Builtin.Num.{s}", .{type_name});
-    defer self.gpa.free(qualified_type_name);
-    const type_name_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text(qualified_type_name));
+    // NominalType.ident must use the source-level type identity, not a synthesized
+    // fully qualified builtin path. Numeric builtin types are user-facing top-level
+    // names like `U8`/`I64`, and static dispatch resolves through origin_module.
+    const type_name_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text(type_name));
     const type_ident = types_mod.TypeIdent{
         .ident_idx = type_name_ident,
     };
@@ -5829,6 +5828,17 @@ fn checkBinopExpr(
 
     switch (binop.op) {
         .add, .sub, .mul, .div, .rem, .div_trunc => {
+            // Operator syntax is homogeneous: `a + b` desugars to a method
+            // lookup, but the syntax-level typing rule requires both operands
+            // to have the same type. Heterogeneous arithmetic remains
+            // available through direct method-call syntax.
+            const arg_unify_result = try self.unify(lhs_var, rhs_var, env);
+
+            if (!arg_unify_result.isOk()) {
+                try self.unifyWith(expr_var, .err, env);
+                return does_fx;
+            }
+
             const method_name =
                 switch (binop.op) {
                     .add => self.cir.idents.plus,
@@ -5840,13 +5850,13 @@ fn checkBinopExpr(
                     else => unreachable,
                 };
 
-            // Return type equals lhs type - e.g. Duration.times : Duration, I64 -> Duration
-            const ret_var = lhs_var;
+            const arg_var = rhs_var;
+            const ret_var = arg_var;
 
-            // Create the binop static dispatch function: lhs.method(rhs) -> ret
+            // Create the binop static dispatch function: arg.method(arg) -> arg
             try self.mkBinopConstraint(
-                lhs_var,
-                rhs_var,
+                arg_var,
+                arg_var,
                 ret_var,
                 method_name,
                 env,
@@ -6310,71 +6320,15 @@ fn poisonErroneousTopLevelValueUses(self: *Self) Allocator.Error!void {
     }
 }
 
-/// After type checking, resolve remaining from_numeral flex vars: first by inferring
-/// the type from peer arguments in dispatch constraints (e.g., U64 from List.len),
-/// then defaulting to Dec if no concrete peer is found.
-/// Resolve from_numeral flex vars using type information from their dispatch
-/// constraints, before falling back to Dec defaulting.
+/// Numeric literals no longer need a separate binop-context rescue pass.
 ///
-/// When a numeric literal appears in an arithmetic expression like
-/// `0 + List.len(tail)`, the binop creates a dispatch constraint
-/// `plus(F, U64) -> F` on the from_numeral flex var F. The normal dispatch
-/// resolution can't process this because F (the dispatcher) is still flex.
-/// But the constraint already contains the answer: the peer argument U64
-/// tells us F must be U64, since all built-in numeric arithmetic is
-/// homogeneous ((T, T) -> T) and from_numeral vars can only be numeric.
-///
-/// This pass walks from_numeral flex vars, finds concrete peer arguments
-/// in their desugared_binop constraints, and unifies — letting the normal
-/// dispatch resolution complete in the subsequent checkAllConstraints call.
+/// Arithmetic operator syntax is checked homogeneously at the syntax
+/// boundary, so `x + 1` directly unifies the literal with `x` during normal
+/// checking. Any remaining from_numeral vars here are genuinely unconstrained
+/// and will be handled by the normal numeric-default verification step.
 fn resolveNumericLiteralsFromContext(self: *Self, env: *Env) std.mem.Allocator.Error!void {
-    if (self.types.from_numeral_flex_count == 0) return;
-
-    const num_vars: u32 = @intCast(self.types.len());
-    var i: u32 = 0;
-    while (i < num_vars) : (i += 1) {
-        const var_: types_mod.Var = @enumFromInt(i);
-        const resolved = self.types.resolveVar(var_);
-        if (resolved.desc.content != .flex) continue;
-
-        const flex = resolved.desc.content.flex;
-        if (flex.constraints.len() == 0) continue;
-
-        const constraints = self.types.sliceStaticDispatchConstraints(flex.constraints);
-
-        // Only process from_numeral flex vars.
-        var has_from_numeral = false;
-        for (constraints) |c| {
-            if (c.origin == .from_numeral) {
-                has_from_numeral = true;
-                break;
-            }
-        }
-        if (!has_from_numeral) continue;
-
-        // Look for a desugared_binop constraint with a concrete peer argument.
-        for (constraints) |c| {
-            if (c.origin != .desugared_binop) continue;
-            const fn_content = self.types.resolveVar(c.fn_var).desc.content;
-            const func = fn_content.unwrapFunc() orelse continue;
-            var found_peer = false;
-            for (self.types.sliceVars(func.args)) |arg| {
-                const resolved_arg = self.types.resolveVar(arg);
-                if (resolved_arg.var_ == resolved.var_) continue; // skip self
-                if (resolved_arg.desc.content.unwrapNominalType() == null) continue;
-                _ = try self.unify(resolved.var_, resolved_arg.var_, env);
-                found_peer = true;
-                break;
-            }
-            if (found_peer) break;
-        }
-    }
-
-    // Process constraints generated by the unifications above.
-    // The from_numeral flex vars that were unified with concrete peers
-    // now have their dispatch constraints deferred, and checkAllConstraints
-    // will resolve them through the normal dispatch machinery.
-    try self.checkAllConstraints(env);
+    _ = self;
+    _ = env;
 }
 
 /// Verify that remaining from_numeral flex vars are compatible with Dec.
@@ -6668,6 +6622,8 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                 const def_idx: CIR.Def.Idx = @enumFromInt(@as(u32, @intCast(node_idx_in_original_env)));
                 const def_var: Var = ModuleEnv.varFrom(def_idx);
 
+                try self.recordResolvedStaticDispatchSite(constraint.fn_var, original_env, def_idx);
+
                 // Track whether we just processed a cycle participant
                 var cycle_method_expr_var: ?Var = null;
 
@@ -6883,6 +6839,26 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
         self.gpa,
         self.scratch_deferred_static_dispatch_constraints.sliceFromStart(scratch_deferred_top),
     );
+}
+
+fn recordResolvedStaticDispatchSite(
+    self: *Self,
+    constraint_fn_var: Var,
+    target_env: *const ModuleEnv,
+    target_def_idx: CIR.Def.Idx,
+) Allocator.Error!void {
+    const site_requirement = self.types.findStaticDispatchSiteRequirementByFnVar(constraint_fn_var) orelse return;
+    const target_module_name_text = if (!target_env.qualified_module_ident.isNone())
+        target_env.getIdent(target_env.qualified_module_ident)
+    else
+        target_env.module_name;
+    const target_module_name = try @constCast(self.cir).insertIdent(base.Ident.for_text(target_module_name_text));
+
+    try self.types.recordResolvedStaticDispatchSite(.{
+        .expr_var = site_requirement.expr_var,
+        .target_module_name = target_module_name,
+        .target_def_idx = @intFromEnum(target_def_idx),
+    });
 }
 
 /// Check if a structural type supports is_eq.

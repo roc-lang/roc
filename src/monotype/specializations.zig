@@ -4,7 +4,6 @@ const std = @import("std");
 const can = @import("can");
 const symbol_mod = @import("symbol");
 const type_mod = @import("type.zig");
-const ctx_mod = @import("ctx.zig");
 
 pub const SourceFn = struct {
     module_idx: u32,
@@ -36,18 +35,24 @@ pub const Queue = struct {
 
     pub fn specializeFn(
         self: *Queue,
-        ctx: *ctx_mod.Ctx,
+        symbols: *symbol_mod.Store,
+        types: *const type_mod.Store,
         source_symbol: symbol_mod.Symbol,
         source: SourceFn,
         ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!symbol_mod.Symbol {
         for (self.pending.items) |item| {
-            if (item.source_symbol == source_symbol and ctx.types.equalIds(item.ty, ty)) {
+            if (item.source_symbol == source_symbol and types.equalIds(item.ty, ty)) {
                 return item.specialized_symbol;
             }
         }
 
-        const specialized_symbol = try ctx.addSpecializedTopLevelSymbol(source_symbol);
+        const source_entry = symbols.get(source_symbol);
+        const specialized_symbol = try symbols.add(source_entry.name, .{
+            .specialized_top_level_def = .{
+                .source_symbol = @intFromEnum(source_symbol),
+            },
+        });
         try self.pending.append(self.allocator, .{
             .source_symbol = source_symbol,
             .source = source,

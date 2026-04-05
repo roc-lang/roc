@@ -42,6 +42,16 @@ fn lowerTypeRec(
         .list => |elem| .{
             .list = try lowerTypeRec(mono_types, ir_layouts, cache, boxed, elem),
         },
+        .tuple => |tuple| blk: {
+            const elems = mono_types.sliceTypeSpan(tuple);
+            const layouts = try ir_layouts.allocator.alloc(ir.LayoutId, elems.len);
+            defer ir_layouts.allocator.free(layouts);
+
+            for (elems, 0..) |elem, i| {
+                layouts[i] = try lowerTypeRec(mono_types, ir_layouts, cache, boxed, elem);
+            }
+            break :blk .{ .struct_ = try ir_layouts.addLayoutSpan(layouts) };
+        },
         .record => |record| blk: {
             const fields = mono_types.sliceFields(record.fields);
             const layouts = try ir_layouts.allocator.alloc(ir.LayoutId, fields.len);

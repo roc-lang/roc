@@ -87,8 +87,10 @@ pub const Instantiator = struct {
         }
 
         // Check if we've already instantiated this variable
-        if (self.var_map.get(resolved_var)) |fresh_var| {
-            return fresh_var;
+        if (self.var_map.count() > 0) {
+            if (self.var_map.get(resolved_var)) |fresh_var| {
+                return fresh_var;
+            }
         }
 
         switch (resolved.desc.content) {

@@ -30,6 +30,7 @@ pub const Field = struct {
 
 pub const Content = union(enum) {
     list: TypeId,
+    tuple: Span(TypeId),
     tag_union: struct {
         tags: Span(Tag),
     },
@@ -139,6 +140,15 @@ pub const Store = struct {
         return switch (left_content) {
             .primitive => |prim| prim == right_content.primitive,
             .list => |elem| self.equalIdsVisited(elem, right_content.list, visited),
+            .tuple => |tuple| blk: {
+                const left_elems = self.sliceTypeSpan(tuple);
+                const right_elems = self.sliceTypeSpan(right_content.tuple);
+                if (left_elems.len != right_elems.len) break :blk false;
+                for (left_elems, right_elems) |left_elem, right_elem| {
+                    if (!try self.equalIdsVisited(left_elem, right_elem, visited)) break :blk false;
+                }
+                break :blk true;
+            },
             .record => |record| blk: {
                 const left_fields = self.sliceFields(record.fields);
                 const right_fields = self.sliceFields(right_content.record.fields);

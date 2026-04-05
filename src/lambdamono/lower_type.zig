@@ -146,6 +146,15 @@ fn lowerTypeRec(
             .list => |elem| .{
                 .list = try lowerTypeRec(types, mono_types, mono_cache, elem, symbols),
             },
+            .tuple => |tuple| blk: {
+                const elems = types.sliceTypeVarSpan(tuple);
+                const lowered_elems = try mono_types.allocator.alloc(mono.TypeId, elems.len);
+                defer mono_types.allocator.free(lowered_elems);
+                for (elems, 0..) |elem, i| {
+                    lowered_elems[i] = try lowerTypeRec(types, mono_types, mono_cache, elem, symbols);
+                }
+                break :blk .{ .tuple = try mono_types.addTypeSpan(lowered_elems) };
+            },
             .record => |record| blk: {
                 const fields = types.sliceFields(record.fields);
                 const out = try mono_types.allocator.alloc(mono.Field, fields.len);

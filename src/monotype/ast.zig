@@ -139,6 +139,7 @@ pub const Expr = struct {
 };
 
 pub const Stmt = union(enum) {
+    local_fn: LetFn,
     decl: struct {
         bind: TypedSymbol,
         body: ExprId,

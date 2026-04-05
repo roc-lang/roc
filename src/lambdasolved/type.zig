@@ -52,6 +52,7 @@ pub const Content = union(enum) {
         ret: TypeVarId,
     },
     list: TypeVarId,
+    tuple: Span(TypeVarId),
     tag_union: struct {
         tags: Span(Tag),
     },

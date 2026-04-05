@@ -812,6 +812,23 @@ pub const StaticDispatchSiteRequirement = struct {
     pub const SafeList = MkSafeList(@This());
 };
 
+/// Exact static-dispatch target chosen by type checking for a source call site.
+///
+/// This remains a source-stage fact:
+/// - `expr_var` identifies the dispatch site in the source module
+/// - `target_module_name` is an ident in that same source module's ident store
+/// - `target_def_idx` names the resolved top-level def in the target module
+///
+/// Later executable stages must immediately convert this into stable binding identity
+/// and must never treat `target_module_name` as cross-module executable identity.
+pub const ResolvedStaticDispatchSite = struct {
+    expr_var: Var,
+    target_module_name: Ident.Idx,
+    target_def_idx: u32,
+
+    pub const SafeList = MkSafeList(@This());
+};
+
 /// Two record fields
 pub const TwoStaticDispatchConstraints = struct {
     a: StaticDispatchConstraint,

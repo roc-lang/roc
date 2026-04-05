@@ -17,12 +17,14 @@ pub const Result = struct {
     root_defs: std.ArrayList(ast.DefId),
     symbols: symbol_mod.Store,
     types: type_mod.Store,
+    strings: base.StringLiteral.Store,
 
     pub fn deinit(self: *Result) void {
         self.store.deinit();
         self.root_defs.deinit(self.store.allocator);
         self.symbols.deinit();
         self.types.deinit();
+        self.strings.deinit(self.store.allocator);
     }
 };
 
@@ -93,11 +95,13 @@ const Lowerer = struct {
             .root_defs = self.root_defs,
             .symbols = self.input.symbols,
             .types = self.types,
+            .strings = self.input.strings,
         };
 
         self.output = ast.Store.init(self.allocator);
         self.root_defs = .empty;
         self.input.symbols = symbol_mod.Store.init(self.allocator);
+        self.input.strings = .{};
         self.types = type_mod.Store.init(self.allocator);
         return result;
     }
@@ -967,6 +971,17 @@ const Lowerer = struct {
                     .list => |elem| solved.Type.Node{ .content = .{
                         .list = try self.cloneInstType(inst, elem),
                     } },
+                    .tuple => |tuple| blk2: {
+                        const elems = self.input.types.sliceTypeVarSpan(tuple);
+                        const out = try self.allocator.alloc(TypeVarId, elems.len);
+                        defer self.allocator.free(out);
+                        for (elems, 0..) |elem, i| {
+                            out[i] = try self.cloneInstType(inst, elem);
+                        }
+                        break :blk2 solved.Type.Node{ .content = .{
+                            .tuple = try self.input.types.addTypeVarSpan(out),
+                        } };
+                    },
                     .record => |record| blk2: {
                         const fields = self.input.types.sliceFields(record.fields);
                         const out = try self.allocator.alloc(solved.Type.Field, fields.len);
@@ -1106,6 +1121,17 @@ const Lowerer = struct {
             .list => |elem| switch (right) {
                 .list => |other| {
                     try self.unifyRec(elem, other, visited);
+                },
+                else => debugPanic("lambdamono.lower.unify incompatible types"),
+            },
+            .tuple => |tuple| switch (right) {
+                .tuple => |other| {
+                    const left_elems = self.input.types.sliceTypeVarSpan(tuple);
+                    const right_elems = self.input.types.sliceTypeVarSpan(other);
+                    if (left_elems.len != right_elems.len) debugPanic("lambdamono.lower.unify tuple arity mismatch");
+                    for (left_elems, right_elems) |left_elem, right_elem| {
+                        try self.unifyRec(left_elem, right_elem, visited);
+                    }
                 },
                 else => debugPanic("lambdamono.lower.unify incompatible types"),
             },

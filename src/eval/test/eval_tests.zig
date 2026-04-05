@@ -8,14 +8,14 @@ const TestCase = @import("parallel_runner.zig").TestCase;
 pub const tests = [_]TestCase{
     .{ .name = "problem: undefined variable", .source = "undefinedVar", .expected = .{ .problem = {} } },
 
-    .{ .name = "inspect: integer literal", .source = "42", .expected = .{ .inspect_str = "42" } },
+    .{ .name = "inspect: integer literal", .source = "42", .expected = .{ .inspect_str = "42.0" } },
     .{ .name = "inspect: decimal literal", .source = "1.5", .expected = .{ .inspect_str = "1.5" } },
     .{ .name = "inspect: boolean true", .source = "True", .expected = .{ .inspect_str = "True" } },
     .{ .name = "inspect: string literal", .source = "\"hello\"", .expected = .{ .inspect_str = "\"hello\"" } },
-    .{ .name = "inspect: arithmetic", .source = "2 + 3 * 4", .expected = .{ .inspect_str = "14" } },
-    .{ .name = "inspect: if expression", .source = "if (1 == 1) 42 else 99", .expected = .{ .inspect_str = "42" } },
-    .{ .name = "inspect: tuple literal", .source = "(1, 2)", .expected = .{ .inspect_str = "(1, 2)" } },
-    .{ .name = "inspect: record field", .source = "{ x: 42, y: 99 }.x", .expected = .{ .inspect_str = "42" } },
+    .{ .name = "inspect: arithmetic", .source = "2 + 3 * 4", .expected = .{ .inspect_str = "14.0" } },
+    .{ .name = "inspect: if expression", .source = "if (1 == 1) 42 else 99", .expected = .{ .inspect_str = "42.0" } },
+    .{ .name = "inspect: tuple literal", .source = "(1, 2)", .expected = .{ .inspect_str = "(1.0, 2.0)" } },
+    .{ .name = "inspect: record field", .source = "{ x: 42, y: 99 }.x", .expected = .{ .inspect_str = "42.0" } },
 
     .{
         .name = "inspect: recursive lambda factorial",

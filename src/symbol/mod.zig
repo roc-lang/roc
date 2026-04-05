@@ -33,6 +33,9 @@ pub const BindingOrigin = union(enum) {
     specialized_top_level_def: struct {
         source_symbol: u32,
     },
+    specialized_local_fn: struct {
+        source_symbol: u32,
+    },
     local_pattern: struct {
         module_idx: u32,
         pattern_idx: u32,

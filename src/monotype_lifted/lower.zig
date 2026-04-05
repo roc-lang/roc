@@ -25,12 +25,14 @@ pub const Result = struct {
     root_defs: std.ArrayList(ast.DefId),
     symbols: symbol_mod.Store,
     types: type_mod.Store,
+    strings: base.StringLiteral.Store,
 
     pub fn deinit(self: *Result) void {
         self.store.deinit();
         self.root_defs.deinit(self.store.allocator);
         self.symbols.deinit();
         self.types.deinit();
+        self.strings.deinit(self.store.allocator);
     }
 };
 
@@ -106,12 +108,14 @@ const Lowerer = struct {
             .root_defs = self.root_defs,
             .symbols = self.input.symbols,
             .types = self.input.types,
+            .strings = self.input.strings,
         };
 
         self.output = ast.Store.init(self.allocator);
         self.root_defs = .empty;
         self.input.symbols = symbol_mod.Store.init(self.allocator);
         self.input.types = type_mod.Store.init(self.allocator);
+        self.input.strings = .{};
         self.input.program = mono.Lower.Program.init(self.allocator);
         return result;
     }
@@ -503,6 +507,7 @@ const Lowerer = struct {
     ) std.mem.Allocator.Error!ast.StmtId {
         const stmt = self.input.program.store.getStmt(stmt_id);
         const lowered_stmt: ast.Stmt = switch (stmt) {
+            .local_fn => debugPanic("monotype_lifted invariant violated: local_fn stmt must be handled by lowerLocalFnDeclGroup"),
             .decl => |decl| .{ .decl = .{
                 .bind = .{ .ty = decl.bind.ty, .symbol = decl.bind.symbol },
                 .body = try self.lowerExprInto(lifted_defs, venv, decl.body),
@@ -540,19 +545,16 @@ const Lowerer = struct {
         if (index.* >= stmt_ids.len) return false;
 
         const first_stmt = self.input.program.store.getStmt(stmt_ids[index.*]);
-        if (first_stmt != .decl) return false;
-        if (!self.isLocalFnDecl(first_stmt.decl.body)) return false;
+        if (first_stmt != .local_fn) return false;
 
         var group_end = index.*;
         while (group_end < stmt_ids.len) : (group_end += 1) {
             const stmt = self.input.program.store.getStmt(stmt_ids[group_end]);
-            if (stmt != .decl) break;
-            if (!self.isLocalFnDecl(stmt.decl.body)) break;
+            if (stmt != .local_fn) break;
         }
 
         const GroupMember = struct {
-            decl: @FieldType(MonoAst.Stmt, "decl"),
-            clos: @FieldType(MonoAst.Expr.Data, "clos"),
+            letfn: MonoAst.LetFn,
             lifted_symbol: Symbol,
         };
 
@@ -565,46 +567,44 @@ const Lowerer = struct {
         defer if (owned_recursive_venv) |buf| self.allocator.free(buf);
 
         for (stmt_ids[index.*..group_end], 0..) |stmt_id, group_i| {
-            const decl = self.input.program.store.getStmt(stmt_id).decl;
-            const clos = self.input.program.store.getExpr(decl.body).data.clos;
-            const lifted_symbol = try self.freshLiftedLocalFnSymbol(decl.bind.symbol);
+            const letfn = self.input.program.store.getStmt(stmt_id).local_fn;
+            const lifted_symbol = try self.freshLiftedLocalFnSymbol(letfn.bind.symbol);
             group[group_i] = .{
-                .decl = decl,
-                .clos = clos,
+                .letfn = letfn,
                 .lifted_symbol = lifted_symbol,
             };
-            recursive_venv = try self.pushRename(recursive_venv, &owned_recursive_venv, decl.bind.symbol, lifted_symbol);
+            recursive_venv = try self.pushRename(recursive_venv, &owned_recursive_venv, letfn.bind.symbol, lifted_symbol);
         }
 
         for (group) |member| {
             const captures = try self.computeCaptures(
                 recursive_venv,
-                &.{ member.decl.bind.symbol, member.clos.arg.symbol },
-                member.clos.body,
+                &.{ member.letfn.bind.symbol, member.letfn.arg.symbol },
+                member.letfn.body,
             );
             defer self.allocator.free(captures);
 
-            var lowered_body = try self.lowerExpr(recursive_venv, member.clos.body);
+            var lowered_body = try self.lowerExpr(recursive_venv, member.letfn.body);
             defer lowered_body.deinit(self.allocator);
             try lifted_defs.appendSlice(self.allocator, lowered_body.lifted_defs.items);
             try lifted_defs.append(self.allocator, .{
-                .bind = .{ .ty = member.decl.bind.ty, .symbol = member.lifted_symbol },
+                .bind = .{ .ty = member.letfn.bind.ty, .symbol = member.lifted_symbol },
                 .value = .{ .fn_ = .{
-                    .arg = .{ .ty = member.clos.arg.ty, .symbol = member.clos.arg.symbol },
+                    .arg = .{ .ty = member.letfn.arg.ty, .symbol = member.letfn.arg.symbol },
                     .captures = try self.output.addTypedSymbolSpan(captures),
                     .body = lowered_body.expr,
                 } },
             });
 
             if (captures.len == 0) {
-                current_venv.* = try self.pushRename(current_venv.*, owned_current_venv, member.decl.bind.symbol, member.lifted_symbol);
+                current_venv.* = try self.pushRename(current_venv.*, owned_current_venv, member.letfn.bind.symbol, member.lifted_symbol);
             } else {
                 const lifted_ref = try self.output.addExpr(.{
-                    .ty = member.decl.bind.ty,
+                    .ty = member.letfn.bind.ty,
                     .data = .{ .var_ = member.lifted_symbol },
                 });
                 const alias_stmt = try self.output.addStmt(.{ .decl = .{
-                    .bind = .{ .ty = member.decl.bind.ty, .symbol = member.decl.bind.symbol },
+                    .bind = .{ .ty = member.letfn.bind.ty, .symbol = member.letfn.bind.symbol },
                     .body = lifted_ref,
                 } });
                 try lowered_stmt_ids.append(self.allocator, alias_stmt);
@@ -786,6 +786,15 @@ const Lowerer = struct {
     ) std.mem.Allocator.Error!void {
         const stmt = self.input.program.store.getStmt(stmt_id);
         switch (stmt) {
+            .local_fn => |local_fn| {
+                const inserted_bind = try self.bindTemporarily(bound, local_fn.bind.symbol);
+                defer self.unbindTemporarily(bound, local_fn.bind.symbol, inserted_bind);
+
+                const inserted_arg = try self.bindTemporarily(bound, local_fn.arg.symbol);
+                defer self.unbindTemporarily(bound, local_fn.arg.symbol, inserted_arg);
+
+                try self.collectFreeVarsExpr(local_fn.body, bound, free);
+            },
             .decl => |decl| {
                 try self.collectFreeVarsExpr(decl.body, bound, free);
                 _ = try self.bindTemporarily(bound, decl.bind.symbol);
@@ -860,10 +869,6 @@ const Lowerer = struct {
         if (owned_venv.*) |buf| self.allocator.free(buf);
         owned_venv.* = next;
         return next;
-    }
-
-    fn isLocalFnDecl(self: *Lowerer, expr_id: MonoAst.ExprId) bool {
-        return self.input.program.store.getExpr(expr_id).data == .clos;
     }
 
     fn bindTemporarily(self: *Lowerer, bound: *std.AutoHashMap(Symbol, void), symbol: Symbol) std.mem.Allocator.Error!bool {
@@ -977,6 +982,11 @@ const Lowerer = struct {
     fn collectBindingTypesStmt(self: *Lowerer, stmt_id: MonoAst.StmtId) std.mem.Allocator.Error!void {
         const stmt = self.input.program.store.getStmt(stmt_id);
         switch (stmt) {
+            .local_fn => |local_fn| {
+                try self.binding_types.put(local_fn.bind.symbol, local_fn.bind.ty);
+                try self.binding_types.put(local_fn.arg.symbol, local_fn.arg.ty);
+                try self.collectBindingTypesExpr(local_fn.body);
+            },
             .decl => |decl| {
                 try self.binding_types.put(decl.bind.symbol, decl.bind.ty);
                 try self.collectBindingTypesExpr(decl.body);

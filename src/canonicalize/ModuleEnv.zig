@@ -3333,7 +3333,6 @@ pub fn lookupMethodIdentConst(self: *const Self, type_ident: Ident.Idx, method_i
 /// - method_ident: The method's identifier index in source_env
 ///
 /// Returns the qualified method's ident index if found, or null if the method doesn't exist.
-/// Falls back to string-based getMethodIdent for backward compatibility with pre-compiled modules.
 pub fn lookupMethodIdentFromEnv(self: *Self, source_env: *const Self, type_ident: Ident.Idx, method_ident: Ident.Idx) ?Ident.Idx {
     // First, try to find the type and method idents in our own ident store
     const type_name = source_env.getIdent(type_ident);
@@ -3343,19 +3342,11 @@ pub fn lookupMethodIdentFromEnv(self: *Self, source_env: *const Self, type_ident
     const local_type_ident = self.common.findIdent(type_name) orelse return null;
     const local_method_ident = self.common.findIdent(method_name) orelse return null;
 
-    // Try index-based lookup first (O(log n))
-    if (self.lookupMethodIdent(local_type_ident, local_method_ident)) |result| {
-        return result;
-    }
-
-    // Fall back to string-based lookup for backward compatibility with pre-compiled modules
-    // that don't have method_idents populated. This can be removed once all modules are recompiled.
-    return self.getMethodIdent(type_name, method_name);
+    return self.lookupMethodIdent(local_type_ident, local_method_ident);
 }
 
 /// Const version of lookupMethodIdentFromEnv for use with immutable module environments.
 /// Safe to use on deserialized modules since method_idents is already sorted.
-/// Falls back to string-based getMethodIdent for backward compatibility with pre-compiled modules.
 pub fn lookupMethodIdentFromEnvConst(self: *const Self, source_env: *const Self, type_ident: Ident.Idx, method_ident: Ident.Idx) ?Ident.Idx {
     // First, try to find the type and method idents in our own ident store
     const type_name = source_env.getIdent(type_ident);
@@ -3365,19 +3356,11 @@ pub fn lookupMethodIdentFromEnvConst(self: *const Self, source_env: *const Self,
     const local_type_ident = self.common.findIdent(type_name) orelse return null;
     const local_method_ident = self.common.findIdent(method_name) orelse return null;
 
-    // Try index-based lookup first (O(log n))
-    if (self.lookupMethodIdentConst(local_type_ident, local_method_ident)) |result| {
-        return result;
-    }
-
-    // Fall back to string-based lookup for backward compatibility with pre-compiled modules
-    // that don't have method_idents populated. This can be removed once all modules are recompiled.
-    return self.getMethodIdent(type_name, method_name);
+    return self.lookupMethodIdentConst(local_type_ident, local_method_ident);
 }
 
 /// Looks up a method identifier when the type and method idents come from different source environments.
 /// This is needed when e.g. type_ident is from runtime layout store and method_ident is from CIR.
-/// Falls back to string-based getMethodIdent for backward compatibility with pre-compiled modules.
 pub fn lookupMethodIdentFromTwoEnvsConst(
     self: *const Self,
     type_source_env: *const Self,
@@ -3393,14 +3376,7 @@ pub fn lookupMethodIdentFromTwoEnvsConst(
     const local_type_ident = self.common.findIdent(type_name) orelse return null;
     const local_method_ident = self.common.findIdent(method_name) orelse return null;
 
-    // Try index-based lookup first (O(log n))
-    if (self.lookupMethodIdentConst(local_type_ident, local_method_ident)) |result| {
-        return result;
-    }
-
-    // Fall back to string-based lookup for backward compatibility with pre-compiled modules
-    // that don't have method_idents populated. This can be removed once all modules are recompiled.
-    return self.getMethodIdent(type_name, method_name);
+    return self.lookupMethodIdentConst(local_type_ident, local_method_ident);
 }
 
 /// Returns the line start positions for source code position mapping.

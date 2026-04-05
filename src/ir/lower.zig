@@ -16,12 +16,14 @@ pub const Result = struct {
     root_defs: std.ArrayList(ast.DefId),
     symbols: symbol_mod.Store,
     layouts: layout_mod.Store,
+    strings: base.StringLiteral.Store,
 
     pub fn deinit(self: *Result) void {
         self.store.deinit();
         self.root_defs.deinit(self.store.allocator);
         self.symbols.deinit();
         self.layouts.deinit();
+        self.strings.deinit(self.store.allocator);
     }
 };
 
@@ -90,12 +92,14 @@ const Lowerer = struct {
             .root_defs = self.root_defs,
             .symbols = self.input.symbols,
             .layouts = self.layouts,
+            .strings = self.input.strings,
         };
 
         self.output = ast.Store.init(self.allocator);
         self.root_defs = .empty;
         self.layouts = layout_mod.Store.init(self.allocator);
         self.input.symbols = symbol_mod.Store.init(self.allocator);
+        self.input.strings = .{};
         return result;
     }
 
@@ -391,6 +395,17 @@ const Lowerer = struct {
         };
     }
 
+    fn freshVarWithLayout(
+        self: *Lowerer,
+        layout: layout_mod.LayoutId,
+        comptime label: []const u8,
+    ) std.mem.Allocator.Error!ast.Var {
+        return .{
+            .layout = layout,
+            .symbol = try self.freshSymbol(label),
+        };
+    }
+
     fn freshOpaqueVar(self: *Lowerer, comptime label: []const u8) std.mem.Allocator.Error!ast.Var {
         return .{
             .layout = try self.layouts.addContent(.{ .primitive = .opaque_ptr }),
@@ -522,6 +537,25 @@ const Lowerer = struct {
         };
     }
 
+    fn discriminantLayoutForUnion(
+        self: *Lowerer,
+        union_ty: lambdamono.Type.TypeId,
+    ) std.mem.Allocator.Error!layout_mod.LayoutId {
+        return switch (self.input.types.getType(union_ty)) {
+            .tag_union => |tag_union| blk: {
+                const variant_count = self.input.types.sliceTags(tag_union.tags).len;
+                const prim: layout_mod.Prim = switch (variant_count) {
+                    0...0xff => .u8,
+                    0x100...0xffff => .u16,
+                    0x1_0000...0xffff_ffff => .u32,
+                    else => .u64,
+                };
+                break :blk try self.layouts.addContent(.{ .primitive = prim });
+            },
+            else => debugPanic("ir.lower.discriminantLayoutForUnion expected tag union type"),
+        };
+    }
+
     fn lowerWhenExpr(
         self: *Lowerer,
         block: *LoweredBlock,
@@ -532,6 +566,15 @@ const Lowerer = struct {
     ) std.mem.Allocator.Error!void {
         const cond = try self.lowerSubexprValue(block, env, cond_expr);
         if (cond == null) return;
+
+        const discr = try self.freshVarWithLayout(
+            try self.discriminantLayoutForUnion(self.input.store.getExpr(cond_expr).ty),
+            "when_discr",
+        );
+        try block.stmts.append(self.allocator, .{ .let_ = .{
+            .bind = discr,
+            .expr = try self.output.addExpr(.{ .get_union_id = cond.? }),
+        } });
 
         var tag_branches = std.ArrayList(ast.Branch).empty;
         defer tag_branches.deinit(self.allocator);
@@ -555,13 +598,19 @@ const Lowerer = struct {
             }
         }
 
+        std.mem.sort(ast.Branch, tag_branches.items, {}, struct {
+            fn lessThan(_: void, left: ast.Branch, right: ast.Branch) bool {
+                return left.value < right.value;
+            }
+        }.lessThan);
+
         const default_final = default_block orelse try self.output.addBlock(.{
             .stmts = try self.output.addStmtSpan(&.{}),
             .term = .runtime_error,
         });
 
         try block.stmts.append(self.allocator, .{ .switch_ = .{
-            .cond = cond.?,
+            .cond = discr,
             .branches = try self.output.addBranchSpan(tag_branches.items),
             .default_block = default_final,
             .join = join,

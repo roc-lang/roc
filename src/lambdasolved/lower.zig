@@ -2,6 +2,7 @@
 //! propagate-erasure -> SCC ordering flow.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const lifted = @import("monotype_lifted");
 const ast = @import("ast.zig");
@@ -19,12 +20,14 @@ pub const Result = struct {
     root_defs: std.ArrayList(ast.DefId),
     symbols: symbol_mod.Store,
     types: type_mod.Store,
+    strings: base.StringLiteral.Store,
 
     pub fn deinit(self: *Result) void {
         self.store.deinit();
         self.root_defs.deinit(self.store.allocator);
         self.symbols.deinit();
         self.types.deinit();
+        self.strings.deinit(self.store.allocator);
     }
 };
 
@@ -44,8 +47,8 @@ const Lowerer = struct {
     output: ast.Store,
     root_defs: std.ArrayList(ast.DefId),
     types: type_mod.Store,
-    type_cache: std.AutoHashMap(LiftedType.TypeId, TypeVarId),
     def_id_by_symbol: std.AutoHashMap(Symbol, ast.DefId),
+    current_return_ty: ?TypeVarId,
 
     const EnvEntry = struct {
         symbol: Symbol,
@@ -68,14 +71,13 @@ const Lowerer = struct {
             .output = ast.Store.init(allocator),
             .root_defs = .empty,
             .types = type_mod.Store.init(allocator),
-            .type_cache = std.AutoHashMap(LiftedType.TypeId, TypeVarId).init(allocator),
             .def_id_by_symbol = std.AutoHashMap(Symbol, ast.DefId).init(allocator),
+            .current_return_ty = null,
         };
     }
 
     fn deinit(self: *Lowerer) void {
         self.def_id_by_symbol.deinit();
-        self.type_cache.deinit();
         self.types.deinit();
         self.root_defs.deinit(self.allocator);
         self.output.deinit();
@@ -88,6 +90,7 @@ const Lowerer = struct {
             .root_defs = self.root_defs,
             .symbols = self.input.symbols,
             .types = self.types,
+            .strings = self.input.strings,
         };
 
         self.output = ast.Store.init(self.allocator);
@@ -97,6 +100,7 @@ const Lowerer = struct {
         self.input.root_defs = .empty;
         self.input.symbols = symbol_mod.Store.init(self.allocator);
         self.input.types = LiftedType.Store.init(self.allocator);
+        self.input.strings = .{};
         return result;
     }
 
@@ -317,20 +321,39 @@ const Lowerer = struct {
     }
 
     fn instantiateType(self: *Lowerer, ty: LiftedType.TypeId) std.mem.Allocator.Error!TypeVarId {
-        if (self.type_cache.get(ty)) |cached| return cached;
+        var cache = std.AutoHashMap(LiftedType.TypeId, TypeVarId).init(self.allocator);
+        defer cache.deinit();
+        return try self.instantiateTypeRec(ty, &cache);
+    }
+
+    fn instantiateTypeRec(
+        self: *Lowerer,
+        ty: LiftedType.TypeId,
+        cache: *std.AutoHashMap(LiftedType.TypeId, TypeVarId),
+    ) std.mem.Allocator.Error!TypeVarId {
+        if (cache.get(ty)) |cached| return cached;
 
         const placeholder = try self.types.freshUnbd();
-        try self.type_cache.put(ty, placeholder);
+        try cache.put(ty, placeholder);
 
         const content = switch (self.input.types.getType(ty)) {
             .func => |func| blk: {
                 break :blk type_mod.Content{ .func = .{
-                    .arg = try self.instantiateType(func.arg),
+                    .arg = try self.instantiateTypeRec(func.arg, cache),
                     .lset = try self.types.freshUnbd(),
-                    .ret = try self.instantiateType(func.ret),
+                    .ret = try self.instantiateTypeRec(func.ret, cache),
                 } };
             },
-            .list => |elem| type_mod.Content{ .list = try self.instantiateType(elem) },
+            .list => |elem| type_mod.Content{ .list = try self.instantiateTypeRec(elem, cache) },
+            .tuple => |tuple| blk: {
+                const elems = self.input.types.sliceTypeSpan(tuple);
+                const out = try self.allocator.alloc(TypeVarId, elems.len);
+                defer self.allocator.free(out);
+                for (elems, 0..) |elem, i| {
+                    out[i] = try self.instantiateTypeRec(elem, cache);
+                }
+                break :blk type_mod.Content{ .tuple = try self.types.addTypeVarSpan(out) };
+            },
             .tag_union => |tag_union| blk: {
                 const tags = self.input.types.sliceTags(tag_union.tags);
                 const out = try self.allocator.alloc(type_mod.Tag, tags.len);
@@ -340,7 +363,7 @@ const Lowerer = struct {
                     const lowered_args = try self.allocator.alloc(TypeVarId, arg_ids.len);
                     defer self.allocator.free(lowered_args);
                     for (arg_ids, 0..) |arg_id, arg_i| {
-                        lowered_args[arg_i] = try self.instantiateType(arg_id);
+                        lowered_args[arg_i] = try self.instantiateTypeRec(arg_id, cache);
                     }
                     out[i] = .{
                         .name = tag.name,
@@ -358,7 +381,7 @@ const Lowerer = struct {
                 for (fields, 0..) |field, i| {
                     out[i] = .{
                         .name = field.name,
-                        .ty = try self.instantiateType(field.ty),
+                        .ty = try self.instantiateTypeRec(field.ty, cache),
                     };
                 }
                 break :blk type_mod.Content{ .record = .{
@@ -462,7 +485,13 @@ const Lowerer = struct {
         const body_env = try self.extendEnvMany(venv, captures_env);
         defer self.allocator.free(body_env);
 
-        const ret_ty = try self.inferExpr(body_env, fn_def.body);
+        const fn_ret_ty = try self.types.freshUnbd();
+        const previous_return_ty = self.current_return_ty;
+        self.current_return_ty = fn_ret_ty;
+        defer self.current_return_ty = previous_return_ty;
+
+        const body_ty = try self.inferExpr(body_env, fn_def.body);
+        try self.unify(fn_ret_ty, body_ty);
 
         const lset_captures = try self.allocator.alloc(type_mod.Capture, captures.len);
         defer self.allocator.free(lset_captures);
@@ -475,7 +504,7 @@ const Lowerer = struct {
         const fn_ty = try self.types.freshContent(.{ .func = .{
             .arg = fn_def.arg.ty,
             .lset = lset_ty,
-            .ret = ret_ty,
+            .ret = fn_ret_ty,
         } });
         try self.unify(fn_entry.ty, fn_ty);
         return fn_entry.ty;
@@ -512,10 +541,21 @@ const Lowerer = struct {
             },
             .access => |access| blk: {
                 const record_ty = try self.inferExpr(venv, access.record);
-                const wanted = try self.types.freshContent(.{ .record = .{
-                    .fields = try self.types.addFields(&.{.{ .name = access.field, .ty = target_ty }}),
-                } });
-                try self.unify(record_ty, wanted);
+                const subject_ty = self.output.getExpr(access.record).ty;
+                try self.unify(record_ty, subject_ty);
+                const subject_root = self.types.unlink(subject_ty);
+                const subject_node = self.types.getNode(subject_root);
+                const fields = switch (subject_node) {
+                    .content => |content| switch (content) {
+                        .record => |record| self.types.sliceFields(record.fields),
+                        else => return debugPanic("lambdasolved.access invariant violated: subject is not a record"),
+                    },
+                    else => return debugPanic("lambdasolved.access invariant violated: subject record type is unresolved"),
+                };
+                const field_ty = for (fields) |field| {
+                    if (field.name.eql(access.field)) break field.ty;
+                } else return debugPanic("lambdasolved.access invariant violated: missing record field");
+                try self.unify(target_ty, field_ty);
                 break :blk target_ty;
             },
             .let_ => |let_expr| blk: {
@@ -576,13 +616,33 @@ const Lowerer = struct {
                 break :blk try self.inferExpr(block_env, block.final_expr);
             },
             .tuple => |tuple| blk: {
-                for (self.output.sliceExprSpan(tuple)) |item| {
-                    _ = try self.inferExpr(venv, item);
+                const items = self.output.sliceExprSpan(tuple);
+                const elem_tys = try self.allocator.alloc(TypeVarId, items.len);
+                defer self.allocator.free(elem_tys);
+                for (items, 0..) |item, i| {
+                    elem_tys[i] = try self.inferExpr(venv, item);
                 }
+                const wanted = try self.types.freshContent(.{ .tuple = try self.types.addTypeVarSpan(elem_tys) });
+                try self.unify(target_ty, wanted);
                 break :blk target_ty;
             },
             .tuple_access => |tuple_access| blk: {
-                _ = try self.inferExpr(venv, tuple_access.tuple);
+                const tuple_ty = try self.inferExpr(venv, tuple_access.tuple);
+                const subject_ty = self.output.getExpr(tuple_access.tuple).ty;
+                try self.unify(tuple_ty, subject_ty);
+                const subject_root = self.types.unlink(subject_ty);
+                const subject_node = self.types.getNode(subject_root);
+                const elems = switch (subject_node) {
+                    .content => |content| switch (content) {
+                        .tuple => |span| self.types.sliceTypeVarSpan(span),
+                        else => return debugPanic("lambdasolved.tuple_access invariant violated: subject is not a tuple"),
+                    },
+                    else => return debugPanic("lambdasolved.tuple_access invariant violated: subject tuple type is unresolved"),
+                };
+                if (tuple_access.elem_index >= elems.len) {
+                    return debugPanic("lambdasolved.tuple_access invariant violated: tuple index out of bounds");
+                }
+                try self.unify(target_ty, elems[tuple_access.elem_index]);
                 break :blk target_ty;
             },
             .list => |list| blk: {
@@ -595,7 +655,12 @@ const Lowerer = struct {
                 }
                 break :blk target_ty;
             },
-            .return_ => |ret| try self.inferExpr(venv, ret),
+            .return_ => |ret| blk: {
+                const return_ty = self.current_return_ty orelse return debugPanic("lambdasolved.return invariant violated: return outside function");
+                const value_ty = try self.inferExpr(venv, ret);
+                try self.unify(return_ty, value_ty);
+                break :blk try self.types.freshUnbd();
+            },
             .runtime_error => target_ty,
             .for_ => |for_expr| blk: {
                 const pat_result = try self.inferPat(venv, for_expr.patt);
@@ -643,13 +708,17 @@ const Lowerer = struct {
             },
             .crash => try self.cloneEnv(venv),
             .return_ => |expr_id| blk: {
-                _ = try self.inferExpr(venv, expr_id);
+                const return_ty = self.current_return_ty orelse return debugPanic("lambdasolved.return_stmt invariant violated: return outside function");
+                const value_ty = try self.inferExpr(venv, expr_id);
+                try self.unify(return_ty, value_ty);
                 break :blk try self.cloneEnv(venv);
             },
             .for_ => |for_stmt| blk: {
-                _ = try self.inferExpr(venv, for_stmt.iterable);
                 const pat_result = try self.inferPat(venv, for_stmt.patt);
                 defer self.allocator.free(pat_result.additions);
+                const iterable_ty = try self.inferExpr(venv, for_stmt.iterable);
+                const wanted_iterable = try self.types.freshContent(.{ .list = pat_result.ty });
+                try self.unify(iterable_ty, wanted_iterable);
                 const body_env = try self.extendEnvMany(venv, pat_result.additions);
                 defer self.allocator.free(body_env);
                 _ = try self.inferExpr(body_env, for_stmt.body);
@@ -1013,6 +1082,12 @@ const Lowerer = struct {
                     try self.isGeneralizedRec(func.lset, visited) or
                     try self.isGeneralizedRec(func.ret, visited),
                 .list => |elem| try self.isGeneralizedRec(elem, visited),
+                .tuple => |elems| blk: {
+                    for (self.types.sliceTypeVarSpan(elems)) |elem| {
+                        if (try self.isGeneralizedRec(elem, visited)) break :blk true;
+                    }
+                    break :blk false;
+                },
                 .tag_union => |tag_union| blk: {
                     for (self.types.sliceTags(tag_union.tags)) |tag| {
                         for (self.types.sliceTypeVarSpan(tag.args)) |arg| {
@@ -1072,6 +1147,17 @@ const Lowerer = struct {
                 .list => |elem| type_mod.Node{ .content = .{
                     .list = try self.instantiateGeneralizedRec(elem, mapping),
                 } },
+                .tuple => |tuple| blk: {
+                    const elems = self.types.sliceTypeVarSpan(tuple);
+                    const lowered_elems = try self.allocator.alloc(TypeVarId, elems.len);
+                    defer self.allocator.free(lowered_elems);
+                    for (elems, 0..) |elem, i| {
+                        lowered_elems[i] = try self.instantiateGeneralizedRec(elem, mapping);
+                    }
+                    break :blk type_mod.Node{ .content = .{
+                        .tuple = try self.types.addTypeVarSpan(lowered_elems),
+                    } };
+                },
                 .tag_union => |tag_union| blk: {
                     const tags = self.types.sliceTags(tag_union.tags);
                     const out = try self.allocator.alloc(type_mod.Tag, tags.len);
@@ -1157,6 +1243,12 @@ const Lowerer = struct {
                     try self.occursRec(needle, func.lset, visited) or
                     try self.occursRec(needle, func.ret, visited),
                 .list => |elem| try self.occursRec(needle, elem, visited),
+                .tuple => |elems| blk: {
+                    for (self.types.sliceTypeVarSpan(elems)) |elem| {
+                        if (try self.occursRec(needle, elem, visited)) break :blk true;
+                    }
+                    break :blk false;
+                },
                 .tag_union => |tag_union| blk: {
                     for (self.types.sliceTags(tag_union.tags)) |tag| {
                         for (self.types.sliceTypeVarSpan(tag.args)) |arg| {
@@ -1212,6 +1304,11 @@ const Lowerer = struct {
                 },
                 .list => |elem| {
                     try self.generalizeRec(venv, elem, visited);
+                },
+                .tuple => |elems| {
+                    for (self.types.sliceTypeVarSpan(elems)) |elem| {
+                        try self.generalizeRec(venv, elem, visited);
+                    }
                 },
                 .tag_union => |tag_union| {
                     for (self.types.sliceTags(tag_union.tags)) |tag| {
@@ -1270,7 +1367,15 @@ const Lowerer = struct {
 
     fn unifyContent(self: *Lowerer, left: type_mod.Content, right: type_mod.Content, visited: *std.ArrayList(TypePair)) std.mem.Allocator.Error!type_mod.Node {
         if (@as(std.meta.Tag(type_mod.Content), left) != @as(std.meta.Tag(type_mod.Content), right)) {
-            return debugPanic("lambdasolved.unify incompatible types");
+            if (builtin.mode == .Debug) {
+                std.debug.panic(
+                    "lambdasolved.unify incompatible types {s} vs {s}",
+                    .{
+                        @tagName(left),
+                        @tagName(right),
+                    },
+                );
+            } else unreachable;
         }
 
         return switch (left) {
@@ -1287,6 +1392,17 @@ const Lowerer = struct {
             .list => |elem| blk: {
                 try self.unifyRec(elem, right.list, visited);
                 break :blk .{ .content = .{ .list = elem } };
+            },
+            .tuple => |tuple| blk: {
+                const left_elems = self.types.sliceTypeVarSpan(tuple);
+                const right_elems = self.types.sliceTypeVarSpan(right.tuple);
+                if (left_elems.len != right_elems.len) {
+                    return debugPanic("lambdasolved.unify tuple arity mismatch");
+                }
+                for (left_elems, right_elems) |left_elem, right_elem| {
+                    try self.unifyRec(left_elem, right_elem, visited);
+                }
+                break :blk .{ .content = .{ .tuple = tuple } };
             },
             .tag_union => |tag_union| blk: {
                 break :blk .{ .content = .{ .tag_union = .{
