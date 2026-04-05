@@ -12,8 +12,8 @@ pub const Symbol = enum(u32) {
 
     pub const none: Symbol = @enumFromInt(std.math.maxInt(u32));
 
-    pub fn fromRaw(raw: u32) Symbol {
-        return @enumFromInt(raw);
+    pub fn fromRaw(value: u32) Symbol {
+        return @enumFromInt(value);
     }
 
     pub fn raw(self: Symbol) u32 {
@@ -21,7 +21,7 @@ pub const Symbol = enum(u32) {
     }
 
     pub fn isNone(self: Symbol) bool {
-        return self == .none;
+        return self == Symbol.none;
     }
 };
 

@@ -8,6 +8,8 @@ const builtin = @import("builtin");
 const base = @import("base");
 const layout_mod = @import("layout");
 const lir = @import("lir");
+const LIR = lir.LIR;
+const LirStore = lir.LirStore;
 const lir_value = @import("value.zig");
 const builtins = @import("builtins");
 const sljmp = @import("sljmp");
@@ -38,13 +40,12 @@ const trace_rc = struct {
 };
 
 const Allocator = std.mem.Allocator;
-const LirStore = lir.LirStore;
-const LirProcSpecId = lir.LirProcSpecId;
-const LirProcSpec = lir.LirProcSpec;
-const CFStmtId = lir.CFStmtId;
-const LocalId = lir.LocalId;
-const LocalSpan = lir.LocalSpan;
-const Symbol = lir.Symbol;
+const LirProcSpecId = LIR.LirProcSpecId;
+const LirProcSpec = LIR.LirProcSpec;
+const CFStmtId = LIR.CFStmtId;
+const LocalId = LIR.LocalId;
+const LocalSpan = LIR.LocalSpan;
+const Symbol = LIR.Symbol;
 const Layout = layout_mod.Layout;
 const Value = lir_value.Value;
 const LayoutHelper = lir_value.LayoutHelper;
@@ -280,6 +281,7 @@ pub const Interpreter = struct {
     const ExecOutcome = union(enum) {
         returned: Value,
         scope_exit,
+        loop_continue,
     };
 
     pub const EvalResult = union(enum) {
@@ -529,6 +531,10 @@ pub const Interpreter = struct {
                 "LIR/interpreter invariant violated: proc {d} terminated via scope_exit",
                 .{proc_spec.name.raw()},
             ),
+            .loop_continue => std.debug.panic(
+                "LIR/interpreter invariant violated: proc {d} terminated via loop_continue",
+                .{proc_spec.name.raw()},
+            ),
         };
     }
 
@@ -552,10 +558,12 @@ pub const Interpreter = struct {
             .assign_ref => |assign| try self.collectJoinPoints(join_points, assign.next),
             .assign_literal => |assign| try self.collectJoinPoints(join_points, assign.next),
             .assign_call => |assign| try self.collectJoinPoints(join_points, assign.next),
+            .assign_call_indirect => |assign| try self.collectJoinPoints(join_points, assign.next),
             .assign_low_level => |assign| try self.collectJoinPoints(join_points, assign.next),
             .assign_list => |assign| try self.collectJoinPoints(join_points, assign.next),
             .assign_struct => |assign| try self.collectJoinPoints(join_points, assign.next),
             .assign_tag => |assign| try self.collectJoinPoints(join_points, assign.next),
+            .set_local => |assign| try self.collectJoinPoints(join_points, assign.next),
             .debug => |debug_stmt| try self.collectJoinPoints(join_points, debug_stmt.next),
             .expect => |expect_stmt| try self.collectJoinPoints(join_points, expect_stmt.next),
             .incref => |inc| try self.collectJoinPoints(join_points, inc.next),
@@ -571,6 +579,10 @@ pub const Interpreter = struct {
                 try self.collectJoinPoints(join_points, scope_stmt.body);
                 try self.collectJoinPoints(join_points, scope_stmt.remainder);
             },
+            .for_list => |for_stmt| {
+                try self.collectJoinPoints(join_points, for_stmt.body);
+                try self.collectJoinPoints(join_points, for_stmt.next);
+            },
             .join => |join_stmt| {
                 try join_points.put(self.allocator, @intFromEnum(join_stmt.id), .{
                     .params = join_stmt.params,
@@ -581,6 +593,7 @@ pub const Interpreter = struct {
             },
             .runtime_error,
             .scope_exit,
+            .loop_continue,
             .jump,
             .ret,
             .crash,
@@ -592,7 +605,7 @@ pub const Interpreter = struct {
         self: *LirInterpreter,
         frame: *Frame,
         start_stmt: CFStmtId,
-        stop_scope: ?lir.BorrowScopeId,
+        stop_scope: ?LIR.BorrowScopeId,
     ) Error!ExecOutcome {
         var current = start_stmt;
         while (true) {
@@ -614,6 +627,12 @@ pub const Interpreter = struct {
                     const arg_locals = self.store.getLocalSpan(assign.args);
                     const arg_values = try self.collectLocalValues(frame, arg_locals);
                     frame.setLocal(assign.target, try self.evalProcById(assign.proc, arg_values));
+                    current = assign.next;
+                },
+                .assign_call_indirect => |assign| {
+                    const arg_locals = self.store.getLocalSpan(assign.args);
+                    const arg_values = try self.collectLocalValues(frame, arg_locals);
+                    frame.setLocal(assign.target, try self.evalIndirectCall(frame, assign.closure, arg_values));
                     current = assign.next;
                 },
                 .assign_low_level => |assign| {
@@ -639,6 +658,17 @@ pub const Interpreter = struct {
                 },
                 .assign_tag => |assign| {
                     frame.setLocal(assign.target, try self.evalTagLiteral(frame, assign.discriminant, assign.args, self.store.getLocal(assign.target).layout_idx));
+                    current = assign.next;
+                },
+                .set_local => |assign| {
+                    frame.setLocal(
+                        assign.target,
+                        self.normalizeValueToLayout(
+                            frame.getLocal(assign.value),
+                            self.store.getLocal(assign.value).layout_idx,
+                            self.store.getLocal(assign.target).layout_idx,
+                        ),
+                    );
                     current = assign.next;
                 },
                 .debug => |debug_stmt| {
@@ -685,6 +715,10 @@ pub const Interpreter = struct {
                     switch (outcome) {
                         .returned => |value| return .{ .returned = value },
                         .scope_exit => current = scope_stmt.remainder,
+                        .loop_continue => std.debug.panic(
+                            "LIR/interpreter invariant violated: loop_continue escaped borrow scope in proc {d}",
+                            .{@intFromEnum(frame.proc_id)},
+                        ),
                     }
                 },
                 .scope_exit => |scope_stmt| {
@@ -696,6 +730,39 @@ pub const Interpreter = struct {
                     }
                     return .scope_exit;
                 },
+                .for_list => |for_stmt| {
+                    const iterable = frame.getLocal(for_stmt.iterable);
+                    const list_layout = self.store.getLocal(for_stmt.iterable).layout_idx;
+                    const elem_layout = self.listElemLayout(list_layout);
+                    const info = self.listElemInfo(list_layout);
+                    const rl = valueToRocList(iterable);
+
+                    var i: usize = 0;
+                    while (i < rl.len()) : (i += 1) {
+                        const elem_value = if (info.width == 0 or rl.bytes == null)
+                            Value.zst
+                        else
+                            self.normalizeValueToLayout(
+                                .{ .ptr = rl.bytes.? + i * info.width },
+                                elem_layout,
+                                self.store.getLocal(for_stmt.elem).layout_idx,
+                            );
+
+                        frame.setLocal(for_stmt.elem, elem_value);
+                        const outcome = try self.execStmtChain(frame, for_stmt.body, null);
+                        switch (outcome) {
+                            .returned => |value| return .{ .returned = value },
+                            .loop_continue => {},
+                            .scope_exit => std.debug.panic(
+                                "LIR/interpreter invariant violated: unexpected scope_exit escaped for_list body in proc {d}",
+                                .{@intFromEnum(frame.proc_id)},
+                            ),
+                        }
+                    }
+
+                    current = for_stmt.next;
+                },
+                .loop_continue => return .loop_continue,
                 .join => |join_stmt| {
                     current = join_stmt.remainder;
                 },
@@ -772,7 +839,7 @@ pub const Interpreter = struct {
         );
     }
 
-    fn evalAssignRef(self: *LirInterpreter, frame: *const Frame, op: lir.RefOp, target_layout: layout_mod.Idx) Error!Value {
+    fn evalAssignRef(self: *LirInterpreter, frame: *const Frame, op: LIR.RefOp, target_layout: layout_mod.Idx) Error!Value {
         return switch (op) {
             .local => |source| self.normalizeValueToLayout(
                 frame.getLocal(source),
@@ -852,6 +919,20 @@ pub const Interpreter = struct {
                     },
                 }
             },
+            .tag_payload_struct => |payload| blk: {
+                const source_val = frame.getLocal(payload.source);
+                const source_layout = self.store.getLocal(payload.source).layout_idx;
+                const tag_base = self.resolveTagUnionBaseValue(source_val, source_layout);
+                const disc = self.helper.readTagDiscriminant(tag_base.value, tag_base.layout);
+                if (builtin.mode == .Debug and disc != payload.tag_discriminant) {
+                    std.debug.panic(
+                        "LIR/interpreter invariant violated: tag payload struct access expected discriminant {d} but observed {d}",
+                        .{ payload.tag_discriminant, disc },
+                    );
+                }
+                const actual_payload_layout = self.tagPayloadLayout(source_layout, payload.tag_discriminant);
+                break :blk self.normalizeValueToLayout(tag_base.value, actual_payload_layout, target_layout);
+            },
             .nominal => |nominal| self.normalizeValueToLayout(
                 frame.getLocal(nominal.backing_ref),
                 self.store.getLocal(nominal.backing_ref).layout_idx,
@@ -878,7 +959,7 @@ pub const Interpreter = struct {
         };
     }
 
-    fn evalLiteral(self: *LirInterpreter, literal: lir.LiteralValue) Error!Value {
+    fn evalLiteral(self: *LirInterpreter, literal: LIR.LiteralValue) Error!Value {
         return switch (literal) {
             .i64_literal => |lit| self.evalI64Literal(lit.value, lit.layout_idx),
             .i128_literal => |lit| self.evalI128Literal(lit.value, lit.layout_idx),
@@ -887,7 +968,92 @@ pub const Interpreter = struct {
             .dec_literal => |value| self.evalDecLiteral(value),
             .str_literal => |idx| self.evalStrLiteral(idx),
             .bool_literal => |value| self.evalBoolLiteral(value),
+            .null_ptr => self.evalNullPtrLiteral(),
+            .proc_ref => |proc_id| self.evalProcRefLiteral(proc_id),
         };
+    }
+
+    fn evalNullPtrLiteral(self: *LirInterpreter) Error!Value {
+        const val = try self.alloc(.opaque_ptr);
+        switch (self.layout_store.targetUsize().size()) {
+            4 => val.write(u32, 0),
+            8 => val.write(usize, 0),
+            else => unreachable,
+        }
+        return val;
+    }
+
+    fn evalProcRefLiteral(self: *LirInterpreter, proc_id: LIR.LirProcSpecId) Error!Value {
+        const val = try self.alloc(.opaque_ptr);
+        const encoded: usize = @intFromEnum(proc_id) + 1;
+        switch (self.layout_store.targetUsize().size()) {
+            4 => val.write(u32, @intCast(encoded)),
+            8 => val.write(usize, encoded),
+            else => unreachable,
+        }
+        return val;
+    }
+
+    fn decodeProcRef(self: *LirInterpreter, value: Value) LIR.LirProcSpecId {
+        const encoded: usize = switch (self.layout_store.targetUsize().size()) {
+            4 => value.read(u32),
+            8 => value.read(usize),
+            else => unreachable,
+        };
+        if (encoded == 0) {
+            std.debug.panic("LIR/interpreter invariant violated: attempted indirect call through null function pointer", .{});
+        }
+        return @enumFromInt(@as(u32, @intCast(encoded - 1)));
+    }
+
+    fn evalIndirectCall(self: *LirInterpreter, frame: *Frame, closure_local: LocalId, args: []const Value) Error!Value {
+        const closure_layout = self.store.getLocal(closure_local).layout_idx;
+        const closure_value = frame.getLocal(closure_local);
+        const closure_base = self.resolveStructBaseValue(closure_value, closure_layout);
+        const closure_layout_val = self.layout_store.getLayout(closure_base.layout);
+        if (closure_layout_val.tag != .struct_) {
+            std.debug.panic(
+                "LIR/interpreter invariant violated: indirect call closure local {d} does not have struct layout",
+                .{@intFromEnum(closure_local)},
+            );
+        }
+
+        const fn_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(closure_layout_val.data.struct_.idx, 0);
+        const fn_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(closure_layout_val.data.struct_.idx, 0);
+        if (fn_layout != .opaque_ptr) {
+            std.debug.panic(
+                "LIR/interpreter invariant violated: indirect call closure field 0 layout {d} is not opaque_ptr",
+                .{@intFromEnum(fn_layout)},
+            );
+        }
+
+        const proc_id = self.decodeProcRef(closure_base.value.offset(fn_offset));
+        const proc_spec = self.store.getProcSpec(proc_id);
+        const proc_args = self.store.getLocalSpan(proc_spec.args);
+
+        if (proc_args.len == args.len) {
+            return self.evalProcById(proc_id, args);
+        }
+
+        if (proc_args.len != args.len + 1) {
+            std.debug.panic(
+                "LIR/interpreter invariant violated: indirect callee {d} expects {d} args, but call site provided {d} or {d} with captures",
+                .{ @intFromEnum(proc_id), proc_args.len, args.len, args.len + 1 },
+            );
+        }
+
+        const capture_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(closure_layout_val.data.struct_.idx, 1);
+        const capture_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(closure_layout_val.data.struct_.idx, 1);
+        const capture_value = self.normalizeValueToLayout(
+            closure_base.value.offset(capture_offset),
+            capture_layout,
+            capture_layout,
+        );
+
+        const all_args = try self.arena.allocator().alloc(Value, args.len + 1);
+        @memcpy(all_args[0..args.len], args);
+        all_args[args.len] = capture_value;
+        return self.evalProcById(proc_id, all_args);
     }
 
     const AllocatedStruct = struct {
@@ -1125,7 +1291,7 @@ pub const Interpreter = struct {
 
     fn callHostedProc(
         self: *LirInterpreter,
-        hosted: lir.HostedProc,
+        hosted: LIR.HostedProc,
         args: []const Value,
         arg_layouts: []const layout_mod.Idx,
         ret_layout: layout_mod.Idx,
@@ -1515,7 +1681,7 @@ pub const Interpreter = struct {
     }
 
     const LowLevelEvalInput = struct {
-        op: lir.LowLevel,
+        op: LIR.LowLevel,
         args: []const Value,
         arg_layouts: []const layout_mod.Idx,
         ret_layout: layout_mod.Idx,
@@ -2624,6 +2790,14 @@ pub const Interpreter = struct {
                     16 => if (isUnsigned(layout_idx)) a.read(u128) == b.read(u128) else a.read(i128) == b.read(i128),
                     else => std.debug.panic(
                         "LIR/interpreter invariant violated: scalar layout {d} has unsupported size {d}",
+                        .{ @intFromEnum(layout_idx), self.helper.sizeOf(layout_idx) },
+                    ),
+                },
+                .opaque_ptr => switch (self.helper.sizeOf(layout_idx)) {
+                    4 => a.read(u32) == b.read(u32),
+                    8 => a.read(usize) == b.read(usize),
+                    else => std.debug.panic(
+                        "LIR/interpreter invariant violated: opaque pointer layout {d} has unsupported size {d}",
                         .{ @intFromEnum(layout_idx), self.helper.sizeOf(layout_idx) },
                     ),
                 },

@@ -2208,6 +2208,7 @@ pub fn build(b: *std.Build) void {
     const check_fmt_step = b.step("check-fmt", "Check formatting of all zig code");
     const snapshot_step = b.step("snapshot", "Run the snapshot tool to update snapshot files");
     const eval_test_step = b.step("test-eval", "Run eval tests in parallel across all backends");
+    const cor_pipeline_test_step = b.step("test-cor-pipeline", "Run focused cor-style pipeline eval tests");
     const playground_step = b.step("playground", "Build the WASM playground");
     const playground_test_step = b.step("test-playground", "Build the integration test suite for the WASM playground");
     const serialization_size_step = b.step("test-serialization-sizes", "Verify Serialized types have platform-independent sizes");
@@ -2389,6 +2390,19 @@ pub fn build(b: *std.Build) void {
     roc_modules.eval.addImport("compiled_builtins", compiled_builtins_module);
     roc_modules.eval.addImport("bytebox", bytebox.module("bytebox"));
     roc_modules.lsp.addImport("compiled_builtins", compiled_builtins_module);
+
+    const check_test_env_module = b.createModule(.{
+        .root_source_file = b.path("src/check/test_env_pkg.zig"),
+    });
+    check_test_env_module.addImport("tracy", roc_modules.tracy);
+    check_test_env_module.addImport("builtins", roc_modules.builtins);
+    check_test_env_module.addImport("collections", roc_modules.collections);
+    check_test_env_module.addImport("base", roc_modules.base);
+    check_test_env_module.addImport("parse", roc_modules.parse);
+    check_test_env_module.addImport("types", roc_modules.types);
+    check_test_env_module.addImport("can", roc_modules.can);
+    check_test_env_module.addImport("reporting", roc_modules.reporting);
+    check_test_env_module.addImport("compiled_builtins", compiled_builtins_module);
 
     // Setup test platform host libraries
     setupTestPlatforms(b, target, optimize, roc_modules, build_test_hosts_step, strip, omit_frame_pointer, platform_filter);
@@ -2710,6 +2724,27 @@ pub fn build(b: *std.Build) void {
         break :blk eval_args_list.toOwnedSlice(b.allocator) catch @panic("OOM");
     } else run_args;
     _ = install_and_run(b, no_bin, eval_test_exe, eval_test_step, eval_test_step, eval_run_args);
+
+    const cor_pipeline_test = b.addTest(.{
+        .name = "cor_pipeline_eval",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/eval/cor_pipeline_test_root.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+        .filters = test_filters,
+    });
+    configureBackend(cor_pipeline_test, target);
+    roc_modules.addModuleDependencies(cor_pipeline_test, .eval);
+    cor_pipeline_test.root_module.addImport("check_test_env", check_test_env_module);
+    cor_pipeline_test.step.dependOn(&write_compiled_builtins.step);
+
+    const run_cor_pipeline_test = b.addRunArtifact(cor_pipeline_test);
+    if (run_args.len != 0) {
+        run_cor_pipeline_test.addArgs(run_args);
+    }
+    cor_pipeline_test_step.dependOn(&run_cor_pipeline_test.step);
 
     const playground_exe = b.addExecutable(.{
         .name = "playground",

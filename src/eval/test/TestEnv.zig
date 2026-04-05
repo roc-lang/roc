@@ -8,7 +8,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const builtins = @import("builtins");
-const eval_mod = @import("../mod.zig");
+const crash_context = @import("../crash_context.zig");
 
 /// Diagnostic print that is a no-op on freestanding (WASM) where
 /// std.debug.print is unavailable due to missing OS thread/file primitives.
@@ -26,8 +26,8 @@ const RocDbg = builtins.host_abi.RocDbg;
 const RocExpectFailed = builtins.host_abi.RocExpectFailed;
 const RocCrashed = builtins.host_abi.RocCrashed;
 
-const CrashContext = eval_mod.CrashContext;
-const CrashState = eval_mod.CrashState;
+const CrashContext = crash_context.CrashContext;
+const CrashState = crash_context.CrashState;
 
 const TestEnv = @This();
 

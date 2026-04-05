@@ -70,6 +70,13 @@ pub const TailRecursionPass = struct {
                 .args = assign.args,
                 .next = next,
             } }),
+            .assign_call_indirect => |assign| self.store.addCFStmt(.{ .assign_call_indirect = .{
+                .target = assign.target,
+                .result = assign.result,
+                .closure = assign.closure,
+                .args = assign.args,
+                .next = next,
+            } }),
             .assign_low_level => |assign| self.store.addCFStmt(.{ .assign_low_level = .{
                 .target = assign.target,
                 .result = assign.result,
@@ -94,6 +101,11 @@ pub const TailRecursionPass = struct {
                 .result = assign.result,
                 .discriminant = assign.discriminant,
                 .args = assign.args,
+                .next = next,
+            } }),
+            .set_local => |assign| self.store.addCFStmt(.{ .set_local = .{
+                .target = assign.target,
+                .value = assign.value,
                 .next = next,
             } }),
             .assign_symbol => |assign| self.store.addCFStmt(.{ .assign_symbol = .{
@@ -137,13 +149,15 @@ pub const TailRecursionPass = struct {
             .assign_symbol => |assign| try self.transformAssignLike(stmt, assign.next),
             .assign_ref => |assign| try self.transformAssignLike(stmt, assign.next),
             .assign_literal => |assign| try self.transformAssignLike(stmt, assign.next),
+            .assign_call_indirect => |assign| try self.transformAssignLike(stmt, assign.next),
             .assign_low_level => |assign| try self.transformAssignLike(stmt, assign.next),
             .assign_list => |assign| try self.transformAssignLike(stmt, assign.next),
             .assign_struct => |assign| try self.transformAssignLike(stmt, assign.next),
             .assign_tag => |assign| try self.transformAssignLike(stmt, assign.next),
+            .set_local => |assign| try self.transformAssignLike(stmt, assign.next),
             .debug => |debug_stmt| try self.transformAssignLike(.{ .debug = debug_stmt }, debug_stmt.next),
             .expect => |expect_stmt| try self.transformAssignLike(.{ .expect = expect_stmt }, expect_stmt.next),
-            .incref, .decref, .free, .scope_exit, .jump, .ret, .crash, .runtime_error => stmt_id,
+            .incref, .decref, .free, .scope_exit, .jump, .ret, .crash, .runtime_error, .loop_continue => stmt_id,
             .switch_stmt => |switch_stmt| blk: {
                 var rewritten_branches: std.ArrayListUnmanaged(ir.CFSwitchBranch) = .empty;
                 defer rewritten_branches.deinit(self.allocator);
@@ -164,6 +178,12 @@ pub const TailRecursionPass = struct {
                     .default_branch = try self.transformStmt(switch_stmt.default_branch),
                 } });
             },
+            .for_list => |for_stmt| try self.store.addCFStmt(.{ .for_list = .{
+                .elem = for_stmt.elem,
+                .iterable = for_stmt.iterable,
+                .body = try self.transformStmt(for_stmt.body),
+                .next = try self.transformStmt(for_stmt.next),
+            } }),
             .borrow_scope => |scope| try self.store.addCFStmt(.{ .borrow_scope = .{
                 .id = scope.id,
                 .body = try self.transformStmt(scope.body),

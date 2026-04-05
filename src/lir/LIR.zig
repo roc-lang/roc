@@ -128,6 +128,8 @@ pub const LiteralValue = union(enum) {
     dec_literal: i128,
     str_literal: StringLiteral.Idx,
     bool_literal: bool,
+    null_ptr,
+    proc_ref: LirProcSpecId,
 };
 
 /// Alias provenance rooted in another local plus optional projections.
@@ -160,6 +162,7 @@ pub const ResultSemantics = union(enum) {
 pub const RefProjection = union(enum) {
     field: u16,
     tag_payload: u16,
+    tag_payload_struct: u16,
     nominal,
 };
 
@@ -176,6 +179,10 @@ pub const RefOp = union(enum) {
     tag_payload: struct {
         source: LocalId,
         payload_idx: u16,
+        tag_discriminant: u16,
+    },
+    tag_payload_struct: struct {
+        source: LocalId,
         tag_discriminant: u16,
     },
     nominal: struct {
@@ -248,6 +255,13 @@ pub const CFStmt = union(enum) {
         args: LocalSpan,
         next: CFStmtId,
     },
+    assign_call_indirect: struct {
+        target: LocalId,
+        result: ResultSemantics,
+        closure: LocalId,
+        args: LocalSpan,
+        next: CFStmtId,
+    },
     assign_low_level: struct {
         target: LocalId,
         result: ResultSemantics,
@@ -272,6 +286,11 @@ pub const CFStmt = union(enum) {
         result: ResultSemantics,
         discriminant: u16,
         args: LocalSpan,
+        next: CFStmtId,
+    },
+    set_local: struct {
+        target: LocalId,
+        value: LocalId,
         next: CFStmtId,
     },
     debug: struct {
@@ -310,6 +329,13 @@ pub const CFStmt = union(enum) {
     scope_exit: struct {
         id: BorrowScopeId,
     },
+    for_list: struct {
+        elem: LocalId,
+        iterable: LocalId,
+        body: CFStmtId,
+        next: CFStmtId,
+    },
+    loop_continue: void,
     join: struct {
         id: JoinPointId,
         params: LocalSpan,

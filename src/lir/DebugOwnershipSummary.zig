@@ -152,6 +152,10 @@ fn inferReturnContracts(
             try results.put(localKey(assign.target), .{ .semantics = assign.result });
             try inferReturnContracts(allocator, store, join_params, join_inputs, param_index_by_symbol, results, assign.next, inferred, saw_return);
         },
+        .assign_call_indirect => |assign| {
+            try results.put(localKey(assign.target), .{ .semantics = assign.result });
+            try inferReturnContracts(allocator, store, join_params, join_inputs, param_index_by_symbol, results, assign.next, inferred, saw_return);
+        },
         .assign_low_level => |assign| {
             try results.put(localKey(assign.target), .{ .semantics = assign.result });
             try inferReturnContracts(allocator, store, join_params, join_inputs, param_index_by_symbol, results, assign.next, inferred, saw_return);
@@ -166,6 +170,15 @@ fn inferReturnContracts(
         },
         .assign_tag => |assign| {
             try results.put(localKey(assign.target), .{ .semantics = assign.result });
+            try inferReturnContracts(allocator, store, join_params, join_inputs, param_index_by_symbol, results, assign.next, inferred, saw_return);
+        },
+        .set_local => |assign| {
+            try results.put(localKey(assign.target), .{
+                .semantics = .{ .alias_of = .{
+                    .owner = assign.value,
+                    .projections = RefProjectionSpan.empty(),
+                } },
+            });
             try inferReturnContracts(allocator, store, join_params, join_inputs, param_index_by_symbol, results, assign.next, inferred, saw_return);
         },
         .debug => |stmt| try inferReturnContracts(allocator, store, join_params, join_inputs, param_index_by_symbol, results, stmt.next, inferred, saw_return),
@@ -204,6 +217,13 @@ fn inferReturnContracts(
                     saw_return,
                 );
             }
+        },
+        .for_list => |for_stmt| {
+            var body_results = try cloneLocalResultMap(allocator, results);
+            defer body_results.deinit();
+            try body_results.put(localKey(for_stmt.elem), .{ .semantics = .fresh });
+            try inferReturnContracts(allocator, store, join_params, join_inputs, param_index_by_symbol, &body_results, for_stmt.body, inferred, saw_return);
+            try inferReturnContracts(allocator, store, join_params, join_inputs, param_index_by_symbol, results, for_stmt.next, inferred, saw_return);
         },
         .join => |join| {
             try inferReturnContracts(allocator, store, join_params, join_inputs, param_index_by_symbol, results, join.remainder, inferred, saw_return);
@@ -273,6 +293,7 @@ fn inferReturnContracts(
             try mergeProcResultContract(store, inferred, contract);
         },
         .crash => {},
+        .loop_continue => {},
     }
 }
 
@@ -286,10 +307,12 @@ fn collectJoinParams(
         .assign_ref => |assign| try collectJoinParams(store, assign.next, join_params),
         .assign_literal => |assign| try collectJoinParams(store, assign.next, join_params),
         .assign_call => |assign| try collectJoinParams(store, assign.next, join_params),
+        .assign_call_indirect => |assign| try collectJoinParams(store, assign.next, join_params),
         .assign_low_level => |assign| try collectJoinParams(store, assign.next, join_params),
         .assign_list => |assign| try collectJoinParams(store, assign.next, join_params),
         .assign_struct => |assign| try collectJoinParams(store, assign.next, join_params),
         .assign_tag => |assign| try collectJoinParams(store, assign.next, join_params),
+        .set_local => |assign| try collectJoinParams(store, assign.next, join_params),
         .debug => |stmt| try collectJoinParams(store, stmt.next, join_params),
         .expect => |stmt| try collectJoinParams(store, stmt.next, join_params),
         .runtime_error => {},
@@ -301,6 +324,10 @@ fn collectJoinParams(
                 try collectJoinParams(store, branch.body, join_params);
             }
             try collectJoinParams(store, switch_stmt.default_branch, join_params);
+        },
+        .for_list => |for_stmt| {
+            try collectJoinParams(store, for_stmt.body, join_params);
+            try collectJoinParams(store, for_stmt.next, join_params);
         },
         .join => |join| {
             const gop = try join_params.getOrPut(@intFromEnum(join.id));
@@ -324,7 +351,7 @@ fn collectJoinParams(
             try collectJoinParams(store, scope.body, join_params);
             try collectJoinParams(store, scope.remainder, join_params);
         },
-        .scope_exit, .jump, .ret, .crash => {},
+        .scope_exit, .jump, .ret, .crash, .loop_continue => {},
     }
 }
 
@@ -708,6 +735,10 @@ fn analyzeStmt(result: *Result, store: *const LirStore, stmt_id: CFStmtId) Alloc
             try recordResultSemantics(result, assign.target, assign.result);
             try analyzeStmt(result, store, assign.next);
         },
+        .assign_call_indirect => |assign| {
+            try recordResultSemantics(result, assign.target, assign.result);
+            try analyzeStmt(result, store, assign.next);
+        },
         .assign_low_level => |assign| {
             try recordResultSemantics(result, assign.target, assign.result);
             try analyzeStmt(result, store, assign.next);
@@ -724,6 +755,13 @@ fn analyzeStmt(result: *Result, store: *const LirStore, stmt_id: CFStmtId) Alloc
             try recordResultSemantics(result, assign.target, assign.result);
             try analyzeStmt(result, store, assign.next);
         },
+        .set_local => |assign| {
+            try recordResultSemantics(result, assign.target, .{ .alias_of = .{
+                .owner = assign.value,
+                .projections = RefProjectionSpan.empty(),
+            } });
+            try analyzeStmt(result, store, assign.next);
+        },
         .debug => |stmt| try analyzeStmt(result, store, stmt.next),
         .expect => |stmt| try analyzeStmt(result, store, stmt.next),
         .runtime_error => {},
@@ -734,6 +772,11 @@ fn analyzeStmt(result: *Result, store: *const LirStore, stmt_id: CFStmtId) Alloc
             for (store.getCFSwitchBranches(switch_stmt.branches)) |branch| try analyzeStmt(result, store, branch.body);
             try analyzeStmt(result, store, switch_stmt.default_branch);
         },
+        .for_list => |for_stmt| {
+            try recordResultSemantics(result, for_stmt.elem, .fresh);
+            try analyzeStmt(result, store, for_stmt.body);
+            try analyzeStmt(result, store, for_stmt.next);
+        },
         .join => |join| {
             try analyzeStmt(result, store, join.body);
             try analyzeStmt(result, store, join.remainder);
@@ -742,7 +785,7 @@ fn analyzeStmt(result: *Result, store: *const LirStore, stmt_id: CFStmtId) Alloc
             try analyzeStmt(result, store, scope.body);
             try analyzeStmt(result, store, scope.remainder);
         },
-        .scope_exit, .jump, .ret, .crash => {},
+        .scope_exit, .jump, .ret, .crash, .loop_continue => {},
     }
 }
 

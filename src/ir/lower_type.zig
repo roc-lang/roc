@@ -1,7 +1,7 @@
 //! Lower executable lambdamono types into cor-style IR layouts.
 
 const std = @import("std");
-const mono = @import("../lambdamono/mod.zig");
+const mono = @import("lambdamono");
 const ir = @import("layout.zig");
 
 pub const LayoutCache = std.AutoHashMap(mono.Type.TypeId, ir.LayoutId);

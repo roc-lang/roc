@@ -4,7 +4,7 @@
 const std = @import("std");
 const base = @import("base");
 const types = @import("types");
-const symbol_mod = @import("../symbol/mod.zig");
+const symbol_mod = @import("symbol");
 const type_mod = @import("type.zig");
 
 pub const Symbol = symbol_mod.Symbol;
@@ -102,6 +102,10 @@ pub const Expr = struct {
             final_expr: ExprId,
         },
         tuple: Span(ExprId),
+        tuple_access: struct {
+            tuple: ExprId,
+            elem_index: u32,
+        },
         list: Span(ExprId),
         unit,
         return_: ExprId,
@@ -115,6 +119,10 @@ pub const Expr = struct {
 };
 
 pub const Stmt = union(enum) {
+    decl: struct {
+        bind: TypedSymbol,
+        body: ExprId,
+    },
     var_decl: struct {
         bind: TypedSymbol,
         body: ExprId,
@@ -217,6 +225,10 @@ pub const Store = struct {
         return @enumFromInt(idx);
     }
 
+    pub fn getPat(self: *const Store, id: PatId) Pat {
+        return self.pats.items[@intFromEnum(id)];
+    }
+
     pub fn addBranchSpan(self: *Store, values: []const Branch) std.mem.Allocator.Error!Span(BranchId) {
         if (values.len == 0) return Span(BranchId).empty();
         const start_ids: u32 = @intCast(self.branch_ids.items.len);
@@ -228,10 +240,18 @@ pub const Store = struct {
         return .{ .start = start_ids, .len = @intCast(values.len) };
     }
 
+    pub fn getBranch(self: *const Store, id: BranchId) Branch {
+        return self.branches.items[@intFromEnum(id)];
+    }
+
     pub fn addStmt(self: *Store, stmt: Stmt) std.mem.Allocator.Error!StmtId {
         const idx: u32 = @intCast(self.stmts.items.len);
         try self.stmts.append(self.allocator, stmt);
         return @enumFromInt(idx);
+    }
+
+    pub fn getStmt(self: *const Store, id: StmtId) Stmt {
+        return self.stmts.items[@intFromEnum(id)];
     }
 
     pub fn addExprSpan(self: *Store, ids: []const ExprId) std.mem.Allocator.Error!Span(ExprId) {
@@ -273,6 +293,44 @@ pub const Store = struct {
         const idx: u32 = @intCast(self.defs.items.len);
         try self.defs.append(self.allocator, def);
         return @enumFromInt(idx);
+    }
+
+    pub fn getDef(self: *const Store, id: DefId) Def {
+        return self.defs.items[@intFromEnum(id)];
+    }
+
+    pub fn defsSlice(self: *const Store) []const Def {
+        return self.defs.items;
+    }
+
+    pub fn sliceExprSpan(self: *const Store, span: Span(ExprId)) []const ExprId {
+        if (span.len == 0) return &.{};
+        return self.expr_ids.items[span.start..][0..span.len];
+    }
+
+    pub fn slicePatSpan(self: *const Store, span: Span(PatId)) []const PatId {
+        if (span.len == 0) return &.{};
+        return self.pat_ids.items[span.start..][0..span.len];
+    }
+
+    pub fn sliceStmtSpan(self: *const Store, span: Span(StmtId)) []const StmtId {
+        if (span.len == 0) return &.{};
+        return self.stmt_ids.items[span.start..][0..span.len];
+    }
+
+    pub fn sliceBranchSpan(self: *const Store, span: Span(BranchId)) []const BranchId {
+        if (span.len == 0) return &.{};
+        return self.branch_ids.items[span.start..][0..span.len];
+    }
+
+    pub fn sliceFieldExprSpan(self: *const Store, span: Span(FieldExpr)) []const FieldExpr {
+        if (span.len == 0) return &.{};
+        return self.field_exprs.items[span.start..][0..span.len];
+    }
+
+    pub fn sliceTypedSymbolSpan(self: *const Store, span: Span(TypedSymbol)) []const TypedSymbol {
+        if (span.len == 0) return &.{};
+        return self.typed_symbols.items[span.start..][0..span.len];
     }
 };
 

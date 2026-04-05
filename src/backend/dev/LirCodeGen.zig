@@ -4311,6 +4311,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                     try self.collectStmtReadLocals(assign.next, locals, visited);
                 },
+                .assign_call_indirect => |assign| {
+                    try locals.put(localKey(assign.closure), assign.closure);
+                    for (self.store.getLocalSpan(assign.args)) |arg| {
+                        try locals.put(localKey(arg), arg);
+                    }
+                    try self.collectStmtReadLocals(assign.next, locals, visited);
+                },
                 .assign_low_level => |assign| {
                     for (self.store.getLocalSpan(assign.args)) |arg| {
                         try locals.put(localKey(arg), arg);
@@ -4333,6 +4340,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     for (self.store.getLocalSpan(assign.args)) |arg| {
                         try locals.put(localKey(arg), arg);
                     }
+                    try self.collectStmtReadLocals(assign.next, locals, visited);
+                },
+                .set_local => |assign| {
+                    try locals.put(localKey(assign.target), assign.target);
+                    try locals.put(localKey(assign.value), assign.value);
                     try self.collectStmtReadLocals(assign.next, locals, visited);
                 },
                 .debug => |debug_stmt| {
@@ -4363,6 +4375,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                     try self.collectStmtReadLocals(sw.default_branch, locals, visited);
                 },
+                .for_list => |for_stmt| {
+                    try locals.put(localKey(for_stmt.elem), for_stmt.elem);
+                    try locals.put(localKey(for_stmt.iterable), for_stmt.iterable);
+                    try self.collectStmtReadLocals(for_stmt.body, locals, visited);
+                    try self.collectStmtReadLocals(for_stmt.next, locals, visited);
+                },
                 .borrow_scope => |scope| {
                     try self.collectStmtReadLocals(scope.body, locals, visited);
                     try self.collectStmtReadLocals(scope.remainder, locals, visited);
@@ -4379,6 +4397,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 .ret => |ret_stmt| try locals.put(localKey(ret_stmt.value), ret_stmt.value),
                 .crash => {},
+                .loop_continue => {},
             }
         }
 
@@ -4412,6 +4431,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                     try self.collectStmtLocals(assign.next, locals, visited);
                 },
+                .assign_call_indirect => |assign| {
+                    try locals.put(localKey(assign.target), assign.target);
+                    try locals.put(localKey(assign.closure), assign.closure);
+                    for (self.store.getLocalSpan(assign.args)) |arg| {
+                        try locals.put(localKey(arg), arg);
+                    }
+                    try self.collectStmtLocals(assign.next, locals, visited);
+                },
                 .assign_low_level => |assign| {
                     try locals.put(localKey(assign.target), assign.target);
                     for (self.store.getLocalSpan(assign.args)) |arg| {
@@ -4438,6 +4465,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     for (self.store.getLocalSpan(assign.args)) |arg| {
                         try locals.put(localKey(arg), arg);
                     }
+                    try self.collectStmtLocals(assign.next, locals, visited);
+                },
+                .set_local => |assign| {
+                    try locals.put(localKey(assign.target), assign.target);
+                    try locals.put(localKey(assign.value), assign.value);
                     try self.collectStmtLocals(assign.next, locals, visited);
                 },
                 .debug => |debug_stmt| {
@@ -4468,6 +4500,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                     try self.collectStmtLocals(sw.default_branch, locals, visited);
                 },
+                .for_list => |for_stmt| {
+                    try locals.put(localKey(for_stmt.elem), for_stmt.elem);
+                    try locals.put(localKey(for_stmt.iterable), for_stmt.iterable);
+                    try self.collectStmtLocals(for_stmt.body, locals, visited);
+                    try self.collectStmtLocals(for_stmt.next, locals, visited);
+                },
                 .borrow_scope => |scope| {
                     try self.collectStmtLocals(scope.body, locals, visited);
                     try self.collectStmtLocals(scope.remainder, locals, visited);
@@ -4487,6 +4525,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 .ret => |ret_stmt| try locals.put(localKey(ret_stmt.value), ret_stmt.value),
                 .crash => {},
+                .loop_continue => {},
             }
         }
 
@@ -4496,6 +4535,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .discriminant => |disc| disc.source,
                 .field => |field| field.source,
                 .tag_payload => |payload| payload.source,
+                .tag_payload_struct => |payload| payload.source,
                 .nominal => |nominal| nominal.backing_ref,
             };
         }
@@ -4546,6 +4586,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .tag_discriminant = payload.tag_discriminant,
                     .target_layout = target_layout,
                 }),
+                .tag_payload_struct => |_| std.debug.panic(
+                    "Dev/codegen TODO: tag_payload_struct lowering is not implemented yet",
+                    .{},
+                ),
                 .nominal => |nominal| try self.emitValueLocal(nominal.backing_ref),
             };
         }
@@ -11558,6 +11602,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .dec_literal => |lit| try self.generateI128Literal(lit),
                         .bool_literal => |lit| .{ .immediate_i64 = if (lit) 1 else 0 },
                         .str_literal => |str_idx| try self.generateStrLiteral(str_idx),
+                        .null_ptr => std.debug.panic(
+                            "Dev/codegen TODO: null_ptr literal lowering is not implemented yet",
+                            .{},
+                        ),
+                        .proc_ref => |_| std.debug.panic(
+                            "Dev/codegen TODO: proc_ref literal lowering is not implemented yet",
+                            .{},
+                        ),
                     };
                     try self.bindAssignedLocal(assign.target, value_loc);
                     try self.generateStmt(assign.next);
@@ -11571,6 +11623,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     });
                     try self.bindAssignedLocal(assign.target, value_loc);
                     try self.generateStmt(assign.next);
+                },
+
+                .assign_call_indirect => |_| {
+                    std.debug.panic(
+                        "Dev/codegen TODO: assign_call_indirect lowering is not implemented yet",
+                        .{},
+                    );
                 },
 
                 .assign_low_level => |assign| {
@@ -11607,6 +11666,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .discriminant = assign.discriminant,
                         .args = assign.args,
                     });
+                    try self.bindAssignedLocal(assign.target, value_loc);
+                    try self.generateStmt(assign.next);
+                },
+
+                .set_local => |assign| {
+                    const value_loc = try self.emitValueLocal(assign.value);
                     try self.bindAssignedLocal(assign.target, value_loc);
                     try self.generateStmt(assign.next);
                 },
@@ -11711,6 +11776,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.generateSwitchStmt(sw);
                 },
 
+                .for_list => |_| {
+                    std.debug.panic(
+                        "Dev/codegen TODO: for_list lowering is not implemented yet",
+                        .{},
+                    );
+                },
+
                 .borrow_scope => |scope| {
                     try self.ensureStableLocationsForStmtReads(scope.remainder);
                     var remainder_env = try self.captureStmtEnv();
@@ -11750,6 +11822,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .crash => |crash| {
                     try self.emitRocCrash(self.store.getString(crash.msg));
                     try self.emitTrap();
+                },
+
+                .loop_continue => {
+                    std.debug.panic(
+                        "Dev/codegen TODO: loop_continue lowering is not implemented outside for_list",
+                        .{},
+                    );
                 },
             }
         }

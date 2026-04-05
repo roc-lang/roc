@@ -12,6 +12,8 @@ pub const LirStore = @import("LirStore.zig");
 pub const TailRecursion = @import("TailRecursion.zig");
 /// Reference-count insertion over explicit LIR statements.
 pub const RcInsert = @import("rc_insert.zig");
+/// Lower cor-style IR into statement-only LIR.
+pub const FromIr = @import("FromIr.zig");
 
 /// Symbol identifiers used throughout statement-only LIR.
 pub const Symbol = LIR.Symbol;
@@ -70,4 +72,5 @@ test "lir tests" {
     std.testing.refAllDecls(DebugVerifyLir);
     std.testing.refAllDecls(TailRecursion);
     std.testing.refAllDecls(RcInsert);
+    std.testing.refAllDecls(FromIr);
 }

@@ -3,10 +3,10 @@
 
 const std = @import("std");
 const base = @import("base");
-const lifted = @import("../monotype_lifted/mod.zig");
+const lifted = @import("monotype_lifted");
 const ast = @import("ast.zig");
 const type_mod = @import("type.zig");
-const symbol_mod = @import("../symbol/mod.zig");
+const symbol_mod = @import("symbol");
 
 const LiftedResult = lifted.Lower.Result;
 const LiftedAst = lifted.Ast;
@@ -537,7 +537,12 @@ const Lowerer = struct {
                 try self.unify(func_ty, wanted);
                 break :blk target_ty;
             },
-            .low_level => |ll| debugTodoLowLevel(ll.op),
+            .low_level => |ll| blk: {
+                for (self.output.sliceExprSpan(ll.args)) |arg| {
+                    _ = try self.inferExpr(venv, arg);
+                }
+                break :blk target_ty;
+            },
             .when => |when_expr| blk: {
                 const cond_ty = try self.inferExpr(venv, when_expr.cond);
                 for (self.output.sliceBranchSpan(when_expr.branches)) |branch_id| {
@@ -671,21 +676,21 @@ const Lowerer = struct {
             },
             .tag => |tag| blk: {
                 const arg_pats = self.output.slicePatSpan(tag.args);
-                var additions_acc = std.ArrayList(EnvEntry).init(self.allocator);
-                errdefer additions_acc.deinit();
+                var additions_acc = std.ArrayList(EnvEntry).empty;
+                errdefer additions_acc.deinit(self.allocator);
                 const arg_tys = try self.allocator.alloc(TypeVarId, arg_pats.len);
                 defer self.allocator.free(arg_tys);
                 for (arg_pats, 0..) |arg_pat_id, i| {
                     const inferred = try self.inferPat(&.{}, arg_pat_id);
                     defer self.allocator.free(inferred.additions);
                     arg_tys[i] = inferred.ty;
-                    try additions_acc.appendSlice(inferred.additions);
+                    try additions_acc.appendSlice(self.allocator, inferred.additions);
                 }
                 const tag_ty = try self.types.freshContent(.{ .tag_union = .{
                     .tags = try self.types.addTags(&.{.{ .name = tag.name, .args = try self.types.addTypeVarSpan(arg_tys) }}),
                 } });
                 try self.unify(pat.ty, tag_ty);
-                const additions = try additions_acc.toOwnedSlice();
+                const additions = try additions_acc.toOwnedSlice(self.allocator);
                 break :blk .{ .additions = additions, .ty = pat.ty };
             },
         };
@@ -725,7 +730,7 @@ const Lowerer = struct {
                 try self.propagateExprErasure(call.func);
                 try self.propagateExprErasure(call.arg);
             },
-            .low_level => |ll| debugTodoLowLevel(ll.op),
+            .low_level => |ll| for (self.output.sliceExprSpan(ll.args)) |arg| try self.propagateExprErasure(arg),
             .when => |when_expr| {
                 try self.propagateExprErasure(when_expr.cond);
                 for (self.output.sliceBranchSpan(when_expr.branches)) |branch_id| {
@@ -796,45 +801,44 @@ const Lowerer = struct {
             stack: std.ArrayList(usize),
             groups: std.ArrayList(SccGroup),
 
-            fn run(self: *@This()) std.mem.Allocator.Error![]SccGroup {
-                for (self.ids, 0..) |_, i| {
-                    if (self.indices[i] == -1) {
-                        try self.strongConnect(i);
+            fn run(tarjan: *@This()) std.mem.Allocator.Error![]SccGroup {
+                for (tarjan.ids, 0..) |_, i| {
+                    if (tarjan.indices[i] == -1) {
+                        try tarjan.strongConnect(i);
                     }
                 }
-                std.mem.reverse(SccGroup, self.groups.items);
-                return try self.groups.toOwnedSlice();
+                return try tarjan.groups.toOwnedSlice(tarjan.lowerer.allocator);
             }
 
-            fn strongConnect(self: *@This(), idx: usize) std.mem.Allocator.Error!void {
-                self.indices[idx] = self.index;
-                self.lowlinks[idx] = self.index;
-                self.index += 1;
-                try self.stack.append(self.lowerer.allocator, idx);
-                self.on_stack[idx] = true;
+            fn strongConnect(tarjan: *@This(), idx: usize) std.mem.Allocator.Error!void {
+                tarjan.indices[idx] = tarjan.index;
+                tarjan.lowlinks[idx] = tarjan.index;
+                tarjan.index += 1;
+                try tarjan.stack.append(tarjan.lowerer.allocator, idx);
+                tarjan.on_stack[idx] = true;
 
-                const edges = try self.lowerer.collectDefEdges(self.ids[idx]);
-                defer self.lowerer.allocator.free(edges);
+                const edges = try tarjan.lowerer.collectDefEdges(tarjan.ids[idx]);
+                defer tarjan.lowerer.allocator.free(edges);
                 for (edges) |target_symbol| {
-                    const target_idx = self.lowerer.lookupDenseIndex(self.ids, target_symbol) orelse continue;
-                    if (self.indices[target_idx] == -1) {
-                        try self.strongConnect(target_idx);
-                        self.lowlinks[idx] = @min(self.lowlinks[idx], self.lowlinks[target_idx]);
-                    } else if (self.on_stack[target_idx]) {
-                        self.lowlinks[idx] = @min(self.lowlinks[idx], self.indices[target_idx]);
+                    const target_idx = tarjan.lowerer.lookupDenseIndex(tarjan.ids, target_symbol) orelse continue;
+                    if (tarjan.indices[target_idx] == -1) {
+                        try tarjan.strongConnect(target_idx);
+                        tarjan.lowlinks[idx] = @min(tarjan.lowlinks[idx], tarjan.lowlinks[target_idx]);
+                    } else if (tarjan.on_stack[target_idx]) {
+                        tarjan.lowlinks[idx] = @min(tarjan.lowlinks[idx], tarjan.indices[target_idx]);
                     }
                 }
 
-                if (self.lowlinks[idx] == self.indices[idx]) {
-                    var members = std.ArrayList(ast.DefId).init(self.lowerer.allocator);
+                if (tarjan.lowlinks[idx] == tarjan.indices[idx]) {
+                    var members = std.ArrayList(ast.DefId).empty;
                     while (true) {
-                        const top_idx = self.stack.pop();
-                        self.on_stack[top_idx] = false;
-                        try members.append(self.lowerer.allocator, self.ids[top_idx]);
+                        const top_idx = tarjan.stack.pop().?;
+                        tarjan.on_stack[top_idx] = false;
+                        try members.append(tarjan.lowerer.allocator, tarjan.ids[top_idx]);
                         if (top_idx == idx) break;
                     }
-                    try self.groups.append(self.lowerer.allocator, .{
-                        .def_ids = try members.toOwnedSlice(),
+                    try tarjan.groups.append(tarjan.lowerer.allocator, .{
+                        .def_ids = try members.toOwnedSlice(tarjan.lowerer.allocator),
                     });
                 }
             }
@@ -873,8 +877,8 @@ const Lowerer = struct {
     }
 
     fn collectDefEdges(self: *Lowerer, def_id: ast.DefId) std.mem.Allocator.Error![]Symbol {
-        var edges = std.ArrayList(Symbol).init(self.allocator);
-        defer edges.deinit();
+        var edges = std.ArrayList(Symbol).empty;
+        defer edges.deinit(self.allocator);
 
         const def = self.output.getDef(def_id);
         switch (def.value) {
@@ -883,7 +887,7 @@ const Lowerer = struct {
             .run => |run_def| try self.collectExprEdges(run_def.body, &edges),
         }
 
-        return try edges.toOwnedSlice();
+        return try edges.toOwnedSlice(self.allocator);
     }
 
     fn collectExprEdges(self: *Lowerer, expr_id: ast.ExprId, edges: *std.ArrayList(Symbol)) std.mem.Allocator.Error!void {
@@ -957,7 +961,6 @@ const Lowerer = struct {
     }
 
     fn lookupDenseIndex(self: *Lowerer, ids: []const ast.DefId, symbol: Symbol) ?usize {
-        _ = self;
         for (ids, 0..) |def_id, i| {
             if (self.output.getDef(def_id).bind.symbol == symbol) return i;
         }
@@ -1057,6 +1060,7 @@ const Lowerer = struct {
         try mapping.put(id, placeholder);
 
         const lowered = switch (self.types.getNode(id)) {
+            .unbd, .for_a => unreachable,
             .link => unreachable,
             .content => |content| switch (content) {
                 .primitive => type_mod.Node{ .content = .{ .primitive = content.primitive } },
@@ -1247,12 +1251,12 @@ const Lowerer = struct {
         }
         try visited.append(self.allocator, .{ .left = l, .right = r });
 
-        const next_node = switch (self.types.getNode(l)) {
+        const next_node: type_mod.Node = switch (self.types.getNode(l)) {
             .unbd => self.types.getNode(r),
             .for_a => return debugPanic("lambdasolved.unify generalized type without instantiation"),
             .link => unreachable,
             .content => |left_content| switch (self.types.getNode(r)) {
-                .unbd => .{ .content = left_content },
+                .unbd => type_mod.Node{ .content = left_content },
                 .for_a => return debugPanic("lambdasolved.unify generalized type without instantiation"),
                 .link => unreachable,
                 .content => |right_content| try self.unifyContent(left_content, right_content, visited),
@@ -1305,8 +1309,8 @@ const Lowerer = struct {
     fn unifyTags(self: *Lowerer, left_span: type_mod.Span(type_mod.Tag), right_span: type_mod.Span(type_mod.Tag), visited: *std.ArrayList(TypePair)) std.mem.Allocator.Error!type_mod.Span(type_mod.Tag) {
         const left = self.types.sliceTags(left_span);
         const right = self.types.sliceTags(right_span);
-        var merged = std.ArrayList(type_mod.Tag).init(self.allocator);
-        defer merged.deinit();
+        var merged = std.ArrayList(type_mod.Tag).empty;
+        defer merged.deinit(self.allocator);
 
         for (left) |left_tag| {
             var matched = false;
@@ -1337,8 +1341,8 @@ const Lowerer = struct {
     fn unifyFields(self: *Lowerer, left_span: type_mod.Span(type_mod.Field), right_span: type_mod.Span(type_mod.Field), visited: *std.ArrayList(TypePair)) std.mem.Allocator.Error!type_mod.Span(type_mod.Field) {
         const left = self.types.sliceFields(left_span);
         const right = self.types.sliceFields(right_span);
-        var merged = std.ArrayList(type_mod.Field).init(self.allocator);
-        defer merged.deinit();
+        var merged = std.ArrayList(type_mod.Field).empty;
+        defer merged.deinit(self.allocator);
 
         for (left) |left_field| {
             var matched = false;
@@ -1364,8 +1368,8 @@ const Lowerer = struct {
     fn unifyLambdaSets(self: *Lowerer, left_span: type_mod.Span(type_mod.Lambda), right_span: type_mod.Span(type_mod.Lambda), visited: *std.ArrayList(TypePair)) std.mem.Allocator.Error!type_mod.Span(type_mod.Lambda) {
         const left = self.types.sliceLambdas(left_span);
         const right = self.types.sliceLambdas(right_span);
-        var merged = std.ArrayList(type_mod.Lambda).init(self.allocator);
-        defer merged.deinit();
+        var merged = std.ArrayList(type_mod.Lambda).empty;
+        defer merged.deinit(self.allocator);
 
         for (left) |left_lambda| {
             var matched = false;
@@ -1396,8 +1400,8 @@ const Lowerer = struct {
         const right = self.types.sliceCaptures(right_span);
         if (left.len != right.len) return debugPanic("lambdasolved.unify incompatible captures");
 
-        var merged = std.ArrayList(type_mod.Capture).init(self.allocator);
-        defer merged.deinit();
+        var merged = std.ArrayList(type_mod.Capture).empty;
+        defer merged.deinit(self.allocator);
 
         for (left) |left_capture| {
             const right_capture = findCaptureBySymbol(right, left_capture.symbol) orelse return debugPanic("lambdasolved.unify incompatible captures");

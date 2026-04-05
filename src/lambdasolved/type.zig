@@ -2,11 +2,11 @@
 
 const std = @import("std");
 const base = @import("base");
-const symbol_mod = @import("../symbol/mod.zig");
-const mono_type = @import("../monotype/type.zig");
+const symbol_mod = @import("symbol");
+const lifted_type = @import("monotype_lifted").Type;
 
 pub const Symbol = symbol_mod.Symbol;
-pub const Prim = mono_type.Prim;
+pub const Prim = lifted_type.Prim;
 
 pub const TypeVarId = enum(u32) { _ };
 

@@ -4,7 +4,7 @@
 const std = @import("std");
 const base = @import("base");
 const types = @import("types");
-const symbol_mod = @import("../symbol/mod.zig");
+const symbol_mod = @import("symbol");
 const type_mod = @import("type.zig");
 
 pub const Symbol = symbol_mod.Symbol;

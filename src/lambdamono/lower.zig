@@ -2,10 +2,10 @@
 
 const std = @import("std");
 const base = @import("base");
-const solved = @import("../lambdasolved/mod.zig");
+const solved = @import("lambdasolved");
 const ast = @import("ast.zig");
 const type_mod = @import("type.zig");
-const symbol_mod = @import("../symbol/mod.zig");
+const symbol_mod = @import("symbol");
 const lower_type = @import("lower_type.zig");
 const specializations = @import("specializations.zig");
 
@@ -388,7 +388,10 @@ const Lowerer = struct {
                 },
             } },
             .call => |call| try self.specializeCallExpr(inst, mono_cache, venv, call, lowered_ty),
-            .low_level => |ll| debugTodoLowLevel(ll.op),
+            .low_level => |ll| .{ .low_level = .{
+                .op = ll.op,
+                .args = try self.specializeExprSpan(inst, mono_cache, venv, ll.args),
+            } },
             .when => |when_expr| .{ .when = .{
                 .cond = try self.specializeExpr(inst, mono_cache, venv, when_expr.cond),
                 .branches = try self.specializeBranchSpan(inst, mono_cache, venv, when_expr.branches),
@@ -599,7 +602,7 @@ const Lowerer = struct {
         inst: *InstScope,
         mono_cache: *lower_type.MonoCache,
         venv: []const EnvEntry,
-        call: solved.Ast.Expr.Data.call,
+        call: @FieldType(solved.Ast.Expr.Data, "call"),
         lowered_ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!ast.Expr.Data {
         const func_source = self.input.store.getExpr(call.func);
@@ -699,8 +702,8 @@ const Lowerer = struct {
         inst: *InstScope,
         mono_cache: *lower_type.MonoCache,
         incoming_env: []const EnvEntry,
-        block: solved.Ast.Expr.Data.block,
-    ) std.mem.Allocator.Error!ast.Expr.Data.block {
+        block: @FieldType(solved.Ast.Expr.Data, "block"),
+    ) std.mem.Allocator.Error!@FieldType(ast.Expr.Data, "block") {
         var env = try self.cloneEnv(incoming_env);
         defer self.allocator.free(env);
 
@@ -726,8 +729,8 @@ const Lowerer = struct {
         inst: *InstScope,
         mono_cache: *lower_type.MonoCache,
         venv: []const EnvEntry,
-        for_expr: solved.Ast.Expr.Data.for_,
-    ) std.mem.Allocator.Error!ast.Expr.Data.for_ {
+        for_expr: @FieldType(solved.Ast.Expr.Data, "for_"),
+    ) std.mem.Allocator.Error!@FieldType(ast.Expr.Data, "for_") {
         const iterable = try self.specializeExpr(inst, mono_cache, venv, for_expr.iterable);
         const pat_result = try self.specializePat(inst, mono_cache, for_expr.patt);
         defer self.allocator.free(pat_result.additions);

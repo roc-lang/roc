@@ -3,7 +3,7 @@
 const std = @import("std");
 const base = @import("base");
 const can = @import("can");
-const symbol_mod = @import("../symbol/mod.zig");
+const symbol_mod = @import("symbol");
 const type_mod = @import("type.zig");
 
 pub const Ctx = struct {

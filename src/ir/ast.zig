@@ -6,7 +6,7 @@
 const std = @import("std");
 const base = @import("base");
 const types = @import("types");
-const symbol_mod = @import("../symbol/mod.zig");
+const symbol_mod = @import("symbol");
 const layout_mod = @import("layout.zig");
 
 pub const Symbol = symbol_mod.Symbol;
@@ -53,7 +53,10 @@ pub const Expr = union(enum) {
         payload: ?Var,
     },
     get_union_id: Var,
-    get_union_struct: Var,
+    get_union_struct: struct {
+        value: Var,
+        tag_discriminant: u16,
+    },
     make_struct: Span(Var),
     make_list: Span(Var),
     get_struct_field: struct {

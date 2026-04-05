@@ -150,39 +150,17 @@ pub const Store = struct {
 
     // Number of sentinel layouts that are pre-populated in the layout store.
     // Must be kept in sync with the sentinel values in layout.zig Idx enum.
-    const num_primitives = 16;
+    const num_primitives = 17;
 
     /// Get the sentinel Idx for a given scalar type using pure arithmetic - no branches!
     /// This relies on the careful ordering of ScalarTag and Idx enum values.
     pub fn idxFromScalar(scalar: Scalar) Idx {
-        // Map scalar to idx using pure arithmetic:
-        // str (tag 0) -> 1
-        // int (tag 1) with precision p -> 2 + p
-        // frac (tag 2) with precision p -> 12 + (p - 2) = 10 + p
-
-        const tag = @intFromEnum(scalar.tag);
-
-        // Get the precision bits directly from the packed representation
-        // This works because in a packed union, all fields start at bit 0
-        const scalar_bits = @as(u7, @bitCast(scalar));
-        const precision = scalar_bits & 0xF; // Lower 4 bits contain precision for numeric types
-
-        // Create masks for different tag ranges
-        // is_numeric: 1 when tag >= 1, else 0
-        const is_numeric = @as(u7, @intFromBool(tag >= 1));
-
-        // Calculate the base index based on tag mappings
-        const base_idx = switch (scalar.tag) {
-            .str => @as(u7, 1),
-            .int => @as(u7, 2),
-            .frac => @as(u7, 10), // 12 - 2 = 10, so 10 + p gives correct result
+        return switch (scalar.tag) {
+            .str => .str,
+            .int => @enumFromInt(2 + @intFromEnum(scalar.data.int)),
+            .frac => @enumFromInt(@as(u32, 12) + @intFromEnum(scalar.data.frac)),
+            .opaque_ptr => .opaque_ptr,
         };
-
-        // Calculate the final index
-        // For non-numeric: idx = base_idx (precision is 0)
-        // For int: idx = base_idx + precision
-        // For frac: idx = base_idx + precision (where base_idx is already adjusted)
-        return @enumFromInt(base_idx + (is_numeric * precision));
     }
 
     pub fn init(
@@ -230,6 +208,7 @@ pub const Store = struct {
         _ = try layouts.append(allocator, Layout.frac(.f32));
         _ = try layouts.append(allocator, Layout.frac(.f64));
         _ = try layouts.append(allocator, Layout.frac(.dec));
+        _ = try layouts.append(allocator, Layout.opaquePtr());
         _ = try layouts.append(allocator, Layout.zst());
 
         std.debug.assert(layouts.len() == num_primitives);
@@ -1444,6 +1423,10 @@ pub const Store = struct {
                 },
                 .str => .{
                     .size = @intCast(3 * target_usize.size()), // ptr, byte length, capacity
+                    .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(target_usize.size())),
+                },
+                .opaque_ptr => .{
+                    .size = @intCast(target_usize.size()),
                     .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(target_usize.size())),
                 },
             },

@@ -18,6 +18,7 @@ pub const report = @import("report.zig");
 pub const exhaustive = @import("exhaustive.zig");
 
 pub const Check = @import("Check.zig");
+pub const TestEnv = @import("test/TestEnv.zig");
 
 pub const ReportBuilder = report.ReportBuilder;
 

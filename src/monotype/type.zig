@@ -139,16 +139,21 @@ pub const Store = struct {
     }
 
     pub fn equalIds(self: *const Store, a: TypeId, b: TypeId) bool {
-        var visited = std.ArrayList(struct { left: TypeId, right: TypeId }).empty;
+        var visited = std.ArrayList(TypePair).empty;
         defer visited.deinit(self.allocator);
         return self.equalIdsVisited(a, b, &visited) catch false;
     }
+
+    const TypePair = struct {
+        left: TypeId,
+        right: TypeId,
+    };
 
     fn equalIdsVisited(
         self: *const Store,
         a: TypeId,
         b: TypeId,
-        visited: *std.ArrayList(struct { left: TypeId, right: TypeId }),
+        visited: *std.ArrayList(TypePair),
     ) std.mem.Allocator.Error!bool {
         if (a == b) return true;
 

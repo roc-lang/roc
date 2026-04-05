@@ -2,9 +2,9 @@
 
 const std = @import("std");
 const base = @import("base");
-const solved = @import("../lambdasolved/mod.zig");
+const solved = @import("lambdasolved");
 const mono = @import("type.zig");
-const symbol_mod = @import("../symbol/mod.zig");
+const symbol_mod = @import("symbol");
 
 const TypeVarId = solved.Type.TypeVarId;
 const Symbol = symbol_mod.Symbol;
@@ -39,7 +39,11 @@ pub fn extractFn(types: *solved.Type.Store, ty: TypeVarId) struct {
     const id = types.unlink(ty);
     return switch (types.getNode(id)) {
         .content => |content| switch (content) {
-            .func => |func| func,
+            .func => |func| .{
+                .arg = func.arg,
+                .lset = func.lset,
+                .ret = func.ret,
+            },
             else => debugPanic("lambdamono.lower_type.extractFn expected function"),
         },
         else => debugPanic("lambdamono.lower_type.extractFn expected function"),

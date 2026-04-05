@@ -1,11 +1,11 @@
 //! Cor-style executable specialization queue.
 
 const std = @import("std");
-const solved = @import("../lambdasolved/mod.zig");
+const solved = @import("lambdasolved");
 const ast = @import("ast.zig");
 const type_mod = @import("type.zig");
 const lower_type = @import("lower_type.zig");
-const symbol_mod = @import("../symbol/mod.zig");
+const symbol_mod = @import("symbol");
 
 const Symbol = symbol_mod.Symbol;
 const TypeVarId = solved.Type.TypeVarId;

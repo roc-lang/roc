@@ -246,10 +246,12 @@ fn collectJoinScopes(
         .assign_ref => |assign| try collectJoinScopes(store, join_scopes, assign.next, active_scopes),
         .assign_literal => |assign| try collectJoinScopes(store, join_scopes, assign.next, active_scopes),
         .assign_call => |assign| try collectJoinScopes(store, join_scopes, assign.next, active_scopes),
+        .assign_call_indirect => |assign| try collectJoinScopes(store, join_scopes, assign.next, active_scopes),
         .assign_low_level => |assign| try collectJoinScopes(store, join_scopes, assign.next, active_scopes),
         .assign_list => |assign| try collectJoinScopes(store, join_scopes, assign.next, active_scopes),
         .assign_struct => |assign| try collectJoinScopes(store, join_scopes, assign.next, active_scopes),
         .assign_tag => |assign| try collectJoinScopes(store, join_scopes, assign.next, active_scopes),
+        .set_local => |assign| try collectJoinScopes(store, join_scopes, assign.next, active_scopes),
         .debug => |stmt| try collectJoinScopes(store, join_scopes, stmt.next, active_scopes),
         .expect => |stmt| try collectJoinScopes(store, join_scopes, stmt.next, active_scopes),
         .runtime_error => {},
@@ -261,6 +263,10 @@ fn collectJoinScopes(
                 try collectJoinScopes(store, join_scopes, branch.body, active_scopes);
             }
             try collectJoinScopes(store, join_scopes, switch_stmt.default_branch, active_scopes);
+        },
+        .for_list => |for_stmt| {
+            try collectJoinScopes(store, join_scopes, for_stmt.body, active_scopes);
+            try collectJoinScopes(store, join_scopes, for_stmt.next, active_scopes);
         },
         .borrow_scope => |scope| {
             try ensureScopeBodyTerminatesWithScopeExit(store, scope.body);
@@ -274,7 +280,7 @@ fn collectJoinScopes(
             try collectJoinScopes(store, join_scopes, join.body, active_scopes);
             try collectJoinScopes(store, join_scopes, join.remainder, active_scopes);
         },
-        .scope_exit, .jump, .ret, .crash => {},
+        .scope_exit, .jump, .ret, .crash, .loop_continue => {},
     }
 }
 
@@ -313,6 +319,13 @@ fn verifyStmt(
             try env.results.put(localKey(assign.target), assign.result);
             try verifyStmt(store, join_scopes, join_inputs, local_definitions, assign.next, env, current_scope_exit, scope_exit_envs, owner_kind, owner_id);
         },
+        .assign_call_indirect => |assign| {
+            try ensureLocalUsable(store, env, assign.closure, stmt_id);
+            try ensureLocalsUsable(store, env, store.getLocalSpan(assign.args), stmt_id);
+            try recordDefinition(local_definitions, assign.target, .{ .stmt = stmt_id });
+            try env.results.put(localKey(assign.target), assign.result);
+            try verifyStmt(store, join_scopes, join_inputs, local_definitions, assign.next, env, current_scope_exit, scope_exit_envs, owner_kind, owner_id);
+        },
         .assign_low_level => |assign| {
             try ensureLocalsUsable(store, env, store.getLocalSpan(assign.args), stmt_id);
             try recordDefinition(local_definitions, assign.target, .{ .stmt = stmt_id });
@@ -335,6 +348,18 @@ fn verifyStmt(
             try ensureLocalsUsable(store, env, store.getLocalSpan(assign.args), stmt_id);
             try recordDefinition(local_definitions, assign.target, .{ .stmt = stmt_id });
             try env.results.put(localKey(assign.target), assign.result);
+            try verifyStmt(store, join_scopes, join_inputs, local_definitions, assign.next, env, current_scope_exit, scope_exit_envs, owner_kind, owner_id);
+        },
+        .set_local => |assign| {
+            if (!env.results.contains(localKey(assign.target))) {
+                panicMissingLocalSemantics(store, stmt_id, assign.target);
+            }
+            try ensureLocalUsable(store, env, assign.value, stmt_id);
+            const source_semantics = env.results.get(localKey(assign.value)) orelse std.debug.panic(
+                "DebugVerifyLir invariant violated: missing source semantics for set_local value {d} at stmt {d}",
+                .{ @intFromEnum(assign.value), @intFromEnum(stmt_id) },
+            );
+            try env.results.put(localKey(assign.target), source_semantics);
             try verifyStmt(store, join_scopes, join_inputs, local_definitions, assign.next, env, current_scope_exit, scope_exit_envs, owner_kind, owner_id);
         },
         .debug => |stmt| {
@@ -371,6 +396,17 @@ fn verifyStmt(
                 defer branch_env.deinit();
                 try verifyStmt(store, join_scopes, join_inputs, local_definitions, branch.body, &branch_env, current_scope_exit, scope_exit_envs, owner_kind, owner_id);
             }
+        },
+        .for_list => |for_stmt| {
+            try ensureLocalUsable(store, env, for_stmt.iterable, stmt_id);
+
+            var body_env = try env.clone();
+            defer body_env.deinit();
+            try recordDefinition(local_definitions, for_stmt.elem, .{ .stmt = stmt_id });
+            try body_env.results.put(localKey(for_stmt.elem), .fresh);
+            try verifyStmt(store, join_scopes, join_inputs, local_definitions, for_stmt.body, &body_env, current_scope_exit, scope_exit_envs, owner_kind, owner_id);
+
+            try verifyStmt(store, join_scopes, join_inputs, local_definitions, for_stmt.next, env, current_scope_exit, scope_exit_envs, owner_kind, owner_id);
         },
         .borrow_scope => |scope| {
             var body_env = try env.clone();
@@ -439,6 +475,7 @@ fn verifyStmt(
             try exit_list.append(env.allocator, try env.clone());
         },
         .crash => {},
+        .loop_continue => {},
     }
 }
 
@@ -603,10 +640,12 @@ fn ensureScopeBodyTerminatesWithScopeExit(
         .assign_ref => |assign| try ensureScopeBodyTerminatesWithScopeExit(store, assign.next),
         .assign_literal => |assign| try ensureScopeBodyTerminatesWithScopeExit(store, assign.next),
         .assign_call => |assign| try ensureScopeBodyTerminatesWithScopeExit(store, assign.next),
+        .assign_call_indirect => |assign| try ensureScopeBodyTerminatesWithScopeExit(store, assign.next),
         .assign_low_level => |assign| try ensureScopeBodyTerminatesWithScopeExit(store, assign.next),
         .assign_list => |assign| try ensureScopeBodyTerminatesWithScopeExit(store, assign.next),
         .assign_struct => |assign| try ensureScopeBodyTerminatesWithScopeExit(store, assign.next),
         .assign_tag => |assign| try ensureScopeBodyTerminatesWithScopeExit(store, assign.next),
+        .set_local => |assign| try ensureScopeBodyTerminatesWithScopeExit(store, assign.next),
         .debug => |stmt| try ensureScopeBodyTerminatesWithScopeExit(store, stmt.next),
         .expect => |stmt| try ensureScopeBodyTerminatesWithScopeExit(store, stmt.next),
         .incref => |inc| try ensureScopeBodyTerminatesWithScopeExit(store, inc.next),
@@ -618,6 +657,10 @@ fn ensureScopeBodyTerminatesWithScopeExit(
             }
             try ensureScopeBodyTerminatesWithScopeExit(store, switch_stmt.default_branch);
         },
+        .for_list => |for_stmt| {
+            try ensureScopeBodyTerminatesWithScopeExit(store, for_stmt.body);
+            try ensureScopeBodyTerminatesWithScopeExit(store, for_stmt.next);
+        },
         .borrow_scope => |scope| {
             try ensureScopeBodyTerminatesWithScopeExit(store, scope.body);
             try ensureScopeBodyTerminatesWithScopeExit(store, scope.remainder);
@@ -626,7 +669,7 @@ fn ensureScopeBodyTerminatesWithScopeExit(
             try ensureScopeBodyTerminatesWithScopeExit(store, join.body);
             try ensureScopeBodyTerminatesWithScopeExit(store, join.remainder);
         },
-        .scope_exit, .runtime_error, .ret, .crash => {},
+        .scope_exit, .runtime_error, .ret, .crash, .loop_continue => {},
         .jump => std.debug.panic(
             "DebugVerifyLir invariant violated: borrow_scope body must terminate through scope_exit or a terminal statement, not jump",
             .{},
@@ -760,6 +803,7 @@ fn refOpSource(op: LIR.RefOp) LocalId {
         .discriminant => |disc| disc.source,
         .field => |field| field.source,
         .tag_payload => |payload| payload.source,
+        .tag_payload_struct => |payload| payload.source,
         .nominal => |nominal| nominal.backing_ref,
     };
 }

@@ -40,6 +40,7 @@ pub const ScalarTag = enum(u3) {
     str = 0, // Maps to Idx 1
     int = 1, // Maps to Idx 2-11 (depending on precision)
     frac = 2, // Maps to Idx 12-14 (depending on precision)
+    opaque_ptr = 3, // Maps to Idx 15
 };
 
 /// The union portion of the Scalar packed tagged union.
@@ -51,9 +52,10 @@ pub const ScalarUnion = packed union {
     str: void,
     int: types.Int.Precision,
     frac: types.Frac.Precision,
+    opaque_ptr: void,
 };
 
-/// A scalar value such as a str, int, or frac.
+/// A scalar value such as a str, int, frac, or opaque pointer.
 pub const Scalar = packed struct {
     // This can't be a normal Zig tagged union because it uses a packed union to reduce memory use,
     // and Zig tagged unions don't support being packed.
@@ -98,8 +100,11 @@ pub const Idx = enum(@Type(.{
     f64 = 13,
     dec = 14,
 
+    // opaque pointer
+    opaque_ptr = 15,
+
     // zero-sized type
-    zst = 15,
+    zst = 16,
 
     // Regular indices start from here.
     // num_primitives in store.zig must refer to how many variants we had up to this point.
@@ -564,6 +569,7 @@ pub const Layout = packed struct {
                 .int => self.data.scalar.data.int.alignment(),
                 .frac => self.data.scalar.data.frac.alignment(),
                 .str => target_usize.alignment(),
+                .opaque_ptr => target_usize.alignment(),
             },
             .box, .box_of_zst => target_usize.alignment(),
             .list, .list_of_zst => target_usize.alignment(),
@@ -603,6 +609,10 @@ pub const Layout = packed struct {
     /// str layout
     pub fn str() Layout {
         return Layout{ .data = .{ .scalar = .{ .data = .{ .str = {} }, .tag = .str } }, .tag = .scalar };
+    }
+
+    pub fn opaquePtr() Layout {
+        return Layout{ .data = .{ .scalar = .{ .data = .{ .opaque_ptr = {} }, .tag = .opaque_ptr } }, .tag = .scalar };
     }
 
     /// box layout with the given element layout
@@ -657,7 +667,7 @@ pub const Layout = packed struct {
         return switch (self.tag) {
             .scalar => switch (self.data.scalar.tag) {
                 .str => true, // RocStr needs refcounting
-                else => false,
+                .int, .frac, .opaque_ptr => false,
             },
             .list, .list_of_zst => true, // Lists need refcounting
             .box, .box_of_zst => true, // Boxes need refcounting
@@ -675,6 +685,7 @@ pub const Layout = packed struct {
                 .str => true, // No additional data to compare
                 .int => self.data.scalar.data.int == other.data.scalar.data.int,
                 .frac => self.data.scalar.data.frac == other.data.scalar.data.frac,
+                .opaque_ptr => true,
             },
             .box => self.data.box == other.data.box,
             .box_of_zst => true, // No additional data

@@ -2,10 +2,10 @@
 
 const std = @import("std");
 const base = @import("base");
-const mono_type = @import("../monotype/type.zig");
+const solved_type = @import("lambdasolved").Type;
 
 pub const TypeId = enum(u32) { _ };
-pub const Prim = mono_type.Prim;
+pub const Prim = solved_type.Prim;
 
 pub fn Span(comptime _: type) type {
     return extern struct {
@@ -110,16 +110,21 @@ pub const Store = struct {
     }
 
     pub fn equalIds(self: *const Store, left: TypeId, right: TypeId) bool {
-        var visited = std.ArrayList(struct { left: TypeId, right: TypeId }).empty;
+        var visited = std.ArrayList(TypePair).empty;
         defer visited.deinit(self.allocator);
         return self.equalIdsVisited(left, right, &visited) catch false;
     }
+
+    const TypePair = struct {
+        left: TypeId,
+        right: TypeId,
+    };
 
     fn equalIdsVisited(
         self: *const Store,
         left: TypeId,
         right: TypeId,
-        visited: *std.ArrayList(struct { left: TypeId, right: TypeId }),
+        visited: *std.ArrayList(TypePair),
     ) std.mem.Allocator.Error!bool {
         if (left == right) return true;
         for (visited.items) |pair| {

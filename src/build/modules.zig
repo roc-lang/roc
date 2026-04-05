@@ -270,7 +270,7 @@ pub const ModuleTest = struct {
 /// unnamed wrappers) so callers can correct the reported totals.
 pub const ModuleTestsResult = struct {
     /// Compile/run steps for each module's tests, in creation order.
-    tests: [25]ModuleTest,
+    tests: [31]ModuleTest,
     /// Number of synthetic passes the summary must subtract when filters were injected.
     /// Includes aggregator ensures and unconditional wrapper tests.
     forced_passes: usize,
@@ -304,6 +304,12 @@ pub const ModuleType = enum {
     lsp,
     backend,
     lir,
+    symbol,
+    monotype,
+    monotype_lifted,
+    lambdasolved,
+    lambdamono,
+    ir,
     roc_target,
     sljmp,
     echo_platform,
@@ -327,7 +333,7 @@ pub const ModuleType = enum {
             .check => &.{ .tracy, .builtins, .collections, .base, .parse, .types, .can, .reporting },
             .layout => &.{ .tracy, .collections, .base, .types, .builtins, .can },
             .values => &.{ .collections, .base, .builtins, .layout },
-            .eval => &.{ .tracy, .io, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .values, .build_options, .reporting, .backend, .lir, .roc_target, .sljmp },
+            .eval => &.{ .tracy, .io, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .values, .build_options, .reporting, .backend, .lir, .symbol, .monotype, .monotype_lifted, .lambdasolved, .lambdamono, .ir, .roc_target, .sljmp },
             .compile => &.{ .tracy, .build_options, .io, .builtins, .collections, .base, .types, .parse, .can, .check, .reporting, .layout, .eval, .unbundle, .roc_target },
             .ipc => &.{},
             .repl => &.{ .base, .collections, .compile, .parse, .types, .can, .check, .builtins, .layout, .values, .eval, .backend, .roc_target },
@@ -338,7 +344,13 @@ pub const ModuleType = enum {
             .base58 => &.{},
             .lsp => &.{ .compile, .reporting, .build_options, .io, .base, .parse, .can, .types, .fmt, .eval, .roc_target },
             .backend => &.{ .base, .layout, .builtins, .can, .lir, .roc_target },
-            .lir => &.{ .base, .layout, .types, .can },
+            .lir => &.{ .base, .layout, .types, .can, .ir },
+            .symbol => &.{.base},
+            .monotype => &.{ .base, .types, .can, .symbol },
+            .monotype_lifted => &.{ .base, .types, .symbol, .monotype },
+            .lambdasolved => &.{ .base, .types, .symbol, .monotype_lifted },
+            .lambdamono => &.{ .base, .types, .symbol, .lambdasolved },
+            .ir => &.{ .base, .types, .symbol, .lambdamono },
             .roc_target => &.{.base},
             .sljmp => &.{},
             .echo_platform => &.{.builtins},
@@ -376,6 +388,12 @@ pub const RocModules = struct {
     lsp: *Module,
     backend: *Module,
     lir: *Module,
+    symbol: *Module,
+    monotype: *Module,
+    monotype_lifted: *Module,
+    lambdasolved: *Module,
+    lambdamono: *Module,
+    ir: *Module,
     roc_target: *Module,
     sljmp: *Module,
     echo_platform: *Module,
@@ -416,6 +434,12 @@ pub const RocModules = struct {
             .lsp = b.addModule("lsp", .{ .root_source_file = b.path("src/lsp/mod.zig") }),
             .backend = b.addModule("backend", .{ .root_source_file = b.path("src/backend/mod.zig") }),
             .lir = b.addModule("lir", .{ .root_source_file = b.path("src/lir/mod.zig") }),
+            .symbol = b.addModule("symbol", .{ .root_source_file = b.path("src/symbol/mod.zig") }),
+            .monotype = b.addModule("monotype", .{ .root_source_file = b.path("src/monotype/mod.zig") }),
+            .monotype_lifted = b.addModule("monotype_lifted", .{ .root_source_file = b.path("src/monotype_lifted/mod.zig") }),
+            .lambdasolved = b.addModule("lambdasolved", .{ .root_source_file = b.path("src/lambdasolved/mod.zig") }),
+            .lambdamono = b.addModule("lambdamono", .{ .root_source_file = b.path("src/lambdamono/mod.zig") }),
+            .ir = b.addModule("ir", .{ .root_source_file = b.path("src/ir/mod.zig") }),
             .roc_target = b.addModule("roc_target", .{ .root_source_file = b.path("src/target/mod.zig") }),
             .sljmp = b.addModule("sljmp", .{ .root_source_file = b.path("src/sljmp/mod.zig") }),
             .echo_platform = b.addModule("echo_platform", .{ .root_source_file = b.path("src/echo_platform/mod.zig") }),
@@ -462,6 +486,12 @@ pub const RocModules = struct {
             .lsp,
             .backend,
             .lir,
+            .symbol,
+            .monotype,
+            .monotype_lifted,
+            .lambdasolved,
+            .lambdamono,
+            .ir,
             .roc_target,
             .sljmp,
             .echo_platform,
@@ -504,6 +534,12 @@ pub const RocModules = struct {
         step.root_module.addImport("roc_target", self.roc_target);
         step.root_module.addImport("backend", self.backend);
         step.root_module.addImport("lir", self.lir);
+        step.root_module.addImport("symbol", self.symbol);
+        step.root_module.addImport("monotype", self.monotype);
+        step.root_module.addImport("monotype_lifted", self.monotype_lifted);
+        step.root_module.addImport("lambdasolved", self.lambdasolved);
+        step.root_module.addImport("lambdamono", self.lambdamono);
+        step.root_module.addImport("ir", self.ir);
         step.root_module.addImport("sljmp", self.sljmp);
         step.root_module.addImport("echo_platform", self.echo_platform);
         step.root_module.addImport("docs", self.docs);
@@ -553,6 +589,12 @@ pub const RocModules = struct {
             .lsp => self.lsp,
             .backend => self.backend,
             .lir => self.lir,
+            .symbol => self.symbol,
+            .monotype => self.monotype,
+            .monotype_lifted => self.monotype_lifted,
+            .lambdasolved => self.lambdasolved,
+            .lambdamono => self.lambdamono,
+            .ir => self.ir,
             .roc_target => self.roc_target,
             .sljmp => self.sljmp,
             .echo_platform => self.echo_platform,
@@ -601,6 +643,12 @@ pub const RocModules = struct {
             .lsp,
             .backend,
             .lir,
+            .symbol,
+            .monotype,
+            .monotype_lifted,
+            .lambdasolved,
+            .lambdamono,
+            .ir,
             .sljmp,
             .echo_platform,
             .docs,

@@ -1223,6 +1223,7 @@ fn recordRefOpLocals(locals: *std.AutoHashMap(u64, void), op: RefOp) Allocator.E
         .discriminant => |disc| try recordProcLocal(locals, disc.source),
         .field => |field| try recordProcLocal(locals, field.source),
         .tag_payload => |payload| try recordProcLocal(locals, payload.source),
+        .tag_payload_struct => |payload| try recordProcLocal(locals, payload.source),
         .nominal => |nominal| try recordProcLocal(locals, nominal.backing_ref),
     }
 }
@@ -1255,6 +1256,12 @@ fn collectProcLocals(
             for (self.store.getLocalSpan(assign.args)) |arg| try recordProcLocal(locals, arg);
             try self.collectProcLocals(assign.next, locals, visited);
         },
+        .assign_call_indirect => |assign| {
+            try recordProcLocal(locals, assign.target);
+            try recordProcLocal(locals, assign.closure);
+            for (self.store.getLocalSpan(assign.args)) |arg| try recordProcLocal(locals, arg);
+            try self.collectProcLocals(assign.next, locals, visited);
+        },
         .assign_low_level => |assign| {
             try recordProcLocal(locals, assign.target);
             for (self.store.getLocalSpan(assign.args)) |arg| try recordProcLocal(locals, arg);
@@ -1275,6 +1282,11 @@ fn collectProcLocals(
             for (self.store.getLocalSpan(assign.args)) |arg| try recordProcLocal(locals, arg);
             try self.collectProcLocals(assign.next, locals, visited);
         },
+        .set_local => |assign| {
+            try recordProcLocal(locals, assign.target);
+            try recordProcLocal(locals, assign.value);
+            try self.collectProcLocals(assign.next, locals, visited);
+        },
         .debug => |debug_stmt| {
             try recordProcLocal(locals, debug_stmt.message);
             try self.collectProcLocals(debug_stmt.next, locals, visited);
@@ -1290,6 +1302,12 @@ fn collectProcLocals(
                 try self.collectProcLocals(branch.body, locals, visited);
             }
             try self.collectProcLocals(switch_stmt.default_branch, locals, visited);
+        },
+        .for_list => |for_stmt| {
+            try recordProcLocal(locals, for_stmt.elem);
+            try recordProcLocal(locals, for_stmt.iterable);
+            try self.collectProcLocals(for_stmt.body, locals, visited);
+            try self.collectProcLocals(for_stmt.next, locals, visited);
         },
         .borrow_scope => |scope| {
             try self.collectProcLocals(scope.body, locals, visited);
@@ -1318,6 +1336,7 @@ fn collectProcLocals(
             try self.collectProcLocals(free_stmt.next, locals, visited);
         },
         .crash => {},
+        .loop_continue => {},
     }
 }
 
@@ -4253,6 +4272,12 @@ fn generateCFStmt(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
             try self.bindAssignedLocal(assign.target);
             try self.generateCFStmt(assign.next);
         },
+        .assign_call_indirect => |_| {
+            std.debug.panic(
+                "WasmCodeGen TODO: assign_call_indirect lowering is not implemented yet",
+                .{},
+            );
+        },
         .assign_low_level => |assign| {
             try self.generateLowLevel(.{
                 .op = assign.op,
@@ -4285,6 +4310,11 @@ fn generateCFStmt(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
                 .args = assign.args,
             });
             try self.bindAssignedLocal(assign.target);
+            try self.generateCFStmt(assign.next);
+        },
+        .set_local => |assign| {
+            try self.emitProcLocal(assign.value);
+            try self.emitLocalSet(try self.getOrAllocTypedLocal(assign.target, self.procLocalValType(assign.target)));
             try self.generateCFStmt(assign.next);
         },
         .debug => |debug_stmt| {
@@ -4361,6 +4391,12 @@ fn generateCFStmt(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
                 self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
                 self.cf_depth -= 1;
             }
+        },
+        .for_list => |_| {
+            std.debug.panic(
+                "WasmCodeGen TODO: for_list lowering is not implemented yet",
+                .{},
+            );
         },
         .join => |j| {
             const jp_key = @intFromEnum(j.id);
@@ -4510,6 +4546,12 @@ fn generateCFStmt(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
 
             self.body.append(self.allocator, Op.@"unreachable") catch return error.OutOfMemory;
         },
+        .loop_continue => {
+            std.debug.panic(
+                "WasmCodeGen TODO: loop_continue lowering is not implemented outside for_list",
+                .{},
+            );
+        },
     }
 }
 
@@ -4543,6 +4585,14 @@ fn generateLiteral(self: *Self, value: LIR.LiteralValue) Allocator.Error!void {
             self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
             WasmModule.leb128WriteI32(self.allocator, &self.body, if (lit) 1 else 0) catch return error.OutOfMemory;
         },
+        .null_ptr => {
+            self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+        },
+        .proc_ref => |_| std.debug.panic(
+            "WasmCodeGen TODO: proc_ref literal lowering is not implemented yet",
+            .{},
+        ),
     }
 }
 

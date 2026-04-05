@@ -3,8 +3,8 @@
 const std = @import("std");
 const base = @import("base");
 const types = @import("types");
-const lambdamono = @import("../lambdamono/mod.zig");
-const symbol_mod = @import("../symbol/mod.zig");
+const lambdamono = @import("lambdamono");
+const symbol_mod = @import("symbol");
 const ast = @import("ast.zig");
 const layout_mod = @import("layout.zig");
 const lower_type = @import("lower_type.zig");
@@ -51,8 +51,9 @@ const Lowerer = struct {
         term: ast.Term,
 
         fn init(allocator: std.mem.Allocator) LoweredBlock {
+            _ = allocator;
             return .{
-                .stmts = std.ArrayList(ast.Stmt).init(allocator),
+                .stmts = .empty,
                 .term = undefined,
             };
         }
@@ -282,14 +283,15 @@ const Lowerer = struct {
             .let_ => |let_expr| {
                 const body_value = try self.lowerSubexprValue(&block, env, let_expr.body);
                 if (body_value == null) return block;
+                const bind_var = try self.lowerTypedSymbol(let_expr.bind);
                 try block.stmts.append(self.allocator, .{ .let_ = .{
-                    .bind = let_expr.bind,
+                    .bind = bind_var,
                     .expr = try self.output.addExpr(.{ .var_ = body_value.? }),
                 } });
 
                 const extended_env = try self.extendEnv(env, .{
                     .symbol = let_expr.bind.symbol,
-                    .var_ = let_expr.bind,
+                    .var_ = bind_var,
                 });
                 defer self.allocator.free(extended_env);
 
@@ -354,7 +356,19 @@ const Lowerer = struct {
                 } });
                 block.term = .{ .value = temp };
             },
-            .low_level => |ll| debugTodoLowLevel(ll.op),
+            .low_level => |ll| {
+                const args = try self.lowerValueSpan(&block, env, ll.args);
+                if (args == null) return block;
+                const temp = try self.freshVar(expr.ty, "low_level");
+                try block.stmts.append(self.allocator, .{ .let_ = .{
+                    .bind = temp,
+                    .expr = try self.output.addExpr(.{ .call_low_level = .{
+                        .op = ll.op,
+                        .args = args.?,
+                    } }),
+                } });
+                block.term = .{ .value = temp };
+            },
             .when => |when_expr| try self.lowerWhenExpr(&block, env, expr.ty, when_expr.cond, when_expr.branches),
             .if_ => |if_expr| try self.lowerIfExpr(&block, env, expr.ty, if_expr.cond, if_expr.then_body, if_expr.else_body),
             .block => |body| try self.lowerBlockExpr(&block, env, body.stmts, body.final_expr),
@@ -371,7 +385,6 @@ const Lowerer = struct {
     }
 
     fn freshVar(self: *Lowerer, ty: lambdamono.Type.TypeId, comptime label: []const u8) std.mem.Allocator.Error!ast.Var {
-        _ = label;
         return .{
             .layout = try lower_type.lowerType(&self.input.types, &self.layouts, &self.layout_cache, ty),
             .symbol = try self.freshSymbol(label),
@@ -444,9 +457,9 @@ const Lowerer = struct {
         try dst.stmts.appendSlice(self.allocator, child.stmts.items);
         return switch (child.term) {
             .value => |value| value,
-            else => {
+            else => blk: {
                 dst.term = child.term;
-                null;
+                break :blk null;
             },
         };
     }
@@ -486,7 +499,6 @@ const Lowerer = struct {
     }
 
     fn fieldId(self: *Lowerer, record_ty: lambdamono.Type.TypeId, name: base.Ident.Idx) std.mem.Allocator.Error!u16 {
-        _ = self;
         return switch (self.input.types.getType(record_ty)) {
             .record => |record| blk: {
                 for (self.input.types.sliceFields(record.fields), 0..) |field, i| {
@@ -499,7 +511,6 @@ const Lowerer = struct {
     }
 
     fn tagId(self: *Lowerer, union_ty: lambdamono.Type.TypeId, name: base.Ident.Idx) std.mem.Allocator.Error!u16 {
-        _ = self;
         return switch (self.input.types.getType(union_ty)) {
             .tag_union => |tag_union| blk: {
                 for (self.input.types.sliceTags(tag_union.tags), 0..) |tag, i| {
@@ -522,8 +533,8 @@ const Lowerer = struct {
         const cond = try self.lowerSubexprValue(block, env, cond_expr);
         if (cond == null) return;
 
-        var tag_branches = std.ArrayList(ast.Branch).init(self.allocator);
-        defer tag_branches.deinit();
+        var tag_branches = std.ArrayList(ast.Branch).empty;
+        defer tag_branches.deinit(self.allocator);
 
         var default_block: ?ast.BlockId = null;
         const join = try self.freshVar(result_ty, "when_join");
@@ -617,13 +628,14 @@ const Lowerer = struct {
             .decl => |decl| {
                 const value = try self.lowerSubexprValue(block, env.*, decl.body);
                 if (value == null) return false;
+                const bind = try self.lowerTypedSymbol(decl.bind);
                 try block.stmts.append(self.allocator, .{ .let_ = .{
-                    .bind = decl.bind,
+                    .bind = bind,
                     .expr = try self.output.addExpr(.{ .var_ = value.? }),
                 } });
                 const extended = try self.extendEnv(env.*, .{
                     .symbol = decl.bind.symbol,
-                    .var_ = decl.bind,
+                    .var_ = bind,
                 });
                 self.allocator.free(env.*);
                 env.* = extended;
@@ -632,13 +644,14 @@ const Lowerer = struct {
             .var_decl => |decl| {
                 const value = try self.lowerSubexprValue(block, env.*, decl.body);
                 if (value == null) return false;
+                const bind = try self.lowerTypedSymbol(decl.bind);
                 try block.stmts.append(self.allocator, .{ .let_ = .{
-                    .bind = decl.bind,
+                    .bind = bind,
                     .expr = try self.output.addExpr(.{ .var_ = value.? }),
                 } });
                 const extended = try self.extendEnv(env.*, .{
                     .symbol = decl.bind.symbol,
-                    .var_ = decl.bind,
+                    .var_ = bind,
                 });
                 self.allocator.free(env.*);
                 env.* = extended;
@@ -732,10 +745,10 @@ const Lowerer = struct {
         pat_id: lambdamono.Ast.PatId,
         body_expr: lambdamono.Ast.ExprId,
     ) std.mem.Allocator.Error!ast.BlockId {
-        var prefix = std.ArrayList(ast.Stmt).init(self.allocator);
-        defer prefix.deinit();
-        var additions = std.ArrayList(EnvEntry).init(self.allocator);
-        defer additions.deinit();
+        var prefix = std.ArrayList(ast.Stmt).empty;
+        defer prefix.deinit(self.allocator);
+        var additions = std.ArrayList(EnvEntry).empty;
+        defer additions.deinit(self.allocator);
 
         try self.destructurePattern(&prefix, &additions, source_var, pat_id);
 
@@ -773,7 +786,10 @@ const Lowerer = struct {
                 const payload_var = try self.freshStructVarFromPats(args, "pat_payload");
                 try prefix.append(self.allocator, .{ .let_ = .{
                     .bind = payload_var,
-                    .expr = try self.output.addExpr(.{ .get_union_struct = source_var }),
+                    .expr = try self.output.addExpr(.{ .get_union_struct = .{
+                        .value = source_var,
+                        .tag_discriminant = try self.tagId(pat.ty, tag.name),
+                    } }),
                 } });
 
                 for (args, 0..) |arg_pat_id, i| {

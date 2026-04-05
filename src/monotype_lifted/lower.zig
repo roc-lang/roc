@@ -11,10 +11,10 @@
 
 const std = @import("std");
 const base = @import("base");
-const mono = @import("../monotype/mod.zig");
+const mono = @import("monotype");
 const ast = @import("ast.zig");
 const type_mod = @import("type.zig");
-const symbol_mod = @import("../symbol/mod.zig");
+const symbol_mod = @import("symbol");
 
 const MonoResult = mono.Lower.Result;
 const MonoAst = mono.Ast;
@@ -59,15 +59,25 @@ const Lowerer = struct {
         expr: ast.ExprId,
         lifted_defs: std.ArrayList(ast.Def),
 
-        fn init(allocator: std.mem.Allocator) LoweredExpr {
+        fn init() LoweredExpr {
             return .{
                 .expr = undefined,
-                .lifted_defs = std.ArrayList(ast.Def).init(allocator),
+                .lifted_defs = .empty,
             };
         }
 
         fn deinit(self: *LoweredExpr, allocator: std.mem.Allocator) void {
             self.lifted_defs.deinit(allocator);
+        }
+    };
+
+    const LoweredBlock = struct {
+        stmts: ast.Span(ast.StmtId),
+        final_venv: []const Rename,
+        owned_final_venv: ?[]Rename = null,
+
+        fn deinit(self: *LoweredBlock, allocator: std.mem.Allocator) void {
+            if (self.owned_final_venv) |buf| allocator.free(buf);
         }
     };
 
@@ -147,9 +157,9 @@ const Lowerer = struct {
                 defer lowered_body.deinit(self.allocator);
                 try self.emitLiftedDefs(lowered_body.lifted_defs.items);
                 break :blk try self.emitDef(.{
-                    .bind = def.bind,
+                    .bind = .{ .ty = def.bind.ty, .symbol = def.bind.symbol },
                     .value = .{ .fn_ = .{
-                        .arg = fn_def.arg,
+                        .arg = .{ .ty = fn_def.arg.ty, .symbol = fn_def.arg.symbol },
                         .captures = try self.output.addTypedSymbolSpan(&.{}),
                         .body = lowered_body.expr,
                     } },
@@ -160,7 +170,7 @@ const Lowerer = struct {
                 defer lowered_expr.deinit(self.allocator);
                 try self.emitLiftedDefs(lowered_expr.lifted_defs.items);
                 break :blk try self.emitDef(.{
-                    .bind = def.bind,
+                    .bind = .{ .ty = def.bind.ty, .symbol = def.bind.symbol },
                     .value = .{ .val = lowered_expr.expr },
                 });
             },
@@ -169,7 +179,7 @@ const Lowerer = struct {
                 defer lowered_expr.deinit(self.allocator);
                 try self.emitLiftedDefs(lowered_expr.lifted_defs.items);
                 break :blk try self.emitDef(.{
-                    .bind = def.bind,
+                    .bind = .{ .ty = def.bind.ty, .symbol = def.bind.symbol },
                     .value = .{ .run = .{
                         .body = lowered_expr.expr,
                         .entry_ty = run_def.entry_ty,
@@ -181,7 +191,7 @@ const Lowerer = struct {
 
     fn lowerExpr(self: *Lowerer, venv: []const Rename, expr_id: MonoAst.ExprId) std.mem.Allocator.Error!LoweredExpr {
         const expr = self.input.program.store.getExpr(expr_id);
-        var lowered = LoweredExpr.init(self.allocator);
+        var lowered = LoweredExpr.init();
         errdefer lowered.deinit(self.allocator);
 
         switch (expr.data) {
@@ -227,7 +237,7 @@ const Lowerer = struct {
                     lowered.expr = try self.output.addExpr(.{
                         .ty = expr.ty,
                         .data = .{ .let_ = .{
-                            .bind = let_val.bind,
+                            .bind = .{ .ty = let_val.bind.ty, .symbol = let_val.bind.symbol },
                             .body = body,
                             .rest = rest,
                         } },
@@ -248,7 +258,7 @@ const Lowerer = struct {
                     try lowered.lifted_defs.append(self.allocator, .{
                         .bind = .{ .ty = expr.ty, .symbol = lifted_symbol },
                         .value = .{ .fn_ = .{
-                            .arg = let_fn.arg,
+                            .arg = .{ .ty = let_fn.arg.ty, .symbol = let_fn.arg.symbol },
                             .captures = try self.output.addTypedSymbolSpan(captures),
                             .body = lowered_body.expr,
                         } },
@@ -265,7 +275,7 @@ const Lowerer = struct {
                         lowered.expr = try self.output.addExpr(.{
                             .ty = expr.ty,
                             .data = .{ .let_ = .{
-                                .bind = let_fn.bind,
+                                .bind = .{ .ty = let_fn.bind.ty, .symbol = let_fn.bind.symbol },
                                 .body = lifted_ref,
                                 .rest = rest,
                             } },
@@ -285,7 +295,7 @@ const Lowerer = struct {
                 try lowered.lifted_defs.append(self.allocator, .{
                     .bind = .{ .ty = expr.ty, .symbol = lifted_symbol },
                     .value = .{ .fn_ = .{
-                        .arg = clos.arg,
+                        .arg = .{ .ty = clos.arg.ty, .symbol = clos.arg.symbol },
                         .captures = try self.output.addTypedSymbolSpan(captures),
                         .body = lowered_body.expr,
                     } },
@@ -333,11 +343,13 @@ const Lowerer = struct {
                 });
             },
             .block => |block| {
+                var lowered_block = try self.lowerBlock(&lowered.lifted_defs, venv, block.stmts);
+                defer lowered_block.deinit(self.allocator);
                 lowered.expr = try self.output.addExpr(.{
                     .ty = expr.ty,
                     .data = .{ .block = .{
-                        .stmts = try self.lowerStmtSpan(&lowered.lifted_defs, venv, block.stmts),
-                        .final_expr = try self.lowerExprInto(&lowered.lifted_defs, venv, block.final_expr),
+                        .stmts = lowered_block.stmts,
+                        .final_expr = try self.lowerExprInto(&lowered.lifted_defs, lowered_block.final_venv, block.final_expr),
                     } },
                 });
             },
@@ -451,19 +463,36 @@ const Lowerer = struct {
         return try self.output.addBranchSpan(lowered);
     }
 
-    fn lowerStmtSpan(
+    fn lowerBlock(
         self: *Lowerer,
         lifted_defs: *std.ArrayList(ast.Def),
         venv: []const Rename,
         span: MonoAst.Span(MonoAst.StmtId),
-    ) std.mem.Allocator.Error!ast.Span(ast.StmtId) {
+    ) std.mem.Allocator.Error!LoweredBlock {
         const stmt_ids = self.input.program.store.sliceStmtSpan(span);
-        const lowered = try self.allocator.alloc(ast.StmtId, stmt_ids.len);
-        defer self.allocator.free(lowered);
-        for (stmt_ids, 0..) |stmt_id, i| {
-            lowered[i] = try self.lowerStmt(lifted_defs, venv, stmt_id);
+        var lowered_stmt_ids = std.ArrayList(ast.StmtId).empty;
+        defer lowered_stmt_ids.deinit(self.allocator);
+
+        var current_venv = venv;
+        var owned_current_venv: ?[]Rename = null;
+        errdefer if (owned_current_venv) |buf| self.allocator.free(buf);
+
+        var i: usize = 0;
+        while (i < stmt_ids.len) {
+            if (try self.lowerLocalFnDeclGroup(lifted_defs, &lowered_stmt_ids, &current_venv, &owned_current_venv, stmt_ids, &i)) {
+                continue;
+            }
+
+            const lowered_stmt_id = try self.lowerStmt(lifted_defs, current_venv, stmt_ids[i]);
+            try lowered_stmt_ids.append(self.allocator, lowered_stmt_id);
+            i += 1;
         }
-        return try self.output.addStmtSpan(lowered);
+
+        return .{
+            .stmts = try self.output.addStmtSpan(lowered_stmt_ids.items),
+            .final_venv = current_venv,
+            .owned_final_venv = owned_current_venv,
+        };
     }
 
     fn lowerStmt(
@@ -475,11 +504,11 @@ const Lowerer = struct {
         const stmt = self.input.program.store.getStmt(stmt_id);
         const lowered_stmt: ast.Stmt = switch (stmt) {
             .decl => |decl| .{ .decl = .{
-                .bind = decl.bind,
+                .bind = .{ .ty = decl.bind.ty, .symbol = decl.bind.symbol },
                 .body = try self.lowerExprInto(lifted_defs, venv, decl.body),
             } },
             .var_decl => |decl| .{ .var_decl = .{
-                .bind = decl.bind,
+                .bind = .{ .ty = decl.bind.ty, .symbol = decl.bind.symbol },
                 .body = try self.lowerExprInto(lifted_defs, venv, decl.body),
             } },
             .reassign => |reassign| .{ .reassign = .{
@@ -497,6 +526,93 @@ const Lowerer = struct {
             } },
         };
         return try self.output.addStmt(lowered_stmt);
+    }
+
+    fn lowerLocalFnDeclGroup(
+        self: *Lowerer,
+        lifted_defs: *std.ArrayList(ast.Def),
+        lowered_stmt_ids: *std.ArrayList(ast.StmtId),
+        current_venv: *[]const Rename,
+        owned_current_venv: *?[]Rename,
+        stmt_ids: []const MonoAst.StmtId,
+        index: *usize,
+    ) std.mem.Allocator.Error!bool {
+        if (index.* >= stmt_ids.len) return false;
+
+        const first_stmt = self.input.program.store.getStmt(stmt_ids[index.*]);
+        if (first_stmt != .decl) return false;
+        if (!self.isLocalFnDecl(first_stmt.decl.body)) return false;
+
+        var group_end = index.*;
+        while (group_end < stmt_ids.len) : (group_end += 1) {
+            const stmt = self.input.program.store.getStmt(stmt_ids[group_end]);
+            if (stmt != .decl) break;
+            if (!self.isLocalFnDecl(stmt.decl.body)) break;
+        }
+
+        const GroupMember = struct {
+            decl: @FieldType(MonoAst.Stmt, "decl"),
+            clos: @FieldType(MonoAst.Expr.Data, "clos"),
+            lifted_symbol: Symbol,
+        };
+
+        const group_len = group_end - index.*;
+        const group = try self.allocator.alloc(GroupMember, group_len);
+        defer self.allocator.free(group);
+
+        var recursive_venv = current_venv.*;
+        var owned_recursive_venv: ?[]Rename = null;
+        defer if (owned_recursive_venv) |buf| self.allocator.free(buf);
+
+        for (stmt_ids[index.*..group_end], 0..) |stmt_id, group_i| {
+            const decl = self.input.program.store.getStmt(stmt_id).decl;
+            const clos = self.input.program.store.getExpr(decl.body).data.clos;
+            const lifted_symbol = try self.freshLiftedLocalFnSymbol(decl.bind.symbol);
+            group[group_i] = .{
+                .decl = decl,
+                .clos = clos,
+                .lifted_symbol = lifted_symbol,
+            };
+            recursive_venv = try self.pushRename(recursive_venv, &owned_recursive_venv, decl.bind.symbol, lifted_symbol);
+        }
+
+        for (group) |member| {
+            const captures = try self.computeCaptures(
+                recursive_venv,
+                &.{ member.decl.bind.symbol, member.clos.arg.symbol },
+                member.clos.body,
+            );
+            defer self.allocator.free(captures);
+
+            var lowered_body = try self.lowerExpr(recursive_venv, member.clos.body);
+            defer lowered_body.deinit(self.allocator);
+            try lifted_defs.appendSlice(self.allocator, lowered_body.lifted_defs.items);
+            try lifted_defs.append(self.allocator, .{
+                .bind = .{ .ty = member.decl.bind.ty, .symbol = member.lifted_symbol },
+                .value = .{ .fn_ = .{
+                    .arg = .{ .ty = member.clos.arg.ty, .symbol = member.clos.arg.symbol },
+                    .captures = try self.output.addTypedSymbolSpan(captures),
+                    .body = lowered_body.expr,
+                } },
+            });
+
+            if (captures.len == 0) {
+                current_venv.* = try self.pushRename(current_venv.*, owned_current_venv, member.decl.bind.symbol, member.lifted_symbol);
+            } else {
+                const lifted_ref = try self.output.addExpr(.{
+                    .ty = member.decl.bind.ty,
+                    .data = .{ .var_ = member.lifted_symbol },
+                });
+                const alias_stmt = try self.output.addStmt(.{ .decl = .{
+                    .bind = .{ .ty = member.decl.bind.ty, .symbol = member.decl.bind.symbol },
+                    .body = lifted_ref,
+                } });
+                try lowered_stmt_ids.append(self.allocator, alias_stmt);
+            }
+        }
+
+        index.* = group_end;
+        return true;
     }
 
     fn lowerPat(self: *Lowerer, pat_id: MonoAst.PatId) std.mem.Allocator.Error!ast.PatId {
@@ -737,6 +853,17 @@ const Lowerer = struct {
         std.mem.copyForwards(Rename, next[0..venv.len], venv);
         next[venv.len] = .{ .from = from, .to = to };
         return next;
+    }
+
+    fn pushRename(self: *Lowerer, venv: []const Rename, owned_venv: *?[]Rename, from: Symbol, to: Symbol) std.mem.Allocator.Error![]const Rename {
+        const next = try self.extendRename(venv, from, to);
+        if (owned_venv.*) |buf| self.allocator.free(buf);
+        owned_venv.* = next;
+        return next;
+    }
+
+    fn isLocalFnDecl(self: *Lowerer, expr_id: MonoAst.ExprId) bool {
+        return self.input.program.store.getExpr(expr_id).data == .clos;
     }
 
     fn bindTemporarily(self: *Lowerer, bound: *std.AutoHashMap(Symbol, void), symbol: Symbol) std.mem.Allocator.Error!bool {

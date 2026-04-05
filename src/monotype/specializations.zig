@@ -2,7 +2,7 @@
 
 const std = @import("std");
 const can = @import("can");
-const symbol_mod = @import("../symbol/mod.zig");
+const symbol_mod = @import("symbol");
 const type_mod = @import("type.zig");
 const ctx_mod = @import("ctx.zig");
 
