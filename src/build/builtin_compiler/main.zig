@@ -48,7 +48,7 @@ const BuiltinIndices = CIR.BuiltinIndices;
 /// Replace specific `e_anno_only` builtin declarations with `e_lambda` wrappers
 /// around `e_run_low_level` operations.
 ///
-/// This keeps compiler-provided builtins in one uniform shape so later MIR
+/// This keeps compiler-provided builtins in one uniform shape so later
 /// lowering can recognize them generically instead of carrying per-builtin
 /// exceptions.
 /// Returns a list of new def indices created.

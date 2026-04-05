@@ -1,4 +1,4 @@
-//! Shared canonical primitive-op vocabulary for CIR, MIR, and LIR.
+//! Shared canonical primitive-op vocabulary for canonicalization and LIR.
 //!
 //! This is the single source of truth for primitive names and their ownership
 //! contracts. Backends may still reject specific ops that should have been
@@ -748,7 +748,7 @@ pub const LowLevel = enum {
             .list_get_unsafe => .{ .borrow_arg = 0 },
 
             // These produce container results whose payload provenance needs a more
-            // precise summary than strongest-form MIR currently computes.
+            // precise summary than the current explicit lowering computes.
             .list_first,
             .list_last,
             .list_split_first,

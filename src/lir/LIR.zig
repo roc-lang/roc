@@ -1,6 +1,6 @@
 //! Statement-only Low-level Intermediate Representation (LIR)
 //!
-//! This is the strongest-form LIR used between MIR and code generation.
+//! This is the strongest-form LIR used before code generation.
 //! It is explicitly statement-oriented:
 //! - no block expressions
 //! - no control-flow expressions
@@ -12,13 +12,41 @@
 const std = @import("std");
 const base = @import("base");
 const layout = @import("layout");
-const mir = @import("mir");
 
 const StringLiteral = base.StringLiteral;
 const Ident = base.Ident;
 
-/// MIR symbols reused only for global/top-level identity in LIR.
-pub const Symbol = mir.Symbol;
+/// Global identifier (opaque 64-bit id).
+pub const Symbol = packed struct(u64) {
+    id: u64,
+
+    comptime {
+        std.debug.assert(@sizeOf(Symbol) == @sizeOf(u64));
+        std.debug.assert(@alignOf(Symbol) == @alignOf(u64));
+    }
+
+    pub fn fromRaw(id: u64) Symbol {
+        return .{ .id = id };
+    }
+
+    pub fn raw(self: Symbol) u64 {
+        return self.id;
+    }
+
+    pub fn eql(a: Symbol, b: Symbol) bool {
+        return a.id == b.id;
+    }
+
+    pub fn hash(self: Symbol) u64 {
+        return self.id;
+    }
+
+    pub const none: Symbol = .{ .id = std.math.maxInt(u64) };
+
+    pub fn isNone(self: Symbol) bool {
+        return self.id == none.id;
+    }
+};
 
 /// Identifier of a lowered LIR proc specification.
 pub const LirProcSpecId = enum(u32) {

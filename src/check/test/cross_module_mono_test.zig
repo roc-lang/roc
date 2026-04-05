@@ -565,7 +565,7 @@ test "cross-module mono: static dispatch with chained method calls" {
 test "cross-module mono: recursive nominal type with self-referencing children" {
     // Module A defines a recursive nominal type where children reference
     // the type itself (Elem contains List(Elem)). This pattern is the key
-    // scenario where `remapMonotypeBetweenModules` in MIR Lower.zig does
+    // scenario where cross-module nominal remapping does
     // meaningful work: the TypeId for List(Elem) may contain a `.rec`
     // placeholder indirection internally, which must be resolved when used
     // from a different module for TypeId comparisons to succeed.

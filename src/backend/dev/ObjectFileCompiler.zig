@@ -8,7 +8,7 @@
 //!
 //! The compilation pipeline:
 //! ```
-//! Roc Source → CIR → MIR → LIR → Machine Code → Object File
+//! Roc Source → CIR → LIR → Machine Code → Object File
 //! ```
 
 const std = @import("std");

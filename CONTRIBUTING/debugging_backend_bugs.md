@@ -8,7 +8,7 @@ code generator, or WASM code generator.
 
 The eval test runner (`zig-out/bin/eval-test-runner`) exercises all the
 backends on many test cases 1000+. Each test is parsed, canonicalized, type-checked,
-lowered through a shared pipeline (CIR → MIR → LIR → RC insertion), and then
+lowered through a shared pipeline (CIR → LIR → RC insertion), and then
 executed by each backend independently. Results are compared via `Str.inspect`.
 
 When a backend crashes or produces the wrong answer, the workflow is:
@@ -112,7 +112,7 @@ the binary as normal.
 ### `-Dtrace-eval=true` — Lowering + interpreter eval tracing
 
 Traces the full pipeline:
-- Lowering stages: Monomorphize → MIR Lower → Lambda Set Inference → MIR→LIR → RC Insertion
+- Lowering stages: canonical lowering → LIR → RC insertion
 - Interpreter eval loop: every work item dispatched (expression, continuation, low-level op)
 - RC plan execution in the interpreter
 
@@ -128,8 +128,8 @@ Example output:
 ```
 [lower] === Monomorphize ===
 [lower] monomorphize done: 2 proc instances
-[lower] === MIR to LIR ===
-[lower] MIR→LIR done: lir_expr=@enumFromInt(29)
+[lower] === LIR lowering ===
+[lower] LIR done: lir_expr=@enumFromInt(29)
 [interp] eval_expr @enumFromInt(18): low_level
 [interp] list_concat: elem_width=24 align=8 rc=true
 ```

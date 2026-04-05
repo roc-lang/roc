@@ -1091,7 +1091,7 @@ test "fx platform inline expect succeeds as expected" {
 
 test "fx platform inline expect fails in dev backend binary" {
     // Regression test for #9261: the dev backend (object file compilation) must
-    // evaluate inline expect expressions. Previously, the MIR lowering of s_expect
+    // evaluate inline expect expressions. Previously, lowered `s_expect`
     // statements did not wrap the condition in an .expect node, causing the dev
     // backend to silently skip the assertion.
     const allocator = testing.allocator;

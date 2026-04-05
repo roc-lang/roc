@@ -7,11 +7,11 @@ navigate the code without prior context.
 
 ## High-Level Architecture
 
-The interpreter works by lowering Canonical IR (CIR) through a multi-stage
-pipeline, then interpreting the resulting LIR directly:
+The interpreter works by lowering Canonical IR (CIR) into LIR, then
+interpreting the resulting program directly:
 
 ```
-CIR → MIR → LIR → RC → Interpret
+CIR → LIR → RC → Interpret
 ```
 
 ### Core Modules
@@ -33,20 +33,12 @@ CIR → MIR → LIR → RC → Interpret
   carry no runtime type information; the layout is always tracked separately
   via `layout.Idx`.
 
-- **`cir_to_lir.zig`** centralizes the CIR → MIR → LIR → RC lowering pipeline.
-  `LirProgram` manages a global layout store (shared across evaluations) and
-  provides `lowerExpr` / `lowerEntrypointExpr` entry points.
-
-- **`runner.zig`** is the unified backend dispatcher. It selects between
-  interpreter, dev, LLVM, or WASM backends at comptime for dead-code
-  elimination.
-
 ## Evaluation Flow
 
 1. **Canonical inputs** — Consumers (REPL, tests, CLI) parse and canonicalize
    Roc source, producing a `ModuleEnv` and canonical expression index.
-2. **Lowering** — `LirProgram.lowerExpr()` or `lowerEntrypointExpr()` runs the
-   CIR → MIR → LIR → RC pipeline, producing a `LirStore` and entry expression.
+2. **Lowering** — CIR is lowered into LIR plus explicit RC statements, producing
+   a `LirStore` and entry expression.
 3. **Interpretation** — `LirInterpreter.init()` creates the interpreter, then
    `eval()` or `evalEntrypoint()` runs the stack-safe engine.
 4. **Stack-safe engine** — `evalStackSafe()` is the main loop. It pops work
@@ -62,15 +54,9 @@ All RocOps interactions (alloc, dealloc, crash, expect, dbg) happen through the
 
 ## Host Integrations
 
-- **REPL** (`src/repl/eval.zig`) — `evaluateWithInterpreter()` lowers and
-  evaluates each expression, returning formatted output.
 - **Interpreter shim** (`src/interpreter_shim/main.zig`) — Provides a
   C-callable entry point (`roc_entrypoint`) that receives a `ModuleEnv` via
   shared memory or embedded data, lowers it, and evaluates via the interpreter.
-- **CLI run** (`src/cli/main.zig`) — `rocRun()` dispatches through
-  `eval.runner.runtimeRun()` which calls `runViaInterpreter()`.
-- **Test runner** (`test_runner.zig`) — Evaluates expect expressions using
-  the interpreter pipeline.
 
 ## Tests
 
@@ -78,20 +64,12 @@ Interpreter-specific coverage lives in `src/eval/test/`:
 
 - `eval_test.zig` — End-to-end tests that parse, canonicalize, lower, and
   evaluate Roc expressions.
-- `helpers.zig` — Test harness with `lirInterpreterStr()` and
-  `lirInterpreterEval()` for running the interpreter in tests.
-  `compareWithDevEvaluator()` cross-checks interpreter output against the
-  dev backend.
 - `arithmetic_comprehensive_test.zig` — Comprehensive numeric operation tests.
 - `list_refcount_*.zig` — Reference counting tests for list operations.
 - `closure_test.zig`, `low_level_interp_test.zig`, `anno_only_interp_test.zig`
   — Targeted test suites for specific interpreter features.
 
 Run tests with:
-
-```bash
-zig build test-eval --summary all -- --test-filter "pattern"
-```
 
 ## Debugging
 

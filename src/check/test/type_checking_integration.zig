@@ -3664,7 +3664,7 @@ test "check type - bool diagnostic - lambda negation applied to Bool.True" {
 // CRITICAL DISTINCTION: In Roc, bare tags like `True` and `False` are structural tag unions,
 // NOT Bool primitives. They only become nominal `Bool` when unified with a Bool annotation
 // or a qualified reference like `Bool.True`. This is by design.
-// See also: corresponding MIR lowering coverage in eval/backend integration tests.
+// See also: corresponding lowering coverage in eval/backend integration tests.
 
 test "check type - nominal Bool - annotated True is Bool" {
     const source =

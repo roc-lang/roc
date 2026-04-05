@@ -38,8 +38,6 @@ fn aggregatorFilters(module_type: ModuleType) []const []const u8 {
         .ipc => &.{"ipc tests"},
         .repl => &.{"repl tests"},
         .fmt => &.{"fmt tests"},
-        .corecir => &.{"corecir tests"},
-        .mir => &.{"mir tests"},
         else => &.{},
     };
 }
@@ -272,7 +270,7 @@ pub const ModuleTest = struct {
 /// unnamed wrappers) so callers can correct the reported totals.
 pub const ModuleTestsResult = struct {
     /// Compile/run steps for each module's tests, in creation order.
-    tests: [27]ModuleTest,
+    tests: [25]ModuleTest,
     /// Number of synthetic passes the summary must subtract when filters were injected.
     /// Includes aggregator ensures and unconditional wrapper tests.
     forced_passes: usize,
@@ -305,8 +303,6 @@ pub const ModuleType = enum {
     base58,
     lsp,
     backend,
-    corecir,
-    mir,
     lir,
     roc_target,
     sljmp,
@@ -329,9 +325,9 @@ pub const ModuleType = enum {
             .parse => &.{ .tracy, .collections, .base, .reporting },
             .can => &.{ .tracy, .builtins, .collections, .types, .base, .parse, .reporting, .build_options },
             .check => &.{ .tracy, .builtins, .collections, .base, .parse, .types, .can, .reporting },
-            .layout => &.{ .tracy, .collections, .base, .types, .builtins, .can, .mir, .corecir },
+            .layout => &.{ .tracy, .collections, .base, .types, .builtins, .can },
             .values => &.{ .collections, .base, .builtins, .layout },
-            .eval => &.{ .tracy, .io, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .values, .build_options, .reporting, .backend, .corecir, .mir, .lir, .roc_target, .sljmp },
+            .eval => &.{ .tracy, .io, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .values, .build_options, .reporting, .backend, .lir, .roc_target, .sljmp },
             .compile => &.{ .tracy, .build_options, .io, .builtins, .collections, .base, .types, .parse, .can, .check, .reporting, .layout, .eval, .unbundle, .roc_target },
             .ipc => &.{},
             .repl => &.{ .base, .collections, .compile, .parse, .types, .can, .check, .builtins, .layout, .values, .eval, .backend, .roc_target },
@@ -342,9 +338,7 @@ pub const ModuleType = enum {
             .base58 => &.{},
             .lsp => &.{ .compile, .reporting, .build_options, .io, .base, .parse, .can, .types, .fmt, .eval, .roc_target },
             .backend => &.{ .base, .layout, .builtins, .can, .lir, .roc_target },
-            .corecir => &.{ .base, .can, .types, .builtins, .parse, .check, .collections, .reporting, .build_options, .tracy },
-            .mir => &.{ .base, .can, .types, .builtins, .parse, .check, .collections, .reporting, .build_options, .tracy, .corecir },
-            .lir => &.{ .base, .layout, .types, .mir, .can, .corecir },
+            .lir => &.{ .base, .layout, .types, .can },
             .roc_target => &.{.base},
             .sljmp => &.{},
             .echo_platform => &.{.builtins},
@@ -381,8 +375,6 @@ pub const RocModules = struct {
     base58: *Module,
     lsp: *Module,
     backend: *Module,
-    corecir: *Module,
-    mir: *Module,
     lir: *Module,
     roc_target: *Module,
     sljmp: *Module,
@@ -423,8 +415,6 @@ pub const RocModules = struct {
             .base58 = b.addModule("base58", .{ .root_source_file = b.path("src/base58/mod.zig") }),
             .lsp = b.addModule("lsp", .{ .root_source_file = b.path("src/lsp/mod.zig") }),
             .backend = b.addModule("backend", .{ .root_source_file = b.path("src/backend/mod.zig") }),
-            .corecir = b.addModule("corecir", .{ .root_source_file = b.path("src/corecir/mod.zig") }),
-            .mir = b.addModule("mir", .{ .root_source_file = b.path("src/mir/mod.zig") }),
             .lir = b.addModule("lir", .{ .root_source_file = b.path("src/lir/mod.zig") }),
             .roc_target = b.addModule("roc_target", .{ .root_source_file = b.path("src/target/mod.zig") }),
             .sljmp = b.addModule("sljmp", .{ .root_source_file = b.path("src/sljmp/mod.zig") }),
@@ -471,8 +461,6 @@ pub const RocModules = struct {
             .base58,
             .lsp,
             .backend,
-            .corecir,
-            .mir,
             .lir,
             .roc_target,
             .sljmp,
@@ -515,8 +503,6 @@ pub const RocModules = struct {
         step.root_module.addImport("base58", self.base58);
         step.root_module.addImport("roc_target", self.roc_target);
         step.root_module.addImport("backend", self.backend);
-        step.root_module.addImport("corecir", self.corecir);
-        step.root_module.addImport("mir", self.mir);
         step.root_module.addImport("lir", self.lir);
         step.root_module.addImport("sljmp", self.sljmp);
         step.root_module.addImport("echo_platform", self.echo_platform);
@@ -566,8 +552,6 @@ pub const RocModules = struct {
             .base58 => self.base58,
             .lsp => self.lsp,
             .backend => self.backend,
-            .corecir => self.corecir,
-            .mir => self.mir,
             .lir => self.lir,
             .roc_target => self.roc_target,
             .sljmp => self.sljmp,
@@ -616,8 +600,6 @@ pub const RocModules = struct {
             .base58,
             .lsp,
             .backend,
-            .corecir,
-            .mir,
             .lir,
             .sljmp,
             .echo_platform,

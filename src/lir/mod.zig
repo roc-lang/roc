@@ -10,12 +10,10 @@ pub const LIR = @import("LIR.zig");
 pub const LirStore = @import("LirStore.zig");
 /// Tail-recursion rewriting for statement-only LIR procs.
 pub const TailRecursion = @import("TailRecursion.zig");
-/// MIR-to-LIR lowering entrypoints.
-pub const MirToLir = @import("MirToLir.zig");
 /// Reference-count insertion over explicit LIR statements.
 pub const RcInsert = @import("rc_insert.zig");
 
-/// Symbol identifiers reused from MIR.
+/// Symbol identifiers used throughout statement-only LIR.
 pub const Symbol = LIR.Symbol;
 /// Explicit local metadata used throughout statement-only LIR.
 pub const Local = LIR.Local;
@@ -68,7 +66,6 @@ test "lir tests" {
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(LIR);
     std.testing.refAllDecls(LirStore);
-    std.testing.refAllDecls(MirToLir);
     std.testing.refAllDecls(DebugOwnershipSummary);
     std.testing.refAllDecls(DebugVerifyLir);
     std.testing.refAllDecls(TailRecursion);

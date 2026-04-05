@@ -4784,7 +4784,7 @@ fn runtimeRepresentationLayoutIdx(self: *const Self, layout_idx: layout.Idx) lay
 }
 
 /// Generate code for a function call.
-/// In the new pipeline, MIR→LIR generates all closure dispatch as generic LIR
+/// In the current pipeline, lowering generates all closure dispatch as generic LIR
 /// constructs (discriminant_switch, tag_payload_access, direct calls). The backend
 /// just handles explicit direct-call symbols plus the residual runtime
 /// function-value expression path. No closure-specific dispatch.
@@ -5891,7 +5891,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
 
         // String operations
         // Bitwise operations
-        .num_pow, .num_log => unreachable, // Resolved by MIR/LIR lowering
+        .num_pow, .num_log => unreachable, // Resolved by earlier lowering
 
         .num_abs_diff => {
             // abs_diff(a, b) -> |a - b|

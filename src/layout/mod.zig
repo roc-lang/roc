@@ -12,10 +12,7 @@
 //! (using type and target information from previous steps in compilation).
 //!
 //! Ordinary data layout is fully determined here and shared across compiler
-//! phases. Function values are the one intentional exception: `.func` types
-//! encode call signatures, not hidden closure environments, so closure capture
-//! discovery still happens in lowering before those captures are expressed back
-//! as ordinary-data layouts.
+//! phases.
 
 const std = @import("std");
 
@@ -70,7 +67,6 @@ pub const GraphNodeId = @import("graph.zig").NodeId;
 pub const GraphRef = @import("graph.zig").Ref;
 pub const GraphField = @import("graph.zig").Field;
 pub const TypeLayoutResolver = @import("type_layout_resolver.zig").Resolver;
-pub const MirMonotypeLayoutResolver = @import("mir_monotype_resolver.zig").Resolver;
 pub const RcOp = @import("rc_helper.zig").RcOp;
 pub const RcHelperKey = @import("rc_helper.zig").HelperKey;
 pub const RcHelperPlan = @import("rc_helper.zig").Plan;
@@ -93,9 +89,7 @@ test "layout tests" {
     std.testing.refAllDecls(@import("layout.zig"));
     std.testing.refAllDecls(@import("graph.zig"));
     std.testing.refAllDecls(@import("type_layout_resolver.zig"));
-    std.testing.refAllDecls(@import("mir_monotype_resolver.zig"));
     std.testing.refAllDecls(@import("rc_helper.zig"));
     std.testing.refAllDecls(@import("store.zig"));
     std.testing.refAllDecls(@import("work.zig"));
-    std.testing.refAllDecls(@import("store_test.zig"));
 }

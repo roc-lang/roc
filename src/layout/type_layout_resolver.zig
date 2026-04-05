@@ -53,11 +53,11 @@ const ResolvedInput = struct {
 
 /// Resolves type vars into canonical layout ids through the shared graph interner/store.
 ///
-/// Unlike the MIR monotype resolver, this one must preserve type-side concerns such as:
+/// This resolver must preserve type-side concerns such as:
 /// - `type_scope` substitutions
 /// - caller-vs-target module ownership for polymorphic substitutions
 /// - builtin nominal recognition (`Str`, `List`, `Box`, numeric builtins)
-/// - recursive nominal cycle handling before MIR erases those distinctions
+/// - recursive nominal cycle handling before executable lowering erases those distinctions
 pub const Resolver = struct {
     store: *Store,
     allocator: std.mem.Allocator,

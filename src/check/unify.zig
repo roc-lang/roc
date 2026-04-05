@@ -1079,8 +1079,8 @@ const Unifier = struct {
         // We intentionally do not unify backing vars here: nominal identity is
         // defined by origin/name/args, and forcing backing vars to coincide at
         // unification time over-constrains row-polymorphic nominals like Try.
-        // MIR monotype lowering substitutes formal nominal params into backing
-        // types explicitly when it strips nominal wrappers.
+        // Lowering substitutes formal nominal params into backing types
+        // explicitly when it strips nominal wrappers.
         self.merge(vars, vars.b.desc.content);
     }
 

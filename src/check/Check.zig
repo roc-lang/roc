@@ -1782,8 +1782,7 @@ pub fn checkPlatformRequirements(
     // Process any deferred static dispatch constraints that arose from unifying
     // platform types with app types. Without this, constraints on app expressions
     // (e.g., method calls like `args.drop_first(1)`) whose receiver types are only
-    // resolved by platform requirements would never get their dispatch targets set,
-    // causing panics during MIR lowering.
+    // resolved by platform requirements would never get their dispatch targets set.
     //
     // Skip entries whose constraints are all from_numeral — these are numeric literal
     // constraints whose flex vars were unified with non-numeric platform types (e.g.,
@@ -6388,7 +6387,7 @@ fn resolveNumericLiteralsFromContext(self: *Self, env: *Env) std.mem.Allocator.E
 /// This function creates a COPY of each from_numeral flex var, unifies the
 /// copy with Dec (to validate constraints and report errors like `1.blah(2)`),
 /// but leaves the original flex var polymorphic. The actual defaulting to Dec
-/// happens later during CIR → MIR lowering (Monotype.zig `fromTypeVar`).
+/// happens later during lowering.
 ///
 /// For app modules with platform requirements, this should be called AFTER
 /// `checkPlatformRequirements()` so that platform types can constrain
