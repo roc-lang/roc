@@ -454,9 +454,24 @@ pub fn requireProgramExprSemanticShape(
         !exprHasCallableShape(result, source_context, module_idx, expr_idx))
     {
         if (std.debug.runtime_safety) {
+            const expr_template = result.getExprTemplateId(source_context, module_idx, expr_idx);
+            const expr_callable = result.getExprCallableValue(source_context, module_idx, expr_idx);
+            const expr_intro = result.getExprIntroCallableInst(source_context, module_idx, expr_idx);
+            const expr_origin = result.getExprOriginExpr(source_context, module_idx, expr_idx);
+            const expr_lookup = result.getExprLookupResolution(source_context, module_idx, expr_idx);
             std.debug.panic(
-                "Lambdamono invariant violated: function-valued expr ctx={s} module={d} expr={d} reached assembly without callable semantics",
-                .{ @tagName(source_context), module_idx, @intFromEnum(expr_idx) },
+                "Lambdamono invariant violated: function-valued expr ctx={s} module={d} expr={d} tag={s} template={?d} callable={?any} intro={?d} origin={?any} lookup={?any} reached assembly without callable semantics",
+                .{
+                    @tagName(source_context),
+                    module_idx,
+                    @intFromEnum(expr_idx),
+                    @tagName(expr),
+                    if (expr_template) |template_id| @intFromEnum(template_id) else null,
+                    expr_callable,
+                    if (expr_intro) |callable_inst_id| @intFromEnum(callable_inst_id) else null,
+                    expr_origin,
+                    expr_lookup,
+                },
             );
         }
         unreachable;
@@ -470,9 +485,43 @@ pub fn requireCallableInstRealized(
 ) Allocator.Error!void {
     if (callableInstHasRealizedRuntimeExpr(result, callable_inst_id)) return;
     if (std.debug.runtime_safety) {
+        const callable_inst = result.getCallableInst(callable_inst_id);
+        const template = result.getCallableTemplate(callable_inst.template);
+        const callable_def = result.getCallableDefForInst(callable_inst_id);
+        var same_template_count: usize = 0;
+        var same_template_realized_count: usize = 0;
+        var same_template_max_specs_len: usize = 0;
+        for (result.lambdasolved.callable_insts.items) |other_callable_inst| {
+            if (other_callable_inst.template != callable_inst.template) continue;
+            same_template_count += 1;
+            if (result.lambdasolved.callable_defs.items[@intFromEnum(other_callable_inst.callable_def)].realized) {
+                same_template_realized_count += 1;
+            }
+            same_template_max_specs_len = @max(
+                same_template_max_specs_len,
+                result.getCallableParamSpecEntries(other_callable_inst.callable_param_specs).len,
+            );
+        }
         std.debug.panic(
-            "Lambdamono invariant violated: callable inst {d} reached executable assembly without solved runtime semantics",
-            .{@intFromEnum(callable_inst_id)},
+            "Lambdamono invariant violated: callable inst {d} reached executable assembly without solved runtime semantics; template={d} kind={s} owner={s} module={d} cir_expr={d} runtime_expr={d} body_expr={d} fn_monotype={any} defining_source_context={s} callable_param_specs_len={d} captures_len={d} realized={} same_template_count={d} same_template_realized_count={d} same_template_max_specs_len={d}",
+            .{
+                @intFromEnum(callable_inst_id),
+                @intFromEnum(callable_inst.template),
+                @tagName(template.kind),
+                @tagName(template.owner),
+                template.module_idx,
+                @intFromEnum(template.cir_expr),
+                @intFromEnum(template.runtime_expr),
+                @intFromEnum(template.body_expr),
+                callable_def.fn_monotype,
+                @tagName(callable_inst.defining_source_context),
+                result.getCallableParamSpecEntries(callable_inst.callable_param_specs).len,
+                result.getCaptureFields(callable_def.captures).len,
+                callable_def.realized,
+                same_template_count,
+                same_template_realized_count,
+                same_template_max_specs_len,
+            },
         );
     }
     unreachable;
@@ -1185,7 +1234,6 @@ fn Transform(comptime ResultPtr: type, comptime Driver: type) type {
             if (self.isCallableInstAssembled(callable_inst_id)) return;
             if (!try self.beginCallableInstAssembly(callable_inst_id)) return;
             defer self.endCallableInstAssembly(callable_inst_id);
-
             try requireCallableInstRealized(self.driver, self.result, callable_inst_id);
 
             const callable_inst = self.result.getCallableInst(callable_inst_id).*;
@@ -1205,9 +1253,13 @@ fn Transform(comptime ResultPtr: type, comptime Driver: type) type {
                 callable_def.body_expr.expr_idx,
             );
             for (self.result.getCaptureFields(callable_def.captures)) |capture_field| {
-                if (capture_field.callable_value) |callable_value| {
-                    try self.ensureCallableValueBodyGraphs(callable_value);
-                    continue;
+                switch (capture_field.storage) {
+                    .runtime_field => if (capture_field.callable_value) |callable_value| {
+                        for (self.result.getCallableValueVariants(callable_value)) |captured_callable_inst_id| {
+                            try self.ensureCallableInstBodyGraph(captured_callable_inst_id);
+                        }
+                    },
+                    .callable_only, .recursive_member => {},
                 }
                 switch (capture_field.source) {
                     .bound_expr => |bound_expr| try self.ensureProgramExprRefNode(bound_expr.expr_ref),
@@ -1234,17 +1286,44 @@ fn Transform(comptime ResultPtr: type, comptime Driver: type) type {
 
             switch (stmt) {
                 .s_decl => |decl| {
-                    if (try exprHasExactProgramSemantics(self.driver, self.result, source_context, module_idx, decl.expr)) {
+                    const expr_template_id = self.result.getExprTemplateId(source_context, module_idx, decl.expr);
+                    const omit_root_scope_callable_binding = if (expr_template_id) |template_id| blk: {
+                        const template = self.result.getCallableTemplate(template_id);
+                        break :blk template.owner == .root_scope and template.binding == .pattern;
+                    } else false;
+                    const expr_has_template = expr_template_id != null;
+                    const expr_has_callable_shape = self.result.getExprCallableValue(source_context, module_idx, decl.expr) != null or
+                        self.result.getExprIntroCallableInst(source_context, module_idx, decl.expr) != null;
+                    if (!omit_root_scope_callable_binding and
+                        (!expr_has_template or expr_has_callable_shape) and
+                        try exprHasExactProgramSemantics(self.driver, self.result, source_context, module_idx, decl.expr))
+                    {
                         try child_exprs.append(self.allocator, try self.assembleProgramExprNode(source_context, module_idx, decl.expr));
                     }
                 },
                 .s_var => |var_decl| {
-                    if (try exprHasExactProgramSemantics(self.driver, self.result, source_context, module_idx, var_decl.expr)) {
+                    const expr_template_id = self.result.getExprTemplateId(source_context, module_idx, var_decl.expr);
+                    const omit_root_scope_callable_binding = if (expr_template_id) |template_id| blk: {
+                        const template = self.result.getCallableTemplate(template_id);
+                        break :blk template.owner == .root_scope and template.binding == .pattern;
+                    } else false;
+                    const expr_has_template = expr_template_id != null;
+                    const expr_has_callable_shape = self.result.getExprCallableValue(source_context, module_idx, var_decl.expr) != null or
+                        self.result.getExprIntroCallableInst(source_context, module_idx, var_decl.expr) != null;
+                    if (!omit_root_scope_callable_binding and
+                        (!expr_has_template or expr_has_callable_shape) and
+                        try exprHasExactProgramSemantics(self.driver, self.result, source_context, module_idx, var_decl.expr))
+                    {
                         try child_exprs.append(self.allocator, try self.assembleProgramExprNode(source_context, module_idx, var_decl.expr));
                     }
                 },
                 .s_reassign => |reassign| {
-                    if (try exprHasExactProgramSemantics(self.driver, self.result, source_context, module_idx, reassign.expr)) {
+                    const expr_has_template = self.result.getExprTemplateId(source_context, module_idx, reassign.expr) != null;
+                    const expr_has_callable_shape = self.result.getExprCallableValue(source_context, module_idx, reassign.expr) != null or
+                        self.result.getExprIntroCallableInst(source_context, module_idx, reassign.expr) != null;
+                    if ((!expr_has_template or expr_has_callable_shape) and
+                        try exprHasExactProgramSemantics(self.driver, self.result, source_context, module_idx, reassign.expr))
+                    {
                         try child_exprs.append(self.allocator, try self.assembleProgramExprNode(source_context, module_idx, reassign.expr));
                     }
                 },
