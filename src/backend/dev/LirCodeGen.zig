@@ -641,10 +641,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// early return jumps to point to the epilogue.
         early_return_patches: std.ArrayList(usize),
 
-        /// Stack of forward-jump patches for break expressions inside loops.
-        /// Each generateForLoop/generateWhileLoop saves the length, and after
-        /// body generation, patches all new entries to the loop exit offset.
-        loop_break_patches: std.ArrayList(usize),
+        /// Stack of active `for_list` continue targets.
+        /// `loop_continue` lowers by jumping to the innermost active loop header.
+        loop_continue_targets: std.ArrayList(usize),
 
         /// Stack slot where early return value is stored during deferred-prologue proc compilation.
         early_return_result_slot: ?i32 = null,
@@ -884,7 +883,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .internal_call_patches = std.ArrayList(InternalCallPatch).empty,
                 .internal_addr_patches = std.ArrayList(InternalAddrPatch).empty,
                 .early_return_patches = std.ArrayList(usize).empty,
-                .loop_break_patches = std.ArrayList(usize).empty,
+                .loop_continue_targets = std.ArrayList(usize).empty,
                 .scratch_arg_locs = try base.Scratch(ValueLocation).init(allocator),
                 .scratch_arg_infos = try base.Scratch(ArgInfo).init(allocator),
                 .scratch_pass_by_ptr = try base.Scratch(bool).init(allocator),
@@ -910,7 +909,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.internal_call_patches.deinit(self.allocator);
             self.internal_addr_patches.deinit(self.allocator);
             self.early_return_patches.deinit(self.allocator);
-            self.loop_break_patches.deinit(self.allocator);
+            self.loop_continue_targets.deinit(self.allocator);
             self.scratch_arg_locs.deinit();
             self.scratch_arg_infos.deinit();
             self.scratch_pass_by_ptr.deinit();
@@ -935,7 +934,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.internal_call_patches.clearRetainingCapacity();
             self.internal_addr_patches.clearRetainingCapacity();
             self.early_return_patches.clearRetainingCapacity();
-            self.loop_break_patches.clearRetainingCapacity();
+            self.loop_continue_targets.clearRetainingCapacity();
         }
 
         fn cloneJoinPointJumpsMap(
@@ -991,7 +990,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
             self.join_point_jumps.clearRetainingCapacity();
             self.join_point_params.clearRetainingCapacity();
-            self.loop_break_patches.clearRetainingCapacity();
+            self.loop_continue_targets.clearRetainingCapacity();
         }
 
         /// Generate code for a compiled root proc.
@@ -10583,8 +10582,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             defer self.deinitJoinPointJumpsMap(&saved_join_point_jumps);
             var saved_join_point_params = self.join_point_params.clone() catch return error.OutOfMemory;
             defer saved_join_point_params.deinit();
-            var saved_loop_break_patches = try self.loop_break_patches.clone(self.allocator);
-            defer saved_loop_break_patches.deinit(self.allocator);
+            var saved_loop_continue_targets = try self.loop_continue_targets.clone(self.allocator);
+            defer saved_loop_continue_targets.deinit(self.allocator);
 
             // Clear state for procedure's scope
             self.local_locations.clearRetainingCapacity();
@@ -10673,8 +10672,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.join_point_jumps = self.cloneJoinPointJumpsMap(&saved_join_point_jumps) catch unreachable;
                 self.join_point_params.deinit();
                 self.join_point_params = saved_join_point_params.clone() catch unreachable;
-                self.loop_break_patches.deinit(self.allocator);
-                self.loop_break_patches = saved_loop_break_patches.clone(self.allocator) catch unreachable;
+                self.loop_continue_targets.deinit(self.allocator);
+                self.loop_continue_targets = saved_loop_continue_targets.clone(self.allocator) catch unreachable;
                 self.early_return_ret_layout = saved_early_return_ret_layout;
                 self.early_return_patches.shrinkRetainingCapacity(saved_early_return_patches_len);
             }
@@ -10836,8 +10835,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.join_point_jumps = try self.cloneJoinPointJumpsMap(&saved_join_point_jumps);
             self.join_point_params.deinit();
             self.join_point_params = try saved_join_point_params.clone();
-            self.loop_break_patches.deinit(self.allocator);
-            self.loop_break_patches = try saved_loop_break_patches.clone(self.allocator);
+            self.loop_continue_targets.deinit(self.allocator);
+            self.loop_continue_targets = try saved_loop_continue_targets.clone(self.allocator);
         }
 
         /// Maximum number of registers used for multi-register returns in internal Roc calls.
@@ -11834,11 +11833,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.generateSwitchStmt(sw);
                 },
 
-                .for_list => |_| {
-                    std.debug.panic(
-                        "Dev/codegen TODO: for_list lowering is not implemented yet",
-                        .{},
-                    );
+                .for_list => |for_stmt| {
+                    try self.generateForListStmt(for_stmt);
                 },
 
                 .borrow_scope => |scope| {
@@ -11883,12 +11879,129 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
 
                 .loop_continue => {
-                    std.debug.panic(
-                        "Dev/codegen TODO: loop_continue lowering is not implemented outside for_list",
-                        .{},
-                    );
+                    if (builtin.mode == .Debug and self.loop_continue_targets.items.len == 0) {
+                        std.debug.panic(
+                            "Dev/codegen invariant violated: loop_continue encountered outside for_list",
+                            .{},
+                        );
+                    }
+                    const loop_target = self.loop_continue_targets.items[self.loop_continue_targets.items.len - 1];
+                    const patch = try self.codegen.emitJump();
+                    self.codegen.patchJump(patch, loop_target);
                 },
             }
+        }
+
+        fn generateForListStmt(self: *Self, for_stmt: anytype) Allocator.Error!void {
+            const iterable_loc = try self.emitValueLocal(for_stmt.iterable);
+            const iterable_snapshot_offset = self.codegen.allocStackSlot(roc_list_size);
+            try self.copyBytesToStackOffset(iterable_snapshot_offset, iterable_loc, roc_list_size);
+
+            const iterable_layout = self.valueLayout(for_stmt.iterable);
+            const elem_layout = try self.forListElemLayout(iterable_layout, self.localLayout(for_stmt.elem));
+
+            const index_slot = self.codegen.allocStackSlot(8);
+            const zero_reg = try self.allocTempGeneral();
+            try self.codegen.emitLoadImm(zero_reg, 0);
+            try self.codegen.emitStoreStack(.w64, index_slot, zero_reg);
+            self.codegen.freeGeneral(zero_reg);
+
+            const loop_header = self.codegen.currentOffset();
+
+            const index_reg = try self.allocTempGeneral();
+            try self.codegen.emitLoadStack(.w64, index_reg, index_slot);
+
+            const len_reg = try self.allocTempGeneral();
+            try self.codegen.emitLoadStack(.w64, len_reg, iterable_snapshot_offset + @as(i32, @intCast(target_ptr_size)));
+            try self.emitCmpReg(index_reg, len_reg);
+            self.codegen.freeGeneral(len_reg);
+            const exit_patch = try self.emitJumpIfEqual();
+
+            try self.bindForListElement(for_stmt.elem, elem_layout, iterable_snapshot_offset, index_reg);
+
+            try self.emitAddImm(index_reg, index_reg, 1);
+            try self.codegen.emitStoreStack(.w64, index_slot, index_reg);
+            self.codegen.freeGeneral(index_reg);
+
+            const saved_loop_continue_depth = self.loop_continue_targets.items.len;
+            try self.loop_continue_targets.append(self.allocator, loop_header);
+            defer self.loop_continue_targets.shrinkRetainingCapacity(saved_loop_continue_depth);
+
+            try self.generateStmt(for_stmt.body);
+
+            self.codegen.patchJump(exit_patch, self.codegen.currentOffset());
+            try self.generateStmt(for_stmt.next);
+        }
+
+        fn forListElemLayout(self: *Self, iterable_layout: layout.Idx, elem_layout: layout.Idx) Allocator.Error!layout.Idx {
+            const ls = self.layout_store;
+            const iterable_layout_val = ls.getLayout(iterable_layout);
+            const resolved_elem_layout = switch (iterable_layout_val.tag) {
+                .list => iterable_layout_val.data.list,
+                .list_of_zst => elem_layout,
+                else => {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic(
+                            "LIR/codegen invariant violated: for_list iterable layout must be list/list_of_zst, got {s}",
+                            .{@tagName(iterable_layout_val.tag)},
+                        );
+                    }
+                    unreachable;
+                },
+            };
+
+            if (builtin.mode == .Debug and !(try self.layoutsStructurallyCompatible(elem_layout, resolved_elem_layout))) {
+                std.debug.panic(
+                    "LIR/codegen invariant violated: for_list elem layout {} did not match iterable elem layout {}",
+                    .{ @intFromEnum(elem_layout), @intFromEnum(resolved_elem_layout) },
+                );
+            }
+
+            return resolved_elem_layout;
+        }
+
+        fn bindForListElement(
+            self: *Self,
+            elem_local: LocalId,
+            elem_layout: layout.Idx,
+            iterable_snapshot_offset: i32,
+            index_reg: GeneralReg,
+        ) Allocator.Error!void {
+            const elem_size = self.getLayoutSize(elem_layout);
+            if (elem_size == 0) {
+                try self.bindAssignedLocal(elem_local, .{ .immediate_i64 = 0 });
+                return;
+            }
+
+            const ptr_reg = try self.allocTempGeneral();
+            try self.codegen.emitLoadStack(.w64, ptr_reg, iterable_snapshot_offset);
+
+            const addr_reg = try self.allocTempGeneral();
+            try self.emitMovRegReg(addr_reg, index_reg);
+
+            if (elem_size != 1) {
+                const size_reg = try self.allocTempGeneral();
+                try self.codegen.emitLoadImm(size_reg, elem_size);
+                try self.emitMulRegs(.w64, addr_reg, addr_reg, size_reg);
+                self.codegen.freeGeneral(size_reg);
+            }
+
+            try self.emitAddRegs(.w64, addr_reg, addr_reg, ptr_reg);
+            self.codegen.freeGeneral(ptr_reg);
+
+            const elem_slot = self.codegen.allocStackSlot(@max(elem_size, @as(u32, 1)));
+            const temp_reg = try self.allocTempGeneral();
+            if (elem_size <= 8) {
+                const value_size = ValueSize.fromByteCount(@intCast(elem_size));
+                try self.emitSizedLoadMem(temp_reg, addr_reg, 0, value_size);
+                try self.emitSizedStoreMem(frame_ptr, elem_slot, temp_reg, value_size);
+            } else {
+                try self.copyChunked(temp_reg, addr_reg, 0, frame_ptr, elem_slot, elem_size);
+            }
+            self.codegen.freeGeneral(temp_reg);
+            self.codegen.freeGeneral(addr_reg);
+
+            try self.bindAssignedLocal(elem_local, self.stackLocationForLayout(elem_layout, elem_slot));
         }
 
         /// Set up storage locations for join point parameters
