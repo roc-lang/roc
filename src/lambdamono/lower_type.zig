@@ -1,0 +1,259 @@
+//! Lower solved lambda-set types into executable lambdamono types.
+
+const std = @import("std");
+const base = @import("base");
+const solved = @import("../lambdasolved/mod.zig");
+const mono = @import("type.zig");
+const symbol_mod = @import("../symbol/mod.zig");
+
+const TypeVarId = solved.Type.TypeVarId;
+const Symbol = symbol_mod.Symbol;
+
+pub const CaptureInfo = struct {
+    captures: []const solved.Type.Capture,
+    ty: mono.TypeId,
+};
+
+pub const CaptureBinding = struct {
+    symbol: Symbol,
+    ty: TypeVarId,
+};
+
+pub const SpecificLambdaRepr = union(enum) {
+    toplevel,
+    lset: CaptureInfo,
+};
+
+pub const LambdaRepr = union(enum) {
+    lset: []const solved.Type.Lambda,
+    erased,
+};
+
+pub const MonoCache = std.AutoHashMap(TypeVarId, mono.TypeId);
+
+pub fn extractFn(types: *solved.Type.Store, ty: TypeVarId) struct {
+    arg: TypeVarId,
+    lset: TypeVarId,
+    ret: TypeVarId,
+} {
+    const id = types.unlink(ty);
+    return switch (types.getNode(id)) {
+        .content => |content| switch (content) {
+            .func => |func| func,
+            else => debugPanic("lambdamono.lower_type.extractFn expected function"),
+        },
+        else => debugPanic("lambdamono.lower_type.extractFn expected function"),
+    };
+}
+
+pub fn lambdaRepr(types: *solved.Type.Store, ty: TypeVarId) LambdaRepr {
+    const fn_ty = extractFn(types, ty);
+    const lset = types.unlink(fn_ty.lset);
+    return switch (types.getNode(lset)) {
+        .content => |content| switch (content) {
+            .lambda_set => |span| .{ .lset = types.sliceLambdas(span) },
+            .primitive => |prim| switch (prim) {
+                .erased => .erased,
+                else => debugPanic("lambdamono.lower_type.lambdaRepr expected lambda set"),
+            },
+            else => debugPanic("lambdamono.lower_type.lambdaRepr expected lambda set"),
+        },
+        else => debugPanic("lambdamono.lower_type.lambdaRepr expected lambda set"),
+    };
+}
+
+pub fn extractLsetFn(
+    types: *solved.Type.Store,
+    mono_types: *mono.Store,
+    mono_cache: *MonoCache,
+    ty: TypeVarId,
+    lambda_symbol: Symbol,
+    symbols: *const symbol_mod.Store,
+) std.mem.Allocator.Error!SpecificLambdaRepr {
+    return switch (lambdaRepr(types, ty)) {
+        .erased => debugPanic("TODO lambdamono.lower_type.extractLsetFn erased lambda set"),
+        .lset => |lambdas| blk: {
+            for (lambdas) |lambda| {
+                if (lambda.symbol != lambda_symbol) continue;
+                const captures = types.sliceCaptures(lambda.captures);
+                if (captures.len == 0) break :blk .toplevel;
+                break :blk .{ .lset = .{
+                    .captures = captures,
+                    .ty = try lowerCaptures(types, mono_types, mono_cache, captures, symbols),
+                } };
+            }
+            debugPanic("lambdamono.lower_type.extractLsetFn missing lambda in lambda set");
+        },
+    };
+}
+
+pub fn lowerType(
+    types: *solved.Type.Store,
+    mono_types: *mono.Store,
+    mono_cache: *MonoCache,
+    ty: TypeVarId,
+    symbols: *const symbol_mod.Store,
+) std.mem.Allocator.Error!mono.TypeId {
+    return try lowerTypeRec(types, mono_types, mono_cache, ty, symbols);
+}
+
+pub fn lowerCaptureBindings(
+    types: *solved.Type.Store,
+    mono_types: *mono.Store,
+    mono_cache: *MonoCache,
+    captures: []const CaptureBinding,
+    symbols: *const symbol_mod.Store,
+) std.mem.Allocator.Error!mono.TypeId {
+    const fields = try mono_types.allocator.alloc(mono.Field, captures.len);
+    defer mono_types.allocator.free(fields);
+
+    for (captures, 0..) |capture, i| {
+        fields[i] = .{
+            .name = symbols.get(capture.symbol).name,
+            .ty = try lowerTypeRec(types, mono_types, mono_cache, capture.ty, symbols),
+        };
+    }
+
+    return try mono_types.addType(.{ .record = .{
+        .fields = try mono_types.addFields(fields),
+    } });
+}
+
+fn lowerTypeRec(
+    types: *solved.Type.Store,
+    mono_types: *mono.Store,
+    mono_cache: *MonoCache,
+    ty: TypeVarId,
+    symbols: *const symbol_mod.Store,
+) std.mem.Allocator.Error!mono.TypeId {
+    const id = unlinkExecutable(types, ty);
+    if (mono_cache.get(id)) |cached| return cached;
+
+    const placeholder = try mono_types.addType(.{ .primitive = .erased });
+    try mono_cache.put(id, placeholder);
+
+    const lowered: mono.Content = switch (types.getNode(id)) {
+        .link => unreachable,
+        .for_a => debugPanic("lambdamono.lower_type.lowerType generalized type survived instantiation"),
+        .unbd => .{ .tag_union = .{ .tags = mono.Span(mono.Tag).empty() } },
+        .content => |content| switch (content) {
+            .func => debugPanic("lambdamono.lower_type.lowerType unexpected function after unlinkExecutable"),
+            .primitive => |prim| .{ .primitive = prim },
+            .list => |elem| .{
+                .list = try lowerTypeRec(types, mono_types, mono_cache, elem, symbols),
+            },
+            .record => |record| blk: {
+                const fields = types.sliceFields(record.fields);
+                const out = try mono_types.allocator.alloc(mono.Field, fields.len);
+                defer mono_types.allocator.free(out);
+                for (fields, 0..) |field, i| {
+                    out[i] = .{
+                        .name = field.name,
+                        .ty = try lowerTypeRec(types, mono_types, mono_cache, field.ty, symbols),
+                    };
+                }
+                break :blk .{ .record = .{
+                    .fields = try mono_types.addFields(out),
+                } };
+            },
+            .tag_union => |tag_union| blk: {
+                const tags = types.sliceTags(tag_union.tags);
+                const out = try mono_types.allocator.alloc(mono.Tag, tags.len);
+                defer mono_types.allocator.free(out);
+                for (tags, 0..) |tag, i| {
+                    const args = types.sliceTypeVarSpan(tag.args);
+                    const lowered_args = try mono_types.allocator.alloc(mono.TypeId, args.len);
+                    defer mono_types.allocator.free(lowered_args);
+                    for (args, 0..) |arg, arg_i| {
+                        lowered_args[arg_i] = try lowerTypeRec(types, mono_types, mono_cache, arg, symbols);
+                    }
+                    out[i] = .{
+                        .name = tag.name,
+                        .args = try mono_types.addTypeSpan(lowered_args),
+                    };
+                }
+                break :blk .{ .tag_union = .{
+                    .tags = try mono_types.addTags(out),
+                } };
+            },
+            .lambda_set => |span| try lowerLambdaSet(types, mono_types, mono_cache, types.sliceLambdas(span), symbols),
+        },
+    };
+
+    mono_types.types.items[@intFromEnum(placeholder)] = lowered;
+    return placeholder;
+}
+
+fn lowerLambdaSet(
+    types: *solved.Type.Store,
+    mono_types: *mono.Store,
+    mono_cache: *MonoCache,
+    lambdas: []const solved.Type.Lambda,
+    symbols: *const symbol_mod.Store,
+) std.mem.Allocator.Error!mono.Content {
+    const out = try mono_types.allocator.alloc(mono.Tag, lambdas.len);
+    defer mono_types.allocator.free(out);
+
+    for (lambdas, 0..) |lambda, i| {
+        const captures = types.sliceCaptures(lambda.captures);
+        if (captures.len == 0) {
+            out[i] = .{
+                .name = lambdaTagName(symbols, lambda.symbol),
+                .args = mono.Span(mono.TypeId).empty(),
+            };
+        } else {
+            const captures_ty = try lowerCaptures(types, mono_types, mono_cache, captures, symbols);
+            const args = try mono_types.allocator.alloc(mono.TypeId, 1);
+            defer mono_types.allocator.free(args);
+            args[0] = captures_ty;
+            out[i] = .{
+                .name = lambdaTagName(symbols, lambda.symbol),
+                .args = try mono_types.addTypeSpan(args),
+            };
+        }
+    }
+
+    return .{ .tag_union = .{
+        .tags = try mono_types.addTags(out),
+    } };
+}
+
+fn lowerCaptures(
+    types: *solved.Type.Store,
+    mono_types: *mono.Store,
+    mono_cache: *MonoCache,
+    captures: []const solved.Type.Capture,
+    symbols: *const symbol_mod.Store,
+) std.mem.Allocator.Error!mono.TypeId {
+    const capture_bindings = try mono_types.allocator.alloc(CaptureBinding, captures.len);
+    defer mono_types.allocator.free(capture_bindings);
+
+    for (captures, 0..) |capture, i| {
+        capture_bindings[i] = .{
+            .symbol = capture.symbol,
+            .ty = capture.ty,
+        };
+    }
+
+    return try lowerCaptureBindings(types, mono_types, mono_cache, capture_bindings, symbols);
+}
+
+fn unlinkExecutable(types: *solved.Type.Store, ty: TypeVarId) TypeVarId {
+    const id = types.unlink(ty);
+    return switch (types.getNode(id)) {
+        .content => |content| switch (content) {
+            .func => |func| unlinkExecutable(types, func.lset),
+            else => id,
+        },
+        else => id,
+    };
+}
+
+pub fn lambdaTagName(symbols: *const symbol_mod.Store, symbol: Symbol) base.Ident.Idx {
+    return symbols.get(symbol).name;
+}
+
+fn debugPanic(comptime msg: []const u8) noreturn {
+    @branchHint(.cold);
+    std.debug.panic("{s}", .{msg});
+}
