@@ -2268,7 +2268,7 @@ fn lowerConcatLocalsInto(
         .args = try self.store.addLocalSpan(self.allocator, &.{ lhs_local, rhs_local }),
         .next = next,
     } });
-    const rhs_entry = try self.lowerLocalAliasInto(rhs_local, segments[segments.len - 1], concat_stmt);
+    const rhs_entry = try self.lowerLocalBorrowInto(rhs_local, segments[segments.len - 1], concat_stmt);
     return self.lowerConcatLocalsInto(segments[0 .. segments.len - 1], lhs_local, rhs_entry);
 }
 
@@ -2940,7 +2940,7 @@ fn lowerLookupLocalInto(
                 },
             );
         }
-        return self.lowerLocalAliasInto(target, source, next);
+        return self.lowerLocalBorrowInto(target, source, next);
     }
 
     if (lookup_resolution) |resolution| switch (resolution) {
@@ -3562,11 +3562,35 @@ fn lowerLambdaParamLocals(
     return self.store.addLocalSpan(self.allocator, self.scratch_local_ids.sliceFromStart(scratch_top));
 }
 
+const CaptureMaterialization = struct {
+    source_local: MIR.LocalId,
+    introduced_callable_value: ?Pipeline.CallableValue = null,
+};
+
+fn runtimeCaptureSourceMonotype(
+    self: *Self,
+    capture_field: Pipeline.CaptureField,
+) Allocator.Error!Monotype.Idx {
+    const runtime_field = switch (capture_field.storage) {
+        .runtime_field => |field| field,
+        .callable_only, .recursive_member => unreachable,
+    };
+    return self.executableMonotypeForCallableValue(
+        try self.importMonotypeFromStore(
+            &self.callable_pipeline.context_mono.monotype_store,
+            runtime_field.field_monotype.idx,
+            runtime_field.field_monotype.module_idx,
+            self.current_module_idx,
+        ),
+        capture_field.callable_value,
+    );
+}
+
 fn appendCaptureMaterialization(
     self: *Self,
     capture_field: Pipeline.CaptureField,
-) Allocator.Error!MIR.LocalId {
-    const capture_local = switch (capture_field.source) {
+) Allocator.Error!CaptureMaterialization {
+    return switch (capture_field.source) {
         .specialized_param => |source| blk: {
             const callable_inst = self.callable_pipeline.getCallableInst(source.callable_inst);
             const template = self.callable_pipeline.getCallableTemplate(callable_inst.template);
@@ -3588,12 +3612,30 @@ fn appendCaptureMaterialization(
                     },
                 );
             }
-            if (self.lookupExistingBindingLocalWithinCurrentLambda(pattern_idx)) |existing| break :blk existing;
+            if (self.lookupExistingBindingLocalWithinCurrentLambda(pattern_idx)) |existing| break :blk .{
+                .source_local = existing,
+            };
             if (self.lookupUsableBindingLocalInAncestorScopes(
                 self.current_module_idx,
                 self.current_binding_scope,
                 pattern_idx,
-            )) |existing| break :blk existing;
+            )) |existing| break :blk .{
+                .source_local = existing,
+            };
+            if (switch (capture_field.storage) {
+                .runtime_field => true,
+                .callable_only, .recursive_member => false,
+            }) {
+                if (capture_field.callable_value) |callable_value| {
+                    break :blk .{
+                        .source_local = try self.freshSyntheticLocal(
+                            try self.runtimeCaptureSourceMonotype(capture_field),
+                            false,
+                        ),
+                        .introduced_callable_value = callable_value,
+                    };
+                }
+            }
             std.debug.panic(
                 "statement-only MIR invariant violated: specialized capture param {d} had no reusable local in scope",
                 .{source.param_index},
@@ -3610,12 +3652,30 @@ fn appendCaptureMaterialization(
                     },
                 );
             }
-            if (self.lookupExistingBindingLocalWithinCurrentLambda(source.pattern_idx)) |existing| break :blk existing;
+            if (self.lookupExistingBindingLocalWithinCurrentLambda(source.pattern_idx)) |existing| break :blk .{
+                .source_local = existing,
+            };
             if (self.lookupUsableBindingLocalInAncestorScopes(
                 self.current_module_idx,
                 self.current_binding_scope,
                 source.pattern_idx,
-            )) |existing| break :blk existing;
+            )) |existing| break :blk .{
+                .source_local = existing,
+            };
+            if (switch (capture_field.storage) {
+                .runtime_field => true,
+                .callable_only, .recursive_member => false,
+            }) {
+                if (capture_field.callable_value) |callable_value| {
+                    break :blk .{
+                        .source_local = try self.freshSyntheticLocal(
+                            try self.runtimeCaptureSourceMonotype(capture_field),
+                            false,
+                        ),
+                        .introduced_callable_value = callable_value,
+                    };
+                }
+            }
             std.debug.panic(
                 "statement-only MIR invariant violated: lexical capture pattern {d} had no reusable local in scope",
                 .{
@@ -3635,14 +3695,28 @@ fn appendCaptureMaterialization(
                 );
             }
             if (self.lookupExistingBindingLocalWithinCurrentLambda(capture_field.pattern_idx)) |existing| {
-                break :blk existing;
+                break :blk .{ .source_local = existing };
             }
             if (self.lookupUsableBindingLocalInAncestorScopes(
                 self.current_module_idx,
                 self.current_binding_scope,
                 capture_field.pattern_idx,
             )) |existing| {
-                break :blk existing;
+                break :blk .{ .source_local = existing };
+            }
+            if (switch (capture_field.storage) {
+                .runtime_field => true,
+                .callable_only, .recursive_member => false,
+            }) {
+                if (capture_field.callable_value) |callable_value| {
+                    break :blk .{
+                        .source_local = try self.freshSyntheticLocal(
+                            try self.runtimeCaptureSourceMonotype(capture_field),
+                            false,
+                        ),
+                        .introduced_callable_value = callable_value,
+                    };
+                }
             }
             std.debug.panic(
                 "statement-only MIR invariant violated: bound capture pattern {d} had no reusable local in scope",
@@ -3650,7 +3724,6 @@ fn appendCaptureMaterialization(
             );
         },
     };
-    return capture_local;
 }
 
 fn reserveResolvedCallableInstLambdaSkeleton(
@@ -3996,17 +4069,22 @@ fn lowerResolvedCallableInstValueInto(
     var capture_bindings = std.ArrayList(struct {
         source: MIR.LocalId,
         captured: MIR.LocalId,
+        introduced_callable_value: ?Pipeline.CallableValue,
     }).empty;
     defer capture_bindings.deinit(self.allocator);
 
     for (self.callable_pipeline.getCaptureFields(callable_def.captures)) |capture_field| {
         switch (capture_field.storage) {
             .runtime_field => {
-                const source_local = try self.appendCaptureMaterialization(capture_field);
-                const captured_local = try self.freshSyntheticLocal(self.store.getLocal(source_local).monotype, false);
+                const materialization = try self.appendCaptureMaterialization(capture_field);
+                const captured_local = try self.freshSyntheticLocal(
+                    self.store.getLocal(materialization.source_local).monotype,
+                    false,
+                );
                 try capture_bindings.append(self.allocator, .{
-                    .source = source_local,
+                    .source = materialization.source_local,
                     .captured = captured_local,
+                    .introduced_callable_value = materialization.introduced_callable_value,
                 });
                 try self.scratch_local_ids.append(captured_local);
             },
@@ -4034,6 +4112,19 @@ fn lowerResolvedCallableInstValueInto(
         binding_i -= 1;
         const binding = capture_bindings.items[binding_i];
         current = try self.lowerLocalAliasInto(binding.captured, binding.source, current);
+        if (binding.introduced_callable_value) |callable_value| {
+            current = switch (callable_value) {
+                .direct => |captured_callable_inst_id| try self.lowerResolvedCallableInstValueInto(
+                    captured_callable_inst_id,
+                    binding.source,
+                    current,
+                ),
+                .packed_fn => std.debug.panic(
+                    "statement-only MIR invariant violated: runtime closure capture pattern introduced a packed callable without a reusable source local",
+                    .{},
+                ),
+            };
+        }
     }
 
     return current;

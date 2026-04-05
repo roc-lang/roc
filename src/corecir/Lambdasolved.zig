@@ -2641,15 +2641,24 @@ pub fn finalizeResolvedDirectCallCallableInst(
         else => unreachable,
     };
     if (result.context_mono.monotype_store.getMonotype(callable_inst_fn_mono.ret) != .func) {
+        const call_expr_monotype = try cm.resolveTypeVarMonotypeResolved(
+            driver,
+            result,
+            thread,
+            module_idx,
+            ModuleEnv.varFrom(call_expr_idx),
+        );
+        if (!call_expr_monotype.isNone()) {
         try cm.recordExprMonotypeForThread(
             driver,
             result,
             thread,
             module_idx,
             call_expr_idx,
-            callable_inst_fn_mono.ret,
-            callable_inst.fn_monotype_module_idx,
+            call_expr_monotype.idx,
+            call_expr_monotype.module_idx,
         );
+        }
     }
     const arg_exprs = module_env.store.sliceExpr(call_expr.args);
     try prepareCallableArgsForCallableInst(driver, visit_memo, result, thread, module_idx, arg_exprs, callable_inst_id);
@@ -4135,6 +4144,29 @@ fn resolveDemandedDispatchFnMonotype(
         }
         return site.fn_monotype;
     }
+    if (try cm.resolveExprExactMonotypeResolved(
+        driver,
+        result,
+        thread,
+        module_idx,
+        expr_idx,
+    )) |expr_exact| {
+        if (cm.resolvedIfFunctionMonotype(result, expr_exact)) |fn_monotype| {
+            return fn_monotype;
+        }
+    }
+    const fn_var_exact = try cm.resolveTypeVarExactMonotypeResolved(
+        driver,
+        result,
+        thread,
+        module_idx,
+        fn_var,
+    );
+    if (!fn_var_exact.isNone()) {
+        if (cm.resolvedIfFunctionMonotype(result, fn_var_exact)) |fn_monotype| {
+            return fn_monotype;
+        }
+    }
     const receiver_exact: ?cm.ResolvedMonotype = switch (expr) {
         .e_binop => |binop_expr| try cm.resolveExprExactMonotypeResolved(
             driver,
@@ -4736,10 +4768,57 @@ fn resolveBoundBindingCallableValueForThread(
         defer visiting.deinit(driver.allocator);
         switch (source) {
             .lexical_binding => |lexical| if (lexical.callable_value) |callable_value| return callable_value,
-            .bound_expr, .specialized_param => {},
+            .bound_expr => |bound_expr| {
+                if (resolveExprRefCallableValue(
+                    driver,
+                    visit_memo,
+                    result,
+                    thread,
+                    bound_expr.expr_ref,
+                    &visiting,
+                ) catch unreachable) |callable_value| {
+                    return callable_value;
+                }
+
+                if (bound_expr.expr_ref.projections.isEmpty()) {
+                    if (result.getExprTemplateId(
+                        bound_expr.expr_ref.source_context,
+                        bound_expr.expr_ref.module_idx,
+                        bound_expr.expr_ref.expr_idx,
+                    )) |template_id| {
+                        const fn_monotype = (resolveBoundCaptureExprMonotype(
+                            driver,
+                            result,
+                            bound_expr,
+                        ) catch unreachable) orelse return null;
+                        _ = introduceExprCallableValueWithKnownFnMonotype(
+                            driver,
+                            visit_memo,
+                            result,
+                            thread,
+                            bound_expr.expr_ref.source_context,
+                            bound_expr.expr_ref.module_idx,
+                            bound_expr.expr_ref.expr_idx,
+                            template_id,
+                            fn_monotype,
+                        ) catch unreachable;
+                        if (resolveExprRefCallableValue(
+                            driver,
+                            visit_memo,
+                            result,
+                            thread,
+                            bound_expr.expr_ref,
+                            &visiting,
+                        ) catch unreachable) |callable_value| {
+                            return callable_value;
+                        }
+                    }
+                }
+            },
+            .specialized_param => {},
         }
         const context_callable_inst = thread.callableInst() orelse return switch (source) {
-            .bound_expr => |bound_expr| resolveExprRefCallableValue(driver, visit_memo, result, thread, bound_expr.expr_ref, &visiting) catch unreachable,
+            .bound_expr => null,
             .specialized_param => |specialized_param| resolveSpecializedParamCallableValue(result, specialized_param, &.{}),
             .lexical_binding => null,
         };

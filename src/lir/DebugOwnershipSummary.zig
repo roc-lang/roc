@@ -248,7 +248,7 @@ fn inferReturnContracts(
             }
 
             for (args, params) |arg, param| {
-                const arg_info = try resolveJumpArgInfo(allocator, store, param_index_by_symbol, results, arg);
+                const arg_info = try resolveJumpArgInfo(allocator, store, join_inputs, param_index_by_symbol, results, stmt_id, arg);
                 try mergeJoinInputInfo(store, join_inputs, param, arg_info);
             }
         },
@@ -331,8 +331,10 @@ fn collectJoinParams(
 fn resolveJumpArgInfo(
     allocator: Allocator,
     store: *LirStore,
+    join_inputs: *const JoinInputMap,
     param_index_by_symbol: *const ParamIndexMap,
     results: *const LocalResultMap,
+    stmt_id: CFStmtId,
     arg: LocalId,
 ) Allocator.Error!LocalResultInfo {
     var visited = VisitedMap.init(allocator);
@@ -340,8 +342,10 @@ fn resolveJumpArgInfo(
     return .{ .semantics = try resolveJoinInputSemantics(
         allocator,
         store,
+        join_inputs,
         param_index_by_symbol,
         results,
+        stmt_id,
         arg,
         &visited,
     ) };
@@ -350,8 +354,10 @@ fn resolveJumpArgInfo(
 fn resolveJoinInputSemantics(
     allocator: Allocator,
     store: *LirStore,
+    join_inputs: *const JoinInputMap,
     param_index_by_symbol: *const ParamIndexMap,
     results: *const LocalResultMap,
+    stmt_id: CFStmtId,
     local: LocalId,
     visited: *VisitedMap,
 ) Allocator.Error!LIR.ResultSemantics {
@@ -371,10 +377,13 @@ fn resolveJoinInputSemantics(
         );
     }
 
-    const info = results.get(key) orelse std.debug.panic(
-        "DebugOwnershipSummary invariant violated: jump arg local {d} had no known result semantics",
-        .{@intFromEnum(local)},
-    );
+    const info = results.get(key) orelse if (join_inputs.get(key)) |join_info|
+        join_info
+    else
+        std.debug.panic(
+            "DebugOwnershipSummary invariant violated: jump arg local {d} had no known result semantics",
+            .{@intFromEnum(local)},
+        );
 
     return switch (info.semantics) {
         .fresh => .fresh,
@@ -382,12 +391,14 @@ fn resolveJoinInputSemantics(
             allocator,
             store,
             try resolveJoinInputSemantics(
-                allocator,
-                store,
-                param_index_by_symbol,
-                results,
-                aliased.owner,
-                visited,
+            allocator,
+            store,
+            join_inputs,
+            param_index_by_symbol,
+            results,
+            stmt_id,
+            aliased.owner,
+            visited,
             ),
             aliased.projections,
         ),
@@ -395,12 +406,14 @@ fn resolveJoinInputSemantics(
             allocator,
             store,
             try resolveJoinInputSemantics(
-                allocator,
-                store,
-                param_index_by_symbol,
-                results,
-                borrowed.owner,
-                visited,
+            allocator,
+            store,
+            join_inputs,
+            param_index_by_symbol,
+            results,
+            stmt_id,
+            borrowed.owner,
+            visited,
             ),
             borrowed.projections,
             borrowed.region,
@@ -587,10 +600,7 @@ fn resolveReturnKind(
             const borrowed_base = switch (base) {
                 .alias_of_param => |param_index| ResolvedReturnKind{ .borrow_of_param = param_index },
                 .borrow_of_param => |param_index| ResolvedReturnKind{ .borrow_of_param = param_index },
-                .fresh => std.debug.panic(
-                    "DebugOwnershipSummary invariant violated: borrowed return local {d} is not rooted in a proc parameter",
-                    .{@intFromEnum(local)},
-                ),
+                .fresh => ResolvedReturnKind.fresh,
             };
             switch (borrowed_base) {
                 .borrow_of_param => try projections.appendSlice(

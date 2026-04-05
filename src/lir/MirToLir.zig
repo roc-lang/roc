@@ -925,6 +925,88 @@ fn lowerSummaryCallResultOrigin(
     };
 }
 
+fn mirCallArgLocal(
+    visible_args: []const MIR.LocalId,
+    captures_local: ?MIR.LocalId,
+    param_index: u32,
+) MIR.LocalId {
+    if (param_index < visible_args.len) return visible_args[param_index];
+    if (param_index == visible_args.len) {
+        if (captures_local) |local| return local;
+    }
+    std.debug.panic(
+        "MirToLir invariant violated: callable result referenced arg {d}, but call only has {d} visible args and captures_local={any}",
+        .{ param_index, visible_args.len, captures_local },
+    );
+}
+
+fn lowerSummaryCallResultOriginFromMirArgs(
+    self: *Self,
+    contract: ResultSummary.ResultContract,
+    visible_args: []const MIR.LocalId,
+    captures_local: ?MIR.LocalId,
+    arg_origins: []const LoweredOrigin,
+) Allocator.Error!LoweredOrigin {
+    return switch (contract) {
+        .no_return => std.debug.panic(
+            "MirToLir invariant violated: no-return callable must not be lowered as a value-producing call result",
+            .{},
+        ),
+        .fresh => .fresh,
+        .alias_of_param => |param_ref| blk: {
+            if (param_ref.param_index >= arg_origins.len) {
+                std.debug.panic(
+                    "MirToLir invariant violated: callable result aliases arg {d}, but call only has {d} args",
+                    .{ param_ref.param_index, arg_origins.len },
+                );
+            }
+            const projections = try self.lowerSummaryProjectionSpan(param_ref.projections);
+            break :blk switch (arg_origins[param_ref.param_index]) {
+                .fresh => if (self.lookupMirLocalBinding(@as(u32, @intFromEnum(mirCallArgLocal(
+                    visible_args,
+                    captures_local,
+                    param_ref.param_index,
+                ))))) |owner|
+                    .{ .alias_of_local = .{
+                        .owner = owner,
+                        .projections = projections,
+                    } }
+                else
+                    try self.aliasOrigin(.fresh, projections),
+                else => try self.aliasOrigin(arg_origins[param_ref.param_index], projections),
+            };
+        },
+        .borrow_of_param => |param_ref| blk: {
+            if (param_ref.param_index >= arg_origins.len) {
+                std.debug.panic(
+                    "MirToLir invariant violated: callable result borrows arg {d}, but call only has {d} args",
+                    .{ param_ref.param_index, arg_origins.len },
+                );
+            }
+            const projections = try self.lowerSummaryProjectionSpan(param_ref.projections);
+            break :blk switch (arg_origins[param_ref.param_index]) {
+                .fresh => if (self.lookupMirLocalBinding(@as(u32, @intFromEnum(mirCallArgLocal(
+                    visible_args,
+                    captures_local,
+                    param_ref.param_index,
+                ))))) |owner|
+                    .{ .borrow_of_local = .{
+                        .owner = owner,
+                        .projections = projections,
+                        .region = self.current_borrow_region,
+                    } }
+                else
+                    try self.borrowOrigin(.fresh, self.current_borrow_region, projections),
+                else => try self.borrowOrigin(
+                    arg_origins[param_ref.param_index],
+                    self.current_borrow_region,
+                    projections,
+                ),
+            };
+        },
+    };
+}
+
 fn resolveMirLocalOrigin(
     self: *Self,
     local_id: MIR.LocalId,
@@ -1022,23 +1104,20 @@ fn resolveMirLocalOrigin(
             const visible_args = self.mir_store.getLocalSpan(call_result.args);
             const arg_count = visible_args.len + @intFromBool(resolved.captures_local != null);
             const arg_origins = try self.allocator.alloc(LoweredOrigin, arg_count);
-            const arg_owners = try self.allocator.alloc(LirLocalId, arg_count);
             defer self.allocator.free(arg_origins);
-            defer self.allocator.free(arg_owners);
 
             for (visible_args, 0..) |arg, i| {
                 arg_origins[i] = try self.resolveMirLocalOrigin(arg, visited);
-                arg_owners[i] = self.existingMappedMirLocal(arg);
             }
             if (resolved.captures_local) |captures_local| {
                 arg_origins[visible_args.len] = try self.resolveMirLocalOrigin(captures_local, visited);
-                arg_owners[visible_args.len] = self.existingMappedMirLocal(captures_local);
             }
 
-            break :blk try self.lowerSummaryCallResultOrigin(
+            break :blk try self.lowerSummaryCallResultOriginFromMirArgs(
                 lambda_contract,
+                visible_args,
+                resolved.captures_local,
                 arg_origins,
-                arg_owners,
             );
         },
         .low_level => |low_level| blk: {
