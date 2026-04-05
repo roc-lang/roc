@@ -688,22 +688,7 @@ fn materializeTemplateExprCallableValueForThread(
         result,
         thread,
         template_id,
-    ) orelse {
-        if (std.debug.runtime_safety) {
-            std.debug.panic(
-                "Lambdasolved invariant violated: callable template expr ctx={s} module={d} expr={d} template={d} kind={s} owner={s} had no function monotype during callable materialization",
-                .{
-                    @tagName(source_context),
-                    module_idx,
-                    @intFromEnum(expr_idx),
-                    @intFromEnum(template_id),
-                    @tagName(template.kind),
-                    @tagName(template.owner),
-                },
-            );
-        }
-        unreachable;
-    };
+    ) orelse return;
     const callable_inst_id = (try introduceExprCallableValueWithKnownFnMonotype(
         driver,
         visit_memo,
@@ -759,50 +744,6 @@ fn resolveTemplateFnMonotypeForThread(
             return fn_monotype;
         }
     }
-
-    const source_context = thread.requireSourceContext();
-    const types_store = &driver.all_module_envs[template.module_idx].types;
-    const root_monotype = try cm.monotypeFromTypeVarInSourceContext(
-        driver,
-        result,
-        source_context,
-        template.module_idx,
-        types_store,
-        template.type_root,
-    );
-    if (!root_monotype.isNone()) {
-        return cm.resolvedIfFunctionMonotype(result, cm.resolvedMonotype(root_monotype, template.module_idx));
-    }
-
-    if ((template.kind == .lambda or template.kind == .hosted_lambda) and template.owner == .root_scope) {
-        const template_source_context: SourceContext = .{ .template_expr = .{
-            .module_idx = template.module_idx,
-            .expr_idx = template.cir_expr,
-        } };
-        if (try cm.resolveExprExactMonotypeResolved(
-            driver,
-            result,
-            SemanticThread.trackedThread(template_source_context),
-            template.module_idx,
-            template.cir_expr,
-        )) |template_expr_monotype| {
-            if (cm.resolvedIfFunctionMonotype(result, template_expr_monotype)) |fn_monotype| {
-                return fn_monotype;
-            }
-        }
-        const template_monotype = try cm.monotypeFromTypeVarInSourceContext(
-            driver,
-            result,
-            template_source_context,
-            template.module_idx,
-            types_store,
-            template.type_root,
-        );
-        if (!template_monotype.isNone()) {
-            return cm.resolvedIfFunctionMonotype(result, cm.resolvedMonotype(template_monotype, template.module_idx));
-        }
-    }
-
     return null;
 }
 
@@ -2250,16 +2191,16 @@ fn bindCurrentDispatchFromFnMonotype(
 
     for (actual_args.items, 0..) |arg_expr_idx, i| {
         const param_mono = result.context_mono.monotype_store.getIdxSpanItem(fn_mono.args, i);
+        try cm.recordExprMonotypeForThread(
+            driver,
+            result,
+            thread,
+            module_idx,
+            arg_expr_idx,
+            param_mono,
+            fn_monotype_module_idx,
+        );
         if (result.context_mono.monotype_store.getMonotype(param_mono) != .func) {
-            try cm.recordExprMonotypeForThread(
-                driver,
-                result,
-                thread,
-                module_idx,
-                arg_expr_idx,
-                param_mono,
-                fn_monotype_module_idx,
-            );
             try propagateDemandedValueMonotypeToValueExpr(
                 driver,
                 result,
@@ -2281,6 +2222,54 @@ fn bindCurrentDispatchFromFnMonotype(
             expr_idx,
             fn_mono.ret,
             fn_monotype_module_idx,
+        );
+    }
+}
+
+fn exprUsesFunctionMonotype(
+    driver: anytype,
+    result: anytype,
+    thread: SemanticThread,
+    module_idx: u32,
+    expr_idx: CIR.Expr.Idx,
+) std.mem.Allocator.Error!bool {
+    const expr_mono = (try cm.resolveExprMonotypeResolved(
+        driver,
+        result,
+        thread,
+        module_idx,
+        expr_idx,
+    )) orelse return false;
+    return result.context_mono.monotype_store.getMonotype(expr_mono.idx) == .func;
+}
+
+fn scanDispatchArgsWithDirectCallResolution(
+    driver: anytype,
+    visit_memo: *VisitMemo,
+    result: anytype,
+    thread: SemanticThread,
+    module_idx: u32,
+    arg_exprs: []const CIR.Expr.Idx,
+    resolve_direct_calls: bool,
+    scan_function_args: bool,
+) std.mem.Allocator.Error!void {
+    for (arg_exprs) |arg_expr_idx| {
+        const is_function_arg = try exprUsesFunctionMonotype(
+            driver,
+            result,
+            thread,
+            module_idx,
+            arg_expr_idx,
+        );
+        if (is_function_arg != scan_function_args) continue;
+        try scanCirExprWithDirectCallResolution(
+            driver,
+            visit_memo,
+            result,
+            thread,
+            module_idx,
+            arg_expr_idx,
+            resolve_direct_calls,
         );
     }
 }
@@ -3298,6 +3287,33 @@ fn ensureCallableInstRecord(
             template.module_idx,
         );
     const canonical_fn_monotype_module_idx = template.module_idx;
+    if (std.debug.runtime_safety) {
+        const mono = result.context_mono.monotype_store.getMonotype(canonical_fn_monotype);
+        switch (mono) {
+            .func => |func| {
+                if (func.args.len != 0) {
+                    const first_arg = result.context_mono.monotype_store.getIdxSpanItem(func.args, 0);
+                    if (result.context_mono.monotype_store.getMonotype(first_arg) == .unit) {
+                        std.debug.print(
+                            "DEBUG ensureCallableInstRecord: template={d} expr={d} module={d} active_ctx={s} defining_ctx={s} fn_monotype={d}@{d} fn_shape={any} callable_param_specs={d}\n",
+                            .{
+                                @intFromEnum(template_id),
+                                @intFromEnum(template.cir_expr),
+                                template.module_idx,
+                                @tagName(active_source_context),
+                                @tagName(defining_source_context),
+                                @intFromEnum(canonical_fn_monotype),
+                                canonical_fn_monotype_module_idx,
+                                mono,
+                                callable_param_specs.len,
+                            },
+                        );
+                    }
+                }
+            },
+            else => {},
+        }
+    }
     const subst_id = if (driver.all_module_envs[template.module_idx].types.needsInstantiation(template.type_root)) blk: {
         break :blk try cm.ensureTypeSubst(
             driver,
@@ -4120,9 +4136,6 @@ fn resolveDemandedDispatchFnMonotype(
         .e_type_var_dispatch => |dispatch_expr| dispatch_expr.method_name,
         else => return null,
     };
-    var actual_args = std.ArrayList(CIR.Expr.Idx).empty;
-    defer actual_args.deinit(driver.allocator);
-    try appendDispatchActualArgsFromExpr(driver, module_idx, expr, &actual_args);
     if (DispatchSolved.exactDispatchSiteForExpr(
         driver,
         result,
@@ -4167,74 +4180,7 @@ fn resolveDemandedDispatchFnMonotype(
             return fn_monotype;
         }
     }
-    const receiver_exact: ?cm.ResolvedMonotype = switch (expr) {
-        .e_binop => |binop_expr| try cm.resolveExprExactMonotypeResolved(
-            driver,
-            result,
-            thread,
-            module_idx,
-            binop_expr.lhs,
-        ),
-        .e_unary_minus => |unary_expr| try cm.resolveExprExactMonotypeResolved(
-            driver,
-            result,
-            thread,
-            module_idx,
-            unary_expr.expr,
-        ),
-        .e_dot_access => |dot_expr| try cm.resolveExprExactMonotypeResolved(
-            driver,
-            result,
-            thread,
-            module_idx,
-            dot_expr.receiver,
-        ),
-        .e_type_var_dispatch => |dispatch_expr| blk: {
-            const alias_stmt = module_env.store.getStatement(dispatch_expr.type_var_alias_stmt).s_type_var_alias;
-            const receiver_type_var = ModuleEnv.varFrom(alias_stmt.type_var_anno);
-            const resolved = try cm.resolveTypeVarExactMonotypeResolved(
-                driver,
-                result,
-                thread,
-                module_idx,
-                receiver_type_var,
-            );
-            break :blk if (resolved.isNone()) null else resolved;
-        },
-        else => null,
-    };
-    if (receiver_exact) |receiver_mono| {
-        if (try DispatchSolved.lookupAssociatedMethodTemplateForMonotype(
-            driver,
-            result,
-            module_idx,
-            receiver_mono.idx,
-            method_name,
-        )) |method_info| {
-            if (try resolveDemandedTemplateFnMonotypeFromCallShape(
-                driver,
-                result,
-                thread,
-                module_idx,
-                expr_idx,
-                actual_args.items,
-                method_info.template_id,
-            )) |resolved| {
-                return resolved;
-            }
-        }
-    }
-    return resolveDemandedFnMonotypeFromCallShape(
-        driver,
-        result,
-        thread,
-        module_idx,
-        &module_env.types,
-        fn_var,
-        module_idx,
-        expr_idx,
-        actual_args.items,
-    );
+    return null;
 }
 
 fn ensureRecordedExactDispatchSiteFromDemandedFnMonotype(
@@ -4257,24 +4203,236 @@ fn ensureRecordedExactDispatchSiteFromDemandedFnMonotype(
         return site;
     }
 
-    const requirement = driver.all_module_envs[module_idx].types.findStaticDispatchSiteRequirement(
-        ModuleEnv.varFrom(expr_idx),
-        method_name,
-    ) orelse return null;
-    const fn_monotype = (try resolveDemandedDispatchFnMonotype(
+    const dispatch_fn_var = blk: {
+        if (driver.all_module_envs[module_idx].types.findStaticDispatchSiteRequirement(
+            ModuleEnv.varFrom(expr_idx),
+            method_name,
+        )) |requirement| {
+            break :blk requirement.fn_var;
+        }
+        const receiver_type_var = DispatchSolved.dispatchConstraintReceiverTypeVar(
+            driver,
+            module_idx,
+            expr_idx,
+            method_name,
+        ) orelse break :blk null;
+        for (DispatchSolved.dispatchConstraintsForTypeVar(driver, module_idx, receiver_type_var)) |constraint| {
+            if (constraint.fn_name.eql(method_name)) break :blk constraint.fn_var;
+        }
+        break :blk null;
+    };
+
+    if (dispatch_fn_var) |fn_var| {
+        if (try resolveDispatchFnMonotypeFromExactActuals(
+            driver,
+            result,
+            thread,
+            module_idx,
+            expr_idx,
+            expr,
+            fn_var,
+        )) |fn_monotype| {
+            const site: DispatchSolved.ExactDispatchSite = .{
+                .method_name = method_name,
+                .fn_var = fn_var,
+                .fn_monotype = fn_monotype,
+            };
+            try result.dispatch_solved.recordExactDispatchSite(
+                driver.allocator,
+                thread.requireSourceContext(),
+                module_idx,
+                expr_idx,
+                site,
+            );
+            return site;
+        }
+    }
+
+    switch (expr) {
+        .e_dot_access => |dot_expr| {
+            if (dot_expr.args != null) {
+                if (try resolveAssociatedMethodDispatchTargetForTypeVar(
+                    driver,
+                    result,
+                    thread,
+                    module_idx,
+                    expr_idx,
+                    expr,
+                    ModuleEnv.varFrom(dot_expr.receiver),
+                    method_name,
+                )) |_| {
+                    return DispatchSolved.exactDispatchSiteForExpr(
+                        driver,
+                        result,
+                        thread,
+                        module_idx,
+                        expr_idx,
+                        method_name,
+                    );
+                }
+                if (try cm.resolveExprMonotypeResolved(driver, result, thread, module_idx, dot_expr.receiver)) |receiver_mono| {
+                    if (try resolveAssociatedMethodDispatchTargetForMonotype(
+                        driver,
+                        result,
+                        thread,
+                        module_idx,
+                        expr_idx,
+                        expr,
+                        receiver_mono.idx,
+                        method_name,
+                    )) |_| {
+                        return DispatchSolved.exactDispatchSiteForExpr(
+                            driver,
+                            result,
+                            thread,
+                            module_idx,
+                            expr_idx,
+                            method_name,
+                        );
+                    }
+                }
+            }
+        },
+        .e_binop => |binop_expr| {
+            if (try resolveAssociatedMethodDispatchTargetForTypeVar(
+                driver,
+                result,
+                thread,
+                module_idx,
+                expr_idx,
+                expr,
+                ModuleEnv.varFrom(binop_expr.lhs),
+                method_name,
+            )) |_| {
+                return DispatchSolved.exactDispatchSiteForExpr(
+                    driver,
+                    result,
+                    thread,
+                    module_idx,
+                    expr_idx,
+                    method_name,
+                );
+            }
+            if (try cm.resolveExprMonotypeResolved(driver, result, thread, module_idx, binop_expr.lhs)) |lhs_mono| {
+                if (try resolveAssociatedMethodDispatchTargetForMonotype(
+                    driver,
+                    result,
+                    thread,
+                    module_idx,
+                    expr_idx,
+                    expr,
+                    lhs_mono.idx,
+                    method_name,
+                )) |_| {
+                    return DispatchSolved.exactDispatchSiteForExpr(
+                        driver,
+                        result,
+                        thread,
+                        module_idx,
+                        expr_idx,
+                        method_name,
+                    );
+                }
+            }
+        },
+        .e_unary_minus => |unary_expr| {
+            if (try resolveAssociatedMethodDispatchTargetForTypeVar(
+                driver,
+                result,
+                thread,
+                module_idx,
+                expr_idx,
+                expr,
+                ModuleEnv.varFrom(unary_expr.expr),
+                method_name,
+            )) |_| {
+                return DispatchSolved.exactDispatchSiteForExpr(
+                    driver,
+                    result,
+                    thread,
+                    module_idx,
+                    expr_idx,
+                    method_name,
+                );
+            }
+            if (try cm.resolveExprMonotypeResolved(driver, result, thread, module_idx, unary_expr.expr)) |operand_mono| {
+                if (try resolveAssociatedMethodDispatchTargetForMonotype(
+                    driver,
+                    result,
+                    thread,
+                    module_idx,
+                    expr_idx,
+                    expr,
+                    operand_mono.idx,
+                    method_name,
+                )) |_| {
+                    return DispatchSolved.exactDispatchSiteForExpr(
+                        driver,
+                        result,
+                        thread,
+                        module_idx,
+                        expr_idx,
+                        method_name,
+                    );
+                }
+            }
+        },
+        .e_type_var_dispatch => |dispatch_expr| {
+            const alias_stmt = driver.all_module_envs[module_idx].store.getStatement(dispatch_expr.type_var_alias_stmt).s_type_var_alias;
+            const receiver_type_var = ModuleEnv.varFrom(alias_stmt.type_var_anno);
+            if (try resolveAssociatedMethodDispatchTargetForTypeVar(
+                driver,
+                result,
+                thread,
+                module_idx,
+                expr_idx,
+                expr,
+                receiver_type_var,
+                method_name,
+            )) |_| {
+                return DispatchSolved.exactDispatchSiteForExpr(
+                    driver,
+                    result,
+                    thread,
+                    module_idx,
+                    expr_idx,
+                    method_name,
+                );
+            }
+            const alias_mono = try cm.resolveTypeVarMonotypeResolved(driver, result, thread, module_idx, receiver_type_var);
+            if (!alias_mono.isNone()) {
+                if (try resolveAssociatedMethodDispatchTargetForMonotype(
+                    driver,
+                    result,
+                    thread,
+                    module_idx,
+                    expr_idx,
+                    expr,
+                    alias_mono.idx,
+                    method_name,
+                )) |_| {
+                    return DispatchSolved.exactDispatchSiteForExpr(
+                        driver,
+                        result,
+                        thread,
+                        module_idx,
+                        expr_idx,
+                        method_name,
+                    );
+                }
+            }
+        },
+        else => {},
+    }
+
+    const site = (try DispatchSolved.extractExactDispatchSiteForExpr(
         driver,
         result,
         thread,
         module_idx,
         expr_idx,
-        expr,
-        requirement.fn_var,
+        method_name,
     )) orelse return null;
-    const site: DispatchSolved.ExactDispatchSite = .{
-        .method_name = method_name,
-        .fn_var = requirement.fn_var,
-        .fn_monotype = fn_monotype,
-    };
     try result.dispatch_solved.recordExactDispatchSite(
         driver.allocator,
         thread.requireSourceContext(),
@@ -4283,6 +4441,309 @@ fn ensureRecordedExactDispatchSiteFromDemandedFnMonotype(
         site,
     );
     return site;
+}
+
+fn resolveDispatchFnMonotypeFromExactActuals(
+    driver: anytype,
+    result: anytype,
+    thread: SemanticThread,
+    module_idx: u32,
+    expr_idx: CIR.Expr.Idx,
+    expr: CIR.Expr,
+    fn_var: types.Var,
+) std.mem.Allocator.Error!?cm.ResolvedMonotype {
+    const module_env = driver.all_module_envs[module_idx];
+    const resolved_func = cm.resolveFuncTypeInStore(&module_env.types, fn_var) orelse return null;
+
+    var extra_bindings = std.AutoHashMap(cm.BoundTypeVarKey, cm.ResolvedMonotype).init(driver.allocator);
+    defer extra_bindings.deinit();
+
+    var actual_args = std.ArrayList(CIR.Expr.Idx).empty;
+    defer actual_args.deinit(driver.allocator);
+    try appendDispatchActualArgsFromExpr(driver, module_idx, expr, &actual_args);
+
+    const param_vars = module_env.types.sliceVars(resolved_func.func.args);
+    if (actual_args.items.len != param_vars.len) return null;
+
+    for (actual_args.items, param_vars) |arg_expr_idx, arg_var| {
+        const arg_mono = (try cm.resolveExprExactMonotypeResolved(
+            driver,
+            result,
+            thread,
+            module_idx,
+            arg_expr_idx,
+        )) orelse continue;
+        const resolved_arg_var = module_env.types.resolveVar(arg_var).var_;
+        try extra_bindings.put(
+            .{ .module_idx = module_idx, .type_var = resolved_arg_var },
+            arg_mono,
+        );
+    }
+
+    if (try cm.resolveExprExactMonotypeResolved(driver, result, thread, module_idx, expr_idx)) |ret_mono| {
+        const resolved_ret_var = module_env.types.resolveVar(resolved_func.func.ret).var_;
+        try extra_bindings.put(
+            .{ .module_idx = module_idx, .type_var = resolved_ret_var },
+            ret_mono,
+        );
+    }
+
+    if (std.debug.runtime_safety) {
+        for (param_vars, 0..) |arg_var, arg_index| {
+            const resolved_arg_var = module_env.types.resolveVar(arg_var).var_;
+            const arg_mono = try resolveExactTypeVarMonotypeFromBindings(
+                driver,
+                result,
+                thread.requireSourceContext(),
+                module_idx,
+                &module_env.types,
+                resolved_arg_var,
+                &extra_bindings,
+            );
+            std.debug.print(
+                "DEBUG resolveDispatchFnMonotypeFromExactActuals param: module={d} expr={d} fn_var={d} arg_index={d} arg_var={d} resolved_arg_var={d} mono={any}\n",
+                .{
+                    module_idx,
+                    @intFromEnum(expr_idx),
+                    @intFromEnum(fn_var),
+                    arg_index,
+                    @intFromEnum(arg_var),
+                    @intFromEnum(resolved_arg_var),
+                    if (arg_mono.isNone()) null else result.context_mono.monotype_store.getMonotype(arg_mono),
+                },
+            );
+        }
+        const resolved_ret_var = module_env.types.resolveVar(resolved_func.func.ret).var_;
+            const ret_mono = try resolveExactTypeVarMonotypeFromBindings(
+                driver,
+                result,
+                thread.requireSourceContext(),
+                module_idx,
+                &module_env.types,
+            resolved_ret_var,
+            &extra_bindings,
+        );
+        std.debug.print(
+            "DEBUG resolveDispatchFnMonotypeFromExactActuals ret: module={d} expr={d} fn_var={d} ret_var={d} resolved_ret_var={d} mono={any}\n",
+            .{
+                module_idx,
+                @intFromEnum(expr_idx),
+                @intFromEnum(fn_var),
+                @intFromEnum(resolved_func.func.ret),
+                @intFromEnum(resolved_ret_var),
+                if (ret_mono.isNone()) null else result.context_mono.monotype_store.getMonotype(ret_mono),
+            },
+        );
+    }
+
+    const fn_monotype = try resolveExactTypeVarMonotypeFromBindings(
+        driver,
+        result,
+        thread.requireSourceContext(),
+        module_idx,
+        &module_env.types,
+        fn_var,
+        &extra_bindings,
+    );
+    if (fn_monotype.isNone()) return null;
+    return if (cm.resolvedIfFunctionMonotype(result, cm.resolvedMonotype(fn_monotype, module_idx))) |resolved|
+        resolved
+    else
+        null;
+}
+
+fn resolveExactTypeVarMonotypeFromBindings(
+    driver: anytype,
+    result: anytype,
+    source_context: SourceContext,
+    module_idx: u32,
+    store_types: *const types.Store,
+    type_var: types.Var,
+    extra_bindings: *const std.AutoHashMap(cm.BoundTypeVarKey, cm.ResolvedMonotype),
+) std.mem.Allocator.Error!Monotype.Idx {
+    const direct = try cm.monotypeFromTypeVarInSourceContextWithExtraBindings(
+        driver,
+        result,
+        source_context,
+        module_idx,
+        store_types,
+        type_var,
+        extra_bindings,
+    );
+    if (!direct.isNone()) return direct;
+
+    const resolved_func = cm.resolveFuncTypeInStore(store_types, type_var) orelse return .none;
+    var arg_monos = std.ArrayListUnmanaged(Monotype.Idx).empty;
+    defer arg_monos.deinit(driver.allocator);
+
+    for (store_types.sliceVars(resolved_func.func.args)) |arg_var| {
+        const arg_mono = try resolveExactTypeVarMonotypeFromBindings(
+            driver,
+            result,
+            source_context,
+            module_idx,
+            store_types,
+            arg_var,
+            extra_bindings,
+        );
+        if (arg_mono.isNone()) return .none;
+        try arg_monos.append(driver.allocator, arg_mono);
+    }
+
+    const ret_mono = try resolveExactTypeVarMonotypeFromBindings(
+        driver,
+        result,
+        source_context,
+        module_idx,
+        store_types,
+        resolved_func.func.ret,
+        extra_bindings,
+    );
+    if (ret_mono.isNone()) return .none;
+
+    const args = try result.context_mono.monotype_store.addIdxSpan(driver.allocator, arg_monos.items);
+    return try result.context_mono.monotype_store.addMonotype(driver.allocator, .{ .func = .{
+        .args = args,
+        .ret = ret_mono,
+        .effectful = resolved_func.effectful,
+    } });
+}
+
+fn resolveTemplateFnMonotypeFromExactActuals(
+    driver: anytype,
+    result: anytype,
+    thread: SemanticThread,
+    caller_module_idx: u32,
+    expr_idx: CIR.Expr.Idx,
+    expr: CIR.Expr,
+    template: *const CallableTemplate,
+) std.mem.Allocator.Error!?cm.ResolvedMonotype {
+    const template_env = driver.all_module_envs[template.module_idx];
+    const resolved_func = cm.resolveFuncTypeInStore(&template_env.types, template.type_root) orelse return null;
+
+    var extra_bindings = std.AutoHashMap(cm.BoundTypeVarKey, cm.ResolvedMonotype).init(driver.allocator);
+    defer extra_bindings.deinit();
+
+    var actual_args = std.ArrayList(CIR.Expr.Idx).empty;
+    defer actual_args.deinit(driver.allocator);
+    try appendDispatchActualArgsFromExpr(driver, caller_module_idx, expr, &actual_args);
+
+    const param_vars = template_env.types.sliceVars(resolved_func.func.args);
+    if (actual_args.items.len != param_vars.len) return null;
+
+    for (actual_args.items, param_vars) |arg_expr_idx, arg_var| {
+        const arg_mono = (try cm.resolveExprExactMonotypeResolved(
+            driver,
+            result,
+            thread,
+            caller_module_idx,
+            arg_expr_idx,
+        )) orelse continue;
+        try extra_bindings.put(
+            .{
+                .module_idx = template.module_idx,
+                .type_var = template_env.types.resolveVar(arg_var).var_,
+            },
+            arg_mono,
+        );
+    }
+
+    if (try cm.resolveExprExactMonotypeResolved(driver, result, thread, caller_module_idx, expr_idx)) |ret_mono| {
+        try extra_bindings.put(
+            .{
+                .module_idx = template.module_idx,
+                .type_var = template_env.types.resolveVar(resolved_func.func.ret).var_,
+            },
+            ret_mono,
+        );
+    }
+
+    if (std.debug.runtime_safety) {
+        for (param_vars, 0..) |arg_var, arg_index| {
+            const resolved_arg_var = template_env.types.resolveVar(arg_var).var_;
+            const arg_mono = try resolveExactTypeVarMonotypeFromBindings(
+                driver,
+                result,
+                thread.requireSourceContext(),
+                template.module_idx,
+                &template_env.types,
+                resolved_arg_var,
+                &extra_bindings,
+            );
+            std.debug.print(
+                "DEBUG resolveTemplateFnMonotypeFromExactActuals param: caller_module={d} template_module={d} expr={d} type_root={d} arg_index={d} arg_var={d} resolved_arg_var={d} mono={any}\n",
+                .{
+                    caller_module_idx,
+                    template.module_idx,
+                    @intFromEnum(expr_idx),
+                    @intFromEnum(template.type_root),
+                    arg_index,
+                    @intFromEnum(arg_var),
+                    @intFromEnum(resolved_arg_var),
+                    if (arg_mono.isNone()) null else result.context_mono.monotype_store.getMonotype(arg_mono),
+                },
+            );
+            if (arg_mono.isNone()) {
+                const raw_func = cm.resolveFuncTypeInStore(&template_env.types, arg_var);
+                std.debug.print(
+                    "DEBUG resolveTemplateFnMonotypeFromExactActuals raw_arg_content: arg_index={d} content_tag={s} func={any}",
+                    .{
+                        arg_index,
+                        @tagName(template_env.types.resolveVar(arg_var).desc.content),
+                        raw_func,
+                    },
+                );
+                if (raw_func) |func_info| {
+                    std.debug.print(
+                        " callback_args={any} callback_ret={d}\n",
+                        .{
+                            template_env.types.sliceVars(func_info.func.args),
+                            @intFromEnum(func_info.func.ret),
+                        },
+                    );
+                } else {
+                    std.debug.print("\n", .{});
+                }
+            }
+        }
+        const resolved_ret_var = template_env.types.resolveVar(resolved_func.func.ret).var_;
+        const ret_mono = try resolveExactTypeVarMonotypeFromBindings(
+            driver,
+            result,
+            thread.requireSourceContext(),
+            template.module_idx,
+            &template_env.types,
+            resolved_ret_var,
+            &extra_bindings,
+        );
+        std.debug.print(
+            "DEBUG resolveTemplateFnMonotypeFromExactActuals ret: caller_module={d} template_module={d} expr={d} type_root={d} ret_var={d} resolved_ret_var={d} mono={any}\n",
+            .{
+                caller_module_idx,
+                template.module_idx,
+                @intFromEnum(expr_idx),
+                @intFromEnum(template.type_root),
+                @intFromEnum(resolved_func.func.ret),
+                @intFromEnum(resolved_ret_var),
+                if (ret_mono.isNone()) null else result.context_mono.monotype_store.getMonotype(ret_mono),
+            },
+        );
+    }
+
+    const fn_monotype = try resolveExactTypeVarMonotypeFromBindings(
+        driver,
+        result,
+        thread.requireSourceContext(),
+        template.module_idx,
+        &template_env.types,
+        template.type_root,
+        &extra_bindings,
+    );
+    if (fn_monotype.isNone()) return null;
+    return if (cm.resolvedIfFunctionMonotype(result, cm.resolvedMonotype(fn_monotype, template.module_idx))) |resolved|
+        resolved
+    else
+        null;
 }
 
 fn ensureBuiltinBoxUnboxCallableInst(
@@ -4779,41 +5240,6 @@ fn resolveBoundBindingCallableValueForThread(
                 ) catch unreachable) |callable_value| {
                     return callable_value;
                 }
-
-                if (bound_expr.expr_ref.projections.isEmpty()) {
-                    if (result.getExprTemplateId(
-                        bound_expr.expr_ref.source_context,
-                        bound_expr.expr_ref.module_idx,
-                        bound_expr.expr_ref.expr_idx,
-                    )) |template_id| {
-                        const fn_monotype = (resolveBoundCaptureExprMonotype(
-                            driver,
-                            result,
-                            bound_expr,
-                        ) catch unreachable) orelse return null;
-                        _ = introduceExprCallableValueWithKnownFnMonotype(
-                            driver,
-                            visit_memo,
-                            result,
-                            thread,
-                            bound_expr.expr_ref.source_context,
-                            bound_expr.expr_ref.module_idx,
-                            bound_expr.expr_ref.expr_idx,
-                            template_id,
-                            fn_monotype,
-                        ) catch unreachable;
-                        if (resolveExprRefCallableValue(
-                            driver,
-                            visit_memo,
-                            result,
-                            thread,
-                            bound_expr.expr_ref,
-                            &visiting,
-                        ) catch unreachable) |callable_value| {
-                            return callable_value;
-                        }
-                    }
-                }
             },
             .specialized_param => {},
         }
@@ -4958,6 +5384,42 @@ fn getValueExprCallableValueForThread(
             if (resolveBoundBindingCallableValueForThread(driver, visit_memo, result, thread, module_idx, lookup.pattern_idx)) |callable_value| {
                 return callable_value;
             }
+            if (thread.lookupValueBinding(module_idx, lookup.pattern_idx)) |source| switch (source) {
+                .bound_expr => |bound_expr| {
+                    if (bound_expr.expr_ref.projections.isEmpty()) {
+                        if (result.getExprTemplateId(
+                            bound_expr.expr_ref.source_context,
+                            bound_expr.expr_ref.module_idx,
+                            bound_expr.expr_ref.expr_idx,
+                        )) |template_id| {
+                            const fn_monotype = (cm.resolveExprExactMonotypeResolved(
+                                driver,
+                                result,
+                                thread,
+                                module_idx,
+                                expr_idx,
+                            ) catch unreachable) orelse return null;
+                            if (cm.resolvedIfFunctionMonotype(result, fn_monotype)) |exact_fn_monotype| {
+                                _ = introduceExprCallableValueWithKnownFnMonotype(
+                                    driver,
+                                    visit_memo,
+                                    result,
+                                    thread,
+                                    thread.requireSourceContext(),
+                                    module_idx,
+                                    expr_idx,
+                                    template_id,
+                                    exact_fn_monotype,
+                                ) catch unreachable;
+                                if (readExprCallableValue(result, thread.requireSourceContext(), module_idx, expr_idx)) |callable_value| {
+                                    return callable_value;
+                                }
+                            }
+                        }
+                    }
+                },
+                .specialized_param, .lexical_binding => {},
+            };
         },
         else => {},
     }
@@ -7025,14 +7487,13 @@ pub fn seedCallableBoundaryContextMonotypes(
 
     for (boundary_arg_patterns, 0..) |pattern_idx, i| {
         const param_mono = result.context_mono.monotype_store.getIdxSpanItem(fn_mono.args, i);
-        try cm.recordTypeVarMonotypeForThread(
+        try bindCurrentPatternFromResolvedMonotype(
             driver,
             result,
             SemanticThread.trackedThread(source_context),
             module_idx,
-            ModuleEnv.varFrom(pattern_idx),
-            param_mono,
-            fn_monotype_module_idx,
+            pattern_idx,
+            cm.resolvedMonotype(param_mono, fn_monotype_module_idx),
         );
     }
 
@@ -8026,6 +8487,17 @@ fn scanCirExprChildren(
         .e_dot_access => |dot_expr| {
             try scanCirExprWithDirectCallResolution(driver, visit_memo, result, thread, module_idx, dot_expr.receiver, resolve_direct_calls);
             if (dot_expr.args) |args| {
+                const arg_exprs = module_env.store.sliceExpr(args);
+                try scanDispatchArgsWithDirectCallResolution(
+                    driver,
+                    visit_memo,
+                    result,
+                    thread,
+                    module_idx,
+                    arg_exprs,
+                    resolve_direct_calls,
+                    false,
+                );
                 if (try ensureRecordedExactDispatchSiteFromDemandedFnMonotype(
                     driver,
                     result,
@@ -8046,7 +8518,36 @@ fn scanCirExprChildren(
                         site.fn_monotype.module_idx,
                     );
                 }
-                try scanCirExprSpanWithDirectCallResolution(driver, visit_memo, result, thread, module_idx, module_env.store.sliceExpr(args), resolve_direct_calls);
+                try scanDispatchArgsWithDirectCallResolution(
+                    driver,
+                    visit_memo,
+                    result,
+                    thread,
+                    module_idx,
+                    arg_exprs,
+                    resolve_direct_calls,
+                    true,
+                );
+                if (try ensureRecordedExactDispatchSiteFromDemandedFnMonotype(
+                    driver,
+                    result,
+                    thread,
+                    module_idx,
+                    expr_idx,
+                    expr,
+                    dot_expr.field_name,
+                )) |site| {
+                    try bindCurrentDispatchFromFnMonotype(
+                        driver,
+                        result,
+                        thread,
+                        module_idx,
+                        expr_idx,
+                        expr,
+                        site.fn_monotype.idx,
+                        site.fn_monotype.module_idx,
+                    );
+                }
                 try realizeDispatchExprSemantics(driver, visit_memo, result, thread, module_idx, expr_idx, expr);
             } else {
                 const receiver_source = exprRefAliasOrSelf(result, thread.requireSourceContext(), module_idx, dot_expr.receiver);
@@ -8386,90 +8887,6 @@ pub fn resolveDirectCallFnMonotype(
     );
 }
 
-fn resolveDemandedFnMonotypeFromCallShape(
-    driver: anytype,
-    result: anytype,
-    thread: SemanticThread,
-    shape_module_idx: u32,
-    shape_types: *const types.Store,
-    fn_var: types.Var,
-    module_idx: u32,
-    _: CIR.Expr.Idx,
-    actual_args: []const CIR.Expr.Idx,
-) std.mem.Allocator.Error!?cm.ResolvedMonotype {
-    const resolved_func = cm.resolveFuncTypeInStore(shape_types, fn_var) orelse {
-        return null;
-    };
-    const param_vars = shape_types.sliceVars(resolved_func.func.args);
-    if (param_vars.len != actual_args.len) {
-        return null;
-    }
-
-    var bindings = std.AutoHashMap(cm.BoundTypeVarKey, ResolvedMonotype).init(driver.allocator);
-    defer bindings.deinit();
-    var ordered_entries = std.ArrayList(cm.TypeSubstEntry).empty;
-    defer ordered_entries.deinit(driver.allocator);
-
-    for (param_vars, actual_args) |param_var, arg_expr_idx| {
-        const arg_mono = (try cm.resolveExprMonotypeResolved(
-            driver,
-            result,
-            thread,
-            module_idx,
-            arg_expr_idx,
-        )) orelse continue;
-        if (arg_mono.isNone()) continue;
-        try cm.bindTypeVarMonotypes(
-            driver,
-            result,
-            shape_module_idx,
-            shape_types,
-            &bindings,
-            &ordered_entries,
-            param_var,
-            arg_mono.idx,
-            arg_mono.module_idx,
-        );
-    }
-
-    var exact_fn_mono = try cm.monotypeFromTypeVarWithLanguageDefaultingInStoreWithExtraBindings(
-        driver,
-        result,
-        shape_module_idx,
-        shape_types,
-        fn_var,
-        &bindings,
-    );
-    if (exact_fn_mono.isNone()) {
-        return null;
-    }
-    return cm.resolvedMonotype(exact_fn_mono, shape_module_idx);
-}
-
-fn resolveDemandedTemplateFnMonotypeFromCallShape(
-    driver: anytype,
-    result: anytype,
-    thread: SemanticThread,
-    call_module_idx: u32,
-    call_expr_idx: CIR.Expr.Idx,
-    actual_args: []const CIR.Expr.Idx,
-    template_id: CallableTemplateId,
-) std.mem.Allocator.Error!?cm.ResolvedMonotype {
-    const template = result.getCallableTemplate(template_id);
-    const template_env = driver.all_module_envs[template.module_idx];
-    return resolveDemandedFnMonotypeFromCallShape(
-        driver,
-        result,
-        thread,
-        template.module_idx,
-        &template_env.types,
-        template.type_root,
-        call_module_idx,
-        call_expr_idx,
-        actual_args,
-    );
-}
-
 pub fn resolveDemandedDirectCallFnMonotype(
     driver: anytype,
     visit_memo: *VisitMemo,
@@ -8479,58 +8896,7 @@ pub fn resolveDemandedDirectCallFnMonotype(
     call_expr_idx: CIR.Expr.Idx,
     call_expr: anytype,
 ) std.mem.Allocator.Error!?cm.ResolvedMonotype {
-    const module_env = driver.all_module_envs[module_idx];
-    const callee_expr = module_env.store.getExpr(call_expr.func);
-    const arg_exprs = module_env.store.sliceExpr(call_expr.args);
-    const callee_var_exact = try cm.resolveTypeVarExactMonotypeResolved(
-        driver,
-        result,
-        thread,
-        module_idx,
-        ModuleEnv.varFrom(call_expr.func),
-    );
-    if (!callee_var_exact.isNone()) {
-        if (cm.resolvedIfFunctionMonotype(result, callee_var_exact)) |fn_monotype| {
-            return fn_monotype;
-        }
-    }
-    if (callee_expr == .e_lookup_local) {
-        const lookup = callee_expr.e_lookup_local;
-        if (thread.lookupValueBinding(module_idx, lookup.pattern_idx)) |source| {
-            if (bindingSourceExprRef(source)) |source_expr_ref| {
-                if (result.getExprTemplateId(
-                    source_expr_ref.source_context,
-                    source_expr_ref.module_idx,
-                    source_expr_ref.expr_idx,
-                )) |template_id| {
-                    const exact_from_source_template = try resolveDemandedTemplateFnMonotypeFromCallShape(
-                        driver,
-                        result,
-                        thread,
-                        module_idx,
-                        call_expr_idx,
-                        arg_exprs,
-                        template_id,
-                    );
-                    if (exact_from_source_template) |resolved| {
-                        return resolved;
-                    }
-                    if (std.debug.runtime_safety) {
-                        std.debug.panic(
-                            "Lambdasolved invariant violated: direct call expr {d} in module {d} has source template {d} but call-shape specialization produced no demanded function monotype; callee_expr={d} arg_count={d}",
-                            .{
-                                @intFromEnum(call_expr_idx),
-                                module_idx,
-                                @intFromEnum(template_id),
-                                @intFromEnum(call_expr.func),
-                                arg_exprs.len,
-                            },
-                        );
-                    } else unreachable;
-                }
-            }
-        }
-    }
+    _ = call_expr_idx;
     if (getValueExprCallableValueForThread(driver, visit_memo, result, thread, module_idx, call_expr.func)) |callable_value| {
         const resolved: cm.ResolvedMonotype = switch (callable_value) {
             .direct => |callable_inst_id| .{
@@ -8539,50 +8905,31 @@ pub fn resolveDemandedDirectCallFnMonotype(
             },
             .packed_fn => |packed_fn| packed_fn.fn_monotype,
         };
+        if (std.debug.runtime_safety) {
+            const mono = result.context_mono.monotype_store.getMonotype(resolved.idx);
+            switch (mono) {
+                .func => |func| {
+                    if (func.args.len != 0) {
+                        const first_arg = result.context_mono.monotype_store.getIdxSpanItem(func.args, 0);
+                        if (result.context_mono.monotype_store.getMonotype(first_arg) == .unit) {
+                            std.debug.print(
+                                "DEBUG resolveDemandedDirectCallFnMonotype callable_value: ctx={s} module={d} callee={d} fn={d}@{d} callable_value={any}\n",
+                                .{
+                                    @tagName(thread.requireSourceContext()),
+                                    module_idx,
+                                    @intFromEnum(call_expr.func),
+                                    @intFromEnum(resolved.idx),
+                                    resolved.module_idx,
+                                    callable_value,
+                                },
+                            );
+                        }
+                    }
+                },
+                else => {},
+            }
+        }
         return resolved;
-    }
-
-    if (result.getExprOriginExpr(thread.requireSourceContext(), module_idx, call_expr.func)) |origin| {
-        const origin_thread = SemanticThread.trackedThread(origin.source_context);
-        if (try cm.resolveExprExactMonotypeResolved(
-            driver,
-            result,
-            origin_thread,
-            origin.module_idx,
-            origin.expr_idx,
-        )) |origin_mono| {
-            if (cm.resolvedIfFunctionMonotype(result, origin_mono)) |fn_monotype| {
-                return fn_monotype;
-            }
-        }
-    }
-    if (result.getExprTemplateId(thread.requireSourceContext(), module_idx, call_expr.func)) |template_id| {
-        if (try resolveDemandedTemplateFnMonotypeFromCallShape(
-            driver,
-            result,
-            thread,
-            module_idx,
-            call_expr_idx,
-            arg_exprs,
-            template_id,
-        )) |resolved| {
-            return resolved;
-        }
-    }
-    if (result.getExprOriginExpr(thread.requireSourceContext(), module_idx, call_expr.func)) |origin| {
-        if (result.getExprTemplateId(origin.source_context, origin.module_idx, origin.expr_idx)) |template_id| {
-            if (try resolveDemandedTemplateFnMonotypeFromCallShape(
-                driver,
-                result,
-                thread,
-                module_idx,
-                call_expr_idx,
-                arg_exprs,
-                template_id,
-            )) |resolved| {
-                return resolved;
-            }
-        }
     }
     if (try cm.resolveExprExactMonotypeResolved(
         driver,
@@ -8590,24 +8937,33 @@ pub fn resolveDemandedDirectCallFnMonotype(
         thread,
         module_idx,
         call_expr.func,
-    )) |callee_mono| {
+        )) |callee_mono| {
         if (cm.resolvedIfFunctionMonotype(result, callee_mono)) |fn_monotype| {
+            if (std.debug.runtime_safety) {
+                const mono = result.context_mono.monotype_store.getMonotype(fn_monotype.idx);
+                switch (mono) {
+                    .func => |func| {
+                        if (func.args.len != 0) {
+                            const first_arg = result.context_mono.monotype_store.getIdxSpanItem(func.args, 0);
+                            if (result.context_mono.monotype_store.getMonotype(first_arg) == .unit) {
+                                std.debug.print(
+                                    "DEBUG resolveDemandedDirectCallFnMonotype expr_exact: ctx={s} module={d} callee={d} fn={d}@{d}\n",
+                                    .{
+                                        @tagName(thread.requireSourceContext()),
+                                        module_idx,
+                                        @intFromEnum(call_expr.func),
+                                        @intFromEnum(fn_monotype.idx),
+                                        fn_monotype.module_idx,
+                                    },
+                                );
+                            }
+                        }
+                    },
+                    else => {},
+                }
+            }
             return fn_monotype;
         }
-    }
-    const exact_from_call_shape = try resolveDemandedFnMonotypeFromCallShape(
-        driver,
-        result,
-        thread,
-        module_idx,
-        &module_env.types,
-        ModuleEnv.varFrom(call_expr.func),
-        module_idx,
-        call_expr_idx,
-        arg_exprs,
-    );
-    if (exact_from_call_shape) |resolved| {
-        return resolved;
     }
     return null;
 }
@@ -9846,24 +10202,31 @@ fn realizeDispatchExprSemantics(
         }
     }
 
+    const method_name = switch (expr) {
+        .e_binop => |binop_expr| dispatchMethodIdentForExprBinop(module_env, binop_expr.op) orelse return,
+        .e_unary_minus => module_env.idents.negate,
+        .e_dot_access => |dot_expr| if (dot_expr.args != null) dot_expr.field_name else return,
+        .e_type_var_dispatch => |dispatch_expr| dispatch_expr.method_name,
+        else => return,
+    };
+
     const resolved_target = if (associated_target) |target| target else switch (expr) {
         .e_binop => |binop_expr| blk: {
-            const method_name = dispatchMethodIdentForExprBinop(module_env, binop_expr.op) orelse return;
             break :blk try resolveBinopDispatchTarget(driver, result, thread, module_idx, expr_idx, binop_expr, method_name);
         },
         .e_unary_minus => blk: {
-            break :blk try resolveDispatchTargetForExpr(driver, result, thread, module_idx, expr_idx, module_env.idents.negate);
+            break :blk try resolveDispatchTargetForExpr(driver, result, thread, module_idx, expr_idx, method_name);
         },
         .e_dot_access => |dot_expr| blk: {
             if (dot_expr.args == null) return;
             if (dotCallUsesRuntimeReceiverExpr(module_env, dot_expr.receiver)) {
                 _ = try cm.resolveExprMonotypeResolved(driver, result, thread, module_idx, dot_expr.receiver);
-                break :blk try resolveDispatchTargetForExpr(driver, result, thread, module_idx, expr_idx, dot_expr.field_name);
+                break :blk try resolveDispatchTargetForExpr(driver, result, thread, module_idx, expr_idx, method_name);
             }
-            break :blk try resolveDispatchTargetForExpr(driver, result, thread, module_idx, expr_idx, dot_expr.field_name);
+            break :blk try resolveDispatchTargetForExpr(driver, result, thread, module_idx, expr_idx, method_name);
         },
-        .e_type_var_dispatch => |dispatch_expr| blk: {
-            break :blk try resolveDispatchTargetForExpr(driver, result, thread, module_idx, expr_idx, dispatch_expr.method_name);
+        .e_type_var_dispatch => |_| blk: {
+            break :blk try resolveDispatchTargetForExpr(driver, result, thread, module_idx, expr_idx, method_name);
         },
         else => return,
     };
@@ -9889,48 +10252,46 @@ fn realizeDispatchExprSemantics(
             break :blk exact_callable_inst;
         }
 
-        var actual_args = std.ArrayList(CIR.Expr.Idx).empty;
-        defer actual_args.deinit(driver.allocator);
-        try appendDispatchActualArgsFromExpr(driver, module_idx, expr, &actual_args);
-
-        if (try resolveDemandedTemplateFnMonotypeFromCallShape(
+        const site = (try ensureRecordedExactDispatchSiteFromDemandedFnMonotype(
             driver,
             result,
             thread,
             module_idx,
             expr_idx,
-            actual_args.items,
-            template_id,
-        )) |fn_monotype| {
-            var callable_param_specs = std.ArrayListUnmanaged(CallableParamSpecEntry).empty;
-            defer callable_param_specs.deinit(driver.allocator);
-            const callable_param_specs_complete = try collectDirectCallCallableParamSpecs(
-                driver,
-                visit_memo,
-                result,
-                thread,
-                thread.requireSourceContext(),
-                module_idx,
-                fn_monotype.idx,
-                fn_monotype.module_idx,
-                actual_args.items,
-                &callable_param_specs,
-            );
-            if (!callable_param_specs_complete) return;
-            break :blk try requireCallableInstWithCallableParamSpecs(
-                driver,
-                visit_memo,
-                result,
-                thread,
-                thread.requireSourceContext(),
-                template_id,
-                fn_monotype.idx,
-                fn_monotype.module_idx,
-                callable_param_specs.items,
-            );
-        }
+            expr,
+            method_name,
+        )) orelse return;
 
-        return;
+        var actual_args = std.ArrayList(CIR.Expr.Idx).empty;
+        defer actual_args.deinit(driver.allocator);
+        try appendDispatchActualArgsFromExpr(driver, module_idx, expr, &actual_args);
+
+        var callable_param_specs = std.ArrayListUnmanaged(CallableParamSpecEntry).empty;
+        defer callable_param_specs.deinit(driver.allocator);
+        const callable_param_specs_complete = try collectDirectCallCallableParamSpecs(
+            driver,
+            visit_memo,
+            result,
+            thread,
+            thread.requireSourceContext(),
+            module_idx,
+            site.fn_monotype.idx,
+            site.fn_monotype.module_idx,
+            actual_args.items,
+            &callable_param_specs,
+        );
+        if (!callable_param_specs_complete) return;
+        break :blk try requireCallableInstWithCallableParamSpecs(
+            driver,
+            visit_memo,
+            result,
+            thread,
+            thread.requireSourceContext(),
+            template_id,
+            site.fn_monotype.idx,
+            site.fn_monotype.module_idx,
+            callable_param_specs.items,
+        );
     };
     try commitDirectDispatchExprSemantics(driver, visit_memo, result, thread, module_idx, expr_idx, expr, callable_inst_id);
 }
@@ -10319,11 +10680,32 @@ pub fn exactAssociatedMethodDispatchSite(
     method_info: anytype,
     receiver_monotype: Monotype.Idx,
 ) std.mem.Allocator.Error!?DispatchSolved.ExactDispatchSite {
-    _ = expr;
-    _ = method_info;
-    const site = DispatchSolved.exactDispatchSiteForExpr(driver, result, thread, module_idx, expr_idx, method_name) orelse return null;
+    if (DispatchSolved.exactDispatchSiteForExpr(driver, result, thread, module_idx, expr_idx, method_name)) |site| {
+        return site;
+    }
     if (receiver_monotype.isNone()) return null;
-
+    const template = result.getCallableTemplate(method_info.template_id);
+    const fn_monotype = (try resolveTemplateFnMonotypeFromExactActuals(
+        driver,
+        result,
+        thread,
+        module_idx,
+        expr_idx,
+        expr,
+        template,
+    )) orelse return null;
+    const site: DispatchSolved.ExactDispatchSite = .{
+        .method_name = method_name,
+        .fn_var = method_info.type_var,
+        .fn_monotype = fn_monotype,
+    };
+    try result.dispatch_solved.recordExactDispatchSite(
+        driver.allocator,
+        thread.requireSourceContext(),
+        module_idx,
+        expr_idx,
+        site,
+    );
     return site;
 }
 
@@ -10386,13 +10768,30 @@ pub fn resolveDispatchTargetForExpr(
                     null
             else
                 null;
+            const receiver_binding_source = if (receiver_lookup_pattern) |pattern_idx|
+                thread.lookupValueBinding(module_idx, pattern_idx)
+            else
+                null;
             const source_context_callable_inst = sourceContextCallableInstId(thread.requireSourceContext());
             const current_callable_fn = if (source_context_callable_inst) |callable_inst_id|
                 result.getCallableInst(callable_inst_id)
             else
                 null;
+            const current_callable_arg_patterns = if (current_callable_fn) |callable_inst|
+                driver.all_module_envs[result.getCallableTemplate(callable_inst.template).module_idx].store.slicePatterns(
+                    result.getCallableTemplate(callable_inst.template).arg_patterns,
+                )
+            else
+                &.{};
+            const current_callable_arg_monos = if (current_callable_fn) |callable_inst|
+                switch (result.context_mono.monotype_store.getMonotype(callable_inst.fn_monotype)) {
+                    .func => |func| result.context_mono.monotype_store.getIdxSpan(func.args),
+                    else => &.{},
+                }
+            else
+                &.{};
             std.debug.panic(
-                "Lambdasolved invariant violated: no exact cached dispatch site for expr={d} method='{s}' in ctx={s}; expr_tag={s} receiver={?d}@{?d} receiver_shape={?any} receiver_pattern={?d} receiver_pattern_value={?any} receiver_pattern_mono={?any} receiver_pattern_source={?any} current_callable_inst={?d} current_callable_fn={?d}@{?d} current_callable_fn_shape={?any} current_callable_template_expr={?d}",
+                "Lambdasolved invariant violated: no exact cached dispatch site for expr={d} method='{s}' in ctx={s}; expr_tag={s} receiver={?d}@{?d} receiver_shape={?any} receiver_pattern={?d} receiver_pattern_value={?any} receiver_pattern_mono={?any} receiver_pattern_source={?any} receiver_binding_source={?any} current_callable_inst={?d} current_callable_fn={?d}@{?d} current_callable_fn_shape={?any} current_callable_template_expr={?d} current_callable_arg_patterns={any} current_callable_arg_monos={any}",
                 .{
                     @intFromEnum(expr_idx),
                     module_env.getIdent(method_name),
@@ -10411,11 +10810,14 @@ pub fn resolveDispatchTargetForExpr(
                     else
                         null,
                     receiver_pattern_source,
+                    receiver_binding_source,
                     if (source_context_callable_inst) |callable_inst_id| @intFromEnum(callable_inst_id) else null,
                     if (current_callable_fn) |callable_inst| @intFromEnum(callable_inst.fn_monotype) else null,
                     if (current_callable_fn) |callable_inst| callable_inst.fn_monotype_module_idx else null,
                     if (current_callable_fn) |callable_inst| result.context_mono.monotype_store.getMonotype(callable_inst.fn_monotype) else null,
                     if (current_callable_fn) |callable_inst| @intFromEnum(result.getCallableTemplate(callable_inst.template).cir_expr) else null,
+                    current_callable_arg_patterns,
+                    current_callable_arg_monos,
                 },
             );
         }

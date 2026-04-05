@@ -1868,12 +1868,50 @@ pub fn resolveExprExactMonotypeResolved(
     const module_env = driver.all_module_envs[module_idx];
     const expr = module_env.store.getExpr(expr_idx);
     const expr_var = ModuleEnv.varFrom(expr_idx);
-    if (lookupExprMonotypeForSourceContext(result, source_context, module_idx, expr_idx)) |resolved| {
-        return resolved;
-    }
     if (@hasDecl(Thread, "lookupValueBinding")) {
         switch (expr) {
             .e_lookup_local => |lookup| {
+                if (thread.lookupValueBinding(module_idx, lookup.pattern_idx)) |source| {
+                    switch (source) {
+                        .specialized_param, .lexical_binding => {
+                            if (try resolveExprMonotypeFromValueBinding(driver, result, source, true)) |resolved| {
+                                try recordExprMonotypeResolved(
+                                    driver,
+                                    result,
+                                    source_context,
+                                    module_idx,
+                                    expr_idx,
+                                    resolved.idx,
+                                    resolved.module_idx,
+                                );
+                                return resolved;
+                            }
+                        },
+                        .bound_expr => {},
+                    }
+                }
+                if (lookupExprMonotypeForSourceContext(result, source_context, module_idx, expr_idx)) |resolved| {
+                    return resolved;
+                }
+                const expr_exact = try resolveTypeVarExactMonotypeResolved(
+                    driver,
+                    result,
+                    thread,
+                    module_idx,
+                    expr_var,
+                );
+                if (!expr_exact.isNone()) {
+                    try recordExprMonotypeResolved(
+                        driver,
+                        result,
+                        source_context,
+                        module_idx,
+                        expr_idx,
+                        expr_exact.idx,
+                        expr_exact.module_idx,
+                    );
+                    return expr_exact;
+                }
                 const binding_exact = try resolveTypeVarExactMonotypeResolved(
                     driver,
                     result,
@@ -1893,27 +1931,12 @@ pub fn resolveExprExactMonotypeResolved(
                     );
                     return binding_exact;
                 }
-                if (thread.lookupValueBinding(module_idx, lookup.pattern_idx)) |source| {
-                    switch (source) {
-                        .bound_expr, .specialized_param, .lexical_binding => {
-                            if (try resolveExprMonotypeFromValueBinding(driver, result, source, true)) |resolved| {
-                                try recordExprMonotypeResolved(
-                                    driver,
-                                    result,
-                                    source_context,
-                                    module_idx,
-                                    expr_idx,
-                                    resolved.idx,
-                                    resolved.module_idx,
-                                );
-                                return resolved;
-                            }
-                        },
-                    }
-                }
             },
             else => {},
         }
+    }
+    if (lookupExprMonotypeForSourceContext(result, source_context, module_idx, expr_idx)) |resolved| {
+        return resolved;
     }
     const typevar_resolved = try resolveTypeVarExactMonotypeResolved(
         driver,
@@ -1954,6 +1977,22 @@ pub fn resolveExprMonotypeResolved(
     if (@hasDecl(Thread, "lookupValueBinding")) {
         switch (expr) {
             .e_lookup_local => |lookup| {
+                if (thread.lookupValueBinding(module_idx, lookup.pattern_idx)) |source| {
+                    switch (source) {
+                        .specialized_param, .lexical_binding => return try resolveExprMonotypeFromValueBinding(driver, result, source, false),
+                        .bound_expr => {},
+                    }
+                }
+                const expr_mono = try resolveTypeVarMonotypeResolved(
+                    driver,
+                    result,
+                    thread,
+                    module_idx,
+                    ModuleEnv.varFrom(expr_idx),
+                );
+                if (!expr_mono.isNone()) {
+                    return expr_mono;
+                }
                 const binding_mono = try resolveTypeVarMonotypeResolved(
                     driver,
                     result,
@@ -1966,7 +2005,8 @@ pub fn resolveExprMonotypeResolved(
                 }
                 if (thread.lookupValueBinding(module_idx, lookup.pattern_idx)) |source| {
                     switch (source) {
-                        .bound_expr, .specialized_param, .lexical_binding => return try resolveExprMonotypeFromValueBinding(driver, result, source, false),
+                        .bound_expr => return try resolveExprMonotypeFromValueBinding(driver, result, source, false),
+                        .specialized_param, .lexical_binding => {},
                     }
                 }
             },

@@ -276,6 +276,98 @@ pub fn getRecordedExactDispatchSiteForExpr(
     return null;
 }
 
+fn resolveExactFnMonotypeFromFnVarPieces(
+    driver: anytype,
+    result: anytype,
+    thread: anytype,
+    module_idx: u32,
+    fn_var: types.Var,
+) Allocator.Error!?ContextMono.ResolvedMonotype {
+    const direct = try ContextMono.resolveTypeVarExactMonotypeResolved(
+        driver,
+        result,
+        thread,
+        module_idx,
+        fn_var,
+    );
+    if (!direct.isNone()) {
+        return if (ContextMono.resolvedIfFunctionMonotype(result, direct)) |fn_monotype|
+            fn_monotype
+        else
+            null;
+    }
+
+    const module_env = driver.all_module_envs[module_idx];
+    const resolved_func = ContextMono.resolveFuncTypeInStore(&module_env.types, fn_var) orelse return null;
+    var arg_monos = std.ArrayListUnmanaged(Monotype.Idx).empty;
+    defer arg_monos.deinit(driver.allocator);
+
+    for (module_env.types.sliceVars(resolved_func.func.args)) |arg_var| {
+        const arg_mono = try ContextMono.resolveTypeVarExactMonotypeResolved(
+            driver,
+            result,
+            thread,
+            module_idx,
+            arg_var,
+        );
+        if (arg_mono.isNone()) {
+            if (std.debug.runtime_safety) {
+                std.debug.print(
+                    "DEBUG resolveExactFnMonotypeFromFnVarPieces missing arg exact: module={d} fn_var={d} arg_var={d} ctx={s}\n",
+                    .{ module_idx, @intFromEnum(fn_var), @intFromEnum(arg_var), @tagName(thread.requireSourceContext()) },
+                );
+            }
+            return null;
+        }
+        const canonical_arg = if (arg_mono.module_idx == module_idx)
+            arg_mono.idx
+        else
+            try ContextMono.remapMonotypeBetweenModules(
+                driver,
+                result,
+                arg_mono.idx,
+                arg_mono.module_idx,
+                module_idx,
+            );
+        try arg_monos.append(driver.allocator, canonical_arg);
+    }
+
+    const ret_mono = try ContextMono.resolveTypeVarExactMonotypeResolved(
+        driver,
+        result,
+        thread,
+        module_idx,
+        resolved_func.func.ret,
+    );
+    if (ret_mono.isNone()) {
+        if (std.debug.runtime_safety) {
+            std.debug.print(
+                "DEBUG resolveExactFnMonotypeFromFnVarPieces missing ret exact: module={d} fn_var={d} ret_var={d} ctx={s}\n",
+                .{ module_idx, @intFromEnum(fn_var), @intFromEnum(resolved_func.func.ret), @tagName(thread.requireSourceContext()) },
+            );
+        }
+        return null;
+    }
+    const canonical_ret = if (ret_mono.module_idx == module_idx)
+        ret_mono.idx
+    else
+        try ContextMono.remapMonotypeBetweenModules(
+            driver,
+            result,
+            ret_mono.idx,
+            ret_mono.module_idx,
+            module_idx,
+        );
+
+    const args = try result.context_mono.monotype_store.addIdxSpan(driver.allocator, arg_monos.items);
+    const fn_monotype = try result.context_mono.monotype_store.addMonotype(driver.allocator, .{ .func = .{
+        .args = args,
+        .ret = canonical_ret,
+        .effectful = resolved_func.effectful,
+    } });
+    return ContextMono.resolvedMonotype(fn_monotype, module_idx);
+}
+
 pub fn extractExactDispatchSiteForExpr(
     driver: anytype,
     result: anytype,
@@ -285,18 +377,78 @@ pub fn extractExactDispatchSiteForExpr(
     method_name: Ident.Idx,
 ) Allocator.Error!?ExactDispatchSite {
     const module_env = driver.all_module_envs[module_idx];
-    const requirement = module_env.types.findStaticDispatchSiteRequirement(ModuleEnv.varFrom(expr_idx), method_name) orelse return null;
-    const fn_monotype = try ContextMono.resolveTypeVarExactMonotypeResolved(
+    if (module_env.types.findStaticDispatchSiteRequirement(ModuleEnv.varFrom(expr_idx), method_name)) |requirement| {
+        const fn_monotype = (try resolveExactFnMonotypeFromFnVarPieces(
+            driver,
+            result,
+            thread,
+            module_idx,
+            requirement.fn_var,
+        )) orelse return null;
+        return .{
+            .method_name = requirement.method_name,
+            .fn_var = requirement.fn_var,
+            .fn_monotype = fn_monotype,
+        };
+    }
+
+    const receiver_type_var = dispatchConstraintReceiverTypeVar(
+        driver,
+        module_idx,
+        expr_idx,
+        method_name,
+    ) orelse {
+        if (std.debug.runtime_safety) {
+            std.debug.print(
+                "DEBUG extractExactDispatchSiteForExpr no receiver typevar: module={d} expr={d} method={s} ctx={s}\n",
+                .{ module_idx, @intFromEnum(expr_idx), module_env.getIdent(method_name), @tagName(thread.requireSourceContext()) },
+            );
+        }
+        return null;
+    };
+    const receiver_constraints = dispatchConstraintsForTypeVar(
+        driver,
+        module_idx,
+        receiver_type_var,
+    );
+
+    var matched_constraint: ?types.StaticDispatchConstraint = null;
+    for (receiver_constraints) |constraint| {
+        if (!constraint.fn_name.eql(method_name)) continue;
+        if (matched_constraint != null) {
+            if (std.debug.runtime_safety) {
+                std.debug.panic(
+                    "DispatchSolved invariant violated: multiple receiver dispatch constraints matched expr={d} method='{s}' in module {d}",
+                    .{
+                        @intFromEnum(expr_idx),
+                        module_env.getIdent(method_name),
+                        module_idx,
+                    },
+                );
+            }
+            unreachable;
+        }
+        matched_constraint = constraint;
+    }
+    const constraint = matched_constraint orelse {
+        if (std.debug.runtime_safety) {
+            std.debug.print(
+                "DEBUG extractExactDispatchSiteForExpr no matching receiver constraint: module={d} expr={d} method={s} receiver_var={d} ctx={s} constraint_count={d}\n",
+                .{ module_idx, @intFromEnum(expr_idx), module_env.getIdent(method_name), @intFromEnum(receiver_type_var), @tagName(thread.requireSourceContext()), receiver_constraints.len },
+            );
+        }
+        return null;
+    };
+    const fn_monotype = (try resolveExactFnMonotypeFromFnVarPieces(
         driver,
         result,
         thread,
         module_idx,
-        requirement.fn_var,
-    );
-    if (fn_monotype.isNone()) return null;
+        constraint.fn_var,
+    )) orelse return null;
     return .{
-        .method_name = requirement.method_name,
-        .fn_var = requirement.fn_var,
+        .method_name = method_name,
+        .fn_var = constraint.fn_var,
         .fn_monotype = fn_monotype,
     };
 }
