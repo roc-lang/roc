@@ -691,6 +691,169 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "123.0" },
     },
+    .{
+        .name = "inspect: closure over bool used in conditional",
+        .source =
+        \\{
+        \\    flag = True
+        \\    choose = |a, b| if (flag) a else b
+        \\    choose(42, 0)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "42.0" },
+    },
+    .{
+        .name = "inspect: deeply nested blocks add captures",
+        .source =
+        \\{
+        \\    a = 1
+        \\    r1 = {
+        \\        b = 2
+        \\        r2 = {
+        \\            c = 3
+        \\            f = |x| x + a + b + c
+        \\            f(10)
+        \\        }
+        \\        r2
+        \\    }
+        \\    r1
+        \\}
+        ,
+        .expected = .{ .inspect_str = "16.0" },
+    },
+    .{
+        .name = "inspect: same capture used by independent closures",
+        .source =
+        \\{
+        \\    shared = 10
+        \\    f = |x| x + shared
+        \\    g = |x| x * shared
+        \\    f(5) + g(3)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "45.0" },
+    },
+    .{
+        .name = "inspect: closure returning captured string composition",
+        .source =
+        \\{
+        \\    make_greeter = |greeting|
+        \\        |name|
+        \\            Str.concat(Str.concat(greeting, ", "), name)
+        \\    hello = make_greeter("Hello")
+        \\    hi = make_greeter("Hi")
+        \\    r1 = hello("Alice")
+        \\    r2 = hi("Bob")
+        \\    Str.concat(Str.concat(r1, " and "), r2)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"Hello, Alice and Hi, Bob\"" },
+    },
+    .{
+        .name = "inspect: same closure applied to multiple arguments",
+        .source =
+        \\{
+        \\    base = 100
+        \\    f = |x| x + base
+        \\    a = f(1)
+        \\    b = f(2)
+        \\    c = f(3)
+        \\    a + b + c
+        \\}
+        ,
+        .expected = .{ .inspect_str = "306.0" },
+    },
+    .{
+        .name = "inspect: immediately invoked closure with capture",
+        .source =
+        \\{
+        \\    y = 42
+        \\    (|x| x + y)(8)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "50.0" },
+    },
+    .{
+        .name = "inspect: closure ignores argument and uses capture",
+        .source =
+        \\{
+        \\    val = 99
+        \\    f = |_| val
+        \\    f(0)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "99.0" },
+    },
+    .{
+        .name = "inspect: closure ignores capture and uses argument",
+        .source =
+        \\{
+        \\    _unused = 999
+        \\    f = |x| x + 1
+        \\    f(41)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "42.0" },
+    },
+    .{
+        .name = "inspect: monomorphic str identity",
+        .source =
+        \\{
+        \\    identity : Str -> Str
+        \\    identity = |val| val
+        \\    identity("Hello")
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"Hello\"" },
+    },
+    .{
+        .name = "inspect: monomorphic dec identity",
+        .source =
+        \\{
+        \\    identity : Dec -> Dec
+        \\    identity = |val| val
+        \\    identity(5)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "5.0" },
+    },
+    .{
+        .name = "inspect: monomorphic str identity if join",
+        .source =
+        \\{
+        \\    str_id : Str -> Str
+        \\    str_id = |val| val
+        \\    num = 5
+        \\    str = str_id("Hello")
+        \\    if (num > 0) str else ""
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"Hello\"" },
+    },
+    .{
+        .name = "inspect: multi-use closure with short captured string",
+        .source =
+        \\{
+        \\    s = "short"
+        \\    f = |_x| s
+        \\    _a = f(0)
+        \\    f(0)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"short\"" },
+    },
+    .{
+        .name = "inspect: multi-use closure with heap captured string",
+        .source =
+        \\{
+        \\    s = "This string is definitely longer than twenty three bytes"
+        \\    f = |_x| s
+        \\    _a = f(0)
+        \\    f(0)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"This string is definitely longer than twenty three bytes\"" },
+    },
 
     // Loops
     .{
