@@ -34,6 +34,33 @@ const LayoutIdx = @import("layout").Idx;
 
 pub const interpreter_allocator = std.heap.page_allocator;
 
+pub const SourceKind = enum {
+    expr,
+    module,
+};
+
+pub const ModuleSource = struct {
+    name: []const u8,
+    source: []const u8,
+};
+
+const AvailableImport = struct {
+    name: []const u8,
+    env: *const ModuleEnv,
+};
+
+pub const CheckedModule = struct {
+    module_env: *ModuleEnv,
+    parse_ast: *parse.AST,
+    can: *Can,
+    checker: *Check,
+    imported_envs: []*const ModuleEnv,
+    owned_source: ?[]u8 = null,
+    parse_ns: u64 = 0,
+    canonicalize_ns: u64 = 0,
+    typecheck_ns: u64 = 0,
+};
+
 pub const ParsedResources = struct {
     module_env: *ModuleEnv,
     parse_ast: *parse.AST,
@@ -43,6 +70,7 @@ pub const ParsedResources = struct {
     builtin_module: builtin_loading.LoadedModule,
     builtin_indices: CIR.BuiltinIndices,
     imported_envs: []*const ModuleEnv,
+    extra_modules: []CheckedModule = &.{},
     owned_source: ?[]u8 = null,
     parse_ns: u64 = 0,
     canonicalize_ns: u64 = 0,
@@ -73,119 +101,41 @@ pub fn allocInspectedExprSource(allocator: std.mem.Allocator, source: []const u8
 }
 
 pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) !ParsedResources {
-    var parse_timer = try std.time.Timer.start();
-
-    const wrapped_source = try std.fmt.allocPrint(allocator, "main = {s}", .{source});
-    errdefer allocator.free(wrapped_source);
-
-    const module_env = try allocator.create(ModuleEnv);
-    errdefer allocator.destroy(module_env);
-    module_env.* = try ModuleEnv.init(allocator, wrapped_source);
-    errdefer module_env.deinit();
-    module_env.common.source = wrapped_source;
-    module_env.module_name = "Test";
-    try module_env.common.calcLineStarts(module_env.gpa);
-
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(allocator);
-    errdefer allocators.deinit();
-
-    const parse_ast = try parse.parse(&allocators, &module_env.common);
-    errdefer {
-        parse_ast.deinit();
-        allocators.deinit();
-    }
-    parse_ast.store.emptyScratch();
-    if (parse_ast.tokenize_diagnostics.items.len > 0 or parse_ast.parse_diagnostics.items.len > 0) {
-        return error.ParseError;
-    }
-    const parse_elapsed = parse_timer.read();
-
-    var can_timer = try std.time.Timer.start();
-    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(allocator, compiled_builtins.builtin_indices_bin);
-    var builtin_module = try builtin_loading.loadCompiledModule(
-        allocator,
-        compiled_builtins.builtin_bin,
-        "Builtin",
-        compiled_builtins.builtin_source,
-    );
-    errdefer builtin_module.deinit();
-
-    try module_env.initCIRFields("test");
-    const builtin_ctx: Check.BuiltinContext = .{
-        .module_name = try module_env.insertIdent(base.Ident.for_text("test")),
-        .bool_stmt = builtin_indices.bool_type,
-        .try_stmt = builtin_indices.try_type,
-        .str_stmt = builtin_indices.str_type,
-        .builtin_module = builtin_module.env,
-        .builtin_indices = builtin_indices,
-    };
-
-    const czer = try allocator.create(Can);
-    errdefer allocator.destroy(czer);
-    czer.* = try Can.initModule(&allocators, module_env, parse_ast, .{
-        .builtin_types = .{
-            .builtin_module_env = builtin_module.env,
-            .builtin_indices = builtin_indices,
-        },
-    });
-    errdefer czer.deinit();
-
-    try czer.canonicalizeFile();
-    const can_elapsed = can_timer.read();
-
-    var check_timer = try std.time.Timer.start();
-    const imported_envs = try allocator.alloc(*const ModuleEnv, 1);
-    errdefer allocator.free(imported_envs);
-    imported_envs[0] = builtin_module.env;
-    module_env.imports.resolveImports(module_env, imported_envs);
-
-    const checker = try allocator.create(Check);
-    errdefer allocator.destroy(checker);
-    checker.* = try Check.init(
-        allocator,
-        &module_env.types,
-        module_env,
-        imported_envs,
-        null,
-        &module_env.store.regions,
-        builtin_ctx,
-    );
-    errdefer checker.deinit();
-    try checker.checkFile();
-    const check_elapsed = check_timer.read();
-
-    const defs = module_env.store.sliceDefs(module_env.all_defs);
-    if (defs.len == 0) return error.NoRootDefinition;
-    const expr_idx = module_env.store.getDef(defs[defs.len - 1]).expr;
-
-    return .{
-        .module_env = module_env,
-        .parse_ast = parse_ast,
-        .can = czer,
-        .checker = checker,
-        .expr_idx = expr_idx,
-        .builtin_module = builtin_module,
-        .builtin_indices = builtin_indices,
-        .imported_envs = imported_envs,
-        .owned_source = wrapped_source,
-        .parse_ns = parse_elapsed,
-        .canonicalize_ns = can_elapsed,
-        .typecheck_ns = check_elapsed,
-    };
+    return parseAndCanonicalizeProgram(allocator, .expr, source, &.{});
 }
 
 pub fn parseAndCanonicalizeInspectedExpr(allocator: std.mem.Allocator, source: []const u8) !ParsedResources {
-    const inspected_source = try allocInspectedExprSource(allocator, source);
-    defer allocator.free(inspected_source);
-    return parseAndCanonicalizeExpr(allocator, inspected_source);
+    return parseAndCanonicalizeProgramWrapped(allocator, .expr, source, &.{}, true);
 }
 
 pub fn compileInspectedExpr(allocator: std.mem.Allocator, source: []const u8) !CompiledInspectedExpr {
-    const resources = try parseAndCanonicalizeInspectedExpr(allocator, source);
+    return compileInspectedProgram(allocator, .expr, source, &.{});
+}
+
+pub fn parseAndCanonicalizeProgram(
+    allocator: std.mem.Allocator,
+    source_kind: SourceKind,
+    source: []const u8,
+    imports: []const ModuleSource,
+) !ParsedResources {
+    return parseAndCanonicalizeProgramWrapped(allocator, source_kind, source, imports, false);
+}
+
+pub fn compileInspectedProgram(
+    allocator: std.mem.Allocator,
+    source_kind: SourceKind,
+    source: []const u8,
+    imports: []const ModuleSource,
+) !CompiledInspectedExpr {
+    const resources = try parseAndCanonicalizeProgramWrapped(allocator, source_kind, source, imports, true);
     errdefer cleanupParseAndCanonical(allocator, resources);
 
-    const lowered = try lowerParsedExprToLir(allocator, resources.module_env, resources.builtin_module.env);
+    const lowered = try lowerParsedExprToLir(
+        allocator,
+        resources.module_env,
+        resources.builtin_module.env,
+        resources.extra_modules,
+    );
     errdefer {
         var lowered_mut = lowered;
         lowered_mut.deinit();
@@ -198,6 +148,10 @@ pub fn compileInspectedExpr(allocator: std.mem.Allocator, source: []const u8) !C
 }
 
 pub fn cleanupParseAndCanonical(allocator: std.mem.Allocator, resources: ParsedResources) void {
+    for (resources.extra_modules) |extra| {
+        cleanupCheckedModule(allocator, extra);
+    }
+    allocator.free(resources.extra_modules);
     resources.checker.deinit();
     resources.can.deinit();
     resources.parse_ast.deinit();
@@ -215,8 +169,9 @@ pub fn lowerParsedExprToLir(
     allocator: std.mem.Allocator,
     module_env: *ModuleEnv,
     builtin_module_env: *const ModuleEnv,
+    extra_modules: []const CheckedModule,
 ) !LoweredProgram {
-    return lowerToLir(allocator, module_env, builtin_module_env);
+    return lowerToLir(allocator, module_env, builtin_module_env, extra_modules);
 }
 
 pub fn lirInterpreterInspectedStr(
@@ -310,14 +265,18 @@ fn lowerToLir(
     allocator: std.mem.Allocator,
     module_env: *ModuleEnv,
     builtin_module_env: *const ModuleEnv,
+    extra_modules: []const CheckedModule,
 ) !LoweredProgram {
-    const all_module_envs = [_]*const ModuleEnv{
-        module_env,
-        builtin_module_env,
-    };
-    module_env.imports.resolveImports(module_env, &all_module_envs);
+    var all_module_envs = try allocator.alloc(*const ModuleEnv, extra_modules.len + 2);
+    defer allocator.free(all_module_envs);
+    all_module_envs[0] = module_env;
+    all_module_envs[1] = builtin_module_env;
+    for (extra_modules, 0..) |extra, i| {
+        all_module_envs[i + 2] = extra.module_env;
+    }
+    module_env.imports.resolveImports(module_env, all_module_envs);
 
-    var mono_lowerer = monotype.Lower.Lowerer.init(allocator, &all_module_envs, 1);
+    var mono_lowerer = monotype.Lower.Lowerer.init(allocator, all_module_envs, 1);
     defer mono_lowerer.deinit();
     const mono = try mono_lowerer.run(0);
     debugValidateMonotypeTypes(&mono.types);
@@ -340,6 +299,243 @@ fn lowerToLir(
         .lir_result = lowered_lir,
         .main_proc = lowered_lir.root_procs.items[lowered_lir.root_procs.items.len - 1],
     };
+}
+
+fn parseAndCanonicalizeProgramWrapped(
+    allocator: std.mem.Allocator,
+    source_kind: SourceKind,
+    source: []const u8,
+    imports: []const ModuleSource,
+    inspect_wrap: bool,
+) !ParsedResources {
+    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(allocator, compiled_builtins.builtin_indices_bin);
+    var builtin_module = try builtin_loading.loadCompiledModule(
+        allocator,
+        compiled_builtins.builtin_bin,
+        "Builtin",
+        compiled_builtins.builtin_source,
+    );
+    errdefer builtin_module.deinit();
+
+    var extra_modules = std.ArrayList(CheckedModule).init(allocator);
+    errdefer {
+        for (extra_modules.items) |extra| cleanupCheckedModule(allocator, extra);
+        extra_modules.deinit();
+    }
+
+    for (imports) |import_module| {
+        const available_imports = try allocator.alloc(AvailableImport, extra_modules.items.len);
+        defer allocator.free(available_imports);
+        for (extra_modules.items, 0..) |extra, i| {
+            available_imports[i] = .{
+                .name = extra.module_env.module_name,
+                .env = extra.module_env,
+            };
+        }
+
+        const checked = try parseCheckModule(
+            allocator,
+            import_module.name,
+            .module,
+            import_module.source,
+            false,
+            builtin_module.env,
+            builtin_indices,
+            available_imports,
+        );
+        try extra_modules.append(checked);
+    }
+
+    const main_imports = try allocator.alloc(AvailableImport, extra_modules.items.len);
+    defer allocator.free(main_imports);
+    for (extra_modules.items, 0..) |extra, i| {
+        main_imports[i] = .{
+            .name = extra.module_env.module_name,
+            .env = extra.module_env,
+        };
+    }
+
+    const main_checked = try parseCheckModule(
+        allocator,
+        "Test",
+        source_kind,
+        source,
+        inspect_wrap,
+        builtin_module.env,
+        builtin_indices,
+        main_imports,
+    );
+    errdefer cleanupCheckedModule(allocator, main_checked);
+
+    const defs = main_checked.module_env.store.sliceDefs(main_checked.module_env.all_defs);
+    if (defs.len == 0) return error.NoRootDefinition;
+    const expr_idx = main_checked.module_env.store.getDef(defs[defs.len - 1]).expr;
+
+    return .{
+        .module_env = main_checked.module_env,
+        .parse_ast = main_checked.parse_ast,
+        .can = main_checked.can,
+        .checker = main_checked.checker,
+        .expr_idx = expr_idx,
+        .builtin_module = builtin_module,
+        .builtin_indices = builtin_indices,
+        .imported_envs = main_checked.imported_envs,
+        .extra_modules = try extra_modules.toOwnedSlice(),
+        .owned_source = main_checked.owned_source,
+        .parse_ns = main_checked.parse_ns,
+        .canonicalize_ns = main_checked.canonicalize_ns,
+        .typecheck_ns = main_checked.typecheck_ns,
+    };
+}
+
+fn parseCheckModule(
+    allocator: std.mem.Allocator,
+    module_name: []const u8,
+    source_kind: SourceKind,
+    source: []const u8,
+    inspect_wrap: bool,
+    builtin_module_env: *const ModuleEnv,
+    builtin_indices: CIR.BuiltinIndices,
+    available_imports: []const AvailableImport,
+) !CheckedModule {
+    var parse_timer = try std.time.Timer.start();
+    const owned_source = try makeModuleSource(allocator, source_kind, source, inspect_wrap);
+    errdefer allocator.free(owned_source);
+
+    const module_env = try allocator.create(ModuleEnv);
+    errdefer allocator.destroy(module_env);
+    module_env.* = try ModuleEnv.init(allocator, owned_source);
+    errdefer module_env.deinit();
+    module_env.common.source = owned_source;
+    module_env.module_name = module_name;
+    try module_env.common.calcLineStarts(module_env.gpa);
+
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(allocator);
+    errdefer allocators.deinit();
+
+    const parse_ast = try parse.parse(&allocators, &module_env.common);
+    errdefer {
+        parse_ast.deinit();
+        allocators.deinit();
+    }
+    parse_ast.store.emptyScratch();
+    if (parse_ast.tokenize_diagnostics.items.len > 0 or parse_ast.parse_diagnostics.items.len > 0) {
+        return error.ParseError;
+    }
+    const parse_elapsed = parse_timer.read();
+
+    try module_env.initCIRFields(module_name);
+    const builtin_ctx: Check.BuiltinContext = .{
+        .module_name = try module_env.insertIdent(base.Ident.for_text(module_name)),
+        .bool_stmt = builtin_indices.bool_type,
+        .try_stmt = builtin_indices.try_type,
+        .str_stmt = builtin_indices.str_type,
+        .builtin_module = builtin_module_env,
+        .builtin_indices = builtin_indices,
+    };
+
+    var imported_modules = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
+    defer imported_modules.deinit();
+    for (available_imports) |available| {
+        const import_ident = try module_env.insertIdent(base.Ident.for_text(available.name));
+        const qualified_ident = try module_env.insertIdent(base.Ident.for_text(available.name));
+        try imported_modules.put(import_ident, .{
+            .env = available.env,
+            .qualified_type_ident = qualified_ident,
+        });
+    }
+
+    var can_timer = try std.time.Timer.start();
+    const czer = try allocator.create(Can);
+    errdefer allocator.destroy(czer);
+    czer.* = try Can.initModule(&allocators, module_env, parse_ast, .{
+        .builtin_types = .{
+            .builtin_module_env = builtin_module_env,
+            .builtin_indices = builtin_indices,
+        },
+        .imported_modules = if (available_imports.len == 0) null else &imported_modules,
+    });
+    errdefer czer.deinit();
+    try czer.canonicalizeFile();
+    const can_elapsed = can_timer.read();
+
+    var check_timer = try std.time.Timer.start();
+    const imported_envs_len: usize = if (available_imports.len == 0 and source_kind == .expr) 1 else available_imports.len + 2;
+    const imported_envs = try allocator.alloc(*const ModuleEnv, imported_envs_len);
+    errdefer allocator.free(imported_envs);
+
+    if (available_imports.len == 0 and source_kind == .expr) {
+        imported_envs[0] = builtin_module_env;
+    } else {
+        imported_envs[0] = module_env;
+        imported_envs[1] = builtin_module_env;
+        for (available_imports, 0..) |available, i| {
+            imported_envs[i + 2] = available.env;
+        }
+    }
+    module_env.imports.resolveImports(module_env, imported_envs);
+
+    const checker = try allocator.create(Check);
+    errdefer allocator.destroy(checker);
+    checker.* = try Check.init(
+        allocator,
+        &module_env.types,
+        module_env,
+        imported_envs,
+        null,
+        &module_env.store.regions,
+        builtin_ctx,
+    );
+    errdefer checker.deinit();
+    try checker.checkFile();
+    const check_elapsed = check_timer.read();
+
+    return .{
+        .module_env = module_env,
+        .parse_ast = parse_ast,
+        .can = czer,
+        .checker = checker,
+        .imported_envs = imported_envs,
+        .owned_source = owned_source,
+        .parse_ns = parse_elapsed,
+        .canonicalize_ns = can_elapsed,
+        .typecheck_ns = check_elapsed,
+    };
+}
+
+fn makeModuleSource(
+    allocator: std.mem.Allocator,
+    source_kind: SourceKind,
+    source: []const u8,
+    inspect_wrap: bool,
+) ![]u8 {
+    return switch (source_kind) {
+        .expr => if (inspect_wrap)
+            std.fmt.allocPrint(allocator, "main = Str.inspect(({s}))", .{source})
+        else
+            std.fmt.allocPrint(allocator, "main = {s}", .{source}),
+        .module => if (inspect_wrap)
+            std.fmt.allocPrint(
+                allocator,
+                "{s}\n\n__codex_test_inspect_main = Str.inspect(main)\n",
+                .{source},
+            )
+        else
+            allocator.dupe(u8, source),
+    };
+}
+
+fn cleanupCheckedModule(allocator: std.mem.Allocator, module: CheckedModule) void {
+    module.checker.deinit();
+    module.can.deinit();
+    module.parse_ast.deinit();
+    module.module_env.deinit();
+    allocator.free(module.imported_envs);
+    if (module.owned_source) |owned_source| allocator.free(owned_source);
+    allocator.destroy(module.checker);
+    allocator.destroy(module.can);
+    allocator.destroy(module.module_env);
 }
 
 fn debugValidateMonotypeTypes(types_store: *const monotype.Type.Store) void {

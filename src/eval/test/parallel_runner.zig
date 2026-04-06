@@ -85,6 +85,8 @@ const eval_tests = @import("eval_tests.zig");
 pub const TestCase = struct {
     name: []const u8,
     source: []const u8,
+    source_kind: helpers.SourceKind = .expr,
+    imports: []const helpers.ModuleSource = &.{},
     expected: Expected,
     skip: Skip = .{},
 
@@ -336,7 +338,7 @@ fn runSingleTest(allocator: std.mem.Allocator, tc: TestCase) TestOutcome {
     if (tc.skip.interpreter and tc.skip.dev and tc.skip.wasm) {
         const timings = switch (tc.expected) {
             .inspect_str => blk: {
-                var compiled = helpers.compileInspectedExpr(allocator, tc.source) catch {
+                var compiled = helpers.compileInspectedProgram(allocator, tc.source_kind, tc.source, tc.imports) catch {
                     return .{ .status = .fail, .message = "INVALID_SYNTAX — skipped inspect test has parse/check/lower errors" };
                 };
                 defer compiled.deinit(allocator);
@@ -347,7 +349,7 @@ fn runSingleTest(allocator: std.mem.Allocator, tc: TestCase) TestOutcome {
                 };
             },
             .crash, .problem_and_crash => blk: {
-                var compiled = helpers.compileInspectedExpr(allocator, tc.source) catch {
+                var compiled = helpers.compileInspectedProgram(allocator, tc.source_kind, tc.source, tc.imports) catch {
                     return .{ .status = .fail, .message = "INVALID_SYNTAX — skipped crash test has parse/check/lower errors" };
                 };
                 defer compiled.deinit(allocator);
@@ -358,7 +360,7 @@ fn runSingleTest(allocator: std.mem.Allocator, tc: TestCase) TestOutcome {
                 };
             },
             .problem => blk: {
-                const resources = helpers.parseAndCanonicalizeExpr(allocator, tc.source) catch {
+                const resources = helpers.parseAndCanonicalizeProgram(allocator, tc.source_kind, tc.source, tc.imports) catch {
                     return .{ .status = .pass, .timings = .{} };
                 };
                 defer helpers.cleanupParseAndCanonical(allocator, resources);
@@ -389,20 +391,22 @@ fn hasAnySkip(skip: TestCase.Skip) bool {
 
 fn runSingleTestInner(allocator: std.mem.Allocator, tc: TestCase) !TestOutcome {
     return switch (tc.expected) {
-        .inspect_str => runInspectTest(allocator, tc.source, tc.expected, tc.skip),
-        .problem => runTestProblem(allocator, tc.source),
-        .crash => runCrashTest(allocator, tc.source, tc.skip, false),
-        .problem_and_crash => runCrashTest(allocator, tc.source, tc.skip, true),
+        .inspect_str => runInspectTest(allocator, tc.source_kind, tc.source, tc.imports, tc.expected, tc.skip),
+        .problem => runTestProblem(allocator, tc.source_kind, tc.source, tc.imports),
+        .crash => runCrashTest(allocator, tc.source_kind, tc.source, tc.imports, tc.skip, false),
+        .problem_and_crash => runCrashTest(allocator, tc.source_kind, tc.source, tc.imports, tc.skip, true),
     };
 }
 
 fn runInspectTest(
     allocator: std.mem.Allocator,
+    source_kind: helpers.SourceKind,
     src: []const u8,
+    imports: []const helpers.ModuleSource,
     expected: TestCase.Expected,
     skip: TestCase.Skip,
 ) !TestOutcome {
-    var compiled = try helpers.compileInspectedExpr(allocator, src);
+    var compiled = try helpers.compileInspectedProgram(allocator, source_kind, src, imports);
     defer compiled.deinit(allocator);
 
     const timings = EvalTimings{
@@ -494,9 +498,14 @@ fn runInspectTest(
     return .{ .status = .pass, .timings = final_timings, .backends = backends };
 }
 
-fn runTestProblem(allocator: std.mem.Allocator, src: []const u8) !TestOutcome {
+fn runTestProblem(
+    allocator: std.mem.Allocator,
+    source_kind: helpers.SourceKind,
+    src: []const u8,
+    imports: []const helpers.ModuleSource,
+) !TestOutcome {
     var timer = Timer.start() catch unreachable;
-    const resources = helpers.parseAndCanonicalizeExpr(allocator, src) catch {
+    const resources = helpers.parseAndCanonicalizeProgram(allocator, source_kind, src, imports) catch {
         // Parse or canonicalize error means a problem was found — that's a pass.
         const elapsed = timer.read();
         return .{ .status = .pass, .timings = .{ .parse_ns = elapsed } };
@@ -521,11 +530,13 @@ fn runTestProblem(allocator: std.mem.Allocator, src: []const u8) !TestOutcome {
 
 fn runCrashTest(
     allocator: std.mem.Allocator,
+    source_kind: helpers.SourceKind,
     src: []const u8,
+    imports: []const helpers.ModuleSource,
     skip: TestCase.Skip,
     require_problems: bool,
 ) !TestOutcome {
-    var compiled = try helpers.compileInspectedExpr(allocator, src);
+    var compiled = try helpers.compileInspectedProgram(allocator, source_kind, src, imports);
     defer compiled.deinit(allocator);
 
     const can_diags = try compiled.resources.module_env.getDiagnostics();
