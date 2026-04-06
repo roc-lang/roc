@@ -37,6 +37,7 @@ pub const Pat = struct {
     data: Data,
 
     pub const Data = union(enum) {
+        bool_lit: bool,
         tag: struct {
             name: base.Ident.Idx,
             args: Span(PatId),
@@ -65,6 +66,7 @@ pub const Expr = struct {
         frac_f32_lit: f32,
         frac_f64_lit: f64,
         dec_lit: i128,
+        bool_lit: bool,
         str_lit: base.StringLiteral.Idx,
         tag: struct {
             name: base.Ident.Idx,

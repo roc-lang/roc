@@ -307,6 +307,7 @@ fn lowerToLir(
     var mono_lowerer = monotype.Lower.Lowerer.init(allocator, &all_module_envs, 1);
     defer mono_lowerer.deinit();
     const mono = try mono_lowerer.run(0);
+    debugValidateMonotypeTypes(&mono.types);
     const lifted = try monotype_lifted.Lower.run(allocator, mono);
     const solved = try lambdasolved.Lower.run(allocator, lifted);
     const executable = try lambdamono.Lower.run(allocator, solved);
@@ -326,6 +327,50 @@ fn lowerToLir(
         .lir_result = lowered_lir,
         .main_proc = lowered_lir.root_procs.items[lowered_lir.root_procs.items.len - 1],
     };
+}
+
+fn debugValidateMonotypeTypes(types_store: *const monotype.Type.Store) void {
+    const type_len = types_store.types.items.len;
+    for (types_store.types.items, 0..) |ty, i| {
+        switch (ty) {
+            .primitive => {},
+            .func => |func| {
+                debugAssertValidMonoTypeRef(types_store, @enumFromInt(@as(u32, @intCast(i))), "func.arg", func.arg, type_len);
+                debugAssertValidMonoTypeRef(types_store, @enumFromInt(@as(u32, @intCast(i))), "func.ret", func.ret, type_len);
+            },
+            .list => |elem| {
+                debugAssertValidMonoTypeRef(types_store, @enumFromInt(@as(u32, @intCast(i))), "list.elem", elem, type_len);
+            },
+            .tuple => |tuple| for (types_store.sliceTypeSpan(tuple)) |elem| {
+                debugAssertValidMonoTypeRef(types_store, @enumFromInt(@as(u32, @intCast(i))), "tuple.elem", elem, type_len);
+            },
+            .record => |record| for (types_store.sliceFields(record.fields)) |field| {
+                debugAssertValidMonoTypeRef(types_store, @enumFromInt(@as(u32, @intCast(i))), "record.field", field.ty, type_len);
+            },
+            .tag_union => |tag_union| for (types_store.sliceTags(tag_union.tags)) |tag| {
+                for (types_store.sliceTypeSpan(tag.args)) |arg| {
+                    debugAssertValidMonoTypeRef(types_store, @enumFromInt(@as(u32, @intCast(i))), "tag.arg", arg, type_len);
+                }
+            },
+        }
+    }
+}
+
+fn debugAssertValidMonoTypeRef(
+    types_store: *const monotype.Type.Store,
+    owner: monotype.Type.TypeId,
+    comptime label: []const u8,
+    child: monotype.Type.TypeId,
+    type_len: usize,
+) void {
+    _ = types_store;
+    if (@intFromEnum(child) >= type_len) {
+        std.debug.print(
+            "HELPER_MONO_BAD owner={d} label={s} child={d} len={d}\n",
+            .{ @intFromEnum(owner), label, @intFromEnum(child), type_len },
+        );
+        @panic("monotype produced invalid type reference");
+    }
 }
 
 fn copyReturnedRocStr(

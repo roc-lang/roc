@@ -210,6 +210,7 @@ const Lowerer = struct {
                     }) };
                 }
             },
+            .bool_lit => |value| try self.emitLeafExpr(&block, expr.ty, "bool", .{ .lit = .{ .bool = value } }),
             .int_lit => |value| try self.emitLeafExpr(&block, expr.ty, "int", .{ .lit = .{ .int = value } }),
             .frac_f32_lit => |value| try self.emitLeafExpr(&block, expr.ty, "f32", .{ .lit = .{ .f32 = value } }),
             .frac_f64_lit => |value| try self.emitLeafExpr(&block, expr.ty, "f64", .{ .lit = .{ .f64 = value } }),
@@ -567,14 +568,20 @@ const Lowerer = struct {
         const cond = try self.lowerSubexprValue(block, env, cond_expr);
         if (cond == null) return;
 
-        const discr = try self.freshVarWithLayout(
-            try self.discriminantLayoutForUnion(self.input.store.getExpr(cond_expr).ty),
-            "when_discr",
-        );
-        try block.stmts.append(self.allocator, .{ .let_ = .{
-            .bind = discr,
-            .expr = try self.output.addExpr(.{ .get_union_id = cond.? }),
-        } });
+        const cond_ty = self.input.store.getExpr(cond_expr).ty;
+        const discr = if (self.input.types.getType(cond_ty) == .primitive and self.input.types.getType(cond_ty).primitive == .bool)
+            cond.?
+        else blk: {
+            const discr_var = try self.freshVarWithLayout(
+                try self.discriminantLayoutForUnion(cond_ty),
+                "when_discr",
+            );
+            try block.stmts.append(self.allocator, .{ .let_ = .{
+                .bind = discr_var,
+                .expr = try self.output.addExpr(.{ .get_union_id = cond.? }),
+            } });
+            break :blk discr_var;
+        };
 
         var tag_branches = std.ArrayList(ast.Branch).empty;
         defer tag_branches.deinit(self.allocator);
@@ -588,6 +595,12 @@ const Lowerer = struct {
             switch (pat.data) {
                 .var_ => {
                     default_block = try self.lowerPatternBranchBlock(env, cond.?, branch.pat, branch.body);
+                },
+                .bool_lit => |value| {
+                    try tag_branches.append(self.allocator, .{
+                        .value = if (value) 1 else 0,
+                        .block = try self.lowerPatternBranchBlock(env, cond.?, branch.pat, branch.body),
+                    });
                 },
                 .tag => |tag| {
                     try tag_branches.append(self.allocator, .{
@@ -828,6 +841,7 @@ const Lowerer = struct {
                 .symbol = symbol,
                 .var_ = source_var,
             }),
+            .bool_lit => {},
             .tag => |tag| {
                 const args = self.input.store.slicePatSpan(tag.args);
                 if (args.len == 0) return;

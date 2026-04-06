@@ -169,6 +169,7 @@ const Lowerer = struct {
             .frac_f64_lit => |value| .{ .frac_f64_lit = value },
             .dec_lit => |value| .{ .dec_lit = value },
             .str_lit => |value| .{ .str_lit = value },
+            .bool_lit => |value| .{ .bool_lit = value },
             .unit => .unit,
             .tag => |tag| .{ .tag = .{
                 .name = tag.name,
@@ -250,6 +251,7 @@ const Lowerer = struct {
         const ty = try self.instantiateType(pat.ty);
         const data: ast.Pat.Data = switch (pat.data) {
             .var_ => |symbol| .{ .var_ = symbol },
+            .bool_lit => |value| .{ .bool_lit = value },
             .tag => |tag| .{ .tag = .{
                 .name = tag.name,
                 .args = try self.instantiatePatSpan(tag.args),
@@ -336,7 +338,12 @@ const Lowerer = struct {
         const placeholder = try self.types.freshUnbd();
         try cache.put(ty, placeholder);
 
-        const content = switch (self.input.types.getType(ty)) {
+        const mono_ty = self.input.types.getType(ty);
+        if (mono_ty == .tag_union and self.input.types.sliceTags(mono_ty.tag_union.tags).len == 0) {
+            return placeholder;
+        }
+
+        const content = switch (mono_ty) {
             .func => |func| blk: {
                 break :blk type_mod.Content{ .func = .{
                     .arg = try self.instantiateTypeRec(func.arg, cache),
@@ -344,9 +351,9 @@ const Lowerer = struct {
                     .ret = try self.instantiateTypeRec(func.ret, cache),
                 } };
             },
-            .list => |elem| type_mod.Content{ .list = try self.instantiateTypeRec(elem, cache) },
-            .tuple => |tuple| blk: {
-                const elems = self.input.types.sliceTypeSpan(tuple);
+                .list => |elem| type_mod.Content{ .list = try self.instantiateTypeRec(elem, cache) },
+                .tuple => |tuple| blk: {
+                    const elems = self.input.types.sliceTypeSpan(tuple);
                 const out = try self.allocator.alloc(TypeVarId, elems.len);
                 defer self.allocator.free(out);
                 for (elems, 0..) |elem, i| {
@@ -516,7 +523,14 @@ const Lowerer = struct {
 
         const inferred = switch (expr.data) {
             .var_ => |symbol| blk: {
-                const env_ty = self.lookupEnv(venv, symbol) orelse return debugPanic("lambdasolved.inferExpr unbound variable");
+                const env_ty = self.lookupEnv(venv, symbol) orelse {
+                    const entry = self.input.symbols.get(symbol);
+                    std.debug.print(
+                        "LSET_UNBOUND symbol={d} name={any} origin={any}\n",
+                        .{ symbol.raw(), entry.name, entry.origin },
+                    );
+                    return debugPanic("lambdasolved.inferExpr unbound variable");
+                };
                 const inst_ty = try self.instantiateGeneralized(env_ty);
                 try self.fixCaptures(venv, inst_ty, symbol);
                 break :blk inst_ty;
@@ -526,17 +540,38 @@ const Lowerer = struct {
             .frac_f64_lit => target_ty,
             .dec_lit => target_ty,
             .str_lit => target_ty,
+            .bool_lit => target_ty,
             .unit => target_ty,
             .tag => |tag| blk: {
-                for (self.output.sliceExprSpan(tag.args)) |arg| {
-                    _ = try self.inferExpr(venv, arg);
+                const args = self.output.sliceExprSpan(tag.args);
+                const arg_tys = try self.allocator.alloc(TypeVarId, args.len);
+                defer self.allocator.free(arg_tys);
+                for (args, 0..) |arg, i| {
+                    arg_tys[i] = try self.inferExpr(venv, arg);
                 }
+                const wanted = try self.types.freshContent(.{ .tag_union = .{
+                    .tags = try self.types.addTags(&.{.{
+                        .name = tag.name,
+                        .args = try self.types.addTypeVarSpan(arg_tys),
+                    }}),
+                } });
+                try self.unify(target_ty, wanted);
                 break :blk target_ty;
             },
             .record => |fields| blk: {
-                for (self.output.sliceFieldExprSpan(fields)) |field| {
-                    _ = try self.inferExpr(venv, field.value);
+                const field_values = self.output.sliceFieldExprSpan(fields);
+                const field_tys = try self.allocator.alloc(type_mod.Field, field_values.len);
+                defer self.allocator.free(field_tys);
+                for (field_values, 0..) |field, i| {
+                    field_tys[i] = .{
+                        .name = field.name,
+                        .ty = try self.inferExpr(venv, field.value),
+                    };
                 }
+                const wanted = try self.types.freshContent(.{ .record = .{
+                    .fields = try self.types.addFields(field_tys),
+                } });
+                try self.unify(target_ty, wanted);
                 break :blk target_ty;
             },
             .access => |access| blk: {
@@ -598,7 +633,8 @@ const Lowerer = struct {
                 break :blk target_ty;
             },
             .if_ => |if_expr| blk: {
-                _ = try self.inferExpr(venv, if_expr.cond);
+                const cond_ty = try self.inferExpr(venv, if_expr.cond);
+                try self.unify(cond_ty, try self.freshPrimitiveType(.bool));
                 const then_ty = try self.inferExpr(venv, if_expr.then_body);
                 const else_ty = try self.inferExpr(venv, if_expr.else_body);
                 try self.unify(target_ty, then_ty);
@@ -743,8 +779,21 @@ const Lowerer = struct {
                 }
                 break :blk .{ .additions = adds, .ty = pat.ty };
             },
+            .bool_lit => .{
+                .additions = try self.allocator.alloc(EnvEntry, 0),
+                .ty = pat.ty,
+            },
             .tag => |tag| blk: {
                 const arg_pats = self.output.slicePatSpan(tag.args);
+                if (try self.isPrimitiveBoolType(pat.ty)) {
+                    if (arg_pats.len != 0) {
+                        return debugPanic("lambdasolved.bool pattern invariant violated: bool tags cannot carry arguments");
+                    }
+                    break :blk .{
+                        .additions = try self.allocator.alloc(EnvEntry, 0),
+                        .ty = pat.ty,
+                    };
+                }
                 var additions_acc = std.ArrayList(EnvEntry).empty;
                 errdefer additions_acc.deinit(self.allocator);
                 const arg_tys = try self.allocator.alloc(TypeVarId, arg_pats.len);
@@ -762,6 +811,24 @@ const Lowerer = struct {
                 const additions = try additions_acc.toOwnedSlice(self.allocator);
                 break :blk .{ .additions = additions, .ty = pat.ty };
             },
+        };
+    }
+
+    fn freshPrimitiveType(self: *Lowerer, prim: type_mod.Prim) std.mem.Allocator.Error!TypeVarId {
+        return try self.types.freshContent(.{ .primitive = prim });
+    }
+
+    fn isPrimitiveBoolType(self: *Lowerer, ty: TypeVarId) std.mem.Allocator.Error!bool {
+        const root = self.types.unlink(ty);
+        return switch (self.types.getNode(root)) {
+            .content => |content| switch (content) {
+                .primitive => |prim| prim == .bool,
+                else => false,
+            },
+            .unbd,
+            .for_a,
+            => false,
+            .link => unreachable,
         };
     }
 
@@ -785,6 +852,7 @@ const Lowerer = struct {
             .frac_f64_lit,
             .dec_lit,
             .str_lit,
+            .bool_lit,
             .unit,
             .runtime_error,
             => {},
@@ -972,6 +1040,7 @@ const Lowerer = struct {
             .frac_f64_lit,
             .dec_lit,
             .str_lit,
+            .bool_lit,
             .unit,
             .runtime_error,
             => {},
@@ -1149,9 +1218,11 @@ const Lowerer = struct {
                 } },
                 .tuple => |tuple| blk: {
                     const elems = self.types.sliceTypeVarSpan(tuple);
-                    const lowered_elems = try self.allocator.alloc(TypeVarId, elems.len);
+                    const elems_copy = try self.allocator.dupe(TypeVarId, elems);
+                    defer self.allocator.free(elems_copy);
+                    const lowered_elems = try self.allocator.alloc(TypeVarId, elems_copy.len);
                     defer self.allocator.free(lowered_elems);
-                    for (elems, 0..) |elem, i| {
+                    for (elems_copy, 0..) |elem, i| {
                         lowered_elems[i] = try self.instantiateGeneralizedRec(elem, mapping);
                     }
                     break :blk type_mod.Node{ .content = .{
@@ -1160,13 +1231,17 @@ const Lowerer = struct {
                 },
                 .tag_union => |tag_union| blk: {
                     const tags = self.types.sliceTags(tag_union.tags);
-                    const out = try self.allocator.alloc(type_mod.Tag, tags.len);
+                    const tags_copy = try self.allocator.dupe(type_mod.Tag, tags);
+                    defer self.allocator.free(tags_copy);
+                    const out = try self.allocator.alloc(type_mod.Tag, tags_copy.len);
                     defer self.allocator.free(out);
-                    for (tags, 0..) |tag, i| {
+                    for (tags_copy, 0..) |tag, i| {
                         const args = self.types.sliceTypeVarSpan(tag.args);
-                        const lowered_args = try self.allocator.alloc(TypeVarId, args.len);
+                        const args_copy = try self.allocator.dupe(TypeVarId, args);
+                        defer self.allocator.free(args_copy);
+                        const lowered_args = try self.allocator.alloc(TypeVarId, args_copy.len);
                         defer self.allocator.free(lowered_args);
-                        for (args, 0..) |arg, arg_i| {
+                        for (args_copy, 0..) |arg, arg_i| {
                             lowered_args[arg_i] = try self.instantiateGeneralizedRec(arg, mapping);
                         }
                         out[i] = .{
@@ -1180,9 +1255,11 @@ const Lowerer = struct {
                 },
                 .record => |record| blk: {
                     const fields = self.types.sliceFields(record.fields);
-                    const out = try self.allocator.alloc(type_mod.Field, fields.len);
+                    const fields_copy = try self.allocator.dupe(type_mod.Field, fields);
+                    defer self.allocator.free(fields_copy);
+                    const out = try self.allocator.alloc(type_mod.Field, fields_copy.len);
                     defer self.allocator.free(out);
-                    for (fields, 0..) |field, i| {
+                    for (fields_copy, 0..) |field, i| {
                         out[i] = .{
                             .name = field.name,
                             .ty = try self.instantiateGeneralizedRec(field.ty, mapping),
@@ -1194,13 +1271,17 @@ const Lowerer = struct {
                 },
                 .lambda_set => |lambda_set| blk: {
                     const lambdas = self.types.sliceLambdas(lambda_set);
-                    const out_lambdas = try self.allocator.alloc(type_mod.Lambda, lambdas.len);
+                    const lambdas_copy = try self.allocator.dupe(type_mod.Lambda, lambdas);
+                    defer self.allocator.free(lambdas_copy);
+                    const out_lambdas = try self.allocator.alloc(type_mod.Lambda, lambdas_copy.len);
                     defer self.allocator.free(out_lambdas);
-                    for (lambdas, 0..) |lambda, i| {
+                    for (lambdas_copy, 0..) |lambda, i| {
                         const captures = self.types.sliceCaptures(lambda.captures);
-                        const out_captures = try self.allocator.alloc(type_mod.Capture, captures.len);
+                        const captures_copy = try self.allocator.dupe(type_mod.Capture, captures);
+                        defer self.allocator.free(captures_copy);
+                        const out_captures = try self.allocator.alloc(type_mod.Capture, captures_copy.len);
                         defer self.allocator.free(out_captures);
-                        for (captures, 0..) |capture, capture_i| {
+                        for (captures_copy, 0..) |capture, capture_i| {
                             out_captures[capture_i] = .{
                                 .symbol = capture.symbol,
                                 .ty = try self.instantiateGeneralizedRec(capture.ty, mapping),
@@ -1350,11 +1431,15 @@ const Lowerer = struct {
 
         const next_node: type_mod.Node = switch (self.types.getNode(l)) {
             .unbd => self.types.getNode(r),
-            .for_a => return debugPanic("lambdasolved.unify generalized type without instantiation"),
+            .for_a => {
+                return debugPanic("lambdasolved.unify generalized type without instantiation");
+            },
             .link => unreachable,
             .content => |left_content| switch (self.types.getNode(r)) {
                 .unbd => type_mod.Node{ .content = left_content },
-                .for_a => return debugPanic("lambdasolved.unify generalized type without instantiation"),
+                .for_a => {
+                    return debugPanic("lambdasolved.unify generalized type without instantiation");
+                },
                 .link => unreachable,
                 .content => |right_content| try self.unifyContent(left_content, right_content, visited),
             },
@@ -1423,8 +1508,10 @@ const Lowerer = struct {
     }
 
     fn unifyTags(self: *Lowerer, left_span: type_mod.Span(type_mod.Tag), right_span: type_mod.Span(type_mod.Tag), visited: *std.ArrayList(TypePair)) std.mem.Allocator.Error!type_mod.Span(type_mod.Tag) {
-        const left = self.types.sliceTags(left_span);
-        const right = self.types.sliceTags(right_span);
+        const left = try self.allocator.dupe(type_mod.Tag, self.types.sliceTags(left_span));
+        defer self.allocator.free(left);
+        const right = try self.allocator.dupe(type_mod.Tag, self.types.sliceTags(right_span));
+        defer self.allocator.free(right);
         var merged = std.ArrayList(type_mod.Tag).empty;
         defer merged.deinit(self.allocator);
 
@@ -1455,8 +1542,10 @@ const Lowerer = struct {
     }
 
     fn unifyFields(self: *Lowerer, left_span: type_mod.Span(type_mod.Field), right_span: type_mod.Span(type_mod.Field), visited: *std.ArrayList(TypePair)) std.mem.Allocator.Error!type_mod.Span(type_mod.Field) {
-        const left = self.types.sliceFields(left_span);
-        const right = self.types.sliceFields(right_span);
+        const left = try self.allocator.dupe(type_mod.Field, self.types.sliceFields(left_span));
+        defer self.allocator.free(left);
+        const right = try self.allocator.dupe(type_mod.Field, self.types.sliceFields(right_span));
+        defer self.allocator.free(right);
         var merged = std.ArrayList(type_mod.Field).empty;
         defer merged.deinit(self.allocator);
 
@@ -1482,8 +1571,10 @@ const Lowerer = struct {
     }
 
     fn unifyLambdaSets(self: *Lowerer, left_span: type_mod.Span(type_mod.Lambda), right_span: type_mod.Span(type_mod.Lambda), visited: *std.ArrayList(TypePair)) std.mem.Allocator.Error!type_mod.Span(type_mod.Lambda) {
-        const left = self.types.sliceLambdas(left_span);
-        const right = self.types.sliceLambdas(right_span);
+        const left = try self.allocator.dupe(type_mod.Lambda, self.types.sliceLambdas(left_span));
+        defer self.allocator.free(left);
+        const right = try self.allocator.dupe(type_mod.Lambda, self.types.sliceLambdas(right_span));
+        defer self.allocator.free(right);
         var merged = std.ArrayList(type_mod.Lambda).empty;
         defer merged.deinit(self.allocator);
 
@@ -1512,8 +1603,10 @@ const Lowerer = struct {
     }
 
     fn unifyCaptures(self: *Lowerer, left_span: type_mod.Span(type_mod.Capture), right_span: type_mod.Span(type_mod.Capture), visited: *std.ArrayList(TypePair)) std.mem.Allocator.Error!type_mod.Span(type_mod.Capture) {
-        const left = self.types.sliceCaptures(left_span);
-        const right = self.types.sliceCaptures(right_span);
+        const left = try self.allocator.dupe(type_mod.Capture, self.types.sliceCaptures(left_span));
+        defer self.allocator.free(left);
+        const right = try self.allocator.dupe(type_mod.Capture, self.types.sliceCaptures(right_span));
+        defer self.allocator.free(right);
         if (left.len != right.len) return debugPanic("lambdasolved.unify incompatible captures");
 
         var merged = std.ArrayList(type_mod.Capture).empty;

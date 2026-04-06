@@ -359,6 +359,7 @@ const Lowerer = struct {
             .frac_f64_lit => |value| .{ .frac_f64_lit = value },
             .dec_lit => |value| .{ .dec_lit = value },
             .str_lit => |value| .{ .str_lit = value },
+            .bool_lit => |value| .{ .bool_lit = value },
             .unit => .unit,
             .tag => |tag| .{ .tag = .{
                 .name = tag.name,
@@ -773,6 +774,13 @@ const Lowerer = struct {
                 else
                     try self.allocator.dupe(EnvEntry, &.{.{ .symbol = symbol, .ty = ty }}),
             },
+            .bool_lit => |value| .{
+                .pat = try self.output.addPat(.{
+                    .ty = lowered_ty,
+                    .data = .{ .bool_lit = value },
+                }),
+                .additions = try self.allocator.dupe(EnvEntry, &.{}),
+            },
             .tag => |tag| blk: {
                 const source_args = self.input.store.slicePatSpan(tag.args);
                 const lowered_args = try self.allocator.alloc(ast.PatId, source_args.len);
@@ -973,9 +981,11 @@ const Lowerer = struct {
                     } },
                     .tuple => |tuple| blk2: {
                         const elems = self.input.types.sliceTypeVarSpan(tuple);
-                        const out = try self.allocator.alloc(TypeVarId, elems.len);
+                        const elems_copy = try self.allocator.dupe(TypeVarId, elems);
+                        defer self.allocator.free(elems_copy);
+                        const out = try self.allocator.alloc(TypeVarId, elems_copy.len);
                         defer self.allocator.free(out);
-                        for (elems, 0..) |elem, i| {
+                        for (elems_copy, 0..) |elem, i| {
                             out[i] = try self.cloneInstType(inst, elem);
                         }
                         break :blk2 solved.Type.Node{ .content = .{
@@ -984,9 +994,11 @@ const Lowerer = struct {
                     },
                     .record => |record| blk2: {
                         const fields = self.input.types.sliceFields(record.fields);
-                        const out = try self.allocator.alloc(solved.Type.Field, fields.len);
+                        const fields_copy = try self.allocator.dupe(solved.Type.Field, fields);
+                        defer self.allocator.free(fields_copy);
+                        const out = try self.allocator.alloc(solved.Type.Field, fields_copy.len);
                         defer self.allocator.free(out);
-                        for (fields, 0..) |field, i| {
+                        for (fields_copy, 0..) |field, i| {
                             out[i] = .{
                                 .name = field.name,
                                 .ty = try self.cloneInstType(inst, field.ty),
@@ -998,13 +1010,17 @@ const Lowerer = struct {
                     },
                     .tag_union => |tag_union| blk2: {
                         const tags = self.input.types.sliceTags(tag_union.tags);
-                        const out = try self.allocator.alloc(solved.Type.Tag, tags.len);
+                        const tags_copy = try self.allocator.dupe(solved.Type.Tag, tags);
+                        defer self.allocator.free(tags_copy);
+                        const out = try self.allocator.alloc(solved.Type.Tag, tags_copy.len);
                         defer self.allocator.free(out);
-                        for (tags, 0..) |tag, i| {
+                        for (tags_copy, 0..) |tag, i| {
                             const args = self.input.types.sliceTypeVarSpan(tag.args);
-                            const out_args = try self.allocator.alloc(TypeVarId, args.len);
+                            const args_copy = try self.allocator.dupe(TypeVarId, args);
+                            defer self.allocator.free(args_copy);
+                            const out_args = try self.allocator.alloc(TypeVarId, args_copy.len);
                             defer self.allocator.free(out_args);
-                            for (args, 0..) |arg, arg_i| {
+                            for (args_copy, 0..) |arg, arg_i| {
                                 out_args[arg_i] = try self.cloneInstType(inst, arg);
                             }
                             out[i] = .{
@@ -1018,13 +1034,17 @@ const Lowerer = struct {
                     },
                     .lambda_set => |lambda_set| blk2: {
                         const lambdas = self.input.types.sliceLambdas(lambda_set);
-                        const out = try self.allocator.alloc(solved.Type.Lambda, lambdas.len);
+                        const lambdas_copy = try self.allocator.dupe(solved.Type.Lambda, lambdas);
+                        defer self.allocator.free(lambdas_copy);
+                        const out = try self.allocator.alloc(solved.Type.Lambda, lambdas_copy.len);
                         defer self.allocator.free(out);
-                        for (lambdas, 0..) |lambda, i| {
+                        for (lambdas_copy, 0..) |lambda, i| {
                             const captures = self.input.types.sliceCaptures(lambda.captures);
-                            const out_captures = try self.allocator.alloc(solved.Type.Capture, captures.len);
+                            const captures_copy = try self.allocator.dupe(solved.Type.Capture, captures);
+                            defer self.allocator.free(captures_copy);
+                            const out_captures = try self.allocator.alloc(solved.Type.Capture, captures_copy.len);
                             defer self.allocator.free(out_captures);
-                            for (captures, 0..) |capture, capture_i| {
+                            for (captures_copy, 0..) |capture, capture_i| {
                                 out_captures[capture_i] = .{
                                     .symbol = capture.symbol,
                                     .ty = try self.cloneInstType(inst, capture.ty),

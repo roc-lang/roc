@@ -139,7 +139,7 @@ fn lowerTypeRec(
     const lowered: mono.Content = switch (types.getNode(id)) {
         .link => unreachable,
         .for_a => debugPanic("lambdamono.lower_type.lowerType generalized type survived instantiation"),
-        .unbd => .{ .tag_union = .{ .tags = mono.Span(mono.Tag).empty() } },
+        .unbd => debugPanic("lambdamono.lower_type.lowerType unresolved type survived executable lowering"),
         .content => |content| switch (content) {
             .func => debugPanic("lambdamono.lower_type.lowerType unexpected function after unlinkExecutable"),
             .primitive => |prim| .{ .primitive = prim },

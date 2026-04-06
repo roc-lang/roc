@@ -43,6 +43,9 @@ pub const BindingOrigin = union(enum) {
     lifted_local_fn: struct {
         source_symbol: u32,
     },
+    lifted_local_fn_alias: struct {
+        source_symbol: u32,
+    },
     lifted_lambda: struct {
         module_idx: u32,
         expr_idx: u32,

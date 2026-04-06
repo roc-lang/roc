@@ -205,6 +205,7 @@ const Lowerer = struct {
                     .data = .{ .var_ = self.lookupRenamedSymbol(venv, symbol) },
                 });
             },
+            .bool_lit => |value| lowered.expr = try self.output.addExpr(.{ .ty = expr.ty, .data = .{ .bool_lit = value } }),
             .int_lit => |value| lowered.expr = try self.output.addExpr(.{ .ty = expr.ty, .data = .{ .int_lit = value } }),
             .frac_f32_lit => |value| lowered.expr = try self.output.addExpr(.{ .ty = expr.ty, .data = .{ .frac_f32_lit = value } }),
             .frac_f64_lit => |value| lowered.expr = try self.output.addExpr(.{ .ty = expr.ty, .data = .{ .frac_f64_lit = value } }),
@@ -260,7 +261,7 @@ const Lowerer = struct {
                     try lowered.lifted_defs.appendSlice(self.allocator, lowered_body.lifted_defs.items);
 
                     try lowered.lifted_defs.append(self.allocator, .{
-                        .bind = .{ .ty = expr.ty, .symbol = lifted_symbol },
+                        .bind = .{ .ty = let_fn.bind.ty, .symbol = lifted_symbol },
                         .value = .{ .fn_ = .{
                             .arg = .{ .ty = let_fn.arg.ty, .symbol = let_fn.arg.symbol },
                             .captures = try self.output.addTypedSymbolSpan(captures),
@@ -271,7 +272,11 @@ const Lowerer = struct {
                     if (captures.len == 0) {
                         lowered.expr = try self.lowerExprInto(&lowered.lifted_defs, recursive_venv, let_expr.rest);
                     } else {
-                        const rest = try self.lowerExprInto(&lowered.lifted_defs, venv, let_expr.rest);
+                        const alias_symbol = try self.freshLiftedLocalFnAliasSymbol(let_fn.bind.symbol);
+                        const alias_venv = try self.extendRename(venv, let_fn.bind.symbol, alias_symbol);
+                        defer self.allocator.free(alias_venv);
+
+                        const rest = try self.lowerExprInto(&lowered.lifted_defs, alias_venv, let_expr.rest);
                         const lifted_ref = try self.output.addExpr(.{
                             .ty = let_fn.bind.ty,
                             .data = .{ .var_ = lifted_symbol },
@@ -279,7 +284,7 @@ const Lowerer = struct {
                         lowered.expr = try self.output.addExpr(.{
                             .ty = expr.ty,
                             .data = .{ .let_ = .{
-                                .bind = .{ .ty = let_fn.bind.ty, .symbol = let_fn.bind.symbol },
+                                .bind = .{ .ty = let_fn.bind.ty, .symbol = alias_symbol },
                                 .body = lifted_ref,
                                 .rest = rest,
                             } },
@@ -556,58 +561,159 @@ const Lowerer = struct {
         const GroupMember = struct {
             letfn: MonoAst.LetFn,
             lifted_symbol: Symbol,
+            alias_symbol: Symbol,
         };
 
         const group_len = group_end - index.*;
         const group = try self.allocator.alloc(GroupMember, group_len);
         defer self.allocator.free(group);
 
-        var recursive_venv = current_venv.*;
-        var owned_recursive_venv: ?[]Rename = null;
-        defer if (owned_recursive_venv) |buf| self.allocator.free(buf);
-
         for (stmt_ids[index.*..group_end], 0..) |stmt_id, group_i| {
             const letfn = self.input.program.store.getStmt(stmt_id).local_fn;
             const lifted_symbol = try self.freshLiftedLocalFnSymbol(letfn.bind.symbol);
+            const alias_symbol = try self.freshLiftedLocalFnAliasSymbol(letfn.bind.symbol);
             group[group_i] = .{
                 .letfn = letfn,
                 .lifted_symbol = lifted_symbol,
+                .alias_symbol = alias_symbol,
             };
-            recursive_venv = try self.pushRename(recursive_venv, &owned_recursive_venv, letfn.bind.symbol, lifted_symbol);
         }
 
-        for (group) |member| {
+        const group_base_venv = current_venv.*;
+        const needs_alias = try self.allocator.alloc(bool, group_len);
+        defer self.allocator.free(needs_alias);
+        @memset(needs_alias, false);
+
+        var changed = true;
+        while (changed) {
+            changed = false;
+            for (group, 0..) |member, member_i| {
+                var body_venv = group_base_venv;
+                var owned_body_venv: ?[]Rename = null;
+                defer if (owned_body_venv) |buf| self.allocator.free(buf);
+
+                for (group, 0..) |other, other_i| {
+                    const target_symbol = if (other_i == member_i)
+                        other.lifted_symbol
+                    else if (needs_alias[other_i])
+                        other.alias_symbol
+                    else
+                        other.lifted_symbol;
+                    body_venv = try self.pushRename(body_venv, &owned_body_venv, other.letfn.bind.symbol, target_symbol);
+                }
+
+                const captures = try self.computeCaptures(
+                    body_venv,
+                    &.{ member.letfn.bind.symbol, member.letfn.arg.symbol },
+                    member.letfn.body,
+                );
+                defer self.allocator.free(captures);
+
+                const next_needs_alias = captures.len != 0;
+                if (next_needs_alias != needs_alias[member_i]) {
+                    needs_alias[member_i] = next_needs_alias;
+                    changed = true;
+                }
+            }
+        }
+
+        const LoweredMember = struct {
+            captures: ast.Span(ast.TypedSymbol),
+            body: ast.ExprId,
+        };
+
+        const lowered_members = try self.allocator.alloc(LoweredMember, group_len);
+        defer self.allocator.free(lowered_members);
+
+        for (group, 0..) |member, member_i| {
+            var body_venv = group_base_venv;
+            var owned_body_venv: ?[]Rename = null;
+            defer if (owned_body_venv) |buf| self.allocator.free(buf);
+
+            for (group, 0..) |other, other_i| {
+                const target_symbol = if (other_i == member_i)
+                    other.lifted_symbol
+                else if (needs_alias[other_i])
+                    other.alias_symbol
+                else
+                    other.lifted_symbol;
+                body_venv = try self.pushRename(body_venv, &owned_body_venv, other.letfn.bind.symbol, target_symbol);
+            }
+
             const captures = try self.computeCaptures(
-                recursive_venv,
+                body_venv,
                 &.{ member.letfn.bind.symbol, member.letfn.arg.symbol },
                 member.letfn.body,
             );
             defer self.allocator.free(captures);
 
-            var lowered_body = try self.lowerExpr(recursive_venv, member.letfn.body);
+            var lowered_body = try self.lowerExpr(body_venv, member.letfn.body);
             defer lowered_body.deinit(self.allocator);
             try lifted_defs.appendSlice(self.allocator, lowered_body.lifted_defs.items);
+            lowered_members[member_i] = .{
+                .captures = try self.output.addTypedSymbolSpan(captures),
+                .body = lowered_body.expr,
+            };
             try lifted_defs.append(self.allocator, .{
                 .bind = .{ .ty = member.letfn.bind.ty, .symbol = member.lifted_symbol },
                 .value = .{ .fn_ = .{
                     .arg = .{ .ty = member.letfn.arg.ty, .symbol = member.letfn.arg.symbol },
-                    .captures = try self.output.addTypedSymbolSpan(captures),
-                    .body = lowered_body.expr,
+                    .captures = lowered_members[member_i].captures,
+                    .body = lowered_members[member_i].body,
                 } },
             });
+        }
 
-            if (captures.len == 0) {
+        for (group, 0..) |member, member_i| {
+            if (!needs_alias[member_i]) {
                 current_venv.* = try self.pushRename(current_venv.*, owned_current_venv, member.letfn.bind.symbol, member.lifted_symbol);
-            } else {
+            }
+        }
+
+        const emitted_aliases = try self.allocator.alloc(bool, group_len);
+        defer self.allocator.free(emitted_aliases);
+        @memset(emitted_aliases, false);
+
+        var remaining_aliases: usize = 0;
+        for (needs_alias) |needed| {
+            if (needed) remaining_aliases += 1;
+        }
+
+        while (remaining_aliases > 0) {
+            var progressed = false;
+            for (group, 0..) |member, member_i| {
+                if (!needs_alias[member_i] or emitted_aliases[member_i]) continue;
+
+                var blocked = false;
+                for (self.output.sliceTypedSymbolSpan(lowered_members[member_i].captures)) |capture| {
+                    for (group, 0..) |other, other_i| {
+                        if (other_i == member_i or !needs_alias[other_i] or emitted_aliases[other_i]) continue;
+                        if (capture.symbol == other.alias_symbol) {
+                            blocked = true;
+                            break;
+                        }
+                    }
+                    if (blocked) break;
+                }
+                if (blocked) continue;
+
                 const lifted_ref = try self.output.addExpr(.{
                     .ty = member.letfn.bind.ty,
                     .data = .{ .var_ = member.lifted_symbol },
                 });
                 const alias_stmt = try self.output.addStmt(.{ .decl = .{
-                    .bind = .{ .ty = member.letfn.bind.ty, .symbol = member.letfn.bind.symbol },
+                    .bind = .{ .ty = member.letfn.bind.ty, .symbol = member.alias_symbol },
                     .body = lifted_ref,
                 } });
                 try lowered_stmt_ids.append(self.allocator, alias_stmt);
+                current_venv.* = try self.pushRename(current_venv.*, owned_current_venv, member.letfn.bind.symbol, member.alias_symbol);
+                emitted_aliases[member_i] = true;
+                remaining_aliases -= 1;
+                progressed = true;
+            }
+
+            if (!progressed) {
+                return debugPanic("monotype_lifted local function alias cycle");
             }
         }
 
@@ -621,6 +727,10 @@ const Lowerer = struct {
             .var_ => |symbol| try self.output.addPat(.{
                 .ty = pat.ty,
                 .data = .{ .var_ = symbol },
+            }),
+            .bool_lit => |value| try self.output.addPat(.{
+                .ty = pat.ty,
+                .data = .{ .bool_lit = value },
             }),
             .tag => |tag| blk: {
                 const args = self.input.program.store.slicePatSpan(tag.args);
@@ -702,6 +812,7 @@ const Lowerer = struct {
             .frac_f64_lit,
             .dec_lit,
             .str_lit,
+            .bool_lit,
             .unit,
             .runtime_error,
             => {},
@@ -838,6 +949,7 @@ const Lowerer = struct {
                     try added.append(self.allocator, symbol);
                 }
             },
+            .bool_lit => {},
             .tag => |tag| {
                 for (self.input.program.store.slicePatSpan(tag.args)) |arg_pat| {
                     try self.bindPatSymbols(arg_pat, bound, added);
@@ -902,6 +1014,15 @@ const Lowerer = struct {
         return symbol;
     }
 
+    fn freshLiftedLocalFnAliasSymbol(self: *Lowerer, source_symbol: Symbol) std.mem.Allocator.Error!Symbol {
+        const entry = self.input.symbols.get(source_symbol);
+        const symbol = try self.input.symbols.add(entry.name, .{
+            .lifted_local_fn_alias = .{ .source_symbol = source_symbol.raw() },
+        });
+        try self.binding_types.put(symbol, self.lookupTypeForSymbol(source_symbol));
+        return symbol;
+    }
+
     fn lookupTypeForSymbol(self: *Lowerer, symbol: Symbol) type_mod.TypeId {
         if (self.binding_types.get(symbol)) |ty| {
             return ty;
@@ -918,6 +1039,7 @@ const Lowerer = struct {
             .frac_f64_lit,
             .dec_lit,
             .str_lit,
+            .bool_lit,
             .unit,
             .runtime_error,
             => {},
