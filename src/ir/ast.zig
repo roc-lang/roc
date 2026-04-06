@@ -109,6 +109,7 @@ pub const Stmt = union(enum) {
         default_block: BlockId,
         join: ?Var,
     },
+    debug: Var,
     expect: Var,
     for_list: struct {
         elem: Var,

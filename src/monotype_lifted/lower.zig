@@ -526,6 +526,7 @@ const Lowerer = struct {
                 .body = try self.lowerExprInto(lifted_defs, venv, reassign.body),
             } },
             .expr => |expr_id| .{ .expr = try self.lowerExprInto(lifted_defs, venv, expr_id) },
+            .debug => |expr_id| .{ .debug = try self.lowerExprInto(lifted_defs, venv, expr_id) },
             .expect => |expr_id| .{ .expect = try self.lowerExprInto(lifted_defs, venv, expr_id) },
             .crash => |msg| .{ .crash = msg },
             .return_ => |expr_id| .{ .return_ = try self.lowerExprInto(lifted_defs, venv, expr_id) },
@@ -921,6 +922,7 @@ const Lowerer = struct {
                 try self.collectFreeVarsExpr(reassign.body, bound, free);
             },
             .expr => |expr_id| try self.collectFreeVarsExpr(expr_id, bound, free),
+            .debug => |expr_id| try self.collectFreeVarsExpr(expr_id, bound, free),
             .expect => |expr_id| try self.collectFreeVarsExpr(expr_id, bound, free),
             .crash => {},
             .return_ => |expr_id| try self.collectFreeVarsExpr(expr_id, bound, free),
@@ -1119,6 +1121,7 @@ const Lowerer = struct {
             },
             .reassign => |reassign| try self.collectBindingTypesExpr(reassign.body),
             .expr => |expr_id| try self.collectBindingTypesExpr(expr_id),
+            .debug => |expr_id| try self.collectBindingTypesExpr(expr_id),
             .expect => |expr_id| try self.collectBindingTypesExpr(expr_id),
             .crash => {},
             .return_ => |expr_id| try self.collectBindingTypesExpr(expr_id),

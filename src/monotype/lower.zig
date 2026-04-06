@@ -822,6 +822,15 @@ pub const Lowerer = struct {
                 })}),
                 .final_expr = try self.program.store.addExpr(.{ .ty = ty, .data = .unit }),
             } },
+            .e_dbg => |dbg| blk: {
+                const debug_stmt = try self.program.store.addStmt(.{
+                    .debug = try self.lowerDebugMessageExpr(module_idx, type_scope, env, dbg.expr),
+                });
+                break :blk .{ .block = .{
+                    .stmts = try self.program.store.addStmtSpan(&.{debug_stmt}),
+                    .final_expr = try self.makeUnitExpr(),
+                } };
+            },
             .e_return => |ret| .{ .return_ = try self.lowerExpr(module_idx, type_scope, env, ret.expr) },
             .e_for => |for_expr| .{ .for_ = try self.lowerForExpr(module_idx, type_scope, env, for_expr.patt, for_expr.expr, for_expr.body) },
             .e_run_low_level => |ll| .{ .low_level = .{
@@ -2219,6 +2228,9 @@ pub const Lowerer = struct {
                 .body = try self.lowerExpr(module_idx, type_scope, env.*, reassign.expr),
             } })),
             .s_expr => |expr_stmt| try lowered.append(self.allocator, try self.program.store.addStmt(.{ .expr = try self.lowerExpr(module_idx, type_scope, env.*, expr_stmt.expr) })),
+            .s_dbg => |dbg| try lowered.append(self.allocator, try self.program.store.addStmt(.{
+                .debug = try self.lowerDebugMessageExpr(module_idx, type_scope, env.*, dbg.expr),
+            })),
             .s_expect => |expect| try lowered.append(self.allocator, try self.program.store.addStmt(.{ .expect = try self.lowerExpr(module_idx, type_scope, env.*, expect.body) })),
             .s_crash => |crash| try lowered.append(self.allocator, try self.program.store.addStmt(.{ .crash = try self.copySourceStringLiteral(module_idx, crash.msg) })),
             .s_return => |ret| try lowered.append(self.allocator, try self.program.store.addStmt(.{ .return_ = try self.lowerExpr(module_idx, type_scope, env.*, ret.expr) })),
@@ -2260,6 +2272,18 @@ pub const Lowerer = struct {
             },
             else => debugTodoStmt(stmt),
         }
+    }
+
+    fn lowerDebugMessageExpr(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeCloneScope,
+        env: BindingEnv,
+        expr_idx: CIR.Expr.Idx,
+    ) std.mem.Allocator.Error!ast.ExprId {
+        const value_expr = try self.lowerExpr(module_idx, type_scope, env, expr_idx);
+        const str_ty = try self.makePrimitiveType(.str);
+        return try self.lowerBuiltinInspectExpr(module_idx, value_expr, str_ty);
     }
 
     fn lowerForExpr(

@@ -1023,11 +1023,19 @@ pub fn listDropAt(
     const size = list.len();
     const size_u64 = @as(u64, @intCast(size));
 
-    // NOTE
-    // we need to return an empty list explicitly,
-    // because we rely on the pointer field being null if the list is empty
-    // which also requires duplicating the utils.decref call to spend the RC token
-    if (size <= 1) {
+    // Empty lists lower to the canonical null-pointer representation. Since
+    // listDropAt consumes its input, spend the ownership token and return the
+    // canonical empty result.
+    if (size == 0) {
+        list.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
+        return RocList.empty();
+    }
+
+    if (drop_index_u64 >= size_u64) {
+        return list;
+    }
+
+    if (size == 1) {
         list.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
         return RocList.empty();
     }

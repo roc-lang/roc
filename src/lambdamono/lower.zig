@@ -868,6 +868,10 @@ const Lowerer = struct {
                 .stmt = try self.output.addStmt(.{ .expr = try self.specializeExpr(inst, mono_cache, venv, expr) }),
                 .env = try self.cloneEnv(venv),
             },
+            .debug => |expr| .{
+                .stmt = try self.output.addStmt(.{ .debug = try self.specializeExpr(inst, mono_cache, venv, expr) }),
+                .env = try self.cloneEnv(venv),
+            },
             .expect => |expr| .{
                 .stmt = try self.output.addStmt(.{ .expect = try self.specializeExpr(inst, mono_cache, venv, expr) }),
                 .env = try self.cloneEnv(venv),

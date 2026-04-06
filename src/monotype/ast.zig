@@ -155,6 +155,7 @@ pub const Stmt = union(enum) {
         body: ExprId,
     },
     expr: ExprId,
+    debug: ExprId,
     expect: ExprId,
     crash: base.StringLiteral.Idx,
     return_: ExprId,

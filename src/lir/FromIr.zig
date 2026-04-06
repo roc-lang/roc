@@ -272,7 +272,7 @@ const ProcLowerer = struct {
                     try self.indexStructFieldDefs(switch_stmt.default_block);
                 },
                 .for_list => |for_stmt| try self.indexStructFieldDefs(for_stmt.body),
-                .set, .expect => {},
+                .set, .debug, .expect => {},
             }
         }
     }
@@ -336,6 +336,10 @@ const ProcLowerer = struct {
             .switch_ => |switch_stmt| try self.lowerSwitchStmt(switch_stmt, next),
             .expect => |cond| try self.parent.store.addCFStmt(.{ .expect = .{
                 .condition = try self.lowerVar(cond),
+                .next = next,
+            } }),
+            .debug => |message| try self.parent.store.addCFStmt(.{ .debug = .{
+                .message = try self.lowerVar(message),
                 .next = next,
             } }),
             .for_list => |for_stmt| try self.parent.store.addCFStmt(.{ .for_list = .{

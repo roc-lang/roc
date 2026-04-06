@@ -300,6 +300,7 @@ const Lowerer = struct {
                 .body = try self.instantiateExpr(reassign.body),
             } },
             .expr => |expr_id| .{ .expr = try self.instantiateExpr(expr_id) },
+            .debug => |expr_id| .{ .debug = try self.instantiateExpr(expr_id) },
             .expect => |expr_id| .{ .expect = try self.instantiateExpr(expr_id) },
             .crash => |msg| .{ .crash = msg },
             .return_ => |expr_id| .{ .return_ = try self.instantiateExpr(expr_id) },
@@ -742,6 +743,10 @@ const Lowerer = struct {
                 _ = try self.inferExpr(venv, expr_id);
                 break :blk try self.cloneEnv(venv);
             },
+            .debug => |expr_id| blk: {
+                _ = try self.inferExpr(venv, expr_id);
+                break :blk try self.cloneEnv(venv);
+            },
             .expect => |expr_id| blk: {
                 _ = try self.inferExpr(venv, expr_id);
                 break :blk try self.cloneEnv(venv);
@@ -892,6 +897,7 @@ const Lowerer = struct {
                         .var_decl => |decl| try self.propagateExprErasure(decl.body),
                         .reassign => |reassign| try self.propagateExprErasure(reassign.body),
                         .expr => |nested| try self.propagateExprErasure(nested),
+                        .debug => |nested| try self.propagateExprErasure(nested),
                         .expect => |nested| try self.propagateExprErasure(nested),
                         .crash => {},
                         .return_ => |nested| try self.propagateExprErasure(nested),
@@ -1080,6 +1086,7 @@ const Lowerer = struct {
                         .var_decl => |decl| try self.collectExprEdges(decl.body, edges),
                         .reassign => |reassign| try self.collectExprEdges(reassign.body, edges),
                         .expr => |nested| try self.collectExprEdges(nested, edges),
+                        .debug => |nested| try self.collectExprEdges(nested, edges),
                         .expect => |nested| try self.collectExprEdges(nested, edges),
                         .crash => {},
                         .return_ => |nested| try self.collectExprEdges(nested, edges),

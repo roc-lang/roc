@@ -733,6 +733,12 @@ const Lowerer = struct {
                 _ = try self.lowerSubexprValue(block, env.*, expr_id);
                 return block.term == .value;
             },
+            .debug => |expr_id| {
+                const value = try self.lowerSubexprValue(block, env.*, expr_id);
+                if (value == null) return false;
+                try block.stmts.append(self.allocator, .{ .debug = value.? });
+                return true;
+            },
             .expect => |expr_id| {
                 const value = try self.lowerSubexprValue(block, env.*, expr_id);
                 if (value == null) return false;

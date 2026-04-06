@@ -1,11 +1,12 @@
 //! Data-driven eval test definitions for the inspect-only parallel runner.
 
 const TestCase = @import("parallel_runner.zig").TestCase;
+const low_level_tests = @import("eval_low_level_tests.zig");
 
 /// All eval test cases, consumed by the parallel runner.
 ///
 /// Every value-producing test is observed solely through `Str.inspect(...)`.
-pub const tests = [_]TestCase{
+const core_tests = [_]TestCase{
     // Frontend problems
     .{ .name = "problem: undefined variable", .source = "undefinedVar", .expected = .{ .problem = {} } },
     .{ .name = "problem: dec plus int type mismatch", .source = "1.0.Dec + 2.I64", .expected = .{ .problem = {} } },
@@ -2064,3 +2065,5 @@ pub const tests = [_]TestCase{
     .{ .name = "inspect: Dec div", .source = "{ a : Dec\n    a = 10.0.Dec\n    b : Dec\n    b = 2.0.Dec\n    a / b\n}", .expected = .{ .inspect_str = "5.0" } },
     .{ .name = "inspect: Dec to_str", .source = "{ a : Dec\n    a = 100.0.Dec\n    Dec.to_str(a)\n}", .expected = .{ .inspect_str = "\"100.0\"" } },
 };
+
+pub const tests = core_tests ++ low_level_tests.tests;

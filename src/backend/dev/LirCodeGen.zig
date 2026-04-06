@@ -41,15 +41,7 @@ const rcNone = builtins.utils.rcNone;
 
 // List builtin functions - using C-compatible wrappers to avoid ABI issues
 // with 24-byte RocList struct returns on aarch64
-const list_copy_builtin = builtins.list.copy_fallback;
 const RocList = builtins.list.RocList;
-
-// Additional list builtins (return RocList by value with callconv(.c))
-const listConcat = builtins.list.listConcat;
-const listPrepend = builtins.list.listPrepend;
-const listReplace = builtins.list.listReplace;
-const listReserve = builtins.list.listReserve;
-const listReleaseExcessCapacity = builtins.list.listReleaseExcessCapacity;
 
 // String builtins
 const strToUtf8C = builtins.str.strToUtf8C;
@@ -150,6 +142,7 @@ pub const BuiltinFn = enum {
     list_concat,
     list_prepend,
     list_sublist,
+    list_drop_at,
     list_replace,
     list_reserve,
     list_release_excess_capacity,
@@ -239,6 +232,7 @@ pub const BuiltinFn = enum {
             .list_concat => "roc_builtins_list_concat",
             .list_prepend => "roc_builtins_list_prepend",
             .list_sublist => "roc_builtins_list_sublist",
+            .list_drop_at => "roc_builtins_list_drop_at",
             .list_replace => "roc_builtins_list_replace",
             .list_reserve => "roc_builtins_list_reserve",
             .list_release_excess_capacity => "roc_builtins_list_release_excess_capacity",
@@ -468,37 +462,6 @@ fn wrapStrFromUtf8(out: [*]u8, list_bytes: ?[*]u8, list_len: usize, list_cap: us
     const list = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
     const result = strFromUtf8C(list, .Immutable, roc_ops);
     @as(*FromUtf8Try, @ptrCast(@alignCast(out))).* = result;
-}
-
-/// Wrapper: listConcat(RocList, RocList, alignment, element_width, ..., *RocOps) -> RocList
-fn wrapListConcat(out: *RocList, a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize, alignment: u32, element_width: usize, roc_ops: *RocOps) callconv(.c) void {
-    const a = RocList{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
-    const b = RocList{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
-    out.* = listConcat(a, b, alignment, element_width, false, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), roc_ops);
-}
-
-/// Wrapper: listPrepend(RocList, alignment, element, element_width, ..., *RocOps) -> RocList
-fn wrapListPrepend(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, element: ?[*]u8, element_width: usize, roc_ops: *RocOps) callconv(.c) void {
-    const list = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
-    out.* = listPrepend(list, alignment, element, element_width, false, null, @ptrCast(&rcNone), @ptrCast(&list_copy_builtin), roc_ops);
-}
-
-/// Wrapper: listReplace for list_set
-fn wrapListReplace(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, index: u64, element: ?[*]u8, element_width: usize, out_element: ?[*]u8, roc_ops: *RocOps) callconv(.c) void {
-    const list = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
-    out.* = listReplace(list, alignment, index, element, element_width, false, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), out_element, @ptrCast(&list_copy_builtin), roc_ops);
-}
-
-/// Wrapper: listReserve
-fn wrapListReserve(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, spare: u64, element_width: usize, roc_ops: *RocOps) callconv(.c) void {
-    const list = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
-    out.* = listReserve(list, alignment, spare, element_width, false, null, @ptrCast(&rcNone), .Immutable, roc_ops);
-}
-
-/// Wrapper: listReleaseExcessCapacity
-fn wrapListReleaseExcessCapacity(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, element_width: usize, roc_ops: *RocOps) callconv(.c) void {
-    const list = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
-    out.* = listReleaseExcessCapacity(list, alignment, element_width, false, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), .Immutable, roc_ops);
 }
 
 const LirProcSpec = lir.LirProcSpec;
@@ -1615,10 +1578,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const list_b_off = try self.ensureOnStack(list_b_loc, roc_list_size);
                     const result_offset = self.codegen.allocStackSlot(roc_str_size);
                     const alignment_bytes = elem_size_align.alignment.toByteUnits();
-                    const fn_addr: usize = @intFromPtr(&wrapListConcat);
+                    const elements_refcounted: bool = blk: {
+                        const ret_layout = ls.getLayout(ll.ret_layout);
+                        if (ret_layout.tag == .list) {
+                            break :blk ls.layoutContainsRefcounted(ls.getLayout(ret_layout.data.list));
+                        }
+                        break :blk false;
+                    };
+                    const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_concat);
 
                     {
-                        // wrapListConcat(out, a_bytes, a_len, a_cap, b_bytes, b_len, b_cap, alignment, element_width, roc_ops)
+                        // roc_builtins_list_concat(out, a_bytes, a_len, a_cap, b_bytes, b_len, b_cap,
+                        // alignment, element_width, elements_refcounted, roc_ops)
                         const base_reg = frame_ptr;
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
 
@@ -1631,6 +1602,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try builder.addMemArg(base_reg, list_b_off + 16);
                         try builder.addImmArg(@intCast(alignment_bytes));
                         try builder.addImmArg(@intCast(elem_size_align.size));
+                        try builder.addImmArg(if (elements_refcounted) 1 else 0);
                         try builder.addRegArg(roc_ops_reg);
 
                         try self.callBuiltin(&builder, fn_addr, .list_concat);
@@ -1660,10 +1632,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const elem_off = try self.ensureOnStack(elem_loc, elem_size_align.size);
                     const result_offset = self.codegen.allocStackSlot(roc_str_size);
                     const alignment_bytes = elem_size_align.alignment.toByteUnits();
-                    const fn_addr: usize = @intFromPtr(&wrapListPrepend);
+                    const elements_refcounted: bool = blk: {
+                        const ret_layout = ls.getLayout(ll.ret_layout);
+                        if (ret_layout.tag == .list) {
+                            break :blk ls.layoutContainsRefcounted(ls.getLayout(ret_layout.data.list));
+                        }
+                        break :blk false;
+                    };
+                    const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_prepend);
 
                     {
-                        // wrapListPrepend(out, list_bytes, list_len, list_cap, alignment, element, element_width, roc_ops)
+                        // roc_builtins_list_prepend(out, list_bytes, list_len, list_cap, alignment,
+                        // element, element_width, elements_refcounted, roc_ops)
                         const base_reg = frame_ptr;
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
 
@@ -1674,6 +1654,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try builder.addImmArg(@intCast(alignment_bytes));
                         try builder.addLeaArg(base_reg, elem_off);
                         try builder.addImmArg(@intCast(elem_size_align.size));
+                        try builder.addImmArg(if (elements_refcounted) 1 else 0);
                         try builder.addRegArg(roc_ops_reg);
 
                         try self.callBuiltin(&builder, fn_addr, .list_prepend);
@@ -2685,10 +2666,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // We need a scratch slot for the old element (out_element param)
                     const old_elem_slot = self.codegen.allocStackSlot(@intCast(if (elem_size_align.size > 0) elem_size_align.size else 8));
                     const alignment_bytes = elem_size_align.alignment.toByteUnits();
-                    const fn_addr: usize = @intFromPtr(&wrapListReplace);
+                    const elements_refcounted: bool = blk: {
+                        const ret_layout = ls.getLayout(ll.ret_layout);
+                        if (ret_layout.tag == .list) {
+                            break :blk ls.layoutContainsRefcounted(ls.getLayout(ret_layout.data.list));
+                        }
+                        break :blk false;
+                    };
+                    const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_replace);
 
                     {
-                        // wrapListReplace(out, list_bytes, list_len, list_cap, alignment, index, element, element_width, out_element, roc_ops)
+                        // roc_builtins_list_replace(out, list_bytes, list_len, list_cap, alignment,
+                        // index, element, element_width, out_element, elements_refcounted, roc_ops)
                         const base_reg = frame_ptr;
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
 
@@ -2701,6 +2690,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try builder.addLeaArg(base_reg, elem_off);
                         try builder.addImmArg(@intCast(elem_size_align.size));
                         try builder.addLeaArg(base_reg, old_elem_slot);
+                        try builder.addImmArg(if (elements_refcounted) 1 else 0);
                         try builder.addRegArg(roc_ops_reg);
 
                         try self.callBuiltin(&builder, fn_addr, .list_replace);
@@ -2875,6 +2865,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const list_loc = try self.emitValueLocal(args[0]);
                     const record_loc = try self.emitValueLocal(args[1]);
                     return try self.callListSublistFromRecord(ll, list_loc, record_loc, record_layout_idx);
+                },
+                .list_drop_at => {
+                    if (args.len != 2) unreachable;
+                    const list_loc = try self.emitValueLocal(args[0]);
+                    const index_loc = try self.emitValueLocal(args[1]);
+                    return try self.callListDropAt(ll, list_loc, index_loc);
                 },
                 .num_abs => {
                     // Absolute value: classify signedness from the operand layout.
@@ -3109,7 +3105,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .num_floor,
                 .num_ceiling,
                 .num_from_numeral,
-                .list_drop_at,
                 .compare,
                 => {
                     std.debug.panic("UNIMPLEMENTED low-level op: {s}", .{@tagName(ll.op)});
@@ -3628,6 +3623,50 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
         }
 
+        fn callListDropAt(self: *Self, ll: anytype, list_loc: ValueLocation, index_loc: ValueLocation) Allocator.Error!ValueLocation {
+            const ls = self.layout_store;
+            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+            const elements_refcounted = blk: {
+                const ret_layout = ls.getLayout(ll.ret_layout);
+                break :blk switch (ret_layout.tag) {
+                    .list => ls.layoutContainsRefcounted(ls.getLayout(ret_layout.data.list)),
+                    .list_of_zst => false,
+                    else => unreachable,
+                };
+            };
+            const elem_size_align: layout.SizeAlign = blk: {
+                const ret_layout = ls.getLayout(ll.ret_layout);
+                break :blk switch (ret_layout.tag) {
+                    .list => ls.layoutSizeAlign(ls.getLayout(ret_layout.data.list)),
+                    .list_of_zst => .{ .size = 0, .alignment = .@"1" },
+                    else => unreachable,
+                };
+            };
+
+            const list_off = try self.ensureOnStack(list_loc, roc_list_size);
+            const index_off = try self.ensureOnStack(index_loc, 8);
+            const result_offset = self.codegen.allocStackSlot(roc_str_size);
+            const alignment_bytes = elem_size_align.alignment.toByteUnits();
+            const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_drop_at);
+
+            {
+                const base_reg = frame_ptr;
+                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                try builder.addLeaArg(base_reg, result_offset);
+                try builder.addMemArg(base_reg, list_off);
+                try builder.addMemArg(base_reg, list_off + 8);
+                try builder.addMemArg(base_reg, list_off + 16);
+                try builder.addImmArg(@intCast(alignment_bytes));
+                try builder.addImmArg(@intCast(elem_size_align.size));
+                try builder.addMemArg(base_reg, index_off);
+                try builder.addImmArg(if (elements_refcounted) 1 else 0);
+                try builder.addRegArg(roc_ops_reg);
+                try self.callBuiltin(&builder, fn_addr, .list_drop_at);
+            }
+
+            return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
+        }
+
         /// Helper for list_split_first and list_split_last.
         /// Returns a record {element, List} with fields at layout-determined offsets.
         fn callListSplitOp(self: *Self, ll: anytype, list_loc: ValueLocation, mode: enum { first, last }) Allocator.Error!ValueLocation {
@@ -4065,10 +4104,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const spare_off = try self.ensureOnStack(spare_loc, 8);
             const result_offset = self.codegen.allocStackSlot(roc_str_size);
             const alignment_bytes = elem_size_align.alignment.toByteUnits();
-            const fn_addr: usize = @intFromPtr(&wrapListReserve);
+            const elements_refcounted: bool = blk: {
+                const ret_layout = ls.getLayout(ll.ret_layout);
+                if (ret_layout.tag == .list) {
+                    break :blk ls.layoutContainsRefcounted(ls.getLayout(ret_layout.data.list));
+                }
+                break :blk false;
+            };
+            const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_reserve);
 
             {
-                // wrapListReserve(out, list_bytes, list_len, list_cap, alignment, spare, element_width, roc_ops)
+                // roc_builtins_list_reserve(out, list_bytes, list_len, list_cap, alignment, spare,
+                // element_width, elements_refcounted, roc_ops)
                 const base_reg = frame_ptr;
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
 
@@ -4079,6 +4126,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try builder.addImmArg(@intCast(alignment_bytes));
                 try builder.addMemArg(base_reg, spare_off);
                 try builder.addImmArg(@intCast(elem_size_align.size));
+                try builder.addImmArg(if (elements_refcounted) 1 else 0);
                 try builder.addRegArg(roc_ops_reg);
 
                 try self.callBuiltin(&builder, fn_addr, .list_reserve);
@@ -4104,10 +4152,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const list_off = try self.ensureOnStack(list_loc, roc_list_size);
             const result_offset = self.codegen.allocStackSlot(roc_str_size);
             const alignment_bytes = elem_size_align.alignment.toByteUnits();
-            const fn_addr: usize = @intFromPtr(&wrapListReleaseExcessCapacity);
+            const elements_refcounted: bool = blk: {
+                const ret_layout = ls.getLayout(ll.ret_layout);
+                if (ret_layout.tag == .list) {
+                    break :blk ls.layoutContainsRefcounted(ls.getLayout(ret_layout.data.list));
+                }
+                break :blk false;
+            };
+            const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_release_excess_capacity);
 
             {
-                // wrapListReleaseExcessCapacity(out, list_bytes, list_len, list_cap, alignment, element_width, roc_ops)
+                // roc_builtins_list_release_excess_capacity(out, list_bytes, list_len, list_cap,
+                // alignment, element_width, elements_refcounted, roc_ops)
                 const base_reg = frame_ptr;
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
 
@@ -4117,6 +4173,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try builder.addMemArg(base_reg, list_off + 16);
                 try builder.addImmArg(@intCast(alignment_bytes));
                 try builder.addImmArg(@intCast(elem_size_align.size));
+                try builder.addImmArg(if (elements_refcounted) 1 else 0);
                 try builder.addRegArg(roc_ops_reg);
 
                 try self.callBuiltin(&builder, fn_addr, .list_release_excess_capacity);
@@ -4612,21 +4669,40 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .i32 => 32,
                 else => 0,
             };
-            if (narrow_signed_shift > 0) {
-                try self.emitShlImm(.w64, lhs_reg, lhs_reg, narrow_signed_shift);
-                try self.emitAsrImm(.w64, lhs_reg, lhs_reg, narrow_signed_shift);
-                try self.emitShlImm(.w64, rhs_reg, rhs_reg, narrow_signed_shift);
-                try self.emitAsrImm(.w64, rhs_reg, rhs_reg, narrow_signed_shift);
-            }
-
-            // Allocate result register
-            const result_reg = try self.allocTempGeneral();
-
             // Determine if this is an unsigned type (for division/modulo/comparisons)
             const is_unsigned = switch (operand_layout) {
                 layout.Idx.u8, layout.Idx.u16, layout.Idx.u32, layout.Idx.u64, layout.Idx.u128 => true,
                 else => false,
             };
+
+            const is_shift_op = switch (op) {
+                .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by => true,
+                else => false,
+            };
+
+            if (narrow_signed_shift > 0 and !is_unsigned) {
+                if (op == .num_shift_right_zf_by) {
+                    try self.emitShlImm(.w64, lhs_reg, lhs_reg, narrow_signed_shift);
+                    try self.emitLsrImm(.w64, lhs_reg, lhs_reg, narrow_signed_shift);
+                } else {
+                    try self.emitShlImm(.w64, lhs_reg, lhs_reg, narrow_signed_shift);
+                    try self.emitAsrImm(.w64, lhs_reg, lhs_reg, narrow_signed_shift);
+                }
+
+                if (is_shift_op) {
+                    try self.emitShlImm(.w64, rhs_reg, rhs_reg, 56);
+                    try self.emitLsrImm(.w64, rhs_reg, rhs_reg, 56);
+                } else {
+                    try self.emitShlImm(.w64, rhs_reg, rhs_reg, narrow_signed_shift);
+                    try self.emitAsrImm(.w64, rhs_reg, rhs_reg, narrow_signed_shift);
+                }
+            } else if (is_shift_op) {
+                try self.emitShlImm(.w64, rhs_reg, rhs_reg, 56);
+                try self.emitLsrImm(.w64, rhs_reg, rhs_reg, 56);
+            }
+
+            // Allocate result register
+            const result_reg = try self.allocTempGeneral();
 
             switch (op) {
                 .num_plus => try self.codegen.emitAdd(.w64, result_reg, lhs_reg, rhs_reg),
