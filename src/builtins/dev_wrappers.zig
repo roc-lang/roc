@@ -320,6 +320,12 @@ pub fn roc_builtins_str_escape_and_quote(out: *RocStr, str_bytes: ?[*]u8, str_le
     }
 }
 
+/// Wrapper: project a runtime RocStr to the host dbg ABI using the actual RocStr representation.
+pub fn roc_builtins_dbg_str(str_bytes: ?[*]u8, str_len: usize, str_cap: usize, roc_ops: *RocOps) callconv(.c) void {
+    const s = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
+    roc_ops.dbg(s.asSlice());
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // List Wrappers
 // ═══════════════════════════════════════════════════════════════════════════

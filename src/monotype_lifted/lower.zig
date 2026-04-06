@@ -26,6 +26,7 @@ pub const Result = struct {
     symbols: symbol_mod.Store,
     types: type_mod.Store,
     strings: base.StringLiteral.Store,
+    ident_name_literals: std.AutoHashMap(u32, base.StringLiteral.Idx),
 
     pub fn deinit(self: *Result) void {
         self.store.deinit();
@@ -33,6 +34,7 @@ pub const Result = struct {
         self.symbols.deinit();
         self.types.deinit();
         self.strings.deinit(self.store.allocator);
+        self.ident_name_literals.deinit();
     }
 };
 
@@ -109,6 +111,7 @@ const Lowerer = struct {
             .symbols = self.input.symbols,
             .types = self.input.types,
             .strings = self.input.strings,
+            .ident_name_literals = self.input.ident_name_literals,
         };
 
         self.output = ast.Store.init(self.allocator);
@@ -116,6 +119,7 @@ const Lowerer = struct {
         self.input.symbols = symbol_mod.Store.init(self.allocator);
         self.input.types = type_mod.Store.init(self.allocator);
         self.input.strings = .{};
+        self.input.ident_name_literals = std.AutoHashMap(u32, base.StringLiteral.Idx).init(self.allocator);
         self.input.program = mono.Lower.Program.init(self.allocator);
         return result;
     }
@@ -321,6 +325,12 @@ const Lowerer = struct {
                         .func = try self.lowerExprInto(&lowered.lifted_defs, venv, call.func),
                         .arg = try self.lowerExprInto(&lowered.lifted_defs, venv, call.arg),
                     } },
+                });
+            },
+            .inspect => |value| {
+                lowered.expr = try self.output.addExpr(.{
+                    .ty = expr.ty,
+                    .data = .{ .inspect = try self.lowerExprInto(&lowered.lifted_defs, venv, value) },
                 });
             },
             .low_level => |ll| {
@@ -775,7 +785,7 @@ const Lowerer = struct {
         var free_iter = free.iterator();
         while (free_iter.next()) |entry| {
             const symbol = self.lookupRenamedSymbol(venv, entry.key_ptr.*);
-            if (self.top_levels.contains(symbol)) continue;
+            if (self.isGlobalValueSymbol(symbol)) continue;
             try captures_map.put(symbol, entry.value_ptr.*);
         }
 
@@ -852,6 +862,7 @@ const Lowerer = struct {
                 try self.collectFreeVarsExpr(call.func, bound, free);
                 try self.collectFreeVarsExpr(call.arg, bound, free);
             },
+            .inspect => |value| try self.collectFreeVarsExpr(value, bound, free),
             .low_level => |ll| for (self.input.program.store.sliceExprSpan(ll.args)) |arg| try self.collectFreeVarsExpr(arg, bound, free),
             .when => |when_expr| {
                 try self.collectFreeVarsExpr(when_expr.cond, bound, free);
@@ -971,6 +982,17 @@ const Lowerer = struct {
         return symbol;
     }
 
+    fn isGlobalValueSymbol(self: *const Lowerer, symbol: Symbol) bool {
+        if (self.top_levels.contains(symbol)) return true;
+
+        return switch (self.input.symbols.get(symbol).origin) {
+            .top_level_def,
+            .specialized_top_level_def,
+            => true,
+            else => false,
+        };
+    }
+
     fn extendRename(self: *Lowerer, venv: []const Rename, from: Symbol, to: Symbol) std.mem.Allocator.Error![]Rename {
         const next = try self.allocator.alloc(Rename, venv.len + 1);
         std.mem.copyForwards(Rename, next[0..venv.len], venv);
@@ -1073,6 +1095,7 @@ const Lowerer = struct {
                 try self.collectBindingTypesExpr(call.func);
                 try self.collectBindingTypesExpr(call.arg);
             },
+            .inspect => |value| try self.collectBindingTypesExpr(value),
             .low_level => |ll| for (self.input.program.store.sliceExprSpan(ll.args)) |arg| try self.collectBindingTypesExpr(arg),
             .when => |when_expr| {
                 try self.collectBindingTypesExpr(when_expr.cond);

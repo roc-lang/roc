@@ -502,7 +502,7 @@ pub const tests = [_]TestCase{
         \\}
         \\
         \\x = test("abc")
-        \\bytes
+        \\x
         \\}
         ,
         .expected = .{ .inspect_str = "[0, 97, 98, 99]" },

@@ -771,6 +771,8 @@ pub const StaticDispatchConstraint = struct {
     fn_name: Ident.Idx,
     /// the dispatch fn var, a function
     fn_var: Var,
+    /// source expr var for source-site dispatches that must later resolve to an exact target
+    site_expr_var: ?Var = null,
     /// the origin of this constraint (operator, method call, or where clause)
     origin: Origin,
     /// Optional numeric literal info for from_numeral constraints
@@ -825,6 +827,7 @@ pub const ResolvedStaticDispatchSite = struct {
     expr_var: Var,
     target_module_name: Ident.Idx,
     target_def_idx: u32,
+    resolved_fn_var: Var,
 
     pub const SafeList = MkSafeList(@This());
 };

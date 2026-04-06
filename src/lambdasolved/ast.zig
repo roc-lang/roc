@@ -87,6 +87,7 @@ pub const Expr = struct {
             func: ExprId,
             arg: ExprId,
         },
+        inspect: ExprId,
         low_level: struct {
             op: base.LowLevel,
             args: Span(ExprId),

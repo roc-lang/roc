@@ -665,7 +665,7 @@ pub const Store = struct {
 
     pub fn findStaticDispatchSiteRequirement(self: *const Self, expr_var: Var, method_name: base.Ident.Idx) ?StaticDispatchSiteRequirement {
         for (self.static_dispatch_site_requirements.items.items) |requirement| {
-            if (requirement.expr_var == expr_var and requirement.method_name.eql(method_name)) {
+            if (requirement.expr_var == expr_var and requirement.method_name.idx == method_name.idx) {
                 return requirement;
             }
         }
@@ -691,6 +691,7 @@ pub const Store = struct {
             if (existing.expr_var != site.expr_var) continue;
             std.debug.assert(existing.target_module_name == site.target_module_name);
             std.debug.assert(existing.target_def_idx == site.target_def_idx);
+            std.debug.assert(existing.resolved_fn_var == site.resolved_fn_var);
             return;
         }
         _ = try self.appendResolvedStaticDispatchSites(&.{site});

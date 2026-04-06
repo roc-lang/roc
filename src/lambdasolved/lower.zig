@@ -21,6 +21,7 @@ pub const Result = struct {
     symbols: symbol_mod.Store,
     types: type_mod.Store,
     strings: base.StringLiteral.Store,
+    ident_name_literals: std.AutoHashMap(u32, base.StringLiteral.Idx),
 
     pub fn deinit(self: *Result) void {
         self.store.deinit();
@@ -28,6 +29,7 @@ pub const Result = struct {
         self.symbols.deinit();
         self.types.deinit();
         self.strings.deinit(self.store.allocator);
+        self.ident_name_literals.deinit();
     }
 };
 
@@ -91,6 +93,7 @@ const Lowerer = struct {
             .symbols = self.input.symbols,
             .types = self.types,
             .strings = self.input.strings,
+            .ident_name_literals = self.input.ident_name_literals,
         };
 
         self.output = ast.Store.init(self.allocator);
@@ -101,6 +104,7 @@ const Lowerer = struct {
         self.input.symbols = symbol_mod.Store.init(self.allocator);
         self.input.types = LiftedType.Store.init(self.allocator);
         self.input.strings = .{};
+        self.input.ident_name_literals = std.AutoHashMap(u32, base.StringLiteral.Idx).init(self.allocator);
         return result;
     }
 
@@ -189,6 +193,7 @@ const Lowerer = struct {
                 .func = try self.instantiateExpr(call.func),
                 .arg = try self.instantiateExpr(call.arg),
             } },
+            .inspect => |value| .{ .inspect = try self.instantiateExpr(value) },
             .low_level => |ll| .{ .low_level = .{
                 .op = ll.op,
                 .args = try self.instantiateExprSpan(ll.args),
@@ -357,6 +362,7 @@ const Lowerer = struct {
                 } };
             },
                 .list => |elem| type_mod.Content{ .list = try self.instantiateTypeRec(elem, cache) },
+                .box => |elem| type_mod.Content{ .box = try self.instantiateTypeRec(elem, cache) },
                 .tuple => |tuple| blk: {
                     const elems = self.input.types.sliceTypeSpan(tuple);
                 const out = try self.allocator.alloc(TypeVarId, elems.len);
@@ -529,11 +535,6 @@ const Lowerer = struct {
         const inferred = switch (expr.data) {
             .var_ => |symbol| blk: {
                 const env_ty = self.lookupEnv(venv, symbol) orelse {
-                    const entry = self.input.symbols.get(symbol);
-                    std.debug.print(
-                        "LSET_UNBOUND symbol={d} name={any} origin={any}\n",
-                        .{ symbol.raw(), entry.name, entry.origin },
-                    );
                     return debugPanic("lambdasolved.inferExpr unbound variable");
                 };
                 const inst_ty = try self.instantiateGeneralized(env_ty);
@@ -615,6 +616,11 @@ const Lowerer = struct {
                     .ret = target_ty,
                 } });
                 try self.unify(func_ty, wanted);
+                break :blk target_ty;
+            },
+            .inspect => |value| blk: {
+                _ = try self.inferExpr(venv, value);
+                try self.unify(target_ty, try self.freshPrimitiveType(.str));
                 break :blk target_ty;
             },
             .low_level => |ll| blk: {
@@ -876,6 +882,7 @@ const Lowerer = struct {
                 try self.propagateExprErasure(call.func);
                 try self.propagateExprErasure(call.arg);
             },
+            .inspect => |value| try self.propagateExprErasure(value),
             .low_level => |ll| for (self.output.sliceExprSpan(ll.args)) |arg| try self.propagateExprErasure(arg),
             .when => |when_expr| {
                 try self.propagateExprErasure(when_expr.cond);
@@ -1065,6 +1072,7 @@ const Lowerer = struct {
                 try self.collectExprEdges(call.func, edges);
                 try self.collectExprEdges(call.arg, edges);
             },
+            .inspect => |value| try self.collectExprEdges(value, edges),
             .low_level => |ll| for (self.output.sliceExprSpan(ll.args)) |arg| try self.collectExprEdges(arg, edges),
             .when => |when_expr| {
                 try self.collectExprEdges(when_expr.cond, edges);
@@ -1162,6 +1170,7 @@ const Lowerer = struct {
                     try self.isGeneralizedRec(func.lset, visited) or
                     try self.isGeneralizedRec(func.ret, visited),
                 .list => |elem| try self.isGeneralizedRec(elem, visited),
+                .box => |elem| try self.isGeneralizedRec(elem, visited),
                 .tuple => |elems| blk: {
                     for (self.types.sliceTypeVarSpan(elems)) |elem| {
                         if (try self.isGeneralizedRec(elem, visited)) break :blk true;
@@ -1231,6 +1240,9 @@ const Lowerer = struct {
                 } } },
                 .list => |elem| type_mod.Node{ .content = .{
                     .list = try self.instantiateGeneralizedRec(elem, mapping),
+                } },
+                .box => |elem| type_mod.Node{ .content = .{
+                    .box = try self.instantiateGeneralizedRec(elem, mapping),
                 } },
                 .tuple => |tuple| blk: {
                     const elems = self.types.sliceTypeVarSpan(tuple);
@@ -1340,6 +1352,7 @@ const Lowerer = struct {
                     try self.occursRec(needle, func.lset, visited) or
                     try self.occursRec(needle, func.ret, visited),
                 .list => |elem| try self.occursRec(needle, elem, visited),
+                .box => |elem| try self.occursRec(needle, elem, visited),
                 .tuple => |elems| blk: {
                     for (self.types.sliceTypeVarSpan(elems)) |elem| {
                         if (try self.occursRec(needle, elem, visited)) break :blk true;
@@ -1400,6 +1413,9 @@ const Lowerer = struct {
                     try self.generalizeRec(venv, func.ret, visited);
                 },
                 .list => |elem| {
+                    try self.generalizeRec(venv, elem, visited);
+                },
+                .box => |elem| {
                     try self.generalizeRec(venv, elem, visited);
                 },
                 .tuple => |elems| {
@@ -1482,7 +1498,10 @@ const Lowerer = struct {
         return switch (left) {
             .primitive => |prim| blk: {
                 if (prim != right.primitive) {
-                    return debugPanic("lambdasolved.unify incompatible primitives");
+                    std.debug.panic(
+                        "lambdasolved.unify incompatible primitives {s} vs {s}",
+                        .{ @tagName(prim), @tagName(right.primitive) },
+                    );
                 }
                 break :blk .{ .content = .{ .primitive = prim } };
             },
@@ -1495,6 +1514,10 @@ const Lowerer = struct {
             .list => |elem| blk: {
                 try self.unifyRec(elem, right.list, visited);
                 break :blk .{ .content = .{ .list = elem } };
+            },
+            .box => |elem| blk: {
+                try self.unifyRec(elem, right.box, visited);
+                break :blk .{ .content = .{ .box = elem } };
             },
             .tuple => |tuple| blk: {
                 const left_elems = self.types.sliceTypeVarSpan(tuple);
@@ -1658,7 +1681,8 @@ const Lowerer = struct {
         for (self.types.sliceLambdas(lambda_set)) |lambda| {
             if (lambda.symbol != lambda_symbol) continue;
             for (self.types.sliceCaptures(lambda.captures)) |capture| {
-                const env_ty = self.lookupEnv(venv, capture.symbol) orelse return debugPanic("lambdasolved.fixCaptures missing capture binding");
+                const env_ty = self.lookupEnv(venv, capture.symbol) orelse
+                    return debugPanic("lambdasolved.fixCaptures missing capture binding");
                 try self.unify(capture.ty, env_ty);
             }
             return;

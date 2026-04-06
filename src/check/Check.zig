@@ -4739,6 +4739,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     // For static dispatch to be used like `thing.dispatch(...)` the
                     // method being dispatched on must accept the type of `thing` as
                     // it's first arg. So, we prepend the `receiver_var` to the args list
+                    const deferred_constraints_before = env.deferred_static_dispatch_constraints.items.items.len;
                     const first_arg_range = try self.types.appendVars(&.{receiver_var});
                     const rest_args_range = try self.types.appendVars(@ptrCast(dispatch_arg_expr_idxs));
                     const dispatch_arg_vars_range = Var.SafeList.Range{
@@ -4762,6 +4763,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     const constraint = StaticDispatchConstraint{
                         .fn_name = dot_access.field_name,
                         .fn_var = constraint_fn_var,
+                        .site_expr_var = expr_var,
                         .origin = .method_call,
                     };
                     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
@@ -4783,6 +4785,15 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
                     // Then, set the root expr to redirect to the ret var
                     _ = try self.unify(expr_var, dispatch_ret_var, env);
+
+                    const resolved_receiver_after = self.types.resolveVar(receiver_var).desc.content;
+                    if (env.deferred_static_dispatch_constraints.items.items.len > deferred_constraints_before and
+                        resolved_receiver_after != .flex and
+                        resolved_receiver_after != .err)
+                    {
+                        try self.checkStaticDispatchConstraints(env, false);
+                        try self.checkAllConstraints(env);
+                    }
                 }
             } else {
                 // Otherwise, this is dot access on a record
@@ -4953,6 +4964,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 const constraint = StaticDispatchConstraint{
                     .fn_name = tvd.method_name,
                     .fn_var = constraint_fn_var,
+                    .site_expr_var = expr_var,
                     .origin = .method_call,
                 };
                 const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
@@ -6015,6 +6027,7 @@ fn mkBinopConstraint(
     const constraint = StaticDispatchConstraint{
         .fn_name = method_name,
         .fn_var = constraint_fn_var,
+        .site_expr_var = if (binop_expr_idx) |idx| ModuleEnv.varFrom(idx) else null,
         .origin = .desugared_binop,
     };
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
@@ -6064,6 +6077,7 @@ fn mkUnaryOp(
     const constraint = StaticDispatchConstraint{
         .fn_name = method_name,
         .fn_var = constraint_fn_var,
+        .site_expr_var = if (unary_expr_idx) |idx| ModuleEnv.varFrom(idx) else null,
         .origin = .desugared_unaryop,
     };
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
@@ -6622,8 +6636,6 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                 const def_idx: CIR.Def.Idx = @enumFromInt(@as(u32, @intCast(node_idx_in_original_env)));
                 const def_var: Var = ModuleEnv.varFrom(def_idx);
 
-                try self.recordResolvedStaticDispatchSite(constraint.fn_var, original_env, def_idx);
-
                 // Track whether we just processed a cycle participant
                 var cycle_method_expr_var: ?Var = null;
 
@@ -6730,6 +6742,9 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         .method_name = constraint.fn_name,
                     },
                 });
+                if (!fn_result.isProblem()) {
+                    try self.recordResolvedStaticDispatchSite(constraint.fn_var, original_env, def_idx, constraint.fn_var);
+                }
 
                 // If there was a problem, then ensure the error gets propagated
                 // to all args and return types.
@@ -6846,6 +6861,7 @@ fn recordResolvedStaticDispatchSite(
     constraint_fn_var: Var,
     target_env: *const ModuleEnv,
     target_def_idx: CIR.Def.Idx,
+    resolved_fn_var: Var,
 ) Allocator.Error!void {
     const site_requirement = self.types.findStaticDispatchSiteRequirementByFnVar(constraint_fn_var) orelse return;
     const target_module_name_text = if (!target_env.qualified_module_ident.isNone())
@@ -6858,6 +6874,7 @@ fn recordResolvedStaticDispatchSite(
         .expr_var = site_requirement.expr_var,
         .target_module_name = target_module_name,
         .target_def_idx = @intFromEnum(target_def_idx),
+        .resolved_fn_var = resolved_fn_var,
     });
 }
 

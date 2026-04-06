@@ -51,17 +51,31 @@ const Lowerer = struct {
     const LoweredBlock = struct {
         stmts: std.ArrayList(ast.Stmt),
         term: ast.Term,
+        has_term: bool,
 
         fn init(allocator: std.mem.Allocator) LoweredBlock {
             _ = allocator;
             return .{
                 .stmts = .empty,
                 .term = undefined,
+                .has_term = false,
             };
         }
 
         fn deinit(self: *LoweredBlock, allocator: std.mem.Allocator) void {
             self.stmts.deinit(allocator);
+        }
+
+        fn setTerm(self: *LoweredBlock, term: ast.Term) void {
+            self.term = term;
+            self.has_term = true;
+        }
+
+        fn requireTerm(self: *const LoweredBlock) ast.Term {
+            if (!self.has_term) {
+                debugPanic("ir.lower invariant violated: lowered block missing terminator");
+            }
+            return self.term;
         }
     };
 
@@ -180,7 +194,7 @@ const Lowerer = struct {
         const stmt_span = try self.addStmtSpan(lowered.stmts.items);
         return try self.output.addBlock(.{
             .stmts = stmt_span,
-            .term = lowered.term,
+            .term = lowered.requireTerm(),
         });
     }
 
@@ -192,7 +206,7 @@ const Lowerer = struct {
         switch (expr.data) {
             .var_ => |symbol| {
                 if (self.lookupEnv(env, symbol)) |value| {
-                    block.term = .{ .value = value };
+                    block.setTerm(.{ .value = value });
                 } else if (self.value_thunks.contains(symbol)) {
                     const temp = try self.freshVar(expr.ty, "thunk_result");
                     try block.stmts.append(self.allocator, .{ .let_ = .{
@@ -202,12 +216,12 @@ const Lowerer = struct {
                             .args = try self.output.addVarSpan(&.{}),
                         } }),
                     } });
-                    block.term = .{ .value = temp };
+                    block.setTerm(.{ .value = temp });
                 } else {
-                    block.term = .{ .value = try self.lowerTypedSymbol(.{
+                    block.setTerm(.{ .value = try self.lowerTypedSymbol(.{
                         .ty = expr.ty,
                         .symbol = symbol,
-                    }) };
+                    }) });
                 }
             },
             .bool_lit => |value| try self.emitLeafExpr(&block, expr.ty, "bool", .{ .lit = .{ .bool = value } }),
@@ -221,22 +235,22 @@ const Lowerer = struct {
             }),
             .record => |fields| {
                 const lowered_fields = try self.lowerFieldValues(&block, env, fields);
-                if (lowered_fields == null) return block;
+                if (lowered_fields == null) return if (block.has_term) block else debugPanic("ir.lower record missing terminator");
                 try self.emitLeafExpr(&block, expr.ty, "record", .{ .make_struct = lowered_fields.? });
             },
             .tuple => |items| {
                 const lowered_items = try self.lowerValueSpan(&block, env, items);
-                if (lowered_items == null) return block;
+                if (lowered_items == null) return if (block.has_term) block else debugPanic("ir.lower tuple missing terminator");
                 try self.emitLeafExpr(&block, expr.ty, "tuple", .{ .make_struct = lowered_items.? });
             },
             .list => |items| {
                 const lowered_items = try self.lowerValueSpan(&block, env, items);
-                if (lowered_items == null) return block;
+                if (lowered_items == null) return if (block.has_term) block else debugPanic("ir.lower list missing terminator");
                 try self.emitLeafExpr(&block, expr.ty, "list", .{ .make_list = lowered_items.? });
             },
             .tag => |tag| {
                 const lowered_args = try self.lowerValueSpan(&block, env, tag.args);
-                if (lowered_args == null) return block;
+                if (lowered_args == null) return if (block.has_term) block else debugPanic("ir.lower tag missing terminator");
 
                 const payload: ?ast.Var = blk: {
                     const args = self.output.sliceVarSpan(lowered_args.?);
@@ -257,11 +271,11 @@ const Lowerer = struct {
                         .payload = payload,
                     } }),
                 } });
-                block.term = .{ .value = temp };
+                block.setTerm(.{ .value = temp });
             },
             .access => |access| {
                 const record = try self.lowerSubexprValue(&block, env, access.record);
-                if (record == null) return block;
+                if (record == null) return if (block.has_term) block else debugPanic("ir.lower access missing terminator");
                 const temp = try self.freshVar(expr.ty, "field");
                 try block.stmts.append(self.allocator, .{ .let_ = .{
                     .bind = temp,
@@ -270,11 +284,11 @@ const Lowerer = struct {
                         .field_index = try self.fieldId(self.input.store.getExpr(access.record).ty, access.field),
                     } }),
                 } });
-                block.term = .{ .value = temp };
+                block.setTerm(.{ .value = temp });
             },
             .tuple_access => |tuple_access| {
                 const tuple = try self.lowerSubexprValue(&block, env, tuple_access.tuple);
-                if (tuple == null) return block;
+                if (tuple == null) return if (block.has_term) block else debugPanic("ir.lower tuple_access missing terminator");
                 const temp = try self.freshVar(expr.ty, "tuple_field");
                 try block.stmts.append(self.allocator, .{ .let_ = .{
                     .bind = temp,
@@ -283,11 +297,11 @@ const Lowerer = struct {
                         .field_index = @intCast(tuple_access.elem_index),
                     } }),
                 } });
-                block.term = .{ .value = temp };
+                block.setTerm(.{ .value = temp });
             },
             .let_ => |let_expr| {
                 const body_value = try self.lowerSubexprValue(&block, env, let_expr.body);
-                if (body_value == null) return block;
+                if (body_value == null) return if (block.has_term) block else debugPanic("ir.lower let missing terminator");
                 const bind_var = try self.lowerTypedSymbol(let_expr.bind);
                 try block.stmts.append(self.allocator, .{ .let_ = .{
                     .bind = bind_var,
@@ -306,7 +320,7 @@ const Lowerer = struct {
             },
             .call => |call| {
                 const args = try self.lowerValueSpan(&block, env, call.args);
-                if (args == null) return block;
+                if (args == null) return if (block.has_term) block else debugPanic("ir.lower call missing terminator");
                 const temp = try self.freshVar(expr.ty, "call");
                 try block.stmts.append(self.allocator, .{ .let_ = .{
                     .bind = temp,
@@ -315,7 +329,7 @@ const Lowerer = struct {
                         .args = args.?,
                     } }),
                 } });
-                block.term = .{ .value = temp };
+                block.setTerm(.{ .value = temp });
             },
             .packed_fn => |packed_fn| {
                 const fn_ptr = try self.freshOpaqueVar("fn_ptr");
@@ -326,7 +340,7 @@ const Lowerer = struct {
 
                 const captures = if (packed_fn.captures) |captures_expr| blk: {
                     const lowered = try self.lowerSubexprValue(&block, env, captures_expr);
-                    if (lowered == null) return block;
+                    if (lowered == null) return if (block.has_term) block else debugPanic("ir.lower packed_fn captures missing terminator");
                     break :blk lowered.?;
                 } else blk: {
                     const null_ptr = try self.freshOpaqueVar("null_ptr");
@@ -344,13 +358,13 @@ const Lowerer = struct {
                         .make_struct = try self.output.addVarSpan(&.{ fn_ptr, captures }),
                     }),
                 } });
-                block.term = .{ .value = temp };
+                block.setTerm(.{ .value = temp });
             },
             .call_indirect => |call| {
                 const func = try self.lowerSubexprValue(&block, env, call.func);
-                if (func == null) return block;
+                if (func == null) return if (block.has_term) block else debugPanic("ir.lower call_indirect missing func terminator");
                 const args = try self.lowerValueSpan(&block, env, call.args);
-                if (args == null) return block;
+                if (args == null) return if (block.has_term) block else debugPanic("ir.lower call_indirect missing args terminator");
                 const temp = try self.freshVar(expr.ty, "call_indirect");
                 try block.stmts.append(self.allocator, .{ .let_ = .{
                     .bind = temp,
@@ -359,11 +373,11 @@ const Lowerer = struct {
                         .args = args.?,
                     } }),
                 } });
-                block.term = .{ .value = temp };
+                block.setTerm(.{ .value = temp });
             },
             .low_level => |ll| {
                 const args = try self.lowerValueSpan(&block, env, ll.args);
-                if (args == null) return block;
+                if (args == null) return if (block.has_term) block else debugPanic("ir.lower low_level missing terminator");
                 const temp = try self.freshVar(expr.ty, "low_level");
                 try block.stmts.append(self.allocator, .{ .let_ = .{
                     .bind = temp,
@@ -372,20 +386,21 @@ const Lowerer = struct {
                         .args = args.?,
                     } }),
                 } });
-                block.term = .{ .value = temp };
+                block.setTerm(.{ .value = temp });
             },
             .when => |when_expr| try self.lowerWhenExpr(&block, env, expr.ty, when_expr.cond, when_expr.branches),
             .if_ => |if_expr| try self.lowerIfExpr(&block, env, expr.ty, if_expr.cond, if_expr.then_body, if_expr.else_body),
             .block => |body| try self.lowerBlockExpr(&block, env, body.stmts, body.final_expr),
             .return_ => |ret_expr| {
                 const value = try self.lowerSubexprValue(&block, env, ret_expr);
-                if (value == null) return block;
-                block.term = .{ .return_ = value.? };
+                if (value == null) return if (block.has_term) block else debugPanic("ir.lower return missing terminator");
+                block.setTerm(.{ .return_ = value.? });
             },
-            .runtime_error => block.term = .runtime_error,
+            .runtime_error => block.setTerm(.runtime_error),
             .for_ => |for_expr| try self.lowerForExpr(&block, env, for_expr.patt, for_expr.iterable, for_expr.body),
         }
 
+        if (!block.has_term) debugPanic("ir.lower invariant violated: expr lowered without terminator");
         return block;
     }
 
@@ -454,12 +469,13 @@ const Lowerer = struct {
             .bind = temp,
             .expr = try self.output.addExpr(expr),
         } });
-        block.term = .{ .value = temp };
+        block.setTerm(.{ .value = temp });
     }
 
     fn appendChildBlock(self: *Lowerer, dst: *LoweredBlock, src: *const LoweredBlock) std.mem.Allocator.Error!void {
         try dst.stmts.appendSlice(self.allocator, src.stmts.items);
-        dst.term = src.term;
+        dst.term = src.requireTerm();
+        dst.has_term = true;
     }
 
     fn lowerSubexprValue(
@@ -474,7 +490,8 @@ const Lowerer = struct {
         return switch (child.term) {
             .value => |value| value,
             else => blk: {
-                dst.term = child.term;
+                dst.term = child.requireTerm();
+                dst.has_term = true;
                 break :blk null;
             },
         };
@@ -628,7 +645,7 @@ const Lowerer = struct {
             .default_block = default_final,
             .join = join,
         } });
-        block.term = .{ .value = join };
+        block.setTerm(.{ .value = join });
     }
 
     fn lowerIfExpr(
@@ -656,7 +673,7 @@ const Lowerer = struct {
             .default_block = else_block,
             .join = join,
         } });
-        block.term = .{ .value = join };
+        block.setTerm(.{ .value = join });
     }
 
     fn lowerBlockExpr(
@@ -730,8 +747,9 @@ const Lowerer = struct {
                 return true;
             },
             .expr => |expr_id| {
-                _ = try self.lowerSubexprValue(block, env.*, expr_id);
-                return block.term == .value;
+                const value = try self.lowerSubexprValue(block, env.*, expr_id);
+                if (value == null) return false;
+                return true;
             },
             .debug => |expr_id| {
                 const value = try self.lowerSubexprValue(block, env.*, expr_id);
@@ -746,18 +764,18 @@ const Lowerer = struct {
                 return true;
             },
             .crash => |msg| {
-                block.term = .{ .crash = msg };
+                block.setTerm(.{ .crash = msg });
                 return false;
             },
             .return_ => |expr_id| {
                 const value = try self.lowerSubexprValue(block, env.*, expr_id);
                 if (value == null) return false;
-                block.term = .{ .return_ = value.? };
+                block.setTerm(.{ .return_ = value.? });
                 return false;
             },
             .for_ => |for_stmt| {
                 try self.lowerForStmt(block, env.*, for_stmt.patt, for_stmt.iterable, for_stmt.body);
-                return block.term == .value;
+                return true;
             },
         }
     }
@@ -770,7 +788,8 @@ const Lowerer = struct {
         iterable_expr: lambdamono.Ast.ExprId,
         body_expr: lambdamono.Ast.ExprId,
     ) std.mem.Allocator.Error!void {
-        try self.lowerForCommon(block, env, patt, iterable_expr, body_expr);
+        try self.lowerForLoop(block, env, patt, iterable_expr, body_expr);
+        block.setTerm(.{ .value = try self.makeUnitValue(block, "for_progress") });
     }
 
     fn lowerForStmt(
@@ -781,10 +800,10 @@ const Lowerer = struct {
         iterable_expr: lambdamono.Ast.ExprId,
         body_expr: lambdamono.Ast.ExprId,
     ) std.mem.Allocator.Error!void {
-        try self.lowerForCommon(block, env, patt, iterable_expr, body_expr);
+        try self.lowerForLoop(block, env, patt, iterable_expr, body_expr);
     }
 
-    fn lowerForCommon(
+    fn lowerForLoop(
         self: *Lowerer,
         block: *LoweredBlock,
         env: []const EnvEntry,
@@ -803,7 +822,6 @@ const Lowerer = struct {
             .iterable = iterable.?,
             .body = body_block,
         } });
-        block.term = .{ .value = try self.makeUnitValue(block, "for_progress") };
     }
 
     fn lowerPatternBranchBlock(
@@ -830,7 +848,7 @@ const Lowerer = struct {
         const stmt_span = try self.addStmtSpan(prefix.items);
         return try self.output.addBlock(.{
             .stmts = stmt_span,
-            .term = body.term,
+            .term = body.requireTerm(),
         });
     }
 

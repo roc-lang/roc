@@ -139,18 +139,17 @@ fn lowerTypeRec(
     const lowered: mono.Content = switch (types.getNode(id)) {
         .link => unreachable,
         .for_a => debugPanic("lambdamono.lower_type.lowerType generalized type survived instantiation"),
-        // Residual unbound solved vars are the executable analogue of cor's
-        // monotype `Unbd`: they were never semantically constrained, so we
-        // materialize them as the empty tag union instead of letting
-        // executable lowering depend on solver internals.
-        .unbd => .{ .tag_union = .{
-            .tags = mono.Span(mono.Tag).empty(),
-        } },
+        // Residual unbound solved vars are operationally erased in executable
+        // lowering. They must not fabricate empty tag-union layouts.
+        .unbd => .{ .primitive = .erased },
         .content => |content| switch (content) {
             .func => debugPanic("lambdamono.lower_type.lowerType unexpected function after unlinkExecutable"),
             .primitive => |prim| .{ .primitive = prim },
             .list => |elem| .{
                 .list = try lowerTypeRec(types, mono_types, mono_cache, elem, symbols),
+            },
+            .box => |elem| .{
+                .box = try lowerTypeRec(types, mono_types, mono_cache, elem, symbols),
             },
             .tuple => |tuple| blk: {
                 const elems = types.sliceTypeVarSpan(tuple);

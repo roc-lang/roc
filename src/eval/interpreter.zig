@@ -279,7 +279,7 @@ pub const Interpreter = struct {
     };
 
     const ExecOutcome = union(enum) {
-        returned: Value,
+        returned: LocalId,
         scope_exit,
         loop_continue,
     };
@@ -465,31 +465,54 @@ pub const Interpreter = struct {
         if (sj != 0) return error.Crash;
 
         const args = try self.marshalAbiArgs(request.arg_ptr, request.arg_layouts);
-        const result_value = try self.evalProcById(request.proc_id, args);
+        const proc_ret_layout = self.store.getProcSpec(request.proc_id).ret_layout;
+        const result_value = try self.evalProcById(request.proc_id, args, request.arg_layouts);
+        const ret_layout = request.ret_layout orelse proc_ret_layout;
+        const normalized_result = self.normalizeValueToLayout(result_value, proc_ret_layout, ret_layout);
 
         if (request.ret_ptr) |ret_ptr| {
-            const ret_layout = request.ret_layout orelse self.store.getProcSpec(request.proc_id).ret_layout;
             const ret_size = self.helper.sizeOf(ret_layout);
-            if (ret_size > 0 and !result_value.isZst()) {
-                @memcpy(@as([*]u8, @ptrCast(ret_ptr))[0..ret_size], result_value.readBytes(ret_size));
+            if (ret_size > 0 and !normalized_result.isZst()) {
+                @memcpy(@as([*]u8, @ptrCast(ret_ptr))[0..ret_size], normalized_result.readBytes(ret_size));
             }
         }
 
-        return .{ .value = result_value };
+        return .{ .value = normalized_result };
     }
 
-    fn evalProcById(self: *LirInterpreter, proc_id: LirProcSpecId, args: []const Value) Error!Value {
-        return self.evalProcSpec(proc_id, self.store.getProcSpec(proc_id), args);
+    fn evalProcById(
+        self: *LirInterpreter,
+        proc_id: LirProcSpecId,
+        args: []const Value,
+        arg_layouts: []const layout_mod.Idx,
+    ) Error!Value {
+        return self.evalProcSpec(proc_id, self.store.getProcSpec(proc_id), args, arg_layouts);
     }
 
-    fn evalProcSpec(self: *LirInterpreter, proc_id: LirProcSpecId, proc_spec: LirProcSpec, args: []const Value) Error!Value {
+    fn evalProcSpec(
+        self: *LirInterpreter,
+        proc_id: LirProcSpecId,
+        proc_spec: LirProcSpec,
+        args: []const Value,
+        arg_layouts: []const layout_mod.Idx,
+    ) Error!Value {
         if (self.call_depth >= max_call_depth) {
             return self.triggerCrash(stack_overflow_message);
         }
+        if (args.len != arg_layouts.len) {
+            std.debug.panic(
+                "LIR/interpreter invariant violated: proc {d} received {d} args but {d} arg layouts",
+                .{ proc_spec.name.raw(), args.len, arg_layouts.len },
+            );
+        }
 
         if (proc_spec.hosted) |hosted| {
-            const arg_layouts = self.localLayoutsFromSpan(proc_spec.args);
-            return self.callHostedProc(hosted, args, arg_layouts, proc_spec.ret_layout);
+            const param_layouts = self.localLayoutsFromSpan(proc_spec.args);
+            const normalized_args = try self.arena.allocator().alloc(Value, args.len);
+            for (args, arg_layouts, param_layouts, 0..) |arg, arg_layout, param_layout, i| {
+                normalized_args[i] = self.normalizeValueToLayout(arg, arg_layout, param_layout);
+            }
+            return self.callHostedProc(hosted, normalized_args, param_layouts, proc_spec.ret_layout);
         }
 
         trace.log(
@@ -514,18 +537,35 @@ pub const Interpreter = struct {
                 .{ proc_spec.name.raw(), params.len, args.len },
             );
         }
+        if (params.len != arg_layouts.len) {
+            std.debug.panic(
+                "LIR/interpreter invariant violated: proc {d} expected {d} arg layouts but got {d}",
+                .{ proc_spec.name.raw(), params.len, arg_layouts.len },
+            );
+        }
 
-        for (params, args) |param, arg| {
-            frame.setLocal(param, arg);
+        for (params, args, arg_layouts) |param, arg, arg_layout| {
+            frame.setLocal(
+                param,
+                self.normalizeValueToLayout(
+                    arg,
+                    arg_layout,
+                    self.store.getLocal(param).layout_idx,
+                ),
+            );
         }
         const outcome = try self.execStmtChain(&frame, proc_spec.body, null);
         return switch (outcome) {
-            .returned => |value| blk: {
+            .returned => |ret_local| blk: {
                 trace.log(
                     "return proc={d} name={d} depth={d}",
                     .{ @intFromEnum(proc_id), proc_spec.name.raw(), self.call_depth },
                 );
-                break :blk value;
+                break :blk self.normalizeValueToLayout(
+                    frame.getLocal(ret_local),
+                    self.store.getLocal(ret_local).layout_idx,
+                    proc_spec.ret_layout,
+                );
             },
             .scope_exit => std.debug.panic(
                 "LIR/interpreter invariant violated: proc {d} terminated via scope_exit",
@@ -626,13 +666,29 @@ pub const Interpreter = struct {
                 .assign_call => |assign| {
                     const arg_locals = self.store.getLocalSpan(assign.args);
                     const arg_values = try self.collectLocalValues(frame, arg_locals);
-                    frame.setLocal(assign.target, try self.evalProcById(assign.proc, arg_values));
+                    const result = try self.evalProcById(assign.proc, arg_values, try self.localLayouts(arg_locals));
+                    frame.setLocal(
+                        assign.target,
+                        self.normalizeValueToLayout(
+                            result,
+                            self.store.getProcSpec(assign.proc).ret_layout,
+                            self.store.getLocal(assign.target).layout_idx,
+                        ),
+                    );
                     current = assign.next;
                 },
                 .assign_call_indirect => |assign| {
                     const arg_locals = self.store.getLocalSpan(assign.args);
                     const arg_values = try self.collectLocalValues(frame, arg_locals);
-                    frame.setLocal(assign.target, try self.evalIndirectCall(frame, assign.closure, arg_values));
+                    const result = try self.evalIndirectCall(frame, assign.closure, arg_values, try self.localLayouts(arg_locals));
+                    frame.setLocal(
+                        assign.target,
+                        self.normalizeValueToLayout(
+                            result.value,
+                            result.layout,
+                            self.store.getLocal(assign.target).layout_idx,
+                        ),
+                    );
                     current = assign.next;
                 },
                 .assign_low_level => |assign| {
@@ -713,7 +769,7 @@ pub const Interpreter = struct {
                 .borrow_scope => |scope_stmt| {
                     const outcome = try self.execStmtChain(frame, scope_stmt.body, scope_stmt.id);
                     switch (outcome) {
-                        .returned => |value| return .{ .returned = value },
+                        .returned => |ret_local| return .{ .returned = ret_local },
                         .scope_exit => current = scope_stmt.remainder,
                         .loop_continue => std.debug.panic(
                             "LIR/interpreter invariant violated: loop_continue escaped borrow scope in proc {d}",
@@ -751,7 +807,7 @@ pub const Interpreter = struct {
                         frame.setLocal(for_stmt.elem, elem_value);
                         const outcome = try self.execStmtChain(frame, for_stmt.body, null);
                         switch (outcome) {
-                            .returned => |value| return .{ .returned = value },
+                            .returned => |ret_local| return .{ .returned = ret_local },
                             .loop_continue => {},
                             .scope_exit => std.debug.panic(
                                 "LIR/interpreter invariant violated: unexpected scope_exit escaped for_list body in proc {d}",
@@ -782,7 +838,7 @@ pub const Interpreter = struct {
                     for (params, arg_values) |param, arg| frame.setLocal(param, arg);
                     current = join_info.body;
                 },
-                .ret => |ret_stmt| return .{ .returned = frame.getLocal(ret_stmt.value) },
+                .ret => |ret_stmt| return .{ .returned = ret_stmt.value },
                 .crash => |crash_stmt| return self.triggerCrash(self.store.getString(crash_stmt.msg)),
             }
         }
@@ -817,6 +873,11 @@ pub const Interpreter = struct {
         for (local_ids, 0..) |local_id, i| layouts[i] = self.store.getLocal(local_id).layout_idx;
         return layouts;
     }
+
+    const IndirectCallResult = struct {
+        value: Value,
+        layout: layout_mod.Idx,
+    };
 
     fn readSwitchValue(self: *LirInterpreter, value: Value, layout_idx: layout_mod.Idx) u64 {
         return switch (self.helper.sizeOf(layout_idx)) {
@@ -1006,7 +1067,13 @@ pub const Interpreter = struct {
         return @enumFromInt(@as(u32, @intCast(encoded - 1)));
     }
 
-    fn evalIndirectCall(self: *LirInterpreter, frame: *Frame, closure_local: LocalId, args: []const Value) Error!Value {
+    fn evalIndirectCall(
+        self: *LirInterpreter,
+        frame: *Frame,
+        closure_local: LocalId,
+        args: []const Value,
+        arg_layouts: []const layout_mod.Idx,
+    ) Error!IndirectCallResult {
         const closure_layout = self.store.getLocal(closure_local).layout_idx;
         const closure_value = frame.getLocal(closure_local);
         const closure_base = self.resolveStructBaseValue(closure_value, closure_layout);
@@ -1032,7 +1099,10 @@ pub const Interpreter = struct {
         const proc_args = self.store.getLocalSpan(proc_spec.args);
 
         if (proc_args.len == args.len) {
-            return self.evalProcById(proc_id, args);
+            return .{
+                .value = try self.evalProcById(proc_id, args, arg_layouts),
+                .layout = proc_spec.ret_layout,
+            };
         }
 
         if (proc_args.len != args.len + 1) {
@@ -1053,7 +1123,13 @@ pub const Interpreter = struct {
         const all_args = try self.arena.allocator().alloc(Value, args.len + 1);
         @memcpy(all_args[0..args.len], args);
         all_args[args.len] = capture_value;
-        return self.evalProcById(proc_id, all_args);
+        const all_arg_layouts = try self.arena.allocator().alloc(layout_mod.Idx, arg_layouts.len + 1);
+        @memcpy(all_arg_layouts[0..arg_layouts.len], arg_layouts);
+        all_arg_layouts[arg_layouts.len] = capture_layout;
+        return .{
+            .value = try self.evalProcById(proc_id, all_args, all_arg_layouts),
+            .layout = proc_spec.ret_layout,
+        };
     }
 
     const AllocatedStruct = struct {

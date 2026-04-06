@@ -49,6 +49,7 @@ pub const Content = union(enum) {
         ret: TypeId,
     },
     list: TypeId,
+    box: TypeId,
     tuple: TypeSpan,
     tag_union: struct {
         tags: Span(Tag),
@@ -177,6 +178,7 @@ pub const Store = struct {
                 break :blk try self.equalIdsVisited(func.ret, right_func.ret, visited);
             },
             .list => |elem| self.equalIdsVisited(elem, right.list, visited),
+            .box => |elem| self.equalIdsVisited(elem, right.box, visited),
             .tuple => |tuple| blk: {
                 const left_elems = self.sliceTypeSpan(tuple);
                 const right_elems = self.sliceTypeSpan(right.tuple);

@@ -102,6 +102,7 @@ const Lowerer = struct {
         self.root_defs = .empty;
         self.input.symbols = symbol_mod.Store.init(self.allocator);
         self.input.strings = .{};
+        self.input.ident_name_literals = std.AutoHashMap(u32, base.StringLiteral.Idx).init(self.allocator);
         self.types = type_mod.Store.init(self.allocator);
         return result;
     }
@@ -352,6 +353,10 @@ const Lowerer = struct {
         const ty = try self.cloneInstType(inst, expr.ty);
         const lowered_ty = try lower_type.lowerType(&self.input.types, &self.types, mono_cache, ty, &self.input.symbols);
 
+        if (expr.data == .inspect) {
+            return try self.specializeInspectExpr(inst, mono_cache, venv, expr.data.inspect, lowered_ty);
+        }
+
         const data: ast.Expr.Data = switch (expr.data) {
             .var_ => |symbol| try self.specializeVarExpr(inst, mono_cache, venv, symbol, ty, lowered_ty),
             .int_lit => |value| .{ .int_lit = value },
@@ -393,6 +398,7 @@ const Lowerer = struct {
                 },
             } },
             .call => |call| try self.specializeCallExpr(inst, mono_cache, venv, call, lowered_ty),
+            .inspect => unreachable,
             .low_level => |ll| .{ .low_level = .{
                 .op = ll.op,
                 .args = try self.specializeExprSpan(inst, mono_cache, venv, ll.args),
@@ -419,6 +425,471 @@ const Lowerer = struct {
         };
 
         return try self.output.addExpr(.{ .ty = lowered_ty, .data = data });
+    }
+
+    fn specializeInspectExpr(
+        self: *Lowerer,
+        inst: *InstScope,
+        mono_cache: *lower_type.MonoCache,
+        venv: []const EnvEntry,
+        value_expr_id: solved.Ast.ExprId,
+        result_ty: type_mod.TypeId,
+    ) std.mem.Allocator.Error!ast.ExprId {
+        const value_expr = try self.specializeExpr(inst, mono_cache, venv, value_expr_id);
+        return try self.specializeInspectValueExpr(value_expr, result_ty);
+    }
+
+    fn retypeDivergingExpr(
+        self: *Lowerer,
+        expr_id: ast.ExprId,
+        result_ty: type_mod.TypeId,
+    ) std.mem.Allocator.Error!?ast.ExprId {
+        return switch (self.output.getExpr(expr_id).data) {
+            .runtime_error => |msg| try self.output.addExpr(.{
+                .ty = result_ty,
+                .data = .{ .runtime_error = msg },
+            }),
+            .block => |block| if (try self.retypeDivergingExpr(block.final_expr, result_ty)) |final_expr| try self.output.addExpr(.{
+                .ty = result_ty,
+                .data = .{ .block = .{
+                    .stmts = block.stmts,
+                    .final_expr = final_expr,
+                } },
+            }) else null,
+            else => null,
+        };
+    }
+
+    fn makeBoolInspectExpr(
+        self: *Lowerer,
+        value_expr: ast.ExprId,
+        result_ty: type_mod.TypeId,
+    ) std.mem.Allocator.Error!ast.ExprId {
+        return try self.output.addExpr(.{
+            .ty = result_ty,
+            .data = .{ .if_ = .{
+                .cond = value_expr,
+                .then_body = try self.makeStringLiteralExpr(result_ty, "True"),
+                .else_body = try self.makeStringLiteralExpr(result_ty, "False"),
+            } },
+        });
+    }
+
+    fn makeListInspectExpr(
+        self: *Lowerer,
+        elem_ty: type_mod.TypeId,
+        list_expr: ast.ExprId,
+        result_ty: type_mod.TypeId,
+    ) std.mem.Allocator.Error!ast.ExprId {
+        const prefix_expr = try self.makeStringLiteralExpr(result_ty, "[");
+        const suffix_expr = try self.makeStringLiteralExpr(result_ty, "]");
+        const separator_expr = try self.makeStringLiteralExpr(result_ty, ", ");
+        const unit_ty = try self.makeUnitType();
+        const unit_expr = try self.output.addExpr(.{
+            .ty = unit_ty,
+            .data = .unit,
+        });
+        const bool_ty = try self.makePrimitiveType(.bool);
+
+        const out_bind: ast.TypedSymbol = .{
+            .ty = result_ty,
+            .symbol = try self.input.symbols.add(base.Ident.Idx.NONE, .synthetic),
+        };
+        const out_decl = try self.output.addStmt(.{ .var_decl = .{
+            .bind = out_bind,
+            .body = prefix_expr,
+        } });
+
+        const item_symbol = try self.input.symbols.add(base.Ident.Idx.NONE, .synthetic);
+        const item_pat = try self.output.addPat(.{
+            .ty = elem_ty,
+            .data = .{ .var_ = item_symbol },
+        });
+        const item_expr = try self.makeVarExpr(elem_ty, item_symbol);
+
+        const out_before_cmp = try self.makeVarExpr(result_ty, out_bind.symbol);
+        const is_first_expr = try self.makeLowLevelExpr(bool_ty, .str_is_eq, &.{ out_before_cmp, prefix_expr });
+        const inspected_item = try self.specializeInspectValueExpr(item_expr, result_ty);
+
+        const out_then_expr = try self.makeVarExpr(result_ty, out_bind.symbol);
+        const appended_first = try self.makeStringConcatExpr(result_ty, out_then_expr, inspected_item);
+        const then_stmt = try self.output.addStmt(.{ .reassign = .{
+            .target = out_bind.symbol,
+            .body = appended_first,
+        } });
+        const then_body = try self.output.addExpr(.{
+            .ty = unit_ty,
+            .data = .{ .block = .{
+                .stmts = try self.output.addStmtSpan(&.{then_stmt}),
+                .final_expr = unit_expr,
+            } },
+        });
+
+        const out_else_prefix = try self.makeVarExpr(result_ty, out_bind.symbol);
+        const with_separator = try self.makeStringConcatExpr(result_ty, out_else_prefix, separator_expr);
+        const else_sep_stmt = try self.output.addStmt(.{ .reassign = .{
+            .target = out_bind.symbol,
+            .body = with_separator,
+        } });
+        const out_else_value = try self.makeVarExpr(result_ty, out_bind.symbol);
+        const appended_else = try self.makeStringConcatExpr(result_ty, out_else_value, inspected_item);
+        const else_item_stmt = try self.output.addStmt(.{ .reassign = .{
+            .target = out_bind.symbol,
+            .body = appended_else,
+        } });
+        const else_body = try self.output.addExpr(.{
+            .ty = unit_ty,
+            .data = .{ .block = .{
+                .stmts = try self.output.addStmtSpan(&.{ else_sep_stmt, else_item_stmt }),
+                .final_expr = unit_expr,
+            } },
+        });
+
+        const loop_body = try self.output.addExpr(.{
+            .ty = unit_ty,
+            .data = .{ .if_ = .{
+                .cond = is_first_expr,
+                .then_body = then_body,
+                .else_body = else_body,
+            } },
+        });
+
+        const loop_expr = try self.output.addExpr(.{
+            .ty = unit_ty,
+            .data = .{ .for_ = .{
+                .patt = item_pat,
+                .iterable = list_expr,
+                .body = loop_body,
+            } },
+        });
+        const loop_stmt = try self.output.addStmt(.{ .expr = loop_expr });
+
+        const out_before_close = try self.makeVarExpr(result_ty, out_bind.symbol);
+        const closed_out = try self.makeStringConcatExpr(result_ty, out_before_close, suffix_expr);
+        const close_stmt = try self.output.addStmt(.{ .reassign = .{
+            .target = out_bind.symbol,
+            .body = closed_out,
+        } });
+
+        const final_out = try self.makeVarExpr(result_ty, out_bind.symbol);
+        return try self.output.addExpr(.{
+            .ty = result_ty,
+            .data = .{ .block = .{
+                .stmts = try self.output.addStmtSpan(&.{ out_decl, loop_stmt, close_stmt }),
+                .final_expr = final_out,
+            } },
+        });
+    }
+
+    fn makeRecordInspectExpr(
+        self: *Lowerer,
+        record_expr: ast.ExprId,
+        fields_span: type_mod.Span(type_mod.Field),
+        result_ty: type_mod.TypeId,
+    ) std.mem.Allocator.Error!ast.ExprId {
+        const fields = self.types.sliceFields(fields_span);
+        if (fields.len == 0) {
+            return self.makeStringLiteralExpr(result_ty, "{}");
+        }
+
+        const record_ty = self.output.getExpr(record_expr).ty;
+        const subject_bind: ast.TypedSymbol = .{
+            .ty = record_ty,
+            .symbol = try self.input.symbols.add(base.Ident.Idx.NONE, .synthetic),
+        };
+        const subject_decl = try self.output.addStmt(.{ .decl = .{
+            .bind = subject_bind,
+            .body = record_expr,
+        } });
+        const subject_expr = try self.makeVarExpr(record_ty, subject_bind.symbol);
+
+        var current = try self.makeStringLiteralExpr(result_ty, "{ ");
+        for (fields, 0..) |field, i| {
+            if (i != 0) {
+                current = try self.makeStringConcatExpr(
+                    result_ty,
+                    current,
+                    try self.makeStringLiteralExpr(result_ty, ", "),
+                );
+            }
+
+            current = try self.makeStringConcatExpr(
+                result_ty,
+                current,
+                try self.makeStringLiteralExpr(result_ty, self.lookupIdentNameBytes(field.name)),
+            );
+            current = try self.makeStringConcatExpr(
+                result_ty,
+                current,
+                try self.makeStringLiteralExpr(result_ty, ": "),
+            );
+
+            const field_expr = try self.output.addExpr(.{
+                .ty = field.ty,
+                .data = .{ .access = .{
+                    .record = subject_expr,
+                    .field = field.name,
+                } },
+            });
+            current = try self.makeStringConcatExpr(
+                result_ty,
+                current,
+                try self.specializeInspectValueExpr(field_expr, result_ty),
+            );
+        }
+
+        const final_expr = try self.makeStringConcatExpr(
+            result_ty,
+            current,
+            try self.makeStringLiteralExpr(result_ty, " }"),
+        );
+        return try self.output.addExpr(.{
+            .ty = result_ty,
+            .data = .{ .block = .{
+                .stmts = try self.output.addStmtSpan(&.{subject_decl}),
+                .final_expr = final_expr,
+            } },
+        });
+    }
+
+    fn makeTupleInspectExpr(
+        self: *Lowerer,
+        tuple_expr: ast.ExprId,
+        elems_span: type_mod.Span(type_mod.TypeId),
+        result_ty: type_mod.TypeId,
+    ) std.mem.Allocator.Error!ast.ExprId {
+        const elems = self.types.sliceTypeSpan(elems_span);
+        if (elems.len == 0) {
+            return self.makeStringLiteralExpr(result_ty, "()");
+        }
+
+        const tuple_ty = self.output.getExpr(tuple_expr).ty;
+        const subject_bind: ast.TypedSymbol = .{
+            .ty = tuple_ty,
+            .symbol = try self.input.symbols.add(base.Ident.Idx.NONE, .synthetic),
+        };
+        const subject_decl = try self.output.addStmt(.{ .decl = .{
+            .bind = subject_bind,
+            .body = tuple_expr,
+        } });
+        const subject_expr = try self.makeVarExpr(tuple_ty, subject_bind.symbol);
+
+        var current = try self.makeStringLiteralExpr(result_ty, "(");
+        for (elems, 0..) |elem_ty, i| {
+            if (i != 0) {
+                current = try self.makeStringConcatExpr(
+                    result_ty,
+                    current,
+                    try self.makeStringLiteralExpr(result_ty, ", "),
+                );
+            }
+
+            const elem_expr = try self.output.addExpr(.{
+                .ty = elem_ty,
+                .data = .{ .tuple_access = .{
+                    .tuple = subject_expr,
+                    .elem_index = @intCast(i),
+                } },
+            });
+            current = try self.makeStringConcatExpr(
+                result_ty,
+                current,
+                try self.specializeInspectValueExpr(elem_expr, result_ty),
+            );
+        }
+
+        const final_expr = try self.makeStringConcatExpr(
+            result_ty,
+            current,
+            try self.makeStringLiteralExpr(result_ty, ")"),
+        );
+        return try self.output.addExpr(.{
+            .ty = result_ty,
+            .data = .{ .block = .{
+                .stmts = try self.output.addStmtSpan(&.{subject_decl}),
+                .final_expr = final_expr,
+            } },
+        });
+    }
+
+    fn makeTagUnionInspectExpr(
+        self: *Lowerer,
+        value_expr: ast.ExprId,
+        tags_span: type_mod.Span(type_mod.Tag),
+        result_ty: type_mod.TypeId,
+    ) std.mem.Allocator.Error!ast.ExprId {
+        const union_ty = self.output.getExpr(value_expr).ty;
+        const tags = self.types.sliceTags(tags_span);
+        const branches = try self.allocator.alloc(ast.Branch, tags.len);
+        defer self.allocator.free(branches);
+
+        for (tags, 0..) |tag, i| {
+            const tag_args = self.types.sliceTypeSpan(tag.args);
+            const pat_args = try self.allocator.alloc(ast.PatId, tag_args.len);
+            defer self.allocator.free(pat_args);
+
+            var current = try self.makeStringLiteralExpr(result_ty, self.lookupIdentNameBytes(tag.name));
+
+            for (tag_args, 0..) |arg_ty, arg_i| {
+                const arg_symbol = try self.input.symbols.add(base.Ident.Idx.NONE, .synthetic);
+                pat_args[arg_i] = try self.output.addPat(.{
+                    .ty = arg_ty,
+                    .data = .{ .var_ = arg_symbol },
+                });
+
+                const arg_expr = try self.makeVarExpr(arg_ty, arg_symbol);
+                if (arg_i == 0) {
+                    current = try self.makeStringConcatExpr(
+                        result_ty,
+                        current,
+                        try self.makeStringLiteralExpr(result_ty, "("),
+                    );
+                } else {
+                    current = try self.makeStringConcatExpr(
+                        result_ty,
+                        current,
+                        try self.makeStringLiteralExpr(result_ty, ", "),
+                    );
+                }
+                current = try self.makeStringConcatExpr(
+                    result_ty,
+                    current,
+                    try self.specializeInspectValueExpr(arg_expr, result_ty),
+                );
+            }
+
+            if (tag_args.len > 0) {
+                current = try self.makeStringConcatExpr(
+                    result_ty,
+                    current,
+                    try self.makeStringLiteralExpr(result_ty, ")"),
+                );
+            }
+
+            branches[i] = .{
+                .pat = try self.output.addPat(.{
+                    .ty = union_ty,
+                    .data = .{ .tag = .{
+                        .name = tag.name,
+                        .args = try self.output.addPatSpan(pat_args),
+                    } },
+                }),
+                .body = current,
+            };
+        }
+
+        return try self.output.addExpr(.{
+            .ty = result_ty,
+            .data = .{ .when = .{
+                .cond = value_expr,
+                .branches = try self.output.addBranchSpan(branches),
+            } },
+        });
+    }
+
+    fn specializeInspectValueExpr(
+        self: *Lowerer,
+        value_expr: ast.ExprId,
+        result_ty: type_mod.TypeId,
+    ) std.mem.Allocator.Error!ast.ExprId {
+        if (try self.retypeDivergingExpr(value_expr, result_ty)) |diverging| {
+            return diverging;
+        }
+
+        const value_ty = self.output.getExpr(value_expr).ty;
+        return switch (self.types.getType(value_ty)) {
+            .primitive => |prim| switch (prim) {
+                .str => self.makeLowLevelExpr(result_ty, .str_inspect, &.{value_expr}),
+                .bool => self.makeBoolInspectExpr(value_expr, result_ty),
+                .u8,
+                .i8,
+                .u16,
+                .i16,
+                .u32,
+                .i32,
+                .u64,
+                .i64,
+                .u128,
+                .i128,
+                .f32,
+                .f64,
+                .dec,
+                => self.makeLowLevelExpr(result_ty, .num_to_str, &.{value_expr}),
+                .erased => debugPanic("lambdamono.inspect invariant violated: erased value type"),
+            },
+            .list => |elem_ty| self.makeListInspectExpr(elem_ty, value_expr, result_ty),
+            .box => debugPanic("lambdamono.inspect TODO: Box"),
+            .tuple => |elems| self.makeTupleInspectExpr(value_expr, elems, result_ty),
+            .record => |record| self.makeRecordInspectExpr(value_expr, record.fields, result_ty),
+            .tag_union => |tag_union| self.makeTagUnionInspectExpr(value_expr, tag_union.tags, result_ty),
+        };
+    }
+
+    fn makePrimitiveType(self: *Lowerer, prim: type_mod.Prim) std.mem.Allocator.Error!type_mod.TypeId {
+        return try self.types.addType(.{ .primitive = prim });
+    }
+
+    fn makeUnitType(self: *Lowerer) std.mem.Allocator.Error!type_mod.TypeId {
+        return try self.types.addType(.{ .record = .{ .fields = type_mod.Span(type_mod.Field).empty() } });
+    }
+
+    fn makeVarExpr(
+        self: *Lowerer,
+        ty: type_mod.TypeId,
+        symbol: Symbol,
+    ) std.mem.Allocator.Error!ast.ExprId {
+        return try self.output.addExpr(.{
+            .ty = ty,
+            .data = .{ .var_ = symbol },
+        });
+    }
+
+    fn internStringLiteral(
+        self: *Lowerer,
+        bytes: []const u8,
+    ) std.mem.Allocator.Error!base.StringLiteral.Idx {
+        return self.input.strings.insert(self.allocator, bytes);
+    }
+
+    fn makeStringLiteralExpr(
+        self: *Lowerer,
+        str_ty: type_mod.TypeId,
+        bytes: []const u8,
+    ) std.mem.Allocator.Error!ast.ExprId {
+        return try self.output.addExpr(.{
+            .ty = str_ty,
+            .data = .{ .str_lit = try self.internStringLiteral(bytes) },
+        });
+    }
+
+    fn makeStringConcatExpr(
+        self: *Lowerer,
+        str_ty: type_mod.TypeId,
+        left: ast.ExprId,
+        right: ast.ExprId,
+    ) std.mem.Allocator.Error!ast.ExprId {
+        return self.makeLowLevelExpr(str_ty, .str_concat, &.{ left, right });
+    }
+
+    fn makeLowLevelExpr(
+        self: *Lowerer,
+        ret_ty: type_mod.TypeId,
+        op: base.LowLevel,
+        args: []const ast.ExprId,
+    ) std.mem.Allocator.Error!ast.ExprId {
+        return try self.output.addExpr(.{
+            .ty = ret_ty,
+            .data = .{ .low_level = .{
+                .op = op,
+                .args = try self.output.addExprSpan(args),
+            } },
+        });
+    }
+
+    fn lookupIdentNameBytes(self: *Lowerer, ident: base.Ident.Idx) []const u8 {
+        const literal = self.input.ident_name_literals.get(@as(u32, @bitCast(ident))) orelse
+            debugPanic("lambdamono.inspect missing lowered ident display text");
+        return self.input.strings.get(literal);
     }
 
     fn specializeVarExpr(
@@ -983,6 +1454,9 @@ const Lowerer = struct {
                     .list => |elem| solved.Type.Node{ .content = .{
                         .list = try self.cloneInstType(inst, elem),
                     } },
+                    .box => |elem| solved.Type.Node{ .content = .{
+                        .box = try self.cloneInstType(inst, elem),
+                    } },
                     .tuple => |tuple| blk2: {
                         const elems = self.input.types.sliceTypeVarSpan(tuple);
                         const elems_copy = try self.allocator.dupe(TypeVarId, elems);
@@ -1144,6 +1618,12 @@ const Lowerer = struct {
             },
             .list => |elem| switch (right) {
                 .list => |other| {
+                    try self.unifyRec(elem, other, visited);
+                },
+                else => debugPanic("lambdamono.lower.unify incompatible types"),
+            },
+            .box => |elem| switch (right) {
+                .box => |other| {
                     try self.unifyRec(elem, other, visited);
                 },
                 else => debugPanic("lambdamono.lower.unify incompatible types"),

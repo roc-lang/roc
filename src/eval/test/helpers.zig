@@ -355,6 +355,9 @@ fn debugValidateMonotypeTypes(types_store: *const monotype.Type.Store) void {
             .list => |elem| {
                 debugAssertValidMonoTypeRef(types_store, @enumFromInt(@as(u32, @intCast(i))), "list.elem", elem, type_len);
             },
+            .box => |elem| {
+                debugAssertValidMonoTypeRef(types_store, @enumFromInt(@as(u32, @intCast(i))), "box.elem", elem, type_len);
+            },
             .tuple => |tuple| for (types_store.sliceTypeSpan(tuple)) |elem| {
                 debugAssertValidMonoTypeRef(types_store, @enumFromInt(@as(u32, @intCast(i))), "tuple.elem", elem, type_len);
             },

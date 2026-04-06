@@ -16,6 +16,8 @@ pub const problem = @import("problem.zig");
 pub const report = @import("report.zig");
 /// **Exhaustiveness Checking**
 pub const exhaustive = @import("exhaustive.zig");
+/// **Cross-module type copying**
+pub const copy_import = @import("copy_import.zig");
 
 pub const Check = @import("Check.zig");
 pub const TestEnv = @import("test/TestEnv.zig");

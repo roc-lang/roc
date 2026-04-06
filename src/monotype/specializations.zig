@@ -4,6 +4,7 @@ const std = @import("std");
 const can = @import("can");
 const symbol_mod = @import("symbol");
 const type_mod = @import("type.zig");
+const checker_types = @import("types");
 
 pub const SourceFn = struct {
     module_idx: u32,
@@ -14,6 +15,7 @@ pub const Pending = struct {
     source_symbol: symbol_mod.Symbol,
     source: SourceFn,
     ty: type_mod.TypeId,
+    expected_checker_var: ?checker_types.Var,
     specialized_symbol: symbol_mod.Symbol,
     emitted: bool = false,
 };
@@ -40,9 +42,13 @@ pub const Queue = struct {
         source_symbol: symbol_mod.Symbol,
         source: SourceFn,
         ty: type_mod.TypeId,
+        expected_checker_var: ?checker_types.Var,
     ) std.mem.Allocator.Error!symbol_mod.Symbol {
-        for (self.pending.items) |item| {
+        for (self.pending.items) |*item| {
             if (item.source_symbol == source_symbol and types.equalIds(item.ty, ty)) {
+                if (item.expected_checker_var == null and expected_checker_var != null) {
+                    item.expected_checker_var = expected_checker_var;
+                }
                 return item.specialized_symbol;
             }
         }
@@ -57,6 +63,7 @@ pub const Queue = struct {
             .source_symbol = source_symbol,
             .source = source,
             .ty = ty,
+            .expected_checker_var = expected_checker_var,
             .specialized_symbol = specialized_symbol,
         });
         return specialized_symbol;

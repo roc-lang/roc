@@ -144,9 +144,6 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) !std.ArrayList(CIR.Def.Id
     if (env.common.findIdent("Builtin.Str.join_with")) |str_join_with_ident| {
         try low_level_map.put(str_join_with_ident, .str_join_with);
     }
-    if (env.common.findIdent("Builtin.Str.inspect")) |str_inspect_ident| {
-        try low_level_map.put(str_inspect_ident, .str_inspect);
-    }
     if (env.common.findIdent("Builtin.Box.box")) |box_box_ident| {
         try low_level_map.put(box_box_ident, .box_box);
     }

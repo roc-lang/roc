@@ -42,6 +42,9 @@ fn lowerTypeRec(
         .list => |elem| .{
             .list = try lowerTypeRec(mono_types, ir_layouts, cache, boxed, elem),
         },
+        .box => |elem| .{
+            .box = try lowerTypeRec(mono_types, ir_layouts, cache, boxed, elem),
+        },
         .tuple => |tuple| blk: {
             const elems = mono_types.sliceTypeSpan(tuple);
             const layouts = try ir_layouts.allocator.alloc(ir.LayoutId, elems.len);

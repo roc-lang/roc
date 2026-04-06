@@ -134,6 +134,7 @@ pub const BuiltinFn = enum {
     str_from_utf8_lossy,
     str_from_utf8,
     str_escape_and_quote,
+    dbg_str,
 
     // List operations
     list_with_capacity,
@@ -224,6 +225,7 @@ pub const BuiltinFn = enum {
             .str_from_utf8_lossy => "roc_builtins_str_from_utf8_lossy",
             .str_from_utf8 => "roc_builtins_str_from_utf8",
             .str_escape_and_quote => "roc_builtins_str_escape_and_quote",
+            .dbg_str => "roc_builtins_dbg_str",
 
             // List operations
             .list_with_capacity => "roc_builtins_list_with_capacity",
@@ -12381,33 +12383,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         fn emitRocDbgFromStackStr(self: *Self, str_offset: i32) Allocator.Error!void {
-            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
-            const base_reg = frame_ptr;
-            const args_slot = self.codegen.allocStackSlot(16);
-            const tmp = try self.allocTempGeneral();
-            defer self.codegen.freeGeneral(tmp);
-
-            try self.emitLoad(.w64, tmp, base_reg, str_offset);
-            if (comptime target.toCpuArch() == .aarch64) {
-                try self.codegen.emit.strRegMemSoff(.w64, tmp, base_reg, args_slot);
-            } else {
-                try self.codegen.emit.movMemReg(.w64, base_reg, args_slot, tmp);
-            }
-
-            try self.emitLoad(.w64, tmp, base_reg, str_offset + 8);
-            if (comptime target.toCpuArch() == .aarch64) {
-                try self.codegen.emit.strRegMemSoff(.w64, tmp, base_reg, args_slot + 8);
-            } else {
-                try self.codegen.emit.movMemReg(.w64, base_reg, args_slot + 8, tmp);
-            }
-
-            const fn_ptr_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X10 else .RAX;
-            try self.emitLoad(.w64, fn_ptr_reg, roc_ops_reg, @offsetOf(RocOps, "roc_dbg"));
-
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-            try builder.addLeaArg(base_reg, args_slot);
-            try builder.addMemArg(roc_ops_reg, 0);
-            try builder.callReg(fn_ptr_reg);
+            try builder.addMemArg(frame_ptr, str_offset);
+            try builder.addMemArg(frame_ptr, str_offset + @as(i32, @intCast(target_ptr_size)));
+            try builder.addMemArg(frame_ptr, str_offset + 2 * @as(i32, @intCast(target_ptr_size)));
+            try builder.addRegArg(self.roc_ops_reg orelse unreachable);
+            try self.callBuiltin(&builder, @intFromPtr(&dev_wrappers.roc_builtins_dbg_str), .dbg_str);
         }
 
         fn emitRocExpectFailed(self: *Self) Allocator.Error!void {
