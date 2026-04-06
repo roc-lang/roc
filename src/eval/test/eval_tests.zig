@@ -474,6 +474,34 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "40.0" },
     },
     .{
+        .name = "inspect: higher-order function returns first closure result",
+        .source =
+        \\{
+        \\    apply = |f, x| f(x)
+        \\    a = 10
+        \\    b = 20
+        \\    r1 = apply(|x| x + a, 5)
+        \\    _r2 = apply(|x| x + b, 5)
+        \\    r1
+        \\}
+        ,
+        .expected = .{ .inspect_str = "15.0" },
+    },
+    .{
+        .name = "inspect: higher-order function returns second closure result",
+        .source =
+        \\{
+        \\    apply = |f, x| f(x)
+        \\    a = 10
+        \\    b = 20
+        \\    _r1 = apply(|x| x + a, 5)
+        \\    r2 = apply(|x| x + b, 5)
+        \\    r2
+        \\}
+        ,
+        .expected = .{ .inspect_str = "25.0" },
+    },
+    .{
         .name = "inspect: higher-order function applying twice",
         .source =
         \\{
@@ -621,6 +649,19 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "40.0" },
     },
     .{
+        .name = "inspect: record field closure add_a preserves capture",
+        .source =
+        \\{
+        \\    a = 10
+        \\    b = 20
+        \\    rec = { add_a: |x| x + a, add_b: |x| x + b }
+        \\    add_a = rec.add_a
+        \\    add_a(5)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "15.0" },
+    },
+    .{
         .name = "inspect: parenthesized record field closure",
         .source =
         \\{
@@ -628,6 +669,19 @@ pub const tests = [_]TestCase{
         \\    b = 20
         \\    rec = { add_a: |x| x + a, add_b: |x| x + b }
         \\    (rec.add_b)(5)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "25.0" },
+    },
+    .{
+        .name = "inspect: record field closure add_b preserves capture",
+        .source =
+        \\{
+        \\    a = 10
+        \\    b = 20
+        \\    rec = { add_a: |x| x + a, add_b: |x| x + b }
+        \\    add_b = rec.add_b
+        \\    add_b(5)
         \\}
         ,
         .expected = .{ .inspect_str = "25.0" },
@@ -790,6 +844,19 @@ pub const tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .inspect_str = "123.0" },
+    },
+    .{
+        .name = "inspect: polymorphic hof with closures capturing different types",
+        .source =
+        \\{
+        \\    apply = |f, x| f(x)
+        \\    offset = 100
+        \\    prefix = "Result: "
+        \\    num = apply(|x| x + offset, 23)
+        \\    if (num > 0) apply(|s| Str.concat(prefix, s), "yes") else "no"
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"Result: yes\"" },
     },
     .{
         .name = "inspect: closure over bool used in conditional",
@@ -1047,6 +1114,137 @@ pub const tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .inspect_str = "\"Test\"" },
+    },
+    .{
+        .name = "inspect: polymorphic return function then call int",
+        .source = "(|_| (|x| x))(0)(42)",
+        .expected = .{ .inspect_str = "42.0" },
+    },
+    .{
+        .name = "inspect: polymorphic return function then call string",
+        .source = "(|_| (|x| x))(0)(\"hi\")",
+        .expected = .{ .inspect_str = "\"hi\"" },
+    },
+    .{
+        .name = "inspect: polymorphic captured id applied to int",
+        .source = "((|id| (|x| id(x)))(|y| y))(41)",
+        .expected = .{ .inspect_str = "41.0" },
+    },
+    .{
+        .name = "inspect: polymorphic captured id applied to string",
+        .source = "((|id| (|x| id(x)))(|y| y))(\"ok\")",
+        .expected = .{ .inspect_str = "\"ok\"" },
+    },
+    .{
+        .name = "inspect: polymorphic higher-order apply then call",
+        .source = "((|f| (|x| f(x)))(|n| n + 1))(41)",
+        .expected = .{ .inspect_str = "42.0" },
+    },
+    .{
+        .name = "inspect: polymorphic higher-order apply twice",
+        .source = "((|f| (|x| f(f(x))))(|n| n + 1))(40)",
+        .expected = .{ .inspect_str = "42.0" },
+    },
+    .{
+        .name = "inspect: polymorphic pass constructed closure and apply",
+        .source = "(|g| g(41))((|f| (|x| f(x)))(|y| y))",
+        .expected = .{ .inspect_str = "41.0" },
+    },
+    .{
+        .name = "inspect: polymorphic construct then pass then call",
+        .source = "((|make| (|z| (make(|n| n + 1))(z)))(|f| (|x| f(x))))(41)",
+        .expected = .{ .inspect_str = "42.0" },
+    },
+    .{
+        .name = "inspect: polymorphic compose identity with plus one",
+        .source = "(((|f| (|g| (|x| f(g(x)))))(|n| n + 1))(|y| y))(41)",
+        .expected = .{ .inspect_str = "42.0" },
+    },
+    .{
+        .name = "inspect: polymorphic return function using captured increment",
+        .source = "(((|n| (|id| (|x| id(x + n))))(1))(|y| y))(41)",
+        .expected = .{ .inspect_str = "42.0" },
+    },
+    .{
+        .name = "inspect: recursive countdown",
+        .source =
+        \\{
+        \\    rec = |n| if (n == 0) 0 else rec(n - 1) + 1
+        \\    rec(2)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "2.0" },
+    },
+    .{
+        .name = "inspect: else if chain selects middle branch",
+        .source =
+        \\{
+        \\    n = 1
+        \\    if (n == 0)
+        \\        "zero"
+        \\    else if (n == 1)
+        \\        "one"
+        \\    else
+        \\        "other"
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"one\"" },
+    },
+    .{
+        .name = "inspect: mutable variable reassign",
+        .source =
+        \\{
+        \\    var $x = 1
+        \\    $x = $x + 1
+        \\    $x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "2.0" },
+    },
+    .{
+        .name = "inspect: logical or short circuits",
+        .source =
+        \\if ((1 == 1) or { crash "nope" })
+        \\    "ok"
+        \\else
+        \\    "bad"
+        ,
+        .expected = .{ .inspect_str = "\"ok\"" },
+    },
+    .{
+        .name = "inspect: logical and short circuits",
+        .source =
+        \\if ((1 == 0) and { crash "nope" })
+        \\    "bad"
+        \\else
+        \\    "ok"
+        ,
+        .expected = .{ .inspect_str = "\"ok\"" },
+    },
+    .{
+        .name = "inspect: recursive fibonacci",
+        .source =
+        \\{
+        \\    fib = |n| if (n == 0) 0 else if (n == 1) 1 else fib(n - 1) + fib(n - 2)
+        \\    fib(5)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "5.0" },
+    },
+    .{
+        .name = "inspect: tag union one arg ok",
+        .source = "Ok(42.0)",
+        .expected = .{ .inspect_str = "Ok(42.0)" },
+    },
+    .{
+        .name = "inspect: tag union multi arg point",
+        .source = "Point(1.0, 2.0)",
+        .expected = .{ .inspect_str = "Point(1.0, 2.0)" },
+    },
+    .{
+        .name = "inspect: tag union nested in tuple regression",
+        .source = "Ok((Name(\"hello\"), 5))",
+        .expected = .{ .inspect_str = "Ok((Name(\"hello\"), 5.0))" },
     },
 
     // Typed arithmetic matrix from origin/main
