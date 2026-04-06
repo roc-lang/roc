@@ -1402,7 +1402,7 @@ pub fn listReplaceInPlace(
     element: Opaque,
     element_width: usize,
     out_element: ?[*]u8,
-    copy: CopyFn,
+    copy: CopyFallbackFn,
 ) callconv(.c) RocList {
     // INVARIANT: bounds checking happens on the roc side
     //
@@ -1427,7 +1427,7 @@ pub fn listReplace(
     dec_context: ?*anyopaque,
     dec: Dec,
     out_element: ?[*]u8,
-    copy: CopyFn,
+    copy: CopyFallbackFn,
     roc_ops: *RocOps,
 ) callconv(.c) RocList {
     // INVARIANT: bounds checking happens on the roc side
@@ -1454,16 +1454,16 @@ inline fn listReplaceInPlaceHelp(
     element: Opaque,
     element_width: usize,
     out_element: ?[*]u8,
-    copy: CopyFn,
+    copy: CopyFallbackFn,
 ) RocList {
     // the element we will replace
     const element_at_index = (list.bytes orelse unreachable) + (index * element_width);
 
     // copy out the old element
-    copy((out_element orelse unreachable), element_at_index);
+    copy((out_element orelse unreachable), element_at_index, element_width);
 
     // copy in the new element
-    copy(element_at_index, (element orelse unreachable));
+    copy(element_at_index, (element orelse unreachable), element_width);
 
     return list;
 }
@@ -2269,17 +2269,6 @@ test "listReplace basic functionality" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    // Copy function for u8 elements
-    const copy_fn = struct {
-        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.c) void {
-            if (dest != null and src != null) {
-                const dest_ptr = @as(*u8, @ptrCast(@alignCast(dest)));
-                const src_ptr = @as(*u8, @ptrCast(@alignCast(src)));
-                dest_ptr.* = src_ptr.*;
-            }
-        }
-    }.copy;
-
     // Create a list with multiple elements
     const data = [_]u8{ 10, 20, 30, 40 };
     const list = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
@@ -2287,7 +2276,7 @@ test "listReplace basic functionality" {
     // Replace element at index 2 (value 30) with 99
     const new_element: u8 = 99;
     var out_element: u8 = 0;
-    const result = listReplace(list, @alignOf(u8), 2, @as(?[*]u8, @ptrCast(@constCast(&new_element))), @sizeOf(u8), false, null, rcNone, null, rcNone, @as(?[*]u8, @ptrCast(&out_element)), copy_fn, test_env.getOps());
+    const result = listReplace(list, @alignOf(u8), 2, @as(?[*]u8, @ptrCast(@constCast(&new_element))), @sizeOf(u8), false, null, rcNone, null, rcNone, @as(?[*]u8, @ptrCast(&out_element)), copy_fallback, test_env.getOps());
     defer result.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 4), result.len());
@@ -2306,17 +2295,6 @@ test "listReplace first element" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    // Copy function for i32 elements
-    const copy_fn = struct {
-        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.c) void {
-            if (dest != null and src != null) {
-                const dest_ptr = @as(*i32, @ptrCast(@alignCast(dest)));
-                const src_ptr = @as(*i32, @ptrCast(@alignCast(src)));
-                dest_ptr.* = src_ptr.*;
-            }
-        }
-    }.copy;
-
     // Create a list with multiple elements
     const data = [_]i32{ 100, 200, 300 };
     const list = RocList.fromSlice(i32, data[0..], false, test_env.getOps());
@@ -2324,7 +2302,7 @@ test "listReplace first element" {
     // Replace first element (index 0)
     const new_element: i32 = -999;
     var out_element: i32 = 0;
-    const result = listReplace(list, @alignOf(i32), 0, @as(?[*]u8, @ptrCast(@constCast(&new_element))), @sizeOf(i32), false, null, rcNone, null, rcNone, @as(?[*]u8, @ptrCast(&out_element)), copy_fn, test_env.getOps());
+    const result = listReplace(list, @alignOf(i32), 0, @as(?[*]u8, @ptrCast(@constCast(&new_element))), @sizeOf(i32), false, null, rcNone, null, rcNone, @as(?[*]u8, @ptrCast(&out_element)), copy_fallback, test_env.getOps());
     defer result.decref(@alignOf(i32), @sizeOf(i32), false, null, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 3), result.len());
@@ -2342,17 +2320,6 @@ test "listReplace last element" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    // Copy function for u16 elements
-    const copy_fn = struct {
-        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.c) void {
-            if (dest != null and src != null) {
-                const dest_ptr = @as(*u16, @ptrCast(@alignCast(dest)));
-                const src_ptr = @as(*u16, @ptrCast(@alignCast(src)));
-                dest_ptr.* = src_ptr.*;
-            }
-        }
-    }.copy;
-
     // Create a list with multiple elements
     const data = [_]u16{ 1, 2, 3, 4 };
     const list = RocList.fromSlice(u16, data[0..], false, test_env.getOps());
@@ -2360,7 +2327,7 @@ test "listReplace last element" {
     // Replace last element (index 3)
     const new_element: u16 = 9999;
     var out_element: u16 = 0;
-    const result = listReplace(list, @alignOf(u16), 3, @as(?[*]u8, @ptrCast(@constCast(&new_element))), @sizeOf(u16), false, null, rcNone, null, rcNone, @as(?[*]u8, @ptrCast(&out_element)), copy_fn, test_env.getOps());
+    const result = listReplace(list, @alignOf(u16), 3, @as(?[*]u8, @ptrCast(@constCast(&new_element))), @sizeOf(u16), false, null, rcNone, null, rcNone, @as(?[*]u8, @ptrCast(&out_element)), copy_fallback, test_env.getOps());
     defer result.decref(@alignOf(u16), @sizeOf(u16), false, null, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 4), result.len());
@@ -2379,17 +2346,6 @@ test "listReplace single element list" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    // Copy function for u8 elements
-    const copy_fn = struct {
-        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.c) void {
-            if (dest != null and src != null) {
-                const dest_ptr = @as(*u8, @ptrCast(@alignCast(dest)));
-                const src_ptr = @as(*u8, @ptrCast(@alignCast(src)));
-                dest_ptr.* = src_ptr.*;
-            }
-        }
-    }.copy;
-
     // Create a list with a single element
     const data = [_]u8{42};
     const list = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
@@ -2397,7 +2353,7 @@ test "listReplace single element list" {
     // Replace the only element (index 0)
     const new_element: u8 = 84;
     var out_element: u8 = 0;
-    const result = listReplace(list, @alignOf(u8), 0, @as(?[*]u8, @ptrCast(@constCast(&new_element))), @sizeOf(u8), false, null, rcNone, null, rcNone, @as(?[*]u8, @ptrCast(&out_element)), copy_fn, test_env.getOps());
+    const result = listReplace(list, @alignOf(u8), 0, @as(?[*]u8, @ptrCast(@constCast(&new_element))), @sizeOf(u8), false, null, rcNone, null, rcNone, @as(?[*]u8, @ptrCast(&out_element)), copy_fallback, test_env.getOps());
     defer result.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 1), result.len());
@@ -2787,17 +2743,6 @@ test "listReplaceInPlace basic functionality" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    // Copy function for u8 elements
-    const copy_fn = struct {
-        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.c) void {
-            if (dest != null and src != null) {
-                const dest_ptr = @as(*u8, @ptrCast(@alignCast(dest)));
-                const src_ptr = @as(*u8, @ptrCast(@alignCast(src)));
-                dest_ptr.* = src_ptr.*;
-            }
-        }
-    }.copy;
-
     // Create a list with multiple elements
     const data = [_]u8{ 10, 20, 30, 40 };
     const list = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
@@ -2805,7 +2750,7 @@ test "listReplaceInPlace basic functionality" {
     // Replace element at index 2 (value 30) with 99
     const new_element: u8 = 99;
     var out_element: u8 = 0;
-    const result = listReplaceInPlace(list, 2, @as(?[*]u8, @ptrCast(@constCast(&new_element))), @sizeOf(u8), @as(?[*]u8, @ptrCast(&out_element)), copy_fn);
+    const result = listReplaceInPlace(list, 2, @as(?[*]u8, @ptrCast(@constCast(&new_element))), @sizeOf(u8), @as(?[*]u8, @ptrCast(&out_element)), copy_fallback);
     defer result.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 4), result.len());
@@ -2824,24 +2769,13 @@ test "listReplaceInPlace first and last elements" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    // Copy function for i32 elements
-    const copy_fn = struct {
-        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.c) void {
-            if (dest != null and src != null) {
-                const dest_ptr = @as(*i32, @ptrCast(@alignCast(dest)));
-                const src_ptr = @as(*i32, @ptrCast(@alignCast(src)));
-                dest_ptr.* = src_ptr.*;
-            }
-        }
-    }.copy;
-
     // Test replacing first element
     const data = [_]i32{ 100, 200, 300 };
     const list1 = RocList.fromSlice(i32, data[0..], false, test_env.getOps());
 
     const new_first: i32 = -999;
     var out_first: i32 = 0;
-    const result1 = listReplaceInPlace(list1, 0, @as(?[*]u8, @ptrCast(@constCast(&new_first))), @sizeOf(i32), @as(?[*]u8, @ptrCast(&out_first)), copy_fn);
+    const result1 = listReplaceInPlace(list1, 0, @as(?[*]u8, @ptrCast(@constCast(&new_first))), @sizeOf(i32), @as(?[*]u8, @ptrCast(&out_first)), copy_fallback);
     defer result1.decref(@alignOf(i32), @sizeOf(i32), false, null, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(i32, 100), out_first);
@@ -2855,7 +2789,7 @@ test "listReplaceInPlace first and last elements" {
 
     const new_last: i32 = 999;
     var out_last: i32 = 0;
-    const result2 = listReplaceInPlace(list2, 2, @as(?[*]u8, @ptrCast(@constCast(&new_last))), @sizeOf(i32), @as(?[*]u8, @ptrCast(&out_last)), copy_fn);
+    const result2 = listReplaceInPlace(list2, 2, @as(?[*]u8, @ptrCast(@constCast(&new_last))), @sizeOf(i32), @as(?[*]u8, @ptrCast(&out_last)), copy_fallback);
     defer result2.decref(@alignOf(i32), @sizeOf(i32), false, null, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(i32, 300), out_last);
@@ -2869,17 +2803,6 @@ test "listReplaceInPlace single element list" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    // Copy function for u16 elements
-    const copy_fn = struct {
-        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.c) void {
-            if (dest != null and src != null) {
-                const dest_ptr = @as(*u16, @ptrCast(@alignCast(dest)));
-                const src_ptr = @as(*u16, @ptrCast(@alignCast(src)));
-                dest_ptr.* = src_ptr.*;
-            }
-        }
-    }.copy;
-
     // Create a list with a single element
     const data = [_]u16{42};
     const list = RocList.fromSlice(u16, data[0..], false, test_env.getOps());
@@ -2887,7 +2810,7 @@ test "listReplaceInPlace single element list" {
     // Replace the only element (index 0)
     const new_element: u16 = 84;
     var out_element: u16 = 0;
-    const result = listReplaceInPlace(list, 0, @as(?[*]u8, @ptrCast(@constCast(&new_element))), @sizeOf(u16), @as(?[*]u8, @ptrCast(&out_element)), copy_fn);
+    const result = listReplaceInPlace(list, 0, @as(?[*]u8, @ptrCast(@constCast(&new_element))), @sizeOf(u16), @as(?[*]u8, @ptrCast(&out_element)), copy_fallback);
     defer result.decref(@alignOf(u16), @sizeOf(u16), false, null, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 1), result.len());
@@ -2903,31 +2826,20 @@ test "listReplaceInPlace vs listReplace comparison" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    // Copy function for u8 elements
-    const copy_fn = struct {
-        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.c) void {
-            if (dest != null and src != null) {
-                const dest_ptr = @as(*u8, @ptrCast(@alignCast(dest)));
-                const src_ptr = @as(*u8, @ptrCast(@alignCast(src)));
-                dest_ptr.* = src_ptr.*;
-            }
-        }
-    }.copy;
-
     const data = [_]u8{ 1, 2, 3, 4, 5 };
 
     // Test listReplaceInPlace
     const list1 = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
     const new_element1: u8 = 99;
     var out_element1: u8 = 0;
-    const result1 = listReplaceInPlace(list1, 2, @as(?[*]u8, @ptrCast(@constCast(&new_element1))), @sizeOf(u8), @as(?[*]u8, @ptrCast(&out_element1)), copy_fn);
+    const result1 = listReplaceInPlace(list1, 2, @as(?[*]u8, @ptrCast(@constCast(&new_element1))), @sizeOf(u8), @as(?[*]u8, @ptrCast(&out_element1)), copy_fallback);
     defer result1.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     // Test listReplace with same parameters
     const list2 = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
     const new_element2: u8 = 99;
     var out_element2: u8 = 0;
-    const result2 = listReplace(list2, @alignOf(u8), 2, @as(?[*]u8, @ptrCast(@constCast(&new_element2))), @sizeOf(u8), false, null, rcNone, null, rcNone, @as(?[*]u8, @ptrCast(&out_element2)), copy_fn, test_env.getOps());
+    const result2 = listReplace(list2, @alignOf(u8), 2, @as(?[*]u8, @ptrCast(@constCast(&new_element2))), @sizeOf(u8), false, null, rcNone, null, rcNone, @as(?[*]u8, @ptrCast(&out_element2)), copy_fallback, test_env.getOps());
     defer result2.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     // Both should produce the same result
@@ -3074,8 +2986,8 @@ test "integration: replace then swap operations" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    // Copy function for u32 elements
-    const copy_fn = struct {
+    // Copy function for u32 elements (used by listSwap which still takes CopyFn)
+    const swap_copy_fn = struct {
         fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.c) void {
             if (dest != null and src != null) {
                 const dest_ptr = @as(*u32, @ptrCast(@alignCast(dest)));
@@ -3092,13 +3004,13 @@ test "integration: replace then swap operations" {
     // Replace element at index 1 (20 -> 99)
     const new_element: u32 = 99;
     var out_element: u32 = 0;
-    list = listReplace(list, @alignOf(u32), 1, @as(?[*]u8, @ptrCast(@constCast(&new_element))), @sizeOf(u32), false, null, rcNone, null, rcNone, @as(?[*]u8, @ptrCast(&out_element)), copy_fn, test_env.getOps());
+    list = listReplace(list, @alignOf(u32), 1, @as(?[*]u8, @ptrCast(@constCast(&new_element))), @sizeOf(u32), false, null, rcNone, null, rcNone, @as(?[*]u8, @ptrCast(&out_element)), copy_fallback, test_env.getOps());
 
     try std.testing.expectEqual(@as(u32, 20), out_element);
 
     // Now we should have [10, 99, 30, 40]
     // Swap elements at indices 0 and 2 (10 <-> 30)
-    list = listSwap(list, @alignOf(u32), @sizeOf(u32), 0, 2, false, null, rcNone, null, rcNone, utils.UpdateMode.Immutable, copy_fn, test_env.getOps());
+    list = listSwap(list, @alignOf(u32), @sizeOf(u32), 0, 2, false, null, rcNone, null, rcNone, utils.UpdateMode.Immutable, swap_copy_fn, test_env.getOps());
 
     defer list.decref(@alignOf(u32), @sizeOf(u32), false, null, rcNone, test_env.getOps());
 

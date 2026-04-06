@@ -147,6 +147,8 @@ src/snapshots/**/*.html
 
 # Local claude-code settings
 .claude/settings.local.json
+# Local OpenCode folder where config and planning markdown files are stored
+.opencode/
 
 *.bak
 kcov-output/

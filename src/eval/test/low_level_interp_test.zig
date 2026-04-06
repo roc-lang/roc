@@ -3088,3 +3088,59 @@ test "issue 8555: method call syntax list.first() with match on Result" {
     const val = try evalModuleAndGetInt(src, 1);
     try testing.expectEqual(@as(i128, 8), val);
 }
+
+test "low_level - List.replace with U8" {
+    const src =
+        \\list = [10u8, 20u8, 30u8]
+        \\replace_result = List.replace(list, 1, 99u8)
+    ;
+
+    const value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("Ok({ list: [10, 99, 30], prev: 20 })", value);
+}
+
+test "low_level - List.replace with U8, keeps prev list" {
+    const src =
+        \\list = [10u8, 20u8, 30u8]
+        \\replace_result = List.replace(list, 1, 99u8)
+        \\old_list = list
+    ;
+
+    const value = try evalModuleAndGetString(src, 2, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("[10, 20, 30]", value);
+}
+
+test "low_level - List.replace with strings (refcounted elements)" {
+    const src =
+        \\list = ["apple", "banana", "cherry"]
+        \\replace_result = List.replace(list, 2, "orange")
+    ;
+
+    const value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("Ok({ list: [\"apple\", \"banana\", \"orange\"], prev: \"cherry\" })", value);
+}
+
+test "low_level - List.replace with ZST" {
+    const src =
+        \\list = [{}, {}, {}]
+        \\replace_result = List.replace(list, 1, {})
+    ;
+
+    const value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("Ok({ list: [{}, {}, {}], prev: {} })", value);
+}
+
+test "low_level - List.set" {
+    const src =
+        \\list = [10u8, 20u8, 30u8]
+        \\new = List.set(list, 1, 99u8)
+    ;
+
+    const value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("Ok([10, 99, 30])", value);
+}

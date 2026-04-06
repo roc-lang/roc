@@ -646,7 +646,11 @@ pub const Store = struct {
     /// Get bundled information about a list layout's element
     pub fn getListInfo(self: *const Self, layout: Layout) ListInfo {
         std.debug.assert(layout.tag == .list or layout.tag == .list_of_zst);
-        const elem_layout_idx = layout.data.list;
+        const elem_layout_idx: Idx = switch (layout.tag) {
+            .list => layout.data.list,
+            .list_of_zst => .zst,
+            else => unreachable,
+        };
         const elem_layout = self.getLayout(elem_layout_idx);
         return ListInfo{
             .elem_layout_idx = elem_layout_idx,
@@ -660,7 +664,11 @@ pub const Store = struct {
     /// Get bundled information about a box layout's element
     pub fn getBoxInfo(self: *const Self, layout: Layout) BoxInfo {
         std.debug.assert(layout.tag == .box or layout.tag == .box_of_zst);
-        const elem_layout_idx = layout.data.box;
+        const elem_layout_idx: Idx = switch (layout.tag) {
+            .box => layout.data.box,
+            .box_of_zst => .zst,
+            else => unreachable,
+        };
         const elem_layout = self.getLayout(elem_layout_idx);
         return BoxInfo{
             .elem_layout_idx = elem_layout_idx,

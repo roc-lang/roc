@@ -528,7 +528,7 @@ fn wrapListPrepend(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap:
 /// Wrapper: listReplace for list_set
 fn wrapListReplace(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, index: u64, element: ?[*]u8, element_width: usize, out_element: ?[*]u8, roc_ops: *RocOps) callconv(.c) void {
     const list = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
-    out.* = listReplace(list, alignment, index, element, element_width, false, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), out_element, @ptrCast(&copy_fallback), roc_ops);
+    out.* = listReplace(list, alignment, index, element, element_width, false, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), out_element, &copy_fallback, roc_ops);
 }
 
 /// Wrapper: listReserve
@@ -1628,9 +1628,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                     const ls = self.layout_store;
 
-                    const roc_ops_reg = self.roc_ops_reg orelse {
-                        unreachable;
-                    };
+                    const roc_ops_reg = self.roc_ops_reg orelse unreachable;
 
                     // Generate list argument (must be on stack - 24 bytes)
                     const list_loc = try self.generateExpr(args[0]);
@@ -2989,6 +2987,88 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
 
                     return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
+                },
+                .list_replace_unsafe => {
+                    // List.replace_unsafe: List(item), U64, item -> { list: List(item), prev: item }
+                    // Reuses wrapListReplace but constructs the return struct manually
+                    if (args.len != 3) unreachable;
+                    const list_loc = try self.generateExpr(args[0]);
+                    const index_loc = try self.generateExpr(args[1]);
+                    const elem_loc = try self.generateExpr(args[2]);
+
+                    const ls = self.layout_store;
+                    const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+
+                    // Get the return record layout
+                    const ret_layout = ls.getLayout(ll.ret_layout);
+                    if (ret_layout.tag != .struct_) unreachable;
+
+                    const result_size = ls.layoutSizeAlign(ret_layout).size;
+                    const record_idx = ret_layout.data.struct_.idx;
+
+                    // Find which field is the list and which is the element.
+                    // The record has exactly 2 fields.
+                    const field0_layout_idx = ls.getStructFieldLayout(record_idx, 0);
+                    const field0_layout = ls.getLayout(field0_layout_idx);
+                    const field0_offset: i32 = @intCast(ls.getStructFieldOffset(record_idx, 0));
+                    const field1_layout_idx = ls.getStructFieldLayout(record_idx, 1);
+                    const field1_layout = ls.getLayout(field1_layout_idx);
+                    const field1_offset: i32 = @intCast(ls.getStructFieldOffset(record_idx, 1));
+
+                    const field0_is_list = field0_layout.tag == .list or field0_layout.tag == .list_of_zst;
+                    const list_field_offset: i32 = if (field0_is_list) field0_offset else field1_offset;
+                    const elem_field_offset: i32 = if (field0_is_list) field1_offset else field0_offset;
+                    const elem_layout = if (field0_is_list) field1_layout else field0_layout;
+
+                    const elem_size_align = ls.layoutSizeAlign(elem_layout);
+                    const elem_size: u32 = elem_size_align.size;
+                    const alignment_bytes = elem_size_align.alignment.toByteUnits();
+
+                    const list_off = try self.ensureOnStack(list_loc, roc_list_size);
+                    const index_off = try self.ensureOnStack(index_loc, 8);
+                    const elem_off = try self.ensureOnStack(elem_loc, elem_size_align.size);
+
+                    // Allocate result struct
+                    const result_offset = self.codegen.allocStackSlot(result_size);
+                    // For ZST elements, we can't call listReplace (it would try to dereference NULL)
+                    // Instead, just copy the list to the result and zero out the prev field.
+                    // todo: do I need to handle refcounting somehow?
+                    if (elem_size_align.size == 0) {
+                        const temp = try self.allocTempGeneral();
+                        for (0..3) |i| {
+                            try self.emitLoad(.w64, temp, frame_ptr, list_off + @as(i32, @intCast(i * 8)));
+                            try self.emitStore(.w64, frame_ptr, result_offset + list_field_offset + @as(i32, @intCast(i * 8)), temp);
+                        }
+                        self.codegen.freeGeneral(temp);
+
+                        return .{ .stack = .{ .offset = result_offset } };
+                    }
+
+                    const list_dst_offset = result_offset + list_field_offset;
+                    const elem_dst_offset = result_offset + elem_field_offset;
+
+                    // todo: do I need to handle elements being refcounted or not? (see list_append_unsafe which works)
+                    const fn_addr: usize = @intFromPtr(&wrapListReplace);
+                    {
+                        // wrapListReplace(out, list_bytes, list_len, list_cap, alignment, index, element, element_width, out_element, roc_ops)
+                        const base_reg = frame_ptr;
+                        var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+
+                        try builder.addLeaArg(base_reg, list_dst_offset);
+                        try builder.addMemArg(base_reg, list_off);
+                        try builder.addMemArg(base_reg, list_off + 8);
+                        try builder.addMemArg(base_reg, list_off + 16);
+                        try builder.addImmArg(@intCast(alignment_bytes));
+                        try builder.addMemArg(base_reg, index_off);
+                        try builder.addLeaArg(base_reg, elem_off);
+                        try builder.addImmArg(@intCast(elem_size));
+                        try builder.addLeaArg(base_reg, elem_dst_offset);
+                        try builder.addRegArg(roc_ops_reg);
+
+                        try self.callBuiltin(&builder, fn_addr, .list_replace);
+                    }
+
+                    return .{ .stack = .{ .offset = result_offset } };
                 },
                 .list_first => {
                     // list_first(list) -> element  (same as list_get at index 0)

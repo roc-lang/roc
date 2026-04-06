@@ -416,6 +416,21 @@ Builtin :: [].{
 			Try.Err(OutOfBounds)
 		}
 
+		## Replaces the element at the given index with a new item.
+		##
+		## Returns `Ok` with the new list, or `Err(OutOfBounds)` if the index is out of bounds.
+		## ```roc
+		## List.set(["a", "b", "c"], 1, "B") == Ok(["a", "B", "c"])
+		## List.set(["a", "b", "c"], 9, "B") == Err(OutOfBounds)
+		## ```
+		##
+		## If you also need the replaced value, use [List.replace] instead.
+		set : List(item), U64, item -> Try(List(item), [OutOfBounds, ..])
+		set = |original_list, index, element| {
+			replace_res = List.replace(original_list, index, element)?
+			Ok(replace_res.list)
+		}
+
 		## Returns the reversed list.
 		## ```roc
 		## expect List.rev([1, 2, 3]) == [3, 2, 1]
@@ -427,6 +442,20 @@ Builtin :: [].{
 			empty_list = List.with_capacity(list.len())
 			list.fold_rev(empty_list, |item, newlist| list_append_unsafe(newlist, item))
 		}
+
+		## Alias to [List.get], which enables the use of the subscript operator.
+		## Returns an element from a list at the given index.
+		## > Note: The subscript operator is not yet implemented,
+		## > so this function is just an alias to [List.get] for now
+		##
+		## Returns `Err OutOfBounds` if the given index exceeds the List's length
+		## ```roc
+		## expect List.subscript(["bird", "lizzard"], 0) == Ok("bird")
+		## expect ["bird", "lizzard"][0] == Ok("bird")
+		## expect ["bird", "lizzard"][5] == Err(OutOfBounds)
+		## ```
+		subscript : List(item), U64 -> Try(item, [OutOfBounds, ..])
+		subscript = get
 
 		for_each! : List(item), (item => {}) => {}
 		for_each! = |items, cb!| for item in items {
@@ -688,6 +717,28 @@ Builtin :: [].{
 		join_with = |list, joiner| {
 			Item : item
 			Item.join_with(list, joiner)
+		}
+
+		## Replaces the element at the given index with a new item, also returning the old value.
+		##
+		## Returns `Ok` with a record containing:
+		##   - `list`: the list with the element replaced
+		##   - `prev`: the element that was at the index before replacement
+		##
+		## Returns `Err(OutOfBounds)` if the index is out of bounds
+		##
+		## ```roc
+		## expect List.replace([1, 2, 3], 1, 4) == Ok({ list: [1, 4, 3], prev: 2 })
+		## expect List.replace(["a", "b", "c"], 0, "z") == Ok({ list: ["z", "b", "c"], prev: "a" })
+		## expect List.replace([1, 2, 3], 5, 4) == Err(OutOfBounds)
+		## ```
+		replace : List(item), U64, item -> Try({ list : List(item), prev : item }, [OutOfBounds, ..])
+		replace = |list, index, item| {
+			if index < list.len() {
+				Try.Ok(list_replace_unsafe(list, index, item))
+			} else {
+				Try.Err(OutOfBounds)
+			}
 		}
 
 		repeat : a, U64 -> List(a)
@@ -2045,6 +2096,9 @@ range_until = |var $current, end| {
 
 # Implemented by the compiler, does not perform bounds checks
 list_get_unsafe : List(item), U64 -> item
+
+# Implemented by the compiler, does not perform bounds checks
+list_replace_unsafe : List(item), U64, item -> { list : List(item), prev : item }
 
 # Implemented by the compiler, does not perform bounds checks
 list_append_unsafe : List(item), item -> List(item)
