@@ -495,24 +495,24 @@ pub const Lowerer = struct {
                     };
                 }
 
-        const arg_patterns = env.store.slicePatterns(hosted.args);
-        const first_arg = try self.bindLambdaArg(module_idx, type_scope, arg_patterns[0], fn_parts.arg);
-        var body_env = try self.cloneEnv(incoming_env);
-        defer body_env.deinit();
-        var binding_decls = std.ArrayList(BindingDecl).empty;
-        defer binding_decls.deinit(self.allocator);
-        try self.collectStructuralBindingDecls(module_idx, type_scope, first_arg, arg_patterns[0], &body_env, &binding_decls);
+                const arg_patterns = env.store.slicePatterns(hosted.args);
+                const first_arg = try self.bindLambdaArg(module_idx, type_scope, arg_patterns[0], fn_parts.arg);
+                var body_env = try self.cloneEnv(incoming_env);
+                defer body_env.deinit();
+                var binding_decls = std.ArrayList(BindingDecl).empty;
+                defer binding_decls.deinit(self.allocator);
+                try self.collectStructuralBindingDecls(module_idx, type_scope, first_arg, arg_patterns[0], &body_env, &binding_decls);
 
-        const body = if (arg_patterns.len == 1)
-            try self.wrapExprWithBindingDecls(
-                try self.lowerExprWithExpectedType(module_idx, type_scope, body_env, hosted.body, fn_parts.ret, self.lookupFunctionRetVar(module_idx, expected_var)),
-                binding_decls.items,
-            )
-        else
-            try self.wrapExprWithBindingDecls(
-                try self.lowerCurriedClosureChain(module_idx, type_scope, body_env, fn_parts.ret, self.lookupFunctionRetVar(module_idx, expected_var), arg_patterns[1..], hosted.body),
-                binding_decls.items,
-            );
+                const body = if (arg_patterns.len == 1)
+                    try self.wrapExprWithBindingDecls(
+                        try self.lowerExprWithExpectedType(module_idx, type_scope, body_env, hosted.body, fn_parts.ret, self.lookupFunctionRetVar(module_idx, expected_var)),
+                        binding_decls.items,
+                    )
+                else
+                    try self.wrapExprWithBindingDecls(
+                        try self.lowerCurriedClosureChain(module_idx, type_scope, body_env, fn_parts.ret, self.lookupFunctionRetVar(module_idx, expected_var), arg_patterns[1..], hosted.body),
+                        binding_decls.items,
+                    );
 
                 return .{
                     .recursive = recursive,
@@ -646,9 +646,7 @@ pub const Lowerer = struct {
             })) |entry| switch (entry) {
                 .typed => |typed| typed.ty,
                 .local_fn_source => null,
-            }
-            else
-                null,
+            } else null,
             else => null,
         };
         const ty = if (env_lookup_ty) |lookup_ty|
@@ -677,13 +675,13 @@ pub const Lowerer = struct {
             .e_lambda => |lambda| .{ .clos = try self.lowerAnonymousClosure(module_idx, type_scope, env, expr_idx, ty, lambda.args, lambda.body, null) },
             .e_closure => |closure| .{ .clos = try self.lowerClosureExpr(module_idx, type_scope, env, expr_idx, ty, closure, null) },
             .e_hosted_lambda => |_| debugTodo("monotype.lowerExpr hosted lambda"),
-            .e_record => |record| .{ .record = try self.lowerRecordFields(module_idx, type_scope, env, record.fields) },
+            .e_record => |record| .{ .record = try self.lowerRecordFields(module_idx, type_scope, env, ty, record.fields) },
             .e_empty_record => .unit,
             .e_tuple => |tuple| .{ .tuple = try self.lowerExprList(module_idx, type_scope, env, tuple.elems) },
             .e_list => |list| .{ .list = try self.lowerExprList(module_idx, type_scope, env, list.elems) },
             .e_empty_list => .{ .list = ast.Span(ast.ExprId).empty() },
             .e_if => |if_expr| .{ .if_ = try self.lowerIfExpr(module_idx, type_scope, env, if_expr) },
-            .e_match => |match_expr| .{ .when = try self.lowerMatchExpr(module_idx, type_scope, env, match_expr) },
+            .e_match => |match_expr| try self.lowerMatchExprData(module_idx, type_scope, env, ty, match_expr),
             .e_block => |block| .{ .block = try self.lowerBlockExpr(module_idx, type_scope, env, block.stmts, block.final_expr) },
             .e_binop => |binop| blk: {
                 if (binop.op == .ne) {
@@ -1576,14 +1574,44 @@ pub const Lowerer = struct {
     ) std.mem.Allocator.Error!@FieldType(ast.Expr.Data, "if_") {
         const cir_env = self.ctx.env(module_idx);
         const branch_ids = cir_env.store.sliceIfBranches(if_expr.branches);
-        if (branch_ids.len != 1) debugTodo("monotype.lowerIfExpr multi-branch if");
+        if (branch_ids.len == 0) debugPanic("monotype invariant violated: if expression missing branches", .{});
+
+        var else_body = try self.lowerExpr(module_idx, type_scope, env, if_expr.final_else);
+        var idx = branch_ids.len;
+        while (idx > 1) {
+            idx -= 1;
+            const branch = cir_env.store.getIfBranch(branch_ids[idx]);
+            else_body = try self.program.store.addExpr(.{
+                .ty = self.program.store.getExpr(else_body).ty,
+                .data = .{ .if_ = .{
+                    .cond = try self.lowerExpr(module_idx, type_scope, env, branch.cond),
+                    .then_body = try self.lowerExpr(module_idx, type_scope, env, branch.body),
+                    .else_body = else_body,
+                } },
+            });
+        }
+
         const branch = cir_env.store.getIfBranch(branch_ids[0]);
 
         return .{
             .cond = try self.lowerExpr(module_idx, type_scope, env, branch.cond),
             .then_body = try self.lowerExpr(module_idx, type_scope, env, branch.body),
-            .else_body = try self.lowerExpr(module_idx, type_scope, env, if_expr.final_else),
+            .else_body = else_body,
         };
+    }
+
+    fn lowerMatchExprData(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeCloneScope,
+        env: BindingEnv,
+        result_ty: type_mod.TypeId,
+        match_expr: CIR.Expr.Match,
+    ) std.mem.Allocator.Error!ast.Expr.Data {
+        if (self.matchExprNeedsListDesugaring(module_idx, match_expr)) {
+            return .{ .block = try self.lowerListMatchExpr(module_idx, type_scope, env, result_ty, match_expr) };
+        }
+        return .{ .when = try self.lowerMatchExpr(module_idx, type_scope, env, match_expr) };
     }
 
     fn lowerMatchExpr(
@@ -1597,6 +1625,8 @@ pub const Lowerer = struct {
         const branches = cir_env.store.matchBranchSlice(match_expr.branches);
         const out = try self.allocator.alloc(ast.Branch, branches.len);
         defer self.allocator.free(out);
+        const cond = try self.lowerExpr(module_idx, type_scope, env, match_expr.cond);
+        const cond_ty = self.program.store.getExpr(cond).ty;
 
         for (branches, 0..) |branch_idx, i| {
             const branch = cir_env.store.getMatchBranch(branch_idx);
@@ -1612,10 +1642,11 @@ pub const Lowerer = struct {
             defer binding_decls.deinit(self.allocator);
 
             out[i] = .{
-                .pat = try self.lowerMatchPat(
+                .pat = try self.lowerMatchPatWithType(
                     module_idx,
                     type_scope,
                     branch_pattern.pattern,
+                    cond_ty,
                     &branch_env,
                     &binding_decls,
                 ),
@@ -1627,9 +1658,277 @@ pub const Lowerer = struct {
         }
 
         return .{
-            .cond = try self.lowerExpr(module_idx, type_scope, env, match_expr.cond),
+            .cond = cond,
             .branches = try self.program.store.addBranchSpan(out),
         };
+    }
+
+    fn matchExprNeedsListDesugaring(
+        self: *Lowerer,
+        module_idx: u32,
+        match_expr: CIR.Expr.Match,
+    ) bool {
+        const cir_env = self.ctx.env(module_idx);
+        for (cir_env.store.matchBranchSlice(match_expr.branches)) |branch_idx| {
+            const branch = cir_env.store.getMatchBranch(branch_idx);
+            if (branch.guard != null) return true;
+            const branch_pattern_ids = cir_env.store.sliceMatchBranchPatterns(branch.patterns);
+            if (branch_pattern_ids.len != 1) return true;
+            const branch_pattern = cir_env.store.getMatchBranchPattern(branch_pattern_ids[0]);
+            if (branch_pattern.degenerate) return true;
+            if (self.patternNeedsListDesugaring(module_idx, branch_pattern.pattern)) return true;
+        }
+        return false;
+    }
+
+    fn patternNeedsListDesugaring(self: *Lowerer, module_idx: u32, pattern_idx: CIR.Pattern.Idx) bool {
+        const pattern = self.ctx.env(module_idx).store.getPattern(pattern_idx);
+        return switch (pattern) {
+            .list => true,
+            .as => |as_pat| self.patternNeedsListDesugaring(module_idx, as_pat.pattern),
+            .nominal => |nominal| self.patternNeedsListDesugaring(module_idx, nominal.backing_pattern),
+            .nominal_external => |nominal| self.patternNeedsListDesugaring(module_idx, nominal.backing_pattern),
+            else => false,
+        };
+    }
+
+    fn lowerListMatchExpr(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeCloneScope,
+        env: BindingEnv,
+        result_ty: type_mod.TypeId,
+        match_expr: CIR.Expr.Match,
+    ) std.mem.Allocator.Error!@FieldType(ast.Expr.Data, "block") {
+        const scrutinee = try self.lowerExpr(module_idx, type_scope, env, match_expr.cond);
+        const scrutinee_ty = self.program.store.getExpr(scrutinee).ty;
+        const scrutinee_bind: ast.TypedSymbol = .{
+            .ty = scrutinee_ty,
+            .symbol = try self.ctx.addSyntheticSymbol(base.Ident.Idx.NONE),
+        };
+        const scrutinee_decl = try self.program.store.addStmt(.{ .decl = .{
+            .bind = scrutinee_bind,
+            .body = scrutinee,
+        } });
+        const scrutinee_expr = try self.makeVarExpr(scrutinee_ty, scrutinee_bind.symbol);
+
+        var current = try self.program.store.addExpr(.{
+            .ty = result_ty,
+            .data = .{ .runtime_error = try self.internStringLiteral("non-exhaustive match") },
+        });
+
+        const cir_env = self.ctx.env(module_idx);
+        const branches = cir_env.store.matchBranchSlice(match_expr.branches);
+        var idx = branches.len;
+        while (idx > 0) {
+            idx -= 1;
+            const branch = cir_env.store.getMatchBranch(branches[idx]);
+            const branch_pattern = cir_env.store.getMatchBranchPattern(cir_env.store.sliceMatchBranchPatterns(branch.patterns)[0]);
+            current = try self.lowerListAwareMatchBranch(
+                module_idx,
+                type_scope,
+                env,
+                result_ty,
+                scrutinee_expr,
+                scrutinee_ty,
+                branch_pattern.pattern,
+                branch.value,
+                current,
+            );
+        }
+
+        return .{
+            .stmts = try self.program.store.addStmtSpan(&.{scrutinee_decl}),
+            .final_expr = current,
+        };
+    }
+
+    fn lowerListAwareMatchBranch(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeCloneScope,
+        incoming_env: BindingEnv,
+        result_ty: type_mod.TypeId,
+        scrutinee_expr: ast.ExprId,
+        scrutinee_ty: type_mod.TypeId,
+        pattern_idx: CIR.Pattern.Idx,
+        branch_value: CIR.Expr.Idx,
+        else_expr: ast.ExprId,
+    ) std.mem.Allocator.Error!ast.ExprId {
+        const pattern = self.ctx.env(module_idx).store.getPattern(pattern_idx);
+        return switch (pattern) {
+            .list => |list| try self.lowerExactListPatternBranch(
+                module_idx,
+                type_scope,
+                incoming_env,
+                result_ty,
+                scrutinee_expr,
+                scrutinee_ty,
+                list,
+                branch_value,
+                else_expr,
+            ),
+            .assign, .as, .underscore, .record_destructure, .nominal, .nominal_external => try self.lowerWholeValuePatternBranch(
+                module_idx,
+                type_scope,
+                incoming_env,
+                scrutinee_expr,
+                scrutinee_ty,
+                pattern_idx,
+                branch_value,
+            ),
+            else => debugTodoPattern(pattern),
+        };
+    }
+
+    fn lowerWholeValuePatternBranch(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeCloneScope,
+        incoming_env: BindingEnv,
+        scrutinee_expr: ast.ExprId,
+        scrutinee_ty: type_mod.TypeId,
+        pattern_idx: CIR.Pattern.Idx,
+        branch_value: CIR.Expr.Idx,
+    ) std.mem.Allocator.Error!ast.ExprId {
+        var branch_env = try self.cloneEnv(incoming_env);
+        defer branch_env.deinit();
+        var binding_decls = std.ArrayList(BindingDecl).empty;
+        defer binding_decls.deinit(self.allocator);
+
+        try self.bindPatternFromSourceExpr(
+            module_idx,
+            type_scope,
+            pattern_idx,
+            scrutinee_expr,
+            scrutinee_ty,
+            &branch_env,
+            &binding_decls,
+        );
+
+        return try self.wrapExprWithBindingDecls(
+            try self.lowerExpr(module_idx, type_scope, branch_env, branch_value),
+            binding_decls.items,
+        );
+    }
+
+    fn lowerExactListPatternBranch(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeCloneScope,
+        incoming_env: BindingEnv,
+        result_ty: type_mod.TypeId,
+        scrutinee_expr: ast.ExprId,
+        scrutinee_ty: type_mod.TypeId,
+        list_pattern: @FieldType(CIR.Pattern, "list"),
+        branch_value: CIR.Expr.Idx,
+        else_expr: ast.ExprId,
+    ) std.mem.Allocator.Error!ast.ExprId {
+        if (list_pattern.rest_info != null) debugTodo("monotype.list-match rest pattern");
+
+        const elem_ty = self.requireListElemType(scrutinee_ty);
+        const bool_ty = try self.makePrimitiveType(.bool);
+        const u64_ty = try self.makePrimitiveType(.u64);
+        const patterns = self.ctx.env(module_idx).store.slicePatterns(list_pattern.patterns);
+
+        const len_expr = try self.makeLowLevelExpr(u64_ty, .list_len, &.{scrutinee_expr});
+        const expected_len_expr = try self.program.store.addExpr(.{
+            .ty = u64_ty,
+            .data = .{ .int_lit = @intCast(patterns.len) },
+        });
+        const cond_expr = try self.makeLowLevelExpr(bool_ty, .num_is_eq, &.{ len_expr, expected_len_expr });
+
+        var branch_env = try self.cloneEnv(incoming_env);
+        defer branch_env.deinit();
+        var binding_decls = std.ArrayList(BindingDecl).empty;
+        defer binding_decls.deinit(self.allocator);
+
+        for (patterns, 0..) |elem_pattern_idx, i| {
+            const index_expr = try self.program.store.addExpr(.{
+                .ty = u64_ty,
+                .data = .{ .int_lit = @intCast(i) },
+            });
+            const elem_expr = try self.makeLowLevelExpr(elem_ty, .list_get_unsafe, &.{ scrutinee_expr, index_expr });
+            try self.bindPatternFromSourceExpr(
+                module_idx,
+                type_scope,
+                elem_pattern_idx,
+                elem_expr,
+                elem_ty,
+                &branch_env,
+                &binding_decls,
+            );
+        }
+
+        const then_expr = try self.wrapExprWithBindingDecls(
+            try self.lowerExpr(module_idx, type_scope, branch_env, branch_value),
+            binding_decls.items,
+        );
+        return try self.program.store.addExpr(.{
+            .ty = result_ty,
+            .data = .{ .if_ = .{
+                .cond = cond_expr,
+                .then_body = then_expr,
+                .else_body = else_expr,
+            } },
+        });
+    }
+
+    fn bindPatternFromSourceExpr(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeCloneScope,
+        pattern_idx: CIR.Pattern.Idx,
+        source_expr: ast.ExprId,
+        source_ty: type_mod.TypeId,
+        env: *BindingEnv,
+        decls: *std.ArrayList(BindingDecl),
+    ) std.mem.Allocator.Error!void {
+        const pattern = self.ctx.env(module_idx).store.getPattern(pattern_idx);
+        switch (pattern) {
+            .assign => |assign| {
+                const bind: ast.TypedSymbol = .{
+                    .ty = source_ty,
+                    .symbol = try self.ctx.getOrCreatePatternSymbol(module_idx, pattern_idx, assign.ident),
+                };
+                try decls.append(self.allocator, .{
+                    .bind = bind,
+                    .body = source_expr,
+                });
+                try env.put(.{
+                    .module_idx = module_idx,
+                    .pattern_idx = @intFromEnum(pattern_idx),
+                }, .{ .typed = bind });
+            },
+            .as, .record_destructure => {
+                const source = try self.makePatternSourceBindWithType(module_idx, pattern_idx, source_ty);
+                try decls.append(self.allocator, .{
+                    .bind = source,
+                    .body = source_expr,
+                });
+                try self.collectStructuralBindingDecls(module_idx, type_scope, source, pattern_idx, env, decls);
+            },
+            .underscore => {},
+            .nominal => |nominal| try self.bindPatternFromSourceExpr(
+                module_idx,
+                type_scope,
+                nominal.backing_pattern,
+                source_expr,
+                source_ty,
+                env,
+                decls,
+            ),
+            .nominal_external => |nominal| try self.bindPatternFromSourceExpr(
+                module_idx,
+                type_scope,
+                nominal.backing_pattern,
+                source_expr,
+                source_ty,
+                env,
+                decls,
+            ),
+            else => debugTodoPattern(pattern),
+        }
     }
 
     fn lowerBlockExpr(
@@ -1855,16 +2154,14 @@ pub const Lowerer = struct {
                 );
                 const elem_ty = self.requireListElemType(iterable_ty);
 
-                const patt = if (self.patternNeedsBindingDecls(module_idx, for_stmt.patt))
-                    blk: {
-                        const root_bind = try self.makePatternSourceBindWithType(module_idx, for_stmt.patt, elem_ty);
-                        try self.collectStructuralBindingDecls(module_idx, type_scope, root_bind, for_stmt.patt, &body_env, &binding_decls);
-                        break :blk try self.program.store.addPat(.{
-                            .ty = root_bind.ty,
-                            .data = .{ .var_ = root_bind.symbol },
-                        });
-                    }
-                else blk: {
+                const patt = if (self.patternNeedsBindingDecls(module_idx, for_stmt.patt)) blk: {
+                    const root_bind = try self.makePatternSourceBindWithType(module_idx, for_stmt.patt, elem_ty);
+                    try self.collectStructuralBindingDecls(module_idx, type_scope, root_bind, for_stmt.patt, &body_env, &binding_decls);
+                    break :blk try self.program.store.addPat(.{
+                        .ty = root_bind.ty,
+                        .data = .{ .var_ = root_bind.symbol },
+                    });
+                } else blk: {
                     try self.bindPatternEnvFromType(module_idx, for_stmt.patt, elem_ty, &body_env);
                     break :blk try self.lowerPatWithType(module_idx, for_stmt.patt, elem_ty);
                 };
@@ -1905,16 +2202,14 @@ pub const Lowerer = struct {
         );
         const elem_ty = self.requireListElemType(iterable_ty);
 
-        const patt = if (self.patternNeedsBindingDecls(module_idx, patt_idx))
-            blk: {
-                const root_bind = try self.makePatternSourceBindWithType(module_idx, patt_idx, elem_ty);
-                try self.collectStructuralBindingDecls(module_idx, type_scope, root_bind, patt_idx, &body_env, &binding_decls);
-                break :blk try self.program.store.addPat(.{
-                    .ty = root_bind.ty,
-                    .data = .{ .var_ = root_bind.symbol },
-                });
-            }
-        else blk: {
+        const patt = if (self.patternNeedsBindingDecls(module_idx, patt_idx)) blk: {
+            const root_bind = try self.makePatternSourceBindWithType(module_idx, patt_idx, elem_ty);
+            try self.collectStructuralBindingDecls(module_idx, type_scope, root_bind, patt_idx, &body_env, &binding_decls);
+            break :blk try self.program.store.addPat(.{
+                .ty = root_bind.ty,
+                .data = .{ .var_ = root_bind.symbol },
+            });
+        } else blk: {
             try self.bindPatternEnvFromType(module_idx, patt_idx, elem_ty, &body_env);
             break :blk try self.lowerPatWithType(module_idx, patt_idx, elem_ty);
         };
@@ -2044,6 +2339,7 @@ pub const Lowerer = struct {
         module_idx: u32,
         type_scope: *TypeCloneScope,
         env: BindingEnv,
+        record_ty: type_mod.TypeId,
         span: CIR.RecordField.Span,
     ) std.mem.Allocator.Error!ast.Span(ast.FieldExpr) {
         const cir_env = self.ctx.env(module_idx);
@@ -2058,6 +2354,16 @@ pub const Lowerer = struct {
                 .value = try self.lowerExpr(module_idx, type_scope, env, field.value),
             };
         }
+
+        switch (self.ctx.types.getType(record_ty)) {
+            .record => {},
+            else => debugPanic("monotype invariant violated: record expression lowered with non-record type", .{}),
+        }
+        std.mem.sort(ast.FieldExpr, out, self.ctx.env(module_idx).getIdentStoreConst(), struct {
+            fn lessThan(idents: *const base.Ident.Store, a: ast.FieldExpr, b: ast.FieldExpr) bool {
+                return std.mem.order(u8, idents.getText(a.name), idents.getText(b.name)) == .lt;
+            }
+        }.lessThan);
 
         return try self.program.store.addFieldExprSpan(out);
     }
@@ -2174,16 +2480,17 @@ pub const Lowerer = struct {
                 func_expr_idx,
                 arg_exprs,
             )
-        else .{
-            .ty = try self.lowerExprType(
-                module_idx,
-                type_scope,
-                env,
-                func_expr_idx,
-                cir_env.store.getExpr(func_expr_idx),
-            ),
-            .solved_var = null,
-        };
+        else
+            .{
+                .ty = try self.lowerExprType(
+                    module_idx,
+                    type_scope,
+                    env,
+                    func_expr_idx,
+                    cir_env.store.getExpr(func_expr_idx),
+                ),
+                .solved_var = null,
+            };
     }
 
     fn calleeNeedsSourceFnSpecialization(
@@ -2534,6 +2841,12 @@ pub const Lowerer = struct {
             };
         }
 
+        std.mem.sort(type_mod.Field, lowered_fields, cir_env.getIdentStoreConst(), struct {
+            fn lessThan(idents: *const base.Ident.Store, a: type_mod.Field, b: type_mod.Field) bool {
+                return std.mem.order(u8, idents.getText(a.name), idents.getText(b.name)) == .lt;
+            }
+        }.lessThan);
+
         return try self.ctx.types.addType(.{ .record = .{
             .fields = try self.ctx.types.addFields(lowered_fields),
         } });
@@ -2627,12 +2940,14 @@ pub const Lowerer = struct {
                 if (try self.defaultPrimitiveForConstraints(module_idx, env, flex.constraints)) |prim| {
                     break :blk .{ .primitive = prim };
                 }
+                if (flex.constraints.len() == 0) break :blk .{ .primitive = .erased };
                 self.debugPanicUnresolvedTypeVar(env, module_idx, resolved.var_);
             },
             .rigid => |rigid| blk: {
                 if (try self.defaultPrimitiveForConstraints(module_idx, env, rigid.constraints)) |prim| {
                     break :blk .{ .primitive = prim };
                 }
+                if (rigid.constraints.len() == 0) break :blk .{ .primitive = .erased };
                 self.debugPanicUnresolvedTypeVar(env, module_idx, resolved.var_);
             },
             .err => .{ .primitive = .erased },
@@ -2700,6 +3015,12 @@ pub const Lowerer = struct {
             return .{ .primitive = .bool };
         }
 
+        std.mem.sort(type_mod.Tag, lowered_tags.items, env.getIdentStoreConst(), struct {
+            fn lessThan(idents: *const base.Ident.Store, a: type_mod.Tag, b: type_mod.Tag) bool {
+                return std.mem.order(u8, idents.getText(a.name), idents.getText(b.name)) == .lt;
+            }
+        }.lessThan);
+
         return .{ .tag_union = .{
             .tags = try self.ctx.types.addTags(lowered_tags.items),
         } };
@@ -2764,6 +3085,12 @@ pub const Lowerer = struct {
             }
         }
 
+        std.mem.sort(type_mod.Field, lowered_fields.items, env.getIdentStoreConst(), struct {
+            fn lessThan(idents: *const base.Ident.Store, a: type_mod.Field, b: type_mod.Field) bool {
+                return std.mem.order(u8, idents.getText(a.name), idents.getText(b.name)) == .lt;
+            }
+        }.lessThan);
+
         return .{ .record = .{
             .fields = try self.ctx.types.addFields(lowered_fields.items),
         } };
@@ -2784,6 +3111,11 @@ pub const Lowerer = struct {
                 .ty = try self.lowerInstantiatedType(module_idx, fields_slice.items(.var_)[i]),
             };
         }
+        std.mem.sort(type_mod.Field, lowered_fields, env.getIdentStoreConst(), struct {
+            fn lessThan(idents: *const base.Ident.Store, a: type_mod.Field, b: type_mod.Field) bool {
+                return std.mem.order(u8, idents.getText(a.name), idents.getText(b.name)) == .lt;
+            }
+        }.lessThan);
         return .{ .record = .{
             .fields = try self.ctx.types.addFields(lowered_fields),
         } };
@@ -3054,7 +3386,7 @@ pub const Lowerer = struct {
                 const source_expr = try self.makeVarExpr(source.ty, source.symbol);
                 for (cir_env.store.sliceRecordDestructs(record.destructs)) |destruct_idx| {
                     const destruct = cir_env.store.getRecordDestruct(destruct_idx);
-                    const field_ty = try self.lowerSolvedType(module_idx, type_scope, ModuleEnv.varFrom(destruct_idx));
+                    const field_ty = self.lookupRecordFieldType(source.ty, destruct.label);
                     const field_bind: ast.TypedSymbol = .{
                         .ty = field_ty,
                         .symbol = try self.ctx.addSyntheticSymbol(base.Ident.Idx.NONE),
@@ -3159,55 +3491,77 @@ pub const Lowerer = struct {
         });
     }
 
-    fn lowerMatchPat(
+    fn lowerStructuralPatWithType(
         self: *Lowerer,
         module_idx: u32,
         type_scope: *TypeCloneScope,
         pattern_idx: CIR.Pattern.Idx,
+        source_ty: type_mod.TypeId,
+        env: *BindingEnv,
+        decls: *std.ArrayList(BindingDecl),
+    ) std.mem.Allocator.Error!ast.PatId {
+        const source = try self.makePatternSourceBindWithType(module_idx, pattern_idx, source_ty);
+        try self.collectStructuralBindingDecls(module_idx, type_scope, source, pattern_idx, env, decls);
+        return try self.program.store.addPat(.{
+            .ty = source.ty,
+            .data = .{ .var_ = source.symbol },
+        });
+    }
+
+    fn lowerMatchPatWithType(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeCloneScope,
+        pattern_idx: CIR.Pattern.Idx,
+        source_ty: type_mod.TypeId,
         env: *BindingEnv,
         decls: *std.ArrayList(BindingDecl),
     ) std.mem.Allocator.Error!ast.PatId {
         const cir_env = self.ctx.env(module_idx);
         const pattern = cir_env.store.getPattern(pattern_idx);
-        const ty = try self.lowerSolvedType(module_idx, type_scope, ModuleEnv.varFrom(pattern_idx));
 
         if (self.patternNeedsBindingDecls(module_idx, pattern_idx)) {
-            return self.lowerStructuralPatWithSource(module_idx, type_scope, pattern_idx, env, decls);
+            return self.lowerStructuralPatWithType(module_idx, type_scope, pattern_idx, source_ty, env, decls);
         }
 
         return switch (pattern) {
             .assign => |assign| blk: {
                 const source: ast.TypedSymbol = .{
-                    .ty = ty,
+                    .ty = source_ty,
                     .symbol = try self.ctx.getOrCreatePatternSymbol(module_idx, pattern_idx, assign.ident),
                 };
                 try self.collectStructuralBindingDecls(module_idx, type_scope, source, pattern_idx, env, decls);
                 break :blk try self.program.store.addPat(.{
-                    .ty = ty,
+                    .ty = source_ty,
                     .data = .{ .var_ = source.symbol },
                 });
             },
             .underscore => try self.program.store.addPat(.{
-                .ty = ty,
+                .ty = source_ty,
                 .data = .{ .var_ = symbol_mod.Symbol.none },
             }),
             .applied_tag => |tag| blk: {
-                if (self.ctx.types.getType(ty) == .primitive and self.ctx.types.getType(ty).primitive == .bool) {
+                if (self.ctx.types.getType(source_ty) == .primitive and self.ctx.types.getType(source_ty).primitive == .bool) {
                     if (cir_env.store.slicePatterns(tag.args).len != 0) {
                         return debugPanic("monotype bool pattern invariant violated: Bool tags cannot carry arguments", .{});
                     }
                     break :blk try self.program.store.addPat(.{
-                        .ty = ty,
+                        .ty = source_ty,
                         .data = .{ .bool_lit = self.requireBoolLiteralValue(module_idx, tag.name) },
                     });
                 }
-                const lowered_args = try self.allocator.alloc(ast.PatId, tag.args.span.len);
+                const arg_pats = cir_env.store.slicePatterns(tag.args);
+                const arg_tys = self.lookupTagArgTypes(source_ty, tag.name);
+                if (arg_pats.len != arg_tys.len) {
+                    return debugPanic("monotype invariant violated: tag pattern arity mismatch for lowered source type", .{});
+                }
+                const lowered_args = try self.allocator.alloc(ast.PatId, arg_pats.len);
                 defer self.allocator.free(lowered_args);
-                for (cir_env.store.slicePatterns(tag.args), 0..) |arg_pat, i| {
-                    lowered_args[i] = try self.lowerMatchPat(module_idx, type_scope, arg_pat, env, decls);
+                for (arg_pats, arg_tys, 0..) |arg_pat, arg_ty, i| {
+                    lowered_args[i] = try self.lowerMatchPatWithType(module_idx, type_scope, arg_pat, arg_ty, env, decls);
                 }
                 break :blk try self.program.store.addPat(.{
-                    .ty = ty,
+                    .ty = source_ty,
                     .data = .{ .tag = .{
                         .name = tag.name,
                         .args = try self.program.store.addPatSpan(lowered_args),
@@ -3215,22 +3569,54 @@ pub const Lowerer = struct {
                 });
             },
             .nominal => |nominal| blk: {
-                const lowered = try self.lowerMatchPat(module_idx, type_scope, nominal.backing_pattern, env, decls);
+                const lowered = try self.lowerMatchPatWithType(module_idx, type_scope, nominal.backing_pattern, source_ty, env, decls);
                 const backing = self.program.store.getPat(lowered);
                 break :blk try self.program.store.addPat(.{
-                    .ty = ty,
+                    .ty = source_ty,
                     .data = backing.data,
                 });
             },
             .nominal_external => |nominal| blk: {
-                const lowered = try self.lowerMatchPat(module_idx, type_scope, nominal.backing_pattern, env, decls);
+                const lowered = try self.lowerMatchPatWithType(module_idx, type_scope, nominal.backing_pattern, source_ty, env, decls);
                 const backing = self.program.store.getPat(lowered);
                 break :blk try self.program.store.addPat(.{
-                    .ty = ty,
+                    .ty = source_ty,
                     .data = backing.data,
                 });
             },
             else => debugTodoPattern(pattern),
+        };
+    }
+
+    fn lookupTagArgTypes(
+        self: *Lowerer,
+        source_ty: type_mod.TypeId,
+        tag_name: base.Ident.Idx,
+    ) []const type_mod.TypeId {
+        return switch (self.ctx.types.getType(source_ty)) {
+            .tag_union => |tag_union| blk: {
+                for (self.ctx.types.sliceTags(tag_union.tags)) |tag| {
+                    if (tag.name.eql(tag_name)) break :blk self.ctx.types.sliceTypeSpan(tag.args);
+                }
+                debugPanic("monotype invariant violated: missing tag in lowered tag union type", .{});
+            },
+            else => debugPanic("monotype invariant violated: attempted to read tag args from non-tag type", .{}),
+        };
+    }
+
+    fn lookupRecordFieldType(
+        self: *Lowerer,
+        source_ty: type_mod.TypeId,
+        field_name: base.Ident.Idx,
+    ) type_mod.TypeId {
+        return switch (self.ctx.types.getType(source_ty)) {
+            .record => |record| blk: {
+                for (self.ctx.types.sliceFields(record.fields)) |field| {
+                    if (field.name.eql(field_name)) break :blk field.ty;
+                }
+                debugPanic("monotype invariant violated: missing field in lowered record type", .{});
+            },
+            else => debugPanic("monotype invariant violated: attempted to read record field type from non-record type", .{}),
         };
     }
 
