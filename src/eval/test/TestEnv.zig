@@ -9,6 +9,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const builtins = @import("builtins");
 const crash_context = @import("../crash_context.zig");
+const sljmp = @import("sljmp");
 
 /// Diagnostic print that is a no-op on freestanding (WASM) where
 /// std.debug.print is unavailable due to missing OS thread/file primitives.
@@ -25,6 +26,9 @@ const RocRealloc = builtins.host_abi.RocRealloc;
 const RocDbg = builtins.host_abi.RocDbg;
 const RocExpectFailed = builtins.host_abi.RocExpectFailed;
 const RocCrashed = builtins.host_abi.RocCrashed;
+const JmpBuf = sljmp.JmpBuf;
+const setjmp = sljmp.setjmp;
+const longjmp = sljmp.longjmp;
 
 const CrashContext = crash_context.CrashContext;
 const CrashState = crash_context.CrashState;
@@ -47,6 +51,8 @@ const AllocationInfo = struct {
 allocator: std.mem.Allocator,
 crash: CrashContext,
 roc_ops: ?RocOps,
+jmp_buf: JmpBuf = undefined,
+active_jmp_buf: ?*JmpBuf = null,
 /// Tracks active allocations for leak/double-free detection.
 /// Key is the allocation pointer returned by `roc_alloc`.
 allocation_tracker: std.AutoHashMap(usize, AllocationInfo),
@@ -103,6 +109,41 @@ pub fn get_ops(self: *TestEnv) *RocOps {
 /// Expose the current crash state for assertions in tests.
 pub fn crashState(self: *TestEnv) CrashState {
     return self.crash.state;
+}
+
+pub const CrashBoundary = struct {
+    env: *TestEnv,
+    prev_jmp_buf: ?*JmpBuf,
+
+    pub fn init(env: *TestEnv) CrashBoundary {
+        env.crash.reset();
+        return .{
+            .env = env,
+            .prev_jmp_buf = env.installJumpBuf(&env.jmp_buf),
+        };
+    }
+
+    pub fn deinit(self: *CrashBoundary) void {
+        self.env.restoreJumpBuf(self.prev_jmp_buf);
+    }
+
+    pub fn set(self: *CrashBoundary) c_int {
+        return setjmp(&self.env.jmp_buf);
+    }
+};
+
+pub fn enterCrashBoundary(self: *TestEnv) CrashBoundary {
+    return CrashBoundary.init(self);
+}
+
+fn installJumpBuf(self: *TestEnv, jmp_buf: *JmpBuf) ?*JmpBuf {
+    const prev = self.active_jmp_buf;
+    self.active_jmp_buf = jmp_buf;
+    return prev;
+}
+
+fn restoreJumpBuf(self: *TestEnv, prev: ?*JmpBuf) void {
+    self.active_jmp_buf = prev;
 }
 
 fn testRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.c) void {
@@ -191,6 +232,9 @@ fn testRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.c)
     test_env.crash.recordCrash(msg_slice) catch |err| {
         std.debug.panic("failed to store crash message in test env: {}", .{err});
     };
+    const active_jmp_buf = test_env.active_jmp_buf orelse return;
+    test_env.active_jmp_buf = null;
+    longjmp(active_jmp_buf, 1);
 }
 
 fn allocateTrackedBytes(allocator: std.mem.Allocator, len: usize, alignment: usize) [*]u8 {

@@ -234,7 +234,10 @@ pub fn lirInterpreterInspectedStr(
     );
     defer interp.deinit();
 
-    const result = try interp.eval(.{ .proc_id = lowered.main_proc });
+    const result = interp.eval(.{ .proc_id = lowered.main_proc }) catch |err| switch (err) {
+        error.RuntimeError => return error.Crash,
+        else => return err,
+    };
     const ret_layout = lowered.lir_result.store.getProcSpec(lowered.main_proc).ret_layout;
     return copyReturnedRocStr(
         allocator,
@@ -273,7 +276,17 @@ pub fn devEvaluatorInspectedStr(
     defer allocator.free(ret_buf);
     @memset(ret_buf, 0);
 
+    var crash_boundary = runtime_env.enterCrashBoundary();
+    defer crash_boundary.deinit();
+    const sj = crash_boundary.set();
+    if (sj != 0) return error.Crash;
+
     exec_mem.callWithResultPtrAndRocOps(@ptrCast(ret_buf.ptr), @ptrCast(runtime_env.get_ops()));
+
+    switch (runtime_env.crashState()) {
+        .did_not_crash => {},
+        .crashed => return error.Crash,
+    }
 
     return copyReturnedRocStr(
         allocator,
@@ -333,6 +346,7 @@ fn debugValidateMonotypeTypes(types_store: *const monotype.Type.Store) void {
     const type_len = types_store.types.items.len;
     for (types_store.types.items, 0..) |ty, i| {
         switch (ty) {
+            .placeholder => {},
             .primitive => {},
             .func => |func| {
                 debugAssertValidMonoTypeRef(types_store, @enumFromInt(@as(u32, @intCast(i))), "func.arg", func.arg, type_len);

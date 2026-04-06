@@ -91,11 +91,15 @@ pub const TestCase = struct {
     pub const Expected = union(enum) {
         inspect_str: []const u8,
         problem: void,
+        crash: void,
+        problem_and_crash: void,
 
         pub fn display(self: Expected) ?[]const u8 {
             return switch (self) {
                 .inspect_str => |value| value,
                 .problem => null,
+                .crash => null,
+                .problem_and_crash => null,
             };
         }
     };
@@ -342,6 +346,17 @@ fn runSingleTest(allocator: std.mem.Allocator, tc: TestCase) TestOutcome {
                     .typecheck_ns = compiled.resources.typecheck_ns,
                 };
             },
+            .crash, .problem_and_crash => blk: {
+                var compiled = helpers.compileInspectedExpr(allocator, tc.source) catch {
+                    return .{ .status = .fail, .message = "INVALID_SYNTAX — skipped crash test has parse/check/lower errors" };
+                };
+                defer compiled.deinit(allocator);
+                break :blk EvalTimings{
+                    .parse_ns = compiled.resources.parse_ns,
+                    .canonicalize_ns = compiled.resources.canonicalize_ns,
+                    .typecheck_ns = compiled.resources.typecheck_ns,
+                };
+            },
             .problem => blk: {
                 const resources = helpers.parseAndCanonicalizeExpr(allocator, tc.source) catch {
                     return .{ .status = .pass, .timings = .{} };
@@ -376,6 +391,8 @@ fn runSingleTestInner(allocator: std.mem.Allocator, tc: TestCase) !TestOutcome {
     return switch (tc.expected) {
         .inspect_str => runInspectTest(allocator, tc.source, tc.expected, tc.skip),
         .problem => runTestProblem(allocator, tc.source),
+        .crash => runCrashTest(allocator, tc.source, tc.skip, false),
+        .problem_and_crash => runCrashTest(allocator, tc.source, tc.skip, true),
     };
 }
 
@@ -430,6 +447,8 @@ fn runInspectTest(
                 const expected_str = switch (expected) {
                     .inspect_str => |value| value,
                     .problem => unreachable,
+                    .crash => unreachable,
+                    .problem_and_crash => unreachable,
                 };
                 const value_ok = std.mem.eql(u8, expected_str, str);
                 const agreement_ok = if (first_ok) |fok| std.mem.eql(u8, fok, str) else true;
@@ -498,6 +517,119 @@ fn runTestProblem(allocator: std.mem.Allocator, src: []const u8) !TestOutcome {
         return .{ .status = .pass, .timings = timings };
     }
     return .{ .status = .fail, .message = "expected problems but none found", .timings = timings };
+}
+
+fn runCrashTest(
+    allocator: std.mem.Allocator,
+    src: []const u8,
+    skip: TestCase.Skip,
+    require_problems: bool,
+) !TestOutcome {
+    var compiled = try helpers.compileInspectedExpr(allocator, src);
+    defer compiled.deinit(allocator);
+
+    const can_diags = try compiled.resources.module_env.getDiagnostics();
+    defer allocator.free(can_diags);
+    const type_problems = compiled.resources.checker.problems.problems.items.len;
+    const has_problems = can_diags.len + type_problems > 0;
+
+    if (require_problems and !has_problems) {
+        return .{
+            .status = .fail,
+            .message = "expected compile-time problems before runtime crash",
+            .timings = .{
+                .parse_ns = compiled.resources.parse_ns,
+                .canonicalize_ns = compiled.resources.canonicalize_ns,
+                .typecheck_ns = compiled.resources.typecheck_ns,
+            },
+        };
+    }
+
+    if (!require_problems and has_problems) {
+        return .{
+            .status = .fail,
+            .message = "unexpected compile-time problems in runtime crash test",
+            .timings = .{
+                .parse_ns = compiled.resources.parse_ns,
+                .canonicalize_ns = compiled.resources.canonicalize_ns,
+                .typecheck_ns = compiled.resources.typecheck_ns,
+            },
+        };
+    }
+
+    const timings = EvalTimings{
+        .parse_ns = compiled.resources.parse_ns,
+        .canonicalize_ns = compiled.resources.canonicalize_ns,
+        .typecheck_ns = compiled.resources.typecheck_ns,
+    };
+
+    const skips = if (comptime coverage_mode)
+        [NUM_BACKENDS]bool{ skip.interpreter, true, true, true }
+    else
+        [NUM_BACKENDS]bool{ skip.interpreter, skip.dev, skip.wasm, false };
+
+    const eval_fns = [NUM_BACKENDS]BackendEvalFn{
+        helpers.lirInterpreterInspectedStr,
+        helpers.devEvaluatorInspectedStr,
+        helpers.wasmEvaluatorInspectedStr,
+        helpers.devEvaluatorInspectedStr, // llvm placeholder
+    };
+
+    var backends: [NUM_BACKENDS]BackendDetail = [_]BackendDetail{.{ .status = .not_implemented }} ** NUM_BACKENDS;
+    var any_failure = false;
+
+    for (0..NUM_BACKENDS) |i| {
+        if (i == 2 and !WASM_BACKEND_IMPLEMENTED) continue;
+        if (i == 3 and !LLVM_BACKEND_IMPLEMENTED) continue;
+        if (skips[i]) {
+            backends[i] = .{ .status = .skip };
+            continue;
+        }
+
+        var timer = Timer.start() catch unreachable;
+        const fork_result = forkAndEval(eval_fns[i], &compiled.lowered);
+        const dur = timer.read();
+
+        switch (fork_result) {
+            .child_error => |err_name| {
+                if (std.mem.eql(u8, err_name, "Crash")) {
+                    backends[i] = .{ .status = .pass, .value = err_name, .duration_ns = dur };
+                } else {
+                    backends[i] = .{ .status = .fail, .value = err_name, .duration_ns = dur };
+                    any_failure = true;
+                }
+            },
+            .success => |value| {
+                backends[i] = .{ .status = .wrong_value, .value = value, .duration_ns = dur };
+                any_failure = true;
+            },
+            .signal_death => |sig| {
+                var sig_buf: [32]u8 = undefined;
+                const sig_str = std.fmt.bufPrint(&sig_buf, "signal: {d}", .{sig}) catch "signal: ?";
+                backends[i] = .{ .status = .fail, .value = allocator.dupe(u8, sig_str) catch "signal", .duration_ns = dur };
+                any_failure = true;
+            },
+            .fork_failed => {
+                backends[i] = .{ .status = .fail, .value = "ForkFailed", .duration_ns = dur };
+                any_failure = true;
+            },
+        }
+    }
+
+    const final_timings = EvalTimings{
+        .parse_ns = timings.parse_ns,
+        .canonicalize_ns = timings.canonicalize_ns,
+        .typecheck_ns = timings.typecheck_ns,
+        .interpreter_ns = backends[0].duration_ns,
+        .dev_ns = backends[1].duration_ns,
+        .wasm_ns = backends[2].duration_ns,
+        .llvm_ns = backends[3].duration_ns,
+    };
+
+    if (any_failure) {
+        return .{ .status = .fail, .timings = final_timings, .backends = backends };
+    }
+    return .{ .status = .pass, .timings = final_timings, .backends = backends };
 }
 
 //

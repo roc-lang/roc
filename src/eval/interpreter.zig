@@ -2722,8 +2722,9 @@ pub const Interpreter = struct {
         const layout_val = self.layout_store.getLayout(arg_layout);
 
         if (op == .eq and switch (layout_val.tag) {
-            .scalar, .zst => false,
-            else => true,
+            .zst, .struct_, .list, .list_of_zst, .tag_union => true,
+            .scalar => layout_val.data.scalar.tag == .str,
+            else => false,
         }) {
             val.write(u8, if (try self.valuesEqual(a, b, arg_layout)) 1 else 0);
             return val;

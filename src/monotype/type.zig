@@ -43,6 +43,7 @@ pub const Field = struct {
 };
 
 pub const Content = union(enum) {
+    placeholder,
     func: struct {
         arg: TypeId,
         ret: TypeId,
@@ -168,6 +169,7 @@ pub const Store = struct {
         if (@as(std.meta.Tag(Content), left) != @as(std.meta.Tag(Content), right)) return false;
 
         return switch (left) {
+            .placeholder => false,
             .primitive => |prim| prim == right.primitive,
             .func => |func| blk: {
                 const right_func = right.func;

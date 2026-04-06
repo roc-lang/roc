@@ -6425,6 +6425,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.freeGeneral(lhs_len);
             const empty_patch = try self.codegen.emitCondJump(condEqual());
 
+            // Zero-sized element layouts are fully determined by list length.
+            // Once lengths match, every element compares equal.
+            if (elem_size == 0) {
+                const done_offset = self.codegen.currentOffset();
+                self.codegen.patchJump(len_ne_patch, done_offset);
+                self.codegen.patchJump(empty_patch, done_offset);
+                if (op != .num_is_eq) {
+                    try self.emitXorImm(.w64, result_reg, result_reg, 1);
+                }
+                return .{ .general_reg = result_reg };
+            }
+
             const lhs_ptr_slot = self.codegen.allocStackSlot(8);
             const rhs_ptr_slot = self.codegen.allocStackSlot(8);
             {

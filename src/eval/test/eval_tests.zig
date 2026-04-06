@@ -244,6 +244,26 @@ pub const tests = [_]TestCase{
     .{ .name = "inspect: typed three parameter lambda", .source = "(|a, b, c| a + b + c)(1.I64, 2.I64, 3.I64)", .expected = .{ .inspect_str = "6" } },
     .{ .name = "inspect: typed lambda if body positive", .source = "(|x| if x > 0.I64 x else 0.I64)(5.I64)", .expected = .{ .inspect_str = "5" } },
     .{ .name = "inspect: typed lambda if body negative", .source = "(|x| if x > 0.I64 x else 0.I64)(-3.I64)", .expected = .{ .inspect_str = "0" } },
+    .{
+        .name = "inspect: crash not taken when lambda condition true",
+        .source =
+        \\(|x| if x > 0.I64 x else {
+        \\    crash "this should not execute"
+        \\    0.I64
+        \\})(10.I64)
+        ,
+        .expected = .{ .inspect_str = "10" },
+    },
+    .{
+        .name = "crash: lambda else branch crash",
+        .source =
+        \\(|x| if x > 0.I64 x else {
+        \\    crash "crash in else!"
+        \\    0.I64
+        \\})(-5.I64)
+        ,
+        .expected = .{ .crash = {} },
+    },
     .{ .name = "inspect: typed lambda unary minus", .source = "(|x| -x)(5.I64)", .expected = .{ .inspect_str = "-5" } },
     .{ .name = "inspect: typed lambda ignore arg", .source = "(|_x| 5.I64)(99.I64)", .expected = .{ .inspect_str = "5" } },
     .{ .name = "inspect: typed curried lambda", .source = "(|a| |b| a * b)(5.I64)(10.I64)", .expected = .{ .inspect_str = "50" } },
@@ -846,6 +866,17 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "123.0" },
     },
     .{
+        .name = "inspect: regression issue 8727 captured closure return",
+        .source =
+        \\{
+        \\    make_adder = |n| |x| n + x
+        \\    add_ten = make_adder(10)
+        \\    add_ten(5)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "15.0" },
+    },
+    .{
         .name = "inspect: polymorphic hof with closures capturing different types",
         .source =
         \\{
@@ -857,6 +888,28 @@ pub const tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .inspect_str = "\"Result: yes\"" },
+    },
+    .{
+        .name = "inspect: closure capture duplication integer specialization",
+        .source =
+        \\{
+        \\    make_getter = |n| |_x| n
+        \\    get_num = make_getter(42)
+        \\    get_num(0)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "42.0" },
+    },
+    .{
+        .name = "inspect: closure capture duplication string specialization",
+        .source =
+        \\{
+        \\    make_getter = |n| |_x| n
+        \\    get_str = make_getter("hello")
+        \\    get_str(0)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"hello\"" },
     },
     .{
         .name = "inspect: closure over bool used in conditional",
@@ -1021,6 +1074,30 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "\"This string is definitely longer than twenty three bytes\"" },
     },
+    .{
+        .name = "inspect: large record chained higher order calls w",
+        .source =
+        \\{
+        \\    apply2 = |a, b, f| f(a, b)
+        \\    step1 = apply2("x_val", "y_val", |x, y| { x, y })
+        \\    result = apply2("w_val", step1.y, |w, y| { w, y })
+        \\    result.w
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"w_val\"" },
+    },
+    .{
+        .name = "inspect: large record chained higher order calls y",
+        .source =
+        \\{
+        \\    apply2 = |a, b, f| f(a, b)
+        \\    step1 = apply2("x_val", "y_val", |x, y| { x, y })
+        \\    result = apply2("w_val", step1.y, |w, y| { w, y })
+        \\    result.y
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"y_val\"" },
+    },
 
     // Loops
     .{
@@ -1081,6 +1158,235 @@ pub const tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "inspect: lambda list param calling List.len",
+        .source =
+        \\{
+        \\    get_len = |l| List.len(l)
+        \\    get_len([1.I64, 2.I64, 3.I64])
+        \\}
+        ,
+        .expected = .{ .inspect_str = "3" },
+    },
+    .{
+        .name = "inspect: lambda list param calling List.append",
+        .source =
+        \\{
+        \\    add_one = |l| List.len(List.append(l, 99.I64))
+        \\    add_one([1.I64, 2.I64, 3.I64])
+        \\}
+        ,
+        .expected = .{ .inspect_str = "4" },
+    },
+    .{
+        .name = "inspect: lambda list param and var declaration",
+        .source =
+        \\{
+        \\    test_fn = |_l| {
+        \\        var $acc = [0.I64]
+        \\        List.len($acc)
+        \\    }
+        \\    test_fn([1.I64, 2.I64])
+        \\}
+        ,
+        .expected = .{ .inspect_str = "1" },
+    },
+    .{
+        .name = "inspect: lambda list param and list literal creation",
+        .source =
+        \\{
+        \\    test_fn = |_l| {
+        \\        var $acc = [0.I64]
+        \\        List.len($acc)
+        \\    }
+        \\    test_fn([10.I64, 20.I64])
+        \\}
+        ,
+        .expected = .{ .inspect_str = "1" },
+    },
+    .{
+        .name = "inspect: lambda list param var and for loop",
+        .source =
+        \\{
+        \\    test_fn = |l| {
+        \\        var $total = 0.I64
+        \\        for e in l {
+        \\            $total = $total + e
+        \\        }
+        \\        $total
+        \\    }
+        \\    test_fn([10.I64, 20.I64, 30.I64])
+        \\}
+        ,
+        .expected = .{ .inspect_str = "60" },
+    },
+    .{
+        .name = "inspect: lambda list param var and List.append no for loop",
+        .source =
+        \\{
+        \\    test_fn = |_l| {
+        \\        var $acc = [0.I64]
+        \\        $acc = List.append($acc, 42.I64)
+        \\        List.len($acc)
+        \\    }
+        \\    test_fn([10.I64, 20.I64])
+        \\}
+        ,
+        .expected = .{ .inspect_str = "2" },
+    },
+    .{
+        .name = "inspect: minimal lambda list param and for loop",
+        .source =
+        \\{
+        \\    test_fn = |l| {
+        \\        var $total = 0.I64
+        \\        for e in l {
+        \\            $total = $total + e
+        \\        }
+        \\        $total
+        \\    }
+        \\    test_fn([1.I64, 2.I64])
+        \\}
+        ,
+        .expected = .{ .inspect_str = "3" },
+    },
+    .{
+        .name = "inspect: lambda list param for loop with allocation inside loop",
+        .source =
+        \\{
+        \\    test_fn = |l| {
+        \\        var $total = 0.I64
+        \\        for e in l {
+        \\            $total = match List.last([e]) { Ok(last) => $total + last, Err(_) => $total }
+        \\        }
+        \\        $total
+        \\    }
+        \\    test_fn([1.I64, 2.I64])
+        \\}
+        ,
+        .expected = .{ .inspect_str = "3" },
+    },
+    .{
+        .name = "inspect: lambda for loop over internal list",
+        .source =
+        \\{
+        \\    test_fn = |_x| {
+        \\        var $total = 0.I64
+        \\        for e in [1.I64, 2.I64, 3.I64] {
+        \\            $total = $total + e
+        \\        }
+        \\        $total
+        \\    }
+        \\    test_fn(42.I64)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "6" },
+    },
+    .{
+        .name = "inspect: lambda list param internal loop allocation",
+        .source =
+        \\{
+        \\    test_fn = |_l| {
+        \\        var $total = 0.I64
+        \\        for e in [1.I64, 2.I64] {
+        \\            $total = match List.last([e]) { Ok(last) => $total + last, Err(_) => $total }
+        \\        }
+        \\        $total
+        \\    }
+        \\    test_fn([10.I64, 20.I64])
+        \\}
+        ,
+        .expected = .{ .inspect_str = "3" },
+    },
+    .{
+        .name = "inspect: lambda list param for loop empty iteration",
+        .source =
+        \\{
+        \\    test_fn = |l| {
+        \\        var $acc = [0.I64]
+        \\        for e in l {
+        \\            $acc = List.append($acc, e)
+        \\        }
+        \\        List.len($acc)
+        \\    }
+        \\    test_fn([])
+        \\}
+        ,
+        .expected = .{ .inspect_str = "1" },
+    },
+    .{
+        .name = "inspect: lambda list param for loop append single iteration",
+        .source =
+        \\{
+        \\    test_fn = |l| {
+        \\        var $acc = [0.I64]
+        \\        for e in l {
+        \\            $acc = List.append($acc, e)
+        \\        }
+        \\        List.len($acc)
+        \\    }
+        \\    test_fn([10.I64])
+        \\}
+        ,
+        .expected = .{ .inspect_str = "2" },
+    },
+    .{
+        .name = "inspect: lambda list param var for loop and List.append",
+        .source =
+        \\{
+        \\    test_fn = |l| {
+        \\        var $acc = [0.I64]
+        \\        for e in l {
+        \\            $acc = List.append($acc, e)
+        \\        }
+        \\        List.len($acc)
+        \\    }
+        \\    test_fn([10.I64, 20.I64, 30.I64])
+        \\}
+        ,
+        .expected = .{ .inspect_str = "4" },
+    },
+    .{
+        .name = "inspect: closure in for loop with List.last regression",
+        .source =
+        \\{
+        \\    sum_with_last = |l| {
+        \\        var $total = 0.I64
+        \\        var $acc = [0.I64]
+        \\        for e in l {
+        \\            $acc = List.append($acc, e)
+        \\            $total = match List.last($acc) { Ok(last) => $total + last, Err(_) => $total }
+        \\        }
+        \\        $total
+        \\    }
+        \\    sum_with_last([10.I64, 20.I64, 30.I64])
+        \\}
+        ,
+        .expected = .{ .inspect_str = "60" },
+    },
+    .{
+        .name = "inspect: closure capturing for loop element with equality",
+        .source =
+        \\{
+        \\    my_any = |lst, pred| {
+        \\        for e in lst {
+        \\            if pred(e) { return True }
+        \\        }
+        \\        False
+        \\    }
+        \\    check = |list| {
+        \\        var $built = []
+        \\        for item in list {
+        \\            _x = my_any($built, |x| x == item)
+        \\            $built = $built.append(item)
+        \\        }
+        \\        $built.len()
+        \\    }
+        \\    check([1, 2])
+        \\}
+        ,
+        .expected = .{ .inspect_str = "2" },
     },
 
     // Polymorphic source-level cases
@@ -1245,6 +1551,429 @@ pub const tests = [_]TestCase{
         .name = "inspect: tag union nested in tuple regression",
         .source = "Ok((Name(\"hello\"), 5))",
         .expected = .{ .inspect_str = "Ok((Name(\"hello\"), 5.0))" },
+    },
+    .{
+        .name = "inspect: multiple polymorphic instantiations",
+        .source =
+        \\{
+        \\    id = |x| x
+        \\
+        \\    num1 = id(42)
+        \\    str1 = id("Hello")
+        \\    num2 = id(100)
+        \\
+        \\    if (num1 == 42)
+        \\        if (num2 == 100)
+        \\            str1
+        \\        else
+        \\            "Failed2"
+        \\    else
+        \\        "Failed1"
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"Hello\"" },
+    },
+    .{
+        .name = "inspect: early return in closure passed to List.map",
+        .source =
+        \\{
+        \\    result = [Ok(1), Err({})].map(|x| Ok(x?))
+        \\    List.len(result)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "2" },
+    },
+    .{
+        .name = "inspect: early return in closure passed to List.fold",
+        .source =
+        \\{
+        \\    compute = |x| Ok(x?)
+        \\    result = List.fold([Ok(1), Err({})], [], |acc, x| List.append(acc, compute(x)))
+        \\    List.len(result)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "2" },
+    },
+    .{
+        .name = "inspect: lambda wrapping try suffix result in Ok",
+        .source =
+        \\{
+        \\    compute = |x| Ok(x?)
+        \\    match compute(Ok(42.I64)) { Ok(v) => v, _ => 0 }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "42" },
+    },
+    .{
+        .name = "inspect: lambda with tag match called directly",
+        .source =
+        \\{
+        \\    f = |child|
+        \\        match child {
+        \\            Aaa(_, _) => 10.I64
+        \\            Bbb(_) => 1.I64
+        \\        }
+        \\    f(Bbb(42.I64))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "1" },
+    },
+    .{
+        .name = "inspect: fold with simple addition lambda",
+        .source =
+        \\{
+        \\    items = [1.I64, 2.I64, 3.I64]
+        \\    List.fold(items, 0.I64, |acc, x| acc + x)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "6" },
+    },
+    .{
+        .name = "inspect: polymorphic tag payload substitution extract payload",
+        .source =
+        \\{
+        \\    second : [Left(a), Right(b)], b -> b
+        \\    second = |either, fallback| match either {
+        \\        Left(_) => fallback
+        \\        Right(val) => val
+        \\    }
+        \\
+        \\    input : [Left(I64), Right(I64)]
+        \\    input = Right(42.I64)
+        \\    second(input, 0.I64)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "42" },
+    },
+    .{
+        .name = "inspect: polymorphic tag payload substitution multiple type vars",
+        .source =
+        \\{
+        \\    get_err : [Ok(a), Err(e)], e -> e
+        \\    get_err = |result, fallback| match result {
+        \\        Ok(_) => fallback
+        \\        Err(e) => e
+        \\    }
+        \\
+        \\    val : [Ok(I64), Err(Str)]
+        \\    val = Err("hello")
+        \\    get_err(val, "")
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"hello\"" },
+    },
+    .{
+        .name = "problem and crash: polymorphic erroneous match branch",
+        .source =
+        \\{
+        \\    get_err : [Ok(a), Err(e)] -> e
+        \\    get_err = |result| match result {
+        \\        Ok(_) => ""
+        \\        Err(e) => e
+        \\    }
+        \\
+        \\    val : [Ok(I64), Err(Str)]
+        \\    val = Ok(42)
+        \\    get_err(val)
+        \\}
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "problem and crash: polymorphic erroneous if else branch",
+        .source =
+        \\{
+        \\    get_val : Bool, e -> e
+        \\    get_val = |flag, val| if (flag) "" else val
+        \\
+        \\    get_val(Bool.true, 42)
+        \\}
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "problem and crash: polymorphic erroneous match in block",
+        .source =
+        \\{
+        \\    get_err : [Ok(a), Err(e)] -> e
+        \\    get_err = |result| {
+        \\        unused = 0
+        \\        match result {
+        \\            Ok(_) => ""
+        \\            Err(e) => e
+        \\        }
+        \\    }
+        \\
+        \\    val : [Ok(I64), Err(Str)]
+        \\    val = Ok(42)
+        \\    get_err(val)
+        \\}
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "inspect: polymorphic tag payload substitution wrap and unwrap",
+        .source =
+        \\{
+        \\    second : [Left(a), Right(b)], b -> b
+        \\    second = |either, fallback| match either {
+        \\        Left(_) => fallback
+        \\        Right(val) => val
+        \\    }
+        \\
+        \\    input : [Left(Dec), Right(Dec)]
+        \\    input = Right(42.0)
+        \\    second(input, 0.0)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "42.0" },
+    },
+    .{
+        .name = "inspect: polymorphic tag payload layout in match expression",
+        .source =
+        \\{
+        \\    transform_err : [Ok({}), Err(a)], (a -> b) -> [Ok({}), Err(b)]
+        \\    transform_err = |try_val, transform| match try_val {
+        \\        Err(a) => Err(transform(a))
+        \\        Ok(ok) => Ok(ok)
+        \\    }
+        \\
+        \\    err : [Ok({}), Err(I32)]
+        \\    err = Err(42.I32)
+        \\
+        \\    result = transform_err(err, |_e| "hello")
+        \\    match result {
+        \\        Ok(_) => "got ok"
+        \\        Err(msg) => msg
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"hello\"" },
+    },
+    .{
+        .name = "inspect: polymorphic tag transform with match",
+        .source =
+        \\{
+        \\    transform_err = |try_val| match try_val {
+        \\        Err(_) => Err("hello")
+        \\        Ok(ok) => Ok(ok)
+        \\    }
+        \\
+        \\    err : [Ok({}), Err(I32)]
+        \\    err = Err(42.I32)
+        \\
+        \\    result = transform_err(err)
+        \\    match result {
+        \\        Ok(_) => "got ok"
+        \\        Err(msg) => msg
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"hello\"" },
+    },
+    .{
+        .name = "inspect: recursive function with record stack restoration",
+        .source =
+        \\{
+        \\    f = |n|
+        \\        if n <= 0
+        \\            0
+        \\        else
+        \\            { a: n, b: n * 2, c: n * 3, d: n * 4 }.a + f(n - 1)
+        \\    f(1000)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "500500.0" },
+    },
+    .{
+        .name = "inspect: polymorphic sum in block called with U64",
+        .source =
+        \\{
+        \\    sum = |a, b| {
+        \\        tmp = a
+        \\        tmp + b
+        \\    }
+        \\    sum(100.U64, 160.U64)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "260" },
+    },
+    .{
+        .name = "inspect: polymorphic predicate with comparison in block",
+        .source =
+        \\{
+        \\    at_least = |threshold, value| {
+        \\        current = value
+        \\        current >= threshold
+        \\    }
+        \\    at_least(3, 5)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "inspect: polymorphic comparison lambda called directly",
+        .source =
+        \\{
+        \\    greater_than = |lhs, rhs| lhs > rhs
+        \\    greater_than(5, 3)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "inspect: polymorphic comparison lambda passed to List.any",
+        .source =
+        \\{
+        \\    greater_than = |lhs, rhs| lhs > rhs
+        \\    List.any([1, 2, 3, 4], |x| greater_than(x, 3))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "inspect: polymorphic function called with two list types",
+        .source =
+        \\{
+        \\    my_len = |list| list.len()
+        \\    a : List(I64)
+        \\    a = [1, 2, 3]
+        \\    b : List(Str)
+        \\    b = ["x", "y"]
+        \\    my_len(a) + my_len(b)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "5" },
+    },
+    .{
+        .name = "inspect: polymorphic function single call I64",
+        .source =
+        \\{
+        \\    contains = |list, item| list.contains(item)
+        \\    a : List(I64)
+        \\    a = [1, 2, 3]
+        \\    r = contains(a, 2)
+        \\    if r { 1 } else { 0 }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "1.0" },
+    },
+    .{
+        .name = "inspect: polymorphic function single call Str",
+        .source =
+        \\{
+        \\    contains = |list, item| list.contains(item)
+        \\    b : List(Str)
+        \\    b = ["x", "y"]
+        \\    r = contains(b, "x")
+        \\    if r { 1 } else { 0 }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "1.0" },
+    },
+    .{
+        .name = "inspect: polymorphic function with List.contains called with two types",
+        .source =
+        \\{
+        \\    contains = |list, item| list.contains(item)
+        \\    a : List(I64)
+        \\    a = [1, 2, 3]
+        \\    b : List(Str)
+        \\    b = ["x", "y"]
+        \\    r1 = contains(a, 2)
+        \\    r2 = contains(b, "x")
+        \\    if r1 and r2 { 1 } else { 0 }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "1.0" },
+    },
+    .{
+        .name = "inspect: polymorphic function with List.contains called with multiple types",
+        .source =
+        \\{
+        \\    dedup = |list| {
+        \\        var $out = []
+        \\        for item in list {
+        \\            if !$out.contains(item) {
+        \\                $out = $out.append(item)
+        \\            }
+        \\        }
+        \\        $out
+        \\    }
+        \\    nums : List(I64)
+        \\    nums = [1, 2, 3, 2, 1]
+        \\    u1 = dedup(nums)
+        \\    strs : List(Str)
+        \\    strs = ["a", "b", "a"]
+        \\    u2 = dedup(strs)
+        \\    u1.len() + u2.len()
+        \\}
+        ,
+        .expected = .{ .inspect_str = "5" },
+    },
+    .{
+        .name = "inspect: nested List.any true path with captured Str",
+        .source =
+        \\{
+        \\    out = ["a"]
+        \\    List.any(["a"], |item| out.contains(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "inspect: nested List.any false path with captured Str",
+        .source =
+        \\{
+        \\    out = ["a"]
+        \\    List.any(["b"], |item| out.contains(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "False" },
+    },
+    .{
+        .name = "inspect: direct List.contains captured Str control",
+        .source =
+        \\{
+        \\    out = ["a"]
+        \\    out.contains("a")
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "inspect: forwarding tag union with Str payload through proc call",
+        .source =
+        \\{
+        \\    consume = |value| value == Ok({ x: "x" })
+        \\    forward = |value| consume(value)
+        \\    value = Ok({ x: "x" })
+        \\    forward(value)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "inspect: Str.inspect through polymorphic wrapper",
+        .source =
+        \\{
+        \\    show = |x| Str.inspect(x)
+        \\    show(42.I64)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"42\"" },
+    },
+    .{
+        .name = "inspect: polymorphic additional specialization via List.append",
+        .source =
+        \\{
+        \\    append_one = |acc, x| List.append(acc, x)
+        \\    clone_via_fold = |xs| xs.fold(List.with_capacity(1), append_one)
+        \\    _first_len = clone_via_fold([1.I64, 2.I64]).len()
+        \\    clone_via_fold([[1.I64, 2.I64], [3.I64, 4.I64]]).len()
+        \\}
+        ,
+        .expected = .{ .inspect_str = "2" },
     },
 
     // Typed arithmetic matrix from origin/main

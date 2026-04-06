@@ -339,11 +339,15 @@ const Lowerer = struct {
         try cache.put(ty, placeholder);
 
         const mono_ty = self.input.types.getType(ty);
+        if (mono_ty == .placeholder) {
+            return placeholder;
+        }
         if (mono_ty == .tag_union and self.input.types.sliceTags(mono_ty.tag_union.tags).len == 0) {
             return placeholder;
         }
 
         const content = switch (mono_ty) {
+            .placeholder => unreachable,
             .func => |func| blk: {
                 break :blk type_mod.Content{ .func = .{
                     .arg = try self.instantiateTypeRec(func.arg, cache),
@@ -1193,12 +1197,17 @@ const Lowerer = struct {
 
     fn instantiateGeneralizedRec(self: *Lowerer, ty: TypeVarId, mapping: *std.AutoHashMap(TypeVarId, TypeVarId)) std.mem.Allocator.Error!TypeVarId {
         const id = self.types.unlink(ty);
+        if (mapping.get(id)) |cached| return cached;
+
         switch (self.types.getNode(id)) {
             .unbd => return id,
-            .for_a => return try self.types.freshUnbd(),
+            .for_a => {
+                const fresh = try self.types.freshUnbd();
+                try mapping.put(id, fresh);
+                return fresh;
+            },
             else => {},
         }
-        if (mapping.get(id)) |cached| return cached;
 
         const placeholder = try self.types.freshUnbd();
         try mapping.put(id, placeholder);
@@ -1465,7 +1474,9 @@ const Lowerer = struct {
 
         return switch (left) {
             .primitive => |prim| blk: {
-                if (prim != right.primitive) return debugPanic("lambdasolved.unify incompatible primitives");
+                if (prim != right.primitive) {
+                    return debugPanic("lambdasolved.unify incompatible primitives");
+                }
                 break :blk .{ .content = .{ .primitive = prim } };
             },
             .func => |func| blk: {
