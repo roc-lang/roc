@@ -535,8 +535,10 @@ pub const ComptimeEvaluator = struct {
         defer tag_list.deinit();
         try self.interpreter.appendUnionTags(rt_var, &tag_list);
 
-        // Tag index from the value must be valid
-        std.debug.assert(tag_index < tag_list.items.len);
+        // Tag index must be within bounds. This can fail when evalAll() runs twice on
+        // the same module (e.g., during compilation then testing) — expressions folded in
+        // the first pass get re-evaluated with stale type information in the second pass.
+        if (tag_index >= tag_list.items.len) return error.NotImplemented;
 
         const tag_info = tag_list.items[tag_index];
         const arg_vars = self.interpreter.runtime_types.sliceVars(tag_info.args);
@@ -976,7 +978,10 @@ pub const ComptimeEvaluator = struct {
         defer tag_list.deinit();
         try self.interpreter.appendUnionTags(rt_var, &tag_list);
 
-        std.debug.assert(tag_index < tag_list.items.len);
+        // Tag index must be within bounds. This can fail when evalAll() runs twice on
+        // the same module (e.g., during compilation then testing) — expressions folded in
+        // the first pass get re-evaluated with stale type information in the second pass.
+        if (tag_index >= tag_list.items.len) return error.NotImplemented;
         const tag_info = tag_list.items[tag_index];
 
         const resolved = self.interpreter.runtime_types.resolveVar(rt_var);
