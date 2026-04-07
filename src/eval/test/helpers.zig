@@ -248,10 +248,7 @@ pub fn devEvaluatorInspectedStr(
 
     switch (runtime_env.crashState()) {
         .did_not_crash => {},
-        .crashed => |msg| {
-            if (std.debug.runtime_safety) {
-                std.debug.print("devEvaluatorInspectedStr crash: {s}\n", .{msg});
-            }
+        .crashed => |_| {
             return error.Crash;
         },
     }

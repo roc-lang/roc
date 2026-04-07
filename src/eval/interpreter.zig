@@ -979,48 +979,6 @@ pub const Interpreter = struct {
                 );
                 const raw_result = frame.getLocal(ret_local);
                 const raw_layout = self.store.getLocal(ret_local).layout_idx;
-                if (builtin.mode == .Debug and @intFromEnum(proc_id) >= 4 and @intFromEnum(proc_id) <= 6) {
-                    std.debug.print(
-                        "LIR/interpreter proc-return proc={d} local={d} raw_layout={d} ret_layout={d} ptr=0x{x}\n",
-                        .{
-                            @intFromEnum(proc_id),
-                            @intFromEnum(ret_local),
-                            @intFromEnum(raw_layout),
-                            @intFromEnum(proc_spec.ret_layout),
-                            @intFromPtr(raw_result.ptr),
-                        },
-                    );
-                    if (@intFromEnum(proc_id) == 6) {
-                        self.debugPrintLayoutShape("  proc6 raw layout", raw_layout);
-                        self.debugPrintLayoutShape("  proc6 ret layout", proc_spec.ret_layout);
-                    }
-                    const raw_size = self.helper.sizeOf(raw_layout);
-                    if (raw_size > 0) {
-                        const dump_len = @min(raw_size, 40);
-                        std.debug.print("  raw bytes:", .{});
-                        for (raw_result.readBytes(dump_len)) |byte| {
-                            std.debug.print(" {x:0>2}", .{byte});
-                        }
-                        std.debug.print("\n", .{});
-                    }
-                    if (self.layout_store.getLayout(raw_layout).tag == .box) {
-                        if (self.readBoxedDataPointer(raw_result)) |data_ptr| {
-                            const inner_layout = self.layout_store.getLayout(raw_layout).data.box;
-                            const inner_size = self.helper.sizeOf(inner_layout);
-                            if (inner_size > 0) {
-                                const dump_len = @min(inner_size, 40);
-                                std.debug.print(
-                                    "  raw box pointee layout={d} ptr=0x{x} bytes:",
-                                    .{ @intFromEnum(inner_layout), @intFromPtr(data_ptr) },
-                                );
-                                for ((Value{ .ptr = data_ptr }).readBytes(dump_len)) |byte| {
-                                    std.debug.print(" {x:0>2}", .{byte});
-                                }
-                                std.debug.print("\n", .{});
-                            }
-                        }
-                    }
-                }
                 if (builtin.mode == .Debug) {
                     var visited = std.ArrayList(DebugVisitedValue).empty;
                     defer visited.deinit(self.allocator);
@@ -1031,38 +989,6 @@ pub const Interpreter = struct {
                     raw_layout,
                     proc_spec.ret_layout,
                 );
-                if (builtin.mode == .Debug and @intFromEnum(proc_id) >= 4 and @intFromEnum(proc_id) <= 6) {
-                    std.debug.print(
-                        "  coerced ptr=0x{x}\n",
-                        .{@intFromPtr(coerced_result.ptr)},
-                    );
-                    const coerced_size = self.helper.sizeOf(proc_spec.ret_layout);
-                    if (coerced_size > 0) {
-                        const dump_len = @min(coerced_size, 40);
-                        std.debug.print("  coerced bytes:", .{});
-                        for (coerced_result.readBytes(dump_len)) |byte| {
-                            std.debug.print(" {x:0>2}", .{byte});
-                        }
-                        std.debug.print("\n", .{});
-                    }
-                    if (self.layout_store.getLayout(proc_spec.ret_layout).tag == .box) {
-                        if (self.readBoxedDataPointer(coerced_result)) |data_ptr| {
-                            const inner_layout = self.layout_store.getLayout(proc_spec.ret_layout).data.box;
-                            const inner_size = self.helper.sizeOf(inner_layout);
-                            if (inner_size > 0) {
-                                const dump_len = @min(inner_size, 40);
-                                std.debug.print(
-                                    "  coerced box pointee layout={d} ptr=0x{x} bytes:",
-                                    .{ @intFromEnum(inner_layout), @intFromPtr(data_ptr) },
-                                );
-                                for ((Value{ .ptr = data_ptr }).readBytes(dump_len)) |byte| {
-                                    std.debug.print(" {x:0>2}", .{byte});
-                                }
-                                std.debug.print("\n", .{});
-                            }
-                        }
-                    }
-                }
                 if (builtin.mode == .Debug) {
                     var visited = std.ArrayList(DebugVisitedValue).empty;
                     defer visited.deinit(self.allocator);
@@ -1204,30 +1130,6 @@ pub const Interpreter = struct {
                     const arg_locals = self.store.getLocalSpan(assign.args);
                     const arg_values = try self.collectLocalValues(frame, arg_locals);
                     const arg_layouts = try self.localLayouts(arg_locals);
-                    if (builtin.mode == .Debug and assign.op == .str_inspect and arg_locals.len == 1) {
-                        const roc_str = valueToRocStr(arg_values[0]);
-                        std.debug.print(
-                            "LIR/interpreter str_inspect proc={d} stmt={d} local={d} layout={d} bytes=0x{x} len={d} cap=0x{x}\n",
-                            .{
-                                @intFromEnum(frame.proc_id),
-                                @intFromEnum(current),
-                                @intFromEnum(arg_locals[0]),
-                                @intFromEnum(arg_layouts[0]),
-                                @intFromPtr(roc_str.bytes),
-                                roc_str.length,
-                                roc_str.capacity_or_alloc_ptr,
-                            },
-                        );
-                        const center = @as(usize, @intFromEnum(current));
-                        const stmt_count = self.store.cf_stmts.items.len;
-                        const start: usize = if (@intFromEnum(frame.proc_id) <= 1) 0 else center -| 4;
-                        const end = @min(stmt_count, center + 5);
-                        var i = start;
-                        while (i < end) : (i += 1) {
-                            const stmt_id: CFStmtId = @enumFromInt(@as(u32, @intCast(i)));
-                            std.debug.print("  stmt {d}: {any}\n", .{ i, self.store.getCFStmt(stmt_id) });
-                        }
-                    }
                     self.setLocalChecked(frame, current, assign.target, try self.evalLowLevel(.{
                         .op = assign.op,
                         .args = arg_values,
@@ -1469,20 +1371,6 @@ pub const Interpreter = struct {
                     struct_layout_val.data.struct_.idx,
                     field.field_idx,
                 );
-                if (builtin.mode == .Debug and target_layout == .str) {
-                    std.debug.print(
-                        "LIR/interpreter field->str proc={d} source_local={d} source_layout={d} base_layout={d} field_idx={d} actual_field_layout={d} field_offset={d}\n",
-                        .{
-                            @intFromEnum(frame.proc_id),
-                            @intFromEnum(field.source),
-                            @intFromEnum(source_layout),
-                            @intFromEnum(struct_base.layout),
-                            field.field_idx,
-                            @intFromEnum(actual_field_layout),
-                            field_offset,
-                        },
-                    );
-                }
                 const field_value = try self.coerceValueToLayout(
                     struct_base.value.offset(field_offset),
                     actual_field_layout,
