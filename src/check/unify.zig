@@ -248,6 +248,10 @@ const Unifier = struct {
         };
     }
 
+    fn getTypeIdentText(self: *const Self, idx: Ident.Idx) []const u8 {
+        return self.module_env.getIdentStore().getText(idx);
+    }
+
     // merge
 
     /// Link the variables & updated the content in the type_store
@@ -1383,8 +1387,7 @@ const Unifier = struct {
         const b_gathered_fields = try self.gatherRecordFields(b_fields, b_ext);
 
         // Then partition the fields
-        const partitioned = try Self.partitionFields(
-            self.module_env.getIdentStore(),
+        const partitioned = try self.partitionFields(
             self.scratch,
             a_gathered_fields.range,
             b_gathered_fields.range,
@@ -1633,16 +1636,24 @@ const Unifier = struct {
     ///
     /// The caller must not mutate the field ranges between `gatherRecordFields` and `partitionFields`.
     fn partitionFields(
-        ident_store: *const Ident.Store,
+        self: *const Self,
         scratch: *Scratch,
         a_fields_range: RecordFieldSafeList.Range,
         b_fields_range: RecordFieldSafeList.Range,
     ) std.mem.Allocator.Error!PartitionedRecordFields {
         // Sort the fields (gathering maintains partial order, but unification may create unsorted unions)
         const a_fields = scratch.gathered_fields.sliceRange(a_fields_range);
-        std.mem.sort(RecordField, a_fields, ident_store, comptime RecordField.sortByNameAsc);
+        std.mem.sort(RecordField, a_fields, self, struct {
+            fn less(unifier: *const Self, a: RecordField, b: RecordField) bool {
+                return std.mem.order(u8, unifier.getTypeIdentText(a.name), unifier.getTypeIdentText(b.name)) == .lt;
+            }
+        }.less);
         const b_fields = scratch.gathered_fields.sliceRange(b_fields_range);
-        std.mem.sort(RecordField, b_fields, ident_store, comptime RecordField.sortByNameAsc);
+        std.mem.sort(RecordField, b_fields, self, struct {
+            fn less(unifier: *const Self, a: RecordField, b: RecordField) bool {
+                return std.mem.order(u8, unifier.getTypeIdentText(a.name), unifier.getTypeIdentText(b.name)) == .lt;
+            }
+        }.less);
 
         // Get the start of index of the new range
         const a_fields_start: u32 = @intCast(scratch.only_in_a_fields.len());
@@ -1655,7 +1666,7 @@ const Unifier = struct {
         while (a_i < a_fields.len and b_i < b_fields.len) {
             const a_next = a_fields[a_i];
             const b_next = b_fields[b_i];
-            const ord = RecordField.orderByName(ident_store, a_next, b_next);
+            const ord = std.mem.order(u8, self.getTypeIdentText(a_next.name), self.getTypeIdentText(b_next.name));
             switch (ord) {
                 .eq => {
                     _ = try scratch.in_both_fields.append(scratch.gpa, TwoRecordFields{
@@ -1858,8 +1869,7 @@ const Unifier = struct {
         const b_gathered_tags = try self.gatherTagUnionTags(b_tag_union);
 
         // Then partition the tags
-        const partitioned = try Self.partitionTags(
-            self.module_env.getIdentStore(),
+        const partitioned = try self.partitionTags(
             self.scratch,
             a_gathered_tags.range,
             b_gathered_tags.range,
@@ -2095,16 +2105,24 @@ const Unifier = struct {
     ///
     /// The caller must not mutate the field ranges between `gatherTagUnionTags` and `partitionTags`.
     fn partitionTags(
-        ident_store: *const Ident.Store,
+        self: *const Self,
         scratch: *Scratch,
         a_tags_range: TagSafeList.Range,
         b_tags_range: TagSafeList.Range,
     ) std.mem.Allocator.Error!PartitionedTags {
         // Sort the tags (gathering maintains partial order, but unification may create unsorted unions)
         const a_tags = scratch.gathered_tags.sliceRange(a_tags_range);
-        std.mem.sort(Tag, a_tags, ident_store, comptime Tag.sortByNameAsc);
+        std.mem.sort(Tag, a_tags, self, struct {
+            fn less(unifier: *const Self, a: Tag, b: Tag) bool {
+                return std.mem.order(u8, unifier.getTypeIdentText(a.name), unifier.getTypeIdentText(b.name)) == .lt;
+            }
+        }.less);
         const b_tags = scratch.gathered_tags.sliceRange(b_tags_range);
-        std.mem.sort(Tag, b_tags, ident_store, comptime Tag.sortByNameAsc);
+        std.mem.sort(Tag, b_tags, self, struct {
+            fn less(unifier: *const Self, a: Tag, b: Tag) bool {
+                return std.mem.order(u8, unifier.getTypeIdentText(a.name), unifier.getTypeIdentText(b.name)) == .lt;
+            }
+        }.less);
 
         // Get the start of index of the new range
         const a_tags_start: u32 = @intCast(scratch.only_in_a_tags.len());
@@ -2117,7 +2135,7 @@ const Unifier = struct {
         while (a_i < a_tags.len and b_i < b_tags.len) {
             const a_next = a_tags[a_i];
             const b_next = b_tags[b_i];
-            const ord = Tag.orderByName(ident_store, a_next, b_next);
+            const ord = std.mem.order(u8, self.getTypeIdentText(a_next.name), self.getTypeIdentText(b_next.name));
             switch (ord) {
                 .eq => {
                     _ = try scratch.in_both_tags.append(scratch.gpa, TwoTags{ .a = a_next, .b = b_next });
@@ -2338,14 +2356,21 @@ const Unifier = struct {
         a_constraints_range: StaticDispatchConstraint.SafeList.Range,
         b_constraints_range: StaticDispatchConstraint.SafeList.Range,
     ) std.mem.Allocator.Error!PartitionedStaticDispatchConstraints {
-        const ident_store = self.module_env.getIdentStore();
         const scratch = self.scratch;
 
         // First sort the fields
         const a_constraints = self.types_store.static_dispatch_constraints.sliceRange(a_constraints_range);
-        std.mem.sort(StaticDispatchConstraint, a_constraints, ident_store, comptime StaticDispatchConstraint.sortByFnNameAsc);
+        std.mem.sort(StaticDispatchConstraint, a_constraints, self, struct {
+            fn less(unifier: *const Self, a: StaticDispatchConstraint, b: StaticDispatchConstraint) bool {
+                return std.mem.order(u8, unifier.getTypeIdentText(a.fn_name), unifier.getTypeIdentText(b.fn_name)) == .lt;
+            }
+        }.less);
         const b_constraints = self.types_store.static_dispatch_constraints.sliceRange(b_constraints_range);
-        std.mem.sort(StaticDispatchConstraint, b_constraints, ident_store, comptime StaticDispatchConstraint.sortByFnNameAsc);
+        std.mem.sort(StaticDispatchConstraint, b_constraints, self, struct {
+            fn less(unifier: *const Self, a: StaticDispatchConstraint, b: StaticDispatchConstraint) bool {
+                return std.mem.order(u8, unifier.getTypeIdentText(a.fn_name), unifier.getTypeIdentText(b.fn_name)) == .lt;
+            }
+        }.less);
 
         // Get the start of index of the new range
         const a_constraints_start: u32 = @intCast(scratch.only_in_a_static_dispatch_constraints.len());
@@ -2358,7 +2383,7 @@ const Unifier = struct {
         while (a_i < a_constraints.len and b_i < b_constraints.len) {
             const a_next = a_constraints[a_i];
             const b_next = b_constraints[b_i];
-            const ord = StaticDispatchConstraint.orderByFnName(ident_store, a_next, b_next);
+            const ord = std.mem.order(u8, self.getTypeIdentText(a_next.fn_name), self.getTypeIdentText(b_next.fn_name));
             switch (ord) {
                 .eq => {
                     _ = try scratch.in_both_static_dispatch_constraints.append(scratch.gpa, TwoStaticDispatchConstraints{

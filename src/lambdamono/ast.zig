@@ -38,7 +38,7 @@ pub const Pat = struct {
     pub const Data = union(enum) {
         bool_lit: bool,
         tag: struct {
-            name: base.Ident.Idx,
+            name: type_mod.TagName,
             args: Span(PatId),
         },
         var_: Symbol,
@@ -74,7 +74,7 @@ pub const Expr = struct {
         bool_lit: bool,
         unit,
         tag: struct {
-            name: base.Ident.Idx,
+            name: type_mod.TagName,
             args: Span(ExprId),
         },
         record: Span(FieldExpr),

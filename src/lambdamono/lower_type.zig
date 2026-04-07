@@ -187,7 +187,7 @@ fn lowerTypeRec(
                         lowered_args[arg_i] = try lowerTypeRec(types, mono_types, mono_cache, arg, symbols);
                     }
                     out[i] = .{
-                        .name = tag.name,
+                        .name = .{ .ctor = tag.name },
                         .args = try mono_types.addTypeSpan(lowered_args),
                     };
                 }
@@ -217,7 +217,7 @@ fn lowerLambdaSet(
         const captures = types.sliceCaptures(lambda.captures);
         if (captures.len == 0) {
             out[i] = .{
-                .name = lambdaTagName(symbols, lambda.symbol),
+                .name = lambdaTagKey(lambda.symbol),
                 .args = mono.Span(mono.TypeId).empty(),
             };
         } else {
@@ -226,7 +226,7 @@ fn lowerLambdaSet(
             defer mono_types.allocator.free(args);
             args[0] = captures_ty;
             out[i] = .{
-                .name = lambdaTagName(symbols, lambda.symbol),
+                .name = lambdaTagKey(lambda.symbol),
                 .args = try mono_types.addTypeSpan(args),
             };
         }
@@ -269,8 +269,8 @@ fn unlinkExecutable(types: *solved.Type.Store, ty: TypeVarId) TypeVarId {
     };
 }
 
-pub fn lambdaTagName(symbols: *const symbol_mod.Store, symbol: Symbol) base.Ident.Idx {
-    return symbols.get(symbol).name;
+pub fn lambdaTagKey(symbol: Symbol) mono.TagName {
+    return .{ .lambda = symbol };
 }
 
 fn debugPanic(comptime msg: []const u8) noreturn {

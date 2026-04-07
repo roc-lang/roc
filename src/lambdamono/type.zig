@@ -6,6 +6,7 @@ const solved_type = @import("lambdasolved").Type;
 
 pub const TypeId = enum(u32) { _ };
 pub const Prim = solved_type.Prim;
+pub const Symbol = @import("symbol").Symbol;
 
 pub fn Span(comptime _: type) type {
     return extern struct {
@@ -18,8 +19,13 @@ pub fn Span(comptime _: type) type {
     };
 }
 
+pub const TagName = union(enum) {
+    ctor: base.Ident.Idx,
+    lambda: Symbol,
+};
+
 pub const Tag = struct {
-    name: base.Ident.Idx,
+    name: TagName,
     args: Span(TypeId),
 };
 
@@ -100,9 +106,31 @@ pub const Store = struct {
 
     pub fn addTags(self: *Store, tags: []const Tag) std.mem.Allocator.Error!Span(Tag) {
         if (tags.len == 0) return Span(Tag).empty();
+        if (tags.len == 1) {
+            const start_single: u32 = @intCast(self.tags.items.len);
+            try self.tags.append(self.allocator, tags[0]);
+            return .{ .start = start_single, .len = 1 };
+        }
+
+        const sorted = try self.allocator.dupe(Tag, tags);
+        defer self.allocator.free(sorted);
+        std.mem.sort(Tag, sorted, {}, struct {
+            fn key(name: TagName) u64 {
+                return switch (name) {
+                    .ctor => |ident| @as(u64, @as(u32, @bitCast(ident))),
+                    .lambda => |symbol| (@as(u64, 1) << 32) | @as(u64, symbol.raw()),
+                };
+            }
+
+            fn lessThan(_: void, a: Tag, b: Tag) bool {
+                return key(a.name) < key(b.name);
+            }
+        }.lessThan);
+
+        const canonical_len = self.canonicalizeSortedTags(sorted);
         const start: u32 = @intCast(self.tags.items.len);
-        try self.tags.appendSlice(self.allocator, tags);
-        return .{ .start = start, .len = @intCast(tags.len) };
+        try self.tags.appendSlice(self.allocator, sorted[0..canonical_len]);
+        return .{ .start = start, .len = @intCast(canonical_len) };
     }
 
     pub fn sliceTags(self: *const Store, span: Span(Tag)) []const Tag {
@@ -112,8 +140,22 @@ pub const Store = struct {
 
     pub fn addFields(self: *Store, fields: []const Field) std.mem.Allocator.Error!Span(Field) {
         if (fields.len == 0) return Span(Field).empty();
+        if (fields.len == 1) {
+            const start_single: u32 = @intCast(self.fields.items.len);
+            try self.fields.append(self.allocator, fields[0]);
+            return .{ .start = start_single, .len = 1 };
+        }
+
+        const sorted = try self.allocator.dupe(Field, fields);
+        defer self.allocator.free(sorted);
+        std.mem.sort(Field, sorted, {}, struct {
+            fn lessThan(_: void, a: Field, b: Field) bool {
+                return @as(u32, @bitCast(a.name)) < @as(u32, @bitCast(b.name));
+            }
+        }.lessThan);
+
         const start: u32 = @intCast(self.fields.items.len);
-        try self.fields.appendSlice(self.allocator, fields);
+        try self.fields.appendSlice(self.allocator, sorted);
         return .{ .start = start, .len = @intCast(fields.len) };
     }
 
@@ -132,6 +174,35 @@ pub const Store = struct {
         left: TypeId,
         right: TypeId,
     };
+
+    fn canonicalizeSortedTags(self: *const Store, tags: []Tag) usize {
+        if (tags.len <= 1) return tags.len;
+
+        var write_index: usize = 1;
+        var prev = tags[0];
+
+        for (tags[1..]) |tag| {
+            if (!std.meta.eql(tag.name, prev.name)) {
+                tags[write_index] = tag;
+                write_index += 1;
+                prev = tag;
+                continue;
+            }
+
+            const prev_args = self.sliceTypeSpan(prev.args);
+            const tag_args = self.sliceTypeSpan(tag.args);
+            if (prev_args.len != tag_args.len) {
+                debugPanic("lambdamono.type duplicate tag constructor had different arity");
+            }
+            for (prev_args, tag_args) |prev_arg, tag_arg| {
+                if (!self.equalIds(prev_arg, tag_arg)) {
+                    debugPanic("lambdamono.type duplicate tag constructor had different payload types");
+                }
+            }
+        }
+
+        return write_index;
+    }
 
     fn equalIdsVisited(
         self: *const Store,
@@ -178,7 +249,7 @@ pub const Store = struct {
                 const right_tags = self.sliceTags(right_content.tag_union.tags);
                 if (left_tags.len != right_tags.len) break :blk false;
                 for (left_tags, right_tags) |left_tag, right_tag| {
-                    if (left_tag.name != right_tag.name) break :blk false;
+                    if (!std.meta.eql(left_tag.name, right_tag.name)) break :blk false;
                     const left_args = self.sliceTypeSpan(left_tag.args);
                     const right_args = self.sliceTypeSpan(right_tag.args);
                     if (left_args.len != right_args.len) break :blk false;
@@ -194,4 +265,9 @@ pub const Store = struct {
 
 test "lambdamono type tests" {
     std.testing.refAllDecls(@This());
+}
+
+fn debugPanic(comptime msg: []const u8) noreturn {
+    @branchHint(.cold);
+    std.debug.panic("{s}", .{msg});
 }

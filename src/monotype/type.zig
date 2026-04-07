@@ -138,9 +138,24 @@ pub const Store = struct {
 
     pub fn addTags(self: *Store, tags: []const Tag) std.mem.Allocator.Error!Span(Tag) {
         if (tags.len == 0) return Span(Tag).empty();
+        if (tags.len == 1) {
+            const start_single: u32 = @intCast(self.tags.items.len);
+            try self.tags.append(self.allocator, tags[0]);
+            return .{ .start = start_single, .len = 1 };
+        }
+
+        const sorted = try self.allocator.dupe(Tag, tags);
+        defer self.allocator.free(sorted);
+        std.mem.sort(Tag, sorted, {}, struct {
+            fn lessThan(_: void, a: Tag, b: Tag) bool {
+                return @as(u32, @bitCast(a.name)) < @as(u32, @bitCast(b.name));
+            }
+        }.lessThan);
+
+        const canonical_len = self.canonicalizeSortedTags(sorted);
         const start: u32 = @intCast(self.tags.items.len);
-        try self.tags.appendSlice(self.allocator, tags);
-        return .{ .start = start, .len = @intCast(tags.len) };
+        try self.tags.appendSlice(self.allocator, sorted[0..canonical_len]);
+        return .{ .start = start, .len = @intCast(canonical_len) };
     }
 
     pub fn sliceTags(self: *const Store, span: Span(Tag)) []const Tag {
@@ -164,6 +179,35 @@ pub const Store = struct {
         var visited = std.ArrayList(TypePair).empty;
         defer visited.deinit(self.allocator);
         return self.equalIdsVisited(a, b, &visited) catch false;
+    }
+
+    fn canonicalizeSortedTags(self: *const Store, tags: []Tag) usize {
+        if (tags.len <= 1) return tags.len;
+
+        var write_index: usize = 1;
+        var prev = tags[0];
+
+        for (tags[1..]) |tag| {
+            if (tag.name != prev.name) {
+                tags[write_index] = tag;
+                write_index += 1;
+                prev = tag;
+                continue;
+            }
+
+            const prev_args = self.sliceTypeSpan(prev.args);
+            const tag_args = self.sliceTypeSpan(tag.args);
+            if (prev_args.len != tag_args.len) {
+                debugPanic("monotype.type duplicate tag constructor had different arity");
+            }
+            for (prev_args, tag_args) |prev_arg, tag_arg| {
+                if (!self.equalIds(prev_arg, tag_arg)) {
+                    debugPanic("monotype.type duplicate tag constructor had different payload types");
+                }
+            }
+        }
+
+        return write_index;
     }
 
     const TypePair = struct {
@@ -240,4 +284,9 @@ pub const Store = struct {
 
 test "monotype type tests" {
     std.testing.refAllDecls(@This());
+}
+
+fn debugPanic(comptime msg: []const u8) noreturn {
+    @branchHint(.cold);
+    std.debug.panic("{s}", .{msg});
 }

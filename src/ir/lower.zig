@@ -562,11 +562,11 @@ const Lowerer = struct {
         };
     }
 
-    fn tagId(self: *Lowerer, union_ty: lambdamono.Type.TypeId, name: base.Ident.Idx) std.mem.Allocator.Error!u16 {
+    fn tagId(self: *Lowerer, union_ty: lambdamono.Type.TypeId, name: lambdamono.Type.TagName) std.mem.Allocator.Error!u16 {
         return switch (self.input.types.getType(union_ty)) {
             .tag_union => |tag_union| blk: {
                 for (self.input.types.sliceTags(tag_union.tags), 0..) |tag, i| {
-                    if (tag.name == name) break :blk @intCast(i);
+                    if (std.meta.eql(tag.name, name)) break :blk @intCast(i);
                 }
                 debugPanic("ir.lower.tagId missing tag");
             },
@@ -577,7 +577,7 @@ const Lowerer = struct {
     fn tagPayloadLayout(
         self: *Lowerer,
         union_ty: lambdamono.Type.TypeId,
-        name: base.Ident.Idx,
+        name: lambdamono.Type.TagName,
     ) std.mem.Allocator.Error!layout_mod.LayoutId {
         const union_layout = try lower_type.lowerType(&self.input.types, &self.layouts, &self.layout_cache, union_ty);
         const resolved_union_layout = try self.resolveUnionLayoutLayout(union_layout);
@@ -589,7 +589,7 @@ const Lowerer = struct {
                 };
 
                 for (self.input.types.sliceTags(tag_union.tags), 0..) |tag, i| {
-                    if (tag.name == name) break :blk variants[i];
+                    if (std.meta.eql(tag.name, name)) break :blk variants[i];
                 }
                 debugPanic("ir.lower.tagPayloadLayout missing tag");
             },

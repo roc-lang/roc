@@ -26,7 +26,7 @@ pub const Result = struct {
     symbols: symbol_mod.Store,
     types: type_mod.Store,
     strings: base.StringLiteral.Store,
-    ident_name_literals: std.AutoHashMap(u32, base.StringLiteral.Idx),
+    idents: base.Ident.Store,
 
     pub fn deinit(self: *Result) void {
         self.store.deinit();
@@ -34,7 +34,7 @@ pub const Result = struct {
         self.symbols.deinit();
         self.types.deinit();
         self.strings.deinit(self.store.allocator);
-        self.ident_name_literals.deinit();
+        self.idents.deinit(self.store.allocator);
     }
 };
 
@@ -43,7 +43,7 @@ pub fn run(allocator: std.mem.Allocator, input: MonoResult) std.mem.Allocator.Er
     defer lowerer.deinit();
     try lowerer.collectTopLevels();
     try lowerer.lowerProgram();
-    return lowerer.finish();
+    return try lowerer.finish();
 }
 
 const Lowerer = struct {
@@ -104,14 +104,14 @@ const Lowerer = struct {
         self.input.deinit();
     }
 
-    fn finish(self: *Lowerer) Result {
+    fn finish(self: *Lowerer) std.mem.Allocator.Error!Result {
         const result = Result{
             .store = self.output,
             .root_defs = self.root_defs,
             .symbols = self.input.symbols,
             .types = self.input.types,
             .strings = self.input.strings,
-            .ident_name_literals = self.input.ident_name_literals,
+            .idents = self.input.idents,
         };
 
         self.output = ast.Store.init(self.allocator);
@@ -119,7 +119,7 @@ const Lowerer = struct {
         self.input.symbols = symbol_mod.Store.init(self.allocator);
         self.input.types = type_mod.Store.init(self.allocator);
         self.input.strings = .{};
-        self.input.ident_name_literals = std.AutoHashMap(u32, base.StringLiteral.Idx).init(self.allocator);
+        self.input.idents = try base.Ident.Store.initCapacity(self.allocator, 1);
         self.input.program = mono.Lower.Program.init(self.allocator);
         return result;
     }

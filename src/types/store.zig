@@ -691,7 +691,6 @@ pub const Store = struct {
             if (existing.expr_var != site.expr_var) continue;
             std.debug.assert(existing.target_module_name == site.target_module_name);
             std.debug.assert(existing.target_def_idx == site.target_def_idx);
-            std.debug.assert(existing.resolved_fn_var == site.resolved_fn_var);
             return;
         }
         _ = try self.appendResolvedStaticDispatchSites(&.{site});

@@ -71,6 +71,10 @@ pub const Instantiator = struct {
 
     const Self = @This();
 
+    fn getIdentText(self: *const Self, idx: Ident.Idx) []const u8 {
+        return self.idents.getText(idx);
+    }
+
     // instantiation //
 
     /// Instantiate a variable
@@ -400,7 +404,11 @@ pub const Instantiator = struct {
 
         // Sort the fresh tags alphabetically by name before appending.
         // This ensures tag discriminants are consistent after instantiation.
-        std.mem.sort(Tag, fresh_tags.items, self.idents, comptime Tag.sortByNameAsc);
+        std.mem.sort(Tag, fresh_tags.items, self, struct {
+            fn less(instantiator: *const Self, a: Tag, b: Tag) bool {
+                return std.mem.order(u8, instantiator.getIdentText(a.name), instantiator.getIdentText(b.name)) == .lt;
+            }
+        }.less);
 
         const tags_range = try self.store.appendTags(fresh_tags.items);
         return TagUnion{
@@ -410,7 +418,7 @@ pub const Instantiator = struct {
     }
 
     pub fn getIdent(self: *const Self, idx: Ident.Idx) []const u8 {
-        return self.idents.getText(idx);
+        return self.getIdentText(idx);
     }
 
     fn instantiateStaticDispatchConstraints(self: *Self, constraints: StaticDispatchConstraint.SafeList.Range) std.mem.Allocator.Error!StaticDispatchConstraint.SafeList.Range {

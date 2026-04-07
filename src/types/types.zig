@@ -827,7 +827,6 @@ pub const ResolvedStaticDispatchSite = struct {
     expr_var: Var,
     target_module_name: Ident.Idx,
     target_def_idx: u32,
-    resolved_fn_var: Var,
 
     pub const SafeList = MkSafeList(@This());
 };

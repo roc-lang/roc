@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const base = @import("base");
+const types = @import("types");
 const can = @import("can");
 const check = @import("check");
 const parse = @import("parse");
@@ -286,7 +287,7 @@ fn lowerToLir(
     }
     module_env.imports.resolveImports(module_env, all_module_envs);
 
-    var mono_lowerer = monotype.Lower.Lowerer.init(allocator, all_module_envs, 1);
+    var mono_lowerer = try monotype.Lower.Lowerer.init(allocator, all_module_envs, 1);
     defer mono_lowerer.deinit();
     const mono = try mono_lowerer.run(0);
     debugValidateMonotypeTypes(&mono.types);
@@ -584,6 +585,7 @@ fn debugValidateMonotypeTypes(types_store: *const monotype.Type.Store) void {
         }
     }
 }
+
 
 fn debugAssertValidMonoTypeRef(
     types_store: *const monotype.Type.Store,

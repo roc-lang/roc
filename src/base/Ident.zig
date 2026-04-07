@@ -259,8 +259,14 @@ pub const Store = struct {
     pub fn containsIdx(self: *const Store, idx: Idx) bool {
         if (enable_store_tracking) {
             if (self.debug_id == 0) {
-                // Store was never registered (e.g., deserialized store).
-                // Can't verify, assume true.
+                // A fresh empty store has never produced any Idx values.
+                // Treat it as containing nothing.
+                if (self.interner.entry_count == 0) {
+                    return false;
+                }
+
+                // Store was never registered but already has entries
+                // (e.g. a deserialized store). Can't verify provenance here.
                 return true;
             }
 
@@ -338,6 +344,12 @@ pub const Store = struct {
         self.trackIdx(result, @src());
 
         return result;
+    }
+
+    /// Enable inserts on a deserialized store by copying its interner data into
+    /// growable allocations owned by the provided allocator.
+    pub fn enableRuntimeInserts(self: *Store, gpa: std.mem.Allocator) std.mem.Allocator.Error!void {
+        try self.interner.enableRuntimeInserts(gpa);
     }
 
     /// Look up an identifier in the store without inserting.

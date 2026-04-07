@@ -233,7 +233,7 @@ pub fn init(
     builtin_ctx: BuiltinContext,
 ) std.mem.Allocator.Error!Self {
     const mutable_cir = @constCast(cir);
-    preflightForTypeChecking(mutable_cir, imported_modules);
+    try preflightForTypeChecking(mutable_cir, imported_modules);
     return initAssumePrepared(
         gpa,
         types,
@@ -250,7 +250,8 @@ pub fn init(
 fn preflightForTypeChecking(
     cir: *ModuleEnv,
     imported_modules: []const *const ModuleEnv,
-) void {
+) std.mem.Allocator.Error!void {
+    try cir.getIdentStore().enableRuntimeInserts(cir.gpa);
     // Resolve import indices to entries in imported_modules.
     cir.imports.resolveImports(cir, imported_modules);
     // Resolve deferred expr/type pending lookups now that imported modules are known.
@@ -2785,7 +2786,11 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
 
             // Get the slice of tags
             const tags_slice = self.scratch_tags.sliceFromStart(scratch_tags_top);
-            std.mem.sort(types_mod.Tag, tags_slice, self.cir.common.getIdentStore(), comptime types_mod.Tag.sortByNameAsc);
+            std.mem.sort(types_mod.Tag, tags_slice, self, struct {
+                fn less(checker: *const Self, a: types_mod.Tag, b: types_mod.Tag) bool {
+                    return std.mem.order(u8, checker.cir.getIdentStoreConst().getText(a.name), checker.cir.getIdentStoreConst().getText(b.name)) == .lt;
+                }
+            }.less);
 
             // Process the ext if it exists. Absence means it's a closed union
             const ext_var = inner_blk: {
@@ -2827,7 +2832,11 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
 
             // Get the slice of record_fields
             const record_fields_slice = self.scratch_record_fields.sliceFromStart(scratch_record_fields_top);
-            std.mem.sort(types_mod.RecordField, record_fields_slice, self.cir.common.getIdentStore(), comptime types_mod.RecordField.sortByNameAsc);
+            std.mem.sort(types_mod.RecordField, record_fields_slice, self, struct {
+                fn less(checker: *const Self, a: types_mod.RecordField, b: types_mod.RecordField) bool {
+                    return std.mem.order(u8, checker.cir.getIdentStoreConst().getText(a.name), checker.cir.getIdentStoreConst().getText(b.name)) == .lt;
+                }
+            }.less);
             const fields_type_range = try self.types.appendRecordFields(record_fields_slice);
 
             // Process the ext if it exists. Absence (null) means it's a closed record.
@@ -3247,7 +3256,11 @@ fn checkPatternHelp(
 
             // Copy the scratch record fields into the types store
             const record_fields_scratch = self.scratch_record_fields.sliceFromStart(scratch_records_top);
-            std.mem.sort(types_mod.RecordField, record_fields_scratch, self.cir.getIdentStore(), comptime types_mod.RecordField.sortByNameAsc);
+            std.mem.sort(types_mod.RecordField, record_fields_scratch, self, struct {
+                fn less(checker: *const Self, a: types_mod.RecordField, b: types_mod.RecordField) bool {
+                    return std.mem.order(u8, checker.cir.getIdentStoreConst().getText(a.name), checker.cir.getIdentStoreConst().getText(b.name)) == .lt;
+                }
+            }.less);
             const record_fields_range = try self.types.appendRecordFields(record_fields_scratch);
 
             // Update the pattern var
@@ -4053,7 +4066,11 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
                 // Copy the scratch fields into the types store
                 const record_fields_scratch = self.scratch_record_fields.sliceFromStart(record_fields_top);
-                std.mem.sort(types_mod.RecordField, record_fields_scratch, self.cir.getIdentStore(), comptime types_mod.RecordField.sortByNameAsc);
+                std.mem.sort(types_mod.RecordField, record_fields_scratch, self, struct {
+                    fn less(checker: *const Self, a: types_mod.RecordField, b: types_mod.RecordField) bool {
+                        return std.mem.order(u8, checker.cir.getIdentStoreConst().getText(a.name), checker.cir.getIdentStoreConst().getText(b.name)) == .lt;
+                    }
+                }.less);
                 const record_fields_range = try self.types.appendRecordFields(record_fields_scratch);
 
                 // Create an unbound record with the provided fields
@@ -4852,13 +4869,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
             // Check the body
             does_fx = try self.checkExpr(for_expr.body, env, .no_expectation) or does_fx;
-            const for_body_var: Var = ModuleEnv.varFrom(for_expr.body);
 
-            // Check that the for body evaluates to {}
-            const body_ret = try self.freshFromContent(.{ .structure = .empty_record }, env, for_expr_region);
-            _ = try self.unify(body_ret, for_body_var, env);
-
-            // The for expression itself evaluates to {}
+            // Like cor, loop bodies are ordinary expressions whose final value is
+            // discarded by the loop construct itself. The loop expression still
+            // evaluates to {}, but the body is not required to produce {}.
             try self.unifyWith(expr_var, .{ .structure = .empty_record }, env);
         },
         .e_ellipsis => {
@@ -5183,10 +5197,12 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                 _ = try self.unify(stmt_var, var_expr, env);
             },
             .s_reassign => |reassign| {
-                // We don't need to check the pattern here since it was already
-                // checked when this var was created.
-                //
-                // try self.checkPattern(reassign.pattern_idx, env, .no_expectation);
+                // Reassignment patterns can mix existing mutable binders with
+                // fresh local binders, e.g. `(word, $index) = pair`.
+                // The pattern occurrence itself must therefore always be
+                // checked here so its structural type and any fresh binders are
+                // established explicitly before we unify it with the RHS.
+                try self.checkPattern(reassign.pattern_idx, .bound, env);
 
                 const reassign_pattern_var: Var = ModuleEnv.varFrom(reassign.pattern_idx);
 
@@ -5225,13 +5241,8 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                 //     print!(item.toStr())  <<<<
                 // }
                 does_fx = try self.checkExpr(for_stmt.body, env, .no_expectation) or does_fx;
-                const for_body_var: Var = ModuleEnv.varFrom(for_stmt.body);
-
-                // Check that the for body evaluates to {}
-                const body_ret = try self.freshFromContent(.{ .structure = .empty_record }, env, for_expr_region);
-                _ = try self.unify(body_ret, for_body_var, env);
-
-                _ = try self.unify(stmt_var, for_body_var, env);
+                const empty_rec = try self.freshFromContent(.{ .structure = .empty_record }, env, for_expr_region);
+                _ = try self.unify(stmt_var, empty_rec, env);
             },
             .s_while => |while_stmt| {
                 // Check the condition
@@ -5251,13 +5262,8 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                 //     $count = $count + 1
                 // }
                 does_fx = try self.checkExpr(while_stmt.body, env, .no_expectation) or does_fx;
-                const while_body_var: Var = ModuleEnv.varFrom(while_stmt.body);
-
-                // Check that the while body evaluates to {}
-                const body_ret = try self.freshFromContent(.{ .structure = .empty_record }, env, cond_region);
-                _ = try self.unify(body_ret, while_body_var, env);
-
-                _ = try self.unify(stmt_var, while_body_var, env);
+                const empty_rec = try self.freshFromContent(.{ .structure = .empty_record }, env, cond_region);
+                _ = try self.unify(stmt_var, empty_rec, env);
             },
             .s_expr => |expr| {
                 does_fx = try self.checkExpr(expr.expr, env, .no_expectation) or does_fx;
@@ -6742,7 +6748,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     },
                 });
                 if (!fn_result.isProblem()) {
-                    try self.recordResolvedStaticDispatchSite(constraint.fn_var, original_env, def_idx, constraint.fn_var);
+                    try self.recordResolvedStaticDispatchSite(constraint.fn_var, original_env, def_idx);
                 }
 
                 // If there was a problem, then ensure the error gets propagated
@@ -6860,7 +6866,6 @@ fn recordResolvedStaticDispatchSite(
     constraint_fn_var: Var,
     target_env: *const ModuleEnv,
     target_def_idx: CIR.Def.Idx,
-    resolved_fn_var: Var,
 ) Allocator.Error!void {
     const site_requirement = self.types.findStaticDispatchSiteRequirementByFnVar(constraint_fn_var) orelse return;
     const target_module_name_text = if (!target_env.qualified_module_ident.isNone())
@@ -6873,7 +6878,6 @@ fn recordResolvedStaticDispatchSite(
         .expr_var = site_requirement.expr_var,
         .target_module_name = target_module_name,
         .target_def_idx = @intFromEnum(target_def_idx),
-        .resolved_fn_var = resolved_fn_var,
     });
 }
 

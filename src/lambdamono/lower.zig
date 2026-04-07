@@ -32,7 +32,7 @@ pub fn run(allocator: std.mem.Allocator, input: solved.Lower.Result) std.mem.All
     var lowerer = Lowerer.init(allocator, input);
     defer lowerer.deinit();
     try lowerer.lowerProgram();
-    return lowerer.finish();
+    return try lowerer.finish();
 }
 
 const Lowerer = struct {
@@ -111,7 +111,7 @@ const Lowerer = struct {
         self.input.deinit();
     }
 
-    fn finish(self: *Lowerer) Result {
+    fn finish(self: *Lowerer) std.mem.Allocator.Error!Result {
         const result = Result{
             .store = self.output,
             .root_defs = self.root_defs,
@@ -124,7 +124,7 @@ const Lowerer = struct {
         self.root_defs = .empty;
         self.input.symbols = symbol_mod.Store.init(self.allocator);
         self.input.strings = .{};
-        self.input.ident_name_literals = std.AutoHashMap(u32, base.StringLiteral.Idx).init(self.allocator);
+        self.input.idents = try base.Ident.Store.initCapacity(self.allocator, 1);
         self.types = type_mod.Store.init(self.allocator);
         return result;
     }
@@ -249,7 +249,8 @@ const Lowerer = struct {
         defer mono_cache.deinit();
 
         const t = try self.cloneInstType(&inst, pending.fn_ty);
-        try self.unify(t, pending.requested_ty);
+        const requested_ty = try self.cloneInstType(&inst, pending.requested_ty);
+        try self.unify(t, requested_ty);
 
         const arg_ty = try self.cloneInstType(&inst, pending.fn_def.arg.ty);
         const lowered_arg_ty = try lower_type.lowerType(
@@ -466,7 +467,7 @@ const Lowerer = struct {
             .bool_lit => |value| .{ .bool_lit = value },
             .unit => .unit,
             .tag => |tag| .{ .tag = .{
-                .name = tag.name,
+                .name = .{ .ctor = tag.name },
                 .args = try self.specializeExprSpan(inst, mono_cache, venv, tag.args),
             } },
             .record => |fields| .{ .record = try self.specializeFieldSpan(inst, mono_cache, venv, fields) },
@@ -917,7 +918,7 @@ const Lowerer = struct {
             const pat_args = try self.allocator.alloc(ast.PatId, tag_args.len);
             defer self.allocator.free(pat_args);
 
-            var current = try self.makeStringLiteralExpr(result_ty, self.lookupIdentNameBytes(tag.name));
+            var current = try self.makeStringLiteralExpr(result_ty, self.lookupTagNameBytes(tag.name));
 
             for (tag_args, 0..) |arg_ty, arg_i| {
                 const arg_symbol = try self.input.symbols.add(base.Ident.Idx.NONE, .synthetic);
@@ -1089,10 +1090,17 @@ const Lowerer = struct {
         });
     }
 
+    fn lookupTagNameBytes(self: *Lowerer, tag_name: type_mod.TagName) []const u8 {
+        return switch (tag_name) {
+            .ctor => |ident| blk: {
+                break :blk self.lookupIdentNameBytes(ident);
+            },
+            .lambda => debugPanic("lambdamono.inspect invariant violated: internal lambda-set tag reached string rendering"),
+        };
+    }
+
     fn lookupIdentNameBytes(self: *Lowerer, ident: base.Ident.Idx) []const u8 {
-        const literal = self.input.ident_name_literals.get(@as(u32, @bitCast(ident))) orelse
-            debugPanic("lambdamono.inspect missing lowered ident display text");
-        return self.input.strings.get(literal);
+        return self.input.idents.getText(ident);
     }
 
     fn specializeVarExpr(
@@ -1126,7 +1134,7 @@ const Lowerer = struct {
                         &self.input.symbols,
                     )) {
                         .toplevel => break :blk .{ .tag = .{
-                            .name = lower_type.lambdaTagName(&self.input.symbols, symbol),
+                            .name = lower_type.lambdaTagKey(symbol),
                             .args = ast.Span(ast.ExprId).empty(),
                         } },
                         .lset => |capture_info| {
@@ -1137,7 +1145,7 @@ const Lowerer = struct {
                             defer self.allocator.free(args);
                             args[0] = capture_record;
                             break :blk .{ .tag = .{
-                                .name = lower_type.lambdaTagName(&self.input.symbols, symbol),
+                                .name = lower_type.lambdaTagKey(symbol),
                                 .args = try self.output.addExprSpan(args),
                             } };
                         },
@@ -1323,7 +1331,7 @@ const Lowerer = struct {
                             .pat = try self.output.addPat(.{
                                 .ty = self.output.getExpr(lowered_func).ty,
                                 .data = .{ .tag = .{
-                                    .name = lower_type.lambdaTagName(&self.input.symbols, lambda.symbol),
+                                    .name = lower_type.lambdaTagKey(lambda.symbol),
                                     .args = ast.Span(ast.PatId).empty(),
                                 } },
                             }),
@@ -1344,7 +1352,7 @@ const Lowerer = struct {
                             const pat = try self.output.addPat(.{
                                 .ty = self.output.getExpr(lowered_func).ty,
                                 .data = .{ .tag = .{
-                                    .name = lower_type.lambdaTagName(&self.input.symbols, lambda.symbol),
+                                    .name = lower_type.lambdaTagKey(lambda.symbol),
                                     .args = try self.output.addPatSpan(&.{capture_pat}),
                                 } },
                             });
@@ -1473,7 +1481,7 @@ const Lowerer = struct {
                     .pat = try self.output.addPat(.{
                         .ty = lowered_ty,
                         .data = .{ .tag = .{
-                            .name = tag.name,
+                            .name = .{ .ctor = tag.name },
                             .args = try self.output.addPatSpan(lowered_args),
                         } },
                     }),
@@ -1874,7 +1882,7 @@ const Lowerer = struct {
                     const right_tags = self.input.types.sliceTags(other.tags);
                     if (left_tags.len != right_tags.len) debugPanic("lambdamono.lower.unify tag mismatch");
                     for (left_tags, right_tags) |left_tag, right_tag| {
-                        if (left_tag.name != right_tag.name) debugPanic("lambdamono.lower.unify tag mismatch");
+                        if (!std.meta.eql(left_tag.name, right_tag.name)) debugPanic("lambdamono.lower.unify tag mismatch");
                         const left_args = self.input.types.sliceTypeVarSpan(left_tag.args);
                         const right_args = self.input.types.sliceTypeVarSpan(right_tag.args);
                         if (left_args.len != right_args.len) debugPanic("lambdamono.lower.unify tag arity mismatch");

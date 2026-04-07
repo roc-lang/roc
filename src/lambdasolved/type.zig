@@ -177,9 +177,24 @@ pub const Store = struct {
 
     pub fn addTags(self: *Store, values: []const Tag) std.mem.Allocator.Error!Span(Tag) {
         if (values.len == 0) return Span(Tag).empty();
+        if (values.len == 1) {
+            const start_single: u32 = @intCast(self.tags.items.len);
+            try self.tags.append(self.allocator, values[0]);
+            return .{ .start = start_single, .len = 1 };
+        }
+
+        const sorted = try self.allocator.dupe(Tag, values);
+        defer self.allocator.free(sorted);
+        std.mem.sort(Tag, sorted, {}, struct {
+            fn lessThan(_: void, a: Tag, b: Tag) bool {
+                return @as(u32, @bitCast(a.name)) < @as(u32, @bitCast(b.name));
+            }
+        }.lessThan);
+
+        const canonical_len = self.canonicalizeSortedTags(sorted);
         const start: u32 = @intCast(self.tags.items.len);
-        try self.tags.appendSlice(self.allocator, values);
-        return .{ .start = start, .len = @intCast(values.len) };
+        try self.tags.appendSlice(self.allocator, sorted[0..canonical_len]);
+        return .{ .start = start, .len = @intCast(canonical_len) };
     }
 
     pub fn sliceTags(self: *const Store, span: Span(Tag)) []const Tag {
@@ -189,8 +204,22 @@ pub const Store = struct {
 
     pub fn addFields(self: *Store, values: []const Field) std.mem.Allocator.Error!Span(Field) {
         if (values.len == 0) return Span(Field).empty();
+        if (values.len == 1) {
+            const start_single: u32 = @intCast(self.fields.items.len);
+            try self.fields.append(self.allocator, values[0]);
+            return .{ .start = start_single, .len = 1 };
+        }
+
+        const sorted = try self.allocator.dupe(Field, values);
+        defer self.allocator.free(sorted);
+        std.mem.sort(Field, sorted, {}, struct {
+            fn lessThan(_: void, a: Field, b: Field) bool {
+                return @as(u32, @bitCast(a.name)) < @as(u32, @bitCast(b.name));
+            }
+        }.lessThan);
+
         const start: u32 = @intCast(self.fields.items.len);
-        try self.fields.appendSlice(self.allocator, values);
+        try self.fields.appendSlice(self.allocator, sorted);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
@@ -201,8 +230,22 @@ pub const Store = struct {
 
     pub fn addCaptures(self: *Store, values: []const Capture) std.mem.Allocator.Error!Span(Capture) {
         if (values.len == 0) return Span(Capture).empty();
+        if (values.len == 1) {
+            const start_single: u32 = @intCast(self.captures.items.len);
+            try self.captures.append(self.allocator, values[0]);
+            return .{ .start = start_single, .len = 1 };
+        }
+
+        const sorted = try self.allocator.dupe(Capture, values);
+        defer self.allocator.free(sorted);
+        std.mem.sort(Capture, sorted, {}, struct {
+            fn lessThan(_: void, a: Capture, b: Capture) bool {
+                return a.symbol.raw() < b.symbol.raw();
+            }
+        }.lessThan);
+
         const start: u32 = @intCast(self.captures.items.len);
-        try self.captures.appendSlice(self.allocator, values);
+        try self.captures.appendSlice(self.allocator, sorted);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
@@ -213,8 +256,22 @@ pub const Store = struct {
 
     pub fn addLambdas(self: *Store, values: []const Lambda) std.mem.Allocator.Error!Span(Lambda) {
         if (values.len == 0) return Span(Lambda).empty();
+        if (values.len == 1) {
+            const start_single: u32 = @intCast(self.lambdas.items.len);
+            try self.lambdas.append(self.allocator, values[0]);
+            return .{ .start = start_single, .len = 1 };
+        }
+
+        const sorted = try self.allocator.dupe(Lambda, values);
+        defer self.allocator.free(sorted);
+        std.mem.sort(Lambda, sorted, {}, struct {
+            fn lessThan(_: void, a: Lambda, b: Lambda) bool {
+                return a.symbol.raw() < b.symbol.raw();
+            }
+        }.lessThan);
+
         const start: u32 = @intCast(self.lambdas.items.len);
-        try self.lambdas.appendSlice(self.allocator, values);
+        try self.lambdas.appendSlice(self.allocator, sorted);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
@@ -222,8 +279,171 @@ pub const Store = struct {
         if (span.len == 0) return &.{};
         return self.lambdas.items[span.start..][0..span.len];
     }
+
+    const TypePair = struct {
+        left: TypeVarId,
+        right: TypeVarId,
+    };
+
+    pub fn equalIds(self: *Store, left: TypeVarId, right: TypeVarId) bool {
+        var visited = std.ArrayList(TypePair).empty;
+        defer visited.deinit(self.allocator);
+        return self.equalIdsVisited(left, right, &visited) catch false;
+    }
+
+    fn equalIdsVisited(
+        self: *Store,
+        left: TypeVarId,
+        right: TypeVarId,
+        visited: *std.ArrayList(TypePair),
+    ) std.mem.Allocator.Error!bool {
+        const left_id = self.unlink(left);
+        const right_id = self.unlink(right);
+        if (left_id == right_id) return true;
+
+        for (visited.items) |pair| {
+            if (pair.left == left_id and pair.right == right_id) return true;
+        }
+        try visited.append(self.allocator, .{ .left = left_id, .right = right_id });
+
+        const left_node = self.getNode(left_id);
+        const right_node = self.getNode(right_id);
+        if (@as(std.meta.Tag(Node), left_node) != @as(std.meta.Tag(Node), right_node)) return false;
+
+        return switch (left_node) {
+            .link => unreachable,
+            .nominal => |left_backing| switch (right_node) {
+                .nominal => |right_backing| try self.equalIdsVisited(left_backing, right_backing, visited),
+                else => unreachable,
+            },
+            .unbd => true,
+            .for_a => true,
+            .content => |left_content| switch (right_node) {
+                .content => |right_content| switch (right_content) {
+                    .primitive => |right_prim| switch (left_content) {
+                        .primitive => |left_prim| left_prim == right_prim,
+                        else => false,
+                    },
+                    .func => |right_func| switch (left_content) {
+                        .func => |left_func| blk: {
+                            if (!try self.equalIdsVisited(left_func.arg, right_func.arg, visited)) break :blk false;
+                            if (!try self.equalIdsVisited(left_func.lset, right_func.lset, visited)) break :blk false;
+                            if (!try self.equalIdsVisited(left_func.ret, right_func.ret, visited)) break :blk false;
+                            break :blk true;
+                        },
+                        else => false,
+                    },
+                    .list => |right_elem| switch (left_content) {
+                        .list => |left_elem| try self.equalIdsVisited(left_elem, right_elem, visited),
+                        else => false,
+                    },
+                    .box => |right_elem| switch (left_content) {
+                        .box => |left_elem| try self.equalIdsVisited(left_elem, right_elem, visited),
+                        else => false,
+                    },
+                    .tuple => |right_tuple| switch (left_content) {
+                        .tuple => |left_tuple| blk: {
+                            const left_elems = self.sliceTypeVarSpan(left_tuple);
+                            const right_elems = self.sliceTypeVarSpan(right_tuple);
+                            if (left_elems.len != right_elems.len) break :blk false;
+                            for (left_elems, right_elems) |left_elem, right_elem| {
+                                if (!try self.equalIdsVisited(left_elem, right_elem, visited)) break :blk false;
+                            }
+                            break :blk true;
+                        },
+                        else => false,
+                    },
+                    .tag_union => |right_union| switch (left_content) {
+                        .tag_union => |left_union| blk: {
+                            const left_tags = self.sliceTags(left_union.tags);
+                            const right_tags = self.sliceTags(right_union.tags);
+                            if (left_tags.len != right_tags.len) break :blk false;
+                            for (left_tags, right_tags) |left_tag, right_tag| {
+                                if (left_tag.name != right_tag.name) break :blk false;
+                                const left_args = self.sliceTypeVarSpan(left_tag.args);
+                                const right_args = self.sliceTypeVarSpan(right_tag.args);
+                                if (left_args.len != right_args.len) break :blk false;
+                                for (left_args, right_args) |left_arg, right_arg| {
+                                    if (!try self.equalIdsVisited(left_arg, right_arg, visited)) break :blk false;
+                                }
+                            }
+                            break :blk true;
+                        },
+                        else => false,
+                    },
+                    .record => |right_record| switch (left_content) {
+                        .record => |left_record| blk: {
+                            const left_fields = self.sliceFields(left_record.fields);
+                            const right_fields = self.sliceFields(right_record.fields);
+                            if (left_fields.len != right_fields.len) break :blk false;
+                            for (left_fields, right_fields) |left_field, right_field| {
+                                if (left_field.name != right_field.name) break :blk false;
+                                if (!try self.equalIdsVisited(left_field.ty, right_field.ty, visited)) break :blk false;
+                            }
+                            break :blk true;
+                        },
+                        else => false,
+                    },
+                    .lambda_set => |right_lset| switch (left_content) {
+                        .lambda_set => |left_lset| blk: {
+                            const left_lambdas = self.sliceLambdas(left_lset);
+                            const right_lambdas = self.sliceLambdas(right_lset);
+                            if (left_lambdas.len != right_lambdas.len) break :blk false;
+                            for (left_lambdas, right_lambdas) |left_lambda, right_lambda| {
+                                if (left_lambda.symbol != right_lambda.symbol) break :blk false;
+                                const left_caps = self.sliceCaptures(left_lambda.captures);
+                                const right_caps = self.sliceCaptures(right_lambda.captures);
+                                if (left_caps.len != right_caps.len) break :blk false;
+                                for (left_caps, right_caps) |left_cap, right_cap| {
+                                    if (left_cap.symbol != right_cap.symbol) break :blk false;
+                                    if (!try self.equalIdsVisited(left_cap.ty, right_cap.ty, visited)) break :blk false;
+                                }
+                            }
+                            break :blk true;
+                        },
+                        else => false,
+                    },
+                },
+                else => unreachable,
+            },
+        };
+    }
+
+    fn canonicalizeSortedTags(self: *Store, tags: []Tag) usize {
+        if (tags.len <= 1) return tags.len;
+
+        var write_index: usize = 1;
+        var prev = tags[0];
+
+        for (tags[1..]) |tag| {
+            if (tag.name != prev.name) {
+                tags[write_index] = tag;
+                write_index += 1;
+                prev = tag;
+                continue;
+            }
+
+            const prev_args = self.sliceTypeVarSpan(prev.args);
+            const tag_args = self.sliceTypeVarSpan(tag.args);
+            if (prev_args.len != tag_args.len) {
+                debugPanic("lambdasolved.type duplicate tag constructor had different arity");
+            }
+            for (prev_args, tag_args) |prev_arg, tag_arg| {
+                if (!self.equalIds(prev_arg, tag_arg)) {
+                    debugPanic("lambdasolved.type duplicate tag constructor had different payload types");
+                }
+            }
+        }
+
+        return write_index;
+    }
 };
 
 test "lambdasolved type tests" {
     std.testing.refAllDecls(@This());
+}
+
+fn debugPanic(comptime msg: []const u8) noreturn {
+    @branchHint(.cold);
+    std.debug.panic("{s}", .{msg});
 }

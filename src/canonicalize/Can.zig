@@ -149,6 +149,14 @@ defining_patterns_start: ?u32 = null,
 /// was created in a first pass, or for simple ident patterns).
 /// Used to detect self-referential definitions like `a = a`.
 defining_pattern: ?Pattern.Idx = null,
+/// Whether the current declaration-pattern canonicalization should reuse
+/// existing mutable binders when it encounters `$name` patterns.
+allow_pattern_var_reuse: bool = false,
+/// Whether the current declaration-pattern canonicalization reused any
+/// existing mutable binder. `canonicalizeBlockDecl` uses this explicit fact to
+/// emit `s_reassign` instead of `s_decl` for mixed structural reassignments
+/// like `(word, $index) = pair`.
+pattern_reused_existing_var: bool = false,
 /// The expression index of the enclosing lambda, if any.
 /// Used to track which lambda a return expression belongs to.
 enclosing_lambda: ?Expr.Idx = null,
@@ -8588,6 +8596,7 @@ pub fn canonicalizePattern(
                             } });
                         },
                         .var_reassignment_ok => |existing_pattern_idx| {
+                            self.pattern_reused_existing_var = true;
                             // This is a var reassignment - return the existing pattern
                             // so the interpreter's upsertBinding will update the existing binding
                             return existing_pattern_idx;
@@ -8614,10 +8623,23 @@ pub fn canonicalizePattern(
                     .ident = ident_idx,
                 } }, region);
 
-                // Introduce the var with function boundary tracking
-                // scopeIntroduceVar will detect if this is a reassignment of an existing var
-                // and return the existing pattern in that case
-                return try self.scopeIntroduceVar(ident_idx, pattern_idx, region, true, Pattern.Idx);
+                // In ordinary pattern positions `$name` introduces a fresh mutable
+                // binder. In block declaration patterns we explicitly allow reuse
+                // of an existing mutable binder so mixed structural reassignments
+                // become `s_reassign` instead of pretending to be declarations.
+                const result = try self.scopeIntroduceVar(
+                    ident_idx,
+                    pattern_idx,
+                    region,
+                    !self.allow_pattern_var_reuse,
+                    Pattern.Idx,
+                );
+                if (self.allow_pattern_var_reuse and result == pattern_idx and self.isVarPattern(pattern_idx)) {
+                    // fresh mutable binder in a mixed declaration pattern; no-op
+                } else if (result != pattern_idx) {
+                    self.pattern_reused_existing_var = true;
+                }
+                return result;
             } else {
                 const feature = try self.env.insertString("report an error when unable to resolve identifier");
                 const malformed_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .not_implemented = .{
@@ -12038,6 +12060,13 @@ pub fn canonicalizeBlockDecl(self: *Self, d: AST.Statement.Decl, mb_last_anno: ?
     // was newly created by this declaration (as opposed to existing vars being reassigned).
     const patterns_start_idx: u32 = @intCast(self.env.store.nodes.len());
 
+    const saved_allow_pattern_var_reuse = self.allow_pattern_var_reuse;
+    const saved_pattern_reused_existing_var = self.pattern_reused_existing_var;
+    self.allow_pattern_var_reuse = true;
+    self.pattern_reused_existing_var = false;
+    defer self.allow_pattern_var_reuse = saved_allow_pattern_var_reuse;
+    defer self.pattern_reused_existing_var = saved_pattern_reused_existing_var;
+
     // Regular declaration - canonicalize as usual
     const pattern_idx = try self.canonicalizePattern(d.pattern) orelse inner_blk: {
         const pattern = self.parse_ir.store.getPattern(d.pattern);
@@ -12045,6 +12074,7 @@ pub fn canonicalizeBlockDecl(self: *Self, d: AST.Statement.Decl, mb_last_anno: ?
             .region = self.parse_ir.tokenizedRegionToRegion(pattern.to_tokenized_region()),
         } });
     };
+    const pattern_reused_existing_var = self.pattern_reused_existing_var;
 
     // Check if the RHS is a lambda - if so, self-references are valid (for recursion).
     // Otherwise, set defining_patterns_start and defining_pattern for self-reference detection.
@@ -12068,8 +12098,12 @@ pub fn canonicalizeBlockDecl(self: *Self, d: AST.Statement.Decl, mb_last_anno: ?
     self.defining_patterns_start = saved_defining_patterns_start;
     self.defining_pattern = saved_defining_pattern;
 
-    // Create a declaration statement
-    const stmt_idx =
+    const stmt_idx = if (pattern_reused_existing_var)
+        try self.env.addStatement(Statement{ .s_reassign = .{
+            .pattern_idx = pattern_idx,
+            .expr = expr.idx,
+        } }, region)
+    else
         try self.env.addStatement(Statement{ .s_decl = .{
             .pattern = pattern_idx,
             .expr = expr.idx,

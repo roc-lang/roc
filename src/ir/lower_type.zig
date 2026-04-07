@@ -228,7 +228,16 @@ fn buildTypeKey(
                     try self.appendValue(@as(u8, 16));
                     try self.appendValue(@as(u32, @intCast(tags.len)));
                     for (tags) |tag| {
-                        try self.appendValue(tag.name);
+                        switch (tag.name) {
+                            .ctor => |ident| {
+                                try self.appendValue(@as(u8, 0));
+                                try self.appendValue(ident);
+                            },
+                            .lambda => |symbol| {
+                                try self.appendValue(@as(u8, 1));
+                                try self.appendValue(symbol.raw());
+                            },
+                        }
                         const args = self.mono_types.sliceTypeSpan(tag.args);
                         try self.appendValue(@as(u32, @intCast(args.len)));
                         for (args) |arg| {
