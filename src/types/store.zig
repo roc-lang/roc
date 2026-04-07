@@ -536,7 +536,13 @@ pub const Store = struct {
                 }
                 break :blk false;
             },
-            .nominal_type => false, // Nominal types are concrete
+            .nominal_type => |nominal| blk: {
+                const args = self.sliceNominalArgs(nominal);
+                for (args) |arg_var| {
+                    if (self.needsInstantiation(arg_var)) break :blk true;
+                }
+                break :blk false;
+            },
             .fn_pure => |func| func.needs_instantiation,
             .fn_effectful => |func| func.needs_instantiation,
             .fn_unbound => |func| func.needs_instantiation,

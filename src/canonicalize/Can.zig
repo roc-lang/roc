@@ -981,15 +981,20 @@ fn processTypeDeclFirstPass(
     try self.env.store.setStatementNode(type_decl_stmt_idx, type_decl_stmt);
     try self.env.store.addScratchStatement(type_decl_stmt_idx);
 
-    // For type modules, associate the node index with the exposed type.
-    // display_module_name_idx is the bare module name (e.g., "Color"), which matches
-    // what canonicalization produces for unqualified type module references.
-    if (self.env.module_kind == .type_module) {
-        if (qualified_name_idx.eql(self.env.display_module_name_idx)) {
-            // This is the main type of the type module - set its node index
-            const node_idx_u16 = @as(u16, @intCast(@intFromEnum(type_decl_stmt_idx)));
-            try self.env.setExposedNodeIndexById(qualified_name_idx, node_idx_u16);
-        }
+    const node_idx_u16 = @as(u16, @intCast(@intFromEnum(type_decl_stmt_idx)));
+
+    // Exposed type names must resolve to the canonical type-decl statement idx so
+    // importing modules can consume an explicit exported binding fact instead of
+    // reconstructing type visibility later.
+    if (self.exposed_types.contains(type_header.name)) {
+        try self.env.setExposedNodeIndexById(type_header.name, node_idx_u16);
+    }
+
+    // For type modules, also associate the module's display name with the main
+    // type declaration, because unqualified references resolve through the bare
+    // module/type name rather than the internal qualified name.
+    if (self.env.module_kind == .type_module and qualified_name_idx.eql(self.env.display_module_name_idx)) {
+        try self.env.setExposedNodeIndexById(qualified_name_idx, node_idx_u16);
     }
 
     // Remove from exposed_type_texts since the type is now fully defined
@@ -1094,14 +1099,20 @@ fn processTypeDeclFirstPassWithExisting(
     try self.env.store.setStatementNode(type_decl_stmt_idx, type_decl_stmt);
     try self.env.store.addScratchStatement(type_decl_stmt_idx);
 
-    // For type modules, associate the node index with the exposed type.
-    // display_module_name_idx is the bare module name (e.g., "Color"), which matches
-    // what canonicalization produces for unqualified type module references.
-    if (self.env.module_kind == .type_module) {
-        if (qualified_name_idx.eql(self.env.display_module_name_idx)) {
-            const node_idx_u16 = @as(u16, @intCast(@intFromEnum(type_decl_stmt_idx)));
-            try self.env.setExposedNodeIndexById(qualified_name_idx, node_idx_u16);
-        }
+    const node_idx_u16 = @as(u16, @intCast(@intFromEnum(type_decl_stmt_idx)));
+
+    // Exposed type names must resolve to the canonical type-decl statement idx so
+    // importing modules can consume an explicit exported binding fact instead of
+    // reconstructing type visibility later.
+    if (self.exposed_types.contains(type_header.name)) {
+        try self.env.setExposedNodeIndexById(type_header.name, node_idx_u16);
+    }
+
+    // For type modules, also associate the module's display name with the main
+    // type declaration, because unqualified references resolve through the bare
+    // module/type name rather than the internal qualified name.
+    if (self.env.module_kind == .type_module and qualified_name_idx.eql(self.env.display_module_name_idx)) {
+        try self.env.setExposedNodeIndexById(qualified_name_idx, node_idx_u16);
     }
 
     // Remove from exposed_type_texts since the type is now fully defined
@@ -3524,8 +3535,11 @@ fn addToExposedScope(
 
                 // Get the interned identifier
                 if (self.parse_ir.tokens.resolveIdentifier(type_name.ident)) |ident_idx| {
-                    // Don't add types to exposed_items - types are not values
-                    // Only add to type_bindings for type resolution
+                    // Exposed types must be part of the module's permanent exposed-item
+                    // table too, because cross-module canonicalization resolves imported
+                    // type names through the same explicit exported-binding map that
+                    // imported values use.
+                    try self.env.addExposedById(ident_idx);
 
                     // Just track that this type is exposed
                     try self.exposed_types.put(gpa, ident_idx, {});
@@ -3556,8 +3570,11 @@ fn addToExposedScope(
 
                 // Get the interned identifier
                 if (self.parse_ir.tokens.resolveIdentifier(type_with_constructors.ident)) |ident_idx| {
-                    // Don't add types to exposed_items - types are not values
-                    // Only add to type_bindings for type resolution
+                    // Exposed types must be part of the module's permanent exposed-item
+                    // table too, because cross-module canonicalization resolves imported
+                    // type names through the same explicit exported-binding map that
+                    // imported values use.
+                    try self.env.addExposedById(ident_idx);
 
                     // Just track that this type is exposed
                     try self.exposed_types.put(gpa, ident_idx, {});

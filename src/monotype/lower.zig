@@ -846,7 +846,7 @@ pub const Lowerer = struct {
                 expected_result_var,
                 arg_expr,
                 arg_bind.ty,
-                null,
+                arg_solved_var,
                 pattern_idx,
                 pattern_idx,
                 if (is_final_arg) body_expr_idx else body_expr_idx,
@@ -863,7 +863,7 @@ pub const Lowerer = struct {
             type_scope,
             pattern_idx,
             arg_bind.ty,
-            null,
+            arg_solved_var,
             &branch_env,
             &binding_decls,
         );
@@ -3483,7 +3483,7 @@ pub const Lowerer = struct {
 
         const target = self.lookupResolvedDispatchTarget(module_idx, expr_idx) orelse
             self.resolveMonomorphicDispatchTarget(module_idx, type_scope, env, expr_idx, method_name);
-        const source_fn_var = try self.copyTopLevelDefExprVarToModule(target.module_idx, target.def_idx, module_idx);
+        const source_fn_var = try self.copyTopLevelDefBindingVarToModule(target.module_idx, target.def_idx, module_idx);
         const cloned_func_var = try call_scope.instantiator.instantiateVar(source_fn_var);
         const cloned_ret_var = self.lookupFunctionRetVar(module_idx, cloned_func_var) orelse debugPanic(
             "monotype static dispatch invariant violated: method target missing return var in module {d}",
@@ -3508,14 +3508,14 @@ pub const Lowerer = struct {
         };
     }
 
-    fn copyTopLevelDefExprVarToModule(
+    fn copyTopLevelDefBindingVarToModule(
         self: *Lowerer,
         source_module_idx: u32,
         def_idx: CIR.Def.Idx,
         dest_module_idx: u32,
     ) std.mem.Allocator.Error!Var {
         const def = self.ctx.env(source_module_idx).store.getDef(def_idx);
-        const source_var = ModuleEnv.varFrom(def.expr);
+        const source_var = ModuleEnv.varFrom(def.pattern);
         return if (source_module_idx == dest_module_idx)
             source_var
         else
@@ -3967,11 +3967,11 @@ pub const Lowerer = struct {
 
                 const symbol = self.lookupTopLevelSymbol(module_idx, lookup.pattern_idx) orelse break :blk null;
                 const top_level = self.top_level_defs_by_symbol.get(symbol) orelse break :blk null;
-                break :blk try self.copyTopLevelDefExprVarToModule(top_level.module_idx, top_level.def_idx, module_idx);
+                break :blk try self.copyTopLevelDefBindingVarToModule(top_level.module_idx, top_level.def_idx, module_idx);
             },
             .e_lookup_external => |lookup| blk: {
                 const target_module_idx = current_env.imports.getResolvedModule(lookup.module_idx) orelse break :blk null;
-                break :blk try self.copyTopLevelDefExprVarToModule(target_module_idx, @enumFromInt(lookup.target_node_idx), module_idx);
+                break :blk try self.copyTopLevelDefBindingVarToModule(target_module_idx, @enumFromInt(lookup.target_node_idx), module_idx);
             },
             else => null,
         };
@@ -4014,11 +4014,11 @@ pub const Lowerer = struct {
 
                 const symbol = self.lookupTopLevelSymbol(module_idx, lookup.pattern_idx) orelse break :blk null;
                 const top_level = self.top_level_defs_by_symbol.get(symbol) orelse break :blk null;
-                break :blk try self.copyTopLevelDefExprVarToModule(top_level.module_idx, top_level.def_idx, module_idx);
+                break :blk try self.copyTopLevelDefBindingVarToModule(top_level.module_idx, top_level.def_idx, module_idx);
             },
             .e_lookup_external => |lookup| blk: {
                 const target_module_idx = current_env.imports.getResolvedModule(lookup.module_idx) orelse break :blk null;
-                break :blk try self.copyTopLevelDefExprVarToModule(target_module_idx, @enumFromInt(lookup.target_node_idx), module_idx);
+                break :blk try self.copyTopLevelDefBindingVarToModule(target_module_idx, @enumFromInt(lookup.target_node_idx), module_idx);
             },
             else => null,
         };
@@ -4072,12 +4072,20 @@ pub const Lowerer = struct {
     ) std.mem.Allocator.Error!ast.ExprId {
         const cir_env = self.ctx.env(module_idx);
         const expr = cir_env.store.getExpr(expr_idx);
+        const target_ty = blk: {
+            if (self.ctx.types.getType(expected_ty) != .placeholder) break :blk expected_ty;
+            if (expected_var) |var_| {
+                const lowered = try self.lowerSolvedType(module_idx, type_scope, var_);
+                if (self.ctx.types.getType(lowered) != .placeholder) break :blk lowered;
+            }
+            break :blk expected_ty;
+        };
 
         if (self.exprVarIsErroneous(module_idx, expr_idx)) {
-            return self.lowerErroneousExprWithType(module_idx, type_scope, env, expr_idx, expected_ty);
+            return self.lowerErroneousExprWithType(module_idx, type_scope, env, expr_idx, target_ty);
         }
 
-        if (self.ctx.types.getType(expected_ty) == .placeholder) {
+        if (self.ctx.types.getType(target_ty) == .placeholder) {
             return self.lowerExpr(module_idx, type_scope, env, expr_idx);
         }
 
@@ -4088,7 +4096,7 @@ pub const Lowerer = struct {
                 env,
                 expr_idx,
                 nominal.backing_expr,
-                expected_ty,
+                target_ty,
             ),
             .e_nominal_external => |nominal| self.lowerTransparentNominalExprWithType(
                 module_idx,
@@ -4096,27 +4104,27 @@ pub const Lowerer = struct {
                 env,
                 expr_idx,
                 nominal.backing_expr,
-                expected_ty,
+                target_ty,
             ),
             .e_num => |num| try self.program.store.addExpr(.{
-                .ty = expected_ty,
-                .data = try self.lowerNumericIntLiteralData(expected_ty, num.value),
+                .ty = target_ty,
+                .data = try self.lowerNumericIntLiteralData(target_ty, num.value),
             }),
             .e_dec => |dec| try self.program.store.addExpr(.{
-                .ty = expected_ty,
-                .data = try self.lowerNumericDecLiteralData(expected_ty, dec.value.toI128()),
+                .ty = target_ty,
+                .data = try self.lowerNumericDecLiteralData(target_ty, dec.value.toI128()),
             }),
             .e_dec_small => |dec| try self.program.store.addExpr(.{
-                .ty = expected_ty,
-                .data = try self.lowerNumericSmallDecLiteralData(expected_ty, dec.value),
+                .ty = target_ty,
+                .data = try self.lowerNumericSmallDecLiteralData(target_ty, dec.value),
             }),
             .e_typed_int => |num| try self.program.store.addExpr(.{
-                .ty = expected_ty,
-                .data = try self.lowerNumericIntLiteralData(expected_ty, num.value),
+                .ty = target_ty,
+                .data = try self.lowerNumericIntLiteralData(target_ty, num.value),
             }),
             .e_typed_frac => |frac| try self.program.store.addExpr(.{
-                .ty = expected_ty,
-                .data = try self.lowerNumericDecLiteralData(expected_ty, @bitCast(frac.value.bytes)),
+                .ty = target_ty,
+                .data = try self.lowerNumericDecLiteralData(target_ty, @bitCast(frac.value.bytes)),
             }),
             .e_call => |call| blk: {
                 if (self.callRootCalleeIsRuntimeError(module_idx, call.func)) {
@@ -4125,13 +4133,13 @@ pub const Lowerer = struct {
                         type_scope,
                         env,
                         expr_idx,
-                        expected_ty,
+                        target_ty,
                     );
                 }
 
-                if (try self.maybeLowerSpecialCallExpr(module_idx, type_scope, env, expr_idx, call, expected_ty)) |special| {
+                if (try self.maybeLowerSpecialCallExpr(module_idx, type_scope, env, expr_idx, call, target_ty)) |special| {
                     break :blk try self.program.store.addExpr(.{
-                        .ty = expected_ty,
+                        .ty = self.program.store.getExpr(special).ty,
                         .data = self.program.store.getExpr(special).data,
                     });
                 }
@@ -4145,7 +4153,7 @@ pub const Lowerer = struct {
                     expected_var,
                 );
                 break :blk try self.program.store.addExpr(.{
-                    .ty = expected_ty,
+                    .ty = lowered_call.result_ty,
                     .data = .{ .call = lowered_call.data },
                 });
             },
@@ -4155,7 +4163,7 @@ pub const Lowerer = struct {
                     type_scope,
                     env,
                     expr_idx,
-                    expected_ty,
+                    target_ty,
                     lambda.args,
                     lambda.body,
                     expected_var,
@@ -4171,7 +4179,7 @@ pub const Lowerer = struct {
                     type_scope,
                     env,
                     expr_idx,
-                    expected_ty,
+                    target_ty,
                     closure,
                     expected_var,
                 );
@@ -4182,106 +4190,109 @@ pub const Lowerer = struct {
             },
             .e_hosted_lambda => debugTodo("monotype.lowerExprWithExpectedType hosted lambda"),
             .e_run_low_level => |ll| try self.program.store.addExpr(.{
-                .ty = expected_ty,
+                .ty = target_ty,
                 .data = .{ .low_level = .{
                     .op = ll.op,
                     .args = try self.lowerExprList(module_idx, type_scope, env, ll.args),
                 } },
             }),
-            .e_record => |record| self.lowerRecordExpr(module_idx, type_scope, env, expected_ty, record),
+            .e_record => |record| self.lowerRecordExpr(module_idx, type_scope, env, target_ty, record),
             .e_tuple => |tuple| try self.program.store.addExpr(.{
-                .ty = expected_ty,
+                .ty = target_ty,
                 .data = .{ .tuple = try self.lowerTupleExprsWithExpectedType(
                     module_idx,
                     type_scope,
                     env,
-                    expected_ty,
+                    target_ty,
                     tuple.elems,
                 ) },
             }),
             .e_list => |list| try self.program.store.addExpr(.{
-                .ty = expected_ty,
+                .ty = target_ty,
                 .data = .{ .list = try self.lowerListExprsWithExpectedType(
                     module_idx,
                     type_scope,
                     env,
-                    expected_ty,
+                    target_ty,
                     list.elems,
                 ) },
             }),
             .e_if => |if_expr| try self.program.store.addExpr(.{
-                .ty = expected_ty,
+                .ty = target_ty,
                 .data = .{ .if_ = try self.lowerIfExprWithExpectedType(
                     module_idx,
                     type_scope,
                     env,
-                    expected_ty,
+                    target_ty,
                     expected_var,
                     if_expr,
                 ) },
             }),
             .e_match => |match_expr| try self.program.store.addExpr(.{
-                .ty = expected_ty,
+                .ty = target_ty,
                 .data = try self.lowerMatchExprData(
                     module_idx,
                     type_scope,
                     env,
-                    expected_ty,
+                    target_ty,
                     expected_var,
                     match_expr,
                 ),
             }),
-            .e_block => |block| try self.program.store.addExpr(.{
-                .ty = expected_ty,
-                .data = .{ .block = try self.lowerBlockExprWithExpectedType(
+            .e_block => |block| blk: {
+                const lowered_block = try self.lowerBlockExprWithExpectedType(
                     module_idx,
                     type_scope,
                     env,
                     block.stmts,
                     block.final_expr,
-                    expected_ty,
+                    target_ty,
                     expected_var,
-                ) },
-            }),
+                );
+                break :blk try self.program.store.addExpr(.{
+                    .ty = self.program.store.getExpr(lowered_block.final_expr).ty,
+                    .data = .{ .block = lowered_block },
+                });
+            },
             .e_tag => |tag| try self.program.store.addExpr(.{
-                .ty = expected_ty,
+                .ty = target_ty,
                 .data = try self.lowerTagExprWithExpectedType(
                     module_idx,
                     type_scope,
                     env,
-                    expected_ty,
+                    target_ty,
                     tag.name,
                     tag.args,
                 ),
             }),
             .e_zero_argument_tag => |tag| try self.program.store.addExpr(.{
-                .ty = expected_ty,
+                .ty = target_ty,
                 .data = try self.lowerTagExprWithExpectedType(
                     module_idx,
                     type_scope,
                     env,
-                    expected_ty,
+                    target_ty,
                     tag.name,
                     .{ .span = .{ .start = 0, .len = 0 } },
                 ),
             }),
             .e_lookup_local => |lookup| blk: {
-                if (self.ctx.types.getType(expected_ty) != .func) {
+                if (self.ctx.types.getType(target_ty) != .func) {
                     break :blk try self.lowerExpr(module_idx, type_scope, env, expr_idx);
                 }
-                const symbol = try self.lookupOrSpecializeLocal(module_idx, type_scope, env, lookup.pattern_idx, expected_ty, expected_var);
+                const symbol = try self.lookupOrSpecializeLocal(module_idx, type_scope, env, lookup.pattern_idx, target_ty, expected_var);
                 break :blk try self.program.store.addExpr(.{
-                    .ty = self.lookupKnownSymbolType(symbol) orelse expected_ty,
+                    .ty = self.lookupKnownSymbolType(symbol) orelse target_ty,
                     .data = .{ .var_ = symbol },
                 });
             },
             .e_lookup_external => |lookup| blk: {
-                if (self.ctx.types.getType(expected_ty) != .func) {
+                if (self.ctx.types.getType(target_ty) != .func) {
                     break :blk try self.lowerExpr(module_idx, type_scope, env, expr_idx);
                 }
-                const symbol = try self.lookupOrSpecializeExternal(module_idx, lookup, expected_ty, expected_var);
+                const symbol = try self.lookupOrSpecializeExternal(module_idx, lookup, target_ty, expected_var);
                 break :blk try self.program.store.addExpr(.{
-                    .ty = self.lookupKnownSymbolType(symbol) orelse expected_ty,
+                    .ty = self.lookupKnownSymbolType(symbol) orelse target_ty,
                     .data = .{ .var_ = symbol },
                 });
             },
@@ -4290,7 +4301,7 @@ pub const Lowerer = struct {
                     break :blk try self.lowerExpr(module_idx, type_scope, env, expr_idx);
                 }
                 break :blk try self.program.store.addExpr(.{
-                    .ty = expected_ty,
+                    .ty = target_ty,
                     .data = .{ .call = try self.lowerRecordedMethodCall(
                         module_idx,
                         type_scope,
@@ -4302,7 +4313,7 @@ pub const Lowerer = struct {
                 });
             },
             .e_type_var_dispatch => |dispatch| try self.program.store.addExpr(.{
-                .ty = expected_ty,
+                .ty = target_ty,
                 .data = .{ .call = try self.lowerRecordedMethodCall(
                     module_idx,
                     type_scope,
