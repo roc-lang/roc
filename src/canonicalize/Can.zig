@@ -547,6 +547,185 @@ const Self = @This();
 /// First pass helper: Process a type declaration and introduce it into scope
 /// If parent_name is provided, creates a qualified name (e.g., "Foo.Bar")
 /// relative_parent_name is the parent path without the module prefix (e.g., null for top-level, "Num" for U8 inside Num)
+fn ensureTypeDeclPlaceholderOnly(
+    self: *Self,
+    type_decl: std.meta.fieldInfo(AST.Statement, .type_decl).type,
+    parent_name: ?Ident.Idx,
+    relative_parent_name: ?Ident.Idx,
+) std.mem.Allocator.Error!?struct {
+    qualified_name_idx: Ident.Idx,
+    relative_name_idx: Ident.Idx,
+} {
+    const region = self.parse_ir.tokenizedRegionToRegion(type_decl.region);
+
+    const ast_header_node = self.parse_ir.store.nodes.get(@enumFromInt(@intFromEnum(type_decl.header)));
+    if (ast_header_node.tag == .malformed) {
+        if (parent_name == null) return null;
+    }
+
+    const ast_header = self.parse_ir.store.getTypeHeader(type_decl.header) catch null;
+    if (ast_header) |hdr| {
+        if (self.parse_ir.tokens.resolveIdentifier(hdr.name)) |name_ident| {
+            const check_qualified_name = if (parent_name) |parent_idx| blk: {
+                const parent_text = self.env.getIdent(parent_idx);
+                const type_text = self.env.getIdent(name_ident);
+                break :blk try self.env.insertQualifiedIdent(parent_text, type_text);
+            } else name_ident;
+
+            if (self.scopeLookupTypeDecl(check_qualified_name)) |existing_stmt_idx| {
+                const existing_stmt = self.env.store.getStatement(existing_stmt_idx);
+                const existing_header_idx = switch (existing_stmt) {
+                    .s_alias_decl => |alias| if (alias.anno == .placeholder) alias.header else null,
+                    .s_nominal_decl => |nominal| if (nominal.anno == .placeholder) nominal.header else null,
+                    else => null,
+                };
+
+                if (existing_header_idx) |header_idx| {
+                    const type_header = self.env.store.getTypeHeader(header_idx);
+                    const relative_name_idx: Ident.Idx = if (relative_parent_name) |rel_parent_idx| blk: {
+                        const rel_parent_text = self.env.getIdent(rel_parent_idx);
+                        const type_relative = self.env.getIdent(type_header.relative_name);
+                        break :blk try self.env.insertQualifiedIdent(rel_parent_text, type_relative);
+                    } else type_header.relative_name;
+
+                    return .{
+                        .qualified_name_idx = check_qualified_name,
+                        .relative_name_idx = relative_name_idx,
+                    };
+                }
+            }
+        }
+    }
+
+    const header_idx = try self.canonicalizeTypeHeader(type_decl.header, type_decl.kind);
+    const node = self.env.store.nodes.get(@enumFromInt(@intFromEnum(header_idx)));
+    if (node.tag == .malformed) return null;
+
+    const type_header = self.env.store.getTypeHeader(header_idx);
+    const qualified_name_idx = if (parent_name) |parent_idx| blk: {
+        const parent_text = self.env.getIdent(parent_idx);
+        const type_text = self.env.getIdent(type_header.name);
+        break :blk try self.env.insertQualifiedIdent(parent_text, type_text);
+    } else type_header.name;
+
+    const relative_name_idx: Ident.Idx = if (relative_parent_name) |rel_parent_idx| blk: {
+        const rel_parent_text = self.env.getIdent(rel_parent_idx);
+        const type_relative = self.env.getIdent(type_header.relative_name);
+        break :blk try self.env.insertQualifiedIdent(rel_parent_text, type_relative);
+    } else type_header.relative_name;
+
+    const final_header_idx = if (parent_name != null and !qualified_name_idx.eql(type_header.name)) blk: {
+        const qualified_header = CIR.TypeHeader{
+            .name = qualified_name_idx,
+            .relative_name = relative_name_idx,
+            .args = type_header.args,
+        };
+        break :blk try self.env.addTypeHeader(qualified_header, region);
+    } else header_idx;
+
+    if (self.scopeLookupTypeDecl(qualified_name_idx)) |existing_stmt_idx| {
+        const existing_stmt = self.env.store.getStatement(existing_stmt_idx);
+        const is_placeholder = switch (existing_stmt) {
+            .s_alias_decl => |alias| alias.anno == .placeholder,
+            .s_nominal_decl => |nominal| nominal.anno == .placeholder,
+            else => false,
+        };
+
+        if (!is_placeholder) {
+            const original_region = self.env.store.getStatementRegion(existing_stmt_idx);
+            try self.env.pushDiagnostic(Diagnostic{
+                .type_redeclared = .{
+                    .original_region = original_region,
+                    .redeclared_region = region,
+                    .name = qualified_name_idx,
+                },
+            });
+
+            const new_stmt = switch (type_decl.kind) {
+                .alias => Statement{
+                    .s_alias_decl = .{
+                        .header = final_header_idx,
+                        .anno = .placeholder,
+                    },
+                },
+                .nominal, .@"opaque" => Statement{
+                    .s_nominal_decl = .{
+                        .header = final_header_idx,
+                        .anno = .placeholder,
+                        .is_opaque = type_decl.kind == .@"opaque",
+                    },
+                },
+            };
+
+            _ = try self.env.addStatement(new_stmt, region);
+        }
+    } else {
+        const placeholder_cir_type_decl = switch (type_decl.kind) {
+            .alias => Statement{
+                .s_alias_decl = .{
+                    .header = final_header_idx,
+                    .anno = .placeholder,
+                },
+            },
+            .nominal, .@"opaque" => Statement{
+                .s_nominal_decl = .{
+                    .header = final_header_idx,
+                    .anno = .placeholder,
+                    .is_opaque = type_decl.kind == .@"opaque",
+                },
+            },
+        };
+
+        const stmt_idx = try self.env.addStatement(placeholder_cir_type_decl, region);
+        try self.introduceType(qualified_name_idx, stmt_idx, region);
+    }
+
+    return .{
+        .qualified_name_idx = qualified_name_idx,
+        .relative_name_idx = relative_name_idx,
+    };
+}
+
+fn predeclareAssociatedTypePlaceholders(
+    self: *Self,
+    parent_name: Ident.Idx,
+    relative_parent_name: ?Ident.Idx,
+    statements: AST.Statement.Span,
+) std.mem.Allocator.Error!void {
+    for (self.parse_ir.store.statementSlice(statements)) |stmt_idx| {
+        const stmt = self.parse_ir.store.getStatement(stmt_idx);
+        if (stmt != .type_decl) continue;
+
+        const type_decl = stmt.type_decl;
+        _ = try self.ensureTypeDeclPlaceholderOnly(type_decl, parent_name, relative_parent_name) orelse continue;
+    }
+}
+
+fn introduceImmediateAssociatedTypeAliases(
+    self: *Self,
+    parent_name: Ident.Idx,
+    relative_parent_name: ?Ident.Idx,
+    statements: AST.Statement.Span,
+) std.mem.Allocator.Error!void {
+    const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+
+    for (self.parse_ir.store.statementSlice(statements)) |stmt_idx| {
+        const stmt = self.parse_ir.store.getStatement(stmt_idx);
+        if (stmt != .type_decl) continue;
+
+        const type_decl = stmt.type_decl;
+        const ast_header = self.parse_ir.store.getTypeHeader(type_decl.header) catch continue;
+        const name_ident = self.parse_ir.tokens.resolveIdentifier(ast_header.name) orelse continue;
+        const placeholder_info = try self.ensureTypeDeclPlaceholderOnly(type_decl, parent_name, relative_parent_name) orelse continue;
+        const type_decl_stmt_idx = self.scopeLookupTypeDecl(placeholder_info.qualified_name_idx) orelse continue;
+
+        try current_scope.introduceTypeAlias(self.env.gpa, name_ident, type_decl_stmt_idx);
+        if (!placeholder_info.relative_name_idx.eql(name_ident)) {
+            try current_scope.introduceTypeAlias(self.env.gpa, placeholder_info.relative_name_idx, type_decl_stmt_idx);
+        }
+    }
+}
+
 fn processTypeDeclFirstPass(
     self: *Self,
     type_decl: std.meta.fieldInfo(AST.Statement, .type_decl).type,
@@ -739,6 +918,13 @@ fn processTypeDeclFirstPass(
 
     // Process type parameters and annotation in a separate scope
     const anno_idx = blk: {
+        if (type_decl.associated) |assoc| {
+            try self.predeclareAssociatedTypePlaceholders(qualified_name_idx, relative_name_idx, assoc.statements);
+            try self.scopeEnter(self.env.gpa, false);
+            defer self.scopeExit(self.env.gpa) catch unreachable;
+            try self.introduceImmediateAssociatedTypeAliases(qualified_name_idx, relative_name_idx, assoc.statements);
+        }
+
         // Enter a new scope for type parameters
         const type_var_scope = self.scopeEnterTypeVar();
         defer self.scopeExitTypeVar(type_var_scope);
@@ -839,6 +1025,13 @@ fn processTypeDeclFirstPassWithExisting(
 
     // Process type parameters and annotation in a separate scope
     const anno_idx = blk: {
+        if (type_decl.associated) |assoc| {
+            try self.predeclareAssociatedTypePlaceholders(qualified_name_idx, relative_name_idx, assoc.statements);
+            try self.scopeEnter(self.env.gpa, false);
+            defer self.scopeExit(self.env.gpa) catch unreachable;
+            try self.introduceImmediateAssociatedTypeAliases(qualified_name_idx, relative_name_idx, assoc.statements);
+        }
+
         // Enter a new scope for type parameters
         const type_var_scope = self.scopeEnterTypeVar();
         defer self.scopeExitTypeVar(type_var_scope);

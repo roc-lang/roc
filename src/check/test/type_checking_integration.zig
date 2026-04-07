@@ -4211,6 +4211,21 @@ test "check type - issue8934 recursive nominal type unification" {
     try checkTypesModule(source, .{ .pass = .{ .def = "flatten" } }, "List(Node(a)) -> List(a)");
 }
 
+test "check type - nested same-module mutually recursive nominal types" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Tree := [Leaf, Branch(Tree.Forest)].{
+        \\    Forest := [Empty, More(Tree, Forest)]
+        \\}
+        \\
+        \\mk : {} -> Tree
+        \\mk = |_| Tree.Branch(Tree.Forest.More(Tree.Leaf, Tree.Forest.Empty))
+    ;
+
+    try checkTypesModule(source, .{ .pass = .{ .def = "mk" } }, "{} -> Tree");
+}
+
 // early return //
 
 test "check type - early return - pass" {
