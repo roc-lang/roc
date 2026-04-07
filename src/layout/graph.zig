@@ -1,4 +1,5 @@
-//! Temporary graph representation for ordinary-data layouts before canonical interning.
+//! Temporary graph representation for logical ordinary-data layouts before the
+//! shared canonical layout commit.
 
 const std = @import("std");
 const layout = @import("./layout.zig");
@@ -48,6 +49,7 @@ pub const RefSpan = extern struct {
 /// Temporary node shape used before interning into the canonical layout store.
 pub const Node = union(enum) {
     pending: void,
+    nominal: Ref,
     box: Ref,
     list: Ref,
     closure: Ref,

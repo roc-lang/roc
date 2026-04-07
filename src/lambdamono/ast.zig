@@ -152,6 +152,10 @@ pub const Stmt = union(enum) {
         iterable: ExprId,
         body: ExprId,
     },
+    while_: struct {
+        cond: ExprId,
+        body: ExprId,
+    },
 };
 
 pub const FnDef = struct {
@@ -172,6 +176,7 @@ pub const DefVal = union(enum) {
 
 pub const Def = struct {
     bind: Symbol,
+    result_ty: ?TypeId = null,
     value: DefVal,
 };
 

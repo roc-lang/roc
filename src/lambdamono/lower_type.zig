@@ -138,6 +138,7 @@ fn lowerTypeRec(
 
     const lowered: mono.Content = switch (types.getNode(id)) {
         .link => unreachable,
+        .nominal => |backing| .{ .nominal = try lowerTypeRec(types, mono_types, mono_cache, backing, symbols) },
         .for_a => debugPanic("lambdamono.lower_type.lowerType generalized type survived instantiation"),
         // Residual unbound solved vars are operationally erased in executable
         // lowering. They must not fabricate empty tag-union layouts.
@@ -257,8 +258,9 @@ fn lowerCaptures(
 }
 
 fn unlinkExecutable(types: *solved.Type.Store, ty: TypeVarId) TypeVarId {
-    const id = types.unlink(ty);
+    const id = types.unlinkPreservingNominal(ty);
     return switch (types.getNode(id)) {
+        .nominal => id,
         .content => |content| switch (content) {
             .func => |func| unlinkExecutable(types, func.lset),
             else => id,

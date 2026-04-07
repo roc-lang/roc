@@ -41,11 +41,16 @@ const Lowerer = struct {
     root_defs: std.ArrayList(ast.DefId),
     layouts: layout_mod.Store,
     layout_cache: lower_type.LayoutCache,
-    value_thunks: std.AutoHashMap(Symbol, Symbol),
+    value_thunks: std.AutoHashMap(Symbol, ValueThunk),
 
     const EnvEntry = struct {
         symbol: Symbol,
         var_: ast.Var,
+    };
+
+    const ValueThunk = struct {
+        proc: Symbol,
+        result_ty: lambdamono.Type.TypeId,
     };
 
     const LoweredBlock = struct {
@@ -87,7 +92,7 @@ const Lowerer = struct {
             .root_defs = .empty,
             .layouts = layout_mod.Store.init(allocator),
             .layout_cache = lower_type.LayoutCache.init(allocator),
-            .value_thunks = std.AutoHashMap(Symbol, Symbol).init(allocator),
+            .value_thunks = std.AutoHashMap(Symbol, ValueThunk).init(allocator),
         };
     }
 
@@ -130,7 +135,14 @@ const Lowerer = struct {
     fn registerValueThunks(self: *Lowerer) std.mem.Allocator.Error!void {
         for (self.input.store.defsSlice()) |def| {
             switch (def.value) {
-                .val, .run => try self.value_thunks.put(def.bind, def.bind),
+                .val => |expr_id| try self.value_thunks.put(def.bind, .{
+                    .proc = def.bind,
+                    .result_ty = def.result_ty orelse self.input.store.getExpr(expr_id).ty,
+                }),
+                .run => |run_def| try self.value_thunks.put(def.bind, .{
+                    .proc = def.bind,
+                    .result_ty = def.result_ty orelse self.input.store.getExpr(run_def.body).ty,
+                }),
                 .fn_ => {},
             }
         }
@@ -146,20 +158,27 @@ const Lowerer = struct {
                     .name = def.bind,
                     .args = args,
                     .body = try self.lowerBlock(env, fn_def.body),
+                    .ret_layout = try self.lowerResultLayout(self.input.store.getExpr(fn_def.body).ty),
                 };
             },
             .val => |expr_id| .{
                 .name = def.bind,
                 .args = try self.output.addVarSpan(&.{}),
                 .body = try self.lowerBlock(&.{}, expr_id),
+                .ret_layout = try self.lowerResultLayout(def.result_ty orelse self.input.store.getExpr(expr_id).ty),
             },
             .run => |run_def| .{
                 .name = def.bind,
                 .args = try self.output.addVarSpan(&.{}),
                 .body = try self.lowerBlock(&.{}, run_def.body),
+                .ret_layout = try self.lowerResultLayout(def.result_ty orelse self.input.store.getExpr(run_def.body).ty),
                 .entry_ty = run_def.entry_ty,
             },
         };
+    }
+
+    fn lowerResultLayout(self: *Lowerer, ty: lambdamono.Type.TypeId) std.mem.Allocator.Error!layout_mod.LayoutId {
+        return try lower_type.lowerType(&self.input.types, &self.layouts, &self.layout_cache, ty);
     }
 
     fn lowerTypedSymbol(self: *Lowerer, value: lambdamono.Ast.TypedSymbol) std.mem.Allocator.Error!ast.Var {
@@ -207,12 +226,12 @@ const Lowerer = struct {
             .var_ => |symbol| {
                 if (self.lookupEnv(env, symbol)) |value| {
                     block.setTerm(.{ .value = value });
-                } else if (self.value_thunks.contains(symbol)) {
-                    const temp = try self.freshVar(expr.ty, "thunk_result");
+                } else if (self.value_thunks.get(symbol)) |value_thunk| {
+                    const temp = try self.freshVar(value_thunk.result_ty, "thunk_result");
                     try block.stmts.append(self.allocator, .{ .let_ = .{
                         .bind = temp,
                         .expr = try self.output.addExpr(.{ .call_direct = .{
-                            .proc = symbol,
+                            .proc = value_thunk.proc,
                             .args = try self.output.addVarSpan(&.{}),
                         } }),
                     } });
@@ -255,7 +274,10 @@ const Lowerer = struct {
                 const payload: ?ast.Var = blk: {
                     const args = self.output.sliceVarSpan(lowered_args.?);
                     if (args.len == 0) break :blk null;
-                    const payload_var = try self.freshStructVar(args, "tag_payload");
+                    const payload_var = try self.freshVarWithLayout(
+                        try self.tagPayloadLayout(expr.ty, tag.name),
+                        "tag_payload",
+                    );
                     try block.stmts.append(self.allocator, .{ .let_ = .{
                         .bind = payload_var,
                         .expr = try self.output.addExpr(.{ .make_struct = lowered_args.? }),
@@ -429,16 +451,6 @@ const Lowerer = struct {
         };
     }
 
-    fn freshStructVar(self: *Lowerer, fields: []const ast.Var, comptime label: []const u8) std.mem.Allocator.Error!ast.Var {
-        const layouts = try self.allocator.alloc(layout_mod.LayoutId, fields.len);
-        defer self.allocator.free(layouts);
-        for (fields, 0..) |field, i| layouts[i] = field.layout;
-        return .{
-            .layout = try self.layouts.addContent(.{ .struct_ = try self.layouts.addLayoutSpan(layouts) }),
-            .symbol = try self.freshSymbol(label),
-        };
-    }
-
     fn freshSymbol(self: *Lowerer, comptime _: []const u8) std.mem.Allocator.Error!Symbol {
         return try self.input.symbols.add(base.Ident.Idx.NONE, .synthetic);
     }
@@ -552,6 +564,33 @@ const Lowerer = struct {
                 debugPanic("ir.lower.tagId missing tag");
             },
             else => debugPanic("ir.lower.tagId expected tag union type"),
+        };
+    }
+
+    fn tagPayloadLayout(
+        self: *Lowerer,
+        union_ty: lambdamono.Type.TypeId,
+        name: base.Ident.Idx,
+    ) std.mem.Allocator.Error!layout_mod.LayoutId {
+        return switch (self.input.types.getType(union_ty)) {
+            .tag_union => |tag_union| blk: {
+                for (self.input.types.sliceTags(tag_union.tags)) |tag| {
+                    if (tag.name != name) continue;
+
+                    const args = self.input.types.sliceTypeSpan(tag.args);
+                    const arg_layouts = try self.allocator.alloc(layout_mod.LayoutId, args.len);
+                    defer self.allocator.free(arg_layouts);
+                    for (args, 0..) |arg_ty, i| {
+                        arg_layouts[i] = try lower_type.lowerType(&self.input.types, &self.layouts, &self.layout_cache, arg_ty);
+                    }
+
+                    break :blk try self.layouts.addContent(.{
+                        .struct_ = try self.layouts.addLayoutSpan(arg_layouts),
+                    });
+                }
+                debugPanic("ir.lower.tagPayloadLayout missing tag");
+            },
+            else => debugPanic("ir.lower.tagPayloadLayout expected tag union type"),
         };
     }
 
@@ -777,6 +816,10 @@ const Lowerer = struct {
                 try self.lowerForStmt(block, env.*, for_stmt.patt, for_stmt.iterable, for_stmt.body);
                 return true;
             },
+            .while_ => |while_stmt| {
+                try self.lowerWhileStmt(block, env.*, while_stmt.cond, while_stmt.body);
+                return true;
+            },
         }
     }
 
@@ -821,6 +864,19 @@ const Lowerer = struct {
             .elem = elem,
             .iterable = iterable.?,
             .body = body_block,
+        } });
+    }
+
+    fn lowerWhileStmt(
+        self: *Lowerer,
+        block: *LoweredBlock,
+        env: []const EnvEntry,
+        cond_expr: lambdamono.Ast.ExprId,
+        body_expr: lambdamono.Ast.ExprId,
+    ) std.mem.Allocator.Error!void {
+        try block.stmts.append(self.allocator, .{ .while_ = .{
+            .cond = try self.lowerBlock(env, cond_expr),
+            .body = try self.lowerBlock(env, body_expr),
         } });
     }
 

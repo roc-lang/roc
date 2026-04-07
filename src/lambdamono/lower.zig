@@ -44,10 +44,24 @@ const Lowerer = struct {
     queue: specializations.Queue,
     fenv: []specializations.FEnvEntry,
     pending_values: std.ArrayList(ast.Def),
+    inspect_defs: std.ArrayList(ast.Def),
+    inspect_helpers: std.AutoHashMap(InspectKey, Symbol),
+    top_level_values: std.AutoHashMap(Symbol, TopLevelValueSource),
+    top_level_value_types: std.AutoHashMap(Symbol, type_mod.TypeId),
+
+    const InspectKey = struct {
+        value_ty: type_mod.TypeId,
+        result_ty: type_mod.TypeId,
+    };
 
     const EnvEntry = struct {
         symbol: Symbol,
         ty: TypeVarId,
+    };
+
+    const TopLevelValueSource = union(enum) {
+        val: solved.Ast.ExprId,
+        run: solved.Ast.RunDef,
     };
 
     const InstScope = struct {
@@ -76,10 +90,18 @@ const Lowerer = struct {
             .queue = specializations.Queue.init(allocator),
             .fenv = &.{},
             .pending_values = .empty,
+            .inspect_defs = .empty,
+            .inspect_helpers = std.AutoHashMap(InspectKey, Symbol).init(allocator),
+            .top_level_values = std.AutoHashMap(Symbol, TopLevelValueSource).init(allocator),
+            .top_level_value_types = std.AutoHashMap(Symbol, type_mod.TypeId).init(allocator),
         };
     }
 
     fn deinit(self: *Lowerer) void {
+        self.top_level_values.deinit();
+        self.top_level_value_types.deinit();
+        self.inspect_helpers.deinit();
+        self.inspect_defs.deinit(self.allocator);
         self.pending_values.deinit(self.allocator);
         self.queue.deinit();
         if (self.fenv.len != 0) self.allocator.free(self.fenv);
@@ -109,21 +131,12 @@ const Lowerer = struct {
 
     fn lowerProgram(self: *Lowerer) std.mem.Allocator.Error!void {
         self.fenv = try specializations.buildFEnv(self.allocator, &self.input);
+        try self.indexTopLevelValues();
 
         for (self.input.store.defsSlice()) |def| {
             switch (def.value) {
                 .fn_ => {},
-                .val => |expr_id| try self.pending_values.append(self.allocator, .{
-                    .bind = def.bind.symbol,
-                    .value = .{ .val = try self.specializeStandaloneExpr(expr_id) },
-                }),
-                .run => |run_def| try self.pending_values.append(self.allocator, .{
-                    .bind = def.bind.symbol,
-                    .value = .{ .run = .{
-                        .body = try self.specializeStandaloneExpr(run_def.body),
-                        .entry_ty = run_def.entry_ty,
-                    } },
-                }),
+                .val, .run => _ = try self.ensureTopLevelValueLowered(def.bind.symbol),
             }
         }
 
@@ -131,10 +144,19 @@ const Lowerer = struct {
             pending.specialized = try self.specializeFn(pending.*);
         }
 
-        const fn_defs = try self.queue.solvedDefs(self.allocator);
+        const fn_defs = try self.queue.solvedDefs(
+            self.allocator,
+            &self.input.types,
+            &self.types,
+            &self.input.symbols,
+        );
         defer self.allocator.free(fn_defs);
 
         for (fn_defs) |def| {
+            const def_id = try self.output.addDef(def);
+            try self.root_defs.append(self.allocator, def_id);
+        }
+        for (self.inspect_defs.items) |def| {
             const def_id = try self.output.addDef(def);
             try self.root_defs.append(self.allocator, def_id);
         }
@@ -144,12 +166,80 @@ const Lowerer = struct {
         }
     }
 
+    fn indexTopLevelValues(self: *Lowerer) std.mem.Allocator.Error!void {
+        for (self.input.store.defsSlice()) |def| {
+            switch (def.value) {
+                .val => |expr_id| try self.top_level_values.put(def.bind.symbol, .{ .val = expr_id }),
+                .run => |run_def| try self.top_level_values.put(def.bind.symbol, .{ .run = run_def }),
+                .fn_ => {},
+            }
+        }
+    }
+
+    fn ensureTopLevelValueLowered(self: *Lowerer, symbol: Symbol) std.mem.Allocator.Error!type_mod.TypeId {
+        if (self.top_level_value_types.get(symbol)) |existing| return existing;
+
+        const source = self.top_level_values.get(symbol) orelse
+            debugPanic("lambdamono.lower.ensureTopLevelValueLowered missing top-level value");
+
+        const expr_id: solved.Ast.ExprId = switch (source) {
+            .val => |value_expr| value_expr,
+            .run => |run_def| run_def.body,
+        };
+
+        const specialized = try self.specializeStandaloneValue(.{ .symbol = symbol, .ty = self.input.store.getExpr(expr_id).ty }, expr_id);
+        const result_ty = self.output.getExpr(specialized.expr).ty;
+        try self.top_level_value_types.put(symbol, result_ty);
+
+        switch (source) {
+            .val => {
+                try self.pending_values.append(self.allocator, .{
+                    .bind = specialized.symbol,
+                    .result_ty = result_ty,
+                    .value = .{ .val = specialized.expr },
+                });
+            },
+            .run => |run_def| {
+                try self.pending_values.append(self.allocator, .{
+                    .bind = specialized.symbol,
+                    .result_ty = result_ty,
+                    .value = .{ .run = .{
+                        .body = specialized.expr,
+                        .entry_ty = run_def.entry_ty,
+                    } },
+                });
+            },
+        }
+
+        return result_ty;
+    }
+
     fn specializeStandaloneExpr(self: *Lowerer, expr_id: solved.Ast.ExprId) std.mem.Allocator.Error!ast.ExprId {
         var inst = InstScope.init(self.allocator);
         defer inst.deinit();
         var mono_cache = lower_type.MonoCache.init(self.allocator);
         defer mono_cache.deinit();
         return try self.specializeExpr(&inst, &mono_cache, &.{}, expr_id);
+    }
+
+    const SpecializedStandaloneValue = struct {
+        symbol: Symbol,
+        expr: ast.ExprId,
+    };
+
+    fn specializeStandaloneValue(
+        self: *Lowerer,
+        bind: solved.Ast.TypedSymbol,
+        expr_id: solved.Ast.ExprId,
+    ) std.mem.Allocator.Error!SpecializedStandaloneValue {
+        var inst = InstScope.init(self.allocator);
+        defer inst.deinit();
+        var mono_cache = lower_type.MonoCache.init(self.allocator);
+        defer mono_cache.deinit();
+        return .{
+            .symbol = bind.symbol,
+            .expr = try self.specializeExpr(&inst, &mono_cache, &.{}, expr_id),
+        };
     }
 
     fn specializeFn(self: *Lowerer, pending: specializations.Pending) std.mem.Allocator.Error!ast.FnDef {
@@ -351,7 +441,16 @@ const Lowerer = struct {
     ) std.mem.Allocator.Error!ast.ExprId {
         const expr = self.input.store.getExpr(expr_id);
         const ty = try self.cloneInstType(inst, expr.ty);
-        const lowered_ty = try lower_type.lowerType(&self.input.types, &self.types, mono_cache, ty, &self.input.symbols);
+        const lowered_ty = switch (expr.data) {
+            .var_ => |symbol| if (self.lookupEnv(venv, symbol) == null)
+                if (self.top_level_values.contains(symbol))
+                    try self.ensureTopLevelValueLowered(symbol)
+                else
+                    try lower_type.lowerType(&self.input.types, &self.types, mono_cache, ty, &self.input.symbols)
+            else
+                try lower_type.lowerType(&self.input.types, &self.types, mono_cache, ty, &self.input.symbols),
+            else => try lower_type.lowerType(&self.input.types, &self.types, mono_cache, ty, &self.input.symbols),
+        };
 
         if (expr.data == .inspect) {
             return try self.specializeInspectExpr(inst, mono_cache, venv, expr.data.inspect, lowered_ty);
@@ -437,6 +536,92 @@ const Lowerer = struct {
     ) std.mem.Allocator.Error!ast.ExprId {
         const value_expr = try self.specializeExpr(inst, mono_cache, venv, value_expr_id);
         return try self.specializeInspectValueExpr(value_expr, result_ty);
+    }
+
+    fn ensureInspectHelper(
+        self: *Lowerer,
+        value_ty: type_mod.TypeId,
+        result_ty: type_mod.TypeId,
+    ) std.mem.Allocator.Error!Symbol {
+        const key: InspectKey = .{
+            .value_ty = value_ty,
+            .result_ty = result_ty,
+        };
+        if (self.inspect_helpers.get(key)) |symbol| return symbol;
+
+        const symbol = try self.input.symbols.add(base.Ident.Idx.NONE, .synthetic);
+        try self.inspect_helpers.put(key, symbol);
+
+        const arg_symbol = try self.input.symbols.add(base.Ident.Idx.NONE, .synthetic);
+        const arg_expr = try self.makeVarExpr(value_ty, arg_symbol);
+        const body = try self.buildInlineInspectValueExpr(arg_expr, result_ty);
+
+        try self.inspect_defs.append(self.allocator, .{
+            .bind = symbol,
+            .result_ty = null,
+            .value = .{ .fn_ = .{
+                .args = try self.output.addTypedSymbolSpan(&.{.{
+                    .ty = value_ty,
+                    .symbol = arg_symbol,
+                }}),
+                .body = body,
+            } },
+        });
+
+        return symbol;
+    }
+
+    fn makeInspectHelperCall(
+        self: *Lowerer,
+        value_expr: ast.ExprId,
+        result_ty: type_mod.TypeId,
+    ) std.mem.Allocator.Error!ast.ExprId {
+        const value_ty = self.output.getExpr(value_expr).ty;
+        const helper = try self.ensureInspectHelper(value_ty, result_ty);
+        return try self.output.addExpr(.{
+            .ty = result_ty,
+            .data = .{ .call = .{
+                .proc = helper,
+                .args = try self.output.addExprSpan(&.{value_expr}),
+            } },
+        });
+    }
+
+    fn buildInlineInspectValueExpr(
+        self: *Lowerer,
+        value_expr: ast.ExprId,
+        result_ty: type_mod.TypeId,
+    ) std.mem.Allocator.Error!ast.ExprId {
+        const value_ty = self.output.getExpr(value_expr).ty;
+        return switch (self.types.getType(value_ty)) {
+            .primitive => |prim| switch (prim) {
+                .str => self.makeLowLevelExpr(result_ty, .str_inspect, &.{value_expr}),
+                .bool => self.makeBoolInspectExpr(value_expr, result_ty),
+                .u8,
+                .i8,
+                .u16,
+                .i16,
+                .u32,
+                .i32,
+                .u64,
+                .i64,
+                .u128,
+                .i128,
+                .f32,
+                .f64,
+                .dec,
+                => self.makeLowLevelExpr(result_ty, .num_to_str, &.{value_expr}),
+                .erased => debugPanic("lambdamono.inspect invariant violated: erased value type"),
+            },
+            .list => |elem_ty| self.makeListInspectExpr(elem_ty, value_expr, result_ty),
+            .box => |elem_ty| blk: {
+                const unboxed_expr = try self.makeLowLevelExpr(elem_ty, .box_unbox, &.{value_expr});
+                break :blk try self.specializeInspectValueExpr(unboxed_expr, result_ty);
+            },
+            .tuple => |elems| self.makeTupleInspectExpr(value_expr, elems, result_ty),
+            .record => |record| self.makeRecordInspectExpr(value_expr, record.fields, result_ty),
+            .tag_union => |tag_union| self.makeTagUnionInspectExpr(value_expr, tag_union.tags, result_ty),
+        };
     }
 
     fn retypeDivergingExpr(
@@ -817,11 +1002,12 @@ const Lowerer = struct {
                 => self.makeLowLevelExpr(result_ty, .num_to_str, &.{value_expr}),
                 .erased => debugPanic("lambdamono.inspect invariant violated: erased value type"),
             },
-            .list => |elem_ty| self.makeListInspectExpr(elem_ty, value_expr, result_ty),
-            .box => debugPanic("lambdamono.inspect TODO: Box"),
-            .tuple => |elems| self.makeTupleInspectExpr(value_expr, elems, result_ty),
-            .record => |record| self.makeRecordInspectExpr(value_expr, record.fields, result_ty),
-            .tag_union => |tag_union| self.makeTagUnionInspectExpr(value_expr, tag_union.tags, result_ty),
+            .list,
+            .box,
+            .tuple,
+            .record,
+            .tag_union,
+            => self.makeInspectHelperCall(value_expr, result_ty),
         };
     }
 
@@ -975,7 +1161,7 @@ const Lowerer = struct {
         }
 
         _ = lowered_ty;
-        if (self.lookupEnv(venv, symbol) != null or self.isTopLevelValue(symbol)) {
+        if (self.lookupEnv(venv, symbol) != null or self.top_level_values.contains(symbol)) {
             return .{ .var_ = symbol };
         }
         debugPanic("lambdamono.lower.specializeVarExpr unbound variable");
@@ -1369,6 +1555,13 @@ const Lowerer = struct {
                     .env = try self.cloneEnv(venv),
                 };
             },
+            .while_ => |while_stmt| .{
+                .stmt = try self.output.addStmt(.{ .while_ = .{
+                    .cond = try self.specializeExpr(inst, mono_cache, venv, while_stmt.cond),
+                    .body = try self.specializeExpr(inst, mono_cache, venv, while_stmt.body),
+                } }),
+                .env = try self.cloneEnv(venv),
+            },
         };
     }
 
@@ -1709,15 +1902,8 @@ const Lowerer = struct {
         return null;
     }
 
-    fn isTopLevelValue(self: *const Lowerer, symbol: Symbol) bool {
-        for (self.input.store.defsSlice()) |def| {
-            if (def.bind.symbol != symbol) continue;
-            return switch (def.value) {
-                .val, .run => true,
-                .fn_ => false,
-            };
-        }
-        return false;
+    fn lookupTopLevelValueType(self: *const Lowerer, symbol: Symbol) ?type_mod.TypeId {
+        return self.top_level_value_types.get(symbol);
     }
 
     fn cloneEnv(self: *Lowerer, env: []const EnvEntry) std.mem.Allocator.Error![]EnvEntry {

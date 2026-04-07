@@ -1,5 +1,23 @@
 # Eval Test Reset Plan
 
+## Recursive Layout Architecture
+
+Before any additional bring-up work, the compiler must follow this rule:
+
+- recursive nominal data stays logical through `monotype`, `monotype_lifted`, `lambdasolved`, `lambdamono`, and `ir`
+- recursive boxing is committed exactly once at the shared `IR -> LIR/layout` boundary
+- after that commit, every backend and interpreter consumes only final explicit `box` / `tag_union` / `struct` layout facts
+
+This means:
+
+- no early recursive boxing in `IR` type/layout lowering
+- no store-owned fallback resolver for recursive nominal boxing
+- no backend-local recursive-structure recovery or repair logic
+- no `RecursivePointer`-style backend-visible abstraction
+
+The only place allowed to decide “this recursive edge becomes a box” is the shared
+`LIR` layout commit path.
+
 ## Goal
 
 Reset eval testing so that backend comparison follows one and only one observation model:

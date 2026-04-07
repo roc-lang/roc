@@ -78,6 +78,19 @@ pub fn roc_builtins_str_to_utf8(out: *RocList, str_bytes: ?[*]u8, str_len: usize
 
 /// Wrapper: strConcatC(RocStr, RocStr, *RocOps) -> RocStr
 pub fn roc_builtins_str_concat(out: *RocStr, a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize, roc_ops: *RocOps) callconv(.c) void {
+    if (@import("builtin").mode == .Debug) {
+        std.debug.print(
+            "roc_builtins_str_concat a=(bytes=0x{x}, len={d}, cap=0x{x}) b=(bytes=0x{x}, len={d}, cap=0x{x})\n",
+            .{
+                if (a_bytes) |ptr| @intFromPtr(ptr) else 0,
+                a_len,
+                a_cap,
+                if (b_bytes) |ptr| @intFromPtr(ptr) else 0,
+                b_len,
+                b_cap,
+            },
+        );
+    }
     const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
     const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
     out.* = strConcatC(a, b, roc_ops);
@@ -277,6 +290,16 @@ pub fn roc_builtins_str_from_utf8_parts(
 
 /// Wrapper: escape special characters and wrap in double quotes for Str.inspect
 pub fn roc_builtins_str_escape_and_quote(out: *RocStr, str_bytes: ?[*]u8, str_len: usize, str_cap: usize, roc_ops: *RocOps) callconv(.c) void {
+    if (@import("builtin").mode == .Debug) {
+        std.debug.print(
+            "roc_builtins_str_escape_and_quote bytes=0x{x} len={d} cap=0x{x}\n",
+            .{
+                if (str_bytes) |ptr| @intFromPtr(ptr) else 0,
+                str_len,
+                str_cap,
+            },
+        );
+    }
     const s = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
     const slice = s.asSlice();
 

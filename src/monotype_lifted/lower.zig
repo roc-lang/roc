@@ -545,6 +545,10 @@ const Lowerer = struct {
                 .iterable = try self.lowerExprInto(lifted_defs, venv, for_stmt.iterable),
                 .body = try self.lowerExprInto(lifted_defs, venv, for_stmt.body),
             } },
+            .while_ => |while_stmt| .{ .while_ = .{
+                .cond = try self.lowerExprInto(lifted_defs, venv, while_stmt.cond),
+                .body = try self.lowerExprInto(lifted_defs, venv, while_stmt.body),
+            } },
         };
         return try self.output.addStmt(lowered_stmt);
     }
@@ -945,6 +949,10 @@ const Lowerer = struct {
                 try self.collectFreeVarsExpr(for_stmt.body, bound, free);
                 for (added.items) |symbol| _ = bound.remove(symbol);
             },
+            .while_ => |while_stmt| {
+                try self.collectFreeVarsExpr(while_stmt.cond, bound, free);
+                try self.collectFreeVarsExpr(while_stmt.body, bound, free);
+            },
         }
     }
 
@@ -1151,6 +1159,10 @@ const Lowerer = struct {
             .for_ => |for_stmt| {
                 try self.collectBindingTypesExpr(for_stmt.iterable);
                 try self.collectBindingTypesExpr(for_stmt.body);
+            },
+            .while_ => |while_stmt| {
+                try self.collectBindingTypesExpr(while_stmt.cond);
+                try self.collectBindingTypesExpr(while_stmt.body);
             },
         }
     }

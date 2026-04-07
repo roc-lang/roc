@@ -314,6 +314,10 @@ const Lowerer = struct {
                 .iterable = try self.instantiateExpr(for_stmt.iterable),
                 .body = try self.instantiateExpr(for_stmt.body),
             } },
+            .while_ => |while_stmt| .{ .while_ = .{
+                .cond = try self.instantiateExpr(while_stmt.cond),
+                .body = try self.instantiateExpr(while_stmt.body),
+            } },
         };
         return try self.output.addStmt(lowered);
     }
@@ -344,7 +348,7 @@ const Lowerer = struct {
         const placeholder = try self.types.freshUnbd();
         try cache.put(ty, placeholder);
 
-        const mono_ty = self.input.types.getType(ty);
+        const mono_ty = self.input.types.getTypePreservingNominal(ty);
         if (mono_ty == .placeholder) {
             return placeholder;
         }
@@ -352,25 +356,27 @@ const Lowerer = struct {
             return placeholder;
         }
 
-        const content = switch (mono_ty) {
-            .placeholder => unreachable,
+        const lowered = switch (mono_ty) {
+            .placeholder => type_mod.Node.unbd,
+            .link => unreachable,
+            .nominal => |backing| type_mod.Node{ .nominal = try self.instantiateTypeRec(backing, cache) },
             .func => |func| blk: {
-                break :blk type_mod.Content{ .func = .{
+                break :blk type_mod.Node{ .content = .{ .func = .{
                     .arg = try self.instantiateTypeRec(func.arg, cache),
                     .lset = try self.types.freshUnbd(),
                     .ret = try self.instantiateTypeRec(func.ret, cache),
-                } };
+                } } };
             },
-                .list => |elem| type_mod.Content{ .list = try self.instantiateTypeRec(elem, cache) },
-                .box => |elem| type_mod.Content{ .box = try self.instantiateTypeRec(elem, cache) },
-                .tuple => |tuple| blk: {
-                    const elems = self.input.types.sliceTypeSpan(tuple);
+            .list => |elem| type_mod.Node{ .content = .{ .list = try self.instantiateTypeRec(elem, cache) } },
+            .box => |elem| type_mod.Node{ .content = .{ .box = try self.instantiateTypeRec(elem, cache) } },
+            .tuple => |tuple| blk: {
+                const elems = self.input.types.sliceTypeSpan(tuple);
                 const out = try self.allocator.alloc(TypeVarId, elems.len);
                 defer self.allocator.free(out);
                 for (elems, 0..) |elem, i| {
                     out[i] = try self.instantiateTypeRec(elem, cache);
                 }
-                break :blk type_mod.Content{ .tuple = try self.types.addTypeVarSpan(out) };
+                break :blk type_mod.Node{ .content = .{ .tuple = try self.types.addTypeVarSpan(out) } };
             },
             .tag_union => |tag_union| blk: {
                 const tags = self.input.types.sliceTags(tag_union.tags);
@@ -388,9 +394,9 @@ const Lowerer = struct {
                         .args = try self.types.addTypeVarSpan(lowered_args),
                     };
                 }
-                break :blk type_mod.Content{ .tag_union = .{
+                break :blk type_mod.Node{ .content = .{ .tag_union = .{
                     .tags = try self.types.addTags(out),
-                } };
+                } } };
             },
             .record => |record| blk: {
                 const fields = self.input.types.sliceFields(record.fields);
@@ -402,14 +408,14 @@ const Lowerer = struct {
                         .ty = try self.instantiateTypeRec(field.ty, cache),
                     };
                 }
-                break :blk type_mod.Content{ .record = .{
+                break :blk type_mod.Node{ .content = .{ .record = .{
                     .fields = try self.types.addFields(out),
-                } };
+                } } };
             },
-            .primitive => |prim| type_mod.Content{ .primitive = prim },
+            .primitive => |prim| type_mod.Node{ .content = .{ .primitive = prim } },
         };
 
-        self.types.setNode(placeholder, .{ .content = content });
+        self.types.setNode(placeholder, lowered);
         return placeholder;
     }
 
@@ -775,6 +781,13 @@ const Lowerer = struct {
                 _ = try self.inferExpr(body_env, for_stmt.body);
                 break :blk try self.cloneEnv(venv);
             },
+            .while_ => |while_stmt| blk: {
+                const cond_ty = try self.inferExpr(venv, while_stmt.cond);
+                const bool_ty = try self.types.freshContent(.{ .primitive = .bool });
+                try self.unify(cond_ty, bool_ty);
+                _ = try self.inferExpr(venv, while_stmt.body);
+                break :blk try self.cloneEnv(venv);
+            },
         };
     }
 
@@ -843,7 +856,7 @@ const Lowerer = struct {
             .unbd,
             .for_a,
             => false,
-            .link => unreachable,
+            .link, .nominal => unreachable,
         };
     }
 
@@ -911,6 +924,10 @@ const Lowerer = struct {
                         .for_ => |for_stmt| {
                             try self.propagateExprErasure(for_stmt.iterable);
                             try self.propagateExprErasure(for_stmt.body);
+                        },
+                        .while_ => |while_stmt| {
+                            try self.propagateExprErasure(while_stmt.cond);
+                            try self.propagateExprErasure(while_stmt.body);
                         },
                     }
                 }
@@ -1102,6 +1119,10 @@ const Lowerer = struct {
                             try self.collectExprEdges(for_stmt.iterable, edges);
                             try self.collectExprEdges(for_stmt.body, edges);
                         },
+                        .while_ => |while_stmt| {
+                            try self.collectExprEdges(while_stmt.cond, edges);
+                            try self.collectExprEdges(while_stmt.body, edges);
+                        },
                     }
                 }
                 try self.collectExprEdges(block.final_expr, edges);
@@ -1163,7 +1184,7 @@ const Lowerer = struct {
         return switch (self.types.getNode(id)) {
             .unbd => false,
             .for_a => true,
-            .link => unreachable,
+            .link, .nominal => unreachable,
             .content => |content| switch (content) {
                 .primitive => false,
                 .func => |func| try self.isGeneralizedRec(func.arg, visited) or
@@ -1212,7 +1233,7 @@ const Lowerer = struct {
     }
 
     fn instantiateGeneralizedRec(self: *Lowerer, ty: TypeVarId, mapping: *std.AutoHashMap(TypeVarId, TypeVarId)) std.mem.Allocator.Error!TypeVarId {
-        const id = self.types.unlink(ty);
+        const id = self.types.unlinkPreservingNominal(ty);
         if (mapping.get(id)) |cached| return cached;
 
         switch (self.types.getNode(id)) {
@@ -1231,6 +1252,7 @@ const Lowerer = struct {
         const lowered = switch (self.types.getNode(id)) {
             .unbd, .for_a => unreachable,
             .link => unreachable,
+            .nominal => |backing| .{ .nominal = try self.instantiateGeneralizedRec(backing, mapping) },
             .content => |content| switch (content) {
                 .primitive => type_mod.Node{ .content = .{ .primitive = content.primitive } },
                 .func => type_mod.Node{ .content = .{ .func = .{
@@ -1345,7 +1367,7 @@ const Lowerer = struct {
 
         return switch (self.types.getNode(id)) {
             .unbd, .for_a => false,
-            .link => unreachable,
+            .link, .nominal => unreachable,
             .content => |content| switch (content) {
                 .primitive => false,
                 .func => |func| try self.occursRec(needle, func.arg, visited) or
@@ -1404,7 +1426,7 @@ const Lowerer = struct {
                 self.types.setNode(id, .for_a);
             },
             .for_a => {},
-            .link => unreachable,
+            .link, .nominal => unreachable,
             .content => |content| switch (content) {
                 .primitive => {},
                 .func => |func| {
@@ -1466,13 +1488,13 @@ const Lowerer = struct {
             .for_a => {
                 return debugPanic("lambdasolved.unify generalized type without instantiation");
             },
-            .link => unreachable,
+            .link, .nominal => unreachable,
             .content => |left_content| switch (self.types.getNode(r)) {
                 .unbd => type_mod.Node{ .content = left_content },
                 .for_a => {
                     return debugPanic("lambdasolved.unify generalized type without instantiation");
                 },
-                .link => unreachable,
+                .link, .nominal => unreachable,
                 .content => |right_content| try self.unifyContent(left_content, right_content, visited),
             },
         };

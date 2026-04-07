@@ -1,5 +1,8 @@
-//! Cor-style executable layouts, extended only where Roc needs explicit list
-//! and opaque-pointer layouts.
+//! Cor-style logical executable layouts, extended only where Roc needs explicit
+//! list and opaque-pointer layouts.
+//!
+//! Recursive nominal structure stays explicit here and is only committed to
+//! final boxed memory layout at the shared `IR -> LIR/layout` boundary.
 
 const std = @import("std");
 const base = @import("base");
@@ -38,6 +41,7 @@ pub const Prim = enum(u16) {
 
 pub const Content = union(enum) {
     primitive: Prim,
+    nominal: LayoutId,
     list: LayoutId,
     struct_: Span(LayoutId),
     union_: Span(LayoutId),
@@ -139,6 +143,7 @@ pub const Store = struct {
 
                 break :blk switch (left_content) {
                     .primitive => |prim| prim == right_content.primitive,
+                    .nominal => |backing| try self.equalIdsVisited(backing, right_content.nominal, visited),
                     .list => |elem| try self.equalIdsVisited(elem, right_content.list, visited),
                     .box => |elem| try self.equalIdsVisited(elem, right_content.box, visited),
                     .struct_ => |fields| blk2: {

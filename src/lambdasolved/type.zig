@@ -66,6 +66,7 @@ pub const Content = union(enum) {
 
 pub const Node = union(enum) {
     link: TypeVarId,
+    nominal: TypeVarId,
     unbd,
     for_a,
     content: Content,
@@ -132,6 +133,27 @@ pub const Store = struct {
         return switch (node) {
             .link => |next| blk: {
                 const terminal = self.unlink(next);
+                if (terminal != next) {
+                    self.setNode(id, .{ .link = terminal });
+                }
+                break :blk terminal;
+            },
+            .nominal => |next| blk: {
+                const terminal = self.unlink(next);
+                if (terminal != next) {
+                    self.setNode(id, .{ .nominal = terminal });
+                }
+                break :blk terminal;
+            },
+            else => id,
+        };
+    }
+
+    pub fn unlinkPreservingNominal(self: *Store, id: TypeVarId) TypeVarId {
+        const node = self.getNode(id);
+        return switch (node) {
+            .link => |next| blk: {
+                const terminal = self.unlinkPreservingNominal(next);
                 if (terminal != next) {
                     self.setNode(id, .{ .link = terminal });
                 }

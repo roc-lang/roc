@@ -5,7 +5,6 @@
 //!
 //! - Layout definitions for scalars, containers, structs (records/tuples), and closures
 //! - A layout store that manages layout instances and their dependencies
-//! - Work queue management for stack-safe layout computation
 //! - Canonical graph interning and RC-helper planning for ordinary data
 //!
 //! See the Layout Store for how these representations actually get created
@@ -60,7 +59,6 @@ pub const ScalarInfo = @import("layout.zig").ScalarInfo;
 
 // Re-export store functionality
 pub const Store = @import("store.zig").Store;
-pub const ModuleVarKey = @import("store.zig").ModuleVarKey;
 pub const Graph = @import("graph.zig").Graph;
 pub const GraphNode = @import("graph.zig").Node;
 pub const GraphNodeId = @import("graph.zig").NodeId;
@@ -80,10 +78,6 @@ pub const RcIncrefFn = @import("rc_helper.zig").RcIncrefFn;
 pub const RcDecrefFn = @import("rc_helper.zig").RcDecrefFn;
 pub const RcFreeFn = @import("rc_helper.zig").RcFreeFn;
 
-// Re-export work queue functionality
-pub const Work = @import("work.zig").Work;
-pub const work = @import("work.zig");
-
 test "layout tests" {
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(@import("layout.zig"));
@@ -91,5 +85,4 @@ test "layout tests" {
     std.testing.refAllDecls(@import("type_layout_resolver.zig"));
     std.testing.refAllDecls(@import("rc_helper.zig"));
     std.testing.refAllDecls(@import("store.zig"));
-    std.testing.refAllDecls(@import("work.zig"));
 }

@@ -29,6 +29,7 @@ pub const Field = struct {
 };
 
 pub const Content = union(enum) {
+    nominal: TypeId,
     list: TypeId,
     box: TypeId,
     tuple: Span(TypeId),
@@ -72,6 +73,16 @@ pub const Store = struct {
     }
 
     pub fn getType(self: *const Store, id: TypeId) Content {
+        var current = id;
+        while (true) {
+            switch (self.types.items[@intFromEnum(current)]) {
+                .nominal => |next| current = next,
+                else => |content| return content,
+            }
+        }
+    }
+
+    pub fn getTypePreservingNominal(self: *const Store, id: TypeId) Content {
         return self.types.items[@intFromEnum(id)];
     }
 
@@ -134,11 +145,12 @@ pub const Store = struct {
         }
         try visited.append(self.allocator, .{ .left = left, .right = right });
 
-        const left_content = self.getType(left);
-        const right_content = self.getType(right);
+        const left_content = self.getTypePreservingNominal(left);
+        const right_content = self.getTypePreservingNominal(right);
         if (@as(std.meta.Tag(Content), left_content) != @as(std.meta.Tag(Content), right_content)) return false;
 
         return switch (left_content) {
+            .nominal => |backing| self.equalIdsVisited(backing, right_content.nominal, visited),
             .primitive => |prim| prim == right_content.primitive,
             .list => |elem| self.equalIdsVisited(elem, right_content.list, visited),
             .box => |elem| self.equalIdsVisited(elem, right_content.box, visited),

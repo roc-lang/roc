@@ -217,8 +217,16 @@ pub fn devEvaluatorInspectedStr(
     try codegen.compileAllProcSpecs(lowered.lir_result.store.getProcSpecs());
 
     const proc = lowered.lir_result.store.getProcSpec(lowered.main_proc);
-    const code_result = try codegen.generateCode(lowered.main_proc, proc.ret_layout, 0);
-    var exec_mem = try ExecutableMemory.initWithEntryOffset(code_result.code, code_result.entry_offset);
+    const entrypoint = try codegen.generateEntrypointWrapper(
+        "roc_eval_test_main",
+        lowered.main_proc,
+        &.{},
+        proc.ret_layout,
+    );
+    var exec_mem = try ExecutableMemory.initWithEntryOffset(
+        codegen.getGeneratedCode(),
+        entrypoint.offset,
+    );
     defer exec_mem.deinit();
 
     var runtime_env = RuntimeEnv.init(allocator);
@@ -236,11 +244,16 @@ pub fn devEvaluatorInspectedStr(
     const sj = crash_boundary.set();
     if (sj != 0) return error.Crash;
 
-    exec_mem.callWithResultPtrAndRocOps(@ptrCast(ret_buf.ptr), @ptrCast(runtime_env.get_ops()));
+    exec_mem.callRocABI(@ptrCast(runtime_env.get_ops()), @ptrCast(ret_buf.ptr), null);
 
     switch (runtime_env.crashState()) {
         .did_not_crash => {},
-        .crashed => return error.Crash,
+        .crashed => |msg| {
+            if (std.debug.runtime_safety) {
+                std.debug.print("devEvaluatorInspectedStr crash: {s}\n", .{msg});
+            }
+            return error.Crash;
+        },
     }
 
     return copyReturnedRocStr(
@@ -287,7 +300,7 @@ fn lowerToLir(
 
     var lowered_lir = try FromIr.run(
         allocator,
-        &all_module_envs,
+        all_module_envs,
         null,
         base.target.TargetUsize.native,
         lowered_ir,
@@ -317,10 +330,10 @@ fn parseAndCanonicalizeProgramWrapped(
     );
     errdefer builtin_module.deinit();
 
-    var extra_modules = std.ArrayList(CheckedModule).init(allocator);
+    var extra_modules = std.ArrayList(CheckedModule).empty;
     errdefer {
         for (extra_modules.items) |extra| cleanupCheckedModule(allocator, extra);
-        extra_modules.deinit();
+        extra_modules.deinit(allocator);
     }
 
     for (imports) |import_module| {
@@ -343,7 +356,7 @@ fn parseAndCanonicalizeProgramWrapped(
             builtin_indices,
             available_imports,
         );
-        try extra_modules.append(checked);
+        try extra_modules.append(allocator, checked);
     }
 
     const main_imports = try allocator.alloc(AvailableImport, extra_modules.items.len);
@@ -380,7 +393,7 @@ fn parseAndCanonicalizeProgramWrapped(
         .builtin_module = builtin_module,
         .builtin_indices = builtin_indices,
         .imported_envs = main_checked.imported_envs,
-        .extra_modules = try extra_modules.toOwnedSlice(),
+        .extra_modules = try extra_modules.toOwnedSlice(allocator),
         .owned_source = main_checked.owned_source,
         .parse_ns = main_checked.parse_ns,
         .canonicalize_ns = main_checked.canonicalize_ns,
@@ -518,7 +531,7 @@ fn makeModuleSource(
         .module => if (inspect_wrap)
             std.fmt.allocPrint(
                 allocator,
-                "{s}\n\n__codex_test_inspect_main = Str.inspect(main)\n",
+                "{s}\n\ncodex_test_inspect_main = Str.inspect(main)\n",
                 .{source},
             )
         else
@@ -543,6 +556,9 @@ fn debugValidateMonotypeTypes(types_store: *const monotype.Type.Store) void {
     for (types_store.types.items, 0..) |ty, i| {
         switch (ty) {
             .placeholder => {},
+            .link => |target| {
+                debugAssertValidMonoTypeRef(types_store, @enumFromInt(@as(u32, @intCast(i))), "link.target", target, type_len);
+            },
             .primitive => {},
             .func => |func| {
                 debugAssertValidMonoTypeRef(types_store, @enumFromInt(@as(u32, @intCast(i))), "func.arg", func.arg, type_len);

@@ -468,7 +468,7 @@ pub const Interpreter = struct {
         const proc_ret_layout = self.store.getProcSpec(request.proc_id).ret_layout;
         const result_value = try self.evalProcById(request.proc_id, args, request.arg_layouts);
         const ret_layout = request.ret_layout orelse proc_ret_layout;
-        const normalized_result = self.normalizeValueToLayout(result_value, proc_ret_layout, ret_layout);
+        const normalized_result = try self.coerceValueToLayout(result_value, proc_ret_layout, ret_layout);
 
         if (request.ret_ptr) |ret_ptr| {
             const ret_size = self.helper.sizeOf(ret_layout);
@@ -487,6 +487,500 @@ pub const Interpreter = struct {
         arg_layouts: []const layout_mod.Idx,
     ) Error!Value {
         return self.evalProcSpec(proc_id, self.store.getProcSpec(proc_id), args, arg_layouts);
+    }
+
+    const DebugVisitedValue = struct {
+        ptr: usize,
+        layout_idx: layout_mod.Idx,
+    };
+
+    fn setLocalChecked(
+        self: *LirInterpreter,
+        frame: *Frame,
+        stmt_id: ?CFStmtId,
+        local_id: LocalId,
+        value: Value,
+    ) void {
+        if (builtin.mode == .Debug) {
+            const layout_idx = self.store.getLocal(local_id).layout_idx;
+            if (((@intFromEnum(frame.proc_id) == 1 and
+                (@intFromEnum(local_id) == 19 or
+                    @intFromEnum(local_id) == 28 or
+                    @intFromEnum(local_id) == 27)) or
+                (@intFromEnum(frame.proc_id) == 0 and @intFromEnum(local_id) == 16) or
+                (@intFromEnum(frame.proc_id) == 4 and
+                    (@intFromEnum(local_id) == 68 or
+                        @intFromEnum(local_id) == 67 or
+                        @intFromEnum(local_id) == 66)) or
+                (@intFromEnum(frame.proc_id) == 5 and
+                    (@intFromEnum(local_id) == 73 or
+                        @intFromEnum(local_id) == 72 or
+                        @intFromEnum(local_id) == 71))))
+            {
+                const size = self.helper.sizeOf(layout_idx);
+                std.debug.print(
+                    "LIR/interpreter set-local proc={d} stmt={any} local={d} layout={d} size={d} ptr=0x{x}\n",
+                    .{
+                        @intFromEnum(frame.proc_id),
+                        if (stmt_id) |stmt| @intFromEnum(stmt) else 0xFFFF_FFFF,
+                        @intFromEnum(local_id),
+                        @intFromEnum(layout_idx),
+                        size,
+                        @intFromPtr(value.ptr),
+                    },
+                );
+                if (stmt_id) |stmt| {
+                    const stmt_val = self.store.getCFStmt(stmt);
+                    std.debug.print("  from stmt: {any}\n", .{stmt_val});
+                    if (stmt_val == .assign_ref and stmt_val.assign_ref.op == .field) {
+                        const field = stmt_val.assign_ref.op.field;
+                        const source_layout = self.store.getLocal(field.source).layout_idx;
+                        const source_value = frame.getLocal(field.source);
+                        std.debug.print(
+                            "  field source local={d} field_idx={d} source_layout={d} source_ptr=0x{x}\n",
+                            .{
+                                @intFromEnum(field.source),
+                                field.field_idx,
+                                @intFromEnum(source_layout),
+                                @intFromPtr(source_value.ptr),
+                            },
+                        );
+                        const source_size = self.helper.sizeOf(source_layout);
+                        if (source_size > 0) {
+                            const source_dump_len = @min(source_size, 32);
+                            std.debug.print("  source bytes:", .{});
+                            for (source_value.readBytes(source_dump_len)) |byte| {
+                                std.debug.print(" {x:0>2}", .{byte});
+                            }
+                            std.debug.print("\n", .{});
+                        }
+                    }
+                }
+                if (size > 0) {
+                    const dump_len = @min(size, 24);
+                    std.debug.print("  bytes:", .{});
+                    for (value.readBytes(dump_len)) |byte| {
+                        std.debug.print(" {x:0>2}", .{byte});
+                    }
+                    std.debug.print("\n", .{});
+                }
+                const layout_val = self.layout_store.getLayout(layout_idx);
+                if (layout_val.tag == .box) {
+                    if (self.readBoxedDataPointer(value)) |data_ptr| {
+                        const inner_layout = layout_val.data.box;
+                        const inner_size = self.helper.sizeOf(inner_layout);
+                        if (inner_size > 0) {
+                            const dump_len = @min(inner_size, 40);
+                            std.debug.print(
+                                "  box pointee layout={d} ptr=0x{x} bytes:",
+                                .{ @intFromEnum(inner_layout), @intFromPtr(data_ptr) },
+                            );
+                            for ((Value{ .ptr = data_ptr }).readBytes(dump_len)) |byte| {
+                                std.debug.print(" {x:0>2}", .{byte});
+                            }
+                            std.debug.print("\n", .{});
+                        }
+                    }
+                }
+            }
+            var visited = std.ArrayList(DebugVisitedValue).empty;
+            defer visited.deinit(self.allocator);
+            self.debugAssertValueMatchesLayout(frame.proc_id, stmt_id, local_id, value, layout_idx, &visited);
+        }
+
+        frame.setLocal(local_id, value);
+    }
+
+    fn debugAssertValueMatchesLayout(
+        self: *LirInterpreter,
+        proc_id: LirProcSpecId,
+        stmt_id: ?CFStmtId,
+        local_id: LocalId,
+        value: Value,
+        layout_idx: layout_mod.Idx,
+        visited: *std.ArrayList(DebugVisitedValue),
+    ) void {
+        if (builtin.mode != .Debug) return;
+
+        const layout_val = self.layout_store.getLayout(layout_idx);
+        switch (layout_val.tag) {
+            .scalar => {
+                if (layout_idx == .str) {
+                    const str = valueToRocStr(value);
+                    if (!str.isSmallStr() and str.len() > 0 and str.bytes == null) {
+                        self.debugValueShapePanic(
+                            proc_id,
+                            stmt_id,
+                            local_id,
+                            layout_idx,
+                            "non-small RocStr had null bytes pointer",
+                        );
+                    }
+                }
+            },
+            .zst, .box_of_zst => return,
+            .box => {
+                const data_ptr = self.readBoxedDataPointer(value) orelse self.debugValueShapePanic(
+                    proc_id,
+                    stmt_id,
+                    local_id,
+                    layout_idx,
+                    "boxed value had null data pointer",
+                );
+
+                const key = DebugVisitedValue{
+                    .ptr = @intFromPtr(data_ptr),
+                    .layout_idx = layout_idx,
+                };
+                for (visited.items) |entry| {
+                    if (entry.ptr == key.ptr and entry.layout_idx == key.layout_idx) return;
+                }
+                visited.append(self.allocator, key) catch @panic("OOM");
+                self.debugAssertValueMatchesLayout(
+                    proc_id,
+                    stmt_id,
+                    local_id,
+                    .{ .ptr = data_ptr },
+                    layout_val.data.box,
+                    visited,
+                );
+            },
+            .list => {
+                const list = valueToRocList(value);
+                if (list.len() > 0 and list.bytes == null) {
+                    self.debugValueShapePanic(
+                        proc_id,
+                        stmt_id,
+                        local_id,
+                        layout_idx,
+                        "non-empty list had null bytes pointer",
+                    );
+                }
+                if (list.len() == 0 or list.bytes == null) return;
+
+                const elem_layout = layout_val.data.list;
+                const elem_size = self.helper.sizeOf(elem_layout);
+                if (elem_size == 0) return;
+
+                for (0..list.len()) |i| {
+                    self.debugAssertValueMatchesLayout(
+                        proc_id,
+                        stmt_id,
+                        local_id,
+                        .{ .ptr = list.bytes.? + i * elem_size },
+                        elem_layout,
+                        visited,
+                    );
+                }
+            },
+            .list_of_zst => {
+                const list = valueToRocList(value);
+                if (list.len() > 0 and list.capacity_or_alloc_ptr == 0) {
+                    self.debugValueShapePanic(
+                        proc_id,
+                        stmt_id,
+                        local_id,
+                        layout_idx,
+                        "non-empty list_of_zst had zero capacity marker",
+                    );
+                }
+            },
+            .struct_ => {
+                const struct_info = self.layout_store.getStructInfo(layout_val);
+                for (0..struct_info.fields.len) |i| {
+                    const field = struct_info.fields.get(@intCast(i));
+                    const field_offset = self.layout_store.getStructFieldOffset(layout_val.data.struct_.idx, @intCast(i));
+                    self.debugAssertValueMatchesLayout(
+                        proc_id,
+                        stmt_id,
+                        local_id,
+                        value.offset(field_offset),
+                        field.layout,
+                        visited,
+                    );
+                }
+            },
+            .tag_union => {
+                const disc = self.helper.readTagDiscriminant(value, layout_idx);
+                const tag_union_info = self.layout_store.getTagUnionInfo(layout_val);
+                if (disc >= tag_union_info.variants.len) {
+                    self.debugValueShapePanic(
+                        proc_id,
+                        stmt_id,
+                        local_id,
+                        layout_idx,
+                        "tag union discriminant was out of range",
+                    );
+                }
+
+                const payload_layout = tag_union_info.variants.get(disc).payload_layout;
+                if (self.helper.sizeOf(payload_layout) == 0) return;
+
+                self.debugAssertValueMatchesLayout(
+                    proc_id,
+                    stmt_id,
+                    local_id,
+                    value,
+                    payload_layout,
+                    visited,
+                );
+            },
+            .closure => {
+                self.debugValueShapePanic(
+                    proc_id,
+                    stmt_id,
+                    local_id,
+                    layout_idx,
+                    "closure value reached interpreter recursive validator unexpectedly",
+                );
+            },
+        }
+    }
+
+    fn debugValueShapePanic(
+        self: *LirInterpreter,
+        proc_id: LirProcSpecId,
+        stmt_id: ?CFStmtId,
+        local_id: LocalId,
+        layout_idx: layout_mod.Idx,
+        comptime reason: []const u8,
+    ) noreturn {
+        if (stmt_id) |id| {
+            const center = @as(usize, @intFromEnum(id));
+            const stmt_count = self.store.cf_stmts.items.len;
+            const start = center -| 3;
+            const end = @min(stmt_count, center + 4);
+            std.debug.print("LIR/interpreter stmt window around failing stmt {d}:\n", .{@intFromEnum(id)});
+            for (start..end) |i| {
+                const window_id: CFStmtId = @enumFromInt(@as(u32, @intCast(i)));
+                std.debug.print("  stmt {d}: {any}\n", .{ i, self.store.getCFStmt(window_id) });
+            }
+
+            switch (self.store.getCFStmt(id)) {
+                .assign_call => |assign| {
+                    const callee_proc = self.store.getProcSpec(assign.proc);
+                    std.debug.print(
+                        "LIR/interpreter failing assign_call callee proc {d}: name={d} body={d} ret_layout={d}\n",
+                        .{
+                            @intFromEnum(assign.proc),
+                            callee_proc.name.raw(),
+                            @intFromEnum(callee_proc.body),
+                            @intFromEnum(callee_proc.ret_layout),
+                        },
+                    );
+                    self.debugPrintStmtChain(callee_proc.body, 20);
+                },
+                else => {},
+            }
+
+            std.debug.panic(
+                "LIR/interpreter invariant violated: proc {d} stmt {d}={any} assigned local {d} layout {d} invalid value shape: {s}",
+                .{
+                    @intFromEnum(proc_id),
+                    @intFromEnum(id),
+                    self.store.getCFStmt(id),
+                    @intFromEnum(local_id),
+                    @intFromEnum(layout_idx),
+                    reason,
+                },
+            );
+        }
+
+        std.debug.panic(
+            "LIR/interpreter invariant violated: proc {d} assigned local {d} layout {d} invalid value shape: {s}",
+            .{
+                @intFromEnum(proc_id),
+                @intFromEnum(local_id),
+                @intFromEnum(layout_idx),
+                reason,
+            },
+        );
+    }
+
+    fn debugPrintStmtChain(self: *LirInterpreter, start_stmt: CFStmtId, limit: usize) void {
+        std.debug.print(
+            "LIR/interpreter stmt chain from {d}:\n",
+            .{@intFromEnum(start_stmt)},
+        );
+
+        var current = start_stmt;
+        var remaining = limit;
+        while (remaining > 0) : (remaining -= 1) {
+            const stmt = self.store.getCFStmt(current);
+            switch (stmt) {
+                .assign_symbol => |assign| std.debug.print(
+                    "  stmt {d}: {any} target_layout={d}\n",
+                    .{
+                        @intFromEnum(current),
+                        stmt,
+                        @intFromEnum(self.store.getLocal(assign.target).layout_idx),
+                    },
+                ),
+                .assign_ref => |assign| std.debug.print(
+                    "  stmt {d}: {any} target_layout={d}\n",
+                    .{
+                        @intFromEnum(current),
+                        stmt,
+                        @intFromEnum(self.store.getLocal(assign.target).layout_idx),
+                    },
+                ),
+                .assign_literal => |assign| std.debug.print(
+                    "  stmt {d}: {any} target_layout={d}\n",
+                    .{
+                        @intFromEnum(current),
+                        stmt,
+                        @intFromEnum(self.store.getLocal(assign.target).layout_idx),
+                    },
+                ),
+                .assign_call => |assign| std.debug.print(
+                    "  stmt {d}: {any} target_layout={d}\n",
+                    .{
+                        @intFromEnum(current),
+                        stmt,
+                        @intFromEnum(self.store.getLocal(assign.target).layout_idx),
+                    },
+                ),
+                .assign_call_indirect => |assign| std.debug.print(
+                    "  stmt {d}: {any} target_layout={d}\n",
+                    .{
+                        @intFromEnum(current),
+                        stmt,
+                        @intFromEnum(self.store.getLocal(assign.target).layout_idx),
+                    },
+                ),
+                .assign_low_level => |assign| std.debug.print(
+                    "  stmt {d}: {any} target_layout={d}\n",
+                    .{
+                        @intFromEnum(current),
+                        stmt,
+                        @intFromEnum(self.store.getLocal(assign.target).layout_idx),
+                    },
+                ),
+                .assign_list => |assign| std.debug.print(
+                    "  stmt {d}: {any} target_layout={d}\n",
+                    .{
+                        @intFromEnum(current),
+                        stmt,
+                        @intFromEnum(self.store.getLocal(assign.target).layout_idx),
+                    },
+                ),
+                .assign_struct => |assign| std.debug.print(
+                    "  stmt {d}: {any} target_layout={d}\n",
+                    .{
+                        @intFromEnum(current),
+                        stmt,
+                        @intFromEnum(self.store.getLocal(assign.target).layout_idx),
+                    },
+                ),
+                .assign_tag => |assign| std.debug.print(
+                    "  stmt {d}: {any} target_layout={d}\n",
+                    .{
+                        @intFromEnum(current),
+                        stmt,
+                        @intFromEnum(self.store.getLocal(assign.target).layout_idx),
+                    },
+                ),
+                .set_local => |assign| std.debug.print(
+                    "  stmt {d}: {any} target_layout={d} target_layout_data={any}\n",
+                    .{
+                        @intFromEnum(current),
+                        stmt,
+                        @intFromEnum(self.store.getLocal(assign.target).layout_idx),
+                        self.layout_store.getLayout(self.store.getLocal(assign.target).layout_idx),
+                    },
+                ),
+                else => std.debug.print("  stmt {d}: {any}\n", .{ @intFromEnum(current), stmt }),
+            }
+            current = switch (stmt) {
+                .assign_symbol => |assign| assign.next,
+                .assign_ref => |assign| assign.next,
+                .assign_literal => |assign| assign.next,
+                .assign_call => |assign| assign.next,
+                .assign_call_indirect => |assign| assign.next,
+                .assign_low_level => |assign| assign.next,
+                .assign_list => |assign| assign.next,
+                .assign_struct => |assign| assign.next,
+                .assign_tag => |assign| assign.next,
+                .set_local => |assign| assign.next,
+                .debug => |stmt_next| stmt_next.next,
+                .expect => |stmt_next| stmt_next.next,
+                .incref => |stmt_next| stmt_next.next,
+                .decref => |stmt_next| stmt_next.next,
+                .free => |stmt_next| stmt_next.next,
+                .borrow_scope => |scope| scope.body,
+                .join => |join_stmt| join_stmt.body,
+                .switch_stmt,
+                .runtime_error,
+                .scope_exit,
+                .for_list,
+                .jump,
+                .ret,
+                .crash,
+                .loop_continue,
+                => break,
+            };
+        }
+    }
+
+    fn debugPrintIndexedLayoutShape(self: *LirInterpreter, index: usize, layout_idx: layout_mod.Idx) void {
+        std.debug.print("  field[{d}] layout tree:\n", .{index});
+        var visited = std.ArrayList(u32).empty;
+        defer visited.deinit(self.allocator);
+        self.debugPrintLayoutShapeLines(layout_idx, 2, &visited);
+    }
+
+    fn debugPrintLayoutShape(self: *LirInterpreter, label: []const u8, layout_idx: layout_mod.Idx) void {
+        std.debug.print("{s}:\n", .{label});
+        var visited = std.ArrayList(u32).empty;
+        defer visited.deinit(self.allocator);
+        self.debugPrintLayoutShapeLines(layout_idx, 1, &visited);
+    }
+
+    fn debugPrintLayoutShapeLines(
+        self: *LirInterpreter,
+        layout_idx: layout_mod.Idx,
+        indent: usize,
+        visited: *std.ArrayList(u32),
+    ) void {
+        for (visited.items) |existing| {
+            if (existing == @intFromEnum(layout_idx)) {
+                std.debug.print("{s}{d} (cycle)\n", .{ debugIndent(indent), @intFromEnum(layout_idx) });
+                return;
+            }
+        }
+
+        visited.append(self.allocator, @intFromEnum(layout_idx)) catch return;
+        defer _ = visited.pop();
+
+        const layout_val = self.layout_store.getLayout(layout_idx);
+        std.debug.print("{s}{d}: {s}\n", .{ debugIndent(indent), @intFromEnum(layout_idx), @tagName(layout_val.tag) });
+        switch (layout_val.tag) {
+            .scalar, .zst, .box_of_zst, .list_of_zst => {},
+            .box => self.debugPrintLayoutShapeLines(layout_val.data.box, indent + 1, visited),
+            .list => self.debugPrintLayoutShapeLines(layout_val.data.list, indent + 1, visited),
+            .closure => self.debugPrintLayoutShapeLines(layout_val.data.closure.captures_layout_idx, indent + 1, visited),
+            .struct_ => {
+                const info = self.layout_store.getStructInfo(layout_val);
+                for (0..info.fields.len) |i| {
+                    const field = info.fields.get(@intCast(i));
+                    std.debug.print("{s}field[{d}] semantic_index={d}\n", .{ debugIndent(indent + 1), i, field.index });
+                    self.debugPrintLayoutShapeLines(field.layout, indent + 2, visited);
+                }
+            },
+            .tag_union => {
+                const info = self.layout_store.getTagUnionInfo(layout_val);
+                for (0..info.variants.len) |i| {
+                    const variant = info.variants.get(@intCast(i));
+                    std.debug.print("{s}variant[{d}]\n", .{ debugIndent(indent + 1), i });
+                    self.debugPrintLayoutShapeLines(variant.payload_layout, indent + 2, visited);
+                }
+            },
+        }
+    }
+
+    fn debugIndent(indent: usize) []const u8 {
+        const spaces = "                                ";
+        return spaces[0..@min(indent * 2, spaces.len)];
     }
 
     fn evalProcSpec(
@@ -510,7 +1004,7 @@ pub const Interpreter = struct {
             const param_layouts = self.localLayoutsFromSpan(proc_spec.args);
             const normalized_args = try self.arena.allocator().alloc(Value, args.len);
             for (args, arg_layouts, param_layouts, 0..) |arg, arg_layout, param_layout, i| {
-                normalized_args[i] = self.normalizeValueToLayout(arg, arg_layout, param_layout);
+                normalized_args[i] = try self.coerceValueToLayout(arg, arg_layout, param_layout);
             }
             return self.callHostedProc(hosted, normalized_args, param_layouts, proc_spec.ret_layout);
         }
@@ -544,10 +1038,47 @@ pub const Interpreter = struct {
             );
         }
 
+        if (builtin.mode == .Debug and @intFromEnum(proc_id) <= 2) {
+            std.debug.print(
+                "LIR/interpreter proc-entry proc={d} name={d} args={d}\n",
+                .{ @intFromEnum(proc_id), proc_spec.name.raw(), args.len },
+            );
+            for (params, args, arg_layouts, 0..) |param, arg_value, arg_layout, i| {
+                std.debug.print(
+                    "  param[{d}] local={d} param_layout={d} arg_layout={d}\n",
+                    .{
+                        i,
+                        @intFromEnum(param),
+                        @intFromEnum(self.store.getLocal(param).layout_idx),
+                        @intFromEnum(arg_layout),
+                    },
+                );
+                if (self.layout_store.getLayout(arg_layout).tag == .box) {
+                    if (self.readBoxedDataPointer(arg_value)) |data_ptr| {
+                        const inner_layout = self.layout_store.getLayout(arg_layout).data.box;
+                        const inner_size = self.helper.sizeOf(inner_layout);
+                        if (inner_size > 0) {
+                            const dump_len = @min(inner_size, 40);
+                            std.debug.print(
+                                "    param[{d}] box pointee layout={d} ptr=0x{x} bytes:",
+                                .{ i, @intFromEnum(inner_layout), @intFromPtr(data_ptr) },
+                            );
+                            for ((Value{ .ptr = data_ptr }).readBytes(dump_len)) |byte| {
+                                std.debug.print(" {x:0>2}", .{byte});
+                            }
+                            std.debug.print("\n", .{});
+                        }
+                    }
+                }
+            }
+        }
+
         for (params, args, arg_layouts) |param, arg, arg_layout| {
-            frame.setLocal(
+            self.setLocalChecked(
+                &frame,
+                null,
                 param,
-                self.normalizeValueToLayout(
+                try self.coerceValueToLayout(
                     arg,
                     arg_layout,
                     self.store.getLocal(param).layout_idx,
@@ -561,11 +1092,98 @@ pub const Interpreter = struct {
                     "return proc={d} name={d} depth={d}",
                     .{ @intFromEnum(proc_id), proc_spec.name.raw(), self.call_depth },
                 );
-                break :blk self.normalizeValueToLayout(
-                    frame.getLocal(ret_local),
-                    self.store.getLocal(ret_local).layout_idx,
+                const raw_result = frame.getLocal(ret_local);
+                const raw_layout = self.store.getLocal(ret_local).layout_idx;
+                if (builtin.mode == .Debug and @intFromEnum(proc_id) >= 4 and @intFromEnum(proc_id) <= 6) {
+                    std.debug.print(
+                        "LIR/interpreter proc-return proc={d} local={d} raw_layout={d} ret_layout={d} ptr=0x{x}\n",
+                        .{
+                            @intFromEnum(proc_id),
+                            @intFromEnum(ret_local),
+                            @intFromEnum(raw_layout),
+                            @intFromEnum(proc_spec.ret_layout),
+                            @intFromPtr(raw_result.ptr),
+                        },
+                    );
+                    if (@intFromEnum(proc_id) == 6) {
+                        self.debugPrintLayoutShape("  proc6 raw layout", raw_layout);
+                        self.debugPrintLayoutShape("  proc6 ret layout", proc_spec.ret_layout);
+                    }
+                    const raw_size = self.helper.sizeOf(raw_layout);
+                    if (raw_size > 0) {
+                        const dump_len = @min(raw_size, 40);
+                        std.debug.print("  raw bytes:", .{});
+                        for (raw_result.readBytes(dump_len)) |byte| {
+                            std.debug.print(" {x:0>2}", .{byte});
+                        }
+                        std.debug.print("\n", .{});
+                    }
+                    if (self.layout_store.getLayout(raw_layout).tag == .box) {
+                        if (self.readBoxedDataPointer(raw_result)) |data_ptr| {
+                            const inner_layout = self.layout_store.getLayout(raw_layout).data.box;
+                            const inner_size = self.helper.sizeOf(inner_layout);
+                            if (inner_size > 0) {
+                                const dump_len = @min(inner_size, 40);
+                                std.debug.print(
+                                    "  raw box pointee layout={d} ptr=0x{x} bytes:",
+                                    .{ @intFromEnum(inner_layout), @intFromPtr(data_ptr) },
+                                );
+                                for ((Value{ .ptr = data_ptr }).readBytes(dump_len)) |byte| {
+                                    std.debug.print(" {x:0>2}", .{byte});
+                                }
+                                std.debug.print("\n", .{});
+                            }
+                        }
+                    }
+                }
+                if (builtin.mode == .Debug) {
+                    var visited = std.ArrayList(DebugVisitedValue).empty;
+                    defer visited.deinit(self.allocator);
+                    self.debugAssertValueMatchesLayout(proc_id, null, ret_local, raw_result, raw_layout, &visited);
+                }
+                const coerced_result = try self.coerceValueToLayout(
+                    raw_result,
+                    raw_layout,
                     proc_spec.ret_layout,
                 );
+                if (builtin.mode == .Debug and @intFromEnum(proc_id) >= 4 and @intFromEnum(proc_id) <= 6) {
+                    std.debug.print(
+                        "  coerced ptr=0x{x}\n",
+                        .{@intFromPtr(coerced_result.ptr)},
+                    );
+                    const coerced_size = self.helper.sizeOf(proc_spec.ret_layout);
+                    if (coerced_size > 0) {
+                        const dump_len = @min(coerced_size, 40);
+                        std.debug.print("  coerced bytes:", .{});
+                        for (coerced_result.readBytes(dump_len)) |byte| {
+                            std.debug.print(" {x:0>2}", .{byte});
+                        }
+                        std.debug.print("\n", .{});
+                    }
+                    if (self.layout_store.getLayout(proc_spec.ret_layout).tag == .box) {
+                        if (self.readBoxedDataPointer(coerced_result)) |data_ptr| {
+                            const inner_layout = self.layout_store.getLayout(proc_spec.ret_layout).data.box;
+                            const inner_size = self.helper.sizeOf(inner_layout);
+                            if (inner_size > 0) {
+                                const dump_len = @min(inner_size, 40);
+                                std.debug.print(
+                                    "  coerced box pointee layout={d} ptr=0x{x} bytes:",
+                                    .{ @intFromEnum(inner_layout), @intFromPtr(data_ptr) },
+                                );
+                                for ((Value{ .ptr = data_ptr }).readBytes(dump_len)) |byte| {
+                                    std.debug.print(" {x:0>2}", .{byte});
+                                }
+                                std.debug.print("\n", .{});
+                            }
+                        }
+                    }
+                }
+                if (builtin.mode == .Debug) {
+                    var visited = std.ArrayList(DebugVisitedValue).empty;
+                    defer visited.deinit(self.allocator);
+                    self.debugAssertValueMatchesLayout(proc_id, null, ret_local, coerced_result, proc_spec.ret_layout, &visited);
+                }
+                break :blk coerced_result;
             },
             .scope_exit => std.debug.panic(
                 "LIR/interpreter invariant violated: proc {d} terminated via scope_exit",
@@ -652,24 +1270,63 @@ pub const Interpreter = struct {
             const stmt = self.store.getCFStmt(current);
             switch (stmt) {
                 .assign_symbol => |assign| {
-                    frame.setLocal(assign.target, try self.evalAssignSymbol(assign.symbol, self.store.getLocal(assign.target).layout_idx));
+                    self.setLocalChecked(frame, current, assign.target, try self.evalAssignSymbol(assign.symbol, self.store.getLocal(assign.target).layout_idx));
                     current = assign.next;
                 },
                 .assign_ref => |assign| {
-                    frame.setLocal(assign.target, try self.evalAssignRef(frame, assign.op, self.store.getLocal(assign.target).layout_idx));
+                    const target_layout = self.store.getLocal(assign.target).layout_idx;
+                    const value = try self.evalAssignRef(frame, assign.op, target_layout);
+                    self.setLocalChecked(frame, current, assign.target, value);
                     current = assign.next;
                 },
                 .assign_literal => |assign| {
-                    frame.setLocal(assign.target, try self.evalLiteral(assign.value));
+                    self.setLocalChecked(frame, current, assign.target, try self.evalLiteral(assign.value));
                     current = assign.next;
                 },
                 .assign_call => |assign| {
                     const arg_locals = self.store.getLocalSpan(assign.args);
                     const arg_values = try self.collectLocalValues(frame, arg_locals);
+                    if (builtin.mode == .Debug and @intFromEnum(assign.proc) <= 2) {
+                        const arg_layouts = try self.localLayouts(arg_locals);
+                        std.debug.print(
+                            "LIR/interpreter direct-call proc={d} -> proc={d} target={d} args={d}\n",
+                            .{
+                                @intFromEnum(frame.proc_id),
+                                @intFromEnum(assign.proc),
+                                @intFromEnum(assign.target),
+                                arg_locals.len,
+                            },
+                        );
+                        for (arg_locals, arg_layouts, 0..) |arg_local, arg_layout, i| {
+                            std.debug.print(
+                                "  arg[{d}] local={d} layout={d}\n",
+                                .{ i, @intFromEnum(arg_local), @intFromEnum(arg_layout) },
+                            );
+                            if (self.layout_store.getLayout(arg_layout).tag == .box) {
+                                if (self.readBoxedDataPointer(arg_values[i])) |data_ptr| {
+                                    const inner_layout = self.layout_store.getLayout(arg_layout).data.box;
+                                    const inner_size = self.helper.sizeOf(inner_layout);
+                                    if (inner_size > 0) {
+                                        const dump_len = @min(inner_size, 40);
+                                        std.debug.print(
+                                            "    arg[{d}] box pointee layout={d} ptr=0x{x} bytes:",
+                                            .{ i, @intFromEnum(inner_layout), @intFromPtr(data_ptr) },
+                                        );
+                                        for ((Value{ .ptr = data_ptr }).readBytes(dump_len)) |byte| {
+                                            std.debug.print(" {x:0>2}", .{byte});
+                                        }
+                                        std.debug.print("\n", .{});
+                                    }
+                                }
+                            }
+                        }
+                    }
                     const result = try self.evalProcById(assign.proc, arg_values, try self.localLayouts(arg_locals));
-                    frame.setLocal(
+                    self.setLocalChecked(
+                        frame,
+                        current,
                         assign.target,
-                        self.normalizeValueToLayout(
+                        try self.coerceValueToLayout(
                             result,
                             self.store.getProcSpec(assign.proc).ret_layout,
                             self.store.getLocal(assign.target).layout_idx,
@@ -681,9 +1338,11 @@ pub const Interpreter = struct {
                     const arg_locals = self.store.getLocalSpan(assign.args);
                     const arg_values = try self.collectLocalValues(frame, arg_locals);
                     const result = try self.evalIndirectCall(frame, assign.closure, arg_values, try self.localLayouts(arg_locals));
-                    frame.setLocal(
+                    self.setLocalChecked(
+                        frame,
+                        current,
                         assign.target,
-                        self.normalizeValueToLayout(
+                        try self.coerceValueToLayout(
                             result.value,
                             result.layout,
                             self.store.getLocal(assign.target).layout_idx,
@@ -695,7 +1354,31 @@ pub const Interpreter = struct {
                     const arg_locals = self.store.getLocalSpan(assign.args);
                     const arg_values = try self.collectLocalValues(frame, arg_locals);
                     const arg_layouts = try self.localLayouts(arg_locals);
-                    frame.setLocal(assign.target, try self.evalLowLevel(.{
+                    if (builtin.mode == .Debug and assign.op == .str_inspect and arg_locals.len == 1) {
+                        const roc_str = valueToRocStr(arg_values[0]);
+                        std.debug.print(
+                            "LIR/interpreter str_inspect proc={d} stmt={d} local={d} layout={d} bytes=0x{x} len={d} cap=0x{x}\n",
+                            .{
+                                @intFromEnum(frame.proc_id),
+                                @intFromEnum(current),
+                                @intFromEnum(arg_locals[0]),
+                                @intFromEnum(arg_layouts[0]),
+                                @intFromPtr(roc_str.bytes),
+                                roc_str.length,
+                                roc_str.capacity_or_alloc_ptr,
+                            },
+                        );
+                        const center = @as(usize, @intFromEnum(current));
+                        const stmt_count = self.store.cf_stmts.items.len;
+                        const start: usize = if (@intFromEnum(frame.proc_id) <= 1) 0 else center -| 4;
+                        const end = @min(stmt_count, center + 5);
+                        var i = start;
+                        while (i < end) : (i += 1) {
+                            const stmt_id: CFStmtId = @enumFromInt(@as(u32, @intCast(i)));
+                            std.debug.print("  stmt {d}: {any}\n", .{ i, self.store.getCFStmt(stmt_id) });
+                        }
+                    }
+                    self.setLocalChecked(frame, current, assign.target, try self.evalLowLevel(.{
                         .op = assign.op,
                         .args = arg_values,
                         .arg_layouts = arg_layouts,
@@ -705,21 +1388,56 @@ pub const Interpreter = struct {
                     current = assign.next;
                 },
                 .assign_list => |assign| {
-                    frame.setLocal(assign.target, try self.evalListLiteral(frame, assign.elems, self.store.getLocal(assign.target).layout_idx));
+                    self.setLocalChecked(frame, current, assign.target, try self.evalListLiteral(frame, assign.elems, self.store.getLocal(assign.target).layout_idx));
                     current = assign.next;
                 },
                 .assign_struct => |assign| {
-                    frame.setLocal(assign.target, try self.evalStructLiteral(frame, assign.fields, self.store.getLocal(assign.target).layout_idx));
+                    if (builtin.mode == .Debug) {
+                        const target_layout = self.store.getLocal(assign.target).layout_idx;
+                        const field_locals = self.store.getLocalSpan(assign.fields);
+                        std.debug.print(
+                            "LIR/interpreter assign_struct proc={d} stmt={d} target={d} target_layout={d} fields_len={d}\n",
+                            .{
+                                @intFromEnum(frame.proc_id),
+                                @intFromEnum(current),
+                                @intFromEnum(assign.target),
+                                @intFromEnum(target_layout),
+                                field_locals.len,
+                            },
+                        );
+                        for (field_locals, 0..) |field_local, i| {
+                            const field_layout = self.store.getLocal(field_local).layout_idx;
+                            const field_value = frame.getLocal(field_local);
+                            std.debug.print(
+                                "  field[{d}] local={d} layout={d} ptr=0x{x}\n",
+                                .{ i, @intFromEnum(field_local), @intFromEnum(field_layout), @intFromPtr(field_value.ptr) },
+                            );
+                            const layout_val = self.layout_store.getLayout(field_layout);
+                            if (layout_val.tag == .tag_union) {
+                                std.debug.print(
+                                    "    field[{d}] disc={d}\n",
+                                    .{ i, self.helper.readTagDiscriminant(field_value, field_layout) },
+                                );
+                            }
+                        }
+                        self.debugPrintLayoutShape("  target layout", target_layout);
+                        for (field_locals, 0..) |field_local, i| {
+                            self.debugPrintIndexedLayoutShape(i, self.store.getLocal(field_local).layout_idx);
+                        }
+                    }
+                    self.setLocalChecked(frame, current, assign.target, try self.evalStructLiteral(frame, assign.fields, self.store.getLocal(assign.target).layout_idx));
                     current = assign.next;
                 },
                 .assign_tag => |assign| {
-                    frame.setLocal(assign.target, try self.evalTagLiteral(frame, assign.discriminant, assign.args, self.store.getLocal(assign.target).layout_idx));
+                    self.setLocalChecked(frame, current, assign.target, try self.evalTagLiteral(frame, assign.discriminant, assign.payload, self.store.getLocal(assign.target).layout_idx));
                     current = assign.next;
                 },
                 .set_local => |assign| {
-                    frame.setLocal(
+                    self.setLocalChecked(
+                        frame,
+                        current,
                         assign.target,
-                        self.normalizeValueToLayout(
+                        try self.coerceValueToLayout(
                             frame.getLocal(assign.value),
                             self.store.getLocal(assign.value).layout_idx,
                             self.store.getLocal(assign.target).layout_idx,
@@ -789,22 +1507,24 @@ pub const Interpreter = struct {
                 .for_list => |for_stmt| {
                     const iterable = frame.getLocal(for_stmt.iterable);
                     const list_layout = self.store.getLocal(for_stmt.iterable).layout_idx;
-                    const elem_layout = self.listElemLayout(list_layout);
+                    const resolved_iterable = self.resolveListBaseValue(iterable, list_layout);
+                    const actual_elem_layout = self.listElemLayout(list_layout);
+                    const elem_layout = self.store.getLocal(for_stmt.elem).layout_idx;
                     const info = self.listElemInfo(list_layout);
-                    const rl = valueToRocList(iterable);
+                    const rl = valueToRocList(resolved_iterable.value);
 
                     var i: usize = 0;
                     while (i < rl.len()) : (i += 1) {
                         const elem_value = if (info.width == 0 or rl.bytes == null)
-                            Value.zst
+                            try self.coerceValueToLayout(Value.zst, actual_elem_layout, elem_layout)
                         else
-                            self.normalizeValueToLayout(
+                            try self.coerceValueToLayout(
                                 .{ .ptr = rl.bytes.? + i * info.width },
+                                actual_elem_layout,
                                 elem_layout,
-                                self.store.getLocal(for_stmt.elem).layout_idx,
                             );
 
-                        frame.setLocal(for_stmt.elem, elem_value);
+                        self.setLocalChecked(frame, current, for_stmt.elem, elem_value);
                         const outcome = try self.execStmtChain(frame, for_stmt.body, null);
                         switch (outcome) {
                             .returned => |ret_local| return .{ .returned = ret_local },
@@ -827,7 +1547,8 @@ pub const Interpreter = struct {
                         "LIR/interpreter invariant violated: missing join point {d} in proc {d}",
                         .{ @intFromEnum(jump_stmt.target), @intFromEnum(frame.proc_id) },
                     );
-                    const arg_values = try self.collectLocalValues(frame, self.store.getLocalSpan(jump_stmt.args));
+                    const arg_locals = self.store.getLocalSpan(jump_stmt.args);
+                    const arg_values = try self.collectLocalValues(frame, arg_locals);
                     const params = self.store.getLocalSpan(join_info.params);
                     if (params.len != arg_values.len) {
                         std.debug.panic(
@@ -835,7 +1556,18 @@ pub const Interpreter = struct {
                             .{ @intFromEnum(jump_stmt.target), arg_values.len, params.len },
                         );
                     }
-                    for (params, arg_values) |param, arg| frame.setLocal(param, arg);
+                    for (params, arg_values, arg_locals) |param, arg, arg_local| {
+                        self.setLocalChecked(
+                            frame,
+                            current,
+                            param,
+                            try self.coerceValueToLayout(
+                                arg,
+                                self.store.getLocal(arg_local).layout_idx,
+                                self.store.getLocal(param).layout_idx,
+                            ),
+                        );
+                    }
                     current = join_info.body;
                 },
                 .ret => |ret_stmt| return .{ .returned = ret_stmt.value },
@@ -902,7 +1634,7 @@ pub const Interpreter = struct {
 
     fn evalAssignRef(self: *LirInterpreter, frame: *const Frame, op: LIR.RefOp, target_layout: layout_mod.Idx) Error!Value {
         return switch (op) {
-            .local => |source| self.normalizeValueToLayout(
+            .local => |source| self.coerceValueToLayout(
                 frame.getLocal(source),
                 self.store.getLocal(source).layout_idx,
                 target_layout,
@@ -920,12 +1652,31 @@ pub const Interpreter = struct {
                     struct_layout_val.data.struct_.idx,
                     field.field_idx,
                 );
-                const field_value = self.normalizeValueToLayout(
+                if (builtin.mode == .Debug and target_layout == .str) {
+                    std.debug.print(
+                        "LIR/interpreter field->str proc={d} source_local={d} source_layout={d} base_layout={d} field_idx={d} actual_field_layout={d} field_offset={d}\n",
+                        .{
+                            @intFromEnum(frame.proc_id),
+                            @intFromEnum(field.source),
+                            @intFromEnum(source_layout),
+                            @intFromEnum(struct_base.layout),
+                            field.field_idx,
+                            @intFromEnum(actual_field_layout),
+                            field_offset,
+                        },
+                    );
+                }
+                const field_value = try self.coerceValueToLayout(
                     struct_base.value.offset(field_offset),
                     actual_field_layout,
                     target_layout,
                 );
-                if (builtin.mode == .Debug and self.helper.sizeOf(target_layout) > 0 and field_value.isZst()) {
+                const target_layout_val = self.layout_store.getLayout(target_layout);
+                if (builtin.mode == .Debug and
+                    self.helper.sizeOf(target_layout) > 0 and
+                    target_layout_val.tag != .box_of_zst and
+                    field_value.isZst())
+                {
                     std.debug.panic(
                         "LIR/interpreter invariant violated: field projection source_local={d} source_layout={d} base_layout={d} field_idx={d} actual_field_layout={d} target_layout={d} normalized to ZST",
                         .{
@@ -963,7 +1714,7 @@ pub const Interpreter = struct {
                             payload_layout_val.data.struct_.idx,
                             payload.payload_idx,
                         );
-                        break :blk self.normalizeValueToLayout(
+                        break :blk try self.coerceValueToLayout(
                             tag_base.value.offset(field_offset),
                             actual_field_layout,
                             target_layout,
@@ -976,7 +1727,7 @@ pub const Interpreter = struct {
                                 .{ payload.payload_idx, @intFromEnum(actual_payload_layout) },
                             );
                         }
-                        break :blk self.normalizeValueToLayout(tag_base.value, actual_payload_layout, target_layout);
+                        break :blk try self.coerceValueToLayout(tag_base.value, actual_payload_layout, target_layout);
                     },
                 }
             },
@@ -992,9 +1743,9 @@ pub const Interpreter = struct {
                     );
                 }
                 const actual_payload_layout = self.tagPayloadLayout(source_layout, payload.tag_discriminant);
-                break :blk self.normalizeValueToLayout(tag_base.value, actual_payload_layout, target_layout);
+                break :blk try self.coerceValueToLayout(tag_base.value, actual_payload_layout, target_layout);
             },
-            .nominal => |nominal| self.normalizeValueToLayout(
+            .nominal => |nominal| self.coerceValueToLayout(
                 frame.getLocal(nominal.backing_ref),
                 self.store.getLocal(nominal.backing_ref).layout_idx,
                 target_layout,
@@ -1210,7 +1961,7 @@ pub const Interpreter = struct {
                 base_layout_val.data.struct_.idx,
                 @intCast(i),
             );
-            const field_value = self.normalizeValueToLayout(
+            const field_value = try self.coerceValueToLayout(
                 frame.getLocal(field_local),
                 self.store.getLocal(field_local).layout_idx,
                 field_layout,
@@ -1277,48 +2028,23 @@ pub const Interpreter = struct {
         self: *LirInterpreter,
         frame: *const Frame,
         discriminant: u16,
-        args: LocalSpan,
+        payload_local: ?LocalId,
         union_layout: layout_mod.Idx,
     ) Error!Value {
         const allocated = try self.allocTagValue(union_layout);
         self.helper.writeTagDiscriminant(allocated.base, allocated.base_layout, discriminant);
 
         const payload_layout = self.tagPayloadLayout(union_layout, discriminant);
-        const payload_layout_val = self.layout_store.getLayout(payload_layout);
-        const arg_locals = self.store.getLocalSpan(args);
-
-        if (payload_layout_val.tag != .struct_) {
-            if (arg_locals.len == 1) {
-                const payload_size = self.helper.sizeOf(payload_layout);
-                if (payload_size > 0) {
-                    const payload_value = self.normalizeValueToLayout(
-                        frame.getLocal(arg_locals[0]),
-                        self.store.getLocal(arg_locals[0]).layout_idx,
-                        payload_layout,
-                    );
-                    allocated.base.copyFrom(payload_value, payload_size);
-                }
+        if (payload_local) |local| {
+            const payload_size = self.helper.sizeOf(payload_layout);
+            if (payload_size > 0) {
+                const payload_value = try self.coerceValueToLayout(
+                    frame.getLocal(local),
+                    self.store.getLocal(local).layout_idx,
+                    payload_layout,
+                );
+                allocated.base.copyFrom(payload_value, payload_size);
             }
-            return allocated.outer;
-        }
-
-        for (arg_locals, 0..) |arg_local, i| {
-            const field_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(
-                payload_layout_val.data.struct_.idx,
-                @intCast(i),
-            );
-            const field_size = self.helper.sizeOf(field_layout);
-            if (field_size == 0) continue;
-            const field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(
-                payload_layout_val.data.struct_.idx,
-                @intCast(i),
-            );
-            const field_value = self.normalizeValueToLayout(
-                frame.getLocal(arg_local),
-                self.store.getLocal(arg_local).layout_idx,
-                field_layout,
-            );
-            allocated.base.offset(field_offset).copyFrom(field_value, field_size);
         }
 
         return allocated.outer;
@@ -1348,14 +2074,27 @@ pub const Interpreter = struct {
         const elem_alignment: u32 = @intCast(sa.alignment.toByteUnits());
         const elems_rc = self.helper.containsRefcounted(elem_layout);
         const elem_data = try self.allocRocDataWithRc(total_elem_bytes, elem_alignment, elems_rc);
+        const elem_layout_val = self.layout_store.getLayout(elem_layout);
         for (elem_locals, 0..) |elem_local, i| {
             const offset = i * elem_size;
-            const elem_value = self.normalizeValueToLayout(
+            const elem_value = try self.coerceValueToLayout(
                 frame.getLocal(elem_local),
                 self.store.getLocal(elem_local).layout_idx,
                 elem_layout,
             );
+            if (builtin.mode == .Debug and elem_layout_val.tag == .box and self.readBoxedDataPointer(elem_value) == null) {
+                std.debug.panic(
+                    "LIR/interpreter invariant violated: list literal source local {d} in proc {d} had null boxed element for list elem layout {d}",
+                    .{ @intFromEnum(elem_local), @intFromEnum(frame.proc_id), @intFromEnum(elem_layout) },
+                );
+            }
             @memcpy(elem_data[offset..][0..elem_size], elem_value.readBytes(elem_size));
+            if (builtin.mode == .Debug and elem_layout_val.tag == .box and self.readBoxedDataPointer(.{ .ptr = elem_data + offset }) == null) {
+                std.debug.panic(
+                    "LIR/interpreter invariant violated: list literal wrote null boxed element at index {d} from local {d} in proc {d} for elem layout {d}",
+                    .{ i, @intFromEnum(elem_local), @intFromEnum(frame.proc_id), @intFromEnum(elem_layout) },
+                );
+            }
         }
 
         return self.rocListToValue(.{
@@ -1695,16 +2434,77 @@ pub const Interpreter = struct {
         return rl;
     }
 
+    fn resolveListLayout(self: *LirInterpreter, list_layout: layout_mod.Idx) layout_mod.Idx {
+        const layout_val = self.layout_store.getLayout(list_layout);
+        return switch (layout_val.tag) {
+            .box => self.resolveListLayout(layout_val.data.box),
+            .list, .list_of_zst => list_layout,
+            else => std.debug.panic(
+                "LIR/interpreter invariant violated: expected list or boxed list layout, got {d}",
+                .{@intFromEnum(list_layout)},
+            ),
+        };
+    }
+
+    const ResolvedListBase = struct {
+        value: Value,
+        layout: layout_mod.Idx,
+    };
+
+    fn resolveListBaseValue(
+        self: *LirInterpreter,
+        list_val: Value,
+        list_layout: layout_mod.Idx,
+    ) ResolvedListBase {
+        const resolved_layout = self.resolveListLayout(list_layout);
+        return .{
+            .value = self.normalizeValueToLayout(list_val, list_layout, resolved_layout),
+            .layout = resolved_layout,
+        };
+    }
+
+    fn valueToRocListForLayout(
+        self: *LirInterpreter,
+        list_val: Value,
+        list_layout: layout_mod.Idx,
+    ) RocList {
+        return valueToRocList(self.resolveListBaseValue(list_val, list_layout).value);
+    }
+
     fn rocListToValue(self: *LirInterpreter, rl: RocList, ret_layout: layout_mod.Idx) Error!Value {
-        const val = try self.alloc(ret_layout);
-        @memcpy(val.ptr[0..@sizeOf(RocList)], std.mem.asBytes(&rl));
-        return val;
+        const ret_layout_val = self.layout_store.getLayout(ret_layout);
+        switch (ret_layout_val.tag) {
+            .box => {
+                const box_info = self.layout_store.getBoxInfo(ret_layout_val);
+                const data_ptr = try self.allocRocDataWithRc(
+                    box_info.elem_size,
+                    box_info.elem_alignment,
+                    box_info.contains_refcounted,
+                );
+                @memcpy(data_ptr[0..@sizeOf(RocList)], std.mem.asBytes(&rl));
+
+                const boxed = try self.alloc(ret_layout);
+                const target_usize = self.layout_store.targetUsize();
+                if (target_usize.size() == 8) {
+                    boxed.write(usize, @intFromPtr(data_ptr));
+                } else {
+                    boxed.write(u32, @intCast(@intFromPtr(data_ptr)));
+                }
+                return boxed;
+            },
+            .box_of_zst => return Value.zst,
+            else => {
+                const val = try self.alloc(ret_layout);
+                @memcpy(val.ptr[0..@sizeOf(RocList)], std.mem.asBytes(&rl));
+                return val;
+            },
+        }
     }
 
     const ListElemInfo = struct { alignment: u32, width: usize, rc: bool };
 
     fn listElemInfo(self: *LirInterpreter, list_layout: layout_mod.Idx) ListElemInfo {
-        const l = self.layout_store.getLayout(list_layout);
+        const l = self.layout_store.getLayout(self.resolveListLayout(list_layout));
         if (l.tag == .list) {
             const elem_idx = l.data.list;
             const sa = self.helper.sizeAlignOf(elem_idx);
@@ -1718,7 +2518,7 @@ pub const Interpreter = struct {
     }
 
     fn listElemLayout(self: *LirInterpreter, list_layout: layout_mod.Idx) layout_mod.Idx {
-        const l = self.layout_store.getLayout(list_layout);
+        const l = self.layout_store.getLayout(self.resolveListLayout(list_layout));
         if (l.tag == .list) return l.data.list;
         return .zst;
     }
@@ -1844,7 +2644,7 @@ pub const Interpreter = struct {
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
                 if (sj != 0) return error.Crash;
-                const result = builtins.str.fromUtf8C(valueToRocList(args[0]), UpdateMode.Immutable, &self.roc_ops);
+                const result = builtins.str.fromUtf8C(self.valueToRocListForLayout(args[0], arg_layout), UpdateMode.Immutable, &self.roc_ops);
 
                 const ret_layout_val = self.layout_store.getLayout(ll.ret_layout);
                 if (ret_layout_val.tag != .tag_union) {
@@ -1906,7 +2706,7 @@ pub const Interpreter = struct {
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
                 if (sj != 0) return error.Crash;
-                const result = builtins.str.fromUtf8Lossy(valueToRocList(args[0]), &self.roc_ops);
+                const result = builtins.str.fromUtf8Lossy(self.valueToRocListForLayout(args[0], arg_layout), &self.roc_ops);
                 break :blk self.rocStrToValue(result, ll.ret_layout);
             },
             .str_split_on => blk: {
@@ -1922,7 +2722,7 @@ pub const Interpreter = struct {
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
                 if (sj != 0) return error.Crash;
-                const result = builtins.str.strJoinWithC(valueToRocList(args[0]), valueToRocStr(args[1]), &self.roc_ops);
+                const result = builtins.str.strJoinWithC(self.valueToRocListForLayout(args[0], arg_layout), valueToRocStr(args[1]), &self.roc_ops);
                 break :blk self.rocStrToValue(result, ll.ret_layout);
             },
             .str_with_capacity => blk: {
@@ -2026,13 +2826,13 @@ pub const Interpreter = struct {
 
             // ── List ops ──
             .list_len => blk: {
-                const rl = valueToRocList(args[0]);
+                const rl = self.valueToRocListForLayout(args[0], arg_layout);
                 const val = try self.alloc(ll.ret_layout);
                 val.write(u64, @intCast(rl.len()));
                 break :blk val;
             },
             .list_get_unsafe => blk: {
-                const rl = valueToRocList(args[0]);
+                const rl = self.valueToRocListForLayout(args[0], arg_layout);
                 const idx = args[1].read(u64);
                 const info = self.listElemInfo(arg_layout);
                 if (info.width == 0 or rl.bytes == null) break :blk try self.alloc(ll.ret_layout);
@@ -2051,7 +2851,7 @@ pub const Interpreter = struct {
                 const sj = crash_boundary.set();
                 if (sj != 0) return error.Crash;
                 const result = builtins.list.listAppend(
-                    valueToRocList(args[0]),
+                    self.valueToRocListForLayout(args[0], arg_layout),
                     info.alignment,
                     @ptrCast(args[1].ptr),
                     info.width,
@@ -2067,8 +2867,8 @@ pub const Interpreter = struct {
             .list_concat => blk: {
                 const info = self.listElemInfo(arg_layout);
                 trace.log("list_concat: elem_width={d} align={d} rc={any}", .{ info.width, info.alignment, info.rc });
-                const list_a = valueToRocList(args[0]);
-                const list_b = valueToRocList(args[1]);
+                const list_a = self.valueToRocListForLayout(args[0], arg_layout);
+                const list_b = self.valueToRocListForLayout(args[1], arg_layout);
                 if (info.width == 0) {
                     const total_len = list_a.len() + list_b.len();
                     const result = RocList{
@@ -2108,7 +2908,7 @@ pub const Interpreter = struct {
                     fn f(_: ?[*]u8, _: ?[*]u8) callconv(.c) void {}
                 }).f;
                 const result = builtins.list.listPrepend(
-                    valueToRocList(args[0]),
+                    self.valueToRocListForLayout(args[0], arg_layout),
                     info.alignment,
                     @ptrCast(args[1].ptr),
                     info.width,
@@ -2137,7 +2937,7 @@ pub const Interpreter = struct {
                 const start_field_off = self.layout_store.getStructFieldOffsetByOriginalIndex(record_idx, 1);
                 const start = args[1].offset(start_field_off).read(u64);
                 const len = args[1].offset(len_field_off).read(u64);
-                const source_list = valueToRocList(args[0]);
+                const source_list = self.valueToRocListForLayout(args[0], arg_layout);
 
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
@@ -2163,7 +2963,7 @@ pub const Interpreter = struct {
                 const sj = crash_boundary.set();
                 if (sj != 0) return error.Crash;
                 const result = builtins.list.listDropAt(
-                    valueToRocList(args[0]),
+                    self.valueToRocListForLayout(args[0], arg_layout),
                     info.alignment,
                     info.width,
                     info.rc,
@@ -2188,7 +2988,7 @@ pub const Interpreter = struct {
                 // listReplace writes old element into out_element
                 const old_elem = try self.allocBytes(info.width);
                 const result = builtins.list.listReplace(
-                    valueToRocList(args[0]),
+                    self.valueToRocListForLayout(args[0], arg_layout),
                     info.alignment,
                     args[1].read(u64),
                     @ptrCast(args[2].ptr),
@@ -2234,7 +3034,7 @@ pub const Interpreter = struct {
                 const sj = crash_boundary.set();
                 if (sj != 0) return error.Crash;
                 const result = builtins.list.listReserve(
-                    valueToRocList(args[0]),
+                    self.valueToRocListForLayout(args[0], arg_layout),
                     info.alignment,
                     args[1].read(u64),
                     info.width,
@@ -2253,7 +3053,7 @@ pub const Interpreter = struct {
                 const sj = crash_boundary.set();
                 if (sj != 0) return error.Crash;
                 const result = builtins.list.listReleaseExcessCapacity(
-                    valueToRocList(args[0]),
+                    self.valueToRocListForLayout(args[0], arg_layout),
                     info.alignment,
                     info.width,
                     info.rc,
@@ -2915,10 +3715,10 @@ pub const Interpreter = struct {
                 if (self.helper.sizeOf(payload_layout) == 0) break :blk true;
                 break :blk try self.valuesEqual(a_base.value, b_base.value, payload_layout);
             },
-            .list_of_zst => valueToRocList(a).len() == valueToRocList(b).len(),
+            .list_of_zst => self.valueToRocListForLayout(a, layout_idx).len() == self.valueToRocListForLayout(b, layout_idx).len(),
             .list => blk: {
-                const a_list = valueToRocList(a);
-                const b_list = valueToRocList(b);
+                const a_list = self.valueToRocListForLayout(a, layout_idx);
+                const b_list = self.valueToRocListForLayout(b, layout_idx);
                 if (a_list.len() != b_list.len()) break :blk false;
                 const elem_layout = self.listElemLayout(layout_idx);
                 const elem_size = self.helper.sizeOf(elem_layout);
@@ -3253,7 +4053,7 @@ pub const Interpreter = struct {
     // ── List operation helpers ──
 
     fn evalListFirst(self: *LirInterpreter, list_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx) Error!Value {
-        const rl = valueToRocList(list_arg);
+        const rl = self.valueToRocListForLayout(list_arg, list_layout);
         const info = self.listElemInfo(list_layout);
         const val = try self.alloc(ret_layout);
         if (rl.len() > 0 and rl.bytes != null and info.width > 0) {
@@ -3267,7 +4067,7 @@ pub const Interpreter = struct {
     }
 
     fn evalListLast(self: *LirInterpreter, list_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx) Error!Value {
-        const rl = valueToRocList(list_arg);
+        const rl = self.valueToRocListForLayout(list_arg, list_layout);
         const info = self.listElemInfo(list_layout);
         const val = try self.alloc(ret_layout);
         if (rl.len() > 0 and rl.bytes != null and info.width > 0) {
@@ -3287,7 +4087,7 @@ pub const Interpreter = struct {
         const sj = crash_boundary.set();
         if (sj != 0) return error.Crash;
         const result = builtins.list.listSublist(
-            valueToRocList(list_arg),
+            self.valueToRocListForLayout(list_arg, list_layout),
             info.alignment,
             info.width,
             info.rc,
@@ -3301,7 +4101,7 @@ pub const Interpreter = struct {
     }
 
     fn evalListDropLast(self: *LirInterpreter, list_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx) Error!Value {
-        const rl = valueToRocList(list_arg);
+        const rl = self.valueToRocListForLayout(list_arg, list_layout);
         const info = self.listElemInfo(list_layout);
         const len = rl.len();
         if (len == 0) return self.rocListToValue(rl, ret_layout);
@@ -3330,7 +4130,7 @@ pub const Interpreter = struct {
         const sj = crash_boundary.set();
         if (sj != 0) return error.Crash;
         const result = builtins.list.listSublist(
-            valueToRocList(list_arg),
+            self.valueToRocListForLayout(list_arg, list_layout),
             info.alignment,
             info.width,
             info.rc,
@@ -3344,7 +4144,7 @@ pub const Interpreter = struct {
     }
 
     fn evalListTakeLast(self: *LirInterpreter, list_arg: Value, count_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx) Error!Value {
-        const rl = valueToRocList(list_arg);
+        const rl = self.valueToRocListForLayout(list_arg, list_layout);
         const info = self.listElemInfo(list_layout);
         const len = rl.len();
         const take = count_arg.read(u64);
@@ -3368,7 +4168,7 @@ pub const Interpreter = struct {
     }
 
     fn evalListReverse(self: *LirInterpreter, list_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx) Error!Value {
-        const rl = valueToRocList(list_arg);
+        const rl = self.valueToRocListForLayout(list_arg, list_layout);
         const info = self.listElemInfo(list_layout);
         if (rl.len() <= 1 or rl.bytes == null or info.width == 0)
             return self.rocListToValue(rl, ret_layout);
@@ -3394,7 +4194,7 @@ pub const Interpreter = struct {
     }
 
     fn evalListSplitFirst(self: *LirInterpreter, list_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx) Error!Value {
-        const rl = valueToRocList(list_arg);
+        const rl = self.valueToRocListForLayout(list_arg, list_layout);
         const info = self.listElemInfo(list_layout);
         const val = try self.alloc(ret_layout);
         if (rl.len() > 0 and rl.bytes != null and info.width > 0) {
@@ -3427,7 +4227,7 @@ pub const Interpreter = struct {
     }
 
     fn evalListSplitLast(self: *LirInterpreter, list_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx) Error!Value {
-        const rl = valueToRocList(list_arg);
+        const rl = self.valueToRocListForLayout(list_arg, list_layout);
         const info = self.listElemInfo(list_layout);
         const val = try self.alloc(ret_layout);
         if (rl.len() > 0 and rl.bytes != null and info.width > 0) {
@@ -3635,9 +4435,10 @@ pub const Interpreter = struct {
                         .{ @intFromEnum(struct_layout), @intFromEnum(inner_layout) },
                     );
                 }
-                const data_ptr = self.readBoxedDataPointer(struct_val) orelse {
-                    return .{ .value = Value.zst, .layout = inner_layout };
-                };
+                const data_ptr = self.readBoxedDataPointer(struct_val) orelse std.debug.panic(
+                    "LIR/interpreter invariant violated: boxed struct layout {d} had null data pointer for inner layout {d}",
+                    .{ @intFromEnum(struct_layout), @intFromEnum(inner_layout) },
+                );
                 return .{
                     .value = .{ .ptr = data_ptr },
                     .layout = inner_layout,
@@ -3662,9 +4463,10 @@ pub const Interpreter = struct {
         const union_layout_val = self.layout_store.getLayout(union_layout);
         if (union_layout_val.tag == .box) {
             const inner_layout = union_layout_val.data.box;
-            const data_ptr = self.readBoxedDataPointer(union_val) orelse {
-                return .{ .value = Value.zst, .layout = inner_layout };
-            };
+            const data_ptr = self.readBoxedDataPointer(union_val) orelse std.debug.panic(
+                "LIR/interpreter invariant violated: boxed tag union layout {d} had null data pointer for inner layout {d}",
+                .{ @intFromEnum(union_layout), @intFromEnum(inner_layout) },
+            );
             return .{
                 .value = .{ .ptr = data_ptr },
                 .layout = inner_layout,
@@ -3709,7 +4511,10 @@ pub const Interpreter = struct {
         switch (actual_layout_val.tag) {
             .box => {
                 if (actual_layout_val.data.box == expected_layout) {
-                    const data_ptr = self.readBoxedDataPointer(value) orelse return Value.zst;
+                    const data_ptr = self.readBoxedDataPointer(value) orelse std.debug.panic(
+                        "LIR/interpreter invariant violated: expected boxed layout {d} to contain data for inner layout {d}, but observed null box pointer",
+                        .{ @intFromEnum(actual_layout), @intFromEnum(expected_layout) },
+                    );
                     return .{ .ptr = data_ptr };
                 }
             },
@@ -3718,6 +4523,222 @@ pub const Interpreter = struct {
         }
 
         return value;
+    }
+
+    fn coerceValueToLayout(
+        self: *LirInterpreter,
+        value: Value,
+        actual_layout: layout_mod.Idx,
+        expected_layout: layout_mod.Idx,
+    ) Error!Value {
+        if (actual_layout == expected_layout) return value;
+
+        const actual_layout_val = self.layout_store.getLayout(actual_layout);
+        const expected_layout_val = self.layout_store.getLayout(expected_layout);
+        switch (expected_layout_val.tag) {
+            .box => {
+                return try self.coerceValueIntoBox(value, actual_layout, expected_layout);
+            },
+            .box_of_zst => {
+                if (self.helper.sizeOf(actual_layout) == 0) return Value.zst;
+            },
+            .struct_ => {
+                if (actual_layout_val.tag == .struct_ or actual_layout_val.tag == .box) {
+                    return try self.coerceStructValue(value, actual_layout, expected_layout);
+                }
+            },
+            .tag_union => {
+                if (actual_layout_val.tag == .tag_union or actual_layout_val.tag == .box) {
+                    return try self.coerceTagUnionValue(value, actual_layout, expected_layout);
+                }
+            },
+            else => {},
+        }
+
+        return self.normalizeValueToLayout(value, actual_layout, expected_layout);
+    }
+
+    fn coerceValueIntoBox(
+        self: *LirInterpreter,
+        value: Value,
+        actual_layout: layout_mod.Idx,
+        expected_box_layout: layout_mod.Idx,
+    ) Error!Value {
+        const expected_layout_val = self.layout_store.getLayout(expected_box_layout);
+        switch (expected_layout_val.tag) {
+            .box_of_zst => return Value.zst,
+            .box => {
+                const inner_layout = expected_layout_val.data.box;
+                const inner_value = try self.coerceValueToLayout(value, actual_layout, inner_layout);
+                const box_info = self.layout_store.getBoxInfo(expected_layout_val);
+                const data_ptr = try self.allocRocDataWithRc(
+                    box_info.elem_size,
+                    box_info.elem_alignment,
+                    box_info.contains_refcounted,
+                );
+                if (box_info.elem_size > 0) {
+                    (Value{ .ptr = data_ptr }).copyFrom(inner_value, box_info.elem_size);
+                    if (self.helper.containsRefcounted(inner_layout)) {
+                        self.performRc(.incref, .{ .ptr = data_ptr }, inner_layout, 1);
+                    }
+                    if (builtin.mode == .Debug and @intFromEnum(expected_box_layout) == 29) {
+                        std.debug.print(
+                            "coerceValueIntoBox actual_layout={d} expected_box={d} inner_layout={d} data_ptr=0x{x} bytes:",
+                            .{
+                                @intFromEnum(actual_layout),
+                                @intFromEnum(expected_box_layout),
+                                @intFromEnum(inner_layout),
+                                @intFromPtr(data_ptr),
+                            },
+                        );
+                        for ((Value{ .ptr = data_ptr }).readBytes(@min(box_info.elem_size, @as(u32, 40)))) |byte| {
+                            std.debug.print(" {x:0>2}", .{byte});
+                        }
+                        std.debug.print("\n", .{});
+                    }
+                }
+                const boxed = try self.alloc(expected_box_layout);
+                if (self.layout_store.targetUsize().size() == 8) {
+                    boxed.write(usize, @intFromPtr(data_ptr));
+                } else {
+                    boxed.write(u32, @intCast(@intFromPtr(data_ptr)));
+                }
+                return boxed;
+            },
+            else => unreachable,
+        }
+    }
+
+    fn coerceStructValue(
+        self: *LirInterpreter,
+        value: Value,
+        actual_layout: layout_mod.Idx,
+        expected_layout: layout_mod.Idx,
+    ) Error!Value {
+        const actual_base = self.resolveStructBaseValue(value, actual_layout);
+        const expected_alloc = try self.allocStructValue(expected_layout);
+
+        const actual_layout_val = self.layout_store.getLayout(actual_base.layout);
+        const expected_layout_val = self.layout_store.getLayout(expected_alloc.base_layout);
+        if (actual_layout_val.tag != .struct_ or expected_layout_val.tag != .struct_) {
+            return self.normalizeValueToLayout(value, actual_layout, expected_layout);
+        }
+
+        const actual_info = self.layout_store.getStructInfo(actual_layout_val);
+        const expected_info = self.layout_store.getStructInfo(expected_layout_val);
+        if (actual_info.fields.len != expected_info.fields.len) {
+            return self.normalizeValueToLayout(value, actual_layout, expected_layout);
+        }
+
+        if (builtin.mode == .Debug and
+            ((@intFromEnum(actual_layout) == 19 and @intFromEnum(expected_layout) == 26) or
+                (@intFromEnum(actual_layout) == 20 and @intFromEnum(expected_layout) == 30)))
+        {
+            std.debug.print(
+                "coerceStructValue actual_layout={d} expected_layout={d} base_ptr=0x{x}\n",
+                .{ @intFromEnum(actual_layout), @intFromEnum(expected_layout), @intFromPtr(actual_base.value.ptr) },
+            );
+        }
+
+        for (0..expected_info.fields.len) |i| {
+            const actual_field_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(actual_layout_val.data.struct_.idx, @intCast(i));
+            const expected_field_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(expected_layout_val.data.struct_.idx, @intCast(i));
+            const expected_field_size = self.helper.sizeOf(expected_field_layout);
+            if (expected_field_size == 0) continue;
+
+            const actual_field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(actual_layout_val.data.struct_.idx, @intCast(i));
+            const expected_field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(expected_layout_val.data.struct_.idx, @intCast(i));
+            const actual_field_value = actual_base.value.offset(actual_field_offset);
+            const coerced_field = try self.coerceValueToLayout(actual_field_value, actual_field_layout, expected_field_layout);
+            if (builtin.mode == .Debug and
+                ((@intFromEnum(actual_layout) == 19 and @intFromEnum(expected_layout) == 26) or
+                    (@intFromEnum(actual_layout) == 20 and @intFromEnum(expected_layout) == 30)))
+            {
+                std.debug.print(
+                    "  field[{d}] actual_layout={d} expected_layout={d} actual_off={d} expected_off={d} size={d}\n",
+                    .{
+                        i,
+                        @intFromEnum(actual_field_layout),
+                        @intFromEnum(expected_field_layout),
+                        actual_field_offset,
+                        expected_field_offset,
+                        expected_field_size,
+                    },
+                );
+                std.debug.print("    actual bytes:", .{});
+                for (actual_field_value.readBytes(@min(self.helper.sizeOf(actual_field_layout), @as(u32, 32)))) |byte| {
+                    std.debug.print(" {x:0>2}", .{byte});
+                }
+                std.debug.print("\n", .{});
+                std.debug.print("    coerced bytes:", .{});
+                for (coerced_field.readBytes(@min(expected_field_size, @as(u32, 32)))) |byte| {
+                    std.debug.print(" {x:0>2}", .{byte});
+                }
+                std.debug.print("\n", .{});
+            }
+            expected_alloc.base.offset(expected_field_offset).copyFrom(coerced_field, expected_field_size);
+        }
+
+        if (self.helper.containsRefcounted(expected_alloc.base_layout)) {
+            self.performRc(.incref, expected_alloc.base, expected_alloc.base_layout, 1);
+        }
+
+        return expected_alloc.outer;
+    }
+
+    fn coerceTagUnionValue(
+        self: *LirInterpreter,
+        value: Value,
+        actual_layout: layout_mod.Idx,
+        expected_layout: layout_mod.Idx,
+    ) Error!Value {
+        const actual_base = self.resolveTagUnionBaseValue(value, actual_layout);
+        const actual_base_layout_val = self.layout_store.getLayout(actual_base.layout);
+        const expected_layout_val = self.layout_store.getLayout(expected_layout);
+        const expected_base_layout = switch (expected_layout_val.tag) {
+            .box => expected_layout_val.data.box,
+            else => expected_layout,
+        };
+        const expected_base_layout_val = self.layout_store.getLayout(expected_base_layout);
+        if (actual_base_layout_val.tag != .tag_union or expected_base_layout_val.tag != .tag_union) {
+            return self.normalizeValueToLayout(value, actual_layout, expected_layout);
+        }
+
+        const discriminant = self.helper.readTagDiscriminant(actual_base.value, actual_base.layout);
+        const allocated = try self.allocTagValue(expected_layout);
+        self.helper.writeTagDiscriminant(allocated.base, allocated.base_layout, discriminant);
+
+        const actual_payload_layout = self.tagPayloadLayout(actual_base.layout, discriminant);
+        const expected_payload_layout = self.tagPayloadLayout(allocated.base_layout, discriminant);
+        const payload_size = self.helper.sizeOf(expected_payload_layout);
+        if (payload_size > 0) {
+            const coerced_payload = try self.coerceValueToLayout(actual_base.value, actual_payload_layout, expected_payload_layout);
+            allocated.base.copyFrom(coerced_payload, payload_size);
+        }
+
+        if (builtin.mode == .Debug and @intFromEnum(actual_base.layout) == 21 and @intFromEnum(expected_base_layout) == 28) {
+            std.debug.print(
+                "coerceTagUnionValue actual_layout={d} expected_layout={d} disc={d} payload_layout={d} payload_size={d} base_ptr=0x{x} bytes:",
+                .{
+                    @intFromEnum(actual_base.layout),
+                    @intFromEnum(expected_base_layout),
+                    discriminant,
+                    @intFromEnum(expected_payload_layout),
+                    payload_size,
+                    @intFromPtr(allocated.base.ptr),
+                },
+            );
+            for (allocated.base.readBytes(@min(self.helper.sizeOf(expected_base_layout), @as(u32, 40)))) |byte| {
+                std.debug.print(" {x:0>2}", .{byte});
+            }
+            std.debug.print("\n", .{});
+        }
+
+        if (self.helper.containsRefcounted(allocated.base_layout)) {
+            self.performRc(.incref, allocated.base, allocated.base_layout, 1);
+        }
+
+        return allocated.outer;
     }
 
     fn getLayout(self: *LirInterpreter, idx: layout_mod.Idx) Layout {

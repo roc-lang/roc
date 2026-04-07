@@ -285,7 +285,7 @@ pub const CFStmt = union(enum) {
         target: LocalId,
         result: ResultSemantics,
         discriminant: u16,
-        args: LocalSpan,
+        payload: ?LocalId,
         next: CFStmtId,
     },
     set_local: struct {

@@ -44,10 +44,12 @@ pub const Field = struct {
 
 pub const Content = union(enum) {
     placeholder,
+    link: TypeId,
     func: struct {
         arg: TypeId,
         ret: TypeId,
     },
+    nominal: TypeId,
     list: TypeId,
     box: TypeId,
     tuple: TypeSpan,
@@ -102,7 +104,24 @@ pub const Store = struct {
     }
 
     pub fn getType(self: *const Store, id: TypeId) Content {
-        return self.types.items[@intFromEnum(id)];
+        var current = id;
+        while (true) {
+            switch (self.types.items[@intFromEnum(current)]) {
+                .link => |next| current = next,
+                .nominal => |next| current = next,
+                else => |content| return content,
+            }
+        }
+    }
+
+    pub fn getTypePreservingNominal(self: *const Store, id: TypeId) Content {
+        var current = id;
+        while (true) {
+            switch (self.types.items[@intFromEnum(current)]) {
+                .link => |next| current = next,
+                else => |content| return content,
+            }
+        }
     }
 
     pub fn addTypeSpan(self: *Store, ids: []const TypeId) std.mem.Allocator.Error!TypeSpan {
@@ -165,12 +184,14 @@ pub const Store = struct {
         }
         try visited.append(self.allocator, .{ .left = a, .right = b });
 
-        const left = self.getType(a);
-        const right = self.getType(b);
+        const left = self.getTypePreservingNominal(a);
+        const right = self.getTypePreservingNominal(b);
         if (@as(std.meta.Tag(Content), left) != @as(std.meta.Tag(Content), right)) return false;
 
         return switch (left) {
             .placeholder => false,
+            .link => unreachable,
+            .nominal => |backing| self.equalIdsVisited(backing, right.nominal, visited),
             .primitive => |prim| prim == right.primitive,
             .func => |func| blk: {
                 const right_func = right.func;

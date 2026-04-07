@@ -51,7 +51,13 @@ pub const Queue = struct {
         return null;
     }
 
-    pub fn solvedDefs(self: *const Queue, allocator: std.mem.Allocator) std.mem.Allocator.Error![]ast.Def {
+    pub fn solvedDefs(
+        self: *const Queue,
+        allocator: std.mem.Allocator,
+        _: *solved.Type.Store,
+        _: *type_mod.Store,
+        _: *const symbol_mod.Store,
+    ) std.mem.Allocator.Error![]ast.Def {
         var out = std.ArrayList(ast.Def).empty;
         errdefer out.deinit(allocator);
         for (self.items.items) |item| {

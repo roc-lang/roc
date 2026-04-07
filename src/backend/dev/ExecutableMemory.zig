@@ -87,19 +87,6 @@ pub const ExecutableMemory = struct {
         return func();
     }
 
-    /// Call the code as a function that takes a result pointer and returns void.
-    /// This is the Roc calling convention for functions that return values.
-    pub fn callWithResultPtr(self: *const Self, result_ptr: *anyopaque) void {
-        const func: *const fn (*anyopaque) callconv(.c) void = @ptrCast(@alignCast(self.entryPtr()));
-        func(result_ptr);
-    }
-
-    /// Call the code as a function that takes a result pointer and RocOps pointer.
-    pub fn callWithResultPtrAndRocOps(self: *const Self, result_ptr: *anyopaque, roc_ops: *anyopaque) void {
-        const func: *const fn (*anyopaque, *anyopaque) callconv(.c) void = @ptrCast(@alignCast(self.entryPtr()));
-        func(result_ptr, roc_ops);
-    }
-
     /// Call using the RocCall ABI: fn(roc_ops, ret_ptr, args_ptr) callconv(.c) void
     pub fn callRocABI(self: *const Self, roc_ops: *anyopaque, ret_ptr: *anyopaque, args_ptr: ?*anyopaque) void {
         const func: *const fn (*anyopaque, *anyopaque, ?*anyopaque) callconv(.c) void =
@@ -230,7 +217,7 @@ test "execute x86_64 with result ptr" {
 
     var result: i64 = 0;
     var dummy_roc_ops: u64 = 0xDEADBEEF;
-    mem.callWithResultPtrAndRocOps(@ptrCast(&result), @ptrCast(&dummy_roc_ops));
+    mem.callRocABI(@ptrCast(&dummy_roc_ops), @ptrCast(&result), null);
     try std.testing.expectEqual(@as(i64, 42), result);
 }
 
@@ -297,6 +284,6 @@ test "execute x86_64 with full prologue/epilogue" {
 
     var result: i64 = 0;
     var dummy_roc_ops: u64 = 0xDEADBEEF;
-    mem.callWithResultPtrAndRocOps(@ptrCast(&result), @ptrCast(&dummy_roc_ops));
+    mem.callRocABI(@ptrCast(&dummy_roc_ops), @ptrCast(&result), null);
     try std.testing.expectEqual(@as(i64, 42), result);
 }

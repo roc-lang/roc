@@ -1,4 +1,4 @@
-//! Lower executable lambdamono types into cor-style IR layouts.
+//! Lower executable lambdamono types into logical cor-style IR layouts.
 
 const std = @import("std");
 const mono = @import("lambdamono");
@@ -12,38 +12,32 @@ pub fn lowerType(
     cache: *LayoutCache,
     ty: mono.Type.TypeId,
 ) std.mem.Allocator.Error!ir.LayoutId {
-    var boxed = std.AutoHashMap(mono.Type.TypeId, void).init(ir_layouts.allocator);
-    defer boxed.deinit();
-    return try lowerTypeRec(mono_types, ir_layouts, cache, &boxed, ty);
+    return try lowerTypeRec(mono_types, ir_layouts, cache, ty);
 }
 
 fn lowerTypeRec(
     mono_types: *mono.Type.Store,
     ir_layouts: *ir.Store,
     cache: *LayoutCache,
-    boxed: *std.AutoHashMap(mono.Type.TypeId, void),
     ty: mono.Type.TypeId,
 ) std.mem.Allocator.Error!ir.LayoutId {
     if (cache.get(ty)) |cached| {
-        if (switch (ir_layouts.getNode(cached)) {
-            .unfilled => true,
-            else => false,
-        }) {
-            try boxed.put(ty, {});
-        }
         return cached;
     }
 
     const placeholder = try ir_layouts.addPlaceholder();
     try cache.put(ty, placeholder);
 
-    const lowered_content: ir.Content = switch (mono_types.getType(ty)) {
+    const lowered_content: ir.Content = switch (mono_types.getTypePreservingNominal(ty)) {
         .primitive => |prim| .{ .primitive = lowerPrim(prim) },
+        .nominal => |backing| .{
+            .nominal = try lowerTypeRec(mono_types, ir_layouts, cache, backing),
+        },
         .list => |elem| .{
-            .list = try lowerTypeRec(mono_types, ir_layouts, cache, boxed, elem),
+            .list = try lowerTypeRec(mono_types, ir_layouts, cache, elem),
         },
         .box => |elem| .{
-            .box = try lowerTypeRec(mono_types, ir_layouts, cache, boxed, elem),
+            .box = try lowerTypeRec(mono_types, ir_layouts, cache, elem),
         },
         .tuple => |tuple| blk: {
             const elems = mono_types.sliceTypeSpan(tuple);
@@ -51,7 +45,7 @@ fn lowerTypeRec(
             defer ir_layouts.allocator.free(layouts);
 
             for (elems, 0..) |elem, i| {
-                layouts[i] = try lowerTypeRec(mono_types, ir_layouts, cache, boxed, elem);
+                layouts[i] = try lowerTypeRec(mono_types, ir_layouts, cache, elem);
             }
             break :blk .{ .struct_ = try ir_layouts.addLayoutSpan(layouts) };
         },
@@ -61,7 +55,7 @@ fn lowerTypeRec(
             defer ir_layouts.allocator.free(layouts);
 
             for (fields, 0..) |field, i| {
-                layouts[i] = try lowerTypeRec(mono_types, ir_layouts, cache, boxed, field.ty);
+                layouts[i] = try lowerTypeRec(mono_types, ir_layouts, cache, field.ty);
             }
             break :blk .{ .struct_ = try ir_layouts.addLayoutSpan(layouts) };
         },
@@ -78,7 +72,7 @@ fn lowerTypeRec(
                     const payload_layouts = try ir_layouts.allocator.alloc(ir.LayoutId, args.len);
                     defer ir_layouts.allocator.free(payload_layouts);
                     for (args, 0..) |arg, arg_i| {
-                        payload_layouts[arg_i] = try lowerTypeRec(mono_types, ir_layouts, cache, boxed, arg);
+                        payload_layouts[arg_i] = try lowerTypeRec(mono_types, ir_layouts, cache, arg);
                     }
                     variants[i] = try ir_layouts.addContent(.{ .struct_ = try ir_layouts.addLayoutSpan(payload_layouts) });
                 }
@@ -87,13 +81,7 @@ fn lowerTypeRec(
         },
     };
 
-    if (boxed.contains(ty)) {
-        const inner = try ir_layouts.addContent(lowered_content);
-        ir_layouts.setContent(placeholder, .{ .box = inner });
-    } else {
-        ir_layouts.setContent(placeholder, lowered_content);
-    }
-
+    ir_layouts.setContent(placeholder, lowered_content);
     return placeholder;
 }
 

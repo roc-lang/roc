@@ -116,12 +116,17 @@ pub const Stmt = union(enum) {
         iterable: Var,
         body: BlockId,
     },
+    while_: struct {
+        cond: BlockId,
+        body: BlockId,
+    },
 };
 
 pub const Def = struct {
     name: Symbol,
     args: Span(Var),
     body: BlockId,
+    ret_layout: LayoutId,
     entry_ty: ?types.Var = null,
 };
 

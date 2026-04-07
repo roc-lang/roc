@@ -8,7 +8,6 @@ const types = @import("types");
 const graph_mod = @import("graph.zig");
 const layout_mod = @import("layout.zig");
 const store_mod = @import("store.zig");
-const work_mod = @import("work.zig");
 
 const ModuleEnv = can.ModuleEnv;
 const types_store = types.store;
@@ -22,7 +21,10 @@ const LayoutGraph = graph_mod.Graph;
 const GraphField = graph_mod.Field;
 const GraphNode = graph_mod.Node;
 const GraphRef = graph_mod.Ref;
-const ModuleVarKey = work_mod.ModuleVarKey;
+const ModuleVarKey = packed struct {
+    module_idx: u32,
+    var_: types.Var,
+};
 
 const ParentContext = enum {
     ordinary,
@@ -57,7 +59,7 @@ const ResolvedInput = struct {
 /// - `type_scope` substitutions
 /// - caller-vs-target module ownership for polymorphic substitutions
 /// - builtin nominal recognition (`Str`, `List`, `Box`, numeric builtins)
-/// - recursive nominal cycle handling before executable lowering erases those distinctions
+/// - logical recursive nominal structure until the shared `LIR` layout commit boxes only recursive nominal cycles
 pub const Resolver = struct {
     store: *Store,
     allocator: std.mem.Allocator,
@@ -262,18 +264,8 @@ pub const Resolver = struct {
             .ordinary,
             build_state,
         );
-
-        switch (backing_ref) {
-            .canonical => {
-                try build_state.refs_by_var.put(cache_key, backing_ref);
-                return backing_ref;
-            },
-            .local => |backing_node_id| {
-                if (backing_node_id == placeholder_id) unreachable;
-                build_state.graph.setNode(placeholder_id, build_state.graph.getNode(backing_node_id));
-                return placeholder_ref;
-            },
-        }
+        build_state.graph.setNode(placeholder_id, .{ .nominal = backing_ref });
+        return placeholder_ref;
     }
 
     fn buildRecordRef(
