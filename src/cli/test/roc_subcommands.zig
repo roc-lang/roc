@@ -1430,6 +1430,13 @@ fn runEchoExpectFailure(opt_args: []const []const u8, roc_file: []const u8) !voi
     try std.testing.expect(result.term == .Exited and result.term.Exited != 0);
 }
 
+test "echo platform: list concat with refcounted elements issue 9316 (interpreter)" {
+    try runEchoExpectOutput(&.{}, "test/echo/issue_9316.roc", "[\"BAZ\", \"DUCK\", \"XYZ\", \"ABC\"]\n");
+}
+test "echo platform: list concat with refcounted elements issue 9316 (dev backend)" {
+    try runEchoExpectOutput(&.{"--opt=dev"}, "test/echo/issue_9316.roc", "[\"BAZ\", \"DUCK\", \"XYZ\", \"ABC\"]\n");
+}
+
 test "echo platform: no main is not a default app (interpreter)" {
     try runEchoExpectFailure(&.{"--opt=interpreter"}, "test/echo/no_main.roc");
 }
