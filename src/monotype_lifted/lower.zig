@@ -540,6 +540,7 @@ const Lowerer = struct {
             .expect => |expr_id| .{ .expect = try self.lowerExprInto(lifted_defs, venv, expr_id) },
             .crash => |msg| .{ .crash = msg },
             .return_ => |expr_id| .{ .return_ = try self.lowerExprInto(lifted_defs, venv, expr_id) },
+            .break_ => .break_,
             .for_ => |for_stmt| .{ .for_ = .{
                 .patt = try self.lowerPat(for_stmt.patt),
                 .iterable = try self.lowerExprInto(lifted_defs, venv, for_stmt.iterable),
@@ -941,6 +942,7 @@ const Lowerer = struct {
             .expect => |expr_id| try self.collectFreeVarsExpr(expr_id, bound, free),
             .crash => {},
             .return_ => |expr_id| try self.collectFreeVarsExpr(expr_id, bound, free),
+            .break_ => {},
             .for_ => |for_stmt| {
                 try self.collectFreeVarsExpr(for_stmt.iterable, bound, free);
                 var added = std.ArrayList(Symbol).empty;
@@ -1156,6 +1158,7 @@ const Lowerer = struct {
             .expect => |expr_id| try self.collectBindingTypesExpr(expr_id),
             .crash => {},
             .return_ => |expr_id| try self.collectBindingTypesExpr(expr_id),
+            .break_ => {},
             .for_ => |for_stmt| {
                 try self.collectBindingTypesExpr(for_stmt.iterable);
                 try self.collectBindingTypesExpr(for_stmt.body);

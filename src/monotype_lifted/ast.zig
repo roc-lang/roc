@@ -139,6 +139,7 @@ pub const Stmt = union(enum) {
     expect: ExprId,
     crash: base.StringLiteral.Idx,
     return_: ExprId,
+    break_,
     for_: struct {
         patt: PatId,
         iterable: ExprId,

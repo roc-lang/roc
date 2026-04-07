@@ -309,6 +309,7 @@ const Lowerer = struct {
             .expect => |expr_id| .{ .expect = try self.instantiateExpr(expr_id) },
             .crash => |msg| .{ .crash = msg },
             .return_ => |expr_id| .{ .return_ = try self.instantiateExpr(expr_id) },
+            .break_ => .break_,
             .for_ => |for_stmt| .{ .for_ = .{
                 .patt = try self.instantiatePat(for_stmt.patt),
                 .iterable = try self.instantiateExpr(for_stmt.iterable),
@@ -782,6 +783,7 @@ const Lowerer = struct {
                 try self.unify(return_ty, value_ty);
                 break :blk try self.cloneEnv(venv);
             },
+            .break_ => try self.cloneEnv(venv),
             .for_ => |for_stmt| blk: {
                 const pat_result = try self.inferPat(venv, for_stmt.patt);
                 defer self.allocator.free(pat_result.additions);
@@ -933,6 +935,7 @@ const Lowerer = struct {
                         .expect => |nested| try self.propagateExprErasure(nested),
                         .crash => {},
                         .return_ => |nested| try self.propagateExprErasure(nested),
+                        .break_ => {},
                         .for_ => |for_stmt| {
                             try self.propagateExprErasure(for_stmt.iterable);
                             try self.propagateExprErasure(for_stmt.body);
@@ -1127,6 +1130,7 @@ const Lowerer = struct {
                         .expect => |nested| try self.collectExprEdges(nested, edges),
                         .crash => {},
                         .return_ => |nested| try self.collectExprEdges(nested, edges),
+                        .break_ => {},
                         .for_ => |for_stmt| {
                             try self.collectExprEdges(for_stmt.iterable, edges);
                             try self.collectExprEdges(for_stmt.body, edges);

@@ -855,6 +855,11 @@ const Lowerer = struct {
                 block.setTerm(.{ .return_ = value.? });
                 return false;
             },
+            .break_ => {
+                block.setTerm(.{ .@"unreachable" = {} });
+                try block.stmts.append(self.allocator, .break_);
+                return false;
+            },
             .for_ => |for_stmt| {
                 try self.lowerForStmt(block, env.*, for_stmt.patt, for_stmt.iterable, for_stmt.body);
                 return true;

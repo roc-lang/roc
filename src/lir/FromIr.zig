@@ -364,6 +364,7 @@ const ProcLowerer = struct {
     parent: *Lowerer,
     proc_id: LIR.LirProcSpecId,
     locals_by_var: std.AutoHashMap(VarKey, LIR.LocalId),
+    loop_break_targets: std.ArrayList(LIR.CFStmtId),
 
     const VarKey = struct {
         symbol: u64,
@@ -375,11 +376,13 @@ const ProcLowerer = struct {
             .parent = parent,
             .proc_id = proc_id,
             .locals_by_var = std.AutoHashMap(VarKey, LIR.LocalId).init(parent.allocator),
+            .loop_break_targets = .empty,
         };
     }
 
     fn deinit(self: *ProcLowerer) void {
         self.locals_by_var.deinit();
+        self.loop_break_targets.deinit(self.parent.allocator);
     }
 
     fn lowerVar(self: *ProcLowerer, value: ir.Ast.Var) std.mem.Allocator.Error!LIR.LocalId {
@@ -676,6 +679,7 @@ const ProcLowerer = struct {
             .return_ => |value| try self.parent.store.addCFStmt(.{ .ret = .{ .value = try self.lowerVar(value) } }),
             .crash => |msg| try self.parent.store.addCFStmt(.{ .crash = .{ .msg = try self.parent.lowerStringId(msg) } }),
             .runtime_error => try self.parent.store.addCFStmt(.runtime_error),
+            .@"unreachable" => try self.parent.store.addCFStmt(.runtime_error),
         };
     }
 
@@ -696,12 +700,17 @@ const ProcLowerer = struct {
                 .message = try self.lowerVar(message),
                 .next = next,
             } }),
-            .for_list => |for_stmt| try self.parent.store.addCFStmt(.{ .for_list = .{
-                .elem = try self.lowerVar(for_stmt.elem),
-                .iterable = try self.lowerVar(for_stmt.iterable),
-                .body = try self.lowerBlock(for_stmt.body, .loop_continue),
-                .next = next,
-            } }),
+            .break_ => self.currentLoopBreakTarget(),
+            .for_list => |for_stmt| blk: {
+                try self.loop_break_targets.append(self.parent.allocator, next);
+                defer _ = self.loop_break_targets.pop();
+                break :blk try self.parent.store.addCFStmt(.{ .for_list = .{
+                    .elem = try self.lowerVar(for_stmt.elem),
+                    .iterable = try self.lowerVar(for_stmt.iterable),
+                    .body = try self.lowerBlock(for_stmt.body, .loop_continue),
+                    .next = next,
+                } });
+            },
             .while_ => |while_stmt| try self.lowerWhileStmt(while_stmt, next),
         };
     }
@@ -747,6 +756,8 @@ const ProcLowerer = struct {
         next: LIR.CFStmtId,
     ) std.mem.Allocator.Error!LIR.CFStmtId {
         const loop_id = self.parent.nextJoin();
+        try self.loop_break_targets.append(self.parent.allocator, next);
+        defer _ = self.loop_break_targets.pop();
         const body = try self.lowerBlock(while_stmt.body, .{ .jump_void = loop_id });
         const cond = try self.lowerConditionBlock(while_stmt.cond, body, next);
         const enter_loop = try self.parent.store.addCFStmt(.{ .jump = .{
@@ -759,6 +770,13 @@ const ProcLowerer = struct {
             .body = cond,
             .remainder = enter_loop,
         } });
+    }
+
+    fn currentLoopBreakTarget(self: *const ProcLowerer) LIR.CFStmtId {
+        if (self.loop_break_targets.items.len == 0) {
+            return debugPanic("lir.from_ir.break_ invariant violated: break outside loop");
+        }
+        return self.loop_break_targets.items[self.loop_break_targets.items.len - 1];
     }
 
     fn lowerConditionBlock(

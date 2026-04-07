@@ -1566,6 +1566,10 @@ const Lowerer = struct {
                 .stmt = try self.output.addStmt(.{ .return_ = try self.specializeExpr(inst, mono_cache, venv, expr) }),
                 .env = try self.cloneEnv(venv),
             },
+            .break_ => .{
+                .stmt = try self.output.addStmt(.break_),
+                .env = try self.cloneEnv(venv),
+            },
             .for_ => |for_stmt| blk: {
                 const pat_result = try self.specializePat(inst, mono_cache, for_stmt.patt);
                 defer self.allocator.free(pat_result.additions);

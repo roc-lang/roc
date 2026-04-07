@@ -82,6 +82,7 @@ pub const Term = union(enum) {
     return_: Var,
     crash: base.StringLiteral.Idx,
     runtime_error,
+    @"unreachable": void,
 };
 
 pub const Block = struct {
@@ -111,6 +112,7 @@ pub const Stmt = union(enum) {
     },
     debug: Var,
     expect: Var,
+    break_,
     for_list: struct {
         elem: Var,
         iterable: Var,

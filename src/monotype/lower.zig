@@ -849,7 +849,7 @@ pub const Lowerer = struct {
             .e_lambda => |lambda| .{ .clos = try self.lowerAnonymousClosure(module_idx, type_scope, env, expr_idx, ty, lambda.args, lambda.body, null) },
             .e_closure => |closure| .{ .clos = try self.lowerClosureExpr(module_idx, type_scope, env, expr_idx, ty, closure, null) },
             .e_hosted_lambda => |_| debugTodo("monotype.lowerExpr hosted lambda"),
-            .e_record => |record| .{ .record = try self.lowerRecordFields(module_idx, type_scope, env, ty, record.fields) },
+            .e_record => |record| return self.lowerRecordExpr(module_idx, type_scope, env, ty, record),
             .e_empty_record => .unit,
             .e_tuple => |tuple| .{ .tuple = try self.lowerExprList(module_idx, type_scope, env, tuple.elems) },
             .e_list => |list| .{ .list = try self.lowerExprList(module_idx, type_scope, env, list.elems) },
@@ -2291,6 +2291,7 @@ pub const Lowerer = struct {
             .s_expect => |expect| try lowered.append(self.allocator, try self.program.store.addStmt(.{ .expect = try self.lowerExpr(module_idx, type_scope, env.*, expect.body) })),
             .s_crash => |crash| try lowered.append(self.allocator, try self.program.store.addStmt(.{ .crash = try self.copySourceStringLiteral(module_idx, crash.msg) })),
             .s_return => |ret| try lowered.append(self.allocator, try self.program.store.addStmt(.{ .return_ = try self.lowerExpr(module_idx, type_scope, env.*, ret.expr) })),
+            .s_break => |_| try lowered.append(self.allocator, try self.program.store.addStmt(.break_)),
             .s_for => |for_stmt| {
                 var body_env = try self.cloneEnv(env.*);
                 defer body_env.deinit();
@@ -2599,6 +2600,124 @@ pub const Lowerer = struct {
         return try self.program.store.addFieldExprSpan(out);
     }
 
+    fn lowerRecordExpr(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeCloneScope,
+        env: BindingEnv,
+        record_ty: type_mod.TypeId,
+        record: @FieldType(CIR.Expr, "e_record"),
+    ) std.mem.Allocator.Error!ast.ExprId {
+        if (record.ext) |base_expr_idx| {
+            return self.lowerRecordUpdateExpr(
+                module_idx,
+                type_scope,
+                env,
+                record_ty,
+                base_expr_idx,
+                record.fields,
+            );
+        }
+
+        return try self.program.store.addExpr(.{
+            .ty = record_ty,
+            .data = .{ .record = try self.lowerRecordFields(
+                module_idx,
+                type_scope,
+                env,
+                record_ty,
+                record.fields,
+            ) },
+        });
+    }
+
+    fn lowerRecordUpdateExpr(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeCloneScope,
+        env: BindingEnv,
+        record_ty: type_mod.TypeId,
+        base_expr_idx: CIR.Expr.Idx,
+        update_fields_span: CIR.RecordField.Span,
+    ) std.mem.Allocator.Error!ast.ExprId {
+        const record = switch (self.ctx.types.getType(record_ty)) {
+            .record => |record| record,
+            else => debugPanic("monotype invariant violated: record update lowered with non-record type", .{}),
+        };
+
+        const base_symbol = try self.ctx.addSyntheticSymbol(base.Ident.Idx.NONE);
+        const base_bind: ast.TypedSymbol = .{
+            .ty = record_ty,
+            .symbol = base_symbol,
+        };
+        const lowered_base = try self.lowerExprWithExpectedType(
+            module_idx,
+            type_scope,
+            env,
+            base_expr_idx,
+            record_ty,
+            null,
+        );
+        const base_decl = try self.program.store.addStmt(.{ .decl = .{
+            .bind = base_bind,
+            .body = lowered_base,
+        } });
+        const base_expr = try self.makeVarExpr(record_ty, base_symbol);
+
+        const cir_env = self.ctx.env(module_idx);
+        const update_field_ids = cir_env.store.sliceRecordFields(update_fields_span);
+        const lowered_updates = try self.allocator.alloc(ast.FieldExpr, update_field_ids.len);
+        defer self.allocator.free(lowered_updates);
+        for (update_field_ids, 0..) |field_idx, i| {
+            const field = cir_env.store.getRecordField(field_idx);
+            lowered_updates[i] = .{
+                .name = try self.ctx.copyExecutableIdent(module_idx, field.name),
+                .value = try self.lowerExprWithExpectedType(
+                    module_idx,
+                    type_scope,
+                    env,
+                    field.value,
+                    try self.lookupRecordFieldType(module_idx, record_ty, field.name),
+                    null,
+                ),
+            };
+        }
+
+        const final_fields = self.ctx.types.sliceFields(record.fields);
+        const lowered_fields = try self.allocator.alloc(ast.FieldExpr, final_fields.len);
+        defer self.allocator.free(lowered_fields);
+        for (final_fields, 0..) |field, i| {
+            const value = blk: {
+                for (lowered_updates) |updated| {
+                    if (updated.name == field.name) break :blk updated.value;
+                }
+                break :blk try self.program.store.addExpr(.{
+                    .ty = field.ty,
+                    .data = .{ .access = .{
+                        .record = base_expr,
+                        .field = field.name,
+                    } },
+                });
+            };
+            lowered_fields[i] = .{
+                .name = field.name,
+                .value = value,
+            };
+        }
+
+        const rebuilt_record = try self.program.store.addExpr(.{
+            .ty = record_ty,
+            .data = .{ .record = try self.program.store.addFieldExprSpan(lowered_fields) },
+        });
+        return try self.program.store.addExpr(.{
+            .ty = record_ty,
+            .data = .{ .block = .{
+                .stmts = try self.program.store.addStmtSpan(&.{base_decl}),
+                .final_expr = rebuilt_record,
+            } },
+        });
+    }
+
     const RecordedMethodArgs = struct {
         implicit_receiver: ?CIR.Expr.Idx,
         explicit_args: []const CIR.Expr.Idx,
@@ -2673,7 +2792,7 @@ pub const Lowerer = struct {
         const module_env = @constCast(self.ctx.env(module_idx));
         const args = self.getRecordedMethodArgs(module_idx, expr_idx, method_name);
         var call_scope: TypeCloneScope = undefined;
-        call_scope.initCloneAllFromParent(self.allocator, module_env, type_scope);
+        call_scope.initCloneAll(self.allocator, module_env);
         defer call_scope.deinit();
 
         const target = self.lookupResolvedDispatchTarget(module_idx, expr_idx) orelse
@@ -2687,21 +2806,17 @@ pub const Lowerer = struct {
 
         var arg_index: usize = 0;
         if (args.implicit_receiver) |receiver_expr_idx| {
-            if (self.lookupCallArgSpecializationVar(module_idx, type_scope, env, receiver_expr_idx)) |source_arg_var| {
-                const cloned_arg_var = try call_scope.instantiator.instantiateVar(source_arg_var);
-                const expected_arg_var = self.lookupFunctionArgVar(module_idx, cloned_func_var, arg_index) orelse debugPanic(
-                    "monotype static dispatch invariant violated: missing receiver argument on method target",
-                    .{},
-                );
-                try self.unifyClonedCheckerVars(module_idx, expected_arg_var, cloned_arg_var);
-            }
+            const source_arg_var = try self.lookupCallArgSpecializationVar(module_idx, type_scope, env, receiver_expr_idx);
+            const cloned_arg_var = try call_scope.instantiator.instantiateVar(source_arg_var);
+            const expected_arg_var = self.lookupFunctionArgVar(module_idx, cloned_func_var, arg_index) orelse debugPanic(
+                "monotype static dispatch invariant violated: missing receiver argument on method target",
+                .{},
+            );
+            try self.unifyClonedCheckerVars(module_idx, expected_arg_var, cloned_arg_var);
             arg_index += 1;
         }
         for (args.explicit_args, 0..) |arg_expr_idx, i| {
-            const source_arg_var = self.lookupCallArgSpecializationVar(module_idx, type_scope, env, arg_expr_idx) orelse {
-                arg_index += 1;
-                continue;
-            };
+            const source_arg_var = try self.lookupCallArgSpecializationVar(module_idx, type_scope, env, arg_expr_idx);
             const cloned_arg_var = try call_scope.instantiator.instantiateVar(source_arg_var);
             const expected_arg_var = self.lookupFunctionArgVar(module_idx, cloned_func_var, arg_index) orelse debugPanic(
                 "monotype static dispatch invariant violated: method target missing argument {d}",
@@ -2912,7 +3027,7 @@ pub const Lowerer = struct {
     ) std.mem.Allocator.Error!ExpectedTypeFact {
         const module_env = @constCast(self.ctx.env(module_idx));
         var call_scope: TypeCloneScope = undefined;
-        call_scope.initCloneAllFromParent(self.allocator, module_env, type_scope);
+        call_scope.initCloneAll(self.allocator, module_env);
         defer call_scope.deinit();
 
         const source_func_var = if (try self.synthesizeLocalFnCallVar(
@@ -2939,7 +3054,7 @@ pub const Lowerer = struct {
             .{module_idx},
         );
         for (arg_exprs, 0..) |arg_expr_idx, i| {
-            const source_arg_var = self.lookupCallArgSpecializationVar(module_idx, type_scope, env, arg_expr_idx) orelse continue;
+            const source_arg_var = try self.lookupCallArgSpecializationVar(module_idx, type_scope, env, arg_expr_idx);
             const cloned_arg_var = try call_scope.instantiator.instantiateVar(source_arg_var);
             const expected_arg_var = self.lookupFunctionArgVar(module_idx, cloned_func_var, i) orelse debugPanic(
                 "monotype invariant violated: specialized callee missing argument {d} in module {d}",
@@ -3072,7 +3187,7 @@ pub const Lowerer = struct {
         const arg_vars = try self.allocator.alloc(Var, arg_exprs.len);
         defer self.allocator.free(arg_vars);
         for (arg_exprs, 0..) |arg_expr_idx, i| {
-            arg_vars[i] = try self.scopedExprResultVar(module_idx, @constCast(type_scope), env, arg_expr_idx);
+            arg_vars[i] = try self.lookupCallArgSpecializationVar(module_idx, type_scope, env, arg_expr_idx);
         }
         const args_range = try module_env.types.appendVars(arg_vars);
         const ret_var = if (expected_result_var) |result_var|
@@ -3107,18 +3222,12 @@ pub const Lowerer = struct {
         type_scope: *const TypeCloneScope,
         env: BindingEnv,
         expr_idx: CIR.Expr.Idx,
-    ) ?Var {
-        const cir_env = self.ctx.env(module_idx);
-        return switch (cir_env.store.getExpr(expr_idx)) {
-            .e_lookup_local => self.lookupSpecializedExprVar(module_idx, env, expr_idx) orelse ModuleEnv.varFrom(expr_idx),
-            .e_lookup_external, .e_lambda, .e_closure, .e_hosted_lambda => ModuleEnv.varFrom(expr_idx),
-            .e_dot_access => |dot| if (dot.args != null)
-                self.lowerRecordedMethodResultVar(module_idx, @constCast(type_scope), env, expr_idx, dot.field_name) catch null
-            else
-                null,
-            .e_type_var_dispatch => |dispatch| self.lowerRecordedMethodResultVar(module_idx, @constCast(type_scope), env, expr_idx, dispatch.method_name) catch null,
-            else => null,
-        };
+    ) std.mem.Allocator.Error!Var {
+        _ = type_scope;
+        if (self.lookupSpecializedExprVar(module_idx, env, expr_idx)) |specialized| {
+            return specialized;
+        }
+        return ModuleEnv.varFrom(expr_idx);
     }
 
     fn lowerDirectCallCallee(
@@ -3265,16 +3374,7 @@ pub const Lowerer = struct {
                     .args = try self.lowerExprList(module_idx, type_scope, env, ll.args),
                 } },
             }),
-            .e_record => |record| try self.program.store.addExpr(.{
-                .ty = expected_ty,
-                .data = .{ .record = try self.lowerRecordFieldsWithExpectedType(
-                    module_idx,
-                    type_scope,
-                    env,
-                    expected_ty,
-                    record.fields,
-                ) },
-            }),
+            .e_record => |record| self.lowerRecordExpr(module_idx, type_scope, env, expected_ty, record),
             .e_tuple => |tuple| try self.program.store.addExpr(.{
                 .ty = expected_ty,
                 .data = .{ .tuple = try self.lowerTupleExprsWithExpectedType(
@@ -3770,7 +3870,10 @@ pub const Lowerer = struct {
                 try self.makePrimitiveType(prim)
             else
                 null,
-            .e_record => |record| try self.lowerExactRecordExprType(module_idx, type_scope, env, record.fields),
+            .e_record => |record| if (record.ext != null)
+                try self.lowerSolvedType(module_idx, type_scope, ModuleEnv.varFrom(expr_idx))
+            else
+                try self.lowerExactRecordExprType(module_idx, type_scope, env, record.fields),
             .e_empty_record => try self.makeEmptyRecordType(),
             .e_call => |call| blk: {
                 var current = (try self.lowerCallExpectedFnType(
