@@ -10,7 +10,7 @@ The layout module is responsible for determining how Roc data types are represen
 
 This module provides:
 - **Memory Layout**: Determining the optimal memory layout for Roc data structures
-- **Field Ordering**: Optimizing field placement for memory efficiency and cache performance
+- **Field Ordering**: Performing one shared stable alignment sort at the `IR -> LIR/layout` boundary while preserving earlier semantic field order among equal-alignment fields
 - **Alignment**: Ensuring proper memory alignment for different data types
 - **Size Calculation**: Computing the memory requirements for Roc types
 - **Runtime Support**: Layout information needed by the interpreter and code generator

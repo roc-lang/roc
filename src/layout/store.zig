@@ -421,13 +421,15 @@ pub const Store = struct {
     pub const insertTuple = insertStruct;
 
     /// Insert a record layout from field layouts in canonical record-field order.
-    /// Fields are sorted by alignment (descending), then by canonical index (ascending).
+    /// The shared layout commit performs one stable sort by descending alignment,
+    /// preserving canonical alphabetical order among equal-alignment fields.
     pub fn putRecord(self: *Self, field_layouts: []const Layout) std.mem.Allocator.Error!Idx {
         return self.putTuple(field_layouts);
     }
 
     /// Insert a struct layout from semantic fields.
-    /// `fields[i].index` is the canonical semantic field index before layout sorting.
+    /// `fields[i].index` is the canonical semantic field index before the shared
+    /// stable alignment sort at layout commit.
     pub fn putStructFields(self: *Self, fields: []const StructField) std.mem.Allocator.Error!Idx {
         const trace = tracy.traceNamed(@src(), "layoutStore.putStructFields");
         defer trace.end();
@@ -439,28 +441,7 @@ pub const Store = struct {
         var temp_fields = std.ArrayList(StructField).empty;
         defer temp_fields.deinit(self.allocator);
         try temp_fields.appendSlice(self.allocator, fields);
-
-        const AlignmentSortCtx = struct {
-            store: *Self,
-            target_usize: target.TargetUsize,
-            pub fn lessThan(ctx: @This(), lhs: StructField, rhs: StructField) bool {
-                const lhs_layout = ctx.store.getLayout(lhs.layout);
-                const rhs_layout = ctx.store.getLayout(rhs.layout);
-                const lhs_alignment = lhs_layout.alignment(ctx.target_usize);
-                const rhs_alignment = rhs_layout.alignment(ctx.target_usize);
-                if (lhs_alignment.toByteUnits() != rhs_alignment.toByteUnits()) {
-                    return lhs_alignment.toByteUnits() > rhs_alignment.toByteUnits();
-                }
-                return lhs.index < rhs.index;
-            }
-        };
-
-        std.mem.sort(
-            StructField,
-            temp_fields.items,
-            AlignmentSortCtx{ .store = self, .target_usize = self.targetUsize() },
-            AlignmentSortCtx.lessThan,
-        );
+        self.stableSortStructFieldsByLayoutAlignment(temp_fields.items);
 
         var max_alignment: usize = 1;
         var current_offset: u32 = 0;
@@ -482,7 +463,8 @@ pub const Store = struct {
     }
 
     /// Insert a tuple layout from concrete element layouts.
-    /// Fields are sorted by alignment (descending), then by original index (ascending).
+    /// The shared layout commit performs one stable sort by descending alignment,
+    /// preserving original tuple index order among equal-alignment elements.
     pub fn putTuple(self: *Self, element_layouts: []const Layout) std.mem.Allocator.Error!Idx {
         var temp_fields = std.ArrayList(StructField).empty;
         defer temp_fields.deinit(self.allocator);
@@ -493,6 +475,26 @@ pub const Store = struct {
         }
 
         return self.putStructFields(temp_fields.items);
+    }
+
+    fn stableSortStructFieldsByLayoutAlignment(self: *Self, fields: []StructField) void {
+        const AlignmentSortCtx = struct {
+            store: *Self,
+            target_usize: target.TargetUsize,
+
+            pub fn lessThan(ctx: @This(), lhs: StructField, rhs: StructField) bool {
+                const lhs_alignment = ctx.store.getLayout(lhs.layout).alignment(ctx.target_usize).toByteUnits();
+                const rhs_alignment = ctx.store.getLayout(rhs.layout).alignment(ctx.target_usize).toByteUnits();
+                return lhs_alignment > rhs_alignment;
+            }
+        };
+
+        std.sort.block(
+            StructField,
+            fields,
+            AlignmentSortCtx{ .store = self, .target_usize = self.targetUsize() },
+            AlignmentSortCtx.lessThan,
+        );
     }
 
     /// Create a tag union layout from pre-computed variant payload layouts.
@@ -543,28 +545,7 @@ pub const Store = struct {
         var temp_fields = std.ArrayList(StructField).empty;
         defer temp_fields.deinit(self.allocator);
         try temp_fields.appendSlice(self.allocator, input_fields);
-
-        const AlignmentSortCtx = struct {
-            store: *Self,
-            target_usize: target.TargetUsize,
-            pub fn lessThan(ctx: @This(), lhs: StructField, rhs: StructField) bool {
-                const lhs_layout = ctx.store.getLayout(lhs.layout);
-                const rhs_layout = ctx.store.getLayout(rhs.layout);
-                const lhs_alignment = lhs_layout.alignment(ctx.target_usize);
-                const rhs_alignment = rhs_layout.alignment(ctx.target_usize);
-                if (lhs_alignment.toByteUnits() != rhs_alignment.toByteUnits()) {
-                    return lhs_alignment.toByteUnits() > rhs_alignment.toByteUnits();
-                }
-                return lhs.index < rhs.index;
-            }
-        };
-
-        std.mem.sort(
-            StructField,
-            temp_fields.items,
-            AlignmentSortCtx{ .store = self, .target_usize = self.targetUsize() },
-            AlignmentSortCtx.lessThan,
-        );
+        self.stableSortStructFieldsByLayoutAlignment(temp_fields.items);
 
         var max_alignment: usize = 1;
         var current_offset: u32 = 0;
@@ -817,8 +798,8 @@ pub const Store = struct {
                                         switch (self_finder.graph.getNode(child_id)) {
                                             .struct_ => {},
                                             .pending, .nominal, .box, .list, .closure, .tag_union => {
-                                            has_boxable_slot_edge = true;
-                                            break;
+                                                has_boxable_slot_edge = true;
+                                                break;
                                             },
                                         }
                                     },
@@ -957,8 +938,7 @@ pub const Store = struct {
         for (graph.nodes.items, 0..) |node, i| {
             value_layouts[i] = switch (node) {
                 .pending => unreachable,
-                .nominal,
-                .box, .list, .closure, .struct_, .tag_union => raw_layouts[i],
+                .nominal, .box, .list, .closure, .struct_, .tag_union => raw_layouts[i],
             };
         }
 
@@ -1806,3 +1786,76 @@ pub const Store = struct {
         ptr.* = layout;
     }
 };
+
+test "layout store commits struct fields with a stable alignment sort" {
+    const testing = std.testing;
+
+    var store = try Store.init(&.{}, null, testing.allocator, .u64);
+    defer store.deinit();
+
+    const semantic_fields = [_]StructField{
+        .{ .index = 0, .layout = .u8 },
+        .{ .index = 1, .layout = .u64 },
+        .{ .index = 2, .layout = .u16 },
+        .{ .index = 3, .layout = .bool },
+        .{ .index = 4, .layout = .u8 },
+    };
+
+    const layout_idx = try store.putStructFields(&semantic_fields);
+    const layout_val = store.getLayout(layout_idx);
+    try testing.expectEqual(LayoutTag.struct_, layout_val.tag);
+
+    const struct_idx = layout_val.data.struct_.idx;
+    const committed = store.struct_fields.sliceRange(store.getStructData(struct_idx).getFields());
+    try testing.expectEqual(@as(usize, 5), committed.len);
+
+    const expected_indices = [_]u16{ 1, 2, 0, 3, 4 };
+    for (expected_indices, 0..) |expected_index, i| {
+        try testing.expectEqual(expected_index, committed.get(@intCast(i)).index);
+    }
+
+    try testing.expectEqual(@as(u32, 0), store.getStructFieldOffsetByOriginalIndex(struct_idx, 1));
+    try testing.expectEqual(@as(u32, 8), store.getStructFieldOffsetByOriginalIndex(struct_idx, 2));
+    try testing.expectEqual(@as(u32, 10), store.getStructFieldOffsetByOriginalIndex(struct_idx, 0));
+    try testing.expectEqual(@as(u32, 11), store.getStructFieldOffsetByOriginalIndex(struct_idx, 3));
+    try testing.expectEqual(@as(u32, 12), store.getStructFieldOffsetByOriginalIndex(struct_idx, 4));
+    try testing.expectEqual(@as(u32, 16), store.getStructData(struct_idx).size);
+}
+
+test "uninterned struct layouts use the same stable alignment sort as interned ones" {
+    const testing = std.testing;
+
+    var store = try Store.init(&.{}, null, testing.allocator, .u64);
+    defer store.deinit();
+
+    const semantic_fields = [_]StructField{
+        .{ .index = 0, .layout = .u8 },
+        .{ .index = 1, .layout = .u64 },
+        .{ .index = 2, .layout = .u16 },
+        .{ .index = 3, .layout = .bool },
+        .{ .index = 4, .layout = .u8 },
+    };
+
+    const interned_idx = try store.putStructFields(&semantic_fields);
+    const interned_layout = store.getLayout(interned_idx);
+    const uninterned_layout = try store.buildUninternedStructLayout(&semantic_fields);
+
+    try testing.expectEqual(LayoutTag.struct_, interned_layout.tag);
+    try testing.expectEqual(LayoutTag.struct_, uninterned_layout.tag);
+    try testing.expectEqual(interned_layout.data.struct_.alignment, uninterned_layout.data.struct_.alignment);
+
+    const interned_struct = store.getStructData(interned_layout.data.struct_.idx);
+    const uninterned_struct = store.getStructData(uninterned_layout.data.struct_.idx);
+    try testing.expectEqual(interned_struct.size, uninterned_struct.size);
+
+    const interned_fields = store.struct_fields.sliceRange(interned_struct.getFields());
+    const uninterned_fields = store.struct_fields.sliceRange(uninterned_struct.getFields());
+    try testing.expectEqual(interned_fields.len, uninterned_fields.len);
+
+    for (0..interned_fields.len) |i| {
+        const left = interned_fields.get(@intCast(i));
+        const right = uninterned_fields.get(@intCast(i));
+        try testing.expectEqual(left.index, right.index);
+        try testing.expectEqual(left.layout, right.layout);
+    }
+}

@@ -6,6 +6,8 @@ Before any additional bring-up work, the compiler must follow this rule:
 
 - recursive nominal data stays logical through `monotype`, `monotype_lifted`, `lambdasolved`, `lambdamono`, and `ir`
 - recursive boxing is committed exactly once at the shared `IR -> LIR/layout` boundary
+- record and tuple fields stay in semantic order until that same shared `IR -> LIR/layout` boundary
+- the shared `LIR/layout` commit then performs one stable sort by descending field alignment, preserving the earlier semantic order among equal-alignment fields
 - after that commit, every backend and interpreter consumes only final explicit `box` / `tag_union` / `struct` layout facts
 
 This means:

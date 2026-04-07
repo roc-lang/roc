@@ -46,6 +46,18 @@ const core_tests = [_]TestCase{
     .{ .name = "inspect: deeper nested record access", .source = "{ a: { b: { c: 100 } } }.a.b.c", .expected = .{ .inspect_str = "100.0" } },
     .{ .name = "inspect: record field order independence", .source = "{ x: 1, y: 2 }.x + { y: 2, x: 1 }.x", .expected = .{ .inspect_str = "2.0" } },
     .{
+        .name = "inspect: mixed-alignment record survives closure and list round trip",
+        .source =
+        \\{
+        \\    make = || { a: 1.U8, b: 2.U64, c: 3.U16, d: True, e: 4.U8 }
+        \\    wrap = |value| { items: [value], keep: value }
+        \\    wrapped = wrap(make())
+        \\    wrapped.items == [wrapped.keep]
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
         .name = "inspect: function returning record with dec field",
         .source =
         \\{

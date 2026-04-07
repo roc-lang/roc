@@ -21,7 +21,7 @@ pub const LayoutTag = enum(u4) {
     box_of_zst, // Box of a zero-sized type, e.g. Box({}) - needs a special-cased runtime implementation
     list,
     list_of_zst, // List of zero-sized types, e.g. List({}) - needs a special-cased runtime implementation
-    struct_, // Unified struct layout for both records and tuples (fields sorted by alignment)
+    struct_, // Unified struct layout for both records and tuples (fields stable-sorted by alignment)
     closure,
     zst, // Zero-sized type (empty records, empty tuples, phantom types, etc.)
     tag_union, // Tag union with variant-specific layouts for proper refcounting
@@ -164,10 +164,12 @@ pub const LayoutUnion = packed union {
 };
 
 /// Unified struct field layout — used for both records and tuples at the layout level.
-/// At the LIR level, records and tuples are both just contiguous fields sorted by alignment.
+/// At the shared LIR/layout commit, records and tuples become contiguous fields that are
+/// stable-sorted by descending alignment.
 /// The `index` field stores the canonical semantic field index:
 ///   - For records: alphabetical closed-record field order
 ///   - For tuples: the original tuple element index (e.g. .0, .1, .2)
+/// Equal-alignment fields preserve that earlier semantic order.
 pub const StructField = struct {
     /// The canonical semantic index of this field before layout sorting.
     index: u16,
