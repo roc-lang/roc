@@ -6357,14 +6357,17 @@ fn resolveNumericLiteralsFromContext(self: *Self, env: *Env) std.mem.Allocator.E
 /// constraints (e.g., U64 from List.len). The only vars still flex here
 /// are those with genuinely no numeric context.
 ///
-/// This function creates a COPY of each from_numeral flex var, unifies the
-/// copy with Dec (to validate constraints and report errors like `1.blah(2)`),
-/// but leaves the original flex var polymorphic. The actual defaulting to Dec
-/// happens later during lowering.
+/// Finalize unresolved numeric literals after all other constraints have had a
+/// chance to specialize them.
 ///
-/// For app modules with platform requirements, this should be called AFTER
-/// `checkPlatformRequirements()` so that platform types can constrain
-/// numeric literals first. Use `checkFileSkipNumericDefaults()` in that case.
+/// This pass does two things:
+/// - non-generalized numeric flex vars default in-place to `Dec`
+/// - generalized numeric flex vars stay polymorphic, but their deferred method
+///   constraints are validated against `Dec` so invalid usages report errors
+///
+/// For app modules with platform requirements, call this after
+/// `checkPlatformRequirements()` so platform types can constrain numeric
+/// literals first. Use `checkFileSkipNumericDefaults()` in that case.
 pub fn verifyNumericDefaults(self: *Self) std.mem.Allocator.Error!void {
     var env = try self.env_pool.acquire();
     defer self.env_pool.release(env);
@@ -6378,42 +6381,54 @@ pub fn verifyNumericDefaults(self: *Self) std.mem.Allocator.Error!void {
 }
 
 fn verifyNumericDefaultsInternal(self: *Self, env: *Env) std.mem.Allocator.Error!void {
-    if (self.types.from_numeral_flex_count == 0) return;
+    _ = self;
+    _ = env;
+}
 
-    // Track which resolved root vars we've already verified to avoid
-    // duplicate error reports (multiple var indices can resolve to the
-    // same root flex var).
-    self.verified_numeric_vars.clearRetainingCapacity();
+fn flexHasFromNumeralConstraint(self: *Self, constraints: []const StaticDispatchConstraint) bool {
+    _ = self;
+    for (constraints) |constraint| {
+        if (constraint.origin == .from_numeral) return true;
+    }
+    return false;
+}
 
-    const num_vars: u32 = @intCast(self.types.len());
-    var i: u32 = 0;
-    while (i < num_vars) : (i += 1) {
-        const var_: types_mod.Var = @enumFromInt(i);
-        const resolved = self.types.resolveVar(var_);
-        if (resolved.desc.content != .flex) continue;
+fn validateGeneralizedNumericConstraintsAsDec(
+    self: *Self,
+    deferred_constraint: DeferredConstraintCheck,
+    env: *Env,
+    is_numeric_default_pass: bool,
+) Allocator.Error!void {
+    const builtin_env = self.builtin_ctx.builtin_module orelse self.cir;
+    const indices = self.builtin_ctx.builtin_indices orelse return;
+    const dec_ident = indices.dec_ident;
 
-        const flex = resolved.desc.content.flex;
-        const constraints = self.types.sliceStaticDispatchConstraints(flex.constraints);
-        var has_from_numeral = false;
-        for (constraints) |c| {
-            if (c.origin == .from_numeral) {
-                has_from_numeral = true;
-                break;
-            }
+    const constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
+    for (constraints) |constraint| {
+        if (constraint.origin == .from_numeral) continue;
+        if (self.types.resolveVar(constraint.fn_var).desc.content == .err) continue;
+        if (constraint.fn_name.eql(self.cir.idents.is_eq)) continue;
+
+        const method_ident = builtin_env.lookupMethodIdentFromEnvConst(self.cir, dec_ident, constraint.fn_name) orelse {
+            try self.reportConstraintError(
+                deferred_constraint.var_,
+                constraint,
+                .{ .missing_method = .nominal },
+                env,
+                is_numeric_default_pass,
+            );
+            continue;
+        };
+
+        if (builtin_env.getExposedNodeIndexById(method_ident) == null) {
+            try self.reportConstraintError(
+                deferred_constraint.var_,
+                constraint,
+                .{ .missing_method = .nominal },
+                env,
+                is_numeric_default_pass,
+            );
         }
-        if (!has_from_numeral) continue;
-
-        // Skip if we've already verified this resolved root var.
-        const gop = self.verified_numeric_vars.getOrPut(self.gpa, resolved.var_) catch continue;
-        if (gop.found_existing) continue;
-
-        // Create a COPY of the flex var with the same constraints, then unify
-        // the copy with Dec. This validates that the constraints are compatible
-        // with Dec (for error reporting) without modifying the original var.
-        // The original stays polymorphic for monomorphization to specialize.
-        const copy_var = try self.freshFromContent(.{ .flex = flex }, env, Region.zero());
-        const dec_var = try self.freshFromContent(try self.mkDecContent(env), env, Region.zero());
-        _ = try self.unify(copy_var, dec_var, env);
     }
 }
 
@@ -6486,8 +6501,8 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
     var deferred_constraint_index: usize = 0;
     while (deferred_constraint_index < env.deferred_static_dispatch_constraints.items.items.len) : (deferred_constraint_index += 1) {
         const deferred_constraint = env.deferred_static_dispatch_constraints.items.items[deferred_constraint_index];
-        const dispatcher_resolved = self.types.resolveVar(deferred_constraint.var_);
-        const dispatcher_content = dispatcher_resolved.desc.content;
+        var dispatcher_resolved = self.types.resolveVar(deferred_constraint.var_);
+        var dispatcher_content = dispatcher_resolved.desc.content;
         // Verify no recursive constraints - recursion should be handled through
         // nominal types which break the cycle naturally.
         for (self.constraint_check_stack.items) |stack_var| {
@@ -6497,6 +6512,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
         try self.constraint_check_stack.append(self.gpa, dispatcher_resolved.var_);
         defer _ = self.constraint_check_stack.pop();
 
+        dispatch_resolution: while (true) {
         if (dispatcher_content == .err) {
             // If the root type is an error, then skip constraint checking
             const constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
@@ -6504,6 +6520,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                 try self.markConstraintFunctionAsError(constraint, env);
             }
             try self.unifyWith(deferred_constraint.var_, .err, env);
+            break :dispatch_resolution;
         } else if (dispatcher_content == .rigid) {
             // Get the rigid variable and the constraints it has defined
             const rigid = dispatcher_content.rigid;
@@ -6550,6 +6567,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     continue;
                 }
             }
+            break :dispatch_resolution;
         } else if (dispatcher_content == .structure and dispatcher_content.structure == .nominal_type) {
             // If the root type is a nominal type, then this is valid static dispatch
             const nominal_type = dispatcher_content.structure.nominal_type;
@@ -6781,6 +6799,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                 // Note: from_numeral constraint validation happens during comptime evaluation
                 // in ComptimeEvaluator.validateDeferredNumericLiterals()
             }
+            break :dispatch_resolution;
         } else if (dispatcher_content == .structure and
             (dispatcher_content.structure == .record or
                 dispatcher_content.structure == .tuple or
@@ -6822,11 +6841,30 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     );
                 }
             }
+            break :dispatch_resolution;
         } else if (dispatcher_content == .flex) {
+            const flex_constraints = self.types.sliceStaticDispatchConstraints(dispatcher_content.flex.constraints);
+            if (is_numeric_default_pass and self.flexHasFromNumeralConstraint(flex_constraints)) {
+                if (dispatcher_resolved.desc.rank != .generalized) {
+                    try self.unifyWith(deferred_constraint.var_, try self.mkDecContent(env), env);
+                    dispatcher_resolved = self.types.resolveVar(deferred_constraint.var_);
+                    dispatcher_content = dispatcher_resolved.desc.content;
+                    continue :dispatch_resolution;
+                }
+
+                try self.validateGeneralizedNumericConstraintsAsDec(
+                    deferred_constraint,
+                    env,
+                    is_numeric_default_pass,
+                );
+                break :dispatch_resolution;
+            }
+
             // If the dispatcher is a flex, hold onto the constraint to try again later.
             // Note: flex vars with from_numeral constraints are validated separately
             // in checkFlexVarConstraintCompatibility after type checking completes.
             _ = try self.scratch_deferred_static_dispatch_constraints.append(deferred_constraint);
+            break :dispatch_resolution;
         } else {
             // If the root type is anything but a nominal type or anonymous structural type, push an error
             // This handles function types, which do not support any methods
@@ -6858,6 +6896,8 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                 // If we hit this, there's a compiler bug in how constraints are tracked.
                 std.debug.assert(false);
             }
+            break :dispatch_resolution;
+        }
         }
     }
 

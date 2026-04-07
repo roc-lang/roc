@@ -664,8 +664,10 @@ pub const Store = struct {
     }
 
     pub fn findStaticDispatchSiteRequirement(self: *const Self, expr_var: Var, method_name: base.Ident.Idx) ?StaticDispatchSiteRequirement {
+        const resolved_expr_var = self.resolveVar(expr_var).var_;
         for (self.static_dispatch_site_requirements.items.items) |requirement| {
-            if (requirement.expr_var == expr_var and requirement.method_name.idx == method_name.idx) {
+            if (requirement.method_name.idx != method_name.idx) continue;
+            if (self.resolveVar(requirement.expr_var).var_ == resolved_expr_var) {
                 return requirement;
             }
         }
@@ -680,8 +682,9 @@ pub const Store = struct {
     }
 
     pub fn findResolvedStaticDispatchSite(self: *const Self, expr_var: Var) ?ResolvedStaticDispatchSite {
+        const resolved_expr_var = self.resolveVar(expr_var).var_;
         for (self.resolved_static_dispatch_sites.items.items) |site| {
-            if (site.expr_var == expr_var) return site;
+            if (self.resolveVar(site.expr_var).var_ == resolved_expr_var) return site;
         }
         return null;
     }
