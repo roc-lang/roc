@@ -1384,9 +1384,9 @@ pub const Lowerer = struct {
         len_expr: ast.ExprId,
     ) std.mem.Allocator.Error!ast.ExprId {
         const bounds_ty = try self.makeListSliceBoundsType(self.program.store.getExpr(len_expr).ty);
-        const start_ident = self.ctx.idents.findIdent("start") orelse
+        const start_ident = self.ctx.idents.findByString("start") orelse
             debugPanic("monotype invariant violated: missing executable start ident", .{});
-        const len_ident = self.ctx.idents.findIdent("len") orelse
+        const len_ident = self.ctx.idents.findByString("len") orelse
             debugPanic("monotype invariant violated: missing executable len ident", .{});
         return try self.program.store.addExpr(.{
             .ty = bounds_ty,
@@ -2713,9 +2713,6 @@ pub const Lowerer = struct {
 
         if (expected_result_var) |result_var| {
             try self.unifyClonedCheckerVars(module_idx, cloned_ret_var, result_var);
-        } else {
-            const cloned_call_result_var = try call_scope.instantiator.instantiateVar(ModuleEnv.varFrom(expr_idx));
-            try self.unifyClonedCheckerVars(module_idx, cloned_ret_var, cloned_call_result_var);
         }
 
         return .{
@@ -3568,7 +3565,7 @@ pub const Lowerer = struct {
                     type_scope,
                     env,
                     field.value,
-                    self.lookupRecordFieldType(record_ty, field.name),
+                    try self.lookupRecordFieldType(module_idx, record_ty, field.name),
                     null,
                 ),
             };
@@ -3599,7 +3596,7 @@ pub const Lowerer = struct {
             return .{ .bool_lit = self.requireBoolLiteralValue(module_idx, tag_name) };
         }
 
-        const arg_tys = try self.lookupTagArgTypesOwned(expected_ty, tag_name);
+        const arg_tys = try self.lookupTagArgTypesOwned(module_idx, expected_ty, tag_name);
         defer self.allocator.free(arg_tys);
         const arg_exprs = self.ctx.env(module_idx).store.sliceExpr(args_span);
         if (arg_exprs.len != arg_tys.len) {
@@ -4497,7 +4494,7 @@ pub const Lowerer = struct {
                 const source_expr = try self.makeVarExpr(source.ty, source.symbol);
                 for (cir_env.store.sliceRecordDestructs(record.destructs)) |destruct_idx| {
                     const destruct = cir_env.store.getRecordDestruct(destruct_idx);
-                    const field_ty = self.lookupRecordFieldType(source.ty, destruct.label);
+                    const field_ty = try self.lookupRecordFieldType(module_idx, source.ty, destruct.label);
                     const field_solved_var = self.lookupRecordFieldSolvedVar(module_idx, source_solved_var, destruct.label);
                     const field_bind: ast.TypedSymbol = .{
                         .ty = field_ty,
@@ -4670,7 +4667,7 @@ pub const Lowerer = struct {
             .record_destructure => |record| {
                 for (cir_env.store.sliceRecordDestructs(record.destructs)) |destruct_idx| {
                     const destruct = cir_env.store.getRecordDestruct(destruct_idx);
-                    const field_ty = self.lookupRecordFieldType(source_ty, destruct.label);
+                    const field_ty = try self.lookupRecordFieldType(module_idx, source_ty, destruct.label);
                     const field_bind: ast.TypedSymbol = .{
                         .ty = field_ty,
                         .symbol = try self.ctx.addSyntheticSymbol(base.Ident.Idx.NONE),
@@ -4818,7 +4815,7 @@ pub const Lowerer = struct {
                     });
                 }
                 const arg_pats = cir_env.store.slicePatterns(tag.args);
-                const arg_tys = try self.lookupTagArgTypesOwned(source_ty, tag.name);
+                const arg_tys = try self.lookupTagArgTypesOwned(module_idx, source_ty, tag.name);
                 defer self.allocator.free(arg_tys);
                 if (arg_pats.len != arg_tys.len) {
                     return debugPanic("monotype invariant violated: tag pattern arity mismatch for lowered source type", .{});
@@ -4869,13 +4866,15 @@ pub const Lowerer = struct {
 
     fn lookupTagArgTypesOwned(
         self: *Lowerer,
+        module_idx: u32,
         source_ty: type_mod.TypeId,
         tag_name: base.Ident.Idx,
     ) std.mem.Allocator.Error![]type_mod.TypeId {
+        const executable_tag_name = try self.ctx.copyExecutableIdent(module_idx, tag_name);
         return switch (self.ctx.types.getType(source_ty)) {
             .tag_union => |tag_union| blk: {
                 for (self.ctx.types.sliceTags(tag_union.tags)) |tag| {
-                    if (tag.name.idx == tag_name.idx) {
+                    if (tag.name.idx == executable_tag_name.idx) {
                         const args = self.ctx.types.sliceTypeSpan(tag.args);
                         const out = try self.allocator.alloc(type_mod.TypeId, args.len);
                         for (args, 0..) |arg_ty, i| {
@@ -4892,13 +4891,17 @@ pub const Lowerer = struct {
 
     fn lookupRecordFieldType(
         self: *Lowerer,
+        module_idx: u32,
         source_ty: type_mod.TypeId,
         field_name: base.Ident.Idx,
-    ) type_mod.TypeId {
+    ) std.mem.Allocator.Error!type_mod.TypeId {
+        const executable_field_name = try self.ctx.copyExecutableIdent(module_idx, field_name);
         return switch (self.ctx.types.getType(source_ty)) {
             .record => |record| blk: {
                 for (self.ctx.types.sliceFields(record.fields)) |field| {
-                    if (field.name.idx == field_name.idx) break :blk self.normalizeNominalChildType(source_ty, field.ty);
+                    if (field.name.idx == executable_field_name.idx) {
+                        break :blk self.normalizeNominalChildType(source_ty, field.ty);
+                    }
                 }
                 debugPanic("monotype invariant violated: missing field in lowered record type", .{});
             },

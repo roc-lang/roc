@@ -144,17 +144,12 @@ pub const Store = struct {
             return .{ .start = start_single, .len = 1 };
         }
 
-        const sorted = try self.allocator.dupe(Tag, tags);
-        defer self.allocator.free(sorted);
-        std.mem.sort(Tag, sorted, {}, struct {
-            fn lessThan(_: void, a: Tag, b: Tag) bool {
-                return @as(u32, @bitCast(a.name)) < @as(u32, @bitCast(b.name));
-            }
-        }.lessThan);
+        const canonical = try self.allocator.dupe(Tag, tags);
+        defer self.allocator.free(canonical);
 
-        const canonical_len = self.canonicalizeSortedTags(sorted);
+        const canonical_len = self.canonicalizeSortedTags(canonical);
         const start: u32 = @intCast(self.tags.items.len);
-        try self.tags.appendSlice(self.allocator, sorted[0..canonical_len]);
+        try self.tags.appendSlice(self.allocator, canonical[0..canonical_len]);
         return .{ .start = start, .len = @intCast(canonical_len) };
     }
 

@@ -183,17 +183,12 @@ pub const Store = struct {
             return .{ .start = start_single, .len = 1 };
         }
 
-        const sorted = try self.allocator.dupe(Tag, values);
-        defer self.allocator.free(sorted);
-        std.mem.sort(Tag, sorted, {}, struct {
-            fn lessThan(_: void, a: Tag, b: Tag) bool {
-                return @as(u32, @bitCast(a.name)) < @as(u32, @bitCast(b.name));
-            }
-        }.lessThan);
+        const canonical = try self.allocator.dupe(Tag, values);
+        defer self.allocator.free(canonical);
 
-        const canonical_len = self.canonicalizeSortedTags(sorted);
+        const canonical_len = self.canonicalizeSortedTags(canonical);
         const start: u32 = @intCast(self.tags.items.len);
-        try self.tags.appendSlice(self.allocator, sorted[0..canonical_len]);
+        try self.tags.appendSlice(self.allocator, canonical[0..canonical_len]);
         return .{ .start = start, .len = @intCast(canonical_len) };
     }
 
@@ -204,22 +199,8 @@ pub const Store = struct {
 
     pub fn addFields(self: *Store, values: []const Field) std.mem.Allocator.Error!Span(Field) {
         if (values.len == 0) return Span(Field).empty();
-        if (values.len == 1) {
-            const start_single: u32 = @intCast(self.fields.items.len);
-            try self.fields.append(self.allocator, values[0]);
-            return .{ .start = start_single, .len = 1 };
-        }
-
-        const sorted = try self.allocator.dupe(Field, values);
-        defer self.allocator.free(sorted);
-        std.mem.sort(Field, sorted, {}, struct {
-            fn lessThan(_: void, a: Field, b: Field) bool {
-                return @as(u32, @bitCast(a.name)) < @as(u32, @bitCast(b.name));
-            }
-        }.lessThan);
-
         const start: u32 = @intCast(self.fields.items.len);
-        try self.fields.appendSlice(self.allocator, sorted);
+        try self.fields.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 

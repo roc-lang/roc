@@ -112,24 +112,12 @@ pub const Store = struct {
             return .{ .start = start_single, .len = 1 };
         }
 
-        const sorted = try self.allocator.dupe(Tag, tags);
-        defer self.allocator.free(sorted);
-        std.mem.sort(Tag, sorted, {}, struct {
-            fn key(name: TagName) u64 {
-                return switch (name) {
-                    .ctor => |ident| @as(u64, @as(u32, @bitCast(ident))),
-                    .lambda => |symbol| (@as(u64, 1) << 32) | @as(u64, symbol.raw()),
-                };
-            }
+        const canonical = try self.allocator.dupe(Tag, tags);
+        defer self.allocator.free(canonical);
 
-            fn lessThan(_: void, a: Tag, b: Tag) bool {
-                return key(a.name) < key(b.name);
-            }
-        }.lessThan);
-
-        const canonical_len = self.canonicalizeSortedTags(sorted);
+        const canonical_len = self.canonicalizeSortedTags(canonical);
         const start: u32 = @intCast(self.tags.items.len);
-        try self.tags.appendSlice(self.allocator, sorted[0..canonical_len]);
+        try self.tags.appendSlice(self.allocator, canonical[0..canonical_len]);
         return .{ .start = start, .len = @intCast(canonical_len) };
     }
 
@@ -140,22 +128,8 @@ pub const Store = struct {
 
     pub fn addFields(self: *Store, fields: []const Field) std.mem.Allocator.Error!Span(Field) {
         if (fields.len == 0) return Span(Field).empty();
-        if (fields.len == 1) {
-            const start_single: u32 = @intCast(self.fields.items.len);
-            try self.fields.append(self.allocator, fields[0]);
-            return .{ .start = start_single, .len = 1 };
-        }
-
-        const sorted = try self.allocator.dupe(Field, fields);
-        defer self.allocator.free(sorted);
-        std.mem.sort(Field, sorted, {}, struct {
-            fn lessThan(_: void, a: Field, b: Field) bool {
-                return @as(u32, @bitCast(a.name)) < @as(u32, @bitCast(b.name));
-            }
-        }.lessThan);
-
         const start: u32 = @intCast(self.fields.items.len);
-        try self.fields.appendSlice(self.allocator, sorted);
+        try self.fields.appendSlice(self.allocator, fields);
         return .{ .start = start, .len = @intCast(fields.len) };
     }
 
