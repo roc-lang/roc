@@ -164,8 +164,15 @@ deferred_def_unifications: std.ArrayListUnmanaged(DeferredDefUnification),
 /// Stored here instead of merging eagerly so that ranks remain correct
 /// (no `popRankRetainingVars` needed).
 deferred_cycle_envs: std.ArrayListUnmanaged(Env),
-/// Tracks lookup exprs that reference top-level non-function values.
-top_level_value_lookup_tracking: std.ArrayListUnmanaged(TopLevelValueLookupEntry),
+/// Tracks all local lookup exprs so erroneous bindings can be poisoned explicitly
+/// after type checking has finished.
+value_lookup_tracking: std.ArrayListUnmanaged(ValueLookupEntry),
+/// Tracks expressions whose checked type contains an error, even if annotation
+/// preservation later gives their raw expr var a non-error type.
+erroneous_value_exprs: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void),
+/// Tracks bindings whose defining expression is known erroneous and whose
+/// subsequent local lookups must therefore become explicit runtime errors.
+erroneous_value_patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
 /// A def + processing data
 const DefProcessed = struct {
     def_idx: CIR.Def.Idx,
@@ -183,7 +190,7 @@ const DeferredDefUnification = struct {
     expr_var: Var,
 };
 
-const TopLevelValueLookupEntry = struct {
+const ValueLookupEntry = struct {
     expr_idx: CIR.Expr.Idx,
     pattern_idx: CIR.Pattern.Idx,
 };
@@ -318,7 +325,9 @@ fn initAssumePrepared(
         .type_writer = try types_mod.TypeWriter.initFromParts(gpa, types, cir.getIdentStore(), null),
         .deferred_def_unifications = .{},
         .deferred_cycle_envs = .{},
-        .top_level_value_lookup_tracking = .{},
+        .value_lookup_tracking = .{},
+        .erroneous_value_exprs = .empty,
+        .erroneous_value_patterns = .empty,
     };
 }
 
@@ -342,7 +351,9 @@ pub fn deinit(self: *Self) void {
         self.env_pool.release(deferred_env);
     }
     self.deferred_cycle_envs.deinit(self.gpa);
-    self.top_level_value_lookup_tracking.deinit(self.gpa);
+    self.value_lookup_tracking.deinit(self.gpa);
+    self.erroneous_value_exprs.deinit(self.gpa);
+    self.erroneous_value_patterns.deinit(self.gpa);
     self.env_pool.deinit();
     self.generalizer.deinit(self.gpa);
     self.var_map.deinit();
@@ -1458,7 +1469,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
         try self.checkForInfiniteType(CIR.Def.Idx, def_idx);
     }
 
-    try self.poisonErroneousTopLevelValueUses();
+    try self.poisonErroneousValueUses();
 
     // Note that we can't use SCCs to determine the order to resolve defs
     // because anonymous static dispatch makes function order not knowable
@@ -1974,7 +1985,7 @@ pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Alloca
         try self.checkForInfiniteType(CIR.Def.Idx, def_idx);
     }
 
-    try self.poisonErroneousTopLevelValueUses();
+    try self.poisonErroneousValueUses();
 }
 
 // defs //
@@ -2037,6 +2048,9 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
 
     // Infer types for the body, checking against the instantiated annotation
     _ = try self.checkExpr(def.expr, env, expectation);
+    if (self.erroneous_value_exprs.contains(def.expr)) {
+        try self.erroneous_value_patterns.put(self.gpa, def.pattern, {});
+    }
 
     if (self.defer_generalize) {
         // defer_generalize is only set when a cycle root has been identified.
@@ -4152,15 +4166,14 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         .e_lookup_local => |lookup| blk: {
             const pat_var = ModuleEnv.varFrom(lookup.pattern_idx);
 
+            try self.value_lookup_tracking.append(self.gpa, .{
+                .expr_idx = expr_idx,
+                .pattern_idx = lookup.pattern_idx,
+            });
+
             const mb_processing_def = self.top_level_ptrns.get(lookup.pattern_idx);
             if (mb_processing_def) |processing_def| {
                 const referenced_def = self.cir.store.getDef(processing_def.def_idx);
-                if (!isFunctionDef(&self.cir.store, self.cir.store.getExpr(referenced_def.expr))) {
-                    try self.top_level_value_lookup_tracking.append(self.gpa, .{
-                        .expr_idx = expr_idx,
-                        .pattern_idx = lookup.pattern_idx,
-                    });
-                }
 
                 switch (processing_def.status) {
                     .not_processed => {
@@ -5030,6 +5043,11 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         }
     }
 
+    self.var_set.clearRetainingCapacity();
+    if (self.varContainsError(expr_var, &self.var_set)) {
+        try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
+    }
+
     // Check any accumulated static dispatch constraints
     try self.checkStaticDispatchConstraints(env, false);
 
@@ -5171,6 +5189,9 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                 };
 
                 does_fx = try self.checkExpr(decl_stmt.expr, env, expectation) or does_fx;
+                if (self.erroneous_value_exprs.contains(decl_stmt.expr)) {
+                    try self.erroneous_value_patterns.put(self.gpa, decl_stmt.pattern, {});
+                }
 
                 _ = try self.unify(decl_pattern_var, decl_expr_var, env);
                 _ = try self.unify(stmt_var, decl_pattern_var, env);
@@ -5191,6 +5212,9 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                 };
 
                 does_fx = try self.checkExpr(var_stmt.expr, env, expectation) or does_fx;
+                if (self.erroneous_value_exprs.contains(var_stmt.expr)) {
+                    try self.erroneous_value_patterns.put(self.gpa, var_stmt.pattern_idx, {});
+                }
                 const var_expr: Var = ModuleEnv.varFrom(var_stmt.expr);
 
                 _ = try self.unify(var_pattern_var, var_expr, env);
@@ -6323,10 +6347,14 @@ fn checkAllConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     }
 }
 
-fn poisonErroneousTopLevelValueUses(self: *Self) Allocator.Error!void {
-    for (self.top_level_value_lookup_tracking.items) |entry| {
+fn poisonErroneousValueUses(self: *Self) Allocator.Error!void {
+    for (self.value_lookup_tracking.items) |entry| {
         const pattern_var = ModuleEnv.varFrom(entry.pattern_idx);
-        if (self.types.resolveVar(pattern_var).desc.content != .err) continue;
+        if (!self.erroneous_value_patterns.contains(entry.pattern_idx) and
+            self.types.resolveVar(pattern_var).desc.content != .err)
+        {
+            continue;
+        }
 
         if (self.cir.store.getExpr(entry.expr_idx) == .e_runtime_error) continue;
 
@@ -6381,8 +6409,28 @@ pub fn verifyNumericDefaults(self: *Self) std.mem.Allocator.Error!void {
 }
 
 fn verifyNumericDefaultsInternal(self: *Self, env: *Env) std.mem.Allocator.Error!void {
-    _ = self;
-    _ = env;
+    if (self.types.from_numeral_flex_count == 0) return;
+
+    self.verified_numeric_vars.clearRetainingCapacity();
+
+    const num_vars: u32 = @intCast(self.types.len());
+    var i: u32 = 0;
+    while (i < num_vars) : (i += 1) {
+        const var_: types_mod.Var = @enumFromInt(i);
+        const resolved = self.types.resolveVar(var_);
+        if (resolved.desc.content != .flex) continue;
+
+        const flex = resolved.desc.content.flex;
+        const constraints = self.types.sliceStaticDispatchConstraints(flex.constraints);
+        if (!self.flexHasFromNumeralConstraint(constraints)) continue;
+
+        const gop = try self.verified_numeric_vars.getOrPut(self.gpa, resolved.var_);
+        if (gop.found_existing) continue;
+
+        if (resolved.desc.rank != .generalized) {
+            try self.unifyWith(resolved.var_, try self.mkDecContent(env), env);
+        }
+    }
 }
 
 fn flexHasFromNumeralConstraint(self: *Self, constraints: []const StaticDispatchConstraint) bool {
