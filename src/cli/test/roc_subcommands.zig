@@ -1524,3 +1524,16 @@ test "echo platform: all_syntax_test.roc prints expected output (dev backend)" {
     // TODO: dev backend doesn't produce dbg output
     try std.testing.expectEqualStrings("", run_result.stderr);
 }
+
+test "echo platform: roc test all_syntax_test.roc passes" {
+    const allocator = std.testing.allocator;
+
+    const result = try util.runRoc(allocator, &.{ "test", "--no-cache" }, "test/echo/all_syntax_test.roc");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try util.checkSuccess(result);
+
+    const has_passed = std.mem.indexOf(u8, result.stdout, "passed") != null;
+    try std.testing.expect(has_passed);
+}
