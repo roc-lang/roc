@@ -6611,18 +6611,6 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     continue;
                 }
 
-                if (constraint.fn_name.eql(self.cir.idents.is_eq) and
-                    self.nominalSupportsImplicitIsEq(nominal_type))
-                {
-                    try self.satisfyImplicitEqualityConstraint(
-                        deferred_constraint.var_,
-                        constraint.fn_var,
-                        env,
-                        region,
-                    );
-                    continue;
-                }
-
                 // Look up the method in the original env using index-based lookup.
                 // Methods are stored with qualified names like "Type.method" (or "Module.Type.method" for builtins).
                 const method_ident = original_env.lookupMethodIdentFromEnvConst(self.cir, nominal_type.ident.ident_idx, constraint.fn_name) orelse {
@@ -6796,12 +6784,14 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                 if (constraint.fn_name.eql(self.cir.idents.is_eq)) {
                     // Check if all components of this anonymous type support is_eq
                     if (self.typeSupportsIsEq(dispatcher_content.structure)) {
-                        try self.satisfyImplicitEqualityConstraint(
-                            deferred_constraint.var_,
-                            constraint.fn_var,
-                            env,
-                            self.getRegionAt(deferred_constraint.var_),
-                        );
+                        // All components support is_eq, unify return type with Bool
+                        const resolved_constraint = self.types.resolveVar(constraint.fn_var);
+                        const mb_resolved_func = resolved_constraint.desc.content.unwrapFunc();
+                        if (mb_resolved_func) |resolved_func| {
+                            const region = self.getRegionAt(deferred_constraint.var_);
+                            const bool_var = try self.freshBool(env, region);
+                            _ = try self.unify(bool_var, resolved_func.ret, env);
+                        }
                     } else {
                         // Some component doesn't support is_eq (e.g., contains a function)
                         try self.reportEqualityError(
@@ -6950,42 +6940,6 @@ fn typeSupportsIsEq(self: *Self, flat_type: types_mod.FlatType) bool {
             return true;
         },
     };
-}
-
-fn nominalSupportsImplicitIsEq(self: *Self, nominal_type: types_mod.NominalType) bool {
-    if (self.nominalIsBuiltinNumberType(nominal_type)) return true;
-    return self.varSupportsIsEq(self.types.getNominalBackingVar(nominal_type));
-}
-
-fn nominalIsBuiltinNumberType(self: *Self, nominal_type: types_mod.NominalType) bool {
-    if (!nominal_type.origin_module.eql(self.cir.idents.builtin_module)) return false;
-    return self.builtinNumKindFromTypeName(nominal_type.ident.ident_idx) != null;
-}
-
-fn satisfyImplicitEqualityConstraint(
-    self: *Self,
-    dispatcher_var: Var,
-    constraint_fn_var: Var,
-    env: *Env,
-    region: Region,
-) Allocator.Error!void {
-    const resolved_constraint = self.types.resolveVar(constraint_fn_var);
-    const resolved_func = resolved_constraint.desc.content.unwrapFunc() orelse {
-        try self.unifyWith(constraint_fn_var, .err, env);
-        return;
-    };
-
-    const args = self.types.sliceVars(resolved_func.args);
-    if (args.len != 2) {
-        std.debug.panic(
-            "type checker invariant violated: implicit equality constraint expected 2 args, found {d}",
-            .{args.len},
-        );
-    }
-
-    _ = try self.unify(dispatcher_var, args[0], env);
-    _ = try self.unify(dispatcher_var, args[1], env);
-    _ = try self.unify(try self.freshBool(env, region), resolved_func.ret, env);
 }
 
 /// Check if a type variable supports is_eq by resolving it and checking its content

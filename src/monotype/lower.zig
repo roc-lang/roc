@@ -3273,30 +3273,51 @@ pub const Lowerer = struct {
         method_name: base.Ident.Idx,
         expected_result_var: ?Var,
     ) std.mem.Allocator.Error!RecordedMethodFact {
+        const module_env = @constCast(self.ctx.env(module_idx));
+        const args = self.getRecordedMethodArgs(module_idx, expr_idx, method_name);
+        var call_scope: TypeCloneScope = undefined;
+        call_scope.initCloneAll(self.allocator, module_env);
+        defer call_scope.deinit();
+
         const target = self.lookupResolvedDispatchTarget(module_idx, expr_idx) orelse
             self.resolveMonomorphicDispatchTarget(module_idx, type_scope, env, expr_idx, method_name);
-        const expr = self.ctx.env(module_idx).store.getExpr(expr_idx);
+        const source_fn_var = try self.copyTopLevelDefExprVarToModule(target.module_idx, target.def_idx, module_idx);
+        const cloned_func_var = try call_scope.instantiator.instantiateVar(source_fn_var);
+        const cloned_ret_var = self.lookupFunctionRetVar(module_idx, cloned_func_var) orelse debugPanic(
+            "monotype static dispatch invariant violated: method target missing return var in module {d}",
+            .{module_idx},
+        );
 
-        const method_var = switch (expr) {
-            .e_dot_access, .e_type_var_dispatch => blk: {
-                const requirement = self.ctx.env(module_idx).types.findStaticDispatchSiteRequirement(
-                    ModuleEnv.varFrom(expr_idx),
-                    method_name,
-                ) orelse debugPanic(
-                    "monotype static dispatch invariant violated: missing site requirement for expr {d} in module {d}",
-                    .{ @intFromEnum(expr_idx), module_idx },
-                );
-                break :blk try self.scopeVar(type_scope, requirement.fn_var);
-            },
-            .e_call => |call| try self.scopedExprResultVar(module_idx, type_scope, env, call.func),
-            else => debugPanic("monotype static dispatch invariant violated: expr is not recorded dispatch", .{}),
-        };
-        _ = expected_result_var;
+        var arg_index: usize = 0;
+        if (args.implicit_receiver) |receiver_expr_idx| {
+            const source_arg_var = try self.lookupCallArgSpecializationVar(module_idx, type_scope, env, receiver_expr_idx);
+            const cloned_arg_var = try call_scope.instantiator.instantiateVar(source_arg_var);
+            const expected_arg_var = self.lookupFunctionArgVar(module_idx, cloned_func_var, arg_index) orelse debugPanic(
+                "monotype static dispatch invariant violated: missing receiver argument on method target",
+                .{},
+            );
+            try self.unifyClonedCheckerVars(module_idx, expected_arg_var, cloned_arg_var);
+            arg_index += 1;
+        }
+        for (args.explicit_args, 0..) |arg_expr_idx, i| {
+            const source_arg_var = try self.lookupCallArgSpecializationVar(module_idx, type_scope, env, arg_expr_idx);
+            const cloned_arg_var = try call_scope.instantiator.instantiateVar(source_arg_var);
+            const expected_arg_var = self.lookupFunctionArgVar(module_idx, cloned_func_var, arg_index) orelse debugPanic(
+                "monotype static dispatch invariant violated: method target missing argument {d}",
+                .{i},
+            );
+            try self.unifyClonedCheckerVars(module_idx, expected_arg_var, cloned_arg_var);
+            arg_index += 1;
+        }
+
+        if (expected_result_var) |result_var| {
+            try self.unifyClonedCheckerVars(module_idx, cloned_ret_var, result_var);
+        }
 
         return .{
             .target = target,
-            .fn_ty = try self.lowerInstantiatedType(module_idx, type_scope, method_var),
-            .solved_var = method_var,
+            .fn_ty = try self.lowerInstantiatedType(module_idx, &call_scope, cloned_func_var),
+            .solved_var = cloned_func_var,
         };
     }
 
@@ -3481,7 +3502,7 @@ pub const Lowerer = struct {
     fn lowerExpectedCallFactFromSolvedFacts(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        type_scope: *const TypeCloneScope,
         env: BindingEnv,
         call_expr_idx: CIR.Expr.Idx,
         func_expr_idx: CIR.Expr.Idx,
@@ -3490,7 +3511,7 @@ pub const Lowerer = struct {
     ) std.mem.Allocator.Error!ExpectedTypeFact {
         const module_env = @constCast(self.ctx.env(module_idx));
         var call_scope: TypeCloneScope = undefined;
-        call_scope.initCloneAllFromParent(self.allocator, module_env, type_scope);
+        call_scope.initCloneAll(self.allocator, module_env);
         defer call_scope.deinit();
 
         const source_func_var = if (try self.synthesizeLocalFnCallVar(
@@ -3516,14 +3537,7 @@ pub const Lowerer = struct {
             "monotype invariant violated: specialized callee missing return var in module {d}",
             .{module_idx},
         );
-        if (expected_result_var) |result_var| {
-            try self.unifyClonedCheckerVars(module_idx, cloned_ret_var, result_var);
-        } else {
-            const cloned_call_result_var = try call_scope.instantiator.instantiateVar(ModuleEnv.varFrom(call_expr_idx));
-            try self.unifyClonedCheckerVars(module_idx, cloned_ret_var, cloned_call_result_var);
-        }
         for (arg_exprs, 0..) |arg_expr_idx, i| {
-            if (!self.callArgUsesBoundValueFact(module_idx, env, arg_expr_idx)) continue;
             const source_arg_var = try self.lookupCallArgSpecializationVar(module_idx, type_scope, env, arg_expr_idx);
             const cloned_arg_var = try call_scope.instantiator.instantiateVar(source_arg_var);
             const expected_arg_var = self.lookupFunctionArgVar(module_idx, cloned_func_var, i) orelse debugPanic(
@@ -3532,32 +3546,16 @@ pub const Lowerer = struct {
             );
             try self.unifyClonedCheckerVars(module_idx, expected_arg_var, cloned_arg_var);
         }
+        if (expected_result_var) |result_var| {
+            try self.unifyClonedCheckerVars(module_idx, cloned_ret_var, result_var);
+        } else {
+            const cloned_call_result_var = try call_scope.instantiator.instantiateVar(ModuleEnv.varFrom(call_expr_idx));
+            try self.unifyClonedCheckerVars(module_idx, cloned_ret_var, cloned_call_result_var);
+        }
 
         return .{
             .ty = try self.lowerInstantiatedType(module_idx, &call_scope, cloned_func_var),
             .solved_var = cloned_func_var,
-        };
-    }
-
-    fn callArgUsesBoundValueFact(
-        self: *const Lowerer,
-        module_idx: u32,
-        env: BindingEnv,
-        expr_idx: CIR.Expr.Idx,
-    ) bool {
-        return switch (self.ctx.env(module_idx).store.getExpr(expr_idx)) {
-            .e_lookup_local => |lookup| blk: {
-                if (env.get(.{
-                    .module_idx = module_idx,
-                    .pattern_idx = @intFromEnum(lookup.pattern_idx),
-                })) |entry| switch (entry) {
-                    .typed => break :blk false,
-                    .local_fn_source => break :blk true,
-                };
-                break :blk true;
-            },
-            .e_lookup_external => true,
-            else => false,
         };
     }
 
@@ -3601,7 +3599,7 @@ pub const Lowerer = struct {
                     .{symbol.raw()},
                 );
                 const def = self.ctx.env(top_level.module_idx).store.getDef(top_level.def_idx);
-                break :blk ModuleEnv.varFrom(def.expr);
+                break :blk ModuleEnv.varFrom(def.pattern);
             },
             .e_lookup_external => |lookup| blk: {
                 const target_module_idx = current_env.imports.getResolvedModule(lookup.module_idx) orelse debugPanic(
@@ -3695,7 +3693,7 @@ pub const Lowerer = struct {
         dest_module_idx: u32,
     ) std.mem.Allocator.Error!Var {
         const def = self.ctx.env(source_module_idx).store.getDef(def_idx);
-        const source_var = ModuleEnv.varFrom(def.expr);
+        const source_var = ModuleEnv.varFrom(def.pattern);
         return if (source_module_idx == dest_module_idx)
             source_var
         else
@@ -3707,20 +3705,11 @@ pub const Lowerer = struct {
         module_idx: u32,
         type_scope: *const TypeCloneScope,
         env: BindingEnv,
-        expr_idx: CIR.Expr.Idx,
+    expr_idx: CIR.Expr.Idx,
     ) std.mem.Allocator.Error!Var {
         _ = type_scope;
         if (self.lookupSpecializedExprVar(module_idx, env, expr_idx)) |specialized| {
             return specialized;
-        }
-        if (self.resolveDirectTopLevelSource(module_idx, env, expr_idx)) |source| {
-            const source_symbol = self.lookupTopLevelDefSymbol(source.module_idx, source.def_idx) orelse
-                return ModuleEnv.varFrom(expr_idx);
-            if (self.top_level_defs_by_symbol.get(source_symbol)) |top_level| {
-                if (top_level.is_function) {
-                    return self.copyTopLevelDefExprVarToModule(source.module_idx, source.def_idx, module_idx);
-                }
-            }
         }
         return ModuleEnv.varFrom(expr_idx);
     }
@@ -5922,7 +5911,24 @@ pub const Lowerer = struct {
         const expr = cir_env.store.getExpr(expr_idx);
         return switch (expr) {
             .e_lookup_local => self.lookupSpecializedExprVar(module_idx, env, expr_idx) orelse try self.scopeVar(type_scope, ModuleEnv.varFrom(expr_idx)),
-            .e_call => try self.scopeVar(type_scope, ModuleEnv.varFrom(expr_idx)),
+            .e_call => |call| blk: {
+                const expected = try self.lowerCallExpectedFnType(
+                    module_idx,
+                    type_scope,
+                    env,
+                    expr_idx,
+                    call.func,
+                    cir_env.store.sliceExpr(call.args),
+                    null,
+                );
+                if (expected.solved_var) |fn_var| {
+                    break :blk self.lookupFunctionRetVar(module_idx, fn_var) orelse debugPanic(
+                        "monotype invariant violated: specialized call missing return var in module {d}",
+                        .{module_idx},
+                    );
+                }
+                break :blk try self.scopeVar(type_scope, ModuleEnv.varFrom(expr_idx));
+            },
             .e_dot_access => |dot| if (dot.args != null)
                 try self.lowerRecordedMethodResultVar(module_idx, type_scope, env, expr_idx, dot.field_name)
             else
@@ -5949,10 +5955,18 @@ pub const Lowerer = struct {
         expr_idx: CIR.Expr.Idx,
         method_name: base.Ident.Idx,
     ) std.mem.Allocator.Error!Var {
-        _ = module_idx;
-        _ = env;
-        _ = method_name;
-        return try self.scopeVar(type_scope, ModuleEnv.varFrom(expr_idx));
+        const fact = try self.lowerRecordedMethodFact(
+            module_idx,
+            type_scope,
+            env,
+            expr_idx,
+            method_name,
+            null,
+        );
+        return self.lookupFunctionRetVar(module_idx, fact.solved_var) orelse debugPanic(
+            "monotype static dispatch invariant violated: missing method result var",
+            .{},
+        );
     }
 
     fn lowerRecordedMethodResultType(
