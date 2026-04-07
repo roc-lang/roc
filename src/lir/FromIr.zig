@@ -98,9 +98,17 @@ const Lowerer = struct {
 
     fn registerProcPlaceholders(self: *Lowerer) std.mem.Allocator.Error!void {
         for (self.input.store.defsSlice()) |def| {
+            const ir_args = self.input.store.sliceVarSpan(def.args);
+            const arg_locals = try self.allocator.alloc(LIR.LocalId, ir_args.len);
+            defer self.allocator.free(arg_locals);
+            for (ir_args, 0..) |arg, i| {
+                arg_locals[i] = try self.store.addLocal(.{
+                    .layout_idx = try self.lowerLayoutId(arg.layout),
+                });
+            }
             const proc_id = try self.store.addProcSpec(.{
                 .name = lirSymbol(def.name),
-                .args = LIR.LocalSpan.empty(),
+                .args = try self.store.addLocalSpan(arg_locals),
                 .body = try self.store.addCFStmt(.runtime_error),
                 .ret_layout = try self.lowerLayoutId(def.ret_layout),
                 .result_contract = .fresh,
@@ -122,15 +130,27 @@ const Lowerer = struct {
         defer proc.deinit();
 
         const args = self.input.store.sliceVarSpan(def.args);
-        const arg_locals = try proc.lowerVarSpan(args);
-        defer self.allocator.free(arg_locals);
+        const proc_ptr = self.store.getProcSpecPtr(proc_id);
+        const arg_span = proc_ptr.args;
+        const arg_locals = self.store.getLocalSpan(arg_span);
+        if (builtin.mode == .Debug and args.len != arg_locals.len) {
+            std.debug.panic(
+                "lir.from_ir invariant violated: proc {d} placeholder stored {d} args but source def has {d}",
+                .{ @intFromEnum(proc_id), arg_locals.len, args.len },
+            );
+        }
+        for (args, arg_locals) |arg, local_id| {
+            try proc.locals_by_var.put(.{
+                .symbol = arg.symbol.raw(),
+                .layout = @intFromEnum(arg.layout),
+            }, local_id);
+        }
         const body = try proc.lowerBlock(def.body, .ret);
         const ret_layout = try self.lowerLayoutId(def.ret_layout);
 
-        const proc_ptr = self.store.getProcSpecPtr(proc_id);
         proc_ptr.* = .{
             .name = lirSymbol(def.name),
-            .args = try self.store.addLocalSpan(arg_locals),
+            .args = arg_span,
             .body = body,
             .ret_layout = ret_layout,
             .result_contract = .fresh,
@@ -919,15 +939,36 @@ const ProcLowerer = struct {
                 break :blk access;
             },
             .call_direct => |call| blk: {
-                const locals = try self.lowerVarSpan(self.parent.input.store.sliceVarSpan(call.args));
-                defer self.parent.allocator.free(locals);
-                break :blk try self.parent.store.addCFStmt(.{ .assign_call = .{
+                const source_locals = try self.lowerVarSpan(self.parent.input.store.sliceVarSpan(call.args));
+                defer self.parent.allocator.free(source_locals);
+                const proc_id = self.lookupProcId(call.proc);
+                const proc_spec = self.parent.store.getProcSpec(proc_id);
+                const param_locals = self.parent.store.getLocalSpan(proc_spec.args);
+                if (builtin.mode == .Debug and source_locals.len != param_locals.len) {
+                    std.debug.panic(
+                        "lir.from_ir invariant violated: direct call to proc {d} lowered {d} args but callee expects {d}",
+                        .{ @intFromEnum(proc_id), source_locals.len, param_locals.len },
+                    );
+                }
+
+                const bridged_locals = try self.parent.allocator.alloc(LIR.LocalId, source_locals.len);
+                defer self.parent.allocator.free(bridged_locals);
+                for (source_locals, param_locals, 0..) |source_local, param_local, i| {
+                    const expected_layout = self.localLayout(param_local);
+                    bridged_locals[i] = if (self.localLayout(source_local) == expected_layout)
+                        source_local
+                    else
+                        try self.freshLocalWithLayout(expected_layout);
+                }
+
+                const assign_call = try self.parent.store.addCFStmt(.{ .assign_call = .{
                     .target = target,
                     .result = .fresh,
-                    .proc = self.lookupProcId(call.proc),
-                    .args = try self.parent.store.addLocalSpan(locals),
+                    .proc = proc_id,
+                    .args = try self.parent.store.addLocalSpan(bridged_locals),
                     .next = next,
                 } });
+                break :blk try self.emitBridgesIntoLocals(source_locals, bridged_locals, assign_call);
             },
             .call_indirect => |call| blk: {
                 const locals = try self.lowerVarSpan(self.parent.input.store.sliceVarSpan(call.args));

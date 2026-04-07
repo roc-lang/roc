@@ -949,7 +949,8 @@ pub const Store = struct {
                 .nominal => Layout.zst(),
                 .box => Layout.box(.zst),
                 .list => Layout.list(.zst),
-                .closure, .struct_, .tag_union => Layout.zst(),
+                .closure => Layout.closure(.zst),
+                .struct_, .tag_union => Layout.zst(),
             });
         }
 
@@ -981,6 +982,31 @@ pub const Store = struct {
                 return switch (ref) {
                     .canonical => true,
                     .local => |node_id| self_resolver.resolved[@intFromEnum(node_id)],
+                };
+            }
+
+            fn isSlotReady(self_resolver: *@This(), ref: GraphRef) bool {
+                return switch (ref) {
+                    .canonical => true,
+                    .local => |node_id| blk: {
+                        const index = @intFromEnum(node_id);
+                        if (self_resolver.resolved[index]) break :blk true;
+                        break :blk switch (self_resolver.graph.getNode(node_id)) {
+                            .box, .list, .closure => true,
+                            .pending, .nominal, .struct_, .tag_union => false,
+                        };
+                    },
+                };
+            }
+
+            fn isKnownZeroSized(self_resolver: *@This(), ref: GraphRef) bool {
+                return switch (ref) {
+                    .canonical => |layout_idx| self_resolver.store.isZeroSized(self_resolver.store.getLayout(layout_idx)),
+                    .local => |node_id| blk: {
+                        if (!self_resolver.resolved[@intFromEnum(node_id)]) break :blk false;
+                        const layout_idx = self_resolver.value_layouts[@intFromEnum(node_id)];
+                        break :blk self_resolver.store.isZeroSized(self_resolver.store.getLayout(layout_idx));
+                    },
                 };
             }
 
@@ -1038,25 +1064,22 @@ pub const Store = struct {
                         self_resolver.value_layouts[index] = self_resolver.raw_layouts[index];
                     },
                     .box => |child| {
-                        if (!self_resolver.isValueReady(child)) return false;
                         const child_idx = self_resolver.valueIdx(child);
-                        const child_is_zst = self_resolver.store.isZeroSized(self_resolver.store.getLayout(child_idx));
+                        const child_is_zst = self_resolver.isKnownZeroSized(child);
                         self_resolver.store.updateLayout(
                             self_resolver.raw_layouts[index],
                             if (child_is_zst) Layout.boxOfZst() else Layout.box(child_idx),
                         );
                     },
                     .list => |child| {
-                        if (!self_resolver.isValueReady(child)) return false;
                         const child_idx = self_resolver.valueIdx(child);
-                        const child_is_zst = self_resolver.store.isZeroSized(self_resolver.store.getLayout(child_idx));
+                        const child_is_zst = self_resolver.isKnownZeroSized(child);
                         self_resolver.store.updateLayout(
                             self_resolver.raw_layouts[index],
                             if (child_is_zst) Layout.listOfZst() else Layout.list(child_idx),
                         );
                     },
                     .closure => |child| {
-                        if (!self_resolver.isValueReady(child)) return false;
                         self_resolver.store.updateLayout(
                             self_resolver.raw_layouts[index],
                             Layout.closure(self_resolver.valueIdx(child)),
@@ -1078,7 +1101,7 @@ pub const Store = struct {
                                         .local => |child_id| child_id,
                                     })
                                 else blk: {
-                                    if (!self_resolver.isValueReady(field.child)) return false;
+                                    if (!self_resolver.isSlotReady(field.child)) return false;
                                     break :blk self_resolver.valueIdx(field.child);
                                 };
                                 fields.appendAssumeCapacity(.{
@@ -1109,7 +1132,7 @@ pub const Store = struct {
                                         .local => |child_id| child_id,
                                     })
                                 else blk: {
-                                    if (!self_resolver.isValueReady(variant_ref)) return false;
+                                    if (!self_resolver.isSlotReady(variant_ref)) return false;
                                     break :blk self_resolver.valueIdx(variant_ref);
                                 };
                                 variants.appendAssumeCapacity(variant_layout);
