@@ -54,6 +54,11 @@ pub const Node = union(enum) {
 };
 
 pub const Store = struct {
+    const LayoutPair = struct {
+        left: LayoutId,
+        right: LayoutId,
+    };
+
     allocator: std.mem.Allocator,
     nodes: std.ArrayList(Node),
     layout_ids: std.ArrayList(LayoutId),
@@ -111,7 +116,7 @@ pub const Store = struct {
     }
 
     pub fn equalIds(self: *const Store, left: LayoutId, right: LayoutId) bool {
-        var visited = std.ArrayList(struct { left: LayoutId, right: LayoutId }).empty;
+        var visited = std.ArrayList(LayoutPair).empty;
         defer visited.deinit(self.allocator);
         return self.equalIdsVisited(left, right, &visited) catch false;
     }
@@ -120,7 +125,7 @@ pub const Store = struct {
         self: *const Store,
         left: LayoutId,
         right: LayoutId,
-        visited: *std.ArrayList(struct { left: LayoutId, right: LayoutId }),
+        visited: *std.ArrayList(LayoutPair),
     ) std.mem.Allocator.Error!bool {
         if (left == right) return true;
 

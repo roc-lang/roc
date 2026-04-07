@@ -164,6 +164,15 @@ pub const Store = struct {
         return self.all_module_envs;
     }
 
+    pub const GraphCommit = struct {
+        root_idx: Idx,
+        value_layouts: []Idx,
+
+        pub fn deinit(self_commit: *GraphCommit, allocator: std.mem.Allocator) void {
+            allocator.free(self_commit.value_layouts);
+        }
+    };
+
     /// Get the mutable module environment (used by interpreter for identifier insertion).
     /// Returns null if no mutable env was set via setMutableEnv.
     pub fn getMutableEnv(self: *Self) ?*ModuleEnv {
@@ -636,9 +645,12 @@ pub const Store = struct {
     /// Canonically intern a whole temporary logical layout graph.
     /// This is the one shared commit point where recursive nominal size cycles
     /// become explicit box layouts for final executable `LIR` consumption.
-    pub fn internGraph(self: *Self, graph: *const LayoutGraph, root: GraphRef) std.mem.Allocator.Error!Idx {
+    pub fn commitGraph(self: *Self, graph: *const LayoutGraph, root: GraphRef) std.mem.Allocator.Error!GraphCommit {
         switch (root) {
-            .canonical => |layout_idx| return layout_idx,
+            .canonical => |layout_idx| return .{
+                .root_idx = layout_idx,
+                .value_layouts = try self.allocator.alloc(Idx, 0),
+            },
             .local => {},
         }
 
@@ -732,27 +744,18 @@ pub const Store = struct {
             }
         };
 
-        var root_key_builder = KeyBuilder{
-            .store = self,
-            .graph = graph,
-            .states = key_states,
-            .binder_ids = binder_ids,
-        };
-        try root_key_builder.build(root);
-        if (self.interned_graphs.get(self.scratch_intern_key.items)) |existing| {
-            return existing;
-        }
-
         const raw_layouts = try self.allocator.alloc(Idx, graph.nodes.items.len);
         defer self.allocator.free(raw_layouts);
         const value_layouts = try self.allocator.alloc(Idx, graph.nodes.items.len);
-        defer self.allocator.free(value_layouts);
         const resolved = try self.allocator.alloc(bool, graph.nodes.items.len);
         defer self.allocator.free(resolved);
-        const boxed_recursive_nominals = try self.allocator.alloc(bool, graph.nodes.items.len);
-        defer self.allocator.free(boxed_recursive_nominals);
+        const recursive_nodes = try self.allocator.alloc(bool, graph.nodes.items.len);
+        defer self.allocator.free(recursive_nodes);
+        const component_ids = try self.allocator.alloc(u32, graph.nodes.items.len);
+        defer self.allocator.free(component_ids);
         @memset(resolved, false);
-        @memset(boxed_recursive_nominals, false);
+        @memset(recursive_nodes, false);
+        @memset(component_ids, std.math.maxInt(u32));
 
         const visit_index = try self.allocator.alloc(i32, graph.nodes.items.len);
         defer self.allocator.free(visit_index);
@@ -774,30 +777,61 @@ pub const Store = struct {
             lowlink: []i32,
             on_stack: []bool,
             stack: *std.ArrayList(GraphNodeId),
-            boxed_recursive_nominals: []bool,
+            recursive_nodes: []bool,
+            component_ids: []u32,
             next_index: i32 = 0,
+            next_component_id: u32 = 0,
 
             fn markRecursiveComponent(self_finder: *@This(), component: []const GraphNodeId) void {
-                var boxed_nominal_count: usize = 0;
+                const component_id = self_finder.next_component_id;
+                self_finder.next_component_id += 1;
+
+                for (component) |member| {
+                    const index = @intFromEnum(member);
+                    self_finder.recursive_nodes[index] = true;
+                    self_finder.component_ids[index] = component_id;
+                }
+
+                var has_boxable_slot_edge = false;
                 for (component) |member| {
                     switch (self_finder.graph.getNode(member)) {
-                        .nominal => |child| switch (child) {
-                            .canonical => unreachable,
-                            .local => |child_id| switch (self_finder.graph.getNode(child_id)) {
-                                .nominal => {},
-                                .pending, .box, .list, .closure, .struct_, .tag_union => {
-                                    self_finder.boxed_recursive_nominals[@intFromEnum(member)] = true;
-                                    boxed_nominal_count += 1;
-                                },
-                            },
+                        .struct_ => |span| {
+                            for (self_finder.graph.getFields(span)) |field| {
+                                switch (field.child) {
+                                    .canonical => {},
+                                    .local => |child_id| {
+                                        if (self_finder.component_ids[@intFromEnum(child_id)] == component_id) {
+                                            has_boxable_slot_edge = true;
+                                            break;
+                                        }
+                                    },
+                                }
+                            }
                         },
-                        .pending, .box, .list, .closure, .struct_, .tag_union => {},
+                        .tag_union => |span| {
+                            for (self_finder.graph.getRefs(span)) |child| {
+                                switch (child) {
+                                    .canonical => {},
+                                    .local => |child_id| {
+                                        if (self_finder.component_ids[@intFromEnum(child_id)] != component_id) continue;
+                                        switch (self_finder.graph.getNode(child_id)) {
+                                            .struct_ => {},
+                                            .pending, .nominal, .box, .list, .closure, .tag_union => {
+                                            has_boxable_slot_edge = true;
+                                            break;
+                                            },
+                                        }
+                                    },
+                                }
+                            }
+                        },
+                        .pending, .nominal, .box, .list, .closure => {},
                     }
                 }
 
-                if (boxed_nominal_count == 0) {
+                if (!has_boxable_slot_edge) {
                     std.debug.panic(
-                        "layout.Store invariant violated: recursive nominal SCC had no structural boxing point at the shared LIR layout commit",
+                        "layout.Store invariant violated: recursive layout SCC had no explicit slot edge to box at the shared LIR layout commit",
                         .{},
                     );
                 }
@@ -899,7 +933,8 @@ pub const Store = struct {
             .lowlink = lowlink,
             .on_stack = on_stack,
             .stack = &tarjan_stack,
-            .boxed_recursive_nominals = boxed_recursive_nominals,
+            .recursive_nodes = recursive_nodes,
+            .component_ids = component_ids,
         };
 
         for (graph.nodes.items, 0..) |_, i| {
@@ -921,7 +956,7 @@ pub const Store = struct {
         for (graph.nodes.items, 0..) |node, i| {
             value_layouts[i] = switch (node) {
                 .pending => unreachable,
-                .nominal => if (boxed_recursive_nominals[i]) try self.insertBox(raw_layouts[i]) else raw_layouts[i],
+                .nominal,
                 .box, .list, .closure, .struct_, .tag_union => raw_layouts[i],
             };
         }
@@ -932,7 +967,8 @@ pub const Store = struct {
             raw_layouts: []Idx,
             value_layouts: []Idx,
             resolved: []bool,
-            boxed_recursive_nominals: []bool,
+            recursive_nodes: []bool,
+            component_ids: []u32,
 
             fn valueIdx(self_resolver: *@This(), ref: GraphRef) Idx {
                 return switch (ref) {
@@ -944,12 +980,46 @@ pub const Store = struct {
             fn isValueReady(self_resolver: *@This(), ref: GraphRef) bool {
                 return switch (ref) {
                     .canonical => true,
-                    .local => |node_id| blk: {
-                        const index = @intFromEnum(node_id);
-                        if (self_resolver.resolved[index]) break :blk true;
-                        break :blk self_resolver.boxed_recursive_nominals[index];
-                    },
+                    .local => |node_id| self_resolver.resolved[@intFromEnum(node_id)],
                 };
+            }
+
+            fn shouldBoxRecursiveSlotEdge(
+                self_resolver: *@This(),
+                parent_id: GraphNodeId,
+                child_ref: GraphRef,
+            ) bool {
+                const child_id = switch (child_ref) {
+                    .canonical => return false,
+                    .local => |id| id,
+                };
+                const parent_index = @intFromEnum(parent_id);
+                const child_index = @intFromEnum(child_id);
+
+                if (!self_resolver.recursive_nodes[parent_index] or !self_resolver.recursive_nodes[child_index]) {
+                    return false;
+                }
+                if (self_resolver.component_ids[parent_index] != self_resolver.component_ids[child_index]) {
+                    return false;
+                }
+
+                return switch (self_resolver.graph.getNode(parent_id)) {
+                    .struct_ => true,
+                    .tag_union => switch (self_resolver.graph.getNode(child_id)) {
+                        .struct_ => false,
+                        .pending, .nominal, .box, .list, .closure, .tag_union => true,
+                    },
+                    .pending, .nominal, .box, .list, .closure => false,
+                };
+            }
+
+            fn recursiveSlotLayout(
+                self_resolver: *@This(),
+                child_id: GraphNodeId,
+            ) std.mem.Allocator.Error!Idx {
+                return try self_resolver.store.insertBox(
+                    self_resolver.raw_layouts[@intFromEnum(child_id)],
+                );
             }
 
             fn tryResolveNode(self_resolver: *@This(), node_id: GraphNodeId) std.mem.Allocator.Error!bool {
@@ -965,9 +1035,7 @@ pub const Store = struct {
                             self_resolver.raw_layouts[index],
                             self_resolver.store.getLayout(child_value_idx),
                         );
-                        if (!self_resolver.boxed_recursive_nominals[index]) {
-                            self_resolver.value_layouts[index] = child_value_idx;
-                        }
+                        self_resolver.value_layouts[index] = self_resolver.raw_layouts[index];
                     },
                     .box => |child| {
                         if (!self_resolver.isValueReady(child)) return false;
@@ -1004,10 +1072,18 @@ pub const Store = struct {
                             try fields.ensureTotalCapacity(self_resolver.store.allocator, graph_fields.len);
 
                             for (graph_fields) |field| {
-                                if (!self_resolver.isValueReady(field.child)) return false;
+                                const field_layout = if (self_resolver.shouldBoxRecursiveSlotEdge(node_id, field.child))
+                                    try self_resolver.recursiveSlotLayout(switch (field.child) {
+                                        .canonical => unreachable,
+                                        .local => |child_id| child_id,
+                                    })
+                                else blk: {
+                                    if (!self_resolver.isValueReady(field.child)) return false;
+                                    break :blk self_resolver.valueIdx(field.child);
+                                };
                                 fields.appendAssumeCapacity(.{
                                     .index = field.index,
-                                    .layout = self_resolver.valueIdx(field.child),
+                                    .layout = field_layout,
                                 });
                             }
 
@@ -1027,8 +1103,16 @@ pub const Store = struct {
                             try variants.ensureTotalCapacity(self_resolver.store.allocator, graph_refs.len);
 
                             for (graph_refs) |variant_ref| {
-                                if (!self_resolver.isValueReady(variant_ref)) return false;
-                                variants.appendAssumeCapacity(self_resolver.valueIdx(variant_ref));
+                                const variant_layout = if (self_resolver.shouldBoxRecursiveSlotEdge(node_id, variant_ref))
+                                    try self_resolver.recursiveSlotLayout(switch (variant_ref) {
+                                        .canonical => unreachable,
+                                        .local => |child_id| child_id,
+                                    })
+                                else blk: {
+                                    if (!self_resolver.isValueReady(variant_ref)) return false;
+                                    break :blk self_resolver.valueIdx(variant_ref);
+                                };
+                                variants.appendAssumeCapacity(variant_layout);
                             }
 
                             self_resolver.store.updateLayout(
@@ -1050,7 +1134,8 @@ pub const Store = struct {
             .raw_layouts = raw_layouts,
             .value_layouts = value_layouts,
             .resolved = resolved,
-            .boxed_recursive_nominals = boxed_recursive_nominals,
+            .recursive_nodes = recursive_nodes,
+            .component_ids = component_ids,
         };
 
         while (true) {
@@ -1076,11 +1161,6 @@ pub const Store = struct {
             }
         }
 
-        const root_idx = switch (root) {
-            .canonical => |layout_idx| layout_idx,
-            .local => |node_id| value_layouts[@intFromEnum(node_id)],
-        };
-
         for (graph.nodes.items, 0..) |_, i| {
             @memset(key_states, .unseen);
             @memset(binder_ids, 0);
@@ -1091,14 +1171,24 @@ pub const Store = struct {
                 .binder_ids = binder_ids,
             };
             try subgraph_key_builder.build(.{ .local = @enumFromInt(i) });
-            if (self.interned_graphs.get(self.scratch_intern_key.items) == null) {
+            if (self.interned_graphs.get(self.scratch_intern_key.items)) |existing| {
+                value_layouts[i] = existing;
+            } else {
                 const owned_key = try self.allocator.dupe(u8, self.scratch_intern_key.items);
                 errdefer self.allocator.free(owned_key);
                 try self.interned_graphs.put(owned_key, value_layouts[i]);
             }
         }
 
-        return root_idx;
+        const root_idx = switch (root) {
+            .canonical => |layout_idx| layout_idx,
+            .local => |node_id| value_layouts[@intFromEnum(node_id)],
+        };
+
+        return .{
+            .root_idx = root_idx,
+            .value_layouts = value_layouts,
+        };
     }
 
     /// Create a struct layout representing the sequential layout of closure captures.
@@ -1164,6 +1254,81 @@ pub const Store = struct {
 
     pub fn getLayout(self: *const Self, idx: Idx) Layout {
         return self.layouts.get(@enumFromInt(@intFromEnum(idx))).*;
+    }
+
+    pub fn layoutsHaveSameRuntimeRepresentation(self: *const Self, left: Idx, right: Idx) bool {
+        var visited = std.ArrayList(LayoutPair).empty;
+        defer visited.deinit(self.allocator);
+        return self.layoutsHaveSameRuntimeRepresentationRec(left, right, &visited) catch false;
+    }
+
+    const LayoutPair = struct {
+        left: Idx,
+        right: Idx,
+    };
+
+    fn layoutsHaveSameRuntimeRepresentationRec(
+        self: *const Self,
+        left: Idx,
+        right: Idx,
+        visited: *std.ArrayList(LayoutPair),
+    ) std.mem.Allocator.Error!bool {
+        if (left == right) return true;
+
+        for (visited.items) |pair| {
+            if ((pair.left == left and pair.right == right) or (pair.left == right and pair.right == left)) {
+                return true;
+            }
+        }
+        try visited.append(self.allocator, .{ .left = left, .right = right });
+
+        const left_layout = self.getLayout(left);
+        const right_layout = self.getLayout(right);
+        if (left_layout.tag != right_layout.tag) return false;
+
+        return switch (left_layout.tag) {
+            .scalar => std.meta.eql(left_layout.data.scalar, right_layout.data.scalar),
+            .zst => true,
+            .box => try self.layoutsHaveSameRuntimeRepresentationRec(left_layout.data.box, right_layout.data.box, visited),
+            .box_of_zst => true,
+            .list => try self.layoutsHaveSameRuntimeRepresentationRec(left_layout.data.list, right_layout.data.list, visited),
+            .list_of_zst => true,
+            .closure => try self.layoutsHaveSameRuntimeRepresentationRec(
+                left_layout.data.closure.captures_layout_idx,
+                right_layout.data.closure.captures_layout_idx,
+                visited,
+            ),
+            .struct_ => blk: {
+                const left_info = self.getStructInfo(left_layout);
+                const right_info = self.getStructInfo(right_layout);
+                if (left_info.alignment != right_info.alignment) break :blk false;
+                if (left_info.data.size != right_info.data.size) break :blk false;
+                if (left_info.fields.len != right_info.fields.len) break :blk false;
+                for (0..left_info.fields.len) |i| {
+                    const left_field = left_info.fields.get(@intCast(i));
+                    const right_field = right_info.fields.get(@intCast(i));
+                    if (left_field.index != right_field.index) break :blk false;
+                    if (!try self.layoutsHaveSameRuntimeRepresentationRec(left_field.layout, right_field.layout, visited)) {
+                        break :blk false;
+                    }
+                }
+                break :blk true;
+            },
+            .tag_union => blk: {
+                const left_info = self.getTagUnionInfo(left_layout);
+                const right_info = self.getTagUnionInfo(right_layout);
+                if (left_info.alignment != right_info.alignment) break :blk false;
+                if (left_info.variants.len != right_info.variants.len) break :blk false;
+                for (0..left_info.variants.len) |i| {
+                    const left_variant = left_info.variants.get(@intCast(i));
+                    const right_variant = right_info.variants.get(@intCast(i));
+                    if (!try self.layoutsHaveSameRuntimeRepresentationRec(left_variant.payload_layout, right_variant.payload_layout, visited)) {
+                        break :blk false;
+                    }
+                }
+                break :blk true;
+            },
+        };
     }
 
     pub fn getStructData(self: *const Self, idx: StructIdx) *const StructData {

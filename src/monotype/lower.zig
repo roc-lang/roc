@@ -749,19 +749,21 @@ pub const Lowerer = struct {
         const cir_env = self.ctx.env(module_idx);
         const expr = cir_env.store.getExpr(expr_idx);
         switch (expr) {
-            .e_nominal => |nominal| return self.lowerTransparentNominalExpr(
+            .e_nominal => |nominal| return self.lowerTransparentNominalExprWithType(
                 module_idx,
                 type_scope,
                 env,
                 expr_idx,
                 nominal.backing_expr,
+                try self.lowerLocalNominalExprType(module_idx, type_scope, nominal.nominal_type_decl),
             ),
-            .e_nominal_external => |nominal| return self.lowerTransparentNominalExpr(
+            .e_nominal_external => |nominal| return self.lowerTransparentNominalExprWithType(
                 module_idx,
                 type_scope,
                 env,
                 expr_idx,
                 nominal.backing_expr,
+                try self.lowerExternalNominalExprType(module_idx, type_scope, nominal.module_idx, nominal.target_node_idx),
             ),
             else => {},
         }
@@ -3067,21 +3069,21 @@ pub const Lowerer = struct {
         }
 
         return switch (expr) {
-            .e_nominal => |nominal| self.lowerExprWithExpectedType(
+            .e_nominal => |nominal| self.lowerTransparentNominalExprWithType(
                 module_idx,
                 type_scope,
                 env,
+                expr_idx,
                 nominal.backing_expr,
-                expected_ty,
-                expected_var,
+                try self.lowerLocalNominalExprType(module_idx, type_scope, nominal.nominal_type_decl),
             ),
-            .e_nominal_external => |nominal| self.lowerExprWithExpectedType(
+            .e_nominal_external => |nominal| self.lowerTransparentNominalExprWithType(
                 module_idx,
                 type_scope,
                 env,
+                expr_idx,
                 nominal.backing_expr,
-                expected_ty,
-                expected_var,
+                try self.lowerExternalNominalExprType(module_idx, type_scope, nominal.module_idx, nominal.target_node_idx),
             ),
             .e_num => |num| try self.program.store.addExpr(.{
                 .ty = expected_ty,
@@ -3267,20 +3269,46 @@ pub const Lowerer = struct {
         };
     }
 
-    fn lowerTransparentNominalExpr(
+    fn lowerLocalNominalExprType(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeCloneScope,
+        nominal_type_decl: CIR.Statement.Idx,
+    ) std.mem.Allocator.Error!type_mod.TypeId {
+        return self.lowerSolvedType(module_idx, type_scope, ModuleEnv.varFrom(nominal_type_decl));
+    }
+
+    fn lowerExternalNominalExprType(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeCloneScope,
+        import_idx: CIR.Import.Idx,
+        target_node_idx: u16,
+    ) std.mem.Allocator.Error!type_mod.TypeId {
+        const current_env = self.ctx.env(module_idx);
+        const target_module_idx = current_env.imports.getResolvedModule(import_idx) orelse debugPanic(
+            "monotype invariant violated: unresolved nominal import during external nominal lowering",
+            .{},
+        );
+        const copied = try self.copyCheckerVarToModule(target_module_idx, module_idx, ModuleEnv.varFrom(@as(CIR.Node.Idx, @enumFromInt(target_node_idx))));
+        return self.lowerInstantiatedType(module_idx, type_scope, copied);
+    }
+
+    fn lowerTransparentNominalExprWithType(
         self: *Lowerer,
         module_idx: u32,
         type_scope: *TypeCloneScope,
         env: BindingEnv,
         expr_idx: CIR.Expr.Idx,
         backing_expr_idx: CIR.Expr.Idx,
+        nominal_ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!ast.ExprId {
         return self.lowerExprWithExpectedType(
             module_idx,
             type_scope,
             env,
             backing_expr_idx,
-            try self.lowerExprType(module_idx, type_scope, env, expr_idx, self.ctx.env(module_idx).store.getExpr(expr_idx)),
+            nominal_ty,
             ModuleEnv.varFrom(expr_idx),
         );
     }
@@ -3462,7 +3490,8 @@ pub const Lowerer = struct {
             return .{ .bool_lit = self.requireBoolLiteralValue(module_idx, tag_name) };
         }
 
-        const arg_tys = self.lookupTagArgTypes(expected_ty, tag_name);
+        const arg_tys = try self.lookupTagArgTypesOwned(expected_ty, tag_name);
+        defer self.allocator.free(arg_tys);
         const arg_exprs = self.ctx.env(module_idx).store.sliceExpr(args_span);
         if (arg_exprs.len != arg_tys.len) {
             return debugPanic("monotype invariant violated: tag constructor arity mismatch during expected-type lowering", .{});
@@ -4357,7 +4386,8 @@ pub const Lowerer = struct {
             },
             .tuple => |tuple| {
                 const elem_patterns = cir_env.store.slicePatterns(tuple.patterns);
-                const elem_tys = self.lookupTupleElemTypes(source.ty);
+                const elem_tys = try self.lookupTupleElemTypesOwned(source.ty);
+                defer self.allocator.free(elem_tys);
                 if (elem_patterns.len != elem_tys.len) {
                     return debugPanic("monotype invariant violated: tuple pattern arity mismatch for lowered source type", .{});
                 }
@@ -4527,7 +4557,8 @@ pub const Lowerer = struct {
             },
             .tuple => |tuple| {
                 const elem_patterns = cir_env.store.slicePatterns(tuple.patterns);
-                const elem_tys = self.lookupTupleElemTypes(source_ty);
+                const elem_tys = try self.lookupTupleElemTypesOwned(source_ty);
+                defer self.allocator.free(elem_tys);
                 if (elem_patterns.len != elem_tys.len) {
                     return debugPanic("monotype invariant violated: tuple reassign arity mismatch for lowered source type", .{});
                 }
@@ -4646,7 +4677,8 @@ pub const Lowerer = struct {
                     });
                 }
                 const arg_pats = cir_env.store.slicePatterns(tag.args);
-                const arg_tys = self.lookupTagArgTypes(source_ty, tag.name);
+                const arg_tys = try self.lookupTagArgTypesOwned(source_ty, tag.name);
+                defer self.allocator.free(arg_tys);
                 if (arg_pats.len != arg_tys.len) {
                     return debugPanic("monotype invariant violated: tag pattern arity mismatch for lowered source type", .{});
                 }
@@ -4683,15 +4715,33 @@ pub const Lowerer = struct {
         };
     }
 
-    fn lookupTagArgTypes(
+    fn normalizeNominalChildType(
+        self: *Lowerer,
+        parent_ty: type_mod.TypeId,
+        child_ty: type_mod.TypeId,
+    ) type_mod.TypeId {
+        return switch (self.ctx.types.getTypePreservingNominal(parent_ty)) {
+            .nominal => |backing| if (self.ctx.types.equalIds(child_ty, backing)) parent_ty else child_ty,
+            else => child_ty,
+        };
+    }
+
+    fn lookupTagArgTypesOwned(
         self: *Lowerer,
         source_ty: type_mod.TypeId,
         tag_name: base.Ident.Idx,
-    ) []const type_mod.TypeId {
+    ) std.mem.Allocator.Error![]type_mod.TypeId {
         return switch (self.ctx.types.getType(source_ty)) {
             .tag_union => |tag_union| blk: {
                 for (self.ctx.types.sliceTags(tag_union.tags)) |tag| {
-                    if (tag.name.idx == tag_name.idx) break :blk self.ctx.types.sliceTypeSpan(tag.args);
+                    if (tag.name.idx == tag_name.idx) {
+                        const args = self.ctx.types.sliceTypeSpan(tag.args);
+                        const out = try self.allocator.alloc(type_mod.TypeId, args.len);
+                        for (args, 0..) |arg_ty, i| {
+                            out[i] = self.normalizeNominalChildType(source_ty, arg_ty);
+                        }
+                        break :blk out;
+                    }
                 }
                 debugPanic("monotype invariant violated: missing tag in lowered tag union type", .{});
             },
@@ -4707,7 +4757,7 @@ pub const Lowerer = struct {
         return switch (self.ctx.types.getType(source_ty)) {
             .record => |record| blk: {
                 for (self.ctx.types.sliceFields(record.fields)) |field| {
-                    if (field.name.idx == field_name.idx) break :blk field.ty;
+                    if (field.name.idx == field_name.idx) break :blk self.normalizeNominalChildType(source_ty, field.ty);
                 }
                 debugPanic("monotype invariant violated: missing field in lowered record type", .{});
             },
@@ -4715,15 +4765,24 @@ pub const Lowerer = struct {
         };
     }
 
-    fn lookupTupleElemTypes(self: *Lowerer, source_ty: type_mod.TypeId) []const type_mod.TypeId {
+    fn lookupTupleElemTypesOwned(self: *Lowerer, source_ty: type_mod.TypeId) std.mem.Allocator.Error![]type_mod.TypeId {
         return switch (self.ctx.types.getType(source_ty)) {
-            .tuple => |tuple| self.ctx.types.sliceTypeSpan(tuple),
+            .tuple => |tuple| blk: {
+                const elems = self.ctx.types.sliceTypeSpan(tuple);
+                const out = try self.allocator.alloc(type_mod.TypeId, elems.len);
+                for (elems, 0..) |elem_ty, i| {
+                    out[i] = self.normalizeNominalChildType(source_ty, elem_ty);
+                }
+                break :blk out;
+            },
             else => debugPanic("monotype invariant violated: attempted to read tuple element types from non-tuple type", .{}),
         };
     }
 
     fn lookupTupleElemType(self: *Lowerer, source_ty: type_mod.TypeId, elem_index: usize) type_mod.TypeId {
-        const elems = self.lookupTupleElemTypes(source_ty);
+        const elems = self.lookupTupleElemTypesOwned(source_ty) catch |err|
+            std.debug.panic("monotype invariant violated: tuple elem allocation failed: {s}", .{@errorName(err)});
+        defer self.allocator.free(elems);
         if (elem_index >= elems.len) {
             debugPanic("monotype invariant violated: tuple element index out of bounds", .{});
         }

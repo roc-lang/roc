@@ -2,7 +2,6 @@
 //! propagate-erasure -> SCC ordering flow.
 
 const std = @import("std");
-const builtin = @import("builtin");
 const base = @import("base");
 const lifted = @import("monotype_lifted");
 const ast = @import("ast.zig");
@@ -567,7 +566,7 @@ const Lowerer = struct {
                         .args = try self.types.addTypeVarSpan(arg_tys),
                     }}),
                 } });
-                try self.unify(target_ty, wanted);
+                try self.unifyTargetWithWantedPreservingNominal(target_ty, wanted);
                 break :blk target_ty;
             },
             .record => |fields| blk: {
@@ -583,7 +582,7 @@ const Lowerer = struct {
                 const wanted = try self.types.freshContent(.{ .record = .{
                     .fields = try self.types.addFields(field_tys),
                 } });
-                try self.unify(target_ty, wanted);
+                try self.unifyTargetWithWantedPreservingNominal(target_ty, wanted);
                 break :blk target_ty;
             },
             .access => |access| blk: {
@@ -676,7 +675,7 @@ const Lowerer = struct {
                     elem_tys[i] = try self.inferExpr(venv, item);
                 }
                 const wanted = try self.types.freshContent(.{ .tuple = try self.types.addTypeVarSpan(elem_tys) });
-                try self.unify(target_ty, wanted);
+                try self.unifyTargetWithWantedPreservingNominal(target_ty, wanted);
                 break :blk target_ty;
             },
             .tuple_access => |tuple_access| blk: {
@@ -701,7 +700,7 @@ const Lowerer = struct {
             .list => |list| blk: {
                 const elem_ty = try self.types.freshUnbd();
                 const wanted = try self.types.freshContent(.{ .list = elem_ty });
-                try self.unify(target_ty, wanted);
+                try self.unifyTargetWithWantedPreservingNominal(target_ty, wanted);
                 for (self.output.sliceExprSpan(list)) |item| {
                     const item_ty = try self.inferExpr(venv, item);
                     try self.unify(elem_ty, item_ty);
@@ -730,6 +729,18 @@ const Lowerer = struct {
 
         try self.unify(target_ty, inferred);
         return target_ty;
+    }
+
+    fn unifyTargetWithWantedPreservingNominal(
+        self: *Lowerer,
+        target_ty: TypeVarId,
+        wanted_ty: TypeVarId,
+    ) std.mem.Allocator.Error!void {
+        const target_root = self.types.unlinkPreservingNominal(target_ty);
+        return switch (self.types.getNode(target_root)) {
+            .nominal => |backing| try self.unify(backing, wanted_ty),
+            else => try self.unify(target_ty, wanted_ty),
+        };
     }
 
     fn inferStmt(self: *Lowerer, venv: []const EnvEntry, stmt_id: ast.StmtId) std.mem.Allocator.Error![]EnvEntry {
@@ -1252,7 +1263,7 @@ const Lowerer = struct {
         const lowered = switch (self.types.getNode(id)) {
             .unbd, .for_a => unreachable,
             .link => unreachable,
-            .nominal => |backing| .{ .nominal = try self.instantiateGeneralizedRec(backing, mapping) },
+            .nominal => |backing| type_mod.Node{ .nominal = try self.instantiateGeneralizedRec(backing, mapping) },
             .content => |content| switch (content) {
                 .primitive => type_mod.Node{ .content = .{ .primitive = content.primitive } },
                 .func => type_mod.Node{ .content = .{ .func = .{

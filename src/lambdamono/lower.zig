@@ -593,7 +593,7 @@ const Lowerer = struct {
         result_ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!ast.ExprId {
         const value_ty = self.output.getExpr(value_expr).ty;
-        return switch (self.types.getType(value_ty)) {
+        return switch (self.types.getTypePreservingNominal(value_ty)) {
             .primitive => |prim| switch (prim) {
                 .str => self.makeLowLevelExpr(result_ty, .str_inspect, &.{value_expr}),
                 .bool => self.makeBoolInspectExpr(value_expr, result_ty),
@@ -613,6 +613,7 @@ const Lowerer = struct {
                 => self.makeLowLevelExpr(result_ty, .num_to_str, &.{value_expr}),
                 .erased => debugPanic("lambdamono.inspect invariant violated: erased value type"),
             },
+            .nominal => self.makeInspectHelperCall(value_expr, result_ty),
             .list => |elem_ty| self.makeListInspectExpr(elem_ty, value_expr, result_ty),
             .box => |elem_ty| blk: {
                 const unboxed_expr = try self.makeLowLevelExpr(elem_ty, .box_unbox, &.{value_expr});
@@ -1002,6 +1003,7 @@ const Lowerer = struct {
                 => self.makeLowLevelExpr(result_ty, .num_to_str, &.{value_expr}),
                 .erased => debugPanic("lambdamono.inspect invariant violated: erased value type"),
             },
+            .nominal => self.makeInspectHelperCall(value_expr, result_ty),
             .list,
             .box,
             .tuple,
@@ -1627,13 +1629,20 @@ const Lowerer = struct {
     }
 
     fn cloneInstType(self: *Lowerer, inst: *InstScope, ty: TypeVarId) std.mem.Allocator.Error!TypeVarId {
-        const id = self.input.types.unlink(ty);
+        const id = self.input.types.unlinkPreservingNominal(ty);
         if (inst.mapping.get(id)) |cached| return cached;
 
         const cloned = switch (self.input.types.getNode(id)) {
             .link => unreachable,
             .for_a => try self.input.types.freshUnbd(),
             .unbd => try self.input.types.freshUnbd(),
+            .nominal => |backing| blk: {
+                const placeholder = try self.input.types.freshUnbd();
+                try inst.mapping.put(id, placeholder);
+                const node = solved.Type.Node{ .nominal = try self.cloneInstType(inst, backing) };
+                self.input.types.setNode(placeholder, node);
+                break :blk placeholder;
+            },
             .content => |content| blk: {
                 const placeholder = try self.input.types.freshUnbd();
                 try inst.mapping.put(id, placeholder);

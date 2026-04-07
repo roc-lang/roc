@@ -4780,7 +4780,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .tag_discriminant = payload.tag_discriminant,
                     .target_layout = target_layout,
                 }),
-                .nominal => |nominal| self.requireExactValueLocationToLayout(
+                .nominal => |nominal| self.requireExplicitNominalValueLocationToLayout(
                     try self.emitValueLocal(nominal.backing_ref),
                     self.localLayout(nominal.backing_ref),
                     target_layout,
@@ -7458,6 +7458,20 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             return self.coerceImmediateToLayout(loc, expected_layout);
+        }
+
+        fn requireExplicitNominalValueLocationToLayout(
+            self: *Self,
+            loc: ValueLocation,
+            actual_layout: layout.Idx,
+            expected_layout: layout.Idx,
+            comptime site: []const u8,
+        ) ValueLocation {
+            if (actual_layout == expected_layout or self.layout_store.layoutsHaveSameRuntimeRepresentation(actual_layout, expected_layout)) {
+                return self.coerceImmediateToLayout(loc, expected_layout);
+            }
+
+            return self.requireExactValueLocationToLayout(loc, actual_layout, expected_layout, site);
         }
 
         /// Emit a correctly-sized raw load from the stack, zero-extending sub-word

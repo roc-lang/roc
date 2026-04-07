@@ -298,12 +298,16 @@ const Lowerer = struct {
             .access => |access| {
                 const record = try self.lowerSubexprValue(&block, env, access.record);
                 if (record == null) return if (block.has_term) block else debugPanic("ir.lower access missing terminator");
-                const temp = try self.freshVar(expr.ty, "field");
+                const field_index = try self.fieldId(self.input.store.getExpr(access.record).ty, access.field);
+                const temp = try self.freshVarWithLayout(
+                    try self.structFieldLayout(record.?.layout, field_index),
+                    "field",
+                );
                 try block.stmts.append(self.allocator, .{ .let_ = .{
                     .bind = temp,
                     .expr = try self.output.addExpr(.{ .get_struct_field = .{
                         .record = record.?,
-                        .field_index = try self.fieldId(self.input.store.getExpr(access.record).ty, access.field),
+                        .field_index = field_index,
                     } }),
                 } });
                 block.setTerm(.{ .value = temp });
@@ -311,7 +315,10 @@ const Lowerer = struct {
             .tuple_access => |tuple_access| {
                 const tuple = try self.lowerSubexprValue(&block, env, tuple_access.tuple);
                 if (tuple == null) return if (block.has_term) block else debugPanic("ir.lower tuple_access missing terminator");
-                const temp = try self.freshVar(expr.ty, "tuple_field");
+                const temp = try self.freshVarWithLayout(
+                    try self.structFieldLayout(tuple.?.layout, @intCast(tuple_access.elem_index)),
+                    "tuple_field",
+                );
                 try block.stmts.append(self.allocator, .{ .let_ = .{
                     .bind = temp,
                     .expr = try self.output.addExpr(.{ .get_struct_field = .{
@@ -572,25 +579,61 @@ const Lowerer = struct {
         union_ty: lambdamono.Type.TypeId,
         name: base.Ident.Idx,
     ) std.mem.Allocator.Error!layout_mod.LayoutId {
+        const union_layout = try lower_type.lowerType(&self.input.types, &self.layouts, &self.layout_cache, union_ty);
+        const resolved_union_layout = try self.resolveUnionLayoutLayout(union_layout);
         return switch (self.input.types.getType(union_ty)) {
             .tag_union => |tag_union| blk: {
-                for (self.input.types.sliceTags(tag_union.tags)) |tag| {
-                    if (tag.name != name) continue;
+                const variants = switch (self.layouts.getContent(resolved_union_layout)) {
+                    .union_ => |variants| self.layouts.sliceLayoutSpan(variants),
+                    else => debugPanic("ir.lower.tagPayloadLayout expected lowered union layout"),
+                };
 
-                    const args = self.input.types.sliceTypeSpan(tag.args);
-                    const arg_layouts = try self.allocator.alloc(layout_mod.LayoutId, args.len);
-                    defer self.allocator.free(arg_layouts);
-                    for (args, 0..) |arg_ty, i| {
-                        arg_layouts[i] = try lower_type.lowerType(&self.input.types, &self.layouts, &self.layout_cache, arg_ty);
-                    }
-
-                    break :blk try self.layouts.addContent(.{
-                        .struct_ = try self.layouts.addLayoutSpan(arg_layouts),
-                    });
+                for (self.input.types.sliceTags(tag_union.tags), 0..) |tag, i| {
+                    if (tag.name == name) break :blk variants[i];
                 }
                 debugPanic("ir.lower.tagPayloadLayout missing tag");
             },
             else => debugPanic("ir.lower.tagPayloadLayout expected tag union type"),
+        };
+    }
+
+    fn resolveUnionLayoutLayout(
+        self: *Lowerer,
+        layout_id: layout_mod.LayoutId,
+    ) std.mem.Allocator.Error!layout_mod.LayoutId {
+        var current = layout_id;
+        while (true) {
+            switch (self.layouts.getContent(current)) {
+                .nominal => |backing| current = backing,
+                .union_ => return current,
+                else => debugPanic("ir.lower.resolveUnionLayoutLayout expected nominal or union layout"),
+            }
+        }
+    }
+
+    fn resolveStructLayoutLayout(
+        self: *Lowerer,
+        layout_id: layout_mod.LayoutId,
+    ) std.mem.Allocator.Error!layout_mod.LayoutId {
+        var current = layout_id;
+        while (true) {
+            switch (self.layouts.getContent(current)) {
+                .nominal => |backing| current = backing,
+                .struct_ => return current,
+                else => debugPanic("ir.lower.resolveStructLayoutLayout expected nominal or struct layout"),
+            }
+        }
+    }
+
+    fn structFieldLayout(
+        self: *Lowerer,
+        struct_layout_id: layout_mod.LayoutId,
+        field_index: u16,
+    ) std.mem.Allocator.Error!layout_mod.LayoutId {
+        const resolved_struct_layout = try self.resolveStructLayoutLayout(struct_layout_id);
+        return switch (self.layouts.getContent(resolved_struct_layout)) {
+            .struct_ => |fields| self.layouts.sliceLayoutSpan(fields)[field_index],
+            else => debugPanic("ir.lower.structFieldLayout expected struct layout"),
         };
     }
 
@@ -926,7 +969,10 @@ const Lowerer = struct {
                 const args = self.input.store.slicePatSpan(tag.args);
                 if (args.len == 0) return;
 
-                const payload_var = try self.freshStructVarFromPats(args, "pat_payload");
+                const payload_var = try self.freshVarWithLayout(
+                    try self.tagPayloadLayout(pat.ty, tag.name),
+                    "pat_payload",
+                );
                 try prefix.append(self.allocator, .{ .let_ = .{
                     .bind = payload_var,
                     .expr = try self.output.addExpr(.{ .get_union_struct = .{
@@ -936,8 +982,10 @@ const Lowerer = struct {
                 } });
 
                 for (args, 0..) |arg_pat_id, i| {
-                    const arg_pat = self.input.store.getPat(arg_pat_id);
-                    const field_var = try self.freshVar(arg_pat.ty, "pat_field");
+                    const field_var = try self.freshVarWithLayout(
+                        try self.structFieldLayout(payload_var.layout, @intCast(i)),
+                        "pat_field",
+                    );
                     try prefix.append(self.allocator, .{ .let_ = .{
                         .bind = field_var,
                         .expr = try self.output.addExpr(.{ .get_struct_field = .{
@@ -949,25 +997,6 @@ const Lowerer = struct {
                 }
             },
         }
-    }
-
-    fn freshStructVarFromPats(
-        self: *Lowerer,
-        pats: []const lambdamono.Ast.PatId,
-        comptime label: []const u8,
-    ) std.mem.Allocator.Error!ast.Var {
-        const layouts = try self.allocator.alloc(layout_mod.LayoutId, pats.len);
-        defer self.allocator.free(layouts);
-
-        for (pats, 0..) |pat_id, i| {
-            const pat = self.input.store.getPat(pat_id);
-            layouts[i] = try lower_type.lowerType(&self.input.types, &self.layouts, &self.layout_cache, pat.ty);
-        }
-
-        return .{
-            .layout = try self.layouts.addContent(.{ .struct_ = try self.layouts.addLayoutSpan(layouts) }),
-            .symbol = try self.freshSymbol(label),
-        };
     }
 
     fn concatEnv(self: *Lowerer, left: []const EnvEntry, right: []const EnvEntry) std.mem.Allocator.Error![]EnvEntry {

@@ -116,7 +116,9 @@ pub const Resolver = struct {
             .ordinary,
             &build_state,
         );
-        const layout_idx = try self.store.internGraph(&build_state.graph, root);
+        var commit = try self.store.commitGraph(&build_state.graph, root);
+        defer commit.deinit(self.allocator);
+        const layout_idx = commit.root_idx;
 
         if (!build_state.depends_on_unresolved_type_params) {
             try self.canonical_cache.put(initial_key, layout_idx);
