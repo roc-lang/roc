@@ -16,7 +16,6 @@ const ir = @import("ir");
 const lir = @import("lir");
 const backend = @import("backend");
 const collections = @import("collections");
-
 const builtin_loading = @import("../builtin_loading.zig");
 const Interpreter = @import("../interpreter.zig").Interpreter;
 const RuntimeHostEnv = @import("RuntimeHostEnv.zig");
