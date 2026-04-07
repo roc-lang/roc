@@ -19,7 +19,7 @@ const collections = @import("collections");
 
 const builtin_loading = @import("../builtin_loading.zig");
 const Interpreter = @import("../interpreter.zig").Interpreter;
-const RuntimeEnv = @import("TestEnv.zig");
+const RuntimeHostEnv = @import("RuntimeHostEnv.zig");
 
 const Can = can.Can;
 const Check = check.Check;
@@ -87,15 +87,17 @@ pub const LoweredProgram = struct {
     }
 };
 
-pub const CompiledInspectedExpr = struct {
+pub const CompiledProgram = struct {
     resources: ParsedResources,
     lowered: LoweredProgram,
 
-    pub fn deinit(self: *CompiledInspectedExpr, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *CompiledProgram, allocator: std.mem.Allocator) void {
         self.lowered.deinit();
         cleanupParseAndCanonical(allocator, self.resources);
     }
 };
+
+pub const CompiledInspectedExpr = CompiledProgram;
 
 pub fn allocInspectedExprSource(allocator: std.mem.Allocator, source: []const u8) ![]u8 {
     return std.fmt.allocPrint(allocator, "Str.inspect(({s}))", .{source});
@@ -111,6 +113,32 @@ pub fn parseAndCanonicalizeInspectedExpr(allocator: std.mem.Allocator, source: [
 
 pub fn compileInspectedExpr(allocator: std.mem.Allocator, source: []const u8) !CompiledInspectedExpr {
     return compileInspectedProgram(allocator, .expr, source, &.{});
+}
+
+pub fn compileProgram(
+    allocator: std.mem.Allocator,
+    source_kind: SourceKind,
+    source: []const u8,
+    imports: []const ModuleSource,
+) !CompiledProgram {
+    const resources = try parseAndCanonicalizeProgramWrapped(allocator, source_kind, source, imports, false);
+    errdefer cleanupParseAndCanonical(allocator, resources);
+
+    const lowered = try lowerParsedExprToLir(
+        allocator,
+        resources.module_env,
+        resources.builtin_module.env,
+        resources.extra_modules,
+    );
+    errdefer {
+        var lowered_mut = lowered;
+        lowered_mut.deinit();
+    }
+
+    return .{
+        .resources = resources,
+        .lowered = lowered,
+    };
 }
 
 pub fn parseAndCanonicalizeProgram(
@@ -179,7 +207,7 @@ pub fn lirInterpreterInspectedStr(
     allocator: std.mem.Allocator,
     lowered: *const LoweredProgram,
 ) ![]u8 {
-    var runtime_env = RuntimeEnv.init(allocator);
+    var runtime_env = RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
 
     var interp = try Interpreter.init(
@@ -230,7 +258,7 @@ pub fn devEvaluatorInspectedStr(
     );
     defer exec_mem.deinit();
 
-    var runtime_env = RuntimeEnv.init(allocator);
+    var runtime_env = RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
 
     const ret_layout = proc.ret_layout;

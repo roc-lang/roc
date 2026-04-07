@@ -28,8 +28,10 @@ pub const Value = value.Value;
 /// LIR expression interpreter
 pub const interpreter = @import("interpreter.zig");
 pub const Interpreter = interpreter.Interpreter;
-/// Test environment providing RocOps with allocation tracking.
-pub const TestEnv = @import("test/TestEnv.zig");
+/// Production-faithful RocOps recorder used by eval tests.
+pub const RuntimeHostEnv = @import("test/RuntimeHostEnv.zig");
+/// Backward-compatible export for existing eval test helpers and tests.
+pub const TestEnv = RuntimeHostEnv;
 /// Shared cor-style eval test helpers.
 pub const test_helpers = @import("test/helpers.zig");
 
@@ -44,7 +46,7 @@ test "eval tests" {
     std.testing.refAllDecls(@import("fold_type.zig"));
     std.testing.refAllDecls(@import("value_to_cir.zig"));
     std.testing.refAllDecls(@import("stack.zig"));
-    std.testing.refAllDecls(@import("test/TestEnv.zig"));
+    std.testing.refAllDecls(@import("test/RuntimeHostEnv.zig"));
     std.testing.refAllDecls(@import("test/helpers.zig"));
     std.testing.refAllDecls(@import("test/cor_pipeline_test.zig"));
     std.testing.refAllDecls(@import("test/stack_test.zig"));

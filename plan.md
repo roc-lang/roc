@@ -1,293 +1,409 @@
-# Remaining Str.inspect Eval Port Plan
+# Runtime Host-Effects Harness Plan
 
 ## Goal
 
-Port every remaining `origin/main` eval test that still belongs in the single
-`Str.inspect((...)) -> returned RocStr` observation model.
+Build a production-faithful runtime host-effects harness for eval tests.
 
-This plan is intentionally **not** about:
+This harness is for observing only what a real host can observe through the
+existing `RocOps` / `host_abi` callback boundary:
 
-- comptime-evaluator summary/problem tests
-- annotation-only interpreter tests
-- emitter / monomorphic-source tests
-- stack unit tests
-- host-side `dbg` / `crash` / `expect` plumbing assertions
+- `dbg`
+- `expect_failed`
+- `crashed`
 
-Those need separate harnesses and are out of scope for this project.
+The harness must record:
+
+- exact callback kind
+- exact UTF-8 bytes passed to the callback
+- exact event order
+- whether execution returned normally or terminated via crash
+
+It must **not** observe or depend on:
+
+- source-site ids
+- extra test-only metadata
+- interpreter-only introspection
+- stdout/stderr scraping
+- any change to `src/builtins/host_abi.zig`
 
 ## Non-Negotiable Design Rules
 
-1. There is exactly one runtime-observation protocol for this project:
-   - raw Roc source in
-   - compiler wraps/observes via `Str.inspect((...))`
-   - backend executes compiled program
-   - test harness reads returned `RocStr`
-   - assertions compare exact bytes
+1. `host_abi` is fixed production contract.
+   - do not add fields
+   - do not add side channels
+   - do not add test-only wrappers to the ABI payloads
 
-2. Do not introduce any secondary observation path.
-   - no typed host readback
-   - no helper-specific formatting
-   - no “special test-only evaluator mode”
+2. The harness must assert exactly what the production host receives.
+   - exact `dbg` bytes
+   - exact `expect_failed` bytes
+   - exact `crashed` bytes
+   - exact event order
 
-3. Port tests by preserving the original semantic intent, not by weakening them.
-   - if the old test was checking aliasing/container survival through an observed value,
-     the new test must still check that semantic fact
-   - only the observation mechanism changes
+3. No synthetic structure is allowed beyond the event kind itself.
+   - if two different source sites emit identical `dbg` bytes, the harness may
+     only assert that two identical `dbg` events occurred in order
 
-4. Prefer one canonical shared definition over duplicated test logic.
-   - if many old tests differ only in source and expected string, move them into
-     the existing data-driven `TestCase` model
-   - do not create another ad hoc mini-harness
+4. No host-side formatting or rewriting.
+   - do not prepend `Expect failed: `
+   - do not print `dbg`
+   - do not re-render runtime values for assertions
 
-5. If porting exposes a compiler bug, fix the compiler in the most explicit,
-   stage-owned, cor-like way available.
-   - no workarounds
-   - no fallbacks
-   - no backend-local repair logic
+5. Keep value parity and host effects as separate contracts.
+   - final returned-value semantics remain in the `Str.inspect((...)) -> RocStr`
+     runner
+   - host effects get their own runner
+   - mixed legacy tests must be split, not merged into a muddled mega-harness
 
-## In Scope
+6. Port legacy tests by strengthening them toward exact byte assertions.
+   - no substring matching for `dbg` payloads
+   - no “one of these several strings is acceptable”
+   - no fuzzy assertions carried forward from unstable old interpreter behavior
 
-These are the remaining `origin/main` eval buckets that should live in the
-current inspect-only parity runner.
+7. If a legacy test title encoded obsolete behavior, keep production semantics
+   instead of preserving the obsolete assertion.
+   - example: old expect-failure tests that assumed crash behavior must be
+     rewritten around the actual `expect_failed` callback contract
 
-### 1. Remaining semantic/runtime cases from `interpreter_style_test.zig`
+## Runtime Contract
 
-Only the cases whose true contract is:
+Each backend run in this harness yields:
 
-- evaluate Roc source
-- observe the resulting Roc value
-- compare that value semantically
+- `events: []const HostEffect`
+- `termination: returned | crashed | problem | timeout`
 
-Examples that belong here:
+Where:
 
-- ordinary rendered-value expectations
-- arithmetic / equality results
-- record update semantics
-- tuple / record / tag / list pattern matches
-- `List.len`, `List.fold`, `List.any`, `List.all`, `List.contains`
-- loops, early return, and runtime control flow
+- `HostEffect.dbg(payload_bytes)`
+- `HostEffect.expect_failed(payload_bytes)`
+- `HostEffect.crashed(payload_bytes)`
 
-Examples that do **not** belong here:
+There is no other observable state.
 
-- host `dbg` message capture
-- crash-message assertions
-- expect-failure host plumbing
-- tests that are specifically about the old interpreter’s host readback API
+## Ideal File Ownership
 
-### 2. Entire remaining list-refcount semantic buckets
+### New Files
 
-These old files are still semantically valid under `Str.inspect`:
+- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/eval/test/RuntimeHostEnv.zig`
+  - shared production-faithful `RocOps` recorder
+- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/eval/test/host_effects_runner.zig`
+  - process-isolated backend runner for host-effects tests
+- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/eval/test/host_effects_tests.zig`
+  - data-driven runtime host-effects cases
 
-- `src/eval/test/list_refcount_simple.zig`
-- `src/eval/test/list_refcount_basic.zig`
-- `src/eval/test/list_refcount_conditional.zig`
-- `src/eval/test/list_refcount_strings.zig`
-- `src/eval/test/list_refcount_complex.zig`
+### Existing Files To Reuse, Not Distort
 
-`src/eval/test/list_refcount_builtins.zig` is documentation, not a real porting target.
+- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/eval/test/helpers.zig`
+  - shared source compilation helpers
+- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/eval/interpreter.zig`
+  - must continue forwarding the real callbacks
+- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/backend/dev/LirCodeGen.zig`
+  - must continue emitting the real callbacks
 
-The already-ported list/closure/container buckets are not part of the remaining work:
+### Existing Test-Only Host Plumbing To Replace Or Retire
 
-- `list_refcount_alias`
-- `list_refcount_function`
-- `list_refcount_containers`
-- `list_refcount_pattern`
-- `list_refcount_nested`
+- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/eval/test/TestEnv.zig`
+- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/eval/crash_context.zig`
 
-### 3. Any still-unported runtime-shaped value cases from `comptime_eval_test.zig`
+These currently embody old test-only behavior:
 
-Only if they are genuinely source-to-value semantic cases that fit the runtime
-inspect-only model.
+- printing `dbg`
+- rewriting expect payloads
+- storing crash separately from a unified event stream
 
-This explicitly excludes:
+The new harness must not depend on those semantics.
 
-- `evalAll()` summary assertions
-- crash/problem-count assertions
-- cross-module comptime-specific reporting behavior
-- expect/dbg/crash bookkeeping
+## Harness Architecture
 
-Most recursive nominal/runtime cases have already moved into
-`src/eval/test/eval_recursive_data_tests.zig`, but this plan includes a final
-audit for any remaining stragglers.
+### 1. `RuntimeHostEnv`
 
-## Out of Scope
+Create one shared runtime host environment whose only job is to record raw
+production callback traffic.
 
-These are intentionally excluded and must not be silently folded into the
-inspect-only runner:
+Required behavior:
 
-- `src/eval/test/anno_only_interp_test.zig`
-- the comptime-specific parts of `src/eval/test/comptime_eval_test.zig`
-- `src/eval/test/mono_emit_test.zig`
-- `src/eval/test/stack_test.zig`
-- `interpreter_style_test.zig` cases whose contract is host `dbg` / `crash` / `expect`
+- `roc_dbg`
+  - append one `.dbg` event with exact copied bytes
+  - do not print
+  - do not reformat
 
-If a case from one of those files looks tempting, stop and classify it first.
-Do not mix harness styles in this project.
+- `roc_expect_failed`
+  - append one `.expect_failed` event with exact copied bytes
+  - do not prepend text
+  - do not halt execution
 
-## File Ownership
+- `roc_crashed`
+  - append one `.crashed` event with exact copied bytes
+  - mark termination as `.crashed`
+  - stop current execution via the existing crash boundary mechanism
 
-The final inspect-only runtime coverage should live only in these data-driven files:
+This env should also own any test-side memory for recorded payloads so every
+result is self-contained and serialization-safe.
 
-- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/eval/test/eval_tests.zig`
-- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/eval/test/eval_closure_recursion_tests.zig`
-- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/eval/test/eval_recursive_data_tests.zig`
-- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/eval/test/eval_low_level_tests.zig`
+### 2. Runner Model
 
-Do not create another parallel eval-runner test family for source-level runtime parity.
+Use the same robustness principles as the current parallel eval runner:
 
-## Phase 1: Final Classification Audit
+- fork per test/backend run
+- hard timeout around child execution
+- serialize result to the parent
+- parent compares normalized recorded results
 
-Produce a line-by-line classification of all remaining old-style tests into one of:
+Do **not** reuse the current `Str.inspect` runner result type by stuffing host
+effects into optional fields. Keep a separate runner and a separate result type.
 
-1. `port_to_inspect_runner`
-2. `already_covered`
-3. `different_harness_required`
+### 3. Backend Coverage
 
-This audit must cover, at minimum:
+The runtime host-effects harness should run the same currently-supported
+backends as the inspect runner:
+
+- LIR interpreter
+- dev backend
+
+LLVM/WASM remain out of scope for this project.
+
+### 4. Test Definition Model
+
+Tests should be data-driven.
+
+Each case should specify:
+
+- test name
+- Roc source
+- source kind / module imports if needed
+- exact expected ordered events
+- expected termination
+
+Do not encode source-site identity or hidden metadata in test expectations.
+
+### 5. Split Mixed Legacy Tests
+
+Some old tests asserted both:
+
+- final returned value
+- host effect stream
+
+For those, keep the final-value coverage in the `Str.inspect` runner and port
+only the host-effects portion into the new harness.
+
+Do not create hybrid assertions in one harness.
+
+## Exact Legacy Tests To Port To This Harness
+
+These are the old `origin/main` tests that belong in the runtime host-effects
+harness.
+
+Source file:
 
 - `origin/main:src/eval/test/interpreter_style_test.zig`
-- `origin/main:src/eval/test/list_refcount_simple.zig`
-- `origin/main:src/eval/test/list_refcount_basic.zig`
-- `origin/main:src/eval/test/list_refcount_conditional.zig`
-- `origin/main:src/eval/test/list_refcount_strings.zig`
-- `origin/main:src/eval/test/list_refcount_complex.zig`
-- `origin/main:src/eval/test/comptime_eval_test.zig`
 
-### Required End State
+### A. Crash / Expect Runtime Callback Tests
 
-- no remaining ambiguity about whether a test belongs in this project
-- no “maybe later” bucket
-- every old test is accounted for
+Port these as runtime host-effects tests:
 
-## Phase 2: Port Remaining `interpreter_style` Semantic Cases
+1. `interpreter: crash statement triggers crash error and message`
+2. `interpreter: crash at end of block in if branch`
+3. `interpreter: expect expression succeeds`
+4. `interpreter: expect expression failure crashes with message`
 
-Port every still-unported `interpreter_style_test.zig` case that fits the
-inspect-only model.
+Normalization rules:
 
-### Porting Rules
+- `expect expression succeeds`
+  - assert no `expect_failed` event
+  - assert `.returned`
 
-1. Preserve the original Roc source whenever possible.
-2. Replace host readback assertions with exact inspect-string expectations.
-3. If multiple old tests are redundant with current coverage, keep the strongest version.
-4. If an old test depended on interpreter-specific render formatting rather than
-   language-level semantics, classify it out of scope instead of distorting it.
+- `expect expression failure crashes with message`
+  - do **not** preserve the obsolete “crashes” assumption from the old title
+  - port it as:
+    - one `expect_failed` event with exact raw callback bytes
+    - normal `.returned` termination
 
-### Expected Homes
+### B. Direct `dbg` Runtime Callback Tests
 
-- general source-level semantics -> `eval_tests.zig`
-- closure/recursion-heavy semantics -> `eval_closure_recursion_tests.zig`
+Port these as runtime host-effects tests:
 
-## Phase 3: Port Remaining List/Container Semantic Cases
+1. `interpreter: dbg statement in block`
+2. `interpreter: dbg statement with string`
+3. `dbg: integer literal`
+4. `dbg: negative integer`
+5. `dbg: float value`
+6. `dbg: boolean True`
+7. `dbg: boolean False`
+8. `dbg: empty string`
+9. `dbg: list of integers`
+10. `dbg: tuple`
+11. `dbg: record`
+12. `dbg: empty record`
+13. `dbg: tag without payload`
+14. `dbg: tag with payload`
+15. `dbg: function prints as unsupported or function marker`
+16. `dbg: expression form returns unit`
+17. `dbg: multiple dbg calls in sequence`
+18. `dbg: nested dbg calls`
+19. `dbg: in if-then-else branch`
+20. `dbg: in match pattern`
+21. `dbg: in for loop`
+22. `dbg: as final expression returns unit`
+23. `dbg: with arithmetic expression`
+24. `dbg: inside function body`
+25. `dbg: function called multiple times`
+26. `dbg: with string containing special chars`
+27. `dbg: large integer`
+28. `dbg: variable after mutation in binding`
+29. `dbg: list of strings`
 
-Port every remaining case from:
+Normalization rules:
 
-- `list_refcount_simple.zig`
-- `list_refcount_basic.zig`
-- `list_refcount_conditional.zig`
-- `list_refcount_strings.zig`
-- `list_refcount_complex.zig`
+- old substring-based assertions must become exact byte assertions
+- `dbg: record` must assert one exact final payload string, not field-presence substrings
+- `dbg: with string containing special chars` must assert the exact escaped/quoted bytes
+- `dbg: function prints as unsupported or function marker` must stop allowing multiple
+  acceptable outputs; the production output must be pinned to one exact byte string
 
-### Porting Rules
+### C. Mixed Final-Value + Host-Effects Regression
 
-1. Treat these as semantic aliasing/container-survival tests, not host RC probes.
-2. Preserve the original semantic shape of the test.
-3. Prefer exact structural observed results over overly-reduced numeric summaries
-   when the full structure gives stronger coverage.
-4. Keep source snippets readable; do not obfuscate them just to force them into
-   a smaller helper shape.
+Port this as a host-effects test while keeping final-value coverage in the
+`Str.inspect` runner:
 
-### Expected Homes
+1. `issue 8729: var reassignment in tuple pattern in while loop`
 
-- list/container semantics with no special low-level dependence -> `eval_closure_recursion_tests.zig`
-- genuinely builtin/low-level surface behavior -> `eval_low_level_tests.zig`
+Host-effects harness responsibility:
 
-## Phase 4: Final Runtime-Shaped Audit Against `comptime_eval_test.zig`
+- assert the exact ordered `dbg` payloads
+- assert normal `.returned` termination
 
-Do one final sweep of `origin/main:src/eval/test/comptime_eval_test.zig` and port
-any still-missing cases whose true contract is “runtime value shape/behavior”
-rather than comptime machinery.
+Inspect harness responsibility:
 
-Examples that belong here:
+- keep the final returned value assertion
 
-- recursive nominal value construction
-- cross-module runtime-shaped value use
-- deep recursive data inspection
+## Explicitly Out Of Scope For This Harness
 
-Examples that do not:
+Do **not** port any tests from these files into runtime host effects:
 
-- `evalAll()` counts
-- crash/problem reporting
-- annotation-only access behavior
-- comptime-only exposure/diagnostic assertions
+- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/eval/test/anno_only_interp_test.zig`
+- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/eval/test/comptime_eval_test.zig`
+- `origin/main:src/eval/test/mono_emit_test.zig`
+- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/eval/test/stack_test.zig`
 
-### Expected Home
+Reason:
 
-- recursive/runtime-shaped value tests -> `eval_recursive_data_tests.zig`
+- they are comptime-summary, problem-store, emission-shape, or unit-test suites
+- they require different harnesses
+- even when they mention `dbg`, `expect`, or `crash`, their contract is not
+  runtime `RocOps` observation
 
-## Phase 5: Deduplicate and Normalize
+## Additional New Coverage Required
 
-Once all eligible tests are ported:
+The old suite is necessary but not sufficient. Add these new runtime
+host-effects tests because they are required by the fixed-ABI production model:
 
-1. Remove duplicated semantic cases where the new suite now has multiple copies
-   of the same behavior from different legacy files.
-2. Keep the strongest and clearest variant.
-3. Normalize naming so every test name clearly says what semantic behavior is under test.
-4. Normalize expected inspect strings to the true current language-level rendering,
-   not to historical harness accidents.
+1. Two different `dbg` sites that intentionally emit identical bytes.
+   - assert only ordered duplicate payloads
+   - prove the harness does not smuggle in hidden site identity
 
-### Important Constraint
+2. `dbg` events before a crash are preserved in order.
+   - assert prior `dbg` payloads and final `crashed` payload
 
-Deduplication must not reduce meaningful coverage.
+3. `expect_failed` does not halt execution.
+   - assert `expect_failed` event followed by later observable effects and `.returned`
 
-If two tests look similar but stress different compilation paths
-(for example closure capture vs plain local value), keep both.
+4. Mixed `dbg` and `expect_failed` ordering.
+   - assert exact interleaving order
 
-## Phase 6: Bring-Up and Compiler Fixes
+5. Repeated host effects from loops / recursion.
+   - assert exact sequence and count, not aggregate summaries
 
-Only after phases 1-5 are complete:
+## Phases
 
-1. Run the inspect-only eval suite.
-2. Fix failures by improving the compiler/runtime/backends, not the harness.
-3. Keep fixes explicit, stage-owned, and cor-like.
-4. Do not reintroduce any old observation machinery.
+## Phase 1: Fixed-ABI Audit
 
-### Fix Policy
+Audit the current test-side host plumbing and remove any behavior that is not
+faithful to production `host_abi`.
 
-If a test fails:
+Audit targets:
 
-- first ask what explicit fact should have been produced earlier
-- then make the responsible stage produce and preserve that fact
-- then make later stages consume it directly
+- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/eval/test/TestEnv.zig`
+- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/eval/crash_context.zig`
+- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/eval/test/helpers.zig`
 
-Never fix a failure by:
+Required findings to eliminate:
 
-- ad hoc backend special-casing
-- host-side formatting tricks
-- “close enough” structural compatibility logic
-- recovery from missing earlier-stage information
+- any `dbg` printing
+- any expect-message rewriting
+- any host-effect observation path that is not an ordered raw event log
 
-## Phase 7: Final Audit
+## Phase 2: Implement `RuntimeHostEnv`
 
-After the port and bring-up are complete, run a final audit with these questions:
+Implement the shared raw-event recorder.
 
-1. Are there any remaining `origin/main` eval tests that fit the `Str.inspect`
-   observation model but are still unported?
-2. Are there any inspect-only parity tests still living outside the four
-   canonical data-driven files?
-3. Did any typed observation or host formatting path get reintroduced?
-4. Are any currently-ported cases actually using the wrong harness and needing
-   to be moved out into the future separate project?
+Success criteria:
 
-This phase is not complete until all four answers are clean.
+- exact bytes recorded for all three callback kinds
+- ordered event log
+- explicit termination state
+- no output printing
+- no string rewriting
 
-## Completion Criteria
+## Phase 3: Implement Process-Isolated Runner
 
-This project is complete only when:
+Implement the dedicated host-effects runner.
 
-1. Every remaining `origin/main` eval test that truly belongs in the
-   `Str.inspect -> RocStr` model has been ported.
-2. No out-of-scope harness-specific tests were incorrectly forced into this runner.
-3. The inspect-only runner remains the sole runtime parity observation mechanism.
-4. The resulting suite is green.
-5. A final audit confirms there are no remaining port-eligible old-style eval
-   tests left behind.
+Success criteria:
+
+- child isolation
+- hard timeout
+- parent receives serialized event log + termination
+- interpreter and dev both run through the same harness contract
+
+## Phase 4: Port Exact Legacy Inventory
+
+Port every test listed in:
+
+- `Crash / Expect Runtime Callback Tests`
+- `Direct dbg Runtime Callback Tests`
+- `Mixed Final-Value + Host-Effects Regression`
+
+Success criteria:
+
+- every listed legacy test is accounted for
+- each one lands in the new host-effects harness or is explicitly split with the
+  `Str.inspect` runner where appropriate
+- no fuzzy assertions remain
+
+## Phase 5: Add New Fixed-ABI Coverage
+
+Add the new tests listed in `Additional New Coverage Required`.
+
+Success criteria:
+
+- the harness explicitly codifies the limitations and guarantees of the fixed ABI
+- duplicate payloads from distinct sites are treated correctly
+- ordering and non-halting semantics are covered
+
+## Phase 6: Final Audit
+
+Audit the old runtime host-effects surface against the new harness.
+
+Checklist:
+
+1. Every legacy runtime host-effects test from `origin/main:interpreter_style_test.zig`
+   is either:
+   - ported to the new harness
+   - or explicitly split with value assertions left in the inspect runner
+2. No remaining host-effects assertions depend on:
+   - `renderValueRoc`
+   - `renderValueRocWithType`
+   - printed debug output
+   - rewritten expect/crash strings
+3. No new harness code depends on changing `host_abi`
+
+## Success Criteria
+
+This plan is complete only when all of the following are true:
+
+1. The runtime host-effects harness observes exactly the existing production
+   `host_abi` contract and nothing more.
+2. All 34 listed legacy runtime host-effects tests are ported or correctly split.
+3. The harness compares exact ordered callback payload bytes.
+4. The harness distinguishes only by event kind, payload bytes, order, and
+   termination state.
+5. No old test-only host formatting or rewriting remains on the active path.

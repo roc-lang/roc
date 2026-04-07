@@ -2208,6 +2208,7 @@ pub fn build(b: *std.Build) void {
     const check_fmt_step = b.step("check-fmt", "Check formatting of all zig code");
     const snapshot_step = b.step("snapshot", "Run the snapshot tool to update snapshot files");
     const eval_test_step = b.step("test-eval", "Run eval tests in parallel across all backends");
+    const eval_host_effects_step = b.step("test-eval-host-effects", "Run runtime host-effects eval tests across supported backends");
     const cor_pipeline_test_step = b.step("test-cor-pipeline", "Run focused cor-style pipeline eval tests");
     const playground_step = b.step("playground", "Build the WASM playground");
     const playground_test_step = b.step("test-playground", "Build the integration test suite for the WASM playground");
@@ -2725,6 +2726,60 @@ pub fn build(b: *std.Build) void {
     } else run_args;
     _ = install_and_run(b, no_bin, eval_test_exe, eval_test_step, eval_test_step, eval_run_args);
 
+    const eval_host_effects_exe = b.addExecutable(.{
+        .name = "eval-host-effects-runner",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/eval/test/host_effects_runner.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+    });
+    configureBackend(eval_host_effects_exe, target);
+    roc_modules.addAll(eval_host_effects_exe);
+    eval_host_effects_exe.root_module.addImport("compiled_builtins", compiled_builtins_module);
+    eval_host_effects_exe.root_module.addImport("bytebox", bytebox.module("bytebox"));
+    eval_host_effects_exe.root_module.addImport("test_harness", b.createModule(.{
+        .root_source_file = b.path("src/build/test_harness.zig"),
+    }));
+    eval_host_effects_exe.step.dependOn(&write_compiled_builtins.step);
+    eval_host_effects_exe.step.dependOn(&copy_builtins_bc.step);
+    try addLlvmSupportToStep(
+        b,
+        eval_host_effects_exe,
+        target,
+        use_system_llvm,
+        user_llvm_path,
+        roc_modules,
+        llvm_codegen_module,
+        &copy_builtins_bc.step,
+        zstd,
+    );
+    if (eval_host_effects_exe.root_module.resolved_target.?.result.os.tag != .windows or
+        eval_host_effects_exe.root_module.resolved_target.?.result.abi != .msvc)
+    {
+        eval_host_effects_exe.root_module.link_libcpp = true;
+    }
+    const eval_host_effects_run_args = if (test_filters.len > 0) blk: {
+        var eval_args_list = std.ArrayList([]const u8).empty;
+        for (run_args) |arg| {
+            eval_args_list.append(b.allocator, arg) catch @panic("OOM");
+        }
+        for (test_filters) |f| {
+            eval_args_list.append(b.allocator, "--filter") catch @panic("OOM");
+            eval_args_list.append(b.allocator, f) catch @panic("OOM");
+        }
+        break :blk eval_args_list.toOwnedSlice(b.allocator) catch @panic("OOM");
+    } else run_args;
+    _ = install_and_run(
+        b,
+        no_bin,
+        eval_host_effects_exe,
+        eval_host_effects_step,
+        eval_host_effects_step,
+        eval_host_effects_run_args,
+    );
+
     const cor_pipeline_test = b.addTest(.{
         .name = "cor_pipeline_eval",
         .root_module = b.createModule(.{
@@ -3127,8 +3182,10 @@ pub fn build(b: *std.Build) void {
     // and get SIGKILL'd by macOS jetsam under memory pressure when running in parallel
     // with fx_platform_test and other test suites.
     tests_summary.step.dependOn(eval_test_step);
+    tests_summary.step.dependOn(eval_host_effects_step);
     test_step.dependOn(&tests_summary.step);
     test_step.dependOn(eval_test_step);
+    test_step.dependOn(eval_host_effects_step);
 
     b.default_step.dependOn(playground_step);
     {

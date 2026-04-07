@@ -612,7 +612,7 @@ const Lowerer = struct {
                 .f64,
                 .dec,
                 => self.makeLowLevelExpr(result_ty, .num_to_str, &.{value_expr}),
-                .erased => debugPanic("lambdamono.inspect invariant violated: erased value type"),
+                .erased => self.makeStringLiteralExpr(result_ty, "<opaque>"),
             },
             .nominal => |backing| blk: {
                 const backing_expr = try self.retypeExpr(value_expr, backing);
@@ -625,7 +625,10 @@ const Lowerer = struct {
             },
             .tuple => |elems| self.makeTupleInspectExpr(value_expr, elems, result_ty),
             .record => |record| self.makeRecordInspectExpr(value_expr, record.fields, result_ty),
-            .tag_union => |tag_union| self.makeTagUnionInspectExpr(value_expr, tag_union.tags, result_ty),
+            .tag_union => |tag_union| if (self.tagUnionIsInternalLambdaSet(tag_union.tags))
+                self.makeStringLiteralExpr(result_ty, "<fn>")
+            else
+                self.makeTagUnionInspectExpr(value_expr, tag_union.tags, result_ty),
         };
     }
 
@@ -977,6 +980,21 @@ const Lowerer = struct {
         });
     }
 
+    fn tagUnionIsInternalLambdaSet(
+        self: *Lowerer,
+        tags_span: type_mod.Span(type_mod.Tag),
+    ) bool {
+        const tags = self.types.sliceTags(tags_span);
+        if (tags.len == 0) return false;
+
+        for (tags) |tag| switch (tag.name) {
+            .lambda => {},
+            .ctor => return false,
+        };
+
+        return true;
+    }
+
     fn specializeInspectValueExpr(
         self: *Lowerer,
         value_expr: ast.ExprId,
@@ -1005,15 +1023,18 @@ const Lowerer = struct {
                 .f64,
                 .dec,
                 => self.makeLowLevelExpr(result_ty, .num_to_str, &.{value_expr}),
-                .erased => debugPanic("lambdamono.inspect invariant violated: erased value type"),
+                .erased => self.makeStringLiteralExpr(result_ty, "<opaque>"),
             },
             .nominal => self.makeInspectHelperCall(value_expr, result_ty),
             .list,
             .box,
             .tuple,
             .record,
-            .tag_union,
             => self.makeInspectHelperCall(value_expr, result_ty),
+            .tag_union => |tag_union| if (self.tagUnionIsInternalLambdaSet(tag_union.tags))
+                self.makeStringLiteralExpr(result_ty, "<fn>")
+            else
+                self.makeInspectHelperCall(value_expr, result_ty),
         };
     }
 

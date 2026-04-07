@@ -363,10 +363,8 @@ pub const Interpreter = struct {
     }
 
     fn triggerCrash(self: *LirInterpreter, message: []const u8) Error {
-        if (self.roc_env.crash_message) |old| self.allocator.free(old);
-        self.roc_env.crash_message = self.allocator.dupe(u8, message) catch null;
-        self.roc_env.crashed = true;
-        return error.Crash;
+        self.roc_ops.crash(message);
+        unreachable;
     }
 
     fn currentRocOps(self: *LirInterpreter) *RocOps {

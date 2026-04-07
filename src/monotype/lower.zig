@@ -1514,8 +1514,8 @@ pub const Lowerer = struct {
         if (try self.matchExprCanLowerDirect(module_idx, match_expr)) {
             return .{ .block = try self.lowerDirectMatchExpr(module_idx, type_scope, env, result_ty, expected_result_var, match_expr) };
         }
-        if (self.matchExprNeedsListDesugaring(module_idx, match_expr)) {
-            return .{ .block = try self.lowerListMatchExpr(module_idx, type_scope, env, result_ty, expected_result_var, match_expr) };
+        if (self.matchExprNeedsPredicateDesugaring(module_idx, match_expr)) {
+            return .{ .block = try self.lowerPredicateMatchExpr(module_idx, type_scope, env, result_ty, expected_result_var, match_expr) };
         }
         return .{ .when = try self.lowerMatchExpr(module_idx, type_scope, env, result_ty, expected_result_var, match_expr) };
     }
@@ -1662,7 +1662,7 @@ pub const Lowerer = struct {
         };
     }
 
-    fn matchExprNeedsListDesugaring(
+    fn matchExprNeedsPredicateDesugaring(
         self: *Lowerer,
         module_idx: u32,
         match_expr: CIR.Expr.Match,
@@ -1675,23 +1675,30 @@ pub const Lowerer = struct {
             if (branch_pattern_ids.len != 1) return true;
             const branch_pattern = cir_env.store.getMatchBranchPattern(branch_pattern_ids[0]);
             if (branch_pattern.degenerate) return true;
-            if (self.patternNeedsListDesugaring(module_idx, branch_pattern.pattern)) return true;
+            if (self.patternNeedsPredicateDesugaring(module_idx, branch_pattern.pattern)) return true;
         }
         return false;
     }
 
-    fn patternNeedsListDesugaring(self: *Lowerer, module_idx: u32, pattern_idx: CIR.Pattern.Idx) bool {
+    fn patternNeedsPredicateDesugaring(self: *Lowerer, module_idx: u32, pattern_idx: CIR.Pattern.Idx) bool {
         const pattern = self.ctx.env(module_idx).store.getPattern(pattern_idx);
         return switch (pattern) {
             .list => true,
-            .as => |as_pat| self.patternNeedsListDesugaring(module_idx, as_pat.pattern),
-            .nominal => |nominal| self.patternNeedsListDesugaring(module_idx, nominal.backing_pattern),
-            .nominal_external => |nominal| self.patternNeedsListDesugaring(module_idx, nominal.backing_pattern),
+            .num_literal,
+            .small_dec_literal,
+            .dec_literal,
+            .frac_f32_literal,
+            .frac_f64_literal,
+            .str_literal,
+            => true,
+            .as => |as_pat| self.patternNeedsPredicateDesugaring(module_idx, as_pat.pattern),
+            .nominal => |nominal| self.patternNeedsPredicateDesugaring(module_idx, nominal.backing_pattern),
+            .nominal_external => |nominal| self.patternNeedsPredicateDesugaring(module_idx, nominal.backing_pattern),
             else => false,
         };
     }
 
-    fn lowerListMatchExpr(
+    fn lowerPredicateMatchExpr(
         self: *Lowerer,
         module_idx: u32,
         type_scope: *TypeCloneScope,
@@ -1724,7 +1731,7 @@ pub const Lowerer = struct {
             idx -= 1;
             const branch = cir_env.store.getMatchBranch(branches[idx]);
             const branch_pattern = cir_env.store.getMatchBranchPattern(cir_env.store.sliceMatchBranchPatterns(branch.patterns)[0]);
-            current = try self.lowerListAwareMatchBranch(
+            current = try self.lowerPredicateMatchBranch(
                 module_idx,
                 type_scope,
                 env,
@@ -1732,6 +1739,7 @@ pub const Lowerer = struct {
                 expected_result_var,
                 scrutinee_expr,
                 scrutinee_ty,
+                branch_pattern.pattern,
                 branch_pattern.pattern,
                 branch.value,
                 current,
@@ -1744,7 +1752,7 @@ pub const Lowerer = struct {
         };
     }
 
-    fn lowerListAwareMatchBranch(
+    fn lowerPredicateMatchBranch(
         self: *Lowerer,
         module_idx: u32,
         type_scope: *TypeCloneScope,
@@ -1753,11 +1761,12 @@ pub const Lowerer = struct {
         expected_result_var: ?Var,
         scrutinee_expr: ast.ExprId,
         scrutinee_ty: type_mod.TypeId,
-        pattern_idx: CIR.Pattern.Idx,
+        match_pattern_idx: CIR.Pattern.Idx,
+        bind_pattern_idx: CIR.Pattern.Idx,
         branch_value: CIR.Expr.Idx,
         else_expr: ast.ExprId,
     ) std.mem.Allocator.Error!ast.ExprId {
-        const pattern = self.ctx.env(module_idx).store.getPattern(pattern_idx);
+        const pattern = self.ctx.env(module_idx).store.getPattern(match_pattern_idx);
         return switch (pattern) {
             .list => |list| try self.lowerExactListPatternBranch(
                 module_idx,
@@ -1767,11 +1776,18 @@ pub const Lowerer = struct {
                 expected_result_var,
                 scrutinee_expr,
                 scrutinee_ty,
+                bind_pattern_idx,
                 list,
                 branch_value,
                 else_expr,
             ),
-            .assign, .as, .underscore, .record_destructure, .nominal, .nominal_external => try self.lowerWholeValuePatternBranch(
+            .num_literal,
+            .small_dec_literal,
+            .dec_literal,
+            .frac_f32_literal,
+            .frac_f64_literal,
+            .str_literal,
+            => try self.lowerLiteralPatternBranch(
                 module_idx,
                 type_scope,
                 incoming_env,
@@ -1779,7 +1795,59 @@ pub const Lowerer = struct {
                 expected_result_var,
                 scrutinee_expr,
                 scrutinee_ty,
-                pattern_idx,
+                pattern,
+                bind_pattern_idx,
+                branch_value,
+                else_expr,
+            ),
+            .as => |as_pat| try self.lowerPredicateMatchBranch(
+                module_idx,
+                type_scope,
+                incoming_env,
+                result_ty,
+                expected_result_var,
+                scrutinee_expr,
+                scrutinee_ty,
+                as_pat.pattern,
+                bind_pattern_idx,
+                branch_value,
+                else_expr,
+            ),
+            .nominal => |nominal| try self.lowerPredicateMatchBranch(
+                module_idx,
+                type_scope,
+                incoming_env,
+                result_ty,
+                expected_result_var,
+                scrutinee_expr,
+                scrutinee_ty,
+                nominal.backing_pattern,
+                bind_pattern_idx,
+                branch_value,
+                else_expr,
+            ),
+            .nominal_external => |nominal| try self.lowerPredicateMatchBranch(
+                module_idx,
+                type_scope,
+                incoming_env,
+                result_ty,
+                expected_result_var,
+                scrutinee_expr,
+                scrutinee_ty,
+                nominal.backing_pattern,
+                bind_pattern_idx,
+                branch_value,
+                else_expr,
+            ),
+            .assign, .underscore, .record_destructure, .tuple => try self.lowerWholeValuePatternBranch(
+                module_idx,
+                type_scope,
+                incoming_env,
+                result_ty,
+                expected_result_var,
+                scrutinee_expr,
+                scrutinee_ty,
+                bind_pattern_idx,
                 branch_value,
             ),
             else => debugTodoPattern(pattern),
@@ -1835,6 +1903,7 @@ pub const Lowerer = struct {
         expected_result_var: ?Var,
         scrutinee_expr: ast.ExprId,
         scrutinee_ty: type_mod.TypeId,
+        bind_pattern_idx: CIR.Pattern.Idx,
         list_pattern: @FieldType(CIR.Pattern, "list"),
         branch_value: CIR.Expr.Idx,
         else_expr: ast.ExprId,
@@ -1918,6 +1987,16 @@ pub const Lowerer = struct {
             }
         }
 
+        try self.bindPatternFromSourceExpr(
+            module_idx,
+            type_scope,
+            bind_pattern_idx,
+            scrutinee_expr,
+            scrutinee_ty,
+            &branch_env,
+            &binding_decls,
+        );
+
         const then_expr = try self.wrapExprWithBindingDecls(
             try self.lowerExprWithExpectedType(
                 module_idx,
@@ -1936,6 +2015,96 @@ pub const Lowerer = struct {
                 .then_body = then_expr,
                 .else_body = else_expr,
             } },
+        });
+    }
+
+    fn lowerLiteralPatternBranch(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeCloneScope,
+        incoming_env: BindingEnv,
+        result_ty: type_mod.TypeId,
+        expected_result_var: ?Var,
+        scrutinee_expr: ast.ExprId,
+        scrutinee_ty: type_mod.TypeId,
+        pattern: CIR.Pattern,
+        bind_pattern_idx: CIR.Pattern.Idx,
+        branch_value: CIR.Expr.Idx,
+        else_expr: ast.ExprId,
+    ) std.mem.Allocator.Error!ast.ExprId {
+        const cond_expr = try self.makeLiteralPatternConditionExpr(
+            module_idx,
+            scrutinee_expr,
+            scrutinee_ty,
+            pattern,
+        );
+        const then_expr = try self.lowerWholeValuePatternBranch(
+            module_idx,
+            type_scope,
+            incoming_env,
+            result_ty,
+            expected_result_var,
+            scrutinee_expr,
+            scrutinee_ty,
+            bind_pattern_idx,
+            branch_value,
+        );
+        return try self.program.store.addExpr(.{
+            .ty = result_ty,
+            .data = .{ .if_ = .{
+                .cond = cond_expr,
+                .then_body = then_expr,
+                .else_body = else_expr,
+            } },
+        });
+    }
+
+    fn makeLiteralPatternConditionExpr(
+        self: *Lowerer,
+        module_idx: u32,
+        scrutinee_expr: ast.ExprId,
+        scrutinee_ty: type_mod.TypeId,
+        pattern: CIR.Pattern,
+    ) std.mem.Allocator.Error!ast.ExprId {
+        const bool_ty = try self.makePrimitiveType(.bool);
+        const literal_expr = try self.makeLiteralPatternExpr(module_idx, scrutinee_ty, pattern);
+        const op: base.LowLevel = switch (pattern) {
+            .str_literal => .str_is_eq,
+            .num_literal,
+            .small_dec_literal,
+            .dec_literal,
+            .frac_f32_literal,
+            .frac_f64_literal,
+            => .num_is_eq,
+            else => debugPanic(
+                "monotype match invariant violated: non-literal pattern reached literal predicate lowering",
+                .{},
+            ),
+        };
+        return self.makeLowLevelExpr(bool_ty, op, &.{ scrutinee_expr, literal_expr });
+    }
+
+    fn makeLiteralPatternExpr(
+        self: *Lowerer,
+        module_idx: u32,
+        target_ty: type_mod.TypeId,
+        pattern: CIR.Pattern,
+    ) std.mem.Allocator.Error!ast.ExprId {
+        const data: ast.Expr.Data = switch (pattern) {
+            .num_literal => |num| try self.lowerNumericIntLiteralData(target_ty, num.value),
+            .small_dec_literal => |dec| try self.lowerNumericSmallDecLiteralData(target_ty, dec.value),
+            .dec_literal => |dec| try self.lowerNumericDecLiteralData(target_ty, dec.value.toI128()),
+            .frac_f32_literal => |frac| .{ .frac_f32_lit = frac.value },
+            .frac_f64_literal => |frac| .{ .frac_f64_lit = frac.value },
+            .str_literal => |str| .{ .str_lit = try self.copySourceStringLiteral(module_idx, str.literal) },
+            else => debugPanic(
+                "monotype match invariant violated: non-literal pattern reached literal expression lowering",
+                .{},
+            ),
+        };
+        return try self.program.store.addExpr(.{
+            .ty = target_ty,
+            .data = data,
         });
     }
 
@@ -1992,6 +2161,14 @@ pub const Lowerer = struct {
                 env,
                 decls,
             ),
+            .list,
+            .num_literal,
+            .small_dec_literal,
+            .dec_literal,
+            .frac_f32_literal,
+            .frac_f64_literal,
+            .str_literal,
+            => {},
             else => debugTodoPattern(pattern),
         }
     }
