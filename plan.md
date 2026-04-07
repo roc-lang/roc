@@ -1,246 +1,293 @@
-# Eval Test Reset Plan
-
-## Recursive Layout Architecture
-
-Before any additional bring-up work, the compiler must follow this rule:
-
-- recursive nominal data stays logical through `monotype`, `monotype_lifted`, `lambdasolved`, `lambdamono`, and `ir`
-- recursive boxing is committed exactly once at the shared `IR -> LIR/layout` boundary
-- record and tuple fields stay in semantic order until that same shared `IR -> LIR/layout` boundary
-- the shared `LIR/layout` commit then performs one stable sort by descending field alignment, preserving the earlier semantic order among equal-alignment fields
-- after that commit, every backend and interpreter consumes only final explicit `box` / `tag_union` / `struct` layout facts
-
-This means:
-
-- no early recursive boxing in `IR` type/layout lowering
-- no store-owned fallback resolver for recursive nominal boxing
-- no backend-local recursive-structure recovery or repair logic
-- no `RecursivePointer`-style backend-visible abstraction
-
-The only place allowed to decide “this recursive edge becomes a box” is the shared
-`LIR` layout commit path.
+# Remaining Str.inspect Eval Port Plan
 
 ## Goal
 
-Reset eval testing so that backend comparison follows one and only one observation model:
+Port every remaining `origin/main` eval test that still belongs in the single
+`Str.inspect((...)) -> returned RocStr` observation model.
 
-- input: raw Roc source text
-- source wrapping: `Str.inspect((...))`
-- compilation: the normal cor-style compiler pipeline
-- execution: backend runs the compiled program
-- output: raw returned `RocStr` bytes
-- assertion: exact string comparison
+This plan is intentionally **not** about:
 
-There must be no host-side typed value readback, no host-side generic value formatting, and no secondary observation protocol for eval tests.
+- comptime-evaluator summary/problem tests
+- annotation-only interpreter tests
+- emitter / monomorphic-source tests
+- stack unit tests
+- host-side `dbg` / `crash` / `expect` plumbing assertions
 
-This plan is not complete until:
+Those need separate harnesses and are out of scope for this project.
 
-- all legacy eval-test observation machinery is gone
-- the deletion has been audited and confirmed
-- the new single-observation design is implemented
-- eval tests pass except for cases that intentionally hit remaining `TODO` panics
+## Non-Negotiable Design Rules
 
-## Global Rules
+1. There is exactly one runtime-observation protocol for this project:
+   - raw Roc source in
+   - compiler wraps/observes via `Str.inspect((...))`
+   - backend executes compiled program
+   - test harness reads returned `RocStr`
+   - assertions compare exact bytes
 
-- Do not run Zig at all during phases 1, 2, or 3.
-- Do not add workarounds, fallbacks, heuristics, or compatibility layers.
-- Do not preserve any legacy eval-test infrastructure just because it already exists.
-- Every backend-comparison eval test must ultimately observe only a returned `RocStr`.
-- No eval test may assert on host-read raw non-string runtime values.
+2. Do not introduce any secondary observation path.
+   - no typed host readback
+   - no helper-specific formatting
+   - no “special test-only evaluator mode”
 
-## Phase 1: Delete All Legacy Eval Testing Infrastructure
+3. Port tests by preserving the original semantic intent, not by weakening them.
+   - if the old test was checking aliasing/container survival through an observed value,
+     the new test must still check that semantic fact
+   - only the observation mechanism changes
 
-### Objective
+4. Prefer one canonical shared definition over duplicated test logic.
+   - if many old tests differ only in source and expected string, move them into
+     the existing data-driven `TestCase` model
+   - do not create another ad hoc mini-harness
 
-Delete every eval-test path that observes results any way other than “program returns `Str`”.
+5. If porting exposes a compiler bug, fix the compiler in the most explicit,
+   stage-owned, cor-like way available.
+   - no workarounds
+   - no fallbacks
+   - no backend-local repair logic
 
-### Delete These Concepts Entirely
+## In Scope
 
-1. Typed eval helpers that inspect native runtime values in host code.
-   - Examples:
-     - helpers returning `i64`, `i128`, `bool`, `f32`, `f64`, `dec`
-     - focused pipeline helpers that assert on non-`Str` values
+These are the remaining `origin/main` eval buckets that should live in the
+current inspect-only parity runner.
 
-2. Generic host-side eval formatting for test comparison.
-   - Examples:
-     - `EvalValue`
-     - `formatEvalValueString(...)`
-     - stringification of arbitrary runtime values in the harness
-     - “unsupported value formatting” panic paths for eval comparison
+### 1. Remaining semantic/runtime cases from `interpreter_style_test.zig`
 
-3. Any eval helper API that exposes both:
-   - “run and return arbitrary value”
-   - “run and return inspected string”
-   The only remaining eval-comparison API must be the `RocStr` one.
+Only the cases whose true contract is:
 
-4. Focused cor-pipeline tests that validate backend/runtime results through typed host readback.
-   - Rewrite or delete them later in phase 3.
-   - But first, delete the typed observation helpers they depend on.
+- evaluate Roc source
+- observe the resulting Roc value
+- compare that value semantically
 
-5. Any test runner branching that distinguishes:
-   - value-producing tests
-   - inspect-string tests
-   These must collapse to one model: compile `Str.inspect(...)`, run, compare raw string bytes.
+Examples that belong here:
 
-### Files Likely In Scope
+- ordinary rendered-value expectations
+- arithmetic / equality results
+- record update semantics
+- tuple / record / tag / list pattern matches
+- `List.len`, `List.fold`, `List.any`, `List.all`, `List.contains`
+- loops, early return, and runtime control flow
 
-- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/eval/test/helpers.zig`
-- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/eval/test/parallel_runner.zig`
-- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/eval/test/cor_pipeline_test.zig`
+Examples that do **not** belong here:
+
+- host `dbg` message capture
+- crash-message assertions
+- expect-failure host plumbing
+- tests that are specifically about the old interpreter’s host readback API
+
+### 2. Entire remaining list-refcount semantic buckets
+
+These old files are still semantically valid under `Str.inspect`:
+
+- `src/eval/test/list_refcount_simple.zig`
+- `src/eval/test/list_refcount_basic.zig`
+- `src/eval/test/list_refcount_conditional.zig`
+- `src/eval/test/list_refcount_strings.zig`
+- `src/eval/test/list_refcount_complex.zig`
+
+`src/eval/test/list_refcount_builtins.zig` is documentation, not a real porting target.
+
+The already-ported list/closure/container buckets are not part of the remaining work:
+
+- `list_refcount_alias`
+- `list_refcount_function`
+- `list_refcount_containers`
+- `list_refcount_pattern`
+- `list_refcount_nested`
+
+### 3. Any still-unported runtime-shaped value cases from `comptime_eval_test.zig`
+
+Only if they are genuinely source-to-value semantic cases that fit the runtime
+inspect-only model.
+
+This explicitly excludes:
+
+- `evalAll()` summary assertions
+- crash/problem-count assertions
+- cross-module comptime-specific reporting behavior
+- expect/dbg/crash bookkeeping
+
+Most recursive nominal/runtime cases have already moved into
+`src/eval/test/eval_recursive_data_tests.zig`, but this plan includes a final
+audit for any remaining stragglers.
+
+## Out of Scope
+
+These are intentionally excluded and must not be silently folded into the
+inspect-only runner:
+
+- `src/eval/test/anno_only_interp_test.zig`
+- the comptime-specific parts of `src/eval/test/comptime_eval_test.zig`
+- `src/eval/test/mono_emit_test.zig`
+- `src/eval/test/stack_test.zig`
+- `interpreter_style_test.zig` cases whose contract is host `dbg` / `crash` / `expect`
+
+If a case from one of those files looks tempting, stop and classify it first.
+Do not mix harness styles in this project.
+
+## File Ownership
+
+The final inspect-only runtime coverage should live only in these data-driven files:
+
 - `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/eval/test/eval_tests.zig`
-- any additional eval test/helper files found by audit
+- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/eval/test/eval_closure_recursion_tests.zig`
+- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/eval/test/eval_recursive_data_tests.zig`
+- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/eval/test/eval_low_level_tests.zig`
 
-### Required End State For Phase 1
+Do not create another parallel eval-runner test family for source-level runtime parity.
 
-- no eval helper remains that exposes typed runtime-value observation for tests
-- no host-side generic formatting path remains for eval test comparison
-- no test runner mode remains except “compile inspected source, run backend, extract `RocStr`”
+## Phase 1: Final Classification Audit
 
-## Phase 2: Verify All Legacy Infrastructure Is Deleted
+Produce a line-by-line classification of all remaining old-style tests into one of:
 
-### Objective
+1. `port_to_inspect_runner`
+2. `already_covered`
+3. `different_harness_required`
 
-Prove phase 1 was complete. If not complete, go back to phase 1 and continue deleting.
+This audit must cover, at minimum:
 
-### Mandatory Audits
+- `origin/main:src/eval/test/interpreter_style_test.zig`
+- `origin/main:src/eval/test/list_refcount_simple.zig`
+- `origin/main:src/eval/test/list_refcount_basic.zig`
+- `origin/main:src/eval/test/list_refcount_conditional.zig`
+- `origin/main:src/eval/test/list_refcount_strings.zig`
+- `origin/main:src/eval/test/list_refcount_complex.zig`
+- `origin/main:src/eval/test/comptime_eval_test.zig`
 
-Run static audits only. Do not run Zig.
+### Required End State
 
-1. Search for typed eval-result helper surfaces.
-   - Examples of forbidden residue:
-     - `EvalValue`
-     - `asI128`
-     - `copyEvalValueFromValue`
-     - typed `eval*Expr`
-     - typed `expect*`
-     - helper names ending in `Str` that are not raw-`RocStr` extraction from an inspected program
+- no remaining ambiguity about whether a test belongs in this project
+- no “maybe later” bucket
+- every old test is accounted for
 
-2. Search for host-side formatting / quoting infrastructure used for eval comparison.
-   - Examples:
-     - `formatEvalValueString`
-     - `quoteString`
-     - `unsupportedEvalValue`
-     - generic runtime value printing / formatting in eval helpers
+## Phase 2: Port Remaining `interpreter_style` Semantic Cases
 
-3. Search for multiple eval-comparison modes in the runner.
-   - The runner must not distinguish “primitive value tests” from “inspect string tests”.
+Port every still-unported `interpreter_style_test.zig` case that fits the
+inspect-only model.
 
-4. Search for focused tests still reading non-`Str` results directly from interpreter/dev backend runtime memory.
+### Porting Rules
 
-### Audit Rule
+1. Preserve the original Roc source whenever possible.
+2. Replace host readback assertions with exact inspect-string expectations.
+3. If multiple old tests are redundant with current coverage, keep the strongest version.
+4. If an old test depended on interpreter-specific render formatting rather than
+   language-level semantics, classify it out of scope instead of distorting it.
 
-If any legacy artifact remains:
+### Expected Homes
 
-- the plan immediately returns to phase 1
-- delete the remaining artifact
-- repeat phase 2
+- general source-level semantics -> `eval_tests.zig`
+- closure/recursion-heavy semantics -> `eval_closure_recursion_tests.zig`
 
-Phase 2 ends only when the audit is clean.
+## Phase 3: Port Remaining List/Container Semantic Cases
 
-## Phase 3: Commit, Then Implement The New Design Without Running Zig
+Port every remaining case from:
 
-### Objective
+- `list_refcount_simple.zig`
+- `list_refcount_basic.zig`
+- `list_refcount_conditional.zig`
+- `list_refcount_strings.zig`
+- `list_refcount_complex.zig`
 
-After the legacy system is fully deleted and audited clean, make one clean commit. Then implement the new design from scratch, still without running Zig.
+### Porting Rules
 
-### New Design
+1. Treat these as semantic aliasing/container-survival tests, not host RC probes.
+2. Preserve the original semantic shape of the test.
+3. Prefer exact structural observed results over overly-reduced numeric summaries
+   when the full structure gives stronger coverage.
+4. Keep source snippets readable; do not obfuscate them just to force them into
+   a smaller helper shape.
 
-There is exactly one eval-observation protocol:
+### Expected Homes
 
-1. The harness receives raw Roc source text `expr_src`.
-2. The harness constructs source:
+- list/container semantics with no special low-level dependence -> `eval_closure_recursion_tests.zig`
+- genuinely builtin/low-level surface behavior -> `eval_low_level_tests.zig`
 
-   `main = Str.inspect((expr_src))`
+## Phase 4: Final Runtime-Shaped Audit Against `comptime_eval_test.zig`
 
-3. The compiler runs its normal cor-style pipeline on that source.
-4. `Str.inspect` is lowered in monotype based on the exact monomorphic type.
-5. Downstream stages see only ordinary executable structure producing a `Str`.
-6. Each backend executes the same lowered program.
-7. The harness requires the root result layout/type to be `Str`.
-8. The harness copies raw `RocStr` bytes into owned memory.
-9. Tests compare those bytes exactly.
+Do one final sweep of `origin/main:src/eval/test/comptime_eval_test.zig` and port
+any still-missing cases whose true contract is “runtime value shape/behavior”
+rather than comptime machinery.
 
-### Required Implementation Properties
+Examples that belong here:
 
-1. `Str.inspect` is language-level observability, not host-side formatting.
-   - No backend parity logic may inspect arbitrary runtime values in host code.
+- recursive nominal value construction
+- cross-module runtime-shaped value use
+- deep recursive data inspection
 
-2. The harness must compile inspected source once and reuse the same lowered artifact per backend where architecture permits.
-   - Parsing / checking / lowering are not to be duplicated per backend unless the backend API fundamentally forces it.
+Examples that do not:
 
-3. The helper surface must be minimal.
-   - One source-compilation path for inspected programs.
-   - One backend-execution path that returns raw string bytes.
-   - No second helper family for typed observation.
+- `evalAll()` counts
+- crash/problem reporting
+- annotation-only access behavior
+- comptime-only exposure/diagnostic assertions
 
-4. Focused eval tests must also use the inspect protocol.
-   - Even narrow cor-pipeline tests must observe only the final `Str`.
-   - No exceptions.
+### Expected Home
 
-5. `Str.inspect` lowering must remain in monotype.
-   - It must not leak as a generic inspect node to later stages.
+- recursive/runtime-shaped value tests -> `eval_recursive_data_tests.zig`
 
-### Concrete Deliverables
+## Phase 5: Deduplicate and Normalize
 
-1. New eval helper API:
-   - compile inspected source
-   - run lowered program expecting `Str`
-   - return owned `[]u8`
+Once all eligible tests are ported:
 
-2. New runner shape:
-   - every backend-comparison test is an inspect-string test
-   - no alternate comparison mode remains
+1. Remove duplicated semantic cases where the new suite now has multiple copies
+   of the same behavior from different legacy files.
+2. Keep the strongest and clearest variant.
+3. Normalize naming so every test name clearly says what semantic behavior is under test.
+4. Normalize expected inspect strings to the true current language-level rendering,
+   not to historical harness accidents.
 
-3. Focused pipeline tests rewritten:
-   - compare returned `Str`
-   - no host typed result extraction
+### Important Constraint
 
-4. Clear invariants:
-   - if a backend does not return `Str`, debug panic or explicit test error
-   - if a caller tries to use old typed observation APIs, those APIs no longer exist
+Deduplication must not reduce meaningful coverage.
 
-### Commit Boundary
+If two tests look similar but stress different compilation paths
+(for example closure capture vs plain local value), keep both.
 
-Before phase 3 implementation:
+## Phase 6: Bring-Up and Compiler Fixes
 
-- commit the completed phase 1+2 deletion state
+Only after phases 1-5 are complete:
 
-After phase 3 implementation:
+1. Run the inspect-only eval suite.
+2. Fix failures by improving the compiler/runtime/backends, not the harness.
+3. Keep fixes explicit, stage-owned, and cor-like.
+4. Do not reintroduce any old observation machinery.
 
-- commit the completed new-design state
+### Fix Policy
 
-## Phase 4: Commit, Then Proceed To Getting Tests To Pass
+If a test fails:
 
-### Objective
+- first ask what explicit fact should have been produced earlier
+- then make the responsible stage produce and preserve that fact
+- then make later stages consume it directly
 
-After the new design is fully implemented and committed, run Zig again and bring eval tests up under the new architecture.
+Never fix a failure by:
 
-### Rules For This Phase
+- ad hoc backend special-casing
+- host-side formatting tricks
+- “close enough” structural compatibility logic
+- recovery from missing earlier-stage information
 
-- Only now is Zig allowed.
-- If a bug appears, fix it by preserving the single-observation design.
-- Do not reintroduce typed host readback, generic host formatting, or legacy comparison paths.
-- If a test fails because `Str.inspect` lowering is incomplete, implement the missing lowering in the compiler, not in the harness.
-- If a test fails because a backend cannot yet execute the generated inspected program, fix the backend/compiler path, not the harness protocol.
+## Phase 7: Final Audit
 
-### Success Criteria
+After the port and bring-up are complete, run a final audit with these questions:
 
-Phase 4 is complete when:
+1. Are there any remaining `origin/main` eval tests that fit the `Str.inspect`
+   observation model but are still unported?
+2. Are there any inspect-only parity tests still living outside the four
+   canonical data-driven files?
+3. Did any typed observation or host formatting path get reintroduced?
+4. Are any currently-ported cases actually using the wrong harness and needing
+   to be moved out into the future separate project?
 
-- eval tests use only the inspected-string path
-- all non-`TODO` eval tests pass
-- the only remaining failures are explicit intentional `TODO` panics
-- no legacy eval-observation artifacts were reintroduced during bring-up
+This phase is not complete until all four answers are clean.
 
-## Final Completion Criteria
+## Completion Criteria
 
-This plan is complete only when all of the following are true:
+This project is complete only when:
 
-1. There is no typed eval-test observation infrastructure left.
-2. There is no generic host-side eval value formatter left for backend parity.
-3. Every eval test observes only a returned `RocStr`.
-4. `Str.inspect((...))` is the sole backend-comparison protocol.
-5. Phase-2 audits come back clean.
-6. The deletion state was committed before rebuilding.
-7. The new design state was committed before test bring-up.
-8. Eval tests pass except for explicit intentional `TODO` panic cases.
+1. Every remaining `origin/main` eval test that truly belongs in the
+   `Str.inspect -> RocStr` model has been ported.
+2. No out-of-scope harness-specific tests were incorrectly forced into this runner.
+3. The inspect-only runner remains the sole runtime parity observation mechanism.
+4. The resulting suite is green.
+5. A final audit confirms there are no remaining port-eligible old-style eval
+   tests left behind.

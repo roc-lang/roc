@@ -722,6 +722,22 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "25.0" },
     },
     .{
+        .name = "inspect: opaque function field lookup issue 9262",
+        .source_kind = .module,
+        .source =
+        \\W(a) := { f : {} -> [V(a)] }.{
+        \\    run : W(a) -> [V(a)]
+        \\    run = |w| (w.f)({})
+        \\
+        \\    mk : a -> W(a)
+        \\    mk = |val| { f: |_| V(val) }
+        \\}
+        \\
+        \\main = W.run(W.mk("x")) == V("x")
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
         .name = "inspect: compose two functions",
         .source =
         \\{
@@ -1678,6 +1694,22 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "\"hello\"" },
     },
     .{
+        .name = "inspect: attached methods on transparent tag union alias issue 8637",
+        .source_kind = .module,
+        .source =
+        \\Iter(s) :: [It(s)].{
+        \\    identity : Iter(s) -> Iter(s)
+        \\    identity = |It(s_)| It(s_)
+        \\}
+        \\
+        \\count : Iter({})
+        \\count = It({})
+        \\
+        \\main = count.identity() == It({})
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
         .name = "problem and crash: polymorphic erroneous match branch",
         .source =
         \\{
@@ -2078,6 +2110,134 @@ const core_tests = [_]TestCase{
     .{ .name = "inspect: Dec times", .source = "{ a : Dec\n    a = 2.5.Dec\n    b : Dec\n    b = 4.0.Dec\n    a * b\n}", .expected = .{ .inspect_str = "10.0" } },
     .{ .name = "inspect: Dec div", .source = "{ a : Dec\n    a = 10.0.Dec\n    b : Dec\n    b = 2.0.Dec\n    a / b\n}", .expected = .{ .inspect_str = "5.0" } },
     .{ .name = "inspect: Dec to_str", .source = "{ a : Dec\n    a = 100.0.Dec\n    Dec.to_str(a)\n}", .expected = .{ .inspect_str = "\"100.0\"" } },
+
+    // Remaining semantic ports from interpreter_style_test.zig
+    .{ .name = "inspect: inline identity lambda on string", .source = "(|x| x)(\"Hello\")", .expected = .{ .inspect_str = "\"Hello\"" } },
+    .{ .name = "inspect: inline increment lambda on dec literal", .source = "(|n| n + 1)(41)", .expected = .{ .inspect_str = "42.0" } },
+    .{ .name = "inspect: inline binary add lambda on dec literals", .source = "(|a, b| a + b)(40, 2)", .expected = .{ .inspect_str = "42.0" } },
+    .{ .name = "inspect: slash division defaults to Dec", .source = "6 / 3", .expected = .{ .inspect_str = "2.0" } },
+    .{ .name = "inspect: decimal addition simple fraction", .source = "0.2 + 0.3", .expected = .{ .inspect_str = "0.5" } },
+    .{ .name = "inspect: decimal division by integer literal", .source = "0.5 / 2", .expected = .{ .inspect_str = "0.25" } },
+    .{ .name = "inspect: custom tag renders as tag name", .source = "MyTag", .expected = .{ .inspect_str = "MyTag" } },
+    .{
+        .name = "inspect: record update copies base fields",
+        .source =
+        \\{
+        \\    point = { x: 1, y: 2 }
+        \\    updated = { ..point, y: point.y }
+        \\    (updated.x, updated.y)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(1.0, 2.0)" },
+    },
+    .{
+        .name = "inspect: record update overrides field",
+        .source =
+        \\{
+        \\    point = { x: 1, y: 2 }
+        \\    updated = { ..point, y: 3 }
+        \\    (updated.x, updated.y)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(1.0, 3.0)" },
+    },
+    .{
+        .name = "inspect: record update expression references base",
+        .source =
+        \\{
+        \\    point = { x: 1, y: 2 }
+        \\    updated = { ..point, y: point.y + 5 }
+        \\    updated.y
+        \\}
+        ,
+        .expected = .{ .inspect_str = "7.0" },
+    },
+    .{ .name = "inspect: match tuple pattern destructures", .source = "match (1, 2) { (1, b) => b, _ => 0 }", .expected = .{ .inspect_str = "2.0" } },
+    .{ .name = "inspect: match bool patterns", .source = "match True { True => 1, False => 0 }", .expected = .{ .inspect_str = "1.0" } },
+    .{ .name = "inspect: match result tag payload", .source = "match Ok(3) { Ok(n) => n + 1, Err(_) => 0 }", .expected = .{ .inspect_str = "4.0" } },
+    .{ .name = "inspect: match record destructures fields", .source = "match { x: 1, y: 2 } { { x, y } => x + y }", .expected = .{ .inspect_str = "3.0" } },
+    .{ .name = "inspect: render Try.Ok literal", .source = "match True { True => Ok(42), False => Err(\"boom\") }", .expected = .{ .inspect_str = "Ok(42.0)" } },
+    .{ .name = "inspect: render Try.Err string", .source = "match True { True => Err(\"boom\"), False => Ok(42) }", .expected = .{ .inspect_str = "Err(\"boom\")" } },
+    .{ .name = "inspect: render Try.Ok tuple payload", .source = "match True { True => Ok((1, 2)), False => Err(\"boom\") }", .expected = .{ .inspect_str = "Ok((1.0, 2.0))" } },
+    .{ .name = "inspect: match tuple payload tag", .source = "match Ok((1, 2)) { Ok((a, b)) => a + b, Err(_) => 0 }", .expected = .{ .inspect_str = "3.0" } },
+    .{ .name = "inspect: match record payload tag", .source = "match Err({ code: 1, msg: \"boom\" }) { Err({ code, msg: _msg }) => code, Ok(_) => 0 }", .expected = .{ .inspect_str = "1.0" } },
+    .{ .name = "inspect: direct list pattern destructure sum", .source = "match [1, 2, 3] { [a, b, c] => a + b + c, _ => 0 }", .expected = .{ .inspect_str = "6.0" } },
+    .{ .name = "inspect: List.len on literal", .source = "List.len([1, 2, 3])", .expected = .{ .inspect_str = "3" } },
+    .{ .name = "inspect: List.fold builtin sum", .source = "List.fold([1, 2, 3], 0, |acc, item| acc + item)", .expected = .{ .inspect_str = "6.0" } },
+    .{ .name = "inspect: List.any true on integers", .source = "List.any([1, 0, 1, 0, -1], |x| x > 0)", .expected = .{ .inspect_str = "True" } },
+    .{ .name = "inspect: List.any false on positive integers with negative predicate", .source = "List.any([9, 8, 7, 6, 5], |x| x < 0)", .expected = .{ .inspect_str = "False" } },
+    .{ .name = "inspect: List.any false on empty list", .source = "List.any([], |x| x < 0)", .expected = .{ .inspect_str = "False" } },
+    .{ .name = "inspect: List.all false when some elements fail", .source = "List.all([9, 18, 7, 6, 15], |x| x < 10)", .expected = .{ .inspect_str = "False" } },
+    .{ .name = "inspect: List.all true on small integers", .source = "List.all([9, 8, 7, 6, 5], |x| x < 10)", .expected = .{ .inspect_str = "True" } },
+    .{ .name = "inspect: List.all on empty list is True", .source = "List.all([], |x| x < 10)", .expected = .{ .inspect_str = "True" } },
+    .{ .name = "inspect: List.contains false for missing element", .source = "List.contains([-1, -2, -3, 1, 2, 3], 0)", .expected = .{ .inspect_str = "False" } },
+    .{ .name = "inspect: List.contains true when element is found", .source = "List.contains([1, 2, 3, 4, 5], 3)", .expected = .{ .inspect_str = "True" } },
+    .{ .name = "inspect: List.contains false on empty list", .source = "List.contains([], 3333)", .expected = .{ .inspect_str = "False" } },
+    .{ .name = "inspect: empty record literal", .source = "{}", .expected = .{ .inspect_str = "{}" } },
+    .{ .name = "inspect: decimal literal one eighth", .source = "0.125", .expected = .{ .inspect_str = "0.125" } },
+    .{ .name = "inspect: decimal addition one tenth plus two tenths", .source = "0.1 + 0.2", .expected = .{ .inspect_str = "0.3" } },
+    .{ .name = "inspect: int and f64 equality", .source = "1 == 1.0.F64", .expected = .{ .inspect_str = "True" } },
+    .{ .name = "inspect: int and decimal equality", .source = "1 == 1.0", .expected = .{ .inspect_str = "True" } },
+    .{ .name = "inspect: int less than", .source = "3 < 4", .expected = .{ .inspect_str = "True" } },
+    .{ .name = "inspect: int greater than false", .source = "5 > 8", .expected = .{ .inspect_str = "False" } },
+    .{ .name = "inspect: f64 greater than", .source = "3.5.F64 > 1.25.F64", .expected = .{ .inspect_str = "True" } },
+    .{ .name = "inspect: decimal less than or equal", .source = "0.5 <= 0.5", .expected = .{ .inspect_str = "True" } },
+    .{ .name = "inspect: int and f64 less than", .source = "1 < 2.0.F64", .expected = .{ .inspect_str = "True" } },
+    .{ .name = "inspect: int and decimal greater than false", .source = "3 > 5.5", .expected = .{ .inspect_str = "False" } },
+    .{ .name = "inspect: bool inequality", .source = "True != False", .expected = .{ .inspect_str = "True" } },
+    .{ .name = "inspect: decimal inequality false", .source = "0.5 != 0.5", .expected = .{ .inspect_str = "False" } },
+    .{ .name = "inspect: f64 equality false", .source = "3.25.F64 == 4.0.F64", .expected = .{ .inspect_str = "False" } },
+    .{ .name = "inspect: decimal equality false", .source = "0.125 == 0.25", .expected = .{ .inspect_str = "False" } },
+    .{ .name = "inspect: direct record literal render", .source = "{ x: 1, y: 2 }", .expected = .{ .inspect_str = "{ x: 1.0, y: 2.0 }" } },
+    .{
+        .name = "inspect: crash at end of if branch does not poison taken path",
+        .source =
+        \\{
+        \\    f = |x| {
+        \\        if x == 0 {
+        \\            crash "division by zero"
+        \\        }
+        \\        42 / x
+        \\    }
+        \\    f(2)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "21.0" },
+    },
+    .{
+        .name = "inspect: break inside for loop",
+        .source =
+        \\{
+        \\    var $sum = 0
+        \\    for i in [1, 2, 3, 4, 5] {
+        \\        if i == 4 {
+        \\            break
+        \\        }
+        \\        $sum = $sum + i
+        \\    }
+        \\    $sum
+        \\}
+        ,
+        .expected = .{ .inspect_str = "6.0" },
+    },
+    .{
+        .name = "inspect: break inside while loop",
+        .source =
+        \\{
+        \\    var $i = 1
+        \\    var $sum = 0
+        \\    while $i <= 5 {
+        \\        if $i == 4 {
+        \\            break
+        \\        }
+        \\        $sum = $sum + $i
+        \\        $i = $i + 1
+        \\    }
+        \\    $sum
+        \\}
+        ,
+        .expected = .{ .inspect_str = "6.0" },
+    },
 };
 
 pub const tests = core_tests ++ closure_recursion_tests.tests ++ recursive_data_tests.tests ++ low_level_tests.tests;

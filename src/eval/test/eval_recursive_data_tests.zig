@@ -309,6 +309,16 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "Rose(1, [Rose(2, []), Rose(3, [])])" },
     },
     .{
+        .name = "inspect: recursive nominal stack empty",
+        .source_kind = .module,
+        .source =
+        \\Stack := [Empty, Push(I64, Stack)]
+        \\
+        \\main = Stack.Empty
+        ,
+        .expected = .{ .inspect_str = "Empty" },
+    },
+    .{
         .name = "inspect: recursive nominal stack with items",
         .source_kind = .module,
         .source =
@@ -370,6 +380,16 @@ pub const tests = [_]TestCase{
         \\main = Chain.Link(1, Chain.Link(2, Chain.Link(3, Chain.Link(4, Chain.Link(5, Chain.End)))))
         ,
         .expected = .{ .inspect_str = "Link(1, Link(2, Link(3, Link(4, Link(5, End)))))" },
+    },
+    .{
+        .name = "inspect: recursive nominal three way tree",
+        .source_kind = .module,
+        .source =
+        \\Tri := [Tip, Branch(Tri, Tri, Tri)]
+        \\
+        \\main = Tri.Branch(Tri.Tip, Tri.Tip, Tri.Tip)
+        ,
+        .expected = .{ .inspect_str = "Branch(Tip, Tip, Tip)" },
     },
     .{
         .name = "inspect: recursive nominal three way tree nested",
@@ -710,5 +730,99 @@ pub const tests = [_]TestCase{
         \\])
         ,
         .expected = .{ .inspect_str = "Branch(\"root\", [Branch(\"left\", [Leaf(\"a\"), Leaf(\"b\")]), Branch(\"right\", [Branch(\"inner\", [Leaf(\"c\")])])])" },
+    },
+    .{
+        .name = "inspect: wrapped tag union in wrapped record issue 8930",
+        .source_kind = .module,
+        .source =
+        \\ValueCombinationMethod := [Divide, Modulo, Add, Subtract]
+        \\Value := [CombinedValue({combination_method: ValueCombinationMethod})]
+        \\
+        \\main = Value.CombinedValue({combination_method: ValueCombinationMethod.Add})
+        ,
+        .expected = .{ .inspect_str = "CombinedValue({ combination_method: Add })" },
+    },
+    .{
+        .name = "inspect: wrapper function for List.get with match issue 8944",
+        .source_kind = .module,
+        .source =
+        \\nth = |l, i| {
+        \\    match List.get(l, i) {
+        \\        Ok(e) => Ok(e)
+        \\        Err(OutOfBounds) => Err(OutOfBounds)
+        \\    }
+        \\}
+        \\
+        \\first = nth(["a", "b", "c", "d", "e"], 2)
+        \\second = nth(["a"], 2)
+        \\main = (first, second)
+        ,
+        .expected = .{ .inspect_str = "(Ok(\"c\"), Err(OutOfBounds))" },
+    },
+    .{
+        .name = "inspect: tag union payload matching inside function single module",
+        .source_kind = .module,
+        .source =
+        \\MyTag := [Foo({x: U64, y: U64}), Bar, Baz(Str)]
+        \\
+        \\lookup = |items, idx| {
+        \\    match List.get(items, idx) {
+        \\        Ok(val) =>
+        \\            match val {
+        \\                Foo(rec) => rec.x
+        \\                Baz(_) => 99
+        \\                _ => 0
+        \\            }
+        \\        Err(_) => 0
+        \\    }
+        \\}
+        \\
+        \\items = [MyTag.Foo({x: 42, y: 7})]
+        \\inline = match List.get(items, 0) {
+        \\    Ok(val) => match val { Foo(rec) => rec.x, _ => 0 }
+        \\    Err(_) => 0
+        \\}
+        \\main = (inline, lookup(items, 0))
+        ,
+        .expected = .{ .inspect_str = "(42, 42)" },
+    },
+    .{
+        .name = "inspect: tag union payload matching inside function cross module",
+        .source_kind = .module,
+        .source =
+        \\module []
+        \\
+        \\import A exposing [MyTag]
+        \\
+        \\lookup = |items, idx| {
+        \\    match List.get(items, idx) {
+        \\        Ok(val) =>
+        \\            match val {
+        \\                Foo(rec) => rec.x
+        \\                Baz(_) => 99
+        \\                _ => 0
+        \\            }
+        \\        Err(_) => 0
+        \\    }
+        \\}
+        \\
+        \\items = [MyTag.Foo({x: 42, y: 7})]
+        \\inline = match List.get(items, 0) {
+        \\    Ok(val) => match val { Foo(rec) => rec.x, _ => 0 }
+        \\    Err(_) => 0
+        \\}
+        \\main = (inline, lookup(items, 0))
+        ,
+        .imports = &.{
+            .{
+                .name = "A",
+                .source =
+                \\module [MyTag]
+                \\
+                \\MyTag := [Foo({x: U64, y: U64}), Bar, Baz(Str)]
+                ,
+            },
+        },
+        .expected = .{ .inspect_str = "(42, 42)" },
     },
 };

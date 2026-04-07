@@ -714,4 +714,521 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "4.0" },
     },
+
+    // Ported from list_refcount_simple.zig
+    .{
+        .name = "inspect: minimal empty list pattern match",
+        .source = "match [] { [] => 42, _ => 0 }",
+        .expected = .{ .inspect_str = "42.0" },
+    },
+    .{
+        .name = "inspect: minimal single element list pattern match",
+        .source = "match [1] { [x] => x, _ => 0 }",
+        .expected = .{ .inspect_str = "1.0" },
+    },
+    .{
+        .name = "inspect: minimal multi element list pattern match",
+        .source = "match [1, 2, 3] { [a, b, c] => a + b + c, _ => 0 }",
+        .expected = .{ .inspect_str = "6.0" },
+    },
+
+    // Ported from list_refcount_basic.zig
+    .{
+        .name = "inspect: basic various small list sizes",
+        .source = "match [5] { [x] => x, _ => 0 }",
+        .expected = .{ .inspect_str = "5.0" },
+    },
+    .{
+        .name = "inspect: basic two element list pattern match",
+        .source = "match [10, 20] { [a, b] => a + b, _ => 0 }",
+        .expected = .{ .inspect_str = "30.0" },
+    },
+    .{
+        .name = "inspect: basic five element list pattern match",
+        .source = "match [1, 2, 3, 4, 5] { [a, b, c, d, e] => a + b + c + d + e, _ => 0 }",
+        .expected = .{ .inspect_str = "15.0" },
+    },
+    .{
+        .name = "inspect: basic larger list with rest pattern",
+        .source = "match [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] { [first, second, ..] => first + second, _ => 0 }",
+        .expected = .{ .inspect_str = "3.0" },
+    },
+    .{
+        .name = "inspect: basic sequential independent lists",
+        .source =
+        \\{
+        \\    a = [1]
+        \\    _b = [2, 3]
+        \\    _c = [4, 5, 6]
+        \\    match a { [x] => x, _ => 0 }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "1.0" },
+    },
+    .{
+        .name = "inspect: basic return middle list",
+        .source =
+        \\{
+        \\    _a = [1]
+        \\    b = [2, 3]
+        \\    _c = [4, 5, 6]
+        \\    match b { [x, y] => x + y, _ => 0 }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "5.0" },
+    },
+    .{
+        .name = "inspect: basic return last list",
+        .source =
+        \\{
+        \\    _a = [1]
+        \\    _b = [2, 3]
+        \\    c = [4, 5, 6]
+        \\    match c { [x, y, z] => x + y + z, _ => 0 }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "15.0" },
+    },
+    .{
+        .name = "inspect: basic mix of empty and non empty lists",
+        .source =
+        \\{
+        \\    _x = []
+        \\    y = [1, 2]
+        \\    _z = []
+        \\    match y { [a, b] => a + b, _ => 0 }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "3.0" },
+    },
+    .{
+        .name = "inspect: basic return empty from mixed lists",
+        .source =
+        \\{
+        \\    x = []
+        \\    _y = [1, 2]
+        \\    _z = []
+        \\    match x { [] => 42, _ => 0 }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "42.0" },
+    },
+    .{
+        .name = "inspect: basic nested blocks with lists",
+        .source =
+        \\{
+        \\    outer = [1, 2, 3]
+        \\    result = {
+        \\        inner = outer
+        \\        match inner { [a, b, c] => a + b + c, _ => 0 }
+        \\    }
+        \\    result
+        \\}
+        ,
+        .expected = .{ .inspect_str = "6.0" },
+    },
+    .{
+        .name = "inspect: basic list created and used in inner block",
+        .source =
+        \\{
+        \\    result = {
+        \\        lst = [10, 20, 30]
+        \\        match lst { [a, b, c] => a + b + c, _ => 0 }
+        \\    }
+        \\    result
+        \\}
+        ,
+        .expected = .{ .inspect_str = "60.0" },
+    },
+    .{
+        .name = "inspect: basic multiple lists chained through aliases",
+        .source =
+        \\{
+        \\    a = [1]
+        \\    b = a
+        \\    c = [2, 3]
+        \\    d = c
+        \\    x = match b { [v] => v, _ => 0 }
+        \\    y = match d { [v1, v2] => v1 + v2, _ => 0 }
+        \\    x + y
+        \\}
+        ,
+        .expected = .{ .inspect_str = "6.0" },
+    },
+
+    // Ported from list_refcount_conditional.zig
+    .{
+        .name = "inspect: conditional chooses list from then branch",
+        .source =
+        \\{
+        \\    x = [1, 2]
+        \\    result = if True {x} else {[3, 4]}
+        \\    match result { [a, b] => a + b, _ => 0 }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "3.0" },
+    },
+    .{
+        .name = "inspect: conditional chooses list from else branch",
+        .source =
+        \\{
+        \\    x = [1, 2]
+        \\    result = if False {x} else {[3, 4]}
+        \\    match result { [a, b] => a + b, _ => 0 }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "7.0" },
+    },
+    .{
+        .name = "inspect: conditional reuses same list in both branches",
+        .source =
+        \\{
+        \\    x = [1, 2]
+        \\    result = if True {x} else {x}
+        \\    match result { [a, b] => a + b, _ => 0 }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "3.0" },
+    },
+    .{
+        .name = "inspect: conditional drops unused branch list",
+        .source =
+        \\{
+        \\    x = [1, 2]
+        \\    y = [3, 4]
+        \\    result = if True {x} else {y}
+        \\    match result { [a, b] => a + b, _ => 0 }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "3.0" },
+    },
+    .{
+        .name = "inspect: nested conditional list result",
+        .source =
+        \\{
+        \\    x = [1]
+        \\    result = if True {if False {x} else {[2]}} else {[3]}
+        \\    match result { [a] => a, _ => 0 }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "2.0" },
+    },
+    .{
+        .name = "inspect: conditional string list result",
+        .source =
+        \\{
+        \\    x = ["a", "b"]
+        \\    result = if True {x} else {["c"]}
+        \\    match result { [first, ..] => first, _ => "" }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"a\"" },
+    },
+    .{
+        .name = "inspect: conditional inline list literals",
+        .source =
+        \\{
+        \\    result = if True {[10, 20]} else {[30, 40]}
+        \\    match result { [a, b] => a + b, _ => 0 }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "30.0" },
+    },
+    .{
+        .name = "inspect: conditional empty list branch",
+        .source =
+        \\{
+        \\    result = if True {[]} else {[1, 2]}
+        \\    match result { [] => 42, _ => 0 }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "42.0" },
+    },
+
+    // Ported from list_refcount_strings.zig
+    .{
+        .name = "inspect: string list single captured string",
+        .source =
+        \\{
+        \\    x = "hi"
+        \\    lst = [x]
+        \\    match lst { [s] => s, _ => "" }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"hi\"" },
+    },
+    .{
+        .name = "inspect: string list multiple captured strings",
+        .source =
+        \\{
+        \\    x = "a"
+        \\    y = "b"
+        \\    lst = [x, y]
+        \\    match lst { [first, ..] => first, _ => "" }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"a\"" },
+    },
+    .{
+        .name = "inspect: string list return second string",
+        .source =
+        \\{
+        \\    x = "a"
+        \\    y = "b"
+        \\    lst = [x, y]
+        \\    match lst { [_, second] => second, _ => "" }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"b\"" },
+    },
+    .{
+        .name = "inspect: string list same string multiple times",
+        .source =
+        \\{
+        \\    x = "hi"
+        \\    lst = [x, x, x]
+        \\    match lst { [first, ..] => first, _ => "" }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"hi\"" },
+    },
+    .{
+        .name = "inspect: string list empty string",
+        .source =
+        \\{
+        \\    x = ""
+        \\    lst = [x]
+        \\    match lst { [s] => s, _ => "fallback" }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"\"" },
+    },
+    .{
+        .name = "inspect: string list small and large strings",
+        .source =
+        \\{
+        \\    small = "hi"
+        \\    large = "This is a very long string that will be heap allocated for sure"
+        \\    lst = [small, large]
+        \\    match lst { [first, ..] => first, _ => "" }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"hi\"" },
+    },
+    .{
+        .name = "inspect: string list return large string",
+        .source =
+        \\{
+        \\    small = "hi"
+        \\    large = "This is a very long string that will be heap allocated for sure"
+        \\    lst = [small, large]
+        \\    match lst { [_, second] => second, _ => "" }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"This is a very long string that will be heap allocated for sure\"" },
+    },
+    .{
+        .name = "inspect: string list literal head",
+        .source = "match [\"a\", \"b\", \"c\"] { [first, ..] => first, _ => \"\" }",
+        .expected = .{ .inspect_str = "\"a\"" },
+    },
+    .{
+        .name = "inspect: string list literal second element",
+        .source = "match [\"a\", \"b\", \"c\"] { [_, second, ..] => second, _ => \"\" }",
+        .expected = .{ .inspect_str = "\"b\"" },
+    },
+    .{
+        .name = "inspect: empty list then string list",
+        .source =
+        \\{
+        \\    _empty = []
+        \\    strings = ["x", "y"]
+        \\    match strings { [first, ..] => first, _ => "" }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"x\"" },
+    },
+    .{
+        .name = "inspect: aliased string list",
+        .source =
+        \\{
+        \\    lst1 = ["a", "b"]
+        \\    lst2 = lst1
+        \\    match lst2 { [first, ..] => first, _ => "" }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"a\"" },
+    },
+    .{
+        .name = "inspect: aliased string list returns original",
+        .source =
+        \\{
+        \\    lst1 = ["a", "b"]
+        \\    _lst2 = lst1
+        \\    match lst1 { [first, ..] => first, _ => "" }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"a\"" },
+    },
+    .{
+        .name = "inspect: mutable string list reassigned",
+        .source =
+        \\{
+        \\    var $lst = ["old1", "old2"]
+        \\    $lst = ["new1", "new2"]
+        \\    match $lst { [first, ..] => first, _ => "" }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"new1\"" },
+    },
+    .{
+        .name = "inspect: three string lists chooses middle",
+        .source =
+        \\{
+        \\    _a = ["a1", "a2"]
+        \\    b = ["b1", "b2"]
+        \\    _c = ["c1", "c2"]
+        \\    match b { [first, ..] => first, _ => "" }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"b1\"" },
+    },
+    .{
+        .name = "inspect: extract string from nested match",
+        .source =
+        \\{
+        \\    lst = ["x", "y", "z"]
+        \\    match lst {
+        \\        [_first, .. as rest] => match rest {
+        \\            [second, ..] => second,
+        \\            _ => ""
+        \\        },
+        \\        _ => ""
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"y\"" },
+    },
+
+    // Ported from list_refcount_complex.zig
+    .{
+        .name = "inspect: list of records with strings",
+        .source =
+        \\{
+        \\    r1 = {s: "a"}
+        \\    r2 = {s: "b"}
+        \\    lst = [r1, r2]
+        \\    match lst { [first, ..] => first.s, _ => "" }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"a\"" },
+    },
+    .{
+        .name = "inspect: list of records with integers",
+        .source =
+        \\{
+        \\    r1 = {val: 10}
+        \\    r2 = {val: 20}
+        \\    lst = [r1, r2]
+        \\    match lst { [first, ..] => first.val, _ => 0 }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "10.0" },
+    },
+    .{
+        .name = "inspect: same record multiple times in list",
+        .source =
+        \\{
+        \\    r = {val: 42}
+        \\    lst = [r, r, r]
+        \\    match lst { [first, ..] => first.val, _ => 0 }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "42.0" },
+    },
+    .{
+        .name = "inspect: list of records with nested data",
+        .source =
+        \\{
+        \\    r1 = {inner: {val: 10}}
+        \\    r2 = {inner: {val: 20}}
+        \\    lst = [r1, r2]
+        \\    match lst { [first, ..] => first.inner.val, _ => 0 }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "10.0" },
+    },
+    .{
+        .name = "inspect: list of tuples with integers",
+        .source =
+        \\{
+        \\    t1 = (1, 2)
+        \\    t2 = (3, 4)
+        \\    lst = [t1, t2]
+        \\    match lst { [first, ..] => match first { (a, b) => a + b }, _ => 0 }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "3.0" },
+    },
+    .{
+        .name = "inspect: list of tuples with strings",
+        .source =
+        \\{
+        \\    t1 = ("a", "b")
+        \\    t2 = ("c", "d")
+        \\    lst = [t1, t2]
+        \\    match lst { [first, ..] => match first { (s, _) => s }, _ => "" }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"a\"" },
+    },
+    .{
+        .name = "inspect: tag containing list of integers",
+        .source = "match Some([10, 20]) { Some(lst) => match lst { [x, ..] => x, _ => 0 }, None => 0 }",
+        .expected = .{ .inspect_str = "10.0" },
+    },
+    .{
+        .name = "inspect: tag containing list of strings",
+        .source = "match Some([\"hello\", \"world\"]) { Some(lst) => match lst { [s, ..] => s, _ => \"\" }, None => \"\" }",
+        .expected = .{ .inspect_str = "\"hello\"" },
+    },
+    .{
+        .name = "inspect: list of records of lists of strings",
+        .source =
+        \\{
+        \\    r1 = {items: ["a", "b"]}
+        \\    r2 = {items: ["c", "d"]}
+        \\    lst = [r1, r2]
+        \\    match lst { [first, ..] => match first.items { [s, ..] => s, _ => "" }, _ => "" }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"a\"" },
+    },
+    .{
+        .name = "inspect: inline complex structure list",
+        .source =
+        \\{
+        \\    data = [{val: 1}, {val: 2}]
+        \\    match data { [first, ..] => first.val, _ => 0 }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "1.0" },
+    },
+    .{
+        .name = "inspect: deeply nested mixed structures list",
+        .source =
+        \\{
+        \\    inner = {x: 42}
+        \\    outer = {nested: inner}
+        \\    lst = [outer]
+        \\    match lst { [first, ..] => first.nested.x, _ => 0 }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "42.0" },
+    },
+    .{
+        .name = "inspect: list of Ok Err tags through payload match",
+        .source = "match Ok([1, 2]) { Ok(lst) => match lst { [x, ..] => x, _ => 0 }, Err(_) => 0 }",
+        .expected = .{ .inspect_str = "1.0" },
+    },
 };
