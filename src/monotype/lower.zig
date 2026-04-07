@@ -1678,6 +1678,7 @@ pub const Lowerer = struct {
         const arg_patterns = cir_env.store.slicePatterns(args_span);
         const fn_parts = self.requireFunctionType(closure_ty);
         const source_fn_var = expected_var orelse ModuleEnv.varFrom(source_expr_idx);
+        const expected_ret_var = self.lookupFunctionRetVar(module_idx, source_fn_var);
         const first_arg_pattern = if (arg_patterns.len == 0) null else arg_patterns[0];
         const arg = if (first_arg_pattern) |pattern_idx|
             try self.bindLambdaArg(module_idx, type_scope, pattern_idx, fn_parts.arg)
@@ -1702,7 +1703,14 @@ pub const Lowerer = struct {
 
         const body = if (arg_patterns.len <= 1)
             try self.wrapExprWithBindingDecls(
-                try self.lowerExpr(module_idx, type_scope, body_env, body_expr_idx),
+                try self.lowerExprWithExpectedType(
+                    module_idx,
+                    type_scope,
+                    body_env,
+                    body_expr_idx,
+                    fn_parts.ret,
+                    expected_ret_var,
+                ),
                 binding_decls.items,
             )
         else
@@ -3633,10 +3641,14 @@ pub const Lowerer = struct {
             );
             current_fn_ty = fn_parts.ret;
         }
+        const result_ty = if (chain.arg_exprs.len == 0)
+            self.callResultType(callee)
+        else
+            current_fn_ty;
 
         return .{
             .data = try self.buildCurriedCallFromLowered(callee, lowered_args),
-            .result_ty = current_fn_ty,
+            .result_ty = result_ty,
         };
     }
 
@@ -3909,6 +3921,9 @@ pub const Lowerer = struct {
                 "monotype invariant violated: specialized callee missing argument {d} in module {d}",
                 .{ i, module_idx },
             );
+            if (try self.specializeFunctionArgumentFromExpectedType(module_idx, type_scope, env, arg_expr_idx, cloned_arg_var)) {
+                continue;
+            }
             const actual_arg_var = try self.lookupCallArgSpecializationVar(module_idx, type_scope, env, arg_expr_idx);
             try self.unifySpecializedCheckerVars(module_idx, cloned_arg_var, actual_arg_var);
         }
@@ -3928,8 +3943,10 @@ pub const Lowerer = struct {
                 "monotype static dispatch invariant violated: specialized method missing receiver arg in module {d}",
                 .{module_idx},
             );
-            const actual_arg_var = try self.lookupCallArgSpecializationVar(module_idx, type_scope, env, receiver_expr_idx);
-            try self.unifySpecializedCheckerVars(module_idx, cloned_arg_var, actual_arg_var);
+            if (!try self.specializeFunctionArgumentFromExpectedType(module_idx, type_scope, env, receiver_expr_idx, cloned_arg_var)) {
+                const actual_arg_var = try self.lookupCallArgSpecializationVar(module_idx, type_scope, env, receiver_expr_idx);
+                try self.unifySpecializedCheckerVars(module_idx, cloned_arg_var, actual_arg_var);
+            }
             arg_index += 1;
         }
 
@@ -3938,9 +3955,53 @@ pub const Lowerer = struct {
                 "monotype static dispatch invariant violated: specialized method missing arg {d} in module {d}",
                 .{ arg_index + i, module_idx },
             );
+            if (try self.specializeFunctionArgumentFromExpectedType(module_idx, type_scope, env, arg_expr_idx, cloned_arg_var)) {
+                continue;
+            }
             const actual_arg_var = try self.lookupCallArgSpecializationVar(module_idx, type_scope, env, arg_expr_idx);
             try self.unifySpecializedCheckerVars(module_idx, cloned_arg_var, actual_arg_var);
         }
+    }
+
+    fn specializeFunctionArgumentFromExpectedType(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeCloneScope,
+        env: BindingEnv,
+        expr_idx: CIR.Expr.Idx,
+        expected_arg_var: Var,
+    ) std.mem.Allocator.Error!bool {
+        const expected_ty = try self.lowerInstantiatedType(module_idx, type_scope, expected_arg_var);
+        if (self.ctx.types.getType(expected_ty) != .func) return false;
+
+        const cir_env = self.ctx.env(module_idx);
+        return switch (cir_env.store.getExpr(expr_idx)) {
+            .e_lookup_local => |lookup| blk: {
+                if (env.get(.{
+                    .module_idx = module_idx,
+                    .pattern_idx = @intFromEnum(lookup.pattern_idx),
+                })) |entry| switch (entry) {
+                    .typed => break :blk false,
+                    .local_fn_source => |source| {
+                        _ = try self.specializeLocalFnSource(source, expected_ty, expected_arg_var);
+                        break :blk true;
+                    },
+                };
+
+                const symbol = self.lookupTopLevelSymbol(module_idx, lookup.pattern_idx) orelse break :blk false;
+                if (!self.topLevelNeedsSpecialization(symbol)) break :blk false;
+                _ = try self.lookupOrSpecializeLocal(module_idx, type_scope, env, lookup.pattern_idx, expected_ty, expected_arg_var);
+                break :blk true;
+            },
+            .e_lookup_external => |lookup| blk: {
+                const target_module_idx = cir_env.imports.getResolvedModule(lookup.module_idx) orelse break :blk false;
+                const symbol = self.lookupTopLevelDefSymbol(target_module_idx, @enumFromInt(lookup.target_node_idx)) orelse break :blk false;
+                if (!self.topLevelNeedsSpecialization(symbol)) break :blk false;
+                _ = try self.lookupOrSpecializeExternal(module_idx, lookup, expected_ty, expected_arg_var);
+                break :blk true;
+            },
+            else => false,
+        };
     }
 
     fn lookupSourceFunctionSeedVar(
