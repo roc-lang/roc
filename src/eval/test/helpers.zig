@@ -277,9 +277,7 @@ pub fn devEvaluatorInspectedStr(
 
     switch (runtime_env.crashState()) {
         .did_not_crash => {},
-        .crashed => |_| {
-            return error.Crash;
-        },
+        .crashed => |_| return error.Crash,
     }
 
     return copyReturnedRocStr(

@@ -521,7 +521,13 @@ pub const Store = struct {
         return switch (content) {
             .flex => true, // Flexible variables need instantiation
             .rigid => true, // Rigid variables need instantiation when used outside their defining scope
-            .alias => true, // Aliases may contain type variables, so assume they need instantiation
+            .alias => |alias| blk: {
+                if (self.needsInstantiation(self.getAliasBackingVar(alias))) break :blk true;
+                for (self.sliceAliasArgs(alias)) |arg_var| {
+                    if (self.needsInstantiation(arg_var)) break :blk true;
+                }
+                break :blk false;
+            },
             .structure => |flat_type| self.needsInstantiationFlatType(flat_type),
             .err => false,
         };
