@@ -613,7 +613,10 @@ const Lowerer = struct {
                 => self.makeLowLevelExpr(result_ty, .num_to_str, &.{value_expr}),
                 .erased => debugPanic("lambdamono.inspect invariant violated: erased value type"),
             },
-            .nominal => self.makeInspectHelperCall(value_expr, result_ty),
+            .nominal => |backing| blk: {
+                const backing_expr = try self.retypeExpr(value_expr, backing);
+                break :blk try self.buildInlineInspectValueExpr(backing_expr, result_ty);
+            },
             .list => |elem_ty| self.makeListInspectExpr(elem_ty, value_expr, result_ty),
             .box => |elem_ty| blk: {
                 const unboxed_expr = try self.makeLowLevelExpr(elem_ty, .box_unbox, &.{value_expr});
@@ -1029,6 +1032,18 @@ const Lowerer = struct {
         return try self.output.addExpr(.{
             .ty = ty,
             .data = .{ .var_ = symbol },
+        });
+    }
+
+    fn retypeExpr(
+        self: *Lowerer,
+        expr_id: ast.ExprId,
+        ty: type_mod.TypeId,
+    ) std.mem.Allocator.Error!ast.ExprId {
+        const expr = self.output.getExpr(expr_id);
+        return try self.output.addExpr(.{
+            .ty = ty,
+            .data = expr.data,
         });
     }
 

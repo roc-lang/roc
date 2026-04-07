@@ -559,48 +559,69 @@ const ProcLowerer = struct {
         unreachable;
     }
 
-    fn lowerStructFieldsIntoTarget(
+    fn emitBridgesIntoLocals(
+        self: *ProcLowerer,
+        source_locals: []const LIR.LocalId,
+        target_locals: []const LIR.LocalId,
+        next: LIR.CFStmtId,
+    ) std.mem.Allocator.Error!LIR.CFStmtId {
+        if (source_locals.len != target_locals.len) {
+            debugPanic("lir.from_ir invariant violated: bridge source/target local arity mismatch");
+        }
+        var cursor = next;
+        var i = source_locals.len;
+        while (i > 0) {
+            i -= 1;
+            const source_local = source_locals[i];
+            const target_local = target_locals[i];
+            if (source_local == target_local) continue;
+            cursor = try self.bridgeValueIntoLocal(source_local, target_local, cursor);
+        }
+        return cursor;
+    }
+
+    fn planStructFieldsIntoTarget(
         self: *ProcLowerer,
         target_local: LIR.LocalId,
         fields: []const ir.Ast.Var,
-        next: LIR.CFStmtId,
-    ) std.mem.Allocator.Error!struct { fields: []LIR.LocalId, next: LIR.CFStmtId } {
+    ) std.mem.Allocator.Error!struct { sources: []LIR.LocalId, fields: []LIR.LocalId } {
+        const sources = try self.parent.allocator.alloc(LIR.LocalId, fields.len);
+        errdefer self.parent.allocator.free(sources);
         const lowered = try self.parent.allocator.alloc(LIR.LocalId, fields.len);
         errdefer self.parent.allocator.free(lowered);
 
-        var cursor = next;
-        var i = fields.len;
-        while (i > 0) {
-            i -= 1;
-            const source_local = try self.lowerVar(fields[i]);
+        for (fields, 0..) |field, i| {
+            const source_local = try self.lowerVar(field);
             const slot_layout = self.lowerStructFieldLayout(self.localLayout(target_local), @intCast(i));
-            const bridged = try self.bridgeValueToLayout(source_local, slot_layout, cursor);
-            lowered[i] = bridged.local;
-            cursor = bridged.next;
+            sources[i] = source_local;
+            lowered[i] = if (self.localLayout(source_local) == slot_layout)
+                source_local
+            else
+                try self.freshLocalWithLayout(slot_layout);
         }
-        return .{ .fields = lowered, .next = cursor };
+        return .{ .sources = sources, .fields = lowered };
     }
 
-    fn lowerListElemsIntoTarget(
+    fn planListElemsIntoTarget(
         self: *ProcLowerer,
         target_local: LIR.LocalId,
         elems: []const ir.Ast.Var,
-        next: LIR.CFStmtId,
-    ) std.mem.Allocator.Error!struct { elems: []LIR.LocalId, next: LIR.CFStmtId } {
+    ) std.mem.Allocator.Error!struct { sources: []LIR.LocalId, elems: []LIR.LocalId } {
+        const sources = try self.parent.allocator.alloc(LIR.LocalId, elems.len);
+        errdefer self.parent.allocator.free(sources);
         const lowered = try self.parent.allocator.alloc(LIR.LocalId, elems.len);
         errdefer self.parent.allocator.free(lowered);
 
         const elem_layout = self.lowerListElemLayout(self.localLayout(target_local));
-        var cursor = next;
-        var i = elems.len;
-        while (i > 0) {
-            i -= 1;
-            const source_local = try self.lowerVar(elems[i]);
-            const bridged = try self.bridgeValueToLayout(source_local, elem_layout, cursor);
-            lowered[i] = bridged.local;
-            cursor = bridged.next;
+        for (elems, 0..) |elem, i| {
+            const source_local = try self.lowerVar(elem);
+            sources[i] = source_local;
+            lowered[i] = if (self.localLayout(source_local) == elem_layout)
+                source_local
+            else
+                try self.freshLocalWithLayout(elem_layout);
         }
-        return .{ .elems = lowered, .next = cursor };
+        return .{ .sources = sources, .elems = lowered };
     }
 
     fn lowerBlock(self: *ProcLowerer, block_id: ir.Ast.BlockId, exit: Lowerer.BlockExit) std.mem.Allocator.Error!LIR.CFStmtId {
@@ -784,23 +805,31 @@ const ProcLowerer = struct {
                 .next = next,
             } }),
             .make_union => |union_expr| blk: {
+                var payload_source: ?LIR.LocalId = null;
                 var payload_local: ?LIR.LocalId = null;
-                var lowered_next = next;
                 if (union_expr.payload) |payload| {
                     const source_local = try self.lowerVar(payload);
                     const payload_layout = self.lowerTagPayloadLayout(self.localLayout(target), union_expr.discriminant);
-                    const bridged = try self.bridgeValueToLayout(source_local, payload_layout, next);
-                    payload_local = bridged.local;
-                    lowered_next = bridged.next;
+                    payload_source = source_local;
+                    payload_local = if (self.localLayout(source_local) == payload_layout)
+                        source_local
+                    else
+                        try self.freshLocalWithLayout(payload_layout);
                 }
 
-                break :blk try self.parent.store.addCFStmt(.{ .assign_tag = .{
+                const assign_tag = try self.parent.store.addCFStmt(.{ .assign_tag = .{
                     .target = target,
                     .result = .fresh,
                     .discriminant = union_expr.discriminant,
                     .payload = payload_local,
-                    .next = lowered_next,
+                    .next = next,
                 } });
+
+                if (payload_source) |source_local| {
+                    if (payload_local.? == source_local) break :blk assign_tag;
+                    break :blk try self.bridgeValueIntoLocal(source_local, payload_local.?, assign_tag);
+                }
+                break :blk assign_tag;
             },
             .get_union_id => |value| try self.parent.store.addCFStmt(.{ .assign_ref = .{
                 .target = target,
@@ -824,7 +853,7 @@ const ProcLowerer = struct {
                 }
 
                 const raw_target = try self.freshLocalWithLayout(actual_payload_layout);
-                const bridged = try self.bridgeValueToLayout(raw_target, self.localLayout(target), next);
+                const bridged = try self.bridgeValueIntoLocal(raw_target, target, next);
                 const access = try self.parent.store.addCFStmt(.{ .assign_ref = .{
                     .target = raw_target,
                     .result = .fresh,
@@ -832,30 +861,34 @@ const ProcLowerer = struct {
                         .source = source,
                         .tag_discriminant = payload.tag_discriminant,
                     } },
-                    .next = bridged.next,
+                    .next = bridged,
                 } });
                 break :blk access;
             },
             .make_struct => |fields| blk: {
-                const bridged = try self.lowerStructFieldsIntoTarget(target, self.parent.input.store.sliceVarSpan(fields), next);
-                defer self.parent.allocator.free(bridged.fields);
-                const span = try self.parent.store.addLocalSpan(bridged.fields);
-                break :blk try self.parent.store.addCFStmt(.{ .assign_struct = .{
+                const planned = try self.planStructFieldsIntoTarget(target, self.parent.input.store.sliceVarSpan(fields));
+                defer self.parent.allocator.free(planned.sources);
+                defer self.parent.allocator.free(planned.fields);
+                const span = try self.parent.store.addLocalSpan(planned.fields);
+                const assign_struct = try self.parent.store.addCFStmt(.{ .assign_struct = .{
                     .target = target,
                     .result = .fresh,
                     .fields = span,
-                    .next = bridged.next,
+                    .next = next,
                 } });
+                break :blk try self.emitBridgesIntoLocals(planned.sources, planned.fields, assign_struct);
             },
             .make_list => |elems| blk: {
-                const bridged = try self.lowerListElemsIntoTarget(target, self.parent.input.store.sliceVarSpan(elems), next);
-                defer self.parent.allocator.free(bridged.elems);
-                break :blk try self.parent.store.addCFStmt(.{ .assign_list = .{
+                const planned = try self.planListElemsIntoTarget(target, self.parent.input.store.sliceVarSpan(elems));
+                defer self.parent.allocator.free(planned.sources);
+                defer self.parent.allocator.free(planned.elems);
+                const assign_list = try self.parent.store.addCFStmt(.{ .assign_list = .{
                     .target = target,
                     .result = .fresh,
-                    .elems = try self.parent.store.addLocalSpan(bridged.elems),
-                    .next = bridged.next,
+                    .elems = try self.parent.store.addLocalSpan(planned.elems),
+                    .next = next,
                 } });
+                break :blk try self.emitBridgesIntoLocals(planned.sources, planned.elems, assign_list);
             },
             .get_struct_field => |field| blk: {
                 const source = try self.lowerVar(field.record);
@@ -873,7 +906,7 @@ const ProcLowerer = struct {
                 }
 
                 const raw_target = try self.freshLocalWithLayout(actual_field_layout);
-                const bridged = try self.bridgeValueToLayout(raw_target, self.localLayout(target), next);
+                const bridged = try self.bridgeValueIntoLocal(raw_target, target, next);
                 const access = try self.parent.store.addCFStmt(.{ .assign_ref = .{
                     .target = raw_target,
                     .result = .fresh,
@@ -881,7 +914,7 @@ const ProcLowerer = struct {
                         .source = source,
                         .field_idx = field.field_index,
                     } },
-                    .next = bridged.next,
+                    .next = bridged,
                 } });
                 break :blk access;
             },

@@ -2,6 +2,7 @@
 //! propagate-erasure -> SCC ordering flow.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const lifted = @import("monotype_lifted");
 const ast = @import("ast.zig");

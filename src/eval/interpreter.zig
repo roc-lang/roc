@@ -503,86 +503,6 @@ pub const Interpreter = struct {
     ) void {
         if (builtin.mode == .Debug) {
             const layout_idx = self.store.getLocal(local_id).layout_idx;
-            if (((@intFromEnum(frame.proc_id) == 1 and
-                (@intFromEnum(local_id) == 19 or
-                    @intFromEnum(local_id) == 28 or
-                    @intFromEnum(local_id) == 27)) or
-                (@intFromEnum(frame.proc_id) == 0 and @intFromEnum(local_id) == 16) or
-                (@intFromEnum(frame.proc_id) == 4 and
-                    (@intFromEnum(local_id) == 68 or
-                        @intFromEnum(local_id) == 67 or
-                        @intFromEnum(local_id) == 66)) or
-                (@intFromEnum(frame.proc_id) == 5 and
-                    (@intFromEnum(local_id) == 73 or
-                        @intFromEnum(local_id) == 72 or
-                        @intFromEnum(local_id) == 71))))
-            {
-                const size = self.helper.sizeOf(layout_idx);
-                std.debug.print(
-                    "LIR/interpreter set-local proc={d} stmt={any} local={d} layout={d} size={d} ptr=0x{x}\n",
-                    .{
-                        @intFromEnum(frame.proc_id),
-                        if (stmt_id) |stmt| @intFromEnum(stmt) else 0xFFFF_FFFF,
-                        @intFromEnum(local_id),
-                        @intFromEnum(layout_idx),
-                        size,
-                        @intFromPtr(value.ptr),
-                    },
-                );
-                if (stmt_id) |stmt| {
-                    const stmt_val = self.store.getCFStmt(stmt);
-                    std.debug.print("  from stmt: {any}\n", .{stmt_val});
-                    if (stmt_val == .assign_ref and stmt_val.assign_ref.op == .field) {
-                        const field = stmt_val.assign_ref.op.field;
-                        const source_layout = self.store.getLocal(field.source).layout_idx;
-                        const source_value = frame.getLocal(field.source);
-                        std.debug.print(
-                            "  field source local={d} field_idx={d} source_layout={d} source_ptr=0x{x}\n",
-                            .{
-                                @intFromEnum(field.source),
-                                field.field_idx,
-                                @intFromEnum(source_layout),
-                                @intFromPtr(source_value.ptr),
-                            },
-                        );
-                        const source_size = self.helper.sizeOf(source_layout);
-                        if (source_size > 0) {
-                            const source_dump_len = @min(source_size, 32);
-                            std.debug.print("  source bytes:", .{});
-                            for (source_value.readBytes(source_dump_len)) |byte| {
-                                std.debug.print(" {x:0>2}", .{byte});
-                            }
-                            std.debug.print("\n", .{});
-                        }
-                    }
-                }
-                if (size > 0) {
-                    const dump_len = @min(size, 24);
-                    std.debug.print("  bytes:", .{});
-                    for (value.readBytes(dump_len)) |byte| {
-                        std.debug.print(" {x:0>2}", .{byte});
-                    }
-                    std.debug.print("\n", .{});
-                }
-                const layout_val = self.layout_store.getLayout(layout_idx);
-                if (layout_val.tag == .box) {
-                    if (self.readBoxedDataPointer(value)) |data_ptr| {
-                        const inner_layout = layout_val.data.box;
-                        const inner_size = self.helper.sizeOf(inner_layout);
-                        if (inner_size > 0) {
-                            const dump_len = @min(inner_size, 40);
-                            std.debug.print(
-                                "  box pointee layout={d} ptr=0x{x} bytes:",
-                                .{ @intFromEnum(inner_layout), @intFromPtr(data_ptr) },
-                            );
-                            for ((Value{ .ptr = data_ptr }).readBytes(dump_len)) |byte| {
-                                std.debug.print(" {x:0>2}", .{byte});
-                            }
-                            std.debug.print("\n", .{});
-                        }
-                    }
-                }
-            }
             var visited = std.ArrayList(DebugVisitedValue).empty;
             defer visited.deinit(self.allocator);
             self.debugAssertValueMatchesLayout(frame.proc_id, stmt_id, local_id, value, layout_idx, &visited);
@@ -1038,41 +958,6 @@ pub const Interpreter = struct {
             );
         }
 
-        if (builtin.mode == .Debug and @intFromEnum(proc_id) <= 2) {
-            std.debug.print(
-                "LIR/interpreter proc-entry proc={d} name={d} args={d}\n",
-                .{ @intFromEnum(proc_id), proc_spec.name.raw(), args.len },
-            );
-            for (params, args, arg_layouts, 0..) |param, arg_value, arg_layout, i| {
-                std.debug.print(
-                    "  param[{d}] local={d} param_layout={d} arg_layout={d}\n",
-                    .{
-                        i,
-                        @intFromEnum(param),
-                        @intFromEnum(self.store.getLocal(param).layout_idx),
-                        @intFromEnum(arg_layout),
-                    },
-                );
-                if (self.layout_store.getLayout(arg_layout).tag == .box) {
-                    if (self.readBoxedDataPointer(arg_value)) |data_ptr| {
-                        const inner_layout = self.layout_store.getLayout(arg_layout).data.box;
-                        const inner_size = self.helper.sizeOf(inner_layout);
-                        if (inner_size > 0) {
-                            const dump_len = @min(inner_size, 40);
-                            std.debug.print(
-                                "    param[{d}] box pointee layout={d} ptr=0x{x} bytes:",
-                                .{ i, @intFromEnum(inner_layout), @intFromPtr(data_ptr) },
-                            );
-                            for ((Value{ .ptr = data_ptr }).readBytes(dump_len)) |byte| {
-                                std.debug.print(" {x:0>2}", .{byte});
-                            }
-                            std.debug.print("\n", .{});
-                        }
-                    }
-                }
-            }
-        }
-
         for (params, args, arg_layouts) |param, arg, arg_layout| {
             self.setLocalChecked(
                 &frame,
@@ -1286,41 +1171,6 @@ pub const Interpreter = struct {
                 .assign_call => |assign| {
                     const arg_locals = self.store.getLocalSpan(assign.args);
                     const arg_values = try self.collectLocalValues(frame, arg_locals);
-                    if (builtin.mode == .Debug and @intFromEnum(assign.proc) <= 2) {
-                        const arg_layouts = try self.localLayouts(arg_locals);
-                        std.debug.print(
-                            "LIR/interpreter direct-call proc={d} -> proc={d} target={d} args={d}\n",
-                            .{
-                                @intFromEnum(frame.proc_id),
-                                @intFromEnum(assign.proc),
-                                @intFromEnum(assign.target),
-                                arg_locals.len,
-                            },
-                        );
-                        for (arg_locals, arg_layouts, 0..) |arg_local, arg_layout, i| {
-                            std.debug.print(
-                                "  arg[{d}] local={d} layout={d}\n",
-                                .{ i, @intFromEnum(arg_local), @intFromEnum(arg_layout) },
-                            );
-                            if (self.layout_store.getLayout(arg_layout).tag == .box) {
-                                if (self.readBoxedDataPointer(arg_values[i])) |data_ptr| {
-                                    const inner_layout = self.layout_store.getLayout(arg_layout).data.box;
-                                    const inner_size = self.helper.sizeOf(inner_layout);
-                                    if (inner_size > 0) {
-                                        const dump_len = @min(inner_size, 40);
-                                        std.debug.print(
-                                            "    arg[{d}] box pointee layout={d} ptr=0x{x} bytes:",
-                                            .{ i, @intFromEnum(inner_layout), @intFromPtr(data_ptr) },
-                                        );
-                                        for ((Value{ .ptr = data_ptr }).readBytes(dump_len)) |byte| {
-                                            std.debug.print(" {x:0>2}", .{byte});
-                                        }
-                                        std.debug.print("\n", .{});
-                                    }
-                                }
-                            }
-                        }
-                    }
                     const result = try self.evalProcById(assign.proc, arg_values, try self.localLayouts(arg_locals));
                     self.setLocalChecked(
                         frame,
@@ -1392,39 +1242,6 @@ pub const Interpreter = struct {
                     current = assign.next;
                 },
                 .assign_struct => |assign| {
-                    if (builtin.mode == .Debug) {
-                        const target_layout = self.store.getLocal(assign.target).layout_idx;
-                        const field_locals = self.store.getLocalSpan(assign.fields);
-                        std.debug.print(
-                            "LIR/interpreter assign_struct proc={d} stmt={d} target={d} target_layout={d} fields_len={d}\n",
-                            .{
-                                @intFromEnum(frame.proc_id),
-                                @intFromEnum(current),
-                                @intFromEnum(assign.target),
-                                @intFromEnum(target_layout),
-                                field_locals.len,
-                            },
-                        );
-                        for (field_locals, 0..) |field_local, i| {
-                            const field_layout = self.store.getLocal(field_local).layout_idx;
-                            const field_value = frame.getLocal(field_local);
-                            std.debug.print(
-                                "  field[{d}] local={d} layout={d} ptr=0x{x}\n",
-                                .{ i, @intFromEnum(field_local), @intFromEnum(field_layout), @intFromPtr(field_value.ptr) },
-                            );
-                            const layout_val = self.layout_store.getLayout(field_layout);
-                            if (layout_val.tag == .tag_union) {
-                                std.debug.print(
-                                    "    field[{d}] disc={d}\n",
-                                    .{ i, self.helper.readTagDiscriminant(field_value, field_layout) },
-                                );
-                            }
-                        }
-                        self.debugPrintLayoutShape("  target layout", target_layout);
-                        for (field_locals, 0..) |field_local, i| {
-                            self.debugPrintIndexedLayoutShape(i, self.store.getLocal(field_local).layout_idx);
-                        }
-                    }
                     self.setLocalChecked(frame, current, assign.target, try self.evalStructLiteral(frame, assign.fields, self.store.getLocal(assign.target).layout_idx));
                     current = assign.next;
                 },
