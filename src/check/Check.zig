@@ -1067,11 +1067,11 @@ fn mkFlexWithFromNumeralConstraint(
     const flex_var = try self.fresh(env, num_literal_info.region);
 
     // Create the argument type: Numeral (from Builtin.Num.Numeral)
-    // For from_numeral, the actual method signature is: Numeral -> Try(a, [InvalidNumeral(Str)])
+    // For from_numeral, the method signature is: Numeral -> Try(a, [InvalidNumeral(Str), ..])
     const numeral_content = try self.mkNumeralContent(env);
     const arg_var = try self.freshFromContent(numeral_content, env, num_literal_info.region);
 
-    // Create the error type: [InvalidNumeral(Str)] (closed tag union)
+    // Create the error type: [InvalidNumeral(Str), ..]
     const str_var = self.str_var;
     const invalid_numeral_tag_ident = try @constCast(self.cir).insertIdent(
         base.Ident.for_text("InvalidNumeral"),
@@ -1080,8 +1080,7 @@ fn mkFlexWithFromNumeralConstraint(
         invalid_numeral_tag_ident,
         &.{str_var},
     );
-    // Use empty_tag_union as extension to create a closed tag union [InvalidNumeral(Str)]
-    const err_ext_var = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, num_literal_info.region);
+    const err_ext_var = try self.fresh(env, num_literal_info.region);
     const err_type = try self.types.mkTagUnion(&.{invalid_numeral_tag}, err_ext_var);
     const err_var = try self.freshFromContent(err_type, env, num_literal_info.region);
 

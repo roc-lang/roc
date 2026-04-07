@@ -772,12 +772,8 @@ fn processTypeDeclFirstPass(
                         // Found an existing placeholder - reuse it without re-canonicalizing
                         const type_header = self.env.store.getTypeHeader(header_idx);
 
-                        // Compute relative_name
-                        const relative_name_idx: Ident.Idx = if (relative_parent_name) |rel_parent_idx| rn_blk: {
-                            const rel_parent_text = self.env.getIdent(rel_parent_idx);
-                            const type_relative = self.env.getIdent(type_header.relative_name);
-                            break :rn_blk try self.env.insertQualifiedIdent(rel_parent_text, type_relative);
-                        } else type_header.relative_name;
+                        // The placeholder header already carries the fully committed relative name.
+                        const relative_name_idx = type_header.relative_name;
 
                         // Process annotation and update the placeholder
                         return try self.processTypeDeclFirstPassWithExisting(
@@ -1017,10 +1013,16 @@ fn processTypeDeclFirstPassWithExisting(
     defer_associated_blocks: bool,
     parent_name: ?Ident.Idx,
 ) std.mem.Allocator.Error!void {
+    const ast_header = self.parse_ir.store.getTypeHeader(type_decl.header) catch null;
+    const local_type_name = if (ast_header) |hdr|
+        self.parse_ir.tokens.resolveIdentifier(hdr.name)
+    else
+        null;
+
     // For nested types, also add an unqualified alias so child scopes can find it
     if (parent_name != null) {
         const current_scope = &self.scopes.items[self.scopes.items.len - 1];
-        try current_scope.introduceTypeAlias(self.env.gpa, type_header.name, type_decl_stmt_idx);
+        try current_scope.introduceTypeAlias(self.env.gpa, local_type_name orelse type_header.relative_name, type_decl_stmt_idx);
     }
 
     // Process type parameters and annotation in a separate scope
@@ -1101,7 +1103,7 @@ fn processTypeDeclFirstPassWithExisting(
     // Process associated items
     if (!defer_associated_blocks) {
         if (type_decl.associated) |assoc| {
-            try self.processAssociatedBlock(qualified_name_idx, relative_name_idx, type_header.relative_name, assoc, false);
+            try self.processAssociatedBlock(qualified_name_idx, relative_name_idx, local_type_name orelse type_header.relative_name, assoc, false);
         }
     }
 }
