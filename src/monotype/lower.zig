@@ -4418,7 +4418,7 @@ pub const Lowerer = struct {
         const cir_env = self.ctx.env(module_idx);
         return switch (cir_env.store.getExpr(call.func)) {
             .e_dot_access => |dot| if (dot.args != null) try self.program.store.addExpr(.{
-                .ty = try self.lowerExprType(module_idx, type_scope, env, call_expr_idx, .{ .e_call = call }),
+                .ty = try self.lowerRecordedMethodResultType(module_idx, type_scope, env, call_expr_idx, dot.field_name),
                 .data = .{ .call = try self.lowerRecordedMethodCall(
                     module_idx,
                     type_scope,
@@ -4429,7 +4429,7 @@ pub const Lowerer = struct {
                 ) },
             }) else null,
             .e_type_var_dispatch => |dispatch| try self.program.store.addExpr(.{
-                .ty = try self.lowerExprType(module_idx, type_scope, env, call_expr_idx, .{ .e_call = call }),
+                .ty = try self.lowerRecordedMethodResultType(module_idx, type_scope, env, call_expr_idx, dispatch.method_name),
                 .data = .{ .call = try self.lowerRecordedMethodCall(
                     module_idx,
                     type_scope,
@@ -4454,13 +4454,13 @@ pub const Lowerer = struct {
     ) std.mem.Allocator.Error!?ast.ExprId {
         if (self.resolveDirectTopLevelSource(module_idx, env, call.func)) |source| {
             if (self.isBuiltinStrInspectSource(source.module_idx, source.def_idx)) {
-                const result_ty = result_ty_opt orelse try self.lowerExprType(
-                    module_idx,
-                    type_scope,
-                    env,
-                    expr_idx,
-                    self.ctx.env(module_idx).store.getExpr(expr_idx),
-                );
+                const result_ty = if (result_ty_opt) |result_ty|
+                    result_ty
+                else blk: {
+                    const str_ty = try self.makePrimitiveType(.str);
+                    std.debug.assert(self.ctx.types.getType(str_ty) == .primitive and self.ctx.types.getType(str_ty).primitive == .str);
+                    break :blk str_ty;
+                };
                 if (try self.maybeLowerBuiltinSpecialCall(module_idx, type_scope, env, call, result_ty)) |special| {
                     return special;
                 }
@@ -4794,24 +4794,9 @@ pub const Lowerer = struct {
             .e_record => |record| if (record.ext != null)
                 try self.lowerSolvedType(module_idx, type_scope, ModuleEnv.varFrom(expr_idx))
             else
-                try self.lowerExactRecordExprType(module_idx, type_scope, env, record.fields),
+                null,
             .e_empty_record => try self.makeEmptyRecordType(),
-            .e_call => |call| blk: {
-                var current = (try self.lowerCallExpectedFnType(
-                    module_idx,
-                    type_scope,
-                    env,
-                    expr_idx,
-                    call.func,
-                    cir_env.store.sliceExpr(call.args),
-                    null,
-                )).ty;
-                for (cir_env.store.sliceExpr(call.args)) |_| {
-                    if (self.ctx.types.getType(current) != .func) break :blk null;
-                    current = self.requireFunctionType(current).ret;
-                }
-                break :blk current;
-            },
+            .e_call => null,
             .e_dot_access => |dot| if (dot.args != null)
                 try self.lowerRecordedMethodResultType(module_idx, type_scope, env, expr_idx, dot.field_name)
             else
@@ -4826,7 +4811,7 @@ pub const Lowerer = struct {
                     ),
                     dot.field_name,
                 ),
-            .e_type_var_dispatch => |dispatch| try self.lowerRecordedMethodResultType(module_idx, type_scope, env, expr_idx, dispatch.method_name),
+            .e_type_var_dispatch => null,
             .e_binop => |binop| switch (binop.op) {
                 .lt, .gt, .le, .ge, .eq, .ne => try self.makePrimitiveType(.bool),
                 .add, .sub, .mul, .div, .rem, .div_trunc => try self.lowerExprType(
@@ -4838,55 +4823,10 @@ pub const Lowerer = struct {
                 ),
                 .@"and", .@"or" => try self.makePrimitiveType(.bool),
             },
-            .e_unary_minus => |unary| try self.lowerExprType(
-                module_idx,
-                type_scope,
-                env,
-                unary.expr,
-                cir_env.store.getExpr(unary.expr),
-            ),
+            .e_unary_minus => null,
             .e_unary_not => try self.makePrimitiveType(.bool),
             else => null,
         };
-    }
-
-    fn lowerExactRecordExprType(
-        self: *Lowerer,
-        module_idx: u32,
-        type_scope: *TypeCloneScope,
-        env: BindingEnv,
-        span: CIR.RecordField.Span,
-    ) std.mem.Allocator.Error!type_mod.TypeId {
-        const cir_env = self.ctx.env(module_idx);
-        const fields = cir_env.store.sliceRecordFields(span);
-        if (fields.len == 0) return self.makeEmptyRecordType();
-
-        const lowered_fields = try self.allocator.alloc(type_mod.Field, fields.len);
-        defer self.allocator.free(lowered_fields);
-
-        for (fields, 0..) |field_idx, i| {
-            const field = cir_env.store.getRecordField(field_idx);
-            lowered_fields[i] = .{
-                .name = try self.ctx.copyExecutableIdent(module_idx, field.name),
-                .ty = try self.lowerExprType(
-                    module_idx,
-                    type_scope,
-                    env,
-                    field.value,
-                    cir_env.store.getExpr(field.value),
-                ),
-            };
-        }
-
-        std.mem.sort(type_mod.Field, lowered_fields, &self.ctx.idents, struct {
-            fn lessThan(idents: *const base.Ident.Store, a: type_mod.Field, b: type_mod.Field) bool {
-                return std.mem.order(u8, idents.getText(a.name), idents.getText(b.name)) == .lt;
-            }
-        }.lessThan);
-
-        return try self.ctx.types.addType(.{ .record = .{
-            .fields = try self.ctx.types.addFields(lowered_fields),
-        } });
     }
 
     fn makeEmptyRecordType(self: *Lowerer) std.mem.Allocator.Error!type_mod.TypeId {
@@ -6498,8 +6438,7 @@ pub const Lowerer = struct {
         expr_idx: CIR.Expr.Idx,
     ) std.mem.Allocator.Error!Var {
         const cir_env = self.ctx.env(module_idx);
-        const expr = cir_env.store.getExpr(expr_idx);
-        return switch (expr) {
+        return switch (cir_env.store.getExpr(expr_idx)) {
             .e_lookup_local => self.lookupSpecializedExprVar(module_idx, env, expr_idx) orelse try self.scopeVar(type_scope, ModuleEnv.varFrom(expr_idx)),
             .e_call => |call| blk: {
                 const expected = try self.lowerCallExpectedFnType(
@@ -6517,13 +6456,18 @@ pub const Lowerer = struct {
                         .{module_idx},
                     );
                 }
-                break :blk try self.scopeVar(type_scope, ModuleEnv.varFrom(expr_idx));
+                if (comptime builtin.mode == .Debug) {
+                    std.debug.panic(
+                        "monotype invariant violated: missing specialized call var for expr {} in module {d}",
+                        .{ expr_idx, module_idx },
+                    );
+                }
+                unreachable;
             },
             .e_dot_access => |dot| if (dot.args != null)
                 try self.lowerRecordedMethodResultVar(module_idx, type_scope, env, expr_idx, dot.field_name)
             else
                 try self.scopeVar(type_scope, ModuleEnv.varFrom(expr_idx)),
-            .e_type_var_dispatch => |dispatch| try self.lowerRecordedMethodResultVar(module_idx, type_scope, env, expr_idx, dispatch.method_name),
             else => try self.scopeVar(type_scope, ModuleEnv.varFrom(expr_idx)),
         };
     }
