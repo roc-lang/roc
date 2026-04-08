@@ -33,6 +33,11 @@ pub const LayoutCache = struct {
     }
 };
 
+fn debugPanic(comptime msg: []const u8) noreturn {
+    @branchHint(.cold);
+    std.debug.panic("{s}", .{msg});
+}
+
 pub fn lowerType(
     mono_types: *mono.Type.Store,
     ir_layouts: *ir.Store,
@@ -64,6 +69,8 @@ fn lowerTypeRec(
     try cache.active_by_type.put(ty, placeholder);
 
     const lowered_content: ir.Content = switch (mono_types.getTypePreservingNominal(ty)) {
+        .placeholder => debugPanic("ir.lower_type.lowerTypeRec unresolved executable type"),
+        .link => unreachable,
         .primitive => |prim| .{ .primitive = lowerPrim(prim) },
         .nominal => |backing| .{
             .nominal = try lowerTypeRec(mono_types, ir_layouts, cache, backing),
@@ -190,6 +197,8 @@ fn buildTypeKey(
 
             try self.appendValue(@as(u8, 2));
             switch (self.mono_types.getTypePreservingNominal(ty)) {
+                .placeholder => debugPanic("ir.lower_type.buildInternKey encountered unresolved executable type"),
+                .link => unreachable,
                 .primitive => |prim| {
                     try self.appendValue(@as(u8, 10));
                     try self.appendValue(@intFromEnum(prim));

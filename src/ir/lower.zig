@@ -458,6 +458,13 @@ const Lowerer = struct {
         };
     }
 
+    fn requireListElemType(self: *Lowerer, list_ty: lambdamono.Type.TypeId) lambdamono.Type.TypeId {
+        return switch (self.input.types.getType(list_ty)) {
+            .list => |elem| elem,
+            else => debugPanic("ir.lower invariant violated: expected list type for for_list iterable"),
+        };
+    }
+
     fn freshSymbol(self: *Lowerer, comptime _: []const u8) std.mem.Allocator.Error!Symbol {
         return try self.input.symbols.add(base.Ident.Idx.NONE, .synthetic);
     }
@@ -905,8 +912,8 @@ const Lowerer = struct {
         const iterable = try self.lowerSubexprValue(block, env, iterable_expr);
         if (iterable == null) return;
 
-        const pat = self.input.store.getPat(patt);
-        const elem = try self.freshVar(pat.ty, "for_elem");
+        const iterable_ty = self.input.store.getExpr(iterable_expr).ty;
+        const elem = try self.freshVar(self.requireListElemType(iterable_ty), "for_elem");
         const body_block = try self.lowerPatternBranchBlock(env, elem, patt, body_expr);
         try block.stmts.append(self.allocator, .{ .for_list = .{
             .elem = elem,

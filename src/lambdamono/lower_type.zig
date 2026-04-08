@@ -118,9 +118,10 @@ pub fn lowerCaptureBindings(
         };
     }
 
-    return try mono_types.addType(.{ .record = .{
+    const raw = try mono_types.addType(.{ .record = .{
         .fields = try mono_types.addFields(fields),
     } });
+    return try mono_types.keyId(raw);
 }
 
 fn lowerTypeRec(
@@ -131,9 +132,15 @@ fn lowerTypeRec(
     symbols: *const symbol_mod.Store,
 ) std.mem.Allocator.Error!mono.TypeId {
     const id = unlinkExecutable(types, ty);
-    if (mono_cache.get(id)) |cached| return cached;
+    if (mono_cache.get(id)) |cached| {
+        const keyed = try mono_types.keyId(cached);
+        if (keyed != cached) {
+            try mono_cache.put(id, keyed);
+        }
+        return keyed;
+    }
 
-    const placeholder = try mono_types.addType(.{ .primitive = .erased });
+    const placeholder = try mono_types.addType(.placeholder);
     try mono_cache.put(id, placeholder);
 
     const lowered: mono.Content = switch (types.getNode(id)) {
@@ -199,8 +206,10 @@ fn lowerTypeRec(
         },
     };
 
-    mono_types.types.items[@intFromEnum(placeholder)] = lowered;
-    return placeholder;
+    mono_types.setType(placeholder, lowered);
+    const keyed = try mono_types.keyId(placeholder);
+    try mono_cache.put(id, keyed);
+    return keyed;
 }
 
 fn lowerLambdaSet(

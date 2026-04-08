@@ -595,6 +595,8 @@ const Lowerer = struct {
     ) std.mem.Allocator.Error!ast.ExprId {
         const value_ty = self.output.getExpr(value_expr).ty;
         return switch (self.types.getTypePreservingNominal(value_ty)) {
+            .placeholder => debugPanic("lambdamono.lower.buildInlineInspectValueExpr unresolved executable type"),
+            .link => unreachable,
             .primitive => |prim| switch (prim) {
                 .str => self.makeLowLevelExpr(result_ty, .str_inspect, &.{value_expr}),
                 .bool => self.makeBoolInspectExpr(value_expr, result_ty),
@@ -1006,6 +1008,8 @@ const Lowerer = struct {
 
         const value_ty = self.output.getExpr(value_expr).ty;
         return switch (self.types.getType(value_ty)) {
+            .placeholder => debugPanic("lambdamono.lower.specializeInspectValueExpr unresolved executable type"),
+            .link => unreachable,
             .primitive => |prim| switch (prim) {
                 .str => self.makeLowLevelExpr(result_ty, .str_inspect, &.{value_expr}),
                 .bool => self.makeBoolInspectExpr(value_expr, result_ty),
@@ -1039,11 +1043,11 @@ const Lowerer = struct {
     }
 
     fn makePrimitiveType(self: *Lowerer, prim: type_mod.Prim) std.mem.Allocator.Error!type_mod.TypeId {
-        return try self.types.addType(.{ .primitive = prim });
+        return try self.types.internResolved(.{ .primitive = prim });
     }
 
     fn makeUnitType(self: *Lowerer) std.mem.Allocator.Error!type_mod.TypeId {
-        return try self.types.addType(.{ .record = .{ .fields = type_mod.Span(type_mod.Field).empty() } });
+        return try self.types.internResolved(.{ .record = .{ .fields = type_mod.Span(type_mod.Field).empty() } });
     }
 
     fn makeVarExpr(
@@ -1836,13 +1840,16 @@ const Lowerer = struct {
 
         const left_node = self.input.types.getNode(l);
         const right_node = self.input.types.getNode(r);
-        switch (left_node) {
+        const merged = switch (left_node) {
             .content => |left_content| switch (right_node) {
                 .content => |right_content| try self.unifyContent(left_content, right_content, visited),
                 else => debugPanic("lambdamono.lower.unify incompatible types"),
             },
             else => debugPanic("lambdamono.lower.unify incompatible types"),
-        }
+        };
+
+        self.input.types.setNode(l, .{ .content = merged });
+        self.input.types.setNode(r, .{ .link = l });
     }
 
     fn unifyContent(
@@ -1850,12 +1857,17 @@ const Lowerer = struct {
         left: solved.Type.Content,
         right: solved.Type.Content,
         visited: *std.AutoHashMap(u64, void),
-    ) std.mem.Allocator.Error!void {
+    ) std.mem.Allocator.Error!solved.Type.Content {
         switch (left) {
             .primitive => |prim| switch (right) {
                 .primitive => |other| {
                     if (prim != other) debugPanic("lambdamono.lower.unify incompatible primitives");
+                    return .{ .primitive = prim };
                 },
+                .lambda_set => if (prim == .erased)
+                    return .{ .primitive = .erased }
+                else
+                    debugPanic("lambdamono.lower.unify incompatible types"),
                 else => debugPanic("lambdamono.lower.unify incompatible types"),
             },
             .func => |func| switch (right) {
@@ -1863,18 +1875,25 @@ const Lowerer = struct {
                     try self.unifyRec(func.arg, other.arg, visited);
                     try self.unifyRec(func.lset, other.lset, visited);
                     try self.unifyRec(func.ret, other.ret, visited);
+                    return .{ .func = .{
+                        .arg = func.arg,
+                        .lset = func.lset,
+                        .ret = func.ret,
+                    } };
                 },
                 else => debugPanic("lambdamono.lower.unify incompatible types"),
             },
             .list => |elem| switch (right) {
                 .list => |other| {
                     try self.unifyRec(elem, other, visited);
+                    return .{ .list = elem };
                 },
                 else => debugPanic("lambdamono.lower.unify incompatible types"),
             },
             .box => |elem| switch (right) {
                 .box => |other| {
                     try self.unifyRec(elem, other, visited);
+                    return .{ .box = elem };
                 },
                 else => debugPanic("lambdamono.lower.unify incompatible types"),
             },
@@ -1886,69 +1905,251 @@ const Lowerer = struct {
                     for (left_elems, right_elems) |left_elem, right_elem| {
                         try self.unifyRec(left_elem, right_elem, visited);
                     }
+                    return .{ .tuple = tuple };
                 },
                 else => debugPanic("lambdamono.lower.unify incompatible types"),
             },
             .record => |record| switch (right) {
                 .record => |other| {
-                    const left_fields = self.input.types.sliceFields(record.fields);
-                    const right_fields = self.input.types.sliceFields(other.fields);
-                    if (left_fields.len != right_fields.len) debugPanic("lambdamono.lower.unify record field mismatch");
-                    for (left_fields, right_fields) |left_field, right_field| {
-                        if (left_field.name != right_field.name) debugPanic("lambdamono.lower.unify record field mismatch");
-                        try self.unifyRec(left_field.ty, right_field.ty, visited);
-                    }
+                    return .{ .record = .{
+                        .fields = try self.unifyRecordFields(record.fields, other.fields, visited),
+                    } };
                 },
                 else => debugPanic("lambdamono.lower.unify incompatible types"),
             },
             .tag_union => |tag_union| switch (right) {
                 .tag_union => |other| {
-                    const left_tags = self.input.types.sliceTags(tag_union.tags);
-                    const right_tags = self.input.types.sliceTags(other.tags);
-                    if (left_tags.len != right_tags.len) debugPanic("lambdamono.lower.unify tag mismatch");
-                    for (left_tags, right_tags) |left_tag, right_tag| {
-                        if (!std.meta.eql(left_tag.name, right_tag.name)) debugPanic("lambdamono.lower.unify tag mismatch");
-                        const left_args = self.input.types.sliceTypeVarSpan(left_tag.args);
-                        const right_args = self.input.types.sliceTypeVarSpan(right_tag.args);
-                        if (left_args.len != right_args.len) debugPanic("lambdamono.lower.unify tag arity mismatch");
-                        for (left_args, right_args) |left_arg, right_arg| {
-                            try self.unifyRec(left_arg, right_arg, visited);
-                        }
-                    }
+                    return .{ .tag_union = .{
+                        .tags = try self.unifyTags(tag_union.tags, other.tags, visited),
+                    } };
                 },
                 else => debugPanic("lambdamono.lower.unify incompatible types"),
             },
             .lambda_set => |lambda_set| switch (right) {
                 .lambda_set => |other| {
-                    const left_lambdas = self.input.types.sliceLambdas(lambda_set);
-                    const right_lambdas = self.input.types.sliceLambdas(other);
-                    if (left_lambdas.len != right_lambdas.len) debugPanic("lambdamono.lower.unify lambda set mismatch");
-                    for (left_lambdas) |left_lambda| {
-                        var found = false;
-                        for (right_lambdas) |right_lambda| {
-                            if (left_lambda.symbol != right_lambda.symbol) continue;
-                            found = true;
-                            const left_caps = self.input.types.sliceCaptures(left_lambda.captures);
-                            const right_caps = self.input.types.sliceCaptures(right_lambda.captures);
-                            if (left_caps.len != right_caps.len) debugPanic("lambdamono.lower.unify capture mismatch");
-                            for (left_caps) |left_cap| {
-                                var capture_found = false;
-                                for (right_caps) |right_cap| {
-                                    if (left_cap.symbol != right_cap.symbol) continue;
-                                    capture_found = true;
-                                    try self.unifyRec(left_cap.ty, right_cap.ty, visited);
-                                    break;
-                                }
-                                if (!capture_found) debugPanic("lambdamono.lower.unify capture mismatch");
-                            }
-                            break;
-                        }
-                        if (!found) debugPanic("lambdamono.lower.unify lambda set mismatch");
-                    }
+                    return .{ .lambda_set = try self.unifyLambdaSet(lambda_set, other, visited) };
                 },
+                .primitive => |prim| if (prim == .erased)
+                    return .{ .primitive = .erased }
+                else
+                    debugPanic("lambdamono.lower.unify incompatible types"),
                 else => debugPanic("lambdamono.lower.unify incompatible types"),
             },
         }
+    }
+
+    fn unifyRecordFields(
+        self: *Lowerer,
+        left_span: solved.Type.Span(solved.Type.Field),
+        right_span: solved.Type.Span(solved.Type.Field),
+        visited: *std.AutoHashMap(u64, void),
+    ) std.mem.Allocator.Error!solved.Type.Span(solved.Type.Field) {
+        const left_fields = self.input.types.sliceFields(left_span);
+        const right_fields = self.input.types.sliceFields(right_span);
+        var out = std.ArrayList(solved.Type.Field).empty;
+        defer out.deinit(self.allocator);
+
+        var i: usize = 0;
+        var j: usize = 0;
+        while (i < left_fields.len or j < right_fields.len) {
+            if (i == left_fields.len) {
+                try out.append(self.allocator, right_fields[j]);
+                j += 1;
+                continue;
+            }
+            if (j == right_fields.len) {
+                try out.append(self.allocator, left_fields[i]);
+                i += 1;
+                continue;
+            }
+
+            const order = std.mem.order(
+                u8,
+                self.input.idents.getText(left_fields[i].name),
+                self.input.idents.getText(right_fields[j].name),
+            );
+            switch (order) {
+                .lt => {
+                    try out.append(self.allocator, left_fields[i]);
+                    i += 1;
+                },
+                .gt => {
+                    try out.append(self.allocator, right_fields[j]);
+                    j += 1;
+                },
+                .eq => {
+                    try self.unifyRec(left_fields[i].ty, right_fields[j].ty, visited);
+                    try out.append(self.allocator, .{
+                        .name = left_fields[i].name,
+                        .ty = left_fields[i].ty,
+                    });
+                    i += 1;
+                    j += 1;
+                },
+            }
+        }
+
+        return try self.input.types.addFields(out.items);
+    }
+
+    fn unifyTags(
+        self: *Lowerer,
+        left_span: solved.Type.Span(solved.Type.Tag),
+        right_span: solved.Type.Span(solved.Type.Tag),
+        visited: *std.AutoHashMap(u64, void),
+    ) std.mem.Allocator.Error!solved.Type.Span(solved.Type.Tag) {
+        const left_tags = self.input.types.sliceTags(left_span);
+        const right_tags = self.input.types.sliceTags(right_span);
+        var out = std.ArrayList(solved.Type.Tag).empty;
+        defer out.deinit(self.allocator);
+
+        var i: usize = 0;
+        var j: usize = 0;
+        while (i < left_tags.len or j < right_tags.len) {
+            if (i == left_tags.len) {
+                try out.append(self.allocator, right_tags[j]);
+                j += 1;
+                continue;
+            }
+            if (j == right_tags.len) {
+                try out.append(self.allocator, left_tags[i]);
+                i += 1;
+                continue;
+            }
+
+            const order = std.mem.order(
+                u8,
+                self.input.idents.getText(left_tags[i].name),
+                self.input.idents.getText(right_tags[j].name),
+            );
+            switch (order) {
+                .lt => {
+                    try out.append(self.allocator, left_tags[i]);
+                    i += 1;
+                },
+                .gt => {
+                    try out.append(self.allocator, right_tags[j]);
+                    j += 1;
+                },
+                .eq => {
+                    const left_args = self.input.types.sliceTypeVarSpan(left_tags[i].args);
+                    const right_args = self.input.types.sliceTypeVarSpan(right_tags[j].args);
+                    if (left_args.len != right_args.len) {
+                        debugPanic("lambdamono.lower.unify tag arity mismatch");
+                    }
+                    for (left_args, right_args) |left_arg, right_arg| {
+                        try self.unifyRec(left_arg, right_arg, visited);
+                    }
+                    try out.append(self.allocator, .{
+                        .name = left_tags[i].name,
+                        .args = left_tags[i].args,
+                    });
+                    i += 1;
+                    j += 1;
+                },
+            }
+        }
+
+        return try self.input.types.addTags(out.items);
+    }
+
+    fn unifyLambdaSet(
+        self: *Lowerer,
+        left_span: solved.Type.Span(solved.Type.Lambda),
+        right_span: solved.Type.Span(solved.Type.Lambda),
+        visited: *std.AutoHashMap(u64, void),
+    ) std.mem.Allocator.Error!solved.Type.Span(solved.Type.Lambda) {
+        const left_lambdas = self.input.types.sliceLambdas(left_span);
+        const right_lambdas = self.input.types.sliceLambdas(right_span);
+        var out = std.ArrayList(solved.Type.Lambda).empty;
+        defer out.deinit(self.allocator);
+
+        var i: usize = 0;
+        var j: usize = 0;
+        while (i < left_lambdas.len or j < right_lambdas.len) {
+            if (i == left_lambdas.len) {
+                try out.append(self.allocator, right_lambdas[j]);
+                j += 1;
+                continue;
+            }
+            if (j == right_lambdas.len) {
+                try out.append(self.allocator, left_lambdas[i]);
+                i += 1;
+                continue;
+            }
+
+            const left_symbol = left_lambdas[i].symbol.raw();
+            const right_symbol = right_lambdas[j].symbol.raw();
+            if (left_symbol < right_symbol) {
+                try out.append(self.allocator, left_lambdas[i]);
+                i += 1;
+                continue;
+            }
+            if (left_symbol > right_symbol) {
+                try out.append(self.allocator, right_lambdas[j]);
+                j += 1;
+                continue;
+            }
+
+            try out.append(self.allocator, .{
+                .symbol = left_lambdas[i].symbol,
+                .captures = try self.unifyCaptures(left_lambdas[i].captures, right_lambdas[j].captures, visited),
+            });
+            i += 1;
+            j += 1;
+        }
+
+        return try self.input.types.addLambdas(out.items);
+    }
+
+    fn unifyCaptures(
+        self: *Lowerer,
+        left_span: solved.Type.Span(solved.Type.Capture),
+        right_span: solved.Type.Span(solved.Type.Capture),
+        visited: *std.AutoHashMap(u64, void),
+    ) std.mem.Allocator.Error!solved.Type.Span(solved.Type.Capture) {
+        const left_caps = self.input.types.sliceCaptures(left_span);
+        const right_caps = self.input.types.sliceCaptures(right_span);
+        var out = std.ArrayList(solved.Type.Capture).empty;
+        defer out.deinit(self.allocator);
+
+        var i: usize = 0;
+        var j: usize = 0;
+        while (i < left_caps.len or j < right_caps.len) {
+            if (i == left_caps.len) {
+                try out.append(self.allocator, right_caps[j]);
+                j += 1;
+                continue;
+            }
+            if (j == right_caps.len) {
+                try out.append(self.allocator, left_caps[i]);
+                i += 1;
+                continue;
+            }
+
+            const left_symbol = left_caps[i].symbol.raw();
+            const right_symbol = right_caps[j].symbol.raw();
+            if (left_symbol < right_symbol) {
+                try out.append(self.allocator, left_caps[i]);
+                i += 1;
+                continue;
+            }
+            if (left_symbol > right_symbol) {
+                try out.append(self.allocator, right_caps[j]);
+                j += 1;
+                continue;
+            }
+
+            try self.unifyRec(left_caps[i].ty, right_caps[j].ty, visited);
+            try out.append(self.allocator, .{
+                .symbol = left_caps[i].symbol,
+                .ty = left_caps[i].ty,
+            });
+            i += 1;
+            j += 1;
+        }
+
+        return try self.input.types.addCaptures(out.items);
     }
 
     fn lookupEnv(self: *const Lowerer, venv: []const EnvEntry, symbol: Symbol) ?TypeVarId {

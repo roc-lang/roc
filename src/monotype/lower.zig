@@ -1836,11 +1836,11 @@ pub const Lowerer = struct {
     }
 
     fn makePrimitiveType(self: *Lowerer, prim: type_mod.Prim) std.mem.Allocator.Error!type_mod.TypeId {
-        return try self.ctx.types.addType(.{ .primitive = prim });
+        return try self.ctx.types.internResolved(.{ .primitive = prim });
     }
 
     fn makeUnitType(self: *Lowerer) std.mem.Allocator.Error!type_mod.TypeId {
-        return try self.ctx.types.addType(.{ .record = .{ .fields = type_mod.Span(type_mod.Field).empty() } });
+        return try self.ctx.types.internResolved(.{ .record = .{ .fields = type_mod.Span(type_mod.Field).empty() } });
     }
 
     fn makeUnitExpr(self: *Lowerer) std.mem.Allocator.Error!ast.ExprId {
@@ -1963,7 +1963,7 @@ pub const Lowerer = struct {
             }
         }.lessThan);
 
-        return try self.ctx.types.addType(.{ .record = .{
+        return try self.ctx.types.internResolved(.{ .record = .{
             .fields = try self.ctx.types.addFields(&fields),
         } });
     }
@@ -5480,9 +5480,7 @@ pub const Lowerer = struct {
     }
 
     fn makeEmptyRecordType(self: *Lowerer) std.mem.Allocator.Error!type_mod.TypeId {
-        return try self.ctx.types.addType(.{ .record = .{
-            .fields = type_mod.Span(type_mod.Field).empty(),
-        } });
+        return try self.makeUnitType();
     }
 
     fn normalizeDefaultNumericLiteralType(
@@ -5531,7 +5529,13 @@ pub const Lowerer = struct {
             return self.makePrimitiveType(prim);
         }
         const key: TypeCloneScope.TypeKey = .{ .module_idx = module_idx, .var_ = resolved.var_ };
-        if (type_scope.type_cache.get(key)) |cached| return cached;
+        if (type_scope.type_cache.get(key)) |cached| {
+            const keyed = try self.ctx.types.keyId(cached);
+            if (keyed != cached) {
+                try type_scope.type_cache.put(key, keyed);
+            }
+            return keyed;
+        }
 
         const placeholder = try self.ctx.types.addType(.placeholder);
         try type_scope.type_cache.put(key, placeholder);
@@ -5579,11 +5583,15 @@ pub const Lowerer = struct {
             .err => .placeholder,
         };
 
-        self.ctx.types.types.items[@intFromEnum(placeholder)] = lowered;
+        self.ctx.types.setType(placeholder, lowered);
         if (lowered == .placeholder) {
             _ = type_scope.type_cache.remove(key);
+            return placeholder;
         }
-        return placeholder;
+
+        const keyed = try self.ctx.types.keyId(placeholder);
+        try type_scope.type_cache.put(key, keyed);
+        return keyed;
     }
 
     fn lowerTagUnionContent(
@@ -5680,7 +5688,7 @@ pub const Lowerer = struct {
                 debugPanic("monotype invariant violated: duplicate tag constructors had different arity after row flattening", .{});
             }
             for (prev_args, tag_args) |prev_arg, tag_arg| {
-                if (!self.ctx.types.equalIds(prev_arg, tag_arg)) {
+                if (prev_arg != tag_arg) {
                     debugPanic("monotype invariant violated: duplicate tag constructors had different payload types after row flattening", .{});
                 }
             }
@@ -6545,7 +6553,7 @@ pub const Lowerer = struct {
         child_ty: type_mod.TypeId,
     ) type_mod.TypeId {
         return switch (self.ctx.types.getTypePreservingNominal(parent_ty)) {
-            .nominal => |backing| if (self.ctx.types.equalIds(child_ty, backing)) parent_ty else child_ty,
+            .nominal => |backing| if (child_ty == backing) parent_ty else child_ty,
             else => child_ty,
         };
     }
@@ -6982,9 +6990,10 @@ pub const Lowerer = struct {
         left: []const type_mod.TypeId,
         right: []const type_mod.TypeId,
     ) bool {
+        _ = self;
         if (left.len != right.len) return false;
         for (left, right) |left_ty, right_ty| {
-            if (!self.ctx.types.equalIds(left_ty, right_ty)) return false;
+            if (left_ty != right_ty) return false;
         }
         return true;
     }

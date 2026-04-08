@@ -23,34 +23,47 @@ pub const Pending = struct {
 pub const Queue = struct {
     allocator: std.mem.Allocator,
     pending: std.ArrayList(Pending),
+    by_key: std.AutoHashMap(Key, usize),
+
+    const Key = struct {
+        source_symbol: symbol_mod.Symbol,
+        ty: type_mod.TypeId,
+    };
 
     pub fn init(allocator: std.mem.Allocator) Queue {
         return .{
             .allocator = allocator,
             .pending = .empty,
+            .by_key = std.AutoHashMap(Key, usize).init(allocator),
         };
     }
 
     pub fn deinit(self: *Queue) void {
         self.pending.deinit(self.allocator);
+        self.by_key.deinit();
     }
 
     pub fn specializeFn(
         self: *Queue,
         symbols: *symbol_mod.Store,
-        types: *const type_mod.Store,
+        types: *type_mod.Store,
         source_symbol: symbol_mod.Symbol,
         source: SourceFn,
         ty: type_mod.TypeId,
         expected_checker_var: ?checker_types.Var,
     ) std.mem.Allocator.Error!symbol_mod.Symbol {
-        for (self.pending.items) |*item| {
-            if (item.source_symbol == source_symbol and types.equalIds(item.ty, ty)) {
-                if (item.expected_checker_var == null and expected_checker_var != null) {
-                    item.expected_checker_var = expected_checker_var;
-                }
-                return item.specialized_symbol;
+        const canonical_ty = try types.keyId(ty);
+        const key: Key = .{
+            .source_symbol = source_symbol,
+            .ty = canonical_ty,
+        };
+
+        if (self.by_key.get(key)) |idx| {
+            const item = &self.pending.items[idx];
+            if (item.expected_checker_var == null and expected_checker_var != null) {
+                item.expected_checker_var = expected_checker_var;
             }
+            return item.specialized_symbol;
         }
 
         const source_entry = symbols.get(source_symbol);
@@ -62,10 +75,11 @@ pub const Queue = struct {
         try self.pending.append(self.allocator, .{
             .source_symbol = source_symbol,
             .source = source,
-            .ty = ty,
+            .ty = canonical_ty,
             .expected_checker_var = expected_checker_var,
             .specialized_symbol = specialized_symbol,
         });
+        try self.by_key.put(key, self.pending.items.len - 1);
         return specialized_symbol;
     }
 

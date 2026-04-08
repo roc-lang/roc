@@ -21,6 +21,7 @@ pub const Pending = struct {
     fn_ty: TypeVarId,
     fn_def: solved.Ast.FnDef,
     requested_ty: TypeVarId,
+    sig: SigKey,
     specialized_symbol: Symbol,
     captures_new: ?[]lower_type.CaptureBinding = null,
     specialized: ?ast.FnDef = null,
@@ -29,11 +30,13 @@ pub const Pending = struct {
 pub const Queue = struct {
     allocator: std.mem.Allocator,
     items: std.ArrayList(Pending),
+    by_key: std.AutoHashMap(SigKey, usize),
 
     pub fn init(allocator: std.mem.Allocator) Queue {
         return .{
             .allocator = allocator,
             .items = .empty,
+            .by_key = std.AutoHashMap(SigKey, usize).init(allocator),
         };
     }
 
@@ -42,6 +45,7 @@ pub const Queue = struct {
             if (item.captures_new) |captures_new| self.allocator.free(captures_new);
         }
         self.items.deinit(self.allocator);
+        self.by_key.deinit();
     }
 
     pub fn nextPending(self: *Queue) ?*Pending {
@@ -76,6 +80,46 @@ pub const FEnvEntry = struct {
     fn_ty: TypeVarId,
     fn_def: solved.Ast.FnDef,
 };
+
+const CaptureKind = enum(u8) {
+    toplevel,
+    lset,
+    erased,
+};
+
+const SigKey = struct {
+    name: Symbol,
+    arg_ty: type_mod.TypeId,
+    ret_ty: type_mod.TypeId,
+    capture_kind: CaptureKind,
+    capture_ty: ?type_mod.TypeId,
+};
+
+fn makeSigKey(name: Symbol, arg_ty: type_mod.TypeId, ret_ty: type_mod.TypeId, captures: CaptureSpec) SigKey {
+    return switch (captures) {
+        .toplevel => .{
+            .name = name,
+            .arg_ty = arg_ty,
+            .ret_ty = ret_ty,
+            .capture_kind = .toplevel,
+            .capture_ty = null,
+        },
+        .lset => |capture_ty| .{
+            .name = name,
+            .arg_ty = arg_ty,
+            .ret_ty = ret_ty,
+            .capture_kind = .lset,
+            .capture_ty = capture_ty,
+        },
+        .erased => |capture_ty| .{
+            .name = name,
+            .arg_ty = arg_ty,
+            .ret_ty = ret_ty,
+            .capture_kind = .erased,
+            .capture_ty = capture_ty,
+        },
+    };
+}
 
 pub fn buildFEnv(allocator: std.mem.Allocator, input: *const solved.Lower.Result) std.mem.Allocator.Error![]FEnvEntry {
     var out = std.ArrayList(FEnvEntry).empty;
@@ -117,9 +161,9 @@ pub fn specializeFnLset(
     defer mono_cache.deinit();
 
     const requested_fn = lower_type.extractFn(solved_types, requested_ty);
-    const arg_ty = try lower_type.lowerType(solved_types, mono_types, &mono_cache, requested_fn.arg, symbols);
-    const ret_ty = try lower_type.lowerType(solved_types, mono_types, &mono_cache, requested_fn.ret, symbols);
-    const captures_spec: CaptureSpec = switch (try lower_type.extractLsetFn(
+    const arg_ty_raw = try lower_type.lowerType(solved_types, mono_types, &mono_cache, requested_fn.arg, symbols);
+    const ret_ty_raw = try lower_type.lowerType(solved_types, mono_types, &mono_cache, requested_fn.ret, symbols);
+    const captures_spec_raw: CaptureSpec = switch (try lower_type.extractLsetFn(
         solved_types,
         mono_types,
         &mono_cache,
@@ -130,42 +174,16 @@ pub fn specializeFnLset(
         .toplevel => .toplevel,
         .lset => |info| .{ .lset = info.ty },
     };
-
-    for (queue.items.items) |item| {
-        if (item.name != requested_name) continue;
-        var item_cache = lower_type.MonoCache.init(queue.allocator);
-        defer item_cache.deinit();
-
-        const item_fn = lower_type.extractFn(solved_types, item.requested_ty);
-        const item_arg = try lower_type.lowerType(solved_types, mono_types, &item_cache, item_fn.arg, symbols);
-        const item_ret = try lower_type.lowerType(solved_types, mono_types, &item_cache, item_fn.ret, symbols);
-        const item_captures: CaptureSpec = if (item.captures_new) |item_captures_new|
-            if (item_captures_new.len == 0)
-                .toplevel
-            else
-                .{ .erased = try lower_type.lowerCaptureBindings(
-                    solved_types,
-                    mono_types,
-                    &item_cache,
-                    item_captures_new,
-                    symbols,
-                ) }
-        else switch (try lower_type.extractLsetFn(
-            solved_types,
-            mono_types,
-            &item_cache,
-            item.requested_ty,
-            item.name,
-            symbols,
-        )) {
-            .toplevel => .toplevel,
-            .lset => |info| .{ .lset = info.ty },
-        };
-
-        if (!mono_types.equalIds(item_arg, arg_ty)) continue;
-        if (!mono_types.equalIds(item_ret, ret_ty)) continue;
-        if (!captureSpecsEqual(mono_types, item_captures, captures_spec)) continue;
-        return item.specialized_symbol;
+    const arg_ty = try mono_types.keyId(arg_ty_raw);
+    const ret_ty = try mono_types.keyId(ret_ty_raw);
+    const captures_spec: CaptureSpec = switch (captures_spec_raw) {
+        .toplevel => .toplevel,
+        .lset => |capture_ty| .{ .lset = try mono_types.keyId(capture_ty) },
+        .erased => |capture_ty| .{ .erased = try mono_types.keyId(capture_ty) },
+    };
+    const key = makeSigKey(requested_name, arg_ty, ret_ty, captures_spec);
+    if (queue.by_key.get(key)) |idx| {
+        return queue.items.items[idx].specialized_symbol;
     }
 
     const source_entry = symbols.get(requested_name);
@@ -179,8 +197,10 @@ pub fn specializeFnLset(
         .fn_ty = entry.fn_ty,
         .fn_def = entry.fn_def,
         .requested_ty = requested_ty,
+        .sig = key,
         .specialized_symbol = specialized_symbol,
     });
+    try queue.by_key.put(key, queue.items.items.len - 1);
     return specialized_symbol;
 }
 
@@ -200,9 +220,9 @@ pub fn specializeFnErased(
     defer mono_cache.deinit();
 
     const requested_fn = lower_type.extractFn(solved_types, requested_ty);
-    const arg_ty = try lower_type.lowerType(solved_types, mono_types, &mono_cache, requested_fn.arg, symbols);
-    const ret_ty = try lower_type.lowerType(solved_types, mono_types, &mono_cache, requested_fn.ret, symbols);
-    const captures_spec: CaptureSpec = if (captures_new.len == 0)
+    const arg_ty_raw = try lower_type.lowerType(solved_types, mono_types, &mono_cache, requested_fn.arg, symbols);
+    const ret_ty_raw = try lower_type.lowerType(solved_types, mono_types, &mono_cache, requested_fn.ret, symbols);
+    const captures_spec_raw: CaptureSpec = if (captures_new.len == 0)
         .toplevel
     else
         .{ .erased = try lower_type.lowerCaptureBindings(
@@ -212,42 +232,16 @@ pub fn specializeFnErased(
             captures_new,
             symbols,
         ) };
-
-    for (queue.items.items) |item| {
-        if (item.name != requested_name) continue;
-        var item_cache = lower_type.MonoCache.init(queue.allocator);
-        defer item_cache.deinit();
-
-        const item_fn = lower_type.extractFn(solved_types, item.requested_ty);
-        const item_arg = try lower_type.lowerType(solved_types, mono_types, &item_cache, item_fn.arg, symbols);
-        const item_ret = try lower_type.lowerType(solved_types, mono_types, &item_cache, item_fn.ret, symbols);
-        const item_captures: CaptureSpec = if (item.captures_new) |item_captures_new|
-            if (item_captures_new.len == 0)
-                .toplevel
-            else
-                .{ .erased = try lower_type.lowerCaptureBindings(
-                    solved_types,
-                    mono_types,
-                    &item_cache,
-                    item_captures_new,
-                    symbols,
-                ) }
-        else switch (try lower_type.extractLsetFn(
-            solved_types,
-            mono_types,
-            &item_cache,
-            item.requested_ty,
-            item.name,
-            symbols,
-        )) {
-            .toplevel => CaptureSpec.toplevel,
-            .lset => |info| CaptureSpec{ .lset = info.ty },
-        };
-
-        if (!mono_types.equalIds(item_arg, arg_ty)) continue;
-        if (!mono_types.equalIds(item_ret, ret_ty)) continue;
-        if (!captureSpecsEqual(mono_types, item_captures, captures_spec)) continue;
-        return item.specialized_symbol;
+    const arg_ty = try mono_types.keyId(arg_ty_raw);
+    const ret_ty = try mono_types.keyId(ret_ty_raw);
+    const captures_spec: CaptureSpec = switch (captures_spec_raw) {
+        .toplevel => .toplevel,
+        .lset => |capture_ty| .{ .lset = try mono_types.keyId(capture_ty) },
+        .erased => |capture_ty| .{ .erased = try mono_types.keyId(capture_ty) },
+    };
+    const key = makeSigKey(requested_name, arg_ty, ret_ty, captures_spec);
+    if (queue.by_key.get(key)) |idx| {
+        return queue.items.items[idx].specialized_symbol;
     }
 
     const source_entry = symbols.get(requested_name);
@@ -261,30 +255,12 @@ pub fn specializeFnErased(
         .fn_ty = entry.fn_ty,
         .fn_def = entry.fn_def,
         .requested_ty = requested_ty,
+        .sig = key,
         .specialized_symbol = specialized_symbol,
         .captures_new = try queue.allocator.dupe(lower_type.CaptureBinding, captures_new),
     });
+    try queue.by_key.put(key, queue.items.items.len - 1);
     return specialized_symbol;
-}
-
-fn captureSpecsEqual(
-    mono_types: *const type_mod.Store,
-    left: CaptureSpec,
-    right: CaptureSpec,
-) bool {
-    return switch (left) {
-        .toplevel => right == .toplevel,
-        .lset => |left_ty| switch (right) {
-            .toplevel => false,
-            .lset => |right_ty| mono_types.equalIds(left_ty, right_ty),
-            .erased => false,
-        },
-        .erased => |left_ty| switch (right) {
-            .toplevel => false,
-            .lset => false,
-            .erased => |right_ty| mono_types.equalIds(left_ty, right_ty),
-        },
-    };
 }
 
 fn debugPanic(comptime msg: []const u8) noreturn {
