@@ -4426,35 +4426,35 @@ test "Set.difference - subtract all" {
     , 0, .no_trace);
 }
 
-// test "Set.is_eq - equal sets" {
-//     try runExpectBool(
-//         \\Set.from_list([1.I64, 2, 3]) == Set.from_list([3, 2, 1])
-//     , true, .no_trace);
-// }
+test "Set.is_eq - equal sets" {
+    try runExpectBool(
+        \\Set.from_list([1.I64, 2, 3]) == Set.from_list([3, 2, 1])
+    , true, .no_trace);
+}
 
-// test "Set.is_eq - unequal sets different lengths" {
-//     try runExpectBool(
-//         \\Set.from_list([1.I64, 2]) == Set.from_list([1, 2, 3])
-//     , false, .no_trace);
-// }
+test "Set.is_eq - unequal sets different lengths" {
+    try runExpectBool(
+        \\Set.from_list([1.I64, 2]) == Set.from_list([1, 2, 3])
+    , false, .no_trace);
+}
 
-// test "Set.is_eq - unequal sets same length" {
-//     try runExpectBool(
-//         \\Set.from_list([1.I64, 2, 3]) == Set.from_list([1, 2, 4])
-//     , false, .no_trace);
-// }
+test "Set.is_eq - unequal sets same length" {
+    try runExpectBool(
+        \\Set.from_list([1.I64, 2, 3]) == Set.from_list([1, 2, 4])
+    , false, .no_trace);
+}
 
-// test "Set.is_eq - both empty" {
-//     try runExpectBool(
-//         \\{
-//         \\    a : Set(I64)
-//         \\    a = Set.empty()
-//         \\    b : Set(I64)
-//         \\    b = Set.empty()
-//         \\    a == b
-//         \\}
-//     , true, .no_trace);
-// }
+test "Set.is_eq - both empty" {
+    try runExpectBool(
+        \\{
+        \\    a : Set(I64)
+        \\    a = Set.empty()
+        \\    b : Set(I64)
+        \\    b = Set.empty()
+        \\    a == b
+        \\}
+    , true, .no_trace);
+}
 
 test "Set.map - transforms elements" {
     try runExpectI64(

@@ -894,30 +894,20 @@ Builtin :: [].{
 			list_a = Set.to_list(set_a)
 			list_b = Set.to_list(set_b)
 
-			len_a = List.len(list_a)
-			len_b = List.len(list_b)
-
-			if len_a != len_b {
+			if List.len(list_a) != List.len(list_b) {
 				False
 			} else {
-				var $all_found = Bool.True
-				var $i = 0
-				while $i < len_a {
-					elem = list_get_unsafe(list_a, $i)
-					var $found = Bool.False
-					var $j = 0
-					while $j < len_b {
-						if list_get_unsafe(list_b, $j) == elem {
-							$found = Bool.True
-						}
-						$j = $j + 1
-					}
-					if $found == Bool.False {
-						$all_found = Bool.False
-					}
-					$i = $i + 1
-				}
-				$all_found
+				state = List.fold(
+					list_a,
+					{ all_found: Bool.True, check: list_b },
+					|st, elem|
+						if List.contains(st.check, elem) {
+							st
+						} else {
+							{ all_found: Bool.False, check: st.check }
+						},
+				)
+				state.all_found
 			}
 		}
 
