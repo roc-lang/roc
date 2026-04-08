@@ -1100,12 +1100,21 @@ const ProcLowerer = struct {
                         try self.freshLocalWithLayout(expected_layout);
                 }
 
+                const raw_target = if (self.localLayout(target) == proc_spec.ret_layout)
+                    target
+                else
+                    try self.freshLocalWithLayout(proc_spec.ret_layout);
+                const call_next = if (raw_target == target)
+                    next
+                else
+                    try self.bridgeValueIntoLocal(raw_target, target, next);
+
                 const assign_call = try self.parent.store.addCFStmt(.{ .assign_call = .{
-                    .target = target,
+                    .target = raw_target,
                     .result = .fresh,
                     .proc = proc_id,
                     .args = try self.parent.store.addLocalSpan(bridged_locals),
-                    .next = next,
+                    .next = call_next,
                 } });
                 break :blk try self.emitBridgesIntoLocals(source_locals, bridged_locals, assign_call);
             },

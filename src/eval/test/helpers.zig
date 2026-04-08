@@ -330,7 +330,6 @@ fn lowerToLir(
     );
     errdefer lowered_lir.deinit();
     if (lowered_lir.root_procs.items.len == 0) return error.NoRootProc;
-
     return .{
         .lir_result = lowered_lir,
         .main_proc = lowered_lir.root_procs.items[lowered_lir.root_procs.items.len - 1],
@@ -579,6 +578,7 @@ fn debugValidateMonotypeTypes(types_store: *const monotype.Type.Store) void {
     for (types_store.types.items, 0..) |ty, i| {
         switch (ty) {
             .placeholder => {},
+            .unbd => {},
             .link => |target| {
                 debugAssertValidMonoTypeRef(types_store, @enumFromInt(@as(u32, @intCast(i))), "link.target", target, type_len);
             },

@@ -9114,6 +9114,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 arg_layouts[i] = expected_layout;
             }
 
+            if (builtin.mode == .Debug and proc_spec.ret_layout != call.ret_layout) {
+                std.debug.panic(
+                    "Dev/codegen invariant violated: direct call target layout {} did not match callee ret layout {} for proc {d}",
+                    .{ @intFromEnum(call.ret_layout), @intFromEnum(proc_spec.ret_layout), @intFromEnum(call.proc) },
+                );
+            }
+
             if (proc_spec.hosted) |hosted| {
                 return try self.generateHostedCall(hosted, arg_locs, arg_layouts, call.ret_layout);
             }
