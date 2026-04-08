@@ -140,9 +140,10 @@ const Lowerer = struct {
             );
         }
         for (args, arg_locals) |arg, local_id| {
+            const arg_layout = try self.lowerLayoutId(arg.layout);
             try proc.locals_by_var.put(.{
                 .symbol = arg.symbol.raw(),
-                .layout = @intFromEnum(arg.layout),
+                .layout = @intFromEnum(arg_layout),
             }, local_id);
         }
         const body = try proc.lowerBlock(def.body, .ret);
@@ -157,184 +158,21 @@ const Lowerer = struct {
         };
     }
 
-    fn lowerLayoutId(self: *Lowerer, id: ir.Layout.LayoutId) std.mem.Allocator.Error!layout_mod.Idx {
-        if (self.ir_to_layout.get(@intFromEnum(id))) |existing| return existing;
-        var build_state = LayoutBuildState.init(self.allocator);
-        defer build_state.deinit(self.allocator);
+    fn lowerLayoutId(self: *Lowerer, ref: ir.Layout.Ref) std.mem.Allocator.Error!layout_mod.Idx {
+        return switch (ref) {
+            .canonical => |layout_idx| layout_idx,
+            .local => |node_id| blk: {
+                const key = @intFromEnum(node_id);
+                if (self.ir_to_layout.get(key)) |existing| break :blk existing;
 
-        const root_ref = try self.buildLayoutRef(id, &build_state);
-        var commit = try self.layouts.commitGraph(&build_state.graph, root_ref);
-        defer commit.deinit(self.allocator);
-        const root_idx = commit.root_idx;
+                var commit = try self.layouts.commitGraph(&self.input.layouts, ref);
+                defer commit.deinit(self.allocator);
 
-        var refs_it = build_state.refs_by_layout_id.iterator();
-        while (refs_it.next()) |entry| {
-            const lowered = switch (entry.value_ptr.*) {
-                .canonical => |layout_idx| layout_idx,
-                .local => |node_id| commit.value_layouts[@intFromEnum(node_id)],
-            };
-            try self.ir_to_layout.put(entry.key_ptr.*, lowered);
-        }
-
-        try self.ir_to_layout.put(@intFromEnum(id), root_idx);
-        return root_idx;
-    }
-
-    const LayoutBuildState = struct {
-        graph: layout_mod.Graph = .{},
-        refs_by_layout_id: std.AutoHashMap(u32, layout_mod.GraphRef),
-
-        fn init(allocator: std.mem.Allocator) LayoutBuildState {
-            return .{
-                .refs_by_layout_id = std.AutoHashMap(u32, layout_mod.GraphRef).init(allocator),
-            };
-        }
-
-        fn deinit(self: *LayoutBuildState, allocator: std.mem.Allocator) void {
-            self.graph.deinit(allocator);
-            self.refs_by_layout_id.deinit();
-        }
-    };
-
-    fn buildLayoutRef(
-        self: *Lowerer,
-        id: ir.Layout.LayoutId,
-        build_state: *LayoutBuildState,
-    ) std.mem.Allocator.Error!layout_mod.GraphRef {
-        const key = @intFromEnum(id);
-        if (self.ir_to_layout.get(key)) |existing| {
-            return .{ .canonical = existing };
-        }
-        var canonical_it = self.ir_to_layout.iterator();
-        while (canonical_it.next()) |entry| {
-            const existing_id: ir.Layout.LayoutId = @enumFromInt(entry.key_ptr.*);
-            if (existing_id == id) continue;
-            if (self.input.layouts.equalIds(id, existing_id)) {
-                return .{ .canonical = entry.value_ptr.* };
-            }
-        }
-        if (build_state.refs_by_layout_id.get(key)) |existing| {
-            return existing;
-        }
-        var local_it = build_state.refs_by_layout_id.iterator();
-        while (local_it.next()) |entry| {
-            const existing_id: ir.Layout.LayoutId = @enumFromInt(entry.key_ptr.*);
-            if (existing_id == id) continue;
-            if (self.input.layouts.equalIds(id, existing_id)) {
-                return entry.value_ptr.*;
-            }
-        }
-
-        const content = self.input.layouts.getContent(id);
-        return switch (content) {
-            .primitive => |prim| .{ .canonical = lowerPrimitiveLayout(prim) },
-            .nominal => |backing| try self.buildUnaryLayoutNode(key, .nominal, backing, build_state),
-            .list => |elem| try self.buildUnaryLayoutNode(key, .list, elem, build_state),
-            .box => |elem| try self.buildUnaryLayoutNode(key, .box, elem, build_state),
-            .struct_ => |fields| try self.buildStructLayoutNode(key, fields, build_state),
-            .union_ => |variants| try self.buildTagUnionLayoutNode(key, variants, build_state),
-        };
-    }
-
-    fn buildUnaryLayoutNode(
-        self: *Lowerer,
-        key: u32,
-        comptime tag: enum { nominal, box, list },
-        child_id: ir.Layout.LayoutId,
-        build_state: *LayoutBuildState,
-    ) std.mem.Allocator.Error!layout_mod.GraphRef {
-        const node_id = try build_state.graph.reserveNode(self.allocator);
-        const node_ref: layout_mod.GraphRef = .{ .local = node_id };
-        try build_state.refs_by_layout_id.put(key, node_ref);
-
-        const child_ref = try self.buildLayoutRef(child_id, build_state);
-        build_state.graph.setNode(node_id, switch (tag) {
-            .nominal => .{ .nominal = child_ref },
-            .box => .{ .box = child_ref },
-            .list => .{ .list = child_ref },
-        });
-        return node_ref;
-    }
-
-    fn buildStructLayoutNode(
-        self: *Lowerer,
-        key: u32,
-        fields: ir.Layout.Span(ir.Layout.LayoutId),
-        build_state: *LayoutBuildState,
-    ) std.mem.Allocator.Error!layout_mod.GraphRef {
-        const ir_fields = self.input.layouts.sliceLayoutSpan(fields);
-        if (ir_fields.len == 0) {
-            const empty: layout_mod.GraphRef = .{ .canonical = .zst };
-            try build_state.refs_by_layout_id.put(key, empty);
-            return empty;
-        }
-
-        const node_id = try build_state.graph.reserveNode(self.allocator);
-        const node_ref: layout_mod.GraphRef = .{ .local = node_id };
-        try build_state.refs_by_layout_id.put(key, node_ref);
-
-        var graph_fields = std.ArrayList(layout_mod.GraphField).empty;
-        defer graph_fields.deinit(self.allocator);
-        try graph_fields.ensureTotalCapacity(self.allocator, ir_fields.len);
-        for (ir_fields, 0..) |field_id, index| {
-            graph_fields.appendAssumeCapacity(.{
-                .index = @intCast(index),
-                .child = try self.buildLayoutRef(field_id, build_state),
-            });
-        }
-
-        const span = try build_state.graph.appendFields(self.allocator, graph_fields.items);
-        build_state.graph.setNode(node_id, .{ .struct_ = span });
-        return node_ref;
-    }
-
-    fn buildTagUnionLayoutNode(
-        self: *Lowerer,
-        key: u32,
-        variants: ir.Layout.Span(ir.Layout.LayoutId),
-        build_state: *LayoutBuildState,
-    ) std.mem.Allocator.Error!layout_mod.GraphRef {
-        const ir_variants = self.input.layouts.sliceLayoutSpan(variants);
-        if (ir_variants.len == 0) {
-            const empty: layout_mod.GraphRef = .{ .canonical = .zst };
-            try build_state.refs_by_layout_id.put(key, empty);
-            return empty;
-        }
-
-        const node_id = try build_state.graph.reserveNode(self.allocator);
-        const node_ref: layout_mod.GraphRef = .{ .local = node_id };
-        try build_state.refs_by_layout_id.put(key, node_ref);
-
-        var graph_refs = std.ArrayList(layout_mod.GraphRef).empty;
-        defer graph_refs.deinit(self.allocator);
-        try graph_refs.ensureTotalCapacity(self.allocator, ir_variants.len);
-        for (ir_variants) |variant_id| {
-            graph_refs.appendAssumeCapacity(try self.buildLayoutRef(variant_id, build_state));
-        }
-
-        const span = try build_state.graph.appendRefs(self.allocator, graph_refs.items);
-        build_state.graph.setNode(node_id, .{ .tag_union = span });
-        return node_ref;
-    }
-
-    fn lowerPrimitiveLayout(prim: ir.Layout.Prim) layout_mod.Idx {
-        return switch (prim) {
-            .bool => .bool,
-            .str => .str,
-            .u8 => .u8,
-            .i8 => .i8,
-            .u16 => .u16,
-            .i16 => .i16,
-            .u32 => .u32,
-            .i32 => .i32,
-            .u64 => .u64,
-            .i64 => .i64,
-            .u128 => .u128,
-            .i128 => .i128,
-            .f32 => .f32,
-            .f64 => .f64,
-            .dec => .dec,
-            .opaque_ptr => .opaque_ptr,
+                for (commit.value_layouts, 0..) |layout_idx, i| {
+                    try self.ir_to_layout.put(@intCast(i), layout_idx);
+                }
+                break :blk commit.root_idx;
+            },
         };
     }
 
@@ -386,13 +224,14 @@ const ProcLowerer = struct {
     }
 
     fn lowerVar(self: *ProcLowerer, value: ir.Ast.Var) std.mem.Allocator.Error!LIR.LocalId {
+        const layout_idx = try self.parent.lowerLayoutId(value.layout);
         const key: VarKey = .{
             .symbol = value.symbol.raw(),
-            .layout = @intFromEnum(value.layout),
+            .layout = @intFromEnum(layout_idx),
         };
         if (self.locals_by_var.get(key)) |existing| return existing;
         const local_id = try self.parent.store.addLocal(.{
-            .layout_idx = try self.parent.lowerLayoutId(value.layout),
+            .layout_idx = layout_idx,
         });
         try self.locals_by_var.put(key, local_id);
         return local_id;
@@ -434,21 +273,61 @@ const ProcLowerer = struct {
         return ls.getStructFieldLayoutByOriginalIndex(struct_layout.data.struct_.idx, field_index);
     }
 
-    fn lowerTagPayloadLayout(
+    fn lowerUnionPayloadLayout(
         self: *ProcLowerer,
         union_layout_idx: layout_mod.Idx,
         tag_discriminant: u16,
     ) layout_mod.Idx {
         const ls = &self.parent.layouts;
         const union_layout = ls.getLayout(union_layout_idx);
-        if (builtin.mode == .Debug and union_layout.tag != .tag_union) {
-            std.debug.panic(
-                "lir.from_ir invariant violated: expected tag union layout for payload lookup, got {s}",
-                .{@tagName(union_layout.tag)},
-            );
-        }
-        const variants = ls.getTagUnionVariants(ls.getTagUnionData(union_layout.data.tag_union.idx));
-        return variants.get(tag_discriminant).payload_layout;
+        return switch (union_layout.tag) {
+            .tag_union => blk: {
+                const variants = ls.getTagUnionVariants(ls.getTagUnionData(union_layout.data.tag_union.idx));
+                if (builtin.mode == .Debug and tag_discriminant >= variants.len) {
+                    std.debug.panic(
+                        "lir.from_ir invariant violated: tag discriminant {d} out of bounds for union layout {d}",
+                        .{ tag_discriminant, @intFromEnum(union_layout_idx) },
+                    );
+                }
+                break :blk variants.get(tag_discriminant).payload_layout;
+            },
+            .box => self.lowerUnionPayloadLayout(union_layout.data.box, tag_discriminant),
+            .scalar, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .zst => {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic(
+                        "lir.from_ir invariant violated: expected tag union layout for payload lookup, got {s}",
+                        .{@tagName(union_layout.tag)},
+                    );
+                }
+                unreachable;
+            },
+        };
+    }
+
+    fn unionDiscriminantLayout(self: *ProcLowerer, union_layout_idx: layout_mod.Idx) layout_mod.Idx {
+        const ls = &self.parent.layouts;
+        const union_layout = ls.getLayout(union_layout_idx);
+        return switch (union_layout.tag) {
+            .tag_union => blk: {
+                const variant_count = ls.getTagUnionVariants(ls.getTagUnionData(union_layout.data.tag_union.idx)).len;
+                break :blk switch (variant_count) {
+                    0...0xff => .u8,
+                    0x100...0xffff => .u16,
+                    0x1_0000...0xffff_ffff => .u32,
+                    else => .u64,
+                };
+            },
+            .box => self.unionDiscriminantLayout(union_layout.data.box),
+            .scalar, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .zst => {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic(
+                        "lir.from_ir invariant violated: expected tag union layout for discriminant lookup, got {s}",
+                        .{@tagName(union_layout.tag)},
+                    );
+                }
+                unreachable;
+            },
+        };
     }
 
     fn lowerListElemLayout(self: *ProcLowerer, list_layout_idx: layout_mod.Idx) layout_mod.Idx {
@@ -577,13 +456,221 @@ const ProcLowerer = struct {
             return unbox_stmt;
         }
 
+        if (actual.tag == .struct_ and target.tag == .struct_) {
+            return try self.bridgeStructIntoLocal(source_local, target_local, next);
+        }
+
+        if (actual.tag == .tag_union and target.tag == .tag_union) {
+            return try self.bridgeTagUnionIntoLocal(source_local, target_local, next);
+        }
+
+        if (target.tag == .box) {
+            const boxed_child_local = try self.freshLocalWithLayout(target.data.box);
+            const box_args = try self.parent.store.addLocalSpan(&.{boxed_child_local});
+            const box_stmt = try self.parent.store.addCFStmt(.{ .assign_low_level = .{
+                .target = target_local,
+                .result = .fresh,
+                .op = .box_box,
+                .args = box_args,
+                .next = next,
+            } });
+            return try self.bridgeValueIntoLocal(source_local, boxed_child_local, box_stmt);
+        }
+
+        if (actual.tag == .box) {
+            const unboxed_local = try self.freshLocalWithLayout(actual.data.box);
+            const bridged = try self.bridgeValueIntoLocal(unboxed_local, target_local, next);
+            const unbox_args = try self.parent.store.addLocalSpan(&.{source_local});
+            return try self.parent.store.addCFStmt(.{ .assign_low_level = .{
+                .target = unboxed_local,
+                .result = .fresh,
+                .op = .box_unbox,
+                .args = unbox_args,
+                .next = bridged,
+            } });
+        }
+
         if (builtin.mode == .Debug) {
+            const actual_layout_val = ls.getLayout(actual_layout);
+            const target_layout_val = ls.getLayout(target_layout);
+            const target_box_child: ?layout_mod.Idx = if (target_layout_val.tag == .box) target_layout_val.data.box else null;
+            const actual_box_child: ?layout_mod.Idx = if (actual_layout_val.tag == .box) actual_layout_val.data.box else null;
+            const target_box_child_tag: ?[]const u8 = if (target_box_child) |child| @tagName(ls.getLayout(child).tag) else null;
+            const actual_box_child_tag: ?[]const u8 = if (actual_box_child) |child| @tagName(ls.getLayout(child).tag) else null;
+            const box_child_matches = if (target_box_child) |child| ls.layoutsHaveSameRuntimeRepresentation(actual_layout, child) else false;
             std.debug.panic(
-                "lir.from_ir invariant violated: no explicit bridge from layout {d} to layout {d}",
-                .{ @intFromEnum(actual_layout), @intFromEnum(target_layout) },
+                "lir.from_ir invariant violated: no explicit bridge from layout {d} ({s}, child={any}/{any}) to layout {d} ({s}, child={any}/{any}, child_match={})",
+                .{
+                    @intFromEnum(actual_layout),
+                    @tagName(actual_layout_val.tag),
+                    actual_box_child,
+                    actual_box_child_tag,
+                    @intFromEnum(target_layout),
+                    @tagName(target_layout_val.tag),
+                    target_box_child,
+                    target_box_child_tag,
+                    box_child_matches,
+                },
             );
         }
         unreachable;
+    }
+
+    fn bridgeStructIntoLocal(
+        self: *ProcLowerer,
+        source_local: LIR.LocalId,
+        target_local: LIR.LocalId,
+        next: LIR.CFStmtId,
+    ) std.mem.Allocator.Error!LIR.CFStmtId {
+        const ls = &self.parent.layouts;
+        const actual_layout = self.localLayout(source_local);
+        const target_layout = self.localLayout(target_local);
+        const actual_info = ls.getStructInfo(ls.getLayout(actual_layout));
+        const target_info = ls.getStructInfo(ls.getLayout(target_layout));
+
+        if (builtin.mode == .Debug) {
+            if (actual_info.fields.len != target_info.fields.len) {
+                std.debug.panic(
+                    "lir.from_ir invariant violated: struct bridge field-count mismatch from layout {d} to {d}",
+                    .{ @intFromEnum(actual_layout), @intFromEnum(target_layout) },
+                );
+            }
+            for (0..target_info.fields.len) |i| {
+                const actual_field = actual_info.fields.get(@intCast(i));
+                const target_field = target_info.fields.get(@intCast(i));
+                if (actual_field.index != target_field.index) {
+                    std.debug.panic(
+                        "lir.from_ir invariant violated: struct bridge semantic field-index mismatch at position {d}: {d} vs {d}",
+                        .{ i, actual_field.index, target_field.index },
+                    );
+                }
+            }
+        }
+
+        const field_count = target_info.fields.len;
+        const source_fields = try self.parent.allocator.alloc(LIR.LocalId, field_count);
+        defer self.parent.allocator.free(source_fields);
+        const target_fields = try self.parent.allocator.alloc(LIR.LocalId, field_count);
+        defer self.parent.allocator.free(target_fields);
+
+        for (0..field_count) |i| {
+            const field_index: u16 = @intCast(i);
+            const actual_field_layout = self.lowerStructFieldLayout(actual_layout, field_index);
+            const target_field_layout = self.lowerStructFieldLayout(target_layout, field_index);
+            source_fields[i] = try self.freshLocalWithLayout(actual_field_layout);
+            target_fields[i] = if (actual_field_layout == target_field_layout)
+                source_fields[i]
+            else
+                try self.freshLocalWithLayout(target_field_layout);
+        }
+
+        const assign_struct = try self.parent.store.addCFStmt(.{ .assign_struct = .{
+            .target = target_local,
+            .result = .fresh,
+            .fields = try self.parent.store.addLocalSpan(target_fields),
+            .next = next,
+        } });
+        var cursor = try self.emitBridgesIntoLocals(source_fields, target_fields, assign_struct);
+
+        var i = field_count;
+        while (i > 0) {
+            i -= 1;
+            cursor = try self.parent.store.addCFStmt(.{ .assign_ref = .{
+                .target = source_fields[i],
+                .result = .fresh,
+                .op = .{ .field = .{
+                    .source = source_local,
+                    .field_idx = @intCast(i),
+                } },
+                .next = cursor,
+            } });
+        }
+
+        return cursor;
+    }
+
+    fn bridgeTagUnionIntoLocal(
+        self: *ProcLowerer,
+        source_local: LIR.LocalId,
+        target_local: LIR.LocalId,
+        next: LIR.CFStmtId,
+    ) std.mem.Allocator.Error!LIR.CFStmtId {
+        const ls = &self.parent.layouts;
+        const actual_layout = self.localLayout(source_local);
+        const target_layout = self.localLayout(target_local);
+        const actual_info = ls.getTagUnionInfo(ls.getLayout(actual_layout));
+        const target_info = ls.getTagUnionInfo(ls.getLayout(target_layout));
+
+        if (builtin.mode == .Debug and actual_info.variants.len != target_info.variants.len) {
+            std.debug.panic(
+                "lir.from_ir invariant violated: tag union bridge variant-count mismatch from layout {d} to {d}",
+                .{ @intFromEnum(actual_layout), @intFromEnum(target_layout) },
+            );
+        }
+
+        const default_branch = try self.parent.store.addCFStmt(.runtime_error);
+        const branches = try self.parent.allocator.alloc(LIR.CFSwitchBranch, actual_info.variants.len);
+        defer self.parent.allocator.free(branches);
+
+        for (0..actual_info.variants.len) |i| {
+            const discriminant: u16 = @intCast(i);
+            const actual_payload_layout = self.lowerUnionPayloadLayout(actual_layout, discriminant);
+            const target_payload_layout = self.lowerUnionPayloadLayout(target_layout, discriminant);
+            const target_payload_is_zst = ls.isZeroSized(ls.getLayout(target_payload_layout));
+
+            const branch_body = if (target_payload_is_zst)
+                try self.parent.store.addCFStmt(.{ .assign_tag = .{
+                    .target = target_local,
+                    .result = .fresh,
+                    .discriminant = discriminant,
+                    .payload = null,
+                    .next = next,
+                } })
+            else blk: {
+                const actual_payload_local = try self.freshLocalWithLayout(actual_payload_layout);
+                const target_payload_local = if (actual_payload_layout == target_payload_layout)
+                    actual_payload_local
+                else
+                    try self.freshLocalWithLayout(target_payload_layout);
+
+                const assign_tag = try self.parent.store.addCFStmt(.{ .assign_tag = .{
+                    .target = target_local,
+                    .result = .fresh,
+                    .discriminant = discriminant,
+                    .payload = target_payload_local,
+                    .next = next,
+                } });
+                const bridged_payload = try self.bridgeValueIntoLocal(actual_payload_local, target_payload_local, assign_tag);
+                break :blk try self.parent.store.addCFStmt(.{ .assign_ref = .{
+                    .target = actual_payload_local,
+                    .result = .fresh,
+                    .op = .{ .tag_payload_struct = .{
+                        .source = source_local,
+                        .tag_discriminant = discriminant,
+                    } },
+                    .next = bridged_payload,
+                } });
+            };
+
+            branches[i] = .{
+                .value = i,
+                .body = branch_body,
+            };
+        }
+
+        const cond_local = try self.freshLocalWithLayout(self.unionDiscriminantLayout(actual_layout));
+        const switch_stmt = try self.parent.store.addCFStmt(.{ .switch_stmt = .{
+            .cond = cond_local,
+            .branches = try self.parent.store.addCFSwitchBranches(branches),
+            .default_branch = default_branch,
+        } });
+
+        return try self.parent.store.addCFStmt(.{ .assign_ref = .{
+            .target = cond_local,
+            .result = .fresh,
+            .op = .{ .discriminant = .{ .source = source_local } },
+            .next = switch_stmt,
+        } });
     }
 
     fn emitBridgesIntoLocals(
@@ -720,10 +807,22 @@ const ProcLowerer = struct {
             .for_list => |for_stmt| blk: {
                 try self.loop_break_targets.append(self.parent.allocator, next);
                 defer _ = self.loop_break_targets.pop();
+                const iterable_local = try self.lowerVar(for_stmt.iterable);
+                const body_elem_local = try self.lowerVar(for_stmt.elem);
+                const iterable_elem_layout = self.lowerListElemLayout(self.localLayout(iterable_local));
+                const loop_elem_local = if (self.localLayout(body_elem_local) == iterable_elem_layout)
+                    body_elem_local
+                else
+                    try self.freshLocalWithLayout(iterable_elem_layout);
+                const body = try self.lowerBlock(for_stmt.body, .loop_continue);
+                const bridged_body = if (loop_elem_local == body_elem_local)
+                    body
+                else
+                    try self.bridgeValueIntoLocal(loop_elem_local, body_elem_local, body);
                 break :blk try self.parent.store.addCFStmt(.{ .for_list = .{
-                    .elem = try self.lowerVar(for_stmt.elem),
-                    .iterable = try self.lowerVar(for_stmt.iterable),
-                    .body = try self.lowerBlock(for_stmt.body, .loop_continue),
+                    .elem = loop_elem_local,
+                    .iterable = iterable_local,
+                    .body = bridged_body,
                     .next = next,
                 } });
             },
@@ -863,7 +962,10 @@ const ProcLowerer = struct {
                 var payload_local: ?LIR.LocalId = null;
                 if (union_expr.payload) |payload| {
                     const source_local = try self.lowerVar(payload);
-                    const payload_layout = self.lowerTagPayloadLayout(self.localLayout(target), union_expr.discriminant);
+                    const payload_layout = self.lowerUnionPayloadLayout(
+                        self.localLayout(target),
+                        union_expr.discriminant,
+                    );
                     payload_source = source_local;
                     payload_local = if (self.localLayout(source_local) == payload_layout)
                         source_local
@@ -893,7 +995,10 @@ const ProcLowerer = struct {
             } }),
             .get_union_struct => |payload| blk: {
                 const source = try self.lowerVar(payload.value);
-                const actual_payload_layout = self.lowerTagPayloadLayout(self.localLayout(source), payload.tag_discriminant);
+                const actual_payload_layout = self.lowerUnionPayloadLayout(
+                    self.localLayout(source),
+                    payload.tag_discriminant,
+                );
                 if (actual_payload_layout == self.localLayout(target)) {
                     break :blk try self.parent.store.addCFStmt(.{ .assign_ref = .{
                         .target = target,

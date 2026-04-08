@@ -1,17 +1,19 @@
-//! Lower executable lambdamono types into logical cor-style IR layouts.
+//! Lower executable lambdamono types into the shared logical layout graph that
+//! IR carries forward to the single `IR -> LIR/layout` commit boundary.
 
 const std = @import("std");
 const mono = @import("lambdamono");
 const ir = @import("layout.zig");
+const layout_mod = @import("layout");
 
 pub const LayoutCache = struct {
-    resolved_by_type: std.AutoHashMap(mono.Type.TypeId, ir.LayoutId),
-    active_by_type: std.AutoHashMap(mono.Type.TypeId, ir.LayoutId),
+    resolved_by_type: std.AutoHashMap(mono.Type.TypeId, ir.Ref),
+    active_by_type: std.AutoHashMap(mono.Type.TypeId, ir.Ref),
 
     pub fn init(allocator: std.mem.Allocator) LayoutCache {
         return .{
-            .resolved_by_type = std.AutoHashMap(mono.Type.TypeId, ir.LayoutId).init(allocator),
-            .active_by_type = std.AutoHashMap(mono.Type.TypeId, ir.LayoutId).init(allocator),
+            .resolved_by_type = std.AutoHashMap(mono.Type.TypeId, ir.Ref).init(allocator),
+            .active_by_type = std.AutoHashMap(mono.Type.TypeId, ir.Ref).init(allocator),
         };
     }
 
@@ -27,93 +29,118 @@ fn debugPanic(comptime msg: []const u8) noreturn {
 }
 
 pub fn lowerType(
+    allocator: std.mem.Allocator,
     mono_types: *mono.Type.Store,
-    ir_layouts: *ir.Store,
+    graph: *ir.Graph,
     cache: *LayoutCache,
     ty: mono.Type.TypeId,
-) std.mem.Allocator.Error!ir.LayoutId {
-    return try lowerTypeRec(mono_types, ir_layouts, cache, ty);
+) std.mem.Allocator.Error!ir.Ref {
+    return try lowerTypeRec(allocator, mono_types, graph, cache, ty);
 }
 
 fn lowerTypeRec(
+    allocator: std.mem.Allocator,
     mono_types: *mono.Type.Store,
-    ir_layouts: *ir.Store,
+    graph: *ir.Graph,
     cache: *LayoutCache,
     ty: mono.Type.TypeId,
-) std.mem.Allocator.Error!ir.LayoutId {
+) std.mem.Allocator.Error!ir.Ref {
     const keyed_ty = try mono_types.keyId(ty);
-    if (cache.resolved_by_type.get(keyed_ty)) |cached| {
-        return cached;
-    }
-    if (cache.active_by_type.get(keyed_ty)) |active| {
-        return active;
-    }
+    if (cache.resolved_by_type.get(keyed_ty)) |cached| return cached;
+    if (cache.active_by_type.get(keyed_ty)) |active| return active;
 
-    const placeholder = try ir_layouts.addPlaceholder();
-    try cache.active_by_type.put(keyed_ty, placeholder);
-
-    const lowered_content: ir.Content = switch (mono_types.getTypePreservingNominal(keyed_ty)) {
+    return switch (mono_types.getTypePreservingNominal(keyed_ty)) {
         .placeholder => debugPanic("ir.lower_type.lowerTypeRec unresolved executable type"),
         .link => unreachable,
-        .primitive => |prim| .{ .primitive = lowerPrim(prim) },
-        .nominal => |backing| .{
-            .nominal = try lowerTypeRec(mono_types, ir_layouts, cache, backing),
+        .primitive => |prim| blk: {
+            const resolved: ir.Ref = .{ .canonical = lowerPrim(prim) };
+            try cache.resolved_by_type.put(keyed_ty, resolved);
+            break :blk resolved;
         },
-        .list => |elem| .{
-            .list = try lowerTypeRec(mono_types, ir_layouts, cache, elem),
-        },
-        .box => |elem| .{
-            .box = try lowerTypeRec(mono_types, ir_layouts, cache, elem),
-        },
-        .tuple => |tuple| blk: {
-            const elems = mono_types.sliceTypeSpan(tuple);
-            const layouts = try ir_layouts.allocator.alloc(ir.LayoutId, elems.len);
-            defer ir_layouts.allocator.free(layouts);
+        else => blk: {
+            const node_id = try graph.reserveNode(allocator);
+            const local_ref: ir.Ref = .{ .local = node_id };
+            try cache.active_by_type.put(keyed_ty, local_ref);
 
-            for (elems, 0..) |elem, i| {
-                layouts[i] = try lowerTypeRec(mono_types, ir_layouts, cache, elem);
-            }
-            break :blk .{ .struct_ = try ir_layouts.addLayoutSpan(layouts) };
+            graph.setNode(node_id, try lowerNode(allocator, mono_types, graph, cache, keyed_ty));
+
+            _ = cache.active_by_type.remove(keyed_ty);
+            try cache.resolved_by_type.put(keyed_ty, local_ref);
+            break :blk local_ref;
         },
+    };
+}
+
+fn lowerNode(
+    allocator: std.mem.Allocator,
+    mono_types: *mono.Type.Store,
+    graph: *ir.Graph,
+    cache: *LayoutCache,
+    ty: mono.Type.TypeId,
+) std.mem.Allocator.Error!ir.Node {
+    return switch (mono_types.getTypePreservingNominal(ty)) {
+        .placeholder => debugPanic("ir.lower_type.lowerNode unresolved executable type"),
+        .link => unreachable,
+        .primitive => debugPanic("ir.lower_type.lowerNode primitive should have been returned directly"),
+        .nominal => |backing| .{ .nominal = try lowerTypeRec(allocator, mono_types, graph, cache, backing) },
+        .list => |elem| .{ .list = try lowerTypeRec(allocator, mono_types, graph, cache, elem) },
+        .box => |elem| .{ .box = try lowerTypeRec(allocator, mono_types, graph, cache, elem) },
+        .tuple => |tuple| .{ .struct_ = try lowerTupleLikeSpan(allocator, mono_types, graph, cache, mono_types.sliceTypeSpan(tuple)) },
         .record => |record| blk: {
             const fields = mono_types.sliceFields(record.fields);
-            const layouts = try ir_layouts.allocator.alloc(ir.LayoutId, fields.len);
-            defer ir_layouts.allocator.free(layouts);
-
+            var graph_fields = std.ArrayList(ir.Field).empty;
+            defer graph_fields.deinit(allocator);
+            try graph_fields.ensureTotalCapacity(allocator, fields.len);
             for (fields, 0..) |field, i| {
-                layouts[i] = try lowerTypeRec(mono_types, ir_layouts, cache, field.ty);
+                graph_fields.appendAssumeCapacity(.{
+                    .index = @intCast(i),
+                    .child = try lowerTypeRec(allocator, mono_types, graph, cache, field.ty),
+                });
             }
-            break :blk .{ .struct_ = try ir_layouts.addLayoutSpan(layouts) };
+            break :blk .{ .struct_ = try graph.appendFields(allocator, graph_fields.items) };
         },
         .tag_union => |tag_union| blk: {
             const tags = mono_types.sliceTags(tag_union.tags);
-            const variants = try ir_layouts.allocator.alloc(ir.LayoutId, tags.len);
-            defer ir_layouts.allocator.free(variants);
-
-            for (tags, 0..) |tag, i| {
+            var variants = std.ArrayList(ir.Ref).empty;
+            defer variants.deinit(allocator);
+            try variants.ensureTotalCapacity(allocator, tags.len);
+            for (tags) |tag| {
                 const args = mono_types.sliceTypeSpan(tag.args);
                 if (args.len == 0) {
-                    variants[i] = try ir_layouts.addContent(.{ .struct_ = try ir_layouts.addLayoutSpan(&.{}) });
-                } else {
-                    const payload_layouts = try ir_layouts.allocator.alloc(ir.LayoutId, args.len);
-                    defer ir_layouts.allocator.free(payload_layouts);
-                    for (args, 0..) |arg, arg_i| {
-                        payload_layouts[arg_i] = try lowerTypeRec(mono_types, ir_layouts, cache, arg);
-                    }
-                    variants[i] = try ir_layouts.addContent(.{ .struct_ = try ir_layouts.addLayoutSpan(payload_layouts) });
+                    variants.appendAssumeCapacity(.{ .canonical = .zst });
+                    continue;
                 }
+
+                const payload_node = try graph.reserveNode(allocator);
+                const payload_ref: ir.Ref = .{ .local = payload_node };
+                variants.appendAssumeCapacity(payload_ref);
+                graph.setNode(payload_node, .{ .struct_ = try lowerTupleLikeSpan(allocator, mono_types, graph, cache, args) });
             }
-            break :blk .{ .union_ = try ir_layouts.addLayoutSpan(variants) };
+            break :blk .{ .tag_union = try graph.appendRefs(allocator, variants.items) };
         },
     };
-
-    ir_layouts.setContent(placeholder, lowered_content);
-    _ = cache.active_by_type.remove(keyed_ty);
-    try cache.resolved_by_type.put(keyed_ty, placeholder);
-    return placeholder;
 }
 
-fn lowerPrim(prim: mono.Type.Prim) ir.Prim {
+fn lowerTupleLikeSpan(
+    allocator: std.mem.Allocator,
+    mono_types: *mono.Type.Store,
+    graph: *ir.Graph,
+    cache: *LayoutCache,
+    elems: []const mono.Type.TypeId,
+) std.mem.Allocator.Error!ir.FieldSpan {
+    var graph_fields = std.ArrayList(ir.Field).empty;
+    defer graph_fields.deinit(allocator);
+    try graph_fields.ensureTotalCapacity(allocator, elems.len);
+    for (elems, 0..) |elem, i| {
+        graph_fields.appendAssumeCapacity(.{
+            .index = @intCast(i),
+            .child = try lowerTypeRec(allocator, mono_types, graph, cache, elem),
+        });
+    }
+    return try graph.appendFields(allocator, graph_fields.items);
+}
+
+fn lowerPrim(prim: mono.Type.Prim) layout_mod.Idx {
     return switch (prim) {
         .bool => .bool,
         .str => .str,

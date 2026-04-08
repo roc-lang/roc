@@ -10,7 +10,7 @@ const symbol_mod = @import("symbol");
 const layout_mod = @import("layout.zig");
 
 pub const Symbol = symbol_mod.Symbol;
-pub const LayoutId = layout_mod.LayoutId;
+pub const LayoutRef = layout_mod.Ref;
 
 pub const ExprId = enum(u32) { _ };
 pub const StmtId = enum(u32) { _ };
@@ -30,7 +30,7 @@ pub fn Span(comptime _: type) type {
 }
 
 pub const Var = struct {
-    layout: LayoutId,
+    layout: LayoutRef,
     symbol: Symbol,
 };
 
@@ -128,7 +128,7 @@ pub const Def = struct {
     name: Symbol,
     args: Span(Var),
     body: BlockId,
-    ret_layout: LayoutId,
+    ret_layout: LayoutRef,
     entry_ty: ?types.Var = null,
 };
 
