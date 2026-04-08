@@ -1,62 +1,68 @@
-# Explicit Fact And Exact Layout Plan
+# Exact Facts Cleanup Plan
 
 ## Goal
 
-Complete the remaining cleanup in this exact order:
+Finish the remaining "re-work" in strict upstream-to-downstream order:
 
-1. make monotype publish one explicit semantic fact set per lowered body
-2. delete the remaining monotype late fact recovery helpers
+1. make monotype publish one explicit semantic fact table per lowered scope
+2. delete all remaining monotype late fact / shape recovery
 3. make `lambdamono` publish explicit logical layout facts directly
-4. delete the dedicated `lambdamono/layout_facts.zig` recovery layer
+4. delete the dedicated `lambdamono/layout_facts.zig` re-layout layer
 5. make IR consume only explicit upstream semantic/layout facts
 6. delete runtime-shape comparison escape hatches from `FromIr`, the
    interpreter, and the dev backend
 
-`~/code/cor` is the guide for the overall shape:
+`~/code/cor` is the guide for the overall architecture:
 
 - solved expressions carry one authoritative fact
 - monotype clones/lowers those facts once
 - later stages consume explicit earlier facts
 - stage boundaries publish exact facts, not approximate shape-equivalence
 
-Every phase must follow the same architectural rules:
+Compiler-wide rules for every phase:
 
 - no workarounds
 - no fallbacks
 - no heuristics
 - no dual systems
 - no late repair of earlier-stage ids or shapes
-- no downstream shape comparison to compensate for upstream ambiguity
+- no downstream structural layout comparison to compensate for upstream
+  ambiguity
 
-## Phase 1. Monotype Explicit Semantic Facts
+## Phase 1. Monotype Explicit Semantic Fact Table
 
 ### Current offenders
 
 - `src/monotype/lower.zig`
-  - source-seed / function-shape recovery
-  - on-demand `lowerInstantiatedType(...)`
-  - pattern source-type materialization
-  - intermediate curried-call result reconstruction
+  - `lookupSourceFunctionSeedVar(...)`
+  - `lookupCurriedFunctionArgVar(...)`
+  - `lookupCurriedFunctionFinalRetVar(...)`
+  - `lookupFunctionRetVar(...)`
+  - `unifyAppliedFunctionResultVar(...)`
+  - `functionArgCount(...)`
+  - `lowerInstantiatedType(...)` late use sites
+  - `materializePatternSourceType(...)`
 
 ### Target end state
 
-- one explicit monotype fact table exists per lowered body / lowering scope
-- each lowered expr has:
+- monotype owns one explicit fact table per lowered scope / body
+- each expr has:
   - explicit result var
   - explicit monotype type
-- each lowered pattern has:
+- each pattern has:
   - explicit solved var
   - explicit monotype type
   - explicit source type
-- each call-like thing has:
+- each call-like expression has:
   - explicit callee fact
   - explicit arg facts
   - explicit result fact
-- monotype lowering only consumes those facts
+  - explicit curried application shape when relevant
+- lowering only consumes those facts
 
 ### Work
 
-1. define the explicit monotype fact tables needed by lowering:
+1. define the explicit monotype fact tables needed for:
    - expr result vars
    - expr monotype types
    - pattern solved vars
@@ -65,9 +71,10 @@ Every phase must follow the same architectural rules:
    - call-shape facts
 2. build those facts once from solved checker facts before recursive lowering
    consumes them
-3. replace late source-seed / function-shape recovery with direct fact lookup
-4. replace intermediate curried-call result reconstruction with explicit call
-   result facts
+3. replace all remaining function-shape / seed-var recovery with direct fact
+   lookup
+4. replace late checker-var -> monotype lowering use sites with direct
+   monotype fact lookup
 5. verify:
    - `timeout 900s zig build test-eval -- --threads 1`
    - `timeout 900s zig build test-eval-host-effects -- --threads 1`
@@ -79,31 +86,32 @@ Every phase must follow the same architectural rules:
 ### Current offenders
 
 - `src/monotype/lower.zig`
-  - tuple element type recovery from type shape
-  - list element type recovery from type shape
-  - tag discriminant recovery from type shape
-  - record field-index recovery from type shape
-  - function arg/ret recovery from function-var structure
+  - `lookupTupleElemTypesOwned(...)`
+  - `lookupTupleElemType(...)`
+  - `requireTagDiscriminantForType(...)`
+  - `requireRecordFieldIndexForType(...)`
+  - `requireListElemType(...)`
+  - `callResultType(...)`
 
 ### Target end state
 
-- monotype never asks a type or a function var to rediscover:
+- monotype never asks a lowered type to rediscover:
   - tuple element types
   - list element type
   - tag discriminant
   - record field index
-  - curried function arg/ret facts
-- all of those arrive as explicit monotype facts
+  - intermediate curried call result type
+- all of those facts arrive through the explicit monotype fact table
 
 ### Work
 
-1. add structural metadata to the explicit monotype fact tables:
-   - tuple elem facts
-   - list elem facts
+1. add structural metadata to the monotype fact tables:
+   - tuple element facts
+   - list element facts
    - tag discriminants
    - record field indices
-   - function arg/ret facts
-2. delete the corresponding recovery helpers
+   - intermediate call result facts
+2. delete the corresponding type-shape recovery helpers
 3. verify:
    - `timeout 900s zig build test-eval -- --threads 1`
    - `timeout 900s zig build test-eval-host-effects -- --threads 1`
@@ -118,18 +126,22 @@ Every phase must follow the same architectural rules:
 
 ### Target end state
 
-- `lambdamono` result objects already carry explicit logical layout refs
-- exprs/pats/typed symbols/def returns already carry:
+- `lambdamono` publishes logical layout facts directly when constructing its
+  result
+- exprs / patterns / typed symbols / def returns already carry:
   - logical layout ref
   - field layout when needed
   - tag payload layout when needed
-- later stages never derive those by walking type shape or peeling nominals
+  - discriminant behavior when needed
+- later stages never derive those by walking executable type shape or peeling
+  nominals
 
 ### Work
 
-1. identify every logical layout fact currently derived by `layout_facts.zig`
-2. attach those facts where `lambdamono` constructs the AST/result
-3. make later `lambdamono` consumers read those attached facts directly
+1. identify every logical layout fact currently recovered in
+   `layout_facts.zig`
+2. attach those facts at `lambdamono` construction time
+3. migrate `lambdamono` and IR consumers to direct fact access
 4. verify:
    - `timeout 900s zig build test-eval -- --threads 1`
    - `timeout 900s zig build test-eval-host-effects -- --threads 1`
@@ -140,7 +152,7 @@ Every phase must follow the same architectural rules:
 
 ### Target end state
 
-- no dedicated recovery layer exists between `lambdamono` and IR
+- no dedicated re-layout layer exists between `lambdamono` and IR
 - logical layout facts are part of the published `lambdamono` result
 - IR no longer asks `layout_facts` to lower or derive anything
 
@@ -160,21 +172,21 @@ Every phase must follow the same architectural rules:
 ### Current offenders
 
 - `src/ir/lower.zig`
-  - `requireListElemType(...)`
-  - `discriminantLayoutForUnion(...)`
-  - bool-vs-tag-union branch shape checks inside `lowerWhenExpr(...)`
+  - list element type / layout derivation
+  - discriminant layout derivation
+  - bool-vs-tag-union local shape checks in `lowerWhenExpr(...)`
 
 ### Target end state
 
-- IR lowers only from explicit semantic/layout facts attached upstream
-- IR does not inspect `lambdamono` type shape to rediscover loop or `when`
-  facts
+- IR lowers only from explicit upstream semantic/layout facts
+- IR does not inspect type shape to rediscover loop or `when` facts
 
 ### Work
 
-1. add any still-missing explicit `lambdamono -> IR` facts for:
-   - loop element type/layout
-   - match/when discriminant layout behavior
+1. add any still-missing `lambdamono -> IR` facts for:
+   - loop element layout
+   - discriminant layout behavior
+   - bool direct-value vs tag-union discriminant handling
 2. delete the remaining IR type-shape inspection helpers
 3. verify:
    - `timeout 900s zig build test-eval -- --threads 1`
@@ -189,6 +201,7 @@ Every phase must follow the same architectural rules:
 - `src/lir/FromIr.zig`
 - `src/eval/interpreter.zig`
 - `src/backend/dev/LirCodeGen.zig`
+- `src/layout/store.zig` `layoutsHaveSameRuntimeRepresentation(...)`
 
 ### Target end state
 
@@ -202,16 +215,17 @@ Every phase must follow the same architectural rules:
 
 1. identify every remaining bridge/coercion case currently decided by
    `layoutsHaveSameRuntimeRepresentation(...)`
-2. move those decisions earlier into explicit facts
-3. delete the `layoutsHaveSameRuntimeRepresentation(...)` branches from:
+2. move those decisions earlier into explicit bridge facts
+3. delete the runtime-shape comparison branches from:
    - `src/lir/FromIr.zig`
    - `src/eval/interpreter.zig`
    - `src/backend/dev/LirCodeGen.zig`
-4. verify:
+4. keep only explicit exact-layout / explicit-bridge behavior
+5. verify:
    - `timeout 900s zig build test-eval -- --threads 1`
    - `timeout 900s zig build test-eval-host-effects -- --threads 1`
-5. update `reintern.md`
-6. commit
+6. update `reintern.md`
+7. commit
 
 ## Finalization
 
@@ -220,6 +234,10 @@ When all phases are complete:
 1. rerun:
    - `timeout 900s zig build test-eval -- --threads 1`
    - `timeout 900s zig build test-eval-host-effects -- --threads 1`
-2. keep `reinfer.md` and `reintern.md` untracked
-3. push the branch
-4. report what remains on `reinfer.md` and `reintern.md`
+2. do a fresh full audit of remaining live entries in:
+   - `reinfer.md`
+   - `reintern.md`
+3. ensure both audit notes reflect the final state
+4. commit the final code/audit-aligned cleanup slice
+5. push
+6. report exactly what remains on `reinfer.md` and `reintern.md`
