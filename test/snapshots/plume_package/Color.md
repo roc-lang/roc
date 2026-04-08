@@ -87,7 +87,6 @@ DOES NOT EXIST - Color.md:51:39:51:49
 DOES NOT EXIST - Color.md:51:57:51:67
 DOES NOT EXIST - Color.md:51:75:51:85
 DOES NOT EXIST - Color.md:51:93:51:103
-DOES NOT EXIST - Color.md:68:14:68:27
 MISSING METHOD - Color.md:22:17:22:24
 MISSING METHOD - Color.md:35:19:35:39
 MISSING METHOD - Color.md:36:23:36:43
@@ -198,19 +197,6 @@ The unused variable is declared here:
     Color.RGBA(r, g, b, a) => "rgba(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)}, ${Num.to_str(a)})"
 ```
                                                                                             ^^^^^^^^^^
-
-
-**DOES NOT EXIST**
-`Set.from_list` does not exist.
-
-`Set` is in scope, but it has no associated `from_list`.
-
-It's referenced here:
-**Color.md:68:14:68:27:**
-```roc
-    colors = Set.from_list(["AliceBlue", "AntiqueWhite", "Aqua"])
-```
-             ^^^^^^^^^^^^^
 
 
 **MISSING METHOD**
@@ -1201,7 +1187,8 @@ is_named_color = |str| {
 				(s-let
 					(p-assign (ident "colors"))
 					(e-call
-						(e-runtime-error (tag "nested_value_not_found"))
+						(e-lookup-external
+							(builtin))
 						(e-list
 							(elems
 								(e-string
@@ -1286,7 +1273,7 @@ is_named_color = |str| {
 		(patt (type "Str -> Try(Color, [InvalidHex(Str)])"))
 		(patt (type "Color -> Str"))
 		(patt (type "Str -> Try(Color, [UnknownColor(Str)])"))
-		(patt (type "_arg -> Error")))
+		(patt (type "Str -> Bool")))
 	(type_decls
 		(nominal (type "Color")
 			(ty-header (name "Color"))))
@@ -1296,5 +1283,5 @@ is_named_color = |str| {
 		(expr (type "Str -> Try(Color, [InvalidHex(Str)])"))
 		(expr (type "Color -> Str"))
 		(expr (type "Str -> Try(Color, [UnknownColor(Str)])"))
-		(expr (type "_arg -> Error"))))
+		(expr (type "Str -> Bool"))))
 ~~~
