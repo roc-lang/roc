@@ -1,240 +1,146 @@
-# Cor-Style Monotype Re-Inference Removal Plan
+# Explicit-Facts Cleanup Plan
 
 ## Goal
 
-Eliminate the remaining monotype re-inference paths listed in sections 1, 2,
-and 3 of [reinfer.md](/Users/rtfeldman/.codex/worktrees/1d55/roc/reinfer.md)
-by changing the Zig compiler to follow the same architectural strategy `cor`
-uses:
+Finish the remaining compiler cleanup in this order:
 
-- earlier stages produce explicit typed expression facts
-- monotype consumes those facts directly
-- later stages never reconstruct result types or result vars from local syntax
-- missing explicit facts are compiler bugs, not situations to recover from
+1. eliminate the remaining monotype re-inference / result-var recovery paths
+2. replace the current double layout lowering with one shared layout-commit boundary
+3. replace late RC/layout-resolution rebuilding with explicit earlier facts
 
-This work must optimize for long-term architecture only:
+Every phase must optimize for the long-term architectural target only:
 
 - no workarounds
-- no fallbacks
+- no fallback paths
 - no heuristics
-- no transitional dual systems
-- no “make tests pass first, clean up later”
+- no transitional dual systems left behind
+- every later stage consumes explicit earlier facts instead of reconstructing them
 
-The only acceptable end state is that the cor-style path is the only path.
+## Phase 1. Monotype Explicit Facts
 
-## Scope
+### Scope
 
-This plan covers only the remaining monotype items from `reinfer.md`:
+This phase clears the remaining monotype items from `reinfer.md`:
 
-### 1. Monotype expected-type fallback
+- `src/monotype/lower.zig:1030`
+  `resolveLambdaBodyExpectation(...)`
+- `src/monotype/lower.zig:4149`
+  `lowerExprWithExpectedType(...)`
+- `src/monotype/lower.zig:4800`
+  recorded-method result type recovery
+- `src/monotype/lower.zig:4803`
+  field-access result type recovery
+- `src/monotype/lower.zig:4817`
+  arithmetic result type recovery
+- `src/monotype/lower.zig:6443`
+  plain-call result-var recovery
+- `src/monotype/lower.zig:6467`
+  recorded-method result-var recovery
 
-- [`src/monotype/lower.zig:4149`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/lower.zig:4149)
-  `lowerExprWithExpectedType`
+### Target end state
 
-### 2. Remaining monotype expression type recovery
+Monotype must behave the way `cor` does:
 
-- [`src/monotype/lower.zig:4800`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/lower.zig:4800)
-  recorded-method result type
-- [`src/monotype/lower.zig:4803`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/lower.zig:4803)
-  plain field-access result type
-- [`src/monotype/lower.zig:4817`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/lower.zig:4817)
-  arithmetic result type
+- every executable expression entering monotype has an explicit authoritative result fact
+- call-like expressions have explicit authoritative result-type and result-var facts
+- method syntax is resolved into explicit call facts before monotype needs those facts
+- field access uses the access expression's own explicit result fact
+- arithmetic consumes explicit builtin/kernel result facts
+- named result locals are created from the expression's own explicit result fact, not rediscovered from the callee
+- if an expected result fact is missing, that is a compiler bug and must hit a debug invariant
 
-### 3. Remaining monotype result-var rediscovery
+### Work
 
-- [`src/monotype/lower.zig:6443`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/lower.zig:6443)
-  plain-call result var
-- [`src/monotype/lower.zig:6467`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/lower.zig:6467)
-  recorded-method result var
-
-## Required Cor-Style End State
-
-The target architecture is:
-
-1. Every executable expression entering monotype already has an explicit solved
-   result fact.
-   - result type
-   - and, where needed for later lowering, explicit result var identity
-
-2. Calls and method calls are resolved before monotype into one explicit
-   executable call shape.
-   - no monotype code may ask “what is this call’s return type?”
-   - no monotype code may ask “what is this method call’s return type?”
-   - no monotype code may recover result vars from the callee
-
-3. Field access must use the access expression’s own explicit solved result
-   fact.
-   - receiver type may still be used for field ordinal/layout lookup later
-   - but never to reconstruct the result type
-
-4. Arithmetic must be represented the way `cor` represents kernel operations:
-   by explicit earlier-stage callable/signature facts.
-   - monotype may consume builtin/kernel-call result facts
-   - monotype may not derive arithmetic result type from the lhs
-
-5. `lowerExprWithExpectedType` must stop being a recovery API.
-   - callers must provide an explicit usable target type fact
-   - otherwise monotype should hit a debug invariant
-
-6. Result locals must be created the `cor` way.
-   - from the expression’s own explicit result type
-   - not by rediscovering a callee return var
-
-## Work Plan
-
-### Phase 1. Replace section 1 with cor-style explicit expected facts
-
-1. Audit every caller of
-   [`lowerExprWithExpectedType`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/lower.zig:4125)
-   and classify why it can currently reach `.placeholder`.
-
-2. For each path, move the missing fact production earlier.
-   Expected high-value sites:
-   - closure-body lowering
-   - tag payload lowering
-   - record field lowering
-   - call argument lowering
-   - block / branch / loop body lowering
-
-3. Introduce one explicit monotype-internal representation for “lower this expr
-   with explicit result fact”.
-   - do not keep two overlapping calling conventions
-   - the explicit-fact path must become the only path
-
-4. Once every caller is fixed, delete the placeholder fallback at
-   [`src/monotype/lower.zig:4149`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/lower.zig:4149)
-   and replace it with a debug invariant.
-
-### Phase 2. Replace section 2 with cor-style typed expressions
-
-#### 2a. Recorded-method result type
-
-1. Remove the idea that monotype computes method-call result type locally.
-
-2. Make the earlier dispatch-resolution step produce one explicit executable
-   call fact that already includes the result type.
-
-3. Lower recorded-method calls exactly like ordinary explicit calls from that
-   fact.
-
-4. Delete
-   [`lowerRecordedMethodResultType`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/lower.zig:6506)
-   from monotype’s decision-making role.
-
-#### 2b. Plain field-access result type
-
-1. Stop treating receiver type as the source of truth for access result type.
-
-2. Ensure the access expression itself carries its authoritative solved result
-   type into monotype.
-
-3. Keep receiver-type lookup only for field ordinal / layout mechanics where
-   needed later.
-
-4. Delete the result-type recovery at
-   [`src/monotype/lower.zig:4803`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/lower.zig:4803).
-
-#### 2c. Arithmetic result type
-
-1. Stop representing arithmetic as a monotype-local “special case whose result
-   type comes from the lhs”.
-
-2. Convert arithmetic/comparison lowering to consume explicit builtin/kernel
-   signature facts established earlier, matching `cor`’s `KCall` strategy.
-
-3. Make monotype consume the explicit result type from that earlier fact.
-
-4. Delete the lhs-driven recovery at
-   [`src/monotype/lower.zig:4817`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/lower.zig:4817).
-
-### Phase 3. Replace section 3 with cor-style result-local creation
-
-#### 3a. Plain-call result var
-
-1. Stop using callee return-var lookup as the source of the call result.
-
-2. Ensure call lowering yields one typed executable expression whose result type
-   is already explicit.
-
-3. Where a named local is required, synthesize it from the expression’s own
-   result type, the way `cor` lowers expressions into fresh IR vars.
-
-4. Delete the recovery logic at
-   [`src/monotype/lower.zig:6443`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/lower.zig:6443).
-
-#### 3b. Recorded-method result var
-
-1. Apply the same rule to recorded-method calls.
-
-2. Once dispatch lowering produces one explicit typed executable call shape,
-   create result locals from that expression result fact rather than by calling
-   `lowerRecordedMethodResultVar(...)`.
-
-3. Delete the recovery logic at
-   [`src/monotype/lower.zig:6467`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/lower.zig:6467).
-
-## Verification Plan
-
-### Phase 4. Verify all tests still pass
-
-After the cor-style conversion is complete and before any cleanup commit:
-
-1. Run the focused suites first:
+1. Trace every caller of `lowerExprWithExpectedType(...)` and replace placeholder recovery with explicit expected facts produced earlier.
+2. Make lambda body lowering consume one explicit return fact model and delete the fallback to body-expression facts.
+3. Make plain calls and recorded-method calls carry one explicit result-fact representation through monotype.
+4. Make field access and arithmetic consume explicit result facts from the expression itself rather than reconstructing them locally.
+5. Delete the monotype recovery helpers once the explicit-fact path is the only path.
+6. Verify:
    - `timeout 600s zig build test-eval -- --threads 1`
    - `timeout 600s zig build test-eval-host-effects -- --threads 1`
+7. Update `reinfer.md`.
+8. Commit the monotype milestone.
 
-2. Run any additional targeted suites that touch the changed areas if needed.
+## Phase 2. Single Layout-Commit Boundary
 
-3. Do not accept green tests if they depend on retained fallback code.
-   - if a test only passes because an old recovery path still exists, the work
-     is not done
+### Scope
 
-### Phase 5. Delete unnecessary fallbacks
+This phase clears the remaining layout re-work from `reintern.md`:
 
-1. Remove any transitional helpers that were introduced only to bridge old and
-   new representations.
+- `src/ir/lower_type.zig`
+  `lambdamono.TypeId -> ir.LayoutId`
+- `src/lir/FromIr.zig`
+  `ir.LayoutId -> layout.Idx`
+- `src/ir/lower.zig`
+  field index recovery from type + name
+- `src/ir/lower.zig`
+  tag discriminant recovery from type + tag name
+- `src/ir/lower.zig`
+  tag payload layout recovery from union type
+- `src/ir/lower.zig`
+  nominal layout unwrapping to recover physical shape
+- `src/ir/lower.zig`
+  fresh temp / proc result type-to-layout relowering
+- `src/lir/FromIr.zig`
+  structural IR-layout equality scan before graph commit
 
-2. Replace remaining “should never happen” branches with debug invariants where
-   appropriate.
+### Target end state
 
-3. Re-run the verification suite after every deletion wave until the cor-style
-   path is the only path left.
+- logical executable facts flow forward once
+- final physical layout is committed once at the shared LIR/layout boundary
+- IR does not recover field/tag executable metadata from type shape
+- IR locals/proc signatures already carry explicit executable layout facts
+- `FromIr` does not scan old IR layouts for structural equality
 
-## Commit Plan
+### Work
 
-### Phase 6. Commit
+1. Decide the one explicit executable layout fact representation carried before `FromIr`.
+2. Move field index / tag discriminant / payload-layout facts earlier so IR consumes them directly.
+3. Remove `ir/lower_type.zig` as a second semantic layout-lowering layer, or reduce it to a dumb projection of already-explicit layout facts.
+4. Make `FromIr` commit those explicit logical layout facts once into the shared layout store.
+5. Delete the structural equality scan in `FromIr`.
+6. Verify:
+   - `timeout 600s zig build test-eval -- --threads 1`
+   - `timeout 600s zig build test-eval-host-effects -- --threads 1`
+7. Update `reintern.md`.
+8. Commit the layout milestone.
 
-Once:
+## Phase 3. RC / Layout-Resolution Explicit Facts
 
-- the cor-style implementation is the only implementation
-- all relevant tests are green
-- no transitional code remains
+### Scope
 
-then commit the code changes.
+This phase clears the remaining late rebuilding from `reinfer.md`:
 
-## Fresh Audit Plan
+- `src/lir/rc_insert.zig`
+  fixed-point rebuilding of proc param use kinds / fresh returns / join ownership / alias sources
+- `src/layout/type_layout_resolver.zig`
+  unresolved-var-driven layout resolution
 
-### Phase 7. Re-audit `reinfer.md`
+### Target end state
 
-After the commit:
+- RC insertion consumes explicit ownership facts already attached to LIR
+- backends follow only explicit `incref` / `decref`
+- layout resolution consumes explicit earlier executable layout facts, not unresolved checker vars
 
-1. Re-run the same “delete it and run tests” audit for the surviving items.
+### Work
 
-2. Update [reinfer.md](/Users/rtfeldman/.codex/worktrees/1d55/roc/reinfer.md)
-   with the new state.
-   - do not commit `reinfer.md`
+1. Identify the earlier stage that must own ownership/use-kind facts.
+2. Move those facts earlier and make `rc_insert` a dumb consumer or delete it if it becomes unnecessary.
+3. Move layout-resolution inputs off unresolved checker vars and onto explicit executable layout facts.
+4. Verify:
+   - `timeout 600s zig build test-eval -- --threads 1`
+   - `timeout 600s zig build test-eval-host-effects -- --threads 1`
+5. Update `reinfer.md` and `reintern.md`.
+6. Commit the final cleanup milestone.
 
-3. Report exactly which items still cannot be deleted without breaking tests,
-   and why.
+## Finalization
 
-## Success Criteria
+When all three phases are complete:
 
-This plan is complete only when all of the following are true:
+1. run the full verification suite again
+2. make sure only the intended code changes are committed
+3. push the branch
+4. report the remaining contents of `reinfer.md` and `reintern.md`
 
-- the remaining section 1 / 2 / 3 monotype items have been converted to the
-  cor-style architecture
-- no fallback or recovery path remains for those items
-- tests still pass
-- the cleanup commit is made
-- `reinfer.md` is refreshed
-- the remaining non-removable items are explicitly reported
+The plan is not complete until that final report reflects the real post-cleanup state.

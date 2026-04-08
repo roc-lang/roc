@@ -1199,53 +1199,10 @@ pub const Lowerer = struct {
                 const branch = self.ctx.env(module_idx).store.getMatchBranch(branch_ids[0]);
                 break :blk try self.exprResultVar(module_idx, type_scope, env, branch.value);
             },
-            .e_call => |call| blk: {
-                const fact = try self.lowerCallResultFact(
-                    module_idx,
-                    type_scope,
-                    env,
-                    expr_idx,
-                    call.func,
-                    self.ctx.env(module_idx).store.sliceExpr(call.args),
-                    null,
-                );
-                break :blk fact.result_var;
-            },
-            .e_dot_access => |dot| blk: {
-                if (dot.args == null) {
-                    break :blk try self.scopedExprResultVar(module_idx, type_scope, env, expr_idx);
-                }
-                const fact = try self.lowerRecordedMethodFact(
-                    module_idx,
-                    type_scope,
-                    env,
-                    expr_idx,
-                    dot.field_name,
-                    null,
-                );
-                break :blk fact.result_var;
-            },
-            .e_binop => |binop| switch (binop.op) {
-                .add, .sub, .mul, .div, .rem, .div_trunc => try self.lookupHomogeneousBinopResultVar(
-                    module_idx,
-                    type_scope,
-                    env,
-                    binop.lhs,
-                    binop.rhs,
-                ),
-                else => try self.scopedExprResultVar(module_idx, type_scope, env, expr_idx),
-            },
-            .e_type_var_dispatch => |dispatch| blk: {
-                const fact = try self.lowerRecordedMethodFact(
-                    module_idx,
-                    type_scope,
-                    env,
-                    expr_idx,
-                    dispatch.method_name,
-                    null,
-                );
-                break :blk fact.result_var;
-            },
+            .e_call => try self.scopedExprResultVar(module_idx, type_scope, env, expr_idx),
+            .e_dot_access => try self.scopedExprResultVar(module_idx, type_scope, env, expr_idx),
+            .e_binop => try self.scopedExprResultVar(module_idx, type_scope, env, expr_idx),
+            .e_type_var_dispatch => try self.scopedExprResultVar(module_idx, type_scope, env, expr_idx),
             else => try self.scopedExprResultVar(module_idx, type_scope, env, expr_idx),
         };
     }
@@ -3866,7 +3823,7 @@ pub const Lowerer = struct {
             self.resolveMonomorphicDispatchTarget(module_idx, type_scope, env, expr_idx, method_name);
         const source_fn_var = try self.copyTopLevelDefExprVarToModule(target.module_idx, target.def_idx, module_idx);
         const cloned_func_var = try call_scope.instantiator.instantiateVar(source_fn_var);
-        const result_var = try self.scopeVar(type_scope, ModuleEnv.varFrom(expr_idx));
+        const result_var = try self.scopedExprResultVar(module_idx, type_scope, env, expr_idx);
         try self.unifySpecializedRecordedMethodArgsWithActuals(
             module_idx,
             type_scope,
@@ -4206,7 +4163,7 @@ pub const Lowerer = struct {
             arg_exprs,
             expected_result_var,
         );
-        const result_var = try self.scopeVar(type_scope, ModuleEnv.varFrom(call_expr_idx));
+        const result_var = try self.scopedExprResultVar(module_idx, type_scope, env, call_expr_idx);
         try self.unifyAppliedFunctionResultVar(module_idx, result_var, expected.solved_var, arg_exprs.len);
         if (expected_result_var) |var_| {
             try self.unifySpecializedCheckerVars(module_idx, result_var, var_);
@@ -4582,6 +4539,13 @@ pub const Lowerer = struct {
                         dispatch.method_name,
                         var_,
                     );
+                },
+                .e_binop => |binop| switch (binop.op) {
+                    .add, .sub, .mul, .div, .rem, .div_trunc => {
+                        const result_var = try self.scopedExprResultVar(module_idx, type_scope, env, expr_idx);
+                        try self.unifySpecializedCheckerVars(module_idx, result_var, var_);
+                    },
+                    else => {},
                 },
                 else => {},
             }
@@ -7137,25 +7101,6 @@ pub const Lowerer = struct {
     ) std.mem.Allocator.Error!Var {
         return self.lookupSpecializedExprVar(module_idx, env, expr_idx) orelse
             try self.scopeVar(type_scope, ModuleEnv.varFrom(expr_idx));
-    }
-
-    fn lookupHomogeneousBinopResultVar(
-        self: *Lowerer,
-        module_idx: u32,
-        type_scope: *TypeCloneScope,
-        env: BindingEnv,
-        lhs_expr_idx: CIR.Expr.Idx,
-        rhs_expr_idx: CIR.Expr.Idx,
-    ) std.mem.Allocator.Error!Var {
-        const lhs_var = try self.exprResultVar(module_idx, type_scope, env, lhs_expr_idx);
-        const lhs_ty = try self.lowerInstantiatedType(module_idx, type_scope, lhs_var);
-        if (self.ctx.types.getType(lhs_ty) != .placeholder) return lhs_var;
-
-        const rhs_var = try self.exprResultVar(module_idx, type_scope, env, rhs_expr_idx);
-        const rhs_ty = try self.lowerInstantiatedType(module_idx, type_scope, rhs_var);
-        if (self.ctx.types.getType(rhs_ty) != .placeholder) return rhs_var;
-
-        return lhs_var;
     }
 
     fn scopeVar(
