@@ -1,14 +1,15 @@
-# Explicit-Facts Cleanup Plan
+# Explicit Facts Completion Plan
 
 ## Goal
 
-Finish the remaining compiler cleanup in this order:
+Finish the remaining compiler cleanup in this exact order:
 
-1. eliminate the remaining monotype re-inference / result-var recovery paths
-2. replace the current double layout lowering with one shared layout-commit boundary
-3. replace late RC/layout-resolution rebuilding with explicit earlier facts
+1. eliminate the remaining monotype fact fallbacks
+2. eliminate the remaining IR/layout fact re-work
+3. eliminate unresolved-var-driven layout resolution
+4. eliminate late RC/ownership rebuilding
 
-Every phase must optimize for the long-term architectural target only:
+Every phase must optimize only for the long-term architectural target:
 
 - no workarounds
 - no fallback paths
@@ -18,127 +19,116 @@ Every phase must optimize for the long-term architectural target only:
 
 ## Phase 1. Monotype Explicit Facts
 
-### Scope
+### Remaining offenders
 
-This phase clears the remaining monotype items from `reinfer.md`:
-
-- `src/monotype/lower.zig:1030`
-  `resolveLambdaBodyExpectation(...)`
-- `src/monotype/lower.zig:4149`
-  `lowerExprWithExpectedType(...)`
-- `src/monotype/lower.zig:4800`
-  recorded-method result type recovery
-- `src/monotype/lower.zig:4803`
-  field-access result type recovery
-- `src/monotype/lower.zig:4817`
-  arithmetic result type recovery
-- `src/monotype/lower.zig:6443`
-  plain-call result-var recovery
-- `src/monotype/lower.zig:6467`
-  recorded-method result-var recovery
+- `src/monotype/lower.zig`
+  - `lowerExprWithExpectedType(...)` placeholder fallback
+  - arithmetic expected-result seeding
 
 ### Target end state
 
-Monotype must behave the way `cor` does:
-
-- every executable expression entering monotype has an explicit authoritative result fact
-- call-like expressions have explicit authoritative result-type and result-var facts
-- method syntax is resolved into explicit call facts before monotype needs those facts
-- field access uses the access expression's own explicit result fact
-- arithmetic consumes explicit builtin/kernel result facts
-- named result locals are created from the expression's own explicit result fact, not rediscovered from the callee
-- if an expected result fact is missing, that is a compiler bug and must hit a debug invariant
+- every executable expression entering monotype has one authoritative result fact
+- lambda bodies consume one authoritative function-return fact
+- arithmetic lowers from its own explicit expression result fact, not caller-seeded recovery
+- missing expected facts are compiler bugs and hit debug invariants
 
 ### Work
 
-1. Trace every caller of `lowerExprWithExpectedType(...)` and replace placeholder recovery with explicit expected facts produced earlier.
-2. Make lambda body lowering consume one explicit return fact model and delete the fallback to body-expression facts.
-3. Make plain calls and recorded-method calls carry one explicit result-fact representation through monotype.
-4. Make field access and arithmetic consume explicit result facts from the expression itself rather than reconstructing them locally.
-5. Delete the monotype recovery helpers once the explicit-fact path is the only path.
-6. Verify:
+1. trace every remaining `lowerExprWithExpectedType(...)` caller that can still hit a placeholder target and make the earlier caller own that fact explicitly
+2. make arithmetic lower from its own explicit expression result fact without relying on caller seeding
+3. verify:
    - `timeout 600s zig build test-eval -- --threads 1`
    - `timeout 600s zig build test-eval-host-effects -- --threads 1`
-7. Update `reinfer.md`.
-8. Commit the monotype milestone.
+4. update `reinfer.md`
+5. commit
 
-## Phase 2. Single Layout-Commit Boundary
+## Phase 2. IR/Layout Explicit Facts
 
-### Scope
-
-This phase clears the remaining layout re-work from `reintern.md`:
+### Remaining offenders
 
 - `src/ir/lower_type.zig`
-  `lambdamono.TypeId -> ir.LayoutId`
-- `src/lir/FromIr.zig`
-  `ir.LayoutId -> layout.Idx`
+  - on-demand `lambdamono.TypeId -> layout.GraphRef`
 - `src/ir/lower.zig`
-  field index recovery from type + name
-- `src/ir/lower.zig`
-  tag discriminant recovery from type + tag name
-- `src/ir/lower.zig`
-  tag payload layout recovery from union type
-- `src/ir/lower.zig`
-  nominal layout unwrapping to recover physical shape
-- `src/ir/lower.zig`
-  fresh temp / proc result type-to-layout relowering
-- `src/lir/FromIr.zig`
-  structural IR-layout equality scan before graph commit
+  - tag payload layout recovery
+  - nominal layout unwrapping to recover physical shape
+  - fresh temp layout lowering from type
+  - proc/result layout lowering from type
 
 ### Target end state
 
-- logical executable facts flow forward once
-- final physical layout is committed once at the shared LIR/layout boundary
-- IR does not recover field/tag executable metadata from type shape
-- IR locals/proc signatures already carry explicit executable layout facts
-- `FromIr` does not scan old IR layouts for structural equality
+- IR consumes explicit logical executable layout facts
+- tag payload layout and nominal physical-shape facts are attached before IR needs them
+- temps and proc signatures already carry explicit logical layout refs
+- IR no longer lowers executable types into layout refs at individual use sites
 
 ### Work
 
-1. Decide the one explicit executable layout fact representation carried before `FromIr`.
-2. Move field index / tag discriminant / payload-layout facts earlier so IR consumes them directly.
-3. Remove `ir/lower_type.zig` as a second semantic layout-lowering layer, or reduce it to a dumb projection of already-explicit layout facts.
-4. Make `FromIr` commit those explicit logical layout facts once into the shared layout store.
-5. Delete the structural equality scan in `FromIr`.
-6. Verify:
+1. decide the explicit logical-layout facts that `lambdamono` must attach for IR
+2. attach payload-layout / struct-field-layout / union-layout facts before IR lowering
+3. move temp/proc layout ownership out of ad hoc `lower_type.lowerType(...)` calls and onto explicit carried facts
+4. reduce `src/ir/lower_type.zig` to a dumb adapter or delete it if the earlier facts make it unnecessary
+5. verify:
    - `timeout 600s zig build test-eval -- --threads 1`
    - `timeout 600s zig build test-eval-host-effects -- --threads 1`
-7. Update `reintern.md`.
-8. Commit the layout milestone.
+6. update `reintern.md`
+7. commit
 
-## Phase 3. RC / Layout-Resolution Explicit Facts
+## Phase 3. Explicit Layout Resolution Inputs
 
-### Scope
+### Remaining offenders
 
-This phase clears the remaining late rebuilding from `reinfer.md`:
+- `src/layout/type_layout_resolver.zig`
+  - `Resolver.resolve`
+  - `buildRefForVar`
+
+### Target end state
+
+- layout resolution consumes explicit executable layout facts, not unresolved checker vars
+- no late walk over flex/rigid constraints to decide runtime layout
+
+### Work
+
+1. identify the earlier stage that must own the executable-layout facts currently reconstructed from checker vars
+2. thread those facts into the layout boundary explicitly
+3. delete unresolved-var-driven resolution
+4. verify:
+   - `timeout 600s zig build test-eval -- --threads 1`
+   - `timeout 600s zig build test-eval-host-effects -- --threads 1`
+5. update `reinfer.md` and `reintern.md`
+6. commit
+
+## Phase 4. Explicit RC Ownership Facts
+
+### Remaining offenders
 
 - `src/lir/rc_insert.zig`
-  fixed-point rebuilding of proc param use kinds / fresh returns / join ownership / alias sources
-- `src/layout/type_layout_resolver.zig`
-  unresolved-var-driven layout resolution
+  - `rebuildProcParamUseKinds`
+  - `normalizeFreshProcReturns`
+  - `inferOwningJoinParams`
+  - `inferJoinParamAliasSources`
 
 ### Target end state
 
-- RC insertion consumes explicit ownership facts already attached to LIR
+- RC insertion consumes explicit ownership and alias facts already attached to LIR
 - backends follow only explicit `incref` / `decref`
-- layout resolution consumes explicit earlier executable layout facts, not unresolved checker vars
+- no fixed-point ownership rebuilding remains in LIR
 
 ### Work
 
-1. Identify the earlier stage that must own ownership/use-kind facts.
-2. Move those facts earlier and make `rc_insert` a dumb consumer or delete it if it becomes unnecessary.
-3. Move layout-resolution inputs off unresolved checker vars and onto explicit executable layout facts.
-4. Verify:
+1. decide which earlier stage owns proc param use kinds, fresh-return ownership, join ownership, and join alias-source facts
+2. attach those facts explicitly before RC insertion
+3. reduce `rc_insert` to a dumb consumer or delete it if it becomes unnecessary
+4. verify:
    - `timeout 600s zig build test-eval -- --threads 1`
    - `timeout 600s zig build test-eval-host-effects -- --threads 1`
-5. Update `reinfer.md` and `reintern.md`.
-6. Commit the final cleanup milestone.
+5. update `reinfer.md`
+6. commit
 
 ## Finalization
 
-When all three phases are complete:
+When all four phases are complete:
 
-1. run the full verification suite again
+1. run the verification suite again
 2. make sure only the intended code changes are committed
 3. push the branch
 4. report the remaining contents of `reinfer.md` and `reintern.md`
