@@ -353,7 +353,7 @@ const Lowerer = struct {
         try cache.put(ty, placeholder);
 
         const mono_ty = self.input.types.getTypePreservingNominal(ty);
-        if (mono_ty == .placeholder) {
+        if (mono_ty == .unbd) {
             return placeholder;
         }
         if (mono_ty == .tag_union and self.input.types.sliceTags(mono_ty.tag_union.tags).len == 0) {
@@ -361,7 +361,8 @@ const Lowerer = struct {
         }
 
         const lowered = switch (mono_ty) {
-            .placeholder => type_mod.Node.unbd,
+            .placeholder => debugPanic("lambdasolved.instantiateTypeRec leaked monotype builder placeholder"),
+            .unbd => type_mod.Node.unbd,
             .link => unreachable,
             .nominal => |backing| type_mod.Node{ .nominal = try self.instantiateTypeRec(backing, cache) },
             .func => |func| blk: {

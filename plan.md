@@ -1,209 +1,140 @@
-# Remaining Explicit-Facts Plan
+# Canonical Publication Plan
 
 ## Goal
 
-Complete the remaining compiler cleanup in this exact order:
+Complete the remaining cleanup in this exact order:
 
-1. eliminate the remaining monotype fact recovery
-2. eliminate the remaining `lambdamono` semantic-metadata recovery
-3. eliminate the remaining `lambdamono` executable-type relowering
-4. eliminate specialization-request relowering
-5. eliminate the `ir/layout_facts` recovery layer
-6. eliminate the leftover `keyId(...)` recanonicalization residue
+1. make monotype provisional ids builder-private and publish only canonical ids
+2. delete monotype specialization-boundary canonicalization
+3. make lambdamono provisional ids builder-private and publish only canonical ids
+4. delete lambdamono layout-facts-boundary canonicalization
 
-Every phase must follow the same long-term architectural target:
+`~/code/cor` is the guide for the overall shape:
+
+- recursive builder state is private to the builder
+- published stage facts are already final
+- later stages consume one explicit earlier fact
+- stage boundaries never "upgrade" incoming ids
+
+Every phase must follow the same architectural rules:
 
 - no workarounds
 - no fallbacks
 - no heuristics
 - no dual systems
-- every later stage consumes one explicit earlier fact instead of recovering,
-  reconstructing, or re-lowering it
+- no late repair of earlier-stage ids
 
-`~/code/cor` is the guide for the overall approach:
-
-- solving owns semantic type facts
-- specialization happens against one explicit function/request fact
-- later lowering stages recursively consume already-owned facts
-- later stages do not choose between competing facts or rediscover them from
-  shape
-
-## Phase 1. Monotype Explicit Semantic Facts
+## Phase 1. Monotype Canonical Publication
 
 ### Current offenders
 
 - `src/monotype/lower.zig`
-  - `lowerSolvedType(...)`
-  - `lowerExprResultType(...)`
-  - `lookupRecordFieldType(...)`
-  - `lookupTagArgTypesOwned(...)`
-  - `lookupTagArgTypesFromSolvedVarsOwned(...)`
+  - provisional-to-canonical upgrade inside `TypeCloneScope`
+- all monotype AST/type publication sites that still allow provisional ids to
+  escape
 
 ### Target end state
 
-- every monotype expr/pat/binding consumes one authoritative monotype type fact
-- record destructuring/access consumes explicit earlier field-type facts
-- tag construction/matching consumes explicit earlier payload-type facts
-- monotype no longer lowers checker vars to monotype types at arbitrary use
-  sites
+- active/provisional recursive clone ids remain private to monotype lowering
+- anything published out of monotype is already canonical
+- no monotype AST node, typed symbol, def bind, or cross-subsystem request
+  carries a provisional `TypeId`
 
 ### Work
 
-1. identify the earliest stage that can own:
-   - monotype expr result type facts
-   - explicit record field-type facts
-   - explicit tag payload-type facts
-2. thread those facts into monotype AST/lowering inputs explicitly
-3. make monotype lowering consume only those facts
-4. delete:
-   - `lowerSolvedType(...)`
-   - `lowerExprResultType(...)`
-   - `lookupRecordFieldType(...)`
-   - `lookupTagArgTypesOwned(...)`
-   - `lookupTagArgTypesFromSolvedVarsOwned(...)`
-5. verify:
-   - `timeout 600s zig build test-eval -- --threads 1`
-   - `timeout 600s zig build test-eval-host-effects -- --threads 1`
-6. update `reinfer.md`
-7. commit
-
-## Phase 2. Lambdamono Explicit Semantic Metadata
-
-### Current offenders
-
-- `src/lambdamono/lower.zig`
-  - `tagDiscriminantForUnion(...)`
-  - `recordFieldIndex(...)`
-
-### Target end state
-
-- `lambdamono` receives explicit field indices and tag discriminants from
-  earlier semantic facts
-- `lambdamono` does not rediscover semantic ids from lowered executable type
-  shape
-
-### Work
-
-1. decide the earlier stage that owns:
-   - record field index facts
-   - tag discriminant facts
-2. attach those facts explicitly before `lambdamono` lowering
-3. make `lambdamono` consume them directly
-4. delete:
-   - `tagDiscriminantForUnion(...)`
-   - `recordFieldIndex(...)`
+1. identify the publication boundary for monotype facts:
+   - AST expr types
+   - AST pat types
+   - AST typed-symbol types
+   - specialized top-level request types
+2. add one explicit publication helper that finalizes a monotype type for
+   output from the current clone scope
+3. make all monotype publication sites consume that helper
+4. keep builder-private recursive/provisional state internal to the clone
+   cache only
 5. verify:
    - `timeout 600s zig build test-eval -- --threads 1`
    - `timeout 600s zig build test-eval-host-effects -- --threads 1`
 6. update `reintern.md`
 7. commit
 
-## Phase 3. Lambdamono Explicit Executable-Type Facts
+## Phase 2. Delete Monotype Boundary Canonicalization
 
-### Current offenders
+### Current offender
 
-- scattered `lower_type.lowerType(...)` use sites in `src/lambdamono/lower.zig`
-
-### Target end state
-
-- every relevant `lambdamono` expr/pat/binding/capture carries one explicit
-  executable type fact
-- `lambdamono` does not re-lower solved types at arbitrary use sites
-
-### Work
-
-1. identify the canonical executable-type fact model for:
-   - expressions
-   - patterns
-   - binders
-   - captures
-2. attach those executable-type facts once
-3. convert all scattered `lower_type.lowerType(...)` use sites to consume them
-4. verify:
-   - `timeout 600s zig build test-eval -- --threads 1`
-   - `timeout 600s zig build test-eval-host-effects -- --threads 1`
-5. update `reintern.md`
-6. commit
-
-## Phase 4. Explicit Specialization Request Facts
-
-### Current offenders
-
-- `src/lambdamono/specializations.zig`
-  - per-request arg/ret/capture relowering
+- `src/monotype/specializations.zig`
+  - `keyId(...)` at specialization queue lookup
 
 ### Target end state
 
-- each specialization request already carries one explicit canonical executable
-  signature fact
-- specialization lookup is direct key lookup, not request-time relowering
+- specialization requests arrive already canonical
+- specialization lookup only consumes canonical ids
+- any non-canonical incoming id is a compiler bug
 
 ### Work
 
-1. define one explicit specialization-request fact carrying the canonical
-   executable signature
-2. construct that fact before queue lookup
-3. make specialization lookup consume only that fact
-4. delete per-request arg/ret/capture relowering from specialization lookup
-5. verify:
-   - `timeout 600s zig build test-eval -- --threads 1`
-   - `timeout 600s zig build test-eval-host-effects -- --threads 1`
-6. update `reintern.md`
-7. commit
-
-## Phase 5. Eliminate `ir/layout_facts` Recovery
-
-### Current offenders
-
-- `src/ir/layout_facts.zig`
-  - type -> layout lowering
-  - payload/field layout derivation
-  - nominal wrapper peeling
-
-### Target end state
-
-- earlier stages own the logical executable layout facts
-- IR consumes those explicit layout refs and payload/field layout facts
-- `ir/layout_facts.zig` is deleted
-
-### Work
-
-1. decide which earlier stage owns:
-   - logical executable layout refs
-   - explicit field-layout facts
-   - explicit payload-layout facts
-2. thread those facts into IR AST/lowering inputs explicitly
-3. make IR consume only those facts
-4. delete `src/ir/layout_facts.zig`
-5. verify:
-   - `timeout 600s zig build test-eval -- --threads 1`
-   - `timeout 600s zig build test-eval-host-effects -- --threads 1`
-6. update `reintern.md`
-7. commit
-
-## Phase 6. Eliminate Recanonicalization Residue
-
-### Current offenders
-
-- remaining `keyId(...)` recanonicalization sites in:
-  - `src/monotype/lower.zig`
-  - `src/monotype/specializations.zig`
-  - `src/lambdamono/lower_type.zig`
-  - `src/ir/lower_type.zig`
-
-### Target end state
-
-- these ids are canonical by construction
-- no hot-path or stage-boundary recanonicalization remains
-
-### Work
-
-1. delete the remaining `keyId(...)` cleanup passes only after the earlier
-   phases make the ids canonical by construction
+1. replace specialization-boundary `keyId(...)` with a debug-only invariant
 2. verify:
    - `timeout 600s zig build test-eval -- --threads 1`
    - `timeout 600s zig build test-eval-host-effects -- --threads 1`
-3. update `reinfer.md` and `reintern.md`
+3. update `reintern.md`
+4. commit
+
+## Phase 3. Lambdamono Canonical Publication
+
+### Current offenders
+
+- `src/lambdamono/lower_type.zig`
+  - provisional-to-canonical upgrade inside `MonoCache`
+- all lambdamono AST/signature publication sites that still allow provisional
+  executable type ids to escape
+
+### Target end state
+
+- active/provisional executable ids remain private to executable-type lowering
+- published lambdamono AST facts and specialization signatures are already
+  canonical
+- no later lambdamono consumer upgrades incoming executable type ids
+
+### Work
+
+1. identify the publication boundary for lambdamono facts:
+   - expr types
+   - pat types
+   - typed-symbol types
+   - def result types
+   - specialization signature facts
+2. add one explicit publication helper that finalizes executable types for
+   output from the current mono cache
+3. make all lambdamono publication sites consume that helper
+4. keep builder-private recursive/provisional executable ids internal to
+   `lower_type`
+5. verify:
+   - `timeout 600s zig build test-eval -- --threads 1`
+   - `timeout 600s zig build test-eval-host-effects -- --threads 1`
+6. update `reintern.md`
+7. commit
+
+## Phase 4. Delete Lambdamono Boundary Canonicalization
+
+### Current offender
+
+- `src/lambdamono/layout_facts.zig`
+  - `keyId(...)` at logical-layout-facts lowering boundary
+
+### Target end state
+
+- logical-layout-facts lowering receives already-canonical executable type ids
+- boundary `keyId(...)` is gone
+- any non-canonical incoming executable type id is a compiler bug
+
+### Work
+
+1. replace layout-facts-boundary `keyId(...)` with a debug-only invariant
+2. verify:
+   - `timeout 600s zig build test-eval -- --threads 1`
+   - `timeout 600s zig build test-eval-host-effects -- --threads 1`
+3. update `reintern.md` and `reinfer.md`
 4. commit
 
 ## Finalization
@@ -213,8 +144,8 @@ When all phases are complete:
 1. rerun:
    - `timeout 600s zig build test-eval -- --threads 1`
    - `timeout 600s zig build test-eval-host-effects -- --threads 1`
-2. ensure only intended code changes are committed
+2. keep `reinfer.md` and `reintern.md` untracked
 3. push the branch
-4. report the remaining contents of:
+4. report what remains on:
    - `reinfer.md`
    - `reintern.md`

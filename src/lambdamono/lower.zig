@@ -35,6 +35,7 @@ pub fn run(allocator: std.mem.Allocator, input: solved.Lower.Result) std.mem.All
     var lowerer = Lowerer.init(allocator, input);
     defer lowerer.deinit();
     try lowerer.lowerProgram();
+    try lowerer.finalizePublishedTypes();
     const explicit_layout_facts = try layout_facts.Facts.init(allocator, &lowerer.output, &lowerer.types);
     errdefer {
         var facts = explicit_layout_facts;
@@ -149,6 +150,50 @@ const Lowerer = struct {
         return result;
     }
 
+    fn finalizeTypedSymbol(self: *Lowerer, bind: *ast.TypedSymbol) std.mem.Allocator.Error!void {
+        bind.ty = try self.publishExecutableType(bind.ty);
+    }
+
+    fn finalizeExpr(self: *Lowerer, expr: *ast.Expr) std.mem.Allocator.Error!void {
+        expr.ty = try self.publishExecutableType(expr.ty);
+        switch (expr.data) {
+            .let_ => |*let_expr| try self.finalizeTypedSymbol(&let_expr.bind),
+            else => {},
+        }
+    }
+
+    fn finalizeStmt(self: *Lowerer, stmt: *ast.Stmt) std.mem.Allocator.Error!void {
+        switch (stmt.*) {
+            .decl => |*decl| try self.finalizeTypedSymbol(&decl.bind),
+            .var_decl => |*decl| try self.finalizeTypedSymbol(&decl.bind),
+            else => {},
+        }
+    }
+
+    fn finalizeDef(self: *Lowerer, def: *ast.Def) std.mem.Allocator.Error!void {
+        if (def.result_ty) |ty| {
+            def.result_ty = try self.publishExecutableType(ty);
+        }
+    }
+
+    fn finalizePublishedTypes(self: *Lowerer) std.mem.Allocator.Error!void {
+        for (self.output.typed_symbols.items) |*bind| {
+            try self.finalizeTypedSymbol(bind);
+        }
+        for (self.output.pats.items) |*pat| {
+            pat.ty = try self.publishExecutableType(pat.ty);
+        }
+        for (self.output.exprs.items) |*expr| {
+            try self.finalizeExpr(expr);
+        }
+        for (self.output.stmts.items) |*stmt| {
+            try self.finalizeStmt(stmt);
+        }
+        for (self.output.defs.items) |*def| {
+            try self.finalizeDef(def);
+        }
+    }
+
     fn lowerProgram(self: *Lowerer) std.mem.Allocator.Error!void {
         self.fenv = try specializations.buildFEnv(self.allocator, &self.input);
         try self.indexTopLevelValues();
@@ -218,9 +263,9 @@ const Lowerer = struct {
     ) std.mem.Allocator.Error!specializations.SigKey {
         const requested_fn = lower_type.extractFn(&self.input.types, requested_ty);
         const arg_ty = arg_ty_override orelse
-            try self.lowerExecutableTypeFact(mono_cache, requested_fn.arg);
+            try self.publishExecutableTypeFact(mono_cache, requested_fn.arg);
         const ret_ty = ret_ty_override orelse
-            try self.lowerExecutableTypeFact(mono_cache, requested_fn.ret);
+            try self.publishExecutableTypeFact(mono_cache, requested_fn.ret);
         const captures: specializations.CaptureSpec = switch (try lower_type.extractLsetFn(
             &self.input.types,
             &self.types,
@@ -230,7 +275,7 @@ const Lowerer = struct {
             &self.input.symbols,
         )) {
             .toplevel => .toplevel,
-            .lset => |info| .{ .lset = info.ty },
+            .lset => |info| .{ .lset = try self.publishExecutableType(info.ty) },
         };
         return specializations.makeSigKey(requested_name, arg_ty, ret_ty, captures);
     }
@@ -243,18 +288,18 @@ const Lowerer = struct {
         captures_new: []const lower_type.CaptureBinding,
     ) std.mem.Allocator.Error!specializations.SigKey {
         const requested_fn = lower_type.extractFn(&self.input.types, requested_ty);
-        const arg_ty = try self.lowerExecutableTypeFact(mono_cache, requested_fn.arg);
-        const ret_ty = try self.lowerExecutableTypeFact(mono_cache, requested_fn.ret);
+        const arg_ty = try self.publishExecutableTypeFact(mono_cache, requested_fn.arg);
+        const ret_ty = try self.publishExecutableTypeFact(mono_cache, requested_fn.ret);
         const captures: specializations.CaptureSpec = if (captures_new.len == 0)
             .toplevel
         else
-            .{ .erased = try lower_type.lowerCaptureBindings(
+            .{ .erased = try self.publishExecutableType(try lower_type.lowerCaptureBindings(
                 &self.input.types,
                 &self.types,
                 mono_cache,
                 captures_new,
                 &self.input.symbols,
-            ) };
+            )) };
         return specializations.makeSigKey(requested_name, arg_ty, ret_ty, captures);
     }
 
@@ -266,6 +311,21 @@ const Lowerer = struct {
         return try lower_type.lowerType(&self.input.types, &self.types, mono_cache, ty, &self.input.symbols);
     }
 
+    fn publishExecutableType(self: *Lowerer, ty: type_mod.TypeId) std.mem.Allocator.Error!type_mod.TypeId {
+        if (!self.types.isFullyResolved(ty)) {
+            debugPanic("lambdamono publication invariant violated: unresolved executable type escaped stage boundary");
+        }
+        return try self.types.canonicalizeResolved(ty);
+    }
+
+    fn publishExecutableTypeFact(
+        self: *Lowerer,
+        mono_cache: *lower_type.MonoCache,
+        ty: TypeVarId,
+    ) std.mem.Allocator.Error!type_mod.TypeId {
+        return try self.publishExecutableType(try self.lowerExecutableTypeFact(mono_cache, ty));
+    }
+
     fn recordExprTypeFact(
         self: *Lowerer,
         inst: *InstScope,
@@ -275,7 +335,7 @@ const Lowerer = struct {
         if (inst.expr_type_facts.contains(expr_id)) return;
         const expr = self.input.store.getExpr(expr_id);
         const solved_ty = try self.cloneInstType(inst, expr.ty);
-        const lowered_ty = try self.lowerExecutableTypeFact(mono_cache, solved_ty);
+        const lowered_ty = try self.publishExecutableTypeFact(mono_cache, solved_ty);
         try inst.expr_type_facts.put(expr_id, lowered_ty);
     }
 
@@ -288,7 +348,7 @@ const Lowerer = struct {
         if (inst.pat_type_facts.contains(pat_id)) return;
         const pat = self.input.store.getPat(pat_id);
         const solved_ty = try self.cloneInstType(inst, pat.ty);
-        const lowered_ty = try self.lowerExecutableTypeFact(mono_cache, solved_ty);
+        const lowered_ty = try self.publishExecutableTypeFact(mono_cache, solved_ty);
         try inst.pat_type_facts.put(pat_id, lowered_ty);
     }
 
@@ -317,7 +377,7 @@ const Lowerer = struct {
         mono_cache: *lower_type.MonoCache,
         solved_ty: TypeVarId,
     ) std.mem.Allocator.Error!void {
-        const lowered_ty = try self.lowerExecutableTypeFact(mono_cache, solved_ty);
+        const lowered_ty = try self.publishExecutableTypeFact(mono_cache, solved_ty);
         if (inst.binding_type_facts.get(solved_ty)) |existing| {
             if (existing != lowered_ty) {
                 debugPanic("lambdamono.lower.recordBindingTypeFact conflicting executable binding type");
@@ -638,7 +698,7 @@ const Lowerer = struct {
                     var body = try self.specializeExpr(&inst, &mono_cache, body_env, pending.fn_def.body);
                     body = try self.bindCaptureLets(
                         captures_symbol,
-                        capture_info.ty,
+                        try self.publishExecutableType(capture_info.ty),
                         capture_bindings,
                         body,
                     );
@@ -650,7 +710,7 @@ const Lowerer = struct {
                                 .symbol = pending.fn_def.arg.symbol,
                             },
                             .{
-                                .ty = capture_info.ty,
+                                .ty = try self.publishExecutableType(capture_info.ty),
                                 .symbol = captures_symbol,
                             },
                         }),
@@ -694,13 +754,13 @@ const Lowerer = struct {
                 }
 
                 const captures_symbol = try self.input.symbols.add(base.Ident.Idx.NONE, .synthetic);
-                const captures_ty = try lower_type.lowerCaptureBindings(
+                const captures_ty = try self.publishExecutableType(try lower_type.lowerCaptureBindings(
                     &self.input.types,
                     &self.types,
                     &mono_cache,
                     captures,
                     &self.input.symbols,
-                );
+                ));
                 body = try self.bindCaptureLets(captures_symbol, captures_ty, captures, body);
 
                 break :blk .{
@@ -1544,13 +1604,13 @@ const Lowerer = struct {
                     const capture_expr = if (captures.len == 0)
                         null
                     else blk_capture: {
-                        const capture_ty = try lower_type.lowerCaptureBindings(
+                        const capture_ty = try self.publishExecutableType(try lower_type.lowerCaptureBindings(
                             &self.input.types,
                             &self.types,
                             mono_cache,
                             captures,
                             &self.input.symbols,
-                        );
+                        ));
                         break :blk_capture try self.specializeCaptureRecord(captures, capture_ty);
                     };
                     break :blk .{ .packed_fn = .{
@@ -2131,8 +2191,9 @@ const Lowerer = struct {
                                 .args = try self.input.types.addTypeVarSpan(out_args),
                             };
                         }
+                        const tags_span = try self.input.types.addTags(out);
                         break :blk2 solved.Type.Node{ .content = .{
-                            .tag_union = .{ .tags = try self.input.types.addTags(out) },
+                            .tag_union = .{ .tags = tags_span },
                         } };
                     },
                     .lambda_set => |lambda_set| blk2: {
@@ -2315,8 +2376,10 @@ const Lowerer = struct {
         right_span: solved.Type.Span(solved.Type.Field),
         visited: *std.AutoHashMap(u64, void),
     ) std.mem.Allocator.Error!solved.Type.Span(solved.Type.Field) {
-        const left_fields = self.input.types.sliceFields(left_span);
-        const right_fields = self.input.types.sliceFields(right_span);
+        const left_fields = try self.allocator.dupe(solved.Type.Field, self.input.types.sliceFields(left_span));
+        defer self.allocator.free(left_fields);
+        const right_fields = try self.allocator.dupe(solved.Type.Field, self.input.types.sliceFields(right_span));
+        defer self.allocator.free(right_fields);
         var out = std.ArrayList(solved.Type.Field).empty;
         defer out.deinit(self.allocator);
 
@@ -2369,8 +2432,10 @@ const Lowerer = struct {
         right_span: solved.Type.Span(solved.Type.Tag),
         visited: *std.AutoHashMap(u64, void),
     ) std.mem.Allocator.Error!solved.Type.Span(solved.Type.Tag) {
-        const left_tags = self.input.types.sliceTags(left_span);
-        const right_tags = self.input.types.sliceTags(right_span);
+        const left_tags = try self.allocator.dupe(solved.Type.Tag, self.input.types.sliceTags(left_span));
+        defer self.allocator.free(left_tags);
+        const right_tags = try self.allocator.dupe(solved.Type.Tag, self.input.types.sliceTags(right_span));
+        defer self.allocator.free(right_tags);
         var out = std.ArrayList(solved.Type.Tag).empty;
         defer out.deinit(self.allocator);
 

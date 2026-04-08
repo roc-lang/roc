@@ -44,6 +44,7 @@ pub const Field = struct {
 
 pub const Content = union(enum) {
     placeholder,
+    unbd,
     link: TypeId,
     func: struct {
         arg: TypeId,
@@ -131,6 +132,17 @@ pub const Store = struct {
         return try self.canonicalizeResolvedInner(root, &active);
     }
 
+    /// Finalize a published monotype fact. Any remaining builder-only placeholder
+    /// leaves become explicit published abstract facts.
+    pub fn canonicalizePublished(self: *Store, id: TypeId) std.mem.Allocator.Error!TypeId {
+        const root = self.resolveLinks(id);
+        if (self.canonical_by_raw.get(root)) |cached| return cached;
+
+        var active = std.AutoHashMap(TypeId, TypeId).init(self.allocator);
+        defer active.deinit();
+        return try self.canonicalizePublishedInner(root, &active);
+    }
+
     pub fn keyId(self: *Store, id: TypeId) std.mem.Allocator.Error!TypeId {
         const root = self.resolveLinks(id);
         if (!self.isFullyResolved(root)) return root;
@@ -216,6 +228,12 @@ pub const Store = struct {
         return self.equalIdsVisited(a, b, &visited) catch false;
     }
 
+    pub fn publishedContainsPlaceholder(self: *const Store, id: TypeId) bool {
+        var visited = std.AutoHashMap(TypeId, void).init(self.allocator);
+        defer visited.deinit();
+        return self.publishedContainsPlaceholderVisited(id, &visited) catch true;
+    }
+
     pub fn isFullyResolved(self: *const Store, id: TypeId) bool {
         var visited = std.AutoHashMap(TypeId, void).init(self.allocator);
         defer visited.deinit();
@@ -232,6 +250,47 @@ pub const Store = struct {
         }
     }
 
+    fn publishedContainsPlaceholderVisited(
+        self: *const Store,
+        id: TypeId,
+        visited: *std.AutoHashMap(TypeId, void),
+    ) std.mem.Allocator.Error!bool {
+        const root = self.resolveLinks(id);
+        if (visited.contains(root)) return false;
+        try visited.put(root, {});
+
+        return switch (self.types.items[@intFromEnum(root)]) {
+            .placeholder => true,
+            .unbd, .primitive => false,
+            .link => unreachable,
+            .func => |func| try self.publishedContainsPlaceholderVisited(func.arg, visited) or
+                try self.publishedContainsPlaceholderVisited(func.ret, visited),
+            .nominal => |backing| try self.publishedContainsPlaceholderVisited(backing, visited),
+            .list => |elem| try self.publishedContainsPlaceholderVisited(elem, visited),
+            .box => |elem| try self.publishedContainsPlaceholderVisited(elem, visited),
+            .tuple => |tuple| blk: {
+                for (self.sliceTypeSpan(tuple)) |elem| {
+                    if (try self.publishedContainsPlaceholderVisited(elem, visited)) break :blk true;
+                }
+                break :blk false;
+            },
+            .tag_union => |tag_union| blk: {
+                for (self.sliceTags(tag_union.tags)) |tag| {
+                    for (self.sliceTypeSpan(tag.args)) |arg| {
+                        if (try self.publishedContainsPlaceholderVisited(arg, visited)) break :blk true;
+                    }
+                }
+                break :blk false;
+            },
+            .record => |record| blk: {
+                for (self.sliceFields(record.fields)) |field| {
+                    if (try self.publishedContainsPlaceholderVisited(field.ty, visited)) break :blk true;
+                }
+                break :blk false;
+            },
+        };
+    }
+
     fn isFullyResolvedVisited(
         self: *const Store,
         id: TypeId,
@@ -242,6 +301,7 @@ pub const Store = struct {
         try visited.put(root, {});
         return switch (self.types.items[@intFromEnum(root)]) {
             .placeholder => false,
+            .unbd => true,
             .link => unreachable,
             .primitive => true,
             .func => |func| try self.isFullyResolvedVisited(func.arg, visited) and
@@ -300,6 +360,7 @@ pub const Store = struct {
         try active.put(root, root);
         const canonical_content: Content = switch (root_content) {
             .placeholder, .link => unreachable,
+            .unbd => .unbd,
             .primitive => |prim| .{ .primitive = prim },
             .func => |func| .{ .func = .{
                 .arg = try self.canonicalizeResolvedInner(func.arg, active),
@@ -345,6 +406,91 @@ pub const Store = struct {
                     lowered_fields[i] = .{
                         .name = field.name,
                         .ty = try self.canonicalizeResolvedInner(field.ty, active),
+                    };
+                }
+                break :blk .{ .record = .{
+                    .fields = try self.addFields(lowered_fields),
+                } };
+            },
+        };
+
+        self.setType(root, canonical_content);
+        try self.buildCanonicalKey(root);
+        try self.rememberScratchInternKey(root);
+        try self.canonical_by_raw.put(root, root);
+        _ = active.remove(root);
+        return root;
+    }
+
+    fn canonicalizePublishedInner(
+        self: *Store,
+        raw_id: TypeId,
+        active: *std.AutoHashMap(TypeId, TypeId),
+    ) std.mem.Allocator.Error!TypeId {
+        const root = self.resolveLinks(raw_id);
+        if (self.canonical_by_raw.get(root)) |cached| return cached;
+        if (active.get(root)) |pending| return pending;
+        try self.buildCanonicalKey(root);
+        if (self.lookupInternedScratchKey()) |existing| {
+            if (root != existing) {
+                self.setType(root, .{ .link = existing });
+            }
+            try self.canonical_by_raw.put(root, existing);
+            return existing;
+        }
+
+        const root_content = self.types.items[@intFromEnum(root)];
+
+        try active.put(root, root);
+        const canonical_content: Content = switch (root_content) {
+            .placeholder => .unbd,
+            .unbd => .unbd,
+            .link => unreachable,
+            .primitive => |prim| .{ .primitive = prim },
+            .func => |func| .{ .func = .{
+                .arg = try self.canonicalizePublishedInner(func.arg, active),
+                .ret = try self.canonicalizePublishedInner(func.ret, active),
+            } },
+            .nominal => |backing| .{ .nominal = try self.canonicalizePublishedInner(backing, active) },
+            .list => |elem| .{ .list = try self.canonicalizePublishedInner(elem, active) },
+            .box => |elem| .{ .box = try self.canonicalizePublishedInner(elem, active) },
+            .tuple => |tuple| blk: {
+                const elems = self.sliceTypeSpan(tuple);
+                const lowered_elems = try self.allocator.alloc(TypeId, elems.len);
+                defer self.allocator.free(lowered_elems);
+                for (elems, 0..) |elem, i| {
+                    lowered_elems[i] = try self.canonicalizePublishedInner(elem, active);
+                }
+                break :blk .{ .tuple = try self.addTypeSpan(lowered_elems) };
+            },
+            .tag_union => |tag_union| blk: {
+                const tags = self.sliceTags(tag_union.tags);
+                const lowered_tags = try self.allocator.alloc(Tag, tags.len);
+                defer self.allocator.free(lowered_tags);
+                for (tags, 0..) |tag, i| {
+                    const args = self.sliceTypeSpan(tag.args);
+                    const lowered_args = try self.allocator.alloc(TypeId, args.len);
+                    defer self.allocator.free(lowered_args);
+                    for (args, 0..) |arg, j| {
+                        lowered_args[j] = try self.canonicalizePublishedInner(arg, active);
+                    }
+                    lowered_tags[i] = .{
+                        .name = tag.name,
+                        .args = try self.addTypeSpan(lowered_args),
+                    };
+                }
+                break :blk .{ .tag_union = .{
+                    .tags = try self.addTags(lowered_tags),
+                } };
+            },
+            .record => |record| blk: {
+                const fields = self.sliceFields(record.fields);
+                const lowered_fields = try self.allocator.alloc(Field, fields.len);
+                defer self.allocator.free(lowered_fields);
+                for (fields, 0..) |field, i| {
+                    lowered_fields[i] = .{
+                        .name = field.name,
+                        .ty = try self.canonicalizePublishedInner(field.ty, active),
                     };
                 }
                 break :blk .{ .record = .{
@@ -412,7 +558,6 @@ pub const Store = struct {
 
                 const content = self_builder.store.types.items[@intFromEnum(root_id)];
                 switch (content) {
-                    .placeholder => debugPanic("monotype.type buildCanonicalKey encountered unresolved placeholder"),
                     .link => unreachable,
                     else => {},
                 }
@@ -423,7 +568,10 @@ pub const Store = struct {
 
                 try self_builder.store.appendInternKeyValue(@as(u8, 2));
                 switch (content) {
-                    .placeholder, .link => unreachable,
+                    .placeholder, .unbd => {
+                        try self_builder.store.appendInternKeyValue(@as(u8, 18));
+                    },
+                    .link => unreachable,
                     .primitive => |prim| {
                         try self_builder.store.appendInternKeyValue(@as(u8, 10));
                         try self_builder.store.appendInternKeyValue(@intFromEnum(prim));
@@ -543,6 +691,7 @@ pub const Store = struct {
 
         return switch (left) {
             .placeholder => false,
+            .unbd => false,
             .link => unreachable,
             .nominal => |backing| self.equalIdsVisited(backing, right.nominal, visited),
             .primitive => |prim| prim == right.primitive,

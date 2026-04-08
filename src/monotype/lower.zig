@@ -434,6 +434,7 @@ pub const Lowerer = struct {
         try self.registerAllTopLevelDefs();
         try self.lowerRootModule(root_module_idx);
         try self.drainSpecializations();
+        try self.finalizeProgramTypes();
 
         const result = Result{
             .program = self.program,
@@ -448,6 +449,231 @@ pub const Lowerer = struct {
         self.ctx.idents = try base.Ident.Store.initCapacity(self.allocator, 1);
         self.strings = .{};
         return result;
+    }
+
+    fn publishMonotypeType(self: *Lowerer, ty: type_mod.TypeId) std.mem.Allocator.Error!type_mod.TypeId {
+        const published = try self.ctx.types.canonicalizePublished(ty);
+        if (comptime builtin.mode == .Debug) {
+            if (self.ctx.types.publishedContainsPlaceholder(published)) {
+                debugPanic(
+                    "monotype invariant violated: publishMonotypeType leaked builder placeholder for type {d}",
+                    .{@intFromEnum(published)},
+                );
+            }
+        }
+        return published;
+    }
+
+    fn finalizeTypedSymbol(self: *Lowerer, bind: *ast.TypedSymbol) std.mem.Allocator.Error!void {
+        bind.ty = try self.publishMonotypeType(bind.ty);
+    }
+
+    const FinalizeVisited = struct {
+        defs: []bool,
+        exprs: []bool,
+        pats: []bool,
+        stmts: []bool,
+        branches: []bool,
+    };
+
+    fn markVisited(visited: []bool, idx: usize) bool {
+        if (visited[idx]) return true;
+        visited[idx] = true;
+        return false;
+    }
+
+    fn finalizeLetDef(self: *Lowerer, def: *ast.LetDef, visited: *FinalizeVisited) std.mem.Allocator.Error!void {
+        switch (def.*) {
+            .let_fn => |*let_fn| {
+                try self.finalizeTypedSymbol(&let_fn.bind);
+                try self.finalizeTypedSymbol(&let_fn.arg);
+                try self.finalizeExprById(let_fn.body, visited);
+            },
+            .let_val => |*let_val| {
+                try self.finalizeTypedSymbol(&let_val.bind);
+                try self.finalizeExprById(let_val.body, visited);
+            },
+        }
+    }
+
+    fn finalizePatById(self: *Lowerer, pat_id: ast.PatId, visited: *FinalizeVisited) std.mem.Allocator.Error!void {
+        const idx = @intFromEnum(pat_id);
+        if (markVisited(visited.pats, idx)) return;
+
+        var pat = &self.program.store.pats.items[idx];
+        pat.ty = try self.publishMonotypeType(pat.ty);
+        switch (pat.data) {
+            .tag => |tag| {
+                for (self.program.store.slicePatSpan(tag.args)) |arg_pat| {
+                    try self.finalizePatById(arg_pat, visited);
+                }
+            },
+            else => {},
+        }
+    }
+
+    fn finalizeStmtById(self: *Lowerer, stmt_id: ast.StmtId, visited: *FinalizeVisited) std.mem.Allocator.Error!void {
+        const idx = @intFromEnum(stmt_id);
+        if (markVisited(visited.stmts, idx)) return;
+
+        const stmt = &self.program.store.stmts.items[idx];
+        switch (stmt.*) {
+            .local_fn => |*let_fn| {
+                try self.finalizeTypedSymbol(&let_fn.bind);
+                try self.finalizeTypedSymbol(&let_fn.arg);
+                try self.finalizeExprById(let_fn.body, visited);
+            },
+            .decl => |*decl| {
+                try self.finalizeTypedSymbol(&decl.bind);
+                try self.finalizeExprById(decl.body, visited);
+            },
+            .var_decl => |*decl| {
+                try self.finalizeTypedSymbol(&decl.bind);
+                try self.finalizeExprById(decl.body, visited);
+            },
+            .reassign => |reassign| try self.finalizeExprById(reassign.body, visited),
+            .expr => |expr_id| try self.finalizeExprById(expr_id, visited),
+            .debug => |expr_id| try self.finalizeExprById(expr_id, visited),
+            .expect => |expr_id| try self.finalizeExprById(expr_id, visited),
+            .return_ => |expr_id| try self.finalizeExprById(expr_id, visited),
+            .for_ => |for_stmt| {
+                try self.finalizePatById(for_stmt.patt, visited);
+                try self.finalizeExprById(for_stmt.iterable, visited);
+                try self.finalizeExprById(for_stmt.body, visited);
+            },
+            .while_ => |while_stmt| {
+                try self.finalizeExprById(while_stmt.cond, visited);
+                try self.finalizeExprById(while_stmt.body, visited);
+            },
+            else => {},
+        }
+    }
+
+    fn finalizeBranchById(self: *Lowerer, branch_id: ast.BranchId, visited: *FinalizeVisited) std.mem.Allocator.Error!void {
+        const idx = @intFromEnum(branch_id);
+        if (markVisited(visited.branches, idx)) return;
+
+        const branch = self.program.store.branches.items[idx];
+        try self.finalizePatById(branch.pat, visited);
+        try self.finalizeExprById(branch.body, visited);
+    }
+
+    fn finalizeExprById(self: *Lowerer, expr_id: ast.ExprId, visited: *FinalizeVisited) std.mem.Allocator.Error!void {
+        const idx = @intFromEnum(expr_id);
+        if (markVisited(visited.exprs, idx)) return;
+
+        var expr = &self.program.store.exprs.items[idx];
+        expr.ty = try self.publishMonotypeType(expr.ty);
+        switch (expr.data) {
+            .tag => |tag| {
+                for (self.program.store.sliceExprSpan(tag.args)) |arg_expr| {
+                    try self.finalizeExprById(arg_expr, visited);
+                }
+            },
+            .record => |fields| {
+                for (self.program.store.sliceFieldExprSpan(fields)) |field| {
+                    try self.finalizeExprById(field.value, visited);
+                }
+            },
+            .access => |access| try self.finalizeExprById(access.record, visited),
+            .let_ => |*let_expr| {
+                try self.finalizeLetDef(&let_expr.def, visited);
+                try self.finalizeExprById(let_expr.rest, visited);
+            },
+            .clos => |*clos| {
+                try self.finalizeTypedSymbol(&clos.arg);
+                try self.finalizeExprById(clos.body, visited);
+            },
+            .call => |call| {
+                try self.finalizeExprById(call.func, visited);
+                try self.finalizeExprById(call.arg, visited);
+            },
+            .inspect => |inner| try self.finalizeExprById(inner, visited),
+            .low_level => |low_level| {
+                for (self.program.store.sliceExprSpan(low_level.args)) |arg_expr| {
+                    try self.finalizeExprById(arg_expr, visited);
+                }
+            },
+            .when => |when_expr| {
+                try self.finalizeExprById(when_expr.cond, visited);
+                for (self.program.store.sliceBranchSpan(when_expr.branches)) |branch_id| {
+                    try self.finalizeBranchById(branch_id, visited);
+                }
+            },
+            .if_ => |if_expr| {
+                try self.finalizeExprById(if_expr.cond, visited);
+                try self.finalizeExprById(if_expr.then_body, visited);
+                try self.finalizeExprById(if_expr.else_body, visited);
+            },
+            .block => |block| {
+                for (self.program.store.sliceStmtSpan(block.stmts)) |stmt_id| {
+                    try self.finalizeStmtById(stmt_id, visited);
+                }
+                try self.finalizeExprById(block.final_expr, visited);
+            },
+            .tuple => |elems| {
+                for (self.program.store.sliceExprSpan(elems)) |elem_expr| {
+                    try self.finalizeExprById(elem_expr, visited);
+                }
+            },
+            .tuple_access => |access| try self.finalizeExprById(access.tuple, visited),
+            .list => |elems| {
+                for (self.program.store.sliceExprSpan(elems)) |elem_expr| {
+                    try self.finalizeExprById(elem_expr, visited);
+                }
+            },
+            .return_ => |inner| try self.finalizeExprById(inner, visited),
+            .for_ => |for_expr| {
+                try self.finalizePatById(for_expr.patt, visited);
+                try self.finalizeExprById(for_expr.iterable, visited);
+                try self.finalizeExprById(for_expr.body, visited);
+            },
+            else => {},
+        }
+    }
+
+    fn finalizeDefById(self: *Lowerer, def_id: ast.DefId, visited: *FinalizeVisited) std.mem.Allocator.Error!void {
+        const idx = @intFromEnum(def_id);
+        if (markVisited(visited.defs, idx)) return;
+
+        var def = &self.program.store.defs.items[idx];
+        try self.finalizeTypedSymbol(&def.bind);
+        switch (def.value) {
+            .fn_ => |*let_fn| {
+                try self.finalizeTypedSymbol(&let_fn.bind);
+                try self.finalizeTypedSymbol(&let_fn.arg);
+                try self.finalizeExprById(let_fn.body, visited);
+            },
+            .val => |expr_id| try self.finalizeExprById(expr_id, visited),
+            .run => |*run_def| {
+                try self.finalizeTypedSymbol(&run_def.bind);
+                try self.finalizeExprById(run_def.body, visited);
+            },
+        }
+    }
+
+    fn finalizeProgramTypes(self: *Lowerer) std.mem.Allocator.Error!void {
+        var visited = FinalizeVisited{
+            .defs = try self.allocator.alloc(bool, self.program.store.defs.items.len),
+            .exprs = try self.allocator.alloc(bool, self.program.store.exprs.items.len),
+            .pats = try self.allocator.alloc(bool, self.program.store.pats.items.len),
+            .stmts = try self.allocator.alloc(bool, self.program.store.stmts.items.len),
+            .branches = try self.allocator.alloc(bool, self.program.store.branches.items.len),
+        };
+        defer self.allocator.free(visited.defs);
+        defer self.allocator.free(visited.exprs);
+        defer self.allocator.free(visited.pats);
+        defer self.allocator.free(visited.stmts);
+        defer self.allocator.free(visited.branches);
+        @memset(visited.defs, false);
+        @memset(visited.exprs, false);
+        @memset(visited.pats, false);
+        @memset(visited.stmts, false);
+        @memset(visited.branches, false);
+
+        for (self.program.root_defs.items) |def_id| {
+            try self.finalizeDefById(def_id, &visited);
+        }
     }
 
     fn registerAllTopLevelDefs(self: *Lowerer) std.mem.Allocator.Error!void {
@@ -608,7 +834,7 @@ pub const Lowerer = struct {
         while (self.specializations.nextNeededSpecialization()) |pending_idx| {
             const pending = self.specializations.get(pending_idx);
             const def_id = try self.lowerSpecializedTopLevelFn(pending.*);
-            _ = def_id;
+            try self.program.root_defs.append(self.allocator, def_id);
             pending.emitted = true;
         }
     }
@@ -6414,9 +6640,12 @@ pub const Lowerer = struct {
         source_ty: type_mod.TypeId,
         source_solved_var: ?Var,
     ) std.mem.Allocator.Error!type_mod.TypeId {
-        if (self.ctx.types.getType(source_ty) != .placeholder) return source_ty;
-        _ = source_solved_var;
-        return try self.requirePatternTypeFact(module_idx, type_scope, pattern_idx);
+        _ = pattern_idx;
+        if (self.ctx.types.isFullyResolved(source_ty)) return source_ty;
+        if (source_solved_var) |var_| {
+            return try self.publishMonotypeType(try self.lowerInstantiatedType(module_idx, type_scope, var_));
+        }
+        return try self.publishMonotypeType(source_ty);
     }
 
     fn lowerMatchPatWithType(
@@ -6773,7 +7002,8 @@ pub const Lowerer = struct {
         expected_var: ?Var,
     ) std.mem.Allocator.Error!symbol_mod.Symbol {
         const group = self.local_fn_groups.items[source_ref.group_index];
-        const expected_arg_tys = try self.collectCurriedArgTypes(expected_ty);
+        const published_expected_ty = try self.publishMonotypeType(expected_ty);
+        const expected_arg_tys = try self.collectCurriedArgTypes(published_expected_ty);
         errdefer self.allocator.free(expected_arg_tys);
         for (group.pending.items) |pending| {
             if (pending.source_index == source_ref.source_index and self.argTypeKeysEqual(pending.arg_tys, expected_arg_tys)) {
@@ -6801,9 +7031,9 @@ pub const Lowerer = struct {
         defer type_scope.deinit();
         const bind: ast.TypedSymbol = .{
             .ty = if (expected_var) |specialized_checker_var|
-                try self.lowerInstantiatedType(group.module_idx, &type_scope, specialized_checker_var)
+                try self.publishMonotypeType(try self.lowerInstantiatedType(group.module_idx, &type_scope, specialized_checker_var))
             else
-                expected_ty,
+                published_expected_ty,
             .symbol = specialized_symbol,
         };
         const letfn = try self.lowerLambdaLikeDefWithEnv(
@@ -6882,10 +7112,11 @@ pub const Lowerer = struct {
             self.assertNoFirstClassBuiltinStrInspect(top_level.module_idx, top_level.def_idx, "local");
             if (top_level.is_function) {
                 const source_expected_var = expected_var orelse ModuleEnv.varFrom(self.ctx.env(top_level.module_idx).store.getDef(top_level.def_idx).expr);
+                const published_expected_ty = try self.publishMonotypeType(expected_ty);
                 return try self.specializations.specializeFn(&self.ctx.symbols, &self.ctx.types, top_level_symbol, .{
                     .module_idx = top_level.module_idx,
                     .def_idx = top_level.def_idx,
-                }, expected_ty, source_expected_var);
+                }, published_expected_ty, source_expected_var);
             }
             try self.ensureTopLevelValueDefEmitted(top_level_symbol);
         }
@@ -7247,10 +7478,11 @@ pub const Lowerer = struct {
                     try self.copyCheckerVarToModule(current_module_idx, top_level.module_idx, var_)
                 else
                     ModuleEnv.varFrom(self.ctx.env(top_level.module_idx).store.getDef(top_level.def_idx).expr);
+                const published_expected_ty = try self.publishMonotypeType(expected_ty);
                 return try self.specializations.specializeFn(&self.ctx.symbols, &self.ctx.types, symbol, .{
                     .module_idx = top_level.module_idx,
                     .def_idx = top_level.def_idx,
-                }, expected_ty, source_expected_var);
+                }, published_expected_ty, source_expected_var);
             }
             try self.ensureTopLevelValueDefEmitted(symbol);
         }
@@ -7391,10 +7623,11 @@ pub const Lowerer = struct {
                         try self.copyCheckerVarToModule(current_module_idx, top_level.module_idx, var_)
                 else
                     ModuleEnv.varFrom(self.ctx.env(top_level.module_idx).store.getDef(top_level.def_idx).expr);
+                const published_expected_ty = try self.publishMonotypeType(expected_ty);
                 break :blk try self.specializations.specializeFn(&self.ctx.symbols, &self.ctx.types, source_symbol, .{
                     .module_idx = top_level.module_idx,
                     .def_idx = top_level.def_idx,
-                }, expected_ty, source_expected_var);
+                }, published_expected_ty, source_expected_var);
             } else blk: {
                 try self.ensureTopLevelValueDefEmitted(source_symbol);
                 break :blk source_symbol;

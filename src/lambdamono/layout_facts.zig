@@ -4,6 +4,7 @@
 //! layout exactly once.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const ast = @import("ast.zig");
 const type_mod = @import("type.zig");
 
@@ -272,7 +273,10 @@ fn lowerTypeRec(
     cache: *LayoutCache,
     ty: type_mod.TypeId,
 ) std.mem.Allocator.Error!layout_mod.GraphRef {
-    const keyed_ty = try mono_types.keyId(ty);
+    const keyed_ty = ty;
+    if (comptime builtin.mode == .Debug) {
+        std.debug.assert(try mono_types.keyId(ty) == ty);
+    }
     if (cache.resolved_by_type.get(keyed_ty)) |cached| return cached;
     if (cache.active_by_type.get(keyed_ty)) |active| return active;
 

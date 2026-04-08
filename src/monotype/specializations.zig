@@ -1,6 +1,7 @@
 //! Cor-style top-level function specialization queue for the monotype pass.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const can = @import("can");
 const symbol_mod = @import("symbol");
 const type_mod = @import("type.zig");
@@ -52,11 +53,13 @@ pub const Queue = struct {
         ty: type_mod.TypeId,
         expected_checker_var: ?checker_types.Var,
     ) std.mem.Allocator.Error!symbol_mod.Symbol {
-        const canonical_ty = try types.keyId(ty);
         const key: Key = .{
             .source_symbol = source_symbol,
-            .ty = canonical_ty,
+            .ty = ty,
         };
+        if (comptime builtin.mode == .Debug) {
+            std.debug.assert(try types.keyId(ty) == ty);
+        }
 
         if (self.by_key.get(key)) |idx| {
             const item = &self.pending.items[idx];
@@ -75,7 +78,7 @@ pub const Queue = struct {
         try self.pending.append(self.allocator, .{
             .source_symbol = source_symbol,
             .source = source,
-            .ty = canonical_ty,
+            .ty = ty,
             .expected_checker_var = expected_checker_var,
             .specialized_symbol = specialized_symbol,
         });

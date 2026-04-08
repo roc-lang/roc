@@ -10,6 +10,7 @@
 //! mutable statements, blocks, loops, returns, runtime errors, and low-level ops.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const mono = @import("monotype");
 const ast = @import("ast.zig");
@@ -125,11 +126,14 @@ const Lowerer = struct {
     }
 
     fn collectTopLevels(self: *Lowerer) std.mem.Allocator.Error!void {
-        for (self.input.program.store.defsSlice()) |def| {
+        for (self.input.program.root_defs.items) |def_id| {
+            const def = self.input.program.store.getDef(def_id);
+            self.assertPublishedType(def.bind.ty, "monotype def bind");
             try self.top_levels.put(def.bind.symbol, {});
             try self.binding_types.put(def.bind.symbol, def.bind.ty);
             switch (def.value) {
                 .fn_ => |fn_def| {
+                    self.assertPublishedType(fn_def.arg.ty, "monotype fn arg");
                     try self.binding_types.put(fn_def.arg.symbol, fn_def.arg.ty);
                     try self.collectBindingTypesExpr(fn_def.body);
                 },
@@ -140,12 +144,14 @@ const Lowerer = struct {
     }
 
     fn lowerProgram(self: *Lowerer) std.mem.Allocator.Error!void {
-        for (self.input.program.store.defsSlice()) |def| {
+        for (self.input.program.root_defs.items) |def_id| {
+            const def = self.input.program.store.getDef(def_id);
             _ = try self.lowerDef(def);
         }
     }
 
     fn emitDef(self: *Lowerer, def: ast.Def) std.mem.Allocator.Error!ast.DefId {
+        self.assertPublishedType(def.bind.ty, "lifted def bind");
         const def_id = try self.output.addDef(def);
         try self.root_defs.append(self.allocator, def_id);
         return def_id;
@@ -1062,9 +1068,18 @@ const Lowerer = struct {
 
     fn lookupTypeForSymbol(self: *Lowerer, symbol: Symbol) type_mod.TypeId {
         if (self.binding_types.get(symbol)) |ty| {
+            self.assertPublishedType(ty, "lifted symbol lookup");
             return ty;
         }
         return debugPanic("monotype_lifted.lookupTypeForSymbol missing symbol type");
+    }
+
+    fn assertPublishedType(self: *const Lowerer, ty: type_mod.TypeId, comptime site: []const u8) void {
+        if (comptime builtin.mode == .Debug) {
+            if (self.input.types.publishedContainsPlaceholder(ty)) {
+                debugPanic("monotype_lifted invariant violated: " ++ site ++ " leaked monotype builder placeholder");
+            }
+        }
     }
 
     fn collectBindingTypesExpr(self: *Lowerer, expr_id: MonoAst.ExprId) std.mem.Allocator.Error!void {
