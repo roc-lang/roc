@@ -10,6 +10,7 @@ extend-exclude = [
     "src/build/zig_llvm.h",
     "test/snapshots/",
     "build.zig.zon",
+    "build.zig.zon.nix",
     "src/cli/darwin/",
     "src/backend/llvm/",
     "src/backend/dev/object/",
