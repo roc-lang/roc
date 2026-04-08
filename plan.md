@@ -29,18 +29,23 @@ Every phase must optimize only for the long-term architectural target:
 
 - every executable expression entering monotype has one authoritative result fact
 - lambda bodies consume one authoritative function-return fact
-- arithmetic lowers from its own explicit expression result fact, not caller-seeded recovery
+- arithmetic/binops lower from one explicit earlier-produced solved arithmetic fact,
+  the `cor` way, not from caller-seeded recovery
 - missing expected facts are compiler bugs and hit debug invariants
 
 ### Work
 
-1. trace every remaining `lowerExprWithExpectedType(...)` caller that can still hit a placeholder target and make the earlier caller own that fact explicitly
-2. make arithmetic lower from its own explicit expression result fact without relying on caller seeding
-3. verify:
+1. thread one authoritative solved arithmetic/binop fact into monotype before any
+   binop lowering happens, and delete the old caller-seeding path
+2. trace every remaining `lowerExprWithExpectedType(...)` caller that can still
+   hit a placeholder target and make the earlier caller own that fact explicitly
+3. delete the placeholder fallback only after those explicit expected facts exist
+   everywhere it was previously reachable
+4. verify:
    - `timeout 600s zig build test-eval -- --threads 1`
    - `timeout 600s zig build test-eval-host-effects -- --threads 1`
-4. update `reinfer.md`
-5. commit
+5. update `reinfer.md`
+6. commit
 
 ## Phase 2. IR/Layout Explicit Facts
 
