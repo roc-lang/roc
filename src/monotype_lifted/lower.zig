@@ -220,6 +220,7 @@ const Lowerer = struct {
                     .ty = expr.ty,
                     .data = .{ .tag = .{
                         .name = tag.name,
+                        .discriminant = tag.discriminant,
                         .args = try self.lowerExprSpan(&lowered.lifted_defs, venv, tag.args),
                     } },
                 });
@@ -236,6 +237,7 @@ const Lowerer = struct {
                     .data = .{ .access = .{
                         .record = try self.lowerExprInto(&lowered.lifted_defs, venv, access.record),
                         .field = access.field,
+                        .field_index = access.field_index,
                     } },
                 });
             },
@@ -759,6 +761,7 @@ const Lowerer = struct {
                     .ty = pat.ty,
                     .data = .{ .tag = .{
                         .name = tag.name,
+                        .discriminant = tag.discriminant,
                         .args = try self.output.addPatSpan(lowered),
                     } },
                 });

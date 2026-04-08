@@ -1474,6 +1474,10 @@ pub const Lowerer = struct {
                 break :blk .{ .access = .{
                     .record = try self.lowerExpr(module_idx, type_scope, env, dot.receiver),
                     .field = try self.ctx.copyExecutableIdent(module_idx, dot.field_name),
+                    .field_index = self.requireRecordFieldIndexForType(
+                        try self.requireExprTypeFact(module_idx, type_scope, dot.receiver),
+                        try self.ctx.copyExecutableIdent(module_idx, dot.field_name),
+                    ),
                 } };
             },
             .e_tag => |tag| try self.lowerTagExprWithExpectedType(
@@ -2597,6 +2601,10 @@ pub const Lowerer = struct {
                         .data = .{ .access = .{
                             .record = scrutinee_expr,
                             .field = try self.ctx.copyExecutableIdent(module_idx, destruct.label),
+                            .field_index = self.requireRecordFieldIndexForType(
+                                scrutinee_ty,
+                                try self.ctx.copyExecutableIdent(module_idx, destruct.label),
+                            ),
                         } },
                     });
                     current = try self.lowerPatternGuardExpr(
@@ -3534,6 +3542,10 @@ pub const Lowerer = struct {
                     .ty = ty,
                     .data = .{ .tag = .{
                         .name = try self.ctx.copyExecutableIdent(module_idx, tag.name),
+                        .discriminant = self.requireTagDiscriminantForType(
+                            ty,
+                            try self.ctx.copyExecutableIdent(module_idx, tag.name),
+                        ),
                         .args = try self.program.store.addPatSpan(lowered_args),
                     } },
                 });
@@ -3748,6 +3760,7 @@ pub const Lowerer = struct {
                     .data = .{ .access = .{
                         .record = base_expr,
                         .field = field.name,
+                        .field_index = @intCast(i),
                     } },
                 });
             };
@@ -5165,6 +5178,10 @@ pub const Lowerer = struct {
         }
         return .{ .tag = .{
             .name = try self.ctx.copyExecutableIdent(module_idx, tag_name),
+            .discriminant = self.requireTagDiscriminantForType(
+                expected_ty,
+                try self.ctx.copyExecutableIdent(module_idx, tag_name),
+            ),
             .args = try self.program.store.addExprSpan(lowered_args),
         } };
     }
@@ -6084,6 +6101,10 @@ pub const Lowerer = struct {
                         .data = .{ .access = .{
                             .record = source_expr,
                             .field = try self.ctx.copyExecutableIdent(module_idx, destruct.label),
+                            .field_index = self.requireRecordFieldIndexForType(
+                                source.ty,
+                                try self.ctx.copyExecutableIdent(module_idx, destruct.label),
+                            ),
                         } },
                     });
                     try decls.append(self.allocator, .{
@@ -6256,6 +6277,10 @@ pub const Lowerer = struct {
                         .data = .{ .access = .{
                             .record = source_expr,
                             .field = try self.ctx.copyExecutableIdent(module_idx, destruct.label),
+                            .field_index = self.requireRecordFieldIndexForType(
+                                source_ty,
+                                try self.ctx.copyExecutableIdent(module_idx, destruct.label),
+                            ),
                         } },
                     });
                     try lowered.append(self.allocator, try self.program.store.addStmt(.{ .decl = .{
@@ -6444,6 +6469,10 @@ pub const Lowerer = struct {
                     .ty = effective_source_ty,
                     .data = .{ .tag = .{
                         .name = try self.ctx.copyExecutableIdent(module_idx, tag.name),
+                        .discriminant = self.requireTagDiscriminantForType(
+                            effective_source_ty,
+                            try self.ctx.copyExecutableIdent(module_idx, tag.name),
+                        ),
                         .args = try self.program.store.addPatSpan(lowered_args),
                     } },
                 });
@@ -6522,6 +6551,42 @@ pub const Lowerer = struct {
             debugPanic("monotype invariant violated: tuple element index out of bounds", .{});
         }
         return elems[elem_index];
+    }
+
+    fn requireTagDiscriminantForType(
+        self: *const Lowerer,
+        union_ty: type_mod.TypeId,
+        tag_name: base.Ident.Idx,
+    ) u16 {
+        var current = union_ty;
+        while (true) switch (self.ctx.types.getTypePreservingNominal(current)) {
+            .nominal => |backing| current = backing,
+            .tag_union => |tag_union| {
+                for (self.ctx.types.sliceTags(tag_union.tags), 0..) |tag, i| {
+                    if (tag.name == tag_name) return @intCast(i);
+                }
+                debugPanic("monotype invariant violated: missing tag discriminant for lowered type", .{});
+            },
+            else => debugPanic("monotype invariant violated: attempted to read tag discriminant from non-tag-union type", .{}),
+        };
+    }
+
+    fn requireRecordFieldIndexForType(
+        self: *const Lowerer,
+        record_ty: type_mod.TypeId,
+        field_name: base.Ident.Idx,
+    ) u16 {
+        var current = record_ty;
+        while (true) switch (self.ctx.types.getTypePreservingNominal(current)) {
+            .nominal => |backing| current = backing,
+            .record => |record| {
+                for (self.ctx.types.sliceFields(record.fields), 0..) |field, i| {
+                    if (field.name == field_name) return @intCast(i);
+                }
+                debugPanic("monotype invariant violated: missing field index for lowered type", .{});
+            },
+            else => debugPanic("monotype invariant violated: attempted to read field index from non-record type", .{}),
+        };
     }
 
     fn bindPatternEnv(

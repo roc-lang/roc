@@ -176,40 +176,16 @@ const Lowerer = struct {
         }
     }
 
-    fn tagDiscriminantForUnion(
-        self: *Lowerer,
-        union_ty: type_mod.TypeId,
-        tag_name: type_mod.TagName,
-    ) std.mem.Allocator.Error!u16 {
-        var current = union_ty;
-        while (true) switch (self.types.getTypePreservingNominal(current)) {
-            .nominal => |backing| current = backing,
-            .tag_union => |tag_union| {
-                for (self.types.sliceTags(tag_union.tags), 0..) |tag, i| {
-                    if (std.meta.eql(tag.name, tag_name)) return @intCast(i);
-                }
-                debugPanic("lambdamono.lower.tagDiscriminantForUnion missing tag");
-            },
-            else => debugPanic("lambdamono.lower.tagDiscriminantForUnion expected tag union"),
-        };
-    }
-
-    fn recordFieldIndex(
-        self: *Lowerer,
-        record_ty: type_mod.TypeId,
-        field_name: base.Ident.Idx,
-    ) std.mem.Allocator.Error!u16 {
-        var current = record_ty;
-        while (true) switch (self.types.getTypePreservingNominal(current)) {
-            .nominal => |backing| current = backing,
-            .record => |record| {
-                for (self.types.sliceFields(record.fields), 0..) |field, i| {
-                    if (field.name == field_name) return @intCast(i);
-                }
-                debugPanic("lambdamono.lower.recordFieldIndex missing field");
-            },
-            else => debugPanic("lambdamono.lower.recordFieldIndex expected record"),
-        };
+    fn requireLambdaDiscriminant(
+        self: *const Lowerer,
+        lambdas: []const solved.Type.Lambda,
+        symbol: Symbol,
+    ) u16 {
+        _ = self;
+        for (lambdas, 0..) |lambda, i| {
+            if (lambda.symbol == symbol) return @intCast(i);
+        }
+        debugPanic("lambdamono.lower.requireLambdaDiscriminant missing lambda");
     }
 
     fn ensureTopLevelValueLowered(self: *Lowerer, symbol: Symbol) std.mem.Allocator.Error!type_mod.TypeId {
@@ -443,10 +419,7 @@ const Lowerer = struct {
                 .data = .{ .access = .{
                     .record = captures_var,
                     .field = self.input.symbols.get(capture.symbol).name,
-                    .field_index = try self.recordFieldIndex(
-                        capture_record_ty,
-                        self.input.symbols.get(capture.symbol).name,
-                    ),
+                    .field_index = @intCast(idx),
                 } },
             });
             result = try self.output.addExpr(.{
@@ -489,7 +462,7 @@ const Lowerer = struct {
         }
 
         const data: ast.Expr.Data = switch (expr.data) {
-            .var_ => |symbol| try self.specializeVarExpr(inst, mono_cache, venv, symbol, ty, lowered_ty),
+            .var_ => |symbol| try self.specializeVarExpr(inst, mono_cache, venv, symbol, ty),
             .int_lit => |value| .{ .int_lit = value },
             .frac_f32_lit => |value| .{ .frac_f32_lit = value },
             .frac_f64_lit => |value| .{ .frac_f64_lit = value },
@@ -499,7 +472,7 @@ const Lowerer = struct {
             .unit => .unit,
             .tag => |tag| .{ .tag = .{
                 .name = .{ .ctor = tag.name },
-                .discriminant = try self.tagDiscriminantForUnion(lowered_ty, .{ .ctor = tag.name }),
+                .discriminant = tag.discriminant,
                 .args = try self.specializeExprSpan(inst, mono_cache, venv, tag.args),
             } },
             .record => |fields| .{ .record = try self.specializeFieldSpan(inst, mono_cache, venv, fields) },
@@ -508,7 +481,7 @@ const Lowerer = struct {
                 break :blk .{ .access = .{
                     .record = record,
                     .field = access.field,
-                    .field_index = try self.recordFieldIndex(self.output.getExpr(record).ty, access.field),
+                    .field_index = access.field_index,
                 } };
             },
             .let_ => |let_expr| .{ .let_ = .{
@@ -860,7 +833,7 @@ const Lowerer = struct {
                 .data = .{ .access = .{
                     .record = subject_expr,
                     .field = field.name,
-                    .field_index = try self.recordFieldIndex(record_ty, field.name),
+                    .field_index = @intCast(i),
                 } },
             });
             current = try self.makeStringConcatExpr(
@@ -1003,7 +976,7 @@ const Lowerer = struct {
                     .ty = union_ty,
                     .data = .{ .tag = .{
                         .name = tag.name,
-                        .discriminant = try self.tagDiscriminantForUnion(union_ty, tag.name),
+                        .discriminant = @intCast(i),
                         .args = try self.output.addPatSpan(pat_args),
                     } },
                 }),
@@ -1173,11 +1146,11 @@ const Lowerer = struct {
         venv: []const EnvEntry,
         symbol: Symbol,
         instantiated_ty: TypeVarId,
-        lowered_ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!ast.Expr.Data {
         if (specializations.lookupFn(self.fenv, symbol)) |fn_entry| {
             return switch (lower_type.lambdaRepr(&self.input.types, instantiated_ty)) {
-                .lset => blk: {
+                .lset => |lambdas| blk: {
+                    const lambda_discriminant = self.requireLambdaDiscriminant(lambdas, symbol);
                     _ = try specializations.specializeFnLset(
                         &self.queue,
                         self.fenv,
@@ -1198,7 +1171,7 @@ const Lowerer = struct {
                     )) {
                         .toplevel => break :blk .{ .tag = .{
                             .name = lower_type.lambdaTagKey(symbol),
-                            .discriminant = try self.tagDiscriminantForUnion(lowered_ty, lower_type.lambdaTagKey(symbol)),
+                            .discriminant = lambda_discriminant,
                             .args = ast.Span(ast.ExprId).empty(),
                         } },
                         .lset => |capture_info| {
@@ -1210,7 +1183,7 @@ const Lowerer = struct {
                             args[0] = capture_record;
                             break :blk .{ .tag = .{
                                 .name = lower_type.lambdaTagKey(symbol),
-                                .discriminant = try self.tagDiscriminantForUnion(lowered_ty, lower_type.lambdaTagKey(symbol)),
+                                .discriminant = lambda_discriminant,
                                 .args = try self.output.addExprSpan(args),
                             } };
                         },
@@ -1414,10 +1387,7 @@ const Lowerer = struct {
                                 .ty = self.output.getExpr(lowered_func).ty,
                                 .data = .{ .tag = .{
                                     .name = lower_type.lambdaTagKey(lambda.symbol),
-                                    .discriminant = try self.tagDiscriminantForUnion(
-                                        self.output.getExpr(lowered_func).ty,
-                                        lower_type.lambdaTagKey(lambda.symbol),
-                                    ),
+                                    .discriminant = @intCast(i),
                                     .args = ast.Span(ast.PatId).empty(),
                                 } },
                             }),
@@ -1439,10 +1409,7 @@ const Lowerer = struct {
                                 .ty = self.output.getExpr(lowered_func).ty,
                                 .data = .{ .tag = .{
                                     .name = lower_type.lambdaTagKey(lambda.symbol),
-                                    .discriminant = try self.tagDiscriminantForUnion(
-                                        self.output.getExpr(lowered_func).ty,
-                                        lower_type.lambdaTagKey(lambda.symbol),
-                                    ),
+                                    .discriminant = @intCast(i),
                                     .args = try self.output.addPatSpan(&.{capture_pat}),
                                 } },
                             });
@@ -1572,7 +1539,7 @@ const Lowerer = struct {
                         .ty = lowered_ty,
                         .data = .{ .tag = .{
                             .name = .{ .ctor = tag.name },
-                            .discriminant = try self.tagDiscriminantForUnion(lowered_ty, .{ .ctor = tag.name }),
+                            .discriminant = tag.discriminant,
                             .args = try self.output.addPatSpan(lowered_args),
                         } },
                     }),

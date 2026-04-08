@@ -177,12 +177,14 @@ const Lowerer = struct {
             .unit => .unit,
             .tag => |tag| .{ .tag = .{
                 .name = tag.name,
+                .discriminant = tag.discriminant,
                 .args = try self.instantiateExprSpan(tag.args),
             } },
             .record => |fields| .{ .record = try self.instantiateFieldSpan(fields) },
             .access => |access| .{ .access = .{
                 .record = try self.instantiateExpr(access.record),
                 .field = access.field,
+                .field_index = access.field_index,
             } },
             .let_ => |let_expr| .{ .let_ = .{
                 .bind = try self.instantiateTypedSymbol(let_expr.bind),
@@ -259,6 +261,7 @@ const Lowerer = struct {
             .bool_lit => |value| .{ .bool_lit = value },
             .tag => |tag| .{ .tag = .{
                 .name = tag.name,
+                .discriminant = tag.discriminant,
                 .args = try self.instantiatePatSpan(tag.args),
             } },
         };

@@ -40,6 +40,7 @@ pub const Pat = struct {
         bool_lit: bool,
         tag: struct {
             name: base.Ident.Idx,
+            discriminant: u16,
             args: Span(PatId),
         },
         var_: Symbol,
@@ -87,12 +88,14 @@ pub const Expr = struct {
         str_lit: base.StringLiteral.Idx,
         tag: struct {
             name: base.Ident.Idx,
+            discriminant: u16,
             args: Span(ExprId),
         },
         record: Span(FieldExpr),
         access: struct {
             record: ExprId,
             field: base.Ident.Idx,
+            field_index: u16,
         },
         let_: struct {
             def: LetDef,
