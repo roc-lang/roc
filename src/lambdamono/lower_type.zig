@@ -30,7 +30,25 @@ pub const LambdaRepr = union(enum) {
     erased,
 };
 
-pub const MonoCache = std.AutoHashMap(TypeVarId, mono.TypeId);
+pub const MonoCache = struct {
+    active: std.AutoHashMap(TypeVarId, mono.TypeId),
+    provisional: std.AutoHashMap(TypeVarId, mono.TypeId),
+    resolved: std.AutoHashMap(TypeVarId, mono.TypeId),
+
+    pub fn init(allocator: std.mem.Allocator) MonoCache {
+        return .{
+            .active = std.AutoHashMap(TypeVarId, mono.TypeId).init(allocator),
+            .provisional = std.AutoHashMap(TypeVarId, mono.TypeId).init(allocator),
+            .resolved = std.AutoHashMap(TypeVarId, mono.TypeId).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *MonoCache) void {
+        self.resolved.deinit();
+        self.provisional.deinit();
+        self.active.deinit();
+    }
+};
 
 pub fn extractFn(types: *solved.Type.Store, ty: TypeVarId) struct {
     arg: TypeVarId,
@@ -122,7 +140,8 @@ pub fn lowerCaptureBindings(
     const raw = try mono_types.addType(.{ .record = .{
         .fields = try mono_types.addFields(fields),
     } });
-    return try mono_types.keyId(raw);
+    if (!mono_types.isFullyResolved(raw)) return raw;
+    return try mono_types.canonicalizeResolved(raw);
 }
 
 fn lowerTypeRec(
@@ -133,16 +152,20 @@ fn lowerTypeRec(
     symbols: *const symbol_mod.Store,
 ) std.mem.Allocator.Error!mono.TypeId {
     const id = unlinkExecutable(types, ty);
-    if (mono_cache.get(id)) |cached| {
-        const keyed = try mono_types.keyId(cached);
-        if (keyed != cached) {
-            try mono_cache.put(id, keyed);
+    if (mono_cache.active.get(id)) |active| return active;
+    if (mono_cache.resolved.get(id)) |cached| return cached;
+    if (mono_cache.provisional.get(id)) |provisional| {
+        if (mono_types.isFullyResolved(provisional)) {
+            const canonical = try mono_types.canonicalizeResolved(provisional);
+            _ = mono_cache.provisional.remove(id);
+            try mono_cache.resolved.put(id, canonical);
+            return canonical;
         }
-        return keyed;
+        return provisional;
     }
 
     const placeholder = try mono_types.addType(.placeholder);
-    try mono_cache.put(id, placeholder);
+    try mono_cache.active.put(id, placeholder);
 
     const lowered: mono.Content = switch (types.getNode(id)) {
         .link => unreachable,
@@ -208,9 +231,15 @@ fn lowerTypeRec(
     };
 
     mono_types.setType(placeholder, lowered);
-    const keyed = try mono_types.keyId(placeholder);
-    try mono_cache.put(id, keyed);
-    return keyed;
+    _ = mono_cache.active.remove(id);
+    if (mono_types.isFullyResolved(placeholder)) {
+        const canonical = try mono_types.canonicalizeResolved(placeholder);
+        try mono_cache.resolved.put(id, canonical);
+        return canonical;
+    }
+
+    try mono_cache.provisional.put(id, placeholder);
+    return placeholder;
 }
 
 fn lowerLambdaSet(

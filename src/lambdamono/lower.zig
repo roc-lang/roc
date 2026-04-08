@@ -8,6 +8,7 @@ const type_mod = @import("type.zig");
 const symbol_mod = @import("symbol");
 const lower_type = @import("lower_type.zig");
 const specializations = @import("specializations.zig");
+const layout_facts = @import("layout_facts.zig");
 
 const Symbol = symbol_mod.Symbol;
 const TypeVarId = solved.Type.TypeVarId;
@@ -17,12 +18,14 @@ pub const Result = struct {
     root_defs: std.ArrayList(ast.DefId),
     symbols: symbol_mod.Store,
     types: type_mod.Store,
+    layout_facts: layout_facts.Facts,
     strings: base.StringLiteral.Store,
 
     pub fn deinit(self: *Result) void {
         self.store.deinit();
         self.root_defs.deinit(self.store.allocator);
         self.symbols.deinit();
+        self.layout_facts.deinit(self.store.allocator);
         self.types.deinit();
         self.strings.deinit(self.store.allocator);
     }
@@ -32,7 +35,14 @@ pub fn run(allocator: std.mem.Allocator, input: solved.Lower.Result) std.mem.All
     var lowerer = Lowerer.init(allocator, input);
     defer lowerer.deinit();
     try lowerer.lowerProgram();
-    return try lowerer.finish();
+    const explicit_layout_facts = try layout_facts.Facts.init(allocator, &lowerer.output, &lowerer.types);
+    errdefer {
+        var facts = explicit_layout_facts;
+        facts.deinit(allocator);
+    }
+    var result = try lowerer.finish();
+    result.layout_facts = explicit_layout_facts;
+    return result;
 }
 
 const Lowerer = struct {
@@ -67,16 +77,25 @@ const Lowerer = struct {
     const InstScope = struct {
         allocator: std.mem.Allocator,
         mapping: std.AutoHashMap(TypeVarId, TypeVarId),
+        expr_type_facts: std.AutoHashMap(solved.Ast.ExprId, type_mod.TypeId),
+        pat_type_facts: std.AutoHashMap(solved.Ast.PatId, type_mod.TypeId),
+        binding_type_facts: std.AutoHashMap(TypeVarId, type_mod.TypeId),
 
         fn init(allocator: std.mem.Allocator) InstScope {
             return .{
                 .allocator = allocator,
                 .mapping = std.AutoHashMap(TypeVarId, TypeVarId).init(allocator),
+                .expr_type_facts = std.AutoHashMap(solved.Ast.ExprId, type_mod.TypeId).init(allocator),
+                .pat_type_facts = std.AutoHashMap(solved.Ast.PatId, type_mod.TypeId).init(allocator),
+                .binding_type_facts = std.AutoHashMap(TypeVarId, type_mod.TypeId).init(allocator),
             };
         }
 
         fn deinit(self: *InstScope) void {
             self.mapping.deinit();
+            self.expr_type_facts.deinit();
+            self.pat_type_facts.deinit();
+            self.binding_type_facts.deinit();
         }
     };
 
@@ -117,6 +136,7 @@ const Lowerer = struct {
             .root_defs = self.root_defs,
             .symbols = self.input.symbols,
             .types = self.types,
+            .layout_facts = undefined,
             .strings = self.input.strings,
         };
 
@@ -188,6 +208,319 @@ const Lowerer = struct {
         debugPanic("lambdamono.lower.requireLambdaDiscriminant missing lambda");
     }
 
+    fn buildLsetSpecializationSig(
+        self: *Lowerer,
+        mono_cache: *lower_type.MonoCache,
+        requested_name: Symbol,
+        requested_ty: TypeVarId,
+        arg_ty_override: ?type_mod.TypeId,
+        ret_ty_override: ?type_mod.TypeId,
+    ) std.mem.Allocator.Error!specializations.SigKey {
+        const requested_fn = lower_type.extractFn(&self.input.types, requested_ty);
+        const arg_ty = arg_ty_override orelse
+            try self.lowerExecutableTypeFact(mono_cache, requested_fn.arg);
+        const ret_ty = ret_ty_override orelse
+            try self.lowerExecutableTypeFact(mono_cache, requested_fn.ret);
+        const captures: specializations.CaptureSpec = switch (try lower_type.extractLsetFn(
+            &self.input.types,
+            &self.types,
+            mono_cache,
+            requested_ty,
+            requested_name,
+            &self.input.symbols,
+        )) {
+            .toplevel => .toplevel,
+            .lset => |info| .{ .lset = info.ty },
+        };
+        return specializations.makeSigKey(requested_name, arg_ty, ret_ty, captures);
+    }
+
+    fn buildErasedSpecializationSig(
+        self: *Lowerer,
+        mono_cache: *lower_type.MonoCache,
+        requested_name: Symbol,
+        requested_ty: TypeVarId,
+        captures_new: []const lower_type.CaptureBinding,
+    ) std.mem.Allocator.Error!specializations.SigKey {
+        const requested_fn = lower_type.extractFn(&self.input.types, requested_ty);
+        const arg_ty = try self.lowerExecutableTypeFact(mono_cache, requested_fn.arg);
+        const ret_ty = try self.lowerExecutableTypeFact(mono_cache, requested_fn.ret);
+        const captures: specializations.CaptureSpec = if (captures_new.len == 0)
+            .toplevel
+        else
+            .{ .erased = try lower_type.lowerCaptureBindings(
+                &self.input.types,
+                &self.types,
+                mono_cache,
+                captures_new,
+                &self.input.symbols,
+            ) };
+        return specializations.makeSigKey(requested_name, arg_ty, ret_ty, captures);
+    }
+
+    fn lowerExecutableTypeFact(
+        self: *Lowerer,
+        mono_cache: *lower_type.MonoCache,
+        ty: TypeVarId,
+    ) std.mem.Allocator.Error!type_mod.TypeId {
+        return try lower_type.lowerType(&self.input.types, &self.types, mono_cache, ty, &self.input.symbols);
+    }
+
+    fn recordExprTypeFact(
+        self: *Lowerer,
+        inst: *InstScope,
+        mono_cache: *lower_type.MonoCache,
+        expr_id: solved.Ast.ExprId,
+    ) std.mem.Allocator.Error!void {
+        if (inst.expr_type_facts.contains(expr_id)) return;
+        const expr = self.input.store.getExpr(expr_id);
+        const solved_ty = try self.cloneInstType(inst, expr.ty);
+        const lowered_ty = try self.lowerExecutableTypeFact(mono_cache, solved_ty);
+        try inst.expr_type_facts.put(expr_id, lowered_ty);
+    }
+
+    fn recordPatTypeFact(
+        self: *Lowerer,
+        inst: *InstScope,
+        mono_cache: *lower_type.MonoCache,
+        pat_id: solved.Ast.PatId,
+    ) std.mem.Allocator.Error!void {
+        if (inst.pat_type_facts.contains(pat_id)) return;
+        const pat = self.input.store.getPat(pat_id);
+        const solved_ty = try self.cloneInstType(inst, pat.ty);
+        const lowered_ty = try self.lowerExecutableTypeFact(mono_cache, solved_ty);
+        try inst.pat_type_facts.put(pat_id, lowered_ty);
+    }
+
+    fn recordBindingTypeFact(
+        self: *Lowerer,
+        inst: *InstScope,
+        mono_cache: *lower_type.MonoCache,
+        bind: solved.Ast.TypedSymbol,
+    ) std.mem.Allocator.Error!void {
+        try self.recordBindingTypeFactFromSourceTy(inst, mono_cache, bind.ty);
+    }
+
+    fn recordBindingTypeFactFromSourceTy(
+        self: *Lowerer,
+        inst: *InstScope,
+        mono_cache: *lower_type.MonoCache,
+        source_ty: TypeVarId,
+    ) std.mem.Allocator.Error!void {
+        const solved_ty = try self.cloneInstType(inst, source_ty);
+        try self.recordSolvedBindingTypeFact(inst, mono_cache, solved_ty);
+    }
+
+    fn recordSolvedBindingTypeFact(
+        self: *Lowerer,
+        inst: *InstScope,
+        mono_cache: *lower_type.MonoCache,
+        solved_ty: TypeVarId,
+    ) std.mem.Allocator.Error!void {
+        const lowered_ty = try self.lowerExecutableTypeFact(mono_cache, solved_ty);
+        if (inst.binding_type_facts.get(solved_ty)) |existing| {
+            if (existing != lowered_ty) {
+                debugPanic("lambdamono.lower.recordBindingTypeFact conflicting executable binding type");
+            }
+            return;
+        }
+        try inst.binding_type_facts.put(solved_ty, lowered_ty);
+    }
+
+    fn requireExprTypeFact(
+        self: *const Lowerer,
+        inst: *const InstScope,
+        expr_id: solved.Ast.ExprId,
+    ) type_mod.TypeId {
+        _ = self;
+        return inst.expr_type_facts.get(expr_id) orelse
+            debugPanic("lambdamono.lower.requireExprTypeFact missing explicit expr executable type");
+    }
+
+    fn requirePatTypeFact(
+        self: *const Lowerer,
+        inst: *const InstScope,
+        pat_id: solved.Ast.PatId,
+    ) type_mod.TypeId {
+        _ = self;
+        return inst.pat_type_facts.get(pat_id) orelse
+            debugPanic("lambdamono.lower.requirePatTypeFact missing explicit pat executable type");
+    }
+
+    fn requireBindingTypeFact(
+        self: *Lowerer,
+        inst: *InstScope,
+        source_ty: TypeVarId,
+    ) std.mem.Allocator.Error!type_mod.TypeId {
+        const solved_ty = try self.cloneInstType(inst, source_ty);
+        return self.requireSolvedTypeFact(inst, solved_ty);
+    }
+
+    fn requireSolvedTypeFact(
+        self: *const Lowerer,
+        inst: *const InstScope,
+        solved_ty: TypeVarId,
+    ) type_mod.TypeId {
+        _ = self;
+        return inst.binding_type_facts.get(solved_ty) orelse
+            debugPanic("lambdamono.lower.requireSolvedTypeFact missing explicit executable type");
+    }
+
+    fn collectExprExecutableFacts(
+        self: *Lowerer,
+        inst: *InstScope,
+        mono_cache: *lower_type.MonoCache,
+        expr_id: solved.Ast.ExprId,
+    ) std.mem.Allocator.Error!void {
+        if (inst.expr_type_facts.contains(expr_id)) return;
+        try self.recordExprTypeFact(inst, mono_cache, expr_id);
+
+        const expr = self.input.store.getExpr(expr_id);
+        switch (expr.data) {
+            .var_,
+            .int_lit,
+            .frac_f32_lit,
+            .frac_f64_lit,
+            .dec_lit,
+            .str_lit,
+            .bool_lit,
+            .unit,
+            .runtime_error,
+            => {},
+            .tag => |tag| {
+                for (self.input.store.sliceExprSpan(tag.args)) |arg| {
+                    try self.collectExprExecutableFacts(inst, mono_cache, arg);
+                }
+            },
+            .record => |fields| {
+                for (self.input.store.sliceFieldExprSpan(fields)) |field| {
+                    try self.collectExprExecutableFacts(inst, mono_cache, field.value);
+                }
+            },
+            .access => |access| try self.collectExprExecutableFacts(inst, mono_cache, access.record),
+            .let_ => |let_expr| {
+                try self.recordBindingTypeFact(inst, mono_cache, let_expr.bind);
+                try self.collectExprExecutableFacts(inst, mono_cache, let_expr.body);
+                try self.collectExprExecutableFacts(inst, mono_cache, let_expr.rest);
+            },
+            .call => |call| {
+                try self.collectExprExecutableFacts(inst, mono_cache, call.func);
+                try self.collectExprExecutableFacts(inst, mono_cache, call.arg);
+            },
+            .inspect => |value| try self.collectExprExecutableFacts(inst, mono_cache, value),
+            .low_level => |ll| {
+                for (self.input.store.sliceExprSpan(ll.args)) |arg| {
+                    try self.collectExprExecutableFacts(inst, mono_cache, arg);
+                }
+            },
+            .when => |when_expr| {
+                try self.collectExprExecutableFacts(inst, mono_cache, when_expr.cond);
+                for (self.input.store.sliceBranchSpan(when_expr.branches)) |branch_id| {
+                    const branch = self.input.store.getBranch(branch_id);
+                    try self.collectPatExecutableFacts(inst, mono_cache, branch.pat);
+                    try self.collectExprExecutableFacts(inst, mono_cache, branch.body);
+                }
+            },
+            .if_ => |if_expr| {
+                try self.collectExprExecutableFacts(inst, mono_cache, if_expr.cond);
+                try self.collectExprExecutableFacts(inst, mono_cache, if_expr.then_body);
+                try self.collectExprExecutableFacts(inst, mono_cache, if_expr.else_body);
+            },
+            .block => |block| {
+                for (self.input.store.sliceStmtSpan(block.stmts)) |stmt_id| {
+                    try self.collectStmtExecutableFacts(inst, mono_cache, stmt_id);
+                }
+                try self.collectExprExecutableFacts(inst, mono_cache, block.final_expr);
+            },
+            .tuple => |tuple| {
+                for (self.input.store.sliceExprSpan(tuple)) |elem| {
+                    try self.collectExprExecutableFacts(inst, mono_cache, elem);
+                }
+            },
+            .tuple_access => |tuple_access| try self.collectExprExecutableFacts(inst, mono_cache, tuple_access.tuple),
+            .list => |items| {
+                for (self.input.store.sliceExprSpan(items)) |item| {
+                    try self.collectExprExecutableFacts(inst, mono_cache, item);
+                }
+            },
+            .return_ => |ret| try self.collectExprExecutableFacts(inst, mono_cache, ret),
+            .for_ => |for_expr| {
+                try self.collectPatExecutableFacts(inst, mono_cache, for_expr.patt);
+                try self.collectExprExecutableFacts(inst, mono_cache, for_expr.iterable);
+                try self.collectExprExecutableFacts(inst, mono_cache, for_expr.body);
+            },
+        }
+    }
+
+    fn collectPatExecutableFacts(
+        self: *Lowerer,
+        inst: *InstScope,
+        mono_cache: *lower_type.MonoCache,
+        pat_id: solved.Ast.PatId,
+    ) std.mem.Allocator.Error!void {
+        if (inst.pat_type_facts.contains(pat_id)) return;
+        try self.recordPatTypeFact(inst, mono_cache, pat_id);
+
+        const pat = self.input.store.getPat(pat_id);
+        switch (pat.data) {
+            .var_ => {},
+            .bool_lit => {},
+            .tag => |tag| {
+                for (self.input.store.slicePatSpan(tag.args)) |arg| {
+                    try self.collectPatExecutableFacts(inst, mono_cache, arg);
+                }
+            },
+        }
+    }
+
+    fn collectStmtExecutableFacts(
+        self: *Lowerer,
+        inst: *InstScope,
+        mono_cache: *lower_type.MonoCache,
+        stmt_id: solved.Ast.StmtId,
+    ) std.mem.Allocator.Error!void {
+        const stmt = self.input.store.getStmt(stmt_id);
+        switch (stmt) {
+            .decl => |decl| {
+                try self.recordBindingTypeFact(inst, mono_cache, decl.bind);
+                try self.collectExprExecutableFacts(inst, mono_cache, decl.body);
+            },
+            .var_decl => |decl| {
+                try self.recordBindingTypeFact(inst, mono_cache, decl.bind);
+                try self.collectExprExecutableFacts(inst, mono_cache, decl.body);
+            },
+            .reassign => |reassign| try self.collectExprExecutableFacts(inst, mono_cache, reassign.body),
+            .expr => |expr_id| try self.collectExprExecutableFacts(inst, mono_cache, expr_id),
+            .debug => |expr_id| try self.collectExprExecutableFacts(inst, mono_cache, expr_id),
+            .expect => |expr_id| try self.collectExprExecutableFacts(inst, mono_cache, expr_id),
+            .crash => {},
+            .return_ => |expr_id| try self.collectExprExecutableFacts(inst, mono_cache, expr_id),
+            .break_ => {},
+            .for_ => |for_stmt| {
+                try self.collectPatExecutableFacts(inst, mono_cache, for_stmt.patt);
+                try self.collectExprExecutableFacts(inst, mono_cache, for_stmt.iterable);
+                try self.collectExprExecutableFacts(inst, mono_cache, for_stmt.body);
+            },
+            .while_ => |while_stmt| {
+                try self.collectExprExecutableFacts(inst, mono_cache, while_stmt.cond);
+                try self.collectExprExecutableFacts(inst, mono_cache, while_stmt.body);
+            },
+        }
+    }
+
+    fn collectFnExecutableFacts(
+        self: *Lowerer,
+        inst: *InstScope,
+        mono_cache: *lower_type.MonoCache,
+        fn_def: solved.Ast.FnDef,
+    ) std.mem.Allocator.Error!void {
+        try self.recordBindingTypeFact(inst, mono_cache, fn_def.arg);
+        for (self.input.store.sliceTypedSymbolSpan(fn_def.captures)) |capture| {
+            try self.recordBindingTypeFact(inst, mono_cache, capture);
+        }
+        try self.collectExprExecutableFacts(inst, mono_cache, fn_def.body);
+    }
+
     fn ensureTopLevelValueLowered(self: *Lowerer, symbol: Symbol) std.mem.Allocator.Error!type_mod.TypeId {
         if (self.top_level_value_types.get(symbol)) |existing| return existing;
 
@@ -248,6 +581,8 @@ const Lowerer = struct {
         defer inst.deinit();
         var mono_cache = lower_type.MonoCache.init(self.allocator);
         defer mono_cache.deinit();
+        try self.recordBindingTypeFact(&inst, &mono_cache, bind);
+        try self.collectExprExecutableFacts(&inst, &mono_cache, expr_id);
         return .{
             .symbol = bind.symbol,
             .expr = try self.specializeExpr(&inst, &mono_cache, &.{}, expr_id),
@@ -264,15 +599,6 @@ const Lowerer = struct {
         const requested_ty = try self.cloneInstType(&inst, pending.requested_ty);
         try self.unify(t, requested_ty);
 
-        const arg_ty = try self.cloneInstType(&inst, pending.fn_def.arg.ty);
-        const lowered_arg_ty = try lower_type.lowerType(
-            &self.input.types,
-            &self.types,
-            &mono_cache,
-            arg_ty,
-            &self.input.symbols,
-        );
-
         return switch (lower_type.lambdaRepr(&self.input.types, t)) {
             .lset => switch (try lower_type.extractLsetFn(
                 &self.input.types,
@@ -283,21 +609,29 @@ const Lowerer = struct {
                 &self.input.symbols,
             )) {
                 .toplevel => .{
-                    .args = try self.output.addTypedSymbolSpan(&.{.{
-                        .ty = lowered_arg_ty,
-                        .symbol = pending.fn_def.arg.symbol,
-                    }}),
+                    .args = blk: {
+                        try self.collectFnExecutableFacts(&inst, &mono_cache, pending.fn_def);
+                        const arg_ty = try self.cloneInstType(&inst, pending.fn_def.arg.ty);
+                        break :blk try self.output.addTypedSymbolSpan(&.{.{
+                            .ty = self.requireSolvedTypeFact(&inst, arg_ty),
+                            .symbol = pending.fn_def.arg.symbol,
+                        }});
+                    },
                     .body = try self.specializeExpr(
                         &inst,
                         &mono_cache,
-                        &.{.{ .symbol = pending.fn_def.arg.symbol, .ty = arg_ty }},
+                        &.{.{ .symbol = pending.fn_def.arg.symbol, .ty = try self.cloneInstType(&inst, pending.fn_def.arg.ty) }},
                         pending.fn_def.body,
                     ),
                 },
                 .lset => |capture_info| blk: {
+                    try self.collectFnExecutableFacts(&inst, &mono_cache, pending.fn_def);
+                    const arg_ty = try self.cloneInstType(&inst, pending.fn_def.arg.ty);
+                    try self.recordSolvedBindingTypeFact(&inst, &mono_cache, arg_ty);
                     const captures_symbol = try self.input.symbols.add(base.Ident.Idx.NONE, .synthetic);
-                    const capture_bindings = try self.captureBindingsFromSolved(&mono_cache, capture_info.captures);
+                    const capture_bindings = try self.captureBindingsFromTypedSymbols(&inst, pending.fn_def.captures);
                     defer self.allocator.free(capture_bindings);
+                    self.sortCaptureBindings(capture_bindings);
                     const body_env = try self.buildFnBodyEnv(arg_ty, pending.fn_def.arg.symbol, capture_bindings);
                     defer self.allocator.free(body_env);
 
@@ -312,7 +646,7 @@ const Lowerer = struct {
                     break :blk .{
                         .args = try self.output.addTypedSymbolSpan(&.{
                             .{
-                                .ty = lowered_arg_ty,
+                                .ty = self.requireSolvedTypeFact(&inst, arg_ty),
                                 .symbol = pending.fn_def.arg.symbol,
                             },
                             .{
@@ -326,20 +660,25 @@ const Lowerer = struct {
             },
             .erased => blk: {
                 const captures_new = pending.captures_new orelse &.{};
-                const captures = try self.captureBindingsFromTypedSymbols(&inst, &mono_cache, pending.fn_def.captures);
-                defer self.allocator.free(captures);
-                self.sortCaptureBindings(captures);
+                const captures_solved = try self.captureSolvedBindingsFromTypedSymbols(&inst, pending.fn_def.captures);
+                defer self.allocator.free(captures_solved);
 
-                if (captures.len != captures_new.len) {
+                if (captures_solved.len != captures_new.len) {
                     debugPanic("lambdamono.lower.specializeFn erased capture arity mismatch");
                 }
-                for (captures, captures_new) |capture, capture_new| {
+                for (captures_solved, captures_new) |capture, capture_new| {
                     if (capture.symbol != capture_new.symbol) {
                         debugPanic("lambdamono.lower.specializeFn erased capture symbol mismatch");
                     }
                     try self.unify(capture.solved_ty, capture_new.solved_ty);
                 }
 
+                try self.collectFnExecutableFacts(&inst, &mono_cache, pending.fn_def);
+                const arg_ty = try self.cloneInstType(&inst, pending.fn_def.arg.ty);
+                try self.recordSolvedBindingTypeFact(&inst, &mono_cache, arg_ty);
+                const captures = try self.captureBindingsFromTypedSymbols(&inst, pending.fn_def.captures);
+                defer self.allocator.free(captures);
+                self.sortCaptureBindings(captures);
                 const body_env = try self.buildFnBodyEnv(arg_ty, pending.fn_def.arg.symbol, captures);
                 defer self.allocator.free(body_env);
 
@@ -347,7 +686,7 @@ const Lowerer = struct {
                 if (captures.len == 0) {
                     break :blk .{
                         .args = try self.output.addTypedSymbolSpan(&.{.{
-                            .ty = lowered_arg_ty,
+                            .ty = self.requireSolvedTypeFact(&inst, arg_ty),
                             .symbol = pending.fn_def.arg.symbol,
                         }}),
                         .body = body,
@@ -367,7 +706,7 @@ const Lowerer = struct {
                 break :blk .{
                     .args = try self.output.addTypedSymbolSpan(&.{
                         .{
-                            .ty = lowered_arg_ty,
+                            .ty = self.requireSolvedTypeFact(&inst, arg_ty),
                             .symbol = pending.fn_def.arg.symbol,
                         },
                         .{
@@ -446,16 +785,7 @@ const Lowerer = struct {
     ) std.mem.Allocator.Error!ast.ExprId {
         const expr = self.input.store.getExpr(expr_id);
         const ty = try self.cloneInstType(inst, expr.ty);
-        const lowered_ty = switch (expr.data) {
-            .var_ => |symbol| if (self.lookupEnv(venv, symbol) == null)
-                if (self.top_level_values.contains(symbol))
-                    try self.ensureTopLevelValueLowered(symbol)
-                else
-                    try lower_type.lowerType(&self.input.types, &self.types, mono_cache, ty, &self.input.symbols)
-            else
-                try lower_type.lowerType(&self.input.types, &self.types, mono_cache, ty, &self.input.symbols),
-            else => try lower_type.lowerType(&self.input.types, &self.types, mono_cache, ty, &self.input.symbols),
-        };
+        const lowered_ty = self.requireExprTypeFact(inst, expr_id);
 
         if (expr.data == .inspect) {
             return try self.specializeInspectExpr(inst, mono_cache, venv, expr.data.inspect, lowered_ty);
@@ -486,13 +816,7 @@ const Lowerer = struct {
             },
             .let_ => |let_expr| .{ .let_ = .{
                 .bind = .{
-                    .ty = try lower_type.lowerType(
-                        &self.input.types,
-                        &self.types,
-                        mono_cache,
-                        try self.cloneInstType(inst, let_expr.bind.ty),
-                        &self.input.symbols,
-                    ),
+                    .ty = try self.requireBindingTypeFact(inst, let_expr.bind.ty),
                     .symbol = let_expr.bind.symbol,
                 },
                 .body = try self.specializeExpr(inst, mono_cache, venv, let_expr.body),
@@ -1151,14 +1475,20 @@ const Lowerer = struct {
             return switch (lower_type.lambdaRepr(&self.input.types, instantiated_ty)) {
                 .lset => |lambdas| blk: {
                     const lambda_discriminant = self.requireLambdaDiscriminant(lambdas, symbol);
+                    const sig = try self.buildLsetSpecializationSig(
+                        mono_cache,
+                        symbol,
+                        instantiated_ty,
+                        null,
+                        null,
+                    );
                     _ = try specializations.specializeFnLset(
                         &self.queue,
                         self.fenv,
                         &self.input.symbols,
-                        &self.input.types,
-                        &self.types,
                         symbol,
                         instantiated_ty,
+                        sig,
                     );
 
                     switch (try lower_type.extractLsetFn(
@@ -1175,8 +1505,10 @@ const Lowerer = struct {
                             .args = ast.Span(ast.ExprId).empty(),
                         } },
                         .lset => |capture_info| {
-                            const capture_bindings = try self.captureBindingsFromSolved(mono_cache, capture_info.captures);
+                            try self.collectFnExecutableFacts(inst, mono_cache, fn_entry.fn_def);
+                            const capture_bindings = try self.captureBindingsFromTypedSymbols(inst, fn_entry.fn_def.captures);
                             defer self.allocator.free(capture_bindings);
+                            self.sortCaptureBindings(capture_bindings);
                             const capture_record = try self.specializeCaptureRecord(capture_bindings, capture_info.ty);
                             const args = try self.allocator.alloc(ast.ExprId, 1);
                             defer self.allocator.free(args);
@@ -1190,16 +1522,22 @@ const Lowerer = struct {
                     }
                 },
                 .erased => blk: {
-                    const captures = try self.captureBindingsForErasedVar(inst, mono_cache, venv, fn_entry.fn_def.captures);
+                    try self.collectFnExecutableFacts(inst, mono_cache, fn_entry.fn_def);
+                    const captures = try self.captureBindingsForErasedVar(inst, venv, fn_entry.fn_def.captures);
                     defer self.allocator.free(captures);
+                    const sig = try self.buildErasedSpecializationSig(
+                        mono_cache,
+                        symbol,
+                        instantiated_ty,
+                        captures,
+                    );
                     const specialized_symbol = try specializations.specializeFnErased(
                         &self.queue,
                         self.fenv,
                         &self.input.symbols,
-                        &self.input.types,
-                        &self.types,
                         symbol,
                         instantiated_ty,
+                        sig,
                         captures,
                     );
 
@@ -1254,32 +1592,31 @@ const Lowerer = struct {
         });
     }
 
-    fn captureBindingsFromSolved(
+    const CaptureSolvedBinding = struct {
+        symbol: Symbol,
+        solved_ty: TypeVarId,
+    };
+
+    fn captureSolvedBindingsFromTypedSymbols(
         self: *Lowerer,
-        mono_cache: *lower_type.MonoCache,
-        captures: []const solved.Type.Capture,
-    ) std.mem.Allocator.Error![]lower_type.CaptureBinding {
-        const out = try self.allocator.alloc(lower_type.CaptureBinding, captures.len);
+        inst: *InstScope,
+        captures_span: solved.Ast.Span(solved.Ast.TypedSymbol),
+    ) std.mem.Allocator.Error![]CaptureSolvedBinding {
+        const captures = self.input.store.sliceTypedSymbolSpan(captures_span);
+        const out = try self.allocator.alloc(CaptureSolvedBinding, captures.len);
         for (captures, 0..) |capture, i| {
             out[i] = .{
                 .symbol = capture.symbol,
-                .solved_ty = capture.ty,
-                .lowered_ty = try lower_type.lowerType(
-                    &self.input.types,
-                    &self.types,
-                    mono_cache,
-                    capture.ty,
-                    &self.input.symbols,
-                ),
+                .solved_ty = try self.cloneInstType(inst, capture.ty),
             };
         }
+        self.sortCaptureSolvedBindings(out);
         return out;
     }
 
     fn captureBindingsFromTypedSymbols(
         self: *Lowerer,
         inst: *InstScope,
-        mono_cache: *lower_type.MonoCache,
         captures_span: solved.Ast.Span(solved.Ast.TypedSymbol),
     ) std.mem.Allocator.Error![]lower_type.CaptureBinding {
         const captures = self.input.store.sliceTypedSymbolSpan(captures_span);
@@ -1289,13 +1626,7 @@ const Lowerer = struct {
             out[i] = .{
                 .symbol = capture.symbol,
                 .solved_ty = solved_ty,
-                .lowered_ty = try lower_type.lowerType(
-                    &self.input.types,
-                    &self.types,
-                    mono_cache,
-                    solved_ty,
-                    &self.input.symbols,
-                ),
+                .lowered_ty = self.requireSolvedTypeFact(inst, solved_ty),
             };
         }
         return out;
@@ -1304,11 +1635,9 @@ const Lowerer = struct {
     fn captureBindingsForErasedVar(
         self: *Lowerer,
         inst: *InstScope,
-        mono_cache: *lower_type.MonoCache,
         venv: []const EnvEntry,
         captures_span: solved.Ast.Span(solved.Ast.TypedSymbol),
     ) std.mem.Allocator.Error![]lower_type.CaptureBinding {
-        _ = inst;
         const captures = self.input.store.sliceTypedSymbolSpan(captures_span);
         const out = try self.allocator.alloc(lower_type.CaptureBinding, captures.len);
         for (captures, 0..) |capture, i| {
@@ -1317,17 +1646,20 @@ const Lowerer = struct {
             out[i] = .{
                 .symbol = capture.symbol,
                 .solved_ty = solved_ty,
-                .lowered_ty = try lower_type.lowerType(
-                    &self.input.types,
-                    &self.types,
-                    mono_cache,
-                    solved_ty,
-                    &self.input.symbols,
-                ),
+                .lowered_ty = self.requireSolvedTypeFact(inst, solved_ty),
             };
         }
         self.sortCaptureBindings(out);
         return out;
+    }
+
+    fn sortCaptureSolvedBindings(self: *Lowerer, captures: []CaptureSolvedBinding) void {
+        _ = self;
+        std.mem.sortUnstable(CaptureSolvedBinding, captures, {}, struct {
+            fn lessThan(_: void, left: CaptureSolvedBinding, right: CaptureSolvedBinding) bool {
+                return left.symbol.raw() < right.symbol.raw();
+            }
+        }.lessThan);
     }
 
     fn sortCaptureBindings(self: *Lowerer, captures: []lower_type.CaptureBinding) void {
@@ -1362,14 +1694,20 @@ const Lowerer = struct {
                 defer self.allocator.free(branches);
 
                 for (lambdas, 0..) |lambda, i| {
+                    const sig = try self.buildLsetSpecializationSig(
+                        mono_cache,
+                        lambda.symbol,
+                        func_ty,
+                        self.output.getExpr(lowered_arg).ty,
+                        lowered_ty,
+                    );
                     const specialized = try specializations.specializeFnLset(
                         &self.queue,
                         self.fenv,
                         &self.input.symbols,
-                        &self.input.types,
-                        &self.types,
                         lambda.symbol,
                         func_ty,
+                        sig,
                     );
 
                     const capture_repr = try lower_type.extractLsetFn(
@@ -1500,7 +1838,7 @@ const Lowerer = struct {
     ) std.mem.Allocator.Error!PatResult {
         const pat = self.input.store.getPat(pat_id);
         const ty = try self.cloneInstType(inst, pat.ty);
-        const lowered_ty = try lower_type.lowerType(&self.input.types, &self.types, mono_cache, ty, &self.input.symbols);
+        const lowered_ty = self.requirePatTypeFact(inst, pat_id);
 
         return switch (pat.data) {
             .var_ => |symbol| .{
@@ -1570,7 +1908,7 @@ const Lowerer = struct {
                     .stmt = try self.output.addStmt(.{
                         .decl = .{
                             .bind = .{
-                                .ty = try lower_type.lowerType(&self.input.types, &self.types, mono_cache, bind_ty, &self.input.symbols),
+                                .ty = try self.requireBindingTypeFact(inst, decl.bind.ty),
                                 .symbol = decl.bind.symbol,
                             },
                             .body = try self.specializeExpr(inst, mono_cache, venv, decl.body),
@@ -1586,7 +1924,7 @@ const Lowerer = struct {
                     .stmt = try self.output.addStmt(.{
                         .var_decl = .{
                             .bind = .{
-                                .ty = try lower_type.lowerType(&self.input.types, &self.types, mono_cache, bind_ty, &self.input.symbols),
+                                .ty = try self.requireBindingTypeFact(inst, decl.bind.ty),
                                 .symbol = decl.bind.symbol,
                             },
                             .body = try self.specializeExpr(inst, mono_cache, venv, decl.body),

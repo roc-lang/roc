@@ -8,7 +8,6 @@ const symbol_mod = @import("symbol");
 const ast = @import("ast.zig");
 const layout_mod = @import("layout");
 const ir_layout = @import("layout.zig");
-const layout_facts = @import("layout_facts.zig");
 
 const Symbol = symbol_mod.Symbol;
 
@@ -40,7 +39,6 @@ const Lowerer = struct {
     input: lambdamono.Lower.Result,
     output: ast.Store,
     root_defs: std.ArrayList(ast.DefId),
-    facts: ?layout_facts.Facts,
     value_thunks: std.AutoHashMap(Symbol, ValueThunk),
 
     const EnvEntry = struct {
@@ -90,32 +88,28 @@ const Lowerer = struct {
             .input = input,
             .output = ast.Store.init(allocator),
             .root_defs = .empty,
-            .facts = null,
             .value_thunks = std.AutoHashMap(Symbol, ValueThunk).init(allocator),
         };
     }
 
     fn deinit(self: *Lowerer) void {
         self.value_thunks.deinit();
-        if (self.facts) |*facts| facts.deinit(self.allocator);
         self.root_defs.deinit(self.allocator);
         self.output.deinit();
         self.input.deinit();
     }
 
     fn finish(self: *Lowerer) Result {
-        var facts = self.facts.?;
-        self.facts = null;
+        const layouts = self.input.layout_facts.graph;
+        self.input.layout_facts.graph = .{};
 
         const result = Result{
             .store = self.output,
             .root_defs = self.root_defs,
             .symbols = self.input.symbols,
-            .layouts = facts.graph,
+            .layouts = layouts,
             .strings = self.input.strings,
         };
-        facts.graph = .{};
-        facts.deinit(self.allocator);
 
         self.output = ast.Store.init(self.allocator);
         self.root_defs = .empty;
@@ -125,7 +119,6 @@ const Lowerer = struct {
     }
 
     fn lowerProgram(self: *Lowerer) std.mem.Allocator.Error!void {
-        self.facts = try layout_facts.Facts.init(self.allocator, &self.input);
         try self.registerValueThunks();
 
         for (self.input.store.defsSlice(), 0..) |def, i| {
@@ -161,20 +154,20 @@ const Lowerer = struct {
                     .name = def.bind,
                     .args = args,
                     .body = try self.lowerBlock(env, fn_def.body),
-                    .ret_layout = self.facts.?.defRetLayout(def_id),
+                    .ret_layout = self.input.layout_facts.defRetLayout(def_id),
                 };
             },
             .val => |expr_id| .{
                 .name = def.bind,
                 .args = try self.output.addVarSpan(&.{}),
                 .body = try self.lowerBlock(&.{}, expr_id),
-                .ret_layout = self.facts.?.defRetLayout(def_id),
+                .ret_layout = self.input.layout_facts.defRetLayout(def_id),
             },
             .run => |run_def| .{
                 .name = def.bind,
                 .args = try self.output.addVarSpan(&.{}),
                 .body = try self.lowerBlock(&.{}, run_def.body),
-                .ret_layout = self.facts.?.defRetLayout(def_id),
+                .ret_layout = self.input.layout_facts.defRetLayout(def_id),
                 .entry_ty = run_def.entry_ty,
             },
         };
@@ -182,7 +175,7 @@ const Lowerer = struct {
 
     fn lowerTypedSymbol(self: *Lowerer, value: lambdamono.Ast.TypedSymbol) std.mem.Allocator.Error!ast.Var {
         return .{
-            .layout = self.facts.?.layoutForType(value.ty),
+            .layout = self.input.layout_facts.layoutForType(value.ty),
             .symbol = value.symbol,
         };
     }
@@ -273,7 +266,7 @@ const Lowerer = struct {
                 const payload: ?ast.Var = blk: {
                     const args = self.output.sliceVarSpan(lowered_args.?);
                     if (args.len == 0) break :blk null;
-                    const payload_layout = self.facts.?.exprTagPayloadLayout(expr_id);
+                    const payload_layout = self.input.layout_facts.exprTagPayloadLayout(expr_id);
                     const payload_var = try self.freshVarWithLayout(
                         payload_layout,
                         "tag_payload",
@@ -298,7 +291,7 @@ const Lowerer = struct {
             .access => |access| {
                 const record = try self.lowerSubexprValue(&block, env, access.record);
                 if (record == null) return if (block.has_term) block else debugPanic("ir.lower access missing terminator");
-                const field_layout = self.facts.?.exprFieldLayout(expr_id);
+                const field_layout = self.input.layout_facts.exprFieldLayout(expr_id);
                 const temp = try self.freshVarWithLayout(
                     field_layout,
                     "field",
@@ -315,7 +308,7 @@ const Lowerer = struct {
             .tuple_access => |tuple_access| {
                 const tuple = try self.lowerSubexprValue(&block, env, tuple_access.tuple);
                 if (tuple == null) return if (block.has_term) block else debugPanic("ir.lower tuple_access missing terminator");
-                const field_layout = self.facts.?.exprFieldLayout(expr_id);
+                const field_layout = self.input.layout_facts.exprFieldLayout(expr_id);
                 const temp = try self.freshVarWithLayout(
                     field_layout,
                     "tuple_field",
@@ -436,7 +429,7 @@ const Lowerer = struct {
 
     fn freshVar(self: *Lowerer, ty: lambdamono.Type.TypeId, comptime label: []const u8) std.mem.Allocator.Error!ast.Var {
         return .{
-            .layout = self.facts.?.layoutForType(ty),
+            .layout = self.input.layout_facts.layoutForType(ty),
             .symbol = try self.freshSymbol(label),
         };
     }
@@ -894,7 +887,7 @@ const Lowerer = struct {
             .tag => |tag| {
                 const args = self.input.store.slicePatSpan(tag.args);
                 if (args.len == 0) return;
-                const payload_layout = self.facts.?.patTagPayloadLayout(pat_id);
+                const payload_layout = self.input.layout_facts.patTagPayloadLayout(pat_id);
 
                 const payload_var = try self.freshVarWithLayout(
                     payload_layout,
@@ -909,7 +902,7 @@ const Lowerer = struct {
                 } });
 
                 for (args, 0..) |arg_pat_id, i| {
-                    const field_layout = try self.facts.?.structFieldLayout(payload_var.layout, @intCast(i));
+                    const field_layout = try self.input.layout_facts.structFieldLayout(payload_var.layout, @intCast(i));
                     const field_var = try self.freshVarWithLayout(
                         field_layout,
                         "pat_field",
