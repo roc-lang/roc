@@ -1,8 +1,6 @@
 //! Statement-only LIR module.
 
 const std = @import("std");
-const DebugOwnershipSummary = @import("DebugOwnershipSummary.zig");
-const DebugVerifyLir = @import("DebugVerifyLir.zig");
 
 /// Core statement-only LIR type definitions.
 pub const LIR = @import("LIR.zig");
@@ -10,8 +8,6 @@ pub const LIR = @import("LIR.zig");
 pub const LirStore = @import("LirStore.zig");
 /// Tail-recursion rewriting for statement-only LIR procs.
 pub const TailRecursion = @import("TailRecursion.zig");
-/// Reference-count insertion over explicit LIR statements.
-pub const RcInsert = @import("rc_insert.zig");
 /// Lower cor-style IR into statement-only LIR.
 pub const FromIr = @import("FromIr.zig");
 
@@ -68,9 +64,6 @@ test "lir tests" {
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(LIR);
     std.testing.refAllDecls(LirStore);
-    std.testing.refAllDecls(DebugOwnershipSummary);
-    std.testing.refAllDecls(DebugVerifyLir);
     std.testing.refAllDecls(TailRecursion);
-    std.testing.refAllDecls(RcInsert);
     std.testing.refAllDecls(FromIr);
 }
