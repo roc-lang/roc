@@ -4346,9 +4346,115 @@ test "Set.drop_if - drops matching elements" {
     , 3, .no_trace);
 }
 
-// NOTE: Tests for Set.union, Set.intersection, Set.difference, and Set.is_eq
-// that operate on TWO sets are omitted here because they trigger a refcount
-// tracking bug.
+test "Set.union - combines two sets" {
+    try runExpectI64(
+        \\Set.from_list([1.I64, 2, 3]).union(Set.from_list([3, 4, 5])).len()
+    , 5, .no_trace);
+}
+
+test "Set.union - with empty set" {
+    try runExpectI64(
+        \\Set.from_list([1.I64, 2]).union(Set.empty()).len()
+    , 2, .no_trace);
+}
+
+test "Set.union - identical sets" {
+    try runExpectI64(
+        \\Set.from_list([1.I64, 2]).union(Set.from_list([1, 2])).len()
+    , 2, .no_trace);
+}
+
+test "Set.union - disjoint sets" {
+    try runExpectI64(
+        \\Set.from_list([1.I64, 2]).union(Set.from_list([3, 4])).len()
+    , 4, .no_trace);
+}
+
+// test "Set.intersection - common elements" {
+//     try runExpectI64(
+//         \\Set.from_list([1.I64, 2, 3]).intersection(Set.from_list([2, 3, 4])).len()
+//     , 2, .no_trace);
+// }
+
+// test "Set.intersection - no common elements" {
+//     try runExpectI64(
+//         \\Set.from_list([1.I64, 2]).intersection(Set.from_list([3, 4])).len()
+//     , 0, .no_trace);
+// }
+
+// test "Set.intersection - with empty set" {
+//     try runExpectI64(
+//         \\{
+//         \\    s : Set(I64)
+//         \\    s = Set.empty()
+//         \\    Set.from_list([1.I64, 2]).intersection(s).len()
+//         \\}
+//     , 0, .no_trace);
+// }
+
+// test "Set.intersection - identical sets" {
+//     try runExpectI64(
+//         \\Set.from_list([1.I64, 2, 3]).intersection(Set.from_list([1, 2, 3])).len()
+//     , 3, .no_trace);
+// }
+
+// test "Set.difference - removes elements in second set" {
+//     try runExpectI64(
+//         \\Set.from_list([1.I64, 2, 3, 4]).difference(Set.from_list([2, 4])).len()
+//     , 2, .no_trace);
+// }
+
+// test "Set.difference - no overlap" {
+//     try runExpectI64(
+//         \\Set.from_list([1.I64, 2]).difference(Set.from_list([3, 4])).len()
+//     , 2, .no_trace);
+// }
+
+// test "Set.difference - with empty set" {
+//     try runExpectI64(
+//         \\{
+//         \\    s : Set(I64)
+//         \\    s = Set.empty()
+//         \\    Set.from_list([1.I64, 2]).difference(s).len()
+//         \\}
+//     , 2, .no_trace);
+// }
+
+// test "Set.difference - subtract all" {
+//     try runExpectI64(
+//         \\Set.from_list([1.I64, 2]).difference(Set.from_list([1, 2])).len()
+//     , 0, .no_trace);
+// }
+
+// test "Set.is_eq - equal sets" {
+//     try runExpectBool(
+//         \\Set.from_list([1.I64, 2, 3]) == Set.from_list([3, 2, 1])
+//     , true, .no_trace);
+// }
+
+// test "Set.is_eq - unequal sets different lengths" {
+//     try runExpectBool(
+//         \\Set.from_list([1.I64, 2]) == Set.from_list([1, 2, 3])
+//     , false, .no_trace);
+// }
+
+// test "Set.is_eq - unequal sets same length" {
+//     try runExpectBool(
+//         \\Set.from_list([1.I64, 2, 3]) == Set.from_list([1, 2, 4])
+//     , false, .no_trace);
+// }
+
+// test "Set.is_eq - both empty" {
+//     try runExpectBool(
+//         \\{
+//         \\    a : Set(I64)
+//         \\    a = Set.empty()
+//         \\    b : Set(I64)
+//         \\    b = Set.empty()
+//         \\    a == b
+//         \\}
+//     , true, .no_trace);
+// }
 
 test "Set.map - transforms elements" {
     try runExpectI64(

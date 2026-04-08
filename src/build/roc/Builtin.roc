@@ -1010,42 +1010,8 @@ Builtin :: [].{
 		## of all the values.
 		union : Set(a), Set(a) -> Set(a)
 			where [a.is_eq : a, a -> Bool]
-		union = |set_a, set_b| {
-			list_a = Set.to_list(set_a)
-			list_b = Set.to_list(set_b)
-
-			len_a = List.len(list_a)
-			len_b = List.len(list_b)
-
-			var $result = List.with_capacity(len_a + len_b)
-			# Copy all elements from list_a
-			var $k = 0
-
-			while $k < len_a {
-				$result = list_append_unsafe($result, list_get_unsafe(list_a, $k))
-				$k = $k + 1
-			}
-
-			# Add elements from list_b not in list_a
-			var $i = 0
-
-			while $i < len_b {
-				elem = list_get_unsafe(list_b, $i)
-				var $found = Bool.False
-				var $j = 0
-				while $j < len_a {
-					if list_get_unsafe(list_a, $j) == elem {
-						$found = Bool.True
-					}
-					$j = $j + 1
-				}
-				if $found == Bool.False {
-					$result = list_append_unsafe($result, elem)
-				}
-				$i = $i + 1
-			}
-			Items($result)
-		}
+		union = |set_a, set_b|
+			List.fold(Set.to_list(set_b), set_a, |acc, elem| Set.insert(acc, elem))
 
 		## Combine two `Set`s by keeping the
 		## [intersection](https://en.wikipedia.org/wiki/Intersection_(set_theory))
@@ -1093,7 +1059,7 @@ Builtin :: [].{
 
 			var $result = []
 			var $i = 0
-			
+
 			while $i < len_a {
 				elem = list_get_unsafe(list_a, $i)
 				var $found = Bool.False
