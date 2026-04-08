@@ -557,6 +557,12 @@ const Lowerer = struct {
             .unit => target_ty,
             .tag => |tag| blk: {
                 const args = self.output.sliceExprSpan(tag.args);
+                if (try self.isPrimitiveBoolType(target_ty)) {
+                    if (args.len != 0) {
+                        return debugPanic("lambdasolved.bool tag invariant violated: bool tags cannot carry arguments");
+                    }
+                    break :blk target_ty;
+                }
                 const arg_tys = try self.allocator.alloc(TypeVarId, args.len);
                 defer self.allocator.free(arg_tys);
                 for (args, 0..) |arg, i| {

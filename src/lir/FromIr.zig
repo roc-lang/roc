@@ -410,6 +410,10 @@ const ProcLowerer = struct {
         return self.parent.store.getLocal(local_id).layout_idx;
     }
 
+    fn procRetLayout(self: *const ProcLowerer) layout_mod.Idx {
+        return self.parent.store.getProcSpec(self.proc_id).ret_layout;
+    }
+
     fn freshLocalWithLayout(self: *ProcLowerer, layout_idx: layout_mod.Idx) std.mem.Allocator.Error!LIR.LocalId {
         return self.parent.store.addLocal(.{ .layout_idx = layout_idx });
     }
@@ -659,10 +663,22 @@ const ProcLowerer = struct {
         return next;
     }
 
+    fn lowerRetValue(self: *ProcLowerer, value: ir.Ast.Var) std.mem.Allocator.Error!LIR.CFStmtId {
+        const source_local = try self.lowerVar(value);
+        const ret_layout = self.procRetLayout();
+        if (self.localLayout(source_local) == ret_layout) {
+            return try self.parent.store.addCFStmt(.{ .ret = .{ .value = source_local } });
+        }
+
+        const target_local = try self.freshLocalWithLayout(ret_layout);
+        const ret_stmt = try self.parent.store.addCFStmt(.{ .ret = .{ .value = target_local } });
+        return try self.bridgeValueIntoLocal(source_local, target_local, ret_stmt);
+    }
+
     fn lowerTerm(self: *ProcLowerer, term: ir.Ast.Term, exit: Lowerer.BlockExit) std.mem.Allocator.Error!LIR.CFStmtId {
         return switch (term) {
             .value => |value| switch (exit) {
-                .ret => try self.parent.store.addCFStmt(.{ .ret = .{ .value = try self.lowerVar(value) } }),
+                .ret => try self.lowerRetValue(value),
                 .jump => |join_id| blk: {
                     const arg = try self.lowerVar(value);
                     break :blk try self.parent.store.addCFStmt(.{ .jump = .{
@@ -676,7 +692,7 @@ const ProcLowerer = struct {
                 } }),
                 .loop_continue => try self.parent.store.addCFStmt(.loop_continue),
             },
-            .return_ => |value| try self.parent.store.addCFStmt(.{ .ret = .{ .value = try self.lowerVar(value) } }),
+            .return_ => |value| try self.lowerRetValue(value),
             .crash => |msg| try self.parent.store.addCFStmt(.{ .crash = .{ .msg = try self.parent.lowerStringId(msg) } }),
             .runtime_error => try self.parent.store.addCFStmt(.runtime_error),
             .@"unreachable" => try self.parent.store.addCFStmt(.runtime_error),

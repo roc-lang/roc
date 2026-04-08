@@ -184,6 +184,24 @@ const ExpectedTypeFact = struct {
     solved_var: ?Var,
 };
 
+const LoweredExprFact = struct {
+    expr: ast.ExprId,
+    ty: type_mod.TypeId,
+    solved_var: Var,
+};
+
+const LoweredCall = struct {
+    data: @FieldType(ast.Expr.Data, "call"),
+    result_ty: type_mod.TypeId,
+};
+
+const CallResultFact = struct {
+    fn_ty: type_mod.TypeId,
+    fn_var: Var,
+    result_var: Var,
+    result_ty: type_mod.TypeId,
+};
+
 const SpecializableCallChain = struct {
     func_expr_idx: CIR.Expr.Idx,
     arg_exprs: []const CIR.Expr.Idx,
@@ -249,6 +267,7 @@ pub const Lowerer = struct {
     const LocalFnSource = struct {
         pattern_idx: CIR.Pattern.Idx,
         expr_idx: CIR.Expr.Idx,
+        seed_var: Var,
         source_symbol: symbol_mod.Symbol,
     };
 
@@ -463,11 +482,20 @@ pub const Lowerer = struct {
                 var binding_env = BindingEnv.init(self.allocator);
                 defer binding_env.deinit();
 
-                const bind_ty = try self.lowerSolvedType(module_idx, &type_scope, ModuleEnv.varFrom(def.expr));
-                const body = try self.lowerExpr(module_idx, &type_scope, binding_env, def.expr);
+                const bind_var = ModuleEnv.varFrom(def.pattern);
+                const bind_expected_var = try self.scopeVar(&type_scope, bind_var);
+                const bind_expected_ty = try self.lowerInstantiatedType(module_idx, &type_scope, bind_expected_var);
+                const body = try self.lowerExprFactWithExpectedType(
+                    module_idx,
+                    &type_scope,
+                    binding_env,
+                    def.expr,
+                    bind_expected_ty,
+                    bind_expected_var,
+                );
                 const lowered = try self.program.store.addDef(.{
-                    .bind = .{ .ty = bind_ty, .symbol = bind_symbol },
-                    .value = .{ .val = body },
+                    .bind = .{ .ty = body.ty, .symbol = bind_symbol },
+                    .value = .{ .val = body.expr },
                 });
                 try self.emitted_defs_by_symbol.put(bind_symbol, lowered);
                 break :blk lowered;
@@ -493,13 +521,22 @@ pub const Lowerer = struct {
         var binding_env = BindingEnv.init(self.allocator);
         defer binding_env.deinit();
 
-        const bind_ty = try self.lowerSolvedType(module_idx, &type_scope, ModuleEnv.varFrom(def.expr));
-        const body = try self.lowerExpr(module_idx, &type_scope, binding_env, def.expr);
+        const bind_var = ModuleEnv.varFrom(def.pattern);
+        const bind_expected_var = try self.scopeVar(&type_scope, bind_var);
+        const bind_expected_ty = try self.lowerInstantiatedType(module_idx, &type_scope, bind_expected_var);
+        const body = try self.lowerExprFactWithExpectedType(
+            module_idx,
+            &type_scope,
+            binding_env,
+            def.expr,
+            bind_expected_ty,
+            bind_expected_var,
+        );
         const lowered = try self.program.store.addDef(.{
-            .bind = .{ .ty = bind_ty, .symbol = bind_symbol },
+            .bind = .{ .ty = body.ty, .symbol = bind_symbol },
             .value = .{ .run = .{
-                .bind = .{ .ty = bind_ty, .symbol = bind_symbol },
-                .body = body,
+                .bind = .{ .ty = body.ty, .symbol = bind_symbol },
+                .body = body.expr,
                 .entry_ty = fx_var,
             } },
         });
@@ -620,8 +657,9 @@ pub const Lowerer = struct {
                 try type_scope.var_map.put(source_arg_var, specialized_arg_var);
             }
         }
-        const fn_parts = self.requireFunctionType(bind.ty);
         const source_fn_var = expected_var orelse ModuleEnv.varFrom(expr_idx);
+        const result_ty = try self.requireFunctionRetType(module_idx, type_scope, source_fn_var);
+        const result_var = self.lookupFunctionRetVar(module_idx, source_fn_var);
 
         const lambda = switch (expr) {
             .e_lambda => |lambda| lambda,
@@ -631,8 +669,13 @@ pub const Lowerer = struct {
                 break :blk lambda_expr.e_lambda;
             },
             .e_hosted_lambda => |hosted| {
+                const arg_patterns = env.store.slicePatterns(hosted.args);
+                const first_arg_ty = if (arg_patterns.len == 0)
+                    self.requireFunctionType(bind.ty).arg
+                else
+                    try self.requireFunctionArgType(module_idx, type_scope, source_fn_var, 0);
                 if (hosted.args.span.len == 0) {
-                    const unit_arg = try self.makeUnitArgWithType(fn_parts.arg);
+                    const unit_arg = try self.makeUnitArgWithType(first_arg_ty);
                     return .{
                         .recursive = recursive,
                         .bind = bind,
@@ -644,8 +687,7 @@ pub const Lowerer = struct {
                     };
                 }
 
-                const arg_patterns = env.store.slicePatterns(hosted.args);
-                const first_arg = try self.bindLambdaArg(module_idx, type_scope, arg_patterns[0], fn_parts.arg);
+                const first_arg = try self.bindLambdaArg(module_idx, type_scope, arg_patterns[0], first_arg_ty);
                 const body = try self.lowerLambdaBodyWithPattern(
                     module_idx,
                     type_scope,
@@ -653,8 +695,8 @@ pub const Lowerer = struct {
                     first_arg,
                     self.requireFunctionArgVar(module_idx, source_fn_var, 0),
                     arg_patterns[0],
-                    fn_parts.ret,
-                    self.lookupFunctionRetVar(module_idx, source_fn_var),
+                    result_ty,
+                    result_var,
                     arg_patterns.len == 1,
                     hosted.body,
                     if (arg_patterns.len == 1) null else arg_patterns[1..],
@@ -681,39 +723,60 @@ pub const Lowerer = struct {
         };
 
         const arg_patterns = env.store.slicePatterns(lambda.args);
+        const first_arg_ty = if (arg_patterns.len == 0)
+            self.requireFunctionType(bind.ty).arg
+        else
+            try self.requireFunctionArgType(module_idx, type_scope, source_fn_var, 0);
         const first_arg_pattern = if (arg_patterns.len == 0) null else arg_patterns[0];
         const first_arg = if (first_arg_pattern) |pattern_idx|
-            try self.bindLambdaArg(module_idx, type_scope, pattern_idx, fn_parts.arg)
+            try self.bindLambdaArg(module_idx, type_scope, pattern_idx, first_arg_ty)
         else
-            try self.makeUnitArgWithType(fn_parts.arg);
+            try self.makeUnitArgWithType(first_arg_ty);
 
-        const body = if (first_arg_pattern) |pattern_idx|
-            try self.lowerLambdaBodyWithPattern(
+        const body = if (first_arg_pattern) |pattern_idx| blk: {
+            break :blk try self.lowerLambdaBodyWithPattern(
                 module_idx,
                 type_scope,
                 incoming_env,
                 first_arg,
                 self.requireFunctionArgVar(module_idx, source_fn_var, 0),
                 pattern_idx,
-                fn_parts.ret,
-                self.lookupFunctionRetVar(module_idx, source_fn_var),
+                result_ty,
+                result_var,
                 arg_patterns.len <= 1,
                 lambda.body,
                 if (arg_patterns.len <= 1) null else arg_patterns[1..],
                 source_fn_var,
                 1,
-            )
-        else if (arg_patterns.len <= 1)
-            try self.lowerExprWithExpectedType(
+            );
+        } else if (arg_patterns.len <= 1) blk: {
+            const body_expect = try self.resolveLambdaBodyExpectation(
+                module_idx,
+                type_scope,
+                incoming_env,
+                result_ty,
+                result_var,
+                true,
+                null,
+                lambda.body,
+            );
+            break :blk try self.lowerExprWithExpectedType(
                 module_idx,
                 type_scope,
                 incoming_env,
                 lambda.body,
-                fn_parts.ret,
-                self.lookupFunctionRetVar(module_idx, source_fn_var),
-            )
-        else
-            try self.lowerCurriedClosureChain(module_idx, type_scope, incoming_env, fn_parts.ret, source_fn_var, 1, arg_patterns[1..], lambda.body);
+                body_expect.ty,
+                body_expect.solved_var,
+            );
+        } else try self.lowerCurriedClosureChain(
+            module_idx,
+            type_scope,
+            incoming_env,
+            source_fn_var,
+            1,
+            arg_patterns[1..],
+            lambda.body,
+        );
 
         return .{
             .recursive = recursive,
@@ -736,17 +799,55 @@ pub const Lowerer = struct {
         module_idx: u32,
         type_scope: *TypeCloneScope,
         incoming_env: BindingEnv,
-        current_fn_ty: type_mod.TypeId,
         source_fn_var: ?Var,
         next_arg_index: usize,
         remaining_arg_patterns: []const CIR.Pattern.Idx,
         body_expr_idx: CIR.Expr.Idx,
     ) std.mem.Allocator.Error!ast.ExprId {
         std.debug.assert(remaining_arg_patterns.len > 0);
-        const fn_parts = self.requireFunctionType(current_fn_ty);
+        const first_arg_ty = try self.requireFunctionArgType(module_idx, type_scope, source_fn_var, next_arg_index);
+        const body_result_var = try self.scopedExprResultVar(module_idx, type_scope, incoming_env, body_expr_idx);
+        const body_result_ty = try self.lowerInstantiatedType(module_idx, type_scope, body_result_var);
+        const source_result_var = self.lookupCurriedFunctionFinalRetVar(module_idx, source_fn_var);
+        const source_result_ty = try self.lowerInstantiatedType(
+            module_idx,
+            type_scope,
+            source_result_var orelse debugPanic(
+                "monotype lambda invariant violated: missing explicit curried source function return fact in module {d}",
+                .{module_idx},
+            ),
+        );
+        const final_body_expect = if (self.ctx.types.getType(body_result_ty) == .func)
+            ExpectedTypeFact{
+                .ty = body_result_ty,
+                .solved_var = body_result_var,
+            }
+        else
+            ExpectedTypeFact{
+                .ty = source_result_ty,
+                .solved_var = source_result_var,
+            };
+        const remaining_after_current = remaining_arg_patterns.len - 1;
+        const result_ty = if (remaining_after_current == 0)
+            final_body_expect.ty
+        else
+            try self.buildRemainingCurriedClosureTypeFromExplicitFacts(
+                module_idx,
+                type_scope,
+                source_fn_var,
+                next_arg_index + 1,
+                remaining_after_current,
+                final_body_expect.ty,
+            );
+        const final_result_var = if (remaining_after_current == 0) final_body_expect.solved_var else null;
 
         const first_pattern = remaining_arg_patterns[0];
-        const first_arg = try self.bindLambdaArg(module_idx, type_scope, first_pattern, fn_parts.arg);
+        const first_arg = try self.bindLambdaArg(
+            module_idx,
+            type_scope,
+            first_pattern,
+            first_arg_ty,
+        );
         const body = try self.lowerLambdaBodyWithPattern(
             module_idx,
             type_scope,
@@ -754,8 +855,8 @@ pub const Lowerer = struct {
             first_arg,
             self.requireFunctionArgVar(module_idx, source_fn_var, next_arg_index),
             first_pattern,
-            fn_parts.ret,
-            self.lookupFunctionRetVar(module_idx, source_fn_var),
+            result_ty,
+            final_result_var,
             remaining_arg_patterns.len == 1,
             body_expr_idx,
             if (remaining_arg_patterns.len == 1) null else remaining_arg_patterns[1..],
@@ -807,22 +908,30 @@ pub const Lowerer = struct {
                 &body_env,
                 &binding_decls,
             );
-
-            const body = if (is_final_arg)
-                try self.lowerExprWithExpectedType(
+            const body = if (is_final_arg) blk: {
+                const body_expect = try self.resolveLambdaBodyExpectation(
+                    module_idx,
+                    type_scope,
+                    body_env,
+                    result_ty,
+                    expected_result_var,
+                    true,
+                    null,
+                    body_expr_idx,
+                );
+                break :blk try self.lowerExprWithExpectedType(
                     module_idx,
                     type_scope,
                     body_env,
                     body_expr_idx,
-                    result_ty,
-                    expected_result_var,
-                )
-            else
+                    body_expect.ty,
+                    body_expect.solved_var,
+                );
+            } else
                 try self.lowerCurriedClosureChain(
                     module_idx,
                     type_scope,
                     body_env,
-                    result_ty,
                     source_fn_var,
                     next_arg_index,
                     remaining_arg_patterns.?,
@@ -867,21 +976,30 @@ pub const Lowerer = struct {
             &branch_env,
             &binding_decls,
         );
-        const matched_body = if (is_final_arg)
-            try self.lowerExprWithExpectedType(
+        const matched_body = if (is_final_arg) blk: {
+            const body_expect = try self.resolveLambdaBodyExpectation(
+                module_idx,
+                type_scope,
+                branch_env,
+                result_ty,
+                expected_result_var,
+                true,
+                null,
+                body_expr_idx,
+            );
+            break :blk try self.lowerExprWithExpectedType(
                 module_idx,
                 type_scope,
                 branch_env,
                 body_expr_idx,
-                result_ty,
-                expected_result_var,
-            )
-        else
+                body_expect.ty,
+                body_expect.solved_var,
+            );
+        } else
             try self.lowerCurriedClosureChain(
                 module_idx,
                 type_scope,
                 branch_env,
-                result_ty,
                 source_fn_var,
                 next_arg_index,
                 remaining_arg_patterns.?,
@@ -916,61 +1034,101 @@ pub const Lowerer = struct {
         type_scope: *TypeCloneScope,
         env: BindingEnv,
         result_ty: type_mod.TypeId,
+        fallback_result_var: ?Var,
         is_final_arg: bool,
         remaining_arg_patterns: ?[]const CIR.Pattern.Idx,
         body_expr_idx: CIR.Expr.Idx,
     ) std.mem.Allocator.Error!ExpectedTypeFact {
         if (is_final_arg) {
+            if (fallback_result_var) |result_var| {
+                const fallback_ty = try self.lowerInstantiatedType(module_idx, type_scope, result_var);
+                if (self.ctx.types.getType(fallback_ty) != .placeholder) {
+                    return .{
+                        .ty = fallback_ty,
+                        .solved_var = result_var,
+                    };
+                }
+            }
+
+            if (self.ctx.types.getType(result_ty) != .placeholder) {
+                return .{
+                    .ty = result_ty,
+                    .solved_var = fallback_result_var,
+                };
+            }
+
             const body_var = try self.scopedExprResultVar(module_idx, type_scope, env, body_expr_idx);
+            const body_ty = try self.lowerInstantiatedType(module_idx, type_scope, body_var);
+            if (self.ctx.types.getType(body_ty) != .placeholder) {
+                return .{
+                    .ty = body_ty,
+                    .solved_var = body_var,
+                };
+            }
+
             return .{
-                .ty = try self.lowerInstantiatedType(module_idx, type_scope, body_var),
+                .ty = body_ty,
                 .solved_var = body_var,
             };
         }
 
-        const remaining_patterns = remaining_arg_patterns orelse debugPanic(
-            "monotype lambda invariant violated: missing remaining curried argument patterns",
+        _ = remaining_arg_patterns;
+        return debugPanic(
+            "monotype lambda invariant violated: non-final lambda body expectation must come from explicit source function facts",
             .{},
         );
-        return .{
-            .ty = try self.buildActualCurriedClosureType(
-                module_idx,
-                type_scope,
-                env,
-                result_ty,
-                remaining_patterns.len,
-                body_expr_idx,
-            ),
-            .solved_var = null,
-        };
     }
 
-    fn buildActualCurriedClosureType(
+    fn lookupLambdaReturnExpectation(
         self: *Lowerer,
         module_idx: u32,
         type_scope: *TypeCloneScope,
         env: BindingEnv,
-        current_fn_ty: type_mod.TypeId,
+        lambda_expr_idx: CIR.Expr.Idx,
+    ) std.mem.Allocator.Error!ExpectedTypeFact {
+        const lambda_var = try self.scopedExprResultVar(module_idx, type_scope, env, lambda_expr_idx);
+        const result_var = self.lookupFunctionRetVar(module_idx, lambda_var) orelse debugPanic(
+            "monotype return invariant violated: lambda {} in module {d} is missing an explicit return fact",
+            .{ lambda_expr_idx, module_idx },
+        );
+        return .{
+            .ty = try self.lowerInstantiatedType(module_idx, type_scope, result_var),
+            .solved_var = result_var,
+        };
+    }
+
+    fn buildRemainingCurriedClosureTypeFromExplicitFacts(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeCloneScope,
+        source_fn_var: ?Var,
+        next_arg_index: usize,
         remaining_arity: usize,
-        body_expr_idx: CIR.Expr.Idx,
+        final_result_ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!type_mod.TypeId {
-        if (remaining_arity == 0) {
-            const body_var = try self.scopedExprResultVar(module_idx, type_scope, env, body_expr_idx);
-            return try self.lowerInstantiatedType(module_idx, type_scope, body_var);
+        const function_var = source_fn_var orelse debugPanic(
+            "monotype lambda invariant violated: missing explicit source function facts for curried closure type in module {d}",
+            .{module_idx},
+        );
+        const total_args = self.functionArgCount(module_idx, function_var);
+        if (next_arg_index + remaining_arity > total_args) {
+            return debugPanic(
+                "monotype lambda invariant violated: lambda arg range [{d}, {d}) exceeded function arity {d} in module {d}",
+                .{ next_arg_index, next_arg_index + remaining_arity, total_args, module_idx },
+            );
         }
 
+        if (remaining_arity == 0) {
+            return final_result_ty;
+        }
         const arg_tys = try self.allocator.alloc(type_mod.TypeId, remaining_arity);
         defer self.allocator.free(arg_tys);
 
-        var current_ty = current_fn_ty;
         for (0..remaining_arity) |i| {
-            const fn_parts = self.requireFunctionType(current_ty);
-            arg_tys[i] = fn_parts.arg;
-            current_ty = fn_parts.ret;
+            arg_tys[i] = try self.requireFunctionArgType(module_idx, type_scope, function_var, next_arg_index + i);
         }
 
-        const body_var = try self.scopedExprResultVar(module_idx, type_scope, env, body_expr_idx);
-        var actual_ret_ty = try self.lowerInstantiatedType(module_idx, type_scope, body_var);
+        var actual_ret_ty = final_result_ty;
         var i = remaining_arity;
         while (i > 0) : (i -= 1) {
             actual_ret_ty = try self.ctx.types.addType(.{
@@ -981,6 +1139,115 @@ pub const Lowerer = struct {
             });
         }
         return actual_ret_ty;
+    }
+
+    fn lowerExprFact(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeCloneScope,
+        env: BindingEnv,
+        expr_idx: CIR.Expr.Idx,
+    ) std.mem.Allocator.Error!LoweredExprFact {
+        const lowered = try self.lowerExpr(module_idx, type_scope, env, expr_idx);
+        return .{
+            .expr = lowered,
+            .ty = self.program.store.getExpr(lowered).ty,
+            .solved_var = try self.exprResultVar(module_idx, type_scope, env, expr_idx),
+        };
+    }
+
+    fn lowerExprFactWithExpectedType(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeCloneScope,
+        env: BindingEnv,
+        expr_idx: CIR.Expr.Idx,
+        expected_ty: type_mod.TypeId,
+        expected_var: ?Var,
+    ) std.mem.Allocator.Error!LoweredExprFact {
+        const lowered = try self.lowerExprWithExpectedType(
+            module_idx,
+            type_scope,
+            env,
+            expr_idx,
+            expected_ty,
+            expected_var,
+        );
+        return .{
+            .expr = lowered,
+            .ty = self.program.store.getExpr(lowered).ty,
+            .solved_var = try self.exprResultVar(module_idx, type_scope, env, expr_idx),
+        };
+    }
+
+    fn exprResultVar(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeCloneScope,
+        env: BindingEnv,
+        expr_idx: CIR.Expr.Idx,
+    ) std.mem.Allocator.Error!Var {
+        const expr = self.ctx.env(module_idx).store.getExpr(expr_idx);
+        return switch (expr) {
+            .e_block => |block| try self.exprResultVar(module_idx, type_scope, env, block.final_expr),
+            .e_if => |if_expr| try self.exprResultVar(module_idx, type_scope, env, if_expr.final_else),
+            .e_match => |match_expr| blk: {
+                const branch_ids = self.ctx.env(module_idx).store.matchBranchSlice(match_expr.branches);
+                if (branch_ids.len == 0) {
+                    return debugPanic("monotype invariant violated: match expression missing branches for explicit result fact", .{});
+                }
+                const branch = self.ctx.env(module_idx).store.getMatchBranch(branch_ids[0]);
+                break :blk try self.exprResultVar(module_idx, type_scope, env, branch.value);
+            },
+            .e_call => |call| blk: {
+                const fact = try self.lowerCallResultFact(
+                    module_idx,
+                    type_scope,
+                    env,
+                    expr_idx,
+                    call.func,
+                    self.ctx.env(module_idx).store.sliceExpr(call.args),
+                    null,
+                );
+                break :blk fact.result_var;
+            },
+            .e_dot_access => |dot| blk: {
+                if (dot.args == null) {
+                    break :blk try self.scopedExprResultVar(module_idx, type_scope, env, expr_idx);
+                }
+                const fact = try self.lowerRecordedMethodFact(
+                    module_idx,
+                    type_scope,
+                    env,
+                    expr_idx,
+                    dot.field_name,
+                    null,
+                );
+                break :blk fact.result_var;
+            },
+            .e_binop => |binop| switch (binop.op) {
+                .add, .sub, .mul, .div, .rem, .div_trunc => try self.lookupHomogeneousBinopResultVar(
+                    module_idx,
+                    type_scope,
+                    env,
+                    binop.lhs,
+                    binop.rhs,
+                ),
+                else => try self.scopedExprResultVar(module_idx, type_scope, env, expr_idx),
+            },
+            .e_type_var_dispatch => |dispatch| blk: {
+                const fact = try self.lowerRecordedMethodFact(
+                    module_idx,
+                    type_scope,
+                    env,
+                    expr_idx,
+                    dispatch.method_name,
+                    null,
+                );
+                break :blk fact.result_var;
+            },
+            else => try self.scopedExprResultVar(module_idx, type_scope, env, expr_idx),
+        };
     }
 
     fn lowerExpr(
@@ -1000,6 +1267,7 @@ pub const Lowerer = struct {
                 expr_idx,
                 nominal.backing_expr,
                 try self.lowerExprType(module_idx, type_scope, env, expr_idx, expr),
+                ModuleEnv.varFrom(expr_idx),
             ),
             .e_nominal_external => |nominal| return self.lowerTransparentNominalExprWithType(
                 module_idx,
@@ -1008,6 +1276,7 @@ pub const Lowerer = struct {
                 expr_idx,
                 nominal.backing_expr,
                 try self.lowerExprType(module_idx, type_scope, env, expr_idx, expr),
+                ModuleEnv.varFrom(expr_idx),
             ),
             else => {},
         }
@@ -1102,13 +1371,21 @@ pub const Lowerer = struct {
                 });
             },
             .e_hosted_lambda => |_| debugTodo("monotype.lowerExpr hosted lambda"),
-            .e_record => |record| return self.lowerRecordExpr(module_idx, type_scope, env, ty, record),
+            .e_record => |record| return self.lowerRecordExpr(
+                module_idx,
+                type_scope,
+                env,
+                ty,
+                try self.scopedExprResultVar(module_idx, type_scope, env, expr_idx),
+                record,
+            ),
             .e_empty_record => .unit,
             .e_tuple => |tuple| .{ .tuple = try self.lowerTupleExprsWithExpectedType(
                 module_idx,
                 type_scope,
                 env,
                 ty,
+                try self.scopedExprResultVar(module_idx, type_scope, env, expr_idx),
                 tuple.elems,
             ) },
             .e_list => |list| .{ .list = try self.lowerListExprsWithExpectedType(
@@ -1116,6 +1393,7 @@ pub const Lowerer = struct {
                 type_scope,
                 env,
                 ty,
+                try self.scopedExprResultVar(module_idx, type_scope, env, expr_idx),
                 list.elems,
             ) },
             .e_empty_list => .{ .list = ast.Span(ast.ExprId).empty() },
@@ -1130,7 +1408,15 @@ pub const Lowerer = struct {
             },
             .e_binop => |binop| blk: {
                 if (binop.op == .ne) {
-                    const eq_args = try self.lowerHomogeneousBinopArgs(module_idx, type_scope, env, binop.lhs, binop.rhs);
+                    const eq_args = try self.lowerHomogeneousBinopArgs(
+                        module_idx,
+                        type_scope,
+                        env,
+                        try self.lowerExprResultType(module_idx, type_scope, env, binop.lhs),
+                        try self.scopedExprResultVar(module_idx, type_scope, env, binop.lhs),
+                        binop.lhs,
+                        binop.rhs,
+                    );
                     const eq_expr = try self.program.store.addExpr(.{
                         .ty = try self.makePrimitiveType(.bool),
                         .data = .{ .low_level = .{
@@ -1178,7 +1464,23 @@ pub const Lowerer = struct {
                 }
                 break :blk .{ .low_level = .{
                     .op = binopToLowLevel(binop.op),
-                    .args = try self.lowerHomogeneousBinopArgs(module_idx, type_scope, env, binop.lhs, binop.rhs),
+                    .args = try self.lowerHomogeneousBinopArgs(
+                        module_idx,
+                        type_scope,
+                        env,
+                        switch (binop.op) {
+                            .add, .sub, .mul, .div, .rem, .div_trunc => ty,
+                            .lt, .gt, .le, .ge, .eq => try self.lowerExprResultType(module_idx, type_scope, env, binop.lhs),
+                            else => unreachable,
+                        },
+                        switch (binop.op) {
+                            .add, .sub, .mul, .div, .rem, .div_trunc => try self.scopedExprResultVar(module_idx, type_scope, env, expr_idx),
+                            .lt, .gt, .le, .ge, .eq => try self.scopedExprResultVar(module_idx, type_scope, env, binop.lhs),
+                            else => unreachable,
+                        },
+                        binop.lhs,
+                        binop.rhs,
+                    ),
                 } };
             },
             .e_unary_minus => |unary| .{ .low_level = .{
@@ -1192,14 +1494,18 @@ pub const Lowerer = struct {
             .e_dot_access => |dot| blk: {
                 if (dot.args) |dispatch_args| {
                     _ = dispatch_args;
-                    break :blk .{ .call = try self.lowerRecordedMethodCall(
+                    const lowered_call = try self.lowerRecordedMethodCall(
                         module_idx,
                         type_scope,
                         env,
                         expr_idx,
                         dot.field_name,
                         null,
-                    ) };
+                    );
+                    return try self.program.store.addExpr(.{
+                        .ty = lowered_call.result_ty,
+                        .data = .{ .call = lowered_call.data },
+                    });
                 }
                 break :blk .{ .access = .{
                     .record = try self.lowerExpr(module_idx, type_scope, env, dot.receiver),
@@ -1211,6 +1517,7 @@ pub const Lowerer = struct {
                 type_scope,
                 env,
                 ty,
+                try self.scopedExprResultVar(module_idx, type_scope, env, expr_idx),
                 tag.name,
                 tag.args,
             ),
@@ -1219,6 +1526,7 @@ pub const Lowerer = struct {
                 type_scope,
                 env,
                 ty,
+                try self.scopedExprResultVar(module_idx, type_scope, env, expr_idx),
                 tag.name,
                 .{ .span = .{ .start = 0, .len = 0 } },
             ),
@@ -1239,20 +1547,36 @@ pub const Lowerer = struct {
                     .final_expr = try self.makeUnitExpr(),
                 } };
             },
-            .e_return => |ret| .{ .return_ = try self.lowerExpr(module_idx, type_scope, env, ret.expr) },
+            .e_return => |ret| blk: {
+                const expected = try self.lookupLambdaReturnExpectation(module_idx, type_scope, env, ret.lambda);
+                break :blk .{ .return_ = try self.lowerExprWithExpectedType(
+                    module_idx,
+                    type_scope,
+                    env,
+                    ret.expr,
+                    expected.ty,
+                    expected.solved_var,
+                ) };
+            },
             .e_for => |for_expr| .{ .for_ = try self.lowerForExpr(module_idx, type_scope, env, for_expr.patt, for_expr.expr, for_expr.body) },
             .e_run_low_level => |ll| .{ .low_level = .{
                 .op = ll.op,
                 .args = try self.lowerExprList(module_idx, type_scope, env, ll.args),
             } },
-            .e_type_var_dispatch => |dispatch| .{ .call = try self.lowerRecordedMethodCall(
-                module_idx,
-                type_scope,
-                env,
-                expr_idx,
-                dispatch.method_name,
-                null,
-            ) },
+            .e_type_var_dispatch => |dispatch| {
+                const lowered_call = try self.lowerRecordedMethodCall(
+                    module_idx,
+                    type_scope,
+                    env,
+                    expr_idx,
+                    dispatch.method_name,
+                    null,
+                );
+                return try self.program.store.addExpr(.{
+                    .ty = lowered_call.result_ty,
+                    .data = .{ .call = lowered_call.data },
+                });
+            },
             else => debugTodoExpr(expr),
         };
 
@@ -1676,14 +2000,18 @@ pub const Lowerer = struct {
     ) std.mem.Allocator.Error!LoweredClosure {
         const cir_env = self.ctx.env(module_idx);
         const arg_patterns = cir_env.store.slicePatterns(args_span);
-        const fn_parts = self.requireFunctionType(closure_ty);
         const source_fn_var = expected_var orelse ModuleEnv.varFrom(source_expr_idx);
-        const expected_ret_var = self.lookupFunctionRetVar(module_idx, source_fn_var);
+        const first_arg_ty = if (arg_patterns.len == 0)
+            self.requireFunctionType(closure_ty).arg
+        else
+            try self.requireFunctionArgType(module_idx, type_scope, source_fn_var, 0);
+        const result_ty = try self.requireFunctionRetType(module_idx, type_scope, source_fn_var);
+        const result_var = self.lookupFunctionRetVar(module_idx, source_fn_var);
         const first_arg_pattern = if (arg_patterns.len == 0) null else arg_patterns[0];
         const arg = if (first_arg_pattern) |pattern_idx|
-            try self.bindLambdaArg(module_idx, type_scope, pattern_idx, fn_parts.arg)
+            try self.bindLambdaArg(module_idx, type_scope, pattern_idx, first_arg_ty)
         else
-            try self.makeUnitArgWithType(fn_parts.arg);
+            try self.makeUnitArgWithType(first_arg_ty);
 
         var body_env = try self.cloneEnv(env);
         defer body_env.deinit();
@@ -1701,23 +2029,40 @@ pub const Lowerer = struct {
             );
         }
 
-        const body = if (arg_patterns.len <= 1)
-            try self.wrapExprWithBindingDecls(
+        const body = if (arg_patterns.len <= 1) blk: {
+            const body_expect = try self.resolveLambdaBodyExpectation(
+                module_idx,
+                type_scope,
+                body_env,
+                result_ty,
+                result_var,
+                true,
+                null,
+                body_expr_idx,
+            );
+            break :blk try self.wrapExprWithBindingDecls(
                 try self.lowerExprWithExpectedType(
                     module_idx,
                     type_scope,
                     body_env,
                     body_expr_idx,
-                    fn_parts.ret,
-                    expected_ret_var,
+                    body_expect.ty,
+                    body_expect.solved_var,
                 ),
                 binding_decls.items,
-            )
-        else
-            try self.wrapExprWithBindingDecls(
-                try self.lowerCurriedClosureChain(module_idx, type_scope, body_env, fn_parts.ret, source_fn_var, 1, arg_patterns[1..], body_expr_idx),
-                binding_decls.items,
             );
+        } else try self.wrapExprWithBindingDecls(
+            try self.lowerCurriedClosureChain(
+                module_idx,
+                type_scope,
+                body_env,
+                source_fn_var,
+                1,
+                arg_patterns[1..],
+                body_expr_idx,
+            ),
+            binding_decls.items,
+        );
 
         return .{
             .ty = try self.ctx.types.addType(.{
@@ -1868,9 +2213,7 @@ pub const Lowerer = struct {
         const branch_pattern_id = cir_env.store.sliceMatchBranchPatterns(branch.patterns)[0];
         const branch_pattern = cir_env.store.getMatchBranchPattern(branch_pattern_id);
 
-        const scrutinee_expr = try self.lowerExpr(module_idx, type_scope, env, match_expr.cond);
-        const scrutinee_ty = self.program.store.getExpr(scrutinee_expr).ty;
-        const scrutinee_solved_var = try self.scopedExprResultVar(module_idx, type_scope, env, match_expr.cond);
+        const scrutinee = try self.lowerExprFact(module_idx, type_scope, env, match_expr.cond);
 
         var branch_env = try self.cloneEnv(env);
         defer branch_env.deinit();
@@ -1881,9 +2224,9 @@ pub const Lowerer = struct {
             module_idx,
             type_scope,
             branch_pattern.pattern,
-            scrutinee_expr,
-            scrutinee_ty,
-            scrutinee_solved_var,
+            scrutinee.expr,
+            scrutinee.ty,
+            scrutinee.solved_var,
             &branch_env,
             &binding_decls,
         );
@@ -1917,9 +2260,7 @@ pub const Lowerer = struct {
         const branches = cir_env.store.matchBranchSlice(match_expr.branches);
         const out = try self.allocator.alloc(ast.Branch, branches.len);
         defer self.allocator.free(out);
-        const cond = try self.lowerExpr(module_idx, type_scope, env, match_expr.cond);
-        const cond_ty = self.program.store.getExpr(cond).ty;
-        const cond_solved_var = try self.scopedExprResultVar(module_idx, type_scope, env, match_expr.cond);
+        const cond = try self.lowerExprFact(module_idx, type_scope, env, match_expr.cond);
 
         for (branches, 0..) |branch_idx, i| {
             const branch = cir_env.store.getMatchBranch(branch_idx);
@@ -1939,8 +2280,8 @@ pub const Lowerer = struct {
                     module_idx,
                     type_scope,
                     branch_pattern.pattern,
-                    cond_ty,
-                    cond_solved_var,
+                    cond.ty,
+                    cond.solved_var,
                     &branch_env,
                     &binding_decls,
                 ),
@@ -1959,7 +2300,7 @@ pub const Lowerer = struct {
         }
 
         return .{
-            .cond = cond,
+            .cond = cond.expr,
             .branches = try self.program.store.addBranchSpan(out),
         };
     }
@@ -2030,18 +2371,16 @@ pub const Lowerer = struct {
         expected_result_var: ?Var,
         match_expr: CIR.Expr.Match,
     ) std.mem.Allocator.Error!@FieldType(ast.Expr.Data, "block") {
-        const scrutinee = try self.lowerExpr(module_idx, type_scope, env, match_expr.cond);
-        const scrutinee_ty = self.program.store.getExpr(scrutinee).ty;
-        const scrutinee_solved_var = try self.scopedExprResultVar(module_idx, type_scope, env, match_expr.cond);
+        const scrutinee = try self.lowerExprFact(module_idx, type_scope, env, match_expr.cond);
         const scrutinee_bind: ast.TypedSymbol = .{
-            .ty = scrutinee_ty,
+            .ty = scrutinee.ty,
             .symbol = try self.ctx.addSyntheticSymbol(base.Ident.Idx.NONE),
         };
         const scrutinee_decl = try self.program.store.addStmt(.{ .decl = .{
             .bind = scrutinee_bind,
-            .body = scrutinee,
+            .body = scrutinee.expr,
         } });
-        const scrutinee_expr = try self.makeVarExpr(scrutinee_ty, scrutinee_bind.symbol);
+        const scrutinee_expr = try self.makeVarExpr(scrutinee.ty, scrutinee_bind.symbol);
 
         var current = try self.program.store.addExpr(.{
             .ty = result_ty,
@@ -2062,8 +2401,8 @@ pub const Lowerer = struct {
                 result_ty,
                 expected_result_var,
                 scrutinee_expr,
-                scrutinee_ty,
-                scrutinee_solved_var,
+                scrutinee.ty,
+                scrutinee.solved_var,
                 branch_pattern.pattern,
                 branch_pattern.pattern,
                 branch.value,
@@ -2836,11 +3175,16 @@ pub const Lowerer = struct {
         };
         errdefer group.deinit(self.allocator);
 
+        var seed_scope: TypeCloneScope = undefined;
+        seed_scope.initCloneAll(self.allocator, @constCast(cir_env));
+        defer seed_scope.deinit();
+
         for (cir_stmts[start_idx..end_idx], 0..) |stmt_idx, group_i| {
             const decl = cir_env.store.getStatement(stmt_idx).s_decl;
             group.sources[group_i] = .{
                 .pattern_idx = decl.pattern,
                 .expr_idx = decl.expr,
+                .seed_var = try seed_scope.instantiator.instantiateVar(ModuleEnv.varFrom(decl.expr)),
                 .source_symbol = try self.requirePatternSymbolOnly(module_idx, decl.pattern),
             };
         }
@@ -2901,56 +3245,74 @@ pub const Lowerer = struct {
 
         switch (stmt) {
             .s_decl => |decl| {
-                const body_solved_var = try self.scopedExprResultVar(module_idx, type_scope, env.*, decl.expr);
-                const lowered_body = try self.lowerExpr(module_idx, type_scope, env.*, decl.expr);
-                const lowered_body_ty = self.program.store.getExpr(lowered_body).ty;
+                const bind_var = ModuleEnv.varFrom(decl.pattern);
+                const bind_expected_var = try self.scopeVar(type_scope, bind_var);
+                const bind_expected_ty = try self.lowerInstantiatedType(module_idx, type_scope, bind_expected_var);
+                const lowered_body = try self.lowerExprFactWithExpectedType(
+                    module_idx,
+                    type_scope,
+                    env.*,
+                    decl.expr,
+                    bind_expected_ty,
+                    bind_expected_var,
+                );
+                const bind_ty = lowered_body.ty;
                 if (self.patternNeedsBindingDecls(module_idx, decl.pattern)) {
-                    const root_bind = try self.makePatternSourceBindWithType(module_idx, decl.pattern, lowered_body_ty);
+                    const root_bind = try self.makePatternSourceBindWithType(module_idx, decl.pattern, bind_ty);
                     try lowered.append(self.allocator, try self.program.store.addStmt(.{ .decl = .{
                         .bind = root_bind,
-                        .body = lowered_body,
+                        .body = lowered_body.expr,
                     } }));
                     var binding_decls = std.ArrayList(BindingDecl).empty;
                     defer binding_decls.deinit(self.allocator);
-                    try self.collectStructuralBindingDeclsWithSolvedVar(module_idx, type_scope, root_bind, body_solved_var, decl.pattern, env, &binding_decls);
+                    try self.collectStructuralBindingDeclsWithSolvedVar(module_idx, type_scope, root_bind, lowered_body.solved_var, decl.pattern, env, &binding_decls);
                     try self.appendBindingDeclStmts(lowered, binding_decls.items, false);
                     return;
                 }
 
-                try self.bindPatternEnvFromTypeWithSolvedVar(module_idx, decl.pattern, lowered_body_ty, body_solved_var, env);
-                const bind = try self.requirePatternBinderWithType(module_idx, decl.pattern, lowered_body_ty);
+                try self.bindPatternEnvFromTypeWithSolvedVar(module_idx, decl.pattern, bind_ty, lowered_body.solved_var, env);
+                const bind = try self.requirePatternBinderWithType(module_idx, decl.pattern, bind_ty);
                 try lowered.append(self.allocator, try self.program.store.addStmt(.{ .decl = .{
                     .bind = bind,
-                    .body = lowered_body,
+                    .body = lowered_body.expr,
                 } }));
             },
             .s_var => |decl| {
-                const body_solved_var = try self.scopedExprResultVar(module_idx, type_scope, env.*, decl.expr);
-                const lowered_body = try self.lowerExpr(module_idx, type_scope, env.*, decl.expr);
-                const lowered_body_ty = self.program.store.getExpr(lowered_body).ty;
+                const bind_var = ModuleEnv.varFrom(decl.pattern_idx);
+                const bind_expected_var = try self.scopeVar(type_scope, bind_var);
+                const bind_expected_ty = try self.lowerInstantiatedType(module_idx, type_scope, bind_expected_var);
+                const lowered_body = try self.lowerExprFactWithExpectedType(
+                    module_idx,
+                    type_scope,
+                    env.*,
+                    decl.expr,
+                    bind_expected_ty,
+                    bind_expected_var,
+                );
+                const bind_ty = lowered_body.ty;
                 if (self.patternNeedsBindingDecls(module_idx, decl.pattern_idx)) {
-                    const root_bind = try self.makePatternSourceBindWithType(module_idx, decl.pattern_idx, lowered_body_ty);
+                    const root_bind = try self.makePatternSourceBindWithType(module_idx, decl.pattern_idx, bind_ty);
                     try lowered.append(self.allocator, try self.program.store.addStmt(.{ .var_decl = .{
                         .bind = root_bind,
-                        .body = lowered_body,
+                        .body = lowered_body.expr,
                     } }));
                     var binding_decls = std.ArrayList(BindingDecl).empty;
                     defer binding_decls.deinit(self.allocator);
-                    try self.collectStructuralBindingDeclsWithSolvedVar(module_idx, type_scope, root_bind, body_solved_var, decl.pattern_idx, env, &binding_decls);
+                    try self.collectStructuralBindingDeclsWithSolvedVar(module_idx, type_scope, root_bind, lowered_body.solved_var, decl.pattern_idx, env, &binding_decls);
                     try self.appendBindingDeclStmts(lowered, binding_decls.items, true);
                     return;
                 }
 
-                try self.bindPatternEnvFromTypeWithSolvedVar(module_idx, decl.pattern_idx, lowered_body_ty, body_solved_var, env);
-                const bind = try self.requirePatternBinderWithType(module_idx, decl.pattern_idx, lowered_body_ty);
+                try self.bindPatternEnvFromTypeWithSolvedVar(module_idx, decl.pattern_idx, bind_ty, lowered_body.solved_var, env);
+                const bind = try self.requirePatternBinderWithType(module_idx, decl.pattern_idx, bind_ty);
                 try lowered.append(self.allocator, try self.program.store.addStmt(.{ .var_decl = .{
                     .bind = bind,
-                    .body = lowered_body,
+                    .body = lowered_body.expr,
                 } }));
             },
             .s_reassign => |reassign| {
                 const body_ty = try self.lowerSolvedType(module_idx, type_scope, ModuleEnv.varFrom(reassign.pattern_idx));
-                const lowered_body = try self.lowerExprWithExpectedType(
+                const lowered_body = try self.lowerExprFactWithExpectedType(
                     module_idx,
                     type_scope,
                     env.*,
@@ -2962,7 +3324,7 @@ pub const Lowerer = struct {
                     const root_bind = try self.makePatternSourceBindWithType(module_idx, reassign.pattern_idx, body_ty);
                     try lowered.append(self.allocator, try self.program.store.addStmt(.{ .decl = .{
                         .bind = root_bind,
-                        .body = lowered_body,
+                        .body = lowered_body.expr,
                     } }));
                     const root_expr = try self.makeVarExpr(root_bind.ty, root_bind.symbol);
                     try self.lowerPatternReassignFromExpr(
@@ -2977,7 +3339,7 @@ pub const Lowerer = struct {
                 }
                 try lowered.append(self.allocator, try self.program.store.addStmt(.{ .reassign = .{
                     .target = try self.requirePatternSymbol(module_idx, env.*, reassign.pattern_idx),
-                    .body = lowered_body,
+                    .body = lowered_body.expr,
                 } }));
             },
             .s_expr => |expr_stmt| try lowered.append(self.allocator, try self.program.store.addStmt(.{ .expr = try self.lowerExpr(module_idx, type_scope, env.*, expr_stmt.expr) })),
@@ -3268,6 +3630,7 @@ pub const Lowerer = struct {
         type_scope: *TypeCloneScope,
         env: BindingEnv,
         record_ty: type_mod.TypeId,
+        record_var: ?Var,
         span: CIR.RecordField.Span,
     ) std.mem.Allocator.Error!ast.Span(ast.FieldExpr) {
         const cir_env = self.ctx.env(module_idx);
@@ -3279,7 +3642,14 @@ pub const Lowerer = struct {
             const field = cir_env.store.getRecordField(field_idx);
             out[i] = .{
                 .name = try self.ctx.copyExecutableIdent(module_idx, field.name),
-                .value = try self.lowerExpr(module_idx, type_scope, env, field.value),
+                .value = try self.lowerExprWithExpectedType(
+                    module_idx,
+                    type_scope,
+                    env,
+                    field.value,
+                    try self.lookupRecordFieldType(module_idx, record_ty, field.name),
+                    self.lookupRecordFieldSolvedVar(module_idx, record_var, field.name),
+                ),
             };
         }
 
@@ -3302,6 +3672,7 @@ pub const Lowerer = struct {
         type_scope: *TypeCloneScope,
         env: BindingEnv,
         record_ty: type_mod.TypeId,
+        record_var: ?Var,
         record: @FieldType(CIR.Expr, "e_record"),
     ) std.mem.Allocator.Error!ast.ExprId {
         if (record.ext) |base_expr_idx| {
@@ -3322,6 +3693,7 @@ pub const Lowerer = struct {
                 type_scope,
                 env,
                 record_ty,
+                record_var,
                 record.fields,
             ) },
         });
@@ -3423,6 +3795,7 @@ pub const Lowerer = struct {
         target: ResolvedTarget,
         fn_ty: type_mod.TypeId,
         solved_var: Var,
+        result_var: Var,
     };
 
     fn getRecordedMethodArgs(
@@ -3491,12 +3864,9 @@ pub const Lowerer = struct {
 
         const target = self.lookupResolvedDispatchTarget(module_idx, expr_idx) orelse
             self.resolveMonomorphicDispatchTarget(module_idx, type_scope, env, expr_idx, method_name);
-        const source_fn_var = try self.copyTopLevelDefBindingVarToModule(target.module_idx, target.def_idx, module_idx);
+        const source_fn_var = try self.copyTopLevelDefExprVarToModule(target.module_idx, target.def_idx, module_idx);
         const cloned_func_var = try call_scope.instantiator.instantiateVar(source_fn_var);
-        const cloned_ret_var = self.lookupFunctionRetVar(module_idx, cloned_func_var) orelse debugPanic(
-            "monotype static dispatch invariant violated: method target missing return var in module {d}",
-            .{module_idx},
-        );
+        const result_var = try self.scopeVar(type_scope, ModuleEnv.varFrom(expr_idx));
         try self.unifySpecializedRecordedMethodArgsWithActuals(
             module_idx,
             type_scope,
@@ -3504,15 +3874,21 @@ pub const Lowerer = struct {
             cloned_func_var,
             self.getRecordedMethodArgs(module_idx, expr_idx, method_name),
         );
+        const applied_arg_count: usize = blk: {
+            const args = self.getRecordedMethodArgs(module_idx, expr_idx, method_name);
+            break :blk args.explicit_args.len + if (args.implicit_receiver == null) @as(usize, 0) else 1;
+        };
+        try self.unifyAppliedFunctionResultVar(module_idx, result_var, cloned_func_var, applied_arg_count);
 
-        if (expected_result_var) |result_var| {
-            try self.unifySpecializedCheckerVars(module_idx, cloned_ret_var, result_var);
+        if (expected_result_var) |expected_var| {
+            try self.unifySpecializedCheckerVars(module_idx, result_var, expected_var);
         }
 
         return .{
             .target = target,
             .fn_ty = try self.lowerInstantiatedType(module_idx, &call_scope, cloned_func_var),
             .solved_var = cloned_func_var,
+            .result_var = result_var,
         };
     }
 
@@ -3530,6 +3906,20 @@ pub const Lowerer = struct {
             try self.copyCheckerVarToModule(source_module_idx, dest_module_idx, source_var);
     }
 
+    fn copyTopLevelDefExprVarToModule(
+        self: *Lowerer,
+        source_module_idx: u32,
+        def_idx: CIR.Def.Idx,
+        dest_module_idx: u32,
+    ) std.mem.Allocator.Error!Var {
+        const def = self.ctx.env(source_module_idx).store.getDef(def_idx);
+        const source_var = ModuleEnv.varFrom(def.expr);
+        return if (source_module_idx == dest_module_idx)
+            source_var
+        else
+            try self.copyCheckerVarToModule(source_module_idx, dest_module_idx, source_var);
+    }
+
     fn lowerRecordedMethodCall(
         self: *Lowerer,
         module_idx: u32,
@@ -3538,7 +3928,7 @@ pub const Lowerer = struct {
         expr_idx: CIR.Expr.Idx,
         method_name: base.Ident.Idx,
         expected_result_var: ?Var,
-    ) std.mem.Allocator.Error!@FieldType(ast.Expr.Data, "call") {
+    ) std.mem.Allocator.Error!LoweredCall {
         const args = self.getRecordedMethodArgs(module_idx, expr_idx, method_name);
         const fact = try self.lowerRecordedMethodFact(
             module_idx,
@@ -3553,37 +3943,43 @@ pub const Lowerer = struct {
         const lowered_args = try self.allocator.alloc(ast.ExprId, total_args_len);
         defer self.allocator.free(lowered_args);
 
-        const callee = try self.lowerResolvedTargetCallee(fact.target, fact.fn_ty);
+        const callee = try self.lowerResolvedTargetCallee(module_idx, fact.target, fact.fn_ty, fact.solved_var);
 
-        var current_fn_ty = fact.fn_ty;
         var arg_index: usize = 0;
         if (args.implicit_receiver) |receiver_expr_idx| {
-            const fn_parts = self.requireFunctionType(current_fn_ty);
+            const arg_var = self.lookupCurriedFunctionArgVar(module_idx, fact.solved_var, arg_index);
             lowered_args[arg_index] = try self.lowerExprWithExpectedType(
                 module_idx,
                 type_scope,
                 env,
                 receiver_expr_idx,
-                fn_parts.arg,
-                self.lookupFunctionArgVar(module_idx, fact.solved_var, arg_index),
+                try self.lowerInstantiatedType(module_idx, type_scope, arg_var orelse debugPanic(
+                    "monotype static dispatch invariant violated: specialized method missing receiver arg fact in module {d}",
+                    .{module_idx},
+                )),
+                arg_var,
             );
-            current_fn_ty = fn_parts.ret;
             arg_index += 1;
         }
         for (args.explicit_args, 0..) |arg_expr_idx, i| {
-            const fn_parts = self.requireFunctionType(current_fn_ty);
+            const arg_var = self.lookupCurriedFunctionArgVar(module_idx, fact.solved_var, arg_index + i);
             lowered_args[arg_index + i] = try self.lowerExprWithExpectedType(
                 module_idx,
                 type_scope,
                 env,
                 arg_expr_idx,
-                fn_parts.arg,
-                self.lookupFunctionArgVar(module_idx, fact.solved_var, arg_index + i),
+                try self.lowerInstantiatedType(module_idx, type_scope, arg_var orelse debugPanic(
+                    "monotype static dispatch invariant violated: specialized method missing arg {d} fact in module {d}",
+                    .{ arg_index + i, module_idx },
+                )),
+                arg_var,
             );
-            current_fn_ty = fn_parts.ret;
         }
 
-        return try self.buildCurriedCallFromLowered(callee, lowered_args);
+        return .{
+            .data = try self.buildCurriedCallFromLowered(callee, lowered_args),
+            .result_ty = try self.lowerInstantiatedType(module_idx, type_scope, fact.result_var),
+        };
     }
 
     fn lowerCurriedCall(
@@ -3595,14 +3991,11 @@ pub const Lowerer = struct {
         func_expr_idx: CIR.Expr.Idx,
         arg_exprs: []const CIR.Expr.Idx,
         expected_result_var: ?Var,
-    ) std.mem.Allocator.Error!struct {
-        data: @FieldType(ast.Expr.Data, "call"),
-        result_ty: type_mod.TypeId,
-    } {
+    ) std.mem.Allocator.Error!LoweredCall {
         const chain = try self.resolveSpecializableCallChain(module_idx, env, func_expr_idx, arg_exprs);
         defer chain.deinit(self.allocator);
 
-        const expected = try self.lowerCallExpectedFnType(
+        const call_fact = try self.lowerCallResultFact(
             module_idx,
             type_scope,
             env,
@@ -3617,38 +4010,30 @@ pub const Lowerer = struct {
             type_scope,
             env,
             chain.func_expr_idx,
-            expected.ty,
-            expected.solved_var,
+            call_fact.fn_ty,
+            call_fact.fn_var,
         );
 
         const lowered_args = try self.allocator.alloc(ast.ExprId, chain.arg_exprs.len);
         defer self.allocator.free(lowered_args);
-        var current_fn_ty = expected.ty;
-        const current_fn_var = expected.solved_var;
+        const current_fn_var = call_fact.fn_var;
         for (chain.arg_exprs, 0..) |arg_expr_idx, i| {
-            const fn_parts = self.requireFunctionType(current_fn_ty);
-            const arg_expected_var = if (current_fn_var) |var_|
-                self.lookupFunctionArgVar(module_idx, var_, i)
-            else
-                null;
+            const arg_expected_var = self.lookupCurriedFunctionArgVar(module_idx, current_fn_var, i);
             lowered_args[i] = try self.lowerExprWithExpectedType(
                 module_idx,
                 type_scope,
                 env,
                 arg_expr_idx,
-                fn_parts.arg,
+                try self.lowerInstantiatedType(module_idx, type_scope, arg_expected_var orelse debugPanic(
+                    "monotype invariant violated: call missing explicit argument {d} fact in module {d}",
+                    .{ i, module_idx },
+                )),
                 arg_expected_var,
             );
-            current_fn_ty = fn_parts.ret;
         }
-        const result_ty = if (chain.arg_exprs.len == 0)
-            self.callResultType(callee)
-        else
-            current_fn_ty;
-
         return .{
             .data = try self.buildCurriedCallFromLowered(callee, lowered_args),
-            .result_ty = result_ty,
+            .result_ty = call_fact.result_ty,
         };
     }
 
@@ -3802,6 +4187,41 @@ pub const Lowerer = struct {
         };
     }
 
+    fn lowerCallResultFact(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeCloneScope,
+        env: BindingEnv,
+        call_expr_idx: CIR.Expr.Idx,
+        func_expr_idx: CIR.Expr.Idx,
+        arg_exprs: []const CIR.Expr.Idx,
+        expected_result_var: ?Var,
+    ) std.mem.Allocator.Error!CallResultFact {
+        const expected = try self.lowerCallExpectedFnType(
+            module_idx,
+            type_scope,
+            env,
+            call_expr_idx,
+            func_expr_idx,
+            arg_exprs,
+            expected_result_var,
+        );
+        const result_var = try self.scopeVar(type_scope, ModuleEnv.varFrom(call_expr_idx));
+        try self.unifyAppliedFunctionResultVar(module_idx, result_var, expected.solved_var, arg_exprs.len);
+        if (expected_result_var) |var_| {
+            try self.unifySpecializedCheckerVars(module_idx, result_var, var_);
+        }
+        return .{
+            .fn_ty = expected.ty,
+            .fn_var = expected.solved_var orelse debugPanic(
+                "monotype invariant violated: call missing explicit callee facts in module {d}",
+                .{module_idx},
+            ),
+            .result_var = result_var,
+            .result_ty = try self.lowerInstantiatedType(module_idx, type_scope, result_var),
+        };
+    }
+
     fn calleeNeedsSourceFnSpecialization(
         self: *Lowerer,
         module_idx: u32,
@@ -3836,7 +4256,7 @@ pub const Lowerer = struct {
         module_idx: u32,
         type_scope: *TypeCloneScope,
         env: BindingEnv,
-        call_expr_idx: CIR.Expr.Idx,
+        _: CIR.Expr.Idx,
         func_expr_idx: CIR.Expr.Idx,
         arg_exprs: []const CIR.Expr.Idx,
         expected_result_var: ?Var,
@@ -3846,17 +4266,12 @@ pub const Lowerer = struct {
         call_scope.initCloneAll(self.allocator, module_env);
         defer call_scope.deinit();
 
-        _ = call_expr_idx;
         const source_func_var = try self.lookupSourceFunctionSeedVar(module_idx, env, func_expr_idx) orelse
             debugPanic(
                 "monotype invariant violated: missing source function seed for specialized call in module {d}",
                 .{module_idx},
             );
         const cloned_func_var = try call_scope.instantiator.instantiateVar(source_func_var);
-        const cloned_ret_var = self.lookupFunctionRetVar(module_idx, cloned_func_var) orelse debugPanic(
-            "monotype invariant violated: specialized callee missing return var in module {d}",
-            .{module_idx},
-        );
         try self.unifySpecializedCallArgsWithActuals(
             module_idx,
             type_scope,
@@ -3865,7 +4280,7 @@ pub const Lowerer = struct {
             arg_exprs,
         );
         if (expected_result_var) |result_var| {
-            try self.unifySpecializedCheckerVars(module_idx, cloned_ret_var, result_var);
+            try self.unifyAppliedFunctionResultVar(module_idx, result_var, cloned_func_var, arg_exprs.len);
         }
 
         const provisional_ty = try self.lowerInstantiatedType(module_idx, &call_scope, cloned_func_var);
@@ -3917,7 +4332,7 @@ pub const Lowerer = struct {
         arg_exprs: []const CIR.Expr.Idx,
     ) std.mem.Allocator.Error!void {
         for (arg_exprs, 0..) |arg_expr_idx, i| {
-            const cloned_arg_var = self.lookupFunctionArgVar(module_idx, cloned_func_var, i) orelse debugPanic(
+            const cloned_arg_var = self.lookupCurriedFunctionArgVar(module_idx, cloned_func_var, i) orelse debugPanic(
                 "monotype invariant violated: specialized callee missing argument {d} in module {d}",
                 .{ i, module_idx },
             );
@@ -3939,7 +4354,7 @@ pub const Lowerer = struct {
     ) std.mem.Allocator.Error!void {
         var arg_index: usize = 0;
         if (args.implicit_receiver) |receiver_expr_idx| {
-            const cloned_arg_var = self.lookupFunctionArgVar(module_idx, cloned_func_var, arg_index) orelse debugPanic(
+            const cloned_arg_var = self.lookupCurriedFunctionArgVar(module_idx, cloned_func_var, arg_index) orelse debugPanic(
                 "monotype static dispatch invariant violated: specialized method missing receiver arg in module {d}",
                 .{module_idx},
             );
@@ -3951,7 +4366,7 @@ pub const Lowerer = struct {
         }
 
         for (args.explicit_args, 0..) |arg_expr_idx, i| {
-            const cloned_arg_var = self.lookupFunctionArgVar(module_idx, cloned_func_var, arg_index + i) orelse debugPanic(
+            const cloned_arg_var = self.lookupCurriedFunctionArgVar(module_idx, cloned_func_var, arg_index + i) orelse debugPanic(
                 "monotype static dispatch invariant violated: specialized method missing arg {d} in module {d}",
                 .{ arg_index + i, module_idx },
             );
@@ -4018,21 +4433,21 @@ pub const Lowerer = struct {
                     .pattern_idx = @intFromEnum(lookup.pattern_idx),
                 })) |entry| {
                     switch (entry) {
-                        .typed => {},
-                        .local_fn_source => |source| {
-                            const group = self.local_fn_groups.items[source.group_index];
-                            break :blk ModuleEnv.varFrom(group.sources[source.source_index].expr_idx);
-                        },
-                    }
+                    .typed => {},
+                    .local_fn_source => |source| {
+                        const group = self.local_fn_groups.items[source.group_index];
+                        break :blk group.sources[source.source_index].seed_var;
+                    },
                 }
+            }
 
                 const symbol = self.lookupTopLevelSymbol(module_idx, lookup.pattern_idx) orelse break :blk null;
                 const top_level = self.top_level_defs_by_symbol.get(symbol) orelse break :blk null;
-                break :blk try self.copyTopLevelDefBindingVarToModule(top_level.module_idx, top_level.def_idx, module_idx);
+                break :blk try self.copyTopLevelDefExprVarToModule(top_level.module_idx, top_level.def_idx, module_idx);
             },
             .e_lookup_external => |lookup| blk: {
                 const target_module_idx = current_env.imports.getResolvedModule(lookup.module_idx) orelse break :blk null;
-                break :blk try self.copyTopLevelDefBindingVarToModule(target_module_idx, @enumFromInt(lookup.target_node_idx), module_idx);
+                break :blk try self.copyTopLevelDefExprVarToModule(target_module_idx, @enumFromInt(lookup.target_node_idx), module_idx);
             },
             else => null,
         };
@@ -4069,7 +4484,7 @@ pub const Lowerer = struct {
                     .typed => |typed| break :blk typed.solved_var orelse ModuleEnv.varFrom(lookup.pattern_idx),
                     .local_fn_source => |source| {
                         const group = self.local_fn_groups.items[source.group_index];
-                        break :blk ModuleEnv.varFrom(group.sources[source.source_index].expr_idx);
+                        break :blk ModuleEnv.varFrom(group.sources[source.source_index].pattern_idx);
                     },
                 };
 
@@ -4133,21 +4548,117 @@ pub const Lowerer = struct {
     ) std.mem.Allocator.Error!ast.ExprId {
         const cir_env = self.ctx.env(module_idx);
         const expr = cir_env.store.getExpr(expr_idx);
+        if (expected_var) |var_| {
+            switch (expr) {
+                .e_call => |call| {
+                    _ = try self.lowerCallResultFact(
+                        module_idx,
+                        type_scope,
+                        env,
+                        expr_idx,
+                        call.func,
+                        cir_env.store.sliceExpr(call.args),
+                        var_,
+                    );
+                },
+                .e_dot_access => |dot| {
+                    if (dot.args != null) {
+                        _ = try self.lowerRecordedMethodFact(
+                            module_idx,
+                            type_scope,
+                            env,
+                            expr_idx,
+                            dot.field_name,
+                            var_,
+                        );
+                    }
+                },
+                .e_type_var_dispatch => |dispatch| {
+                    _ = try self.lowerRecordedMethodFact(
+                        module_idx,
+                        type_scope,
+                        env,
+                        expr_idx,
+                        dispatch.method_name,
+                        var_,
+                    );
+                },
+                else => {},
+            }
+        }
         const target_ty = blk: {
             if (self.ctx.types.getType(expected_ty) != .placeholder) break :blk expected_ty;
             if (expected_var) |var_| {
-                const lowered = try self.lowerSolvedType(module_idx, type_scope, var_);
-                if (self.ctx.types.getType(lowered) != .placeholder) break :blk lowered;
+                const lowered_expected = try self.lowerInstantiatedType(module_idx, type_scope, var_);
+                if (self.ctx.types.getType(lowered_expected) != .placeholder) {
+                    break :blk lowered_expected;
+                }
             }
-            break :blk expected_ty;
+            if (try self.lowerExplicitExprType(module_idx, type_scope, env, expr_idx, expr)) |explicit_ty| {
+                break :blk explicit_ty;
+            }
+            const result_ty = try self.lowerExprResultType(module_idx, type_scope, env, expr_idx);
+            if (self.ctx.types.getType(result_ty) != .placeholder) {
+                break :blk result_ty;
+            }
+            if (comptime builtin.mode == .Debug) {
+                const scoped_var = self.scopedExprResultVar(module_idx, type_scope, env, expr_idx) catch null;
+                const expr_source_var = ModuleEnv.varFrom(expr_idx);
+                const env_types = self.ctx.env(module_idx).types;
+                var debug_type_writer = try types.TypeWriter.initFromParts(
+                    self.allocator,
+                    &@constCast(self.ctx.env(module_idx)).types,
+                    self.ctx.env(module_idx).getIdentStoreConst(),
+                    null,
+                );
+                defer debug_type_writer.deinit();
+                const expected_var_text = if (expected_var) |var_|
+                    try self.allocator.dupe(u8, try debug_type_writer.writeGet(var_, .one_line))
+                else
+                    try self.allocator.dupe(u8, "null");
+                defer self.allocator.free(expected_var_text);
+                const scoped_var_text = if (scoped_var) |var_|
+                    try self.allocator.dupe(u8, try debug_type_writer.writeGet(var_, .one_line))
+                else
+                    try self.allocator.dupe(u8, "null");
+                defer self.allocator.free(scoped_var_text);
+                const binding_solved_var: ?Var = switch (expr) {
+                    .e_lookup_local => |lookup| if (env.get(.{
+                        .module_idx = module_idx,
+                        .pattern_idx = @intFromEnum(lookup.pattern_idx),
+                    })) |entry| switch (entry) {
+                        .typed => |typed| typed.solved_var,
+                        .local_fn_source => null,
+                    } else null,
+                    else => null,
+                };
+                const binding_solved_content = if (binding_solved_var) |var_|
+                    @tagName(env_types.resolveVar(var_).desc.content)
+                else
+                    "null";
+                std.debug.panic(
+                    "monotype invariant violated: missing explicit expected/result type fact for expr {} ({s}) in module {d}; expected_var={any}({s}) scoped_var={any}({s}) binding_solved_var={any}({s}) source_expr_var={any} expected_ty={s}, expr_ty={s}",
+                    .{
+                        expr_idx,
+                        @tagName(expr),
+                        module_idx,
+                        expected_var,
+                        expected_var_text,
+                        scoped_var,
+                        scoped_var_text,
+                        binding_solved_var,
+                        binding_solved_content,
+                        expr_source_var,
+                        @tagName(self.ctx.types.getType(expected_ty)),
+                        @tagName(self.ctx.types.getType(try self.lowerExprResultType(module_idx, type_scope, env, expr_idx))),
+                    },
+                );
+            }
+            unreachable;
         };
 
         if (self.exprVarIsErroneous(module_idx, expr_idx)) {
             return self.lowerErroneousExprWithType(module_idx, type_scope, env, expr_idx, target_ty);
-        }
-
-        if (self.ctx.types.getType(target_ty) == .placeholder) {
-            return self.lowerExpr(module_idx, type_scope, env, expr_idx);
         }
 
         return switch (expr) {
@@ -4158,6 +4669,7 @@ pub const Lowerer = struct {
                 expr_idx,
                 nominal.backing_expr,
                 target_ty,
+                expected_var,
             ),
             .e_nominal_external => |nominal| self.lowerTransparentNominalExprWithType(
                 module_idx,
@@ -4166,6 +4678,7 @@ pub const Lowerer = struct {
                 expr_idx,
                 nominal.backing_expr,
                 target_ty,
+                expected_var,
             ),
             .e_num => |num| try self.program.store.addExpr(.{
                 .ty = target_ty,
@@ -4257,7 +4770,14 @@ pub const Lowerer = struct {
                     .args = try self.lowerExprList(module_idx, type_scope, env, ll.args),
                 } },
             }),
-            .e_record => |record| self.lowerRecordExpr(module_idx, type_scope, env, target_ty, record),
+            .e_record => |record| self.lowerRecordExpr(
+                module_idx,
+                type_scope,
+                env,
+                target_ty,
+                expected_var orelse try self.scopedExprResultVar(module_idx, type_scope, env, expr_idx),
+                record,
+            ),
             .e_tuple => |tuple| try self.program.store.addExpr(.{
                 .ty = target_ty,
                 .data = .{ .tuple = try self.lowerTupleExprsWithExpectedType(
@@ -4265,6 +4785,7 @@ pub const Lowerer = struct {
                     type_scope,
                     env,
                     target_ty,
+                    expected_var orelse try self.scopedExprResultVar(module_idx, type_scope, env, expr_idx),
                     tuple.elems,
                 ) },
             }),
@@ -4275,6 +4796,7 @@ pub const Lowerer = struct {
                     type_scope,
                     env,
                     target_ty,
+                    expected_var orelse try self.scopedExprResultVar(module_idx, type_scope, env, expr_idx),
                     list.elems,
                 ) },
             }),
@@ -4322,6 +4844,7 @@ pub const Lowerer = struct {
                     type_scope,
                     env,
                     target_ty,
+                    expected_var orelse try self.scopedExprResultVar(module_idx, type_scope, env, expr_idx),
                     tag.name,
                     tag.args,
                 ),
@@ -4333,6 +4856,7 @@ pub const Lowerer = struct {
                     type_scope,
                     env,
                     target_ty,
+                    expected_var orelse try self.scopedExprResultVar(module_idx, type_scope, env, expr_idx),
                     tag.name,
                     .{ .span = .{ .start = 0, .len = 0 } },
                 ),
@@ -4361,29 +4885,33 @@ pub const Lowerer = struct {
                 if (dot.args == null) {
                     break :blk try self.lowerExpr(module_idx, type_scope, env, expr_idx);
                 }
+                const lowered_call = try self.lowerRecordedMethodCall(
+                    module_idx,
+                    type_scope,
+                    env,
+                    expr_idx,
+                    dot.field_name,
+                    expected_var,
+                );
                 break :blk try self.program.store.addExpr(.{
-                    .ty = target_ty,
-                    .data = .{ .call = try self.lowerRecordedMethodCall(
-                        module_idx,
-                        type_scope,
-                        env,
-                        expr_idx,
-                        dot.field_name,
-                        expected_var,
-                    ) },
+                    .ty = lowered_call.result_ty,
+                    .data = .{ .call = lowered_call.data },
                 });
             },
-            .e_type_var_dispatch => |dispatch| try self.program.store.addExpr(.{
-                .ty = target_ty,
-                .data = .{ .call = try self.lowerRecordedMethodCall(
+            .e_type_var_dispatch => |dispatch| blk: {
+                const lowered_call = try self.lowerRecordedMethodCall(
                     module_idx,
                     type_scope,
                     env,
                     expr_idx,
                     dispatch.method_name,
                     expected_var,
-                ) },
-            }),
+                );
+                break :blk try self.program.store.addExpr(.{
+                    .ty = lowered_call.result_ty,
+                    .data = .{ .call = lowered_call.data },
+                });
+            },
             else => try self.lowerExpr(module_idx, type_scope, env, expr_idx),
         };
     }
@@ -4396,15 +4924,45 @@ pub const Lowerer = struct {
         expr_idx: CIR.Expr.Idx,
         backing_expr_idx: CIR.Expr.Idx,
         nominal_ty: type_mod.TypeId,
+        expected_var: ?Var,
     ) std.mem.Allocator.Error!ast.ExprId {
+        const backing_var = self.resolveTransparentBackingVar(
+            module_idx,
+            expected_var orelse try self.exprResultVar(module_idx, type_scope, env, expr_idx),
+        );
+        const backing_ty = if (self.ctx.types.getType(nominal_ty) != .placeholder)
+            nominal_ty
+        else if (backing_var) |var_| blk: {
+            const ty = try self.lowerInstantiatedType(module_idx, type_scope, var_);
+            if (self.ctx.types.getType(ty) != .placeholder) break :blk ty;
+            break :blk nominal_ty;
+        } else nominal_ty;
         return self.lowerExprWithExpectedType(
             module_idx,
             type_scope,
             env,
             backing_expr_idx,
-            nominal_ty,
-            ModuleEnv.varFrom(expr_idx),
+            backing_ty,
+            backing_var,
         );
+    }
+
+    fn resolveTransparentBackingVar(
+        self: *const Lowerer,
+        module_idx: u32,
+        source_var: ?Var,
+    ) ?Var {
+        const root = source_var orelse return null;
+        const env = self.ctx.env(module_idx);
+        const resolved = env.types.resolveVar(root);
+        return switch (resolved.desc.content) {
+            .structure => |flat| switch (flat) {
+                .nominal_type => |nominal| self.resolveTransparentBackingVar(module_idx, env.types.getNominalBackingVar(nominal)),
+                else => root,
+            },
+            .alias => |alias| self.resolveTransparentBackingVar(module_idx, env.types.getAliasBackingVar(alias)),
+            else => root,
+        };
     }
 
     fn maybeLowerRecordedDispatchCallExpr(
@@ -4417,28 +4975,34 @@ pub const Lowerer = struct {
     ) std.mem.Allocator.Error!?ast.ExprId {
         const cir_env = self.ctx.env(module_idx);
         return switch (cir_env.store.getExpr(call.func)) {
-            .e_dot_access => |dot| if (dot.args != null) try self.program.store.addExpr(.{
-                .ty = try self.lowerRecordedMethodResultType(module_idx, type_scope, env, call_expr_idx, dot.field_name),
-                .data = .{ .call = try self.lowerRecordedMethodCall(
+            .e_dot_access => |dot| if (dot.args != null) blk: {
+                const lowered_call = try self.lowerRecordedMethodCall(
                     module_idx,
                     type_scope,
                     env,
                     call_expr_idx,
                     dot.field_name,
                     null,
-                ) },
-            }) else null,
-            .e_type_var_dispatch => |dispatch| try self.program.store.addExpr(.{
-                .ty = try self.lowerRecordedMethodResultType(module_idx, type_scope, env, call_expr_idx, dispatch.method_name),
-                .data = .{ .call = try self.lowerRecordedMethodCall(
+                );
+                break :blk try self.program.store.addExpr(.{
+                    .ty = lowered_call.result_ty,
+                    .data = .{ .call = lowered_call.data },
+                });
+            } else null,
+            .e_type_var_dispatch => |dispatch| blk: {
+                const lowered_call = try self.lowerRecordedMethodCall(
                     module_idx,
                     type_scope,
                     env,
                     call_expr_idx,
                     dispatch.method_name,
                     null,
-                ) },
-            }),
+                );
+                break :blk try self.program.store.addExpr(.{
+                    .ty = lowered_call.result_ty,
+                    .data = .{ .call = lowered_call.data },
+                });
+            },
             else => null,
         };
     }
@@ -4476,6 +5040,7 @@ pub const Lowerer = struct {
         type_scope: *TypeCloneScope,
         env: BindingEnv,
         list_ty: type_mod.TypeId,
+        list_var: ?Var,
         span: CIR.Expr.Span,
     ) std.mem.Allocator.Error!ast.Span(ast.ExprId) {
         const elem_ty = self.requireListElemType(list_ty);
@@ -4485,6 +5050,7 @@ pub const Lowerer = struct {
             env,
             self.ctx.env(module_idx).store.sliceExpr(span),
             elem_ty,
+            self.lookupListElemSolvedVar(module_idx, list_var),
         );
     }
 
@@ -4494,6 +5060,7 @@ pub const Lowerer = struct {
         type_scope: *TypeCloneScope,
         env: BindingEnv,
         tuple_ty: type_mod.TypeId,
+        tuple_var: ?Var,
         span: CIR.Expr.Span,
     ) std.mem.Allocator.Error!ast.Span(ast.ExprId) {
         const elem_tys = switch (self.ctx.types.getType(tuple_ty)) {
@@ -4508,7 +5075,14 @@ pub const Lowerer = struct {
         const out = try self.allocator.alloc(ast.ExprId, exprs.len);
         defer self.allocator.free(out);
         for (exprs, elem_tys, 0..) |expr_idx, elem_ty, i| {
-            out[i] = try self.lowerExprWithExpectedType(module_idx, type_scope, env, expr_idx, elem_ty, null);
+            out[i] = try self.lowerExprWithExpectedType(
+                module_idx,
+                type_scope,
+                env,
+                expr_idx,
+                elem_ty,
+                self.lookupTupleElemSolvedVar(module_idx, tuple_var, i),
+            );
         }
         return try self.program.store.addExprSpan(out);
     }
@@ -4520,11 +5094,12 @@ pub const Lowerer = struct {
         env: BindingEnv,
         exprs: []const CIR.Expr.Idx,
         expected_ty: type_mod.TypeId,
+        expected_var: ?Var,
     ) std.mem.Allocator.Error!ast.Span(ast.ExprId) {
         const out = try self.allocator.alloc(ast.ExprId, exprs.len);
         defer self.allocator.free(out);
         for (exprs, 0..) |expr_idx, i| {
-            out[i] = try self.lowerExprWithExpectedType(module_idx, type_scope, env, expr_idx, expected_ty, null);
+            out[i] = try self.lowerExprWithExpectedType(module_idx, type_scope, env, expr_idx, expected_ty, expected_var);
         }
         return try self.program.store.addExprSpan(out);
     }
@@ -4534,20 +5109,14 @@ pub const Lowerer = struct {
         module_idx: u32,
         type_scope: *TypeCloneScope,
         env: BindingEnv,
+        operand_ty: type_mod.TypeId,
+        operand_var: ?Var,
         lhs_expr_idx: CIR.Expr.Idx,
         rhs_expr_idx: CIR.Expr.Idx,
     ) std.mem.Allocator.Error!ast.Span(ast.ExprId) {
-        const cir_env = self.ctx.env(module_idx);
-        const operand_ty = try self.lowerExprType(
-            module_idx,
-            type_scope,
-            env,
-            lhs_expr_idx,
-            cir_env.store.getExpr(lhs_expr_idx),
-        );
         const lowered = [_]ast.ExprId{
-            try self.lowerExprWithExpectedType(module_idx, type_scope, env, lhs_expr_idx, operand_ty, null),
-            try self.lowerExprWithExpectedType(module_idx, type_scope, env, rhs_expr_idx, operand_ty, null),
+            try self.lowerExprWithExpectedType(module_idx, type_scope, env, lhs_expr_idx, operand_ty, operand_var),
+            try self.lowerExprWithExpectedType(module_idx, type_scope, env, rhs_expr_idx, operand_ty, operand_var),
         };
         return self.program.store.addExprSpan(&lowered);
     }
@@ -4595,6 +5164,7 @@ pub const Lowerer = struct {
         type_scope: *TypeCloneScope,
         env: BindingEnv,
         expected_ty: type_mod.TypeId,
+        expected_var: ?Var,
         tag_name: base.Ident.Idx,
         args_span: CIR.Expr.Span,
     ) std.mem.Allocator.Error!ast.Expr.Data {
@@ -4605,16 +5175,27 @@ pub const Lowerer = struct {
             return .{ .bool_lit = self.requireBoolLiteralValue(module_idx, tag_name) };
         }
 
-        const arg_tys = try self.lookupTagArgTypesOwned(module_idx, expected_ty, tag_name);
-        defer self.allocator.free(arg_tys);
         const arg_exprs = self.ctx.env(module_idx).store.sliceExpr(args_span);
+        const arg_tys = if (self.ctx.types.getType(expected_ty) == .placeholder)
+            try self.lookupTagArgTypesFromSolvedVarsOwned(module_idx, type_scope, expected_var, tag_name, arg_exprs.len)
+        else
+            try self.lookupTagArgTypesOwned(module_idx, expected_ty, tag_name);
+        defer self.allocator.free(arg_tys);
         if (arg_exprs.len != arg_tys.len) {
             return debugPanic("monotype invariant violated: tag constructor arity mismatch during expected-type lowering", .{});
         }
         const lowered_args = try self.allocator.alloc(ast.ExprId, arg_exprs.len);
         defer self.allocator.free(lowered_args);
         for (arg_exprs, arg_tys, 0..) |arg_expr_idx, arg_ty, i| {
-            lowered_args[i] = try self.lowerExprWithExpectedType(module_idx, type_scope, env, arg_expr_idx, arg_ty, null);
+            const arg_var = self.lookupTagArgSolvedVar(module_idx, expected_var, tag_name, i);
+            lowered_args[i] = try self.lowerExprWithExpectedType(
+                module_idx,
+                type_scope,
+                env,
+                arg_expr_idx,
+                arg_ty,
+                arg_var,
+            );
         }
         return .{ .tag = .{
             .name = try self.ctx.copyExecutableIdent(module_idx, tag_name),
@@ -4744,6 +5325,22 @@ pub const Lowerer = struct {
         return self.lowerInstantiatedType(module_idx, type_scope, var_to_lower);
     }
 
+    fn lowerExprResultType(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeCloneScope,
+        env: BindingEnv,
+        expr_idx: CIR.Expr.Idx,
+    ) std.mem.Allocator.Error!type_mod.TypeId {
+        const expr = self.ctx.env(module_idx).store.getExpr(expr_idx);
+        const lowered = try self.lowerInstantiatedType(
+            module_idx,
+            type_scope,
+            try self.exprResultVar(module_idx, type_scope, env, expr_idx),
+        );
+        return self.normalizeDefaultNumericLiteralType(module_idx, expr_idx, expr, lowered);
+    }
+
     fn lowerExprType(
         self: *Lowerer,
         module_idx: u32,
@@ -4755,11 +5352,7 @@ pub const Lowerer = struct {
         if (try self.lowerExplicitExprType(module_idx, type_scope, env, expr_idx, expr)) |explicit| {
             return explicit;
         }
-        const lowered = if (type_scope.var_map.get(ModuleEnv.varFrom(expr_idx))) |scoped_var|
-            try self.lowerInstantiatedType(module_idx, type_scope, scoped_var)
-        else
-            try self.lowerSolvedType(module_idx, type_scope, ModuleEnv.varFrom(expr_idx));
-        return self.normalizeDefaultNumericLiteralType(module_idx, expr_idx, expr, lowered);
+        return try self.lowerExprResultType(module_idx, type_scope, env, expr_idx);
     }
 
     fn lowerExplicitExprType(
@@ -4777,7 +5370,18 @@ pub const Lowerer = struct {
                     .module_idx = module_idx,
                     .pattern_idx = @intFromEnum(lookup.pattern_idx),
                 })) |entry| switch (entry) {
-                    .typed => |typed| break :blk typed.bind.ty,
+                    .typed => |typed| {
+                        if (self.ctx.types.getType(typed.bind.ty) != .placeholder) {
+                            break :blk typed.bind.ty;
+                        }
+                        if (typed.solved_var) |solved_var| {
+                            const lowered = try self.lowerInstantiatedType(module_idx, type_scope, solved_var);
+                            if (self.ctx.types.getType(lowered) != .placeholder) {
+                                break :blk lowered;
+                            }
+                        }
+                        break :blk typed.bind.ty;
+                    },
                     .local_fn_source => {},
                 };
 
@@ -4796,35 +5400,81 @@ pub const Lowerer = struct {
             else
                 null,
             .e_empty_record => try self.makeEmptyRecordType(),
-            .e_call => null,
-            .e_dot_access => |dot| if (dot.args != null)
-                try self.lowerRecordedMethodResultType(module_idx, type_scope, env, expr_idx, dot.field_name)
-            else
-                try self.lookupRecordFieldType(
-                    module_idx,
-                    try self.lowerExprType(
-                        module_idx,
-                        type_scope,
-                        env,
-                        dot.receiver,
-                        cir_env.store.getExpr(dot.receiver),
-                    ),
-                    dot.field_name,
-                ),
-            .e_type_var_dispatch => null,
-            .e_binop => |binop| switch (binop.op) {
-                .lt, .gt, .le, .ge, .eq, .ne => try self.makePrimitiveType(.bool),
-                .add, .sub, .mul, .div, .rem, .div_trunc => try self.lowerExprType(
+            .e_call => |call| blk: {
+                const fact = try self.lowerCallResultFact(
                     module_idx,
                     type_scope,
                     env,
-                    binop.lhs,
-                    cir_env.store.getExpr(binop.lhs),
-                ),
+                    expr_idx,
+                    call.func,
+                    cir_env.store.sliceExpr(call.args),
+                    null,
+                );
+                break :blk fact.result_ty;
+            },
+            .e_dot_access => null,
+            .e_type_var_dispatch => null,
+            .e_match => |match_expr| if (match_expr.is_try_suffix)
+                try self.lookupTrySuffixPayloadType(module_idx, type_scope, env, match_expr)
+            else
+                null,
+            .e_binop => |binop| switch (binop.op) {
+                .lt, .gt, .le, .ge, .eq, .ne => try self.makePrimitiveType(.bool),
+                .add, .sub, .mul, .div, .rem, .div_trunc => null,
                 .@"and", .@"or" => try self.makePrimitiveType(.bool),
             },
             .e_unary_minus => null,
             .e_unary_not => try self.makePrimitiveType(.bool),
+            else => null,
+        };
+    }
+
+    fn lookupTrySuffixPayloadType(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeCloneScope,
+        env: BindingEnv,
+        match_expr: CIR.Expr.Match,
+    ) std.mem.Allocator.Error!?type_mod.TypeId {
+        const cir_env = self.ctx.env(module_idx);
+        const branches = cir_env.store.matchBranchSlice(match_expr.branches);
+        if (branches.len == 0) return null;
+
+        const ok_branch = cir_env.store.getMatchBranch(branches[0]);
+        const branch_patterns = cir_env.store.sliceMatchBranchPatterns(ok_branch.patterns);
+        if (branch_patterns.len == 0) return null;
+
+        const branch_pattern = cir_env.store.getMatchBranchPattern(branch_patterns[0]);
+        const tag_info = self.lookupSingleTagPayloadPattern(module_idx, branch_pattern.pattern) orelse return null;
+        const scrutinee_var = try self.scopedExprResultVar(module_idx, type_scope, env, match_expr.cond);
+        if (self.lookupTagArgSolvedVar(module_idx, scrutinee_var, tag_info.tag_name, 0)) |payload_var| {
+            return try self.lowerInstantiatedType(module_idx, type_scope, payload_var);
+        }
+
+        const scrutinee_ty = try self.lowerInstantiatedType(module_idx, type_scope, scrutinee_var);
+        const payload_tys = try self.lookupTagArgTypesOwned(module_idx, scrutinee_ty, tag_info.tag_name);
+        defer self.allocator.free(payload_tys);
+        if (payload_tys.len == 1) {
+            return payload_tys[0];
+        }
+        return null;
+    }
+
+    fn lookupSingleTagPayloadPattern(
+        self: *Lowerer,
+        module_idx: u32,
+        pattern_idx: CIR.Pattern.Idx,
+    ) ?struct { tag_name: base.Ident.Idx, payload_pattern: CIR.Pattern.Idx } {
+        const cir_env = self.ctx.env(module_idx);
+        const pattern = cir_env.store.getPattern(pattern_idx);
+        return switch (pattern) {
+            .applied_tag => |tag| blk: {
+                const args = cir_env.store.slicePatterns(tag.args);
+                if (args.len != 1) break :blk null;
+                break :blk .{ .tag_name = tag.name, .payload_pattern = args[0] };
+            },
+            .nominal => |nominal| self.lookupSingleTagPayloadPattern(module_idx, nominal.backing_pattern),
+            .nominal_external => |nominal| self.lookupSingleTagPayloadPattern(module_idx, nominal.backing_pattern),
             else => null,
         };
     }
@@ -4930,6 +5580,9 @@ pub const Lowerer = struct {
         };
 
         self.ctx.types.types.items[@intFromEnum(placeholder)] = lowered;
+        if (lowered == .placeholder) {
+            _ = type_scope.type_cache.remove(key);
+        }
         return placeholder;
     }
 
@@ -5781,7 +6434,7 @@ pub const Lowerer = struct {
     ) std.mem.Allocator.Error!type_mod.TypeId {
         if (self.ctx.types.getType(source_ty) != .placeholder) return source_ty;
         const solved_var = source_solved_var orelse return source_ty;
-        return try self.lowerSolvedType(module_idx, type_scope, solved_var);
+        return try self.lowerInstantiatedType(module_idx, type_scope, solved_var);
     }
 
     fn lowerMatchPatWithType(
@@ -5949,7 +6602,7 @@ pub const Lowerer = struct {
                 "monotype invariant violated: missing solved tag arg {d} for pattern in module {d} from solved content {s}",
                 .{ i, module_idx, @tagName(resolved.desc.content) },
             );
-            out[i] = try self.lowerSolvedType(module_idx, type_scope, arg_var);
+            out[i] = try self.lowerInstantiatedType(module_idx, type_scope, arg_var);
         }
         return out;
     }
@@ -6405,10 +7058,46 @@ pub const Lowerer = struct {
             "monotype invariant violated: missing specialized function var in module {d}",
             .{module_idx},
         );
-        return self.lookupFunctionArgVar(module_idx, function_var, arg_index) orelse debugPanic(
+        return self.lookupCurriedFunctionArgVar(module_idx, function_var, arg_index) orelse debugPanic(
             "monotype invariant violated: missing specialized function argument {d} in module {d}",
             .{ arg_index, module_idx },
         );
+    }
+
+    fn lookupCurriedFunctionArgVar(
+        self: *const Lowerer,
+        module_idx: u32,
+        fn_var: ?Var,
+        arg_index: usize,
+    ) ?Var {
+        var current = fn_var orelse return null;
+        var remaining = arg_index;
+
+        while (true) {
+            var local_index: usize = 0;
+            while (self.lookupFunctionArgVar(module_idx, current, local_index)) |arg_var| : (local_index += 1) {
+                if (remaining == 0) return arg_var;
+                remaining -= 1;
+            }
+
+            const ret_var = self.lookupFunctionRetVar(module_idx, current) orelse return null;
+            if (self.lookupFunctionArgVar(module_idx, ret_var, 0) == null) return null;
+            current = ret_var;
+        }
+    }
+
+    fn lookupCurriedFunctionFinalRetVar(
+        self: *const Lowerer,
+        module_idx: u32,
+        fn_var: ?Var,
+    ) ?Var {
+        var current = fn_var orelse return null;
+
+        while (true) {
+            const ret_var = self.lookupFunctionRetVar(module_idx, current) orelse return null;
+            if (self.lookupFunctionArgVar(module_idx, ret_var, 0) == null) return ret_var;
+            current = ret_var;
+        }
     }
 
     fn lookupSpecializedExprVar(
@@ -6437,39 +7126,27 @@ pub const Lowerer = struct {
         env: BindingEnv,
         expr_idx: CIR.Expr.Idx,
     ) std.mem.Allocator.Error!Var {
-        const cir_env = self.ctx.env(module_idx);
-        return switch (cir_env.store.getExpr(expr_idx)) {
-            .e_lookup_local => self.lookupSpecializedExprVar(module_idx, env, expr_idx) orelse try self.scopeVar(type_scope, ModuleEnv.varFrom(expr_idx)),
-            .e_call => |call| blk: {
-                const expected = try self.lowerCallExpectedFnType(
-                    module_idx,
-                    type_scope,
-                    env,
-                    expr_idx,
-                    call.func,
-                    cir_env.store.sliceExpr(call.args),
-                    null,
-                );
-                if (expected.solved_var) |fn_var| {
-                    break :blk self.lookupFunctionRetVar(module_idx, fn_var) orelse debugPanic(
-                        "monotype invariant violated: specialized call missing return var in module {d}",
-                        .{module_idx},
-                    );
-                }
-                if (comptime builtin.mode == .Debug) {
-                    std.debug.panic(
-                        "monotype invariant violated: missing specialized call var for expr {} in module {d}",
-                        .{ expr_idx, module_idx },
-                    );
-                }
-                unreachable;
-            },
-            .e_dot_access => |dot| if (dot.args != null)
-                try self.lowerRecordedMethodResultVar(module_idx, type_scope, env, expr_idx, dot.field_name)
-            else
-                try self.scopeVar(type_scope, ModuleEnv.varFrom(expr_idx)),
-            else => try self.scopeVar(type_scope, ModuleEnv.varFrom(expr_idx)),
-        };
+        return self.lookupSpecializedExprVar(module_idx, env, expr_idx) orelse
+            try self.scopeVar(type_scope, ModuleEnv.varFrom(expr_idx));
+    }
+
+    fn lookupHomogeneousBinopResultVar(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeCloneScope,
+        env: BindingEnv,
+        lhs_expr_idx: CIR.Expr.Idx,
+        rhs_expr_idx: CIR.Expr.Idx,
+    ) std.mem.Allocator.Error!Var {
+        const lhs_var = try self.exprResultVar(module_idx, type_scope, env, lhs_expr_idx);
+        const lhs_ty = try self.lowerInstantiatedType(module_idx, type_scope, lhs_var);
+        if (self.ctx.types.getType(lhs_ty) != .placeholder) return lhs_var;
+
+        const rhs_var = try self.exprResultVar(module_idx, type_scope, env, rhs_expr_idx);
+        const rhs_ty = try self.lowerInstantiatedType(module_idx, type_scope, rhs_var);
+        if (self.ctx.types.getType(rhs_ty) != .placeholder) return rhs_var;
+
+        return lhs_var;
     }
 
     fn scopeVar(
@@ -6479,40 +7156,6 @@ pub const Lowerer = struct {
     ) std.mem.Allocator.Error!Var {
         if (type_scope.var_map.get(source_var)) |scoped| return scoped;
         return try type_scope.instantiator.instantiateVar(source_var);
-    }
-
-    fn lowerRecordedMethodResultVar(
-        self: *Lowerer,
-        module_idx: u32,
-        type_scope: *TypeCloneScope,
-        env: BindingEnv,
-        expr_idx: CIR.Expr.Idx,
-        method_name: base.Ident.Idx,
-    ) std.mem.Allocator.Error!Var {
-        const fact = try self.lowerRecordedMethodFact(
-            module_idx,
-            type_scope,
-            env,
-            expr_idx,
-            method_name,
-            null,
-        );
-        return self.lookupFunctionRetVar(module_idx, fact.solved_var) orelse debugPanic(
-            "monotype static dispatch invariant violated: missing method result var",
-            .{},
-        );
-    }
-
-    fn lowerRecordedMethodResultType(
-        self: *Lowerer,
-        module_idx: u32,
-        type_scope: *TypeCloneScope,
-        env: BindingEnv,
-        expr_idx: CIR.Expr.Idx,
-        method_name: base.Ident.Idx,
-    ) std.mem.Allocator.Error!type_mod.TypeId {
-        const result_var = try self.lowerRecordedMethodResultVar(module_idx, type_scope, env, expr_idx, method_name);
-        return try self.lowerInstantiatedType(module_idx, type_scope, result_var);
     }
 
     fn lookupResolvedDispatchTarget(
@@ -6562,6 +7205,87 @@ pub const Lowerer = struct {
             .alias => |alias| self.lookupFunctionRetVar(module_idx, env.types.getAliasBackingVar(alias)),
             else => null,
         };
+    }
+
+    fn unifyAppliedFunctionResultVar(
+        self: *Lowerer,
+        module_idx: u32,
+        result_var: Var,
+        fn_var_opt: ?Var,
+        applied_arg_count: usize,
+    ) std.mem.Allocator.Error!void {
+        const fn_var = fn_var_opt orelse debugPanic(
+            "monotype invariant violated: missing explicit function fact for applied call result in module {d}",
+            .{module_idx},
+        );
+        const total_args = self.functionArgCount(module_idx, fn_var);
+        if (applied_arg_count > total_args) {
+            return debugPanic(
+                "monotype invariant violated: applied {d} args to function with arity {d} in module {d}",
+                .{ applied_arg_count, total_args, module_idx },
+            );
+        }
+
+        if (applied_arg_count == total_args) {
+            const ret_var = self.lookupCurriedFunctionFinalRetVar(module_idx, fn_var) orelse debugPanic(
+                "monotype invariant violated: saturated call missing return var in module {d}",
+                .{module_idx},
+            );
+            return self.unifySpecializedCheckerVars(module_idx, result_var, ret_var);
+        }
+
+        const remaining_args = total_args - applied_arg_count;
+        for (0..remaining_args) |i| {
+            const result_arg_var = self.lookupCurriedFunctionArgVar(module_idx, result_var, i) orelse debugPanic(
+                "monotype invariant violated: partial-call result missing arg {d} in module {d}",
+                .{ i, module_idx },
+            );
+            const fn_arg_var = self.lookupCurriedFunctionArgVar(module_idx, fn_var, applied_arg_count + i) orelse debugPanic(
+                "monotype invariant violated: function missing arg {d} in module {d}",
+                .{ applied_arg_count + i, module_idx },
+            );
+            try self.unifySpecializedCheckerVars(module_idx, result_arg_var, fn_arg_var);
+        }
+
+        const result_ret_var = self.lookupCurriedFunctionFinalRetVar(module_idx, result_var) orelse debugPanic(
+            "monotype invariant violated: partial-call result missing return var in module {d}",
+            .{module_idx},
+        );
+        const fn_ret_var = self.lookupCurriedFunctionFinalRetVar(module_idx, fn_var) orelse debugPanic(
+            "monotype invariant violated: function missing return var in module {d}",
+            .{module_idx},
+        );
+        try self.unifySpecializedCheckerVars(module_idx, result_ret_var, fn_ret_var);
+    }
+
+    fn requireFunctionArgType(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeCloneScope,
+        fn_var: ?Var,
+        arg_index: usize,
+    ) std.mem.Allocator.Error!type_mod.TypeId {
+        return try self.lowerInstantiatedType(
+            module_idx,
+            type_scope,
+            self.requireFunctionArgVar(module_idx, fn_var, arg_index),
+        );
+    }
+
+    fn requireFunctionRetType(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeCloneScope,
+        fn_var: ?Var,
+    ) std.mem.Allocator.Error!type_mod.TypeId {
+        return try self.lowerInstantiatedType(
+            module_idx,
+            type_scope,
+            self.lookupFunctionRetVar(module_idx, fn_var) orelse debugPanic(
+                "monotype invariant violated: missing function return fact in module {d}",
+                .{module_idx},
+            ),
+        );
     }
 
     fn functionArgCount(
@@ -6800,8 +7524,10 @@ pub const Lowerer = struct {
 
     fn lowerResolvedTargetCallee(
         self: *Lowerer,
+        current_module_idx: u32,
         target: ResolvedTarget,
         expected_ty: type_mod.TypeId,
+        expected_var: ?Var,
     ) std.mem.Allocator.Error!ast.ExprId {
         const source_symbol = self.lookupTopLevelDefSymbol(target.module_idx, target.def_idx) orelse debugPanic(
             "monotype static dispatch invariant violated: unresolved target symbol {d}:{d}",
@@ -6810,7 +7536,13 @@ pub const Lowerer = struct {
 
         const symbol = if (self.top_level_defs_by_symbol.get(source_symbol)) |top_level|
             if (top_level.is_function) blk: {
-                const source_expected_var = ModuleEnv.varFrom(self.ctx.env(top_level.module_idx).store.getDef(top_level.def_idx).expr);
+                const source_expected_var = if (expected_var) |var_|
+                    if (current_module_idx == top_level.module_idx)
+                        var_
+                    else
+                        try self.copyCheckerVarToModule(current_module_idx, top_level.module_idx, var_)
+                else
+                    ModuleEnv.varFrom(self.ctx.env(top_level.module_idx).store.getDef(top_level.def_idx).expr);
                 break :blk try self.specializations.specializeFn(&self.ctx.symbols, &self.ctx.types, source_symbol, .{
                     .module_idx = top_level.module_idx,
                     .def_idx = top_level.def_idx,

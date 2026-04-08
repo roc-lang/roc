@@ -1,409 +1,240 @@
-# Runtime Host-Effects Harness Plan
+# Cor-Style Monotype Re-Inference Removal Plan
 
 ## Goal
 
-Build a production-faithful runtime host-effects harness for eval tests.
+Eliminate the remaining monotype re-inference paths listed in sections 1, 2,
+and 3 of [reinfer.md](/Users/rtfeldman/.codex/worktrees/1d55/roc/reinfer.md)
+by changing the Zig compiler to follow the same architectural strategy `cor`
+uses:
 
-This harness is for observing only what a real host can observe through the
-existing `RocOps` / `host_abi` callback boundary:
+- earlier stages produce explicit typed expression facts
+- monotype consumes those facts directly
+- later stages never reconstruct result types or result vars from local syntax
+- missing explicit facts are compiler bugs, not situations to recover from
 
-- `dbg`
-- `expect_failed`
-- `crashed`
+This work must optimize for long-term architecture only:
 
-The harness must record:
+- no workarounds
+- no fallbacks
+- no heuristics
+- no transitional dual systems
+- no “make tests pass first, clean up later”
 
-- exact callback kind
-- exact UTF-8 bytes passed to the callback
-- exact event order
-- whether execution returned normally or terminated via crash
+The only acceptable end state is that the cor-style path is the only path.
 
-It must **not** observe or depend on:
+## Scope
 
-- source-site ids
-- extra test-only metadata
-- interpreter-only introspection
-- stdout/stderr scraping
-- any change to `src/builtins/host_abi.zig`
+This plan covers only the remaining monotype items from `reinfer.md`:
 
-## Non-Negotiable Design Rules
+### 1. Monotype expected-type fallback
 
-1. `host_abi` is fixed production contract.
-   - do not add fields
-   - do not add side channels
-   - do not add test-only wrappers to the ABI payloads
+- [`src/monotype/lower.zig:4149`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/lower.zig:4149)
+  `lowerExprWithExpectedType`
 
-2. The harness must assert exactly what the production host receives.
-   - exact `dbg` bytes
-   - exact `expect_failed` bytes
-   - exact `crashed` bytes
-   - exact event order
+### 2. Remaining monotype expression type recovery
 
-3. No synthetic structure is allowed beyond the event kind itself.
-   - if two different source sites emit identical `dbg` bytes, the harness may
-     only assert that two identical `dbg` events occurred in order
+- [`src/monotype/lower.zig:4800`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/lower.zig:4800)
+  recorded-method result type
+- [`src/monotype/lower.zig:4803`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/lower.zig:4803)
+  plain field-access result type
+- [`src/monotype/lower.zig:4817`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/lower.zig:4817)
+  arithmetic result type
 
-4. No host-side formatting or rewriting.
-   - do not prepend `Expect failed: `
-   - do not print `dbg`
-   - do not re-render runtime values for assertions
+### 3. Remaining monotype result-var rediscovery
 
-5. Keep value parity and host effects as separate contracts.
-   - final returned-value semantics remain in the `Str.inspect((...)) -> RocStr`
-     runner
-   - host effects get their own runner
-   - mixed legacy tests must be split, not merged into a muddled mega-harness
+- [`src/monotype/lower.zig:6443`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/lower.zig:6443)
+  plain-call result var
+- [`src/monotype/lower.zig:6467`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/lower.zig:6467)
+  recorded-method result var
 
-6. Port legacy tests by strengthening them toward exact byte assertions.
-   - no substring matching for `dbg` payloads
-   - no “one of these several strings is acceptable”
-   - no fuzzy assertions carried forward from unstable old interpreter behavior
+## Required Cor-Style End State
 
-7. If a legacy test title encoded obsolete behavior, keep production semantics
-   instead of preserving the obsolete assertion.
-   - example: old expect-failure tests that assumed crash behavior must be
-     rewritten around the actual `expect_failed` callback contract
+The target architecture is:
 
-## Runtime Contract
+1. Every executable expression entering monotype already has an explicit solved
+   result fact.
+   - result type
+   - and, where needed for later lowering, explicit result var identity
 
-Each backend run in this harness yields:
+2. Calls and method calls are resolved before monotype into one explicit
+   executable call shape.
+   - no monotype code may ask “what is this call’s return type?”
+   - no monotype code may ask “what is this method call’s return type?”
+   - no monotype code may recover result vars from the callee
 
-- `events: []const HostEffect`
-- `termination: returned | crashed | problem | timeout`
+3. Field access must use the access expression’s own explicit solved result
+   fact.
+   - receiver type may still be used for field ordinal/layout lookup later
+   - but never to reconstruct the result type
 
-Where:
+4. Arithmetic must be represented the way `cor` represents kernel operations:
+   by explicit earlier-stage callable/signature facts.
+   - monotype may consume builtin/kernel-call result facts
+   - monotype may not derive arithmetic result type from the lhs
 
-- `HostEffect.dbg(payload_bytes)`
-- `HostEffect.expect_failed(payload_bytes)`
-- `HostEffect.crashed(payload_bytes)`
+5. `lowerExprWithExpectedType` must stop being a recovery API.
+   - callers must provide an explicit usable target type fact
+   - otherwise monotype should hit a debug invariant
 
-There is no other observable state.
+6. Result locals must be created the `cor` way.
+   - from the expression’s own explicit result type
+   - not by rediscovering a callee return var
 
-## Ideal File Ownership
+## Work Plan
 
-### New Files
+### Phase 1. Replace section 1 with cor-style explicit expected facts
 
-- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/eval/test/RuntimeHostEnv.zig`
-  - shared production-faithful `RocOps` recorder
-- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/eval/test/host_effects_runner.zig`
-  - process-isolated backend runner for host-effects tests
-- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/eval/test/host_effects_tests.zig`
-  - data-driven runtime host-effects cases
+1. Audit every caller of
+   [`lowerExprWithExpectedType`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/lower.zig:4125)
+   and classify why it can currently reach `.placeholder`.
 
-### Existing Files To Reuse, Not Distort
+2. For each path, move the missing fact production earlier.
+   Expected high-value sites:
+   - closure-body lowering
+   - tag payload lowering
+   - record field lowering
+   - call argument lowering
+   - block / branch / loop body lowering
 
-- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/eval/test/helpers.zig`
-  - shared source compilation helpers
-- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/eval/interpreter.zig`
-  - must continue forwarding the real callbacks
-- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/backend/dev/LirCodeGen.zig`
-  - must continue emitting the real callbacks
+3. Introduce one explicit monotype-internal representation for “lower this expr
+   with explicit result fact”.
+   - do not keep two overlapping calling conventions
+   - the explicit-fact path must become the only path
 
-### Existing Test-Only Host Plumbing To Replace Or Retire
+4. Once every caller is fixed, delete the placeholder fallback at
+   [`src/monotype/lower.zig:4149`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/lower.zig:4149)
+   and replace it with a debug invariant.
 
-- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/eval/test/TestEnv.zig`
-- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/eval/crash_context.zig`
+### Phase 2. Replace section 2 with cor-style typed expressions
 
-These currently embody old test-only behavior:
+#### 2a. Recorded-method result type
 
-- printing `dbg`
-- rewriting expect payloads
-- storing crash separately from a unified event stream
+1. Remove the idea that monotype computes method-call result type locally.
 
-The new harness must not depend on those semantics.
+2. Make the earlier dispatch-resolution step produce one explicit executable
+   call fact that already includes the result type.
 
-## Harness Architecture
+3. Lower recorded-method calls exactly like ordinary explicit calls from that
+   fact.
 
-### 1. `RuntimeHostEnv`
+4. Delete
+   [`lowerRecordedMethodResultType`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/lower.zig:6506)
+   from monotype’s decision-making role.
 
-Create one shared runtime host environment whose only job is to record raw
-production callback traffic.
+#### 2b. Plain field-access result type
 
-Required behavior:
+1. Stop treating receiver type as the source of truth for access result type.
 
-- `roc_dbg`
-  - append one `.dbg` event with exact copied bytes
-  - do not print
-  - do not reformat
+2. Ensure the access expression itself carries its authoritative solved result
+   type into monotype.
 
-- `roc_expect_failed`
-  - append one `.expect_failed` event with exact copied bytes
-  - do not prepend text
-  - do not halt execution
+3. Keep receiver-type lookup only for field ordinal / layout mechanics where
+   needed later.
 
-- `roc_crashed`
-  - append one `.crashed` event with exact copied bytes
-  - mark termination as `.crashed`
-  - stop current execution via the existing crash boundary mechanism
+4. Delete the result-type recovery at
+   [`src/monotype/lower.zig:4803`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/lower.zig:4803).
 
-This env should also own any test-side memory for recorded payloads so every
-result is self-contained and serialization-safe.
+#### 2c. Arithmetic result type
 
-### 2. Runner Model
+1. Stop representing arithmetic as a monotype-local “special case whose result
+   type comes from the lhs”.
 
-Use the same robustness principles as the current parallel eval runner:
+2. Convert arithmetic/comparison lowering to consume explicit builtin/kernel
+   signature facts established earlier, matching `cor`’s `KCall` strategy.
 
-- fork per test/backend run
-- hard timeout around child execution
-- serialize result to the parent
-- parent compares normalized recorded results
+3. Make monotype consume the explicit result type from that earlier fact.
 
-Do **not** reuse the current `Str.inspect` runner result type by stuffing host
-effects into optional fields. Keep a separate runner and a separate result type.
+4. Delete the lhs-driven recovery at
+   [`src/monotype/lower.zig:4817`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/lower.zig:4817).
 
-### 3. Backend Coverage
+### Phase 3. Replace section 3 with cor-style result-local creation
 
-The runtime host-effects harness should run the same currently-supported
-backends as the inspect runner:
+#### 3a. Plain-call result var
 
-- LIR interpreter
-- dev backend
+1. Stop using callee return-var lookup as the source of the call result.
 
-LLVM/WASM remain out of scope for this project.
+2. Ensure call lowering yields one typed executable expression whose result type
+   is already explicit.
 
-### 4. Test Definition Model
+3. Where a named local is required, synthesize it from the expression’s own
+   result type, the way `cor` lowers expressions into fresh IR vars.
 
-Tests should be data-driven.
+4. Delete the recovery logic at
+   [`src/monotype/lower.zig:6443`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/lower.zig:6443).
 
-Each case should specify:
+#### 3b. Recorded-method result var
 
-- test name
-- Roc source
-- source kind / module imports if needed
-- exact expected ordered events
-- expected termination
+1. Apply the same rule to recorded-method calls.
 
-Do not encode source-site identity or hidden metadata in test expectations.
+2. Once dispatch lowering produces one explicit typed executable call shape,
+   create result locals from that expression result fact rather than by calling
+   `lowerRecordedMethodResultVar(...)`.
 
-### 5. Split Mixed Legacy Tests
+3. Delete the recovery logic at
+   [`src/monotype/lower.zig:6467`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/lower.zig:6467).
 
-Some old tests asserted both:
+## Verification Plan
 
-- final returned value
-- host effect stream
+### Phase 4. Verify all tests still pass
 
-For those, keep the final-value coverage in the `Str.inspect` runner and port
-only the host-effects portion into the new harness.
+After the cor-style conversion is complete and before any cleanup commit:
 
-Do not create hybrid assertions in one harness.
+1. Run the focused suites first:
+   - `timeout 600s zig build test-eval -- --threads 1`
+   - `timeout 600s zig build test-eval-host-effects -- --threads 1`
 
-## Exact Legacy Tests To Port To This Harness
+2. Run any additional targeted suites that touch the changed areas if needed.
 
-These are the old `origin/main` tests that belong in the runtime host-effects
-harness.
+3. Do not accept green tests if they depend on retained fallback code.
+   - if a test only passes because an old recovery path still exists, the work
+     is not done
 
-Source file:
+### Phase 5. Delete unnecessary fallbacks
 
-- `origin/main:src/eval/test/interpreter_style_test.zig`
+1. Remove any transitional helpers that were introduced only to bridge old and
+   new representations.
 
-### A. Crash / Expect Runtime Callback Tests
+2. Replace remaining “should never happen” branches with debug invariants where
+   appropriate.
 
-Port these as runtime host-effects tests:
+3. Re-run the verification suite after every deletion wave until the cor-style
+   path is the only path left.
 
-1. `interpreter: crash statement triggers crash error and message`
-2. `interpreter: crash at end of block in if branch`
-3. `interpreter: expect expression succeeds`
-4. `interpreter: expect expression failure crashes with message`
+## Commit Plan
 
-Normalization rules:
+### Phase 6. Commit
 
-- `expect expression succeeds`
-  - assert no `expect_failed` event
-  - assert `.returned`
+Once:
 
-- `expect expression failure crashes with message`
-  - do **not** preserve the obsolete “crashes” assumption from the old title
-  - port it as:
-    - one `expect_failed` event with exact raw callback bytes
-    - normal `.returned` termination
+- the cor-style implementation is the only implementation
+- all relevant tests are green
+- no transitional code remains
 
-### B. Direct `dbg` Runtime Callback Tests
+then commit the code changes.
 
-Port these as runtime host-effects tests:
+## Fresh Audit Plan
 
-1. `interpreter: dbg statement in block`
-2. `interpreter: dbg statement with string`
-3. `dbg: integer literal`
-4. `dbg: negative integer`
-5. `dbg: float value`
-6. `dbg: boolean True`
-7. `dbg: boolean False`
-8. `dbg: empty string`
-9. `dbg: list of integers`
-10. `dbg: tuple`
-11. `dbg: record`
-12. `dbg: empty record`
-13. `dbg: tag without payload`
-14. `dbg: tag with payload`
-15. `dbg: function prints as unsupported or function marker`
-16. `dbg: expression form returns unit`
-17. `dbg: multiple dbg calls in sequence`
-18. `dbg: nested dbg calls`
-19. `dbg: in if-then-else branch`
-20. `dbg: in match pattern`
-21. `dbg: in for loop`
-22. `dbg: as final expression returns unit`
-23. `dbg: with arithmetic expression`
-24. `dbg: inside function body`
-25. `dbg: function called multiple times`
-26. `dbg: with string containing special chars`
-27. `dbg: large integer`
-28. `dbg: variable after mutation in binding`
-29. `dbg: list of strings`
+### Phase 7. Re-audit `reinfer.md`
 
-Normalization rules:
+After the commit:
 
-- old substring-based assertions must become exact byte assertions
-- `dbg: record` must assert one exact final payload string, not field-presence substrings
-- `dbg: with string containing special chars` must assert the exact escaped/quoted bytes
-- `dbg: function prints as unsupported or function marker` must stop allowing multiple
-  acceptable outputs; the production output must be pinned to one exact byte string
+1. Re-run the same “delete it and run tests” audit for the surviving items.
 
-### C. Mixed Final-Value + Host-Effects Regression
+2. Update [reinfer.md](/Users/rtfeldman/.codex/worktrees/1d55/roc/reinfer.md)
+   with the new state.
+   - do not commit `reinfer.md`
 
-Port this as a host-effects test while keeping final-value coverage in the
-`Str.inspect` runner:
-
-1. `issue 8729: var reassignment in tuple pattern in while loop`
-
-Host-effects harness responsibility:
-
-- assert the exact ordered `dbg` payloads
-- assert normal `.returned` termination
-
-Inspect harness responsibility:
-
-- keep the final returned value assertion
-
-## Explicitly Out Of Scope For This Harness
-
-Do **not** port any tests from these files into runtime host effects:
-
-- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/eval/test/anno_only_interp_test.zig`
-- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/eval/test/comptime_eval_test.zig`
-- `origin/main:src/eval/test/mono_emit_test.zig`
-- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/eval/test/stack_test.zig`
-
-Reason:
-
-- they are comptime-summary, problem-store, emission-shape, or unit-test suites
-- they require different harnesses
-- even when they mention `dbg`, `expect`, or `crash`, their contract is not
-  runtime `RocOps` observation
-
-## Additional New Coverage Required
-
-The old suite is necessary but not sufficient. Add these new runtime
-host-effects tests because they are required by the fixed-ABI production model:
-
-1. Two different `dbg` sites that intentionally emit identical bytes.
-   - assert only ordered duplicate payloads
-   - prove the harness does not smuggle in hidden site identity
-
-2. `dbg` events before a crash are preserved in order.
-   - assert prior `dbg` payloads and final `crashed` payload
-
-3. `expect_failed` does not halt execution.
-   - assert `expect_failed` event followed by later observable effects and `.returned`
-
-4. Mixed `dbg` and `expect_failed` ordering.
-   - assert exact interleaving order
-
-5. Repeated host effects from loops / recursion.
-   - assert exact sequence and count, not aggregate summaries
-
-## Phases
-
-## Phase 1: Fixed-ABI Audit
-
-Audit the current test-side host plumbing and remove any behavior that is not
-faithful to production `host_abi`.
-
-Audit targets:
-
-- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/eval/test/TestEnv.zig`
-- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/eval/crash_context.zig`
-- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/eval/test/helpers.zig`
-
-Required findings to eliminate:
-
-- any `dbg` printing
-- any expect-message rewriting
-- any host-effect observation path that is not an ordered raw event log
-
-## Phase 2: Implement `RuntimeHostEnv`
-
-Implement the shared raw-event recorder.
-
-Success criteria:
-
-- exact bytes recorded for all three callback kinds
-- ordered event log
-- explicit termination state
-- no output printing
-- no string rewriting
-
-## Phase 3: Implement Process-Isolated Runner
-
-Implement the dedicated host-effects runner.
-
-Success criteria:
-
-- child isolation
-- hard timeout
-- parent receives serialized event log + termination
-- interpreter and dev both run through the same harness contract
-
-## Phase 4: Port Exact Legacy Inventory
-
-Port every test listed in:
-
-- `Crash / Expect Runtime Callback Tests`
-- `Direct dbg Runtime Callback Tests`
-- `Mixed Final-Value + Host-Effects Regression`
-
-Success criteria:
-
-- every listed legacy test is accounted for
-- each one lands in the new host-effects harness or is explicitly split with the
-  `Str.inspect` runner where appropriate
-- no fuzzy assertions remain
-
-## Phase 5: Add New Fixed-ABI Coverage
-
-Add the new tests listed in `Additional New Coverage Required`.
-
-Success criteria:
-
-- the harness explicitly codifies the limitations and guarantees of the fixed ABI
-- duplicate payloads from distinct sites are treated correctly
-- ordering and non-halting semantics are covered
-
-## Phase 6: Final Audit
-
-Audit the old runtime host-effects surface against the new harness.
-
-Checklist:
-
-1. Every legacy runtime host-effects test from `origin/main:interpreter_style_test.zig`
-   is either:
-   - ported to the new harness
-   - or explicitly split with value assertions left in the inspect runner
-2. No remaining host-effects assertions depend on:
-   - `renderValueRoc`
-   - `renderValueRocWithType`
-   - printed debug output
-   - rewritten expect/crash strings
-3. No new harness code depends on changing `host_abi`
+3. Report exactly which items still cannot be deleted without breaking tests,
+   and why.
 
 ## Success Criteria
 
 This plan is complete only when all of the following are true:
 
-1. The runtime host-effects harness observes exactly the existing production
-   `host_abi` contract and nothing more.
-2. All 34 listed legacy runtime host-effects tests are ported or correctly split.
-3. The harness compares exact ordered callback payload bytes.
-4. The harness distinguishes only by event kind, payload bytes, order, and
-   termination state.
-5. No old test-only host formatting or rewriting remains on the active path.
+- the remaining section 1 / 2 / 3 monotype items have been converted to the
+  cor-style architecture
+- no fallback or recovery path remains for those items
+- tests still pass
+- the cleanup commit is made
+- `reinfer.md` is refreshed
+- the remaining non-removable items are explicitly reported
