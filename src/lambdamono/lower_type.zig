@@ -16,7 +16,8 @@ pub const CaptureInfo = struct {
 
 pub const CaptureBinding = struct {
     symbol: Symbol,
-    ty: TypeVarId,
+    solved_ty: TypeVarId,
+    lowered_ty: mono.TypeId,
 };
 
 pub const SpecificLambdaRepr = union(enum) {
@@ -102,9 +103,9 @@ pub fn lowerType(
 }
 
 pub fn lowerCaptureBindings(
-    types: *solved.Type.Store,
+    _: *solved.Type.Store,
     mono_types: *mono.Store,
-    mono_cache: *MonoCache,
+    _: *MonoCache,
     captures: []const CaptureBinding,
     symbols: *const symbol_mod.Store,
 ) std.mem.Allocator.Error!mono.TypeId {
@@ -114,7 +115,7 @@ pub fn lowerCaptureBindings(
     for (captures, 0..) |capture, i| {
         fields[i] = .{
             .name = symbols.get(capture.symbol).name,
-            .ty = try lowerTypeRec(types, mono_types, mono_cache, capture.ty, symbols),
+            .ty = capture.lowered_ty,
         };
     }
 
@@ -259,7 +260,8 @@ fn lowerCaptures(
     for (captures, 0..) |capture, i| {
         capture_bindings[i] = .{
             .symbol = capture.symbol,
-            .ty = capture.ty,
+            .solved_ty = capture.ty,
+            .lowered_ty = try lowerTypeRec(types, mono_types, mono_cache, capture.ty, symbols),
         };
     }
 

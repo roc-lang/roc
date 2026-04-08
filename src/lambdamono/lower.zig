@@ -284,14 +284,13 @@ const Lowerer = struct {
                 },
                 .lset => |capture_info| blk: {
                     const captures_symbol = try self.input.symbols.add(base.Ident.Idx.NONE, .synthetic);
-                    const capture_bindings = try self.captureBindingsFromSolved(capture_info.captures);
+                    const capture_bindings = try self.captureBindingsFromSolved(&mono_cache, capture_info.captures);
                     defer self.allocator.free(capture_bindings);
                     const body_env = try self.buildFnBodyEnv(arg_ty, pending.fn_def.arg.symbol, capture_bindings);
                     defer self.allocator.free(body_env);
 
                     var body = try self.specializeExpr(&inst, &mono_cache, body_env, pending.fn_def.body);
                     body = try self.bindCaptureLets(
-                        &mono_cache,
                         captures_symbol,
                         capture_info.ty,
                         capture_bindings,
@@ -315,7 +314,7 @@ const Lowerer = struct {
             },
             .erased => blk: {
                 const captures_new = pending.captures_new orelse &.{};
-                const captures = try self.captureBindingsFromTypedSymbols(&inst, pending.fn_def.captures);
+                const captures = try self.captureBindingsFromTypedSymbols(&inst, &mono_cache, pending.fn_def.captures);
                 defer self.allocator.free(captures);
                 self.sortCaptureBindings(captures);
 
@@ -326,7 +325,7 @@ const Lowerer = struct {
                     if (capture.symbol != capture_new.symbol) {
                         debugPanic("lambdamono.lower.specializeFn erased capture symbol mismatch");
                     }
-                    try self.unify(capture.ty, capture_new.ty);
+                    try self.unify(capture.solved_ty, capture_new.solved_ty);
                 }
 
                 const body_env = try self.buildFnBodyEnv(arg_ty, pending.fn_def.arg.symbol, captures);
@@ -351,7 +350,7 @@ const Lowerer = struct {
                     captures,
                     &self.input.symbols,
                 );
-                body = try self.bindCaptureLets(&mono_cache, captures_symbol, captures_ty, captures, body);
+                body = try self.bindCaptureLets(captures_symbol, captures_ty, captures, body);
 
                 break :blk .{
                     .args = try self.output.addTypedSymbolSpan(&.{
@@ -381,7 +380,7 @@ const Lowerer = struct {
         for (captures, 0..) |capture, i| {
             out[i + 1] = .{
                 .symbol = capture.symbol,
-                .ty = capture.ty,
+                .ty = capture.solved_ty,
             };
         }
         return out;
@@ -389,7 +388,6 @@ const Lowerer = struct {
 
     fn bindCaptureLets(
         self: *Lowerer,
-        mono_cache: *lower_type.MonoCache,
         captures_symbol: Symbol,
         capture_record_ty: type_mod.TypeId,
         captures: []const lower_type.CaptureBinding,
@@ -400,19 +398,12 @@ const Lowerer = struct {
         while (idx > 0) {
             idx -= 1;
             const capture = captures[idx];
-            const lowered_capture_ty = try lower_type.lowerType(
-                &self.input.types,
-                &self.types,
-                mono_cache,
-                capture.ty,
-                &self.input.symbols,
-            );
             const captures_var = try self.output.addExpr(.{
                 .ty = capture_record_ty,
                 .data = .{ .var_ = captures_symbol },
             });
             const access = try self.output.addExpr(.{
-                .ty = lowered_capture_ty,
+                .ty = capture.lowered_ty,
                 .data = .{ .access = .{
                     .record = captures_var,
                     .field = self.input.symbols.get(capture.symbol).name,
@@ -422,7 +413,7 @@ const Lowerer = struct {
                 .ty = self.output.getExpr(result).ty,
                 .data = .{ .let_ = .{
                     .bind = .{
-                        .ty = lowered_capture_ty,
+                        .ty = capture.lowered_ty,
                         .symbol = capture.symbol,
                     },
                     .body = access,
@@ -1163,9 +1154,9 @@ const Lowerer = struct {
                             .args = ast.Span(ast.ExprId).empty(),
                         } },
                         .lset => |capture_info| {
-                            const capture_bindings = try self.captureBindingsFromSolved(capture_info.captures);
+                            const capture_bindings = try self.captureBindingsFromSolved(mono_cache, capture_info.captures);
                             defer self.allocator.free(capture_bindings);
-                            const capture_record = try self.specializeCaptureRecord(mono_cache, capture_bindings, capture_info.ty);
+                            const capture_record = try self.specializeCaptureRecord(capture_bindings, capture_info.ty);
                             const args = try self.allocator.alloc(ast.ExprId, 1);
                             defer self.allocator.free(args);
                             args[0] = capture_record;
@@ -1177,7 +1168,7 @@ const Lowerer = struct {
                     }
                 },
                 .erased => blk: {
-                    const captures = try self.captureBindingsForErasedVar(inst, venv, fn_entry.fn_def.captures);
+                    const captures = try self.captureBindingsForErasedVar(inst, mono_cache, venv, fn_entry.fn_def.captures);
                     defer self.allocator.free(captures);
                     const specialized_symbol = try specializations.specializeFnErased(
                         &self.queue,
@@ -1200,7 +1191,7 @@ const Lowerer = struct {
                             captures,
                             &self.input.symbols,
                         );
-                        break :blk_capture try self.specializeCaptureRecord(mono_cache, captures, capture_ty);
+                        break :blk_capture try self.specializeCaptureRecord(captures, capture_ty);
                     };
                     break :blk .{ .packed_fn = .{
                         .lambda = specialized_symbol,
@@ -1219,7 +1210,6 @@ const Lowerer = struct {
 
     fn specializeCaptureRecord(
         self: *Lowerer,
-        mono_cache: *lower_type.MonoCache,
         captures: []const lower_type.CaptureBinding,
         capture_ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!ast.ExprId {
@@ -1227,15 +1217,8 @@ const Lowerer = struct {
         defer self.allocator.free(fields);
 
         for (captures, 0..) |capture, i| {
-            const lowered_capture_ty = try lower_type.lowerType(
-                &self.input.types,
-                &self.types,
-                mono_cache,
-                capture.ty,
-                &self.input.symbols,
-            );
             const capture_expr = try self.output.addExpr(.{
-                .ty = lowered_capture_ty,
+                .ty = capture.lowered_ty,
                 .data = .{ .var_ = capture.symbol },
             });
             fields[i] = .{
@@ -1252,13 +1235,21 @@ const Lowerer = struct {
 
     fn captureBindingsFromSolved(
         self: *Lowerer,
+        mono_cache: *lower_type.MonoCache,
         captures: []const solved.Type.Capture,
     ) std.mem.Allocator.Error![]lower_type.CaptureBinding {
         const out = try self.allocator.alloc(lower_type.CaptureBinding, captures.len);
         for (captures, 0..) |capture, i| {
             out[i] = .{
                 .symbol = capture.symbol,
-                .ty = capture.ty,
+                .solved_ty = capture.ty,
+                .lowered_ty = try lower_type.lowerType(
+                    &self.input.types,
+                    &self.types,
+                    mono_cache,
+                    capture.ty,
+                    &self.input.symbols,
+                ),
             };
         }
         return out;
@@ -1267,14 +1258,23 @@ const Lowerer = struct {
     fn captureBindingsFromTypedSymbols(
         self: *Lowerer,
         inst: *InstScope,
+        mono_cache: *lower_type.MonoCache,
         captures_span: solved.Ast.Span(solved.Ast.TypedSymbol),
     ) std.mem.Allocator.Error![]lower_type.CaptureBinding {
         const captures = self.input.store.sliceTypedSymbolSpan(captures_span);
         const out = try self.allocator.alloc(lower_type.CaptureBinding, captures.len);
         for (captures, 0..) |capture, i| {
+            const solved_ty = try self.cloneInstType(inst, capture.ty);
             out[i] = .{
                 .symbol = capture.symbol,
-                .ty = try self.cloneInstType(inst, capture.ty),
+                .solved_ty = solved_ty,
+                .lowered_ty = try lower_type.lowerType(
+                    &self.input.types,
+                    &self.types,
+                    mono_cache,
+                    solved_ty,
+                    &self.input.symbols,
+                ),
             };
         }
         return out;
@@ -1283,6 +1283,7 @@ const Lowerer = struct {
     fn captureBindingsForErasedVar(
         self: *Lowerer,
         inst: *InstScope,
+        mono_cache: *lower_type.MonoCache,
         venv: []const EnvEntry,
         captures_span: solved.Ast.Span(solved.Ast.TypedSymbol),
     ) std.mem.Allocator.Error![]lower_type.CaptureBinding {
@@ -1290,10 +1291,18 @@ const Lowerer = struct {
         const captures = self.input.store.sliceTypedSymbolSpan(captures_span);
         const out = try self.allocator.alloc(lower_type.CaptureBinding, captures.len);
         for (captures, 0..) |capture, i| {
+            const solved_ty = self.lookupEnv(venv, capture.symbol) orelse
+                debugPanic("lambdamono.lower.captureBindingsForErasedVar missing capture");
             out[i] = .{
                 .symbol = capture.symbol,
-                .ty = self.lookupEnv(venv, capture.symbol) orelse
-                    debugPanic("lambdamono.lower.captureBindingsForErasedVar missing capture"),
+                .solved_ty = solved_ty,
+                .lowered_ty = try lower_type.lowerType(
+                    &self.input.types,
+                    &self.types,
+                    mono_cache,
+                    solved_ty,
+                    &self.input.symbols,
+                ),
             };
         }
         self.sortCaptureBindings(out);
