@@ -310,6 +310,8 @@ pub const Lowerer = struct {
         };
 
         var_map: std.AutoHashMap(Var, Var),
+        active_type_cache: std.AutoHashMap(TypeKey, type_mod.TypeId),
+        provisional_type_cache: std.AutoHashMap(TypeKey, type_mod.TypeId),
         type_cache: std.AutoHashMap(TypeKey, type_mod.TypeId),
         expr_type_facts: std.AutoHashMap(ExprKey, type_mod.TypeId),
         pattern_type_facts: std.AutoHashMap(PatternTypeKey, type_mod.TypeId),
@@ -341,6 +343,10 @@ pub const Lowerer = struct {
                 while (type_iter.next()) |entry| {
                     self.type_cache.put(entry.key_ptr.*, entry.value_ptr.*) catch unreachable;
                 }
+                var provisional_iter = scope.provisional_type_cache.iterator();
+                while (provisional_iter.next()) |entry| {
+                    self.provisional_type_cache.put(entry.key_ptr.*, entry.value_ptr.*) catch unreachable;
+                }
             }
         }
 
@@ -351,6 +357,8 @@ pub const Lowerer = struct {
             rank_behavior: Instantiator.RankBehavior,
         ) void {
             self.var_map = std.AutoHashMap(Var, Var).init(allocator);
+            self.active_type_cache = std.AutoHashMap(TypeKey, type_mod.TypeId).init(allocator);
+            self.provisional_type_cache = std.AutoHashMap(TypeKey, type_mod.TypeId).init(allocator);
             self.type_cache = std.AutoHashMap(TypeKey, type_mod.TypeId).init(allocator);
             self.expr_type_facts = std.AutoHashMap(ExprKey, type_mod.TypeId).init(allocator);
             self.pattern_type_facts = std.AutoHashMap(PatternTypeKey, type_mod.TypeId).init(allocator);
@@ -375,6 +383,8 @@ pub const Lowerer = struct {
             self.scratch_nominal_key.deinit(self.instantiator.store.gpa);
             self.pattern_type_facts.deinit();
             self.expr_type_facts.deinit();
+            self.active_type_cache.deinit();
+            self.provisional_type_cache.deinit();
             self.type_cache.deinit();
             self.var_map.deinit();
         }
@@ -5475,16 +5485,20 @@ pub const Lowerer = struct {
             return self.makePrimitiveType(prim);
         }
         const key: TypeCloneScope.TypeKey = .{ .module_idx = module_idx, .var_ = resolved.var_ };
-        if (type_scope.type_cache.get(key)) |cached| {
-            const keyed = try self.ctx.types.keyId(cached);
-            if (keyed != cached) {
-                try type_scope.type_cache.put(key, keyed);
+        if (type_scope.active_type_cache.get(key)) |active| return active;
+        if (type_scope.type_cache.get(key)) |cached| return cached;
+        if (type_scope.provisional_type_cache.get(key)) |provisional| {
+            if (self.ctx.types.isFullyResolved(provisional)) {
+                const canonical = try self.ctx.types.canonicalizeResolved(provisional);
+                _ = type_scope.provisional_type_cache.remove(key);
+                try type_scope.type_cache.put(key, canonical);
+                return canonical;
             }
-            return keyed;
+            return provisional;
         }
 
         const placeholder = try self.ctx.types.addType(.placeholder);
-        try type_scope.type_cache.put(key, placeholder);
+        try type_scope.active_type_cache.put(key, placeholder);
 
         const lowered: type_mod.Content = switch (resolved.desc.content) {
             .structure => |flat| switch (flat) {
@@ -5531,13 +5545,19 @@ pub const Lowerer = struct {
 
         self.ctx.types.setType(placeholder, lowered);
         if (lowered == .placeholder) {
-            _ = type_scope.type_cache.remove(key);
+            _ = type_scope.active_type_cache.remove(key);
             return placeholder;
         }
 
-        const keyed = try self.ctx.types.keyId(placeholder);
-        try type_scope.type_cache.put(key, keyed);
-        return keyed;
+        _ = type_scope.active_type_cache.remove(key);
+        if (self.ctx.types.isFullyResolved(placeholder)) {
+            const canonical = try self.ctx.types.canonicalizeResolved(placeholder);
+            try type_scope.type_cache.put(key, canonical);
+            return canonical;
+        }
+
+        try type_scope.provisional_type_cache.put(key, placeholder);
+        return placeholder;
     }
 
     fn lowerTagUnionContent(
