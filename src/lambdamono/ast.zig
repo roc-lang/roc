@@ -39,6 +39,7 @@ pub const Pat = struct {
         bool_lit: bool,
         tag: struct {
             name: type_mod.TagName,
+            discriminant: u16,
             args: Span(PatId),
         },
         var_: Symbol,
@@ -75,12 +76,14 @@ pub const Expr = struct {
         unit,
         tag: struct {
             name: type_mod.TagName,
+            discriminant: u16,
             args: Span(ExprId),
         },
         record: Span(FieldExpr),
         access: struct {
             record: ExprId,
             field: base.Ident.Idx,
+            field_index: u16,
         },
         let_: struct {
             bind: TypedSymbol,

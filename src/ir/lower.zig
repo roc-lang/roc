@@ -291,7 +291,7 @@ const Lowerer = struct {
                 try block.stmts.append(self.allocator, .{ .let_ = .{
                     .bind = temp,
                     .expr = try self.output.addExpr(.{ .make_union = .{
-                        .discriminant = try self.tagId(expr.ty, tag.name),
+                        .discriminant = tag.discriminant,
                         .payload = payload,
                     } }),
                 } });
@@ -300,8 +300,7 @@ const Lowerer = struct {
             .access => |access| {
                 const record = try self.lowerSubexprValue(&block, env, access.record);
                 if (record == null) return if (block.has_term) block else debugPanic("ir.lower access missing terminator");
-                const field_index = try self.fieldId(self.input.store.getExpr(access.record).ty, access.field);
-                const field_layout = try self.structFieldLayout(record.?.layout, field_index);
+                const field_layout = try self.structFieldLayout(record.?.layout, access.field_index);
                 const temp = try self.freshVarWithLayout(
                     field_layout,
                     "field",
@@ -310,7 +309,7 @@ const Lowerer = struct {
                     .bind = temp,
                     .expr = try self.output.addExpr(.{ .get_struct_field = .{
                         .record = record.?,
-                        .field_index = field_index,
+                        .field_index = access.field_index,
                     } }),
                 } });
                 block.setTerm(.{ .value = temp });
@@ -561,30 +560,6 @@ const Lowerer = struct {
         return try self.output.addVarSpan(out);
     }
 
-    fn fieldId(self: *Lowerer, record_ty: lambdamono.Type.TypeId, name: base.Ident.Idx) std.mem.Allocator.Error!u16 {
-        return switch (self.input.types.getType(record_ty)) {
-            .record => |record| blk: {
-                for (self.input.types.sliceFields(record.fields), 0..) |field, i| {
-                    if (field.name == name) break :blk @intCast(i);
-                }
-                debugPanic("ir.lower.fieldId missing field");
-            },
-            else => debugPanic("ir.lower.fieldId expected record type"),
-        };
-    }
-
-    fn tagId(self: *Lowerer, union_ty: lambdamono.Type.TypeId, name: lambdamono.Type.TagName) std.mem.Allocator.Error!u16 {
-        return switch (self.input.types.getType(union_ty)) {
-            .tag_union => |tag_union| blk: {
-                for (self.input.types.sliceTags(tag_union.tags), 0..) |tag, i| {
-                    if (std.meta.eql(tag.name, name)) break :blk @intCast(i);
-                }
-                debugPanic("ir.lower.tagId missing tag");
-            },
-            else => debugPanic("ir.lower.tagId expected tag union type"),
-        };
-    }
-
     fn tagPayloadLayout(
         self: *Lowerer,
         union_ty: lambdamono.Type.TypeId,
@@ -726,7 +701,7 @@ const Lowerer = struct {
                 },
                 .tag => |tag| {
                     try tag_branches.append(self.allocator, .{
-                        .value = try self.tagId(pat.ty, tag.name),
+                        .value = tag.discriminant,
                         .block = try self.lowerPatternBranchBlock(env, cond.?, branch.pat, branch.body),
                     });
                 },
@@ -1006,7 +981,7 @@ const Lowerer = struct {
                     .bind = payload_var,
                     .expr = try self.output.addExpr(.{ .get_union_struct = .{
                         .value = source_var,
-                        .tag_discriminant = try self.tagId(pat.ty, tag.name),
+                        .tag_discriminant = tag.discriminant,
                     } }),
                 } });
 

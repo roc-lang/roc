@@ -176,6 +176,42 @@ const Lowerer = struct {
         }
     }
 
+    fn tagDiscriminantForUnion(
+        self: *Lowerer,
+        union_ty: type_mod.TypeId,
+        tag_name: type_mod.TagName,
+    ) std.mem.Allocator.Error!u16 {
+        var current = union_ty;
+        while (true) switch (self.types.getTypePreservingNominal(current)) {
+            .nominal => |backing| current = backing,
+            .tag_union => |tag_union| {
+                for (self.types.sliceTags(tag_union.tags), 0..) |tag, i| {
+                    if (std.meta.eql(tag.name, tag_name)) return @intCast(i);
+                }
+                debugPanic("lambdamono.lower.tagDiscriminantForUnion missing tag");
+            },
+            else => debugPanic("lambdamono.lower.tagDiscriminantForUnion expected tag union"),
+        };
+    }
+
+    fn recordFieldIndex(
+        self: *Lowerer,
+        record_ty: type_mod.TypeId,
+        field_name: base.Ident.Idx,
+    ) std.mem.Allocator.Error!u16 {
+        var current = record_ty;
+        while (true) switch (self.types.getTypePreservingNominal(current)) {
+            .nominal => |backing| current = backing,
+            .record => |record| {
+                for (self.types.sliceFields(record.fields), 0..) |field, i| {
+                    if (field.name == field_name) return @intCast(i);
+                }
+                debugPanic("lambdamono.lower.recordFieldIndex missing field");
+            },
+            else => debugPanic("lambdamono.lower.recordFieldIndex expected record"),
+        };
+    }
+
     fn ensureTopLevelValueLowered(self: *Lowerer, symbol: Symbol) std.mem.Allocator.Error!type_mod.TypeId {
         if (self.top_level_value_types.get(symbol)) |existing| return existing;
 
@@ -407,6 +443,10 @@ const Lowerer = struct {
                 .data = .{ .access = .{
                     .record = captures_var,
                     .field = self.input.symbols.get(capture.symbol).name,
+                    .field_index = try self.recordFieldIndex(
+                        capture_record_ty,
+                        self.input.symbols.get(capture.symbol).name,
+                    ),
                 } },
             });
             result = try self.output.addExpr(.{
@@ -459,13 +499,18 @@ const Lowerer = struct {
             .unit => .unit,
             .tag => |tag| .{ .tag = .{
                 .name = .{ .ctor = tag.name },
+                .discriminant = try self.tagDiscriminantForUnion(lowered_ty, .{ .ctor = tag.name }),
                 .args = try self.specializeExprSpan(inst, mono_cache, venv, tag.args),
             } },
             .record => |fields| .{ .record = try self.specializeFieldSpan(inst, mono_cache, venv, fields) },
-            .access => |access| .{ .access = .{
-                .record = try self.specializeExpr(inst, mono_cache, venv, access.record),
-                .field = access.field,
-            } },
+            .access => |access| blk: {
+                const record = try self.specializeExpr(inst, mono_cache, venv, access.record);
+                break :blk .{ .access = .{
+                    .record = record,
+                    .field = access.field,
+                    .field_index = try self.recordFieldIndex(self.output.getExpr(record).ty, access.field),
+                } };
+            },
             .let_ => |let_expr| .{ .let_ = .{
                 .bind = .{
                     .ty = try lower_type.lowerType(
@@ -815,6 +860,7 @@ const Lowerer = struct {
                 .data = .{ .access = .{
                     .record = subject_expr,
                     .field = field.name,
+                    .field_index = try self.recordFieldIndex(record_ty, field.name),
                 } },
             });
             current = try self.makeStringConcatExpr(
@@ -957,6 +1003,7 @@ const Lowerer = struct {
                     .ty = union_ty,
                     .data = .{ .tag = .{
                         .name = tag.name,
+                        .discriminant = try self.tagDiscriminantForUnion(union_ty, tag.name),
                         .args = try self.output.addPatSpan(pat_args),
                     } },
                 }),
@@ -1151,6 +1198,7 @@ const Lowerer = struct {
                     )) {
                         .toplevel => break :blk .{ .tag = .{
                             .name = lower_type.lambdaTagKey(symbol),
+                            .discriminant = try self.tagDiscriminantForUnion(lowered_ty, lower_type.lambdaTagKey(symbol)),
                             .args = ast.Span(ast.ExprId).empty(),
                         } },
                         .lset => |capture_info| {
@@ -1162,6 +1210,7 @@ const Lowerer = struct {
                             args[0] = capture_record;
                             break :blk .{ .tag = .{
                                 .name = lower_type.lambdaTagKey(symbol),
+                                .discriminant = try self.tagDiscriminantForUnion(lowered_ty, lower_type.lambdaTagKey(symbol)),
                                 .args = try self.output.addExprSpan(args),
                             } };
                         },
@@ -1201,7 +1250,6 @@ const Lowerer = struct {
             };
         }
 
-        _ = lowered_ty;
         if (self.lookupEnv(venv, symbol) != null or self.top_level_values.contains(symbol)) {
             return .{ .var_ = symbol };
         }
@@ -1366,6 +1414,10 @@ const Lowerer = struct {
                                 .ty = self.output.getExpr(lowered_func).ty,
                                 .data = .{ .tag = .{
                                     .name = lower_type.lambdaTagKey(lambda.symbol),
+                                    .discriminant = try self.tagDiscriminantForUnion(
+                                        self.output.getExpr(lowered_func).ty,
+                                        lower_type.lambdaTagKey(lambda.symbol),
+                                    ),
                                     .args = ast.Span(ast.PatId).empty(),
                                 } },
                             }),
@@ -1387,6 +1439,10 @@ const Lowerer = struct {
                                 .ty = self.output.getExpr(lowered_func).ty,
                                 .data = .{ .tag = .{
                                     .name = lower_type.lambdaTagKey(lambda.symbol),
+                                    .discriminant = try self.tagDiscriminantForUnion(
+                                        self.output.getExpr(lowered_func).ty,
+                                        lower_type.lambdaTagKey(lambda.symbol),
+                                    ),
                                     .args = try self.output.addPatSpan(&.{capture_pat}),
                                 } },
                             });
@@ -1516,6 +1572,7 @@ const Lowerer = struct {
                         .ty = lowered_ty,
                         .data = .{ .tag = .{
                             .name = .{ .ctor = tag.name },
+                            .discriminant = try self.tagDiscriminantForUnion(lowered_ty, .{ .ctor = tag.name }),
                             .args = try self.output.addPatSpan(lowered_args),
                         } },
                     }),
