@@ -1022,28 +1022,17 @@ Builtin :: [].{
 			list_a = Set.to_list(set_a)
 			list_b = Set.to_list(set_b)
 
-			len_a = List.len(list_a)
-			len_b = List.len(list_b)
-
-			var $result = []
-			var $i = 0
-
-			while $i < len_a {
-				elem = list_get_unsafe(list_a, $i)
-				var $found = Bool.False
-				var $j = 0
-				while $j < len_b {
-					if list_get_unsafe(list_b, $j) == elem {
-						$found = Bool.True
-					}
-					$j = $j + 1
-				}
-				if $found {
-					$result = List.append($result, elem)
-				}
-				$i = $i + 1
-			}
-			Items($result)
+			state = List.fold(
+				list_a,
+				{ result: [], check: list_b },
+				|st, elem|
+					if List.contains(st.check, elem) {
+						{ result: List.append(st.result, elem), check: st.check }
+					} else {
+						st
+					},
+			)
+			Items(state.result)
 		}
 
 		## Remove the values in the first `Set` that are also in the second `Set`
@@ -1054,28 +1043,17 @@ Builtin :: [].{
 			list_a = Set.to_list(set_a)
 			list_b = Set.to_list(set_b)
 
-			len_a = List.len(list_a)
-			len_b = List.len(list_b)
-
-			var $result = []
-			var $i = 0
-
-			while $i < len_a {
-				elem = list_get_unsafe(list_a, $i)
-				var $found = Bool.False
-				var $j = 0
-				while $j < len_b {
-					if list_get_unsafe(list_b, $j) == elem {
-						$found = Bool.True
-					}
-					$j = $j + 1
-				}
-				if $found == Bool.False {
-					$result = List.append($result, elem)
-				}
-				$i = $i + 1
-			}
-			Items($result)
+			state = List.fold(
+				list_a,
+				{ result: [], check: list_b },
+				|st, elem|
+					if List.contains(st.check, elem) {
+						st
+					} else {
+						{ result: List.append(st.result, elem), check: st.check }
+					},
+			)
+			Items(state.result)
 		}
 
 		## Convert each value in the set to something new, by calling a conversion
