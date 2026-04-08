@@ -66,7 +66,6 @@ pub const GraphRef = @import("graph.zig").Ref;
 pub const GraphField = @import("graph.zig").Field;
 pub const GraphFieldSpan = @import("graph.zig").FieldSpan;
 pub const GraphRefSpan = @import("graph.zig").RefSpan;
-pub const TypeLayoutResolver = @import("type_layout_resolver.zig").Resolver;
 pub const RcOp = @import("rc_helper.zig").RcOp;
 pub const RcHelperKey = @import("rc_helper.zig").HelperKey;
 pub const RcHelperPlan = @import("rc_helper.zig").Plan;
@@ -84,7 +83,6 @@ test "layout tests" {
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(@import("layout.zig"));
     std.testing.refAllDecls(@import("graph.zig"));
-    std.testing.refAllDecls(@import("type_layout_resolver.zig"));
     std.testing.refAllDecls(@import("rc_helper.zig"));
     std.testing.refAllDecls(@import("store.zig"));
 }

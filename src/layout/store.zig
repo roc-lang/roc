@@ -3,7 +3,6 @@
 const std = @import("std");
 const tracy = @import("tracy");
 const base = @import("base");
-const types = @import("types");
 const collections = @import("collections");
 const can = @import("can");
 
@@ -13,8 +12,6 @@ const graph_mod = @import("./graph.zig");
 const ModuleEnv = can.ModuleEnv;
 const target = base.target;
 const Ident = base.Ident;
-const Var = types.Var;
-const TypeScope = types.TypeScope;
 const Layout = layout_mod.Layout;
 const LayoutTag = layout_mod.LayoutTag;
 const Idx = layout_mod.Idx;
@@ -1801,22 +1798,6 @@ pub const Store = struct {
             4
         else
             8;
-    }
-
-    /// Resolve a type-checker var into a canonical executable layout by building a
-    /// logical recursive graph and committing it through `internGraph`.
-    pub fn fromTypeVar(
-        self: *Self,
-        module_idx: u32,
-        unresolved_var: Var,
-        type_scope: *const TypeScope,
-        caller_module_idx: ?u32,
-    ) std.mem.Allocator.Error!Idx {
-        const TypeLayoutResolver = @import("type_layout_resolver.zig").Resolver;
-
-        var resolver = TypeLayoutResolver.init(self);
-        defer resolver.deinit();
-        return resolver.resolve(module_idx, unresolved_var, type_scope, caller_module_idx);
     }
 
     pub fn insertLayout(self: *Self, layout: Layout) std.mem.Allocator.Error!Idx {
