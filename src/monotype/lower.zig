@@ -1401,6 +1401,16 @@ pub const Lowerer = struct {
                         .rest = rest,
                     } };
                 }
+                const arithmetic_fact = switch (binop.op) {
+                    .add, .sub, .mul, .div, .rem, .div_trunc => try self.lowerArithmeticBinopFact(
+                        module_idx,
+                        type_scope,
+                        env,
+                        expr_idx,
+                        binop,
+                    ),
+                    else => null,
+                };
                 break :blk .{ .low_level = .{
                     .op = binopToLowLevel(binop.op),
                     .args = try self.lowerHomogeneousBinopArgs(
@@ -1408,12 +1418,12 @@ pub const Lowerer = struct {
                         type_scope,
                         env,
                         switch (binop.op) {
-                            .add, .sub, .mul, .div, .rem, .div_trunc => ty,
+                            .add, .sub, .mul, .div, .rem, .div_trunc => arithmetic_fact.?.operand_ty,
                             .lt, .gt, .le, .ge, .eq => try self.lowerExprResultType(module_idx, type_scope, env, binop.lhs),
                             else => unreachable,
                         },
                         switch (binop.op) {
-                            .add, .sub, .mul, .div, .rem, .div_trunc => try self.scopedExprResultVar(module_idx, type_scope, env, expr_idx),
+                            .add, .sub, .mul, .div, .rem, .div_trunc => arithmetic_fact.?.operand_var,
                             .lt, .gt, .le, .ge, .eq => try self.scopedExprResultVar(module_idx, type_scope, env, binop.lhs),
                             else => unreachable,
                         },
@@ -3297,16 +3307,28 @@ pub const Lowerer = struct {
                     cir_env.store.getExpr(for_stmt.expr),
                 );
                 const elem_ty = self.requireListElemType(iterable_ty);
+                const elem_solved_var = self.lookupListElemSolvedVar(
+                    module_idx,
+                    try self.exprResultVar(module_idx, type_scope, env.*, for_stmt.expr),
+                );
 
                 const patt = if (self.patternNeedsBindingDecls(module_idx, for_stmt.patt)) blk: {
                     const root_bind = try self.makePatternSourceBindWithType(module_idx, for_stmt.patt, elem_ty);
-                    try self.collectStructuralBindingDecls(module_idx, type_scope, root_bind, for_stmt.patt, &body_env, &binding_decls);
+                    try self.collectStructuralBindingDeclsWithSolvedVar(
+                        module_idx,
+                        type_scope,
+                        root_bind,
+                        elem_solved_var,
+                        for_stmt.patt,
+                        &body_env,
+                        &binding_decls,
+                    );
                     break :blk try self.program.store.addPat(.{
                         .ty = root_bind.ty,
                         .data = .{ .var_ = root_bind.symbol },
                     });
                 } else blk: {
-                    try self.bindPatternEnvFromType(module_idx, for_stmt.patt, elem_ty, &body_env);
+                    try self.bindPatternEnvFromTypeWithSolvedVar(module_idx, for_stmt.patt, elem_ty, elem_solved_var, &body_env);
                     break :blk try self.lowerPatWithType(module_idx, for_stmt.patt, elem_ty);
                 };
 
@@ -3425,16 +3447,28 @@ pub const Lowerer = struct {
             self.ctx.env(module_idx).store.getExpr(iterable_expr_idx),
         );
         const elem_ty = self.requireListElemType(iterable_ty);
+        const elem_solved_var = self.lookupListElemSolvedVar(
+            module_idx,
+            try self.exprResultVar(module_idx, type_scope, incoming_env, iterable_expr_idx),
+        );
 
         const patt = if (self.patternNeedsBindingDecls(module_idx, patt_idx)) blk: {
             const root_bind = try self.makePatternSourceBindWithType(module_idx, patt_idx, elem_ty);
-            try self.collectStructuralBindingDecls(module_idx, type_scope, root_bind, patt_idx, &body_env, &binding_decls);
+            try self.collectStructuralBindingDeclsWithSolvedVar(
+                module_idx,
+                type_scope,
+                root_bind,
+                elem_solved_var,
+                patt_idx,
+                &body_env,
+                &binding_decls,
+            );
             break :blk try self.program.store.addPat(.{
                 .ty = root_bind.ty,
                 .data = .{ .var_ = root_bind.symbol },
             });
         } else blk: {
-            try self.bindPatternEnvFromType(module_idx, patt_idx, elem_ty, &body_env);
+            try self.bindPatternEnvFromTypeWithSolvedVar(module_idx, patt_idx, elem_ty, elem_solved_var, &body_env);
             break :blk try self.lowerPatWithType(module_idx, patt_idx, elem_ty);
         };
 
@@ -3732,6 +3766,13 @@ pub const Lowerer = struct {
         result_var: Var,
     };
 
+    const ArithmeticBinopFact = struct {
+        operand_var: Var,
+        operand_ty: type_mod.TypeId,
+        result_var: Var,
+        result_ty: type_mod.TypeId,
+    };
+
     fn getRecordedMethodArgs(
         self: *const Lowerer,
         module_idx: u32,
@@ -3780,6 +3821,80 @@ pub const Lowerer = struct {
                 else => debugPanic("monotype static dispatch invariant violated: call head is not recorded dispatch", .{}),
             },
             else => debugPanic("monotype static dispatch invariant violated: expr is not recorded dispatch", .{}),
+        };
+    }
+
+    fn arithmeticBinopMethodName(
+        self: *const Lowerer,
+        module_idx: u32,
+        op: CIR.Expr.Binop.Op,
+    ) base.Ident.Idx {
+        const idents = self.ctx.env(module_idx).idents;
+        return switch (op) {
+            .add => idents.plus,
+            .sub => idents.minus,
+            .mul => idents.times,
+            .div => idents.div_by,
+            .div_trunc => idents.div_trunc_by,
+            .rem => idents.rem_by,
+            else => debugPanic("monotype invariant violated: non-arithmetic binop used as arithmetic fact", .{}),
+        };
+    }
+
+    fn lowerArithmeticBinopFact(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeCloneScope,
+        env: BindingEnv,
+        expr_idx: CIR.Expr.Idx,
+        binop: CIR.Expr.Binop,
+    ) std.mem.Allocator.Error!ArithmeticBinopFact {
+        const source_env = @constCast(self.ctx.env(module_idx));
+        const site_requirement = source_env.types.findStaticDispatchSiteRequirement(
+            ModuleEnv.varFrom(expr_idx),
+            self.arithmeticBinopMethodName(module_idx, binop.op),
+        ) orelse debugPanic(
+            "monotype invariant violated: missing arithmetic static dispatch site for expr {d} in module {d}",
+            .{ expr_idx, module_idx },
+        );
+
+        var call_scope: TypeCloneScope = undefined;
+        call_scope.initCloneAll(self.allocator, source_env);
+        defer call_scope.deinit();
+
+        const cloned_func_var = try call_scope.instantiator.instantiateVar(site_requirement.fn_var);
+        const lhs_expected_var = self.lookupCurriedFunctionArgVar(module_idx, cloned_func_var, 0) orelse debugPanic(
+            "monotype invariant violated: arithmetic fact missing lhs arg for expr {d} in module {d}",
+            .{ expr_idx, module_idx },
+        );
+        const rhs_expected_var = self.lookupCurriedFunctionArgVar(module_idx, cloned_func_var, 1) orelse debugPanic(
+            "monotype invariant violated: arithmetic fact missing rhs arg for expr {d} in module {d}",
+            .{ expr_idx, module_idx },
+        );
+
+        try self.unifySpecializedCheckerVars(
+            module_idx,
+            lhs_expected_var,
+            try self.lookupCallArgSpecializationVar(module_idx, type_scope, env, binop.lhs),
+        );
+        try self.unifySpecializedCheckerVars(
+            module_idx,
+            rhs_expected_var,
+            try self.lookupCallArgSpecializationVar(module_idx, type_scope, env, binop.rhs),
+        );
+
+        const result_var = try self.scopedExprResultVar(module_idx, type_scope, env, expr_idx);
+        try self.unifyAppliedFunctionResultVar(module_idx, result_var, cloned_func_var, 2);
+        const specialized_result_var = self.lookupCurriedFunctionFinalRetVar(module_idx, cloned_func_var) orelse debugPanic(
+            "monotype invariant violated: arithmetic fact missing return var for expr {d} in module {d}",
+            .{ expr_idx, module_idx },
+        );
+
+        return .{
+            .operand_var = lhs_expected_var,
+            .operand_ty = try self.lowerInstantiatedType(module_idx, &call_scope, lhs_expected_var),
+            .result_var = result_var,
+            .result_ty = try self.lowerInstantiatedType(module_idx, &call_scope, specialized_result_var),
         };
     }
 
@@ -4464,7 +4579,7 @@ pub const Lowerer = struct {
     ) std.mem.Allocator.Error!ast.ExprId {
         const cir_env = self.ctx.env(module_idx);
         const expr = cir_env.store.getExpr(expr_idx);
-        if (expected_var) |var_| {
+        if (expected_var != null) {
             switch (expr) {
                 .e_call => |call| {
                     _ = try self.lowerCallResultFact(
@@ -4496,13 +4611,7 @@ pub const Lowerer = struct {
                         dispatch.method_name,
                     );
                 },
-                .e_binop => |binop| switch (binop.op) {
-                    .add, .sub, .mul, .div, .rem, .div_trunc => {
-                        const result_var = try self.scopedExprResultVar(module_idx, type_scope, env, expr_idx);
-                        try self.unifySpecializedCheckerVars(module_idx, result_var, var_);
-                    },
-                    else => {},
-                },
+                .e_binop => |_| {},
                 else => {},
             }
         }
@@ -4516,10 +4625,6 @@ pub const Lowerer = struct {
             }
             if (try self.lowerExplicitExprType(module_idx, type_scope, env, expr_idx, expr)) |explicit_ty| {
                 break :blk explicit_ty;
-            }
-            const result_ty = try self.lowerExprResultType(module_idx, type_scope, env, expr_idx);
-            if (self.ctx.types.getType(result_ty) != .placeholder) {
-                break :blk result_ty;
             }
             if (comptime builtin.mode == .Debug) {
                 const scoped_var = self.scopedExprResultVar(module_idx, type_scope, env, expr_idx) catch null;
@@ -5292,8 +5397,11 @@ pub const Lowerer = struct {
                     .local_fn_source => {},
                 };
 
-                break :blk null;
+                const lowered = try self.lowerSolvedType(module_idx, type_scope, ModuleEnv.varFrom(expr_idx));
+                break :blk if (self.ctx.types.getType(lowered) != .placeholder) lowered else null;
             },
+            .e_nominal => try self.lowerSolvedType(module_idx, type_scope, ModuleEnv.varFrom(expr_idx)),
+            .e_nominal_external => try self.lowerSolvedType(module_idx, type_scope, ModuleEnv.varFrom(expr_idx)),
             .e_typed_int => |typed| if (builtinNumPrim(cir_env, typed.type_name)) |prim|
                 try self.makePrimitiveType(prim)
             else
@@ -5306,6 +5414,10 @@ pub const Lowerer = struct {
                 try self.lowerSolvedType(module_idx, type_scope, ModuleEnv.varFrom(expr_idx))
             else
                 null,
+            .e_block => |block| blk: {
+                const final_ty = try self.lowerExprResultType(module_idx, type_scope, env, block.final_expr);
+                break :blk if (self.ctx.types.getType(final_ty) != .placeholder) final_ty else null;
+            },
             .e_empty_record => try self.makeEmptyRecordType(),
             .e_call => |call| blk: {
                 const fact = try self.lowerCallResultFact(
@@ -5326,7 +5438,16 @@ pub const Lowerer = struct {
                 null,
             .e_binop => |binop| switch (binop.op) {
                 .lt, .gt, .le, .ge, .eq, .ne => try self.makePrimitiveType(.bool),
-                .add, .sub, .mul, .div, .rem, .div_trunc => null,
+                .add, .sub, .mul, .div, .rem, .div_trunc => blk: {
+                    const fact = try self.lowerArithmeticBinopFact(
+                        module_idx,
+                        type_scope,
+                        env,
+                        expr_idx,
+                        binop,
+                    );
+                    break :blk fact.result_ty;
+                },
                 .@"and", .@"or" => try self.makePrimitiveType(.bool),
             },
             .e_unary_minus => null,
