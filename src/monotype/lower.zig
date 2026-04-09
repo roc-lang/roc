@@ -5993,11 +5993,12 @@ pub const Lowerer = struct {
                             destruct.label,
                         ),
                     );
+                    const field_index = self.requireRecordDestructFieldIndexFact(module_idx, type_scope, destruct_idx);
                     try self.recordPatternStructuralFactsFromSourceType(
                         module_idx,
                         type_scope,
                         child_pattern_idx,
-                        try self.requirePatternTypeFact(module_idx, type_scope, child_pattern_idx),
+                        self.requireRecordFieldTypeFromMonotype(effective_source_ty, field_index),
                         try self.requirePatternSolvedVar(type_scope, child_pattern_idx),
                     );
                 }
@@ -6027,12 +6028,20 @@ pub const Lowerer = struct {
                 }
             },
             .tuple => |tuple| {
-                for (cir_env.store.slicePatterns(tuple.patterns)) |child_pattern_idx| {
+                const elem_patterns = cir_env.store.slicePatterns(tuple.patterns);
+                const elem_tys = self.requireTupleElemTypesFromMonotype(effective_source_ty);
+                if (elem_patterns.len != elem_tys.len) {
+                    return debugPanic(
+                        "monotype explicit pattern fact invariant violated: tuple pattern arity {d} did not match frozen source type arity {d} in module {d}",
+                        .{ elem_patterns.len, elem_tys.len, module_idx },
+                    );
+                }
+                for (elem_patterns, elem_tys) |child_pattern_idx, elem_ty| {
                     try self.recordPatternStructuralFactsFromSourceType(
                         module_idx,
                         type_scope,
                         child_pattern_idx,
-                        try self.requirePatternTypeFact(module_idx, type_scope, child_pattern_idx),
+                        elem_ty,
                         try self.requirePatternSolvedVar(type_scope, child_pattern_idx),
                     );
                 }
@@ -7771,6 +7780,42 @@ pub const Lowerer = struct {
             else => debugPanic(
                 "monotype explicit pattern fact invariant violated: expected frozen list source type, found non-list type {d}",
                 .{@intFromEnum(list_ty)},
+            ),
+        };
+    }
+
+    fn requireTupleElemTypesFromMonotype(
+        self: *const Lowerer,
+        tuple_ty: type_mod.TypeId,
+    ) []const type_mod.TypeId {
+        return switch (self.ctx.types.getType(tuple_ty)) {
+            .tuple => |elems| self.ctx.types.sliceTypeSpan(elems),
+            else => debugPanic(
+                "monotype explicit pattern fact invariant violated: expected frozen tuple source type, found non-tuple type {d}",
+                .{@intFromEnum(tuple_ty)},
+            ),
+        };
+    }
+
+    fn requireRecordFieldTypeFromMonotype(
+        self: *const Lowerer,
+        record_ty: type_mod.TypeId,
+        field_index: u16,
+    ) type_mod.TypeId {
+        return switch (self.ctx.types.getType(record_ty)) {
+            .record => |record| blk: {
+                const fields = self.ctx.types.sliceFields(record.fields);
+                if (field_index >= fields.len) {
+                    debugPanic(
+                        "monotype explicit pattern fact invariant violated: frozen record source type missing field index {d}",
+                        .{field_index},
+                    );
+                }
+                break :blk fields[field_index].ty;
+            },
+            else => debugPanic(
+                "monotype explicit pattern fact invariant violated: expected frozen record source type, found non-record type {d}",
+                .{@intFromEnum(record_ty)},
             ),
         };
     }
