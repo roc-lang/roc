@@ -8705,8 +8705,19 @@ pub const Lowerer = struct {
         type_scope: *TypeCloneScope,
         fn_var: Var,
     ) usize {
-        const fact = self.ensureExplicitFunctionFact(module_idx, type_scope, fn_var) catch unreachable;
-        return fact.arg_vars.len;
+        _ = type_scope;
+        var total: usize = 0;
+        var current: ?Var = fn_var;
+        while (current) |function_var| {
+            var local_index: usize = 0;
+            while (self.lookupFunctionArgVar(module_idx, function_var, local_index) != null) : (local_index += 1) {}
+            total += local_index;
+            current = self.lookupFunctionRetVar(module_idx, function_var);
+            if (current) |ret_var| {
+                if (self.lookupFunctionArgVar(module_idx, ret_var, 0) == null) break;
+            }
+        }
+        return total;
     }
 
     fn unifySpecializedCheckerVars(
