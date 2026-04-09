@@ -35,6 +35,7 @@ pub const ExplicitCallFact = struct {
 
 pub const ExplicitFunctionFact = struct {
     arg_vars: []Var,
+    synthetic_unit_arg: bool,
     node_ret_var: Var,
     final_ret_var: Var,
 };

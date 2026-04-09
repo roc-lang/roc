@@ -905,11 +905,6 @@ pub const Lowerer = struct {
         type_scope.initCloneAll(self.allocator, @constCast(env));
         defer type_scope.deinit();
 
-        const bind: ast.TypedSymbol = .{
-            .ty = try self.lowerInstantiatedType(pending.source.module_idx, &type_scope, specialized_checker_var),
-            .symbol = pending.specialized_symbol,
-        };
-
         var binding_env = BindingEnv.init(self.allocator);
         defer binding_env.deinit();
 
@@ -917,17 +912,17 @@ pub const Lowerer = struct {
             pending.source.module_idx,
             &type_scope,
             binding_env,
-            bind,
+            pending.specialized_symbol,
             def.expr,
             isRecursiveTopLevelDef(env, pending.source.def_idx),
             null,
             specialized_checker_var,
         );
         const lowered = try self.program.store.addDef(.{
-            .bind = bind,
+            .bind = letfn.bind,
             .value = .{ .fn_ = letfn },
         });
-        try self.emitted_defs_by_symbol.put(bind.symbol, lowered);
+        try self.emitted_defs_by_symbol.put(letfn.bind.symbol, lowered);
         return lowered;
     }
 
@@ -946,7 +941,7 @@ pub const Lowerer = struct {
         module_idx: u32,
         type_scope: *TypeCloneScope,
         incoming_env: BindingEnv,
-        bind: ast.TypedSymbol,
+        bind_symbol: symbol_mod.Symbol,
         expr_idx: CIR.Expr.Idx,
         recursive: bool,
         source_seed_var: ?Var,
@@ -979,19 +974,28 @@ pub const Lowerer = struct {
             .e_hosted_lambda => |hosted| {
                 const arg_patterns = env.store.slicePatterns(hosted.args);
                 const first_arg_ty = if (arg_patterns.len == 0)
-                    self.requireFunctionType(bind.ty).arg
+                    try self.requireFunctionArgType(module_idx, type_scope, source_fn_var, 0)
                 else
                     try self.requireFunctionArgType(module_idx, type_scope, source_fn_var, 0);
                 if (hosted.args.span.len == 0) {
                     const unit_arg = try self.makeUnitArgWithType(first_arg_ty);
+                    const body = try self.program.store.addExpr(.{
+                        .ty = try self.requireExprTypeFact(module_idx, type_scope, hosted.body),
+                        .data = .{ .runtime_error = try @constCast(env).insertString("TODO monotype hosted lambda") },
+                    });
                     return .{
                         .recursive = recursive,
-                        .bind = bind,
+                        .bind = .{
+                            .ty = try self.ctx.types.addType(.{
+                                .func = .{
+                                    .arg = unit_arg.ty,
+                                    .ret = self.program.store.getExpr(body).ty,
+                                },
+                            }),
+                            .symbol = bind_symbol,
+                        },
                         .arg = unit_arg,
-                        .body = try self.program.store.addExpr(.{
-                            .ty = try self.requireExprTypeFact(module_idx, type_scope, hosted.body),
-                            .data = .{ .runtime_error = try @constCast(env).insertString("TODO monotype hosted lambda") },
-                        }),
+                        .body = body,
                     };
                 }
 
@@ -1021,7 +1025,7 @@ pub const Lowerer = struct {
                                 .ret = self.program.store.getExpr(body).ty,
                             },
                         }),
-                        .symbol = bind.symbol,
+                        .symbol = bind_symbol,
                     },
                     .arg = first_arg,
                     .body = body,
@@ -1032,7 +1036,7 @@ pub const Lowerer = struct {
 
         const arg_patterns = env.store.slicePatterns(lambda.args);
         const first_arg_ty = if (arg_patterns.len == 0)
-            self.requireFunctionType(bind.ty).arg
+            try self.requireFunctionArgType(module_idx, type_scope, source_fn_var, 0)
         else
             try self.requireFunctionArgType(module_idx, type_scope, source_fn_var, 0);
         const first_arg_pattern = if (arg_patterns.len == 0) null else arg_patterns[0];
@@ -1093,7 +1097,7 @@ pub const Lowerer = struct {
                         .ret = self.program.store.getExpr(body).ty,
                     },
                 }),
-                .symbol = bind.symbol,
+                .symbol = bind_symbol,
             },
             .arg = first_arg,
             .body = body,
@@ -8199,18 +8203,11 @@ pub const Lowerer = struct {
         var type_scope: TypeCloneScope = undefined;
         type_scope.initCloneAll(self.allocator, @constCast(self.ctx.env(group.module_idx)));
         defer type_scope.deinit();
-        const bind: ast.TypedSymbol = .{
-            .ty = if (expected_var) |specialized_checker_var|
-                try self.publishMonotypeType(try self.lowerInstantiatedType(group.module_idx, &type_scope, specialized_checker_var))
-            else
-                published_expected_ty,
-            .symbol = specialized_symbol,
-        };
         const letfn = try self.lowerLambdaLikeDefWithEnv(
             group.module_idx,
             &type_scope,
             group.declaration_env,
-            bind,
+            specialized_symbol,
             source.expr_idx,
             false,
             source.seed_var,
@@ -8349,7 +8346,8 @@ pub const Lowerer = struct {
         };
         if (type_scope.facts.function_facts.get(key)) |existing| {
             defer self.allocator.free(fact.arg_vars);
-            if (existing.node_ret_var != fact.node_ret_var or
+            if (existing.synthetic_unit_arg != fact.synthetic_unit_arg or
+                existing.node_ret_var != fact.node_ret_var or
                 existing.final_ret_var != fact.final_ret_var or
                 !std.mem.eql(Var, existing.arg_vars, fact.arg_vars))
             {
@@ -8382,6 +8380,7 @@ pub const Lowerer = struct {
             "monotype explicit function fact invariant violated: missing node return var in module {d}",
             .{module_idx},
         );
+        const synthetic_unit_arg = self.lookupFunctionArgVar(module_idx, fn_var, 0) == null;
         var current = fn_var;
         while (true) {
             var local_index: usize = 0;
@@ -8396,6 +8395,7 @@ pub const Lowerer = struct {
             if (self.lookupFunctionArgVar(module_idx, ret_var, 0) == null) {
                 const fact: ExplicitFunctionFact = .{
                     .arg_vars = try arg_vars.toOwnedSlice(self.allocator),
+                    .synthetic_unit_arg = synthetic_unit_arg,
                     .node_ret_var = node_ret_var,
                     .final_ret_var = ret_var,
                 };
@@ -8432,8 +8432,12 @@ pub const Lowerer = struct {
     ) ?Var {
         const function_var = fn_var orelse return null;
         const fact = self.ensureExplicitFunctionFact(module_idx, type_scope, function_var) catch return null;
-        if (arg_index >= fact.arg_vars.len) return null;
-        return fact.arg_vars[arg_index];
+        const adjusted_index = if (fact.synthetic_unit_arg) blk: {
+            if (arg_index == 0) return null;
+            break :blk arg_index - 1;
+        } else arg_index;
+        if (adjusted_index >= fact.arg_vars.len) return null;
+        return fact.arg_vars[adjusted_index];
     }
 
     fn lookupCurriedFunctionFinalRetVar(
@@ -8595,10 +8599,23 @@ pub const Lowerer = struct {
         fn_var: ?Var,
         arg_index: usize,
     ) std.mem.Allocator.Error!type_mod.TypeId {
+        const function_var = fn_var orelse debugPanic(
+            "monotype invariant violated: missing specialized function var in module {d}",
+            .{module_idx},
+        );
+        const fact = try self.ensureExplicitFunctionFact(module_idx, type_scope, function_var);
+        if (fact.synthetic_unit_arg) {
+            if (arg_index == 0) return self.makeUnitType();
+            return try self.lowerInstantiatedType(
+                module_idx,
+                type_scope,
+                fact.arg_vars[arg_index - 1],
+            );
+        }
         return try self.lowerInstantiatedType(
             module_idx,
             type_scope,
-            try self.requireFunctionArgVar(module_idx, type_scope, fn_var, arg_index),
+            try self.requireFunctionArgVar(module_idx, type_scope, function_var, arg_index),
         );
     }
 
@@ -8624,19 +8641,8 @@ pub const Lowerer = struct {
         type_scope: *TypeCloneScope,
         fn_var: Var,
     ) usize {
-        _ = type_scope;
-        var total: usize = 0;
-        var current: ?Var = fn_var;
-        while (current) |function_var| {
-            var local_index: usize = 0;
-            while (self.lookupFunctionArgVar(module_idx, function_var, local_index) != null) : (local_index += 1) {}
-            total += local_index;
-            current = self.lookupFunctionRetVar(module_idx, function_var);
-            if (current) |ret_var| {
-                if (self.lookupFunctionArgVar(module_idx, ret_var, 0) == null) break;
-            }
-        }
-        return total;
+        const fact = self.ensureExplicitFunctionFact(module_idx, type_scope, fn_var) catch unreachable;
+        return fact.arg_vars.len + @intFromBool(fact.synthetic_unit_arg);
     }
 
     fn unifySpecializedCheckerVars(
