@@ -6003,17 +6003,7 @@ pub const Lowerer = struct {
                 }
             },
             .list => |list| {
-                const source_list_var = source_solved_var orelse debugPanic(
-                    "monotype explicit pattern fact invariant violated: list pattern missing explicit source solved var in module {d}",
-                    .{module_idx},
-                );
-                const elem_var = self.lookupListElemSolvedVar(module_idx, source_list_var) orelse debugPanic(
-                    "monotype explicit pattern fact invariant violated: list pattern missing explicit element solved var in module {d}",
-                    .{module_idx},
-                );
-                const elem_ty = try self.publishMonotypeType(
-                    try self.lowerInstantiatedType(module_idx, type_scope, elem_var),
-                );
+                const elem_ty = self.requireListElemTypeFromMonotype(effective_source_ty);
                 try self.bindPatternListElemTypeFact(module_idx, type_scope, pattern_idx, elem_ty);
                 for (cir_env.store.slicePatterns(list.patterns)) |child_pattern_idx| {
                     try self.recordPatternStructuralFactsFromSourceType(
@@ -7769,6 +7759,19 @@ pub const Lowerer = struct {
             },
             .alias => |alias| self.lookupListElemSolvedVar(module_idx, env.types.getAliasBackingVar(alias)),
             else => null,
+        };
+    }
+
+    fn requireListElemTypeFromMonotype(
+        self: *const Lowerer,
+        list_ty: type_mod.TypeId,
+    ) type_mod.TypeId {
+        return switch (self.ctx.types.getType(list_ty)) {
+            .list => |elem_ty| elem_ty,
+            else => debugPanic(
+                "monotype explicit pattern fact invariant violated: expected frozen list source type, found non-list type {d}",
+                .{@intFromEnum(list_ty)},
+            ),
         };
     }
 
