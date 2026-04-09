@@ -1,242 +1,170 @@
-# Exact Facts Final Cleanup Plan
+# Monotype Settle/Freeze Split Plan
 
 ## Goal
 
-Finish the remaining active re-inference and re-work in strict
-upstream-to-downstream order:
+Split monotype into the same two phases `~/code/cor` effectively already has:
 
-1. publish checker-adjacent semantic facts for monotype consumption
-2. move logical layout fact ownership into `lambdamono` construction
-3. make IR consume only explicit upstream semantic and layout facts
-4. remove all downstream runtime-shape comparison escape hatches
+1. settle specialization facts
+2. lower from settled facts only
 
-`~/code/cor` remains the architectural guide:
+The remaining active monotype offender is still:
 
-- solve first
-- attach one authoritative fact set once
-- specialize whole function facts, not local fragments
-- later stages only consume explicit earlier facts
-- no fallbacks, no heuristics, no dual systems, no late repair
-
-## Phase 1. Publish Checker-Adjacent Semantic Facts
-
-### Remaining offenders in monotype today
-
-- `src/monotype/lower.zig`
+- [src/monotype/lower.zig](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/lower.zig)
   - `lowerInstantiatedType(...)`
 
-### Root problem
+The recent failed experiment established the key architectural boundary:
 
-Monotype still owns one remaining category of fact that it should not own:
-
-- source-root monotype type materialization still happens on demand
-
-The completed tag/record structural-facts slice confirmed the correct
-boundary: structural meaning has to come from explicit solved facts, not
-lowered monotype type shape.
-
-The remaining issue is narrower now: monotype still clones/lower-instantiates
-checker vars on demand instead of consuming one published monotype fact set.
-
-The latest failed experiment clarified one important boundary:
-
-- explicit function/call vars can be published inside the current mutable
-  monotype specialization flow
+- explicit vars can be published while monotype specialization is still mutable
 - explicit monotype types cannot
 
-Publishing typed function facts inside `TypeCloneScope` is still too early,
-because later specialization unifications can refine those vars after the fact
-and make the cached types stale. So the remaining type publication work must
-move earlier, to a stage where those facts are already stable, rather than
-freezing them inside monotype’s current mutable cloning/unification loop.
+So the remaining work is not “cache more types in `TypeCloneScope`.” The
+remaining work is to move type publication to a later, frozen boundary and make
+ordinary lowering consume only frozen facts.
 
-That violates the intended `cor`-style contract:
+## Cor Guidance
 
-- solve first
-- publish semantic facts once
-- lower later from those facts only
+`~/code/cor` remains the model:
 
-### Target end state
+- clone / specialize first
+- lower types from the specialized clone only once
+- attach those lowered types to the lowered expression/pattern tree
+- later lowering consumes them directly
+- no fallback, no heuristic, no recovery path
 
-Introduce a dedicated semantic-facts artifact produced immediately after
-checking and before monotype lowering. That artifact owns:
+The Zig equivalent should be:
 
-- source expr result vars
-- source expr solved types
-- source pattern solved types
-- source call-root / call-application facts
-- source tag discriminants
-- source record field indices
-- any remaining source-root type facts monotype still needs
+- settle one specialization scope completely
+- freeze one immutable specialization fact table
+- lower from that table only
 
-Monotype may still build monomorphic types internally, but it must only consume
-published source facts and builder-private finalized monotype facts. It may not
-materialize fresh semantic meaning on demand while lowering expressions.
+## Phase 1. Isolate Monotype Semantic Facts From Mutable Caches
 
-After that:
+### Problem
 
-- the remaining late semantic uses of `lowerInstantiatedType(...)` are either
-  gone or clearly builder-internal and excluded from the audit
+`TypeCloneScope` currently mixes:
 
-### Work
+- mutable specialization state
+- type caches
+- explicit semantic facts used by later lowering
 
-1. introduce a checker-adjacent semantic-facts module and thread it into
-   monotype entrypoints
-2. move the remaining source-root type materialization out of expression
-   lowering and into that artifact, using `cor`’s “solve first, publish once,
-   lower later” approach
-3. migrate monotype fact collection / lowering to consume those published
-   semantic facts only
-   - do not reintroduce typed function/call facts inside the current mutable
-     `TypeCloneScope`; that boundary is not sound yet
-4. re-audit the remaining `lowerInstantiatedType(...)` uses and either:
-   - remove them from lowering logic
-   - or classify them as builder-internal-only and exclude them explicitly
-5. update:
-   - `reinfer.md`
-   - `reintern.md`
-6. verify:
-   - `timeout 900s zig build test-eval -- --threads 1`
-   - `timeout 300s zig build test-eval-host-effects -- --threads 1`
-7. commit
+That makes it too easy to publish facts before the specialization is actually
+stable.
 
-## Phase 2. Lambdamono Owns Logical Layout Facts
+### Target
 
-### Remaining offender
+Introduce a dedicated monotype semantic-facts artifact for one specialization
+scope. At minimum it must own:
 
-- `src/lambdamono/layout_facts.zig`
+- expr result vars
+- expr monotype types
+- pattern monotype types
+- pattern source types
+- explicit call facts
+- source-function facts
+- field/tag/list/pattern structural facts
+- arithmetic facts
 
-### Root problem
+And it must be separable from:
 
-`lambdamono` still publishes executable types and then runs a separate logical
-re-layout layer that derives:
-
-- logical layout refs
-- union payload layouts
-- struct field layouts
-- nominal-unwrapped union/struct physical shape
-
-That is still late re-layouting.
-
-### Target end state
-
-`lambdamono` construction publishes logical layout facts directly:
-
-- expr logical layout ref
-- pattern logical layout ref
-- typed-symbol logical layout ref
-- def-return logical layout ref
-- explicit field layout facts where needed
-- explicit tag payload layout facts where needed
-- explicit discriminant handling facts where needed
-
-After that, `layout_facts.zig` is either trivial storage or gone.
+- `var_map`
+- `Instantiator`
+- active/provisional type caches
+- nominal cache scratch
 
 ### Work
 
-1. identify every fact currently derived in `layout_facts.zig`
-2. attach those facts while building `lambdamono` results
-3. migrate all `lambdamono` and IR consumers to read direct facts
-4. remove the recovery logic from `layout_facts.zig`
-5. update:
-   - `reintern.md`
-6. verify:
-   - `timeout 900s zig build test-eval -- --threads 1`
-   - `timeout 300s zig build test-eval-host-effects -- --threads 1`
-7. commit
+1. define a dedicated semantic-facts type/module for monotype
+2. move the current fact maps out of the mutable cache cluster and behind that
+   dedicated type
+3. keep behavior unchanged while the data ownership boundary is established
+4. verify eval suites
+5. commit
 
-## Phase 3. IR Pure Consumption
+## Phase 2. Add An Explicit Settle-Then-Freeze Boundary
 
-### Remaining offenders
+### Problem
 
-- `src/ir/lower.zig`
-  - `requireListElemType(...)`
-  - `discriminantLayoutForUnion(...)`
+Monotype still interleaves:
 
-### Root problem
+- collecting facts
+- mutating cloned checker vars
+- lowering AST nodes
 
-IR still locally inspects type/layout shape for list/discriminant handling
-instead of consuming exact upstream facts.
+That is what keeps `lowerInstantiatedType(...)` live in ordinary lowering.
 
-### Target end state
+### Target
 
-IR receives all required semantic/layout facts explicitly from `lambdamono`,
-including:
+For each specialization scope (top-level value, top-level specialization,
+lambda/closure body, local function specialization):
 
-- loop/list element layout behavior
-- discriminant layout behavior
-- bool direct-value vs tagged-union discriminant behavior
+1. run a settling pass that performs all specialization/unification work
+2. freeze one immutable semantic-facts snapshot from the settled scope
+3. lower the AST using only that frozen snapshot
 
-After that, IR lowering is pure consumption.
+The freeze step is the first place typed semantic facts may become
+authoritative.
 
 ### Work
 
-1. add any still-missing `lambdamono -> IR` facts
-2. replace the remaining IR local derivation paths with direct fact reads
-3. delete the remaining IR derivation helpers
-4. update:
-   - `reintern.md`
-5. verify:
-   - `timeout 900s zig build test-eval -- --threads 1`
-   - `timeout 300s zig build test-eval-host-effects -- --threads 1`
+1. identify every current entrypoint that already has an implicit
+   collect-then-lower shape
+2. extract an explicit settle phase for those entrypoints
+3. freeze immutable semantic facts after settling and before lowering
+4. thread frozen facts into the matching lowering entrypoints
+5. verify eval suites
 6. commit
 
-## Phase 4. Exact Layout Or Explicit Bridge Only
+## Phase 3. Remove Lowering-Time `lowerInstantiatedType(...)`
 
-### Remaining offenders
+### Problem
 
-- `src/lir/FromIr.zig`
-- `src/eval/interpreter.zig`
-- `src/backend/dev/LirCodeGen.zig`
-- `src/layout/store.zig`
-  - `layoutsHaveSameRuntimeRepresentation(...)`
+After Phase 2, any remaining lowering-time `lowerInstantiatedType(...)` use in
+ordinary monotype lowering means the frozen fact table is still incomplete.
 
-### Root problem
+### Target
 
-Downstream code still sometimes accepts layout mismatch by structural runtime
-shape comparison instead of requiring:
+In ordinary monotype lowering:
 
-- exact layout identity
-- or explicit earlier bridge facts
+- no expression lowering path calls `lowerInstantiatedType(...)`
+- no pattern lowering path calls `lowerInstantiatedType(...)`
+- no call / lambda / match / block lowering path materializes fresh semantic
+  type meaning on demand
 
-That is downstream compensation for earlier ambiguity, and it is forbidden by
-the compiler rules.
+Allowed remaining uses:
 
-### Target end state
-
-Downstream code consumes only:
-
-- exact layouts
-- explicit earlier bridge/coercion facts
-
-No backend, interpreter path, or `FromIr` bridge selection may ask whether two
-layouts merely “have the same runtime representation.”
+- builder-internal monotype type construction
+- freeze-time conversion from settled checker vars to immutable monotype types
 
 ### Work
 
-1. enumerate every live bridge/coercion case currently guarded by
-   `layoutsHaveSameRuntimeRepresentation(...)`
-2. move those decisions earlier into explicit bridge facts
-3. make `FromIr` consume only exact layouts or explicit bridge facts
-4. make the interpreter and dev backend consume only exact layouts or explicit
-   bridge facts
-5. delete:
-   - `layoutsHaveSameRuntimeRepresentation(...)`
-   - all downstream runtime-shape comparison escape hatches
-6. update:
-   - `reintern.md`
-7. verify:
-   - `timeout 900s zig build test-eval -- --threads 1`
-   - `timeout 300s zig build test-eval-host-effects -- --threads 1`
-8. commit
+1. replace remaining ordinary lowering-time uses with frozen fact reads
+2. delete any now-dead fact recovery helpers
+3. re-audit `lowerInstantiatedType(...)`
+4. update:
+   - [reinfer.md](/Users/rtfeldman/.codex/worktrees/1d55/roc/reinfer.md)
+   - [reintern.md](/Users/rtfeldman/.codex/worktrees/1d55/roc/reintern.md)
+5. verify eval suites
+6. commit
+
+## Phase 4. Resume Downstream Cleanup
+
+Only after monotype is split correctly:
+
+1. move logical layout fact ownership into `lambdamono` construction
+2. make IR consume only explicit upstream semantic/layout facts
+3. remove all downstream runtime-shape comparison escape hatches
+
+Those remaining items stay tracked in:
+
+- [reintern.md](/Users/rtfeldman/.codex/worktrees/1d55/roc/reintern.md)
 
 ## Final Sweep
 
-1. run a fresh from-scratch audit of remaining re-inference / re-work
+1. run a fresh from-scratch audit
 2. update:
-   - `reinfer.md`
-   - `reintern.md`
-3. verify both eval suites again
-4. commit the final audit-synchronized code slices
+   - [reinfer.md](/Users/rtfeldman/.codex/worktrees/1d55/roc/reinfer.md)
+   - [reintern.md](/Users/rtfeldman/.codex/worktrees/1d55/roc/reintern.md)
+3. verify eval suites
+4. commit
 5. push
 6. report exactly what remains, if anything

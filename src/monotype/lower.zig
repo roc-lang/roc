@@ -20,6 +20,7 @@ const types = @import("types");
 const instantiate = @import("types").instantiate;
 const ast = @import("ast.zig");
 const type_mod = @import("type.zig");
+const semantic_facts = @import("semantic_facts.zig");
 const specializations_mod = @import("specializations.zig");
 const symbol_mod = @import("symbol");
 
@@ -195,22 +196,10 @@ const LoweredCall = struct {
     result_ty: type_mod.TypeId,
 };
 
-const ExplicitCallFact = struct {
-    fn_var: Var,
-    result_var: Var,
-    arg_vars: []Var,
-};
-
-const ExplicitFunctionFact = struct {
-    arg_vars: []Var,
-    node_ret_var: Var,
-    final_ret_var: Var,
-};
-
-const ExprSourceFunctionFact = struct {
-    seed_var: Var,
-    arity: usize,
-};
+const ExplicitCallFact = semantic_facts.ExplicitCallFact;
+const ExplicitFunctionFact = semantic_facts.ExplicitFunctionFact;
+const ExprSourceFunctionFact = semantic_facts.ExprSourceFunctionFact;
+const ArithmeticBinopFact = semantic_facts.ArithmeticBinopFact;
 
 const SpecializableCallChain = struct {
     func_expr_idx: CIR.Expr.Idx,
@@ -359,43 +348,16 @@ pub const Lowerer = struct {
     };
 
     const TypeCloneScope = struct {
-        const TypeKey = struct {
-            module_idx: u32,
-            var_: Var,
-        };
-
-        const ExprKey = struct {
-            module_idx: u32,
-            expr_idx: CIR.Expr.Idx,
-        };
-
-        const PatternTypeKey = struct {
-            module_idx: u32,
-            pattern_idx: CIR.Pattern.Idx,
-        };
-
-        const RecordDestructKey = struct {
-            module_idx: u32,
-            destruct_idx: CIR.Pattern.RecordDestruct.Idx,
-        };
+        const TypeKey = semantic_facts.TypeKey;
+        const ExprKey = semantic_facts.ExprKey;
+        const PatternTypeKey = semantic_facts.PatternTypeKey;
+        const RecordDestructKey = semantic_facts.RecordDestructKey;
 
         var_map: std.AutoHashMap(Var, Var),
         active_type_cache: std.AutoHashMap(TypeKey, type_mod.TypeId),
         provisional_type_cache: std.AutoHashMap(TypeKey, type_mod.TypeId),
         type_cache: std.AutoHashMap(TypeKey, type_mod.TypeId),
-        function_facts: std.AutoHashMap(TypeKey, ExplicitFunctionFact),
-        expr_type_facts: std.AutoHashMap(ExprKey, type_mod.TypeId),
-        expr_result_var_facts: std.AutoHashMap(ExprKey, Var),
-        expr_source_function_facts: std.AutoHashMap(ExprKey, ExprSourceFunctionFact),
-        call_facts: std.AutoHashMap(ExprKey, ExplicitCallFact),
-        pattern_type_facts: std.AutoHashMap(PatternTypeKey, type_mod.TypeId),
-        pattern_source_type_facts: std.AutoHashMap(PatternTypeKey, type_mod.TypeId),
-        expr_field_index_facts: std.AutoHashMap(ExprKey, u16),
-        expr_tag_discriminant_facts: std.AutoHashMap(ExprKey, u16),
-        pattern_tag_discriminant_facts: std.AutoHashMap(PatternTypeKey, u16),
-        pattern_list_elem_type_facts: std.AutoHashMap(PatternTypeKey, type_mod.TypeId),
-        record_destruct_field_index_facts: std.AutoHashMap(RecordDestructKey, u16),
-        arithmetic_binop_facts: std.AutoHashMap(ExprKey, ArithmeticBinopFact),
+        facts: semantic_facts.Mutable,
         nominal_type_cache: std.StringHashMap(type_mod.TypeId),
         scratch_nominal_key: std.ArrayList(u8),
         instantiator: Instantiator,
@@ -441,19 +403,7 @@ pub const Lowerer = struct {
             self.active_type_cache = std.AutoHashMap(TypeKey, type_mod.TypeId).init(allocator);
             self.provisional_type_cache = std.AutoHashMap(TypeKey, type_mod.TypeId).init(allocator);
             self.type_cache = std.AutoHashMap(TypeKey, type_mod.TypeId).init(allocator);
-            self.function_facts = std.AutoHashMap(TypeKey, ExplicitFunctionFact).init(allocator);
-            self.expr_type_facts = std.AutoHashMap(ExprKey, type_mod.TypeId).init(allocator);
-            self.expr_result_var_facts = std.AutoHashMap(ExprKey, Var).init(allocator);
-            self.expr_source_function_facts = std.AutoHashMap(ExprKey, ExprSourceFunctionFact).init(allocator);
-            self.call_facts = std.AutoHashMap(ExprKey, ExplicitCallFact).init(allocator);
-            self.pattern_type_facts = std.AutoHashMap(PatternTypeKey, type_mod.TypeId).init(allocator);
-            self.pattern_source_type_facts = std.AutoHashMap(PatternTypeKey, type_mod.TypeId).init(allocator);
-            self.expr_field_index_facts = std.AutoHashMap(ExprKey, u16).init(allocator);
-            self.expr_tag_discriminant_facts = std.AutoHashMap(ExprKey, u16).init(allocator);
-            self.pattern_tag_discriminant_facts = std.AutoHashMap(PatternTypeKey, u16).init(allocator);
-            self.pattern_list_elem_type_facts = std.AutoHashMap(PatternTypeKey, type_mod.TypeId).init(allocator);
-            self.record_destruct_field_index_facts = std.AutoHashMap(RecordDestructKey, u16).init(allocator);
-            self.arithmetic_binop_facts = std.AutoHashMap(ExprKey, ArithmeticBinopFact).init(allocator);
+            self.facts = semantic_facts.Mutable.init(allocator);
             self.nominal_type_cache = std.StringHashMap(type_mod.TypeId).init(allocator);
             self.scratch_nominal_key = .empty;
             self.instantiator = .{
@@ -473,27 +423,7 @@ pub const Lowerer = struct {
             }
             self.nominal_type_cache.deinit();
             self.scratch_nominal_key.deinit(self.instantiator.store.gpa);
-            self.arithmetic_binop_facts.deinit();
-            self.record_destruct_field_index_facts.deinit();
-            self.pattern_list_elem_type_facts.deinit();
-            self.pattern_tag_discriminant_facts.deinit();
-            self.expr_tag_discriminant_facts.deinit();
-            self.expr_field_index_facts.deinit();
-            self.pattern_source_type_facts.deinit();
-            self.pattern_type_facts.deinit();
-            var call_iter = self.call_facts.valueIterator();
-            while (call_iter.next()) |fact| {
-                self.instantiator.store.gpa.free(fact.arg_vars);
-            }
-            self.call_facts.deinit();
-            self.expr_source_function_facts.deinit();
-            var function_iter = self.function_facts.valueIterator();
-            while (function_iter.next()) |fact| {
-                self.instantiator.store.gpa.free(fact.arg_vars);
-            }
-            self.function_facts.deinit();
-            self.expr_result_var_facts.deinit();
-            self.expr_type_facts.deinit();
+            self.facts.deinit();
             self.active_type_cache.deinit();
             self.provisional_type_cache.deinit();
             self.type_cache.deinit();
@@ -1458,7 +1388,7 @@ pub const Lowerer = struct {
             .module_idx = module_idx,
             .expr_idx = body_expr_idx,
         };
-        if (type_scope.expr_result_var_facts.get(key)) |existing| {
+        if (type_scope.facts.expr_result_var_facts.get(key)) |existing| {
             if (existing != result_var) {
                 debugPanic(
                     "monotype explicit expr fact invariant violated: conflicting explicit expr result vars in module {d}",
@@ -1467,7 +1397,7 @@ pub const Lowerer = struct {
             }
             return;
         }
-        try type_scope.expr_result_var_facts.put(key, result_var);
+        try type_scope.facts.expr_result_var_facts.put(key, result_var);
     }
 
     fn putExplicitCallFact(
@@ -1481,7 +1411,7 @@ pub const Lowerer = struct {
             .module_idx = module_idx,
             .expr_idx = call_expr_idx,
         };
-        if (type_scope.call_facts.get(key)) |existing| {
+        if (type_scope.facts.call_facts.get(key)) |existing| {
             defer {
                 self.allocator.free(fact.arg_vars);
             }
@@ -1496,7 +1426,7 @@ pub const Lowerer = struct {
             }
             return;
         }
-        try type_scope.call_facts.put(key, fact);
+        try type_scope.facts.call_facts.put(key, fact);
     }
 
     fn putExprSourceFunctionFact(
@@ -1511,7 +1441,7 @@ pub const Lowerer = struct {
             .module_idx = module_idx,
             .expr_idx = expr_idx,
         };
-        if (type_scope.expr_source_function_facts.get(key)) |existing| {
+        if (type_scope.facts.expr_source_function_facts.get(key)) |existing| {
             if (existing.seed_var != fact.seed_var or existing.arity != fact.arity) {
                 debugPanic(
                     "monotype explicit source-function fact invariant violated: conflicting facts in module {d}",
@@ -1520,7 +1450,7 @@ pub const Lowerer = struct {
             }
             return;
         }
-        try type_scope.expr_source_function_facts.put(key, fact);
+        try type_scope.facts.expr_source_function_facts.put(key, fact);
     }
 
     fn lookupExprSourceFunctionFact(
@@ -1530,7 +1460,7 @@ pub const Lowerer = struct {
         expr_idx: CIR.Expr.Idx,
     ) ?ExprSourceFunctionFact {
         _ = self;
-        return type_scope.expr_source_function_facts.get(.{
+        return type_scope.facts.expr_source_function_facts.get(.{
             .module_idx = module_idx,
             .expr_idx = expr_idx,
         });
@@ -1547,7 +1477,7 @@ pub const Lowerer = struct {
             .module_idx = module_idx,
             .expr_idx = expr_idx,
         };
-        if (type_scope.expr_source_function_facts.contains(key)) return;
+        if (type_scope.facts.expr_source_function_facts.contains(key)) return;
 
         const current_env = self.ctx.env(module_idx);
         const seed_var_opt: ?Var = switch (current_env.store.getExpr(expr_idx)) {
@@ -1596,7 +1526,7 @@ pub const Lowerer = struct {
             .module_idx = module_idx,
             .expr_idx = call_expr_idx,
         };
-        return type_scope.call_facts.get(key) orelse
+        return type_scope.facts.call_facts.get(key) orelse
             debugPanic("monotype explicit call fact invariant violated: missing explicit call fact", .{});
     }
 
@@ -1651,7 +1581,7 @@ pub const Lowerer = struct {
             .module_idx = module_idx,
             .pattern_idx = pattern_idx,
         };
-        return type_scope.pattern_source_type_facts.get(key) orelse
+        return type_scope.facts.pattern_source_type_facts.get(key) orelse
             debugPanic("monotype explicit pattern fact invariant violated: missing explicit pattern source type fact", .{});
     }
 
@@ -1667,7 +1597,7 @@ pub const Lowerer = struct {
             .module_idx = module_idx,
             .pattern_idx = pattern_idx,
         };
-        if (type_scope.pattern_source_type_facts.get(key)) |existing| {
+        if (type_scope.facts.pattern_source_type_facts.get(key)) |existing| {
             if (existing != source_ty) {
                 debugPanic(
                     "monotype explicit pattern fact invariant violated: conflicting pattern source type facts in module {d}",
@@ -1676,7 +1606,7 @@ pub const Lowerer = struct {
             }
             return;
         }
-        try type_scope.pattern_source_type_facts.put(key, source_ty);
+        try type_scope.facts.pattern_source_type_facts.put(key, source_ty);
     }
 
     fn bindExprFieldIndexFact(
@@ -1691,13 +1621,13 @@ pub const Lowerer = struct {
             .module_idx = module_idx,
             .expr_idx = expr_idx,
         };
-        if (type_scope.expr_field_index_facts.get(key)) |existing| {
+        if (type_scope.facts.expr_field_index_facts.get(key)) |existing| {
             if (existing != field_index) {
                 debugPanic("monotype explicit expr fact invariant violated: conflicting field-index facts", .{});
             }
             return;
         }
-        try type_scope.expr_field_index_facts.put(key, field_index);
+        try type_scope.facts.expr_field_index_facts.put(key, field_index);
     }
 
     fn requireExprFieldIndexFact(
@@ -1711,7 +1641,7 @@ pub const Lowerer = struct {
             .module_idx = module_idx,
             .expr_idx = expr_idx,
         };
-        return type_scope.expr_field_index_facts.get(key) orelse
+        return type_scope.facts.expr_field_index_facts.get(key) orelse
             debugPanic("monotype explicit expr fact invariant violated: missing explicit field-index fact", .{});
     }
 
@@ -1727,13 +1657,13 @@ pub const Lowerer = struct {
             .module_idx = module_idx,
             .expr_idx = expr_idx,
         };
-        if (type_scope.expr_tag_discriminant_facts.get(key)) |existing| {
+        if (type_scope.facts.expr_tag_discriminant_facts.get(key)) |existing| {
             if (existing != discriminant) {
                 debugPanic("monotype explicit expr fact invariant violated: conflicting tag discriminant facts", .{});
             }
             return;
         }
-        try type_scope.expr_tag_discriminant_facts.put(key, discriminant);
+        try type_scope.facts.expr_tag_discriminant_facts.put(key, discriminant);
     }
 
     fn requireExprTagDiscriminantFact(
@@ -1747,7 +1677,7 @@ pub const Lowerer = struct {
             .module_idx = module_idx,
             .expr_idx = expr_idx,
         };
-        return type_scope.expr_tag_discriminant_facts.get(key) orelse
+        return type_scope.facts.expr_tag_discriminant_facts.get(key) orelse
             debugPanic("monotype explicit expr fact invariant violated: missing explicit tag discriminant fact", .{});
     }
 
@@ -1763,13 +1693,13 @@ pub const Lowerer = struct {
             .module_idx = module_idx,
             .pattern_idx = pattern_idx,
         };
-        if (type_scope.pattern_tag_discriminant_facts.get(key)) |existing| {
+        if (type_scope.facts.pattern_tag_discriminant_facts.get(key)) |existing| {
             if (existing != discriminant) {
                 debugPanic("monotype explicit pattern fact invariant violated: conflicting tag discriminant facts", .{});
             }
             return;
         }
-        try type_scope.pattern_tag_discriminant_facts.put(key, discriminant);
+        try type_scope.facts.pattern_tag_discriminant_facts.put(key, discriminant);
     }
 
     fn requirePatternTagDiscriminantFact(
@@ -1783,7 +1713,7 @@ pub const Lowerer = struct {
             .module_idx = module_idx,
             .pattern_idx = pattern_idx,
         };
-        return type_scope.pattern_tag_discriminant_facts.get(key) orelse
+        return type_scope.facts.pattern_tag_discriminant_facts.get(key) orelse
             debugPanic("monotype explicit pattern fact invariant violated: missing explicit tag discriminant fact", .{});
     }
 
@@ -1799,13 +1729,13 @@ pub const Lowerer = struct {
             .module_idx = module_idx,
             .pattern_idx = pattern_idx,
         };
-        if (type_scope.pattern_list_elem_type_facts.get(key)) |existing| {
+        if (type_scope.facts.pattern_list_elem_type_facts.get(key)) |existing| {
             if (existing != elem_ty) {
                 debugPanic("monotype explicit pattern fact invariant violated: conflicting list element type facts", .{});
             }
             return;
         }
-        try type_scope.pattern_list_elem_type_facts.put(key, elem_ty);
+        try type_scope.facts.pattern_list_elem_type_facts.put(key, elem_ty);
     }
 
     fn requirePatternListElemTypeFact(
@@ -1819,7 +1749,7 @@ pub const Lowerer = struct {
             .module_idx = module_idx,
             .pattern_idx = pattern_idx,
         };
-        return type_scope.pattern_list_elem_type_facts.get(key) orelse
+        return type_scope.facts.pattern_list_elem_type_facts.get(key) orelse
             debugPanic("monotype explicit pattern fact invariant violated: missing explicit list element type fact", .{});
     }
 
@@ -1835,13 +1765,13 @@ pub const Lowerer = struct {
             .module_idx = module_idx,
             .destruct_idx = destruct_idx,
         };
-        if (type_scope.record_destruct_field_index_facts.get(key)) |existing| {
+        if (type_scope.facts.record_destruct_field_index_facts.get(key)) |existing| {
             if (existing != field_index) {
                 debugPanic("monotype explicit pattern fact invariant violated: conflicting record destruct field-index facts", .{});
             }
             return;
         }
-        try type_scope.record_destruct_field_index_facts.put(key, field_index);
+        try type_scope.facts.record_destruct_field_index_facts.put(key, field_index);
     }
 
     fn requireRecordDestructFieldIndexFact(
@@ -1855,7 +1785,7 @@ pub const Lowerer = struct {
             .module_idx = module_idx,
             .destruct_idx = destruct_idx,
         };
-        return type_scope.record_destruct_field_index_facts.get(key) orelse
+        return type_scope.facts.record_destruct_field_index_facts.get(key) orelse
             debugPanic("monotype explicit pattern fact invariant violated: missing record destruct field-index fact", .{});
     }
 
@@ -1871,7 +1801,7 @@ pub const Lowerer = struct {
             .module_idx = module_idx,
             .expr_idx = expr_idx,
         };
-        if (type_scope.arithmetic_binop_facts.get(key)) |existing| {
+        if (type_scope.facts.arithmetic_binop_facts.get(key)) |existing| {
             if (existing.operand_var != fact.operand_var or
                 existing.operand_ty != fact.operand_ty or
                 existing.result_var != fact.result_var or
@@ -1881,7 +1811,7 @@ pub const Lowerer = struct {
             }
             return;
         }
-        try type_scope.arithmetic_binop_facts.put(key, fact);
+        try type_scope.facts.arithmetic_binop_facts.put(key, fact);
     }
 
     fn requireArithmeticBinopFact(
@@ -1895,7 +1825,7 @@ pub const Lowerer = struct {
             .module_idx = module_idx,
             .expr_idx = expr_idx,
         };
-        return type_scope.arithmetic_binop_facts.get(key) orelse
+        return type_scope.facts.arithmetic_binop_facts.get(key) orelse
             debugPanic("monotype explicit arithmetic fact invariant violated: missing arithmetic fact", .{});
     }
 
@@ -4721,13 +4651,6 @@ pub const Lowerer = struct {
         result_var: Var,
     };
 
-    const ArithmeticBinopFact = struct {
-        operand_var: Var,
-        operand_ty: type_mod.TypeId,
-        result_var: Var,
-        result_ty: type_mod.TypeId,
-    };
-
     fn getRecordedMethodArgs(
         self: *const Lowerer,
         module_idx: u32,
@@ -5915,7 +5838,7 @@ pub const Lowerer = struct {
             .module_idx = module_idx,
             .expr_idx = expr_idx,
         };
-        return type_scope.expr_result_var_facts.get(key) orelse
+        return type_scope.facts.expr_result_var_facts.get(key) orelse
             debugPanic("monotype explicit expr fact invariant violated: missing explicit expr result var fact", .{});
     }
 
@@ -5929,7 +5852,7 @@ pub const Lowerer = struct {
             .module_idx = module_idx,
             .expr_idx = expr_idx,
         };
-        if (type_scope.expr_type_facts.contains(key)) return;
+        if (type_scope.facts.expr_type_facts.contains(key)) return;
 
         const lowered = try self.lowerInstantiatedType(
             module_idx,
@@ -5938,7 +5861,7 @@ pub const Lowerer = struct {
         );
         const expr = self.ctx.env(module_idx).store.getExpr(expr_idx);
         const normalized = try self.normalizeDefaultNumericLiteralType(module_idx, expr_idx, expr, lowered);
-        try type_scope.expr_type_facts.put(key, try self.publishMonotypeType(normalized));
+        try type_scope.facts.expr_type_facts.put(key, try self.publishMonotypeType(normalized));
     }
 
     fn recordPatternTypeFact(
@@ -5951,14 +5874,14 @@ pub const Lowerer = struct {
             .module_idx = module_idx,
             .pattern_idx = pattern_idx,
         };
-        if (type_scope.pattern_type_facts.contains(key)) return;
+        if (type_scope.facts.pattern_type_facts.contains(key)) return;
 
         const lowered = try self.lowerInstantiatedType(
             module_idx,
             type_scope,
             try self.requirePatternSolvedVar(type_scope, pattern_idx),
         );
-        try type_scope.pattern_type_facts.put(key, try self.publishMonotypeType(lowered));
+        try type_scope.facts.pattern_type_facts.put(key, try self.publishMonotypeType(lowered));
     }
 
     fn collectPatternFacts(
@@ -5971,7 +5894,7 @@ pub const Lowerer = struct {
             .module_idx = module_idx,
             .pattern_idx = pattern_idx,
         };
-        if (type_scope.pattern_type_facts.contains(key)) return;
+        if (type_scope.facts.pattern_type_facts.contains(key)) return;
 
         try self.recordPatternTypeFact(module_idx, type_scope, pattern_idx);
         const pattern = self.ctx.env(module_idx).store.getPattern(pattern_idx);
@@ -6378,8 +6301,8 @@ pub const Lowerer = struct {
         };
         const cir_env = self.ctx.env(module_idx);
         const expr = cir_env.store.getExpr(expr_idx);
-        if (type_scope.expr_type_facts.contains(key) and type_scope.expr_result_var_facts.contains(key) and (!exprNeedsExplicitCallFact(expr) or type_scope.call_facts.contains(key))) return;
-        const explicit_result_var = type_scope.expr_result_var_facts.get(key);
+        if (type_scope.facts.expr_type_facts.contains(key) and type_scope.facts.expr_result_var_facts.contains(key) and (!exprNeedsExplicitCallFact(expr) or type_scope.facts.call_facts.contains(key))) return;
+        const explicit_result_var = type_scope.facts.expr_result_var_facts.get(key);
 
         const result_var: Var = switch (expr) {
             .e_num,
@@ -6657,7 +6580,7 @@ pub const Lowerer = struct {
             else => debugTodoExpr(expr),
         };
 
-        try type_scope.expr_result_var_facts.put(key, result_var);
+        try type_scope.facts.expr_result_var_facts.put(key, result_var);
         try self.recordExprSourceFunctionFact(module_idx, type_scope, env, expr_idx);
         try self.recordExprTypeFact(module_idx, type_scope, expr_idx);
         try self.recordExprStructuralFacts(module_idx, type_scope, env, expr_idx, expr);
@@ -6674,7 +6597,7 @@ pub const Lowerer = struct {
             .module_idx = module_idx,
             .expr_idx = expr_idx,
         };
-        return type_scope.expr_type_facts.get(key) orelse
+        return type_scope.facts.expr_type_facts.get(key) orelse
             debugPanic("monotype explicit expr fact invariant violated: missing explicit expr type fact", .{});
     }
 
@@ -6697,7 +6620,7 @@ pub const Lowerer = struct {
             .module_idx = module_idx,
             .pattern_idx = pattern_idx,
         };
-        return type_scope.pattern_type_facts.get(key) orelse
+        return type_scope.facts.pattern_type_facts.get(key) orelse
             debugPanic("monotype explicit pattern fact invariant violated: missing explicit pattern type fact", .{});
     }
 
@@ -8428,7 +8351,7 @@ pub const Lowerer = struct {
             .module_idx = module_idx,
             .var_ = fn_var,
         };
-        if (type_scope.function_facts.get(key)) |existing| {
+        if (type_scope.facts.function_facts.get(key)) |existing| {
             defer self.allocator.free(fact.arg_vars);
             if (existing.node_ret_var != fact.node_ret_var or
                 existing.final_ret_var != fact.final_ret_var or
@@ -8441,7 +8364,7 @@ pub const Lowerer = struct {
             }
             return;
         }
-        try type_scope.function_facts.put(key, fact);
+        try type_scope.facts.function_facts.put(key, fact);
     }
 
     fn ensureExplicitFunctionFact(
@@ -8454,7 +8377,7 @@ pub const Lowerer = struct {
             .module_idx = module_idx,
             .var_ = fn_var,
         };
-        if (type_scope.function_facts.get(key)) |fact| return fact;
+        if (type_scope.facts.function_facts.get(key)) |fact| return fact;
 
         var arg_vars = std.ArrayList(Var).empty;
         defer arg_vars.deinit(self.allocator);
@@ -8481,7 +8404,7 @@ pub const Lowerer = struct {
                     .final_ret_var = ret_var,
                 };
                 try self.putExplicitFunctionFact(module_idx, type_scope, fn_var, fact);
-                return type_scope.function_facts.get(key).?;
+                return type_scope.facts.function_facts.get(key).?;
             }
             current = ret_var;
         }
