@@ -40,12 +40,11 @@ pub const Facts = struct {
     expr_tag_payload_layouts: []?layout_mod.GraphRef,
     pat_tag_payload_layouts: []?layout_mod.GraphRef,
 
-    pub fn init(
+    pub fn initEmpty(
         allocator: std.mem.Allocator,
         store: *ast.Store,
-        types: *type_mod.Store,
     ) std.mem.Allocator.Error!Facts {
-        var facts = Facts{
+        const facts = Facts{
             .graph = .{},
             .cache = LayoutCache.init(allocator),
             .type_layouts = std.AutoHashMap(type_mod.TypeId, layout_mod.GraphRef).init(allocator),
@@ -64,10 +63,6 @@ pub const Facts = struct {
         @memset(facts.expr_discriminant_layouts, null);
         @memset(facts.expr_tag_payload_layouts, null);
         @memset(facts.pat_tag_payload_layouts, null);
-
-        try facts.lowerAllTypes(allocator, store, types);
-        try facts.attachDerivedExprFacts(store);
-        try facts.attachDerivedPatFacts(store);
         return facts;
     }
 
@@ -124,69 +119,45 @@ pub const Facts = struct {
             debugPanic("lambdamono.layout_facts.patTagPayloadLayout missing explicit payload layout");
     }
 
-    fn lowerAllTypes(
-        self: *Facts,
-        allocator: std.mem.Allocator,
-        store: *ast.Store,
-        types: *type_mod.Store,
-    ) std.mem.Allocator.Error!void {
-        for (store.exprs.items, 0..) |expr, i| {
-            self.expr_layouts[i] = try self.lowerAndRecordType(allocator, types, expr.ty);
-        }
-        for (store.pats.items, 0..) |pat, i| {
-            self.pat_layouts[i] = try self.lowerAndRecordType(allocator, types, pat.ty);
-        }
-        for (store.typed_symbols.items, 0..) |value, i| {
-            self.typed_symbol_layouts[i] = try self.lowerAndRecordType(allocator, types, value.ty);
-        }
-        for (store.defs.items, 0..) |def, i| {
-            const ret_ty = switch (def.value) {
-                .fn_ => |fn_def| store.getExpr(fn_def.body).ty,
-                .val => |expr_id| def.result_ty orelse store.getExpr(expr_id).ty,
-                .run => |run_def| def.result_ty orelse store.getExpr(run_def.body).ty,
-            };
-            self.def_ret_layouts[i] = try self.lowerAndRecordType(allocator, types, ret_ty);
-        }
-    }
-
-    fn lowerAndRecordType(
+    pub fn recordTypedSymbol(
         self: *Facts,
         allocator: std.mem.Allocator,
         mono_types: *type_mod.Store,
-        ty: type_mod.TypeId,
-    ) std.mem.Allocator.Error!layout_mod.GraphRef {
-        if (self.type_layouts.get(ty)) |existing| return existing;
-        const lowered = try lowerType(allocator, mono_types, &self.graph, &self.cache, ty);
-        try self.type_layouts.put(ty, lowered);
-        return lowered;
+        index: usize,
+        value: ast.TypedSymbol,
+    ) std.mem.Allocator.Error!void {
+        self.typed_symbol_layouts[index] = try self.layoutForPublishedType(allocator, mono_types, value.ty);
     }
 
-    fn attachDerivedExprFacts(
+    pub fn recordExpr(
         self: *Facts,
+        allocator: std.mem.Allocator,
+        mono_types: *type_mod.Store,
         store: *ast.Store,
+        expr_id: ast.ExprId,
+        expr: ast.Expr,
     ) std.mem.Allocator.Error!void {
-        for (store.exprs.items, 0..) |expr, i| {
-            const expr_id: ast.ExprId = @enumFromInt(@as(u32, @intCast(i)));
-            self.expr_discriminant_layouts[i] = try self.maybeDiscriminantLayout(self.exprLayout(expr_id));
-            switch (expr.data) {
-                .tag => |tag| {
-                    if (store.sliceExprSpan(tag.args).len == 0) continue;
-                    self.expr_tag_payload_layouts[i] = try self.unionPayloadLayout(self.exprLayout(expr_id), tag.discriminant);
-                },
-                .access => |access| {
-                    self.expr_field_layouts[i] = try self.structFieldLayout(
-                        self.exprLayout(access.record),
-                        access.field_index,
-                    );
-                },
-                .tuple_access => |tuple_access| {
-                    self.expr_field_layouts[i] = try self.structFieldLayout(
-                        self.exprLayout(tuple_access.tuple),
-                        @intCast(tuple_access.elem_index),
-                    );
-                },
-                else => {},
-            }
+        const i = @intFromEnum(expr_id);
+        self.expr_layouts[i] = try self.layoutForPublishedType(allocator, mono_types, expr.ty);
+        self.expr_discriminant_layouts[i] = try self.maybeDiscriminantLayout(self.exprLayout(expr_id));
+        switch (expr.data) {
+            .tag => |tag| {
+                if (store.sliceExprSpan(tag.args).len == 0) return;
+                self.expr_tag_payload_layouts[i] = try self.unionPayloadLayout(self.exprLayout(expr_id), tag.discriminant);
+            },
+            .access => |access| {
+                self.expr_field_layouts[i] = try self.structFieldLayout(
+                    self.exprLayout(access.record),
+                    access.field_index,
+                );
+            },
+            .tuple_access => |tuple_access| {
+                self.expr_field_layouts[i] = try self.structFieldLayout(
+                    self.exprLayout(tuple_access.tuple),
+                    @intCast(tuple_access.elem_index),
+                );
+            },
+            else => {},
         }
     }
 
@@ -216,20 +187,45 @@ pub const Facts = struct {
         }
     }
 
-    fn attachDerivedPatFacts(
+    pub fn recordPat(
         self: *Facts,
+        allocator: std.mem.Allocator,
+        mono_types: *type_mod.Store,
         store: *ast.Store,
+        pat_id: ast.PatId,
+        pat: ast.Pat,
     ) std.mem.Allocator.Error!void {
-        for (store.pats.items, 0..) |pat, i| {
-            switch (pat.data) {
-                .tag => |tag| {
-                    if (store.slicePatSpan(tag.args).len == 0) continue;
-                    const pat_id: ast.PatId = @enumFromInt(@as(u32, @intCast(i)));
-                    self.pat_tag_payload_layouts[i] = try self.unionPayloadLayout(self.patLayout(pat_id), tag.discriminant);
-                },
-                else => {},
-            }
+        const i = @intFromEnum(pat_id);
+        self.pat_layouts[i] = try self.layoutForPublishedType(allocator, mono_types, pat.ty);
+        switch (pat.data) {
+            .tag => |tag| {
+                if (store.slicePatSpan(tag.args).len == 0) return;
+                self.pat_tag_payload_layouts[i] = try self.unionPayloadLayout(self.patLayout(pat_id), tag.discriminant);
+            },
+            else => {},
         }
+    }
+
+    pub fn recordDefRet(
+        self: *Facts,
+        allocator: std.mem.Allocator,
+        mono_types: *type_mod.Store,
+        def_id: ast.DefId,
+        ret_ty: type_mod.TypeId,
+    ) std.mem.Allocator.Error!void {
+        self.def_ret_layouts[@intFromEnum(def_id)] = try self.layoutForPublishedType(allocator, mono_types, ret_ty);
+    }
+
+    fn layoutForPublishedType(
+        self: *Facts,
+        allocator: std.mem.Allocator,
+        mono_types: *type_mod.Store,
+        ty: type_mod.TypeId,
+    ) std.mem.Allocator.Error!layout_mod.GraphRef {
+        if (self.type_layouts.get(ty)) |existing| return existing;
+        const lowered = try lowerType(allocator, mono_types, &self.graph, &self.cache, ty);
+        try self.type_layouts.put(ty, lowered);
+        return lowered;
     }
 
     fn unionPayloadLayout(
