@@ -24,21 +24,19 @@ upstream-to-downstream order:
 
 - `src/monotype/lower.zig`
   - `lowerInstantiatedType(...)`
-  - `requireTagDiscriminantForType(...)`
-  - `requireRecordFieldIndexForType(...)`
 
 ### Root problem
 
-Monotype still owns a few semantic facts that it should not own:
+Monotype still owns one remaining category of fact that it should not own:
 
-- source expression / pattern structural facts
-- tag discriminants
-- record field indices
-- source-root structural type facts still materialized on demand
+- source-root monotype type materialization still happens on demand
 
-The failed solved-var experiment showed why the current boundary is wrong:
-these facts are semantically checker facts, not lowering-local guesses. A
-partial monotype-local replacement just created another dual system.
+The completed tag/record structural-facts slice confirmed the correct
+boundary: structural meaning has to come from explicit solved facts, not
+lowered monotype type shape.
+
+The remaining issue is narrower now: monotype still clones/lower-instantiates
+checker vars on demand instead of consuming one published monotype fact set.
 
 That violates the intended `cor`-style contract:
 
@@ -57,15 +55,14 @@ checking and before monotype lowering. That artifact owns:
 - source call-root / call-application facts
 - source tag discriminants
 - source record field indices
-- any remaining structural facts monotype still needs
+- any remaining source-root type facts monotype still needs
 
-Monotype may still clone/lower types into monomorphic types, but it must only
-consume explicit published semantic facts for structural meaning.
+Monotype may still build monomorphic types internally, but it must only consume
+published source facts and builder-private finalized monotype facts. It may not
+materialize fresh semantic meaning on demand while lowering expressions.
 
 After that:
 
-- `requireTagDiscriminantForType(...)` is deleted
-- `requireRecordFieldIndexForType(...)` is deleted
 - the remaining late semantic uses of `lowerInstantiatedType(...)` are either
   gone or clearly builder-internal and excluded from the audit
 
@@ -73,21 +70,21 @@ After that:
 
 1. introduce a checker-adjacent semantic-facts module and thread it into
    monotype entrypoints
-2. build the semantic-facts artifact from solved checker facts, using `cor`’s
-   “solve first, publish once, lower later” approach
-3. migrate monotype fact collection / lowering to consume those semantic facts
-   instead of rediscovering them
-4. delete the remaining monotype structural recovery helpers
-5. re-audit the remaining `lowerInstantiatedType(...)` uses and either:
+2. move the remaining source-root type materialization out of expression
+   lowering and into that artifact, using `cor`’s “solve first, publish once,
+   lower later” approach
+3. migrate monotype fact collection / lowering to consume those published
+   semantic facts only
+4. re-audit the remaining `lowerInstantiatedType(...)` uses and either:
    - remove them from lowering logic
    - or classify them as builder-internal-only and exclude them explicitly
-4. update:
+5. update:
    - `reinfer.md`
    - `reintern.md`
-5. verify:
+6. verify:
    - `timeout 900s zig build test-eval -- --threads 1`
    - `timeout 300s zig build test-eval-host-effects -- --threads 1`
-6. commit
+7. commit
 
 ## Phase 2. Lambdamono Owns Logical Layout Facts
 

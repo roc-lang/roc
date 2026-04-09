@@ -6064,16 +6064,12 @@ pub const Lowerer = struct {
                     }
                     return;
                 }
-
-                try self.bindPatternTagDiscriminantFact(
-                    module_idx,
-                    type_scope,
-                    pattern_idx,
-                    self.requireTagDiscriminantForType(
-                        effective_source_ty,
-                        try self.ctx.copyExecutableIdent(module_idx, tag.name),
-                    ),
+                const source_var = source_solved_var orelse debugPanic(
+                    "monotype explicit pattern fact invariant violated: tag pattern missing explicit source solved var in module {d}",
+                    .{module_idx},
                 );
+                const expected_discriminant = try self.requireTagDiscriminantForSolvedVar(module_idx, source_var, tag.name);
+                try self.bindPatternTagDiscriminantFact(module_idx, type_scope, pattern_idx, expected_discriminant);
                 for (cir_env.store.slicePatterns(tag.args)) |arg_pat| {
                     try self.recordPatternStructuralFactsFromSourceType(
                         module_idx,
@@ -6092,9 +6088,13 @@ pub const Lowerer = struct {
                         module_idx,
                         type_scope,
                         destruct_idx,
-                        self.requireRecordFieldIndexForType(
-                            effective_source_ty,
-                            try self.ctx.copyExecutableIdent(module_idx, destruct.label),
+                        try self.requireRecordFieldIndexForSolvedVar(
+                            module_idx,
+                            source_solved_var orelse debugPanic(
+                                "monotype explicit pattern fact invariant violated: record destructure missing explicit source solved var in module {d}",
+                                .{module_idx},
+                            ),
+                            destruct.label,
                         ),
                     );
                     try self.recordPatternStructuralFactsFromSourceType(
@@ -6225,7 +6225,13 @@ pub const Lowerer = struct {
         const stmt = cir_env.store.getStatement(stmt_idx);
         switch (stmt) {
             .s_decl => |decl| {
-                try self.collectExprFacts(module_idx, type_scope, env.*, decl.expr);
+                try self.collectExprFactsWithExplicitResultVar(
+                    module_idx,
+                    type_scope,
+                    env.*,
+                    decl.expr,
+                    try self.requirePatternSolvedVar(type_scope, decl.pattern),
+                );
                 const body_ty = try self.requireExprTypeFact(module_idx, type_scope, decl.expr);
                 const body_var = self.requireExprResultFact(module_idx, type_scope, decl.expr);
                 try self.collectPatternBindingsIntoEnvWithSolvedVar(
@@ -6238,7 +6244,13 @@ pub const Lowerer = struct {
                 );
             },
             .s_var => |decl| {
-                try self.collectExprFacts(module_idx, type_scope, env.*, decl.expr);
+                try self.collectExprFactsWithExplicitResultVar(
+                    module_idx,
+                    type_scope,
+                    env.*,
+                    decl.expr,
+                    try self.requirePatternSolvedVar(type_scope, decl.pattern_idx),
+                );
                 const body_ty = try self.requireExprTypeFact(module_idx, type_scope, decl.expr);
                 const body_var = self.requireExprResultFact(module_idx, type_scope, decl.expr);
                 try self.collectPatternBindingsIntoEnvWithSolvedVar(
@@ -6305,9 +6317,10 @@ pub const Lowerer = struct {
                         module_idx,
                         type_scope,
                         expr_idx,
-                        self.requireRecordFieldIndexForType(
-                            try self.requireExprTypeFact(module_idx, type_scope, dot.receiver),
-                            try self.ctx.copyExecutableIdent(module_idx, dot.field_name),
+                        try self.requireRecordFieldIndexForSolvedVar(
+                            module_idx,
+                            self.requireExprResultFact(module_idx, type_scope, dot.receiver),
+                            dot.field_name,
                         ),
                     );
                 }
@@ -6318,15 +6331,12 @@ pub const Lowerer = struct {
                     return;
                 }
 
-                try self.bindExprTagDiscriminantFact(
+                const expected_discriminant = try self.requireTagDiscriminantForSolvedVar(
                     module_idx,
-                    type_scope,
-                    expr_idx,
-                    self.requireTagDiscriminantForType(
-                        expr_ty,
-                        try self.ctx.copyExecutableIdent(module_idx, tag.name),
-                    ),
+                    self.requireExprResultFact(module_idx, type_scope, expr_idx),
+                    tag.name,
                 );
+                try self.bindExprTagDiscriminantFact(module_idx, type_scope, expr_idx, expected_discriminant);
             },
             .e_zero_argument_tag => |tag| {
                 const expr_ty = try self.requireExprTypeFact(module_idx, type_scope, expr_idx);
@@ -6334,15 +6344,12 @@ pub const Lowerer = struct {
                     return;
                 }
 
-                try self.bindExprTagDiscriminantFact(
+                const expected_discriminant = try self.requireTagDiscriminantForSolvedVar(
                     module_idx,
-                    type_scope,
-                    expr_idx,
-                    self.requireTagDiscriminantForType(
-                        expr_ty,
-                        try self.ctx.copyExecutableIdent(module_idx, tag.name),
-                    ),
+                    self.requireExprResultFact(module_idx, type_scope, expr_idx),
+                    tag.name,
                 );
+                try self.bindExprTagDiscriminantFact(module_idx, type_scope, expr_idx, expected_discriminant);
             },
             .e_binop => |binop| switch (binop.op) {
                 .add, .sub, .mul, .div, .rem, .div_trunc, .lt, .gt, .le, .ge, .eq =>
@@ -7869,43 +7876,147 @@ pub const Lowerer = struct {
         };
     }
 
-    fn requireTagDiscriminantForType(
-        self: *const Lowerer,
-        union_ty: type_mod.TypeId,
+    fn requireTagDiscriminantForSolvedVar(
+        self: *Lowerer,
+        module_idx: u32,
+        union_var: Var,
         tag_name: base.Ident.Idx,
-    ) u16 {
-        var current = union_ty;
-        while (true) switch (self.ctx.types.getTypePreservingNominal(current)) {
-            .nominal => |backing| current = backing,
-            .tag_union => |tag_union| {
-                for (self.ctx.types.sliceTags(tag_union.tags), 0..) |tag, i| {
-                    if (tag.name == tag_name) return @intCast(i);
-                }
-                debugPanic("monotype invariant violated: missing tag discriminant for lowered type", .{});
-            },
-            else => |other| {
-                _ = other;
-                debugPanic("monotype invariant violated: attempted to read tag discriminant from non-tag-union type", .{});
-            },
-        };
+    ) std.mem.Allocator.Error!u16 {
+        const env = self.ctx.env(module_idx);
+        var names = std.ArrayList(base.Ident.Idx).empty;
+        defer names.deinit(self.allocator);
+
+        var pending = std.ArrayList(Var).empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, union_var);
+
+        while (pending.pop()) |current| {
+            const resolved = env.types.resolveVar(current);
+            switch (resolved.desc.content) {
+                .structure => |flat| switch (flat) {
+                    .nominal_type => |nominal| try pending.append(self.allocator, env.types.getNominalBackingVar(nominal)),
+                    .tag_union => |tag_union| {
+                        const tags = env.types.getTagsSlice(tag_union.tags);
+                        try names.ensureUnusedCapacity(self.allocator, tags.len);
+                        for (0..tags.len) |i| {
+                            names.appendAssumeCapacity(tags.items(.name)[i]);
+                        }
+                        try pending.append(self.allocator, tag_union.ext);
+                    },
+                    .empty_tag_union => {},
+                    else => debugPanic("monotype explicit semantic fact invariant violated: attempted to read tag discriminant from non-tag-union solved var", .{}),
+                },
+                .alias => |alias| try pending.append(self.allocator, env.types.getAliasBackingVar(alias)),
+                .flex => |flex| {
+                    if (flex.constraints.len() == 0) continue;
+                    debugPanic("monotype explicit semantic fact invariant violated: attempted to read tag discriminant from constrained flex var", .{});
+                },
+                .rigid => |rigid| {
+                    if (rigid.constraints.len() == 0) continue;
+                    debugPanic("monotype explicit semantic fact invariant violated: attempted to read tag discriminant from constrained rigid var", .{});
+                },
+                .err => debugPanic("monotype explicit semantic fact invariant violated: attempted to read tag discriminant from error solved var", .{}),
+            }
+        }
+
+        std.mem.sort(base.Ident.Idx, names.items, env.getIdentStoreConst(), struct {
+            fn lessThan(idents: *const base.Ident.Store, a: base.Ident.Idx, b: base.Ident.Idx) bool {
+                return std.mem.order(u8, idents.getText(a), idents.getText(b)) == .lt;
+            }
+        }.lessThan);
+
+        var write_index: usize = 0;
+        var prev: ?base.Ident.Idx = null;
+        for (names.items) |name| {
+            if (prev) |prev_name| {
+                if (std.mem.eql(u8, env.getIdent(name), env.getIdent(prev_name))) continue;
+            }
+            names.items[write_index] = name;
+            write_index += 1;
+            prev = name;
+        }
+
+        for (names.items[0..write_index], 0..) |name, i| {
+            if (name == tag_name) return @intCast(i);
+        }
+
+        debugPanic("monotype explicit semantic fact invariant violated: missing tag discriminant in solved type", .{});
     }
 
-    fn requireRecordFieldIndexForType(
-        self: *const Lowerer,
-        record_ty: type_mod.TypeId,
+    fn requireRecordFieldIndexForSolvedVar(
+        self: *Lowerer,
+        module_idx: u32,
+        record_var: Var,
         field_name: base.Ident.Idx,
-    ) u16 {
-        var current = record_ty;
-        while (true) switch (self.ctx.types.getTypePreservingNominal(current)) {
-            .nominal => |backing| current = backing,
-            .record => |record| {
-                for (self.ctx.types.sliceFields(record.fields), 0..) |field, i| {
-                    if (field.name == field_name) return @intCast(i);
+    ) std.mem.Allocator.Error!u16 {
+        const env = self.ctx.env(module_idx);
+        var names = std.ArrayList(base.Ident.Idx).empty;
+        defer names.deinit(self.allocator);
+
+        var pending = std.ArrayList(Var).empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, record_var);
+
+        while (pending.pop()) |current| {
+            const resolved = env.types.resolveVar(current);
+            switch (resolved.desc.content) {
+                .structure => |flat| switch (flat) {
+                    .nominal_type => |nominal| try pending.append(self.allocator, env.types.getNominalBackingVar(nominal)),
+                    .record => |record| {
+                        const fields = env.types.getRecordFieldsSlice(record.fields);
+                        try names.ensureUnusedCapacity(self.allocator, fields.len);
+                        for (fields.items(.name)) |name| {
+                            names.appendAssumeCapacity(name);
+                        }
+                        try pending.append(self.allocator, record.ext);
+                    },
+                    .record_unbound => |fields_range| {
+                        const fields = env.types.getRecordFieldsSlice(fields_range);
+                        try names.ensureUnusedCapacity(self.allocator, fields.len);
+                        for (fields.items(.name)) |name| {
+                            names.appendAssumeCapacity(name);
+                        }
+                    },
+                    .empty_record => {},
+                    else => debugPanic("monotype explicit semantic fact invariant violated: attempted to read field index from non-record solved var", .{}),
+                },
+                .alias => |alias| try pending.append(self.allocator, env.types.getAliasBackingVar(alias)),
+                .flex => |flex| {
+                    if (flex.constraints.len() == 0) continue;
+                    debugPanic("monotype explicit semantic fact invariant violated: attempted to read field index from constrained flex var", .{});
+                },
+                .rigid => |rigid| {
+                    if (rigid.constraints.len() == 0) continue;
+                    debugPanic("monotype explicit semantic fact invariant violated: attempted to read field index from constrained rigid var", .{});
+                },
+                .err => debugPanic("monotype explicit semantic fact invariant violated: attempted to read field index from error solved var", .{}),
+            }
+        }
+
+        std.mem.sort(base.Ident.Idx, names.items, env.getIdentStoreConst(), struct {
+            fn lessThan(idents: *const base.Ident.Store, a: base.Ident.Idx, b: base.Ident.Idx) bool {
+                return std.mem.order(u8, idents.getText(a), idents.getText(b)) == .lt;
+            }
+        }.lessThan);
+
+        var write_index: usize = 0;
+        var prev: ?base.Ident.Idx = null;
+        for (names.items) |name| {
+            if (prev) |prev_name| {
+                if (std.mem.eql(u8, env.getIdent(name), env.getIdent(prev_name))) {
+                    debugPanic("monotype explicit semantic fact invariant violated: duplicate record field after solved row flattening", .{});
                 }
-                debugPanic("monotype invariant violated: missing field index for lowered type", .{});
-            },
-            else => debugPanic("monotype invariant violated: attempted to read field index from non-record type", .{}),
-        };
+            }
+            names.items[write_index] = name;
+            write_index += 1;
+            prev = name;
+        }
+
+        for (names.items[0..write_index], 0..) |name, i| {
+            if (name == field_name) return @intCast(i);
+        }
+
+        debugPanic("monotype explicit semantic fact invariant violated: missing record field index in solved type", .{});
     }
 
     fn bindPatternEnv(
