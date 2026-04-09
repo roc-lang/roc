@@ -33,6 +33,13 @@ pub const ExplicitCallFact = struct {
     arg_vars: []Var,
 };
 
+pub const ExplicitCallTypeFact = struct {
+    fn_ty: type_mod.TypeId,
+    result_ty: type_mod.TypeId,
+    arg_tys: []type_mod.TypeId,
+    applied_result_tys: []type_mod.TypeId,
+};
+
 pub const ExplicitFunctionFact = struct {
     arg_vars: []Var,
     synthetic_unit_arg: bool,
@@ -59,6 +66,7 @@ pub const Mutable = struct {
     expr_result_var_facts: std.AutoHashMap(ExprKey, Var),
     expr_source_function_facts: std.AutoHashMap(ExprKey, ExprSourceFunctionFact),
     call_facts: std.AutoHashMap(ExprKey, ExplicitCallFact),
+    call_type_facts: std.AutoHashMap(ExprKey, ExplicitCallTypeFact),
     pattern_type_facts: std.AutoHashMap(PatternTypeKey, type_mod.TypeId),
     pattern_source_type_facts: std.AutoHashMap(PatternTypeKey, type_mod.TypeId),
     expr_field_index_facts: std.AutoHashMap(ExprKey, u16),
@@ -76,6 +84,7 @@ pub const Mutable = struct {
             .expr_result_var_facts = std.AutoHashMap(ExprKey, Var).init(allocator),
             .expr_source_function_facts = std.AutoHashMap(ExprKey, ExprSourceFunctionFact).init(allocator),
             .call_facts = std.AutoHashMap(ExprKey, ExplicitCallFact).init(allocator),
+            .call_type_facts = std.AutoHashMap(ExprKey, ExplicitCallTypeFact).init(allocator),
             .pattern_type_facts = std.AutoHashMap(PatternTypeKey, type_mod.TypeId).init(allocator),
             .pattern_source_type_facts = std.AutoHashMap(PatternTypeKey, type_mod.TypeId).init(allocator),
             .expr_field_index_facts = std.AutoHashMap(ExprKey, u16).init(allocator),
@@ -101,6 +110,12 @@ pub const Mutable = struct {
             self.allocator.free(fact.arg_vars);
         }
         self.call_facts.deinit();
+        var call_type_iter = self.call_type_facts.valueIterator();
+        while (call_type_iter.next()) |fact| {
+            self.allocator.free(fact.arg_tys);
+            self.allocator.free(fact.applied_result_tys);
+        }
+        self.call_type_facts.deinit();
         self.expr_source_function_facts.deinit();
         var function_iter = self.function_facts.valueIterator();
         while (function_iter.next()) |fact| {

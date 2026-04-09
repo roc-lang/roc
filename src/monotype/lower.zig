@@ -197,6 +197,7 @@ const LoweredCall = struct {
 };
 
 const ExplicitCallFact = semantic_facts.ExplicitCallFact;
+const ExplicitCallTypeFact = semantic_facts.ExplicitCallTypeFact;
 const ExplicitFunctionFact = semantic_facts.ExplicitFunctionFact;
 const ExprSourceFunctionFact = semantic_facts.ExprSourceFunctionFact;
 const ArithmeticBinopFact = semantic_facts.ArithmeticBinopFact;
@@ -783,6 +784,7 @@ pub const Lowerer = struct {
                     def.expr,
                     bind_expected_var,
                 );
+                try self.freezeLoweringSemanticTypes(module_idx, &type_scope);
                 const bind_expected_ty = try self.requireExprTypeFact(module_idx, &type_scope, def.expr);
                 const body = try self.lowerExprFactWithExpectedType(
                     module_idx,
@@ -828,6 +830,7 @@ pub const Lowerer = struct {
             def.expr,
             bind_expected_var,
         );
+        try self.freezeLoweringSemanticTypes(module_idx, &type_scope);
         const bind_expected_ty = try self.requireExprTypeFact(module_idx, &type_scope, def.expr);
         const body = try self.lowerExprFactWithExpectedType(
             module_idx,
@@ -1070,6 +1073,7 @@ pub const Lowerer = struct {
                 lambda.body,
                 body_expect.solved_var,
             );
+            try self.freezeLoweringSemanticTypes(module_idx, type_scope);
             break :blk try self.lowerExprWithExpectedType(
                 module_idx,
                 type_scope,
@@ -1218,6 +1222,7 @@ pub const Lowerer = struct {
                     body_expr_idx,
                     body_expect.solved_var,
                 );
+                try self.freezeLoweringSemanticTypes(module_idx, type_scope);
                 break :blk try self.lowerExprWithExpectedType(
                     module_idx,
                     type_scope,
@@ -1226,16 +1231,15 @@ pub const Lowerer = struct {
                     body_expect.ty,
                     body_expect.solved_var,
                 );
-            } else
-                try self.lowerCurriedClosureChain(
-                    module_idx,
-                    type_scope,
-                    body_env,
-                    source_fn_var,
-                    next_arg_index,
-                    remaining_arg_patterns.?,
-                    body_expr_idx,
-                );
+            } else try self.lowerCurriedClosureChain(
+                module_idx,
+                type_scope,
+                body_env,
+                source_fn_var,
+                next_arg_index,
+                remaining_arg_patterns.?,
+                body_expr_idx,
+            );
             return self.wrapExprWithBindingDecls(body, binding_decls.items);
         }
 
@@ -1284,6 +1288,7 @@ pub const Lowerer = struct {
                 body_expr_idx,
                 body_expect.solved_var,
             );
+            try self.freezeLoweringSemanticTypes(module_idx, type_scope);
             break :blk try self.lowerExprWithExpectedType(
                 module_idx,
                 type_scope,
@@ -1292,16 +1297,15 @@ pub const Lowerer = struct {
                 body_expect.ty,
                 body_expect.solved_var,
             );
-        } else
-            try self.lowerCurriedClosureChain(
-                module_idx,
-                type_scope,
-                branch_env,
-                source_fn_var,
-                next_arg_index,
-                remaining_arg_patterns.?,
-                body_expr_idx,
-            );
+        } else try self.lowerCurriedClosureChain(
+            module_idx,
+            type_scope,
+            branch_env,
+            source_fn_var,
+            next_arg_index,
+            remaining_arg_patterns.?,
+            body_expr_idx,
+        );
         const branch_result_ty = self.program.store.getExpr(matched_body).ty;
         const mismatch_expr = try self.program.store.addExpr(.{
             .ty = branch_result_ty,
@@ -1527,6 +1531,84 @@ pub const Lowerer = struct {
             debugPanic("monotype explicit call fact invariant violated: missing explicit call fact", .{});
     }
 
+    fn putExplicitCallTypeFact(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeCloneScope,
+        call_expr_idx: CIR.Expr.Idx,
+        fact: ExplicitCallTypeFact,
+    ) std.mem.Allocator.Error!void {
+        const key: TypeCloneScope.ExprKey = .{
+            .module_idx = module_idx,
+            .expr_idx = call_expr_idx,
+        };
+        if (type_scope.facts.call_type_facts.get(key)) |existing| {
+            defer {
+                self.allocator.free(fact.arg_tys);
+                self.allocator.free(fact.applied_result_tys);
+            }
+            if (existing.fn_ty != fact.fn_ty or
+                existing.result_ty != fact.result_ty or
+                !std.mem.eql(type_mod.TypeId, existing.arg_tys, fact.arg_tys) or
+                !std.mem.eql(type_mod.TypeId, existing.applied_result_tys, fact.applied_result_tys))
+            {
+                debugPanic(
+                    "monotype explicit call type fact invariant violated: conflicting typed call facts in module {d}",
+                    .{module_idx},
+                );
+            }
+            return;
+        }
+        try type_scope.facts.call_type_facts.put(key, fact);
+    }
+
+    fn requireExplicitCallTypeFact(
+        self: *const Lowerer,
+        module_idx: u32,
+        type_scope: *const TypeCloneScope,
+        call_expr_idx: CIR.Expr.Idx,
+    ) ExplicitCallTypeFact {
+        _ = self;
+        const key: TypeCloneScope.ExprKey = .{
+            .module_idx = module_idx,
+            .expr_idx = call_expr_idx,
+        };
+        return type_scope.facts.call_type_facts.get(key) orelse
+            debugPanic("monotype explicit call type fact invariant violated: missing explicit typed call fact", .{});
+    }
+
+    fn freezeExplicitCallTypeFacts(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeCloneScope,
+    ) std.mem.Allocator.Error!void {
+        var iter = type_scope.facts.call_facts.keyIterator();
+        while (iter.next()) |key_ptr| {
+            if (type_scope.facts.call_type_facts.contains(key_ptr.*)) continue;
+
+            const call_fact = self.requireExplicitCallFact(module_idx, type_scope, key_ptr.expr_idx);
+            const fn_ty = try self.publishMonotypeType(try self.lowerInstantiatedType(module_idx, type_scope, call_fact.fn_var));
+            const arg_tys = try self.allocator.alloc(type_mod.TypeId, call_fact.arg_vars.len);
+            errdefer self.allocator.free(arg_tys);
+            for (call_fact.arg_vars, 0..) |arg_var, i| {
+                arg_tys[i] = try self.publishMonotypeType(try self.lowerInstantiatedType(module_idx, type_scope, arg_var));
+            }
+
+            const applied_result_tys = try self.collectCurriedAppliedResultTypes(fn_ty, call_fact.arg_vars.len);
+            errdefer self.allocator.free(applied_result_tys);
+            for (applied_result_tys) |*result_ty| {
+                result_ty.* = try self.publishMonotypeType(result_ty.*);
+            }
+
+            try self.putExplicitCallTypeFact(module_idx, type_scope, key_ptr.expr_idx, .{
+                .fn_ty = fn_ty,
+                .result_ty = try self.requireExprTypeFact(module_idx, type_scope, key_ptr.expr_idx),
+                .arg_tys = arg_tys,
+                .applied_result_tys = applied_result_tys,
+            });
+        }
+    }
+
     fn collectExprFactsWithExplicitResultVar(
         self: *Lowerer,
         module_idx: u32,
@@ -1537,6 +1619,14 @@ pub const Lowerer = struct {
     ) std.mem.Allocator.Error!void {
         try self.bindExplicitExprResultFact(module_idx, type_scope, expr_idx, result_var);
         try self.collectExprFacts(module_idx, type_scope, env, expr_idx);
+    }
+
+    fn freezeLoweringSemanticTypes(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeCloneScope,
+    ) std.mem.Allocator.Error!void {
+        try self.freezeExplicitCallTypeFacts(module_idx, type_scope);
     }
 
     fn buildExplicitCallFact(
@@ -2030,6 +2120,7 @@ pub const Lowerer = struct {
         env: BindingEnv,
         expr_idx: CIR.Expr.Idx,
     ) std.mem.Allocator.Error!ast.ExprId {
+        try self.freezeLoweringSemanticTypes(module_idx, type_scope);
         const cir_env = self.ctx.env(module_idx);
         const expr = cir_env.store.getExpr(expr_idx);
         switch (expr) {
@@ -2235,8 +2326,7 @@ pub const Lowerer = struct {
                     } };
                 }
                 const arithmetic_fact = switch (binop.op) {
-                    .add, .sub, .mul, .div, .rem, .div_trunc, .lt, .gt, .le, .ge, .eq =>
-                        self.requireArithmeticBinopFact(module_idx, type_scope, expr_idx),
+                    .add, .sub, .mul, .div, .rem, .div_trunc, .lt, .gt, .le, .ge, .eq => self.requireArithmeticBinopFact(module_idx, type_scope, expr_idx),
                     else => null,
                 };
                 break :blk .{ .low_level = .{
@@ -2819,6 +2909,7 @@ pub const Lowerer = struct {
                 body_expr_idx,
                 body_expect.solved_var,
             );
+            try self.freezeLoweringSemanticTypes(module_idx, type_scope);
             break :blk try self.wrapExprWithBindingDecls(
                 try self.lowerExprWithExpectedType(
                     module_idx,
@@ -3849,6 +3940,7 @@ pub const Lowerer = struct {
             fact_i += 1;
         }
         try self.collectExprFacts(module_idx, type_scope, fact_env, final_expr_idx);
+        try self.freezeLoweringSemanticTypes(module_idx, type_scope);
 
         var env = try self.cloneEnv(incoming_env);
         defer env.deinit();
@@ -3905,6 +3997,7 @@ pub const Lowerer = struct {
         _ = result_ty;
         _ = expected_result_var;
         try self.collectExprFacts(module_idx, type_scope, fact_env, final_expr_idx);
+        try self.freezeLoweringSemanticTypes(module_idx, type_scope);
 
         var env = try self.cloneEnv(incoming_env);
         defer env.deinit();
@@ -4815,14 +4908,14 @@ pub const Lowerer = struct {
     ) std.mem.Allocator.Error!LoweredCall {
         const args = self.getRecordedMethodArgs(module_idx, expr_idx, method_name);
         const fact = self.requireExplicitCallFact(module_idx, type_scope, expr_idx);
+        const typed_fact = self.requireExplicitCallTypeFact(module_idx, type_scope, expr_idx);
         const implicit_arg_len: usize = if (args.implicit_receiver == null) 0 else 1;
         const total_args_len = implicit_arg_len + args.explicit_args.len;
         const lowered_args = try self.allocator.alloc(ast.ExprId, total_args_len);
         defer self.allocator.free(lowered_args);
-        const result_ty = try self.requireExprTypeFact(module_idx, type_scope, expr_idx);
-        const fn_ty = try self.lowerInstantiatedType(module_idx, type_scope, fact.fn_var);
-        const applied_result_tys = try self.collectCurriedAppliedResultTypes(fn_ty, total_args_len);
-        defer self.allocator.free(applied_result_tys);
+        const result_ty = typed_fact.result_ty;
+        const fn_ty = typed_fact.fn_ty;
+        const applied_result_tys = typed_fact.applied_result_tys;
 
         var arg_index: usize = 0;
         if (args.implicit_receiver) |receiver_expr_idx| {
@@ -4831,7 +4924,7 @@ pub const Lowerer = struct {
                 type_scope,
                 env,
                 receiver_expr_idx,
-                try self.lowerInstantiatedType(module_idx, type_scope, fact.arg_vars[arg_index]),
+                typed_fact.arg_tys[arg_index],
                 fact.arg_vars[arg_index],
             );
             arg_index += 1;
@@ -4842,7 +4935,7 @@ pub const Lowerer = struct {
                 type_scope,
                 env,
                 arg_expr_idx,
-                try self.lowerInstantiatedType(module_idx, type_scope, fact.arg_vars[arg_index + i]),
+                typed_fact.arg_tys[arg_index + i],
                 fact.arg_vars[arg_index + i],
             );
         }
@@ -4877,10 +4970,10 @@ pub const Lowerer = struct {
         defer chain.deinit(self.allocator);
 
         const call_fact = self.requireExplicitCallFact(module_idx, type_scope, call_expr_idx);
-        const result_ty = try self.requireExprTypeFact(module_idx, type_scope, call_expr_idx);
-        const fn_ty = try self.lowerInstantiatedType(module_idx, type_scope, call_fact.fn_var);
-        const applied_result_tys = try self.collectCurriedAppliedResultTypes(fn_ty, chain.arg_exprs.len);
-        defer self.allocator.free(applied_result_tys);
+        const typed_fact = self.requireExplicitCallTypeFact(module_idx, type_scope, call_expr_idx);
+        const result_ty = typed_fact.result_ty;
+        const fn_ty = typed_fact.fn_ty;
+        const applied_result_tys = typed_fact.applied_result_tys;
 
         const callee = try self.lowerExprWithExpectedType(
             module_idx,
@@ -4899,7 +4992,7 @@ pub const Lowerer = struct {
                 type_scope,
                 env,
                 arg_expr_idx,
-                try self.lowerInstantiatedType(module_idx, type_scope, call_fact.arg_vars[i]),
+                typed_fact.arg_tys[i],
                 call_fact.arg_vars[i],
             );
         }
@@ -5122,6 +5215,7 @@ pub const Lowerer = struct {
         expected_ty: type_mod.TypeId,
         expected_var: ?Var,
     ) std.mem.Allocator.Error!ast.ExprId {
+        try self.freezeLoweringSemanticTypes(module_idx, type_scope);
         const cir_env = self.ctx.env(module_idx);
         const expr = cir_env.store.getExpr(expr_idx);
         if (expected_var != null) {
@@ -6249,13 +6343,12 @@ pub const Lowerer = struct {
                 try self.bindExprTagDiscriminantFact(module_idx, type_scope, expr_idx, expected_discriminant);
             },
             .e_binop => |binop| switch (binop.op) {
-                .add, .sub, .mul, .div, .rem, .div_trunc, .lt, .gt, .le, .ge, .eq =>
-                    try self.putArithmeticBinopFact(
-                        module_idx,
-                        type_scope,
-                        expr_idx,
-                        try self.lowerArithmeticBinopFact(module_idx, type_scope, env, expr_idx, binop),
-                    ),
+                .add, .sub, .mul, .div, .rem, .div_trunc, .lt, .gt, .le, .ge, .eq => try self.putArithmeticBinopFact(
+                    module_idx,
+                    type_scope,
+                    expr_idx,
+                    try self.lowerArithmeticBinopFact(module_idx, type_scope, env, expr_idx, binop),
+                ),
                 else => {},
             },
             else => {},
@@ -6622,9 +6715,9 @@ pub const Lowerer = struct {
         const branches = cir_env.store.matchBranchSlice(match_expr.branches);
         if (branches.len == 0) return null;
 
-                const ok_branch = cir_env.store.getMatchBranch(branches[0]);
-                const branch_patterns = cir_env.store.sliceMatchBranchPatterns(ok_branch.patterns);
-                if (branch_patterns.len == 0) return null;
+        const ok_branch = cir_env.store.getMatchBranch(branches[0]);
+        const branch_patterns = cir_env.store.sliceMatchBranchPatterns(ok_branch.patterns);
+        if (branch_patterns.len == 0) return null;
 
         const branch_pattern = cir_env.store.getMatchBranchPattern(branch_patterns[0]);
         const tag_info = self.lookupSingleTagPayloadPattern(module_idx, branch_pattern.pattern) orelse return null;
@@ -7085,8 +7178,7 @@ pub const Lowerer = struct {
             .flex => |flex| if (flex.name) |name|
                 builtinNumPrim(env, name) orelse
                     (if (constraintsContainFromNumeral(env, flex.constraints)) .dec else null)
-            else
-                if (constraintsContainFromNumeral(env, flex.constraints)) .dec else null,
+            else if (constraintsContainFromNumeral(env, flex.constraints)) .dec else null,
             .rigid => |rigid| builtinNumPrim(env, rigid.name) orelse
                 (if (constraintsContainFromNumeral(env, rigid.constraints)) .dec else null),
             else => null,
