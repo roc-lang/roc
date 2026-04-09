@@ -5247,12 +5247,6 @@ pub const Lowerer = struct {
         }
         const target_ty = blk: {
             if (self.ctx.types.getType(expected_ty) != .placeholder) break :blk expected_ty;
-            if (expected_var) |var_| {
-                const lowered_expected = try self.lowerInstantiatedType(module_idx, type_scope, var_);
-                if (self.ctx.types.getType(lowered_expected) != .placeholder) {
-                    break :blk lowered_expected;
-                }
-            }
             break :blk try self.requireExprTypeFact(module_idx, type_scope, expr_idx);
         };
 
