@@ -33,10 +33,19 @@ jobs:
         with:
           nix_path: nixpkgs=channel:nixos-25.05
 
-      - name: Build inside nix
+      - name: Build inside a nix dev shell
         uses: ./.github/actions/flaky-retry
         with:
           command: 'nix develop ./src/ -c bash -c \"zig build ${{ matrix.target_flag }} && zig build snapshot ${{ matrix.target_flag }} && zig build test ${{ matrix.target_flag }}\"'
           error_string_contains: "double roundtrip bundle|build.zig.zon"
           retry_count: 3
-          
+
+      - name: Build Nix package
+        if: ${{ runner.os == 'Linux'  }}
+        uses: ./.github/actions/flaky-retry
+        with:
+          command: |
+            nix build ./src#roc
+            result/bin/roc check CONTRIBUTING/profiling/bench_repeated_check.roc
+          error_string_contains: "TemporaryNameServerFailure|build.zig.zon|error: cannot download"
+          retry_count: 3

@@ -4659,8 +4659,115 @@ fn adaptValueLayout(
         .record => |record| self.adaptRecordValueLayout(value_expr, record, source_layout, target_layout, region),
         .tuple => |tuple| self.adaptTupleValueLayout(value_expr, tuple, source_layout, target_layout, region),
         .func => self.adaptLayoutByStructure(value_expr, source_layout, target_layout, region),
-        .prim, .unit, .tag_union, .list, .box, .recursive_placeholder => value_expr,
+        .tag_union => self.adaptTagUnionValueLayout(value_expr, mono_idx, source_layout, target_layout, region),
+        .prim, .unit, .list, .box, .recursive_placeholder => value_expr,
     };
+}
+
+/// Adapt a tag union value from a narrower layout to a wider layout.
+/// This is needed when the `?` operator propagates errors from a narrow
+/// tag union (e.g. `[Ccc(Str)]`) into a wider one (e.g. `[Aaa(Str), Bbb(Str), Ccc(Str)]`).
+/// The source monotype has fewer variants than the target layout, so the
+/// discriminant must be remapped to the correct position in the wider union.
+fn adaptTagUnionValueLayout(
+    self: *Self,
+    value_expr: LirExprId,
+    mono_idx: Monotype.Idx,
+    source_layout: layout.Idx,
+    target_layout: layout.Idx,
+    region: Region,
+) Allocator.Error!LirExprId {
+    const ls = self.layout_store;
+    const source_layout_val = ls.getLayout(source_layout);
+    const target_layout_val = ls.getLayout(target_layout);
+
+    // Only handle widening into a tag_union target
+    if (target_layout_val.tag != .tag_union) return value_expr;
+
+    const target_tu_data = ls.getTagUnionData(target_layout_val.data.tag_union.idx);
+    const target_variants = ls.getTagUnionVariants(target_tu_data);
+
+    // Verify source is actually a tag union monotype
+    const source_tags = switch (self.mir_store.monotype_store.getMonotype(mono_idx)) {
+        .tag_union => |tu| self.mir_store.monotype_store.getTags(tu.tags),
+        else => return value_expr,
+    };
+
+    if (source_tags.len == 0) return value_expr;
+
+    if (source_layout_val.tag != .tag_union) {
+        // Source is a single-variant tag union without a discriminant byte —
+        // the runtime value IS just the payload. Find which target variant
+        // has the same payload layout and construct the wider tag union.
+        const target_disc = self.findTargetVariantByPayloadLayout(target_variants, source_layout) orelse
+            return value_expr;
+
+        return self.constructWidenedTag(value_expr, source_layout, target_layout, target_disc, region);
+    }
+
+    // Source has a tag_union layout with a discriminant.
+    // Handle the single-variant-with-discriminant case.
+    const source_tu_data = ls.getTagUnionData(source_layout_val.data.tag_union.idx);
+    const source_variants = ls.getTagUnionVariants(source_tu_data);
+
+    if (source_variants.len == 1) {
+        const source_payload = source_variants.get(0).payload_layout;
+        const target_disc = self.findTargetVariantByPayloadLayout(target_variants, source_payload) orelse
+            return value_expr;
+
+        // Extract payload from the source tag union, then construct the target
+        var acc = self.startLetAccumulator();
+        const bound_source = try acc.ensureSymbol(value_expr, source_layout, region);
+        const payload_access = try self.lir_store.addExpr(.{ .tag_payload_access = .{
+            .value = bound_source,
+            .union_layout = source_layout,
+            .payload_layout = source_payload,
+        } }, region);
+
+        const widened = try self.constructWidenedTag(payload_access, source_payload, target_layout, target_disc, region);
+        return acc.finish(widened, target_layout, region);
+    }
+
+    return value_expr;
+}
+
+/// Find the index of a target variant whose payload layout matches the given layout.
+fn findTargetVariantByPayloadLayout(
+    _: *Self,
+    target_variants: anytype,
+    payload_layout: layout.Idx,
+) ?u16 {
+    for (0..target_variants.len) |i| {
+        if (target_variants.get(i).payload_layout == payload_layout) {
+            return @intCast(i);
+        }
+    }
+    return null;
+}
+
+/// Construct a tag union value with the given discriminant and payload.
+fn constructWidenedTag(
+    self: *Self,
+    payload_expr: LirExprId,
+    payload_layout: layout.Idx,
+    union_layout: layout.Idx,
+    discriminant: u16,
+    region: Region,
+) Allocator.Error!LirExprId {
+    var acc = self.startLetAccumulator();
+    const bound = try acc.ensureSymbol(payload_expr, payload_layout, region);
+
+    const save_exprs = self.scratch_lir_expr_ids.items.len;
+    defer self.scratch_lir_expr_ids.shrinkRetainingCapacity(save_exprs);
+    try self.scratch_lir_expr_ids.append(self.allocator, bound);
+    const args = try self.lir_store.addExprSpan(self.scratch_lir_expr_ids.items[save_exprs..]);
+
+    const tag_expr = try self.lir_store.addExpr(.{ .tag = .{
+        .discriminant = discriminant,
+        .union_layout = union_layout,
+        .args = args,
+    } }, region);
+    return acc.finish(tag_expr, union_layout, region);
 }
 
 fn adaptLayoutByStructure(
