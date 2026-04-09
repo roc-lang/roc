@@ -783,7 +783,7 @@ pub const Lowerer = struct {
                     def.expr,
                     bind_expected_var,
                 );
-                const bind_expected_ty = try self.lowerInstantiatedType(module_idx, &type_scope, bind_expected_var);
+                const bind_expected_ty = try self.requireExprTypeFact(module_idx, &type_scope, def.expr);
                 const body = try self.lowerExprFactWithExpectedType(
                     module_idx,
                     &type_scope,
@@ -828,7 +828,7 @@ pub const Lowerer = struct {
             def.expr,
             bind_expected_var,
         );
-        const bind_expected_ty = try self.lowerInstantiatedType(module_idx, &type_scope, bind_expected_var);
+        const bind_expected_ty = try self.requireExprTypeFact(module_idx, &type_scope, def.expr);
         const body = try self.lowerExprFactWithExpectedType(
             module_idx,
             &type_scope,
