@@ -4645,12 +4645,6 @@ pub const Lowerer = struct {
         explicit_args: []const CIR.Expr.Idx,
     };
 
-    const RecordedMethodFact = struct {
-        fn_ty: type_mod.TypeId,
-        solved_var: Var,
-        result_var: Var,
-    };
-
     fn getRecordedMethodArgs(
         self: *const Lowerer,
         module_idx: u32,
@@ -4781,25 +4775,6 @@ pub const Lowerer = struct {
         };
     }
 
-    fn lowerRecordedMethodFact(
-        self: *Lowerer,
-        module_idx: u32,
-        type_scope: *TypeCloneScope,
-        env: BindingEnv,
-        expr_idx: CIR.Expr.Idx,
-        method_name: base.Ident.Idx,
-    ) std.mem.Allocator.Error!RecordedMethodFact {
-        _ = env;
-        _ = method_name;
-        const fact = self.requireExplicitCallFact(module_idx, type_scope, expr_idx);
-
-        return .{
-            .fn_ty = try self.lowerInstantiatedType(module_idx, type_scope, fact.fn_var),
-            .solved_var = fact.fn_var,
-            .result_var = fact.result_var,
-        };
-    }
-
     fn copyTopLevelDefBindingVarToModule(
         self: *Lowerer,
         source_module_idx: u32,
@@ -4843,7 +4818,7 @@ pub const Lowerer = struct {
         const lowered_args = try self.allocator.alloc(ast.ExprId, total_args_len);
         defer self.allocator.free(lowered_args);
         const fn_ty = try self.lowerInstantiatedType(module_idx, type_scope, fact.fn_var);
-        const result_ty = try self.lowerInstantiatedType(module_idx, type_scope, fact.result_var);
+        const result_ty = try self.requireExprTypeFact(module_idx, type_scope, expr_idx);
         const applied_result_tys = try self.collectCurriedAppliedResultTypes(fn_ty, total_args_len);
         defer self.allocator.free(applied_result_tys);
 
@@ -4901,7 +4876,7 @@ pub const Lowerer = struct {
 
         const call_fact = self.requireExplicitCallFact(module_idx, type_scope, call_expr_idx);
         const fn_ty = try self.lowerInstantiatedType(module_idx, type_scope, call_fact.fn_var);
-        const result_ty = try self.lowerInstantiatedType(module_idx, type_scope, call_fact.result_var);
+        const result_ty = try self.requireExprTypeFact(module_idx, type_scope, call_expr_idx);
         const applied_result_tys = try self.collectCurriedAppliedResultTypes(fn_ty, chain.arg_exprs.len);
         defer self.allocator.free(applied_result_tys);
 
@@ -5453,11 +5428,8 @@ pub const Lowerer = struct {
         );
         const backing_ty = if (self.ctx.types.getType(nominal_ty) != .placeholder)
             nominal_ty
-        else if (backing_var) |var_| blk: {
-            const ty = try self.lowerInstantiatedType(module_idx, type_scope, var_);
-            if (self.ctx.types.getType(ty) != .placeholder) break :blk ty;
-            break :blk nominal_ty;
-        } else nominal_ty;
+        else
+            try self.requireExprTypeFact(module_idx, type_scope, backing_expr_idx);
         return self.lowerExprWithExpectedType(
             module_idx,
             type_scope,
