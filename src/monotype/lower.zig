@@ -255,7 +255,7 @@ pub const Lowerer = struct {
     };
 
     const TypedBinding = struct {
-        bind: ast.TypedSymbol,
+        symbol: symbol_mod.Symbol,
         solved_var: ?Var = null,
     };
 
@@ -2230,20 +2230,7 @@ pub const Lowerer = struct {
             });
         }
 
-        const env_lookup_ty: ?type_mod.TypeId = switch (expr) {
-            .e_lookup_local => |lookup| if (env.get(.{
-                .module_idx = module_idx,
-                .pattern_idx = @intFromEnum(lookup.pattern_idx),
-            })) |entry|
-                if (entry.typed) |typed| typed.bind.ty else null
-            else
-                null,
-            else => null,
-        };
-        const ty = if (env_lookup_ty) |lookup_ty|
-            lookup_ty
-        else
-            try self.lowerExprType(module_idx, type_scope, env, expr_idx, expr);
+        const ty = try self.lowerExprType(module_idx, type_scope, env, expr_idx, expr);
 
         if (expr == .e_str) {
             return self.lowerStringExpr(module_idx, type_scope, env, ty, expr.e_str);
@@ -3692,6 +3679,13 @@ pub const Lowerer = struct {
         branch_value: CIR.Expr.Idx,
         else_expr: ast.ExprId,
     ) std.mem.Allocator.Error!ast.ExprId {
+        try self.recordPatternStructuralFactsFromSourceType(
+            module_idx,
+            type_scope,
+            bind_pattern_idx,
+            scrutinee_ty,
+            scrutinee_solved_var,
+        );
         const elem_ty = self.requirePatternListElemTypeFact(module_idx, type_scope, bind_pattern_idx);
         const bool_ty = try self.makePrimitiveType(.bool);
         const u64_ty = try self.makePrimitiveType(.u64);
@@ -3909,7 +3903,13 @@ pub const Lowerer = struct {
         env: *BindingEnv,
         decls: *std.ArrayList(BindingDecl),
     ) std.mem.Allocator.Error!void {
-        _ = source_ty;
+        try self.recordPatternStructuralFactsFromSourceType(
+            module_idx,
+            type_scope,
+            pattern_idx,
+            source_ty,
+            source_solved_var,
+        );
         const effective_source_ty = self.requirePatternSourceTypeFact(module_idx, type_scope, pattern_idx);
         const pattern = self.ctx.env(module_idx).store.getPattern(pattern_idx);
         switch (pattern) {
@@ -3926,7 +3926,7 @@ pub const Lowerer = struct {
                     .module_idx = module_idx,
                     .pattern_idx = @intFromEnum(pattern_idx),
                 }, .{
-                    .bind = bind,
+                    .symbol = bind.symbol,
                     .solved_var = source_solved_var,
                 });
             },
@@ -6211,47 +6211,138 @@ pub const Lowerer = struct {
         }
     }
 
+    fn bindPatternEnvWithSolvedVarOnly(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeCloneScope,
+        pattern_idx: CIR.Pattern.Idx,
+        source_solved_var: Var,
+        env: *BindingEnv,
+    ) std.mem.Allocator.Error!void {
+        const pattern = self.ctx.env(module_idx).store.getPattern(pattern_idx);
+        switch (pattern) {
+            .assign => |assign| {
+                const symbol = try self.ctx.getOrCreatePatternSymbol(module_idx, pattern_idx, assign.ident);
+                try self.putTypedBinding(env, .{
+                    .module_idx = module_idx,
+                    .pattern_idx = @intFromEnum(pattern_idx),
+                }, .{
+                    .symbol = symbol,
+                    .solved_var = source_solved_var,
+                });
+            },
+            .as => |as_pat| {
+                try self.bindPatternEnvWithSolvedVarOnly(
+                    module_idx,
+                    type_scope,
+                    as_pat.pattern,
+                    source_solved_var,
+                    env,
+                );
+                const symbol = try self.ctx.getOrCreatePatternSymbol(module_idx, pattern_idx, as_pat.ident);
+                try self.putTypedBinding(env, .{
+                    .module_idx = module_idx,
+                    .pattern_idx = @intFromEnum(pattern_idx),
+                }, .{
+                    .symbol = symbol,
+                    .solved_var = source_solved_var,
+                });
+            },
+            .applied_tag => |tag| {
+                for (self.ctx.env(module_idx).store.slicePatterns(tag.args)) |arg_pat| {
+                    try self.bindPatternEnvWithSolvedVarOnly(
+                        module_idx,
+                        type_scope,
+                        arg_pat,
+                        try self.requirePatternSolvedVar(type_scope, arg_pat),
+                        env,
+                    );
+                }
+            },
+            .record_destructure => |record| {
+                for (self.ctx.env(module_idx).store.sliceRecordDestructs(record.destructs)) |destruct_idx| {
+                    const child_pattern_idx = self.ctx.env(module_idx).store.getRecordDestruct(destruct_idx).kind.toPatternIdx();
+                    try self.bindPatternEnvWithSolvedVarOnly(
+                        module_idx,
+                        type_scope,
+                        child_pattern_idx,
+                        try self.requirePatternSolvedVar(type_scope, child_pattern_idx),
+                        env,
+                    );
+                }
+            },
+            .tuple => |tuple| {
+                for (self.ctx.env(module_idx).store.slicePatterns(tuple.patterns)) |child_pattern_idx| {
+                    try self.bindPatternEnvWithSolvedVarOnly(
+                        module_idx,
+                        type_scope,
+                        child_pattern_idx,
+                        try self.requirePatternSolvedVar(type_scope, child_pattern_idx),
+                        env,
+                    );
+                }
+            },
+            .list => |list| {
+                for (self.ctx.env(module_idx).store.slicePatterns(list.patterns)) |child_pattern_idx| {
+                    try self.bindPatternEnvWithSolvedVarOnly(
+                        module_idx,
+                        type_scope,
+                        child_pattern_idx,
+                        try self.requirePatternSolvedVar(type_scope, child_pattern_idx),
+                        env,
+                    );
+                }
+                if (list.rest_info) |rest| {
+                    if (rest.pattern) |rest_pattern_idx| {
+                        try self.bindPatternEnvWithSolvedVarOnly(
+                            module_idx,
+                            type_scope,
+                            rest_pattern_idx,
+                            try self.requirePatternSolvedVar(type_scope, rest_pattern_idx),
+                            env,
+                        );
+                    }
+                }
+            },
+            .nominal => |nominal| try self.bindPatternEnvWithSolvedVarOnly(
+                module_idx,
+                type_scope,
+                nominal.backing_pattern,
+                source_solved_var,
+                env,
+            ),
+            .nominal_external => |nominal| try self.bindPatternEnvWithSolvedVarOnly(
+                module_idx,
+                type_scope,
+                nominal.backing_pattern,
+                source_solved_var,
+                env,
+            ),
+            .underscore,
+            .num_literal,
+            .small_dec_literal,
+            .dec_literal,
+            .frac_f32_literal,
+            .frac_f64_literal,
+            .str_literal,
+            .runtime_error,
+            => {},
+        }
+    }
+
     fn collectPatternBindingsIntoEnvWithSolvedVar(
         self: *Lowerer,
         module_idx: u32,
         type_scope: *TypeCloneScope,
         pattern_idx: CIR.Pattern.Idx,
-        source_ty: type_mod.TypeId,
-        source_solved_var: ?Var,
+        source_solved_var: Var,
         env: *BindingEnv,
     ) std.mem.Allocator.Error!void {
         try self.collectPatternFacts(module_idx, type_scope, pattern_idx);
-        try self.recordPatternStructuralFactsFromSourceType(
+        try self.bindPatternEnvWithSolvedVarOnly(
             module_idx,
             type_scope,
             pattern_idx,
-            source_ty,
-            source_solved_var,
-        );
-        if (self.patternNeedsBindingDecls(module_idx, pattern_idx)) {
-            const root_bind = try self.makePatternSourceBindWithType(
-                module_idx,
-                pattern_idx,
-                self.requirePatternSourceTypeFact(module_idx, type_scope, pattern_idx),
-            );
-            var binding_decls = std.ArrayList(BindingDecl).empty;
-            defer binding_decls.deinit(self.allocator);
-            try self.collectStructuralBindingDeclsWithSolvedVar(
-                module_idx,
-                type_scope,
-                root_bind,
-                source_solved_var,
-                pattern_idx,
-                env,
-                &binding_decls,
-            );
-            return;
-        }
-        try self.bindPatternEnvFromTypeWithSolvedVar(
-            module_idx,
-            type_scope,
-            pattern_idx,
-            self.requirePatternSourceTypeFact(module_idx, type_scope, pattern_idx),
             source_solved_var,
             env,
         );
@@ -6275,13 +6366,11 @@ pub const Lowerer = struct {
                     decl.expr,
                     try self.requirePatternSolvedVar(type_scope, decl.pattern),
                 );
-                const body_ty = try self.requireExprTypeFact(module_idx, type_scope, decl.expr);
                 const body_var = self.requireExprResultFact(module_idx, type_scope, decl.expr);
                 try self.collectPatternBindingsIntoEnvWithSolvedVar(
                     module_idx,
                     type_scope,
                     decl.pattern,
-                    body_ty,
                     body_var,
                     env,
                 );
@@ -6294,13 +6383,11 @@ pub const Lowerer = struct {
                     decl.expr,
                     try self.requirePatternSolvedVar(type_scope, decl.pattern_idx),
                 );
-                const body_ty = try self.requireExprTypeFact(module_idx, type_scope, decl.expr);
                 const body_var = self.requireExprResultFact(module_idx, type_scope, decl.expr);
                 try self.collectPatternBindingsIntoEnvWithSolvedVar(
                     module_idx,
                     type_scope,
                     decl.pattern_idx,
-                    body_ty,
                     body_var,
                     env,
                 );
@@ -6320,10 +6407,12 @@ pub const Lowerer = struct {
             .s_for => |for_stmt| {
                 try self.collectExprFacts(module_idx, type_scope, env.*, for_stmt.expr);
                 try self.collectPatternFacts(module_idx, type_scope, for_stmt.patt);
-                const elem_ty = try self.requirePatternTypeFact(module_idx, type_scope, for_stmt.patt);
                 const elem_var = self.lookupListElemSolvedVar(
                     module_idx,
                     self.requireExprResultFact(module_idx, type_scope, for_stmt.expr),
+                ) orelse debugPanic(
+                    "monotype explicit pattern fact invariant violated: for statement missing explicit iterable element solved var in module {d}",
+                    .{module_idx},
                 );
                 var body_env = try self.cloneEnv(env.*);
                 defer body_env.deinit();
@@ -6331,7 +6420,6 @@ pub const Lowerer = struct {
                     module_idx,
                     type_scope,
                     for_stmt.patt,
-                    elem_ty,
                     elem_var,
                     &body_env,
                 );
@@ -6618,7 +6706,6 @@ pub const Lowerer = struct {
             },
             .e_match => |match_expr| blk: {
                 try self.collectExprFacts(module_idx, type_scope, env, match_expr.cond);
-                const cond_ty = try self.requireExprTypeFact(module_idx, type_scope, match_expr.cond);
                 const cond_var = self.requireExprResultFact(module_idx, type_scope, match_expr.cond);
                 const branches = cir_env.store.matchBranchSlice(match_expr.branches);
                 for (branches) |branch_idx| {
@@ -6632,7 +6719,6 @@ pub const Lowerer = struct {
                             module_idx,
                             type_scope,
                             first_pattern,
-                            cond_ty,
                             cond_var,
                             &branch_env,
                         );
@@ -6672,10 +6758,12 @@ pub const Lowerer = struct {
             .e_for => |for_expr| blk: {
                 try self.collectExprFacts(module_idx, type_scope, env, for_expr.expr);
                 try self.collectPatternFacts(module_idx, type_scope, for_expr.patt);
-                const elem_ty = try self.requirePatternTypeFact(module_idx, type_scope, for_expr.patt);
                 const elem_var = self.lookupListElemSolvedVar(
                     module_idx,
                     self.requireExprResultFact(module_idx, type_scope, for_expr.expr),
+                ) orelse debugPanic(
+                    "monotype explicit pattern fact invariant violated: for expression missing explicit iterable element solved var in module {d}",
+                    .{module_idx},
                 );
                 var body_env = try self.cloneEnv(env);
                 defer body_env.deinit();
@@ -6683,7 +6771,6 @@ pub const Lowerer = struct {
                     module_idx,
                     type_scope,
                     for_expr.patt,
-                    elem_ty,
                     elem_var,
                     &body_env,
                 );
@@ -7453,6 +7540,13 @@ pub const Lowerer = struct {
         env: *BindingEnv,
         decls: *std.ArrayList(BindingDecl),
     ) std.mem.Allocator.Error!void {
+        try self.recordPatternStructuralFactsFromSourceType(
+            module_idx,
+            type_scope,
+            pattern_idx,
+            source.ty,
+            source_solved_var,
+        );
         const cir_env = self.ctx.env(module_idx);
         const pattern = cir_env.store.getPattern(pattern_idx);
         switch (pattern) {
@@ -7461,7 +7555,7 @@ pub const Lowerer = struct {
                     .module_idx = module_idx,
                     .pattern_idx = @intFromEnum(pattern_idx),
                 }, .{
-                    .bind = source,
+                    .symbol = source.symbol,
                     .solved_var = source_solved_var,
                 });
             },
@@ -7470,7 +7564,7 @@ pub const Lowerer = struct {
                     .module_idx = module_idx,
                     .pattern_idx = @intFromEnum(pattern_idx),
                 }, .{
-                    .bind = source,
+                    .symbol = source.symbol,
                     .solved_var = source_solved_var,
                 });
                 try self.collectStructuralBindingDeclsWithSolvedVar(
@@ -7632,7 +7726,7 @@ pub const Lowerer = struct {
         if (env.get(key)) |entry| {
             if (entry.typed) |typed| {
                 return lowered.append(self.allocator, try self.program.store.addStmt(.{ .reassign = .{
-                    .target = typed.bind.symbol,
+                    .target = typed.symbol,
                     .body = source_expr,
                 } }));
             }
@@ -7642,7 +7736,7 @@ pub const Lowerer = struct {
         }
 
         const bind = try self.requirePatternBinderWithType(module_idx, pattern_idx, source_ty);
-        try self.putTypedBinding(env, key, .{ .bind = bind });
+        try self.putTypedBinding(env, key, .{ .symbol = bind.symbol });
         try lowered.append(self.allocator, try self.program.store.addStmt(.{ .decl = .{
             .bind = bind,
             .body = source_expr,
@@ -7783,7 +7877,13 @@ pub const Lowerer = struct {
         env: *BindingEnv,
         decls: *std.ArrayList(BindingDecl),
     ) std.mem.Allocator.Error!ast.PatId {
-        _ = source_ty;
+        try self.recordPatternStructuralFactsFromSourceType(
+            module_idx,
+            type_scope,
+            pattern_idx,
+            source_ty,
+            source_solved_var,
+        );
         const effective_source_ty = self.requirePatternSourceTypeFact(module_idx, type_scope, pattern_idx);
         const source = try self.makePatternSourceBindWithType(module_idx, pattern_idx, effective_source_ty);
         try self.collectStructuralBindingDeclsWithSolvedVar(
@@ -7811,7 +7911,13 @@ pub const Lowerer = struct {
         env: *BindingEnv,
         decls: *std.ArrayList(BindingDecl),
     ) std.mem.Allocator.Error!ast.PatId {
-        _ = source_ty;
+        try self.recordPatternStructuralFactsFromSourceType(
+            module_idx,
+            type_scope,
+            pattern_idx,
+            source_ty,
+            source_solved_var,
+        );
         const effective_source_ty = self.requirePatternSourceTypeFact(module_idx, type_scope, pattern_idx);
         const cir_env = self.ctx.env(module_idx);
         const pattern = cir_env.store.getPattern(pattern_idx);
@@ -8136,10 +8242,7 @@ pub const Lowerer = struct {
                     .module_idx = module_idx,
                     .pattern_idx = @intFromEnum(pattern_idx),
                 }, .{
-                    .bind = .{
-                        .ty = try self.requirePatternTypeFact(module_idx, type_scope, pattern_idx),
-                        .symbol = symbol,
-                    },
+                    .symbol = symbol,
                 });
             },
             .as => |as_pat| {
@@ -8149,10 +8252,7 @@ pub const Lowerer = struct {
                     .module_idx = module_idx,
                     .pattern_idx = @intFromEnum(pattern_idx),
                 }, .{
-                    .bind = .{
-                        .ty = try self.requirePatternTypeFact(module_idx, type_scope, pattern_idx),
-                        .symbol = symbol,
-                    },
+                    .symbol = symbol,
                 });
             },
             .applied_tag => |tag| {
@@ -8202,10 +8302,7 @@ pub const Lowerer = struct {
                     .module_idx = module_idx,
                     .pattern_idx = @intFromEnum(pattern_idx),
                 }, .{
-                    .bind = .{
-                        .ty = source_ty,
-                        .symbol = symbol,
-                    },
+                    .symbol = symbol,
                     .solved_var = source_solved_var,
                 });
             },
@@ -8216,10 +8313,7 @@ pub const Lowerer = struct {
                     .module_idx = module_idx,
                     .pattern_idx = @intFromEnum(pattern_idx),
                 }, .{
-                    .bind = .{
-                        .ty = source_ty,
-                        .symbol = symbol,
-                    },
+                    .symbol = symbol,
                     .solved_var = source_solved_var,
                 });
             },
@@ -8472,7 +8566,7 @@ pub const Lowerer = struct {
                 return try self.specializeLocalFnSource(source, expected_ty, expected_var);
             }
             if (entry.typed) |typed| {
-                return typed.bind.symbol;
+                return typed.symbol;
             }
         }
 
@@ -9332,7 +9426,7 @@ pub const Lowerer = struct {
         pattern_idx: CIR.Pattern.Idx,
     ) std.mem.Allocator.Error!symbol_mod.Symbol {
         if (env.get(.{ .module_idx = module_idx, .pattern_idx = @intFromEnum(pattern_idx) })) |entry| {
-            if (entry.typed) |typed| return typed.bind.symbol;
+            if (entry.typed) |typed| return typed.symbol;
             if (entry.local_fn_source) |source| {
                 return self.local_fn_groups.items[source.group_index].sources[source.source_index].source_symbol;
             }
