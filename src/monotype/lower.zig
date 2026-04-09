@@ -203,6 +203,7 @@ const ExplicitCallFact = struct {
 
 const ExplicitFunctionFact = struct {
     arg_vars: []Var,
+    node_ret_var: Var,
     final_ret_var: Var,
 };
 
@@ -1028,7 +1029,7 @@ pub const Lowerer = struct {
             try type_scope.var_map.put(source_arg_var, scoped_arg_var);
         }
         const result_ty = try self.requireFunctionRetType(module_idx, type_scope, source_fn_var);
-        const result_var = self.lookupFunctionRetVar(module_idx, source_fn_var);
+        const result_var = self.lookupFunctionNodeRetVar(module_idx, type_scope, source_fn_var);
 
         const lambda = switch (expr) {
             .e_lambda => |lambda| lambda,
@@ -1176,7 +1177,7 @@ pub const Lowerer = struct {
     ) std.mem.Allocator.Error!ast.ExprId {
         std.debug.assert(remaining_arg_patterns.len > 0);
         const first_arg_ty = try self.requireFunctionArgType(module_idx, type_scope, source_fn_var, next_arg_index);
-        const source_result_var = self.lookupFunctionRetVar(module_idx, source_fn_var) orelse debugPanic(
+        const source_result_var = self.lookupFunctionNodeRetVar(module_idx, type_scope, source_fn_var) orelse debugPanic(
             "monotype lambda invariant violated: missing explicit curried source function return fact in module {d}",
             .{module_idx},
         );
@@ -1930,7 +1931,7 @@ pub const Lowerer = struct {
         lambda_expr_idx: CIR.Expr.Idx,
     ) std.mem.Allocator.Error!ExpectedTypeFact {
         const lambda_var = try self.scopedExprResultVar(module_idx, type_scope, env, lambda_expr_idx);
-        const result_var = self.lookupFunctionRetVar(module_idx, lambda_var) orelse debugPanic(
+        const result_var = self.lookupFunctionNodeRetVar(module_idx, type_scope, lambda_var) orelse debugPanic(
             "monotype return invariant violated: lambda {} in module {d} is missing an explicit return fact",
             .{ lambda_expr_idx, module_idx },
         );
@@ -2757,7 +2758,7 @@ pub const Lowerer = struct {
         else
             try self.requireFunctionArgType(module_idx, type_scope, source_fn_var, 0);
         const result_ty = try self.requireFunctionRetType(module_idx, type_scope, source_fn_var);
-        const result_var = self.lookupFunctionRetVar(module_idx, source_fn_var);
+        const result_var = self.lookupFunctionNodeRetVar(module_idx, type_scope, source_fn_var);
         const first_arg_pattern = if (arg_patterns.len == 0) null else arg_patterns[0];
         const arg = if (first_arg_pattern) |pattern_idx|
             try self.bindLambdaArg(module_idx, type_scope, pattern_idx, first_arg_ty)
@@ -8325,7 +8326,8 @@ pub const Lowerer = struct {
         };
         if (type_scope.function_facts.get(key)) |existing| {
             defer self.allocator.free(fact.arg_vars);
-            if (existing.final_ret_var != fact.final_ret_var or
+            if (existing.node_ret_var != fact.node_ret_var or
+                existing.final_ret_var != fact.final_ret_var or
                 !std.mem.eql(Var, existing.arg_vars, fact.arg_vars))
             {
                 debugPanic(
@@ -8353,6 +8355,10 @@ pub const Lowerer = struct {
         var arg_vars = std.ArrayList(Var).empty;
         defer arg_vars.deinit(self.allocator);
 
+        const node_ret_var = self.lookupFunctionRetVar(module_idx, fn_var) orelse debugPanic(
+            "monotype explicit function fact invariant violated: missing node return var in module {d}",
+            .{module_idx},
+        );
         var current = fn_var;
         while (true) {
             var local_index: usize = 0;
@@ -8367,6 +8373,7 @@ pub const Lowerer = struct {
             if (self.lookupFunctionArgVar(module_idx, ret_var, 0) == null) {
                 const fact: ExplicitFunctionFact = .{
                     .arg_vars = try arg_vars.toOwnedSlice(self.allocator),
+                    .node_ret_var = node_ret_var,
                     .final_ret_var = ret_var,
                 };
                 try self.putExplicitFunctionFact(module_idx, type_scope, fn_var, fact);
@@ -8415,6 +8422,17 @@ pub const Lowerer = struct {
         const function_var = fn_var orelse return null;
         const fact = self.ensureExplicitFunctionFact(module_idx, type_scope, function_var) catch return null;
         return fact.final_ret_var;
+    }
+
+    fn lookupFunctionNodeRetVar(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeCloneScope,
+        fn_var: ?Var,
+    ) ?Var {
+        const function_var = fn_var orelse return null;
+        const fact = self.ensureExplicitFunctionFact(module_idx, type_scope, function_var) catch return null;
+        return fact.node_ret_var;
     }
 
     fn lookupSpecializedExprVar(
@@ -8570,7 +8588,7 @@ pub const Lowerer = struct {
         return try self.lowerInstantiatedType(
             module_idx,
             type_scope,
-            self.lookupFunctionRetVar(module_idx, fn_var) orelse debugPanic(
+            self.lookupFunctionNodeRetVar(module_idx, type_scope, fn_var) orelse debugPanic(
                 "monotype invariant violated: missing function return fact in module {d}",
                 .{module_idx},
             ),
