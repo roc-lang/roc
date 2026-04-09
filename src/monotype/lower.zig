@@ -966,6 +966,8 @@ pub const Lowerer = struct {
             const scoped_arg_var = self.lookupFunctionArgVar(module_idx, source_fn_var, arg_index) orelse break;
             try type_scope.var_map.put(source_arg_var, scoped_arg_var);
         }
+        _ = try self.ensureExplicitFunctionFact(module_idx, type_scope, source_fn_var);
+        try self.freezeExplicitFunctionTypeFacts(module_idx, type_scope);
         const result_ty = try self.requireFunctionRetType(module_idx, type_scope, source_fn_var);
         const result_var = self.lookupFunctionNodeRetVar(module_idx, type_scope, source_fn_var);
 
@@ -1647,6 +1649,7 @@ pub const Lowerer = struct {
         type_scope: *TypeCloneScope,
     ) std.mem.Allocator.Error!void {
         try self.freezeExprTypeFacts(module_idx, type_scope);
+        try self.freezePatternTypeFacts(module_idx, type_scope);
         try self.freezeExprStructuralFacts(module_idx, type_scope);
         try self.freezeExplicitFunctionTypeFacts(module_idx, type_scope);
         try self.freezeExplicitCallTypeFacts(module_idx, type_scope);
@@ -2921,6 +2924,8 @@ pub const Lowerer = struct {
         if (expected_var) |var_| {
             try self.unifySpecializedCheckerVars(module_idx, source_fn_var, var_);
         }
+        _ = try self.ensureExplicitFunctionFact(module_idx, type_scope, source_fn_var);
+        try self.freezeExplicitFunctionTypeFacts(module_idx, type_scope);
         const first_arg_ty = if (arg_patterns.len == 0)
             self.requireFunctionType(closure_ty).arg
         else
@@ -6022,6 +6027,18 @@ pub const Lowerer = struct {
         try type_scope.facts.pattern_type_facts.put(key, try self.publishMonotypeType(lowered));
     }
 
+    fn freezePatternTypeFacts(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeCloneScope,
+    ) std.mem.Allocator.Error!void {
+        var iter = type_scope.facts.collected_pattern_facts.keyIterator();
+        while (iter.next()) |key_ptr| {
+            if (type_scope.facts.pattern_type_facts.contains(key_ptr.*)) continue;
+            try self.recordPatternTypeFact(module_idx, type_scope, key_ptr.pattern_idx);
+        }
+    }
+
     fn collectPatternFacts(
         self: *Lowerer,
         module_idx: u32,
@@ -6032,9 +6049,9 @@ pub const Lowerer = struct {
             .module_idx = module_idx,
             .pattern_idx = pattern_idx,
         };
-        if (type_scope.facts.pattern_type_facts.contains(key)) return;
+        if (type_scope.facts.collected_pattern_facts.contains(key)) return;
 
-        try self.recordPatternTypeFact(module_idx, type_scope, pattern_idx);
+        try type_scope.facts.collected_pattern_facts.put(key, {});
         const pattern = self.ctx.env(module_idx).store.getPattern(pattern_idx);
         switch (pattern) {
             .assign,
@@ -9012,25 +9029,14 @@ pub const Lowerer = struct {
             }
             return typed_fact.arg_tys[arg_index];
         }
-
-        const fact = try self.ensureExplicitFunctionFact(module_idx, type_scope, function_var);
-        if (fact.synthetic_unit_arg) {
-            if (arg_index == 0) return self.makeUnitType();
-            return try self.lowerInstantiatedType(
-                module_idx,
-                type_scope,
-                fact.arg_vars[arg_index - 1],
-            );
-        }
-        return try self.lowerInstantiatedType(
-            module_idx,
-            type_scope,
-            try self.requireFunctionArgVar(module_idx, type_scope, function_var, arg_index),
+        return debugPanic(
+            "monotype explicit function type invariant violated: missing frozen function arg type fact in module {d}",
+            .{module_idx},
         );
     }
 
     fn requireFunctionRetType(
-        self: *Lowerer,
+        _: *Lowerer,
         module_idx: u32,
         type_scope: *TypeCloneScope,
         fn_var: ?Var,
@@ -9043,14 +9049,14 @@ pub const Lowerer = struct {
             if (type_scope.facts.function_type_facts.get(key)) |typed_fact| {
                 return typed_fact.node_ret_ty;
             }
-        }
-        return try self.lowerInstantiatedType(
-            module_idx,
-            type_scope,
-            self.lookupFunctionNodeRetVar(module_idx, type_scope, fn_var) orelse debugPanic(
-                "monotype invariant violated: missing function return fact in module {d}",
+            return debugPanic(
+                "monotype explicit function type invariant violated: missing frozen function return type fact in module {d}",
                 .{module_idx},
-            ),
+            );
+        }
+        return debugPanic(
+            "monotype explicit function type invariant violated: missing function var while requiring frozen function return type in module {d}",
+            .{module_idx},
         );
     }
 
