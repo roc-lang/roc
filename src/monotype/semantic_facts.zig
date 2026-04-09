@@ -47,6 +47,13 @@ pub const ExplicitFunctionFact = struct {
     final_ret_var: Var,
 };
 
+pub const ExplicitFunctionTypeFact = struct {
+    arg_tys: []type_mod.TypeId,
+    synthetic_unit_arg: bool,
+    node_ret_ty: type_mod.TypeId,
+    final_ret_ty: type_mod.TypeId,
+};
+
 pub const ExprSourceFunctionFact = struct {
     seed_var: Var,
     arity: usize,
@@ -62,6 +69,7 @@ pub const ArithmeticBinopFact = struct {
 pub const Mutable = struct {
     allocator: std.mem.Allocator,
     function_facts: std.AutoHashMap(TypeKey, ExplicitFunctionFact),
+    function_type_facts: std.AutoHashMap(TypeKey, ExplicitFunctionTypeFact),
     expr_type_facts: std.AutoHashMap(ExprKey, type_mod.TypeId),
     expr_result_var_facts: std.AutoHashMap(ExprKey, Var),
     expr_source_function_facts: std.AutoHashMap(ExprKey, ExprSourceFunctionFact),
@@ -80,6 +88,7 @@ pub const Mutable = struct {
         return .{
             .allocator = allocator,
             .function_facts = std.AutoHashMap(TypeKey, ExplicitFunctionFact).init(allocator),
+            .function_type_facts = std.AutoHashMap(TypeKey, ExplicitFunctionTypeFact).init(allocator),
             .expr_type_facts = std.AutoHashMap(ExprKey, type_mod.TypeId).init(allocator),
             .expr_result_var_facts = std.AutoHashMap(ExprKey, Var).init(allocator),
             .expr_source_function_facts = std.AutoHashMap(ExprKey, ExprSourceFunctionFact).init(allocator),
@@ -122,6 +131,11 @@ pub const Mutable = struct {
             self.allocator.free(fact.arg_vars);
         }
         self.function_facts.deinit();
+        var function_type_iter = self.function_type_facts.valueIterator();
+        while (function_type_iter.next()) |fact| {
+            self.allocator.free(fact.arg_tys);
+        }
+        self.function_type_facts.deinit();
         self.expr_result_var_facts.deinit();
         self.expr_type_facts.deinit();
     }

@@ -199,6 +199,7 @@ const LoweredCall = struct {
 const ExplicitCallFact = semantic_facts.ExplicitCallFact;
 const ExplicitCallTypeFact = semantic_facts.ExplicitCallTypeFact;
 const ExplicitFunctionFact = semantic_facts.ExplicitFunctionFact;
+const ExplicitFunctionTypeFact = semantic_facts.ExplicitFunctionTypeFact;
 const ExprSourceFunctionFact = semantic_facts.ExprSourceFunctionFact;
 const ArithmeticBinopFact = semantic_facts.ArithmeticBinopFact;
 
@@ -1626,6 +1627,7 @@ pub const Lowerer = struct {
         module_idx: u32,
         type_scope: *TypeCloneScope,
     ) std.mem.Allocator.Error!void {
+        try self.freezeExplicitFunctionTypeFacts(module_idx, type_scope);
         try self.freezeExplicitCallTypeFacts(module_idx, type_scope);
     }
 
@@ -8495,6 +8497,34 @@ pub const Lowerer = struct {
         try type_scope.facts.function_facts.put(key, fact);
     }
 
+    fn putExplicitFunctionTypeFact(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeCloneScope,
+        fn_var: Var,
+        fact: ExplicitFunctionTypeFact,
+    ) std.mem.Allocator.Error!void {
+        const key: TypeCloneScope.TypeKey = .{
+            .module_idx = module_idx,
+            .var_ = fn_var,
+        };
+        if (type_scope.facts.function_type_facts.get(key)) |existing| {
+            defer self.allocator.free(fact.arg_tys);
+            if (existing.synthetic_unit_arg != fact.synthetic_unit_arg or
+                existing.node_ret_ty != fact.node_ret_ty or
+                existing.final_ret_ty != fact.final_ret_ty or
+                !std.mem.eql(type_mod.TypeId, existing.arg_tys, fact.arg_tys))
+            {
+                debugPanic(
+                    "monotype explicit function type fact invariant violated: conflicting typed function facts in module {d}",
+                    .{module_idx},
+                );
+            }
+            return;
+        }
+        try type_scope.facts.function_type_facts.put(key, fact);
+    }
+
     fn ensureExplicitFunctionFact(
         self: *Lowerer,
         module_idx: u32,
@@ -8537,6 +8567,31 @@ pub const Lowerer = struct {
                 return type_scope.facts.function_facts.get(key).?;
             }
             current = ret_var;
+        }
+    }
+
+    fn freezeExplicitFunctionTypeFacts(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeCloneScope,
+    ) std.mem.Allocator.Error!void {
+        var iter = type_scope.facts.function_facts.keyIterator();
+        while (iter.next()) |key_ptr| {
+            if (type_scope.facts.function_type_facts.contains(key_ptr.*)) continue;
+
+            const fn_fact = try self.ensureExplicitFunctionFact(module_idx, type_scope, key_ptr.var_);
+            const arg_tys = try self.allocator.alloc(type_mod.TypeId, fn_fact.arg_vars.len);
+            errdefer self.allocator.free(arg_tys);
+            for (fn_fact.arg_vars, 0..) |arg_var, i| {
+                arg_tys[i] = try self.publishMonotypeType(try self.lowerInstantiatedType(module_idx, type_scope, arg_var));
+            }
+
+            try self.putExplicitFunctionTypeFact(module_idx, type_scope, key_ptr.var_, .{
+                .arg_tys = arg_tys,
+                .synthetic_unit_arg = fn_fact.synthetic_unit_arg,
+                .node_ret_ty = try self.publishMonotypeType(try self.lowerInstantiatedType(module_idx, type_scope, fn_fact.node_ret_var)),
+                .final_ret_ty = try self.publishMonotypeType(try self.lowerInstantiatedType(module_idx, type_scope, fn_fact.final_ret_var)),
+            });
         }
     }
 
@@ -8737,6 +8792,18 @@ pub const Lowerer = struct {
             "monotype invariant violated: missing specialized function var in module {d}",
             .{module_idx},
         );
+        const key: TypeCloneScope.TypeKey = .{
+            .module_idx = module_idx,
+            .var_ = function_var,
+        };
+        if (type_scope.facts.function_type_facts.get(key)) |typed_fact| {
+            if (typed_fact.synthetic_unit_arg) {
+                if (arg_index == 0) return self.makeUnitType();
+                return typed_fact.arg_tys[arg_index - 1];
+            }
+            return typed_fact.arg_tys[arg_index];
+        }
+
         const fact = try self.ensureExplicitFunctionFact(module_idx, type_scope, function_var);
         if (fact.synthetic_unit_arg) {
             if (arg_index == 0) return self.makeUnitType();
@@ -8759,6 +8826,15 @@ pub const Lowerer = struct {
         type_scope: *TypeCloneScope,
         fn_var: ?Var,
     ) std.mem.Allocator.Error!type_mod.TypeId {
+        if (fn_var) |function_var| {
+            const key: TypeCloneScope.TypeKey = .{
+                .module_idx = module_idx,
+                .var_ = function_var,
+            };
+            if (type_scope.facts.function_type_facts.get(key)) |typed_fact| {
+                return typed_fact.node_ret_ty;
+            }
+        }
         return try self.lowerInstantiatedType(
             module_idx,
             type_scope,
