@@ -406,6 +406,11 @@ const ProcLowerer = struct {
             layoutRefsEqual(self.localLayoutRef(local_id), ref);
     }
 
+    fn runtimeReprClass(self: *const ProcLowerer, ref: ir.Layout.Ref) u32 {
+        return self.parent.input.layout_runtime_repr_classes.get(layout_mod.graphRefKey(ref)) orelse
+            debugPanic("lir.from_ir missing explicit runtime representation class for logical layout ref");
+    }
+
     fn unwrapNominalRef(self: *ProcLowerer, ref: ir.Layout.Ref) ir.Layout.Ref {
         var current = ref;
         while (true) {
@@ -568,24 +573,11 @@ const ProcLowerer = struct {
 
         if (self.resolvedListElemLayoutRef(actual_ref)) |actual_elem_ref| {
             if (self.resolvedListElemLayoutRef(target_ref)) |target_elem_ref| {
-                const actual_elem_layout: ?layout_mod.Idx = switch (actual.tag) {
-                    .list => actual.data.list,
-                    .list_of_zst => .zst,
-                    else => null,
-                };
-                const target_elem_layout: ?layout_mod.Idx = switch (target.tag) {
-                    .list => target.data.list,
-                    .list_of_zst => .zst,
-                    else => null,
-                };
+                const actual_elem_backing_ref = self.unwrapNominalRef(actual_elem_ref);
+                const target_elem_backing_ref = self.unwrapNominalRef(target_elem_ref);
                 if (layoutRefsEqual(actual_elem_ref, target_elem_ref) or
-                    (actual_elem_layout != null and
-                        target_elem_layout != null and
-                        (actual_elem_layout.? == target_elem_layout.? or
-                            ls.layoutsHaveSameRuntimeRepresentation(
-                                actual_elem_layout.?,
-                                target_elem_layout.?,
-                            ))))
+                    layoutRefsEqual(actual_elem_backing_ref, target_elem_backing_ref) or
+                    self.runtimeReprClass(actual_elem_backing_ref) == self.runtimeReprClass(target_elem_backing_ref))
                 {
                     return try self.parent.store.addCFStmt(.{ .assign_ref = .{
                         .target = target_local,
@@ -694,16 +686,18 @@ const ProcLowerer = struct {
             const target_list_child_tag: ?[]const u8 = if (target_list_child) |child| @tagName(ls.getLayout(child).tag) else null;
             const actual_list_child_tag: ?[]const u8 = if (actual_list_child) |child| @tagName(ls.getLayout(child).tag) else null;
             std.debug.panic(
-                "lir.from_ir invariant violated: no explicit bridge from layout {d} ({s}, box_child={any}/{any}, list_child={any}/{any}) to layout {d} ({s}, box_child={any}/{any}, list_child={any}/{any})",
+                "lir.from_ir invariant violated: no explicit bridge from layout {d} ({s}, ref={any}, box_child={any}/{any}, list_child={any}/{any}) to layout {d} ({s}, ref={any}, box_child={any}/{any}, list_child={any}/{any})",
                 .{
                     @intFromEnum(actual_layout),
                     @tagName(actual_layout_val.tag),
+                    actual_ref,
                     actual_box_child,
                     actual_box_child_tag,
                     actual_list_child,
                     actual_list_child_tag,
                     @intFromEnum(target_layout),
                     @tagName(target_layout_val.tag),
+                    target_ref,
                     target_box_child,
                     target_box_child_tag,
                     target_list_child,

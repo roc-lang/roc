@@ -16,12 +16,14 @@ pub const Result = struct {
     root_defs: std.ArrayList(ast.DefId),
     symbols: symbol_mod.Store,
     layouts: ir_layout.Graph,
+    layout_runtime_repr_classes: ast.RuntimeReprClassMap,
     strings: base.StringLiteral.Store,
 
     pub fn deinit(self: *Result) void {
         self.store.deinit();
         self.root_defs.deinit(self.store.allocator);
         self.symbols.deinit();
+        self.layout_runtime_repr_classes.deinit();
         self.layouts.deinit(self.store.allocator);
         self.strings.deinit(self.store.allocator);
     }
@@ -102,12 +104,15 @@ const Lowerer = struct {
     fn finish(self: *Lowerer) Result {
         const layouts = self.input.layout_facts.graph;
         self.input.layout_facts.graph = .{};
+        const layout_runtime_repr_classes = self.input.layout_facts.runtime_repr_classes;
+        self.input.layout_facts.runtime_repr_classes = ast.RuntimeReprClassMap.init(self.allocator);
 
         const result = Result{
             .store = self.output,
             .root_defs = self.root_defs,
             .symbols = self.input.symbols,
             .layouts = layouts,
+            .layout_runtime_repr_classes = layout_runtime_repr_classes,
             .strings = self.input.strings,
         };
 

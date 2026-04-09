@@ -63,6 +63,7 @@ pub const Graph = @import("graph.zig").Graph;
 pub const GraphNode = @import("graph.zig").Node;
 pub const GraphNodeId = @import("graph.zig").NodeId;
 pub const GraphRef = @import("graph.zig").Ref;
+pub const graphRefKey = @import("graph.zig").refKey;
 pub const GraphField = @import("graph.zig").Field;
 pub const GraphFieldSpan = @import("graph.zig").FieldSpan;
 pub const GraphRefSpan = @import("graph.zig").RefSpan;

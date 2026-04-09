@@ -31,6 +31,8 @@ pub const Facts = struct {
     graph: layout_mod.Graph,
     cache: LayoutCache,
     type_layouts: std.AutoHashMap(type_mod.TypeId, layout_mod.GraphRef),
+    runtime_repr_classes: std.AutoHashMap(u64, u32),
+    runtime_repr_reps: std.ArrayList(layout_mod.GraphRef),
     expr_layouts: []layout_mod.GraphRef,
     pat_layouts: []layout_mod.GraphRef,
     typed_symbol_layouts: []layout_mod.GraphRef,
@@ -48,6 +50,8 @@ pub const Facts = struct {
             .graph = .{},
             .cache = LayoutCache.init(allocator),
             .type_layouts = std.AutoHashMap(type_mod.TypeId, layout_mod.GraphRef).init(allocator),
+            .runtime_repr_classes = std.AutoHashMap(u64, u32).init(allocator),
+            .runtime_repr_reps = .empty,
             .expr_layouts = try allocator.alloc(layout_mod.GraphRef, store.exprs.items.len),
             .pat_layouts = try allocator.alloc(layout_mod.GraphRef, store.pats.items.len),
             .typed_symbol_layouts = try allocator.alloc(layout_mod.GraphRef, store.typed_symbols.items.len),
@@ -75,6 +79,8 @@ pub const Facts = struct {
         allocator.free(self.typed_symbol_layouts);
         allocator.free(self.pat_layouts);
         allocator.free(self.expr_layouts);
+        self.runtime_repr_reps.deinit(allocator);
+        self.runtime_repr_classes.deinit();
         self.type_layouts.deinit();
         self.cache.deinit();
         self.graph.deinit(allocator);
@@ -214,6 +220,196 @@ pub const Facts = struct {
         ret_ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!void {
         self.def_ret_layouts[@intFromEnum(def_id)] = try self.layoutForPublishedType(allocator, mono_types, ret_ty);
+    }
+
+    pub fn finalizeRuntimeReprClasses(self: *Facts, allocator: std.mem.Allocator) std.mem.Allocator.Error!void {
+        var type_layout_it = self.type_layouts.valueIterator();
+        while (type_layout_it.next()) |ref| {
+            _ = try self.ensureRuntimeReprClass(allocator, ref.*);
+        }
+        for (self.expr_layouts) |ref| {
+            _ = try self.ensureRuntimeReprClass(allocator, ref);
+        }
+        for (self.pat_layouts) |ref| {
+            _ = try self.ensureRuntimeReprClass(allocator, ref);
+        }
+        for (self.typed_symbol_layouts) |ref| {
+            _ = try self.ensureRuntimeReprClass(allocator, ref);
+        }
+        for (self.def_ret_layouts) |ref| {
+            _ = try self.ensureRuntimeReprClass(allocator, ref);
+        }
+        for (self.expr_field_layouts) |maybe_ref| {
+            if (maybe_ref) |ref| _ = try self.ensureRuntimeReprClass(allocator, ref);
+        }
+        for (self.expr_discriminant_layouts) |maybe_ref| {
+            if (maybe_ref) |ref| _ = try self.ensureRuntimeReprClass(allocator, ref);
+        }
+        for (self.expr_tag_payload_layouts) |maybe_ref| {
+            if (maybe_ref) |ref| _ = try self.ensureRuntimeReprClass(allocator, ref);
+        }
+        for (self.pat_tag_payload_layouts) |maybe_ref| {
+            if (maybe_ref) |ref| _ = try self.ensureRuntimeReprClass(allocator, ref);
+        }
+        for (0..self.graph.nodes.items.len) |i| {
+            _ = try self.ensureRuntimeReprClass(allocator, .{ .local = @enumFromInt(@as(u32, @intCast(i))) });
+        }
+        for (self.graph.refs.items) |ref| {
+            _ = try self.ensureRuntimeReprClass(allocator, ref);
+        }
+        for (self.graph.fields.items) |field| {
+            _ = try self.ensureRuntimeReprClass(allocator, field.child);
+        }
+    }
+
+    fn ensureRuntimeReprClass(
+        self: *Facts,
+        allocator: std.mem.Allocator,
+        ref: layout_mod.GraphRef,
+    ) std.mem.Allocator.Error!u32 {
+        const key = layout_mod.graphRefKey(ref);
+        if (self.runtime_repr_classes.get(key)) |existing| return existing;
+
+        for (self.runtime_repr_reps.items, 0..) |rep, i| {
+            if (try self.refsHaveSameRuntimeRepresentation(allocator, ref, rep)) {
+                const class_id: u32 = @intCast(i);
+                try self.runtime_repr_classes.put(key, class_id);
+                return class_id;
+            }
+        }
+
+        const class_id: u32 = @intCast(self.runtime_repr_reps.items.len);
+        try self.runtime_repr_reps.append(allocator, ref);
+        try self.runtime_repr_classes.put(key, class_id);
+        return class_id;
+    }
+
+    const RefPair = struct {
+        left: layout_mod.GraphRef,
+        right: layout_mod.GraphRef,
+    };
+
+    fn refsHaveSameRuntimeRepresentation(
+        self: *Facts,
+        allocator: std.mem.Allocator,
+        left: layout_mod.GraphRef,
+        right: layout_mod.GraphRef,
+    ) std.mem.Allocator.Error!bool {
+        var visited = std.ArrayList(RefPair).empty;
+        defer visited.deinit(allocator);
+        return self.refsHaveSameRuntimeRepresentationRec(allocator, left, right, &visited);
+    }
+
+    fn refsHaveSameRuntimeRepresentationRec(
+        self: *Facts,
+        allocator: std.mem.Allocator,
+        left: layout_mod.GraphRef,
+        right: layout_mod.GraphRef,
+        visited: *std.ArrayList(RefPair),
+    ) std.mem.Allocator.Error!bool {
+        const norm_left = self.unwrapNominalRef(left);
+        const norm_right = self.unwrapNominalRef(right);
+
+        switch (norm_left) {
+            .canonical => |left_idx| switch (norm_right) {
+                .canonical => |right_idx| return left_idx == right_idx,
+                .local => return false,
+            },
+            .local => |left_node| switch (norm_right) {
+                .canonical => return false,
+                .local => |right_node| {
+                    if (left_node == right_node) return true;
+                    for (visited.items) |pair| {
+                        if ((layout_mod.graphRefKey(pair.left) == layout_mod.graphRefKey(norm_left) and
+                            layout_mod.graphRefKey(pair.right) == layout_mod.graphRefKey(norm_right)) or
+                            (layout_mod.graphRefKey(pair.left) == layout_mod.graphRefKey(norm_right) and
+                                layout_mod.graphRefKey(pair.right) == layout_mod.graphRefKey(norm_left)))
+                        {
+                            return true;
+                        }
+                    }
+                    try visited.append(allocator, .{ .left = norm_left, .right = norm_right });
+
+                    const left_node_val = self.graph.getNode(left_node);
+                    const right_node_val = self.graph.getNode(right_node);
+                    if (std.meta.activeTag(left_node_val) != std.meta.activeTag(right_node_val)) return false;
+
+                    return switch (left_node_val) {
+                        .pending => debugPanic("lambdamono.layout_facts runtime representation comparison saw pending node"),
+                        .nominal => unreachable,
+                        .box => |left_child| self.refsHaveSameRuntimeRepresentationRec(
+                            allocator,
+                            left_child,
+                            switch (right_node_val) {
+                                .box => |right_child| right_child,
+                                else => unreachable,
+                            },
+                            visited,
+                        ),
+                        .list => |left_child| self.refsHaveSameRuntimeRepresentationRec(
+                            allocator,
+                            left_child,
+                            switch (right_node_val) {
+                                .list => |right_child| right_child,
+                                else => unreachable,
+                            },
+                            visited,
+                        ),
+                        .closure => |left_child| self.refsHaveSameRuntimeRepresentationRec(
+                            allocator,
+                            left_child,
+                            switch (right_node_val) {
+                                .closure => |right_child| right_child,
+                                else => unreachable,
+                            },
+                            visited,
+                        ),
+                        .struct_ => |left_fields| blk: {
+                            const left_slice = self.graph.getFields(left_fields);
+                            const right_slice = self.graph.getFields(switch (right_node_val) {
+                                .struct_ => |right_fields| right_fields,
+                                else => unreachable,
+                            });
+                            if (left_slice.len != right_slice.len) break :blk false;
+                            for (left_slice, right_slice) |left_field, right_field| {
+                                if (left_field.index != right_field.index) break :blk false;
+                                if (!try self.refsHaveSameRuntimeRepresentationRec(allocator, left_field.child, right_field.child, visited)) {
+                                    break :blk false;
+                                }
+                            }
+                            break :blk true;
+                        },
+                        .tag_union => |left_variants| blk: {
+                            const left_slice = self.graph.getRefs(left_variants);
+                            const right_slice = self.graph.getRefs(switch (right_node_val) {
+                                .tag_union => |right_variants| right_variants,
+                                else => unreachable,
+                            });
+                            if (left_slice.len != right_slice.len) break :blk false;
+                            for (left_slice, right_slice) |left_variant, right_variant| {
+                                if (!try self.refsHaveSameRuntimeRepresentationRec(allocator, left_variant, right_variant, visited)) {
+                                    break :blk false;
+                                }
+                            }
+                            break :blk true;
+                        },
+                    };
+                },
+            },
+        }
+    }
+
+    fn unwrapNominalRef(self: *Facts, ref: layout_mod.GraphRef) layout_mod.GraphRef {
+        var current = ref;
+        while (true) {
+            switch (current) {
+                .canonical => return current,
+                .local => |node_id| switch (self.graph.getNode(node_id)) {
+                    .nominal => |backing| current = backing,
+                    else => return current,
+                },
+            }
+        }
     }
 
     fn layoutForPublishedType(
