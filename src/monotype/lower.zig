@@ -201,6 +201,11 @@ const ExplicitCallFact = struct {
     arg_vars: []Var,
 };
 
+const ExplicitFunctionFact = struct {
+    arg_vars: []Var,
+    final_ret_var: Var,
+};
+
 const SpecializableCallChain = struct {
     func_expr_idx: CIR.Expr.Idx,
     arg_exprs: []const CIR.Expr.Idx,
@@ -372,6 +377,7 @@ pub const Lowerer = struct {
         active_type_cache: std.AutoHashMap(TypeKey, type_mod.TypeId),
         provisional_type_cache: std.AutoHashMap(TypeKey, type_mod.TypeId),
         type_cache: std.AutoHashMap(TypeKey, type_mod.TypeId),
+        function_facts: std.AutoHashMap(TypeKey, ExplicitFunctionFact),
         expr_type_facts: std.AutoHashMap(ExprKey, type_mod.TypeId),
         expr_result_var_facts: std.AutoHashMap(ExprKey, Var),
         call_facts: std.AutoHashMap(ExprKey, ExplicitCallFact),
@@ -428,6 +434,7 @@ pub const Lowerer = struct {
             self.active_type_cache = std.AutoHashMap(TypeKey, type_mod.TypeId).init(allocator);
             self.provisional_type_cache = std.AutoHashMap(TypeKey, type_mod.TypeId).init(allocator);
             self.type_cache = std.AutoHashMap(TypeKey, type_mod.TypeId).init(allocator);
+            self.function_facts = std.AutoHashMap(TypeKey, ExplicitFunctionFact).init(allocator);
             self.expr_type_facts = std.AutoHashMap(ExprKey, type_mod.TypeId).init(allocator);
             self.expr_result_var_facts = std.AutoHashMap(ExprKey, Var).init(allocator);
             self.call_facts = std.AutoHashMap(ExprKey, ExplicitCallFact).init(allocator);
@@ -471,6 +478,11 @@ pub const Lowerer = struct {
                 self.instantiator.store.gpa.free(fact.arg_vars);
             }
             self.call_facts.deinit();
+            var function_iter = self.function_facts.valueIterator();
+            while (function_iter.next()) |fact| {
+                self.instantiator.store.gpa.free(fact.arg_vars);
+            }
+            self.function_facts.deinit();
             self.expr_result_var_facts.deinit();
             self.expr_type_facts.deinit();
             self.active_type_cache.deinit();
@@ -1050,7 +1062,7 @@ pub const Lowerer = struct {
                     type_scope,
                     incoming_env,
                     first_arg,
-                    self.requireFunctionArgVar(module_idx, source_fn_var, 0),
+                    try self.requireFunctionArgVar(module_idx, type_scope, source_fn_var, 0),
                     arg_patterns[0],
                     result_ty,
                     result_var,
@@ -1099,7 +1111,7 @@ pub const Lowerer = struct {
                 type_scope,
                 incoming_env,
                 first_arg,
-                self.requireFunctionArgVar(module_idx, source_fn_var, 0),
+                try self.requireFunctionArgVar(module_idx, type_scope, source_fn_var, 0),
                 pattern_idx,
                 result_ty,
                 result_var,
@@ -1198,7 +1210,7 @@ pub const Lowerer = struct {
             type_scope,
             incoming_env,
             first_arg,
-            self.requireFunctionArgVar(module_idx, source_fn_var, next_arg_index),
+            try self.requireFunctionArgVar(module_idx, type_scope, source_fn_var, next_arg_index),
             first_pattern,
             result_ty,
             final_result_var,
@@ -1390,7 +1402,7 @@ pub const Lowerer = struct {
             "monotype lambda invariant violated: missing explicit source function facts for curried closure type in module {d}",
             .{module_idx},
         );
-        const total_args = self.functionArgCount(module_idx, function_var);
+        const total_args = self.functionArgCount(module_idx, type_scope, function_var);
         if (next_arg_index + remaining_arity > total_args) {
             return debugPanic(
                 "monotype lambda invariant violated: lambda arg range [{d}, {d}) exceeded function arity {d} in module {d}",
@@ -1508,17 +1520,18 @@ pub const Lowerer = struct {
     fn buildExplicitCallFact(
         self: *Lowerer,
         module_idx: u32,
+        type_scope: *TypeCloneScope,
         fn_var: Var,
         result_var: Var,
         applied_arg_count: usize,
     ) std.mem.Allocator.Error!ExplicitCallFact {
-        try self.unifyAppliedFunctionResultVar(module_idx, result_var, fn_var, applied_arg_count);
+        try self.unifyAppliedFunctionResultVar(module_idx, type_scope, result_var, fn_var, applied_arg_count);
 
         const arg_vars = try self.allocator.alloc(Var, applied_arg_count);
         errdefer self.allocator.free(arg_vars);
 
         for (0..applied_arg_count) |i| {
-            const arg_var = self.lookupCurriedFunctionArgVar(module_idx, fn_var, i) orelse debugPanic(
+            const arg_var = self.lookupCurriedFunctionArgVar(module_idx, type_scope, fn_var, i) orelse debugPanic(
                 "monotype explicit call fact invariant violated: missing explicit arg {d} fact in module {d}",
                 .{ i, module_idx },
             );
@@ -1814,7 +1827,7 @@ pub const Lowerer = struct {
         const call_result_var = explicit_result_var orelse try self.scopedExprResultVar(module_idx, type_scope, env, call_expr_idx);
 
         for (chain.arg_exprs, 0..) |arg_expr_idx, i| {
-            const cloned_arg_var = self.requireFunctionArgVar(module_idx, cloned_func_var, i);
+            const cloned_arg_var = try self.requireFunctionArgVar(module_idx, &call_scope, cloned_func_var, i);
             try self.collectExprFacts(module_idx, type_scope, env, arg_expr_idx);
             if (try self.specializeFunctionArgumentFromExpectedType(module_idx, type_scope, env, arg_expr_idx, cloned_arg_var)) {
                 continue;
@@ -1825,6 +1838,7 @@ pub const Lowerer = struct {
 
         const fact = try self.buildExplicitCallFact(
             module_idx,
+            &call_scope,
             cloned_func_var,
             call_result_var,
             chain.arg_exprs.len,
@@ -1875,6 +1889,7 @@ pub const Lowerer = struct {
         const applied_arg_count: usize = args.explicit_args.len + if (args.implicit_receiver == null) @as(usize, 0) else 1;
         const fact = try self.buildExplicitCallFact(
             module_idx,
+            &call_scope,
             cloned_func_var,
             result_var,
             applied_arg_count,
@@ -2758,7 +2773,7 @@ pub const Lowerer = struct {
                 module_idx,
                 type_scope,
                 arg,
-                self.requireFunctionArgVar(module_idx, source_fn_var, 0),
+                try self.requireFunctionArgVar(module_idx, type_scope, source_fn_var, 0),
                 pattern_idx,
                 &body_env,
                 &binding_decls,
@@ -4711,11 +4726,11 @@ pub const Lowerer = struct {
         defer call_scope.deinit();
 
         const cloned_func_var = try call_scope.instantiator.instantiateVar(site_requirement.fn_var);
-        const lhs_expected_var = self.lookupCurriedFunctionArgVar(module_idx, cloned_func_var, 0) orelse debugPanic(
+        const lhs_expected_var = self.lookupCurriedFunctionArgVar(module_idx, &call_scope, cloned_func_var, 0) orelse debugPanic(
             "monotype invariant violated: arithmetic fact missing lhs arg for expr {d} in module {d}",
             .{ expr_idx, module_idx },
         );
-        const rhs_expected_var = self.lookupCurriedFunctionArgVar(module_idx, cloned_func_var, 1) orelse debugPanic(
+        const rhs_expected_var = self.lookupCurriedFunctionArgVar(module_idx, &call_scope, cloned_func_var, 1) orelse debugPanic(
             "monotype invariant violated: arithmetic fact missing rhs arg for expr {d} in module {d}",
             .{ expr_idx, module_idx },
         );
@@ -4732,8 +4747,8 @@ pub const Lowerer = struct {
         );
 
         const result_var = try self.scopedExprResultVar(module_idx, type_scope, env, expr_idx);
-        try self.unifyAppliedFunctionResultVar(module_idx, result_var, cloned_func_var, 2);
-        const specialized_result_var = self.lookupCurriedFunctionFinalRetVar(module_idx, cloned_func_var) orelse debugPanic(
+        try self.unifyAppliedFunctionResultVar(module_idx, &call_scope, result_var, cloned_func_var, 2);
+        const specialized_result_var = self.lookupCurriedFunctionFinalRetVar(module_idx, &call_scope, cloned_func_var) orelse debugPanic(
             "monotype invariant violated: arithmetic fact missing return var for expr {d} in module {d}",
             .{ expr_idx, module_idx },
         );
@@ -5043,7 +5058,7 @@ pub const Lowerer = struct {
     ) std.mem.Allocator.Error!void {
         var arg_index: usize = 0;
         if (args.implicit_receiver) |receiver_expr_idx| {
-            const cloned_arg_var = self.lookupCurriedFunctionArgVar(module_idx, cloned_func_var, arg_index) orelse debugPanic(
+            const cloned_arg_var = self.lookupCurriedFunctionArgVar(module_idx, type_scope, cloned_func_var, arg_index) orelse debugPanic(
                 "monotype static dispatch invariant violated: specialized method missing receiver arg in module {d}",
                 .{module_idx},
             );
@@ -5056,7 +5071,7 @@ pub const Lowerer = struct {
         }
 
         for (args.explicit_args, 0..) |arg_expr_idx, i| {
-            const cloned_arg_var = self.lookupCurriedFunctionArgVar(module_idx, cloned_func_var, arg_index + i) orelse debugPanic(
+            const cloned_arg_var = self.lookupCurriedFunctionArgVar(module_idx, type_scope, cloned_func_var, arg_index + i) orelse debugPanic(
                 "monotype static dispatch invariant violated: specialized method missing arg {d} in module {d}",
                 .{ arg_index + i, module_idx },
             );
@@ -6442,6 +6457,7 @@ pub const Lowerer = struct {
                     expr_idx,
                     try self.buildExplicitCallFact(
                         module_idx,
+                        type_scope,
                         callee_var,
                         call_result_var,
                         cir_env.store.sliceExpr(call.args).len,
@@ -8296,56 +8312,109 @@ pub const Lowerer = struct {
         };
     }
 
-    fn requireFunctionArgVar(
-        self: *const Lowerer,
+    fn putExplicitFunctionFact(
+        self: *Lowerer,
         module_idx: u32,
+        type_scope: *TypeCloneScope,
+        fn_var: Var,
+        fact: ExplicitFunctionFact,
+    ) std.mem.Allocator.Error!void {
+        const key: TypeCloneScope.TypeKey = .{
+            .module_idx = module_idx,
+            .var_ = fn_var,
+        };
+        if (type_scope.function_facts.get(key)) |existing| {
+            defer self.allocator.free(fact.arg_vars);
+            if (existing.final_ret_var != fact.final_ret_var or
+                !std.mem.eql(Var, existing.arg_vars, fact.arg_vars))
+            {
+                debugPanic(
+                    "monotype explicit function fact invariant violated: conflicting function facts in module {d}",
+                    .{module_idx},
+                );
+            }
+            return;
+        }
+        try type_scope.function_facts.put(key, fact);
+    }
+
+    fn ensureExplicitFunctionFact(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeCloneScope,
+        fn_var: Var,
+    ) std.mem.Allocator.Error!ExplicitFunctionFact {
+        const key: TypeCloneScope.TypeKey = .{
+            .module_idx = module_idx,
+            .var_ = fn_var,
+        };
+        if (type_scope.function_facts.get(key)) |fact| return fact;
+
+        var arg_vars = std.ArrayList(Var).empty;
+        defer arg_vars.deinit(self.allocator);
+
+        var current = fn_var;
+        while (true) {
+            var local_index: usize = 0;
+            while (self.lookupFunctionArgVar(module_idx, current, local_index)) |arg_var| : (local_index += 1) {
+                try arg_vars.append(self.allocator, arg_var);
+            }
+
+            const ret_var = self.lookupFunctionRetVar(module_idx, current) orelse debugPanic(
+                "monotype explicit function fact invariant violated: missing function return var in module {d}",
+                .{module_idx},
+            );
+            if (self.lookupFunctionArgVar(module_idx, ret_var, 0) == null) {
+                const fact: ExplicitFunctionFact = .{
+                    .arg_vars = try arg_vars.toOwnedSlice(self.allocator),
+                    .final_ret_var = ret_var,
+                };
+                try self.putExplicitFunctionFact(module_idx, type_scope, fn_var, fact);
+                return type_scope.function_facts.get(key).?;
+            }
+            current = ret_var;
+        }
+    }
+
+    fn requireFunctionArgVar(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeCloneScope,
         fn_var: ?Var,
         arg_index: usize,
-    ) Var {
+    ) std.mem.Allocator.Error!Var {
         const function_var = fn_var orelse debugPanic(
             "monotype invariant violated: missing specialized function var in module {d}",
             .{module_idx},
         );
-        return self.lookupCurriedFunctionArgVar(module_idx, function_var, arg_index) orelse debugPanic(
+        return self.lookupCurriedFunctionArgVar(module_idx, type_scope, function_var, arg_index) orelse debugPanic(
             "monotype invariant violated: missing specialized function argument {d} in module {d}",
             .{ arg_index, module_idx },
         );
     }
 
     fn lookupCurriedFunctionArgVar(
-        self: *const Lowerer,
+        self: *Lowerer,
         module_idx: u32,
+        type_scope: *TypeCloneScope,
         fn_var: ?Var,
         arg_index: usize,
     ) ?Var {
-        var current = fn_var orelse return null;
-        var remaining = arg_index;
-
-        while (true) {
-            var local_index: usize = 0;
-            while (self.lookupFunctionArgVar(module_idx, current, local_index)) |arg_var| : (local_index += 1) {
-                if (remaining == 0) return arg_var;
-                remaining -= 1;
-            }
-
-            const ret_var = self.lookupFunctionRetVar(module_idx, current) orelse return null;
-            if (self.lookupFunctionArgVar(module_idx, ret_var, 0) == null) return null;
-            current = ret_var;
-        }
+        const function_var = fn_var orelse return null;
+        const fact = self.ensureExplicitFunctionFact(module_idx, type_scope, function_var) catch return null;
+        if (arg_index >= fact.arg_vars.len) return null;
+        return fact.arg_vars[arg_index];
     }
 
     fn lookupCurriedFunctionFinalRetVar(
-        self: *const Lowerer,
+        self: *Lowerer,
         module_idx: u32,
+        type_scope: *TypeCloneScope,
         fn_var: ?Var,
     ) ?Var {
-        var current = fn_var orelse return null;
-
-        while (true) {
-            const ret_var = self.lookupFunctionRetVar(module_idx, current) orelse return null;
-            if (self.lookupFunctionArgVar(module_idx, ret_var, 0) == null) return ret_var;
-            current = ret_var;
-        }
+        const function_var = fn_var orelse return null;
+        const fact = self.ensureExplicitFunctionFact(module_idx, type_scope, function_var) catch return null;
+        return fact.final_ret_var;
     }
 
     fn lookupSpecializedExprVar(
@@ -8439,6 +8508,7 @@ pub const Lowerer = struct {
     fn unifyAppliedFunctionResultVar(
         self: *Lowerer,
         module_idx: u32,
+        type_scope: *TypeCloneScope,
         result_var: Var,
         fn_var_opt: ?Var,
         applied_arg_count: usize,
@@ -8447,7 +8517,8 @@ pub const Lowerer = struct {
             "monotype invariant violated: missing explicit function fact for applied call result in module {d}",
             .{module_idx},
         );
-        const total_args = self.functionArgCount(module_idx, fn_var);
+        const fn_fact = try self.ensureExplicitFunctionFact(module_idx, type_scope, fn_var);
+        const total_args = fn_fact.arg_vars.len;
         if (applied_arg_count > total_args) {
             return debugPanic(
                 "monotype invariant violated: applied {d} args to function with arity {d} in module {d}",
@@ -8456,35 +8527,24 @@ pub const Lowerer = struct {
         }
 
         if (applied_arg_count == total_args) {
-            const ret_var = self.lookupCurriedFunctionFinalRetVar(module_idx, fn_var) orelse debugPanic(
-                "monotype invariant violated: saturated call missing return var in module {d}",
-                .{module_idx},
-            );
-            return self.unifySpecializedCheckerVars(module_idx, result_var, ret_var);
+            return self.unifySpecializedCheckerVars(module_idx, result_var, fn_fact.final_ret_var);
         }
 
         const remaining_args = total_args - applied_arg_count;
+        const result_fact = try self.ensureExplicitFunctionFact(module_idx, type_scope, result_var);
+        if (result_fact.arg_vars.len != remaining_args) {
+            debugPanic(
+                "monotype invariant violated: partial-call result expected {d} remaining args but found {d} in module {d}",
+                .{ remaining_args, result_fact.arg_vars.len, module_idx },
+            );
+        }
         for (0..remaining_args) |i| {
-            const result_arg_var = self.lookupCurriedFunctionArgVar(module_idx, result_var, i) orelse debugPanic(
-                "monotype invariant violated: partial-call result missing arg {d} in module {d}",
-                .{ i, module_idx },
-            );
-            const fn_arg_var = self.lookupCurriedFunctionArgVar(module_idx, fn_var, applied_arg_count + i) orelse debugPanic(
-                "monotype invariant violated: function missing arg {d} in module {d}",
-                .{ applied_arg_count + i, module_idx },
-            );
+            const result_arg_var = result_fact.arg_vars[i];
+            const fn_arg_var = fn_fact.arg_vars[applied_arg_count + i];
             try self.unifySpecializedCheckerVars(module_idx, result_arg_var, fn_arg_var);
         }
 
-        const result_ret_var = self.lookupCurriedFunctionFinalRetVar(module_idx, result_var) orelse debugPanic(
-            "monotype invariant violated: partial-call result missing return var in module {d}",
-            .{module_idx},
-        );
-        const fn_ret_var = self.lookupCurriedFunctionFinalRetVar(module_idx, fn_var) orelse debugPanic(
-            "monotype invariant violated: function missing return var in module {d}",
-            .{module_idx},
-        );
-        try self.unifySpecializedCheckerVars(module_idx, result_ret_var, fn_ret_var);
+        try self.unifySpecializedCheckerVars(module_idx, result_fact.final_ret_var, fn_fact.final_ret_var);
     }
 
     fn requireFunctionArgType(
@@ -8497,7 +8557,7 @@ pub const Lowerer = struct {
         return try self.lowerInstantiatedType(
             module_idx,
             type_scope,
-            self.requireFunctionArgVar(module_idx, fn_var, arg_index),
+            try self.requireFunctionArgVar(module_idx, type_scope, fn_var, arg_index),
         );
     }
 
@@ -8518,25 +8578,13 @@ pub const Lowerer = struct {
     }
 
     fn functionArgCount(
-        self: *const Lowerer,
+        self: *Lowerer,
         module_idx: u32,
+        type_scope: *TypeCloneScope,
         fn_var: Var,
     ) usize {
-        var total: usize = 0;
-        var current_fn_var: ?Var = fn_var;
-
-        while (current_fn_var) |current| {
-            var local_count: usize = 0;
-            while (self.lookupFunctionArgVar(module_idx, current, local_count) != null) : (local_count += 1) {}
-            if (local_count == 0) break;
-            total += local_count;
-
-            const ret_var = self.lookupFunctionRetVar(module_idx, current) orelse break;
-            if (self.lookupFunctionArgVar(module_idx, ret_var, 0) == null) break;
-            current_fn_var = ret_var;
-        }
-
-        return total;
+        const fact = self.ensureExplicitFunctionFact(module_idx, type_scope, fn_var) catch unreachable;
+        return fact.arg_vars.len;
     }
 
     fn unifySpecializedCheckerVars(

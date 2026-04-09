@@ -2,21 +2,23 @@
 
 ## Goal
 
-Finish the remaining "re-work" in strict upstream-to-downstream order:
+Finish the remaining exact-facts cleanup in strict upstream-to-downstream
+order:
 
-1. make monotype publish one explicit semantic fact table per lowered scope
-2. delete all remaining monotype late fact / shape recovery
+1. make monotype publish full explicit call-application facts
+2. delete the remaining monotype call-shape/type-shape recovery
 3. make `lambdamono` publish explicit logical layout facts directly
 4. delete the dedicated `lambdamono/layout_facts.zig` re-layout layer
 5. make IR consume only explicit upstream semantic/layout facts
 6. delete runtime-shape comparison escape hatches from `FromIr`, the
    interpreter, and the dev backend
 
-`~/code/cor` is the guide for the overall architecture:
+`~/code/cor` is the architectural guide:
 
 - solved expressions carry one authoritative fact
 - monotype clones/lowers those facts once
-- later stages consume explicit earlier facts
+- specialization happens from whole-function facts, not local recovery
+- later stages consume explicit earlier facts only
 - stage boundaries publish exact facts, not approximate shape-equivalence
 
 Compiler-wide rules for every phase:
@@ -29,7 +31,7 @@ Compiler-wide rules for every phase:
 - no downstream structural layout comparison to compensate for upstream
   ambiguity
 
-## Phase 1. Monotype Explicit Semantic Fact Table
+## Phase 1. Monotype Explicit Call-Application Facts
 
 ### Current offenders
 
@@ -40,48 +42,69 @@ Compiler-wide rules for every phase:
   - `lookupFunctionRetVar(...)`
   - `unifyAppliedFunctionResultVar(...)`
   - `functionArgCount(...)`
-  - `lowerInstantiatedType(...)` late use sites
-  - `materializePatternSourceType(...)`
+  - `lowerInstantiatedType(...)` late use sites for call result/arg types
+
+### Root cause
+
+The current monotype fact table knows too little about call chains. It has:
+
+- expr result vars
+- expr monotype types
+- pattern solved vars / types / source types
+- partial explicit call facts
+
+But it does not yet publish the full application-shape facts later code needs.
+
+That is why the reverted experiment was unsound: a root “source function” fact
+is not enough. For nested call chains, later code still needs explicit facts for:
+
+- source function identity
+- source function arity
+- how many arguments have already been applied
+- which argument facts correspond to each application step
+- whether the current application still yields a function
+- if so, the remaining function fact
+- if not, the final result fact
 
 ### Target end state
 
-- monotype owns one explicit fact table per lowered scope / body
-- each expr has:
-  - explicit result var
-  - explicit monotype type
-- each pattern has:
-  - explicit solved var
-  - explicit monotype type
-  - explicit source type
-- each call-like expression has:
-  - explicit callee fact
-  - explicit arg facts
-  - explicit result fact
-  - explicit curried application shape when relevant
-- lowering only consumes those facts
+Monotype owns one explicit fact table per lowered scope / body, and for every
+call-like expression it publishes one authoritative application-shape fact that
+already contains:
+
+- source function fact:
+  - source function var
+  - total source arity
+- application fact:
+  - applied argument count
+  - arg solved vars
+  - arg monotype types
+  - result solved var
+  - result monotype type
+  - remaining function solved var/type when partially applied
+  - intermediate application result types for curried lowering
+
+Lowering then consumes those facts only. No later helper is allowed to recover
+function shape from solved vars or lowered type shape.
 
 ### Work
 
-1. define the explicit monotype fact tables needed for:
-   - expr result vars
-   - expr monotype types
-   - pattern solved vars
-   - pattern monotype types
-   - pattern source types
-   - call-shape facts
-2. build those facts once from solved checker facts before recursive lowering
-   consumes them
-3. replace all remaining function-shape / seed-var recovery with direct fact
-   lookup
-4. replace late checker-var -> monotype lowering use sites with direct
-   monotype fact lookup
+1. extend the monotype fact table to represent full explicit call-application
+   facts, not just root function/result vars
+2. build those facts once during fact collection from solved checker facts,
+   following `cor`’s “specialize whole function facts first, lower bodies later”
+   approach
+3. make direct calls, recorded-method calls, arithmetic builtin calls, and
+   nested call chains all consume the same explicit application fact model
+4. delete the remaining call-shape recovery helpers only after their required
+   information is fully present in the new facts
 5. verify:
    - `timeout 900s zig build test-eval -- --threads 1`
    - `timeout 900s zig build test-eval-host-effects -- --threads 1`
 6. update `reinfer.md`
 7. commit
 
-## Phase 2. Delete Remaining Monotype Shape Recovery
+## Phase 2. Delete Remaining Monotype Type-Shape Recovery
 
 ### Current offenders
 
@@ -92,16 +115,20 @@ Compiler-wide rules for every phase:
   - `requireRecordFieldIndexForType(...)`
   - `requireListElemType(...)`
   - `callResultType(...)`
+  - remaining late `lowerInstantiatedType(...)` uses not justified by builder
+    internals
 
 ### Target end state
 
-- monotype never asks a lowered type to rediscover:
-  - tuple element types
-  - list element type
-  - tag discriminant
-  - record field index
-  - intermediate curried call result type
-- all of those facts arrive through the explicit monotype fact table
+Monotype never asks a lowered type to rediscover:
+
+- tuple element types
+- list element type
+- tag discriminant
+- record field index
+- intermediate curried call result type
+
+All of those facts arrive through the explicit monotype fact table.
 
 ### Work
 
@@ -111,12 +138,13 @@ Compiler-wide rules for every phase:
    - tag discriminants
    - record field indices
    - intermediate call result facts
-2. delete the corresponding type-shape recovery helpers
-3. verify:
+2. replace all remaining use-site type-shape recovery with direct fact lookup
+3. delete the corresponding helpers
+4. verify:
    - `timeout 900s zig build test-eval -- --threads 1`
    - `timeout 900s zig build test-eval-host-effects -- --threads 1`
-4. update `reinfer.md` and `reintern.md`
-5. commit
+5. update `reinfer.md` and `reintern.md`
+6. commit
 
 ## Phase 3. Lambdamono Explicit Logical Layout Facts
 
@@ -126,15 +154,16 @@ Compiler-wide rules for every phase:
 
 ### Target end state
 
-- `lambdamono` publishes logical layout facts directly when constructing its
-  result
-- exprs / patterns / typed symbols / def returns already carry:
-  - logical layout ref
-  - field layout when needed
-  - tag payload layout when needed
-  - discriminant behavior when needed
-- later stages never derive those by walking executable type shape or peeling
-  nominals
+`lambdamono` publishes logical layout facts directly when constructing its
+result. Exprs / patterns / typed symbols / def returns already carry:
+
+- logical layout ref
+- field layout when needed
+- tag payload layout when needed
+- discriminant behavior when needed
+
+Later stages never derive those by walking executable type shape or peeling
+nominals.
 
 ### Work
 
@@ -178,8 +207,8 @@ Compiler-wide rules for every phase:
 
 ### Target end state
 
-- IR lowers only from explicit upstream semantic/layout facts
-- IR does not inspect type shape to rediscover loop or `when` facts
+IR lowers only from explicit upstream semantic/layout facts. IR does not
+inspect type shape to rediscover loop or `when` facts.
 
 ### Work
 
@@ -205,11 +234,13 @@ Compiler-wide rules for every phase:
 
 ### Target end state
 
-- downstream code accepts:
-  - exact layout identity
-  - or explicit earlier bridge facts
-- downstream code never accepts "same runtime representation" as a substitute
-  for exact earlier facts
+Downstream code accepts:
+
+- exact layout identity
+- or explicit earlier bridge facts
+
+Downstream code never accepts “same runtime representation” as a substitute for
+exact earlier facts.
 
 ### Work
 
@@ -238,6 +269,6 @@ When all phases are complete:
    - `reinfer.md`
    - `reintern.md`
 3. ensure both audit notes reflect the final state
-4. commit the final code/audit-aligned cleanup slice
+4. commit the final code / audit-aligned cleanup slice
 5. push
 6. report exactly what remains on `reinfer.md` and `reintern.md`
