@@ -4176,6 +4176,7 @@ pub const Lowerer = struct {
                         reassign.pattern_idx,
                         root_expr,
                         root_bind.ty,
+                        lowered_body.solved_var,
                         env,
                         lowered,
                     );
@@ -7511,23 +7512,31 @@ pub const Lowerer = struct {
         pattern_idx: CIR.Pattern.Idx,
         source_expr: ast.ExprId,
         source_ty: type_mod.TypeId,
+        source_solved_var: ?Var,
         env: *BindingEnv,
         lowered: *std.ArrayList(ast.StmtId),
     ) std.mem.Allocator.Error!void {
+        try self.recordPatternStructuralFactsFromSourceType(
+            module_idx,
+            type_scope,
+            pattern_idx,
+            source_ty,
+            source_solved_var,
+        );
         const cir_env = self.ctx.env(module_idx);
         const pattern = cir_env.store.getPattern(pattern_idx);
         switch (pattern) {
             .assign => try self.appendPatternBindingOrReassign(module_idx, pattern_idx, source_ty, source_expr, env, lowered),
             .as => |as_pat| {
                 try self.appendPatternBindingOrReassign(module_idx, pattern_idx, source_ty, source_expr, env, lowered);
-                try self.lowerPatternReassignFromExpr(module_idx, type_scope, as_pat.pattern, source_expr, source_ty, env, lowered);
+                try self.lowerPatternReassignFromExpr(module_idx, type_scope, as_pat.pattern, source_expr, source_ty, source_solved_var, env, lowered);
             },
             .underscore => {},
             .record_destructure => |record| {
                 for (cir_env.store.sliceRecordDestructs(record.destructs)) |destruct_idx| {
                     const destruct = cir_env.store.getRecordDestruct(destruct_idx);
                     const child_pattern_idx = destruct.kind.toPatternIdx();
-                    const field_ty = try self.requirePatternTypeFact(module_idx, type_scope, child_pattern_idx);
+                    const field_ty = self.requirePatternSourceTypeFact(module_idx, type_scope, child_pattern_idx);
                     const field_bind: ast.TypedSymbol = .{
                         .ty = field_ty,
                         .symbol = try self.ctx.addSyntheticSymbol(base.Ident.Idx.NONE),
@@ -7550,6 +7559,7 @@ pub const Lowerer = struct {
                         child_pattern_idx,
                         try self.makeVarExpr(field_ty, field_bind.symbol),
                         field_ty,
+                        try self.requirePatternSolvedVar(type_scope, child_pattern_idx),
                         env,
                         lowered,
                     );
@@ -7558,7 +7568,7 @@ pub const Lowerer = struct {
             .tuple => |tuple| {
                 const elem_patterns = cir_env.store.slicePatterns(tuple.patterns);
                 for (elem_patterns, 0..) |elem_pattern_idx, i| {
-                    const elem_ty = try self.requirePatternTypeFact(module_idx, type_scope, elem_pattern_idx);
+                    const elem_ty = self.requirePatternSourceTypeFact(module_idx, type_scope, elem_pattern_idx);
                     const elem_bind: ast.TypedSymbol = .{
                         .ty = elem_ty,
                         .symbol = try self.ctx.addSyntheticSymbol(base.Ident.Idx.NONE),
@@ -7573,6 +7583,7 @@ pub const Lowerer = struct {
                         elem_pattern_idx,
                         try self.makeVarExpr(elem_ty, elem_bind.symbol),
                         elem_ty,
+                        try self.requirePatternSolvedVar(type_scope, elem_pattern_idx),
                         env,
                         lowered,
                     );
@@ -7584,6 +7595,7 @@ pub const Lowerer = struct {
                 nominal.backing_pattern,
                 source_expr,
                 source_ty,
+                source_solved_var,
                 env,
                 lowered,
             ),
@@ -7593,6 +7605,7 @@ pub const Lowerer = struct {
                 nominal.backing_pattern,
                 source_expr,
                 source_ty,
+                source_solved_var,
                 env,
                 lowered,
             ),
