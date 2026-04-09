@@ -36,6 +36,7 @@ pub const Facts = struct {
     typed_symbol_layouts: []layout_mod.GraphRef,
     def_ret_layouts: []layout_mod.GraphRef,
     expr_field_layouts: []?layout_mod.GraphRef,
+    expr_discriminant_layouts: []?layout_mod.GraphRef,
     expr_tag_payload_layouts: []?layout_mod.GraphRef,
     pat_tag_payload_layouts: []?layout_mod.GraphRef,
 
@@ -53,12 +54,14 @@ pub const Facts = struct {
             .typed_symbol_layouts = try allocator.alloc(layout_mod.GraphRef, store.typed_symbols.items.len),
             .def_ret_layouts = try allocator.alloc(layout_mod.GraphRef, store.defs.items.len),
             .expr_field_layouts = try allocator.alloc(?layout_mod.GraphRef, store.exprs.items.len),
+            .expr_discriminant_layouts = try allocator.alloc(?layout_mod.GraphRef, store.exprs.items.len),
             .expr_tag_payload_layouts = try allocator.alloc(?layout_mod.GraphRef, store.exprs.items.len),
             .pat_tag_payload_layouts = try allocator.alloc(?layout_mod.GraphRef, store.pats.items.len),
         };
         errdefer facts.deinit(allocator);
 
         @memset(facts.expr_field_layouts, null);
+        @memset(facts.expr_discriminant_layouts, null);
         @memset(facts.expr_tag_payload_layouts, null);
         @memset(facts.pat_tag_payload_layouts, null);
 
@@ -71,6 +74,7 @@ pub const Facts = struct {
     pub fn deinit(self: *Facts, allocator: std.mem.Allocator) void {
         allocator.free(self.pat_tag_payload_layouts);
         allocator.free(self.expr_tag_payload_layouts);
+        allocator.free(self.expr_discriminant_layouts);
         allocator.free(self.expr_field_layouts);
         allocator.free(self.def_ret_layouts);
         allocator.free(self.typed_symbol_layouts);
@@ -104,6 +108,10 @@ pub const Facts = struct {
     pub fn exprFieldLayout(self: *const Facts, expr_id: ast.ExprId) layout_mod.GraphRef {
         return self.expr_field_layouts[@intFromEnum(expr_id)] orelse
             debugPanic("lambdamono.layout_facts.exprFieldLayout missing explicit field layout");
+    }
+
+    pub fn exprDiscriminantLayout(self: *const Facts, expr_id: ast.ExprId) ?layout_mod.GraphRef {
+        return self.expr_discriminant_layouts[@intFromEnum(expr_id)];
     }
 
     pub fn exprTagPayloadLayout(self: *const Facts, expr_id: ast.ExprId) layout_mod.GraphRef {
@@ -159,6 +167,7 @@ pub const Facts = struct {
     ) std.mem.Allocator.Error!void {
         for (store.exprs.items, 0..) |expr, i| {
             const expr_id: ast.ExprId = @enumFromInt(@as(u32, @intCast(i)));
+            self.expr_discriminant_layouts[i] = try self.maybeDiscriminantLayout(self.exprLayout(expr_id));
             switch (expr.data) {
                 .tag => |tag| {
                     if (store.sliceExprSpan(tag.args).len == 0) continue;
@@ -177,6 +186,32 @@ pub const Facts = struct {
                     );
                 },
                 else => {},
+            }
+        }
+    }
+
+    fn maybeDiscriminantLayout(
+        self: *Facts,
+        layout_ref: layout_mod.GraphRef,
+    ) std.mem.Allocator.Error!?layout_mod.GraphRef {
+        var current = layout_ref;
+        while (true) {
+            switch (current) {
+                .canonical => return null,
+                .local => |node_id| switch (self.graph.getNode(node_id)) {
+                    .nominal => |backing| current = backing,
+                    .tag_union => |variants| {
+                        const variant_count = self.graph.getRefs(variants).len;
+                        const prim: layout_mod.Idx = switch (variant_count) {
+                            0...0xff => .u8,
+                            0x100...0xffff => .u16,
+                            0x1_0000...0xffff_ffff => .u32,
+                            else => .u64,
+                        };
+                        return .{ .canonical = prim };
+                    },
+                    else => return null,
+                },
             }
         }
     }

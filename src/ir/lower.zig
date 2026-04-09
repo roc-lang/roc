@@ -452,13 +452,6 @@ const Lowerer = struct {
         };
     }
 
-    fn requireListElemType(self: *Lowerer, list_ty: lambdamono.Type.TypeId) lambdamono.Type.TypeId {
-        return switch (self.input.types.getType(list_ty)) {
-            .list => |elem| elem,
-            else => debugPanic("ir.lower invariant violated: expected list type for for_list iterable"),
-        };
-    }
-
     fn freshSymbol(self: *Lowerer, comptime _: []const u8) std.mem.Allocator.Error!Symbol {
         return try self.input.symbols.add(base.Ident.Idx.NONE, .synthetic);
     }
@@ -551,25 +544,6 @@ const Lowerer = struct {
         return try self.output.addVarSpan(out);
     }
 
-    fn discriminantLayoutForUnion(
-        self: *Lowerer,
-        union_ty: lambdamono.Type.TypeId,
-    ) std.mem.Allocator.Error!ir_layout.Ref {
-        return switch (self.input.types.getType(union_ty)) {
-            .tag_union => |tag_union| blk: {
-                const variant_count = self.input.types.sliceTags(tag_union.tags).len;
-                const prim: layout_mod.Idx = switch (variant_count) {
-                    0...0xff => .u8,
-                    0x100...0xffff => .u16,
-                    0x1_0000...0xffff_ffff => .u32,
-                    else => .u64,
-                };
-                break :blk .{ .canonical = prim };
-            },
-            else => debugPanic("ir.lower.discriminantLayoutForUnion expected tag union type"),
-        };
-    }
-
     fn lowerWhenExpr(
         self: *Lowerer,
         block: *LoweredBlock,
@@ -581,12 +555,9 @@ const Lowerer = struct {
         const cond = try self.lowerSubexprValue(block, env, cond_expr);
         if (cond == null) return;
 
-        const cond_ty = self.input.store.getExpr(cond_expr).ty;
-        const discr = if (self.input.types.getType(cond_ty) == .primitive and self.input.types.getType(cond_ty).primitive == .bool)
-            cond.?
-        else blk: {
+        const discr = if (self.input.layout_facts.exprDiscriminantLayout(cond_expr)) |discr_layout| blk: {
             const discr_var = try self.freshVarWithLayout(
-                try self.discriminantLayoutForUnion(cond_ty),
+                discr_layout,
                 "when_discr",
             );
             try block.stmts.append(self.allocator, .{ .let_ = .{
@@ -594,7 +565,7 @@ const Lowerer = struct {
                 .expr = try self.output.addExpr(.{ .get_union_id = cond.? }),
             } });
             break :blk discr_var;
-        };
+        } else cond.?;
 
         var tag_branches = std.ArrayList(ast.Branch).empty;
         defer tag_branches.deinit(self.allocator);
@@ -819,8 +790,7 @@ const Lowerer = struct {
         const iterable = try self.lowerSubexprValue(block, env, iterable_expr);
         if (iterable == null) return;
 
-        const iterable_ty = self.input.store.getExpr(iterable_expr).ty;
-        const elem = try self.freshVar(self.requireListElemType(iterable_ty), "for_elem");
+        const elem = try self.freshVarWithLayout(self.input.layout_facts.patLayout(patt), "for_elem");
         const body_block = try self.lowerPatternBranchBlock(env, elem, patt, body_expr);
         try block.stmts.append(self.allocator, .{ .for_list = .{
             .elem = elem,
