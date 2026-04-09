@@ -1,237 +1,217 @@
-# Hosted Proc Fact Plan
+# List Append/Reserve Correctness Plan
 
 Status: complete
 
 ## Goal
 
-Remove the remaining hosted-lambda shortcut from the active pipeline and replace it with the long-term ideal design:
+Make list append/reserve work in the long-term ideal way:
 
-- no compiler stage treats hosted functions as ordinary lambdas with fake bodies
-- no compiler stage fabricates runtime errors or crash placeholders to stand in for missing hosted semantics
-- hosted functions are represented as one explicit proc fact produced early and consumed directly by every later stage
-- the resulting design is maximally correct and maximally efficient, even if it takes more implementation work
+- `list_append_unsafe` remains a genuinely memory-unsafe compiler primitive
+- the compiler knows only about irreducible list primitives, not about `List.append` as a special builtin
+- `List.append` is ordinary Roc code in `Builtin.roc`
+- `List.reserve` is publicly exposed ordinary Roc code in `Builtin.roc`
+- ordinary public builtins establish safety preconditions before calling unsafe primitives
+- interpreter and backends execute `list_append_unsafe` as actually unsafe, with no semantic softening
 
-This plan explicitly prioritizes the ideal long-term shape of the compiler over short-term convenience or minimal patch size.
+This plan explicitly prioritizes the ideal long-term architecture over implementation speed or patch size.
 
-`cor` remains the guide:
+## Required Architecture
 
-- earlier stages decide semantics once
-- later stages consume those explicit facts only
-- no recovery, fallback, or heuristic reconstruction
+The correct boundary is:
 
-## Current Problem
+1. `Builtin.roc` defines public list APIs in ordinary Roc
+2. the compiler only recognizes irreducible primitives such as:
+   - `list_append_unsafe`
+   - `list_get_unsafe`
+   - `list_reserve`
+   - `list_with_capacity`
+  - `list_release_excess_capacity`
+3. later stages lower those primitives directly without changing their meaning
+4. interpreter and backends implement the same primitive contract
 
-Today hosted functions are introduced in canonicalization as `e_hosted_lambda`, but they still look too much like ordinary lambdas:
+The compiler should not know that `List.append` exists in any special way.
 
-- canonicalization fabricates a crash body
-- monotype partially lowers them through the lambda path
-- zero-arg hosted functions still fabricate a `runtime_error`
-- direct expr lowering still has hosted-lambda TODOs
+## Current Bugs
 
-That is the wrong boundary. Hosted functions are top-level external procs, not closures.
+Today the contract is broken in multiple places:
 
-## Target Shape
+- [`/Users/rtfeldman/.codex/worktrees/1d55/roc/src/build/roc/Builtin.roc`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/build/roc/Builtin.roc)
+  - `List.append` directly calls `list_append_unsafe` without first establishing spare capacity
+  - `List.reserve` is not publicly exposed even though the primitive exists
 
-Hosted functions should become a first-class top-level proc concept.
+- [`/Users/rtfeldman/.codex/worktrees/1d55/roc/src/build/builtin_compiler/main.zig`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/build/builtin_compiler/main.zig)
+  - `list_append_unsafe` is mapped, but the top-level primitives `list_reserve` and `list_release_excess_capacity` were not
 
-The target pipeline shape is:
+- [`/Users/rtfeldman/.codex/worktrees/1d55/roc/src/eval/interpreter.zig`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/eval/interpreter.zig)
+  - `list_append_unsafe` is intentionally implemented with the safe append helper
 
-1. canonicalization/checking records explicit hosted-proc facts
-2. monotype lowers hosted defs as hosted procs, not lambdas
-3. lambda lifting preserves hosted proc defs directly
-4. lambdasolved carries hosted proc defs without inference from fake bodies
-5. lambdamono carries hosted proc defs without closure lowering
-6. IR carries hosted proc defs explicitly
-7. LIR proc specs receive hosted metadata directly and never need a fake Roc body to explain the proc
-8. backend/interpreter hosted call paths consume that explicit proc metadata
+- [`/Users/rtfeldman/.codex/worktrees/1d55/roc/src/backend/dev/LirCodeGen.zig`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/backend/dev/LirCodeGen.zig)
+  - non-ZST `list_append_unsafe` is intentionally compiled to the safe append helper
 
-## Phase 1: Introduce First-Class Hosted Proc Metadata
+This is an explicit semantic contract violation.
 
-Add one shared hosted-proc metadata shape that is explicit and lossless:
+## Phase 1: Expose The Right Public Builtins
 
-- hosted symbol name
-- stable hosted-table index
+Fix `Builtin.roc` so the public API exposes the correct ordinary Roc functions.
 
-Then introduce first-class hosted top-level def variants instead of encoding hosted defs as ordinary function defs.
+Required changes:
 
-Likely affected files:
+- add public `List.reserve : List(item), U64 -> List(item)`
+- add public `List.release_excess_capacity : List(item) -> List(item)` if we intend to expose that primitive too
+- rewrite `List.append` to establish spare capacity before calling the unsafe primitive
 
-- [`/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/ast.zig`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/ast.zig)
-- [`/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype_lifted/ast.zig`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype_lifted/ast.zig)
-- [`/Users/rtfeldman/.codex/worktrees/1d55/roc/src/lambdasolved/ast.zig`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/lambdasolved/ast.zig)
-- [`/Users/rtfeldman/.codex/worktrees/1d55/roc/src/lambdamono/ast.zig`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/lambdamono/ast.zig)
-- [`/Users/rtfeldman/.codex/worktrees/1d55/roc/src/ir/ast.zig`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/ir/ast.zig)
+Target shape:
 
-Success condition:
+```roc
+reserve = |list, spare| list_reserve(list, spare)
 
-- the compiler can represent “top-level hosted proc” explicitly without pretending it has a lambda body
-
-## Phase 2: Make Monotype Lower Hosted Defs Directly
-
-Replace the remaining hosted-lambda shortcut in monotype with explicit hosted-proc lowering.
-
-Requirements:
-
-- branch on hosted-proc facts before entering lambda lowering
-- remove the hosted-specific runtime-error fabrication
-- remove the hosted-lambda TODO arms from ordinary expr lowering
-- preserve full explicit arg facts and full function type facts
-
-Likely affected files:
-
-- [`/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/lower.zig`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/lower.zig)
+append = |list, item| {
+    reserved = List.reserve(list, 1)
+    list_append_unsafe(reserved, item)
+}
+```
 
 Success condition:
 
-- monotype no longer treats hosted functions as lambdas at all
+- `List.append` is ordinary Roc code
+- `List.reserve` is ordinary Roc code
+- no public builtin exposes memory unsafety directly
 
-## Phase 3: Preserve Hosted Proc Facts Through Lambda Lifting
+## Phase 2: Audit Every Builtin.roc Use Of list_append_unsafe
 
-Hosted procs are already top-level and have no closure semantics.
+Audit every direct use of `list_append_unsafe` in `Builtin.roc`.
 
-So lambda lifting should:
+Each call site must satisfy one of these:
 
-- copy hosted-proc defs through untouched
-- never try to lift them
-- never try to infer free variables or captures for them
+- it is preceded by an explicit `List.reserve(..., needed_spare)` proof
+- it originates from `List.with_capacity(...)` with a loop whose max append count is explicitly bounded by that capacity
+- it is otherwise accompanied by an explicit static proof of sufficient capacity
 
-Likely affected files:
+Expected current call sites:
 
-- [`/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype_lifted/lower.zig`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype_lifted/lower.zig)
+- `List.append`
+- `List.rev`
+- `List.map`
+- any local loops that grow a list by repeated appends
 
-Success condition:
+For each call site:
 
-- hosted-proc defs survive into `monotype_lifted` as explicit hosted procs
-
-## Phase 4: Carry Hosted Proc Facts Through Lambdasolved
-
-Hosted procs must not participate in ordinary function-body inference.
-
-Requirements:
-
-- instantiate hosted-proc defs explicitly
-- add them to environments as already-known top-level proc facts
-- do not infer them from fake bodies
-- do not include them in recursive function-body SCC inference
-
-Likely affected files:
-
-- [`/Users/rtfeldman/.codex/worktrees/1d55/roc/src/lambdasolved/lower.zig`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/lambdasolved/lower.zig)
+- keep it if the proof is explicit and correct
+- rewrite it if the proof is missing
+- do not add compiler heuristics or backend workarounds to compensate
 
 Success condition:
 
-- lambdasolved carries hosted proc defs explicitly and never asks for a hosted body
+- every direct `list_append_unsafe` in `Builtin.roc` is justified locally and explicitly
 
-## Phase 5: Carry Hosted Proc Facts Through Lambdamono
+## Phase 3: Wire Public Reserve/Release Builtins Through The Builtin Compiler
 
-Hosted procs are executable top-level procs, not closures.
+Update the builtin compiler so the public Builtin module can lower the new public functions directly to primitives.
 
-Requirements:
+Required changes:
 
-- preserve hosted metadata on defs
-- keep hosted procs out of closure lowering
-- keep hosted procs out of lambda-set specialization queues unless that is explicitly required and modeled
-- if a hosted proc is referenced as a function value, treat it as a captureless top-level proc value, not as a closure
+- map `list_reserve` to `.list_reserve`
+- map `list_release_excess_capacity` to `.list_release_excess_capacity` if exposed publicly
 
-Likely affected files:
+Likely affected file:
 
-- [`/Users/rtfeldman/.codex/worktrees/1d55/roc/src/lambdamono/lower.zig`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/lambdamono/lower.zig)
-- [`/Users/rtfeldman/.codex/worktrees/1d55/roc/src/lambdamono/specializations.zig`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/lambdamono/specializations.zig)
+- [`/Users/rtfeldman/.codex/worktrees/1d55/roc/src/build/builtin_compiler/main.zig`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/build/builtin_compiler/main.zig)
 
 Success condition:
 
-- lambdamono lowers hosted procs as ordinary top-level executable proc definitions with explicit hosted metadata
+- `Builtin.roc` can express the correct public surface using only primitive replacements
 
-## Phase 6: Carry Hosted Proc Facts Through IR And Into LIR
+## Phase 4: Make list_append_unsafe Actually Unsafe Everywhere
 
-Thread the hosted fact into IR and then into LIR proc specs.
+Interpreter and backends must stop changing the meaning of the primitive.
 
-Requirements:
+Required changes:
 
-- IR defs carry hosted metadata explicitly
-- LIR proc specs receive hosted metadata directly from IR
-- hosted procs no longer require fake bodies to justify their existence
-- if the LIR/IR container shape still requires a body field structurally, refactor that shape so hosted procs can be represented explicitly instead of by placeholder bodies
+- interpreter `list_append_unsafe` must call the actual unsafe primitive implementation
+- dev backend `list_append_unsafe` must always call the actual unsafe wrapper, not the safe wrapper for non-ZST
+- wasm path must be checked to ensure its host/import implementation matches the unsafe contract exactly
+- remove comments and code that intentionally “match” the previous cheating behavior
 
 Likely affected files:
 
-- [`/Users/rtfeldman/.codex/worktrees/1d55/roc/src/ir/lower.zig`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/ir/lower.zig)
-- [`/Users/rtfeldman/.codex/worktrees/1d55/roc/src/lir/FromIr.zig`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/lir/FromIr.zig)
-- [`/Users/rtfeldman/.codex/worktrees/1d55/roc/src/lir/LIR.zig`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/lir/LIR.zig)
+- [`/Users/rtfeldman/.codex/worktrees/1d55/roc/src/eval/interpreter.zig`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/eval/interpreter.zig)
+- [`/Users/rtfeldman/.codex/worktrees/1d55/roc/src/backend/dev/LirCodeGen.zig`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/backend/dev/LirCodeGen.zig)
+- [`/Users/rtfeldman/.codex/worktrees/1d55/roc/src/repl/wasm_runner.zig`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/repl/wasm_runner.zig)
+- [`/Users/rtfeldman/.codex/worktrees/1d55/roc/src/backend/wasm/WasmCodeGen.zig`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/backend/wasm/WasmCodeGen.zig)
 
 Success condition:
 
-- hosted proc specs reach LIR through explicit proc facts, not through fake Roc code
+- every implementation of `list_append_unsafe` is actually unsafe and assumes capacity is already available
 
-## Phase 7: Tests
+## Phase 5: Add Tests That Prove The Boundary Is Correct
 
-We need tests that prove both semantic correctness and the explicit-fact pipeline shape.
+We need tests for both semantics and architecture.
 
-### A. Monotype / Lowering Unit Tests
+### A. Public Builtin Behavior Tests
 
-Add unit tests showing that a hosted declaration:
+Add end-to-end tests showing:
 
-- lowers to an explicit hosted-proc def
-- does not produce a runtime-error body
-- does not take the lambda-lowering path
+- `List.append([], x)` works
+- `List.append([..], x)` works
+- repeated `List.append` works through ordinary public API usage
+- `List.reserve(list, n)` followed by appends works
+- `List.release_excess_capacity` preserves contents
 
-### B. Cross-Stage Propagation Tests
+### B. Primitive Contract Tests
 
-Add unit tests showing that the hosted metadata survives through:
+Add lower-level tests that prove:
 
-- monotype
-- monotype_lifted
-- lambdasolved
-- lambdamono
-- IR
-- LIR
+- `list_append_unsafe` works correctly when spare capacity is already available
+- `list_with_capacity(n)` followed by exactly `n` unsafe appends works
+- `list_reserve(list, spare)` followed by `spare` unsafe appends works
 
-The test should verify:
+These tests should exercise:
 
-- hosted index is preserved
-- hosted symbol name is preserved
-- no stage reconstructs the hosted fact from a fake body
+- non-ZST element lists
+- ZST element lists
+- refcounted element lists
 
-### C. End-To-End Runtime Tests
+### C. Contract-Separation Tests
 
-Add end-to-end tests that compile and run Roc code using hosted functions and verify:
+Add tests that verify the public/safe layer is the thing establishing the precondition, not the primitive executor.
 
-- the hosted function call reaches the host ABI callback
-- the correct hosted-table index is used
-- arguments are marshaled with the expected layouts
-- return values are handled correctly
+Examples:
 
-Coverage should include:
+- compile and run Roc code using `List.append` and verify behavior stays correct after removing backend/interpreter safe-append cheating
+- add backend/interpreter tests that directly execute low-level `list_append_unsafe` only in proven-capacity situations
 
-- zero-arg hosted function
-- one-arg hosted function
-- multiple-arg hosted function
-- repeated hosted calls
-- hosted calls inside blocks / branches / loops
+If practical, add representation/allocation-sensitive tests to show:
 
-### D. Default-App `echo!` Coverage
+- `List.reserve(list, 1)` avoids reallocation before a following append when capacity was insufficient previously
+- repeated appends after a single reserve do not perform extra growth until spare capacity is exhausted
 
-Because `echo!` is injected as a hosted function, add tests that confirm:
+### D. Builtin Surface Tests
 
-- `echo!` lowers as an explicit hosted proc
-- calling `echo!` no longer depends on fake hosted lambda bodies
+Add tests proving:
 
-## Phase 8: Final Audit
+- `List.reserve` is publicly available from Roc code
+- `List.release_excess_capacity` is publicly available from Roc code
+- `List.append` is still just ordinary Roc code built from the primitive layer
+
+## Phase 6: Final Audit
 
 After implementation:
 
-- rerun the earlier hosted-lambda audit
-- verify the old hosted shortcut sites are gone
-- verify no new fallbacks or heuristics were introduced
-- verify the remaining hosted behavior is entirely explicit-fact-driven
+- audit the full pipeline for `list_append_unsafe`
+- verify no stage treats `List.append` specially
+- verify no backend/interpreter path softens the unsafe contract
+- verify every direct `list_append_unsafe` call in `Builtin.roc` has an explicit local capacity proof
 
 ## Completion Criteria
 
 This plan is complete only when all of these are true:
 
-- [`/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/lower.zig:991`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/lower.zig:991) is gone
-- hosted expr-lowering TODO arms are gone from monotype
-- hosted defs are explicit proc facts through the full pipeline
-- LIR hosted proc specs are produced from explicit upstream metadata
-- tests verify both propagation and runtime behavior
-- no fake hosted lambda body remains in the active pipeline
+- `Builtin.roc` publicly exposes `List.reserve`
+- `Builtin.roc` publicly exposes `List.release_excess_capacity`
+- `List.append` in `Builtin.roc` establishes capacity explicitly before unsafe append
+- builtin compiler maps `list_reserve` and `list_release_excess_capacity` correctly
+- interpreter uses the actual unsafe append primitive for `list_append_unsafe`
+- dev backend uses the actual unsafe append primitive for `list_append_unsafe`
+- wasm import/host path matches the same unsafe contract
+- tests cover both public behavior and primitive contract boundaries
+- no compiler stage knows about `List.append` specially

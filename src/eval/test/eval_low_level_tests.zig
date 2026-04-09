@@ -650,6 +650,41 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "5" },
     },
     .{
+        .name = "low_level - List.reserve is public and preserves contents",
+        .source =
+        \\{
+        \\x = List.reserve([0, 1, 2], 4)
+        \\tail = List.append(x, 3)
+        \\List.get(tail, 3)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Ok(3.0)" },
+    },
+    .{
+        .name = "low_level - List.reserve supports repeated append",
+        .source =
+        \\{
+        \\reserved = List.reserve([], 3)
+        \\one = List.append(reserved, 1)
+        \\two = List.append(one, 2)
+        \\three = List.append(two, 3)
+        \\List.len(three)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "3" },
+    },
+    .{
+        .name = "low_level - List.release_excess_capacity is public",
+        .source =
+        \\{
+        \\reserved = List.reserve([1, 2], 8)
+        \\trimmed = List.release_excess_capacity(reserved)
+        \\List.len(trimmed)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "2" },
+    },
+    .{
         .name = "low_level - List.append on empty list",
         .source =
         \\{

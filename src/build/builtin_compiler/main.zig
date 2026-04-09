@@ -165,6 +165,12 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) !std.ArrayList(CIR.Def.Id
     if (env.common.findIdent("list_append_unsafe")) |list_append_unsafe_ident| {
         try low_level_map.put(list_append_unsafe_ident, .list_append_unsafe);
     }
+    if (env.common.findIdent("list_reserve")) |list_reserve_ident| {
+        try low_level_map.put(list_reserve_ident, .list_reserve);
+    }
+    if (env.common.findIdent("list_release_excess_capacity")) |list_release_excess_capacity_ident| {
+        try low_level_map.put(list_release_excess_capacity_ident, .list_release_excess_capacity);
+    }
     if (env.common.findIdent("Builtin.List.drop_at")) |list_drop_at_ident| {
         try low_level_map.put(list_drop_at_ident, .list_drop_at);
     }

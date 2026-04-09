@@ -2009,6 +2009,34 @@ test "listAppendUnsafe with pre-allocated capacity" {
     try std.testing.expectEqual(@as(u16, 9999), elements[0]);
 }
 
+test "listReserve followed by listAppendUnsafe reuses reserved allocation" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    var list = RocList.empty();
+    list = listReserve(list, @alignOf(u16), 2, @sizeOf(u16), false, null, rcNone, utils.UpdateMode.Immutable, test_env.getOps());
+
+    const reserved_ptr = list.bytes;
+    try std.testing.expect(list.getCapacity() >= 2);
+
+    const first: u16 = 11;
+    list = listAppendUnsafe(list, @as(?[*]u8, @ptrCast(@constCast(&first))), @sizeOf(u16), &copy_fallback);
+    try std.testing.expectEqual(reserved_ptr, list.bytes);
+
+    const second: u16 = 22;
+    list = listAppendUnsafe(list, @as(?[*]u8, @ptrCast(@constCast(&second))), @sizeOf(u16), &copy_fallback);
+    try std.testing.expectEqual(reserved_ptr, list.bytes);
+    try std.testing.expectEqual(@as(usize, 2), list.len());
+
+    const elements_ptr = list.elements(u16);
+    try std.testing.expect(elements_ptr != null);
+    const elements = elements_ptr.?[0..list.len()];
+    try std.testing.expectEqual(@as(u16, 11), elements[0]);
+    try std.testing.expectEqual(@as(u16, 22), elements[1]);
+
+    defer list.decref(@alignOf(u16), @sizeOf(u16), false, null, rcNone, test_env.getOps());
+}
+
 test "listPrepend basic functionality" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();

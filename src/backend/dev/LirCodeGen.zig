@@ -1324,7 +1324,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 .list_append_unsafe => {
                     // list_append(list, element) -> List
-                    // Uses SAFE listAppendSafeC that reserves capacity if needed
                     if (args.len != 2) {
                         unreachable;
                     }
@@ -1398,55 +1397,27 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     };
 
                     // Ensure element is on stack
-                    const elem_offset: i32 = try self.ensureOnStack(elem_loc, elem_size_align.size);
+                    const elem_offset: i32 = if (is_zst)
+                        self.codegen.allocStackSlot(1)
+                    else
+                        try self.ensureOnStack(elem_loc, elem_size_align.size);
 
                     // Allocate result slot (24 bytes for RocList)
                     const result_offset = self.codegen.allocStackSlot(roc_str_size);
 
-                    // For ZST (zero-sized types), use the unsafe version since no capacity is needed.
-                    // For regular elements, use the safe version that reserves capacity.
                     const base_reg = frame_ptr;
+                    const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_append_unsafe);
 
-                    if (is_zst) {
-                        // ZST: use listAppendUnsafeC (fewer args, doesn't need capacity reservation)
-                        const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_append_unsafe);
-
-                        // roc_builtins_list_append_unsafe(out, list_bytes, list_len, list_cap, element, element_width, roc_ops)
-                        var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                        try builder.addLeaArg(base_reg, result_offset);
-                        try builder.addMemArg(base_reg, list_offset);
-                        try builder.addMemArg(base_reg, list_offset + 8);
-                        try builder.addMemArg(base_reg, list_offset + 16);
-                        try builder.addLeaArg(base_reg, elem_offset);
-                        try builder.addImmArg(0); // elem_width = 0 for ZST
-                        try builder.addRegArg(roc_ops_reg);
-                        try self.callBuiltin(&builder, fn_addr, .list_append_unsafe);
-                    } else {
-                        // Non-ZST: use listAppendSafeC which reserves capacity
-                        const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_append_safe);
-                        const alignment_bytes = elem_size_align.alignment.toByteUnits();
-
-                        // Determine if elements contain refcounted data
-                        const elements_refcounted: bool = blk: {
-                            if (ret_layout_val.tag == .list) {
-                                break :blk ls.layoutContainsRefcounted(ls.getLayout(ret_layout_val.data.list));
-                            }
-                            break :blk false;
-                        };
-
-                        // roc_builtins_list_append_safe(out, list_bytes, list_len, list_cap, element, alignment, element_width, elements_refcounted, roc_ops)
-                        var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                        try builder.addLeaArg(base_reg, result_offset);
-                        try builder.addMemArg(base_reg, list_offset);
-                        try builder.addMemArg(base_reg, list_offset + 8);
-                        try builder.addMemArg(base_reg, list_offset + 16);
-                        try builder.addLeaArg(base_reg, elem_offset);
-                        try builder.addImmArg(@intCast(alignment_bytes));
-                        try builder.addImmArg(@intCast(elem_size_align.size));
-                        try builder.addImmArg(if (elements_refcounted) 1 else 0);
-                        try builder.addRegArg(roc_ops_reg);
-                        try self.callBuiltin(&builder, fn_addr, .list_append_safe);
-                    }
+                    // roc_builtins_list_append_unsafe(out, list_bytes, list_len, list_cap, element, element_width, roc_ops)
+                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    try builder.addLeaArg(base_reg, result_offset);
+                    try builder.addMemArg(base_reg, list_offset);
+                    try builder.addMemArg(base_reg, list_offset + 8);
+                    try builder.addMemArg(base_reg, list_offset + 16);
+                    try builder.addLeaArg(base_reg, elem_offset);
+                    try builder.addImmArg(if (is_zst) 0 else @as(i64, @intCast(elem_size_align.size)));
+                    try builder.addRegArg(roc_ops_reg);
+                    try self.callBuiltin(&builder, fn_addr, .list_append_unsafe);
 
                     // Return as .list_stack so recursive calls properly detect this as a list argument
                     return .{

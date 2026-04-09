@@ -956,24 +956,29 @@ fn hostListAppendUnsafe(_: ?*anyopaque, module: *bytebox.ModuleInstance, params:
 
     const data_ptr: usize = @intCast(std.mem.readInt(u32, buffer[list_ptr..][0..4], .little));
     const len: usize = @intCast(std.mem.readInt(u32, buffer[list_ptr + 4 ..][0..4], .little));
+    const cap: usize = @intCast(std.mem.readInt(u32, buffer[list_ptr + 8 ..][0..4], .little));
     const new_len = len + 1;
+
+    _ = alignment;
 
     if (elem_width == 0) {
         std.mem.writeInt(u32, buffer[result_ptr..][0..4], @intCast(data_ptr), .little);
         std.mem.writeInt(u32, buffer[result_ptr + 4 ..][0..4], @intCast(new_len), .little);
-        std.mem.writeInt(u32, buffer[result_ptr + 8 ..][0..4], @intCast(new_len), .little);
+        std.mem.writeInt(u32, buffer[result_ptr + 8 ..][0..4], @intCast(cap), .little);
         return;
     }
 
-    const new_data = allocWasmData(buffer, alignment, new_len * elem_width);
-    if (len > 0) {
-        @memcpy(buffer[new_data..][0 .. len * elem_width], buffer[data_ptr..][0 .. len * elem_width]);
+    if (cap < new_len) {
+        std.debug.panic("roc_list_append_unsafe called without spare capacity (len={}, cap={})", .{ len, cap });
     }
-    @memcpy(buffer[new_data + len * elem_width ..][0..elem_width], buffer[elem_ptr..][0..elem_width]);
+    if (data_ptr == 0) {
+        std.debug.panic("roc_list_append_unsafe called with null data pointer for non-ZST list", .{});
+    }
+    @memcpy(buffer[data_ptr + len * elem_width ..][0..elem_width], buffer[elem_ptr..][0..elem_width]);
 
-    std.mem.writeInt(u32, buffer[result_ptr..][0..4], @intCast(new_data), .little);
+    std.mem.writeInt(u32, buffer[result_ptr..][0..4], @intCast(data_ptr), .little);
     std.mem.writeInt(u32, buffer[result_ptr + 4 ..][0..4], @intCast(new_len), .little);
-    std.mem.writeInt(u32, buffer[result_ptr + 8 ..][0..4], @intCast(new_len), .little);
+    std.mem.writeInt(u32, buffer[result_ptr + 8 ..][0..4], @intCast(cap), .little);
 }
 
 fn hostListReverse(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {

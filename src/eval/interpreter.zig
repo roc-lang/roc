@@ -2560,25 +2560,12 @@ pub const Interpreter = struct {
                 break :blk val;
             },
             .list_append_unsafe => blk: {
-                // The Roc List.append function emits list_append_unsafe directly.
-                // Use the safe listAppend which reserves capacity first,
-                // matching the dev codegen (LirCodeGen) behavior.
                 const info = self.listElemInfo(arg_layout);
-                var crash_boundary = self.enterCrashBoundary();
-                defer crash_boundary.deinit();
-                const sj = crash_boundary.set();
-                if (sj != 0) return error.Crash;
-                const result = builtins.list.listAppend(
+                const result = builtins.list.listAppendUnsafe(
                     self.valueToRocListForLayout(args[0], arg_layout),
-                    info.alignment,
                     @ptrCast(args[1].ptr),
                     info.width,
-                    info.rc,
-                    null,
-                    &builtins.utils.rcNone,
-                    .InPlace,
                     &builtins.list.copy_fallback,
-                    &self.roc_ops,
                 );
                 break :blk self.rocListToValue(result, ll.ret_layout);
             },
