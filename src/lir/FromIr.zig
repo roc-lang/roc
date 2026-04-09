@@ -117,8 +117,11 @@ const Lowerer = struct {
             const proc_id = try self.store.addProcSpec(.{
                 .name = lirSymbol(def.name),
                 .args = try self.store.addLocalSpan(arg_locals),
-                .body = try self.store.addCFStmt(.runtime_error),
                 .ret_layout = try self.lowerLayoutId(def.ret_layout),
+                .hosted = if (def.hosted) |hosted| .{
+                    .symbol_name = hosted.symbol_name,
+                    .index = hosted.index,
+                } else null,
                 .result_contract = .fresh,
             });
             try self.proc_ids_by_symbol.put(def.name.raw(), proc_id);
@@ -155,7 +158,12 @@ const Lowerer = struct {
                 .layout = @intFromEnum(arg_layout),
             }, local_id);
         }
-        const body = try proc.lowerBlock(def.body, .ret);
+        const body = if (def.body) |body_id|
+            try proc.lowerBlock(body_id, .ret)
+        else if (def.hosted != null)
+            null
+        else
+            debugPanic("lir.from_ir invariant violated: non-hosted def missing body");
         const ret_layout = try self.lowerLayoutId(def.ret_layout);
 
         proc_ptr.* = .{
@@ -163,6 +171,10 @@ const Lowerer = struct {
             .args = arg_span,
             .body = body,
             .ret_layout = ret_layout,
+            .hosted = if (def.hosted) |hosted| .{
+                .symbol_name = hosted.symbol_name,
+                .index = hosted.index,
+            } else null,
             .result_contract = .fresh,
         };
     }

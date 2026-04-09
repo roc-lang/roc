@@ -181,8 +181,15 @@ pub const RunDef = struct {
     entry_ty: types.Var,
 };
 
+pub const HostedFnDef = struct {
+    bind: TypedSymbol,
+    args: Span(TypedSymbol),
+    hosted: base.HostedProc,
+};
+
 pub const DefVal = union(enum) {
     fn_: LetFn,
+    hosted_fn: HostedFnDef,
     val: ExprId,
     run: RunDef,
 };
@@ -204,6 +211,7 @@ pub const Store = struct {
     stmt_ids: std.ArrayList(StmtId),
     branch_ids: std.ArrayList(BranchId),
     field_exprs: std.ArrayList(FieldExpr),
+    typed_symbols: std.ArrayList(TypedSymbol),
 
     pub fn init(allocator: std.mem.Allocator) Store {
         return .{
@@ -218,6 +226,7 @@ pub const Store = struct {
             .stmt_ids = .empty,
             .branch_ids = .empty,
             .field_exprs = .empty,
+            .typed_symbols = .empty,
         };
     }
 
@@ -232,6 +241,7 @@ pub const Store = struct {
         self.stmt_ids.deinit(self.allocator);
         self.branch_ids.deinit(self.allocator);
         self.field_exprs.deinit(self.allocator);
+        self.typed_symbols.deinit(self.allocator);
     }
 
     pub fn addExpr(self: *Store, expr: Expr) std.mem.Allocator.Error!ExprId {
@@ -339,6 +349,23 @@ pub const Store = struct {
     pub fn sliceFieldExprSpan(self: *const Store, span: Span(FieldExpr)) []const FieldExpr {
         if (span.len == 0) return &.{};
         return self.field_exprs.items[span.start..][0..span.len];
+    }
+
+    pub fn addTypedSymbolSpan(self: *Store, values: []const TypedSymbol) std.mem.Allocator.Error!Span(TypedSymbol) {
+        if (values.len == 0) return Span(TypedSymbol).empty();
+        const start: u32 = @intCast(self.typed_symbols.items.len);
+        try self.typed_symbols.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
+    pub fn sliceTypedSymbolSpan(self: *const Store, span: Span(TypedSymbol)) []const TypedSymbol {
+        if (span.len == 0) return &.{};
+        return self.typed_symbols.items[span.start..][0..span.len];
+    }
+
+    pub fn sliceTypedSymbolSpanMut(self: *Store, span: Span(TypedSymbol)) []TypedSymbol {
+        if (span.len == 0) return &.{};
+        return self.typed_symbols.items[span.start..][0..span.len];
     }
 
     pub fn addDef(self: *Store, def: Def) std.mem.Allocator.Error!DefId {

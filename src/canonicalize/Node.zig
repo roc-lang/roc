@@ -618,7 +618,7 @@ pub const Payload = extern union {
     pub const ExprHostedLambda = extern struct {
         symbol_name: u32,
         index: u32,
-        args_body_idx: u32, // Index into span_with_node_data: (args.start, args.len, body)
+        args_span2_idx: u32, // Index into span2_data: (args.start, args.len)
     };
 
     pub const ExprLowLevel = extern struct {

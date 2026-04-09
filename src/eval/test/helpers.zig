@@ -21,6 +21,7 @@ const Interpreter = @import("../interpreter.zig").Interpreter;
 const RuntimeHostEnv = @import("RuntimeHostEnv.zig");
 
 const Can = can.Can;
+const HostedCompiler = can.HostedCompiler;
 const Check = check.Check;
 const ModuleEnv = can.ModuleEnv;
 const CIR = can.CIR;
@@ -374,6 +375,7 @@ fn parseAndCanonicalizeProgramWrapped(
             .module,
             import_module.source,
             false,
+            true,
             builtin_module.env,
             builtin_indices,
             available_imports,
@@ -396,6 +398,7 @@ fn parseAndCanonicalizeProgramWrapped(
         source_kind,
         source,
         inspect_wrap,
+        false,
         builtin_module.env,
         builtin_indices,
         main_imports,
@@ -429,6 +432,7 @@ fn parseCheckModule(
     source_kind: SourceKind,
     source: []const u8,
     inspect_wrap: bool,
+    hosted_transform: bool,
     builtin_module_env: *const ModuleEnv,
     builtin_indices: CIR.BuiltinIndices,
     available_imports: []const AvailableImport,
@@ -493,6 +497,16 @@ fn parseCheckModule(
     });
     errdefer czer.deinit();
     try czer.canonicalizeFile();
+    if (hosted_transform) {
+        var modified_defs = try HostedCompiler.replaceAnnoOnlyWithHosted(module_env);
+        defer modified_defs.deinit(module_env.gpa);
+        var hosted_fns = try HostedCompiler.collectAndSortHostedFunctions(module_env);
+        defer {
+            for (hosted_fns.items) |hosted_fn| allocator.free(hosted_fn.name_text);
+            hosted_fns.deinit(module_env.gpa);
+        }
+        try HostedCompiler.assignHostedIndices(module_env, hosted_fns.items);
+    }
     const can_elapsed = can_timer.read();
 
     var check_timer = try std.time.Timer.start();

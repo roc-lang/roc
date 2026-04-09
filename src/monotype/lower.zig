@@ -688,6 +688,12 @@ pub const Lowerer = struct {
                 try self.finalizeTypedSymbol(&let_fn.arg);
                 try self.finalizeExprById(let_fn.body, visited);
             },
+            .hosted_fn => |*hosted_fn| {
+                try self.finalizeTypedSymbol(&hosted_fn.bind);
+                for (self.program.store.sliceTypedSymbolSpanMut(hosted_fn.args)) |*arg| {
+                    try self.finalizeTypedSymbol(arg);
+                }
+            },
             .val => |expr_id| try self.finalizeExprById(expr_id, visited),
             .run => |*run_def| {
                 try self.finalizeTypedSymbol(&run_def.bind);
@@ -765,6 +771,14 @@ pub const Lowerer = struct {
     ) std.mem.Allocator.Error!?ast.DefId {
         const env = self.ctx.env(module_idx);
         const def = env.store.getDef(def_idx);
+
+        if (def.kind == .let) {
+            const bind_symbol = self.lookupTopLevelSymbol(module_idx, def.pattern) orelse return null;
+            if (self.emitted_defs_by_symbol.get(bind_symbol)) |existing| return existing;
+            if (env.store.getExpr(def.expr) == .e_hosted_lambda) {
+                return try self.lowerHostedTopLevelDef(module_idx, def_idx, bind_symbol, null);
+            }
+        }
 
         return switch (def.kind) {
             .let => blk: {
@@ -906,6 +920,15 @@ pub const Lowerer = struct {
         const def = env.store.getDef(pending.source.def_idx);
         const specialized_checker_var = try self.requireSpecializedTopLevelCheckerVar(pending);
 
+        if (env.store.getExpr(def.expr) == .e_hosted_lambda) {
+            return try self.lowerHostedTopLevelDef(
+                pending.source.module_idx,
+                pending.source.def_idx,
+                pending.specialized_symbol,
+                specialized_checker_var,
+            );
+        }
+
         var type_scope: TypeCloneScope = undefined;
         type_scope.initCloneAll(self.allocator, @constCast(env));
         defer type_scope.deinit();
@@ -928,6 +951,73 @@ pub const Lowerer = struct {
             .value = .{ .fn_ = letfn },
         });
         try self.emitted_defs_by_symbol.put(letfn.bind.symbol, lowered);
+        return lowered;
+    }
+
+    fn lowerHostedTopLevelDef(
+        self: *Lowerer,
+        module_idx: u32,
+        def_idx: CIR.Def.Idx,
+        bind_symbol: symbol_mod.Symbol,
+        expected_var: ?Var,
+    ) std.mem.Allocator.Error!ast.DefId {
+        const env = self.ctx.env(module_idx);
+        const def = env.store.getDef(def_idx);
+        const expr = env.store.getExpr(def.expr);
+        const hosted = switch (expr) {
+            .e_hosted_lambda => |hosted| hosted,
+            else => debugPanic("monotype invariant violated: attempted to lower non-hosted def as hosted top-level", .{}),
+        };
+
+        var type_scope: TypeCloneScope = undefined;
+        type_scope.initCloneAll(self.allocator, @constCast(env));
+        defer type_scope.deinit();
+
+        const source_expr_var = ModuleEnv.varFrom(def.expr);
+        const source_fn_var = try self.scopeVar(&type_scope, expected_var orelse source_expr_var);
+        try type_scope.var_map.put(source_expr_var, source_fn_var);
+        if (expected_var) |var_| {
+            try self.unifySpecializedCheckerVars(module_idx, source_fn_var, var_);
+        }
+        _ = try self.ensureExplicitFunctionFact(module_idx, &type_scope, source_fn_var);
+        try self.freezeExplicitFunctionTypeFacts(module_idx, &type_scope);
+
+        const arg_patterns = env.store.slicePatterns(hosted.args);
+        const fn_fact = try self.ensureExplicitFunctionFact(module_idx, &type_scope, source_fn_var);
+        const arg_count = fn_fact.arg_vars.len;
+        const arg_tys = try self.allocator.alloc(type_mod.TypeId, arg_count);
+        defer self.allocator.free(arg_tys);
+        for (0..arg_count) |i| {
+            arg_tys[i] = try self.requireFunctionArgType(module_idx, &type_scope, source_fn_var, i);
+        }
+        const lowered_args = try self.allocator.alloc(ast.TypedSymbol, arg_count);
+        defer self.allocator.free(lowered_args);
+        for (0..arg_count) |i| {
+            lowered_args[i] = if (i < arg_patterns.len)
+                try self.bindLambdaArg(module_idx, &type_scope, arg_patterns[i], arg_tys[i])
+            else
+                try self.makeUnitArgWithType(arg_tys[i]);
+        }
+
+        const bind_ty = try self.buildCurriedFuncType(arg_tys, try self.requireFunctionRetType(module_idx, &type_scope, source_fn_var));
+        const lowered = try self.program.store.addDef(.{
+            .bind = .{
+                .ty = try self.ctx.types.addType(bind_ty),
+                .symbol = bind_symbol,
+            },
+            .value = .{ .hosted_fn = .{
+                .bind = .{
+                    .ty = try self.ctx.types.addType(bind_ty),
+                    .symbol = bind_symbol,
+                },
+                .args = try self.program.store.addTypedSymbolSpan(lowered_args),
+                .hosted = .{
+                    .symbol_name = hosted.symbol_name,
+                    .index = hosted.index,
+                },
+            } },
+        });
+        try self.emitted_defs_by_symbol.put(bind_symbol, lowered);
         return lowered;
     }
 
@@ -978,66 +1068,7 @@ pub const Lowerer = struct {
                 if (lambda_expr != .e_lambda) unreachable;
                 break :blk lambda_expr.e_lambda;
             },
-            .e_hosted_lambda => |hosted| {
-                const arg_patterns = env.store.slicePatterns(hosted.args);
-                const first_arg_ty = if (arg_patterns.len == 0)
-                    try self.requireFunctionArgType(module_idx, type_scope, source_fn_var, 0)
-                else
-                    try self.requireFunctionArgType(module_idx, type_scope, source_fn_var, 0);
-                if (hosted.args.span.len == 0) {
-                    const unit_arg = try self.makeUnitArgWithType(first_arg_ty);
-                    const body = try self.program.store.addExpr(.{
-                        .ty = try self.requireExprTypeFact(module_idx, type_scope, hosted.body),
-                        .data = .{ .runtime_error = try @constCast(env).insertString("TODO monotype hosted lambda") },
-                    });
-                    return .{
-                        .recursive = recursive,
-                        .bind = .{
-                            .ty = try self.ctx.types.addType(.{
-                                .func = .{
-                                    .arg = unit_arg.ty,
-                                    .ret = self.program.store.getExpr(body).ty,
-                                },
-                            }),
-                            .symbol = bind_symbol,
-                        },
-                        .arg = unit_arg,
-                        .body = body,
-                    };
-                }
-
-                const first_arg = try self.bindLambdaArg(module_idx, type_scope, arg_patterns[0], first_arg_ty);
-                const body = try self.lowerLambdaBodyWithPattern(
-                    module_idx,
-                    type_scope,
-                    incoming_env,
-                    first_arg,
-                    try self.requireFunctionArgVar(module_idx, type_scope, source_fn_var, 0),
-                    arg_patterns[0],
-                    result_ty,
-                    result_var,
-                    arg_patterns.len == 1,
-                    hosted.body,
-                    if (arg_patterns.len == 1) null else arg_patterns[1..],
-                    source_fn_var,
-                    1,
-                );
-
-                return .{
-                    .recursive = recursive,
-                    .bind = .{
-                        .ty = try self.ctx.types.addType(.{
-                            .func = .{
-                                .arg = first_arg.ty,
-                                .ret = self.program.store.getExpr(body).ty,
-                            },
-                        }),
-                        .symbol = bind_symbol,
-                    },
-                    .arg = first_arg,
-                    .body = body,
-                };
-            },
+            .e_hosted_lambda => debugPanic("monotype invariant violated: hosted top-level proc escaped into lambda lowering", .{}),
             else => unreachable,
         };
 
@@ -2294,7 +2325,7 @@ pub const Lowerer = struct {
                     .data = .{ .clos = lowered.data },
                 });
             },
-            .e_hosted_lambda => |_| debugTodo("monotype.lowerExpr hosted lambda"),
+            .e_hosted_lambda => debugPanic("monotype invariant violated: hosted top-level proc escaped into monotype.lowerExpr", .{}),
             .e_record => |record| return self.lowerRecordExpr(
                 module_idx,
                 type_scope,
@@ -5388,7 +5419,7 @@ pub const Lowerer = struct {
                     .data = .{ .clos = lowered.data },
                 });
             },
-            .e_hosted_lambda => debugTodo("monotype.lowerExprWithExpectedType hosted lambda"),
+            .e_hosted_lambda => debugPanic("monotype invariant violated: hosted top-level proc escaped into monotype.lowerExprWithExpectedType", .{}),
             .e_run_low_level => |ll| try self.program.store.addExpr(.{
                 .ty = target_ty,
                 .data = .{ .low_level = .{

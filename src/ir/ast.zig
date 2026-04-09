@@ -127,8 +127,9 @@ pub const Stmt = union(enum) {
 pub const Def = struct {
     name: Symbol,
     args: Span(Var),
-    body: BlockId,
+    body: ?BlockId = null,
     ret_layout: LayoutRef,
+    hosted: ?base.HostedProc = null,
     entry_ty: ?types.Var = null,
 };
 

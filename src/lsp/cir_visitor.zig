@@ -271,7 +271,6 @@ pub fn CirVisitor(comptime Context: type) type {
                         self.walkPattern(store, arg_idx);
                         if (self.stopped) return;
                     }
-                    self.walkExpr(store, hosted.body);
                 },
                 .e_run_low_level => |run_low_level| {
                     for (store.sliceExpr(run_low_level.args)) |arg_idx| {

@@ -497,7 +497,6 @@ pub const Expr = union(enum) {
         symbol_name: base.Ident.Idx,
         index: u32, // Index into RocOps.hosted_fns (assigned during canonicalization)
         args: CIR.Pattern.Span,
-        body: Expr.Idx,
     },
 
     /// A low-level builtin operation.

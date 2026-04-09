@@ -678,15 +678,18 @@ pub const Interpreter = struct {
                 .assign_call => |assign| {
                     const callee_proc = self.store.getProcSpec(assign.proc);
                     std.debug.print(
-                        "LIR/interpreter failing assign_call callee proc {d}: name={d} body={d} ret_layout={d}\n",
+                        "LIR/interpreter failing assign_call callee proc {d}: name={d} body={any} ret_layout={d} hosted={any}\n",
                         .{
                             @intFromEnum(assign.proc),
                             callee_proc.name.raw(),
-                            @intFromEnum(callee_proc.body),
+                            callee_proc.body,
                             @intFromEnum(callee_proc.ret_layout),
+                            callee_proc.hosted,
                         },
                     );
-                    self.debugPrintStmtChain(callee_proc.body, 20);
+                    if (callee_proc.body) |body| {
+                        self.debugPrintStmtChain(body, 20);
+                    }
                 },
                 else => {},
             }
@@ -968,7 +971,7 @@ pub const Interpreter = struct {
                 ),
             );
         }
-        const outcome = try self.execStmtChain(&frame, proc_spec.body, null);
+        const outcome = try self.execStmtChain(&frame, requireProcBody(proc_id, proc_spec), null);
         return switch (outcome) {
             .returned => |ret_local| blk: {
                 trace.log(
@@ -1014,8 +1017,15 @@ pub const Interpreter = struct {
             .ret_layout = proc_spec.ret_layout,
             .locals = locals,
         };
-        try self.collectJoinPoints(&frame.join_points, proc_spec.body);
+        try self.collectJoinPoints(&frame.join_points, requireProcBody(proc_id, proc_spec));
         return frame;
+    }
+
+    fn requireProcBody(proc_id: LirProcSpecId, proc_spec: LirProcSpec) CFStmtId {
+        return proc_spec.body orelse std.debug.panic(
+            "LIR/interpreter invariant violated: non-hosted proc {d} missing statement body",
+            .{@intFromEnum(proc_id)},
+        );
     }
 
     fn collectJoinPoints(self: *LirInterpreter, join_points: *JoinPointMap, stmt_id: CFStmtId) Error!void {

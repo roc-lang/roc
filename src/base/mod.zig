@@ -2,6 +2,7 @@
 const std = @import("std");
 
 pub const SExprTree = @import("SExprTree.zig");
+pub const HostedProc = @import("HostedProc.zig").HostedProc;
 pub const Ident = @import("Ident.zig");
 pub const Region = @import("Region.zig");
 pub const StringLiteral = @import("StringLiteral.zig");

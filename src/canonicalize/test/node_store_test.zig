@@ -427,7 +427,6 @@ test "NodeStore round trip - Expressions" {
             .symbol_name = rand_ident_idx(),
             .index = rand.random().int(u32),
             .args = CIR.Pattern.Span{ .span = rand_span() },
-            .body = rand_idx(CIR.Expr.Idx),
         },
     });
     try expressions.append(gpa, CIR.Expr{

@@ -132,6 +132,14 @@ const Lowerer = struct {
                     .body = try self.instantiateExpr(fn_def.body),
                 } },
             }),
+            .hosted_fn => |hosted_fn| self.emitDef(.{
+                .bind = bind,
+                .value = .{ .hosted_fn = .{
+                    .bind = try self.instantiateTypedSymbol(hosted_fn.bind),
+                    .args = try self.instantiateTypedSymbolSpan(hosted_fn.args),
+                    .hosted = hosted_fn.hosted,
+                } },
+            }),
             .val => |expr_id| self.emitDef(.{
                 .bind = bind,
                 .value = .{ .val = try self.instantiateExpr(expr_id) },
@@ -442,6 +450,13 @@ const Lowerer = struct {
                         if (venv.len != 0) self.allocator.free(venv);
                         venv = next;
                     },
+                    .hosted_fn => |hosted_fn| {
+                        const inferred = try self.inferHostedFn(.{ .symbol = def.bind.symbol, .ty = def.bind.ty }, hosted_fn);
+                        try self.generalize(venv, inferred);
+                        const next = try self.extendEnvOne(venv, .{ .symbol = def.bind.symbol, .ty = inferred });
+                        if (venv.len != 0) self.allocator.free(venv);
+                        venv = next;
+                    },
                     .val => |expr_id| {
                         const inferred = try self.inferExpr(venv, expr_id);
                         try self.unify(def.bind.ty, inferred);
@@ -535,6 +550,20 @@ const Lowerer = struct {
             .lset = lset_ty,
             .ret = fn_ret_ty,
         } });
+        try self.unify(fn_entry.ty, fn_ty);
+        return fn_entry.ty;
+    }
+
+    fn inferHostedFn(self: *Lowerer, fn_entry: EnvEntry, hosted_fn: ast.HostedFnDef) std.mem.Allocator.Error!TypeVarId {
+        const args = self.output.sliceTypedSymbolSpan(hosted_fn.args);
+        if (args.len == 0) {
+            debugPanic("lambdasolved.inferHostedFn expected at least one executable arg");
+        }
+
+        const captures_span = try self.types.addCaptures(&.{});
+        const lambda_span = try self.types.addLambdas(&.{.{ .symbol = fn_entry.symbol, .captures = captures_span }});
+        const lset_ty = try self.types.freshContent(.{ .lambda_set = lambda_span });
+        const fn_ty = try self.rewriteFunctionLsetType(fn_entry.ty, lset_ty);
         try self.unify(fn_entry.ty, fn_ty);
         return fn_entry.ty;
     }
@@ -908,6 +937,7 @@ const Lowerer = struct {
                     try self.propagateExprErasure(fn_def.body, fn_env);
                     def.bind.ty = try self.rewriteFunctionRetType(def.bind.ty, self.output.getExpr(fn_def.body).ty);
                 },
+                .hosted_fn => {},
                 .val => |expr_id| {
                     try self.propagateExprErasure(expr_id, top_env);
                     def.bind.ty = self.output.getExpr(expr_id).ty;
@@ -1092,6 +1122,29 @@ const Lowerer = struct {
                 else => debugPanic("lambdasolved.rewriteFunctionRetType expected function"),
             },
             else => debugPanic("lambdasolved.rewriteFunctionRetType expected function"),
+        };
+    }
+
+    fn rewriteFunctionLsetType(self: *Lowerer, ty: TypeVarId, new_lset: TypeVarId) std.mem.Allocator.Error!TypeVarId {
+        const id = self.types.unlinkPreservingNominal(ty);
+        return switch (self.types.getNode(id)) {
+            .nominal => |backing| blk: {
+                const rewritten = try self.rewriteFunctionLsetType(backing, new_lset);
+                if (rewritten == backing) break :blk id;
+                break :blk try self.types.fresh(.{ .nominal = rewritten });
+            },
+            .content => |content| switch (content) {
+                .func => |func| blk: {
+                    if (func.lset == new_lset) break :blk id;
+                    break :blk try self.types.freshContent(.{ .func = .{
+                        .arg = func.arg,
+                        .lset = new_lset,
+                        .ret = func.ret,
+                    } });
+                },
+                else => debugPanic("lambdasolved.rewriteFunctionLsetType expected function"),
+            },
+            else => debugPanic("lambdasolved.rewriteFunctionLsetType expected function"),
         };
     }
 
@@ -1443,6 +1496,7 @@ const Lowerer = struct {
         const def = self.output.getDef(def_id);
         switch (def.value) {
             .fn_ => |fn_def| try self.collectExprEdges(fn_def.body, &edges),
+            .hosted_fn => {},
             .val => |expr_id| try self.collectExprEdges(expr_id, &edges),
             .run => |run_def| try self.collectExprEdges(run_def.body, &edges),
         }

@@ -2,9 +2,18 @@
 
 const std = @import("std");
 const base = @import("base");
+const can = @import("can");
+const eval = @import("eval");
+const backend = @import("backend");
+const builtins = @import("builtins");
+const collections = @import("collections");
 const helpers = @import("helpers.zig");
 
 const testing = std.testing;
+const Interpreter = eval.Interpreter;
+const RuntimeHostEnv = eval.RuntimeHostEnv;
+const HostLirCodeGen = backend.HostLirCodeGen;
+const ExecutableMemory = backend.ExecutableMemory;
 
 fn expectInspect(comptime source: []const u8, expected: []const u8) !void {
     var compiled = try helpers.compileInspectedExpr(testing.allocator, source);
@@ -36,6 +45,118 @@ fn countIndirectCalls(compiled: *const helpers.CompiledInspectedExpr) usize {
         }
     }
     return count;
+}
+
+fn countHostedProcSpecs(compiled: *const helpers.CompiledProgram) usize {
+    var count: usize = 0;
+    for (compiled.lowered.lir_result.store.getProcSpecs()) |proc| {
+        if (proc.hosted != null) count += 1;
+    }
+    return count;
+}
+
+fn countHostedProcSpecsWithoutBody(compiled: *const helpers.CompiledProgram) usize {
+    var count: usize = 0;
+    for (compiled.lowered.lir_result.store.getProcSpecs()) |proc| {
+        if (proc.hosted != null and proc.body == null) count += 1;
+    }
+    return count;
+}
+
+fn echoHostedFn(ops_raw: *anyopaque, _: *anyopaque, args_raw: *anyopaque) callconv(.c) void {
+    const ops: *builtins.host_abi.RocOps = @ptrCast(@alignCast(ops_raw));
+    const roc_str: *const builtins.str.RocStr = @ptrCast(@alignCast(args_raw));
+    ops.dbg(roc_str.asSlice());
+}
+
+fn tickHostedFn(ops_raw: *anyopaque, _: *anyopaque, _: *anyopaque) callconv(.c) void {
+    const ops: *builtins.host_abi.RocOps = @ptrCast(@alignCast(ops_raw));
+    ops.dbg("tick");
+}
+
+const PairArgs = extern struct {
+    first: builtins.str.RocStr,
+    second: builtins.str.RocStr,
+};
+
+fn pairHostedFn(ops_raw: *anyopaque, _: *anyopaque, args_raw: *anyopaque) callconv(.c) void {
+    const ops: *builtins.host_abi.RocOps = @ptrCast(@alignCast(ops_raw));
+    const args: *const PairArgs = @ptrCast(@alignCast(args_raw));
+    ops.dbg(args.first.asSlice());
+    ops.dbg(args.second.asSlice());
+}
+
+fn attachHostedFns(runtime_env: *RuntimeHostEnv, hosted_fns: []const builtins.host_abi.HostedFn) void {
+    const ops = runtime_env.get_ops();
+    ops.hosted_fns = .{
+        .count = @intCast(hosted_fns.len),
+        .fns = @ptrCast(@constCast(hosted_fns.ptr)),
+    };
+}
+
+fn runModuleWithInterpreter(
+    allocator: std.mem.Allocator,
+    compiled: *const helpers.CompiledProgram,
+    hosted_fns: []const builtins.host_abi.HostedFn,
+) !RuntimeHostEnv.RecordedRun {
+    var runtime_env = RuntimeHostEnv.init(allocator);
+    defer runtime_env.deinit();
+    attachHostedFns(&runtime_env, hosted_fns);
+
+    var interp = try Interpreter.init(
+        allocator,
+        &compiled.lowered.lir_result.store,
+        &compiled.lowered.lir_result.layouts,
+        runtime_env.get_ops(),
+    );
+    defer interp.deinit();
+
+    _ = try interp.eval(.{ .proc_id = compiled.lowered.main_proc });
+    return try runtime_env.snapshot(allocator);
+}
+
+fn runModuleWithDevBackend(
+    allocator: std.mem.Allocator,
+    compiled: *const helpers.CompiledProgram,
+    hosted_fns: []const builtins.host_abi.HostedFn,
+) !RuntimeHostEnv.RecordedRun {
+    var codegen = try HostLirCodeGen.init(
+        allocator,
+        &compiled.lowered.lir_result.store,
+        &compiled.lowered.lir_result.layouts,
+        null,
+    );
+    defer codegen.deinit();
+    try codegen.compileAllProcSpecs(compiled.lowered.lir_result.store.getProcSpecs());
+
+    const proc = compiled.lowered.lir_result.store.getProcSpec(compiled.lowered.main_proc);
+    const entrypoint = try codegen.generateEntrypointWrapper(
+        "roc_eval_hosted_test_main",
+        compiled.lowered.main_proc,
+        &.{},
+        proc.ret_layout,
+    );
+    var exec_mem = try ExecutableMemory.initWithEntryOffset(
+        codegen.getGeneratedCode(),
+        entrypoint.offset,
+    );
+    defer exec_mem.deinit();
+
+    var runtime_env = RuntimeHostEnv.init(allocator);
+    defer runtime_env.deinit();
+    attachHostedFns(&runtime_env, hosted_fns);
+
+    const ret_layout = proc.ret_layout;
+    const size_align = compiled.lowered.lir_result.layouts.layoutSizeAlign(
+        compiled.lowered.lir_result.layouts.getLayout(ret_layout),
+    );
+    const alloc_len = @max(size_align.size, 1);
+    const ret_buf = try allocator.alignedAlloc(u8, collections.max_roc_alignment, alloc_len);
+    defer allocator.free(ret_buf);
+    @memset(ret_buf, 0);
+
+    exec_mem.callRocABI(@ptrCast(runtime_env.get_ops()), @ptrCast(ret_buf.ptr), null);
+    return try runtime_env.snapshot(allocator);
 }
 
 test "cor pipeline - recursive lambda factorial" {
@@ -159,4 +280,217 @@ test "cor pipeline - boxed lambda lowering uses erased indirect-call path" {
     try testing.expect(countIndirectCalls(&compiled) >= 1);
     try testing.expect(countLowLevelOp(&compiled, .box_box) >= 1);
     try testing.expect(countLowLevelOp(&compiled, .box_unbox) >= 1);
+}
+
+test "cor pipeline - canonical hosted lambda fact has no fake body field" {
+    try testing.expect(!@hasField(@FieldType(can.CIR.Expr, "e_hosted_lambda"), "body"));
+}
+
+test "cor pipeline - echo hosted proc metadata reaches lir" {
+    var compiled = try helpers.compileProgram(
+        testing.allocator,
+        .module,
+        \\main! = |_args| {
+        \\    echo!("Hello from hosted")
+        \\}
+        ,
+        &.{},
+    );
+    defer compiled.deinit(testing.allocator);
+
+    try testing.expect(countHostedProcSpecs(&compiled) >= 1);
+    try testing.expectEqual(countHostedProcSpecs(&compiled), countHostedProcSpecsWithoutBody(&compiled));
+
+    var saw_echo = false;
+    for (compiled.lowered.lir_result.store.getProcSpecs()) |proc| {
+        if (proc.hosted) |hosted| {
+            try testing.expectEqual(@as(u32, 0), hosted.index);
+            try testing.expectEqualStrings("echo!", compiled.resources.module_env.getIdent(hosted.symbol_name));
+            try testing.expect(proc.body == null);
+            saw_echo = true;
+        }
+    }
+    try testing.expect(saw_echo);
+}
+
+test "cor pipeline - echo hosted proc call reaches interpreter and dev backend" {
+    const hosted_fns = [_]builtins.host_abi.HostedFn{
+        builtins.host_abi.hostedFn(&echoHostedFn),
+    };
+    var compiled = try helpers.compileProgram(
+        testing.allocator,
+        .module,
+        \\main! = |_args| {
+        \\    echo!("Hello from hosted")
+        \\    echo!("Again")
+        \\}
+        ,
+        &.{},
+    );
+    defer compiled.deinit(testing.allocator);
+
+    var interp_run = try runModuleWithInterpreter(testing.allocator, &compiled, &hosted_fns);
+    defer interp_run.deinit(testing.allocator);
+    try testing.expectEqual(RuntimeHostEnv.Termination.returned, interp_run.termination);
+    try testing.expectEqual(@as(usize, 2), interp_run.events.len);
+    try testing.expectEqualStrings("Hello from hosted", interp_run.events[0].bytes());
+    try testing.expectEqualStrings("Again", interp_run.events[1].bytes());
+
+    var dev_run = try runModuleWithDevBackend(testing.allocator, &compiled, &hosted_fns);
+    defer dev_run.deinit(testing.allocator);
+    try testing.expectEqual(RuntimeHostEnv.Termination.returned, dev_run.termination);
+    try testing.expectEqual(@as(usize, 2), dev_run.events.len);
+    try testing.expectEqualStrings("Hello from hosted", dev_run.events[0].bytes());
+    try testing.expectEqualStrings("Again", dev_run.events[1].bytes());
+}
+
+test "cor pipeline - hosted function can flow as a first-class argument" {
+    const hosted_fns = [_]builtins.host_abi.HostedFn{
+        builtins.host_abi.hostedFn(&echoHostedFn),
+    };
+    var compiled = try helpers.compileProgram(
+        testing.allocator,
+        .module,
+        \\import Platform
+        \\
+        \\main! = || {
+        \\    ["hello"].for_each!(Platform.line!)
+        \\}
+        ,
+        &.{.{
+            .name = "Platform",
+            .source =
+            \\line! : Str => {}
+            ,
+        }},
+    );
+    defer compiled.deinit(testing.allocator);
+
+    var interp_run = try runModuleWithInterpreter(testing.allocator, &compiled, &hosted_fns);
+    defer interp_run.deinit(testing.allocator);
+    try testing.expectEqual(RuntimeHostEnv.Termination.returned, interp_run.termination);
+    try testing.expectEqual(@as(usize, 1), interp_run.events.len);
+    try testing.expectEqualStrings("hello", interp_run.events[0].bytes());
+
+    var dev_run = try runModuleWithDevBackend(testing.allocator, &compiled, &hosted_fns);
+    defer dev_run.deinit(testing.allocator);
+    try testing.expectEqual(RuntimeHostEnv.Termination.returned, dev_run.termination);
+    try testing.expectEqual(@as(usize, 1), dev_run.events.len);
+    try testing.expectEqualStrings("hello", dev_run.events[0].bytes());
+}
+
+test "cor pipeline - hosted function survives boxed indirect-call round trip" {
+    const hosted_fns = [_]builtins.host_abi.HostedFn{
+        builtins.host_abi.hostedFn(&echoHostedFn),
+    };
+    var compiled = try helpers.compileProgram(
+        testing.allocator,
+        .module,
+        \\import Platform
+        \\
+        \\main! = || {
+        \\    f = Box.unbox(Box.box(Platform.line!))
+        \\    f("hello")
+        \\    f("again")
+        \\}
+        ,
+        &.{.{
+            .name = "Platform",
+            .source =
+            \\line! : Str => {}
+            ,
+        }},
+    );
+    defer compiled.deinit(testing.allocator);
+
+    try testing.expect(countIndirectCalls(&compiled) >= 1);
+
+    var interp_run = try runModuleWithInterpreter(testing.allocator, &compiled, &hosted_fns);
+    defer interp_run.deinit(testing.allocator);
+    try testing.expectEqual(RuntimeHostEnv.Termination.returned, interp_run.termination);
+    try testing.expectEqual(@as(usize, 2), interp_run.events.len);
+    try testing.expectEqualStrings("hello", interp_run.events[0].bytes());
+    try testing.expectEqualStrings("again", interp_run.events[1].bytes());
+
+    var dev_run = try runModuleWithDevBackend(testing.allocator, &compiled, &hosted_fns);
+    defer dev_run.deinit(testing.allocator);
+    try testing.expectEqual(RuntimeHostEnv.Termination.returned, dev_run.termination);
+    try testing.expectEqual(@as(usize, 2), dev_run.events.len);
+    try testing.expectEqualStrings("hello", dev_run.events[0].bytes());
+    try testing.expectEqualStrings("again", dev_run.events[1].bytes());
+}
+
+test "cor pipeline - zero-arg hosted proc call reaches host abi" {
+    const hosted_fns = [_]builtins.host_abi.HostedFn{
+        builtins.host_abi.hostedFn(&tickHostedFn),
+    };
+    var compiled = try helpers.compileProgram(
+        testing.allocator,
+        .module,
+        \\import Platform
+        \\
+        \\main! = || {
+        \\    Platform.tick!()
+        \\    Platform.tick!()
+        \\}
+        ,
+        &.{.{
+            .name = "Platform",
+            .source =
+            \\tick! : {} => {}
+            ,
+        }},
+    );
+    defer compiled.deinit(testing.allocator);
+
+    var interp_run = try runModuleWithInterpreter(testing.allocator, &compiled, &hosted_fns);
+    defer interp_run.deinit(testing.allocator);
+    try testing.expectEqual(RuntimeHostEnv.Termination.returned, interp_run.termination);
+    try testing.expectEqual(@as(usize, 2), interp_run.events.len);
+    try testing.expectEqualStrings("tick", interp_run.events[0].bytes());
+    try testing.expectEqualStrings("tick", interp_run.events[1].bytes());
+
+    var dev_run = try runModuleWithDevBackend(testing.allocator, &compiled, &hosted_fns);
+    defer dev_run.deinit(testing.allocator);
+    try testing.expectEqual(RuntimeHostEnv.Termination.returned, dev_run.termination);
+    try testing.expectEqual(@as(usize, 2), dev_run.events.len);
+    try testing.expectEqualStrings("tick", dev_run.events[0].bytes());
+    try testing.expectEqualStrings("tick", dev_run.events[1].bytes());
+}
+
+test "cor pipeline - multi-arg hosted proc call preserves argument marshaling" {
+    const hosted_fns = [_]builtins.host_abi.HostedFn{
+        builtins.host_abi.hostedFn(&pairHostedFn),
+    };
+    var compiled = try helpers.compileProgram(
+        testing.allocator,
+        .module,
+        \\import Platform
+        \\
+        \\main! = || {
+        \\    Platform.pair!("left", "right")
+        \\}
+        ,
+        &.{.{
+            .name = "Platform",
+            .source =
+            \\pair! : Str, Str => {}
+            ,
+        }},
+    );
+    defer compiled.deinit(testing.allocator);
+
+    var interp_run = try runModuleWithInterpreter(testing.allocator, &compiled, &hosted_fns);
+    defer interp_run.deinit(testing.allocator);
+    try testing.expectEqual(RuntimeHostEnv.Termination.returned, interp_run.termination);
+    try testing.expectEqual(@as(usize, 2), interp_run.events.len);
+    try testing.expectEqualStrings("left", interp_run.events[0].bytes());
+    try testing.expectEqualStrings("right", interp_run.events[1].bytes());
+
+    var dev_run = try runModuleWithDevBackend(testing.allocator, &compiled, &hosted_fns);
+    defer dev_run.deinit(testing.allocator);
+    try testing.expectEqual(RuntimeHostEnv.Termination.returned, dev_run.termination);
+    try testing.expectEqual(@as(usize, 2), dev_run.events.len);
+    try testing.expectEqualStrings("left", dev_run.events[0].bytes());
+    try testing.expectEqualStrings("right", dev_run.events[1].bytes());
 }

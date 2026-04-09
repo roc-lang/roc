@@ -879,14 +879,12 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         },
         .expr_hosted_lambda => {
             const p = payload.expr_hosted_lambda;
-            // Retrieve hosted lambda data from node and span_with_node_data
-            const args_body = store.span_with_node_data.items.items[p.args_body_idx];
+            const args_span = store.span2_data.items.items[p.args_span2_idx];
 
             return CIR.Expr{ .e_hosted_lambda = .{
                 .symbol_name = @bitCast(p.symbol_name),
                 .index = p.index,
-                .args = .{ .span = .{ .start = args_body.start, .len = args_body.len } },
-                .body = @enumFromInt(args_body.node),
+                .args = .{ .span = .{ .start = args_span.start, .len = args_span.len } },
             } };
         },
         .expr_run_low_level => {
@@ -2035,17 +2033,16 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         },
         .e_hosted_lambda => |hosted| {
             node.tag = .expr_hosted_lambda;
-            const args_body_idx: u32 = @intCast(store.span_with_node_data.len());
-            _ = try store.span_with_node_data.append(store.gpa, .{
+            const args_span2_idx: u32 = @intCast(store.span2_data.len());
+            _ = try store.span2_data.append(store.gpa, .{
                 .start = hosted.args.span.start,
                 .len = hosted.args.span.len,
-                .node = @intFromEnum(hosted.body),
             });
 
             node.setPayload(.{ .expr_hosted_lambda = .{
                 .symbol_name = @bitCast(hosted.symbol_name),
                 .index = hosted.index,
-                .args_body_idx = args_body_idx,
+                .args_span2_idx = args_span2_idx,
             } });
         },
         .e_run_low_level => |run_ll| {

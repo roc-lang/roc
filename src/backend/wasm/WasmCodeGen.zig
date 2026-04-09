@@ -1347,7 +1347,7 @@ fn prebindProcLocals(self: *Self, proc: LirProcSpec) Allocator.Error!void {
     defer visited.deinit();
 
     for (self.store.getLocalSpan(proc.args)) |arg| try recordProcLocal(&locals, arg);
-    try self.collectProcLocals(proc.body, &locals, &visited);
+    try self.collectProcLocals(requireProcBody(proc), &locals, &visited);
 
     var it = locals.iterator();
     while (it.next()) |entry| {
@@ -4112,7 +4112,7 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
     self.cf_depth = 1; // inside the ret block
 
     // Generate CFStmt body
-    self.generateCFStmt(proc.body) catch |err| {
+    self.generateCFStmt(requireProcBody(proc)) catch |err| {
         self.restoreState(saved);
         return err;
     };
@@ -4180,6 +4180,13 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
 
     // If the proc used stack memory, the outer scope needs to know
     if (proc_used_stack_memory) self.uses_stack_memory = true;
+}
+
+fn requireProcBody(proc: LirProcSpec) LIR.CFStmtId {
+    return proc.body orelse std.debug.panic(
+        "WASM/codegen invariant violated: non-hosted proc {d} missing statement body",
+        .{proc.name.raw()},
+    );
 }
 
 /// Saved codegen state for restoring after compiling a nested function.

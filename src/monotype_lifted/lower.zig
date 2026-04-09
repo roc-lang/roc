@@ -137,6 +137,12 @@ const Lowerer = struct {
                     try self.binding_types.put(fn_def.arg.symbol, fn_def.arg.ty);
                     try self.collectBindingTypesExpr(fn_def.body);
                 },
+                .hosted_fn => |hosted_fn| {
+                    for (self.input.program.store.sliceTypedSymbolSpan(hosted_fn.args)) |arg| {
+                        self.assertPublishedType(arg.ty, "monotype hosted fn arg");
+                        try self.binding_types.put(arg.symbol, arg.ty);
+                    }
+                },
                 .val => |expr_id| try self.collectBindingTypesExpr(expr_id),
                 .run => |run_def| try self.collectBindingTypesExpr(run_def.body),
             }
@@ -176,6 +182,22 @@ const Lowerer = struct {
                         .arg = .{ .ty = fn_def.arg.ty, .symbol = fn_def.arg.symbol },
                         .captures = try self.output.addTypedSymbolSpan(&.{}),
                         .body = lowered_body.expr,
+                    } },
+                });
+            },
+            .hosted_fn => |hosted_fn| blk: {
+                const args = self.input.program.store.sliceTypedSymbolSpan(hosted_fn.args);
+                const lowered_args = try self.allocator.alloc(ast.TypedSymbol, args.len);
+                defer self.allocator.free(lowered_args);
+                for (args, 0..) |arg, i| {
+                    lowered_args[i] = .{ .ty = arg.ty, .symbol = arg.symbol };
+                }
+                break :blk try self.emitDef(.{
+                    .bind = .{ .ty = def.bind.ty, .symbol = def.bind.symbol },
+                    .value = .{ .hosted_fn = .{
+                        .bind = .{ .ty = hosted_fn.bind.ty, .symbol = hosted_fn.bind.symbol },
+                        .args = try self.output.addTypedSymbolSpan(lowered_args),
+                        .hosted = hosted_fn.hosted,
                     } },
                 });
             },

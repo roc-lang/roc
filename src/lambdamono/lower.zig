@@ -199,6 +199,8 @@ const Lowerer = struct {
             const def_id: ast.DefId = @enumFromInt(@as(u32, @intCast(i)));
             const ret_ty = switch (def.value) {
                 .fn_ => |fn_def| self.output.getExpr(fn_def.body).ty,
+                .hosted_fn => def.result_ty orelse
+                    debugPanic("lambdamono.lower.finalizePublishedTypes hosted def missing explicit result type"),
                 .val => |expr_id| def.result_ty orelse self.output.getExpr(expr_id).ty,
                 .run => |run_def| def.result_ty orelse self.output.getExpr(run_def.body).ty,
             };
@@ -213,7 +215,7 @@ const Lowerer = struct {
 
         for (self.input.store.defsSlice()) |def| {
             switch (def.value) {
-                .fn_ => {},
+                .fn_, .hosted_fn => {},
                 .val, .run => _ = try self.ensureTopLevelValueLowered(def.bind.symbol),
             }
         }
@@ -234,6 +236,15 @@ const Lowerer = struct {
             const def_id = try self.output.addDef(def);
             try self.root_defs.append(self.allocator, def_id);
         }
+        for (self.input.store.defsSlice()) |def| {
+            switch (def.value) {
+                .hosted_fn => |hosted_fn| {
+                    const def_id = try self.output.addDef(try self.lowerHostedDef(def.bind, hosted_fn));
+                    try self.root_defs.append(self.allocator, def_id);
+                },
+                else => {},
+            }
+        }
         for (self.inspect_defs.items) |def| {
             const def_id = try self.output.addDef(def);
             try self.root_defs.append(self.allocator, def_id);
@@ -249,9 +260,45 @@ const Lowerer = struct {
             switch (def.value) {
                 .val => |expr_id| try self.top_level_values.put(def.bind.symbol, .{ .val = expr_id }),
                 .run => |run_def| try self.top_level_values.put(def.bind.symbol, .{ .run = run_def }),
-                .fn_ => {},
+                .fn_, .hosted_fn => {},
             }
         }
+    }
+
+    fn lowerHostedDef(
+        self: *Lowerer,
+        bind: solved.Ast.TypedSymbol,
+        hosted_fn: solved.Ast.HostedFnDef,
+    ) std.mem.Allocator.Error!ast.Def {
+        var inst = InstScope.init(self.allocator);
+        defer inst.deinit();
+        var mono_cache = lower_type.MonoCache.init(self.allocator);
+        defer mono_cache.deinit();
+
+        const solved_fn_ty = try self.cloneInstType(&inst, bind.ty);
+        const hosted_args = self.input.store.sliceTypedSymbolSpan(hosted_fn.args);
+        const lowered_args = try self.allocator.alloc(ast.TypedSymbol, hosted_args.len);
+        defer self.allocator.free(lowered_args);
+
+        var current_fn_ty = solved_fn_ty;
+        for (hosted_args, 0..) |arg, i| {
+            const fn_parts = lower_type.extractFn(&self.input.types, current_fn_ty);
+            lowered_args[i] = .{
+                .ty = try self.publishExecutableTypeFact(&mono_cache, fn_parts.arg),
+                .symbol = arg.symbol,
+            };
+            current_fn_ty = fn_parts.ret;
+        }
+
+        return .{
+            .bind = bind.symbol,
+            .result_ty = try self.publishExecutableTypeFact(&mono_cache, current_fn_ty),
+            .value = .{ .hosted_fn = .{
+                .bind = bind.symbol,
+                .args = try self.output.addTypedSymbolSpan(lowered_args),
+                .hosted = hosted_fn.hosted,
+            } },
+        };
     }
 
     fn requireLambdaDiscriminant(

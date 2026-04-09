@@ -144,7 +144,7 @@ const Lowerer = struct {
                     .proc = def.bind,
                     .result_ty = def.result_ty orelse self.input.store.getExpr(run_def.body).ty,
                 }),
-                .fn_ => {},
+                .fn_, .hosted_fn => {},
             }
         }
     }
@@ -161,6 +161,12 @@ const Lowerer = struct {
                     .body = try self.lowerBlock(env, fn_def.body),
                     .ret_layout = self.input.layout_facts.defRetLayout(def_id),
                 };
+            },
+            .hosted_fn => |hosted_fn| .{
+                .name = def.bind,
+                .args = try self.lowerTypedSymbolSpan(hosted_fn.args),
+                .ret_layout = self.input.layout_facts.defRetLayout(def_id),
+                .hosted = hosted_fn.hosted,
             },
             .val => |expr_id| .{
                 .name = def.bind,

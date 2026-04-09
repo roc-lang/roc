@@ -358,11 +358,12 @@ pub const CFStmt = union(enum) {
     },
 };
 
-/// Lowered proc specification rooted at a statement body.
+/// Lowered proc specification rooted either at a statement body or at explicit
+/// hosted-proc metadata.
 pub const LirProcSpec = struct {
     name: Symbol,
     args: LocalSpan,
-    body: CFStmtId,
+    body: ?CFStmtId = null,
     ret_layout: layout.Idx,
     result_contract: ProcResultContract,
     /// Hosted call ABI metadata, when this proc is provided by the platform.

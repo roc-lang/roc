@@ -11354,11 +11354,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const initial_param_reg_idx: u8 = if (needs_ret_ptr) 1 else 0;
             try self.bindProcParams(proc.args, initial_param_reg_idx);
 
-            try self.ensureStableLocationsForStmtLocals(proc.body);
+            if (proc.hosted) |hosted| {
+                try self.generateHostedProcWrapper(hosted, proc);
+            } else {
+                const body = requireProcBody(proc);
+                try self.ensureStableLocationsForStmtLocals(body);
 
-            // Generate the body (control flow statements)
-            // Note: .return_stmt emits jumps that are patched to the shared epilogue below
-            try self.generateStmt(proc.body);
+                // Generate the body (control flow statements)
+                // Note: .return_stmt emits jumps that are patched to the shared epilogue below
+                try self.generateStmt(body);
+            }
 
             // Emit shared epilogue using DeferredFrameBuilder with actual stack usage
             const body_epilogue_offset = self.codegen.currentOffset();
@@ -11503,6 +11508,48 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.join_point_params = try saved_join_point_params.clone();
             self.loop_continue_targets.deinit(self.allocator);
             self.loop_continue_targets = try saved_loop_continue_targets.clone(self.allocator);
+        }
+
+        fn requireProcBody(proc: LirProcSpec) lir.LIR.CFStmtId {
+            return proc.body orelse std.debug.panic(
+                "Dev/codegen invariant violated: non-hosted proc {d} missing statement body",
+                .{proc.name.raw()},
+            );
+        }
+
+        fn generateHostedProcWrapper(
+            self: *Self,
+            hosted: lir.LIR.HostedProc,
+            proc: LirProcSpec,
+        ) Allocator.Error!void {
+            if (builtin.mode == .Debug and proc.body != null) {
+                std.debug.panic(
+                    "Dev/codegen invariant violated: hosted proc {d} unexpectedly carried a statement body",
+                    .{proc.name.raw()},
+                );
+            }
+
+            const params = self.store.getLocalSpan(proc.args);
+            const arg_locs = try self.allocator.alloc(ValueLocation, params.len);
+            defer self.allocator.free(arg_locs);
+            const arg_layouts = try self.allocator.alloc(layout.Idx, params.len);
+            defer self.allocator.free(arg_layouts);
+
+            for (params, 0..) |param, i| {
+                const arg_layout = self.localLayout(param);
+                const raw_arg_loc = try self.emitValueLocal(param);
+                arg_locs[i] = self.requireExactValueLocationToLayout(raw_arg_loc, arg_layout, arg_layout, "hosted_wrapper.arg");
+                arg_layouts[i] = arg_layout;
+            }
+
+            const raw_result_loc = try self.generateHostedCall(hosted, arg_locs, arg_layouts, proc.ret_layout);
+            const result_loc = self.requireExactValueLocationToLayout(raw_result_loc, proc.ret_layout, proc.ret_layout, "hosted_wrapper.ret");
+
+            if (self.ret_ptr_slot) |ret_slot| {
+                try self.copyResultToReturnPointer(result_loc, proc.ret_layout, ret_slot);
+            } else {
+                try self.moveToReturnRegisterWithLayout(result_loc, proc.ret_layout);
+            }
         }
 
         /// Maximum number of registers used for multi-register returns in internal Roc calls.

@@ -1,324 +1,237 @@
-# Boxed Lambda Erasure Plan
+# Hosted Proc Fact Plan
 
 Status: complete
 
 ## Goal
 
-Make `Box.box` / `Box.unbox` keep exactly the same user-visible Roc types as today:
+Remove the remaining hosted-lambda shortcut from the active pipeline and replace it with the long-term ideal design:
 
-- `Box.box : a -> Box(a)`
-- `Box.unbox : Box(a) -> a`
+- no compiler stage treats hosted functions as ordinary lambdas with fake bodies
+- no compiler stage fabricates runtime errors or crash placeholders to stand in for missing hosted semantics
+- hosted functions are represented as one explicit proc fact produced early and consumed directly by every later stage
+- the resulting design is maximally correct and maximally efficient, even if it takes more implementation work
 
-but compile boxed functions as erased callables internally.
+This plan explicitly prioritizes the ideal long-term shape of the compiler over short-term convenience or minimal patch size.
 
-The end state must satisfy all of these:
+`cor` remains the guide:
 
-- users never see the concept of erasure in source types, docs, or type errors
-- boxing a function introduces an explicit internal callable-representation fact that says "erased"
-- later stages consume that fact directly; no stage reconstructs or guesses it
-- boxed lambdas lower through the erased callable path
-- unboxed calls lower through indirect-call / erased-capture handling
-- the runtime representation is explicit and consistent all the way through
+- earlier stages decide semantics once
+- later stages consume those explicit facts only
+- no recovery, fallback, or heuristic reconstruction
 
-`cor` is the design guide:
+## Current Problem
 
-- keep surface typing simple
-- hide erased-callable machinery from user-facing types
-- make earlier stages produce one explicit fact
-- make later stages consume that fact only
+Today hosted functions are introduced in canonicalization as `e_hosted_lambda`, but they still look too much like ordinary lambdas:
 
-## Current State
+- canonicalization fabricates a crash body
+- monotype partially lowers them through the lambda path
+- zero-arg hosted functions still fabricate a `runtime_error`
+- direct expr lowering still has hosted-lambda TODOs
 
-These are the relevant current boundaries:
+That is the wrong boundary. Hosted functions are top-level external procs, not closures.
 
-- [`/Users/rtfeldman/.codex/worktrees/1d55/roc/src/build/roc/Builtin.roc`](\/Users\/rtfeldman\/.codex\/worktrees\/1d55\/roc\/src\/build\/roc\/Builtin.roc)
-  `Box.box` / `Box.unbox` are still ordinary polymorphic builtins.
-- [`/Users/rtfeldman/.codex/worktrees/1d55/roc/src/lambdamono/lower_type.zig`](\/Users\/rtfeldman\/.codex\/worktrees\/1d55\/roc\/src\/lambdamono\/lower_type.zig)
-  executable function repr is split into `.lset` vs `.erased`.
-- [`/Users/rtfeldman/.codex/worktrees/1d55/roc/src/lambdamono/lower.zig`](\/Users\/rtfeldman\/.codex\/worktrees\/1d55\/roc\/src\/lambdamono\/lower.zig)
-  `.erased` function values already lower as `packed_fn`, and `.erased` calls already lower as `call_indirect`.
-- [`/Users/rtfeldman/.codex/worktrees/1d55/roc/src/lambdamono/layout_facts.zig`](\/Users\/rtfeldman\/.codex\/worktrees\/1d55\/roc\/src\/lambdamono\/layout_facts.zig)
-  currently maps primitive `erased` to `opaque_ptr`.
+## Target Shape
 
-That last point is the representation mismatch we must remove before boxed lambdas can use erased-callable lowering soundly.
+Hosted functions should become a first-class top-level proc concept.
 
-## Non-Goals
+The target pipeline shape is:
 
-- Do not change the published user-facing type of `Box.box` or `Box.unbox`.
-- Do not introduce `Erased` into diagnostics, pretty-printing, docs, or source syntax.
-- Do not add fallbacks, heuristics, or "if this looks like a function later" recovery.
-- Do not implement this as a monotype-only rewrite.
+1. canonicalization/checking records explicit hosted-proc facts
+2. monotype lowers hosted defs as hosted procs, not lambdas
+3. lambda lifting preserves hosted proc defs directly
+4. lambdasolved carries hosted proc defs without inference from fake bodies
+5. lambdamono carries hosted proc defs without closure lowering
+6. IR carries hosted proc defs explicitly
+7. LIR proc specs receive hosted metadata directly and never need a fake Roc body to explain the proc
+8. backend/interpreter hosted call paths consume that explicit proc metadata
 
-## Phase 1: Define The Hidden Callable-Repr Fact
+## Phase 1: Introduce First-Class Hosted Proc Metadata
 
-Add one explicit internal callable-representation fact at the solved-type boundary.
+Add one shared hosted-proc metadata shape that is explicit and lossless:
+
+- hosted symbol name
+- stable hosted-table index
+
+Then introduce first-class hosted top-level def variants instead of encoding hosted defs as ordinary function defs.
+
+Likely affected files:
+
+- [`/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/ast.zig`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/ast.zig)
+- [`/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype_lifted/ast.zig`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype_lifted/ast.zig)
+- [`/Users/rtfeldman/.codex/worktrees/1d55/roc/src/lambdasolved/ast.zig`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/lambdasolved/ast.zig)
+- [`/Users/rtfeldman/.codex/worktrees/1d55/roc/src/lambdamono/ast.zig`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/lambdamono/ast.zig)
+- [`/Users/rtfeldman/.codex/worktrees/1d55/roc/src/ir/ast.zig`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/ir/ast.zig)
+
+Success condition:
+
+- the compiler can represent “top-level hosted proc” explicitly without pretending it has a lambda body
+
+## Phase 2: Make Monotype Lower Hosted Defs Directly
+
+Replace the remaining hosted-lambda shortcut in monotype with explicit hosted-proc lowering.
 
 Requirements:
 
-- This fact must be invisible to users.
-- It must distinguish at least:
-  - concrete lambda-set callable
-  - erased callable
-- It must survive the path from solved types into monotype/lambdamono.
-- It must be explicit enough that no later stage needs to inspect function shape to rediscover whether a callable is erased.
+- branch on hosted-proc facts before entering lambda lowering
+- remove the hosted-specific runtime-error fabrication
+- remove the hosted-lambda TODO arms from ordinary expr lowering
+- preserve full explicit arg facts and full function type facts
 
-Design preference:
+Likely affected files:
 
-- attach the fact to function typing in the same conceptual place where the lambda-set currently lives
-- but separate "user-visible function type" from "internal callable repr"
-- if necessary, add a dedicated internal enum/fact rather than overloading existing user-facing type printing
-
-Files likely involved:
-
-- [`/Users/rtfeldman/.codex/worktrees/1d55/roc/src/lambdasolved/type.zig`](\/Users\/rtfeldman\/.codex\/worktrees\/1d55\/roc\/src\/lambdasolved\/type.zig)
-- [`/Users/rtfeldman/.codex/worktrees/1d55/roc/src/lambdasolved/lower.zig`](\/Users\/rtfeldman\/.codex\/worktrees\/1d55\/roc\/src\/lambdasolved\/lower.zig)
-- any user-facing type printer or error renderer touched by the representation change
+- [`/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/lower.zig`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/lower.zig)
 
 Success condition:
 
-- a solved function can be marked internally as "erased callable" without changing what the user sees as its type
+- monotype no longer treats hosted functions as lambdas at all
 
-## Phase 2: Make Box.box / Box.unbox Set That Fact
+## Phase 3: Preserve Hosted Proc Facts Through Lambda Lifting
 
-Teach the semantic handling of `Box.box` and `Box.unbox`:
+Hosted procs are already top-level and have no closure semantics.
 
-- if `a` is not a function, nothing special happens
-- if `a` is a function, then crossing the `Box` boundary must explicitly set internal callable repr to `erased`
+So lambda lifting should:
 
-Operational rule:
+- copy hosted-proc defs through untouched
+- never try to lift them
+- never try to infer free variables or captures for them
 
-- `Box.box` on a function:
-  - input callable repr may be concrete
-  - boxed payload callable repr becomes erased
-- `Box.unbox` on a function:
-  - output callable repr remains erased
+Likely affected files:
 
-Important constraint:
-
-- this must be done where builtin semantics are established, not later by monotype trying to notice "oh, this function went through Box"
-
-Files likely involved:
-
-- [`/Users/rtfeldman/.codex/worktrees/1d55/roc/src/build/roc/Builtin.roc`](\/Users\/rtfeldman\/.codex\/worktrees\/1d55\/roc\/src\/build\/roc\/Builtin.roc)
-- builtin semantic handling in checker / solved lowering
-- any code that currently treats `Builtin.Box.box` as pure shape-preserving polymorphism
+- [`/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype_lifted/lower.zig`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype_lifted/lower.zig)
 
 Success condition:
 
-- after the solved stage, a function that crossed `Box.box` has one explicit erased-callable fact
-- later stages do not need to infer this from the presence of `Box`
+- hosted-proc defs survive into `monotype_lifted` as explicit hosted procs
 
-## Phase 3: Reconcile Erased Callable Type/Layout With Value Lowering
+## Phase 4: Carry Hosted Proc Facts Through Lambdasolved
 
-This is the main representation task.
-
-Today:
-
-- erased callable values lower as `packed_fn`
-- erased callable types/layouts still collapse toward primitive `erased` / `opaque_ptr`
-
-That is not acceptable for boxed lambdas.
-
-Choose one explicit runtime representation and use it consistently.
-
-Preferred design:
-
-- erased callable runtime representation is the packed-function representation
-- type/layout lowering publishes an explicit logical layout/runtime class for erased callables that matches `packed_fn`
-- boxed erased callables are therefore `Box(packed_fn_repr)`, not `Box(opaque_ptr_guess)`
-
-Alternative design only if strictly better:
-
-- make erased callables truly be opaque pointers everywhere
-- then change erased value lowering so `packed_fn` is materialized and boxed behind that pointer model
-
-The first option appears more aligned with the existing executable AST.
-
-Files likely involved:
-
-- [`/Users/rtfeldman/.codex/worktrees/1d55/roc/src/lambdamono/lower_type.zig`](\/Users\/rtfeldman\/.codex\/worktrees\/1d55\/roc\/src\/lambdamono\/lower_type.zig)
-- [`/Users/rtfeldman/.codex/worktrees/1d55/roc/src/lambdamono/lower.zig`](\/Users\/rtfeldman\/.codex\/worktrees\/1d55\/roc\/src\/lambdamono\/lower.zig)
-- [`/Users/rtfeldman/.codex/worktrees/1d55/roc/src/lambdamono/layout_facts.zig`](\/Users\/rtfeldman\/.codex\/worktrees\/1d55\/roc\/src\/lambdamono\/layout_facts.zig)
-- [`/Users/rtfeldman/.codex/worktrees/1d55/roc/src/ir/lower.zig`](\/Users\/rtfeldman\/.codex\/worktrees\/1d55\/roc\/src\/ir\/lower.zig)
-- [`/Users/rtfeldman/.codex/worktrees/1d55/roc/src/lir/FromIr.zig`](\/Users\/rtfeldman\/.codex\/worktrees\/1d55\/roc\/src\/lir\/FromIr.zig)
-
-Success condition:
-
-- erased callable type facts and erased callable value lowering describe the same runtime thing
-
-## Phase 4: Make Boxed Function Values Follow The Erased Path
-
-Once the fact and representation are correct, the lowering rule becomes simple:
-
-- a function value outside `Box` may still lower through `.lset`
-- a function value crossing `Box.box` lowers as erased callable
-- `Box.unbox` returns the same erased callable representation
-- calling the unboxed value uses `call_indirect`
-
-This phase must remove any lingering concrete-lambda-set extraction along the boxed-function path.
-
-Specifically:
-
-- no `extractLsetFn(...)` after the function has been boxed/unboxed
-- no concrete lambda tag construction for values already marked erased-by-box
-
-Success condition:
-
-- `Box.box(|...| ...)` produces boxed erased callable representation
-- `Box.unbox(...)` returns erased callable representation
-- calling it works through the existing erased-call path
-
-## Phase 5: Preserve Surface-Typing And Diagnostics
-
-After the internal change is in place, audit user-visible surfaces:
-
-- type printing
-- error messages
-- snapshots / debug output intended for end users
-- builtin docs
+Hosted procs must not participate in ordinary function-body inference.
 
 Requirements:
 
-- the user should continue to see `Box(a)` and ordinary function types
-- there should be no `Erased` leak in type errors, inference output, or help text
+- instantiate hosted-proc defs explicitly
+- add them to environments as already-known top-level proc facts
+- do not infer them from fake bodies
+- do not include them in recursive function-body SCC inference
 
-If internal debug printers still mention erased-callable details, that is acceptable only for compiler-internal debug output, not user-facing reports.
+Likely affected files:
 
-## Phase 6: Tests
+- [`/Users/rtfeldman/.codex/worktrees/1d55/roc/src/lambdasolved/lower.zig`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/lambdasolved/lower.zig)
 
-Add tests only from valid Roc source code.
+Success condition:
 
-The test plan must cover both semantics and representation.
+- lambdasolved carries hosted proc defs explicitly and never asks for a hosted body
 
-### A. Basic Boxed Lambda Round-Trip
+## Phase 5: Carry Hosted Proc Facts Through Lambdamono
 
-Add source-level tests for:
+Hosted procs are executable top-level procs, not closures.
 
-- boxing a non-capturing lambda
-- unboxing it
-- calling it multiple times
-- using the return value in further computation
-- inspecting the final result
+Requirements:
 
-Example shape:
+- preserve hosted metadata on defs
+- keep hosted procs out of closure lowering
+- keep hosted procs out of lambda-set specialization queues unless that is explicitly required and modeled
+- if a hosted proc is referenced as a function value, treat it as a captureless top-level proc value, not as a closure
 
-- `boxed = Box.box(|x| x + 1)`
-- `f = Box.unbox(boxed)`
-- `f(1) + f(2) + f(3)`
+Likely affected files:
 
-### B. Capturing Lambda Round-Trip
+- [`/Users/rtfeldman/.codex/worktrees/1d55/roc/src/lambdamono/lower.zig`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/lambdamono/lower.zig)
+- [`/Users/rtfeldman/.codex/worktrees/1d55/roc/src/lambdamono/specializations.zig`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/lambdamono/specializations.zig)
 
-Add source-level tests for:
+Success condition:
 
-- boxing a lambda that captures multiple values
-- unboxing it
-- calling it multiple times
-- ensuring captured values are respected
+- lambdamono lowers hosted procs as ordinary top-level executable proc definitions with explicit hosted metadata
 
-Example shape:
+## Phase 6: Carry Hosted Proc Facts Through IR And Into LIR
 
-- `capture1 = 10`
-- `capture2 = 20`
-- `boxed = Box.box(|a, b| a + b + capture1 + capture2)`
-- `f = Box.unbox(boxed)`
-- check multiple calls and inspected output
+Thread the hosted fact into IR and then into LIR proc specs.
 
-### C. Pass-Around Behavior
+Requirements:
 
-Add tests where boxed erased lambdas are:
+- IR defs carry hosted metadata explicitly
+- LIR proc specs receive hosted metadata directly from IR
+- hosted procs no longer require fake bodies to justify their existence
+- if the LIR/IR container shape still requires a body field structurally, refactor that shape so hosted procs can be represented explicitly instead of by placeholder bodies
 
-- stored in records
-- returned from helper functions
-- passed through multiple helper functions
-- unboxed and called later
+Likely affected files:
 
-The goal is to verify the erased callable fact survives nontrivial data flow without any concrete-lambda recovery.
+- [`/Users/rtfeldman/.codex/worktrees/1d55/roc/src/ir/lower.zig`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/ir/lower.zig)
+- [`/Users/rtfeldman/.codex/worktrees/1d55/roc/src/lir/FromIr.zig`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/lir/FromIr.zig)
+- [`/Users/rtfeldman/.codex/worktrees/1d55/roc/src/lir/LIR.zig`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/lir/LIR.zig)
 
-### D. Multiple Calls After Unboxing
+Success condition:
 
-Add tests where the same unboxed function value is called more than once, with results combined and inspected.
+- hosted proc specs reach LIR through explicit proc facts, not through fake Roc code
 
-This matters because accidental one-shot capture consumption or broken boxed-call lowering would often hide in single-call tests.
+## Phase 7: Tests
 
-### E. Polymorphic Argument Types
+We need tests that prove both semantic correctness and the explicit-fact pipeline shape.
 
-Add tests specifically for lambdas whose arguments are polymorphic before boxing.
+### A. Monotype / Lowering Unit Tests
 
-Required cases:
+Add unit tests showing that a hosted declaration:
 
-- a boxed identity-like lambda used after unboxing at multiple types in valid Roc structure
-- a boxed higher-order helper where the unboxed callable is instantiated at different argument types on different specializations
+- lowers to an explicit hosted-proc def
+- does not produce a runtime-error body
+- does not take the lambda-lowering path
 
-The tests should verify:
+### B. Cross-Stage Propagation Tests
 
-- specialization still works
-- boxed-callable erasure does not collapse distinct valid instantiations incorrectly
+Add unit tests showing that the hosted metadata survives through:
 
-If one single value cannot legally be called at multiple types in one specialization, structure the tests so the same source lambda is boxed/unboxed in multiple valid type contexts and each specialization is exercised explicitly.
+- monotype
+- monotype_lifted
+- lambdasolved
+- lambdamono
+- IR
+- LIR
 
-### F. Closing Over Polymorphic Types
+The test should verify:
 
-Add tests where the boxed lambda closes over values whose surrounding function is polymorphic.
+- hosted index is preserved
+- hosted symbol name is preserved
+- no stage reconstructs the hosted fact from a fake body
 
-Required cases:
+### C. End-To-End Runtime Tests
 
-- a polymorphic helper returns a boxed lambda that closes over its type parameter
-- later unboxing and calling uses that closed-over value correctly
-- multiple valid instantiations of the helper are exercised
+Add end-to-end tests that compile and run Roc code using hosted functions and verify:
 
-The goal is to prove that hidden erasure of callable representation does not break capture specialization or closed-over polymorphic values.
+- the hosted function call reaches the host ABI callback
+- the correct hosted-table index is used
+- arguments are marshaled with the expected layouts
+- return values are handled correctly
 
-### G. Allocation / Representation Verification
+Coverage should include:
 
-Add at least one representation-sensitive test proving boxed lambdas are using erased-callable representation, not concrete lambda-tag representation.
+- zero-arg hosted function
+- one-arg hosted function
+- multiple-arg hosted function
+- repeated hosted calls
+- hosted calls inside blocks / branches / loops
 
-Possible verification strategies:
+### D. Default-App `echo!` Coverage
 
-- instrument a test host and assert `roc_alloc` sizes / alignments / counts for boxed lambdas
-- inspect emitted IR/LIR in a compiler test and assert the boxed lambda path contains erased-callable artifacts:
-  - `packed_fn`
-  - `call_indirect`
-  - absence of concrete lambda tag transport through `Box`
+Because `echo!` is injected as a hosted function, add tests that confirm:
 
-Preferred approach:
+- `echo!` lowers as an explicit hosted proc
+- calling `echo!` no longer depends on fake hosted lambda bodies
 
-- one semantic test at the Roc level
-- one compiler-internal representation test that directly checks the lowered artifact shape
+## Phase 8: Final Audit
 
-This avoids overfitting to platform-specific allocator details while still proving the representation change actually happened.
+After implementation:
 
-Candidate locations:
+- rerun the earlier hosted-lambda audit
+- verify the old hosted shortcut sites are gone
+- verify no new fallbacks or heuristics were introduced
+- verify the remaining hosted behavior is entirely explicit-fact-driven
 
-- [`/Users/rtfeldman/.codex/worktrees/1d55/roc/src/eval/test/eval_low_level_tests.zig`](\/Users\/rtfeldman\/.codex\/worktrees\/1d55\/roc\/src\/eval\/test\/eval_low_level_tests.zig)
-- [`/Users/rtfeldman/.codex/worktrees/1d55/roc/test/snapshots`](\/Users\/rtfeldman\/.codex\/worktrees\/1d55\/roc\/test\/snapshots)
-- [`/Users/rtfeldman/.codex/worktrees/1d55/roc/crates/compiler/test_gen/src/gen_primitives.rs`](\/Users\/rtfeldman\/.codex\/worktrees\/1d55\/roc\/crates\/compiler\/test_gen\/src\/gen_primitives.rs)
-- dedicated lowering snapshot tests if they already exist for `lambdamono` / IR / LIR
+## Completion Criteria
 
-## Phase 7: Audit And Cleanup
+This plan is complete only when all of these are true:
 
-After the feature works:
-
-- remove any temporary dual-path code
-- remove any debug-only "boxed function special-case" probes that are no longer needed
-- confirm no new fallback or heuristic paths were added
-- re-audit the full pipeline for:
-  - hidden callable-repr recovery
-  - concrete-lambda extraction after boxing
-  - runtime-shape shortcuts introduced just for boxed lambdas
-
-## Success Criteria
-
-This work is complete only when all of these are true:
-
-- `Box.box` / `Box.unbox` user-visible types are unchanged
-- the user never sees `Erased` in source-facing diagnostics
-- boxed functions carry an explicit hidden erased-callable fact from early solving onward
-- boxed functions lower through erased callable value/call paths
-- the erased callable runtime representation is explicit and consistent
-- valid Roc tests cover:
-  - non-capturing boxed lambdas
-  - capturing boxed lambdas
-  - pass-around and repeated-call behavior
-  - polymorphic argument cases
-  - closed-over polymorphic value cases
-  - representation-sensitive verification that boxing a lambda really compiled to erased callable form
+- [`/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/lower.zig:991`](/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/lower.zig:991) is gone
+- hosted expr-lowering TODO arms are gone from monotype
+- hosted defs are explicit proc facts through the full pipeline
+- LIR hosted proc specs are produced from explicit upstream metadata
+- tests verify both propagation and runtime behavior
+- no fake hosted lambda body remains in the active pipeline

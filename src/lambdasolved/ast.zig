@@ -165,8 +165,15 @@ pub const RunDef = struct {
     entry_ty: types.Var,
 };
 
+pub const HostedFnDef = struct {
+    bind: TypedSymbol,
+    args: Span(TypedSymbol),
+    hosted: base.HostedProc,
+};
+
 pub const DefVal = union(enum) {
     fn_: FnDef,
+    hosted_fn: HostedFnDef,
     val: ExprId,
     run: RunDef,
 };

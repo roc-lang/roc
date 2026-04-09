@@ -275,13 +275,7 @@ pub const ScopeMap = struct {
                 try self.traverseExpr(module_env, nominal.backing_expr, scope_end, depth + 1);
             },
             .e_hosted_lambda => |hosted| {
-                // Hosted lambda parameters are visible within the body
-                const body_region = module_env.store.getExprRegion(hosted.body);
-                const args = module_env.store.slicePatterns(hosted.args);
-                for (args) |arg_pattern| {
-                    try self.extractBindingsFromPattern(module_env, arg_pattern, body_region.start.offset, body_region.end.offset, true, depth + 1);
-                }
-                try self.traverseExpr(module_env, hosted.body, body_region.end.offset, depth + 1);
+                _ = hosted;
             },
             .e_for => |for_expr| {
                 // For loop variable is visible within the body
