@@ -8043,6 +8043,13 @@ pub const Lowerer = struct {
         source_solved_var: ?Var,
         env: *BindingEnv,
     ) std.mem.Allocator.Error!void {
+        try self.recordPatternStructuralFactsFromSourceType(
+            module_idx,
+            type_scope,
+            pattern_idx,
+            source_ty,
+            source_solved_var,
+        );
         const pattern = self.ctx.env(module_idx).store.getPattern(pattern_idx);
         switch (pattern) {
             .assign => |assign| {
@@ -8078,7 +8085,7 @@ pub const Lowerer = struct {
                         module_idx,
                         type_scope,
                         arg_pat,
-                        try self.requirePatternTypeFact(module_idx, type_scope, arg_pat),
+                        self.requirePatternSourceTypeFact(module_idx, type_scope, arg_pat),
                         try self.requirePatternSolvedVar(type_scope, arg_pat),
                         env,
                     );
@@ -8091,7 +8098,7 @@ pub const Lowerer = struct {
                         module_idx,
                         type_scope,
                         child_pattern_idx,
-                        try self.requirePatternTypeFact(module_idx, type_scope, child_pattern_idx),
+                        self.requirePatternSourceTypeFact(module_idx, type_scope, child_pattern_idx),
                         try self.requirePatternSolvedVar(type_scope, child_pattern_idx),
                         env,
                     );
@@ -8103,7 +8110,7 @@ pub const Lowerer = struct {
                         module_idx,
                         type_scope,
                         child_pattern_idx,
-                        try self.requirePatternTypeFact(module_idx, type_scope, child_pattern_idx),
+                        self.requirePatternSourceTypeFact(module_idx, type_scope, child_pattern_idx),
                         try self.requirePatternSolvedVar(type_scope, child_pattern_idx),
                         env,
                     );
@@ -8115,7 +8122,7 @@ pub const Lowerer = struct {
                         module_idx,
                         type_scope,
                         child_pattern_idx,
-                        try self.requirePatternTypeFact(module_idx, type_scope, child_pattern_idx),
+                        self.requirePatternSourceTypeFact(module_idx, type_scope, child_pattern_idx),
                         try self.requirePatternSolvedVar(type_scope, child_pattern_idx),
                         env,
                     );
@@ -8126,7 +8133,7 @@ pub const Lowerer = struct {
                             module_idx,
                             type_scope,
                             rest_pattern_idx,
-                            try self.requirePatternTypeFact(module_idx, type_scope, rest_pattern_idx),
+                            self.requirePatternSourceTypeFact(module_idx, type_scope, rest_pattern_idx),
                             try self.requirePatternSolvedVar(type_scope, rest_pattern_idx),
                             env,
                         );
