@@ -70,6 +70,7 @@ pub const ArithmeticBinopTypeFact = struct {
 
 pub const Mutable = struct {
     allocator: std.mem.Allocator,
+    typed_facts_frozen: bool,
     function_facts: std.AutoHashMap(TypeKey, ExplicitFunctionFact),
     function_type_facts: std.AutoHashMap(TypeKey, ExplicitFunctionTypeFact),
     collected_expr_facts: std.AutoHashMap(ExprKey, void),
@@ -92,6 +93,7 @@ pub const Mutable = struct {
     pub fn init(allocator: std.mem.Allocator) Mutable {
         return .{
             .allocator = allocator,
+            .typed_facts_frozen = false,
             .function_facts = std.AutoHashMap(TypeKey, ExplicitFunctionFact).init(allocator),
             .function_type_facts = std.AutoHashMap(TypeKey, ExplicitFunctionTypeFact).init(allocator),
             .collected_expr_facts = std.AutoHashMap(ExprKey, void).init(allocator),
