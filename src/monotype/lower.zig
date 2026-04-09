@@ -4817,8 +4817,8 @@ pub const Lowerer = struct {
         const total_args_len = implicit_arg_len + args.explicit_args.len;
         const lowered_args = try self.allocator.alloc(ast.ExprId, total_args_len);
         defer self.allocator.free(lowered_args);
-        const fn_ty = try self.lowerInstantiatedType(module_idx, type_scope, fact.fn_var);
         const result_ty = try self.requireExprTypeFact(module_idx, type_scope, expr_idx);
+        const fn_ty = try self.lowerInstantiatedType(module_idx, type_scope, fact.fn_var);
         const applied_result_tys = try self.collectCurriedAppliedResultTypes(fn_ty, total_args_len);
         defer self.allocator.free(applied_result_tys);
 
@@ -4875,8 +4875,8 @@ pub const Lowerer = struct {
         defer chain.deinit(self.allocator);
 
         const call_fact = self.requireExplicitCallFact(module_idx, type_scope, call_expr_idx);
-        const fn_ty = try self.lowerInstantiatedType(module_idx, type_scope, call_fact.fn_var);
         const result_ty = try self.requireExprTypeFact(module_idx, type_scope, call_expr_idx);
+        const fn_ty = try self.lowerInstantiatedType(module_idx, type_scope, call_fact.fn_var);
         const applied_result_tys = try self.collectCurriedAppliedResultTypes(fn_ty, chain.arg_exprs.len);
         defer self.allocator.free(applied_result_tys);
 
@@ -5924,12 +5924,13 @@ pub const Lowerer = struct {
         source_ty: type_mod.TypeId,
         source_solved_var: ?Var,
     ) std.mem.Allocator.Error!void {
-        const effective_source_ty = if (self.ctx.types.isFullyResolved(source_ty))
-            source_ty
-        else if (source_solved_var) |var_|
-            try self.publishMonotypeType(try self.lowerInstantiatedType(module_idx, type_scope, var_))
-        else
-            try self.publishMonotypeType(source_ty);
+        if (!self.ctx.types.isFullyResolved(source_ty)) {
+            return debugPanic(
+                "monotype explicit pattern fact invariant violated: structural pattern source type was not frozen before structural fact recording in module {d}",
+                .{module_idx},
+            );
+        }
+        const effective_source_ty = source_ty;
         try self.bindPatternSourceTypeFact(module_idx, type_scope, pattern_idx, effective_source_ty);
 
         const cir_env = self.ctx.env(module_idx);
