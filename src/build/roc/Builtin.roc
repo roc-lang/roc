@@ -887,9 +887,187 @@ Builtin :: [].{
 
 	Dict :: [EmptyDict].{}
 
-	Set(item) :: [].{
-		is_eq : Set(item), Set(item) -> Bool
-		is_eq = |_a, _b| Bool.False
+	Set(item) :: [Items(List(item))].{
+		is_eq : Set(a), Set(a) -> Bool
+			where [a.is_eq : a, a -> Bool]
+		is_eq = |set_a, set_b| {
+			list_a = Set.to_list(set_a)
+			list_b = Set.to_list(set_b)
+
+			if List.len(list_a) != List.len(list_b) {
+				False
+			} else {
+				state = List.fold(
+					list_a,
+					{ all_found: Bool.True, check: list_b },
+					|st, elem|
+						if List.contains(st.check, elem) {
+							st
+						} else {
+							{ all_found: Bool.False, check: st.check }
+						},
+				)
+				state.all_found
+			}
+		}
+
+		## Creates a new empty `Set`.
+		empty : () -> Set(_item)
+		empty = || Items([])
+
+		## Creates a new `Set` with a single value.
+		single : item -> Set(item)
+		single = |elem| Items([elem])
+
+		## Counts the number of values in a given `Set`.
+		len : Set(_item) -> U64
+		len = |set| match set {
+			Items(list) => List.len(list)
+		}
+
+		## Check if the set is empty.
+		is_empty : Set(_item) -> Bool
+		is_empty = |set| match set {
+			Items(list) => List.is_empty(list)
+		}
+
+		## Test if a value is in the `Set`.
+		contains : Set(a), a -> Bool
+			where [a.is_eq : a, a -> Bool]
+		contains = |set, elem| match set {
+			Items(list) => List.contains(list, elem)
+		}
+
+		## Insert a value into a `Set`.
+		insert : Set(a), a -> Set(a)
+			where [a.is_eq : a, a -> Bool]
+		insert = |set, elem| match set {
+			Items(list) => Items(
+				List.append(
+					List.keep_if(list, |x| x != elem),
+					elem,
+				),
+			)
+		}
+
+		## Removes the value from the given `Set`.
+		remove : Set(a), a -> Set(a)
+			where [a.is_eq : a, a -> Bool]
+		remove = |set, elem| match set {
+			Items(list) => Items(List.keep_if(list, |x| x != elem))
+		}
+
+		## Retrieve the values in a `Set` as a `List`.
+		to_list : Set(a) -> List(a)
+		to_list = |set| match set {
+			Items(list) => list
+		}
+
+		## Create a `Set` from a `List` of values.
+		from_list : List(a) -> Set(a)
+			where [a.is_eq : a, a -> Bool]
+		from_list = |list| {
+			Items(
+				List.fold(
+					list,
+					[],
+					|acc, elem|
+						if List.contains(acc, elem) {
+							acc
+						} else {
+							List.append(acc, elem)
+						},
+				),
+			)
+		}
+
+		## Run the given function on each element in the `Set`, and return
+		## a `Set` with just the elements for which the function returned `Bool.true`.
+		keep_if : Set(a), (a -> Bool) -> Set(a)
+		keep_if = |set, predicate| match set {
+			Items(list) => Items(List.keep_if(list, predicate))
+		}
+
+		## Run the given function on each element in the `Set`, and return
+		## a `Set` with just the elements for which the function returned `Bool.false`.
+		drop_if : Set(a), (a -> Bool) -> Set(a)
+		drop_if = |set, predicate| match set {
+			Items(list) => Items(List.drop_if(list, predicate))
+		}
+
+		## Combine two `Set`s by keeping the
+		## [union](https://en.wikipedia.org/wiki/Union_(set_theory))
+		## of all the values.
+		union : Set(a), Set(a) -> Set(a)
+			where [a.is_eq : a, a -> Bool]
+		union = |set_a, set_b|
+			List.fold(Set.to_list(set_b), set_a, |acc, elem| Set.insert(acc, elem))
+
+		## Combine two `Set`s by keeping the
+		## [intersection](https://en.wikipedia.org/wiki/Intersection_(set_theory))
+		## of all the values.
+		intersection : Set(a), Set(a) -> Set(a)
+			where [a.is_eq : a, a -> Bool]
+		intersection = |set_a, set_b| {
+			list_a = Set.to_list(set_a)
+			list_b = Set.to_list(set_b)
+
+			state = List.fold(
+				list_a,
+				{ result: [], check: list_b },
+				|st, elem|
+					if List.contains(st.check, elem) {
+						{ result: List.append(st.result, elem), check: st.check }
+					} else {
+						st
+					},
+			)
+			Items(state.result)
+		}
+
+		## Remove the values in the first `Set` that are also in the second `Set`
+		## using the [set difference](https://en.wikipedia.org/wiki/Complement_(set_theory)#Relative_complement).
+		difference : Set(a), Set(a) -> Set(a)
+			where [a.is_eq : a, a -> Bool]
+		difference = |set_a, set_b| {
+			list_a = Set.to_list(set_a)
+			list_b = Set.to_list(set_b)
+
+			state = List.fold(
+				list_a,
+				{ result: [], check: list_b },
+				|st, elem|
+					if List.contains(st.check, elem) {
+						st
+					} else {
+						{ result: List.append(st.result, elem), check: st.check }
+					},
+			)
+			Items(state.result)
+		}
+
+		## Convert each value in the set to something new, by calling a conversion
+		## function on each of them. Then return a new set containing the unique
+		## converted values.
+		map : Set(a), (a -> b) -> Set(b)
+			where [b.is_eq : b, b -> Bool]
+		map = |set, transform| match set {
+			Items(list) =>
+				Items(
+					List.fold(
+						list,
+						[],
+						|acc, elem| {
+							new_elem = transform(elem)
+							if List.contains(acc, new_elem) {
+								acc
+							} else {
+								List.append(acc, new_elem)
+							}
+						},
+					),
+				)
+			}
 	}
 
 	Num :: {}.{

@@ -33,6 +33,7 @@ const runExpectStr = helpers.runExpectStr;
 const runExpectRecord = helpers.runExpectRecord;
 const runExpectListI64 = helpers.runExpectListI64;
 const runExpectListZst = helpers.runExpectListZst;
+const runExpectEmptyListI64 = helpers.runExpectEmptyListI64;
 const runExpectDec = helpers.runExpectDec;
 const runExpectTypeMismatchAndCrash = helpers.runExpectTypeMismatchAndCrash;
 const runExpectProblem = helpers.runExpectProblem;
@@ -4213,4 +4214,256 @@ test "focused: polymorphic additional specialization via List.append (non-eq)" {
         \\    clone_via_fold([[1.I64, 2.I64], [3.I64, 4.I64]]).len()
         \\}
     , 2, .no_trace);
+}
+
+// Set builtin tests
+
+test "Set.empty - creates empty set with length 0" {
+    try runExpectI64(
+        \\Set.empty().len()
+    , 0, .no_trace);
+}
+
+test "Set.empty - is_empty returns true" {
+    try runExpectBool(
+        \\Set.empty().is_empty()
+    , true, .no_trace);
+}
+
+test "Set.single - creates set with one element" {
+    try runExpectI64(
+        \\Set.single(42.I64).len()
+    , 1, .no_trace);
+}
+
+test "Set.single - is not empty" {
+    try runExpectBool(
+        \\Set.single(1.I64).is_empty()
+    , false, .no_trace);
+}
+
+test "Set.contains - element in set" {
+    try runExpectBool(
+        \\Set.single(42.I64).contains(42)
+    , true, .no_trace);
+}
+
+test "Set.contains - element not in set" {
+    try runExpectBool(
+        \\Set.single(42.I64).contains(99)
+    , false, .no_trace);
+}
+
+test "Set.contains - empty set" {
+    try runExpectBool(
+        \\{
+        \\    s : Set(I64)
+        \\    s = Set.empty()
+        \\    s.contains(1)
+        \\}
+    , false, .no_trace);
+}
+
+test "Set.insert - adds new element" {
+    try runExpectI64(
+        \\Set.single(1.I64).insert(2).len()
+    , 2, .no_trace);
+}
+
+test "Set.insert - duplicate has no effect" {
+    try runExpectI64(
+        \\Set.single(1.I64).insert(1).len()
+    , 1, .no_trace);
+}
+
+test "Set.insert - multiple elements" {
+    try runExpectI64(
+        \\Set.empty().insert(1.I64).insert(2).insert(3).len()
+    , 3, .no_trace);
+}
+
+test "Set.insert - duplicate among multiple" {
+    try runExpectI64(
+        \\Set.empty().insert(1.I64).insert(2).insert(1).insert(3).len()
+    , 3, .no_trace);
+}
+
+test "Set.remove - removes existing element" {
+    try runExpectI64(
+        \\Set.single(1.I64).insert(2).insert(3).remove(2).len()
+    , 2, .no_trace);
+}
+
+test "Set.remove - element not in set has no effect" {
+    try runExpectI64(
+        \\Set.single(1.I64).insert(2).remove(99).len()
+    , 2, .no_trace);
+}
+
+test "Set.remove - removed element is no longer contained" {
+    try runExpectBool(
+        \\Set.single(1.I64).insert(2).remove(1).contains(1)
+    , false, .no_trace);
+}
+
+test "Set.to_list - single element set" {
+    try runExpectListI64(
+        \\Set.single(1.I64).to_list()
+    , &[_]i64{1}, .no_trace);
+}
+
+test "Set.to_list - empty set gives empty list" {
+    try runExpectI64(
+        \\{
+        \\    s : Set(I64)
+        \\    s = Set.empty()
+        \\    s.to_list().len()
+        \\}
+    , 0, .no_trace);
+}
+
+test "Set.from_list - creates set from list" {
+    try runExpectI64(
+        \\Set.from_list([1.I64, 2, 3]).len()
+    , 3, .no_trace);
+}
+
+test "Set.from_list - deduplicates" {
+    try runExpectI64(
+        \\Set.from_list([1.I64, 2, 1, 3, 2]).len()
+    , 3, .no_trace);
+}
+
+test "Set.keep_if - keeps matching elements" {
+    try runExpectI64(
+        \\Set.from_list([1.I64, 2, 3, 4, 5]).keep_if(|x| x > 3).len()
+    , 2, .no_trace);
+}
+
+test "Set.drop_if - drops matching elements" {
+    try runExpectI64(
+        \\Set.from_list([1.I64, 2, 3, 4, 5]).drop_if(|x| x > 3).len()
+    , 3, .no_trace);
+}
+
+test "Set.union - combines two sets" {
+    try runExpectI64(
+        \\Set.from_list([1.I64, 2, 3]).union(Set.from_list([3, 4, 5])).len()
+    , 5, .no_trace);
+}
+
+test "Set.union - with empty set" {
+    try runExpectI64(
+        \\Set.from_list([1.I64, 2]).union(Set.empty()).len()
+    , 2, .no_trace);
+}
+
+test "Set.union - identical sets" {
+    try runExpectI64(
+        \\Set.from_list([1.I64, 2]).union(Set.from_list([1, 2])).len()
+    , 2, .no_trace);
+}
+
+test "Set.union - disjoint sets" {
+    try runExpectI64(
+        \\Set.from_list([1.I64, 2]).union(Set.from_list([3, 4])).len()
+    , 4, .no_trace);
+}
+
+test "Set.intersection - common elements" {
+    try runExpectI64(
+        \\Set.from_list([1.I64, 2, 3]).intersection(Set.from_list([2, 3, 4])).len()
+    , 2, .no_trace);
+}
+
+test "Set.intersection - no common elements" {
+    try runExpectI64(
+        \\Set.from_list([1.I64, 2]).intersection(Set.from_list([3, 4])).len()
+    , 0, .no_trace);
+}
+
+test "Set.intersection - with empty set" {
+    try runExpectI64(
+        \\{
+        \\    s : Set(I64)
+        \\    s = Set.empty()
+        \\    Set.from_list([1.I64, 2]).intersection(s).len()
+        \\}
+    , 0, .no_trace);
+}
+
+test "Set.intersection - identical sets" {
+    try runExpectI64(
+        \\Set.from_list([1.I64, 2, 3]).intersection(Set.from_list([1, 2, 3])).len()
+    , 3, .no_trace);
+}
+
+test "Set.difference - removes elements in second set" {
+    try runExpectI64(
+        \\Set.from_list([1.I64, 2, 3, 4]).difference(Set.from_list([2, 4])).len()
+    , 2, .no_trace);
+}
+
+test "Set.difference - no overlap" {
+    try runExpectI64(
+        \\Set.from_list([1.I64, 2]).difference(Set.from_list([3, 4])).len()
+    , 2, .no_trace);
+}
+
+test "Set.difference - with empty set" {
+    try runExpectI64(
+        \\{
+        \\    s : Set(I64)
+        \\    s = Set.empty()
+        \\    Set.from_list([1.I64, 2]).difference(s).len()
+        \\}
+    , 2, .no_trace);
+}
+
+test "Set.difference - subtract all" {
+    try runExpectI64(
+        \\Set.from_list([1.I64, 2]).difference(Set.from_list([1, 2])).len()
+    , 0, .no_trace);
+}
+
+test "Set.is_eq - equal sets" {
+    try runExpectBool(
+        \\Set.from_list([1.I64, 2, 3]) == Set.from_list([3, 2, 1])
+    , true, .no_trace);
+}
+
+test "Set.is_eq - unequal sets different lengths" {
+    try runExpectBool(
+        \\Set.from_list([1.I64, 2]) == Set.from_list([1, 2, 3])
+    , false, .no_trace);
+}
+
+test "Set.is_eq - unequal sets same length" {
+    try runExpectBool(
+        \\Set.from_list([1.I64, 2, 3]) == Set.from_list([1, 2, 4])
+    , false, .no_trace);
+}
+
+test "Set.is_eq - both empty" {
+    try runExpectBool(
+        \\{
+        \\    a : Set(I64)
+        \\    a = Set.empty()
+        \\    b : Set(I64)
+        \\    b = Set.empty()
+        \\    a == b
+        \\}
+    , true, .no_trace);
+}
+
+test "Set.map - transforms elements" {
+    try runExpectI64(
+        \\Set.from_list([1.I64, 2, 3]).map(|x| x * 2).len()
+    , 3, .no_trace);
+}
+
+test "Set.map - deduplicates after transform" {
+    try runExpectI64(
+        \\Set.from_list([1.I64, 2, 3, 4]).map(|x| x / 2).len()
+    , 3, .no_trace);
 }
