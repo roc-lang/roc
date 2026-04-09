@@ -73,6 +73,7 @@ pub const Mutable = struct {
     typed_facts_frozen: bool,
     function_facts: std.AutoHashMap(TypeKey, ExplicitFunctionFact),
     function_type_facts: std.AutoHashMap(TypeKey, ExplicitFunctionTypeFact),
+    var_type_facts: std.AutoHashMap(TypeKey, type_mod.TypeId),
     collected_expr_facts: std.AutoHashMap(ExprKey, void),
     collected_pattern_facts: std.AutoHashMap(PatternTypeKey, void),
     expr_type_facts: std.AutoHashMap(ExprKey, type_mod.TypeId),
@@ -96,6 +97,7 @@ pub const Mutable = struct {
             .typed_facts_frozen = false,
             .function_facts = std.AutoHashMap(TypeKey, ExplicitFunctionFact).init(allocator),
             .function_type_facts = std.AutoHashMap(TypeKey, ExplicitFunctionTypeFact).init(allocator),
+            .var_type_facts = std.AutoHashMap(TypeKey, type_mod.TypeId).init(allocator),
             .collected_expr_facts = std.AutoHashMap(ExprKey, void).init(allocator),
             .collected_pattern_facts = std.AutoHashMap(PatternTypeKey, void).init(allocator),
             .expr_type_facts = std.AutoHashMap(ExprKey, type_mod.TypeId).init(allocator),
@@ -147,6 +149,7 @@ pub const Mutable = struct {
             self.allocator.free(fact.arg_tys);
         }
         self.function_type_facts.deinit();
+        self.var_type_facts.deinit();
         self.collected_expr_facts.deinit();
         self.collected_pattern_facts.deinit();
         self.expr_result_var_facts.deinit();

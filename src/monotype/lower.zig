@@ -980,6 +980,7 @@ pub const Lowerer = struct {
             try self.unifySpecializedCheckerVars(module_idx, source_fn_var, var_);
         }
         _ = try self.ensureExplicitFunctionFact(module_idx, &type_scope, source_fn_var);
+        try self.materializeSettledVarTypeFacts(module_idx, &type_scope);
         try self.freezeExplicitFunctionTypeFacts(module_idx, &type_scope);
 
         const arg_patterns = env.store.slicePatterns(hosted.args);
@@ -1057,6 +1058,7 @@ pub const Lowerer = struct {
             try type_scope.var_map.put(source_arg_var, scoped_arg_var);
         }
         _ = try self.ensureExplicitFunctionFact(module_idx, type_scope, source_fn_var);
+        try self.materializeSettledVarTypeFacts(module_idx, type_scope);
         try self.freezeExplicitFunctionTypeFacts(module_idx, type_scope);
         const result_ty = try self.requireFunctionRetType(module_idx, type_scope, source_fn_var);
         const result_var = self.lookupFunctionNodeRetVar(module_idx, type_scope, source_fn_var);
@@ -1622,11 +1624,11 @@ pub const Lowerer = struct {
             if (type_scope.facts.call_type_facts.contains(key_ptr.*)) continue;
 
             const call_fact = self.requireExplicitCallFact(module_idx, type_scope, key_ptr.expr_idx);
-            const fn_ty = try self.publishMonotypeType(try self.lowerInstantiatedType(module_idx, type_scope, call_fact.fn_var));
+            const fn_ty = self.requireSettledVarTypeFact(module_idx, type_scope, call_fact.fn_var);
             const arg_tys = try self.allocator.alloc(type_mod.TypeId, call_fact.arg_vars.len);
             errdefer self.allocator.free(arg_tys);
             for (call_fact.arg_vars, 0..) |arg_var, i| {
-                arg_tys[i] = try self.publishMonotypeType(try self.lowerInstantiatedType(module_idx, type_scope, arg_var));
+                arg_tys[i] = self.requireSettledVarTypeFact(module_idx, type_scope, arg_var);
             }
 
             const applied_result_tys = try self.collectCurriedAppliedResultTypes(fn_ty, call_fact.arg_vars.len);
@@ -1655,9 +1657,7 @@ pub const Lowerer = struct {
 
             const fact = self.requireArithmeticBinopFact(module_idx, type_scope, key_ptr.expr_idx);
             try self.putArithmeticBinopTypeFact(module_idx, type_scope, key_ptr.expr_idx, .{
-                .operand_ty = try self.publishMonotypeType(
-                    try self.lowerInstantiatedType(module_idx, type_scope, fact.operand_var),
-                ),
+                .operand_ty = self.requireSettledVarTypeFact(module_idx, type_scope, fact.operand_var),
             });
         }
     }
@@ -1680,6 +1680,7 @@ pub const Lowerer = struct {
         type_scope: *TypeCloneScope,
     ) std.mem.Allocator.Error!void {
         if (type_scope.facts.typed_facts_frozen) return;
+        try self.materializeSettledVarTypeFacts(module_idx, type_scope);
         try self.freezeExprTypeFacts(module_idx, type_scope);
         try self.freezePatternTypeFacts(module_idx, type_scope);
         try self.freezeExprStructuralFacts(module_idx, type_scope);
@@ -2973,6 +2974,7 @@ pub const Lowerer = struct {
             try self.unifySpecializedCheckerVars(module_idx, source_fn_var, var_);
         }
         _ = try self.ensureExplicitFunctionFact(module_idx, scope, source_fn_var);
+        try self.materializeSettledVarTypeFacts(module_idx, scope);
         try self.freezeExplicitFunctionTypeFacts(module_idx, scope);
         const first_arg_ty = if (arg_patterns.len == 0)
             self.requireFunctionType(closure_ty).arg
@@ -5975,6 +5977,93 @@ pub const Lowerer = struct {
             debugPanic("monotype explicit expr fact invariant violated: missing explicit expr result var fact", .{});
     }
 
+    fn putSettledVarTypeFact(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeCloneScope,
+        var_: Var,
+        ty: type_mod.TypeId,
+    ) std.mem.Allocator.Error!void {
+        const resolved = self.ctx.env(module_idx).types.resolveVar(var_);
+        const key: TypeCloneScope.TypeKey = .{ .module_idx = module_idx, .var_ = resolved.var_ };
+        if (type_scope.facts.var_type_facts.get(key)) |existing| {
+            if (existing != ty) {
+                debugPanic(
+                    "monotype explicit var type fact invariant violated: conflicting settled var type facts in module {d}",
+                    .{module_idx},
+                );
+            }
+            return;
+        }
+        try type_scope.facts.var_type_facts.put(key, ty);
+    }
+
+    fn requireSettledVarTypeFact(
+        self: *const Lowerer,
+        module_idx: u32,
+        type_scope: *const TypeCloneScope,
+        var_: Var,
+    ) type_mod.TypeId {
+        const resolved = self.ctx.env(module_idx).types.resolveVar(var_);
+        const key: TypeCloneScope.TypeKey = .{ .module_idx = module_idx, .var_ = resolved.var_ };
+        return type_scope.facts.var_type_facts.get(key) orelse
+            debugPanic("monotype explicit var type fact invariant violated: missing settled var type fact", .{});
+    }
+
+    fn materializeSettledVarTypeFact(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeCloneScope,
+        var_: Var,
+    ) std.mem.Allocator.Error!void {
+        const lowered = try self.publishMonotypeType(try self.lowerInstantiatedType(module_idx, type_scope, var_));
+        try self.putSettledVarTypeFact(module_idx, type_scope, var_, lowered);
+    }
+
+    fn materializeSettledVarTypeFacts(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeCloneScope,
+    ) std.mem.Allocator.Error!void {
+        var expr_iter = type_scope.facts.expr_result_var_facts.valueIterator();
+        while (expr_iter.next()) |var_ptr| {
+            try self.materializeSettledVarTypeFact(module_idx, type_scope, var_ptr.*);
+        }
+
+        var pattern_iter = type_scope.facts.collected_pattern_facts.keyIterator();
+        while (pattern_iter.next()) |key_ptr| {
+            try self.materializeSettledVarTypeFact(
+                module_idx,
+                type_scope,
+                try self.requirePatternSolvedVar(type_scope, key_ptr.pattern_idx),
+            );
+        }
+
+        var function_iter = type_scope.facts.function_facts.valueIterator();
+        while (function_iter.next()) |fact| {
+            for (fact.arg_vars) |arg_var| {
+                try self.materializeSettledVarTypeFact(module_idx, type_scope, arg_var);
+            }
+            try self.materializeSettledVarTypeFact(module_idx, type_scope, fact.node_ret_var);
+            try self.materializeSettledVarTypeFact(module_idx, type_scope, fact.final_ret_var);
+        }
+
+        var call_iter = type_scope.facts.call_facts.valueIterator();
+        while (call_iter.next()) |fact| {
+            try self.materializeSettledVarTypeFact(module_idx, type_scope, fact.fn_var);
+            try self.materializeSettledVarTypeFact(module_idx, type_scope, fact.result_var);
+            for (fact.arg_vars) |arg_var| {
+                try self.materializeSettledVarTypeFact(module_idx, type_scope, arg_var);
+            }
+        }
+
+        var arithmetic_iter = type_scope.facts.arithmetic_binop_facts.valueIterator();
+        while (arithmetic_iter.next()) |fact| {
+            try self.materializeSettledVarTypeFact(module_idx, type_scope, fact.operand_var);
+            try self.materializeSettledVarTypeFact(module_idx, type_scope, fact.result_var);
+        }
+    }
+
     fn recordExprTypeFact(
         self: *Lowerer,
         module_idx: u32,
@@ -5987,14 +6076,16 @@ pub const Lowerer = struct {
         };
         if (type_scope.facts.expr_type_facts.contains(key)) return;
 
-        const lowered = try self.lowerInstantiatedType(
+        const lowered = self.requireSettledVarTypeFact(
             module_idx,
             type_scope,
             self.requireExprResultFact(module_idx, type_scope, expr_idx),
         );
         const expr = self.ctx.env(module_idx).store.getExpr(expr_idx);
-        const normalized = try self.normalizeDefaultNumericLiteralType(module_idx, expr_idx, expr, lowered);
-        try type_scope.facts.expr_type_facts.put(key, try self.publishMonotypeType(normalized));
+        try type_scope.facts.expr_type_facts.put(
+            key,
+            try self.normalizeDefaultNumericLiteralType(module_idx, expr_idx, expr, lowered),
+        );
     }
 
     fn freezeExprTypeFacts(
@@ -6021,12 +6112,14 @@ pub const Lowerer = struct {
         };
         if (type_scope.facts.pattern_type_facts.contains(key)) return;
 
-        const lowered = try self.lowerInstantiatedType(
-            module_idx,
-            type_scope,
-            try self.requirePatternSolvedVar(type_scope, pattern_idx),
+        try type_scope.facts.pattern_type_facts.put(
+            key,
+            self.requireSettledVarTypeFact(
+                module_idx,
+                type_scope,
+                try self.requirePatternSolvedVar(type_scope, pattern_idx),
+            ),
         );
-        try type_scope.facts.pattern_type_facts.put(key, try self.publishMonotypeType(lowered));
     }
 
     fn freezePatternTypeFacts(
@@ -8811,14 +8904,14 @@ pub const Lowerer = struct {
             const arg_tys = try self.allocator.alloc(type_mod.TypeId, fn_fact.arg_vars.len);
             errdefer self.allocator.free(arg_tys);
             for (fn_fact.arg_vars, 0..) |arg_var, i| {
-                arg_tys[i] = try self.publishMonotypeType(try self.lowerInstantiatedType(module_idx, type_scope, arg_var));
+                arg_tys[i] = self.requireSettledVarTypeFact(module_idx, type_scope, arg_var);
             }
 
             try self.putExplicitFunctionTypeFact(module_idx, type_scope, key_ptr.var_, .{
                 .arg_tys = arg_tys,
                 .synthetic_unit_arg = fn_fact.synthetic_unit_arg,
-                .node_ret_ty = try self.publishMonotypeType(try self.lowerInstantiatedType(module_idx, type_scope, fn_fact.node_ret_var)),
-                .final_ret_ty = try self.publishMonotypeType(try self.lowerInstantiatedType(module_idx, type_scope, fn_fact.final_ret_var)),
+                .node_ret_ty = self.requireSettledVarTypeFact(module_idx, type_scope, fn_fact.node_ret_var),
+                .final_ret_ty = self.requireSettledVarTypeFact(module_idx, type_scope, fn_fact.final_ret_var),
             });
         }
     }

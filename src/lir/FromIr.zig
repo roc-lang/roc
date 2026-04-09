@@ -418,11 +418,6 @@ const ProcLowerer = struct {
             layoutRefsEqual(self.localLayoutRef(local_id), ref);
     }
 
-    fn runtimeReprClass(self: *const ProcLowerer, ref: ir.Layout.Ref) u32 {
-        return self.parent.input.layout_runtime_repr_classes.get(layout_mod.graphRefKey(ref)) orelse
-            debugPanic("lir.from_ir missing explicit runtime representation class for logical layout ref");
-    }
-
     fn unwrapNominalRef(self: *ProcLowerer, ref: ir.Layout.Ref) ir.Layout.Ref {
         var current = ref;
         while (true) {
@@ -589,7 +584,7 @@ const ProcLowerer = struct {
                 const target_elem_backing_ref = self.unwrapNominalRef(target_elem_ref);
                 if (layoutRefsEqual(actual_elem_ref, target_elem_ref) or
                     layoutRefsEqual(actual_elem_backing_ref, target_elem_backing_ref) or
-                    self.runtimeReprClass(actual_elem_backing_ref) == self.runtimeReprClass(target_elem_backing_ref))
+                    try self.parent.lowerLayoutId(actual_elem_backing_ref) == try self.parent.lowerLayoutId(target_elem_backing_ref))
                 {
                     return try self.parent.store.addCFStmt(.{ .assign_ref = .{
                         .target = target_local,

@@ -133,8 +133,6 @@ pub const Def = struct {
     entry_ty: ?types.Var = null,
 };
 
-pub const RuntimeReprClassMap = std.AutoHashMap(u64, u32);
-
 pub const Store = struct {
     allocator: std.mem.Allocator,
     exprs: std.ArrayList(Expr),

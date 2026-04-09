@@ -1030,13 +1030,6 @@ pub fn roc_builtins_num_shr_u128(out_low: *u64, out_high: *u64, a_low: u64, a_hi
     out_high.* = i128h.hi64(result);
 }
 
-// ── List append safe wrapper ──
-
-/// List append safe (simplified - copy=copy_fallback)
-pub fn roc_builtins_list_append_safe(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, element: ?[*]const u8, alignment: u32, element_width: usize, elements_refcounted: bool, roc_ops: *RocOps) callconv(.c) void {
-    listAppendSafeC(out, list_bytes, list_len, list_cap, @constCast(element), alignment, element_width, elements_refcounted, @ptrCast(&copy_fallback), roc_ops);
-}
-
 // ── Numeric-to-string wrappers ──
 
 /// Format a u128 to decimal string without using compiler_rt intrinsics.

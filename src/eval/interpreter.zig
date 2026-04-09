@@ -2152,18 +2152,6 @@ pub const Interpreter = struct {
         return rl;
     }
 
-    fn resolveListLayout(self: *LirInterpreter, list_layout: layout_mod.Idx) layout_mod.Idx {
-        const layout_val = self.layout_store.getLayout(list_layout);
-        return switch (layout_val.tag) {
-            .box => self.resolveListLayout(layout_val.data.box),
-            .list, .list_of_zst => list_layout,
-            else => std.debug.panic(
-                "LIR/interpreter invariant violated: expected list or boxed list layout, got {d}",
-                .{@intFromEnum(list_layout)},
-            ),
-        };
-    }
-
     const ResolvedListBase = struct {
         value: Value,
         layout: layout_mod.Idx,
@@ -2174,7 +2162,10 @@ pub const Interpreter = struct {
         list_val: Value,
         list_layout: layout_mod.Idx,
     ) ResolvedListBase {
-        const resolved_layout = self.resolveListLayout(list_layout);
+        const resolved_layout = self.layout_store.resolvedListLayoutIdx(list_layout) orelse std.debug.panic(
+            "LIR/interpreter invariant violated: expected explicit resolved list layout for layout {d}",
+            .{@intFromEnum(list_layout)},
+        );
         return .{
             .value = self.normalizeValueToLayout(list_val, list_layout, resolved_layout),
             .layout = resolved_layout,
@@ -2222,7 +2213,11 @@ pub const Interpreter = struct {
     const ListElemInfo = struct { alignment: u32, width: usize, rc: bool };
 
     fn listElemInfo(self: *LirInterpreter, list_layout: layout_mod.Idx) ListElemInfo {
-        const l = self.layout_store.getLayout(self.resolveListLayout(list_layout));
+        const resolved_layout = self.layout_store.resolvedListLayoutIdx(list_layout) orelse std.debug.panic(
+            "LIR/interpreter invariant violated: expected explicit resolved list layout for layout {d}",
+            .{@intFromEnum(list_layout)},
+        );
+        const l = self.layout_store.getLayout(resolved_layout);
         if (l.tag == .list) {
             const elem_idx = l.data.list;
             const sa = self.helper.sizeAlignOf(elem_idx);
@@ -2236,7 +2231,11 @@ pub const Interpreter = struct {
     }
 
     fn listElemLayout(self: *LirInterpreter, list_layout: layout_mod.Idx) layout_mod.Idx {
-        const l = self.layout_store.getLayout(self.resolveListLayout(list_layout));
+        const resolved_layout = self.layout_store.resolvedListLayoutIdx(list_layout) orelse std.debug.panic(
+            "LIR/interpreter invariant violated: expected explicit resolved list layout for layout {d}",
+            .{@intFromEnum(list_layout)},
+        );
+        const l = self.layout_store.getLayout(resolved_layout);
         if (l.tag == .list) return l.data.list;
         return .zst;
     }

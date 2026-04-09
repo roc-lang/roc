@@ -53,6 +53,7 @@ pub const Store = struct {
     mutable_env: ?*ModuleEnv = null,
 
     layouts: collections.SafeList(Layout),
+    resolved_list_layouts: std.ArrayList(?Idx),
     tuple_elems: collections.SafeList(Idx),
     struct_fields: StructField.SafeMultiList,
     struct_data: collections.SafeList(StructData),
@@ -138,6 +139,7 @@ pub const Store = struct {
             .all_module_envs = all_module_envs,
             .allocator = allocator,
             .layouts = layouts,
+            .resolved_list_layouts = .empty,
             .tuple_elems = try collections.SafeList(Idx).initCapacity(allocator, 512),
             .struct_fields = try StructField.SafeMultiList.initCapacity(allocator, 512),
             .struct_data = try collections.SafeList(StructData).initCapacity(allocator, 512),
@@ -151,6 +153,10 @@ pub const Store = struct {
 
         try self.buildExistingLayoutInternKey(Layout.boolType());
         try self.rememberScratchInternKey(.bool);
+        try self.resolved_list_layouts.ensureTotalCapacity(allocator, num_primitives);
+        for (0..num_primitives) |_| {
+            self.resolved_list_layouts.appendAssumeCapacity(null);
+        }
         return self;
     }
 
@@ -180,6 +186,7 @@ pub const Store = struct {
     }
 
     pub fn deinit(self: *Self) void {
+        self.resolved_list_layouts.deinit(self.allocator);
         self.layouts.deinit(self.allocator);
         self.tuple_elems.deinit(self.allocator);
         self.struct_fields.deinit(self.allocator);
@@ -309,7 +316,9 @@ pub const Store = struct {
 
     pub fn reserveLayout(self: *Self, layout: Layout) std.mem.Allocator.Error!Idx {
         const safe_list_idx = try self.layouts.append(self.allocator, layout);
-        return @enumFromInt(@intFromEnum(safe_list_idx));
+        const idx: Idx = @enumFromInt(@intFromEnum(safe_list_idx));
+        try self.resolved_list_layouts.append(self.allocator, self.computeResolvedListLayoutIdx(idx));
+        return idx;
     }
 
     fn internStructShape(
@@ -1748,6 +1757,29 @@ pub const Store = struct {
     pub fn updateLayout(self: *Self, idx: Idx, layout: Layout) void {
         const ptr = self.layouts.get(@enumFromInt(@intFromEnum(idx)));
         ptr.* = layout;
+        self.resolved_list_layouts.items[@intFromEnum(idx)] = self.computeResolvedListLayoutIdx(idx);
+    }
+
+    fn computeResolvedListLayoutIdx(self: *const Self, start: Idx) ?Idx {
+        var current = start;
+        var steps: usize = 0;
+        while (steps < self.layouts.len()) : (steps += 1) {
+            const layout = self.getLayout(current);
+            switch (layout.tag) {
+                .list, .list_of_zst => return current,
+                .box => current = layout.data.box,
+                .box_of_zst => return null,
+                else => return null,
+            }
+        }
+        std.debug.panic(
+            "layout.Store invariant violated: list-layout resolution encountered a cycle starting at layout {d}",
+            .{@intFromEnum(start)},
+        );
+    }
+
+    pub fn resolvedListLayoutIdx(self: *const Self, layout_idx: Idx) ?Idx {
+        return self.resolved_list_layouts.items[@intFromEnum(layout_idx)];
     }
 };
 
@@ -1822,4 +1854,22 @@ test "uninterned struct layouts use the same stable alignment sort as interned o
         try testing.expectEqual(left.index, right.index);
         try testing.expectEqual(left.layout, right.layout);
     }
+}
+
+test "layout store records explicit resolved list layout facts for boxed lists" {
+    const testing = std.testing;
+
+    var store = try Store.init(&.{}, null, testing.allocator, .u64);
+    defer store.deinit();
+
+    const list_idx = try store.insertLayout(Layout.list(.u8));
+    const boxed_list_idx = try store.insertLayout(Layout.box(list_idx));
+    const boxed_boxed_list_idx = try store.insertLayout(Layout.box(boxed_list_idx));
+    const boxed_scalar_idx = try store.insertLayout(Layout.box(.u8));
+
+    try testing.expectEqual(list_idx, store.resolvedListLayoutIdx(list_idx).?);
+    try testing.expectEqual(list_idx, store.resolvedListLayoutIdx(boxed_list_idx).?);
+    try testing.expectEqual(list_idx, store.resolvedListLayoutIdx(boxed_boxed_list_idx).?);
+    try testing.expectEqual(@as(?Idx, null), store.resolvedListLayoutIdx(boxed_scalar_idx));
+    try testing.expectEqual(@as(?Idx, null), store.resolvedListLayoutIdx(.u8));
 }

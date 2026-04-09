@@ -139,7 +139,6 @@ pub const BuiltinFn = enum {
     // List operations
     list_with_capacity,
     list_append_unsafe,
-    list_append_safe,
     list_concat,
     list_prepend,
     list_sublist,
@@ -230,7 +229,6 @@ pub const BuiltinFn = enum {
             // List operations
             .list_with_capacity => "roc_builtins_list_with_capacity",
             .list_append_unsafe => "roc_builtins_list_append_unsafe",
-            .list_append_safe => "roc_builtins_list_append_safe",
             .list_concat => "roc_builtins_list_concat",
             .list_prepend => "roc_builtins_list_prepend",
             .list_sublist => "roc_builtins_list_sublist",

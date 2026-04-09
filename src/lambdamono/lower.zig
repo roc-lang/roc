@@ -206,7 +206,6 @@ const Lowerer = struct {
             };
             try facts.recordDefRet(self.allocator, &self.types, def_id, ret_ty);
         }
-        try facts.finalizeRuntimeReprClasses(self.allocator);
     }
 
     fn lowerProgram(self: *Lowerer) std.mem.Allocator.Error!void {

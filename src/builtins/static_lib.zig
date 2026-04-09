@@ -102,8 +102,6 @@ comptime {
     @export(&dw.roc_builtins_num_div_trunc_i128, .{ .name = "roc_builtins_num_div_trunc_i128" });
     @export(&dw.roc_builtins_num_rem_trunc_u128, .{ .name = "roc_builtins_num_rem_trunc_u128" });
     @export(&dw.roc_builtins_num_rem_trunc_i128, .{ .name = "roc_builtins_num_rem_trunc_i128" });
-    // List append safe wrapper
-    @export(&dw.roc_builtins_list_append_safe, .{ .name = "roc_builtins_list_append_safe" });
     // Numeric-to-string wrappers
     @export(&dw.roc_builtins_int_to_str, .{ .name = "roc_builtins_int_to_str" });
     @export(&dw.roc_builtins_float_to_str, .{ .name = "roc_builtins_float_to_str" });
