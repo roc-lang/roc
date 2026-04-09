@@ -3410,7 +3410,7 @@ pub const Lowerer = struct {
                     const destruct = cir_env.store.getRecordDestruct(destructs[idx]);
                     const child_pattern_idx = destruct.kind.toPatternIdx();
                     if (!self.patternNeedsAnyExplicitMatch(module_idx, child_pattern_idx)) continue;
-                    const field_ty = try self.requirePatternTypeFact(module_idx, type_scope, child_pattern_idx);
+                    const field_ty = self.requirePatternSourceTypeFact(module_idx, type_scope, child_pattern_idx);
                     const field_expr = try self.program.store.addExpr(.{
                         .ty = field_ty,
                         .data = .{ .access = .{
@@ -3439,15 +3439,16 @@ pub const Lowerer = struct {
                     idx -= 1;
                     const child_pattern_idx = elem_patterns[idx];
                     if (!self.patternNeedsAnyExplicitMatch(module_idx, child_pattern_idx)) continue;
+                    const elem_ty = self.requirePatternSourceTypeFact(module_idx, type_scope, child_pattern_idx);
                     current = try self.lowerPatternGuardExpr(
                         module_idx,
                         type_scope,
                         try self.makeTupleAccessExpr(
                             scrutinee_expr,
-                            try self.requirePatternTypeFact(module_idx, type_scope, child_pattern_idx),
+                            elem_ty,
                             idx,
                         ),
-                        try self.requirePatternTypeFact(module_idx, type_scope, child_pattern_idx),
+                        elem_ty,
                         child_pattern_idx,
                         current,
                         else_expr,
@@ -7350,7 +7351,7 @@ pub const Lowerer = struct {
                 for (cir_env.store.sliceRecordDestructs(record.destructs)) |destruct_idx| {
                     const destruct = cir_env.store.getRecordDestruct(destruct_idx);
                     const child_pattern_idx = destruct.kind.toPatternIdx();
-                    const field_ty = try self.requirePatternTypeFact(module_idx, type_scope, child_pattern_idx);
+                    const field_ty = self.requirePatternSourceTypeFact(module_idx, type_scope, child_pattern_idx);
                     const field_solved_var = try self.requirePatternSolvedVar(type_scope, child_pattern_idx);
                     const field_bind: ast.TypedSymbol = .{
                         .ty = field_ty,
@@ -7384,7 +7385,7 @@ pub const Lowerer = struct {
                 const elem_patterns = cir_env.store.slicePatterns(tuple.patterns);
                 const source_expr = try self.makeVarExpr(source.ty, source.symbol);
                 for (elem_patterns, 0..) |elem_pattern_idx, i| {
-                    const elem_ty = try self.requirePatternTypeFact(module_idx, type_scope, elem_pattern_idx);
+                    const elem_ty = self.requirePatternSourceTypeFact(module_idx, type_scope, elem_pattern_idx);
                     const elem_bind: ast.TypedSymbol = .{
                         .ty = elem_ty,
                         .symbol = try self.ctx.addSyntheticSymbol(base.Ident.Idx.NONE),
@@ -7704,7 +7705,7 @@ pub const Lowerer = struct {
                         module_idx,
                         type_scope,
                         arg_pat,
-                        try self.requirePatternTypeFact(module_idx, type_scope, arg_pat),
+                        self.requirePatternSourceTypeFact(module_idx, type_scope, arg_pat),
                         try self.requirePatternSolvedVar(type_scope, arg_pat),
                         env,
                         decls,
