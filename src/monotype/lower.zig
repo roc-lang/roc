@@ -202,6 +202,7 @@ const ExplicitFunctionFact = semantic_facts.ExplicitFunctionFact;
 const ExplicitFunctionTypeFact = semantic_facts.ExplicitFunctionTypeFact;
 const ExprSourceFunctionFact = semantic_facts.ExprSourceFunctionFact;
 const ArithmeticBinopFact = semantic_facts.ArithmeticBinopFact;
+const ArithmeticBinopTypeFact = semantic_facts.ArithmeticBinopTypeFact;
 
 const SpecializableCallChain = struct {
     func_expr_idx: CIR.Expr.Idx,
@@ -1610,6 +1611,24 @@ pub const Lowerer = struct {
         }
     }
 
+    fn freezeArithmeticBinopTypeFacts(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeCloneScope,
+    ) std.mem.Allocator.Error!void {
+        var iter = type_scope.facts.arithmetic_binop_facts.keyIterator();
+        while (iter.next()) |key_ptr| {
+            if (type_scope.facts.arithmetic_binop_type_facts.contains(key_ptr.*)) continue;
+
+            const fact = self.requireArithmeticBinopFact(module_idx, type_scope, key_ptr.expr_idx);
+            try self.putArithmeticBinopTypeFact(module_idx, type_scope, key_ptr.expr_idx, .{
+                .operand_ty = try self.publishMonotypeType(
+                    try self.lowerInstantiatedType(module_idx, type_scope, fact.operand_var),
+                ),
+            });
+        }
+    }
+
     fn collectExprFactsWithExplicitResultVar(
         self: *Lowerer,
         module_idx: u32,
@@ -1629,6 +1648,7 @@ pub const Lowerer = struct {
     ) std.mem.Allocator.Error!void {
         try self.freezeExplicitFunctionTypeFacts(module_idx, type_scope);
         try self.freezeExplicitCallTypeFacts(module_idx, type_scope);
+        try self.freezeArithmeticBinopTypeFacts(module_idx, type_scope);
     }
 
     fn buildExplicitCallFact(
@@ -1892,15 +1912,34 @@ pub const Lowerer = struct {
         };
         if (type_scope.facts.arithmetic_binop_facts.get(key)) |existing| {
             if (existing.operand_var != fact.operand_var or
-                existing.operand_ty != fact.operand_ty or
-                existing.result_var != fact.result_var or
-                existing.result_ty != fact.result_ty)
+                existing.result_var != fact.result_var)
             {
                 debugPanic("monotype explicit arithmetic fact invariant violated: conflicting arithmetic facts", .{});
             }
             return;
         }
         try type_scope.facts.arithmetic_binop_facts.put(key, fact);
+    }
+
+    fn putArithmeticBinopTypeFact(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeCloneScope,
+        expr_idx: CIR.Expr.Idx,
+        fact: ArithmeticBinopTypeFact,
+    ) std.mem.Allocator.Error!void {
+        _ = self;
+        const key: TypeCloneScope.ExprKey = .{
+            .module_idx = module_idx,
+            .expr_idx = expr_idx,
+        };
+        if (type_scope.facts.arithmetic_binop_type_facts.get(key)) |existing| {
+            if (existing.operand_ty != fact.operand_ty) {
+                debugPanic("monotype explicit arithmetic type fact invariant violated: conflicting arithmetic type facts", .{});
+            }
+            return;
+        }
+        try type_scope.facts.arithmetic_binop_type_facts.put(key, fact);
     }
 
     fn requireArithmeticBinopFact(
@@ -1916,6 +1955,21 @@ pub const Lowerer = struct {
         };
         return type_scope.facts.arithmetic_binop_facts.get(key) orelse
             debugPanic("monotype explicit arithmetic fact invariant violated: missing arithmetic fact", .{});
+    }
+
+    fn requireArithmeticBinopTypeFact(
+        self: *const Lowerer,
+        module_idx: u32,
+        type_scope: *const TypeCloneScope,
+        expr_idx: CIR.Expr.Idx,
+    ) ArithmeticBinopTypeFact {
+        _ = self;
+        const key: TypeCloneScope.ExprKey = .{
+            .module_idx = module_idx,
+            .expr_idx = expr_idx,
+        };
+        return type_scope.facts.arithmetic_binop_type_facts.get(key) orelse
+            debugPanic("monotype explicit arithmetic type fact invariant violated: missing arithmetic type fact", .{});
     }
 
     fn collectSourceSeededCallFacts(
@@ -2331,6 +2385,10 @@ pub const Lowerer = struct {
                     .add, .sub, .mul, .div, .rem, .div_trunc, .lt, .gt, .le, .ge, .eq => self.requireArithmeticBinopFact(module_idx, type_scope, expr_idx),
                     else => null,
                 };
+                const arithmetic_type_fact = switch (binop.op) {
+                    .add, .sub, .mul, .div, .rem, .div_trunc, .lt, .gt, .le, .ge, .eq => self.requireArithmeticBinopTypeFact(module_idx, type_scope, expr_idx),
+                    else => null,
+                };
                 break :blk .{ .low_level = .{
                     .op = binopToLowLevel(binop.op),
                     .args = try self.lowerHomogeneousBinopArgs(
@@ -2338,7 +2396,7 @@ pub const Lowerer = struct {
                         type_scope,
                         env,
                         switch (binop.op) {
-                            .add, .sub, .mul, .div, .rem, .div_trunc, .lt, .gt, .le, .ge, .eq => arithmetic_fact.?.operand_ty,
+                            .add, .sub, .mul, .div, .rem, .div_trunc, .lt, .gt, .le, .ge, .eq => arithmetic_type_fact.?.operand_ty,
                             else => unreachable,
                         },
                         switch (binop.op) {
@@ -4859,16 +4917,14 @@ pub const Lowerer = struct {
 
         const result_var = try self.scopedExprResultVar(module_idx, type_scope, env, expr_idx);
         try self.unifyAppliedFunctionResultVar(module_idx, &call_scope, result_var, cloned_func_var, 2);
-        const specialized_result_var = self.lookupCurriedFunctionFinalRetVar(module_idx, &call_scope, cloned_func_var) orelse debugPanic(
+        _ = self.lookupCurriedFunctionFinalRetVar(module_idx, &call_scope, cloned_func_var) orelse debugPanic(
             "monotype invariant violated: arithmetic fact missing return var for expr {d} in module {d}",
             .{ expr_idx, module_idx },
         );
 
         return .{
             .operand_var = lhs_expected_var,
-            .operand_ty = try self.lowerInstantiatedType(module_idx, &call_scope, lhs_expected_var),
             .result_var = result_var,
-            .result_ty = try self.lowerInstantiatedType(module_idx, &call_scope, specialized_result_var),
         };
     }
 

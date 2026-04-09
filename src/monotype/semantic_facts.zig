@@ -61,9 +61,11 @@ pub const ExprSourceFunctionFact = struct {
 
 pub const ArithmeticBinopFact = struct {
     operand_var: Var,
-    operand_ty: type_mod.TypeId,
     result_var: Var,
-    result_ty: type_mod.TypeId,
+};
+
+pub const ArithmeticBinopTypeFact = struct {
+    operand_ty: type_mod.TypeId,
 };
 
 pub const Mutable = struct {
@@ -83,6 +85,7 @@ pub const Mutable = struct {
     pattern_list_elem_type_facts: std.AutoHashMap(PatternTypeKey, type_mod.TypeId),
     record_destruct_field_index_facts: std.AutoHashMap(RecordDestructKey, u16),
     arithmetic_binop_facts: std.AutoHashMap(ExprKey, ArithmeticBinopFact),
+    arithmetic_binop_type_facts: std.AutoHashMap(ExprKey, ArithmeticBinopTypeFact),
 
     pub fn init(allocator: std.mem.Allocator) Mutable {
         return .{
@@ -102,10 +105,12 @@ pub const Mutable = struct {
             .pattern_list_elem_type_facts = std.AutoHashMap(PatternTypeKey, type_mod.TypeId).init(allocator),
             .record_destruct_field_index_facts = std.AutoHashMap(RecordDestructKey, u16).init(allocator),
             .arithmetic_binop_facts = std.AutoHashMap(ExprKey, ArithmeticBinopFact).init(allocator),
+            .arithmetic_binop_type_facts = std.AutoHashMap(ExprKey, ArithmeticBinopTypeFact).init(allocator),
         };
     }
 
     pub fn deinit(self: *Mutable) void {
+        self.arithmetic_binop_type_facts.deinit();
         self.arithmetic_binop_facts.deinit();
         self.record_destruct_field_index_facts.deinit();
         self.pattern_list_elem_type_facts.deinit();
