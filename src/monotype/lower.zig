@@ -1646,6 +1646,8 @@ pub const Lowerer = struct {
         module_idx: u32,
         type_scope: *TypeCloneScope,
     ) std.mem.Allocator.Error!void {
+        try self.freezeExprTypeFacts(module_idx, type_scope);
+        try self.freezeExprStructuralFacts(module_idx, type_scope);
         try self.freezeExplicitFunctionTypeFacts(module_idx, type_scope);
         try self.freezeExplicitCallTypeFacts(module_idx, type_scope);
         try self.freezeArithmeticBinopTypeFacts(module_idx, type_scope);
@@ -5984,6 +5986,18 @@ pub const Lowerer = struct {
         try type_scope.facts.expr_type_facts.put(key, try self.publishMonotypeType(normalized));
     }
 
+    fn freezeExprTypeFacts(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeCloneScope,
+    ) std.mem.Allocator.Error!void {
+        var iter = type_scope.facts.collected_expr_facts.keyIterator();
+        while (iter.next()) |key_ptr| {
+            if (type_scope.facts.expr_type_facts.contains(key_ptr.*)) continue;
+            try self.recordExprTypeFact(module_idx, type_scope, key_ptr.expr_idx);
+        }
+    }
+
     fn recordPatternTypeFact(
         self: *Lowerer,
         module_idx: u32,
@@ -6433,65 +6447,54 @@ pub const Lowerer = struct {
         }
     }
 
-    fn recordExprStructuralFacts(
+    fn freezeExprStructuralFacts(
         self: *Lowerer,
         module_idx: u32,
         type_scope: *TypeCloneScope,
-        env: BindingEnv,
-        expr_idx: CIR.Expr.Idx,
-        expr: CIR.Expr,
     ) std.mem.Allocator.Error!void {
-        switch (expr) {
-            .e_dot_access => |dot| {
-                if (dot.args == null) {
-                    try self.bindExprFieldIndexFact(
-                        module_idx,
-                        type_scope,
-                        expr_idx,
-                        try self.requireRecordFieldIndexForSolvedVar(
+        var iter = type_scope.facts.collected_expr_facts.keyIterator();
+        while (iter.next()) |key_ptr| {
+            const expr_idx = key_ptr.expr_idx;
+            const expr = self.ctx.env(module_idx).store.getExpr(expr_idx);
+            switch (expr) {
+                .e_dot_access => |dot| {
+                    if (dot.args == null) {
+                        try self.bindExprFieldIndexFact(
                             module_idx,
-                            self.requireExprResultFact(module_idx, type_scope, dot.receiver),
-                            dot.field_name,
-                        ),
+                            type_scope,
+                            expr_idx,
+                            try self.requireRecordFieldIndexForSolvedVar(
+                                module_idx,
+                                self.requireExprResultFact(module_idx, type_scope, dot.receiver),
+                                dot.field_name,
+                            ),
+                        );
+                    }
+                },
+                .e_tag => |tag| {
+                    const expr_ty = try self.requireExprTypeFact(module_idx, type_scope, expr_idx);
+                    if (self.ctx.types.getType(expr_ty) == .primitive and self.ctx.types.getType(expr_ty).primitive == .bool) continue;
+
+                    const expected_discriminant = try self.requireTagDiscriminantForSolvedVar(
+                        module_idx,
+                        self.requireExprResultFact(module_idx, type_scope, expr_idx),
+                        tag.name,
                     );
-                }
-            },
-            .e_tag => |tag| {
-                const expr_ty = try self.requireExprTypeFact(module_idx, type_scope, expr_idx);
-                if (self.ctx.types.getType(expr_ty) == .primitive and self.ctx.types.getType(expr_ty).primitive == .bool) {
-                    return;
-                }
+                    try self.bindExprTagDiscriminantFact(module_idx, type_scope, expr_idx, expected_discriminant);
+                },
+                .e_zero_argument_tag => |tag| {
+                    const expr_ty = try self.requireExprTypeFact(module_idx, type_scope, expr_idx);
+                    if (self.ctx.types.getType(expr_ty) == .primitive and self.ctx.types.getType(expr_ty).primitive == .bool) continue;
 
-                const expected_discriminant = try self.requireTagDiscriminantForSolvedVar(
-                    module_idx,
-                    self.requireExprResultFact(module_idx, type_scope, expr_idx),
-                    tag.name,
-                );
-                try self.bindExprTagDiscriminantFact(module_idx, type_scope, expr_idx, expected_discriminant);
-            },
-            .e_zero_argument_tag => |tag| {
-                const expr_ty = try self.requireExprTypeFact(module_idx, type_scope, expr_idx);
-                if (self.ctx.types.getType(expr_ty) == .primitive and self.ctx.types.getType(expr_ty).primitive == .bool) {
-                    return;
-                }
-
-                const expected_discriminant = try self.requireTagDiscriminantForSolvedVar(
-                    module_idx,
-                    self.requireExprResultFact(module_idx, type_scope, expr_idx),
-                    tag.name,
-                );
-                try self.bindExprTagDiscriminantFact(module_idx, type_scope, expr_idx, expected_discriminant);
-            },
-            .e_binop => |binop| switch (binop.op) {
-                .add, .sub, .mul, .div, .rem, .div_trunc, .lt, .gt, .le, .ge, .eq => try self.putArithmeticBinopFact(
-                    module_idx,
-                    type_scope,
-                    expr_idx,
-                    try self.lowerArithmeticBinopFact(module_idx, type_scope, env, expr_idx, binop),
-                ),
+                    const expected_discriminant = try self.requireTagDiscriminantForSolvedVar(
+                        module_idx,
+                        self.requireExprResultFact(module_idx, type_scope, expr_idx),
+                        tag.name,
+                    );
+                    try self.bindExprTagDiscriminantFact(module_idx, type_scope, expr_idx, expected_discriminant);
+                },
                 else => {},
-            },
-            else => {},
+            }
         }
     }
 
@@ -6508,7 +6511,7 @@ pub const Lowerer = struct {
         };
         const cir_env = self.ctx.env(module_idx);
         const expr = cir_env.store.getExpr(expr_idx);
-        if (type_scope.facts.expr_type_facts.contains(key) and type_scope.facts.expr_result_var_facts.contains(key) and (!exprNeedsExplicitCallFact(expr) or type_scope.facts.call_facts.contains(key))) return;
+        if (type_scope.facts.collected_expr_facts.contains(key) and type_scope.facts.expr_result_var_facts.contains(key) and (!exprNeedsExplicitCallFact(expr) or type_scope.facts.call_facts.contains(key))) return;
         const explicit_result_var = type_scope.facts.expr_result_var_facts.get(key);
 
         const result_var: Var = switch (expr) {
@@ -6787,9 +6790,20 @@ pub const Lowerer = struct {
         };
 
         try type_scope.facts.expr_result_var_facts.put(key, result_var);
+        try type_scope.facts.collected_expr_facts.put(key, {});
         try self.recordExprSourceFunctionFact(module_idx, type_scope, env, expr_idx);
-        try self.recordExprTypeFact(module_idx, type_scope, expr_idx);
-        try self.recordExprStructuralFacts(module_idx, type_scope, env, expr_idx, expr);
+        if (expr == .e_binop) {
+            const binop = expr.e_binop;
+            switch (binop.op) {
+                .add, .sub, .mul, .div, .rem, .div_trunc, .lt, .gt, .le, .ge, .eq => try self.putArithmeticBinopFact(
+                    module_idx,
+                    type_scope,
+                    expr_idx,
+                    try self.lowerArithmeticBinopFact(module_idx, type_scope, env, expr_idx, binop),
+                ),
+                else => {},
+            }
+        }
     }
 
     fn requireExprTypeFact(
