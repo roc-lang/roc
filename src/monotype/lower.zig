@@ -1041,9 +1041,6 @@ pub const Lowerer = struct {
         else
             try self.makeUnitArgWithType(first_arg_ty);
 
-        if (arg_patterns.len <= 1) {
-            try self.bindExplicitExprResultFact(module_idx, type_scope, lambda.body, result_var);
-        }
         const body = if (first_arg_pattern) |pattern_idx| blk: {
             break :blk try self.lowerLambdaBodyWithPattern(
                 module_idx,
@@ -1133,10 +1130,6 @@ pub const Lowerer = struct {
                 source_result_ty,
             );
         const final_result_var = if (remaining_after_current == 0) source_result_var else null;
-        if (remaining_after_current == 0) {
-            try self.bindExplicitExprResultFact(module_idx, type_scope, body_expr_idx, final_result_var);
-        }
-
         const first_pattern = remaining_arg_patterns[0];
         const first_arg = try self.bindLambdaArg(
             module_idx,
@@ -1991,8 +1984,14 @@ pub const Lowerer = struct {
         expected_ty: type_mod.TypeId,
         expected_var: ?Var,
     ) std.mem.Allocator.Error!LoweredExprFact {
-        if (expected_var != null) {
-            try self.bindExplicitExprResultFact(module_idx, type_scope, expr_idx, expected_var);
+        if (expected_var) |result_var| {
+            const actual = self.requireExprResultFact(module_idx, type_scope, expr_idx);
+            if (actual != result_var) {
+                debugPanic(
+                    "monotype explicit expr fact invariant violated: lowering expected expr {d} in module {d} to reuse explicit result var {d}, but collected facts stored {d}",
+                    .{ @intFromEnum(expr_idx), module_idx, @intFromEnum(result_var), @intFromEnum(actual) },
+                );
+            }
         }
         const lowered = try self.lowerExprWithExpectedType(
             module_idx,
@@ -2807,9 +2806,6 @@ pub const Lowerer = struct {
             );
         }
 
-        if (arg_patterns.len <= 1) {
-            try self.bindExplicitExprResultFact(module_idx, type_scope, body_expr_idx, result_var);
-        }
         const body = if (arg_patterns.len <= 1) blk: {
             const body_expect = self.requireLambdaBodyReturnFact(module_idx, result_ty, result_var);
             try self.collectExprFactsWithExplicitResultVar(
