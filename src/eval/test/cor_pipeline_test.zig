@@ -1,6 +1,7 @@
 //! Focused eval tests for the cor-style lowering pipeline.
 
 const std = @import("std");
+const base = @import("base");
 const helpers = @import("helpers.zig");
 
 const testing = std.testing;
@@ -13,13 +14,37 @@ fn expectInspect(comptime source: []const u8, expected: []const u8) !void {
     try testing.expectEqualStrings(expected, actual);
 }
 
+fn countLowLevelOp(compiled: *const helpers.CompiledInspectedExpr, op: base.LowLevel) usize {
+    var count: usize = 0;
+    for (compiled.lowered.lir_result.store.cf_stmts.items) |stmt| {
+        switch (stmt) {
+            .assign_low_level => |assign| {
+                if (assign.op == op) count += 1;
+            },
+            else => {},
+        }
+    }
+    return count;
+}
+
+fn countIndirectCalls(compiled: *const helpers.CompiledInspectedExpr) usize {
+    var count: usize = 0;
+    for (compiled.lowered.lir_result.store.cf_stmts.items) |stmt| {
+        switch (stmt) {
+            .assign_call_indirect => count += 1,
+            else => {},
+        }
+    }
+    return count;
+}
+
 test "cor pipeline - recursive lambda factorial" {
     try expectInspect(
         \\{
         \\    factorial = |n| if (n <= 1.I64) 1.I64 else n * factorial(n - 1.I64)
         \\    factorial(5.I64)
         \\}
-        ,
+    ,
         "120",
     );
 }
@@ -31,7 +56,7 @@ test "cor pipeline - mutual recursion in local lambdas" {
         \\    is_odd = |n| if (n == 0.I64) False else is_even(n - 1.I64)
         \\    is_even(6.I64)
         \\}
-        ,
+    ,
         "True",
     );
 }
@@ -45,7 +70,7 @@ test "cor pipeline - for loop sums list" {
         \\    }
         \\    $sum
         \\}
-        ,
+    ,
         "60",
     );
 }
@@ -62,7 +87,7 @@ test "cor pipeline - for loop in lambda body" {
         \\    }
         \\    sum([1.I64, 2.I64, 3.I64, 4.I64])
         \\}
-        ,
+    ,
         "10",
     );
 }
@@ -77,7 +102,7 @@ test "cor pipeline - recursive lambda with record" {
         \\            { a: n, b: n * 2.I64, c: n * 3.I64, d: n * 4.I64 }.a + f(n - 1.I64)
         \\    f(100.I64)
         \\}
-        ,
+    ,
         "5050",
     );
 }
@@ -93,7 +118,7 @@ test "cor pipeline - for loop early return" {
         \\    }
         \\    f([1.I64, 2.I64, 3.I64])
         \\}
-        ,
+    ,
         "True",
     );
 }
@@ -109,7 +134,29 @@ test "cor pipeline - for loop closure early return" {
         \\    }
         \\    f([1.I64, 2.I64, 3.I64], |_x| True)
         \\}
-        ,
+    ,
         "True",
     );
+}
+
+test "cor pipeline - boxed lambda lowering uses erased indirect-call path" {
+    var compiled = try helpers.compileInspectedExpr(
+        testing.allocator,
+        \\{
+        \\    wrap = |boxed| { value: boxed }
+        \\    unwrap = |record| record.value
+        \\    f = Box.unbox(unwrap(wrap(Box.box(|x| x + 1.I64))))
+        \\    f(41.I64)
+        \\}
+        ,
+    );
+    defer compiled.deinit(testing.allocator);
+
+    const actual = try helpers.lirInterpreterInspectedStr(testing.allocator, &compiled.lowered);
+    defer testing.allocator.free(actual);
+    try testing.expectEqualStrings("42", actual);
+
+    try testing.expect(countIndirectCalls(&compiled) >= 1);
+    try testing.expect(countLowLevelOp(&compiled, .box_box) >= 1);
+    try testing.expect(countLowLevelOp(&compiled, .box_unbox) >= 1);
 }

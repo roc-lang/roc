@@ -94,7 +94,7 @@ pub fn extractLsetFn(
     symbols: *const symbol_mod.Store,
 ) std.mem.Allocator.Error!SpecificLambdaRepr {
     return switch (lambdaRepr(types, ty)) {
-        .erased => debugPanic("TODO lambdamono.lower_type.extractLsetFn erased lambda set"),
+        .erased => debugPanic("lambdamono.lower_type.extractLsetFn attempted concrete lambda extraction from erased callable"),
         .lset => |lambdas| blk: {
             for (lambdas) |lambda| {
                 if (lambda.symbol != lambda_symbol) continue;
@@ -249,11 +249,15 @@ fn lowerLambdaSet(
     lambdas: []const solved.Type.Lambda,
     symbols: *const symbol_mod.Store,
 ) std.mem.Allocator.Error!mono.Content {
-    const out = try mono_types.allocator.alloc(mono.Tag, lambdas.len);
+    const frozen_lambdas = try mono_types.allocator.dupe(solved.Type.Lambda, lambdas);
+    defer mono_types.allocator.free(frozen_lambdas);
+
+    const out = try mono_types.allocator.alloc(mono.Tag, frozen_lambdas.len);
     defer mono_types.allocator.free(out);
 
-    for (lambdas, 0..) |lambda, i| {
-        const captures = types.sliceCaptures(lambda.captures);
+    for (frozen_lambdas, 0..) |lambda, i| {
+        const captures = try mono_types.allocator.dupe(solved.Type.Capture, types.sliceCaptures(lambda.captures));
+        defer mono_types.allocator.free(captures);
         if (captures.len == 0) {
             out[i] = .{
                 .name = lambdaTagKey(lambda.symbol),
@@ -276,7 +280,7 @@ fn lowerLambdaSet(
     } };
 }
 
-fn lowerCaptures(
+pub fn lowerCaptures(
     types: *solved.Type.Store,
     mono_types: *mono.Store,
     mono_cache: *MonoCache,

@@ -3021,6 +3021,66 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "1.0" },
     },
     .{
+        .name = "boxed lambda round trip: non-capturing lambda called multiple times",
+        .source =
+        \\{
+        \\f = Box.unbox(Box.box(|x| x + 1))
+        \\f(1) + f(2) + f(3)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "9.0" },
+    },
+    .{
+        .name = "boxed lambda round trip: capturing lambda called multiple times",
+        .source =
+        \\{
+        \\capture1 = 10
+        \\capture2 = 20
+        \\boxed = Box.box(|a, b| a + b + capture1 + capture2)
+        \\f = Box.unbox(boxed)
+        \\f(1, 2) + f(3, 4)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "70.0" },
+    },
+    .{
+        .name = "boxed lambda round trip: pass boxed lambda through helpers",
+        .source =
+        \\{
+        \\make = |n| |x| x + n
+        \\wrap = |boxed| { value: boxed }
+        \\unwrap = |record| record.value
+        \\f = Box.unbox(unwrap(wrap(Box.box(make(5)))))
+        \\f(1) + f(2)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "13.0" },
+    },
+    .{
+        .name = "boxed lambda round trip: polymorphic identity specialized after unboxing",
+        .source =
+        \\{
+        \\identity = |x| x
+        \\id_num = Box.unbox(Box.box(identity))
+        \\id_str = Box.unbox(Box.box(identity))
+        \\{ n: id_num(41), s: id_str("ok") }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "{ n: 41.0, s: \"ok\" }" },
+    },
+    .{
+        .name = "boxed lambda round trip: closes over polymorphic value",
+        .source =
+        \\{
+        \\make_const = |value| |_| value
+        \\num_f = Box.unbox(Box.box(make_const(41)))
+        \\str_f = Box.unbox(Box.box(make_const("ok")))
+        \\{ n: num_f({}), s: str_f({}) }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "{ n: 41.0, s: \"ok\" }" },
+    },
+    .{
         .name = "issue 8555: method call syntax list.first() with match on Result",
         .source =
         \\{

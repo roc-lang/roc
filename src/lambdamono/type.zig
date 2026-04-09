@@ -40,6 +40,7 @@ pub const Content = union(enum) {
     nominal: TypeId,
     list: TypeId,
     box: TypeId,
+    erased_fn: ?TypeId,
     tuple: Span(TypeId),
     tag_union: struct {
         tags: Span(Tag),
@@ -222,6 +223,10 @@ pub const Store = struct {
             .nominal => |backing| try self.isFullyResolvedVisited(backing, visited),
             .list => |elem| try self.isFullyResolvedVisited(elem, visited),
             .box => |elem| try self.isFullyResolvedVisited(elem, visited),
+            .erased_fn => |maybe_capture| if (maybe_capture) |capture|
+                try self.isFullyResolvedVisited(capture, visited)
+            else
+                true,
             .tuple => |tuple| blk: {
                 for (self.sliceTypeSpan(tuple)) |elem| {
                     if (!try self.isFullyResolvedVisited(elem, visited)) break :blk false;
@@ -277,6 +282,10 @@ pub const Store = struct {
             .nominal => |backing| .{ .nominal = try self.canonicalizeResolvedInner(backing, active) },
             .list => |elem| .{ .list = try self.canonicalizeResolvedInner(elem, active) },
             .box => |elem| .{ .box = try self.canonicalizeResolvedInner(elem, active) },
+            .erased_fn => |maybe_capture| .{ .erased_fn = if (maybe_capture) |capture|
+                try self.canonicalizeResolvedInner(capture, active)
+            else
+                null },
             .tuple => |tuple| blk: {
                 const elems = self.sliceTypeSpan(tuple);
                 const lowered_elems = try self.allocator.alloc(TypeId, elems.len);
@@ -405,6 +414,13 @@ pub const Store = struct {
                         try self_builder.store.appendInternKeyValue(@as(u8, 13));
                         try self_builder.serializeType(elem);
                     },
+                    .erased_fn => |maybe_capture| {
+                        try self_builder.store.appendInternKeyValue(@as(u8, 17));
+                        try self_builder.store.appendInternKeyValue(@as(u8, if (maybe_capture == null) 0 else 1));
+                        if (maybe_capture) |capture| {
+                            try self_builder.serializeType(capture);
+                        }
+                    },
                     .tuple => |tuple| {
                         const elems = self_builder.store.sliceTypeSpan(tuple);
                         try self_builder.store.appendInternKeyValue(@as(u8, 14));
@@ -516,6 +532,12 @@ pub const Store = struct {
             .primitive => |prim| prim == right_content.primitive,
             .list => |elem| self.equalIdsVisited(elem, right_content.list, visited),
             .box => |elem| self.equalIdsVisited(elem, right_content.box, visited),
+            .erased_fn => |maybe_capture| blk: {
+                const right_capture = right_content.erased_fn;
+                if (maybe_capture == null) break :blk right_capture == null;
+                if (right_capture == null) break :blk false;
+                break :blk try self.equalIdsVisited(maybe_capture.?, right_capture.?, visited);
+            },
             .tuple => |tuple| blk: {
                 const left_elems = self.sliceTypeSpan(tuple);
                 const right_elems = self.sliceTypeSpan(right_content.tuple);

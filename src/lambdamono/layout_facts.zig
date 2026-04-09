@@ -543,6 +543,16 @@ fn lowerNode(
         .nominal => |backing| .{ .nominal = try lowerTypeRec(allocator, mono_types, graph, cache, backing) },
         .list => |elem| .{ .list = try lowerTypeRec(allocator, mono_types, graph, cache, elem) },
         .box => |elem| .{ .box = try lowerTypeRec(allocator, mono_types, graph, cache, elem) },
+        .erased_fn => |maybe_capture| blk: {
+            var fields = [_]layout_mod.GraphField{
+                .{ .index = 0, .child = .{ .canonical = .opaque_ptr } },
+                .{ .index = 1, .child = if (maybe_capture) |capture|
+                    try lowerTypeRec(allocator, mono_types, graph, cache, capture)
+                else
+                    .{ .canonical = .opaque_ptr } },
+            };
+            break :blk .{ .struct_ = try graph.appendFields(allocator, &fields) };
+        },
         .tuple => |tuple| .{ .struct_ = try lowerTupleLikeSpan(allocator, mono_types, graph, cache, mono_types.sliceTypeSpan(tuple)) },
         .record => |record| blk: {
             const fields = mono_types.sliceFields(record.fields);

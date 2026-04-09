@@ -885,20 +885,60 @@ const Lowerer = struct {
     }
 
     fn propagateErasure(self: *Lowerer) std.mem.Allocator.Error!void {
+        var top_env: []EnvEntry = &.{};
+        defer if (top_env.len != 0) self.allocator.free(top_env);
+
         for (self.root_defs.items) |def_id| {
-            const def = self.output.getDef(def_id);
+            const def = &self.output.defs.items[@intFromEnum(def_id)];
             switch (def.value) {
-                .fn_ => |fn_def| try self.propagateExprErasure(fn_def.body),
-                .val => |expr_id| try self.propagateExprErasure(expr_id),
-                .run => |run_def| try self.propagateExprErasure(run_def.body),
+                .fn_ => |fn_def| {
+                    var fn_env = try self.extendEnvOne(top_env, .{
+                        .symbol = fn_def.arg.symbol,
+                        .ty = fn_def.arg.ty,
+                    });
+                    defer if (fn_env.len != 0) self.allocator.free(fn_env);
+                    for (self.output.sliceTypedSymbolSpan(fn_def.captures)) |capture| {
+                        const next_env = try self.extendEnvOne(fn_env, .{
+                            .symbol = capture.symbol,
+                            .ty = capture.ty,
+                        });
+                        if (fn_env.len != 0) self.allocator.free(fn_env);
+                        fn_env = next_env;
+                    }
+                    try self.propagateExprErasure(fn_def.body, fn_env);
+                    def.bind.ty = try self.rewriteFunctionRetType(def.bind.ty, self.output.getExpr(fn_def.body).ty);
+                },
+                .val => |expr_id| {
+                    try self.propagateExprErasure(expr_id, top_env);
+                    def.bind.ty = self.output.getExpr(expr_id).ty;
+                },
+                .run => |run_def| {
+                    try self.propagateExprErasure(run_def.body, top_env);
+                    def.bind.ty = self.output.getExpr(run_def.body).ty;
+                },
             }
+
+            const next_top = try self.extendEnvOne(top_env, .{
+                .symbol = def.bind.symbol,
+                .ty = def.bind.ty,
+            });
+            if (top_env.len != 0) self.allocator.free(top_env);
+            top_env = next_top;
         }
     }
 
-    fn propagateExprErasure(self: *Lowerer, expr_id: ast.ExprId) std.mem.Allocator.Error!void {
-        const expr = self.output.getExpr(expr_id);
+    fn propagateExprErasure(
+        self: *Lowerer,
+        expr_id: ast.ExprId,
+        venv: []const EnvEntry,
+    ) std.mem.Allocator.Error!void {
+        const expr = &self.output.exprs.items[@intFromEnum(expr_id)];
         switch (expr.data) {
-            .var_,
+            .var_ => |symbol| {
+                if (self.lookupEnv(venv, symbol)) |env_ty| {
+                    expr.ty = try self.overlayErasureTemplate(env_ty, expr.ty);
+                }
+            },
             .int_lit,
             .frac_f32_lit,
             .frac_f64_lit,
@@ -908,65 +948,389 @@ const Lowerer = struct {
             .unit,
             .runtime_error,
             => {},
-            .tag => |tag| for (self.output.sliceExprSpan(tag.args)) |arg| try self.propagateExprErasure(arg),
-            .record => |fields| for (self.output.sliceFieldExprSpan(fields)) |field| try self.propagateExprErasure(field.value),
-            .access => |access| try self.propagateExprErasure(access.record),
-            .let_ => |let_expr| {
-                try self.propagateExprErasure(let_expr.body);
-                try self.propagateExprErasure(let_expr.rest);
+            .tag => |tag| for (self.output.sliceExprSpan(tag.args)) |arg| try self.propagateExprErasure(arg, venv),
+            .record => |fields| for (self.output.sliceFieldExprSpan(fields)) |field| try self.propagateExprErasure(field.value, venv),
+            .access => |access| try self.propagateExprErasure(access.record, venv),
+            .let_ => |*let_expr| {
+                try self.propagateExprErasure(let_expr.body, venv);
+                let_expr.bind.ty = self.output.getExpr(let_expr.body).ty;
+                const rest_env = try self.extendEnvOne(venv, .{
+                    .symbol = let_expr.bind.symbol,
+                    .ty = let_expr.bind.ty,
+                });
+                defer if (rest_env.len != 0) self.allocator.free(rest_env);
+                try self.propagateExprErasure(let_expr.rest, rest_env);
+                expr.ty = self.output.getExpr(let_expr.rest).ty;
             },
             .call => |call| {
-                try self.propagateExprErasure(call.func);
-                try self.propagateExprErasure(call.arg);
+                try self.propagateExprErasure(call.func, venv);
+                try self.propagateExprErasure(call.arg, venv);
+                if (self.functionResultType(self.output.getExpr(call.func).ty)) |ret_ty| {
+                    expr.ty = ret_ty;
+                }
+                const func_expr = self.output.getExpr(call.func);
+                if (func_expr.data == .var_) {
+                    if (self.boxBoundaryBuiltinOpForSymbol(func_expr.data.var_)) |op| {
+                        const arg_ty = self.output.getExpr(call.arg).ty;
+                        switch (op) {
+                            .box_box => {
+                                const erased_arg_ty = try self.eraseCallableBoundaryType(arg_ty);
+                                expr.ty = try self.types.freshContent(.{ .box = erased_arg_ty });
+                            },
+                            .box_unbox => {
+                                const boxed_elem_ty = self.boxedPayloadType(arg_ty) orelse
+                                    return debugPanic("lambdasolved.propagateExprErasure box_unbox call expected boxed arg");
+                                expr.ty = try self.eraseCallableBoundaryType(boxed_elem_ty);
+                            },
+                            else => unreachable,
+                        }
+                    }
+                }
             },
-            .inspect => |value| try self.propagateExprErasure(value),
-            .low_level => |ll| for (self.output.sliceExprSpan(ll.args)) |arg| try self.propagateExprErasure(arg),
+            .inspect => |value| try self.propagateExprErasure(value, venv),
+            .low_level => |ll| {
+                const args = self.output.sliceExprSpan(ll.args);
+                for (args) |arg| {
+                    try self.propagateExprErasure(arg, venv);
+                }
+                switch (ll.op) {
+                    .box_box => {
+                        if (args.len != 1) {
+                            return debugPanic("lambdasolved.propagateExprErasure box_box expected one arg");
+                        }
+
+                        const arg_ty = self.output.getExpr(args[0]).ty;
+                        const erased_elem_ty = try self.eraseCallableBoundaryType(arg_ty);
+                        if (erased_elem_ty != arg_ty) {
+                            expr.ty = try self.types.freshContent(.{ .box = erased_elem_ty });
+                        }
+                    },
+                    .box_unbox => {
+                        if (args.len != 1) {
+                            return debugPanic("lambdasolved.propagateExprErasure box_unbox expected one arg");
+                        }
+
+                        const arg_ty = self.output.getExpr(args[0]).ty;
+                        const boxed_elem_ty = self.boxedPayloadType(arg_ty) orelse
+                            return debugPanic("lambdasolved.propagateExprErasure box_unbox expected boxed arg");
+                        expr.ty = try self.eraseCallableBoundaryType(boxed_elem_ty);
+                    },
+                    else => {},
+                }
+            },
             .when => |when_expr| {
-                try self.propagateExprErasure(when_expr.cond);
+                try self.propagateExprErasure(when_expr.cond, venv);
                 for (self.output.sliceBranchSpan(when_expr.branches)) |branch_id| {
                     const branch = self.output.getBranch(branch_id);
-                    try self.propagateExprErasure(branch.body);
+                    const additions = try self.patternEnvEntries(branch.pat);
+                    defer self.allocator.free(additions);
+                    const body_env = try self.extendEnvMany(venv, additions);
+                    defer if (body_env.len != 0) self.allocator.free(body_env);
+                    try self.propagateExprErasure(branch.body, body_env);
                 }
             },
             .if_ => |if_expr| {
-                try self.propagateExprErasure(if_expr.cond);
-                try self.propagateExprErasure(if_expr.then_body);
-                try self.propagateExprErasure(if_expr.else_body);
+                try self.propagateExprErasure(if_expr.cond, venv);
+                try self.propagateExprErasure(if_expr.then_body, venv);
+                try self.propagateExprErasure(if_expr.else_body, venv);
             },
             .block => |block| {
+                var block_env = try self.cloneEnv(venv);
+                defer if (block_env.len != 0) self.allocator.free(block_env);
                 for (self.output.sliceStmtSpan(block.stmts)) |stmt_id| {
-                    const stmt = self.output.getStmt(stmt_id);
-                    switch (stmt) {
-                        .decl => |decl| try self.propagateExprErasure(decl.body),
-                        .var_decl => |decl| try self.propagateExprErasure(decl.body),
-                        .reassign => |reassign| try self.propagateExprErasure(reassign.body),
-                        .expr => |nested| try self.propagateExprErasure(nested),
-                        .debug => |nested| try self.propagateExprErasure(nested),
-                        .expect => |nested| try self.propagateExprErasure(nested),
-                        .crash => {},
-                        .return_ => |nested| try self.propagateExprErasure(nested),
-                        .break_ => {},
-                        .for_ => |for_stmt| {
-                            try self.propagateExprErasure(for_stmt.iterable);
-                            try self.propagateExprErasure(for_stmt.body);
-                        },
-                        .while_ => |while_stmt| {
-                            try self.propagateExprErasure(while_stmt.cond);
-                            try self.propagateExprErasure(while_stmt.body);
-                        },
-                    }
+                    const next_env = try self.propagateStmtErasure(block_env, stmt_id);
+                    if (block_env.len != 0) self.allocator.free(block_env);
+                    block_env = next_env;
                 }
-                try self.propagateExprErasure(block.final_expr);
+                try self.propagateExprErasure(block.final_expr, block_env);
+                expr.ty = self.output.getExpr(block.final_expr).ty;
             },
-            .tuple => |tuple| for (self.output.sliceExprSpan(tuple)) |item| try self.propagateExprErasure(item),
-            .tuple_access => |tuple_access| try self.propagateExprErasure(tuple_access.tuple),
-            .list => |list| for (self.output.sliceExprSpan(list)) |item| try self.propagateExprErasure(item),
-            .return_ => |ret| try self.propagateExprErasure(ret),
+            .tuple => |tuple| for (self.output.sliceExprSpan(tuple)) |item| try self.propagateExprErasure(item, venv),
+            .tuple_access => |tuple_access| try self.propagateExprErasure(tuple_access.tuple, venv),
+            .list => |list| for (self.output.sliceExprSpan(list)) |item| try self.propagateExprErasure(item, venv),
+            .return_ => |ret| try self.propagateExprErasure(ret, venv),
             .for_ => |for_expr| {
-                try self.propagateExprErasure(for_expr.iterable);
-                try self.propagateExprErasure(for_expr.body);
+                try self.propagateExprErasure(for_expr.iterable, venv);
+                const additions = try self.patternEnvEntries(for_expr.patt);
+                defer self.allocator.free(additions);
+                const body_env = try self.extendEnvMany(venv, additions);
+                defer if (body_env.len != 0) self.allocator.free(body_env);
+                try self.propagateExprErasure(for_expr.body, body_env);
             },
         }
+    }
+
+    fn functionResultType(self: *Lowerer, ty: TypeVarId) ?TypeVarId {
+        const id = self.types.unlinkPreservingNominal(ty);
+        return switch (self.types.getNode(id)) {
+            .nominal => |backing| self.functionResultType(backing),
+            .content => |content| switch (content) {
+                .func => |func| func.ret,
+                else => null,
+            },
+            else => null,
+        };
+    }
+
+    fn rewriteFunctionRetType(self: *Lowerer, ty: TypeVarId, new_ret: TypeVarId) std.mem.Allocator.Error!TypeVarId {
+        const id = self.types.unlinkPreservingNominal(ty);
+        return switch (self.types.getNode(id)) {
+            .nominal => |backing| blk: {
+                const rewritten = try self.rewriteFunctionRetType(backing, new_ret);
+                if (rewritten == backing) break :blk id;
+                break :blk try self.types.fresh(.{ .nominal = rewritten });
+            },
+            .content => |content| switch (content) {
+                .func => |func| blk: {
+                    if (func.ret == new_ret) break :blk id;
+                    break :blk try self.types.freshContent(.{ .func = .{
+                        .arg = func.arg,
+                        .lset = func.lset,
+                        .ret = new_ret,
+                    } });
+                },
+                else => debugPanic("lambdasolved.rewriteFunctionRetType expected function"),
+            },
+            else => debugPanic("lambdasolved.rewriteFunctionRetType expected function"),
+        };
+    }
+
+    fn overlayErasureTemplate(self: *Lowerer, template_ty: TypeVarId, actual_ty: TypeVarId) std.mem.Allocator.Error!TypeVarId {
+        const template_id = self.types.unlinkPreservingNominal(template_ty);
+        const actual_id = self.types.unlinkPreservingNominal(actual_ty);
+
+        return switch (self.types.getNode(template_id)) {
+            .for_a => actual_ty,
+            .nominal => |template_backing| switch (self.types.getNode(actual_id)) {
+                .nominal => |actual_backing| blk: {
+                    const lowered_backing = try self.overlayErasureTemplate(template_backing, actual_backing);
+                    if (lowered_backing == actual_backing) break :blk actual_ty;
+                    break :blk try self.types.fresh(.{ .nominal = lowered_backing });
+                },
+                else => actual_ty,
+            },
+            .content => |template_content| switch (template_content) {
+                .func => |template_func| switch (self.types.getNode(actual_id)) {
+                    .content => |actual_content| switch (actual_content) {
+                        .func => |actual_func| blk: {
+                            const arg = try self.overlayErasureTemplate(template_func.arg, actual_func.arg);
+                            const ret = try self.overlayErasureTemplate(template_func.ret, actual_func.ret);
+                            const lset = if (self.lambdaSetIsErased(template_func.lset))
+                                try self.freshPrimitiveType(.erased)
+                            else
+                                actual_func.lset;
+                            if (arg == actual_func.arg and lset == actual_func.lset and ret == actual_func.ret) {
+                                break :blk actual_ty;
+                            }
+                            break :blk try self.types.freshContent(.{ .func = .{
+                                .arg = arg,
+                                .lset = lset,
+                                .ret = ret,
+                            } });
+                        },
+                        else => actual_ty,
+                    },
+                    else => actual_ty,
+                },
+                .box => |template_elem| switch (self.types.getNode(actual_id)) {
+                    .content => |actual_content| switch (actual_content) {
+                        .box => |actual_elem| blk: {
+                            const elem = try self.overlayErasureTemplate(template_elem, actual_elem);
+                            if (elem == actual_elem) break :blk actual_ty;
+                            break :blk try self.types.freshContent(.{ .box = elem });
+                        },
+                        else => actual_ty,
+                    },
+                    else => actual_ty,
+                },
+                .list => |template_elem| switch (self.types.getNode(actual_id)) {
+                    .content => |actual_content| switch (actual_content) {
+                        .list => |actual_elem| blk: {
+                            const elem = try self.overlayErasureTemplate(template_elem, actual_elem);
+                            if (elem == actual_elem) break :blk actual_ty;
+                            break :blk try self.types.freshContent(.{ .list = elem });
+                        },
+                        else => actual_ty,
+                    },
+                    else => actual_ty,
+                },
+                else => actual_ty,
+            },
+            else => actual_ty,
+        };
+    }
+
+    fn propagateStmtErasure(
+        self: *Lowerer,
+        venv: []const EnvEntry,
+        stmt_id: ast.StmtId,
+    ) std.mem.Allocator.Error![]EnvEntry {
+        const stmt = &self.output.stmts.items[@intFromEnum(stmt_id)];
+        switch (stmt.*) {
+            .decl => |*decl| {
+                try self.propagateExprErasure(decl.body, venv);
+                decl.bind.ty = self.output.getExpr(decl.body).ty;
+                return try self.extendEnvOne(venv, .{
+                    .symbol = decl.bind.symbol,
+                    .ty = decl.bind.ty,
+                });
+            },
+            .var_decl => |*decl| {
+                try self.propagateExprErasure(decl.body, venv);
+                decl.bind.ty = self.output.getExpr(decl.body).ty;
+                return try self.extendEnvOne(venv, .{
+                    .symbol = decl.bind.symbol,
+                    .ty = decl.bind.ty,
+                });
+            },
+            .reassign => |reassign| {
+                try self.propagateExprErasure(reassign.body, venv);
+                return try self.cloneEnv(venv);
+            },
+            .expr => |nested| {
+                try self.propagateExprErasure(nested, venv);
+                return try self.cloneEnv(venv);
+            },
+            .debug => |nested| {
+                try self.propagateExprErasure(nested, venv);
+                return try self.cloneEnv(venv);
+            },
+            .expect => |nested| {
+                try self.propagateExprErasure(nested, venv);
+                return try self.cloneEnv(venv);
+            },
+            .crash, .break_ => return try self.cloneEnv(venv),
+            .return_ => |nested| {
+                try self.propagateExprErasure(nested, venv);
+                return try self.cloneEnv(venv);
+            },
+            .for_ => |for_stmt| {
+                try self.propagateExprErasure(for_stmt.iterable, venv);
+                const additions = try self.patternEnvEntries(for_stmt.patt);
+                defer self.allocator.free(additions);
+                const body_env = try self.extendEnvMany(venv, additions);
+                defer if (body_env.len != 0) self.allocator.free(body_env);
+                try self.propagateExprErasure(for_stmt.body, body_env);
+                return try self.cloneEnv(venv);
+            },
+            .while_ => |while_stmt| {
+                try self.propagateExprErasure(while_stmt.cond, venv);
+                try self.propagateExprErasure(while_stmt.body, venv);
+                return try self.cloneEnv(venv);
+            },
+        }
+    }
+
+    fn patternEnvEntries(self: *Lowerer, pat_id: ast.PatId) std.mem.Allocator.Error![]EnvEntry {
+        const pat = self.output.getPat(pat_id);
+        return switch (pat.data) {
+            .bool_lit => try self.allocator.alloc(EnvEntry, 0),
+            .var_ => |symbol| blk: {
+                const out = try self.allocator.alloc(EnvEntry, 1);
+                out[0] = .{ .symbol = symbol, .ty = pat.ty };
+                break :blk out;
+            },
+            .tag => |tag| blk: {
+                var out = std.ArrayList(EnvEntry).empty;
+                defer out.deinit(self.allocator);
+                for (self.output.slicePatSpan(tag.args)) |arg| {
+                    const nested = try self.patternEnvEntries(arg);
+                    defer self.allocator.free(nested);
+                    try out.appendSlice(self.allocator, nested);
+                }
+                break :blk try out.toOwnedSlice(self.allocator);
+            },
+        };
+    }
+
+    fn eraseCallableBoundaryType(self: *Lowerer, ty: TypeVarId) std.mem.Allocator.Error!TypeVarId {
+        var cache = std.AutoHashMap(TypeVarId, TypeVarId).init(self.allocator);
+        defer cache.deinit();
+        return try self.eraseCallableBoundaryTypeRec(ty, &cache);
+    }
+
+    fn eraseCallableBoundaryTypeRec(
+        self: *Lowerer,
+        ty: TypeVarId,
+        cache: *std.AutoHashMap(TypeVarId, TypeVarId),
+    ) std.mem.Allocator.Error!TypeVarId {
+        const id = self.types.unlinkPreservingNominal(ty);
+        if (cache.get(id)) |cached| return cached;
+
+        return switch (self.types.getNode(id)) {
+            .nominal => |backing| blk: {
+                const erased_backing = try self.eraseCallableBoundaryTypeRec(backing, cache);
+                if (erased_backing == backing) break :blk id;
+                const out = try self.types.fresh(.{ .nominal = erased_backing });
+                try cache.put(id, out);
+                break :blk out;
+            },
+            .content => |content| switch (content) {
+                .func => |func| blk: {
+                    if (self.lambdaSetIsErased(func.lset)) break :blk id;
+                    const erased_lset = try self.freshPrimitiveType(.erased);
+                    const out = try self.types.freshContent(.{ .func = .{
+                        .arg = func.arg,
+                        .lset = erased_lset,
+                        .ret = func.ret,
+                    } });
+                    try cache.put(id, out);
+                    break :blk out;
+                },
+                else => id,
+            },
+            .link => unreachable,
+            .unbd,
+            .for_a,
+            => id,
+        };
+    }
+
+    fn lambdaSetIsErased(self: *Lowerer, lset_ty: TypeVarId) bool {
+        const id = self.types.unlink(lset_ty);
+        return switch (self.types.getNode(id)) {
+            .content => |content| switch (content) {
+                .primitive => |prim| prim == .erased,
+                else => false,
+            },
+            else => false,
+        };
+    }
+
+    fn boxedPayloadType(self: *Lowerer, ty: TypeVarId) ?TypeVarId {
+        const id = self.types.unlinkPreservingNominal(ty);
+        return switch (self.types.getNode(id)) {
+            .nominal => |backing| self.boxedPayloadType(backing),
+            .content => |content| switch (content) {
+                .box => |elem| elem,
+                else => null,
+            },
+            else => null,
+        };
+    }
+
+    fn boxBoundaryBuiltinOpForSymbol(self: *Lowerer, symbol: Symbol) ?base.LowLevel {
+        const def_id = self.def_id_by_symbol.get(symbol) orelse return null;
+        const def = self.output.getDef(def_id);
+        const fn_def = switch (def.value) {
+            .fn_ => |fn_def| fn_def,
+            else => return null,
+        };
+        if (self.output.sliceTypedSymbolSpan(fn_def.captures).len != 0) return null;
+        const body = self.output.getExpr(fn_def.body);
+        return switch (body.data) {
+            .low_level => |ll| blk: {
+                const args = self.output.sliceExprSpan(ll.args);
+                if (args.len != 1) break :blk null;
+                const arg_expr = self.output.getExpr(args[0]);
+                if (arg_expr.data != .var_ or arg_expr.data.var_ != fn_def.arg.symbol) break :blk null;
+                break :blk switch (ll.op) {
+                    .box_box, .box_unbox => ll.op,
+                    else => null,
+                };
+            },
+            else => null,
+        };
     }
 
     fn reorderDefsByScc(self: *Lowerer) std.mem.Allocator.Error!void {

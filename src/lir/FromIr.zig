@@ -1363,7 +1363,6 @@ const ProcLowerer = struct {
     fn lookupProcId(self: *ProcLowerer, symbol: ir.Ast.Symbol) LIR.LirProcSpecId {
         return self.parent.proc_ids_by_symbol.get(symbol.raw()) orelse debugPanic("lir.from_ir.lookupProcId missing proc");
     }
-
 };
 
 fn lirSymbol(symbol: ir.Ast.Symbol) LIR.Symbol {
