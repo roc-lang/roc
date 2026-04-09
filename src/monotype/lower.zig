@@ -1189,7 +1189,7 @@ pub const Lowerer = struct {
             "monotype lambda invariant violated: missing explicit curried source function return fact in module {d}",
             .{module_idx},
         );
-        const source_result_ty = try self.lowerInstantiatedType(module_idx, type_scope, source_result_var);
+        const source_result_ty = try self.requireFunctionRetType(module_idx, type_scope, source_fn_var);
         const remaining_after_current = remaining_arg_patterns.len - 1;
         const result_ty = if (remaining_after_current == 0)
             source_result_ty
@@ -1622,16 +1622,16 @@ pub const Lowerer = struct {
     ) std.mem.Allocator.Error!ExplicitCallFact {
         try self.unifyAppliedFunctionResultVar(module_idx, type_scope, result_var, fn_var, applied_arg_count);
 
-        const arg_vars = try self.allocator.alloc(Var, applied_arg_count);
-        errdefer self.allocator.free(arg_vars);
-
-        for (0..applied_arg_count) |i| {
-            const arg_var = self.lookupCurriedFunctionArgVar(module_idx, type_scope, fn_var, i) orelse debugPanic(
-                "monotype explicit call fact invariant violated: missing explicit arg {d} fact in module {d}",
-                .{ i, module_idx },
+        const fn_fact = try self.ensureExplicitFunctionFact(module_idx, type_scope, fn_var);
+        if (applied_arg_count > fn_fact.arg_vars.len) {
+            debugPanic(
+                "monotype explicit call fact invariant violated: applied {d} args to function with arity {d} in module {d}",
+                .{ applied_arg_count, fn_fact.arg_vars.len, module_idx },
             );
-            arg_vars[i] = arg_var;
         }
+
+        const arg_vars = try self.allocator.dupe(Var, fn_fact.arg_vars[0..applied_arg_count]);
+        errdefer self.allocator.free(arg_vars);
 
         return .{
             .fn_var = fn_var,
@@ -2032,7 +2032,7 @@ pub const Lowerer = struct {
             .{ lambda_expr_idx, module_idx },
         );
         return .{
-            .ty = try self.lowerInstantiatedType(module_idx, type_scope, result_var),
+            .ty = try self.requireFunctionRetType(module_idx, type_scope, lambda_var),
             .solved_var = result_var,
         };
     }

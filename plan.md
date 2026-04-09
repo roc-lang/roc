@@ -38,6 +38,18 @@ lowered monotype type shape.
 The remaining issue is narrower now: monotype still clones/lower-instantiates
 checker vars on demand instead of consuming one published monotype fact set.
 
+The latest failed experiment clarified one important boundary:
+
+- explicit function/call vars can be published inside the current mutable
+  monotype specialization flow
+- explicit monotype types cannot
+
+Publishing typed function facts inside `TypeCloneScope` is still too early,
+because later specialization unifications can refine those vars after the fact
+and make the cached types stale. So the remaining type publication work must
+move earlier, to a stage where those facts are already stable, rather than
+freezing them inside monotype’s current mutable cloning/unification loop.
+
 That violates the intended `cor`-style contract:
 
 - solve first
@@ -75,6 +87,8 @@ After that:
    lower later” approach
 3. migrate monotype fact collection / lowering to consume those published
    semantic facts only
+   - do not reintroduce typed function/call facts inside the current mutable
+     `TypeCloneScope`; that boundary is not sound yet
 4. re-audit the remaining `lowerInstantiatedType(...)` uses and either:
    - remove them from lowering logic
    - or classify them as builder-internal-only and exclude them explicitly
