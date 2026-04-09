@@ -185,6 +185,9 @@ pub const RefOp = union(enum) {
         source: LocalId,
         tag_discriminant: u16,
     },
+    list_reinterpret: struct {
+        backing_ref: LocalId,
+    },
     nominal: struct {
         backing_ref: LocalId,
     },
@@ -332,6 +335,7 @@ pub const CFStmt = union(enum) {
     for_list: struct {
         elem: LocalId,
         iterable: LocalId,
+        iterable_elem_layout: layout.Idx,
         body: CFStmtId,
         next: CFStmtId,
     },

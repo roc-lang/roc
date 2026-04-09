@@ -47,6 +47,8 @@ const Lowerer = struct {
     layouts: layout_mod.Store,
     root_procs: std.ArrayList(LIR.LirProcSpecId),
     proc_ids_by_symbol: std.AutoHashMap(u32, LIR.LirProcSpecId),
+    proc_ret_layout_refs: std.AutoHashMap(u32, ir.Layout.Ref),
+    local_layout_refs: std.AutoHashMap(u32, ir.Layout.Ref),
     ir_to_layout: std.AutoHashMap(u32, layout_mod.Idx),
     next_join_id: u32,
 
@@ -71,6 +73,8 @@ const Lowerer = struct {
             .layouts = try layout_mod.Store.init(all_module_envs, builtin_str_ident, allocator, target_usize),
             .root_procs = .empty,
             .proc_ids_by_symbol = std.AutoHashMap(u32, LIR.LirProcSpecId).init(allocator),
+            .proc_ret_layout_refs = std.AutoHashMap(u32, ir.Layout.Ref).init(allocator),
+            .local_layout_refs = std.AutoHashMap(u32, ir.Layout.Ref).init(allocator),
             .ir_to_layout = std.AutoHashMap(u32, layout_mod.Idx).init(allocator),
             .next_join_id = 0,
         };
@@ -78,6 +82,8 @@ const Lowerer = struct {
 
     fn deinit(self: *Lowerer) void {
         self.ir_to_layout.deinit();
+        self.local_layout_refs.deinit();
+        self.proc_ret_layout_refs.deinit();
         self.proc_ids_by_symbol.deinit();
         self.root_procs.deinit(self.allocator);
         self.layouts.deinit();
@@ -102,9 +108,11 @@ const Lowerer = struct {
             const arg_locals = try self.allocator.alloc(LIR.LocalId, ir_args.len);
             defer self.allocator.free(arg_locals);
             for (ir_args, 0..) |arg, i| {
-                arg_locals[i] = try self.store.addLocal(.{
+                const local_id = try self.store.addLocal(.{
                     .layout_idx = try self.lowerLayoutId(arg.layout),
                 });
+                arg_locals[i] = local_id;
+                try self.local_layout_refs.put(@intFromEnum(local_id), arg.layout);
             }
             const proc_id = try self.store.addProcSpec(.{
                 .name = lirSymbol(def.name),
@@ -114,6 +122,7 @@ const Lowerer = struct {
                 .result_contract = .fresh,
             });
             try self.proc_ids_by_symbol.put(def.name.raw(), proc_id);
+            try self.proc_ret_layout_refs.put(@intFromEnum(proc_id), def.ret_layout);
             try self.root_procs.append(self.allocator, proc_id);
         }
     }
@@ -168,6 +177,7 @@ const Lowerer = struct {
                 var commit = try self.layouts.commitGraph(&self.input.layouts, ref);
                 defer commit.deinit(self.allocator);
 
+                try self.ir_to_layout.put(key, commit.root_idx);
                 for (commit.value_layouts, 0..) |layout_idx, i| {
                     try self.ir_to_layout.put(@intCast(i), layout_idx);
                 }
@@ -234,6 +244,7 @@ const ProcLowerer = struct {
             .layout_idx = layout_idx,
         });
         try self.locals_by_var.put(key, local_id);
+        try self.parent.local_layout_refs.put(@intFromEnum(local_id), value.layout);
         return local_id;
     }
 
@@ -249,12 +260,36 @@ const ProcLowerer = struct {
         return self.parent.store.getLocal(local_id).layout_idx;
     }
 
+    fn localLayoutRef(self: *const ProcLowerer, local_id: LIR.LocalId) ir.Layout.Ref {
+        return self.parent.local_layout_refs.get(@intFromEnum(local_id)) orelse
+            debugPanic("lir.from_ir missing explicit logical layout ref for local");
+    }
+
     fn procRetLayout(self: *const ProcLowerer) layout_mod.Idx {
         return self.parent.store.getProcSpec(self.proc_id).ret_layout;
     }
 
+    fn procRetLayoutRef(self: *const ProcLowerer) ir.Layout.Ref {
+        return self.parent.proc_ret_layout_refs.get(@intFromEnum(self.proc_id)) orelse
+            debugPanic("lir.from_ir missing explicit proc return layout ref");
+    }
+
     fn freshLocalWithLayout(self: *ProcLowerer, layout_idx: layout_mod.Idx) std.mem.Allocator.Error!LIR.LocalId {
         return self.parent.store.addLocal(.{ .layout_idx = layout_idx });
+    }
+
+    fn freshLocalWithRef(self: *ProcLowerer, ref: ir.Layout.Ref) std.mem.Allocator.Error!LIR.LocalId {
+        return self.freshLocalWithLayoutAndRef(try self.parent.lowerLayoutId(ref), ref);
+    }
+
+    fn freshLocalWithLayoutAndRef(
+        self: *ProcLowerer,
+        layout_idx: layout_mod.Idx,
+        ref: ir.Layout.Ref,
+    ) std.mem.Allocator.Error!LIR.LocalId {
+        const local_id = try self.parent.store.addLocal(.{ .layout_idx = layout_idx });
+        try self.parent.local_layout_refs.put(@intFromEnum(local_id), ref);
+        return local_id;
     }
 
     fn lowerStructFieldLayout(
@@ -348,6 +383,149 @@ const ProcLowerer = struct {
         };
     }
 
+    fn layoutRefsEqual(left: ir.Layout.Ref, right: ir.Layout.Ref) bool {
+        return switch (left) {
+            .canonical => |left_idx| switch (right) {
+                .canonical => |right_idx| left_idx == right_idx,
+                .local => false,
+            },
+            .local => |left_node| switch (right) {
+                .canonical => false,
+                .local => |right_node| left_node == right_node,
+            },
+        };
+    }
+
+    fn localMatchesShape(
+        self: *const ProcLowerer,
+        local_id: LIR.LocalId,
+        layout_idx: layout_mod.Idx,
+        ref: ir.Layout.Ref,
+    ) bool {
+        return self.localLayout(local_id) == layout_idx and
+            layoutRefsEqual(self.localLayoutRef(local_id), ref);
+    }
+
+    fn unwrapNominalRef(self: *ProcLowerer, ref: ir.Layout.Ref) ir.Layout.Ref {
+        var current = ref;
+        while (true) {
+            switch (current) {
+                .canonical => return current,
+                .local => |node_id| switch (self.parent.input.layouts.getNode(node_id)) {
+                    .nominal => |backing| current = backing,
+                    else => return current,
+                },
+            }
+        }
+    }
+
+    fn resolvedListElemLayoutRef(self: *ProcLowerer, ref: ir.Layout.Ref) ?ir.Layout.Ref {
+        var current = ref;
+        while (true) {
+            switch (current) {
+                .canonical => return null,
+                .local => |node_id| switch (self.parent.input.layouts.getNode(node_id)) {
+                    .nominal => |backing| current = backing,
+                    .list => |elem| return elem,
+                    else => return null,
+                },
+            }
+        }
+    }
+
+    fn boxChildLayoutRef(self: *ProcLowerer, ref: ir.Layout.Ref) ir.Layout.Ref {
+        var current = ref;
+        while (true) {
+            switch (current) {
+                .canonical => debugPanic("lir.from_ir expected local logical box layout ref"),
+                .local => |node_id| switch (self.parent.input.layouts.getNode(node_id)) {
+                    .nominal => |backing| current = backing,
+                    .box => |child| return child,
+                    else => debugPanic("lir.from_ir expected box logical layout ref"),
+                },
+            }
+        }
+    }
+
+    fn physicalBoxChildLayoutRef(self: *ProcLowerer, ref: ir.Layout.Ref) ir.Layout.Ref {
+        var current = ref;
+        while (true) {
+            switch (current) {
+                .canonical => return ref,
+                .local => |node_id| switch (self.parent.input.layouts.getNode(node_id)) {
+                    .nominal => |backing| current = backing,
+                    .box => |child| return child,
+                    else => return ref,
+                },
+            }
+        }
+    }
+
+    fn isListLayout(layout_val: layout_mod.Layout) bool {
+        return layout_val.tag == .list or layout_val.tag == .list_of_zst;
+    }
+
+    fn structFieldLayoutRef(
+        self: *ProcLowerer,
+        ref: ir.Layout.Ref,
+        field_index: u16,
+    ) ir.Layout.Ref {
+        var current = ref;
+        while (true) {
+            switch (current) {
+                .canonical => debugPanic("lir.from_ir expected local logical struct layout ref"),
+                .local => |node_id| switch (self.parent.input.layouts.getNode(node_id)) {
+                    .nominal => |backing| current = backing,
+                    .struct_ => |fields| return self.parent.input.layouts.getFields(fields)[field_index].child,
+                    else => debugPanic("lir.from_ir expected struct logical layout ref"),
+                },
+            }
+        }
+    }
+
+    fn unionPayloadLayoutRef(
+        self: *ProcLowerer,
+        ref: ir.Layout.Ref,
+        tag_discriminant: u16,
+    ) ir.Layout.Ref {
+        var current = ref;
+        while (true) {
+            switch (current) {
+                .canonical => debugPanic("lir.from_ir expected local logical tag-union layout ref"),
+                .local => |node_id| switch (self.parent.input.layouts.getNode(node_id)) {
+                    .nominal => |backing| current = backing,
+                    .tag_union => |variants| return self.parent.input.layouts.getRefs(variants)[tag_discriminant],
+                    else => debugPanic("lir.from_ir expected tag-union logical layout ref"),
+                },
+            }
+        }
+    }
+
+    fn unionDiscriminantLayoutRef(
+        self: *ProcLowerer,
+        ref: ir.Layout.Ref,
+    ) ir.Layout.Ref {
+        var current = ref;
+        while (true) {
+            switch (current) {
+                .canonical => debugPanic("lir.from_ir expected local logical tag-union layout ref"),
+                .local => |node_id| switch (self.parent.input.layouts.getNode(node_id)) {
+                    .nominal => |backing| current = backing,
+                    .tag_union => |variants| {
+                        const prim: layout_mod.Idx = switch (self.parent.input.layouts.getRefs(variants).len) {
+                            0...0xff => .u8,
+                            0x100...0xffff => .u16,
+                            0x1_0000...0xffff_ffff => .u32,
+                            else => .u64,
+                        };
+                        return .{ .canonical = prim };
+                    },
+                    else => debugPanic("lir.from_ir expected tag-union logical layout ref"),
+                },
+            }
+        }
+    }
+
     fn bridgeValueToLayout(
         self: *ProcLowerer,
         source_local: LIR.LocalId,
@@ -374,6 +552,11 @@ const ProcLowerer = struct {
     ) std.mem.Allocator.Error!LIR.CFStmtId {
         const actual_layout = self.localLayout(source_local);
         const target_layout = self.localLayout(target_local);
+        const actual_ref = self.localLayoutRef(source_local);
+        const target_ref = self.localLayoutRef(target_local);
+        const ls = &self.parent.layouts;
+        const actual = ls.getLayout(actual_layout);
+        const target = ls.getLayout(target_layout);
         if (actual_layout == target_layout) {
             return try self.parent.store.addCFStmt(.{ .assign_ref = .{
                 .target = target_local,
@@ -383,11 +566,48 @@ const ProcLowerer = struct {
             } });
         }
 
-        const ls = &self.parent.layouts;
-        const actual = ls.getLayout(actual_layout);
-        const target = ls.getLayout(target_layout);
+        if (self.resolvedListElemLayoutRef(actual_ref)) |actual_elem_ref| {
+            if (self.resolvedListElemLayoutRef(target_ref)) |target_elem_ref| {
+                const actual_elem_layout: ?layout_mod.Idx = switch (actual.tag) {
+                    .list => actual.data.list,
+                    .list_of_zst => .zst,
+                    else => null,
+                };
+                const target_elem_layout: ?layout_mod.Idx = switch (target.tag) {
+                    .list => target.data.list,
+                    .list_of_zst => .zst,
+                    else => null,
+                };
+                if (layoutRefsEqual(actual_elem_ref, target_elem_ref) or
+                    (actual_elem_layout != null and
+                        target_elem_layout != null and
+                        (actual_elem_layout.? == target_elem_layout.? or
+                            ls.layoutsHaveSameRuntimeRepresentation(
+                                actual_elem_layout.?,
+                                target_elem_layout.?,
+                            ))))
+                {
+                    return try self.parent.store.addCFStmt(.{ .assign_ref = .{
+                        .target = target_local,
+                        .result = .fresh,
+                        .op = .{ .list_reinterpret = .{ .backing_ref = source_local } },
+                        .next = next,
+                    } });
+                }
+            }
+        }
 
-        if (ls.layoutsHaveSameRuntimeRepresentation(actual_layout, target_layout)) {
+        const actual_backing_ref = self.unwrapNominalRef(actual_ref);
+        const target_backing_ref = self.unwrapNominalRef(target_ref);
+        const actual_is_box = actual.tag == .box or actual.tag == .box_of_zst;
+        const target_is_box = target.tag == .box or target.tag == .box_of_zst;
+
+        if (!layoutRefsEqual(actual_ref, target_ref) and
+            layoutRefsEqual(actual_backing_ref, target_backing_ref) and
+            actual_is_box == target_is_box and
+            !isListLayout(actual) and
+            !isListLayout(target))
+        {
             return try self.parent.store.addCFStmt(.{ .assign_ref = .{
                 .target = target_local,
                 .result = .fresh,
@@ -418,44 +638,6 @@ const ProcLowerer = struct {
             } });
         }
 
-        if (target.tag == .box and ls.layoutsHaveSameRuntimeRepresentation(actual_layout, target.data.box)) {
-            const recast_local = try self.freshLocalWithLayout(target.data.box);
-            const box_args = try self.parent.store.addLocalSpan(&.{recast_local});
-            const box_stmt = try self.parent.store.addCFStmt(.{ .assign_low_level = .{
-                .target = target_local,
-                .result = .fresh,
-                .op = .box_box,
-                .args = box_args,
-                .next = next,
-            } });
-            const recast_stmt = try self.parent.store.addCFStmt(.{ .assign_ref = .{
-                .target = recast_local,
-                .result = .fresh,
-                .op = .{ .nominal = .{ .backing_ref = source_local } },
-                .next = box_stmt,
-            } });
-            return recast_stmt;
-        }
-
-        if (actual.tag == .box and ls.layoutsHaveSameRuntimeRepresentation(actual.data.box, target_layout)) {
-            const unboxed_local = try self.freshLocalWithLayout(actual.data.box);
-            const recast_stmt = try self.parent.store.addCFStmt(.{ .assign_ref = .{
-                .target = target_local,
-                .result = .fresh,
-                .op = .{ .nominal = .{ .backing_ref = unboxed_local } },
-                .next = next,
-            } });
-            const unbox_args = try self.parent.store.addLocalSpan(&.{source_local});
-            const unbox_stmt = try self.parent.store.addCFStmt(.{ .assign_low_level = .{
-                .target = unboxed_local,
-                .result = .fresh,
-                .op = .box_unbox,
-                .args = unbox_args,
-                .next = recast_stmt,
-            } });
-            return unbox_stmt;
-        }
-
         if (actual.tag == .struct_ and target.tag == .struct_) {
             return try self.bridgeStructIntoLocal(source_local, target_local, next);
         }
@@ -465,7 +647,8 @@ const ProcLowerer = struct {
         }
 
         if (target.tag == .box) {
-            const boxed_child_local = try self.freshLocalWithLayout(target.data.box);
+            const boxed_child_ref = self.physicalBoxChildLayoutRef(target_ref);
+            const boxed_child_local = try self.freshLocalWithLayoutAndRef(target.data.box, boxed_child_ref);
             const box_args = try self.parent.store.addLocalSpan(&.{boxed_child_local});
             const box_stmt = try self.parent.store.addCFStmt(.{ .assign_low_level = .{
                 .target = target_local,
@@ -478,7 +661,8 @@ const ProcLowerer = struct {
         }
 
         if (actual.tag == .box) {
-            const unboxed_local = try self.freshLocalWithLayout(actual.data.box);
+            const unboxed_ref = self.physicalBoxChildLayoutRef(actual_ref);
+            const unboxed_local = try self.freshLocalWithLayoutAndRef(actual.data.box, unboxed_ref);
             const bridged = try self.bridgeValueIntoLocal(unboxed_local, target_local, next);
             const unbox_args = try self.parent.store.addLocalSpan(&.{source_local});
             return try self.parent.store.addCFStmt(.{ .assign_low_level = .{
@@ -495,21 +679,35 @@ const ProcLowerer = struct {
             const target_layout_val = ls.getLayout(target_layout);
             const target_box_child: ?layout_mod.Idx = if (target_layout_val.tag == .box) target_layout_val.data.box else null;
             const actual_box_child: ?layout_mod.Idx = if (actual_layout_val.tag == .box) actual_layout_val.data.box else null;
+            const target_list_child: ?layout_mod.Idx = switch (target_layout_val.tag) {
+                .list => target_layout_val.data.list,
+                .list_of_zst => .zst,
+                else => null,
+            };
+            const actual_list_child: ?layout_mod.Idx = switch (actual_layout_val.tag) {
+                .list => actual_layout_val.data.list,
+                .list_of_zst => .zst,
+                else => null,
+            };
             const target_box_child_tag: ?[]const u8 = if (target_box_child) |child| @tagName(ls.getLayout(child).tag) else null;
             const actual_box_child_tag: ?[]const u8 = if (actual_box_child) |child| @tagName(ls.getLayout(child).tag) else null;
-            const box_child_matches = if (target_box_child) |child| ls.layoutsHaveSameRuntimeRepresentation(actual_layout, child) else false;
+            const target_list_child_tag: ?[]const u8 = if (target_list_child) |child| @tagName(ls.getLayout(child).tag) else null;
+            const actual_list_child_tag: ?[]const u8 = if (actual_list_child) |child| @tagName(ls.getLayout(child).tag) else null;
             std.debug.panic(
-                "lir.from_ir invariant violated: no explicit bridge from layout {d} ({s}, child={any}/{any}) to layout {d} ({s}, child={any}/{any}, child_match={})",
+                "lir.from_ir invariant violated: no explicit bridge from layout {d} ({s}, box_child={any}/{any}, list_child={any}/{any}) to layout {d} ({s}, box_child={any}/{any}, list_child={any}/{any})",
                 .{
                     @intFromEnum(actual_layout),
                     @tagName(actual_layout_val.tag),
                     actual_box_child,
                     actual_box_child_tag,
+                    actual_list_child,
+                    actual_list_child_tag,
                     @intFromEnum(target_layout),
                     @tagName(target_layout_val.tag),
                     target_box_child,
                     target_box_child_tag,
-                    box_child_matches,
+                    target_list_child,
+                    target_list_child_tag,
                 },
             );
         }
@@ -525,6 +723,8 @@ const ProcLowerer = struct {
         const ls = &self.parent.layouts;
         const actual_layout = self.localLayout(source_local);
         const target_layout = self.localLayout(target_local);
+        const actual_ref = self.localLayoutRef(source_local);
+        const target_ref = self.localLayoutRef(target_local);
         const actual_info = ls.getStructInfo(ls.getLayout(actual_layout));
         const target_info = ls.getStructInfo(ls.getLayout(target_layout));
 
@@ -555,13 +755,16 @@ const ProcLowerer = struct {
 
         for (0..field_count) |i| {
             const field_index: u16 = @intCast(i);
+            const actual_field_ref = self.structFieldLayoutRef(actual_ref, field_index);
+            const target_field_ref = self.structFieldLayoutRef(target_ref, field_index);
             const actual_field_layout = self.lowerStructFieldLayout(actual_layout, field_index);
             const target_field_layout = self.lowerStructFieldLayout(target_layout, field_index);
-            source_fields[i] = try self.freshLocalWithLayout(actual_field_layout);
-            target_fields[i] = if (actual_field_layout == target_field_layout)
+            source_fields[i] = try self.freshLocalWithLayoutAndRef(actual_field_layout, actual_field_ref);
+            target_fields[i] = if (actual_field_layout == target_field_layout and
+                layoutRefsEqual(actual_field_ref, target_field_ref))
                 source_fields[i]
             else
-                try self.freshLocalWithLayout(target_field_layout);
+                try self.freshLocalWithLayoutAndRef(target_field_layout, target_field_ref);
         }
 
         const assign_struct = try self.parent.store.addCFStmt(.{ .assign_struct = .{
@@ -598,6 +801,8 @@ const ProcLowerer = struct {
         const ls = &self.parent.layouts;
         const actual_layout = self.localLayout(source_local);
         const target_layout = self.localLayout(target_local);
+        const actual_ref = self.localLayoutRef(source_local);
+        const target_ref = self.localLayoutRef(target_local);
         const actual_info = ls.getTagUnionInfo(ls.getLayout(actual_layout));
         const target_info = ls.getTagUnionInfo(ls.getLayout(target_layout));
 
@@ -627,11 +832,14 @@ const ProcLowerer = struct {
                     .next = next,
                 } })
             else blk: {
-                const actual_payload_local = try self.freshLocalWithLayout(actual_payload_layout);
-                const target_payload_local = if (actual_payload_layout == target_payload_layout)
+                const actual_payload_ref = self.unionPayloadLayoutRef(actual_ref, discriminant);
+                const target_payload_ref = self.unionPayloadLayoutRef(target_ref, discriminant);
+                const actual_payload_local = try self.freshLocalWithLayoutAndRef(actual_payload_layout, actual_payload_ref);
+                const target_payload_local = if (actual_payload_layout == target_payload_layout and
+                    layoutRefsEqual(actual_payload_ref, target_payload_ref))
                     actual_payload_local
                 else
-                    try self.freshLocalWithLayout(target_payload_layout);
+                    try self.freshLocalWithLayoutAndRef(target_payload_layout, target_payload_ref);
 
                 const assign_tag = try self.parent.store.addCFStmt(.{ .assign_tag = .{
                     .target = target_local,
@@ -658,7 +866,7 @@ const ProcLowerer = struct {
             };
         }
 
-        const cond_local = try self.freshLocalWithLayout(self.unionDiscriminantLayout(actual_layout));
+        const cond_local = try self.freshLocalWithRef(self.unionDiscriminantLayoutRef(actual_ref));
         const switch_stmt = try self.parent.store.addCFStmt(.{ .switch_stmt = .{
             .cond = cond_local,
             .branches = try self.parent.store.addCFSwitchBranches(branches),
@@ -706,12 +914,13 @@ const ProcLowerer = struct {
 
         for (fields, 0..) |field, i| {
             const source_local = try self.lowerVar(field);
+            const slot_ref = self.structFieldLayoutRef(self.localLayoutRef(target_local), @intCast(i));
             const slot_layout = self.lowerStructFieldLayout(self.localLayout(target_local), @intCast(i));
             sources[i] = source_local;
-            lowered[i] = if (self.localLayout(source_local) == slot_layout)
+            lowered[i] = if (self.localMatchesShape(source_local, slot_layout, slot_ref))
                 source_local
             else
-                try self.freshLocalWithLayout(slot_layout);
+                try self.freshLocalWithLayoutAndRef(slot_layout, slot_ref);
         }
         return .{ .sources = sources, .fields = lowered };
     }
@@ -726,14 +935,16 @@ const ProcLowerer = struct {
         const lowered = try self.parent.allocator.alloc(LIR.LocalId, elems.len);
         errdefer self.parent.allocator.free(lowered);
 
+        const elem_ref = self.resolvedListElemLayoutRef(self.localLayoutRef(target_local)) orelse
+            debugPanic("lir.from_ir expected explicit logical list element layout ref");
         const elem_layout = self.lowerListElemLayout(self.localLayout(target_local));
         for (elems, 0..) |elem, i| {
             const source_local = try self.lowerVar(elem);
             sources[i] = source_local;
-            lowered[i] = if (self.localLayout(source_local) == elem_layout)
+            lowered[i] = if (self.localMatchesShape(source_local, elem_layout, elem_ref))
                 source_local
             else
-                try self.freshLocalWithLayout(elem_layout);
+                try self.freshLocalWithLayoutAndRef(elem_layout, elem_ref);
         }
         return .{ .sources = sources, .elems = lowered };
     }
@@ -753,11 +964,11 @@ const ProcLowerer = struct {
     fn lowerRetValue(self: *ProcLowerer, value: ir.Ast.Var) std.mem.Allocator.Error!LIR.CFStmtId {
         const source_local = try self.lowerVar(value);
         const ret_layout = self.procRetLayout();
-        if (self.localLayout(source_local) == ret_layout) {
+        if (self.localMatchesShape(source_local, ret_layout, self.procRetLayoutRef())) {
             return try self.parent.store.addCFStmt(.{ .ret = .{ .value = source_local } });
         }
 
-        const target_local = try self.freshLocalWithLayout(ret_layout);
+        const target_local = try self.freshLocalWithLayoutAndRef(ret_layout, self.procRetLayoutRef());
         const ret_stmt = try self.parent.store.addCFStmt(.{ .ret = .{ .value = target_local } });
         return try self.bridgeValueIntoLocal(source_local, target_local, ret_stmt);
     }
@@ -809,11 +1020,13 @@ const ProcLowerer = struct {
                 defer _ = self.loop_break_targets.pop();
                 const iterable_local = try self.lowerVar(for_stmt.iterable);
                 const body_elem_local = try self.lowerVar(for_stmt.elem);
-                const iterable_elem_layout = self.lowerListElemLayout(self.localLayout(iterable_local));
-                const loop_elem_local = if (self.localLayout(body_elem_local) == iterable_elem_layout)
+                const iterable_elem_ref = self.resolvedListElemLayoutRef(self.localLayoutRef(iterable_local)) orelse
+                    debugPanic("lir.from_ir.for_list missing iterable element layout ref");
+                const iterable_elem_layout = try self.parent.lowerLayoutId(iterable_elem_ref);
+                const loop_elem_local = if (self.localMatchesShape(body_elem_local, iterable_elem_layout, iterable_elem_ref))
                     body_elem_local
                 else
-                    try self.freshLocalWithLayout(iterable_elem_layout);
+                    try self.freshLocalWithLayoutAndRef(iterable_elem_layout, iterable_elem_ref);
                 const body = try self.lowerBlock(for_stmt.body, .loop_continue);
                 const bridged_body = if (loop_elem_local == body_elem_local)
                     body
@@ -822,6 +1035,7 @@ const ProcLowerer = struct {
                 break :blk try self.parent.store.addCFStmt(.{ .for_list = .{
                     .elem = loop_elem_local,
                     .iterable = iterable_local,
+                    .iterable_elem_layout = iterable_elem_layout,
                     .body = bridged_body,
                     .next = next,
                 } });
@@ -962,15 +1176,16 @@ const ProcLowerer = struct {
                 var payload_local: ?LIR.LocalId = null;
                 if (union_expr.payload) |payload| {
                     const source_local = try self.lowerVar(payload);
+                    const payload_ref = self.unionPayloadLayoutRef(self.localLayoutRef(target), union_expr.discriminant);
                     const payload_layout = self.lowerUnionPayloadLayout(
                         self.localLayout(target),
                         union_expr.discriminant,
                     );
                     payload_source = source_local;
-                    payload_local = if (self.localLayout(source_local) == payload_layout)
+                    payload_local = if (self.localMatchesShape(source_local, payload_layout, payload_ref))
                         source_local
                     else
-                        try self.freshLocalWithLayout(payload_layout);
+                        try self.freshLocalWithLayoutAndRef(payload_layout, payload_ref);
                 }
 
                 const assign_tag = try self.parent.store.addCFStmt(.{ .assign_tag = .{
@@ -995,11 +1210,12 @@ const ProcLowerer = struct {
             } }),
             .get_union_struct => |payload| blk: {
                 const source = try self.lowerVar(payload.value);
+                const actual_payload_ref = self.unionPayloadLayoutRef(self.localLayoutRef(source), payload.tag_discriminant);
                 const actual_payload_layout = self.lowerUnionPayloadLayout(
                     self.localLayout(source),
                     payload.tag_discriminant,
                 );
-                if (actual_payload_layout == self.localLayout(target)) {
+                if (self.localMatchesShape(target, actual_payload_layout, actual_payload_ref)) {
                     break :blk try self.parent.store.addCFStmt(.{ .assign_ref = .{
                         .target = target,
                         .result = .fresh,
@@ -1011,7 +1227,7 @@ const ProcLowerer = struct {
                     } });
                 }
 
-                const raw_target = try self.freshLocalWithLayout(actual_payload_layout);
+                const raw_target = try self.freshLocalWithLayoutAndRef(actual_payload_layout, actual_payload_ref);
                 const bridged = try self.bridgeValueIntoLocal(raw_target, target, next);
                 const access = try self.parent.store.addCFStmt(.{ .assign_ref = .{
                     .target = raw_target,
@@ -1051,8 +1267,9 @@ const ProcLowerer = struct {
             },
             .get_struct_field => |field| blk: {
                 const source = try self.lowerVar(field.record);
+                const actual_field_ref = self.structFieldLayoutRef(self.localLayoutRef(source), field.field_index);
                 const actual_field_layout = self.lowerStructFieldLayout(self.localLayout(source), field.field_index);
-                if (actual_field_layout == self.localLayout(target)) {
+                if (self.localMatchesShape(target, actual_field_layout, actual_field_ref)) {
                     break :blk try self.parent.store.addCFStmt(.{ .assign_ref = .{
                         .target = target,
                         .result = .fresh,
@@ -1064,7 +1281,7 @@ const ProcLowerer = struct {
                     } });
                 }
 
-                const raw_target = try self.freshLocalWithLayout(actual_field_layout);
+                const raw_target = try self.freshLocalWithLayoutAndRef(actual_field_layout, actual_field_ref);
                 const bridged = try self.bridgeValueIntoLocal(raw_target, target, next);
                 const access = try self.parent.store.addCFStmt(.{ .assign_ref = .{
                     .target = raw_target,
@@ -1094,16 +1311,22 @@ const ProcLowerer = struct {
                 defer self.parent.allocator.free(bridged_locals);
                 for (source_locals, param_locals, 0..) |source_local, param_local, i| {
                     const expected_layout = self.localLayout(param_local);
-                    bridged_locals[i] = if (self.localLayout(source_local) == expected_layout)
+                    const expected_ref = self.localLayoutRef(param_local);
+                    bridged_locals[i] = if (self.localMatchesShape(source_local, expected_layout, expected_ref))
                         source_local
                     else
-                        try self.freshLocalWithLayout(expected_layout);
+                        try self.freshLocalWithLayoutAndRef(expected_layout, expected_ref);
                 }
 
-                const raw_target = if (self.localLayout(target) == proc_spec.ret_layout)
+                const proc_ret_ref = self.parent.proc_ret_layout_refs.get(@intFromEnum(proc_id)) orelse
+                    debugPanic("lir.from_ir.call_direct missing explicit callee return layout ref");
+                const raw_target = if (self.localMatchesShape(target, proc_spec.ret_layout, proc_ret_ref))
                     target
                 else
-                    try self.freshLocalWithLayout(proc_spec.ret_layout);
+                    try self.freshLocalWithLayoutAndRef(
+                        proc_spec.ret_layout,
+                        proc_ret_ref,
+                    );
                 const call_next = if (raw_target == target)
                     next
                 else

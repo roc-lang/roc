@@ -181,6 +181,7 @@ pub const TailRecursionPass = struct {
             .for_list => |for_stmt| try self.store.addCFStmt(.{ .for_list = .{
                 .elem = for_stmt.elem,
                 .iterable = for_stmt.iterable,
+                .iterable_elem_layout = for_stmt.iterable_elem_layout,
                 .body = try self.transformStmt(for_stmt.body),
                 .next = try self.transformStmt(for_stmt.next),
             } }),

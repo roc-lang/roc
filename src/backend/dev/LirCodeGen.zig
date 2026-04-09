@@ -571,6 +571,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Map from JoinPointId to code offset (for recursive closure jumps)
         join_points: std.AutoHashMap(u32, usize),
 
+        /// Map from CFStmtId to generated code offset.
+        /// Dev codegen must treat LIR control flow as a graph, not a tree:
+        /// shared continuations are emitted once and later paths jump to the
+        /// already-generated block instead of regenerating it.
+        stmt_locations: std.AutoHashMap(u32, usize),
+
         /// Registry of compiled procedures (proc-spec id -> CompiledProc)
         /// Used to find call targets during second pass
         proc_registry: std.AutoHashMap(u32, CompiledProc),
@@ -840,6 +846,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .static_interner = static_interner,
                 .local_locations = std.AutoHashMap(u32, ValueLocation).init(allocator),
                 .join_points = std.AutoHashMap(u32, usize).init(allocator),
+                .stmt_locations = std.AutoHashMap(u32, usize).init(allocator),
                 .proc_registry = std.AutoHashMap(u32, CompiledProc).init(allocator),
                 .compiled_rc_helpers = std.AutoHashMap(u64, usize).init(allocator),
                 .pending_calls = std.ArrayList(PendingCall).empty,
@@ -861,6 +868,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.deinit();
             self.local_locations.deinit();
             self.join_points.deinit();
+            self.stmt_locations.deinit();
             self.proc_registry.deinit();
             self.compiled_rc_helpers.deinit();
             self.pending_calls.deinit(self.allocator);
@@ -886,6 +894,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.reset();
             self.local_locations.clearRetainingCapacity();
             self.join_points.clearRetainingCapacity();
+            self.stmt_locations.clearRetainingCapacity();
             self.proc_registry.clearRetainingCapacity();
             self.compiled_rc_helpers.clearRetainingCapacity();
             self.pending_calls.clearRetainingCapacity();
@@ -949,6 +958,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         fn clearFunctionControlFlowState(self: *Self) void {
             self.join_points.clearRetainingCapacity();
+            self.stmt_locations.clearRetainingCapacity();
             var it = self.join_point_jumps.valueIterator();
             while (it.next()) |list| {
                 list.clearRetainingCapacity();
@@ -4720,6 +4730,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .field => |field| field.source,
                 .tag_payload => |payload| payload.source,
                 .tag_payload_struct => |payload| payload.source,
+                .list_reinterpret => |list_bridge| list_bridge.backing_ref,
                 .nominal => |nominal| nominal.backing_ref,
             };
         }
@@ -4780,6 +4791,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .tag_discriminant = payload.tag_discriminant,
                     .target_layout = target_layout,
                 }),
+                .list_reinterpret => |list_bridge| self.requireExplicitListValueLocationToLayout(
+                    try self.emitValueLocal(list_bridge.backing_ref),
+                    self.localLayout(list_bridge.backing_ref),
+                    target_layout,
+                    "assign_ref.list_reinterpret",
+                ),
                 .nominal => |nominal| self.requireExplicitNominalValueLocationToLayout(
                     try self.emitValueLocal(nominal.backing_ref),
                     self.localLayout(nominal.backing_ref),
@@ -7467,11 +7484,50 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             expected_layout: layout.Idx,
             comptime site: []const u8,
         ) ValueLocation {
-            if (actual_layout == expected_layout or self.layout_store.layoutsHaveSameRuntimeRepresentation(actual_layout, expected_layout)) {
-                return self.coerceImmediateToLayout(loc, expected_layout);
+            if (builtin.mode == .Debug) {
+                const actual_layout_val = self.layout_store.getLayout(actual_layout);
+                const expected_layout_val = self.layout_store.getLayout(expected_layout);
+                const actual_is_box = actual_layout_val.tag == .box or actual_layout_val.tag == .box_of_zst;
+                const expected_is_box = expected_layout_val.tag == .box or expected_layout_val.tag == .box_of_zst;
+                const actual_is_list = actual_layout_val.tag == .list or actual_layout_val.tag == .list_of_zst;
+                const expected_is_list = expected_layout_val.tag == .list or expected_layout_val.tag == .list_of_zst;
+                if (actual_is_box != expected_is_box or actual_is_list or expected_is_list) {
+                    std.debug.panic(
+                        "LIR/codegen invariant violated at {s}: explicit nominal bridge expected non-list layouts on the same side of physical boxing, got actual={} ({s}) expected={} ({s})",
+                        .{
+                            site,
+                            @intFromEnum(actual_layout),
+                            @tagName(actual_layout_val.tag),
+                            @intFromEnum(expected_layout),
+                            @tagName(expected_layout_val.tag),
+                        },
+                    );
+                }
+            }
+            return self.coerceImmediateToLayout(loc, expected_layout);
+        }
+
+        fn requireExplicitListValueLocationToLayout(
+            self: *Self,
+            loc: ValueLocation,
+            actual_layout: layout.Idx,
+            expected_layout: layout.Idx,
+            comptime site: []const u8,
+        ) ValueLocation {
+            if (builtin.mode == .Debug) {
+                const actual_layout_val = self.layout_store.getLayout(actual_layout);
+                const expected_layout_val = self.layout_store.getLayout(expected_layout);
+                const actual_is_list = actual_layout_val.tag == .list or actual_layout_val.tag == .list_of_zst;
+                const expected_is_list = expected_layout_val.tag == .list or expected_layout_val.tag == .list_of_zst;
+                if (!actual_is_list or !expected_is_list) {
+                    std.debug.panic(
+                        "LIR/codegen invariant violated at {s}: explicit list bridge expected list layouts, got actual={} expected={}",
+                        .{ site, @intFromEnum(actual_layout), @intFromEnum(expected_layout) },
+                    );
+                }
             }
 
-            return self.requireExactValueLocationToLayout(loc, actual_layout, expected_layout, site);
+            return self.coerceImmediateToLayout(loc, expected_layout);
         }
 
         /// Emit a correctly-sized raw load from the stack, zero-extending sub-word
@@ -8487,7 +8543,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const field_offset = ls.getStructFieldOffsetByOriginalIndex(struct_layout.data.struct_.idx, access.field_idx);
             const field_size = ls.getStructFieldSizeByOriginalIndex(struct_layout.data.struct_.idx, access.field_idx);
             const actual_field_layout_idx = ls.getStructFieldLayoutByOriginalIndex(struct_layout.data.struct_.idx, access.field_idx);
-
             const raw_field_loc = switch (struct_loc) {
                 .stack_str => |sv| blk: {
                     const field_base = sv + @as(i32, @intCast(field_offset));
@@ -8618,7 +8673,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 else => tps.target_layout,
             };
             const payload_size = ls.layoutSizeAlign(ls.getLayout(payload_layout_idx)).size;
-
             if (union_layout.tag == .tag_union) {
                 const value_loc = try self.materializeValueToStackForLayout(raw_value_loc, source_layout_idx);
                 const base_offset: i32 = switch (value_loc) {
@@ -11040,6 +11094,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             defer saved_local_locations.deinit();
             var saved_join_points = self.join_points.clone() catch return error.OutOfMemory;
             defer saved_join_points.deinit();
+            var saved_stmt_locations = self.stmt_locations.clone() catch return error.OutOfMemory;
+            defer saved_stmt_locations.deinit();
             var saved_join_point_jumps = try self.cloneJoinPointJumpsMap(&self.join_point_jumps);
             defer self.deinitJoinPointJumpsMap(&saved_join_point_jumps);
             var saved_join_point_params = self.join_point_params.clone() catch return error.OutOfMemory;
@@ -11130,6 +11186,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.local_locations = saved_local_locations.clone() catch unreachable;
                 self.join_points.deinit();
                 self.join_points = saved_join_points.clone() catch unreachable;
+                self.stmt_locations.deinit();
+                self.stmt_locations = saved_stmt_locations.clone() catch unreachable;
                 self.deinitJoinPointJumpsMap(&self.join_point_jumps);
                 self.join_point_jumps = self.cloneJoinPointJumpsMap(&saved_join_point_jumps) catch unreachable;
                 self.join_point_params.deinit();
@@ -11294,6 +11352,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.local_locations = saved_local_locations.clone() catch return error.OutOfMemory;
             self.join_points.deinit();
             self.join_points = saved_join_points.clone() catch return error.OutOfMemory;
+            self.stmt_locations.deinit();
+            self.stmt_locations = saved_stmt_locations.clone() catch return error.OutOfMemory;
             self.deinitJoinPointJumpsMap(&self.join_point_jumps);
             self.join_point_jumps = try self.cloneJoinPointJumpsMap(&saved_join_point_jumps);
             self.join_point_params.deinit();
@@ -12094,12 +12154,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Generate code for a control flow statement
         fn generateStmt(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
+            const stmt_key = @intFromEnum(stmt_id);
+            if (self.stmt_locations.get(stmt_key)) |stmt_location| {
+                const patch = try self.codegen.emitJump();
+                self.codegen.patchJump(patch, stmt_location);
+                return;
+            }
+            try self.stmt_locations.put(stmt_key, self.codegen.currentOffset());
+
             const saved_stmt_id = self.current_stmt_id;
             self.current_stmt_id = stmt_id;
             defer self.current_stmt_id = saved_stmt_id;
 
             const stmt = self.store.getCFStmt(stmt_id);
-
             switch (stmt) {
                 .assign_symbol => |assign| {
                     std.debug.panic(
@@ -12364,7 +12431,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const iterable_snapshot_offset = self.codegen.allocStackSlot(roc_list_size);
             try self.copyBytesToStackOffset(iterable_snapshot_offset, iterable_loc, roc_list_size);
 
-            const actual_elem_layout = try self.forListElemLayout(resolved_iterable_layout, self.localLayout(for_stmt.elem));
+            const actual_elem_layout = for_stmt.iterable_elem_layout;
 
             const index_slot = self.codegen.allocStackSlot(8);
             const zero_reg = try self.allocTempGeneral();
@@ -12397,34 +12464,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             self.codegen.patchJump(exit_patch, self.codegen.currentOffset());
             try self.generateStmt(for_stmt.next);
-        }
-
-        fn forListElemLayout(self: *Self, iterable_layout: layout.Idx, elem_layout: layout.Idx) Allocator.Error!layout.Idx {
-            const ls = self.layout_store;
-            const iterable_layout_val = ls.getLayout(iterable_layout);
-            const resolved_elem_layout = switch (iterable_layout_val.tag) {
-                .list => iterable_layout_val.data.list,
-                .list_of_zst => elem_layout,
-                .box => return self.forListElemLayout(iterable_layout_val.data.box, elem_layout),
-                else => {
-                    if (builtin.mode == .Debug) {
-                        std.debug.panic(
-                            "LIR/codegen invariant violated: for_list iterable layout must be list/list_of_zst, got {s}",
-                            .{@tagName(iterable_layout_val.tag)},
-                        );
-                    }
-                    unreachable;
-                },
-            };
-
-            if (builtin.mode == .Debug and elem_layout != resolved_elem_layout) {
-                std.debug.panic(
-                    "LIR/codegen invariant violated: for_list elem layout {} did not match iterable elem layout {}",
-                    .{ @intFromEnum(elem_layout), @intFromEnum(resolved_elem_layout) },
-                );
-            }
-
-            return resolved_elem_layout;
         }
 
         fn bindForListElement(

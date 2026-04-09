@@ -1225,7 +1225,7 @@ pub const Interpreter = struct {
                     const iterable = frame.getLocal(for_stmt.iterable);
                     const list_layout = self.store.getLocal(for_stmt.iterable).layout_idx;
                     const resolved_iterable = self.resolveListBaseValue(iterable, list_layout);
-                    const actual_elem_layout = self.listElemLayout(list_layout);
+                    const actual_elem_layout = for_stmt.iterable_elem_layout;
                     const elem_layout = self.store.getLocal(for_stmt.elem).layout_idx;
                     const info = self.listElemInfo(list_layout);
                     const rl = valueToRocList(resolved_iterable.value);
@@ -1448,7 +1448,12 @@ pub const Interpreter = struct {
                 const actual_payload_layout = self.tagPayloadLayout(source_layout, payload.tag_discriminant);
                 break :blk try self.coerceValueToLayout(tag_base.value, actual_payload_layout, target_layout);
             },
-            .nominal => |nominal| self.coerceValueToLayout(
+            .list_reinterpret => |list_bridge| try self.coerceExplicitListValueToLayout(
+                frame.getLocal(list_bridge.backing_ref),
+                self.store.getLocal(list_bridge.backing_ref).layout_idx,
+                target_layout,
+            ),
+            .nominal => |nominal| self.coerceExplicitNominalValueToLayout(
                 frame.getLocal(nominal.backing_ref),
                 self.store.getLocal(nominal.backing_ref).layout_idx,
                 target_layout,
@@ -4234,7 +4239,7 @@ pub const Interpreter = struct {
         actual_layout: layout_mod.Idx,
         expected_layout: layout_mod.Idx,
     ) Error!Value {
-        if (actual_layout == expected_layout or self.layout_store.layoutsHaveSameRuntimeRepresentation(actual_layout, expected_layout)) {
+        if (actual_layout == expected_layout) {
             return value;
         }
 
@@ -4261,6 +4266,56 @@ pub const Interpreter = struct {
         }
 
         return self.normalizeValueToLayout(value, actual_layout, expected_layout);
+    }
+
+    fn coerceExplicitListValueToLayout(
+        self: *LirInterpreter,
+        value: Value,
+        actual_layout: layout_mod.Idx,
+        expected_layout: layout_mod.Idx,
+    ) Error!Value {
+        if (builtin.mode == .Debug) {
+            const actual_layout_val = self.layout_store.getLayout(actual_layout);
+            const expected_layout_val = self.layout_store.getLayout(expected_layout);
+            const actual_is_list = actual_layout_val.tag == .list or actual_layout_val.tag == .list_of_zst;
+            const expected_is_list = expected_layout_val.tag == .list or expected_layout_val.tag == .list_of_zst;
+            if (!actual_is_list or !expected_is_list) {
+                std.debug.panic(
+                    "LIR/interpreter invariant violated: explicit list bridge expected list layouts, got actual={d} expected={d}",
+                    .{ @intFromEnum(actual_layout), @intFromEnum(expected_layout) },
+                );
+            }
+        }
+
+        return value;
+    }
+
+    fn coerceExplicitNominalValueToLayout(
+        self: *LirInterpreter,
+        value: Value,
+        actual_layout: layout_mod.Idx,
+        expected_layout: layout_mod.Idx,
+    ) Error!Value {
+        if (builtin.mode == .Debug) {
+            const actual_layout_val = self.layout_store.getLayout(actual_layout);
+            const expected_layout_val = self.layout_store.getLayout(expected_layout);
+            const actual_is_box = actual_layout_val.tag == .box or actual_layout_val.tag == .box_of_zst;
+            const expected_is_box = expected_layout_val.tag == .box or expected_layout_val.tag == .box_of_zst;
+            const actual_is_list = actual_layout_val.tag == .list or actual_layout_val.tag == .list_of_zst;
+            const expected_is_list = expected_layout_val.tag == .list or expected_layout_val.tag == .list_of_zst;
+            if (actual_is_box != expected_is_box or actual_is_list or expected_is_list) {
+                std.debug.panic(
+                    "LIR/interpreter invariant violated: explicit nominal bridge expected non-list layouts on the same side of physical boxing, got actual={d} ({s}) expected={d} ({s})",
+                    .{
+                        @intFromEnum(actual_layout),
+                        @tagName(actual_layout_val.tag),
+                        @intFromEnum(expected_layout),
+                        @tagName(expected_layout_val.tag),
+                    },
+                );
+            }
+        }
+        return value;
     }
 
     fn coerceValueIntoBox(
