@@ -4355,7 +4355,9 @@ pub const Lowerer = struct {
                 defer body_env.deinit();
                 var binding_decls = std.ArrayList(BindingDecl).empty;
                 defer binding_decls.deinit(self.allocator);
-                const elem_ty = try self.requirePatternTypeFact(module_idx, type_scope, for_stmt.patt);
+                const elem_ty = self.requireListElemTypeFromMonotype(
+                    try self.requireExprTypeFact(module_idx, type_scope, for_stmt.expr),
+                );
                 const elem_solved_var = self.lookupListElemSolvedVar(
                     module_idx,
                     try self.exprResultVar(module_idx, type_scope, env.*, for_stmt.expr),
@@ -4488,7 +4490,9 @@ pub const Lowerer = struct {
         defer body_env.deinit();
         var binding_decls = std.ArrayList(BindingDecl).empty;
         defer binding_decls.deinit(self.allocator);
-        const elem_ty = try self.requirePatternTypeFact(module_idx, type_scope, patt_idx);
+        const elem_ty = self.requireListElemTypeFromMonotype(
+            try self.requireExprTypeFact(module_idx, type_scope, iterable_expr_idx),
+        );
         const elem_solved_var = self.lookupListElemSolvedVar(
             module_idx,
             try self.exprResultVar(module_idx, type_scope, incoming_env, iterable_expr_idx),
@@ -6128,12 +6132,24 @@ pub const Lowerer = struct {
                 );
                 const expected_discriminant = try self.requireTagDiscriminantForSolvedVar(module_idx, source_var, tag.name);
                 try self.bindPatternTagDiscriminantFact(module_idx, type_scope, pattern_idx, expected_discriminant);
-                for (cir_env.store.slicePatterns(tag.args)) |arg_pat| {
+                const arg_patterns = cir_env.store.slicePatterns(tag.args);
+                const arg_tys = try self.requireTagPayloadTypesFromMonotype(
+                    module_idx,
+                    effective_source_ty,
+                    tag.name,
+                );
+                if (arg_patterns.len != arg_tys.len) {
+                    return debugPanic(
+                        "monotype explicit pattern fact invariant violated: tag pattern arity {d} did not match frozen payload arity {d} in module {d}",
+                        .{ arg_patterns.len, arg_tys.len, module_idx },
+                    );
+                }
+                for (arg_patterns, arg_tys) |arg_pat, arg_ty| {
                     try self.recordPatternStructuralFactsFromSourceType(
                         module_idx,
                         type_scope,
                         arg_pat,
-                        try self.requirePatternTypeFact(module_idx, type_scope, arg_pat),
+                        arg_ty,
                         try self.requirePatternSolvedVar(type_scope, arg_pat),
                     );
                 }
@@ -6183,7 +6199,7 @@ pub const Lowerer = struct {
                             module_idx,
                             type_scope,
                             rest_pattern_idx,
-                            try self.requirePatternTypeFact(module_idx, type_scope, rest_pattern_idx),
+                            effective_source_ty,
                             try self.requirePatternSolvedVar(type_scope, rest_pattern_idx),
                         );
                     }
@@ -6875,7 +6891,15 @@ pub const Lowerer = struct {
         const branch_pattern = cir_env.store.getMatchBranchPattern(branch_patterns[0]);
         const tag_info = self.lookupSingleTagPayloadPattern(module_idx, branch_pattern.pattern) orelse return null;
         _ = env;
-        return try self.requirePatternTypeFact(module_idx, type_scope, tag_info.payload_pattern);
+        const cond_ty = try self.requireExprTypeFact(module_idx, type_scope, match_expr.cond);
+        const payload_tys = try self.requireTagPayloadTypesFromMonotype(module_idx, cond_ty, tag_info.tag_name);
+        if (payload_tys.len != 1) {
+            return debugPanic(
+                "monotype try-suffix invariant violated: expected exactly one payload type for single-payload tag pattern",
+                .{},
+            );
+        }
+        return payload_tys[0];
     }
 
     fn lookupSingleTagPayloadPattern(
@@ -8071,6 +8095,33 @@ pub const Lowerer = struct {
             else => debugPanic(
                 "monotype explicit pattern fact invariant violated: expected frozen tuple source type, found non-tuple type {d}",
                 .{@intFromEnum(tuple_ty)},
+            ),
+        };
+    }
+
+    fn requireTagPayloadTypesFromMonotype(
+        self: *const Lowerer,
+        module_idx: u32,
+        union_ty: type_mod.TypeId,
+        tag_name: base.Ident.Idx,
+    ) std.mem.Allocator.Error![]const type_mod.TypeId {
+        const source_tag_name = self.ctx.env(module_idx).getIdent(tag_name);
+        return switch (self.ctx.types.getType(union_ty)) {
+            .tag_union => |tag_union| blk: {
+                const tags = self.ctx.types.sliceTags(tag_union.tags);
+                for (tags) |tag| {
+                    if (std.mem.eql(u8, self.ctx.idents.getText(tag.name), source_tag_name)) {
+                        break :blk self.ctx.types.sliceTypeSpan(tag.args);
+                    }
+                }
+                debugPanic(
+                    "monotype explicit pattern fact invariant violated: frozen tag union source type missing payload tag",
+                    .{},
+                );
+            },
+            else => debugPanic(
+                "monotype explicit pattern fact invariant violated: expected frozen tag union source type, found non-tag-union type {d}",
+                .{@intFromEnum(union_ty)},
             ),
         };
     }
