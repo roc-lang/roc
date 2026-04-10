@@ -69,7 +69,6 @@ const Ctx = struct {
     symbols: symbol_mod.Store,
     types: type_mod.Store,
     idents: base.Ident.Store,
-    all_module_envs: []const *const ModuleEnv,
     solved_modules: solved_cir.Modules,
     builtin_module_idx: u32,
     top_level_symbols: std.AutoHashMap(TopLevelKey, symbol_mod.Symbol),
@@ -87,7 +86,7 @@ const Ctx = struct {
 
     fn init(
         allocator: std.mem.Allocator,
-        all_module_envs: []const *const ModuleEnv,
+        solved_modules: solved_cir.Modules,
         builtin_module_idx: u32,
     ) std.mem.Allocator.Error!Ctx {
         return .{
@@ -95,8 +94,7 @@ const Ctx = struct {
             .symbols = symbol_mod.Store.init(allocator),
             .types = type_mod.Store.init(allocator),
             .idents = try base.Ident.Store.initCapacity(allocator, 256),
-            .all_module_envs = all_module_envs,
-            .solved_modules = solved_cir.Modules.init(all_module_envs),
+            .solved_modules = solved_modules,
             .builtin_module_idx = builtin_module_idx,
             .top_level_symbols = std.AutoHashMap(TopLevelKey, symbol_mod.Symbol).init(allocator),
             .pattern_symbols = std.AutoHashMap(PatternKey, symbol_mod.Symbol).init(allocator),
@@ -112,7 +110,7 @@ const Ctx = struct {
     }
 
     fn env(self: *const Ctx, module_idx: u32) *const ModuleEnv {
-        return self.all_module_envs[module_idx];
+        return self.solved_modules.env(module_idx);
     }
 
     fn solved(self: *const Ctx, module_idx: u32) solved_cir.Module {
@@ -443,17 +441,17 @@ pub const Lowerer = struct {
 
     pub fn init(
         allocator: std.mem.Allocator,
-        all_module_envs: []const *const ModuleEnv,
+        solved_modules: solved_cir.Modules,
         builtin_module_idx: u32,
     ) std.mem.Allocator.Error!Lowerer {
-        for (all_module_envs) |env| {
+        for (solved_modules.all_module_envs) |env| {
             const mutable_env = @constCast(env);
             try mutable_env.getIdentStore().enableRuntimeInserts(mutable_env.gpa);
         }
 
         return .{
             .allocator = allocator,
-            .ctx = try Ctx.init(allocator, all_module_envs, builtin_module_idx),
+            .ctx = try Ctx.init(allocator, solved_modules, builtin_module_idx),
             .program = Program.init(allocator),
             .strings = .{},
             .specializations = specializations_mod.Queue.init(allocator),
@@ -734,7 +732,7 @@ pub const Lowerer = struct {
     }
 
     fn registerAllTopLevelDefs(self: *Lowerer) std.mem.Allocator.Error!void {
-        for (self.ctx.all_module_envs, 0..) |env, module_idx| {
+        for (self.ctx.solved_modules.all_module_envs, 0..) |env, module_idx| {
             const solved_module = self.ctx.solved(@intCast(module_idx));
             for (env.store.sliceDefs(env.all_defs)) |def_idx| {
                 const solved_def = solved_module.def(def_idx);
@@ -7469,7 +7467,7 @@ pub const Lowerer = struct {
         nominal: types.NominalType,
     ) std.mem.Allocator.Error!NominalDefiningIdentity {
         const env = self.ctx.env(module_idx);
-        const defining_module_idx = findModuleIdxByName(self.ctx.all_module_envs, env.getIdent(nominal.origin_module));
+        const defining_module_idx = findModuleIdxByName(self.ctx.solved_modules.all_module_envs, env.getIdent(nominal.origin_module));
         const defining_env = self.ctx.env(defining_module_idx);
         const defining_ident = defining_env.common.findIdent(env.getIdent(nominal.ident.ident_idx)) orelse debugPanic(
             "monotype.lowerNominalType missing target ident in defining module",
@@ -9080,7 +9078,7 @@ pub const Lowerer = struct {
         const source_env = self.ctx.env(source_module_idx);
         const resolved_site = source_env.types.findResolvedStaticDispatchSite(ModuleEnv.varFrom(expr_idx)) orelse return null;
         return .{
-            .module_idx = findModuleIdxByName(self.ctx.all_module_envs, source_env.getIdent(resolved_site.target_module_name)),
+            .module_idx = findModuleIdxByName(self.ctx.solved_modules.all_module_envs, source_env.getIdent(resolved_site.target_module_name)),
             .def_idx = @enumFromInt(resolved_site.target_def_idx),
         };
     }
@@ -9612,7 +9610,7 @@ pub const Lowerer = struct {
             .alias => |alias| self.resolveDispatchReceiverVar(source_module_idx, type_scope, source_env.types.getAliasBackingVar(alias), method_name),
             .structure => |flat| switch (flat) {
                 .nominal_type => |nominal| {
-                    const target_module_idx = findModuleIdxByName(self.ctx.all_module_envs, source_env.getIdent(nominal.origin_module));
+                    const target_module_idx = findModuleIdxByName(self.ctx.solved_modules.all_module_envs, source_env.getIdent(nominal.origin_module));
                     return .{
                         .target_module_idx = target_module_idx,
                         .target_env = self.ctx.env(target_module_idx),

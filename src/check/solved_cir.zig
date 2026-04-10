@@ -18,6 +18,10 @@ pub const Modules = struct {
             .env = self.all_module_envs[module_idx],
         };
     }
+
+    pub fn env(self: @This(), module_idx: u32) *const ModuleEnv {
+        return self.all_module_envs[module_idx];
+    }
 };
 
 pub const Module = struct {
