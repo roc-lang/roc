@@ -2239,7 +2239,7 @@ pub const Lowerer = struct {
         expr: mir.Expr,
     ) std.mem.Allocator.Error!ast.ExprId {
         self.requireFrozenLoweringSemanticTypes(module_idx, type_scope);
-        const cir_env = expr.env;
+        const mir_module = expr.module();
         switch (expr.data) {
             .e_nominal => |nominal| return self.lowerTransparentNominalExprWithType(
                 module_idx,
@@ -2283,7 +2283,7 @@ pub const Lowerer = struct {
                 env,
                 expr.idx,
                 expr.data.e_call.func,
-                cir_env.store.sliceExpr(expr.data.e_call.args),
+                mir_module.sliceExpr(expr.data.e_call.args),
             );
             return try self.program.store.addExpr(.{
                 .ty = lowered_call.result_ty,
@@ -2565,7 +2565,7 @@ pub const Lowerer = struct {
         result_ty: type_mod.TypeId,
         str_expr: @FieldType(CIR.Expr, "e_str"),
     ) std.mem.Allocator.Error!ast.ExprId {
-        const parts = self.ctx.env(module_idx).store.sliceExpr(str_expr.span);
+        const parts = self.ctx.mirModule(module_idx).sliceExpr(str_expr.span);
         if (parts.len == 0) {
             return self.makeStringLiteralExpr(module_idx, result_ty, "");
         }
@@ -2591,8 +2591,8 @@ pub const Lowerer = struct {
         call: @FieldType(CIR.Expr, "e_call"),
         result_ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!?ast.ExprId {
-        const cir_env = self.ctx.env(module_idx);
-        const arg_exprs = cir_env.store.sliceExpr(call.args);
+        const mir_module = self.ctx.mirModule(module_idx);
+        const arg_exprs = mir_module.sliceExpr(call.args);
         if (arg_exprs.len != 1) return null;
 
         const source = self.resolveDirectTopLevelSource(module_idx, env, call.func) orelse return null;
@@ -2972,12 +2972,12 @@ pub const Lowerer = struct {
         body_expr_idx: CIR.Expr.Idx,
         expected_var: ?Var,
     ) std.mem.Allocator.Error!LoweredClosure {
-        const cir_env = self.ctx.env(module_idx);
+        const mir_module = self.ctx.mirModule(module_idx);
         var closure_scope: TypeCloneScope = undefined;
-        closure_scope.initCloneAllFromParent(self.allocator, @constCast(cir_env), type_scope);
+        closure_scope.initCloneAllFromParent(self.allocator, @constCast(mir_module.env), type_scope);
         defer closure_scope.deinit();
         const scope = &closure_scope;
-        const arg_patterns = cir_env.store.slicePatterns(args_span);
+        const arg_patterns = mir_module.slicePatterns(args_span);
         const source_expr_var = self.ctx.mirModule(module_idx).expr(source_expr_idx).solved_var;
         const source_fn_var = try self.scopeVar(scope, source_expr_var);
         try scope.var_map.put(source_expr_var, source_fn_var);
@@ -3085,15 +3085,15 @@ pub const Lowerer = struct {
         env: BindingEnv,
         if_expr: anytype,
     ) std.mem.Allocator.Error!@FieldType(ast.Expr.Data, "if_") {
-        const cir_env = self.ctx.env(module_idx);
-        const branch_ids = cir_env.store.sliceIfBranches(if_expr.branches);
+        const mir_module = self.ctx.mirModule(module_idx);
+        const branch_ids = mir_module.sliceIfBranches(if_expr.branches);
         if (branch_ids.len == 0) debugPanic("monotype invariant violated: if expression missing branches", .{});
 
         var else_body = try self.lowerExpr(module_idx, type_scope, env, if_expr.final_else);
         var idx = branch_ids.len;
         while (idx > 1) {
             idx -= 1;
-            const branch = cir_env.store.getIfBranch(branch_ids[idx]);
+            const branch = mir_module.getIfBranch(branch_ids[idx]);
             else_body = try self.program.store.addExpr(.{
                 .ty = self.program.store.getExpr(else_body).ty,
                 .data = .{ .if_ = .{
@@ -3104,7 +3104,7 @@ pub const Lowerer = struct {
             });
         }
 
-        const branch = cir_env.store.getIfBranch(branch_ids[0]);
+        const branch = mir_module.getIfBranch(branch_ids[0]);
 
         return .{
             .cond = try self.lowerExpr(module_idx, type_scope, env, branch.cond),
@@ -3136,17 +3136,17 @@ pub const Lowerer = struct {
         module_idx: u32,
         match_expr: CIR.Expr.Match,
     ) std.mem.Allocator.Error!bool {
-        const cir_env = self.ctx.env(module_idx);
-        const branches = cir_env.store.matchBranchSlice(match_expr.branches);
+        const mir_module = self.ctx.mirModule(module_idx);
+        const branches = mir_module.matchBranchSlice(match_expr.branches);
         if (branches.len != 1) return false;
 
-        const branch = cir_env.store.getMatchBranch(branches[0]);
+        const branch = mir_module.getMatchBranch(branches[0]);
         if (branch.guard != null) return false;
 
-        const branch_pattern_ids = cir_env.store.sliceMatchBranchPatterns(branch.patterns);
+        const branch_pattern_ids = mir_module.sliceMatchBranchPatterns(branch.patterns);
         if (branch_pattern_ids.len != 1) return false;
 
-        const branch_pattern = cir_env.store.getMatchBranchPattern(branch_pattern_ids[0]);
+        const branch_pattern = mir_module.getMatchBranchPattern(branch_pattern_ids[0]);
         if (branch_pattern.degenerate) return false;
 
         return self.patternIsIrrefutableStructural(module_idx, branch_pattern.pattern);
@@ -3157,21 +3157,21 @@ pub const Lowerer = struct {
         module_idx: u32,
         pattern_idx: CIR.Pattern.Idx,
     ) bool {
-        const cir_env = self.ctx.env(module_idx);
+        const mir_module = self.ctx.mirModule(module_idx);
         const pattern = self.ctx.mirModule(module_idx).pattern(pattern_idx).data;
         return switch (pattern) {
             .assign, .underscore => true,
             .as => |as_pat| self.patternIsIrrefutableStructural(module_idx, as_pat.pattern),
             .record_destructure => |record| blk: {
-                for (cir_env.store.sliceRecordDestructs(record.destructs)) |destruct_idx| {
-                    if (!self.patternIsIrrefutableStructural(module_idx, cir_env.store.getRecordDestruct(destruct_idx).kind.toPatternIdx())) {
+                for (mir_module.sliceRecordDestructs(record.destructs)) |destruct_idx| {
+                    if (!self.patternIsIrrefutableStructural(module_idx, mir_module.getRecordDestruct(destruct_idx).kind.toPatternIdx())) {
                         break :blk false;
                     }
                 }
                 break :blk true;
             },
             .tuple => |tuple| blk: {
-                for (cir_env.store.slicePatterns(tuple.patterns)) |elem_pattern_idx| {
+                for (mir_module.slicePatterns(tuple.patterns)) |elem_pattern_idx| {
                     if (!self.patternIsIrrefutableStructural(module_idx, elem_pattern_idx)) break :blk false;
                 }
                 break :blk true;
@@ -3191,11 +3191,11 @@ pub const Lowerer = struct {
         expected_result_var: ?Var,
         match_expr: CIR.Expr.Match,
     ) std.mem.Allocator.Error!@FieldType(ast.Expr.Data, "block") {
-        const cir_env = self.ctx.env(module_idx);
-        const branch_id = cir_env.store.matchBranchSlice(match_expr.branches)[0];
-        const branch = cir_env.store.getMatchBranch(branch_id);
-        const branch_pattern_id = cir_env.store.sliceMatchBranchPatterns(branch.patterns)[0];
-        const branch_pattern = cir_env.store.getMatchBranchPattern(branch_pattern_id);
+        const mir_module = self.ctx.mirModule(module_idx);
+        const branch_id = mir_module.matchBranchSlice(match_expr.branches)[0];
+        const branch = mir_module.getMatchBranch(branch_id);
+        const branch_pattern_id = mir_module.sliceMatchBranchPatterns(branch.patterns)[0];
+        const branch_pattern = mir_module.getMatchBranchPattern(branch_pattern_id);
 
         const scrutinee = try self.lowerExprFact(module_idx, type_scope, env, match_expr.cond);
 
@@ -3240,18 +3240,18 @@ pub const Lowerer = struct {
         expected_result_var: ?Var,
         match_expr: CIR.Expr.Match,
     ) std.mem.Allocator.Error!@FieldType(ast.Expr.Data, "when") {
-        const cir_env = self.ctx.env(module_idx);
-        const branches = cir_env.store.matchBranchSlice(match_expr.branches);
+        const mir_module = self.ctx.mirModule(module_idx);
+        const branches = mir_module.matchBranchSlice(match_expr.branches);
         const out = try self.allocator.alloc(ast.Branch, branches.len);
         defer self.allocator.free(out);
         const cond = try self.lowerExprFact(module_idx, type_scope, env, match_expr.cond);
 
         for (branches, 0..) |branch_idx, i| {
-            const branch = cir_env.store.getMatchBranch(branch_idx);
+            const branch = mir_module.getMatchBranch(branch_idx);
             if (branch.guard != null) debugTodo("monotype.lowerMatchExpr guard");
-            const branch_pattern_ids = cir_env.store.sliceMatchBranchPatterns(branch.patterns);
+            const branch_pattern_ids = mir_module.sliceMatchBranchPatterns(branch.patterns);
             if (branch_pattern_ids.len != 1) debugTodo("monotype.lowerMatchExpr or-pattern");
-            const branch_pattern = cir_env.store.getMatchBranchPattern(branch_pattern_ids[0]);
+            const branch_pattern = mir_module.getMatchBranchPattern(branch_pattern_ids[0]);
             if (branch_pattern.degenerate) debugTodo("monotype.lowerMatchExpr degenerate branch");
 
             var branch_env = try self.cloneEnv(env);
@@ -3294,13 +3294,13 @@ pub const Lowerer = struct {
         module_idx: u32,
         match_expr: CIR.Expr.Match,
     ) bool {
-        const cir_env = self.ctx.env(module_idx);
-        for (cir_env.store.matchBranchSlice(match_expr.branches)) |branch_idx| {
-            const branch = cir_env.store.getMatchBranch(branch_idx);
+        const mir_module = self.ctx.mirModule(module_idx);
+        for (mir_module.matchBranchSlice(match_expr.branches)) |branch_idx| {
+            const branch = mir_module.getMatchBranch(branch_idx);
             if (branch.guard != null) return true;
-            const branch_pattern_ids = cir_env.store.sliceMatchBranchPatterns(branch.patterns);
+            const branch_pattern_ids = mir_module.sliceMatchBranchPatterns(branch.patterns);
             if (branch_pattern_ids.len != 1) return true;
-            const branch_pattern = cir_env.store.getMatchBranchPattern(branch_pattern_ids[0]);
+            const branch_pattern = mir_module.getMatchBranchPattern(branch_pattern_ids[0]);
             if (branch_pattern.degenerate) return true;
             if (self.patternNeedsPredicateDesugaring(module_idx, branch_pattern.pattern)) return true;
         }
@@ -3308,7 +3308,7 @@ pub const Lowerer = struct {
     }
 
     fn patternNeedsPredicateDesugaring(self: *Lowerer, module_idx: u32, pattern_idx: CIR.Pattern.Idx) bool {
-        const cir_env = self.ctx.env(module_idx);
+        const mir_module = self.ctx.mirModule(module_idx);
         const pattern = self.ctx.mirModule(module_idx).pattern(pattern_idx).data;
         return switch (pattern) {
             .list => true,
@@ -3320,21 +3320,21 @@ pub const Lowerer = struct {
             .str_literal,
             => true,
             .record_destructure => |record| blk: {
-                for (cir_env.store.sliceRecordDestructs(record.destructs)) |destruct_idx| {
-                    if (self.patternNeedsPredicateDesugaring(module_idx, cir_env.store.getRecordDestruct(destruct_idx).kind.toPatternIdx())) {
+                for (mir_module.sliceRecordDestructs(record.destructs)) |destruct_idx| {
+                    if (self.patternNeedsPredicateDesugaring(module_idx, mir_module.getRecordDestruct(destruct_idx).kind.toPatternIdx())) {
                         break :blk true;
                     }
                 }
                 break :blk false;
             },
             .tuple => |tuple| blk: {
-                for (cir_env.store.slicePatterns(tuple.patterns)) |elem_pattern_idx| {
+                for (mir_module.slicePatterns(tuple.patterns)) |elem_pattern_idx| {
                     if (self.patternNeedsPredicateDesugaring(module_idx, elem_pattern_idx)) break :blk true;
                 }
                 break :blk false;
             },
             .applied_tag => |tag| blk: {
-                for (cir_env.store.slicePatterns(tag.args)) |arg_pattern_idx| {
+                for (mir_module.slicePatterns(tag.args)) |arg_pattern_idx| {
                     if (self.patternNeedsPredicateDesugaring(module_idx, arg_pattern_idx)) break :blk true;
                 }
                 break :blk false;
@@ -3371,13 +3371,13 @@ pub const Lowerer = struct {
             .data = .{ .runtime_error = try self.internStringLiteral("non-exhaustive match") },
         });
 
-        const cir_env = self.ctx.env(module_idx);
-        const branches = cir_env.store.matchBranchSlice(match_expr.branches);
+        const mir_module = self.ctx.mirModule(module_idx);
+        const branches = mir_module.matchBranchSlice(match_expr.branches);
         var idx = branches.len;
         while (idx > 0) {
             idx -= 1;
-            const branch = cir_env.store.getMatchBranch(branches[idx]);
-            const branch_pattern = cir_env.store.getMatchBranchPattern(cir_env.store.sliceMatchBranchPatterns(branch.patterns)[0]);
+            const branch = mir_module.getMatchBranch(branches[idx]);
+            const branch_pattern = mir_module.getMatchBranchPattern(mir_module.sliceMatchBranchPatterns(branch.patterns)[0]);
             current = try self.lowerPredicateMatchBranch(
                 module_idx,
                 type_scope,
@@ -3575,7 +3575,7 @@ pub const Lowerer = struct {
         then_expr: ast.ExprId,
         else_expr: ast.ExprId,
     ) std.mem.Allocator.Error!ast.ExprId {
-        const cir_env = self.ctx.env(module_idx);
+        const mir_module = self.ctx.mirModule(module_idx);
         const pattern = self.ctx.mirModule(module_idx).pattern(pattern_idx).data;
         return switch (pattern) {
             .assign, .underscore => then_expr,
@@ -3608,11 +3608,11 @@ pub const Lowerer = struct {
             ),
             .record_destructure => |record| blk: {
                 var current = then_expr;
-                const destructs = cir_env.store.sliceRecordDestructs(record.destructs);
+                const destructs = mir_module.sliceRecordDestructs(record.destructs);
                 var idx = destructs.len;
                 while (idx > 0) {
                     idx -= 1;
-                    const destruct = cir_env.store.getRecordDestruct(destructs[idx]);
+                    const destruct = mir_module.getRecordDestruct(destructs[idx]);
                     const child_pattern_idx = destruct.kind.toPatternIdx();
                     if (!self.patternNeedsAnyExplicitMatch(module_idx, child_pattern_idx)) continue;
                     const field_ty = self.requirePatternSourceTypeFact(module_idx, type_scope, child_pattern_idx);
@@ -3638,7 +3638,7 @@ pub const Lowerer = struct {
             },
             .tuple => |tuple| blk: {
                 var current = then_expr;
-                const elem_patterns = cir_env.store.slicePatterns(tuple.patterns);
+                const elem_patterns = mir_module.slicePatterns(tuple.patterns);
                 var idx = elem_patterns.len;
                 while (idx > 0) {
                     idx -= 1;
@@ -3756,7 +3756,7 @@ pub const Lowerer = struct {
         const elem_ty = self.requirePatternListElemTypeFact(module_idx, type_scope, bind_pattern_idx);
         const bool_ty = try self.makePrimitiveType(.bool);
         const u64_ty = try self.makePrimitiveType(.u64);
-        const patterns = self.ctx.env(module_idx).store.slicePatterns(list_pattern.patterns);
+        const patterns = self.ctx.mirModule(module_idx).slicePatterns(list_pattern.patterns);
         const prefix_len: usize = if (list_pattern.rest_info) |rest| @intCast(rest.index) else patterns.len;
         const suffix_len = patterns.len - prefix_len;
 
@@ -4056,7 +4056,7 @@ pub const Lowerer = struct {
     ) std.mem.Allocator.Error!@FieldType(ast.Expr.Data, "block") {
         var fact_env = try self.cloneEnv(incoming_env);
         defer fact_env.deinit();
-        const fact_stmts = self.ctx.env(module_idx).store.sliceStatements(stmts_span);
+        const fact_stmts = self.ctx.mirModule(module_idx).sliceStatements(stmts_span);
         var fact_i: usize = 0;
         while (fact_i < fact_stmts.len) {
             if (try self.seedLocalLambdaDeclGroupFacts(module_idx, &fact_env, fact_stmts, fact_i)) |group_end| {
@@ -4072,8 +4072,8 @@ pub const Lowerer = struct {
         var env = try self.cloneEnv(incoming_env);
         defer env.deinit();
 
-        const cir_env = self.ctx.env(module_idx);
-        const cir_stmts = cir_env.store.sliceStatements(stmts_span);
+        const mir_module = self.ctx.mirModule(module_idx);
+        const cir_stmts = mir_module.sliceStatements(stmts_span);
         var lowered = std.ArrayList(ast.StmtId).empty;
         defer lowered.deinit(self.allocator);
         var local_fn_group_indices = std.ArrayList(u32).empty;
@@ -4111,7 +4111,7 @@ pub const Lowerer = struct {
     ) std.mem.Allocator.Error!@FieldType(ast.Expr.Data, "block") {
         var fact_env = try self.cloneEnv(incoming_env);
         defer fact_env.deinit();
-        const fact_stmts = self.ctx.env(module_idx).store.sliceStatements(stmts_span);
+        const fact_stmts = self.ctx.mirModule(module_idx).sliceStatements(stmts_span);
         var fact_i: usize = 0;
         while (fact_i < fact_stmts.len) {
             if (try self.seedLocalLambdaDeclGroupFacts(module_idx, &fact_env, fact_stmts, fact_i)) |group_end| {
@@ -4129,8 +4129,8 @@ pub const Lowerer = struct {
         var env = try self.cloneEnv(incoming_env);
         defer env.deinit();
 
-        const cir_env = self.ctx.env(module_idx);
-        const cir_stmts = cir_env.store.sliceStatements(stmts_span);
+        const mir_module = self.ctx.mirModule(module_idx);
+        const cir_stmts = mir_module.sliceStatements(stmts_span);
         var lowered = std.ArrayList(ast.StmtId).empty;
         defer lowered.deinit(self.allocator);
         var local_fn_group_indices = std.ArrayList(u32).empty;
@@ -4175,24 +4175,24 @@ pub const Lowerer = struct {
     ) std.mem.Allocator.Error!?usize {
         if (start_idx >= cir_stmts.len) return null;
 
-        const cir_env = self.ctx.env(module_idx);
-        const first_stmt = cir_env.store.getStatement(cir_stmts[start_idx]);
+        const mir_module = self.ctx.mirModule(module_idx);
+        const first_stmt = mir_module.getStatement(cir_stmts[start_idx]);
         if (first_stmt != .s_decl) return null;
         if (!isLambdaExpr(self.ctx.mirModule(module_idx).expr(first_stmt.s_decl.expr).data)) return null;
 
         var end_idx = start_idx;
         while (end_idx < cir_stmts.len) : (end_idx += 1) {
-            const stmt = cir_env.store.getStatement(cir_stmts[end_idx]);
+            const stmt = mir_module.getStatement(cir_stmts[end_idx]);
             if (stmt != .s_decl) break;
             if (!isLambdaExpr(self.ctx.mirModule(module_idx).expr(stmt.s_decl.expr).data)) break;
         }
 
         var seed_scope: TypeCloneScope = undefined;
-        seed_scope.initCloneAll(self.allocator, @constCast(cir_env));
+        seed_scope.initCloneAll(self.allocator, @constCast(mir_module.env));
         defer seed_scope.deinit();
 
         for (cir_stmts[start_idx..end_idx]) |stmt_idx| {
-            const decl = cir_env.store.getStatement(stmt_idx).s_decl;
+            const decl = mir_module.getStatement(stmt_idx).s_decl;
             try self.putLocalFnSeedBinding(env, .{
                 .module_idx = module_idx,
                 .pattern_idx = @intFromEnum(decl.pattern),
@@ -4214,14 +4214,14 @@ pub const Lowerer = struct {
         _ = type_scope;
         if (start_idx >= cir_stmts.len) return null;
 
-        const cir_env = self.ctx.env(module_idx);
-        const first_stmt = cir_env.store.getStatement(cir_stmts[start_idx]);
+        const mir_module = self.ctx.mirModule(module_idx);
+        const first_stmt = mir_module.getStatement(cir_stmts[start_idx]);
         if (first_stmt != .s_decl) return null;
         if (!isLambdaExpr(self.ctx.mirModule(module_idx).expr(first_stmt.s_decl.expr).data)) return null;
 
         var end_idx = start_idx;
         while (end_idx < cir_stmts.len) : (end_idx += 1) {
-            const stmt = cir_env.store.getStatement(cir_stmts[end_idx]);
+            const stmt = mir_module.getStatement(cir_stmts[end_idx]);
             if (stmt != .s_decl) break;
             if (!isLambdaExpr(self.ctx.mirModule(module_idx).expr(stmt.s_decl.expr).data)) break;
         }
@@ -4241,11 +4241,11 @@ pub const Lowerer = struct {
         errdefer group.deinit(self.allocator);
 
         var seed_scope: TypeCloneScope = undefined;
-        seed_scope.initCloneAll(self.allocator, @constCast(cir_env));
+        seed_scope.initCloneAll(self.allocator, @constCast(mir_module.env));
         defer seed_scope.deinit();
 
         for (cir_stmts[start_idx..end_idx], 0..) |stmt_idx, group_i| {
-            const decl = cir_env.store.getStatement(stmt_idx).s_decl;
+            const decl = mir_module.getStatement(stmt_idx).s_decl;
             group.sources[group_i] = .{
                 .pattern_idx = decl.pattern,
                 .expr_idx = decl.expr,
@@ -4305,8 +4305,8 @@ pub const Lowerer = struct {
         stmt_idx: CIR.Statement.Idx,
         lowered: *std.ArrayList(ast.StmtId),
     ) std.mem.Allocator.Error!void {
-        const cir_env = self.ctx.env(module_idx);
-        const stmt = cir_env.store.getStatement(stmt_idx);
+        const mir_module = self.ctx.mirModule(module_idx);
+        const stmt = mir_module.getStatement(stmt_idx);
 
         switch (stmt) {
             .s_decl => |decl| {
@@ -4479,8 +4479,8 @@ pub const Lowerer = struct {
         expected_result_var: ?Var,
         if_expr: anytype,
     ) std.mem.Allocator.Error!@FieldType(ast.Expr.Data, "if_") {
-        const cir_env = self.ctx.env(module_idx);
-        const branch_ids = cir_env.store.sliceIfBranches(if_expr.branches);
+        const mir_module = self.ctx.mirModule(module_idx);
+        const branch_ids = mir_module.sliceIfBranches(if_expr.branches);
         if (branch_ids.len == 0) debugPanic("monotype invariant violated: if expression missing branches", .{});
 
         var else_body = try self.lowerExprWithExpectedType(
@@ -4494,7 +4494,7 @@ pub const Lowerer = struct {
         var idx = branch_ids.len;
         while (idx > 1) {
             idx -= 1;
-            const branch = cir_env.store.getIfBranch(branch_ids[idx]);
+            const branch = mir_module.getIfBranch(branch_ids[idx]);
             else_body = try self.program.store.addExpr(.{
                 .ty = result_ty,
                 .data = .{ .if_ = .{
@@ -4512,7 +4512,7 @@ pub const Lowerer = struct {
             });
         }
 
-        const branch = cir_env.store.getIfBranch(branch_ids[0]);
+        const branch = mir_module.getIfBranch(branch_ids[0]);
         return .{
             .cond = try self.lowerExpr(module_idx, type_scope, env, branch.cond),
             .then_body = try self.lowerExprWithExpectedType(
@@ -4621,7 +4621,7 @@ pub const Lowerer = struct {
             .applied_tag => |tag| blk: {
                 const lowered_args = try self.allocator.alloc(ast.PatId, tag.args.span.len);
                 defer self.allocator.free(lowered_args);
-                for (self.ctx.env(module_idx).store.slicePatterns(tag.args), 0..) |arg_pat, i| {
+                for (self.ctx.mirModule(module_idx).slicePatterns(tag.args), 0..) |arg_pat, i| {
                     lowered_args[i] = try self.lowerPat(module_idx, type_scope, arg_pat);
                 }
                 break :blk self.program.store.addPat(.{
@@ -4686,7 +4686,7 @@ pub const Lowerer = struct {
         env: BindingEnv,
         span: CIR.Expr.Span,
     ) std.mem.Allocator.Error!ast.Span(ast.ExprId) {
-        return self.lowerExprSlice(module_idx, type_scope, env, self.ctx.env(module_idx).store.sliceExpr(span));
+        return self.lowerExprSlice(module_idx, type_scope, env, self.ctx.mirModule(module_idx).sliceExpr(span));
     }
 
     fn lowerExprSlice(
@@ -4712,13 +4712,13 @@ pub const Lowerer = struct {
         record_ty: type_mod.TypeId,
         span: CIR.RecordField.Span,
     ) std.mem.Allocator.Error!ast.Span(ast.FieldExpr) {
-        const cir_env = self.ctx.env(module_idx);
-        const fields = cir_env.store.sliceRecordFields(span);
+        const mir_module = self.ctx.mirModule(module_idx);
+        const fields = mir_module.sliceRecordFields(span);
         const out = try self.allocator.alloc(ast.FieldExpr, fields.len);
         defer self.allocator.free(out);
 
         for (fields, 0..) |field_idx, i| {
-            const field = cir_env.store.getRecordField(field_idx);
+            const field = mir_module.getRecordField(field_idx);
             out[i] = .{
                 .name = try self.ctx.copyExecutableIdent(module_idx, field.name),
                 .value = try self.lowerExprWithExpectedType(
@@ -4811,12 +4811,12 @@ pub const Lowerer = struct {
         } });
         const base_expr = try self.makeVarExpr(record_ty, base_symbol);
 
-        const cir_env = self.ctx.env(module_idx);
-        const update_field_ids = cir_env.store.sliceRecordFields(update_fields_span);
+        const mir_module = self.ctx.mirModule(module_idx);
+        const update_field_ids = mir_module.sliceRecordFields(update_fields_span);
         const lowered_updates = try self.allocator.alloc(ast.FieldExpr, update_field_ids.len);
         defer self.allocator.free(lowered_updates);
         for (update_field_ids, 0..) |field_idx, i| {
-            const field = cir_env.store.getRecordField(field_idx);
+            const field = mir_module.getRecordField(field_idx);
             lowered_updates[i] = .{
                 .name = try self.ctx.copyExecutableIdent(module_idx, field.name),
                 .value = try self.lowerExprWithExpectedType(
@@ -4877,7 +4877,7 @@ pub const Lowerer = struct {
         expr_idx: CIR.Expr.Idx,
         method_name: base.Ident.Idx,
     ) RecordedMethodArgs {
-        const cir_env = self.ctx.env(module_idx);
+        const mir_module = self.ctx.mirModule(module_idx);
         return switch (self.ctx.mirModule(module_idx).expr(expr_idx).data) {
             .e_dot_access => |dot| blk: {
                 if (dot.args == null or !dot.field_name.eql(method_name)) {
@@ -4885,7 +4885,7 @@ pub const Lowerer = struct {
                 }
                 break :blk .{
                     .implicit_receiver = dot.receiver,
-                    .explicit_args = cir_env.store.sliceExpr(dot.args.?),
+                    .explicit_args = mir_module.sliceExpr(dot.args.?),
                 };
             },
             .e_type_var_dispatch => |dispatch| blk: {
@@ -4894,7 +4894,7 @@ pub const Lowerer = struct {
                 }
                 break :blk .{
                     .implicit_receiver = null,
-                    .explicit_args = cir_env.store.sliceExpr(dispatch.args),
+                    .explicit_args = mir_module.sliceExpr(dispatch.args),
                 };
             },
             .e_call => |call| switch (self.ctx.mirModule(module_idx).expr(call.func).data) {
@@ -4904,7 +4904,7 @@ pub const Lowerer = struct {
                     }
                     break :blk .{
                         .implicit_receiver = dot.receiver,
-                        .explicit_args = cir_env.store.sliceExpr(call.args),
+                        .explicit_args = mir_module.sliceExpr(call.args),
                     };
                 },
                 .e_type_var_dispatch => |dispatch| blk: {
@@ -4913,7 +4913,7 @@ pub const Lowerer = struct {
                     }
                     break :blk .{
                         .implicit_receiver = null,
-                        .explicit_args = cir_env.store.sliceExpr(call.args),
+                        .explicit_args = mir_module.sliceExpr(call.args),
                     };
                 },
                 else => debugPanic("monotype static dispatch invariant violated: call head is not recorded dispatch", .{}),
@@ -5137,7 +5137,7 @@ pub const Lowerer = struct {
         func_expr_idx: CIR.Expr.Idx,
         arg_exprs: []const CIR.Expr.Idx,
     ) std.mem.Allocator.Error!SpecializableCallChain {
-        const cir_env = self.ctx.env(module_idx);
+        const mir_module = self.ctx.mirModule(module_idx);
         var frames = std.ArrayList([]const CIR.Expr.Idx).empty;
         defer frames.deinit(self.allocator);
 
@@ -5146,7 +5146,7 @@ pub const Lowerer = struct {
         var root_func_expr_idx = func_expr_idx;
         while (self.ctx.mirModule(module_idx).expr(root_func_expr_idx).data == .e_call) {
             const nested_call = self.ctx.mirModule(module_idx).expr(root_func_expr_idx).data.e_call;
-            try frames.append(self.allocator, cir_env.store.sliceExpr(nested_call.args));
+            try frames.append(self.allocator, mir_module.sliceExpr(nested_call.args));
             root_func_expr_idx = nested_call.func;
         }
 
@@ -5316,7 +5316,7 @@ pub const Lowerer = struct {
         expected_var: ?Var,
     ) std.mem.Allocator.Error!ast.ExprId {
         self.requireFrozenLoweringSemanticTypes(module_idx, type_scope);
-        const cir_env = expr.env;
+        const mir_module = expr.module();
         if (expected_var != null) {
             switch (expr.data) {
                 .e_call => |call| {
@@ -5326,7 +5326,7 @@ pub const Lowerer = struct {
                         env,
                         expr.idx,
                         call.func,
-                        cir_env.store.sliceExpr(call.args),
+                        mir_module.sliceExpr(call.args),
                     );
                 },
                 .e_dot_access => |dot| {
@@ -5409,7 +5409,7 @@ pub const Lowerer = struct {
                     env,
                     expr.idx,
                     call.func,
-                    cir_env.store.sliceExpr(call.args),
+                    mir_module.sliceExpr(call.args),
                 );
                 break :blk try self.program.store.addExpr(.{
                     .ty = lowered_call.result_ty,
@@ -5720,7 +5720,7 @@ pub const Lowerer = struct {
     ) std.mem.Allocator.Error!ast.Span(ast.ExprId) {
         _ = list_ty;
         _ = list_var;
-        const exprs = self.ctx.env(module_idx).store.sliceExpr(span);
+        const exprs = self.ctx.mirModule(module_idx).sliceExpr(span);
         const out = try self.allocator.alloc(ast.ExprId, exprs.len);
         defer self.allocator.free(out);
         for (exprs, 0..) |expr_idx, i| {
@@ -5747,7 +5747,7 @@ pub const Lowerer = struct {
     ) std.mem.Allocator.Error!ast.Span(ast.ExprId) {
         _ = tuple_ty;
         _ = tuple_var;
-        const exprs = self.ctx.env(module_idx).store.sliceExpr(span);
+        const exprs = self.ctx.mirModule(module_idx).sliceExpr(span);
         const out = try self.allocator.alloc(ast.ExprId, exprs.len);
         defer self.allocator.free(out);
         for (exprs, 0..) |expr_idx, i| {
@@ -5806,13 +5806,13 @@ pub const Lowerer = struct {
         span: CIR.RecordField.Span,
     ) std.mem.Allocator.Error!ast.Span(ast.FieldExpr) {
         _ = record_ty;
-        const cir_env = self.ctx.env(module_idx);
-        const fields = cir_env.store.sliceRecordFields(span);
+        const mir_module = self.ctx.mirModule(module_idx);
+        const fields = mir_module.sliceRecordFields(span);
         const out = try self.allocator.alloc(ast.FieldExpr, fields.len);
         defer self.allocator.free(out);
 
         for (fields, 0..) |field_idx, i| {
-            const field = cir_env.store.getRecordField(field_idx);
+            const field = mir_module.getRecordField(field_idx);
             out[i] = .{
                 .name = try self.ctx.copyExecutableIdent(module_idx, field.name),
                 .value = try self.lowerExprWithExpectedType(
@@ -5848,13 +5848,13 @@ pub const Lowerer = struct {
     ) std.mem.Allocator.Error!ast.Expr.Data {
         _ = expected_var;
         if (self.ctx.types.getType(expected_ty) == .primitive and self.ctx.types.getType(expected_ty).primitive == .bool) {
-            if (self.ctx.env(module_idx).store.sliceExpr(args_span).len != 0) {
+            if (self.ctx.mirModule(module_idx).sliceExpr(args_span).len != 0) {
                 return debugPanic("monotype bool tag invariant violated: Bool tags cannot carry arguments", .{});
             }
             return .{ .bool_lit = self.requireBoolLiteralValue(module_idx, tag_name) };
         }
 
-        const arg_exprs = self.ctx.env(module_idx).store.sliceExpr(args_span);
+        const arg_exprs = self.ctx.mirModule(module_idx).sliceExpr(args_span);
         const lowered_args = try self.allocator.alloc(ast.ExprId, arg_exprs.len);
         defer self.allocator.free(lowered_args);
         for (arg_exprs, 0..) |arg_expr_idx, i| {
@@ -5925,8 +5925,8 @@ pub const Lowerer = struct {
         var env = try self.cloneEnv(incoming_env);
         defer env.deinit();
 
-        const cir_env = self.ctx.env(module_idx);
-        const cir_stmts = cir_env.store.sliceStatements(stmts_span);
+        const mir_module = self.ctx.mirModule(module_idx);
+        const cir_stmts = mir_module.sliceStatements(stmts_span);
         var lowered = std.ArrayList(ast.StmtId).empty;
         defer lowered.deinit(self.allocator);
         var local_fn_group_indices = std.ArrayList(u32).empty;
@@ -6116,21 +6116,21 @@ pub const Lowerer = struct {
             => {},
             .as => |as_pat| try self.collectSolvedPatternFacts(module_idx, type_scope, solved_module.pattern(as_pat.pattern)),
             .applied_tag => |tag| {
-                for (solved_module.env.store.slicePatterns(tag.args)) |arg_pat| {
+                for (solved_module.slicePatterns(tag.args)) |arg_pat| {
                     try self.collectSolvedPatternFacts(module_idx, type_scope, solved_module.pattern(arg_pat));
                 }
             },
             .record_destructure => |record| {
-                for (solved_module.env.store.sliceRecordDestructs(record.destructs)) |destruct_idx| {
+                for (solved_module.sliceRecordDestructs(record.destructs)) |destruct_idx| {
                     try self.collectSolvedPatternFacts(
                         module_idx,
                         type_scope,
-                        solved_module.pattern(solved_module.env.store.getRecordDestruct(destruct_idx).kind.toPatternIdx()),
+                        solved_module.pattern(solved_module.getRecordDestruct(destruct_idx).kind.toPatternIdx()),
                     );
                 }
             },
             .list => |list| {
-                for (solved_module.env.store.slicePatterns(list.patterns)) |child_pat| {
+                for (solved_module.slicePatterns(list.patterns)) |child_pat| {
                     try self.collectSolvedPatternFacts(module_idx, type_scope, solved_module.pattern(child_pat));
                 }
                 if (list.rest_info) |rest| {
@@ -6140,7 +6140,7 @@ pub const Lowerer = struct {
                 }
             },
             .tuple => |tuple| {
-                for (solved_module.env.store.slicePatterns(tuple.patterns)) |elem_pat| {
+                for (solved_module.slicePatterns(tuple.patterns)) |elem_pat| {
                     try self.collectSolvedPatternFacts(module_idx, type_scope, solved_module.pattern(elem_pat));
                 }
             },
@@ -6166,7 +6166,7 @@ pub const Lowerer = struct {
         const effective_source_ty = source_ty;
         try self.bindPatternSourceTypeFact(module_idx, type_scope, pattern_idx, effective_source_ty);
 
-        const cir_env = self.ctx.env(module_idx);
+        const mir_module = self.ctx.mirModule(module_idx);
         const pattern = self.ctx.mirModule(module_idx).pattern(pattern_idx).data;
         switch (pattern) {
             .assign,
@@ -6188,7 +6188,7 @@ pub const Lowerer = struct {
             ),
             .applied_tag => |tag| {
                 if (self.ctx.types.getType(effective_source_ty) == .primitive and self.ctx.types.getType(effective_source_ty).primitive == .bool) {
-                    if (cir_env.store.slicePatterns(tag.args).len != 0) {
+                    if (mir_module.slicePatterns(tag.args).len != 0) {
                         return debugPanic("monotype bool pattern invariant violated: Bool tags cannot carry arguments", .{});
                     }
                     return;
@@ -6199,7 +6199,7 @@ pub const Lowerer = struct {
                 );
                 const expected_discriminant = try self.requireTagDiscriminantForSolvedVar(module_idx, source_var, tag.name);
                 try self.bindPatternTagDiscriminantFact(module_idx, type_scope, pattern_idx, expected_discriminant);
-                const arg_patterns = cir_env.store.slicePatterns(tag.args);
+                const arg_patterns = mir_module.slicePatterns(tag.args);
                 const arg_tys = try self.requireTagPayloadTypesFromMonotype(
                     module_idx,
                     effective_source_ty,
@@ -6222,8 +6222,8 @@ pub const Lowerer = struct {
                 }
             },
             .record_destructure => |record| {
-                for (cir_env.store.sliceRecordDestructs(record.destructs)) |destruct_idx| {
-                    const destruct = cir_env.store.getRecordDestruct(destruct_idx);
+                for (mir_module.sliceRecordDestructs(record.destructs)) |destruct_idx| {
+                    const destruct = mir_module.getRecordDestruct(destruct_idx);
                     const child_pattern_idx = destruct.kind.toPatternIdx();
                     try self.bindRecordDestructFieldIndexFact(
                         module_idx,
@@ -6251,7 +6251,7 @@ pub const Lowerer = struct {
             .list => |list| {
                 const elem_ty = self.requireListElemTypeFromMonotype(effective_source_ty);
                 try self.bindPatternListElemTypeFact(module_idx, type_scope, pattern_idx, elem_ty);
-                for (cir_env.store.slicePatterns(list.patterns)) |child_pattern_idx| {
+                for (mir_module.slicePatterns(list.patterns)) |child_pattern_idx| {
                     try self.recordPatternStructuralFactsFromSourceType(
                         module_idx,
                         type_scope,
@@ -6273,7 +6273,7 @@ pub const Lowerer = struct {
                 }
             },
             .tuple => |tuple| {
-                const elem_patterns = cir_env.store.slicePatterns(tuple.patterns);
+                const elem_patterns = mir_module.slicePatterns(tuple.patterns);
                 const elem_tys = self.requireTupleElemTypesFromMonotype(effective_source_ty);
                 if (elem_patterns.len != elem_tys.len) {
                     return debugPanic(
@@ -6346,7 +6346,7 @@ pub const Lowerer = struct {
                 });
             },
             .applied_tag => |tag| {
-                for (self.ctx.env(module_idx).store.slicePatterns(tag.args)) |arg_pat| {
+                for (self.ctx.mirModule(module_idx).slicePatterns(tag.args)) |arg_pat| {
                     try self.bindPatternEnvWithSolvedVarOnly(
                         module_idx,
                         type_scope,
@@ -6357,8 +6357,8 @@ pub const Lowerer = struct {
                 }
             },
             .record_destructure => |record| {
-                for (self.ctx.env(module_idx).store.sliceRecordDestructs(record.destructs)) |destruct_idx| {
-                    const child_pattern_idx = self.ctx.env(module_idx).store.getRecordDestruct(destruct_idx).kind.toPatternIdx();
+                for (self.ctx.mirModule(module_idx).sliceRecordDestructs(record.destructs)) |destruct_idx| {
+                    const child_pattern_idx = self.ctx.mirModule(module_idx).getRecordDestruct(destruct_idx).kind.toPatternIdx();
                     try self.bindPatternEnvWithSolvedVarOnly(
                         module_idx,
                         type_scope,
@@ -6369,7 +6369,7 @@ pub const Lowerer = struct {
                 }
             },
             .tuple => |tuple| {
-                for (self.ctx.env(module_idx).store.slicePatterns(tuple.patterns)) |child_pattern_idx| {
+                for (self.ctx.mirModule(module_idx).slicePatterns(tuple.patterns)) |child_pattern_idx| {
                     try self.bindPatternEnvWithSolvedVarOnly(
                         module_idx,
                         type_scope,
@@ -6380,7 +6380,7 @@ pub const Lowerer = struct {
                 }
             },
             .list => |list| {
-                for (self.ctx.env(module_idx).store.slicePatterns(list.patterns)) |child_pattern_idx| {
+                for (self.ctx.mirModule(module_idx).slicePatterns(list.patterns)) |child_pattern_idx| {
                     try self.bindPatternEnvWithSolvedVarOnly(
                         module_idx,
                         type_scope,
@@ -6452,8 +6452,8 @@ pub const Lowerer = struct {
         env: *BindingEnv,
         stmt_idx: CIR.Statement.Idx,
     ) std.mem.Allocator.Error!void {
-        const cir_env = self.ctx.env(module_idx);
-        const stmt = cir_env.store.getStatement(stmt_idx);
+        const mir_module = self.ctx.mirModule(module_idx);
+        const stmt = mir_module.getStatement(stmt_idx);
         switch (stmt) {
             .s_decl => |decl| {
                 try self.collectExprFactsWithExplicitResultVar(
@@ -6602,7 +6602,7 @@ pub const Lowerer = struct {
             .module_idx = module_idx,
             .expr_idx = expr.idx,
         };
-        const cir_env = expr.env;
+        const mir_module = expr.module();
         if (type_scope.facts.collected_expr_facts.contains(key) and type_scope.facts.expr_result_var_facts.contains(key) and (!exprNeedsExplicitCallFact(expr.data) or type_scope.facts.call_facts.contains(key))) return;
         const explicit_result_var = type_scope.facts.expr_result_var_facts.get(key);
         const solved_module = self.ctx.mirModule(module_idx);
@@ -6631,7 +6631,7 @@ pub const Lowerer = struct {
             .e_crash,
             => explicit_result_var orelse try self.scopedSolvedExprResultVar(type_scope, env, expr),
             .e_str => |str_expr| blk: {
-                for (cir_env.store.sliceExpr(str_expr.span)) |part| {
+                for (mir_module.sliceExpr(str_expr.span)) |part| {
                     try self.collectSolvedExprFacts(module_idx, type_scope, env, solved_module.expr(part));
                 }
                 break :blk explicit_result_var orelse try self.scopedSolvedExprResultVar(type_scope, env, expr);
@@ -6639,7 +6639,7 @@ pub const Lowerer = struct {
             .e_list => |list| blk: {
                 const list_result_var = explicit_result_var orelse try self.scopedSolvedExprResultVar(type_scope, env, expr);
                 const elem_result_var = self.lookupListElemSolvedVar(module_idx, list_result_var);
-                for (cir_env.store.sliceExpr(list.elems)) |elem| {
+                for (mir_module.sliceExpr(list.elems)) |elem| {
                     try self.collectExprFactsWithExplicitResultVar(
                         module_idx,
                         type_scope,
@@ -6651,7 +6651,7 @@ pub const Lowerer = struct {
                 break :blk list_result_var;
             },
             .e_tuple => |tuple| blk: {
-                for (cir_env.store.sliceExpr(tuple.elems)) |elem| {
+                for (mir_module.sliceExpr(tuple.elems)) |elem| {
                     try self.collectSolvedExprFacts(module_idx, type_scope, env, solved_module.expr(elem));
                 }
                 break :blk explicit_result_var orelse try self.scopedSolvedExprResultVar(type_scope, env, expr);
@@ -6663,7 +6663,7 @@ pub const Lowerer = struct {
                     env,
                     expr.idx,
                     call.func,
-                    cir_env.store.sliceExpr(call.args),
+                    mir_module.sliceExpr(call.args),
                     explicit_result_var,
                 )) |call_fact| {
                     break :blk call_fact.result_var;
@@ -6696,7 +6696,7 @@ pub const Lowerer = struct {
                     else => {},
                 }
                 try self.collectSolvedExprFacts(module_idx, type_scope, env, solved_module.expr(call.func));
-                for (cir_env.store.sliceExpr(call.args)) |arg_expr| {
+                for (mir_module.sliceExpr(call.args)) |arg_expr| {
                     try self.collectSolvedExprFacts(module_idx, type_scope, env, solved_module.expr(arg_expr));
                 }
                 const call_result_var = explicit_result_var orelse try self.scopedSolvedExprResultVar(type_scope, env, expr);
@@ -6710,14 +6710,14 @@ pub const Lowerer = struct {
                         type_scope,
                         callee_var,
                         call_result_var,
-                        cir_env.store.sliceExpr(call.args).len,
+                        mir_module.sliceExpr(call.args).len,
                     ),
                 );
                 break :blk call_result_var;
             },
             .e_record => |record| blk: {
-                for (cir_env.store.sliceRecordFields(record.fields)) |field_idx| {
-                    const field = cir_env.store.getRecordField(field_idx);
+                for (mir_module.sliceRecordFields(record.fields)) |field_idx| {
+                    const field = mir_module.getRecordField(field_idx);
                     try self.collectSolvedExprFacts(module_idx, type_scope, env, solved_module.expr(field.value));
                 }
                 if (record.ext) |ext_expr| {
@@ -6728,7 +6728,7 @@ pub const Lowerer = struct {
             .e_block => |block| blk: {
                 var body_env = try self.cloneEnv(env);
                 defer body_env.deinit();
-                const block_stmts = cir_env.store.sliceStatements(block.stmts);
+                const block_stmts = mir_module.sliceStatements(block.stmts);
                 var stmt_index: usize = 0;
                 while (stmt_index < block_stmts.len) {
                     if (try self.seedLocalLambdaDeclGroupFacts(module_idx, &body_env, block_stmts, stmt_index)) |group_end| {
@@ -6742,7 +6742,7 @@ pub const Lowerer = struct {
                 break :blk explicit_result_var orelse self.requireExprResultFact(module_idx, type_scope, block.final_expr);
             },
             .e_tag => |tag| blk: {
-                for (cir_env.store.sliceExpr(tag.args)) |arg_expr| {
+                for (mir_module.sliceExpr(tag.args)) |arg_expr| {
                     try self.collectSolvedExprFacts(module_idx, type_scope, env, solved_module.expr(arg_expr));
                 }
                 break :blk explicit_result_var orelse try self.scopedSolvedExprResultVar(type_scope, env, expr);
@@ -6771,7 +6771,7 @@ pub const Lowerer = struct {
             .e_dot_access => |dot| blk: {
                 try self.collectSolvedExprFacts(module_idx, type_scope, env, solved_module.expr(dot.receiver));
                 if (dot.args) |dispatch_args| {
-                    for (cir_env.store.sliceExpr(dispatch_args)) |arg_expr| {
+                    for (mir_module.sliceExpr(dispatch_args)) |arg_expr| {
                         try self.collectSolvedExprFacts(module_idx, type_scope, env, solved_module.expr(arg_expr));
                     }
                     const call_fact = try self.collectRecordedMethodCallFact(
@@ -6787,7 +6787,7 @@ pub const Lowerer = struct {
                 break :blk explicit_result_var orelse try self.scopedSolvedExprResultVar(type_scope, env, expr);
             },
             .e_type_var_dispatch => |dispatch| blk: {
-                for (cir_env.store.sliceExpr(dispatch.args)) |arg_expr| {
+                for (mir_module.sliceExpr(dispatch.args)) |arg_expr| {
                     try self.collectSolvedExprFacts(module_idx, type_scope, env, solved_module.expr(arg_expr));
                 }
                 const call_fact = try self.collectRecordedMethodCallFact(
@@ -6803,14 +6803,14 @@ pub const Lowerer = struct {
             .e_match => |match_expr| blk: {
                 try self.collectSolvedExprFacts(module_idx, type_scope, env, solved_module.expr(match_expr.cond));
                 const cond_var = self.requireExprResultFact(module_idx, type_scope, match_expr.cond);
-                const branches = cir_env.store.matchBranchSlice(match_expr.branches);
+                const branches = mir_module.matchBranchSlice(match_expr.branches);
                 for (branches) |branch_idx| {
-                    const branch = cir_env.store.getMatchBranch(branch_idx);
+                    const branch = mir_module.getMatchBranch(branch_idx);
                     var branch_env = try self.cloneEnv(env);
                     defer branch_env.deinit();
-                    const branch_pattern_ids = cir_env.store.sliceMatchBranchPatterns(branch.patterns);
+                    const branch_pattern_ids = mir_module.sliceMatchBranchPatterns(branch.patterns);
                     if (branch_pattern_ids.len != 0) {
-                        const first_pattern = cir_env.store.getMatchBranchPattern(branch_pattern_ids[0]).pattern;
+                        const first_pattern = mir_module.getMatchBranchPattern(branch_pattern_ids[0]).pattern;
                         try self.collectPatternBindingsIntoEnvWithSolvedVar(
                             module_idx,
                             type_scope,
@@ -6827,12 +6827,12 @@ pub const Lowerer = struct {
                 if (branches.len == 0) {
                     return debugPanic("monotype explicit expr fact invariant violated: match expression missing branches", .{});
                 }
-                const first_branch = cir_env.store.getMatchBranch(branches[0]);
+                const first_branch = mir_module.getMatchBranch(branches[0]);
                 break :blk explicit_result_var orelse self.requireExprResultFact(module_idx, type_scope, first_branch.value);
             },
             .e_if => |if_expr| blk: {
-                for (cir_env.store.sliceIfBranches(if_expr.branches)) |branch_id| {
-                    const branch = cir_env.store.getIfBranch(branch_id);
+                for (mir_module.sliceIfBranches(if_expr.branches)) |branch_id| {
+                    const branch = mir_module.getIfBranch(branch_id);
                     try self.collectSolvedExprFacts(module_idx, type_scope, env, solved_module.expr(branch.cond));
                     try self.collectSolvedExprFacts(module_idx, type_scope, env, solved_module.expr(branch.body));
                 }
@@ -6874,7 +6874,7 @@ pub const Lowerer = struct {
                 break :blk explicit_result_var orelse try self.scopedSolvedExprResultVar(type_scope, env, expr);
             },
             .e_run_low_level => |ll| blk: {
-                for (cir_env.store.sliceExpr(ll.args)) |arg_expr| {
+                for (mir_module.sliceExpr(ll.args)) |arg_expr| {
                     try self.collectSolvedExprFacts(module_idx, type_scope, env, solved_module.expr(arg_expr));
                 }
                 break :blk explicit_result_var orelse try self.scopedSolvedExprResultVar(type_scope, env, expr);
@@ -6958,15 +6958,15 @@ pub const Lowerer = struct {
         env: BindingEnv,
         match_expr: CIR.Expr.Match,
     ) std.mem.Allocator.Error!?type_mod.TypeId {
-        const cir_env = self.ctx.env(module_idx);
-        const branches = cir_env.store.matchBranchSlice(match_expr.branches);
+        const mir_module = self.ctx.mirModule(module_idx);
+        const branches = mir_module.matchBranchSlice(match_expr.branches);
         if (branches.len == 0) return null;
 
-        const ok_branch = cir_env.store.getMatchBranch(branches[0]);
-        const branch_patterns = cir_env.store.sliceMatchBranchPatterns(ok_branch.patterns);
+        const ok_branch = mir_module.getMatchBranch(branches[0]);
+        const branch_patterns = mir_module.sliceMatchBranchPatterns(ok_branch.patterns);
         if (branch_patterns.len == 0) return null;
 
-        const branch_pattern = cir_env.store.getMatchBranchPattern(branch_patterns[0]);
+        const branch_pattern = mir_module.getMatchBranchPattern(branch_patterns[0]);
         const tag_info = self.lookupSingleTagPayloadPattern(module_idx, branch_pattern.pattern) orelse return null;
         _ = env;
         const cond_ty = try self.requireExprTypeFact(module_idx, type_scope, match_expr.cond);
@@ -6985,11 +6985,11 @@ pub const Lowerer = struct {
         module_idx: u32,
         pattern_idx: CIR.Pattern.Idx,
     ) ?struct { tag_name: base.Ident.Idx, payload_pattern: CIR.Pattern.Idx } {
-        const cir_env = self.ctx.env(module_idx);
+        const mir_module = self.ctx.mirModule(module_idx);
         const pattern = self.ctx.mirModule(module_idx).pattern(pattern_idx).data;
         return switch (pattern) {
             .applied_tag => |tag| blk: {
-                const args = cir_env.store.slicePatterns(tag.args);
+                const args = mir_module.slicePatterns(tag.args);
                 if (args.len != 1) break :blk null;
                 break :blk .{ .tag_name = tag.name, .payload_pattern = args[0] };
             },
@@ -7663,7 +7663,7 @@ pub const Lowerer = struct {
             source.ty,
             source_solved_var,
         );
-        const cir_env = self.ctx.env(module_idx);
+        const mir_module = self.ctx.mirModule(module_idx);
         const pattern = self.ctx.mirModule(module_idx).pattern(pattern_idx).data;
         switch (pattern) {
             .assign => {
@@ -7703,8 +7703,8 @@ pub const Lowerer = struct {
                     ),
                 }
                 const source_expr = try self.makeVarExpr(source.ty, source.symbol);
-                for (cir_env.store.sliceRecordDestructs(record.destructs)) |destruct_idx| {
-                    const destruct = cir_env.store.getRecordDestruct(destruct_idx);
+                for (mir_module.sliceRecordDestructs(record.destructs)) |destruct_idx| {
+                    const destruct = mir_module.getRecordDestruct(destruct_idx);
                     const child_pattern_idx = destruct.kind.toPatternIdx();
                     const field_ty = self.requirePatternSourceTypeFact(module_idx, type_scope, child_pattern_idx);
                     const field_solved_var = try self.requirePatternSolvedVar(module_idx, type_scope, child_pattern_idx);
@@ -7737,7 +7737,7 @@ pub const Lowerer = struct {
                 }
             },
             .tuple => |tuple| {
-                const elem_patterns = cir_env.store.slicePatterns(tuple.patterns);
+                const elem_patterns = mir_module.slicePatterns(tuple.patterns);
                 const source_expr = try self.makeVarExpr(source.ty, source.symbol);
                 for (elem_patterns, 0..) |elem_pattern_idx, i| {
                     const elem_ty = self.requirePatternSourceTypeFact(module_idx, type_scope, elem_pattern_idx);
@@ -7877,7 +7877,7 @@ pub const Lowerer = struct {
             source_ty,
             source_solved_var,
         );
-        const cir_env = self.ctx.env(module_idx);
+        const mir_module = self.ctx.mirModule(module_idx);
         const pattern = self.ctx.mirModule(module_idx).pattern(pattern_idx).data;
         switch (pattern) {
             .assign => try self.appendPatternBindingOrReassign(module_idx, pattern_idx, source_ty, source_expr, env, lowered),
@@ -7887,8 +7887,8 @@ pub const Lowerer = struct {
             },
             .underscore => {},
             .record_destructure => |record| {
-                for (cir_env.store.sliceRecordDestructs(record.destructs)) |destruct_idx| {
-                    const destruct = cir_env.store.getRecordDestruct(destruct_idx);
+                for (mir_module.sliceRecordDestructs(record.destructs)) |destruct_idx| {
+                    const destruct = mir_module.getRecordDestruct(destruct_idx);
                     const child_pattern_idx = destruct.kind.toPatternIdx();
                     const field_ty = self.requirePatternSourceTypeFact(module_idx, type_scope, child_pattern_idx);
                     const field_bind: ast.TypedSymbol = .{
@@ -7920,7 +7920,7 @@ pub const Lowerer = struct {
                 }
             },
             .tuple => |tuple| {
-                const elem_patterns = cir_env.store.slicePatterns(tuple.patterns);
+                const elem_patterns = mir_module.slicePatterns(tuple.patterns);
                 for (elem_patterns, 0..) |elem_pattern_idx, i| {
                     const elem_ty = self.requirePatternSourceTypeFact(module_idx, type_scope, elem_pattern_idx);
                     const elem_bind: ast.TypedSymbol = .{
@@ -8035,7 +8035,7 @@ pub const Lowerer = struct {
             source_solved_var,
         );
         const effective_source_ty = self.requirePatternSourceTypeFact(module_idx, type_scope, pattern_idx);
-        const cir_env = self.ctx.env(module_idx);
+        const mir_module = self.ctx.mirModule(module_idx);
         const pattern = self.ctx.mirModule(module_idx).pattern(pattern_idx).data;
 
         if (self.patternNeedsBindingDecls(module_idx, pattern_idx)) {
@@ -8068,7 +8068,7 @@ pub const Lowerer = struct {
             }),
             .applied_tag => |tag| blk: {
                 if (self.ctx.types.getType(effective_source_ty) == .primitive and self.ctx.types.getType(effective_source_ty).primitive == .bool) {
-                    if (cir_env.store.slicePatterns(tag.args).len != 0) {
+                    if (mir_module.slicePatterns(tag.args).len != 0) {
                         return debugPanic("monotype bool pattern invariant violated: Bool tags cannot carry arguments", .{});
                     }
                     break :blk try self.program.store.addPat(.{
@@ -8076,7 +8076,7 @@ pub const Lowerer = struct {
                         .data = .{ .bool_lit = self.requireBoolLiteralValue(module_idx, tag.name) },
                     });
                 }
-                const arg_pats = cir_env.store.slicePatterns(tag.args);
+                const arg_pats = mir_module.slicePatterns(tag.args);
                 const lowered_args = try self.allocator.alloc(ast.PatId, arg_pats.len);
                 defer self.allocator.free(lowered_args);
                 for (arg_pats, 0..) |arg_pat, i| {
@@ -8399,7 +8399,7 @@ pub const Lowerer = struct {
                 });
             },
             .applied_tag => |tag| {
-                for (self.ctx.env(module_idx).store.slicePatterns(tag.args)) |arg_pat| {
+                for (self.ctx.mirModule(module_idx).slicePatterns(tag.args)) |arg_pat| {
                     try self.bindPatternEnv(module_idx, type_scope, arg_pat, env);
                 }
             },
@@ -8461,7 +8461,7 @@ pub const Lowerer = struct {
                 });
             },
             .applied_tag => |tag| {
-                for (self.ctx.env(module_idx).store.slicePatterns(tag.args)) |arg_pat| {
+                for (self.ctx.mirModule(module_idx).slicePatterns(tag.args)) |arg_pat| {
                     try self.bindPatternEnvFromTypeWithSolvedVar(
                         module_idx,
                         type_scope,
@@ -8473,8 +8473,8 @@ pub const Lowerer = struct {
                 }
             },
             .record_destructure => |record| {
-                for (self.ctx.env(module_idx).store.sliceRecordDestructs(record.destructs)) |destruct_idx| {
-                    const child_pattern_idx = self.ctx.env(module_idx).store.getRecordDestruct(destruct_idx).kind.toPatternIdx();
+                for (self.ctx.mirModule(module_idx).sliceRecordDestructs(record.destructs)) |destruct_idx| {
+                    const child_pattern_idx = self.ctx.mirModule(module_idx).getRecordDestruct(destruct_idx).kind.toPatternIdx();
                     try self.bindPatternEnvFromTypeWithSolvedVar(
                         module_idx,
                         type_scope,
@@ -8486,7 +8486,7 @@ pub const Lowerer = struct {
                 }
             },
             .tuple => |tuple| {
-                for (self.ctx.env(module_idx).store.slicePatterns(tuple.patterns)) |child_pattern_idx| {
+                for (self.ctx.mirModule(module_idx).slicePatterns(tuple.patterns)) |child_pattern_idx| {
                     try self.bindPatternEnvFromTypeWithSolvedVar(
                         module_idx,
                         type_scope,
@@ -8498,7 +8498,7 @@ pub const Lowerer = struct {
                 }
             },
             .list => |list| {
-                for (self.ctx.env(module_idx).store.slicePatterns(list.patterns)) |child_pattern_idx| {
+                for (self.ctx.mirModule(module_idx).slicePatterns(list.patterns)) |child_pattern_idx| {
                     try self.bindPatternEnvFromTypeWithSolvedVar(
                         module_idx,
                         type_scope,
