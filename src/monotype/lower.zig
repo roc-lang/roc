@@ -1071,7 +1071,7 @@ pub const Lowerer = struct {
         const lambda = switch (expr) {
             .e_lambda => |lambda| lambda,
             .e_closure => |closure| blk: {
-                const lambda_expr = env.store.getExpr(closure.lambda_idx);
+                const lambda_expr = self.ctx.solved(module_idx).expr(closure.lambda_idx).data;
                 if (lambda_expr != .e_lambda) unreachable;
                 break :blk lambda_expr.e_lambda;
             },
@@ -1523,7 +1523,7 @@ pub const Lowerer = struct {
         if (type_scope.facts.expr_source_function_facts.contains(key)) return;
 
         const current_env = self.ctx.env(module_idx);
-        const seed_var_opt: ?Var = switch (current_env.store.getExpr(expr_idx)) {
+        const seed_var_opt: ?Var = switch (self.ctx.solved(module_idx).expr(expr_idx).data) {
             .e_lookup_local => |lookup| blk: {
                 if (env.get(.{
                     .module_idx = module_idx,
@@ -2619,7 +2619,7 @@ pub const Lowerer = struct {
         func_expr_idx: CIR.Expr.Idx,
     ) ?ResolvedTopLevelSource {
         const current_env = self.ctx.env(current_module_idx);
-        return switch (current_env.store.getExpr(func_expr_idx)) {
+        return switch (self.ctx.solved(current_module_idx).expr(func_expr_idx).data) {
             .e_lookup_local => |lookup| blk: {
                 if (env.get(.{
                     .module_idx = current_module_idx,
@@ -2657,7 +2657,7 @@ pub const Lowerer = struct {
         const env = self.ctx.env(module_idx);
         const inspect_ident = env.common.findIdent("Builtin.Str.inspect") orelse return false;
         const def = env.store.getDef(def_idx);
-        return switch (env.store.getPattern(def.pattern)) {
+        return switch (self.ctx.solved(module_idx).pattern(def.pattern).data) {
             .assign => |assign| assign.ident.eql(inspect_ident),
             else => false,
         };
@@ -3077,7 +3077,7 @@ pub const Lowerer = struct {
         expected_var: ?Var,
     ) std.mem.Allocator.Error!LoweredClosure {
         _ = closure.captures;
-        const lambda_expr = self.ctx.env(module_idx).store.getExpr(closure.lambda_idx);
+        const lambda_expr = self.ctx.solved(module_idx).expr(closure.lambda_idx).data;
         if (lambda_expr != .e_lambda) unreachable;
         return try self.lowerAnonymousClosure(module_idx, type_scope, env, source_expr_idx, closure_ty, lambda_expr.e_lambda.args, lambda_expr.e_lambda.body, expected_var);
     }
@@ -3162,7 +3162,7 @@ pub const Lowerer = struct {
         pattern_idx: CIR.Pattern.Idx,
     ) bool {
         const cir_env = self.ctx.env(module_idx);
-        const pattern = cir_env.store.getPattern(pattern_idx);
+        const pattern = self.ctx.solved(module_idx).pattern(pattern_idx).data;
         return switch (pattern) {
             .assign, .underscore => true,
             .as => |as_pat| self.patternIsIrrefutableStructural(module_idx, as_pat.pattern),
@@ -3313,7 +3313,7 @@ pub const Lowerer = struct {
 
     fn patternNeedsPredicateDesugaring(self: *Lowerer, module_idx: u32, pattern_idx: CIR.Pattern.Idx) bool {
         const cir_env = self.ctx.env(module_idx);
-        const pattern = cir_env.store.getPattern(pattern_idx);
+        const pattern = self.ctx.solved(module_idx).pattern(pattern_idx).data;
         return switch (pattern) {
             .list => true,
             .num_literal,
@@ -3419,7 +3419,7 @@ pub const Lowerer = struct {
         branch_value: CIR.Expr.Idx,
         else_expr: ast.ExprId,
     ) std.mem.Allocator.Error!ast.ExprId {
-        const pattern = self.ctx.env(module_idx).store.getPattern(match_pattern_idx);
+        const pattern = self.ctx.solved(module_idx).pattern(match_pattern_idx).data;
         return switch (pattern) {
             .list => |list| try self.lowerExactListPatternBranch(
                 module_idx,
@@ -3580,7 +3580,7 @@ pub const Lowerer = struct {
         else_expr: ast.ExprId,
     ) std.mem.Allocator.Error!ast.ExprId {
         const cir_env = self.ctx.env(module_idx);
-        const pattern = cir_env.store.getPattern(pattern_idx);
+        const pattern = self.ctx.solved(module_idx).pattern(pattern_idx).data;
         return switch (pattern) {
             .assign, .underscore => then_expr,
             .as => |as_pat| self.lowerPatternGuardExpr(
@@ -3982,7 +3982,7 @@ pub const Lowerer = struct {
             source_solved_var,
         );
         const effective_source_ty = self.requirePatternSourceTypeFact(module_idx, type_scope, pattern_idx);
-        const pattern = self.ctx.env(module_idx).store.getPattern(pattern_idx);
+        const pattern = self.ctx.solved(module_idx).pattern(pattern_idx).data;
         switch (pattern) {
             .assign => |assign| {
                 const bind: ast.TypedSymbol = .{
@@ -4182,13 +4182,13 @@ pub const Lowerer = struct {
         const cir_env = self.ctx.env(module_idx);
         const first_stmt = cir_env.store.getStatement(cir_stmts[start_idx]);
         if (first_stmt != .s_decl) return null;
-        if (!isLambdaExpr(cir_env.store.getExpr(first_stmt.s_decl.expr))) return null;
+        if (!isLambdaExpr(self.ctx.solved(module_idx).expr(first_stmt.s_decl.expr).data)) return null;
 
         var end_idx = start_idx;
         while (end_idx < cir_stmts.len) : (end_idx += 1) {
             const stmt = cir_env.store.getStatement(cir_stmts[end_idx]);
             if (stmt != .s_decl) break;
-            if (!isLambdaExpr(cir_env.store.getExpr(stmt.s_decl.expr))) break;
+            if (!isLambdaExpr(self.ctx.solved(module_idx).expr(stmt.s_decl.expr).data)) break;
         }
 
         var seed_scope: TypeCloneScope = undefined;
@@ -4221,13 +4221,13 @@ pub const Lowerer = struct {
         const cir_env = self.ctx.env(module_idx);
         const first_stmt = cir_env.store.getStatement(cir_stmts[start_idx]);
         if (first_stmt != .s_decl) return null;
-        if (!isLambdaExpr(cir_env.store.getExpr(first_stmt.s_decl.expr))) return null;
+        if (!isLambdaExpr(self.ctx.solved(module_idx).expr(first_stmt.s_decl.expr).data)) return null;
 
         var end_idx = start_idx;
         while (end_idx < cir_stmts.len) : (end_idx += 1) {
             const stmt = cir_env.store.getStatement(cir_stmts[end_idx]);
             if (stmt != .s_decl) break;
-            if (!isLambdaExpr(cir_env.store.getExpr(stmt.s_decl.expr))) break;
+            if (!isLambdaExpr(self.ctx.solved(module_idx).expr(stmt.s_decl.expr).data)) break;
         }
 
         const group = try self.allocator.create(LocalFnGroupState);
@@ -4603,7 +4603,7 @@ pub const Lowerer = struct {
         type_scope: *TypeCloneScope,
         pattern_idx: CIR.Pattern.Idx,
     ) std.mem.Allocator.Error!ast.PatId {
-        const pattern = self.ctx.env(module_idx).store.getPattern(pattern_idx);
+        const pattern = self.ctx.solved(module_idx).pattern(pattern_idx).data;
         const ty = try self.requirePatternTypeFact(module_idx, type_scope, pattern_idx);
         return switch (pattern) {
             .assign => |assign| self.program.store.addPat(.{
@@ -4663,7 +4663,7 @@ pub const Lowerer = struct {
         pattern_idx: CIR.Pattern.Idx,
         ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!ast.PatId {
-        const pattern = self.ctx.env(module_idx).store.getPattern(pattern_idx);
+        const pattern = self.ctx.solved(module_idx).pattern(pattern_idx).data;
         return switch (pattern) {
             .assign => |assign| try self.program.store.addPat(.{
                 .ty = ty,
@@ -4882,7 +4882,7 @@ pub const Lowerer = struct {
         method_name: base.Ident.Idx,
     ) RecordedMethodArgs {
         const cir_env = self.ctx.env(module_idx);
-        return switch (cir_env.store.getExpr(expr_idx)) {
+        return switch (self.ctx.solved(module_idx).expr(expr_idx).data) {
             .e_dot_access => |dot| blk: {
                 if (dot.args == null or !dot.field_name.eql(method_name)) {
                     debugPanic("monotype static dispatch invariant violated: unexpected dot-access dispatch shape", .{});
@@ -4901,7 +4901,7 @@ pub const Lowerer = struct {
                     .explicit_args = cir_env.store.sliceExpr(dispatch.args),
                 };
             },
-            .e_call => |call| switch (cir_env.store.getExpr(call.func)) {
+            .e_call => |call| switch (self.ctx.solved(module_idx).expr(call.func).data) {
                 .e_dot_access => |dot| blk: {
                     if (!dot.field_name.eql(method_name)) {
                         debugPanic("monotype static dispatch invariant violated: mismatched dot-access method name", .{});
@@ -5148,8 +5148,8 @@ pub const Lowerer = struct {
         try frames.append(self.allocator, arg_exprs);
 
         var root_func_expr_idx = func_expr_idx;
-        while (cir_env.store.getExpr(root_func_expr_idx) == .e_call) {
-            const nested_call = cir_env.store.getExpr(root_func_expr_idx).e_call;
+        while (self.ctx.solved(module_idx).expr(root_func_expr_idx).data == .e_call) {
+            const nested_call = self.ctx.solved(module_idx).expr(root_func_expr_idx).data.e_call;
             try frames.append(self.allocator, cir_env.store.sliceExpr(nested_call.args));
             root_func_expr_idx = nested_call.func;
         }
@@ -5263,7 +5263,7 @@ pub const Lowerer = struct {
         func_expr_idx: CIR.Expr.Idx,
         expected_fn_ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!?ast.ExprId {
-        const func_expr = self.ctx.env(module_idx).store.getExpr(func_expr_idx);
+        const func_expr = self.ctx.solved(module_idx).expr(func_expr_idx).data;
 
         switch (func_expr) {
             .e_lookup_local => |lookup| {
@@ -5659,8 +5659,7 @@ pub const Lowerer = struct {
         call_expr_idx: CIR.Expr.Idx,
         call: anytype,
     ) std.mem.Allocator.Error!?ast.ExprId {
-        const cir_env = self.ctx.env(module_idx);
-        return switch (cir_env.store.getExpr(call.func)) {
+        return switch (self.ctx.solved(module_idx).expr(call.func).data) {
             .e_dot_access => |dot| if (dot.args != null) blk: {
                 const lowered_call = try self.lowerRecordedMethodCall(
                     module_idx,
@@ -5884,12 +5883,11 @@ pub const Lowerer = struct {
     }
 
     fn callRootCalleeIsRuntimeError(self: *const Lowerer, module_idx: u32, func_expr_idx: CIR.Expr.Idx) bool {
-        const cir_env = self.ctx.env(module_idx);
         var current = func_expr_idx;
-        while (cir_env.store.getExpr(current) == .e_call) {
-            current = cir_env.store.getExpr(current).e_call.func;
+        while (self.ctx.solved(module_idx).expr(current).data == .e_call) {
+            current = self.ctx.solved(module_idx).expr(current).data.e_call.func;
         }
-        return switch (cir_env.store.getExpr(current)) {
+        return switch (self.ctx.solved(module_idx).expr(current).data) {
             .e_runtime_error, .e_crash => true,
             else => false,
         };
@@ -5903,7 +5901,7 @@ pub const Lowerer = struct {
         expr_idx: CIR.Expr.Idx,
         expected_ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!ast.ExprId {
-        const expr = self.ctx.env(module_idx).store.getExpr(expr_idx);
+        const expr = self.ctx.solved(module_idx).expr(expr_idx).data;
         return switch (expr) {
             .e_block => |block| try self.program.store.addExpr(.{
                 .ty = expected_ty,
@@ -6111,7 +6109,7 @@ pub const Lowerer = struct {
             type_scope,
             self.requireExprResultFact(module_idx, type_scope, expr_idx),
         );
-        const expr = self.ctx.env(module_idx).store.getExpr(expr_idx);
+        const expr = self.ctx.solved(module_idx).expr(expr_idx).data;
         try type_scope.facts.expr_type_facts.put(
             key,
             try self.normalizeDefaultNumericLiteralType(module_idx, expr_idx, expr, lowered),
@@ -6251,7 +6249,7 @@ pub const Lowerer = struct {
         try self.bindPatternSourceTypeFact(module_idx, type_scope, pattern_idx, effective_source_ty);
 
         const cir_env = self.ctx.env(module_idx);
-        const pattern = cir_env.store.getPattern(pattern_idx);
+        const pattern = self.ctx.solved(module_idx).pattern(pattern_idx).data;
         switch (pattern) {
             .assign,
             .underscore,
@@ -6400,7 +6398,7 @@ pub const Lowerer = struct {
         source_solved_var: Var,
         env: *BindingEnv,
     ) std.mem.Allocator.Error!void {
-        const pattern = self.ctx.env(module_idx).store.getPattern(pattern_idx);
+        const pattern = self.ctx.solved(module_idx).pattern(pattern_idx).data;
         switch (pattern) {
             .assign => |assign| {
                 const symbol = try self.ctx.getOrCreatePatternSymbol(module_idx, pattern_idx, assign.ident);
@@ -6622,7 +6620,7 @@ pub const Lowerer = struct {
         var iter = type_scope.facts.collected_expr_facts.keyIterator();
         while (iter.next()) |key_ptr| {
             const expr_idx = key_ptr.expr_idx;
-            const expr = self.ctx.env(module_idx).store.getExpr(expr_idx);
+            const expr = self.ctx.solved(module_idx).expr(expr_idx).data;
             switch (expr) {
                 .e_dot_access => |dot| {
                     if (dot.args == null) {
@@ -6752,7 +6750,7 @@ pub const Lowerer = struct {
                 )) |call_fact| {
                     break :blk call_fact.result_var;
                 }
-                switch (cir_env.store.getExpr(call.func)) {
+                switch (self.ctx.solved(module_idx).expr(call.func).data) {
                     .e_dot_access => |dot| {
                         if (dot.args != null) {
                             const call_fact = try self.collectRecordedMethodCallFact(
@@ -7070,7 +7068,7 @@ pub const Lowerer = struct {
         pattern_idx: CIR.Pattern.Idx,
     ) ?struct { tag_name: base.Ident.Idx, payload_pattern: CIR.Pattern.Idx } {
         const cir_env = self.ctx.env(module_idx);
-        const pattern = cir_env.store.getPattern(pattern_idx);
+        const pattern = self.ctx.solved(module_idx).pattern(pattern_idx).data;
         return switch (pattern) {
             .applied_tag => |tag| blk: {
                 const args = cir_env.store.slicePatterns(tag.args);
@@ -7624,7 +7622,7 @@ pub const Lowerer = struct {
         arg_ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!ast.TypedSymbol {
         _ = type_scope;
-        return switch (self.ctx.env(module_idx).store.getPattern(pattern_idx)) {
+        return switch (self.ctx.solved(module_idx).pattern(pattern_idx).data) {
             .assign => |assign| .{
                 .ty = arg_ty,
                 .symbol = try self.ctx.getOrCreatePatternSymbol(module_idx, pattern_idx, assign.ident),
@@ -7660,7 +7658,7 @@ pub const Lowerer = struct {
     }
 
     fn patternNeedsBindingDecls(self: *Lowerer, module_idx: u32, pattern_idx: CIR.Pattern.Idx) bool {
-        const pattern = self.ctx.env(module_idx).store.getPattern(pattern_idx);
+        const pattern = self.ctx.solved(module_idx).pattern(pattern_idx).data;
         return switch (pattern) {
             .assign, .underscore => false,
             .as => true,
@@ -7673,7 +7671,7 @@ pub const Lowerer = struct {
     }
 
     fn patternCanCollectStructuralBindings(self: *Lowerer, module_idx: u32, pattern_idx: CIR.Pattern.Idx) bool {
-        const pattern = self.ctx.env(module_idx).store.getPattern(pattern_idx);
+        const pattern = self.ctx.solved(module_idx).pattern(pattern_idx).data;
         return switch (pattern) {
             .assign, .as, .underscore, .record_destructure, .tuple => true,
             .nominal => |nominal| self.patternCanCollectStructuralBindings(module_idx, nominal.backing_pattern),
@@ -7702,7 +7700,7 @@ pub const Lowerer = struct {
         pattern_idx: CIR.Pattern.Idx,
         ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!ast.TypedSymbol {
-        const pattern = self.ctx.env(module_idx).store.getPattern(pattern_idx);
+        const pattern = self.ctx.solved(module_idx).pattern(pattern_idx).data;
         const symbol = switch (pattern) {
             .assign => |assign| try self.ctx.getOrCreatePatternSymbol(module_idx, pattern_idx, assign.ident),
             else => try self.ctx.addSyntheticSymbol(base.Ident.Idx.NONE),
@@ -7748,7 +7746,7 @@ pub const Lowerer = struct {
             source_solved_var,
         );
         const cir_env = self.ctx.env(module_idx);
-        const pattern = cir_env.store.getPattern(pattern_idx);
+        const pattern = self.ctx.solved(module_idx).pattern(pattern_idx).data;
         switch (pattern) {
             .assign => {
                 try self.putTypedBinding(env, .{
@@ -7962,7 +7960,7 @@ pub const Lowerer = struct {
             source_solved_var,
         );
         const cir_env = self.ctx.env(module_idx);
-        const pattern = cir_env.store.getPattern(pattern_idx);
+        const pattern = self.ctx.solved(module_idx).pattern(pattern_idx).data;
         switch (pattern) {
             .assign => try self.appendPatternBindingOrReassign(module_idx, pattern_idx, source_ty, source_expr, env, lowered),
             .as => |as_pat| {
@@ -8120,7 +8118,7 @@ pub const Lowerer = struct {
         );
         const effective_source_ty = self.requirePatternSourceTypeFact(module_idx, type_scope, pattern_idx);
         const cir_env = self.ctx.env(module_idx);
-        const pattern = cir_env.store.getPattern(pattern_idx);
+        const pattern = self.ctx.solved(module_idx).pattern(pattern_idx).data;
 
         if (self.patternNeedsBindingDecls(module_idx, pattern_idx)) {
             return self.lowerStructuralPatWithType(module_idx, type_scope, pattern_idx, effective_source_ty, source_solved_var, env, decls);
@@ -8461,7 +8459,7 @@ pub const Lowerer = struct {
         pattern_idx: CIR.Pattern.Idx,
         env: *BindingEnv,
     ) std.mem.Allocator.Error!void {
-        const pattern = self.ctx.env(module_idx).store.getPattern(pattern_idx);
+        const pattern = self.ctx.solved(module_idx).pattern(pattern_idx).data;
         switch (pattern) {
             .assign => |assign| {
                 const symbol = try self.ctx.getOrCreatePatternSymbol(module_idx, pattern_idx, assign.ident);
@@ -8521,7 +8519,7 @@ pub const Lowerer = struct {
             source_ty,
             source_solved_var,
         );
-        const pattern = self.ctx.env(module_idx).store.getPattern(pattern_idx);
+        const pattern = self.ctx.solved(module_idx).pattern(pattern_idx).data;
         switch (pattern) {
             .assign => |assign| {
                 const symbol = try self.ctx.getOrCreatePatternSymbol(module_idx, pattern_idx, assign.ident);
@@ -8625,7 +8623,7 @@ pub const Lowerer = struct {
         type_scope: *TypeCloneScope,
         pattern_idx: CIR.Pattern.Idx,
     ) std.mem.Allocator.Error!ast.TypedSymbol {
-        const pattern = self.ctx.env(module_idx).store.getPattern(pattern_idx);
+        const pattern = self.ctx.solved(module_idx).pattern(pattern_idx).data;
         return switch (pattern) {
             .assign => |assign| .{
                 .ty = try self.requirePatternTypeFact(module_idx, type_scope, pattern_idx),
@@ -8644,7 +8642,7 @@ pub const Lowerer = struct {
         module_idx: u32,
         pattern_idx: CIR.Pattern.Idx,
     ) std.mem.Allocator.Error!symbol_mod.Symbol {
-        const pattern = self.ctx.env(module_idx).store.getPattern(pattern_idx);
+        const pattern = self.ctx.solved(module_idx).pattern(pattern_idx).data;
         return switch (pattern) {
             .assign => |assign| try self.ctx.getOrCreatePatternSymbol(module_idx, pattern_idx, assign.ident),
             .as => |as_pat| try self.ctx.getOrCreatePatternSymbol(module_idx, pattern_idx, as_pat.ident),
@@ -8660,7 +8658,7 @@ pub const Lowerer = struct {
         pattern_idx: CIR.Pattern.Idx,
         ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!ast.TypedSymbol {
-        const pattern = self.ctx.env(module_idx).store.getPattern(pattern_idx);
+        const pattern = self.ctx.solved(module_idx).pattern(pattern_idx).data;
         return switch (pattern) {
             .assign => |assign| .{
                 .ty = ty,
@@ -9028,7 +9026,7 @@ pub const Lowerer = struct {
         env: BindingEnv,
         expr_idx: CIR.Expr.Idx,
     ) ?Var {
-        const expr = self.ctx.env(module_idx).store.getExpr(expr_idx);
+        const expr = self.ctx.solved(module_idx).expr(expr_idx).data;
         return switch (expr) {
             .e_lookup_local => |lookup| if (env.get(.{
                 .module_idx = module_idx,
@@ -9551,7 +9549,7 @@ pub const Lowerer = struct {
         method_name: base.Ident.Idx,
     ) DispatchReceiver {
         const source_env = self.ctx.env(source_module_idx);
-        const expr = source_env.store.getExpr(expr_idx);
+        const expr = self.ctx.solved(source_module_idx).expr(expr_idx).data;
         return switch (expr) {
             .e_dot_access => |dot| self.resolveDispatchReceiverExprVar(
                 source_module_idx,
