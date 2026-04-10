@@ -640,7 +640,7 @@ pub const Lowerer = struct {
             allocator: std.mem.Allocator,
             module: Ctx.Module,
         ) std.mem.Allocator.Error!void {
-            try self.initCloneAllFromParent(allocator, module, null);
+            try self.initCloneAllFromParent(allocator, module, null, false);
         }
 
         fn initCloneAllFromParent(
@@ -648,6 +648,7 @@ pub const Lowerer = struct {
             allocator: std.mem.Allocator,
             module: Ctx.Module,
             parent: ?*const TypeCloneScope,
+            inherit_specialization_state: bool,
         ) std.mem.Allocator.Error!void {
             self.allocator = allocator;
             if (parent) |scope| {
@@ -664,6 +665,7 @@ pub const Lowerer = struct {
 
             self.initWithRankBehavior(.ignore_rank);
             if (parent) |scope| {
+                if (!inherit_specialization_state) return;
                 var iter = scope.source_var_map.iterator();
                 while (iter.next()) |entry| {
                     try self.source_var_map.put(entry.key_ptr.*, entry.value_ptr.*);
@@ -2509,13 +2511,11 @@ pub const Lowerer = struct {
         try self.recordExprSourceFunctionFact(module_idx, type_scope, env, chain.func_expr_idx);
         const source_fact = self.lookupExprSourceFunctionFact(module_idx, type_scope, chain.func_expr_idx) orelse return null;
         const source_func_var = source_fact.seed_var;
-
         try self.collectExprFacts(module_idx, type_scope, env, chain.func_expr_idx);
 
         var call_scope: TypeCloneScope = undefined;
-        try call_scope.initCloneAllFromParent(self.allocator, self.ctx.mirModule(module_idx), type_scope);
+        try call_scope.initCloneAllFromParent(self.allocator, self.ctx.mirModule(module_idx), type_scope, false);
         defer call_scope.deinit();
-
         const cloned_func_var = try call_scope.instantiator.instantiateVar(source_func_var);
         const call_result_var = explicit_result_var orelse
             try self.scopedExprResultVar(module_idx, type_scope, env, call_expr_idx);
@@ -2570,7 +2570,7 @@ pub const Lowerer = struct {
         const source_fn_var = try self.copyTopLevelDefExprVarToScope(type_scope, target.module_idx, target.def_idx);
 
         var call_scope: TypeCloneScope = undefined;
-        try call_scope.initCloneAllFromParent(self.allocator, self.ctx.mirModule(module_idx), type_scope);
+        try call_scope.initCloneAllFromParent(self.allocator, self.ctx.mirModule(module_idx), type_scope, false);
         defer call_scope.deinit();
 
         const cloned_func_var = try call_scope.instantiator.instantiateVar(source_fn_var);
@@ -3448,7 +3448,7 @@ pub const Lowerer = struct {
     ) std.mem.Allocator.Error!LoweredClosure {
         const mir_module = self.ctx.mirModule(module_idx);
         var closure_scope: TypeCloneScope = undefined;
-        try closure_scope.initCloneAllFromParent(self.allocator, mir_module, type_scope);
+        try closure_scope.initCloneAllFromParent(self.allocator, mir_module, type_scope, true);
         defer closure_scope.deinit();
         const scope = &closure_scope;
         const arg_patterns = mir_module.slicePatterns(args_span);
@@ -5473,7 +5473,7 @@ pub const Lowerer = struct {
         );
 
         var call_scope: TypeCloneScope = undefined;
-        try call_scope.initCloneAllFromParent(self.allocator, mir_module, type_scope);
+        try call_scope.initCloneAllFromParent(self.allocator, mir_module, type_scope, false);
         defer call_scope.deinit();
 
         const scoped_site_fn_var = try self.scopeVar(&call_scope, module_idx, site_requirement.fn_var);
@@ -7200,7 +7200,7 @@ pub const Lowerer = struct {
                 const callee_var = self.requireExprResultFact(module_idx, type_scope, call.func);
 
                 var call_scope: TypeCloneScope = undefined;
-                try call_scope.initCloneAllFromParent(self.allocator, self.ctx.mirModule(module_idx), type_scope);
+                try call_scope.initCloneAllFromParent(self.allocator, self.ctx.mirModule(module_idx), type_scope, false);
                 defer call_scope.deinit();
 
                 const cloned_func_var = try call_scope.instantiator.instantiateVar(callee_var);
