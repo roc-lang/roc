@@ -14,7 +14,7 @@ test "MIR exposes solved vars on defs exprs and patterns" {
     defer test_env.deinit();
 
     const source_modules = [_]MIR.Modules.SourceModule{
-        .{ .checked = &test_env.checker },
+        test_env.takePublishedSourceModule(),
         .{ .precompiled = test_env.builtin_module.env },
     };
     var modules = try MIR.Modules.publish(std.testing.allocator, &source_modules);
@@ -49,7 +49,7 @@ test "published MIR survives checker teardown" {
     );
 
     const source_modules = [_]MIR.Modules.SourceModule{
-        .{ .checked = &test_env.checker },
+        test_env.takePublishedSourceModule(),
         .{ .precompiled = test_env.builtin_module.env },
     };
     var modules = try MIR.Modules.publish(std.testing.allocator, &source_modules);

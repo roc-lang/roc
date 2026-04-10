@@ -57,6 +57,7 @@ pub const CheckedModule = struct {
     checker: *Check,
     imported_envs: []*const ModuleEnv,
     owned_source: ?[]u8 = null,
+    published_owns_module_env: bool = false,
     parse_ns: u64 = 0,
     canonicalize_ns: u64 = 0,
     typecheck_ns: u64 = 0,
@@ -67,13 +68,14 @@ pub const ParsedResources = struct {
     parse_ast: *parse.AST,
     can: *Can,
     checker: *Check,
-    mir_modules: ?check.MIR.Modules = null,
+    mir_modules: check.MIR.Modules,
     expr_idx: CIR.Expr.Idx,
     builtin_module: builtin_loading.LoadedModule,
     builtin_indices: CIR.BuiltinIndices,
     imported_envs: []*const ModuleEnv,
     extra_modules: []CheckedModule = &.{},
     owned_source: ?[]u8 = null,
+    published_owns_module_env: bool = false,
     parse_ns: u64 = 0,
     canonicalize_ns: u64 = 0,
     typecheck_ns: u64 = 0,
@@ -168,8 +170,6 @@ pub fn compileInspectedProgram(
 }
 
 pub fn cleanupParseAndCanonical(allocator: std.mem.Allocator, resources: ParsedResources) void {
-    var resources_mut = resources;
-    if (resources_mut.mir_modules) |*mir_modules| mir_modules.deinit();
     for (resources.extra_modules) |extra| {
         cleanupCheckedModule(allocator, extra);
     }
@@ -177,14 +177,18 @@ pub fn cleanupParseAndCanonical(allocator: std.mem.Allocator, resources: ParsedR
     resources.checker.deinit();
     resources.can.deinit();
     resources.parse_ast.deinit();
-    resources.module_env.deinit();
     allocator.free(resources.imported_envs);
+    var mir_modules = resources.mir_modules;
+    mir_modules.deinit();
     var builtin_module = resources.builtin_module;
     builtin_module.deinit();
-    if (resources.owned_source) |source| allocator.free(source);
+    if (!resources.published_owns_module_env) {
+        resources.module_env.deinit();
+        if (resources.owned_source) |source| allocator.free(source);
+        allocator.destroy(resources.module_env);
+    }
     allocator.destroy(resources.checker);
     allocator.destroy(resources.can);
-    allocator.destroy(resources.module_env);
 }
 
 pub fn lowerParsedExprToLir(
@@ -305,10 +309,7 @@ fn lowerToLir(
         all_module_envs[i + 2] = extra.module_env;
     }
 
-    var mir_modules = resources.mir_modules orelse return error.MirNotPublished;
-    resources.mir_modules = null;
-    errdefer mir_modules.deinit();
-    var mono_lowerer = try monotype.Lower.Lowerer.init(allocator, mir_modules, 1);
+    var mono_lowerer = try monotype.Lower.Lowerer.init(allocator, &resources.mir_modules, 1);
     defer mono_lowerer.deinit();
     const mono = try mono_lowerer.run(0);
     debugValidateMonotypeTypes(&mono.types);
@@ -387,7 +388,7 @@ fn parseAndCanonicalizeProgramWrapped(
         };
     }
 
-    const main_checked = try parseCheckModule(
+    var main_checked = try parseCheckModule(
         allocator,
         "Test",
         source_kind,
@@ -417,16 +418,28 @@ fn parseAndCanonicalizeProgramWrapped(
 
     var mir_source_modules = try allocator.alloc(check.MIR.Modules.SourceModule, extra_modules.items.len + 2);
     defer allocator.free(mir_source_modules);
-    mir_source_modules[0] = .{ .checked = main_checked.checker };
+    mir_source_modules[0] = .{ .owned_checked = .{
+        .env = main_checked.module_env,
+        .owned_source = main_checked.owned_source,
+    } };
     mir_source_modules[1] = .{ .precompiled = builtin_module.env };
     for (extra_modules.items, 0..) |extra, i| {
-        mir_source_modules[i + 2] = .{ .checked = extra.checker };
+        mir_source_modules[i + 2] = .{ .owned_checked = .{
+            .env = extra.module_env,
+            .owned_source = extra.owned_source,
+        } };
     }
 
     const mir_modules = try check.MIR.Modules.publish(allocator, mir_source_modules);
     errdefer {
         var mir_modules_mut = mir_modules;
         mir_modules_mut.deinit();
+    }
+    main_checked.published_owns_module_env = true;
+    main_checked.owned_source = null;
+    for (extra_modules.items) |*extra| {
+        extra.published_owns_module_env = true;
+        extra.owned_source = null;
     }
 
     return .{
@@ -440,7 +453,8 @@ fn parseAndCanonicalizeProgramWrapped(
         .builtin_indices = builtin_indices,
         .imported_envs = main_checked.imported_envs,
         .extra_modules = try extra_modules.toOwnedSlice(allocator),
-        .owned_source = main_checked.owned_source,
+        .owned_source = null,
+        .published_owns_module_env = true,
         .parse_ns = main_checked.parse_ns,
         .canonicalize_ns = main_checked.canonicalize_ns,
         .typecheck_ns = main_checked.typecheck_ns,
@@ -600,12 +614,14 @@ fn cleanupCheckedModule(allocator: std.mem.Allocator, module: CheckedModule) voi
     module.checker.deinit();
     module.can.deinit();
     module.parse_ast.deinit();
-    module.module_env.deinit();
     allocator.free(module.imported_envs);
-    if (module.owned_source) |owned_source| allocator.free(owned_source);
+    if (!module.published_owns_module_env) {
+        module.module_env.deinit();
+        if (module.owned_source) |owned_source| allocator.free(owned_source);
+        allocator.destroy(module.module_env);
+    }
     allocator.destroy(module.checker);
     allocator.destroy(module.can);
-    allocator.destroy(module.module_env);
 }
 
 fn debugValidateMonotypeTypes(types_store: *const monotype.Type.Store) void {

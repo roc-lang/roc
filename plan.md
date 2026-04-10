@@ -1,272 +1,494 @@
-## Checker-To-Monotype MIR Plan
+## Zero-Copy Typed CIR Boundary Plan
 
-Status: complete
+Status: in_progress
+
+Progress so far:
+
+- `src/check/mir.zig` no longer stores a duplicate published tree; it now wraps real `ModuleEnv` state directly.
+- publication is zero-copy for checked modules in the active eval/test pipeline
+- monotype now borrows the published boundary instead of owning and destroying it before later stages
+- full `test-eval`, `test-monotype`, `test-cor-pipeline`, and `test-eval-host-effects` are green on this slice
+- the remaining unfinished work is the monotype-side specialization refactor:
+  - published source typing state is still mutable from monotype through `typeStoreMut()`
+  - specialization data is still not fully monotype-owned
+
+## Goal
+
+Replace the current published-MIR boundary with the long-term ideal design:
+
+- the checker publishes one owned typed CIR artifact directly
+- publication is zero-copy ownership transfer, not clone/wrap/adapter construction
+- typed CIR is the only source of source-level solved typing truth after checking
+- monotype consumes typed CIR directly
+- monotype specialization state lives entirely on the monotype side
+- no duplicated MIR tree exists
+- no checker-style solved type store is mutated by monotype
+- all relevant tests pass afterward
+
+This plan is explicitly about correctness and compiler runtime performance, not implementation convenience.
+If a choice trades long-term architecture or performance for short-term ease, reject it.
+
+When in doubt, use `~/code/cor` as the architectural guide:
+
+- `cor` publishes one explicit solved typed tree before monotype
+- monotype lowers from that tree
+- specialization and later executable lowering are downstream concerns
+
+Any intentional divergence from `cor` must be justified at the end as the long-term ideal design here, not as a short-term expedient.
+
+## Why This Plan Exists
+
+Current state is better than the old checker-internal leakage, but still not ideal:
+
+- we still publish a separate `MIR` artifact in `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/check/mir.zig`
+- that artifact still owns a cloned checker `types.Store`
+- monotype still treats that solved checker-style store as part of its input
+- monotype still performs specialization by cloning/instantiating solved vars rather than consuming a pure source boundary plus monotype-owned specialization artifacts
+
+That means we are still paying for:
+
+- an extra publication structure
+- a clone of checker solved state
+- conceptual duplication between typed CIR and MIR
+- a muddled boundary where source typing facts and monotype specialization facts are not cleanly separated
+
+The ideal design is stricter and simpler:
+
+- checked typed CIR is published once
+- ownership transfers out of the checker once
+- monotype never mutates published typed CIR
+- specialization results are stored separately as monotype artifacts keyed by specialization
+
+## End State
+
+When this plan is complete:
+
+- `CIR` nodes are the published typed boundary; there is no second duplicated MIR tree
+- every published expr/pattern/def/binding node carries or can directly index its settled source type facts
+- the checker publishes that typed CIR by moving ownership, not cloning
+- the checker has no remaining responsibility for that published artifact after publication
+- monotype reads only published typed CIR and monotype-owned caches/artifacts
+- monotype does not call any checker-style `typeStoreMut()` on boundary data
+- monotype specialization artifacts are keyed by specialization and source identity, not by mutating the published source tree
+- old MIR naming, files, helpers, tests, and comments are deleted or renamed away unless they truly remain as zero-copy publication helpers with no duplicate storage
+
+## Non-Negotiable Invariants
+
+These invariants must hold at every phase, and the final state must make them obvious in code:
+
+1. Published typed CIR is immutable.
+2. Published typed CIR is owned.
+3. Publication is a one-way boundary: checker finishes, publishes, and does not keep using the published data as checker working state.
+4. Published typed CIR contains only source-level solved facts, not monotype specialization results.
+5. Monotype specialization state is monotype-owned only.
+6. A source node has one source solved type identity, but may have many monotype specializations.
+7. Later stages consume explicit earlier facts only.
+8. No clones exist merely to defend against our own boundary bugs once ownership transfer is in place.
+9. No debug-vs-release architectural split is allowed.
+10. No fallback reconstruction of missing source typing facts is allowed anywhere in monotype or later stages.
+
+## Important Architectural Clarifications
+
+### Typed CIR Is Not Monomorphic
+
+Typed CIR is the published solved source program.
+It is not already monomorphic and must not pretend to be.
+
+That means:
+
+- source node idx -> source solved checker var/type fact
+- `(specialization key, source node idx)` -> monotype instance
+
+The published source tree stores the first thing.
+Monotype-owned specialization artifacts store the second thing.
+
+### Lambda Sets Are Not Part Of This Boundary
+
+Lambda sets appear later, after monotype, just as they do in `cor`.
+They are not a blocker for publishing typed CIR directly.
+
+So this plan must not delay the typed-CIR transition waiting on lambda-set design.
+
+### Zero-Copy Means Ownership Transfer, Not Borrowing
+
+Acceptable:
+
+- checker constructs data
+- checker moves ownership of finalized typed CIR and associated solved type data into the published artifact
+- checker stops using it
+
+Unacceptable:
+
+- checker publishes borrowed views into still-owned checker storage
+- debug-only frozen-bit schemes replacing ownership transfer
+- release-only zero-copy with debug-only clone
+
+## Source Of Truth Layout After Transition
+
+There should be exactly three memory domains:
+
+1. Published typed CIR boundary.
+   - source tree
+   - source solved types
+   - source names/imports/method facts
+   - source evaluation-order facts
+   - immutable
+
+2. Monotype global artifacts.
+   - monotype type interner
+   - specialization table
+   - proc-spec table
+   - frozen monotype bodies
+   - global work queues and caches
+
+3. Per-specialization monotype scratch.
+   - temporary arrays/maps keyed by source node id within one specialization
+   - discarded after that specialization is frozen
+
+Published typed CIR must never become a fourth-place dumping ground for monotype specialization state.
+
+## Things To Watch Out For
+
+These are the main ways this migration can go wrong:
+
+- Accidentally keeping both typed CIR and duplicated MIR alive.
+- Letting monotype continue to mutate a checker-style solved store after the new boundary lands.
+- Smuggling monotype specialization results back onto source nodes.
+- Preserving old APIs under new names.
+- Keeping clone-based publication “temporarily” after ownership transfer is already feasible.
+- Reintroducing debug-only architecture differences.
+- Mixing reporting-only checker state with publishable boundary state in a way that blocks ownership transfer.
+- Forgetting cross-module imported-var handling; imports must be explicit published facts, not a reason to keep checker state alive.
+- Losing source regions/spans needed for diagnostics while moving ownership.
+- Treating local-function specialization facts as source-level truth instead of specialization artifacts.
+
+## Phase 0: Freeze Terminology And Success Criteria
 
 Goal:
-- Fully replace the current checker -> monotype boundary with MIR, where MIR means `Monomorphic IR`.
-- The checker must produce one explicit typed MIR directly.
-- Monotype must consume MIR directly.
-- The old raw CIR + solved-var + wrapper/adapter boundary must be deleted completely.
-- When this plan is complete, MIR must be the only source of truth at this stage boundary.
-- All relevant tests must pass afterward.
 
-Design bar:
-- Always aim for the long-term ideal and perfect design for correctness and compiler runtime performance.
-- Implementation time does not matter.
-- No workarounds, no fallbacks, no heuristics, no shortcuts.
-- Later stages must consume explicit earlier facts.
-- When in doubt, use `~/code/cor` as the architectural guide.
-- If any implementation intentionally differs from `cor`, that difference must be justified as the long-term ideal design here, not a short-term expedient, and that justification must be reported at the end.
+- Stop pretending the duplicate published tree is inherently “MIR” in the monomorphic sense.
+- Define the target architecture in code and docs before touching storage again.
 
-Reference model:
-- `cor` publishes an explicitly typed solved tree before monotype lowering:
-  - `/Users/rtfeldman/code/cor/experiments/lss/monotype/lower.ml`
-- Roc should end up with the same architectural shape:
-  - one typed solved boundary artifact
-  - monotype as pure consumption of that artifact
-  - no parallel raw-tree-plus-side-table contract left alive
+Implementation steps:
 
-Completed end state:
-- Roc now has an explicit MIR boundary:
+- Audit and enumerate every place where `MIR` currently means “published solved boundary”.
+- Decide the final public term:
+  - preferred: published typed CIR
+  - acceptable only if it is not misleading: keep `MIR` as a thin publication module name with no duplicate tree inside it
+- Update comments in:
   - `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/check/mir.zig`
-- MIR publication is an explicit checker-side phase boundary, not a monotype-side wrapper construction step.
-- Monotype consumes published MIR directly.
-- The old raw checker boundary contract is gone from monotype.
-- MIR is the only checker-owned source of truth at the checker -> monotype boundary.
-
-Success condition:
-- The checker directly constructs MIR.
-- MIR nodes directly carry the facts monotype consumes.
-- Monotype input is MIR only.
-- `src/check/mir.zig` is the only checker -> monotype boundary module left.
-- The old checker-side raw CIR boundary contract is deleted from monotype.
-- Any side tables or helper APIs whose only purpose was to bridge the old boundary are deleted.
-- A fresh audit should find no trace of the old boundary model.
-
-Testing rule:
-- Every phase below must add or update targeted tests proving that the phase actually worked.
-- Existing suites staying green is necessary but not sufficient.
-- The final state must pass all relevant regression suites.
-
-## Phase 1: Define MIR As A Real Checker-Owned Data Structure
-
-Goal:
-- Stop treating typed solved nodes as a wrapper concept.
-- Introduce MIR as a first-class data structure owned by the checker.
-
-Implementation steps:
-- Introduce MIR node types in `src/check/` for the checker -> monotype boundary.
-- MIR must directly carry settled monotype-ready facts on the nodes that semantically own them.
-- MIR expr nodes must carry their settled type.
-- MIR pattern nodes must carry their settled type.
-- MIR defs/bindings/functions must carry their owned type facts directly.
-- MIR must be immutable once published.
-- MIR must be named consistently as MIR throughout the code base.
+  - `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/lower.zig`
+  - `/Users/rtfeldman/.codex/worktrees/1d55/roc/plan.md`
+  so they state the real target:
+  - one published typed CIR boundary
+  - monotype specialization state lives elsewhere
 
 Required tests:
-- Construction tests for MIR publication from checked programs.
-- Targeted tests for:
-  - simple values
-  - functions
-  - closures with captures
-  - higher-order functions
-  - boxed erased lambdas
-  - zero-arg functions
+
+- none specific beyond keeping the tree green
 
 Completion criteria:
-- MIR exists as a real checker-owned boundary data structure.
-- MIR is not just a wrapper API over raw CIR.
 
-Progress:
-- Replaced the old `SolvedCIR` naming with MIR in live code.
-- Added `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/check/mir.zig`.
-- Added targeted MIR coverage in `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/check/test/mir_test.zig`.
-- Monotype and eval helpers now consume `check.MIR`.
-- Ordinary monotype lowering no longer reaches directly through MIR into canonicalize `NodeStore`; span/branch/field reads now go through MIR methods instead.
-- MIR now owns copied node/index/region/branch/field boundary data instead of forwarding those reads into canonicalize storage at monotype consumption time.
-- MIR now also owns cloned type/name/string/import/method/evaluation-order boundary facts rather than borrowing them from `ModuleEnv`.
-- MIR publication now happens through `check.MIR.Modules.publish(...)`, not `Modules.init(...)`.
+- the intended end state is described consistently
+- comments no longer imply the published source tree is already monomorphic
 
-## Phase 2: Make The Checker Produce MIR Directly
+## Phase 1: Define The Published Typed-CIR Ownership Boundary
 
 Goal:
-- Move from “wrap raw CIR plus solved vars” to “publish MIR directly”.
+
+- Make it explicit which data must transfer out of the checker and which data must remain checker-internal.
 
 Implementation steps:
-- Identify the checker finalization point where solved facts are complete.
-- Construct MIR directly at that point.
-- Publish MIR from the checker as the explicit boundary artifact.
-- Do not route MIR construction through `ModuleEnv.varFrom(...)` lookups at consumption time.
-- Do not leave raw-CIR reopening as part of the boundary contract.
-- Ensure all type facts monotype needs are published into MIR exactly once by the checker.
+
+- Split checker state conceptually into:
+  - publishable typed-CIR boundary data
+  - checker-only reporting/workspace data
+- For each field currently cloned into `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/check/mir.zig`, classify it as one of:
+  - must move to published typed CIR
+  - must stay checker-only
+  - should be recomputed nowhere and therefore must move
+- Build a table in code/comments for:
+  - CIR node storage
+  - solved `types.Store`
+  - string/ident stores
+  - import resolution
+  - method lookup ids
+  - evaluation order
+  - exposed items
+  - any module indexing structures
+- Identify exactly what diagnostics still need after publication.
+- Refuse to keep publishable state checker-owned just because it is convenient.
 
 Required tests:
-- Checker-focused publication tests proving MIR contains the settled facts without later reconstruction.
-- Regression tests for polymorphic and higher-order cases where late reconstruction previously tended to creep in.
+
+- targeted ownership-boundary test additions proving published typed CIR survives checker teardown
+- tests that prove reporting-only state can still be torn down independently after publication
 
 Completion criteria:
-- The checker directly publishes MIR.
-- MIR publication timing is checker-owned and final.
-- The boundary contract is MIR, not raw CIR plus solved-var graph.
 
-Progress:
-- `check.MIR.Modules.publish(...)` now publishes MIR from explicit source modules instead of letting monotype construct MIR from raw `ModuleEnv` arrays.
-- The eval/lowering pipeline now publishes MIR immediately after checking and before monotype lowering begins.
-- MIR publication now performs the final global `resolveImports(...)` pass before freezing boundary facts, so MIR import indices match the actual lowering order.
-- Added MIR teardown coverage in `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/check/test/mir_test.zig` proving published MIR remains usable after checker teardown.
+- every currently cloned field has a planned move/retain/delete outcome
+- no “we’ll see later” ownership ambiguity remains
 
-## Phase 3: Move Monotype To Pure MIR Consumption
+## Phase 2: Make Publication A Real Move, Not A Clone
 
 Goal:
-- Make monotype structurally match `cor`: it consumes MIR directly and does not translate boundary facts itself.
+
+- Replace clone-based publication with zero-copy transfer of finalized checker output.
 
 Implementation steps:
-- Rewrite monotype entrypoints to accept MIR as their only checker-owned input.
-- Replace any remaining wrapper-based boundary reads with MIR node reads.
-- Replace any remaining side lookups for checker-owned type facts with direct MIR field access.
-- Keep only builder-local monotype state that is truly stage-internal and not a second source of truth.
-- Make MIR the obvious and exclusive source for expr/pattern/binding/function/call boundary facts.
+
+- Redesign the publication API so checker finalization produces:
+  - one owned typed-CIR artifact
+  - one owned solved type store paired with it
+- Remove clone helpers from the boundary path for:
+  - `types.Store`
+  - string/ident interners
+  - evaluation order
+  - exposed items
+  - any remaining boundary-owned vectors or tables
+- Make publication consume or move the finalized checker module state instead of borrowing it.
+- After move, checker must not retain usable aliases to the transferred data.
+- If necessary, split checker finalization into:
+  - finish solving
+  - publish/move typed CIR
+  - discard checker-only temporary state
 
 Required tests:
-- Targeted tests that would fail if monotype still reopened raw checker data or depended on boundary adapters.
-- End-to-end tests covering:
+
+- teardown tests proving published typed CIR remains valid after full checker teardown
+- tests proving there is no clone-based duplicate copy by checking pointer/ownership relationships where practical
+- regression tests for imports, methods, and module order across publication
+
+Completion criteria:
+
+- clone-based publication path is gone from the boundary
+- ownership is transferred, not copied
+- checker teardown no longer threatens published typed CIR lifetime
+
+## Phase 3: Stop Monotype From Mutating Published Source Typing State
+
+Goal:
+
+- Remove the remaining architectural blocker to a truly immutable published source boundary.
+
+Implementation steps:
+
+- Audit every `typeStoreMut()` and checker-style var unification path reached from `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/lower.zig`.
+- Categorize them into:
+  - source-type lookup that should become read-only
+  - specialization bookkeeping that should become monotype-local
+  - import copying that should become explicit published facts or monotype-owned instantiation state
+- Eliminate monotype mutation of published solved checker vars.
+- Replace `TypeCloneScope` responsibilities that currently depend on mutating checker-style solved state with monotype-owned specialization data:
+  - source var -> specialized mono type mapping
+  - source node -> specialized mono type mapping
+  - proc specialization key -> proc spec id
+  - local-fn specialization mapping
+- Make source type instantiation read from published typed CIR and write only monotype-owned artifacts.
+
+Required tests:
+
+- targeted tests for polymorphic top-level functions
+- targeted tests for local polymorphic functions
+- tests for imported polymorphic functions across modules
+- tests for closures and higher-order calls where specialization multiplies source nodes
+
+Completion criteria:
+
+- monotype no longer mutates published source solved type state
+- published typed CIR is actually immutable in practice, not just by convention
+
+## Phase 4: Define Explicit Monotype Specialization Storage
+
+Goal:
+
+- Give specialization its own first-class storage model so it no longer parasitizes checker-style solved state.
+
+Implementation steps:
+
+- Introduce explicit monotype-owned data structures for:
+  - `SpecKey`
+  - `ProcSpec`
+  - frozen monotype bodies
+  - per-specialization expr type arrays
+  - per-specialization pattern type arrays
+  - symbol binding/state arrays
+  - pending work queues for newly discovered specializations
+- Ensure the specialization key includes every fact that can change generated monotype code.
+- Keep per-specialization source-node mappings dense and source-id keyed, not hash-map-heavy, whenever ids are dense.
+- Ensure a single source proc can yield many proc specializations without mutating the published source tree.
+- Move any current specialization-time semantic fact storage out of checker-style structures into these monotype-owned artifacts.
+
+Required tests:
+
+- targeted tests exercising multiple specializations of the same source proc
+- tests proving two specializations of one source node produce distinct monotype results without altering source facts
+- performance-sensitive tests or assertions around dense node-indexed storage shape where practical
+
+Completion criteria:
+
+- specialization storage is explicit and monotype-owned
+- no checker-style mutation remains necessary for specialization
+
+## Phase 5: Make Monotype A Pure Consumer Of Published Typed CIR
+
+Goal:
+
+- Align Roc’s checker -> monotype boundary with `cor` in substance.
+
+Implementation steps:
+
+- Rewrite monotype entrypoints so their source-level input is only:
+  - published typed CIR
+  - monotype-owned specialization state
+- Eliminate any remaining dependence on:
+  - duplicated MIR node structures
+  - wrapper-only node readers
+  - checker-owned env pointers
+  - clone-time translation caches whose only purpose was to compensate for the old boundary
+- Ensure every source-level fact monotype needs is read directly from published typed CIR.
+- Ensure every specialization-level fact monotype needs is read directly from monotype-owned artifacts.
+
+Required tests:
+
+- targeted tests that fail if monotype reaches outside published typed CIR for source facts
+- end-to-end tests covering:
   - nested closures
-  - polymorphic call sites
-  - pattern-heavy code
+  - higher-order polymorphism
   - boxed lambdas
-  - hosted functions
+  - patterns with many child nodes
+  - multi-module import specialization
 
 Completion criteria:
-- Monotype input is MIR only.
-- Monotype no longer depends on wrapper translation or raw checker boundary APIs.
 
-Progress:
-- The live monotype consumer no longer contains direct `ctx.env(...).store`, `expr.env`, or `cir_env.store` reads.
-- Type-cloning entrypoints in monotype now accept MIR modules directly rather than raw checker env pointers.
-- Monotype no longer reaches into raw checker `ModuleEnv` directly for solved-type/text/import services either; those now flow through MIR methods.
-- Monotype and MIR also no longer tunnel a whole `ModuleEnv` through checker unification helpers just to get an allocator, ident store, or recursion-order query.
-- Monotype lowering now consumes MIR that was already published earlier in the pipeline; lowering no longer constructs MIR or reruns import-resolution side effects before monotype.
+- monotype has a clean two-input model:
+  - published typed CIR
+  - monotype-owned specialization artifacts
 
-## Phase 4: Delete The Wrapper Layer And Old Boundary APIs
+## Phase 6: Delete The Duplicate MIR Structure Entirely
 
 Goal:
-- Remove all transitional boundary machinery once checker-owned MIR is live.
+
+- Remove the duplicate-tree idea completely.
 
 Implementation steps:
-- Delete or radically replace:
-  - `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/check/mir.zig`
-  if it is still acting as an adapter over canonicalize storage rather than as the owned MIR artifact itself.
-- Delete any exports and tests that only existed for the transitional adapter form.
-- Remove old monotype initialization signatures that still mention raw module env arrays or solved-wrapper concepts.
-- Remove any helper APIs whose only job was translating raw CIR + solved vars into monotype-consumable facts.
-- Remove comments and naming that imply the transitional adapter form is still part of the architecture.
+
+- Delete the current duplicated publication structure in `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/check/mir.zig` if it still stores copied nodes.
+- If a publication helper module is still useful, reduce it to boundary orchestration only:
+  - publish typed CIR
+  - transfer ownership
+  - no duplicate tree storage
+- Rename files/types as needed so the code no longer suggests there is a second source tree.
+- Remove stale tests that were only asserting the duplicated-MIR transition shape.
 
 Required tests:
-- Add or update tests that fail if the deleted transitional adapter path or raw boundary APIs reappear.
-- Keep all relevant suites green after deletion.
+
+- tests proving the checker publishes typed CIR directly
+- no test should require a duplicate MIR node store to exist
 
 Completion criteria:
-- The transitional adapter layer is gone.
-- No transitional wrapper-based boundary API remains.
 
-Progress:
-- `check.MIR.Modules.init(...)` is gone.
-- The only remaining public MIR publication API is `check.MIR.Modules.publish(...)`.
-- Eval helpers no longer create MIR at monotype-lowering time; they consume the already-published MIR artifact.
+- there is no duplicate published MIR tree left in memory
+- there is only the published typed CIR source tree
 
-## Phase 5: Delete Parallel Sources Of Truth
+## Phase 7: Delete Old Clone-Oriented And Wrapper-Oriented Machinery
 
 Goal:
-- Ensure MIR is the only checker -> monotype source of truth.
+
+- Remove every remaining artifact that existed only because we used clone-based MIR publication.
 
 Implementation steps:
-- Delete any remaining side tables whose only purpose was to compensate for the old boundary.
-- Delete any old “settled facts” stores that are redundant once MIR exists.
-- Delete any caches or helper functions that duplicate MIR-owned facts.
-- Delete dead names, dead tests, dead comments, and dead audit residue tied to the old boundary model.
-- Add assertions where useful so future code cannot quietly reintroduce duplicate sources of truth.
 
-Required tests:
-- Add targeted tests or assertions that fail if MIR-owned facts are absent or if duplicate boundary sources reappear.
-
-Completion criteria:
-- MIR is the only source of checker-owned typing truth at the boundary.
-- No redundant boundary side table or adapter machinery remains anywhere in the code base.
-
-Progress:
-- Old monotype-side settled-var materialization residue and wrapper terminology are gone from the boundary.
-- Monotype no longer accepts raw checker env arrays or raw checker-side lookups as an alternative source of truth.
-- A fresh search over `src/` finds no live `SolvedCIR`, `MIR.Modules.init`, `materializeSettledVarTypeFacts`, or `var_type_facts` residue.
-
-## Phase 6: Align Terminology And Architecture Around MIR
-
-Goal:
-- Make the new architecture obvious and durable.
-
-Implementation steps:
-- Rename remaining “typed CIR”, “solved wrapper”, or similar transitional terms to MIR where appropriate.
-- Ensure docs, comments, and function names describe the checker -> monotype boundary as MIR.
-- Keep the architecture legible enough that a fresh reader can see the `cor`-shaped design directly from the code.
-
-Required tests:
-- No special new suite required, but all targeted and regression tests must still pass after naming cleanup.
-
-Completion criteria:
-- MIR is the consistent architectural term.
-- The code base no longer describes the old wrapper-based model as current reality.
-
-Progress:
-- MIR is now the live architectural name throughout the checker -> monotype path.
-- Remaining references to `SolvedCIR` and wrapper terminology are now only historical notes in this plan file.
-
-## Phase 7: Final Audit And Verification
-
-Goal:
-- Prove the transition is complete and there is no residue.
-
-Audit steps:
-- Run a fresh from-scratch audit for:
-  - reinfer
-  - reintern
-  - boundary translation residue
-  - duplicate sources of truth
-  - stale side tables
-  - adapter layers
-  - hacks, shortcuts, fallbacks, heuristics
-- Search specifically for:
+- Delete obsolete clone helpers from the publication path.
+- Delete wrapper/adapter APIs that only existed to make the old MIR look like checker data.
+- Delete stale terminology:
   - `SolvedCIR`
-  - old wrapper terminology
-  - raw checker boundary calls from monotype
-  - deleted side-table names
-- Confirm MIR is the only checker-owned boundary artifact monotype consumes.
-- Explicitly report any intentional divergence from `cor` and justify it as the long-term ideal design.
+  - duplicate-MIR comments
+  - “publish by clone” descriptions
+- Delete dead tests that encode obsolete boundary behavior.
+- Search specifically for residue in:
+  - `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/check/`
+  - `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/`
+  - `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/eval/test/`
+
+Required tests:
+
+- targeted residue tests/search-based checks where practical
+- all regression suites still green
+
+Completion criteria:
+
+- no clone-oriented boundary machinery remains
+- no duplicate-tree wording remains
+- no wrapper residue remains
+
+## Phase 8: Performance And Invariant Hardening
+
+Goal:
+
+- Ensure the new architecture is not only cleaner, but actually the performance-oriented end state we want.
+
+Implementation steps:
+
+- Audit publication to confirm it is zero-copy in the steady state.
+- Audit specialization storage for unnecessary hashing, copying, or per-node allocations.
+- Prefer dense arrays keyed by source node id within a proc specialization.
+- Ensure source-level interner/storage ownership is transferred once, not duplicated.
+- Add assertions that enforce:
+  - published typed CIR immutability
+  - no monotype mutation of source solved type data
+  - specialization artifacts never become a second source-level truth
+
+Required tests:
+
+- targeted tests for multi-specialization workloads
+- any useful debug assertions that trip if source data is mutated or if specialization state leaks into source storage
+
+Completion criteria:
+
+- the implementation reflects the performance intent, not just the architectural shape
+
+## Phase 9: Final Audit And Verification
+
+Goal:
+
+- Prove the transition is complete and no residue remains.
+
+Audit checklist:
+
+- Search for duplicate MIR-tree storage.
+- Search for clone-based publication in the checker -> monotype boundary path.
+- Search for monotype mutation of published source solved type state.
+- Search for stale wrapper/adapter APIs.
+- Search for comments claiming MIR is monomorphic when it is not.
+- Search for any later-stage source-fact reconstruction that should have been explicit.
 
 Required verification:
+
 - `zig build test-monotype`
 - `zig build test-eval -- --threads 1`
 - `zig build test-eval-host-effects -- --threads 1`
 - `zig build test-cor-pipeline`
-- any new targeted MIR publication/consumption tests added during implementation
+- relevant checker tests
+- all new targeted publication/specialization tests added during the migration
 
 Final success condition:
-- The checker produces MIR directly.
-- Monotype consumes MIR directly.
-- The transitional adapter layer and old boundary machinery are deleted.
-- MIR is the only source of truth.
-- All relevant tests pass.
 
-Verification run:
-- `zig build test-monotype`
-- `zig build test-eval -- --threads 1`
-- `zig build test-eval-host-effects -- --threads 1`
-- `zig build test-cor-pipeline`
+- checker publishes typed CIR directly by ownership transfer
+- no duplicate MIR tree exists
+- typed CIR is the only source-level typing truth after checking
+- monotype specialization state is entirely monotype-owned
+- published typed CIR is immutable
+- monotype consumes published typed CIR directly
+- all relevant tests pass
 
-Additional audit results:
-- A fresh search over `src/` finds no live `SolvedCIR`, `MIR.Modules.init`, `moduleEnvConst(...)`, `moduleEnvMut(...)`, `materializeSettledVarTypeFacts(...)`, or `var_type_facts` residue.
-- A fresh monotype-boundary search finds no raw checker-boundary `ModuleEnv.varFrom(...)`, raw checker `store.getExpr(...)`, or raw checker `store.getPattern(...)` reads in ordinary monotype consumption.
-- `zig build test-check` still fails, but only for unrelated pre-existing `src/check/unify.zig` / `src/check/test/unify_test.zig` signature drift outside this MIR transition.
+## Expected Justification At The End
 
-Intentional divergence from `cor`:
-- `cor` publishes a physically separate explicitly typed solved tree before monotype.
-- Roc now publishes an immutable owned MIR artifact at the same boundary, but it is produced by freezing/cloning the checker’s internal solved state rather than replacing the checker’s internal representation wholesale.
-- This is the intentional long-term choice here because it preserves the existing checker/reporting infrastructure while still giving monotype one explicit immutable source of truth and avoiding a second live mutable boundary contract.
+At the end of implementation, report:
+
+- whether any divergence from `cor` remains
+- why that divergence is long-term ideal here
+- whether zero-copy publication is fully achieved
+- whether any transitional boundary residue remains
+
+If the answer to the last question is anything other than “no”, the plan is not complete.

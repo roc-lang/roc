@@ -11,6 +11,7 @@ const collections = @import("collections");
 const Allocators = base.Allocators;
 
 const Check = @import("../Check.zig");
+const MIR = @import("../mir.zig");
 const report_mod = @import("../report.zig");
 
 const testing = std.testing;
@@ -118,6 +119,7 @@ builtin_module: LoadedModule,
 owns_builtin_module: bool,
 /// Heap-allocated source buffer owned by this TestEnv (if any)
 owned_source: ?[]u8 = null,
+published_owns_module_env: bool = false,
 
 /// Test environment for canonicalization testing, providing a convenient wrapper around ModuleEnv, AST, and Can.
 const TestEnv = @This();
@@ -419,11 +421,12 @@ pub fn deinit(self: *TestEnv) void {
 
     // ModuleEnv.deinit calls self.common.deinit() to clean up CommonEnv's internals
     // Since common is now a value field, we don't need to free it separately
-    self.module_env.deinit();
-    self.gpa.destroy(self.module_env);
-
-    if (self.owned_source) |buffer| {
-        self.gpa.free(buffer);
+    if (!self.published_owns_module_env) {
+        self.module_env.deinit();
+        self.gpa.destroy(self.module_env);
+        if (self.owned_source) |buffer| {
+            self.gpa.free(buffer);
+        }
     }
 
     self.module_envs.deinit();
@@ -432,6 +435,16 @@ pub fn deinit(self: *TestEnv) void {
     if (self.owns_builtin_module) {
         self.builtin_module.deinit();
     }
+}
+
+pub fn takePublishedSourceModule(self: *TestEnv) MIR.Modules.SourceModule {
+    self.published_owns_module_env = true;
+    const owned_source = self.owned_source;
+    self.owned_source = null;
+    return .{ .owned_checked = .{
+        .env = self.module_env,
+        .owned_source = owned_source,
+    } };
 }
 
 /// Get the inferred type of the last declaration and compare it to the provided

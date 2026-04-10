@@ -69,7 +69,7 @@ const Ctx = struct {
     symbols: symbol_mod.Store,
     types: type_mod.Store,
     idents: base.Ident.Store,
-    mir_modules: mir.Modules,
+    mir_modules: *mir.Modules,
     builtin_module_idx: u32,
     top_level_symbols: std.AutoHashMap(TopLevelKey, symbol_mod.Symbol),
     pattern_symbols: std.AutoHashMap(PatternKey, symbol_mod.Symbol),
@@ -86,7 +86,7 @@ const Ctx = struct {
 
     fn init(
         allocator: std.mem.Allocator,
-        mir_modules: mir.Modules,
+        mir_modules: *mir.Modules,
         builtin_module_idx: u32,
     ) std.mem.Allocator.Error!Ctx {
         return .{
@@ -104,7 +104,6 @@ const Ctx = struct {
     fn deinit(self: *Ctx) void {
         self.pattern_symbols.deinit();
         self.top_level_symbols.deinit();
-        self.mir_modules.deinit();
         self.idents.deinit(self.allocator);
         self.symbols.deinit();
         self.types.deinit();
@@ -438,7 +437,7 @@ pub const Lowerer = struct {
 
     pub fn init(
         allocator: std.mem.Allocator,
-        mir_modules: mir.Modules,
+        mir_modules: *mir.Modules,
         builtin_module_idx: u32,
     ) std.mem.Allocator.Error!Lowerer {
         return .{
