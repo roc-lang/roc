@@ -130,18 +130,6 @@ const Ctx = struct {
             return self.source_module.resolvedImportModule(import_idx);
         }
 
-        pub fn lookupMethodIdentByText(
-            self: @This(),
-            type_name: []const u8,
-            method_name: []const u8,
-        ) ?Ident.Idx {
-            return self.source_module.lookupMethodIdentByText(type_name, method_name);
-        }
-
-        pub fn exposedNodeIndexById(self: @This(), ident_idx: Ident.Idx) ?u16 {
-            return self.source_module.exposedNodeIndexById(ident_idx);
-        }
-
         pub fn nodeTag(self: @This(), idx: CIR.Node.Idx) CIR.Node.Tag {
             return self.source_module.nodeTag(idx);
         }
@@ -197,12 +185,21 @@ const Ctx = struct {
             return self.source_module.resolvedStaticDispatchTarget(expr_idx);
         }
 
-        pub fn dispatchSite(
+        pub fn resolveAttachedMethodTarget(
             self: @This(),
-            expr_idx: CIR.Expr.Idx,
-            method_name: Ident.Idx,
-        ) ?typed_cir.Module.DispatchSite {
-            return self.source_module.dispatchSite(expr_idx, method_name);
+            source_module: typed_cir.Module,
+            type_ident: Ident.Idx,
+            method_ident: Ident.Idx,
+        ) ?typed_cir.Modules.ResolvedMethodTarget {
+            return self.source_module.resolveAttachedMethodTarget(source_module, type_ident, method_ident);
+        }
+
+        pub fn resolveAttachedMethodTargetByText(
+            self: @This(),
+            type_name: []const u8,
+            method_name: []const u8,
+        ) ?typed_cir.Modules.ResolvedMethodTarget {
+            return self.source_module.resolveAttachedMethodTargetByText(type_name, method_name);
         }
 
         pub fn getStatement(self: @This(), idx: CIR.Statement.Idx) CIR.Statement {
@@ -628,6 +625,7 @@ pub const Lowerer = struct {
         workspace: *TypeWorkspace,
         owns_workspace: bool,
         workspace_module_idx: u32,
+        copied_source_var_map: type_clone_source.ScopedVarMapping,
         source_var_map: std.AutoHashMap(TypeKey, Var),
         instantiation_var_map: std.AutoHashMap(Var, Var),
         active_type_cache: std.AutoHashMap(TypeKey, type_mod.TypeId),
@@ -673,6 +671,10 @@ pub const Lowerer = struct {
                 while (iter.next()) |entry| {
                     try self.source_var_map.put(entry.key_ptr.*, entry.value_ptr.*);
                 }
+                var copied_iter = scope.copied_source_var_map.iterator();
+                while (copied_iter.next()) |entry| {
+                    try self.copied_source_var_map.put(entry.key_ptr.*, entry.value_ptr.*);
+                }
                 var inst_iter = scope.instantiation_var_map.iterator();
                 while (inst_iter.next()) |entry| {
                     try self.instantiation_var_map.put(entry.key_ptr.*, entry.value_ptr.*);
@@ -693,6 +695,7 @@ pub const Lowerer = struct {
             rank_behavior: Instantiator.RankBehavior,
         ) void {
             self.source_var_map = std.AutoHashMap(TypeKey, Var).init(self.allocator);
+            self.copied_source_var_map = type_clone_source.ScopedVarMapping.init(self.allocator);
             self.instantiation_var_map = std.AutoHashMap(Var, Var).init(self.allocator);
             self.active_type_cache = std.AutoHashMap(TypeKey, type_mod.TypeId).init(self.allocator);
             self.provisional_type_cache = std.AutoHashMap(TypeKey, type_mod.TypeId).init(self.allocator);
@@ -742,6 +745,7 @@ pub const Lowerer = struct {
             self.provisional_type_cache.deinit();
             self.type_cache.deinit();
             self.instantiation_var_map.deinit();
+            self.copied_source_var_map.deinit();
             self.source_var_map.deinit();
             if (self.owns_workspace) {
                 self.workspace.deinit(self.allocator);
@@ -1301,10 +1305,7 @@ pub const Lowerer = struct {
             source_expr_var,
             expected_var,
         );
-        try self.putOrUnifySourceVarMapping(type_scope, .{
-            .module_idx = module_idx,
-            .var_ = source_expr_var,
-        }, source_fn_var);
+        _ = try self.bindSourceVarToExistingWorkspace(module_idx, type_scope, source_expr_var, source_fn_var);
         _ = try self.ensureExplicitFunctionFact(module_idx, type_scope, source_fn_var);
         try self.freezeExplicitFunctionTypeFacts(module_idx, type_scope);
 
@@ -1435,15 +1436,9 @@ pub const Lowerer = struct {
             source_seed_source_var,
             expected_var,
         );
-        try self.putOrUnifySourceVarMapping(type_scope, .{
-            .module_idx = module_idx,
-            .var_ = source_expr_var,
-        }, source_fn_var);
+        _ = try self.bindSourceVarToExistingWorkspace(module_idx, type_scope, source_expr_var, source_fn_var);
         if (source_seed_source_var != source_expr_var) {
-            try self.putOrUnifySourceVarMapping(type_scope, .{
-                .module_idx = module_idx,
-                .var_ = source_seed_source_var,
-            }, source_fn_var);
+            _ = try self.bindSourceVarToExistingWorkspace(module_idx, type_scope, source_seed_source_var, source_fn_var);
         }
         var arg_index: usize = 0;
         while (true) : (arg_index += 1) {
@@ -1453,10 +1448,7 @@ pub const Lowerer = struct {
                 arg_index,
             ) orelse break;
             const scoped_arg_var = self.lookupFunctionArgVar(module_idx, type_scope, source_fn_var, arg_index) orelse break;
-            try self.putOrUnifySourceVarMapping(type_scope, .{
-                .module_idx = module_idx,
-                .var_ = source_arg_var,
-            }, scoped_arg_var);
+            _ = try self.bindSourceVarToExistingWorkspace(module_idx, type_scope, source_arg_var, scoped_arg_var);
         }
         _ = try self.ensureExplicitFunctionFact(module_idx, type_scope, source_fn_var);
         try self.freezeExplicitFunctionTypeFacts(module_idx, type_scope);
@@ -1826,13 +1818,7 @@ pub const Lowerer = struct {
             .module_idx = module_idx,
             .expr_idx = body_expr_idx,
         };
-        if (type_scope.facts.expr_result_var_facts.get(key)) |existing| {
-            if (existing != result_var) {
-                debugPanic(
-                    "monotype explicit expr fact invariant violated: conflicting explicit expr result vars in module {d}",
-                    .{module_idx},
-                );
-            }
+        if (type_scope.facts.expr_result_var_facts.contains(key)) {
             return;
         }
         try type_scope.facts.expr_result_var_facts.put(key, result_var);
@@ -2129,7 +2115,16 @@ pub const Lowerer = struct {
         expr_idx: CIR.Expr.Idx,
         result_var: ?Var,
     ) std.mem.Allocator.Error!void {
-        try self.bindExplicitExprResultFact(module_idx, type_scope, expr_idx, result_var);
+        const explicit_result_var = if (result_var) |explicit|
+            try self.bindSourceVarToExistingWorkspace(
+                module_idx,
+                type_scope,
+                self.ctx.mirModule(module_idx).exprType(expr_idx),
+                explicit,
+            )
+        else
+            null;
+        try self.bindExplicitExprResultFact(module_idx, type_scope, expr_idx, explicit_result_var);
         try self.collectSolvedExprFacts(module_idx, type_scope, env, self.ctx.mirModule(module_idx).expr(expr_idx));
     }
 
@@ -2162,6 +2157,479 @@ pub const Lowerer = struct {
         }
     }
 
+    fn alignWorkspaceVarToCanonical(
+        self: *Lowerer,
+        type_scope: *TypeCloneScope,
+        canonical_var: Var,
+        aligned_var: Var,
+    ) std.mem.Allocator.Error!void {
+        var visited = std.AutoHashMap(AlignVarPair, void).init(self.allocator);
+        defer visited.deinit();
+        try self.alignWorkspaceVarToCanonicalVisited(type_scope, canonical_var, aligned_var, &visited);
+    }
+
+    const AlignVarPair = struct {
+        canonical: Var,
+        aligned: Var,
+    };
+
+    fn alignWorkspaceVarToCanonicalVisited(
+        self: *Lowerer,
+        type_scope: *TypeCloneScope,
+        canonical_var: Var,
+        aligned_var: Var,
+        visited: *std.AutoHashMap(AlignVarPair, void),
+    ) std.mem.Allocator.Error!void {
+        const store = type_scope.typeStoreConst();
+        const canonical = store.resolveVar(canonical_var);
+        const aligned = store.resolveVar(aligned_var);
+        if (canonical.var_ == aligned.var_) return;
+        const pair: AlignVarPair = .{
+            .canonical = canonical.var_,
+            .aligned = aligned.var_,
+        };
+        if (visited.contains(pair)) return;
+        try visited.put(pair, {});
+
+        switch (aligned.desc.content) {
+            .flex, .rigid, .err => {
+                try type_scope.typeStoreMut().dangerousSetVarDesc(aligned.var_, .{
+                    .content = canonical.desc.content,
+                    .rank = types.Rank.generalized,
+                });
+                return;
+            },
+            else => {},
+        }
+
+        switch (canonical.desc.content) {
+            .flex, .rigid, .err => {
+                try type_scope.typeStoreMut().dangerousSetVarDesc(canonical.var_, .{
+                    .content = aligned.desc.content,
+                    .rank = types.Rank.generalized,
+                });
+                return;
+            },
+            else => {},
+        }
+
+        const canonical_first_arg = self.lookupFunctionArgVarInStore(store, canonical.var_, 0);
+        const aligned_first_arg = self.lookupFunctionArgVarInStore(store, aligned.var_, 0);
+        if ((canonical_first_arg == null) != (aligned_first_arg == null)) {
+            debugPanic(
+                "monotype specialization invariant violated: function arity shape mismatch while aligning workspace vars",
+                .{},
+            );
+        }
+        if (canonical_first_arg != null) {
+            var arg_index: usize = 0;
+            while (true) : (arg_index += 1) {
+                const canonical_arg = self.lookupFunctionArgVarInStore(store, canonical.var_, arg_index);
+                const aligned_arg = self.lookupFunctionArgVarInStore(store, aligned.var_, arg_index);
+                if (canonical_arg == null or aligned_arg == null) {
+                    if (canonical_arg != aligned_arg) {
+                        debugPanic(
+                            "monotype specialization invariant violated: function arity mismatch while aligning workspace vars",
+                            .{},
+                        );
+                    }
+                    break;
+                }
+                try self.alignWorkspaceVarToCanonicalVisited(type_scope, canonical_arg.?, aligned_arg.?, visited);
+            }
+            const canonical_ret = self.lookupFunctionRetVarInStore(store, canonical.var_) orelse debugPanic(
+                "monotype specialization invariant violated: missing canonical function return while aligning workspace vars",
+                .{},
+            );
+            const aligned_ret = self.lookupFunctionRetVarInStore(store, aligned.var_) orelse debugPanic(
+                "monotype specialization invariant violated: missing aligned function return while aligning workspace vars",
+                .{},
+            );
+            try self.alignWorkspaceVarToCanonicalVisited(type_scope, canonical_ret, aligned_ret, visited);
+            return;
+        }
+
+        switch (canonical.desc.content) {
+            .alias => |canonical_alias| switch (aligned.desc.content) {
+                .alias => |aligned_alias| {
+                    const canonical_args = store.sliceAliasArgs(canonical_alias);
+                    const aligned_args = store.sliceAliasArgs(aligned_alias);
+                    if (canonical_args.len != aligned_args.len) {
+                        debugPanic(
+                            "monotype specialization invariant violated: alias arg mismatch while aligning workspace vars",
+                            .{},
+                        );
+                    }
+                    for (canonical_args, aligned_args) |canonical_arg, aligned_arg| {
+                        try self.alignWorkspaceVarToCanonicalVisited(type_scope, canonical_arg, aligned_arg, visited);
+                    }
+                    try self.alignWorkspaceVarToCanonicalVisited(
+                        type_scope,
+                        store.getAliasBackingVar(canonical_alias),
+                        store.getAliasBackingVar(aligned_alias),
+                        visited,
+                    );
+                },
+                else => debugPanic(
+                    "monotype specialization invariant violated: alias/content mismatch while aligning workspace vars",
+                    .{},
+                ),
+            },
+            .structure => |canonical_flat| switch (canonical_flat) {
+                .nominal_type => |canonical_nominal| switch (aligned.desc.content) {
+                    .structure => |aligned_flat| switch (aligned_flat) {
+                        .nominal_type => |aligned_nominal| {
+                            if (!canonical_nominal.ident.ident_idx.eql(aligned_nominal.ident.ident_idx) or
+                                !canonical_nominal.origin_module.eql(aligned_nominal.origin_module) or
+                                canonical_nominal.is_opaque != aligned_nominal.is_opaque)
+                            {
+                                debugPanic(
+                                    "monotype specialization invariant violated: nominal identity mismatch while aligning workspace vars",
+                                    .{},
+                                );
+                            }
+                            const canonical_args = store.sliceNominalArgs(canonical_nominal);
+                            const aligned_args = store.sliceNominalArgs(aligned_nominal);
+                            if (canonical_args.len != aligned_args.len) {
+                                debugPanic(
+                                    "monotype specialization invariant violated: nominal arg mismatch while aligning workspace vars",
+                                    .{},
+                                );
+                            }
+                            for (canonical_args, aligned_args) |canonical_arg, aligned_arg| {
+                                try self.alignWorkspaceVarToCanonicalVisited(type_scope, canonical_arg, aligned_arg, visited);
+                            }
+                            try self.alignWorkspaceVarToCanonicalVisited(
+                                type_scope,
+                                store.getNominalBackingVar(canonical_nominal),
+                                store.getNominalBackingVar(aligned_nominal),
+                                visited,
+                            );
+                        },
+                        else => debugPanic(
+                            "monotype specialization invariant violated: nominal/content mismatch while aligning workspace vars",
+                            .{},
+                        ),
+                    },
+                    else => debugPanic(
+                        "monotype specialization invariant violated: nominal/content mismatch while aligning workspace vars",
+                        .{},
+                    ),
+                },
+                .tuple => |canonical_tuple| switch (aligned.desc.content) {
+                    .structure => |aligned_flat| switch (aligned_flat) {
+                        .tuple => |aligned_tuple| {
+                            const canonical_elems = store.sliceVars(canonical_tuple.elems);
+                            const aligned_elems = store.sliceVars(aligned_tuple.elems);
+                            if (canonical_elems.len != aligned_elems.len) {
+                                debugPanic(
+                                    "monotype specialization invariant violated: tuple arity mismatch while aligning workspace vars",
+                                    .{},
+                                );
+                            }
+                            for (canonical_elems, aligned_elems) |canonical_elem, aligned_elem| {
+                                try self.alignWorkspaceVarToCanonicalVisited(type_scope, canonical_elem, aligned_elem, visited);
+                            }
+                        },
+                        else => debugPanic(
+                            "monotype specialization invariant violated: tuple/content mismatch while aligning workspace vars",
+                            .{},
+                        ),
+                    },
+                    else => debugPanic(
+                        "monotype specialization invariant violated: tuple/content mismatch while aligning workspace vars",
+                        .{},
+                    ),
+                },
+                .record => |canonical_record| switch (aligned.desc.content) {
+                    .structure => {
+                        var canonical_flattened = std.ArrayList(types.RecordField).empty;
+                        defer canonical_flattened.deinit(self.allocator);
+                        const canonical_terminal_ext = try self.gatherFlattenedRecordContent(
+                            store,
+                            canonical.var_,
+                            .{ .structure = .{ .record = canonical_record } },
+                            &canonical_flattened,
+                        );
+
+                        var aligned_flattened = std.ArrayList(types.RecordField).empty;
+                        defer aligned_flattened.deinit(self.allocator);
+                        const aligned_terminal_ext = try self.gatherFlattenedRecordContent(
+                            store,
+                            aligned.var_,
+                            aligned.desc.content,
+                            &aligned_flattened,
+                        );
+
+                        var matched_canonical = try self.allocator.alloc(bool, canonical_flattened.items.len);
+                        defer self.allocator.free(matched_canonical);
+                        @memset(matched_canonical, false);
+
+                        var residual_aligned_fields = std.ArrayList(types.RecordField).empty;
+                        defer residual_aligned_fields.deinit(self.allocator);
+
+                        for (aligned_flattened.items) |aligned_field| {
+                            var matched = false;
+                            for (canonical_flattened.items, 0..) |canonical_field, canonical_idx| {
+                                if (!std.mem.eql(
+                                    u8,
+                                    type_scope.identStoreConst().getText(canonical_field.name),
+                                    type_scope.identStoreConst().getText(aligned_field.name),
+                                )) continue;
+                                try self.alignWorkspaceVarToCanonicalVisited(type_scope, canonical_field.var_, aligned_field.var_, visited);
+                                matched_canonical[canonical_idx] = true;
+                                matched = true;
+                                break;
+                            }
+                            if (!matched) {
+                                try residual_aligned_fields.append(self.allocator, aligned_field);
+                            }
+                        }
+
+                        var residual_canonical_fields = std.ArrayList(types.RecordField).empty;
+                        defer residual_canonical_fields.deinit(self.allocator);
+                        for (canonical_flattened.items, matched_canonical) |canonical_field, was_matched| {
+                            if (!was_matched) {
+                                try residual_canonical_fields.append(self.allocator, canonical_field);
+                            }
+                        }
+
+                        if (residual_canonical_fields.items.len == 0 and residual_aligned_fields.items.len == 0) {
+                            try self.alignFlattenedRecordTerminal(type_scope, canonical_terminal_ext, aligned_terminal_ext);
+                        } else {
+                            const canonical_residual_var = if (residual_canonical_fields.items.len == 0)
+                                try self.flattenedRecordTerminalAsVar(canonical_terminal_ext, type_scope)
+                            else
+                                try self.materializeWorkspaceRecordResidualVar(
+                                    residual_canonical_fields.items,
+                                    canonical_terminal_ext,
+                                    type_scope,
+                                );
+                            const aligned_residual_var = if (residual_aligned_fields.items.len == 0)
+                                try self.flattenedRecordTerminalAsVar(aligned_terminal_ext, type_scope)
+                            else
+                                try self.materializeWorkspaceRecordResidualVar(
+                                    residual_aligned_fields.items,
+                                    aligned_terminal_ext,
+                                    type_scope,
+                                );
+                            try self.alignWorkspaceVarToCanonicalVisited(type_scope, canonical_residual_var, aligned_residual_var, visited);
+                        }
+                    },
+                    else => debugPanic(
+                        "monotype specialization invariant violated: record/content mismatch while aligning workspace vars",
+                        .{},
+                    ),
+                },
+                .record_unbound => |canonical_fields_range| switch (aligned.desc.content) {
+                    .structure => {
+                        var canonical_flattened = std.ArrayList(types.RecordField).empty;
+                        defer canonical_flattened.deinit(self.allocator);
+                        const canonical_terminal_ext = try self.gatherFlattenedRecordContent(
+                            store,
+                            canonical.var_,
+                            .{ .structure = .{ .record_unbound = canonical_fields_range } },
+                            &canonical_flattened,
+                        );
+
+                        var aligned_flattened = std.ArrayList(types.RecordField).empty;
+                        defer aligned_flattened.deinit(self.allocator);
+                        const aligned_terminal_ext = try self.gatherFlattenedRecordContent(
+                            store,
+                            aligned.var_,
+                            aligned.desc.content,
+                            &aligned_flattened,
+                        );
+
+                        var matched_canonical = try self.allocator.alloc(bool, canonical_flattened.items.len);
+                        defer self.allocator.free(matched_canonical);
+                        @memset(matched_canonical, false);
+
+                        var residual_aligned_fields = std.ArrayList(types.RecordField).empty;
+                        defer residual_aligned_fields.deinit(self.allocator);
+
+                        for (aligned_flattened.items) |aligned_field| {
+                            var matched = false;
+                            for (canonical_flattened.items, 0..) |canonical_field, canonical_idx| {
+                                if (!std.mem.eql(
+                                    u8,
+                                    type_scope.identStoreConst().getText(canonical_field.name),
+                                    type_scope.identStoreConst().getText(aligned_field.name),
+                                )) continue;
+                                try self.alignWorkspaceVarToCanonicalVisited(type_scope, canonical_field.var_, aligned_field.var_, visited);
+                                matched_canonical[canonical_idx] = true;
+                                matched = true;
+                                break;
+                            }
+                            if (!matched) {
+                                try residual_aligned_fields.append(self.allocator, aligned_field);
+                            }
+                        }
+
+                        var residual_canonical_fields = std.ArrayList(types.RecordField).empty;
+                        defer residual_canonical_fields.deinit(self.allocator);
+                        for (canonical_flattened.items, matched_canonical) |canonical_field, was_matched| {
+                            if (!was_matched) {
+                                try residual_canonical_fields.append(self.allocator, canonical_field);
+                            }
+                        }
+
+                        if (residual_canonical_fields.items.len == 0 and residual_aligned_fields.items.len == 0) {
+                            try self.alignFlattenedRecordTerminal(type_scope, canonical_terminal_ext, aligned_terminal_ext);
+                        } else {
+                            const canonical_residual_var = if (residual_canonical_fields.items.len == 0)
+                                try self.flattenedRecordTerminalAsVar(canonical_terminal_ext, type_scope)
+                            else
+                                try self.materializeWorkspaceRecordResidualVar(
+                                    residual_canonical_fields.items,
+                                    canonical_terminal_ext,
+                                    type_scope,
+                                );
+                            const aligned_residual_var = if (residual_aligned_fields.items.len == 0)
+                                try self.flattenedRecordTerminalAsVar(aligned_terminal_ext, type_scope)
+                            else
+                                try self.materializeWorkspaceRecordResidualVar(
+                                    residual_aligned_fields.items,
+                                    aligned_terminal_ext,
+                                    type_scope,
+                                );
+                            try self.alignWorkspaceVarToCanonicalVisited(type_scope, canonical_residual_var, aligned_residual_var, visited);
+                        }
+                    },
+                    else => debugPanic(
+                        "monotype specialization invariant violated: open-record/content mismatch while aligning workspace vars",
+                        .{},
+                    ),
+                },
+                .tag_union => |canonical_union| switch (aligned.desc.content) {
+                    .structure => |aligned_flat| switch (aligned_flat) {
+                        .tag_union => |aligned_union| {
+                            var canonical_flattened = std.ArrayList(types.Tag).empty;
+                            defer canonical_flattened.deinit(self.allocator);
+                            const canonical_terminal_ext = try self.gatherFlattenedTagUnion(
+                                store,
+                                canonical_union.tags,
+                                canonical_union.ext,
+                                &canonical_flattened,
+                            );
+
+                            var aligned_flattened = std.ArrayList(types.Tag).empty;
+                            defer aligned_flattened.deinit(self.allocator);
+                            const aligned_terminal_ext = try self.gatherFlattenedTagUnion(
+                                store,
+                                aligned_union.tags,
+                                aligned_union.ext,
+                                &aligned_flattened,
+                            );
+
+                            var matched_canonical = try self.allocator.alloc(bool, canonical_flattened.items.len);
+                            defer self.allocator.free(matched_canonical);
+                            @memset(matched_canonical, false);
+
+                            var residual_aligned_tags = std.ArrayList(types.Tag).empty;
+                            defer residual_aligned_tags.deinit(self.allocator);
+
+                            for (aligned_flattened.items) |aligned_tag| {
+                                var matched = false;
+                                for (canonical_flattened.items, 0..) |canonical_tag, canonical_idx| {
+                                    if (!std.mem.eql(u8, type_scope.identStoreConst().getText(canonical_tag.name), type_scope.identStoreConst().getText(aligned_tag.name))) continue;
+                                    const canonical_args = store.sliceVars(canonical_tag.args);
+                                    const aligned_args = store.sliceVars(aligned_tag.args);
+                                    if (canonical_args.len != aligned_args.len) {
+                                        debugPanic(
+                                            "monotype specialization invariant violated: tag payload mismatch while aligning workspace vars",
+                                            .{},
+                                        );
+                                    }
+                                    for (canonical_args, aligned_args) |canonical_arg, aligned_arg| {
+                                        try self.alignWorkspaceVarToCanonicalVisited(type_scope, canonical_arg, aligned_arg, visited);
+                                    }
+                                    matched_canonical[canonical_idx] = true;
+                                    matched = true;
+                                    break;
+                                }
+                                if (!matched) {
+                                    try residual_aligned_tags.append(self.allocator, aligned_tag);
+                                }
+                            }
+
+                            var residual_canonical_tags = std.ArrayList(types.Tag).empty;
+                            defer residual_canonical_tags.deinit(self.allocator);
+                            for (canonical_flattened.items, matched_canonical) |canonical_tag, was_matched| {
+                                if (!was_matched) {
+                                    try residual_canonical_tags.append(self.allocator, canonical_tag);
+                                }
+                            }
+
+                            const canonical_residual_var = if (residual_canonical_tags.items.len == 0)
+                                canonical_terminal_ext
+                            else
+                                try self.materializeWorkspaceTagUnionResidualVar(
+                                    residual_canonical_tags.items,
+                                    canonical_terminal_ext,
+                                    type_scope,
+                                );
+
+                            const aligned_residual_var = if (residual_aligned_tags.items.len == 0)
+                                aligned_terminal_ext
+                            else
+                                try self.materializeWorkspaceTagUnionResidualVar(
+                                    residual_aligned_tags.items,
+                                    aligned_terminal_ext,
+                                    type_scope,
+                                );
+
+                            try self.alignWorkspaceVarToCanonicalVisited(
+                                type_scope,
+                                canonical_residual_var,
+                                aligned_residual_var,
+                                visited,
+                            );
+                        },
+                        else => debugPanic(
+                            "monotype specialization invariant violated: tag-union/content mismatch while aligning workspace vars",
+                            .{},
+                        ),
+                    },
+                    else => debugPanic(
+                        "monotype specialization invariant violated: tag-union/content mismatch while aligning workspace vars",
+                        .{},
+                    ),
+                },
+                .empty_record => switch (aligned.desc.content) {
+                    .structure => {
+                        var aligned_flattened = std.ArrayList(types.RecordField).empty;
+                        defer aligned_flattened.deinit(self.allocator);
+                        const aligned_terminal_ext = try self.gatherFlattenedRecordContent(
+                            store,
+                            aligned.var_,
+                            aligned.desc.content,
+                            &aligned_flattened,
+                        );
+                        if (aligned_flattened.items.len != 0) {
+                            debugPanic(
+                                "monotype specialization invariant violated: empty-record/content mismatch while aligning workspace vars",
+                                .{},
+                            );
+                        }
+                        try self.alignFlattenedRecordTerminal(type_scope, .empty_record, aligned_terminal_ext);
+                    },
+                    else => debugPanic(
+                        "monotype specialization invariant violated: empty-record/content mismatch while aligning workspace vars",
+                        .{},
+                    ),
+                },
+                .empty_tag_union => switch (aligned.desc.content) {
+                    .structure => |aligned_flat| if (aligned_flat != .empty_tag_union)
+                        debugPanic("monotype specialization invariant violated: empty-tag-union/content mismatch while aligning workspace vars", .{}),
+                    else => debugPanic("monotype specialization invariant violated: empty-tag-union/content mismatch while aligning workspace vars", .{}),
+                },
+                .fn_pure, .fn_effectful, .fn_unbound => unreachable,
+            },
+            .flex, .rigid, .err => unreachable,
+        }
+    }
+
     fn buildExplicitCallFact(
         self: *Lowerer,
         module_idx: u32,
@@ -2170,9 +2638,11 @@ pub const Lowerer = struct {
         result_var: Var,
         applied_arg_count: usize,
     ) std.mem.Allocator.Error!ExplicitCallFact {
-        try self.unifyAppliedFunctionResultVar(module_idx, type_scope, result_var, fn_var, applied_arg_count);
-
         const fn_fact = try self.ensureExplicitFunctionFact(module_idx, type_scope, fn_var);
+        if (applied_arg_count == fn_fact.arg_vars.len) {
+            try self.alignWorkspaceVarToCanonical(type_scope, result_var, fn_fact.final_ret_var);
+        }
+        try self.assertAppliedFunctionResultCompatible(module_idx, type_scope, result_var, fn_var, applied_arg_count);
         if (applied_arg_count > fn_fact.arg_vars.len) {
             debugPanic(
                 "monotype explicit call fact invariant violated: applied {d} args to function with arity {d} in module {d}",
@@ -2508,17 +2978,17 @@ pub const Lowerer = struct {
 
         for (chain.arg_exprs, 0..) |arg_expr_idx, i| {
             const cloned_arg_var = try self.requireFunctionArgVar(module_idx, &call_scope, cloned_func_var, i);
-            try self.collectExprFacts(
+            try self.collectExprFactsWithExplicitResultVar(
                 module_idx,
                 type_scope,
                 env,
                 arg_expr_idx,
-            );
-            try self.unifySpecializedCheckerVars(
-                module_idx,
-                &call_scope,
                 cloned_arg_var,
+            );
+            try self.alignWorkspaceVarToCanonical(
+                &call_scope,
                 self.requireExprResultFact(module_idx, type_scope, arg_expr_idx),
+                cloned_arg_var,
             );
         }
 
@@ -3153,7 +3623,14 @@ pub const Lowerer = struct {
                     .{@tagName(prim)},
                 ),
             },
-            else => debugTodo("monotype.lowerNumericIntLiteralData custom from_numeral target"),
+            else => debugPanic(
+                "monotype numeric literal invariant violated: integer literal lowered to unsupported target type {d} ({s} preserving nominal, {s} normalized)",
+                .{
+                    @intFromEnum(target_ty),
+                    @tagName(self.ctx.types.getTypePreservingNominal(target_ty)),
+                    @tagName(self.ctx.types.getType(target_ty)),
+                },
+            ),
         };
     }
 
@@ -3187,7 +3664,14 @@ pub const Lowerer = struct {
                 .i128,
                 => debugTodo("monotype.lowerNumericDecLiteralData fractional literal to integer target"),
             },
-            else => debugTodo("monotype.lowerNumericDecLiteralData custom from_numeral target"),
+            else => debugPanic(
+                "monotype numeric literal invariant violated: decimal literal lowered to unsupported target type {d} ({s} preserving nominal, {s} normalized)",
+                .{
+                    @intFromEnum(target_ty),
+                    @tagName(self.ctx.types.getTypePreservingNominal(target_ty)),
+                    @tagName(self.ctx.types.getType(target_ty)),
+                },
+            ),
         };
     }
 
@@ -3221,7 +3705,14 @@ pub const Lowerer = struct {
                 .i128,
                 => debugTodo("monotype.lowerNumericSmallDecLiteralData fractional literal to integer target"),
             },
-            else => debugTodo("monotype.lowerNumericSmallDecLiteralData custom from_numeral target"),
+            else => debugPanic(
+                "monotype numeric literal invariant violated: small decimal literal lowered to unsupported target type {d} ({s} preserving nominal, {s} normalized)",
+                .{
+                    @intFromEnum(target_ty),
+                    @tagName(self.ctx.types.getTypePreservingNominal(target_ty)),
+                    @tagName(self.ctx.types.getType(target_ty)),
+                },
+            ),
         };
     }
 
@@ -3445,10 +3936,7 @@ pub const Lowerer = struct {
             source_expr_var,
             expected_var,
         );
-        try self.putOrUnifySourceVarMapping(scope, .{
-            .module_idx = module_idx,
-            .var_ = source_expr_var,
-        }, source_fn_var);
+        _ = try self.bindSourceVarToExistingWorkspace(module_idx, scope, source_expr_var, source_fn_var);
         _ = try self.ensureExplicitFunctionFact(module_idx, scope, source_fn_var);
         try self.freezeExplicitFunctionTypeFacts(module_idx, scope);
         const first_arg_ty = if (arg_patterns.len == 0)
@@ -5473,25 +5961,38 @@ pub const Lowerer = struct {
             .{ expr_idx, module_idx },
         );
 
-        try self.unifySpecializedCheckerVars(
+        try self.collectExprFactsWithExplicitResultVar(
             module_idx,
-            &call_scope,
+            type_scope,
+            env,
+            binop.lhs,
             lhs_expected_var,
-            try self.lookupCallArgSpecializationVar(module_idx, type_scope, env, binop.lhs),
         );
-        try self.unifySpecializedCheckerVars(
-            module_idx,
+        try self.alignWorkspaceVarToCanonical(
             &call_scope,
+            self.requireExprResultFact(module_idx, type_scope, binop.lhs),
+            lhs_expected_var,
+        );
+        try self.collectExprFactsWithExplicitResultVar(
+            module_idx,
+            type_scope,
+            env,
+            binop.rhs,
             rhs_expected_var,
-            try self.lookupCallArgSpecializationVar(module_idx, type_scope, env, binop.rhs),
+        );
+        try self.alignWorkspaceVarToCanonical(
+            &call_scope,
+            self.requireExprResultFact(module_idx, type_scope, binop.rhs),
+            rhs_expected_var,
         );
 
         const result_var = try self.scopedExprResultVar(module_idx, type_scope, env, expr_idx);
-        try self.unifyAppliedFunctionResultVar(module_idx, &call_scope, result_var, cloned_func_var, 2);
-        _ = self.lookupCurriedFunctionFinalRetVar(module_idx, &call_scope, cloned_func_var) orelse debugPanic(
+        const final_ret_var = self.lookupCurriedFunctionFinalRetVar(module_idx, &call_scope, cloned_func_var) orelse debugPanic(
             "monotype invariant violated: arithmetic fact missing return var for expr {d} in module {d}",
             .{ expr_idx, module_idx },
         );
+        try self.alignWorkspaceVarToCanonical(&call_scope, result_var, final_ret_var);
+        try self.assertAppliedFunctionResultCompatible(module_idx, &call_scope, result_var, cloned_func_var, 2);
 
         return .{
             .operand_var = lhs_expected_var,
@@ -5699,17 +6200,17 @@ pub const Lowerer = struct {
                 "monotype static dispatch invariant violated: specialized method missing receiver arg in module {d}",
                 .{module_idx},
             );
-            try self.collectExprFacts(
+            try self.collectExprFactsWithExplicitResultVar(
                 module_idx,
                 type_scope,
                 env,
                 receiver_expr_idx,
-            );
-            try self.unifySpecializedCheckerVars(
-                module_idx,
-                type_scope,
                 cloned_arg_var,
+            );
+            try self.alignWorkspaceVarToCanonical(
+                type_scope,
                 self.requireExprResultFact(module_idx, type_scope, receiver_expr_idx),
+                cloned_arg_var,
             );
             arg_index += 1;
         }
@@ -5719,30 +6220,19 @@ pub const Lowerer = struct {
                 "monotype static dispatch invariant violated: specialized method missing arg {d} in module {d}",
                 .{ arg_index + i, module_idx },
             );
-            try self.collectExprFacts(
+            try self.collectExprFactsWithExplicitResultVar(
                 module_idx,
                 type_scope,
                 env,
                 arg_expr_idx,
-            );
-            try self.unifySpecializedCheckerVars(
-                module_idx,
-                type_scope,
                 cloned_arg_var,
+            );
+            try self.alignWorkspaceVarToCanonical(
+                type_scope,
                 self.requireExprResultFact(module_idx, type_scope, arg_expr_idx),
+                cloned_arg_var,
             );
         }
-    }
-
-    fn lookupCallArgSpecializationVar(
-        self: *Lowerer,
-        module_idx: u32,
-        type_scope: *TypeCloneScope,
-        env: BindingEnv,
-        expr_idx: CIR.Expr.Idx,
-    ) std.mem.Allocator.Error!Var {
-        _ = env;
-        return self.requireExprResultFact(module_idx, type_scope, expr_idx);
     }
 
     fn lowerDirectCallCallee(
@@ -7091,7 +7581,7 @@ pub const Lowerer = struct {
         const explicit_result_var = type_scope.facts.expr_result_var_facts.get(key);
         const solved_module = self.ctx.mirModule(module_idx);
 
-        const result_var: Var = switch (expr.data) {
+        var result_var: Var = switch (expr.data) {
             .e_num,
             .e_frac_f32,
             .e_frac_f64,
@@ -7194,17 +7684,12 @@ pub const Lowerer = struct {
                     try self.scopedSolvedExprResultVar(type_scope, env, expr);
                 for (mir_module.sliceExpr(call.args), 0..) |arg_expr, i| {
                     const cloned_arg_var = try self.requireFunctionArgVar(module_idx, &call_scope, cloned_func_var, i);
-                    try self.collectExprFacts(
+                    try self.collectExprFactsWithExplicitResultVar(
                         module_idx,
                         type_scope,
                         env,
                         arg_expr,
-                    );
-                    try self.unifySpecializedCheckerVars(
-                        module_idx,
-                        &call_scope,
                         cloned_arg_var,
-                        self.requireExprResultFact(module_idx, type_scope, arg_expr),
                     );
                 }
                 try self.putExplicitCallFact(
@@ -7389,6 +7874,9 @@ pub const Lowerer = struct {
             else => debugTodoExpr(expr.data),
         };
 
+        if (type_scope.facts.expr_result_var_facts.get(key)) |existing| {
+            result_var = existing;
+        }
         try type_scope.facts.expr_result_var_facts.put(key, result_var);
         try type_scope.facts.collected_expr_facts.put(key, {});
         try self.recordExprSourceFunctionFact(module_idx, type_scope, env, expr.idx);
@@ -9486,62 +9974,41 @@ pub const Lowerer = struct {
             try self.scopeVar(type_scope, expr.module().module_idx, expr.ty());
     }
 
+    fn sourceTypeKey(
+        self: *const Lowerer,
+        source_module_idx: u32,
+        source_var: Var,
+    ) TypeCloneScope.TypeKey {
+        const resolved = self.ctx.mirModule(source_module_idx).typeStoreConst().resolveVar(source_var);
+        return .{
+            .module_idx = source_module_idx,
+            .var_ = resolved.var_,
+        };
+    }
+
     fn scopeVar(
         self: *Lowerer,
         type_scope: *TypeCloneScope,
         source_module_idx: u32,
         source_var: Var,
     ) std.mem.Allocator.Error!Var {
-        const key: TypeCloneScope.TypeKey = .{
-            .module_idx = source_module_idx,
-            .var_ = source_var,
-        };
+        const key = self.sourceTypeKey(source_module_idx, source_var);
         if (type_scope.source_var_map.get(key)) |scoped| return scoped;
         const source_module = self.ctx.mirModule(source_module_idx);
-        var copy_map = std.AutoHashMap(Var, Var).init(self.allocator);
-        defer copy_map.deinit();
-        const copied_root = try type_clone_source.copyVar(
+        const copied_root = try type_clone_source.copyVarFromModule(
+            source_module_idx,
             source_module.typeStoreConst(),
             type_scope.typeStoreMut(),
             source_var,
-            &copy_map,
+            &type_scope.copied_source_var_map,
             source_module.identStoreConst(),
             type_scope.identStoreMut(),
             self.allocator,
         );
-        const scoped_root = try type_scope.instantiator.instantiateVar(copied_root);
-
-        if (type_scope.source_var_map.get(key)) |existing_root| {
-            if (existing_root != scoped_root) {
-                try self.unifySpecializedCheckerVars(source_module_idx, type_scope, existing_root, scoped_root);
-            }
-        } else {
-            try type_scope.source_var_map.put(key, scoped_root);
-        }
-
-        var iter = copy_map.iterator();
-        while (iter.next()) |entry| {
-            const source_key: TypeCloneScope.TypeKey = .{
-                .module_idx = source_module_idx,
-                .var_ = entry.key_ptr.*,
-            };
-            const instantiated = type_scope.instantiation_var_map.get(entry.value_ptr.*) orelse debugPanic(
-                "monotype specialization invariant violated: instantiated source var missing workspace mapping in module {d}",
-                .{source_module_idx},
-            );
-            if (type_scope.source_var_map.get(source_key)) |existing| {
-                if (existing != instantiated) {
-                    try self.unifySpecializedCheckerVars(source_module_idx, type_scope, existing, instantiated);
-                }
-                continue;
-            }
-            try type_scope.source_var_map.put(source_key, instantiated);
-        }
-
-        return type_scope.source_var_map.get(key) orelse debugPanic(
-            "monotype specialization invariant violated: scoped source var missing published mapping in module {d}",
-            .{source_module_idx},
-        );
+        const scoped_root = type_scope.instantiation_var_map.get(copied_root) orelse
+            try type_scope.instantiator.instantiateVar(copied_root);
+        try self.putOrAssertSourceVarMapping(type_scope, key, scoped_root);
+        return scoped_root;
     }
 
     fn prepareScopedFunctionRoot(
@@ -9551,26 +10018,1167 @@ pub const Lowerer = struct {
         source_fn_var: Var,
         expected_var: ?Var,
     ) std.mem.Allocator.Error!Var {
-        const scoped_fn_var = try self.scopeVar(type_scope, module_idx, source_fn_var);
         if (expected_var) |expected| {
-            try self.unifySpecializedCheckerVars(module_idx, type_scope, scoped_fn_var, expected);
+            return try self.bindSourceVarToExistingWorkspace(module_idx, type_scope, source_fn_var, expected);
         }
-        return scoped_fn_var;
+        return try self.scopeVar(type_scope, module_idx, source_fn_var);
     }
 
-    fn putOrUnifySourceVarMapping(
+    fn putOrAssertSourceVarMapping(
         self: *Lowerer,
         type_scope: *TypeCloneScope,
         key: TypeCloneScope.TypeKey,
         scoped_var: Var,
     ) std.mem.Allocator.Error!void {
+        _ = self;
         if (type_scope.source_var_map.get(key)) |existing| {
             if (existing != scoped_var) {
-                try self.unifySpecializedCheckerVars(key.module_idx, type_scope, existing, scoped_var);
+                debugPanic(
+                    "monotype specialization invariant violated: conflicting scoped source var mapping for module {d}",
+                    .{key.module_idx},
+                );
             }
             return;
         }
         try type_scope.source_var_map.put(key, scoped_var);
+    }
+
+    fn bindSourceVarToExistingWorkspace(
+        self: *Lowerer,
+        source_module_idx: u32,
+        type_scope: *TypeCloneScope,
+        source_var: Var,
+        workspace_var: Var,
+    ) std.mem.Allocator.Error!Var {
+        const source_module = self.ctx.mirModule(source_module_idx);
+        const source_store = source_module.typeStoreConst();
+        const resolved_source = source_store.resolveVar(source_var);
+        const key = self.sourceTypeKey(source_module_idx, resolved_source.var_);
+        if (type_scope.source_var_map.get(key)) |existing| {
+            return existing;
+        }
+
+        const workspace_store = type_scope.typeStoreConst();
+        const resolved_workspace = workspace_store.resolveVar(workspace_var);
+        try type_scope.source_var_map.put(key, resolved_workspace.var_);
+        switch (resolved_workspace.desc.content) {
+            .flex, .rigid, .err => {
+                switch (resolved_source.desc.content) {
+                    .flex, .rigid, .err => try self.mergeSourceFlexLikeIntoWorkspaceVar(
+                        source_module_idx,
+                        source_store,
+                        source_module.identStoreConst(),
+                        resolved_source.desc.content,
+                        type_scope,
+                        resolved_workspace.var_,
+                        resolved_workspace.desc.content,
+                    ),
+                    else => try self.materializeSourceContentIntoWorkspaceVar(
+                        source_module_idx,
+                        source_store,
+                        source_module.identStoreConst(),
+                        resolved_source.desc.content,
+                        type_scope,
+                        resolved_workspace.var_,
+                    ),
+                }
+                return resolved_workspace.var_;
+            },
+            else => {},
+        }
+        try self.bindSourceContentToExistingWorkspace(
+            source_module_idx,
+            source_store,
+            source_module.identStoreConst(),
+            resolved_source.desc.content,
+            resolved_workspace.var_,
+            resolved_workspace.desc.content,
+            type_scope,
+        );
+        return resolved_workspace.var_;
+    }
+
+    fn formatVarTextFromStore(
+        self: *Lowerer,
+        store: *const types.Store,
+        idents: *const base.Ident.Store,
+        var_: Var,
+    ) std.mem.Allocator.Error![]u8 {
+        var writer = try types.TypeWriter.initFromParts(
+            self.allocator,
+            store,
+            idents,
+            null,
+        );
+        defer writer.deinit();
+        writer.setDefaultNumeralsToDec(true);
+        const text = try writer.writeGet(var_, .one_line);
+        return self.allocator.dupe(u8, text);
+    }
+
+    fn formatTagUnionText(
+        self: *Lowerer,
+        store: *const types.Store,
+        idents: *const base.Ident.Store,
+        tags: types.Tag.SafeMultiList.Range,
+        ext: Var,
+    ) std.mem.Allocator.Error![]u8 {
+        var buf = try std.array_list.Managed(u8).initCapacity(self.allocator, 64);
+        defer buf.deinit();
+        const writer = buf.writer();
+        try writer.writeAll("[");
+        const tag_slice = store.getTagsSlice(tags);
+        for (tag_slice.items(.name), tag_slice.items(.args), 0..) |tag_name, args_range, tag_index| {
+            if (tag_index != 0) try writer.writeAll(", ");
+            try writer.writeAll(idents.getText(tag_name));
+            const args = store.sliceVars(args_range);
+            if (args.len != 0) {
+                try writer.writeAll("(");
+                for (args, 0..) |arg_var, arg_index| {
+                    if (arg_index != 0) try writer.writeAll(", ");
+                    const arg_text = try self.formatVarTextFromStore(store, idents, arg_var);
+                    defer self.allocator.free(arg_text);
+                    try writer.writeAll(arg_text);
+                }
+                try writer.writeAll(")");
+            }
+        }
+        try writer.writeAll("]");
+        switch (store.resolveVar(ext).desc.content) {
+            .structure => |flat| switch (flat) {
+                .empty_tag_union => {},
+                else => {
+                    const ext_text = try self.formatVarTextFromStore(store, idents, ext);
+                    defer self.allocator.free(ext_text);
+                    try writer.print(" + {s}", .{ext_text});
+                },
+            },
+            else => {
+                const ext_text = try self.formatVarTextFromStore(store, idents, ext);
+                defer self.allocator.free(ext_text);
+                try writer.print(" + {s}", .{ext_text});
+            },
+        }
+        return buf.toOwnedSlice();
+    }
+
+    fn gatherFlattenedTagUnion(
+        self: *Lowerer,
+        store: *const types.Store,
+        tags: types.Tag.SafeMultiList.Range,
+        initial_ext: Var,
+        out: *std.ArrayList(types.Tag),
+    ) std.mem.Allocator.Error!Var {
+        const tag_slice = store.getTagsSlice(tags);
+        for (tag_slice.items(.name), tag_slice.items(.args)) |name, args| {
+            try out.append(self.allocator, .{ .name = name, .args = args });
+        }
+
+        var ext = initial_ext;
+        var iteration_count: usize = 0;
+        while (true) : (iteration_count += 1) {
+            if (iteration_count > 1024) {
+                debugPanic(
+                    "monotype specialization invariant violated: tag union extension chain did not terminate",
+                    .{},
+                );
+            }
+
+            const resolved = store.resolveVar(ext);
+            switch (resolved.desc.content) {
+                .alias => |alias| {
+                    ext = store.getAliasBackingVar(alias);
+                },
+                .structure => |flat| switch (flat) {
+                    .tag_union => |ext_tags| {
+                        const ext_slice = store.getTagsSlice(ext_tags.tags);
+                        for (ext_slice.items(.name), ext_slice.items(.args)) |name, args| {
+                            try out.append(self.allocator, .{ .name = name, .args = args });
+                        }
+                        ext = ext_tags.ext;
+                    },
+                    else => return resolved.var_,
+                },
+                else => return resolved.var_,
+            }
+        }
+    }
+
+    fn materializeSourceTagUnionResidualIntoWorkspaceVar(
+        self: *Lowerer,
+        source_module_idx: u32,
+        source_store: *const types.Store,
+        source_idents: *const base.Ident.Store,
+        residual_tags: []const types.Tag,
+        residual_ext: Var,
+        type_scope: *TypeCloneScope,
+        workspace_var: Var,
+    ) std.mem.Allocator.Error!void {
+        const workspace_store = type_scope.typeStoreMut();
+        var workspace_tags = std.ArrayList(types.Tag).empty;
+        defer workspace_tags.deinit(self.allocator);
+
+        for (residual_tags) |source_tag| {
+            const source_args = source_store.sliceVars(source_tag.args);
+            const workspace_args = try self.allocator.alloc(Var, source_args.len);
+            defer self.allocator.free(workspace_args);
+            for (source_args, 0..) |source_arg, i| {
+                workspace_args[i] = try self.scopeVar(type_scope, source_module_idx, source_arg);
+            }
+            try workspace_tags.append(self.allocator, try workspace_store.mkTag(
+                try self.copySourceIdentToWorkspace(source_idents, type_scope, source_tag.name),
+                workspace_args,
+            ));
+        }
+
+        const materialized = try workspace_store.mkTagUnion(
+            workspace_tags.items,
+            try self.scopeVar(type_scope, source_module_idx, residual_ext),
+        );
+        try workspace_store.dangerousSetVarDesc(workspace_var, .{
+            .content = .{ .structure = materialized.structure },
+            .rank = types.Rank.generalized,
+        });
+    }
+
+    fn materializeWorkspaceTagUnionResidualVar(
+        self: *Lowerer,
+        residual_tags: []const types.Tag,
+        residual_ext: Var,
+        type_scope: *TypeCloneScope,
+    ) std.mem.Allocator.Error!Var {
+        _ = self;
+        const workspace_store = type_scope.typeStoreMut();
+        const content = try workspace_store.mkTagUnion(residual_tags, residual_ext);
+        return try workspace_store.freshFromContentWithRank(content, types.Rank.generalized);
+    }
+
+    fn materializeWorkspaceRecordResidualVar(
+        self: *Lowerer,
+        residual_fields: []const types.RecordField,
+        terminal: FlattenedRecordTerminal,
+        type_scope: *TypeCloneScope,
+    ) std.mem.Allocator.Error!Var {
+        _ = self;
+        const workspace_store = type_scope.typeStoreMut();
+
+        const content: types.Content = switch (terminal) {
+            .unbound => .{ .structure = .{
+                .record_unbound = try workspace_store.appendRecordFields(residual_fields),
+            } },
+            .empty_record, .var_ => blk: {
+                const ext_var = switch (terminal) {
+                    .empty_record => try workspace_store.freshFromContentWithRank(
+                        .{ .structure = .empty_record },
+                        types.Rank.generalized,
+                    ),
+                    .var_ => |var_| var_,
+                    .unbound => unreachable,
+                };
+                break :blk .{ .structure = .{
+                    .record = .{
+                        .fields = try workspace_store.appendRecordFields(residual_fields),
+                        .ext = ext_var,
+                    },
+                } };
+            },
+        };
+
+        return try workspace_store.freshFromContentWithRank(content, types.Rank.generalized);
+    }
+
+    fn flattenedRecordTerminalAsVar(
+        self: *Lowerer,
+        terminal: FlattenedRecordTerminal,
+        type_scope: *TypeCloneScope,
+    ) std.mem.Allocator.Error!Var {
+        _ = self;
+        const workspace_store = type_scope.typeStoreMut();
+        return switch (terminal) {
+            .var_ => |var_| var_,
+            .empty_record => try workspace_store.freshFromContentWithRank(
+                .{ .structure = .empty_record },
+                types.Rank.generalized,
+            ),
+            .unbound => try workspace_store.freshFromContentWithRank(
+                .{ .structure = .{
+                    .record_unbound = try workspace_store.appendRecordFields(&.{}),
+                } },
+                types.Rank.generalized,
+            ),
+        };
+    }
+
+    const FlattenedRecordTerminal = union(enum) {
+        empty_record,
+        unbound,
+        var_: Var,
+    };
+
+    fn alignFlattenedRecordTerminal(
+        self: *Lowerer,
+        type_scope: *TypeCloneScope,
+        canonical_terminal: FlattenedRecordTerminal,
+        aligned_terminal: FlattenedRecordTerminal,
+    ) std.mem.Allocator.Error!void {
+        switch (canonical_terminal) {
+            .empty_record => switch (aligned_terminal) {
+                .empty_record, .unbound => {},
+                else => debugPanic(
+                    "monotype specialization invariant violated: empty-record/content mismatch while aligning workspace vars",
+                    .{},
+                ),
+            },
+            .unbound => switch (aligned_terminal) {
+                .unbound => {},
+                else => debugPanic(
+                    "monotype specialization invariant violated: open-record/content mismatch while aligning workspace vars",
+                    .{},
+                ),
+            },
+            .var_ => |canonical_var| switch (aligned_terminal) {
+                .var_ => |aligned_var| try self.alignWorkspaceVarToCanonical(type_scope, canonical_var, aligned_var),
+                else => debugPanic(
+                    "monotype specialization invariant violated: record extension/content mismatch while aligning workspace vars",
+                    .{},
+                ),
+            },
+        }
+    }
+
+    fn gatherFlattenedRecordFields(
+        self: *Lowerer,
+        store: *const types.Store,
+        fields: types.RecordField.SafeMultiList.Range,
+        initial_ext: Var,
+        out: *std.ArrayList(types.RecordField),
+    ) std.mem.Allocator.Error!FlattenedRecordTerminal {
+        const field_slice = store.getRecordFieldsSlice(fields);
+        for (field_slice.items(.name), field_slice.items(.var_)) |name, var_| {
+            try out.append(self.allocator, .{ .name = name, .var_ = var_ });
+        }
+
+        var ext = initial_ext;
+        var iteration_count: usize = 0;
+        while (true) : (iteration_count += 1) {
+            if (iteration_count > 1024) {
+                debugPanic(
+                    "monotype specialization invariant violated: record extension chain did not terminate",
+                    .{},
+                );
+            }
+
+            const resolved = store.resolveVar(ext);
+            switch (resolved.desc.content) {
+                .alias => |alias| {
+                    ext = store.getAliasBackingVar(alias);
+                },
+                .structure => |flat| switch (flat) {
+                    .record => |ext_record| {
+                        const ext_slice = store.getRecordFieldsSlice(ext_record.fields);
+                        for (ext_slice.items(.name), ext_slice.items(.var_)) |name, var_| {
+                            try out.append(self.allocator, .{ .name = name, .var_ = var_ });
+                        }
+                        ext = ext_record.ext;
+                    },
+                    .record_unbound => |ext_fields| {
+                        const ext_slice = store.getRecordFieldsSlice(ext_fields);
+                        for (ext_slice.items(.name), ext_slice.items(.var_)) |name, var_| {
+                            try out.append(self.allocator, .{ .name = name, .var_ = var_ });
+                        }
+                        return .unbound;
+                    },
+                    .empty_record => return .empty_record,
+                    else => return .{ .var_ = resolved.var_ },
+                },
+                else => return .{ .var_ = resolved.var_ },
+            }
+        }
+    }
+
+    fn gatherFlattenedRecordContent(
+        self: *Lowerer,
+        store: *const types.Store,
+        root_var: Var,
+        content: types.Content,
+        out: *std.ArrayList(types.RecordField),
+    ) std.mem.Allocator.Error!FlattenedRecordTerminal {
+        return switch (content) {
+            .structure => |flat| switch (flat) {
+                .record => |record| self.gatherFlattenedRecordFields(store, record.fields, record.ext, out),
+                .record_unbound => |fields| blk: {
+                    const field_slice = store.getRecordFieldsSlice(fields);
+                    for (field_slice.items(.name), field_slice.items(.var_)) |name, var_| {
+                        try out.append(self.allocator, .{ .name = name, .var_ = var_ });
+                    }
+                    _ = root_var;
+                    break :blk .unbound;
+                },
+                .empty_record => .empty_record,
+                else => debugPanic(
+                    "monotype specialization invariant violated: attempted to flatten non-record workspace content as record",
+                    .{},
+                ),
+            },
+            else => debugPanic(
+                "monotype specialization invariant violated: attempted to flatten non-structural workspace content as record",
+                .{},
+            ),
+        };
+    }
+
+    fn bindSourceContentToExistingWorkspace(
+        self: *Lowerer,
+        source_module_idx: u32,
+        source_store: *const types.Store,
+        source_idents: *const base.Ident.Store,
+        source_content: types.Content,
+        workspace_var: Var,
+        workspace_content: types.Content,
+        type_scope: *TypeCloneScope,
+    ) std.mem.Allocator.Error!void {
+        switch (workspace_content) {
+            .flex, .rigid, .err => return,
+            else => {},
+        }
+        switch (source_content) {
+            .flex, .rigid, .err => return,
+            .alias => |source_alias| switch (workspace_content) {
+                .alias => |workspace_alias| {
+                    try self.assertMatchingIdentText(source_idents, type_scope.identStoreConst(), source_alias.ident.ident_idx, workspace_alias.ident.ident_idx, "alias");
+                    try self.assertMatchingIdentText(source_idents, type_scope.identStoreConst(), source_alias.origin_module, workspace_alias.origin_module, "alias module");
+                    _ = try self.bindSourceVarToExistingWorkspace(
+                        source_module_idx,
+                        type_scope,
+                        source_store.getAliasBackingVar(source_alias),
+                        type_scope.typeStoreConst().getAliasBackingVar(workspace_alias),
+                    );
+                    const source_args = source_store.sliceAliasArgs(source_alias);
+                    const workspace_args = type_scope.typeStoreConst().sliceAliasArgs(workspace_alias);
+                    if (source_args.len != workspace_args.len) {
+                        debugPanic(
+                            "monotype specialization invariant violated: alias arg count mismatch in module {d}",
+                            .{source_module_idx},
+                        );
+                    }
+                    for (source_args, workspace_args) |source_arg, workspace_arg| {
+                        _ = try self.bindSourceVarToExistingWorkspace(source_module_idx, type_scope, source_arg, workspace_arg);
+                    }
+                },
+                else => debugPanic(
+                    "monotype specialization invariant violated: alias source content bound to non-alias workspace content in module {d}",
+                    .{source_module_idx},
+                ),
+            },
+            .structure => |source_flat| switch (source_flat) {
+                .fn_pure, .fn_effectful, .fn_unbound => |source_func| {
+                    const workspace_func = switch (workspace_content) {
+                        .structure => |workspace_flat| switch (workspace_flat) {
+                            .fn_pure, .fn_effectful, .fn_unbound => |func| func,
+                            else => debugPanic(
+                                "monotype specialization invariant violated: function source content bound to non-function workspace content in module {d}",
+                                .{source_module_idx},
+                            ),
+                        },
+                        else => debugPanic(
+                            "monotype specialization invariant violated: function source content bound to non-structural workspace content in module {d}",
+                            .{source_module_idx},
+                        ),
+                    };
+                    const source_args = source_store.sliceVars(source_func.args);
+                    const workspace_args = type_scope.typeStoreConst().sliceVars(workspace_func.args);
+                    if (source_args.len != workspace_args.len) {
+                        debugPanic(
+                            "monotype specialization invariant violated: function arity mismatch in module {d}",
+                            .{source_module_idx},
+                        );
+                    }
+                    for (source_args, workspace_args) |source_arg, workspace_arg| {
+                        _ = try self.bindSourceVarToExistingWorkspace(source_module_idx, type_scope, source_arg, workspace_arg);
+                    }
+                    _ = try self.bindSourceVarToExistingWorkspace(source_module_idx, type_scope, source_func.ret, workspace_func.ret);
+                },
+                .tuple => |source_tuple| switch (workspace_content) {
+                    .structure => |workspace_flat| switch (workspace_flat) {
+                        .tuple => |workspace_tuple| {
+                            const source_elems = source_store.sliceVars(source_tuple.elems);
+                            const workspace_elems = type_scope.typeStoreConst().sliceVars(workspace_tuple.elems);
+                            if (source_elems.len != workspace_elems.len) {
+                                debugPanic(
+                                    "monotype specialization invariant violated: tuple arity mismatch in module {d}",
+                                    .{source_module_idx},
+                                );
+                            }
+                            for (source_elems, workspace_elems) |source_elem, workspace_elem| {
+                                _ = try self.bindSourceVarToExistingWorkspace(source_module_idx, type_scope, source_elem, workspace_elem);
+                            }
+                        },
+                        else => debugPanic(
+                            "monotype specialization invariant violated: tuple source content bound to non-tuple workspace content in module {d}",
+                            .{source_module_idx},
+                        ),
+                    },
+                    else => debugPanic(
+                        "monotype specialization invariant violated: tuple source content bound to non-structural workspace content in module {d}",
+                        .{source_module_idx},
+                    ),
+                },
+                .nominal_type => |source_nominal| switch (workspace_content) {
+                    .structure => |workspace_flat| switch (workspace_flat) {
+                        .nominal_type => |workspace_nominal| {
+                            try self.assertMatchingIdentText(source_idents, type_scope.identStoreConst(), source_nominal.ident.ident_idx, workspace_nominal.ident.ident_idx, "nominal");
+                            try self.assertMatchingIdentText(source_idents, type_scope.identStoreConst(), source_nominal.origin_module, workspace_nominal.origin_module, "nominal module");
+                            if (source_nominal.is_opaque != workspace_nominal.is_opaque) {
+                                debugPanic(
+                                    "monotype specialization invariant violated: nominal opacity mismatch in module {d}",
+                                    .{source_module_idx},
+                                );
+                            }
+                            _ = try self.bindSourceVarToExistingWorkspace(
+                                source_module_idx,
+                                type_scope,
+                                source_store.getNominalBackingVar(source_nominal),
+                                type_scope.typeStoreConst().getNominalBackingVar(workspace_nominal),
+                            );
+                            const source_args = source_store.sliceNominalArgs(source_nominal);
+                            const workspace_args = type_scope.typeStoreConst().sliceNominalArgs(workspace_nominal);
+                            if (source_args.len != workspace_args.len) {
+                                debugPanic(
+                                    "monotype specialization invariant violated: nominal arg count mismatch in module {d}",
+                                    .{source_module_idx},
+                                );
+                            }
+                            for (source_args, workspace_args) |source_arg, workspace_arg| {
+                                _ = try self.bindSourceVarToExistingWorkspace(source_module_idx, type_scope, source_arg, workspace_arg);
+                            }
+                        },
+                        else => {
+                            if (!source_nominal.canLiftInner(self.ctx.mirModule(source_module_idx).qualifiedModuleIdent())) {
+                                debugPanic(
+                                    "monotype specialization invariant violated: opaque nominal source content bound to lifted backing workspace content in module {d}",
+                                    .{source_module_idx},
+                                );
+                            }
+                            _ = try self.bindSourceVarToExistingWorkspace(
+                                source_module_idx,
+                                type_scope,
+                                source_store.getNominalBackingVar(source_nominal),
+                                workspace_var,
+                            );
+                        },
+                    },
+                    else => debugPanic(
+                        "monotype specialization invariant violated: nominal source content bound to non-structural workspace content in module {d}",
+                        .{source_module_idx},
+                    ),
+                },
+                .record => |source_record| switch (workspace_content) {
+                    .structure => |workspace_flat| switch (workspace_flat) {
+                        .record => |workspace_record| {
+                            const source_fields = source_store.getRecordFieldsSlice(source_record.fields);
+                            const workspace_fields = type_scope.typeStoreConst().getRecordFieldsSlice(workspace_record.fields);
+                            if (source_fields.len != workspace_fields.len) {
+                                debugPanic(
+                                    "monotype specialization invariant violated: record field count mismatch in module {d}",
+                                    .{source_module_idx},
+                                );
+                            }
+                            for (source_fields.items(.name), source_fields.items(.var_)) |source_name, source_field_var| {
+                                var matched = false;
+                                for (workspace_fields.items(.name), workspace_fields.items(.var_)) |workspace_name, workspace_field_var| {
+                                    if (!std.mem.eql(u8, source_idents.getText(source_name), type_scope.identStoreConst().getText(workspace_name))) continue;
+                                    _ = try self.bindSourceVarToExistingWorkspace(source_module_idx, type_scope, source_field_var, workspace_field_var);
+                                    matched = true;
+                                    break;
+                                }
+                                if (!matched) {
+                                    debugPanic(
+                                        "monotype specialization invariant violated: missing record field while binding explicit source facts in module {d}",
+                                        .{source_module_idx},
+                                    );
+                                }
+                            }
+                            _ = try self.bindSourceVarToExistingWorkspace(source_module_idx, type_scope, source_record.ext, workspace_record.ext);
+                        },
+                        else => debugPanic(
+                            "monotype specialization invariant violated: record source content bound to non-record workspace content in module {d}",
+                            .{source_module_idx},
+                        ),
+                    },
+                    else => debugPanic(
+                        "monotype specialization invariant violated: record source content bound to non-structural workspace content in module {d}",
+                        .{source_module_idx},
+                    ),
+                },
+                .record_unbound => |source_fields_range| switch (workspace_content) {
+                    .structure => |workspace_flat| switch (workspace_flat) {
+                        .record_unbound => |workspace_fields_range| {
+                            const source_fields = source_store.getRecordFieldsSlice(source_fields_range);
+                            const workspace_fields = type_scope.typeStoreConst().getRecordFieldsSlice(workspace_fields_range);
+                            if (source_fields.len != workspace_fields.len) {
+                                debugPanic(
+                                    "monotype specialization invariant violated: open record field count mismatch in module {d}",
+                                    .{source_module_idx},
+                                );
+                            }
+                            for (source_fields.items(.name), source_fields.items(.var_)) |source_name, source_field_var| {
+                                var matched = false;
+                                for (workspace_fields.items(.name), workspace_fields.items(.var_)) |workspace_name, workspace_field_var| {
+                                    if (!std.mem.eql(u8, source_idents.getText(source_name), type_scope.identStoreConst().getText(workspace_name))) continue;
+                                    _ = try self.bindSourceVarToExistingWorkspace(source_module_idx, type_scope, source_field_var, workspace_field_var);
+                                    matched = true;
+                                    break;
+                                }
+                                if (!matched) {
+                                    debugPanic(
+                                        "monotype specialization invariant violated: missing open record field while binding explicit source facts in module {d}",
+                                        .{source_module_idx},
+                                    );
+                                }
+                            }
+                        },
+                        else => debugPanic(
+                            "monotype specialization invariant violated: open record source content bound to non-open-record workspace content in module {d}",
+                            .{source_module_idx},
+                        ),
+                    },
+                    else => debugPanic(
+                        "monotype specialization invariant violated: open record source content bound to non-structural workspace content in module {d}",
+                        .{source_module_idx},
+                    ),
+                },
+                .tag_union => |source_tags| switch (workspace_content) {
+                    .structure => |workspace_flat| switch (workspace_flat) {
+                        .tag_union => |workspace_tags| {
+                            var source_flattened = std.ArrayList(types.Tag).empty;
+                            defer source_flattened.deinit(self.allocator);
+                            const source_terminal_ext = try self.gatherFlattenedTagUnion(
+                                source_store,
+                                source_tags.tags,
+                                source_tags.ext,
+                                &source_flattened,
+                            );
+
+                            var workspace_flattened = std.ArrayList(types.Tag).empty;
+                            defer workspace_flattened.deinit(self.allocator);
+                            const workspace_terminal_ext = try self.gatherFlattenedTagUnion(
+                                type_scope.typeStoreConst(),
+                                workspace_tags.tags,
+                                workspace_tags.ext,
+                                &workspace_flattened,
+                            );
+
+                            var matched_source = try self.allocator.alloc(bool, source_flattened.items.len);
+                            defer self.allocator.free(matched_source);
+                            @memset(matched_source, false);
+
+                            var residual_workspace_tags = std.ArrayList(types.Tag).empty;
+                            defer residual_workspace_tags.deinit(self.allocator);
+
+                            for (workspace_flattened.items) |workspace_tag| {
+                                var matched = false;
+                                for (source_flattened.items, 0..) |source_tag, source_idx| {
+                                    if (!std.mem.eql(
+                                        u8,
+                                        source_idents.getText(source_tag.name),
+                                        type_scope.identStoreConst().getText(workspace_tag.name),
+                                    )) continue;
+
+                                    const source_args = source_store.sliceVars(source_tag.args);
+                                    const workspace_args = type_scope.typeStoreConst().sliceVars(workspace_tag.args);
+                                    if (source_args.len != workspace_args.len) {
+                                        debugPanic(
+                                            "monotype specialization invariant violated: tag payload arity mismatch in module {d}",
+                                            .{source_module_idx},
+                                        );
+                                    }
+                                    for (source_args, workspace_args) |source_arg, workspace_arg| {
+                                        _ = try self.bindSourceVarToExistingWorkspace(source_module_idx, type_scope, source_arg, workspace_arg);
+                                    }
+                                    matched_source[source_idx] = true;
+                                    matched = true;
+                                    break;
+                                }
+                                if (!matched) {
+                                    try residual_workspace_tags.append(self.allocator, workspace_tag);
+                                }
+                            }
+
+                            var residual_source_tags = std.ArrayList(types.Tag).empty;
+                            defer residual_source_tags.deinit(self.allocator);
+                            for (source_flattened.items, matched_source) |source_tag, was_matched| {
+                                if (!was_matched) {
+                                    try residual_source_tags.append(self.allocator, source_tag);
+                                }
+                            }
+
+                            if (residual_source_tags.items.len != 0 and residual_workspace_tags.items.len != 0) {
+                                const source_text = try self.formatTagUnionText(
+                                    source_store,
+                                    source_idents,
+                                    source_tags.tags,
+                                    source_tags.ext,
+                                );
+                                defer self.allocator.free(source_text);
+                                const workspace_text = try self.formatTagUnionText(
+                                    type_scope.typeStoreConst(),
+                                    type_scope.identStoreConst(),
+                                    workspace_tags.tags,
+                                    workspace_tags.ext,
+                                );
+                                defer self.allocator.free(workspace_text);
+                                debugPanic(
+                                    "monotype specialization invariant violated: tag union residuals diverged on both source and workspace sides in module {d}; source {s} vs workspace {s}",
+                                    .{ source_module_idx, source_text, workspace_text },
+                                );
+                            }
+
+                            if (residual_source_tags.items.len != 0) {
+                                const resolved_workspace_terminal = type_scope.typeStoreConst().resolveVar(workspace_terminal_ext);
+                                switch (resolved_workspace_terminal.desc.content) {
+                                    .flex, .rigid, .err => try self.materializeSourceTagUnionResidualIntoWorkspaceVar(
+                                        source_module_idx,
+                                        source_store,
+                                        source_idents,
+                                        residual_source_tags.items,
+                                        source_terminal_ext,
+                                        type_scope,
+                                        resolved_workspace_terminal.var_,
+                                    ),
+                                    else => {
+                                        const source_text = try self.formatTagUnionText(
+                                            source_store,
+                                            source_idents,
+                                            source_tags.tags,
+                                            source_tags.ext,
+                                        );
+                                        defer self.allocator.free(source_text);
+                                        const workspace_text = try self.formatTagUnionText(
+                                            type_scope.typeStoreConst(),
+                                            type_scope.identStoreConst(),
+                                            workspace_tags.tags,
+                                            workspace_tags.ext,
+                                        );
+                                        defer self.allocator.free(workspace_text);
+                                        debugPanic(
+                                            "monotype specialization invariant violated: source tag union requires residual materialization in module {d}; source {s} vs workspace {s}",
+                                            .{ source_module_idx, source_text, workspace_text },
+                                        );
+                                    },
+                                }
+                            } else if (residual_workspace_tags.items.len != 0) {
+                                const residual_workspace_var = try self.materializeWorkspaceTagUnionResidualVar(
+                                    residual_workspace_tags.items,
+                                    workspace_terminal_ext,
+                                    type_scope,
+                                );
+                                _ = try self.bindSourceVarToExistingWorkspace(
+                                    source_module_idx,
+                                    type_scope,
+                                    source_terminal_ext,
+                                    residual_workspace_var,
+                                );
+                            } else {
+                                _ = try self.bindSourceVarToExistingWorkspace(
+                                    source_module_idx,
+                                    type_scope,
+                                    source_terminal_ext,
+                                    workspace_terminal_ext,
+                                );
+                            }
+                        },
+                        else => debugPanic(
+                            "monotype specialization invariant violated: tag union source content bound to non-tag-union workspace content in module {d}",
+                            .{source_module_idx},
+                        ),
+                    },
+                    else => debugPanic(
+                        "monotype specialization invariant violated: tag union source content bound to non-structural workspace content in module {d}",
+                        .{source_module_idx},
+                    ),
+                },
+                .empty_record => switch (workspace_content) {
+                    .structure => |workspace_flat| if (workspace_flat != .empty_record) {
+                        debugPanic(
+                            "monotype specialization invariant violated: empty record source content bound to non-empty-record workspace content in module {d}",
+                            .{source_module_idx},
+                        );
+                    },
+                    else => debugPanic(
+                        "monotype specialization invariant violated: empty record source content bound to non-structural workspace content in module {d}",
+                        .{source_module_idx},
+                    ),
+                },
+                .empty_tag_union => switch (workspace_content) {
+                    .structure => |workspace_flat| if (workspace_flat != .empty_tag_union) {
+                        debugPanic(
+                            "monotype specialization invariant violated: empty tag union source content bound to non-empty-tag-union workspace content in module {d}",
+                            .{source_module_idx},
+                        );
+                    },
+                    else => debugPanic(
+                        "monotype specialization invariant violated: empty tag union source content bound to non-structural workspace content in module {d}",
+                        .{source_module_idx},
+                    ),
+                },
+            },
+        }
+    }
+
+    fn assertMatchingIdentText(
+        self: *const Lowerer,
+        source_idents: *const base.Ident.Store,
+        workspace_idents: *const base.Ident.Store,
+        source_ident: base.Ident.Idx,
+        workspace_ident: base.Ident.Idx,
+        comptime context: []const u8,
+    ) std.mem.Allocator.Error!void {
+        _ = self;
+        if (std.mem.eql(u8, source_idents.getText(source_ident), workspace_idents.getText(workspace_ident))) return;
+        debugPanic(
+            "monotype specialization invariant violated: mismatched " ++ context ++ " identity while binding explicit source facts",
+            .{},
+        );
+    }
+
+    fn copySourceIdentToWorkspace(
+        self: *Lowerer,
+        source_idents: *const base.Ident.Store,
+        type_scope: *TypeCloneScope,
+        source_ident: base.Ident.Idx,
+    ) std.mem.Allocator.Error!base.Ident.Idx {
+        const text = source_idents.getText(source_ident);
+        return type_scope.identStoreConst().findByString(text) orelse
+            try type_scope.identStoreMut().insert(self.allocator, base.Ident.for_text(text));
+    }
+
+    fn mergeSourceStaticDispatchConstraintsIntoWorkspace(
+        self: *Lowerer,
+        source_module_idx: u32,
+        source_store: *const types.Store,
+        source_idents: *const base.Ident.Store,
+        type_scope: *TypeCloneScope,
+        source_constraints: types.StaticDispatchConstraint.SafeList.Range,
+        workspace_constraints: types.StaticDispatchConstraint.SafeList.Range,
+    ) std.mem.Allocator.Error!types.StaticDispatchConstraint.SafeList.Range {
+        if (source_constraints.len() == 0) return workspace_constraints;
+        if (workspace_constraints.len() == 0) {
+            return self.materializeSourceStaticDispatchConstraints(
+                source_module_idx,
+                source_store,
+                source_idents,
+                type_scope,
+                source_constraints,
+            );
+        }
+
+        const materialized_source = try self.materializeSourceStaticDispatchConstraints(
+            source_module_idx,
+            source_store,
+            source_idents,
+            type_scope,
+            source_constraints,
+        );
+        const source_slice = type_scope.typeStoreConst().sliceStaticDispatchConstraints(materialized_source);
+        const workspace_slice = type_scope.typeStoreConst().sliceStaticDispatchConstraints(workspace_constraints);
+        const merged = try self.allocator.alloc(types.StaticDispatchConstraint, source_slice.len + workspace_slice.len);
+        defer self.allocator.free(merged);
+        @memcpy(merged[0..source_slice.len], source_slice);
+        @memcpy(merged[source_slice.len..], workspace_slice);
+        return try type_scope.typeStoreMut().appendStaticDispatchConstraints(merged);
+    }
+
+    fn mergeSourceFlexLikeIntoWorkspaceVar(
+        self: *Lowerer,
+        source_module_idx: u32,
+        source_store: *const types.Store,
+        source_idents: *const base.Ident.Store,
+        source_content: types.Content,
+        type_scope: *TypeCloneScope,
+        workspace_var: Var,
+        workspace_content: types.Content,
+    ) std.mem.Allocator.Error!void {
+        const merged_content: types.Content = switch (workspace_content) {
+            .flex => |workspace_flex| switch (source_content) {
+                .flex => |source_flex| .{ .flex = .{
+                    .name = if (workspace_flex.name) |name|
+                        name
+                    else if (source_flex.name) |name|
+                        try self.copySourceIdentToWorkspace(source_idents, type_scope, name)
+                    else
+                        null,
+                    .constraints = try self.mergeSourceStaticDispatchConstraintsIntoWorkspace(
+                        source_module_idx,
+                        source_store,
+                        source_idents,
+                        type_scope,
+                        source_flex.constraints,
+                        workspace_flex.constraints,
+                    ),
+                } },
+                .rigid => |source_rigid| .{ .rigid = .{
+                    .name = try self.copySourceIdentToWorkspace(source_idents, type_scope, source_rigid.name),
+                    .constraints = try self.mergeSourceStaticDispatchConstraintsIntoWorkspace(
+                        source_module_idx,
+                        source_store,
+                        source_idents,
+                        type_scope,
+                        source_rigid.constraints,
+                        workspace_flex.constraints,
+                    ),
+                } },
+                .err => .err,
+                else => debugPanic(
+                    "monotype specialization invariant violated: expected flex-like source content while merging flex-like workspace var in module {d}",
+                    .{source_module_idx},
+                ),
+            },
+            .rigid => |workspace_rigid| switch (source_content) {
+                .flex => |source_flex| .{ .rigid = .{
+                    .name = workspace_rigid.name,
+                    .constraints = try self.mergeSourceStaticDispatchConstraintsIntoWorkspace(
+                        source_module_idx,
+                        source_store,
+                        source_idents,
+                        type_scope,
+                        source_flex.constraints,
+                        workspace_rigid.constraints,
+                    ),
+                } },
+                .rigid => |source_rigid| blk: {
+                    try self.assertMatchingIdentText(
+                        source_idents,
+                        type_scope.identStoreConst(),
+                        source_rigid.name,
+                        workspace_rigid.name,
+                        "rigid type-var",
+                    );
+                    break :blk .{ .rigid = .{
+                        .name = workspace_rigid.name,
+                        .constraints = try self.mergeSourceStaticDispatchConstraintsIntoWorkspace(
+                            source_module_idx,
+                            source_store,
+                            source_idents,
+                            type_scope,
+                            source_rigid.constraints,
+                            workspace_rigid.constraints,
+                        ),
+                    } };
+                },
+                .err => .err,
+                else => debugPanic(
+                    "monotype specialization invariant violated: expected flex-like source content while merging flex-like workspace var in module {d}",
+                    .{source_module_idx},
+                ),
+            },
+            .err => .err,
+            else => debugPanic(
+                "monotype specialization invariant violated: expected flex-like workspace content while merging source content in module {d}",
+                .{source_module_idx},
+            ),
+        };
+
+        try type_scope.typeStoreMut().dangerousSetVarDesc(workspace_var, .{
+            .content = merged_content,
+            .rank = types.Rank.generalized,
+        });
+    }
+
+    fn materializeSourceStaticDispatchConstraints(
+        self: *Lowerer,
+        source_module_idx: u32,
+        source_store: *const types.Store,
+        source_idents: *const base.Ident.Store,
+        type_scope: *TypeCloneScope,
+        constraints: types.StaticDispatchConstraint.SafeList.Range,
+    ) std.mem.Allocator.Error!types.StaticDispatchConstraint.SafeList.Range {
+        const source_constraints = source_store.sliceStaticDispatchConstraints(constraints);
+        var workspace_constraints = std.ArrayList(types.StaticDispatchConstraint).empty;
+        defer workspace_constraints.deinit(self.allocator);
+
+        for (source_constraints) |constraint| {
+            try workspace_constraints.append(self.allocator, .{
+                .fn_name = try self.copySourceIdentToWorkspace(source_idents, type_scope, constraint.fn_name),
+                .fn_var = try self.scopeVar(type_scope, source_module_idx, constraint.fn_var),
+                .site_expr_var = if (constraint.site_expr_var) |site_expr_var|
+                    try self.scopeVar(type_scope, source_module_idx, site_expr_var)
+                else
+                    null,
+                .origin = constraint.origin,
+                .num_literal = constraint.num_literal,
+            });
+        }
+
+        return try type_scope.typeStoreMut().appendStaticDispatchConstraints(workspace_constraints.items);
+    }
+
+    fn materializeSourceContentIntoWorkspaceVar(
+        self: *Lowerer,
+        source_module_idx: u32,
+        source_store: *const types.Store,
+        source_idents: *const base.Ident.Store,
+        source_content: types.Content,
+        type_scope: *TypeCloneScope,
+        workspace_var: Var,
+    ) std.mem.Allocator.Error!void {
+        const workspace_store = type_scope.typeStoreMut();
+        const materialized: types.Content = switch (source_content) {
+            .flex => |source_flex| .{ .flex = .{
+                .name = if (source_flex.name) |name|
+                    try self.copySourceIdentToWorkspace(source_idents, type_scope, name)
+                else
+                    null,
+                .constraints = try self.materializeSourceStaticDispatchConstraints(
+                    source_module_idx,
+                    source_store,
+                    source_idents,
+                    type_scope,
+                    source_flex.constraints,
+                ),
+            } },
+            .rigid => |source_rigid| .{ .rigid = .{
+                .name = try self.copySourceIdentToWorkspace(source_idents, type_scope, source_rigid.name),
+                .constraints = try self.materializeSourceStaticDispatchConstraints(
+                    source_module_idx,
+                    source_store,
+                    source_idents,
+                    type_scope,
+                    source_rigid.constraints,
+                ),
+            } },
+            .alias => |source_alias| blk: {
+                const source_args = source_store.sliceAliasArgs(source_alias);
+                const workspace_args = try self.allocator.alloc(Var, source_args.len);
+                defer self.allocator.free(workspace_args);
+                for (source_args, 0..) |source_arg, i| {
+                    workspace_args[i] = try self.scopeVar(type_scope, source_module_idx, source_arg);
+                }
+                break :blk try workspace_store.mkAlias(
+                    .{ .ident_idx = try self.copySourceIdentToWorkspace(source_idents, type_scope, source_alias.ident.ident_idx) },
+                    try self.scopeVar(type_scope, source_module_idx, source_store.getAliasBackingVar(source_alias)),
+                    workspace_args,
+                    try self.copySourceIdentToWorkspace(source_idents, type_scope, source_alias.origin_module),
+                );
+            },
+            .structure => |source_flat| .{ .structure = switch (source_flat) {
+                .fn_pure => |source_func| blk: {
+                    const source_args = source_store.sliceVars(source_func.args);
+                    const workspace_args = try self.allocator.alloc(Var, source_args.len);
+                    defer self.allocator.free(workspace_args);
+                    for (source_args, 0..) |source_arg, i| {
+                        workspace_args[i] = try self.scopeVar(type_scope, source_module_idx, source_arg);
+                    }
+                    break :blk (try workspace_store.mkFuncPure(
+                        workspace_args,
+                        try self.scopeVar(type_scope, source_module_idx, source_func.ret),
+                    )).structure;
+                },
+                .fn_effectful => |source_func| blk: {
+                    const source_args = source_store.sliceVars(source_func.args);
+                    const workspace_args = try self.allocator.alloc(Var, source_args.len);
+                    defer self.allocator.free(workspace_args);
+                    for (source_args, 0..) |source_arg, i| {
+                        workspace_args[i] = try self.scopeVar(type_scope, source_module_idx, source_arg);
+                    }
+                    break :blk (try workspace_store.mkFuncEffectful(
+                        workspace_args,
+                        try self.scopeVar(type_scope, source_module_idx, source_func.ret),
+                    )).structure;
+                },
+                .fn_unbound => |source_func| blk: {
+                    const source_args = source_store.sliceVars(source_func.args);
+                    const workspace_args = try self.allocator.alloc(Var, source_args.len);
+                    defer self.allocator.free(workspace_args);
+                    for (source_args, 0..) |source_arg, i| {
+                        workspace_args[i] = try self.scopeVar(type_scope, source_module_idx, source_arg);
+                    }
+                    break :blk (try workspace_store.mkFuncUnbound(
+                        workspace_args,
+                        try self.scopeVar(type_scope, source_module_idx, source_func.ret),
+                    )).structure;
+                },
+                .tuple => |source_tuple| blk: {
+                    const source_elems = source_store.sliceVars(source_tuple.elems);
+                    const workspace_elems = try self.allocator.alloc(Var, source_elems.len);
+                    defer self.allocator.free(workspace_elems);
+                    for (source_elems, 0..) |source_elem, i| {
+                        workspace_elems[i] = try self.scopeVar(type_scope, source_module_idx, source_elem);
+                    }
+                    break :blk .{ .tuple = .{ .elems = try workspace_store.appendVars(workspace_elems) } };
+                },
+                .nominal_type => |source_nominal| blk: {
+                    const source_args = source_store.sliceNominalArgs(source_nominal);
+                    const workspace_args = try self.allocator.alloc(Var, source_args.len);
+                    defer self.allocator.free(workspace_args);
+                    for (source_args, 0..) |source_arg, i| {
+                        workspace_args[i] = try self.scopeVar(type_scope, source_module_idx, source_arg);
+                    }
+                    break :blk (try workspace_store.mkNominal(
+                        .{ .ident_idx = try self.copySourceIdentToWorkspace(source_idents, type_scope, source_nominal.ident.ident_idx) },
+                        try self.scopeVar(type_scope, source_module_idx, source_store.getNominalBackingVar(source_nominal)),
+                        workspace_args,
+                        try self.copySourceIdentToWorkspace(source_idents, type_scope, source_nominal.origin_module),
+                        source_nominal.is_opaque,
+                    )).structure;
+                },
+                .record => |source_record| blk: {
+                    const source_fields = source_store.getRecordFieldsSlice(source_record.fields);
+                    var workspace_fields = std.ArrayList(types.RecordField).empty;
+                    defer workspace_fields.deinit(self.allocator);
+                    for (source_fields.items(.name), source_fields.items(.var_)) |source_name, source_field_var| {
+                        try workspace_fields.append(self.allocator, .{
+                            .name = try self.copySourceIdentToWorkspace(source_idents, type_scope, source_name),
+                            .var_ = try self.scopeVar(type_scope, source_module_idx, source_field_var),
+                        });
+                    }
+                    break :blk .{ .record = .{
+                        .fields = try workspace_store.appendRecordFields(workspace_fields.items),
+                        .ext = try self.scopeVar(type_scope, source_module_idx, source_record.ext),
+                    } };
+                },
+                .record_unbound => |source_fields_range| blk: {
+                    const source_fields = source_store.getRecordFieldsSlice(source_fields_range);
+                    var workspace_fields = std.ArrayList(types.RecordField).empty;
+                    defer workspace_fields.deinit(self.allocator);
+                    for (source_fields.items(.name), source_fields.items(.var_)) |source_name, source_field_var| {
+                        try workspace_fields.append(self.allocator, .{
+                            .name = try self.copySourceIdentToWorkspace(source_idents, type_scope, source_name),
+                            .var_ = try self.scopeVar(type_scope, source_module_idx, source_field_var),
+                        });
+                    }
+                    break :blk .{ .record_unbound = try workspace_store.appendRecordFields(workspace_fields.items) };
+                },
+                .tag_union => |source_tags| blk: {
+                    const source_tags_slice = source_store.getTagsSlice(source_tags.tags);
+                    var workspace_tags = std.ArrayList(types.Tag).empty;
+                    defer workspace_tags.deinit(self.allocator);
+                    for (source_tags_slice.items(.name), source_tags_slice.items(.args)) |source_name, source_args_range| {
+                        const source_args = source_store.sliceVars(source_args_range);
+                        const workspace_args = try self.allocator.alloc(Var, source_args.len);
+                        defer self.allocator.free(workspace_args);
+                        for (source_args, 0..) |source_arg, i| {
+                            workspace_args[i] = try self.scopeVar(type_scope, source_module_idx, source_arg);
+                        }
+                        try workspace_tags.append(self.allocator, try workspace_store.mkTag(
+                            try self.copySourceIdentToWorkspace(source_idents, type_scope, source_name),
+                            workspace_args,
+                        ));
+                    }
+                    break :blk (try workspace_store.mkTagUnion(
+                        workspace_tags.items,
+                        try self.scopeVar(type_scope, source_module_idx, source_tags.ext),
+                    )).structure;
+                },
+                .empty_tag_union => .empty_tag_union,
+                .empty_record => .empty_record,
+            } },
+            .err => .err,
+        };
+
+        try workspace_store.dangerousSetVarDesc(workspace_var, .{
+            .content = materialized,
+            .rank = types.Rank.generalized,
+        });
     }
 
     fn lookupResolvedDispatchTarget(
@@ -9596,148 +11204,129 @@ pub const Lowerer = struct {
         args: RecordedMethodArgs,
     ) std.mem.Allocator.Error!ResolvedTarget {
         const source_module = self.ctx.mirModule(module_idx);
-        const dispatch_site = source_module.dispatchSite(dispatch_expr_idx, method_name) orelse debugPanic(
-            "monotype static dispatch invariant violated: missing dispatch site requirement for expr {d} ({s}) at call site {d} ({s}) for method {s} in module {d}",
-            .{
-                dispatch_expr_idx,
-                @tagName(source_module.expr(dispatch_expr_idx).data),
-                call_expr_idx,
-                @tagName(source_module.expr(call_expr_idx).data),
-                source_module.getIdent(method_name),
-                module_idx,
+        if (self.lookupResolvedDispatchTarget(module_idx, dispatch_expr_idx)) |resolved| return resolved;
+
+        const site_requirement = source_module.staticDispatchSiteRequirement(dispatch_expr_idx, method_name) orelse
+            debugPanic(
+                "monotype static dispatch invariant violated: missing dispatch site requirement for expr {d} ({s}) at call site {d} ({s}) for method {s} in module {d}",
+                .{
+                    dispatch_expr_idx,
+                    @tagName(source_module.expr(dispatch_expr_idx).data),
+                    call_expr_idx,
+                    @tagName(source_module.expr(call_expr_idx).data),
+                    source_module.getIdent(method_name),
+                    module_idx,
+                },
+            );
+        _ = site_requirement;
+
+        return switch (source_module.expr(dispatch_expr_idx).data) {
+            .e_dot_access => {
+                const receiver_expr_idx = args.implicit_receiver orelse debugPanic(
+                    "monotype static dispatch invariant violated: generic dot-access dispatch missing receiver expr",
+                    .{},
+                );
+                return try self.resolveSpecializedDispatchTargetFromWorkspaceVar(
+                    module_idx,
+                    type_scope,
+                    self.requireExprResultFact(module_idx, type_scope, receiver_expr_idx),
+                    method_name,
+                );
             },
-        );
-        return switch (dispatch_site) {
-            .resolved => |resolved_site| .{
-                .module_idx = self.ctx.findModuleIdxByName(source_module.getIdent(resolved_site.target_module_name)),
-                .def_idx = @enumFromInt(resolved_site.target_def_idx),
-            },
-            .requirement => |_| switch (source_module.expr(dispatch_expr_idx).data) {
-                .e_dot_access => {
-                    const receiver_expr_idx = args.implicit_receiver orelse debugPanic(
-                        "monotype static dispatch invariant violated: generic dot-access dispatch missing receiver expr",
+            .e_type_var_dispatch => |dispatch| {
+                const alias_stmt = source_module.getStatement(dispatch.type_var_alias_stmt);
+                const source_alias_var = switch (alias_stmt) {
+                    .s_type_var_alias => |type_var_alias| source_module.typeAnnoType(type_var_alias.type_var_anno),
+                    else => debugPanic(
+                        "monotype static dispatch invariant violated: type-var dispatch alias stmt was not a type-var alias",
                         .{},
-                    );
-                    return try self.resolveRecordedDispatchTargetForType(
-                        module_idx,
-                        try self.instantiatePublishedVarType(
-                            module_idx,
-                            type_scope,
-                            self.requireExprResultFact(module_idx, type_scope, receiver_expr_idx),
-                        ),
-                        method_name,
-                    );
-                },
-                .e_type_var_dispatch => |dispatch| {
-                    const alias_stmt = source_module.getStatement(dispatch.type_var_alias_stmt);
-                    const alias_ty = switch (alias_stmt) {
-                        .s_type_var_alias => |type_var_alias| try self.instantiatePublishedVarType(
-                            module_idx,
-                            type_scope,
-                            source_module.typeAnnoType(type_var_alias.type_var_anno),
-                        ),
-                        else => debugPanic(
-                            "monotype static dispatch invariant violated: type-var dispatch alias stmt was not a type-var alias",
-                            .{},
-                        ),
-                    };
-                    return try self.resolveRecordedDispatchTargetForType(module_idx, alias_ty, method_name);
-                },
-                else => debugPanic(
-                    "monotype static dispatch invariant violated: generic dispatch requirement attached to unsupported expr kind {s}",
-                    .{@tagName(source_module.expr(dispatch_expr_idx).data)},
-                ),
+                    ),
+                };
+                const scoped_alias_var = try self.scopeVar(type_scope, module_idx, source_alias_var);
+                return try self.resolveSpecializedDispatchTargetFromWorkspaceVar(
+                    module_idx,
+                    type_scope,
+                    scoped_alias_var,
+                    method_name,
+                );
             },
+            else => debugPanic(
+                "monotype static dispatch invariant violated: unresolved generic dispatch attached to unsupported expr kind {s}",
+                .{@tagName(source_module.expr(dispatch_expr_idx).data)},
+            ),
         };
     }
 
-    fn resolveRecordedDispatchTargetForType(
+    const SourceDispatchReceiverIdentity = struct {
+        module_idx: u32,
+        type_name: []const u8,
+    };
+
+    fn resolveSourceDispatchReceiverIdentity(
+        self: *const Lowerer,
+        type_scope: *const TypeCloneScope,
+        receiver_var: Var,
+    ) ?SourceDispatchReceiverIdentity {
+        const resolved = type_scope.typeStoreConst().resolveVar(receiver_var);
+        return switch (resolved.desc.content) {
+            .alias => |alias| self.resolveSourceDispatchReceiverIdentity(
+                type_scope,
+                type_scope.typeStoreConst().getAliasBackingVar(alias),
+            ),
+            .structure => |flat| switch (flat) {
+                .nominal_type => |nominal| .{
+                    .module_idx = self.ctx.findModuleIdxByName(type_scope.getIdent(nominal.origin_module)),
+                    .type_name = type_scope.getIdent(nominal.ident.ident_idx),
+                },
+                else => null,
+            },
+            else => null,
+        };
+    }
+
+    fn resolveSpecializedDispatchTargetFromWorkspaceVar(
         self: *Lowerer,
         module_idx: u32,
-        receiver_ty: type_mod.TypeId,
+        type_scope: *TypeCloneScope,
+        receiver_var: Var,
         method_name: base.Ident.Idx,
     ) std.mem.Allocator.Error!ResolvedTarget {
         const source_module = self.ctx.mirModule(module_idx);
-        const receiver = switch (try self.resolveDispatchReceiverIdentity(receiver_ty)) {
-            .some => |identity| identity,
-            else => debugPanic(
-                "monotype static dispatch invariant violated: specialized dispatch receiver for method {s} was not nominal",
-                .{source_module.getIdent(method_name)},
-            ),
+        var receiver_writer = try types.TypeWriter.initFromParts(
+            self.allocator,
+            type_scope.typeStoreConst(),
+            type_scope.identStoreConst(),
+            null,
+        );
+        defer receiver_writer.deinit();
+        receiver_writer.setDefaultNumeralsToDec(true);
+        const receiver_text = try receiver_writer.writeGet(receiver_var, .one_line);
+        const receiver_copy = try self.allocator.dupe(u8, receiver_text);
+        defer self.allocator.free(receiver_copy);
+        const receiver = self.resolveSourceDispatchReceiverIdentity(type_scope, receiver_var) orelse {
+            debugPanic(
+                "monotype static dispatch invariant violated: specialized dispatch receiver for method {s} was not nominal in module {d}; receiver var {d} => {s}",
+                .{ source_module.getIdent(method_name), module_idx, @intFromEnum(receiver_var), receiver_copy },
+            );
         };
-
-        const resolved = self.ctx.source_modules.resolveAttachedMethodTarget(
-            receiver.module_idx,
+        const receiver_module = self.ctx.mirModule(receiver.module_idx);
+        const resolved = receiver_module.resolveAttachedMethodTargetByText(
             receiver.type_name,
             source_module.getIdent(method_name),
         ) orelse debugPanic(
-            "monotype static dispatch invariant violated: missing method {s} for nominal {s} in module {s}",
+            "monotype static dispatch invariant violated: missing method {s} for nominal {s} in module {s}; receiver var {d} => {s}",
             .{
                 source_module.getIdent(method_name),
                 receiver.type_name,
-                self.ctx.mirModule(receiver.module_idx).name(),
+                receiver_module.name(),
+                @intFromEnum(receiver_var),
+                receiver_copy,
             },
         );
         return .{
             .module_idx = resolved.module_idx,
             .def_idx = resolved.def_idx,
         };
-    }
-
-    const DispatchReceiverIdentity = union(enum) {
-        some: struct {
-            module_idx: u32,
-            type_name: []const u8,
-        },
-        none,
-    };
-
-    fn resolveDispatchReceiverIdentity(
-        self: *const Lowerer,
-        receiver_ty: type_mod.TypeId,
-    ) std.mem.Allocator.Error!DispatchReceiverIdentity {
-        return switch (self.ctx.types.getTypePreservingNominal(receiver_ty)) {
-            .nominal => |nominal| .{ .some = .{
-                .module_idx = nominal.module_idx,
-                .type_name = self.ctx.idents.getText(nominal.ident),
-            } },
-            .list => .{ .some = .{
-                .module_idx = self.ctx.builtin_module_idx,
-                .type_name = self.ctx.mirModule(self.ctx.builtin_module_idx).getIdent(self.ctx.mirModule(self.ctx.builtin_module_idx).commonIdents().list),
-            } },
-            .box => .{ .some = .{
-                .module_idx = self.ctx.builtin_module_idx,
-                .type_name = self.ctx.mirModule(self.ctx.builtin_module_idx).getIdent(self.ctx.mirModule(self.ctx.builtin_module_idx).commonIdents().box),
-            } },
-            .primitive => |prim| .{ .some = .{
-                .module_idx = self.ctx.builtin_module_idx,
-                .type_name = self.builtinDispatchTypeName(prim),
-            } },
-            else => .none,
-        };
-    }
-
-    fn builtinDispatchTypeName(self: *const Lowerer, prim: type_mod.Prim) []const u8 {
-        const builtin_module = self.ctx.mirModule(self.ctx.builtin_module_idx);
-        const idents = builtin_module.commonIdents();
-        return builtin_module.getIdent(switch (prim) {
-            .bool => idents.bool_type,
-            .str => idents.str,
-            .u8 => idents.u8,
-            .i8 => idents.i8,
-            .u16 => idents.u16,
-            .i16 => idents.i16,
-            .u32 => idents.u32,
-            .i32 => idents.i32,
-            .u64 => idents.u64,
-            .i64 => idents.i64,
-            .u128 => idents.u128,
-            .i128 => idents.i128,
-            .f32 => idents.f32,
-            .f64 => idents.f64,
-            .dec => idents.dec,
-            .erased => debugPanic("monotype static dispatch invariant violated: erased receiver cannot dispatch methods", .{}),
-        });
     }
 
 
@@ -9768,7 +11357,102 @@ pub const Lowerer = struct {
         return self.lookupFunctionRetVarInStore(type_scope.typeStoreConst(), fn_var);
     }
 
-    fn unifyAppliedFunctionResultVar(
+    fn materializeAppliedFunctionResultVar(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeCloneScope,
+        fn_var: Var,
+        applied_arg_count: usize,
+        result_var: Var,
+    ) std.mem.Allocator.Error!Var {
+        _ = self;
+        _ = module_idx;
+        var remaining = applied_arg_count;
+        var current = fn_var;
+        while (true) {
+            const resolved = type_scope.typeStoreConst().resolveVar(current);
+            switch (resolved.desc.content) {
+                .alias => |alias| {
+                    current = type_scope.typeStoreConst().getAliasBackingVar(alias);
+                },
+                .structure => |flat| switch (flat) {
+                    .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                        const args = type_scope.typeStoreConst().sliceVars(func.args);
+                        if (remaining < args.len) {
+                            if (remaining == 0) return current;
+
+                            const residual_args = args[remaining..];
+                            const resolved_result = type_scope.typeStoreConst().resolveVar(result_var);
+                            switch (resolved_result.desc.content) {
+                                .flex, .rigid, .err => {
+                                    const content = switch (flat) {
+                                        .fn_pure => try type_scope.typeStoreMut().mkFuncPure(residual_args, func.ret),
+                                        .fn_effectful => try type_scope.typeStoreMut().mkFuncEffectful(residual_args, func.ret),
+                                        .fn_unbound => try type_scope.typeStoreMut().mkFuncUnbound(residual_args, func.ret),
+                                        else => unreachable,
+                                    };
+                                    try type_scope.typeStoreMut().dangerousSetVarDesc(resolved_result.var_, .{
+                                        .content = content,
+                                        .rank = types.Rank.generalized,
+                                    });
+                                },
+                                else => {},
+                            }
+                            return resolved_result.var_;
+                        }
+
+                        remaining -= args.len;
+                        if (remaining == 0) return func.ret;
+                        current = func.ret;
+                    },
+                    else => debugPanic(
+                        "monotype invariant violated: attempted to compute applied-call result from non-function workspace content",
+                        .{},
+                    ),
+                },
+                else => debugPanic(
+                    "monotype invariant violated: attempted to compute applied-call result from non-structural workspace content",
+                    .{},
+                ),
+            }
+        }
+    }
+
+    fn assertWorkspaceVarTypesEqual(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeCloneScope,
+        actual_var: Var,
+        expected_var: Var,
+        comptime context: []const u8,
+    ) std.mem.Allocator.Error!void {
+        const actual_ty = try self.instantiatePublishedVarType(module_idx, type_scope, actual_var);
+        const expected_ty = try self.instantiatePublishedVarType(module_idx, type_scope, expected_var);
+        if (!self.ctx.types.equalIds(actual_ty, expected_ty)) {
+            var writer = try types.TypeWriter.initFromParts(
+                self.allocator,
+                type_scope.typeStoreConst(),
+                type_scope.identStoreConst(),
+                null,
+            );
+            defer writer.deinit();
+            writer.setDefaultNumeralsToDec(true);
+            const actual_text = try writer.writeGet(actual_var, .one_line);
+            const actual_copy = try self.allocator.dupe(u8, actual_text);
+            defer self.allocator.free(actual_copy);
+            writer.reset();
+            writer.setDefaultNumeralsToDec(true);
+            const expected_text = try writer.writeGet(expected_var, .one_line);
+            const expected_copy = try self.allocator.dupe(u8, expected_text);
+            defer self.allocator.free(expected_copy);
+            debugPanic(
+                "monotype invariant violated: " ++ context ++ " type mismatch in module {d}; actual var {d} => {s}; expected var {d} => {s}",
+                .{ module_idx, @intFromEnum(actual_var), actual_copy, @intFromEnum(expected_var), expected_copy },
+            );
+        }
+    }
+
+    fn assertAppliedFunctionResultCompatible(
         self: *Lowerer,
         module_idx: u32,
         type_scope: *TypeCloneScope,
@@ -9788,26 +11472,21 @@ pub const Lowerer = struct {
                 .{ applied_arg_count, total_args, module_idx },
             );
         }
-
-        if (applied_arg_count == total_args) {
-            return self.unifySpecializedCheckerVars(module_idx, type_scope, result_var, fn_fact.final_ret_var);
-        }
-
-        const remaining_args = total_args - applied_arg_count;
-        const result_fact = try self.ensureExplicitFunctionFact(module_idx, type_scope, result_var);
-        if (result_fact.arg_vars.len != remaining_args) {
-            debugPanic(
-                "monotype invariant violated: partial-call result expected {d} remaining args but found {d} in module {d}",
-                .{ remaining_args, result_fact.arg_vars.len, module_idx },
-            );
-        }
-        for (0..remaining_args) |i| {
-            const result_arg_var = result_fact.arg_vars[i];
-            const fn_arg_var = fn_fact.arg_vars[applied_arg_count + i];
-            try self.unifySpecializedCheckerVars(module_idx, type_scope, result_arg_var, fn_arg_var);
-        }
-
-        try self.unifySpecializedCheckerVars(module_idx, type_scope, result_fact.final_ret_var, fn_fact.final_ret_var);
+        const expected_result_var = try self.materializeAppliedFunctionResultVar(
+            module_idx,
+            type_scope,
+            fn_var,
+            applied_arg_count,
+            result_var,
+        );
+        try self.alignWorkspaceVarToCanonical(type_scope, result_var, expected_result_var);
+        try self.assertWorkspaceVarTypesEqual(
+            module_idx,
+            type_scope,
+            result_var,
+            expected_result_var,
+            "applied-call result",
+        );
     }
 
     fn requireFunctionArgType(
@@ -9871,73 +11550,6 @@ pub const Lowerer = struct {
     ) usize {
         const fact = self.ensureExplicitFunctionFact(module_idx, type_scope, fn_var) catch unreachable;
         return fact.arg_vars.len + @intFromBool(fact.synthetic_unit_arg);
-    }
-
-    fn unifySpecializedCheckerVars(
-        self: *Lowerer,
-        module_idx: u32,
-        type_scope: *TypeCloneScope,
-        left: Var,
-        right: Var,
-    ) std.mem.Allocator.Error!void {
-        var problems = try check.problem.Store.init(self.allocator);
-        defer problems.deinit(self.allocator);
-        var snapshots = try check.snapshot.Store.initCapacity(self.allocator, 16);
-        defer snapshots.deinit();
-        var type_writer = try types.TypeWriter.initFromParts(
-            self.allocator,
-            type_scope.typeStoreMut(),
-            type_scope.identStoreConst(),
-            null,
-        );
-        defer type_writer.deinit();
-        const before_left = try self.allocator.dupe(u8, try type_writer.writeGet(left, .one_line));
-        defer self.allocator.free(before_left);
-        const before_right = try self.allocator.dupe(u8, try type_writer.writeGet(right, .one_line));
-        defer self.allocator.free(before_right);
-        const before_left_resolved = type_scope.typeStoreConst().resolveVar(left);
-        const before_right_resolved = type_scope.typeStoreConst().resolveVar(right);
-        var unify_scratch = try check.unifier.Scratch.init(self.allocator);
-        defer unify_scratch.deinit();
-        var occurs_scratch = try check.occurs.Scratch.init(self.allocator);
-        defer occurs_scratch.deinit();
-
-        const result = try check.unifier.unify(
-            self.allocator,
-            type_scope.identStoreConst(),
-            self.ctx.mirModule(module_idx).qualifiedModuleIdent(),
-            type_scope.typeStoreMut(),
-            &problems,
-            &snapshots,
-            &type_writer,
-            &unify_scratch,
-            &occurs_scratch,
-            left,
-            right,
-        );
-        switch (result) {
-            .ok => {},
-            .problem => {
-                const left_text = try type_writer.writeGet(left, .one_line);
-                const left_snapshot = try self.allocator.dupe(u8, left_text);
-                defer self.allocator.free(left_snapshot);
-                const right_text = try type_writer.writeGet(right, .one_line);
-                const right_snapshot = try self.allocator.dupe(u8, right_text);
-                defer self.allocator.free(right_snapshot);
-                debugPanic(
-                    "monotype invariant violated: specialized checker fact unify failed in module {d}: before {s} ({s}) vs {s} ({s}); after {s} vs {s}",
-                    .{
-                        module_idx,
-                        before_left,
-                        @tagName(before_left_resolved.desc.content),
-                        before_right,
-                        @tagName(before_right_resolved.desc.content),
-                        left_snapshot,
-                        right_snapshot,
-                    },
-                );
-            },
-        }
     }
 
     fn lookupOrSpecializeExternal(
@@ -10110,10 +11722,7 @@ pub const Lowerer = struct {
         fn_var: Var,
         arg_index: usize,
     ) ?Var {
-        const scoped_fn_var = type_scope.source_var_map.get(.{
-            .module_idx = module_idx,
-            .var_ = fn_var,
-        }) orelse fn_var;
+        const scoped_fn_var = type_scope.source_var_map.get(self.sourceTypeKey(module_idx, fn_var)) orelse fn_var;
         return self.lookupFunctionArgVar(module_idx, type_scope, scoped_fn_var, arg_index);
     }
 

@@ -150,29 +150,9 @@ pub const Modules = struct {
         );
     }
 
-    pub fn resolveAttachedMethodTarget(
-        self: @This(),
-        receiver_module_idx: u32,
-        receiver_type_name: []const u8,
-        method_name: []const u8,
-    ) ?ResolvedMethodTarget {
-        const target_module = self.module(receiver_module_idx);
-        const method_ident = target_module.lookupMethodIdentByText(receiver_type_name, method_name) orelse return null;
-        const exposed = target_module.exposedNodeIndexById(method_ident) orelse return null;
-        return .{
-            .module_idx = receiver_module_idx,
-            .def_idx = @enumFromInt(@as(u32, @intCast(exposed))),
-        };
-    }
-
 };
 
 pub const Module = struct {
-    pub const DispatchSite = union(enum) {
-        resolved: types.ResolvedStaticDispatchSite,
-        requirement: types.StaticDispatchSiteRequirement,
-    };
-
     allocator: Allocator,
     module_idx: u32,
     data_store: *ModuleData,
@@ -247,23 +227,6 @@ pub const Module = struct {
             .type_ident = local_type_ident,
             .method_ident = local_method_ident,
         });
-    }
-
-    pub fn lookupMethodIdentByText(
-        self: @This(),
-        type_name: []const u8,
-        method_name: []const u8,
-    ) ?Ident.Idx {
-        const local_type_ident = self.findCommonIdent(type_name) orelse return null;
-        const local_method_ident = self.findCommonIdent(method_name) orelse return null;
-        return self.env().method_idents.get(self.env().gpa, MethodKey{
-            .type_ident = local_type_ident,
-            .method_ident = local_method_ident,
-        });
-    }
-
-    pub fn exposedNodeIndexById(self: @This(), ident_idx: Ident.Idx) ?u16 {
-        return self.env().getExposedNodeIndexById(ident_idx);
     }
 
     pub fn nodeTag(self: @This(), idx: CIR.Node.Idx) CIR.Node.Tag {
@@ -343,18 +306,36 @@ pub const Module = struct {
         return self.typeStoreConst().findResolvedStaticDispatchSite(self.exprType(expr_idx));
     }
 
-    pub fn dispatchSite(
+    pub fn resolveAttachedMethodTarget(
         self: @This(),
-        expr_idx: CIR.Expr.Idx,
-        method_name: Ident.Idx,
-    ) ?DispatchSite {
-        if (self.resolvedStaticDispatchTarget(expr_idx)) |resolved| {
-            return .{ .resolved = resolved };
-        }
-        if (self.staticDispatchSiteRequirement(expr_idx, method_name)) |requirement| {
-            return .{ .requirement = requirement };
-        }
-        return null;
+        source_module: Module,
+        type_ident: Ident.Idx,
+        method_ident: Ident.Idx,
+    ) ?Modules.ResolvedMethodTarget {
+        const local_method_ident = self.lookupMethodIdentFromModule(source_module, type_ident, method_ident) orelse return null;
+        const exposed = self.env().getExposedNodeIndexById(local_method_ident) orelse return null;
+        return .{
+            .module_idx = self.module_idx,
+            .def_idx = @enumFromInt(@as(u32, @intCast(exposed))),
+        };
+    }
+
+    pub fn resolveAttachedMethodTargetByText(
+        self: @This(),
+        type_name: []const u8,
+        method_name: []const u8,
+    ) ?Modules.ResolvedMethodTarget {
+        const local_type_ident = self.findCommonIdent(type_name) orelse return null;
+        const local_method_ident = self.findCommonIdent(method_name) orelse return null;
+        const method_ident = self.env().method_idents.get(self.env().gpa, MethodKey{
+            .type_ident = local_type_ident,
+            .method_ident = local_method_ident,
+        }) orelse return null;
+        const exposed = self.env().getExposedNodeIndexById(method_ident) orelse return null;
+        return .{
+            .module_idx = self.module_idx,
+            .def_idx = @enumFromInt(@as(u32, @intCast(exposed))),
+        };
     }
 
     pub fn getStatement(self: @This(), idx: CIR.Statement.Idx) CIR.Statement {
