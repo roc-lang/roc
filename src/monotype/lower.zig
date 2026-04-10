@@ -20,6 +20,7 @@ const types = @import("types");
 const instantiate = @import("types").instantiate;
 const ast = @import("ast.zig");
 const type_mod = @import("type.zig");
+const type_clone_source = @import("type_clone_source.zig");
 const semantic_facts = @import("semantic_facts.zig");
 const specializations_mod = @import("specializations.zig");
 const symbol_mod = @import("symbol");
@@ -1351,11 +1352,7 @@ pub const Lowerer = struct {
         type_scope: *TypeCloneScope,
         pending: specializations_mod.Pending,
     ) std.mem.Allocator.Error!Var {
-        const frozen = pending.expected_checker_seed orelse debugPanic(
-            "monotype specialization invariant violated: missing frozen checker seed for top-level specialization symbol {d}",
-            .{pending.specialized_symbol.raw()},
-        );
-        return try self.materializeFrozenCheckerVar(type_scope, frozen);
+        return try self.materializeFrozenCheckerVar(type_scope, pending.expected_checker_seed);
     }
 
     fn freezeCheckerVarFromStores(
@@ -1370,7 +1367,7 @@ pub const Lowerer = struct {
         errdefer ident_store.deinit(self.allocator);
         var var_map = std.AutoHashMap(Var, Var).init(self.allocator);
         defer var_map.deinit();
-        const root_var = try check.copy_import.copyVar(
+        const root_var = try type_clone_source.copyVar(
             source_store,
             &type_store,
             source_var,
@@ -1405,7 +1402,7 @@ pub const Lowerer = struct {
     ) std.mem.Allocator.Error!Var {
         var var_map = std.AutoHashMap(Var, Var).init(self.allocator);
         defer var_map.deinit();
-        const copied_root = try check.copy_import.copyVar(
+        const copied_root = try type_clone_source.copyVar(
             &frozen.type_store,
             type_scope.typeStoreMut(),
             frozen.root_var,
@@ -9217,10 +9214,13 @@ pub const Lowerer = struct {
             self.assertNoFirstClassBuiltinStrInspect(top_level.module_idx, top_level.def_idx, "local");
             if (top_level.is_function) {
                 const published_expected_ty = try self.publishMonotypeType(expected_ty);
-                const expected_checker_seed = if (expected_var) |var_|
-                    try self.freezeCheckerVarFromScope(type_scope, var_)
-                else
-                    null;
+                const expected_checker_seed = try self.freezeCheckerVarFromScope(
+                    type_scope,
+                    expected_var orelse debugPanic(
+                        "monotype specialization invariant violated: missing exact checker seed for local top-level specialization {d}",
+                        .{top_level_symbol.raw()},
+                    ),
+                );
                 return try self.specializations.specializeFn(&self.ctx.symbols, &self.ctx.types, top_level_symbol, .{
                     .module_idx = top_level.module_idx,
                     .def_idx = top_level.def_idx,
@@ -9500,7 +9500,7 @@ pub const Lowerer = struct {
         const source_module = self.ctx.mirModule(source_module_idx);
         var copy_map = std.AutoHashMap(Var, Var).init(self.allocator);
         defer copy_map.deinit();
-        const copied_root = try check.copy_import.copyVar(
+        const copied_root = try type_clone_source.copyVar(
             source_module.typeStoreConst(),
             type_scope.typeStoreMut(),
             source_var,
@@ -9967,10 +9967,13 @@ pub const Lowerer = struct {
             self.assertNoFirstClassBuiltinStrInspect(top_level.module_idx, top_level.def_idx, "external");
             if (top_level.is_function) {
                 const published_expected_ty = try self.publishMonotypeType(expected_ty);
-                const expected_checker_seed = if (expected_var) |var_|
-                    try self.freezeCheckerVarFromScope(type_scope, var_)
-                else
-                    null;
+                const expected_checker_seed = try self.freezeCheckerVarFromScope(
+                    type_scope,
+                    expected_var orelse debugPanic(
+                        "monotype specialization invariant violated: missing exact checker seed for external top-level specialization {d}",
+                        .{symbol.raw()},
+                    ),
+                );
                 return try self.specializations.specializeFn(&self.ctx.symbols, &self.ctx.types, symbol, .{
                     .module_idx = top_level.module_idx,
                     .def_idx = top_level.def_idx,
@@ -10081,10 +10084,13 @@ pub const Lowerer = struct {
         const symbol = if (self.top_level_defs_by_symbol.get(source_symbol)) |top_level|
             if (top_level.is_function) blk: {
                 const published_expected_ty = try self.publishMonotypeType(expected_ty);
-                const expected_checker_seed = if (expected_var) |var_|
-                    try self.freezeCheckerVarFromScope(type_scope, var_)
-                else
-                    null;
+                const expected_checker_seed = try self.freezeCheckerVarFromScope(
+                    type_scope,
+                    expected_var orelse debugPanic(
+                        "monotype specialization invariant violated: missing exact checker seed for resolved target specialization {d}",
+                        .{source_symbol.raw()},
+                    ),
+                );
                 break :blk try self.specializations.specializeFn(&self.ctx.symbols, &self.ctx.types, source_symbol, .{
                     .module_idx = top_level.module_idx,
                     .def_idx = top_level.def_idx,

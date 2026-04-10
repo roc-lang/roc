@@ -27,7 +27,7 @@ pub const Pending = struct {
     source_symbol: symbol_mod.Symbol,
     source: SourceFn,
     ty: type_mod.TypeId,
-    expected_checker_seed: ?FrozenCheckerVar = null,
+    expected_checker_seed: FrozenCheckerVar,
     specialized_symbol: symbol_mod.Symbol,
     emitted: bool = false,
 };
@@ -52,9 +52,7 @@ pub const Queue = struct {
 
     pub fn deinit(self: *Queue) void {
         for (self.pending.items) |*item| {
-            if (item.expected_checker_seed) |*seed| {
-                seed.deinit(self.allocator);
-            }
+            item.expected_checker_seed.deinit(self.allocator);
         }
         self.pending.deinit(self.allocator);
         self.by_key.deinit();
@@ -67,7 +65,7 @@ pub const Queue = struct {
         source_symbol: symbol_mod.Symbol,
         source: SourceFn,
         ty: type_mod.TypeId,
-        expected_checker_seed: ?FrozenCheckerVar,
+        expected_checker_seed: FrozenCheckerVar,
     ) std.mem.Allocator.Error!symbol_mod.Symbol {
         const key: Key = .{
             .source_symbol = source_symbol,
@@ -78,12 +76,8 @@ pub const Queue = struct {
         }
 
         if (self.by_key.get(key)) |idx| {
-            if (expected_checker_seed) |seed| {
-                if (self.pending.items[idx].expected_checker_seed) |*existing_seed| {
-                    existing_seed.deinit(self.allocator);
-                }
-                self.pending.items[idx].expected_checker_seed = seed;
-            }
+            self.pending.items[idx].expected_checker_seed.deinit(self.allocator);
+            self.pending.items[idx].expected_checker_seed = expected_checker_seed;
             return self.pending.items[idx].specialized_symbol;
         }
 
