@@ -1,4 +1,4 @@
-//! Monotype lowering from checker MIR.
+//! Monotype lowering from published typed CIR.
 //!
 //! This follows cor's strategy:
 //! - lower solved checker facts into a monomorphic type graph
@@ -23,7 +23,7 @@ const type_mod = @import("type.zig");
 const semantic_facts = @import("semantic_facts.zig");
 const specializations_mod = @import("specializations.zig");
 const symbol_mod = @import("symbol");
-const mir = check.MIR;
+const typed_cir = check.TypedCIR;
 
 const ModuleEnv = can.ModuleEnv;
 const CIR = can.CIR;
@@ -73,7 +73,7 @@ const Ctx = struct {
     symbols: symbol_mod.Store,
     types: type_mod.Store,
     idents: base.Ident.Store,
-    source_modules: *mir.Modules,
+    source_modules: *typed_cir.Modules,
     type_modules: []TypeModuleState,
     builtin_module_idx: u32,
     top_level_symbols: std.AutoHashMap(TopLevelKey, symbol_mod.Symbol),
@@ -90,7 +90,7 @@ const Ctx = struct {
     };
 
     const Module = struct {
-        source_module: mir.Module,
+        source_module: typed_cir.Module,
         type_state: *TypeModuleState,
 
         pub fn allDefs(self: @This()) []const CIR.Def.Idx {
@@ -174,15 +174,15 @@ const Ctx = struct {
             return self.source_module.sliceDefs(span);
         }
 
-        pub fn def(self: @This(), idx: CIR.Def.Idx) mir.Def {
+        pub fn def(self: @This(), idx: CIR.Def.Idx) typed_cir.Def {
             return self.source_module.def(idx);
         }
 
-        pub fn expr(self: @This(), idx: CIR.Expr.Idx) mir.Expr {
+        pub fn expr(self: @This(), idx: CIR.Expr.Idx) typed_cir.Expr {
             return self.source_module.expr(idx);
         }
 
-        pub fn pattern(self: @This(), idx: CIR.Pattern.Idx) mir.Pattern {
+        pub fn pattern(self: @This(), idx: CIR.Pattern.Idx) typed_cir.Pattern {
             return self.source_module.pattern(idx);
         }
 
@@ -259,10 +259,10 @@ const Ctx = struct {
 
     fn init(
         allocator: std.mem.Allocator,
-        mir_modules: *mir.Modules,
+        typed_cir_modules: *typed_cir.Modules,
         builtin_module_idx: u32,
     ) std.mem.Allocator.Error!Ctx {
-        const type_modules = try allocator.alloc(TypeModuleState, mir_modules.moduleCount());
+        const type_modules = try allocator.alloc(TypeModuleState, typed_cir_modules.moduleCount());
         errdefer allocator.free(type_modules);
 
         var built_type_modules: usize = 0;
@@ -270,8 +270,8 @@ const Ctx = struct {
             for (type_modules[0..built_type_modules]) |*type_state| type_state.deinit(allocator);
         }
 
-        for (0..mir_modules.moduleCount()) |module_idx| {
-            const module = mir_modules.module(@intCast(module_idx));
+        for (0..typed_cir_modules.moduleCount()) |module_idx| {
+            const module = typed_cir_modules.module(@intCast(module_idx));
             type_modules[module_idx] = .{
                 .type_store = try module.typeStoreConst().clone(allocator),
                 .ident_store = try module.identStoreConst().clone(allocator),
@@ -284,7 +284,7 @@ const Ctx = struct {
             .symbols = symbol_mod.Store.init(allocator),
             .types = type_mod.Store.init(allocator),
             .idents = try base.Ident.Store.initCapacity(allocator, 256),
-            .source_modules = mir_modules,
+            .source_modules = typed_cir_modules,
             .type_modules = type_modules,
             .builtin_module_idx = builtin_module_idx,
             .top_level_symbols = std.AutoHashMap(TopLevelKey, symbol_mod.Symbol).init(allocator),
@@ -641,12 +641,12 @@ pub const Lowerer = struct {
 
     pub fn init(
         allocator: std.mem.Allocator,
-        mir_modules: *mir.Modules,
+        typed_cir_modules: *typed_cir.Modules,
         builtin_module_idx: u32,
     ) std.mem.Allocator.Error!Lowerer {
         return .{
             .allocator = allocator,
-            .ctx = try Ctx.init(allocator, mir_modules, builtin_module_idx),
+            .ctx = try Ctx.init(allocator, typed_cir_modules, builtin_module_idx),
             .program = Program.init(allocator),
             .strings = .{},
             .specializations = specializations_mod.Queue.init(allocator),
@@ -2429,7 +2429,7 @@ pub const Lowerer = struct {
         module_idx: u32,
         type_scope: *TypeCloneScope,
         env: BindingEnv,
-        expr: mir.Expr,
+        expr: typed_cir.Expr,
     ) std.mem.Allocator.Error!ast.ExprId {
         self.requireFrozenLoweringSemanticTypes(module_idx, type_scope);
         const mir_module = expr.module();
@@ -5504,7 +5504,7 @@ pub const Lowerer = struct {
         module_idx: u32,
         type_scope: *TypeCloneScope,
         env: BindingEnv,
-        expr: mir.Expr,
+        expr: typed_cir.Expr,
         expected_ty: type_mod.TypeId,
         expected_var: ?Var,
     ) std.mem.Allocator.Error!ast.ExprId {
@@ -6286,7 +6286,7 @@ pub const Lowerer = struct {
         self: *Lowerer,
         module_idx: u32,
         type_scope: *TypeCloneScope,
-        pattern: mir.Pattern,
+        pattern: typed_cir.Pattern,
     ) std.mem.Allocator.Error!void {
         const key: TypeCloneScope.PatternTypeKey = .{
             .module_idx = module_idx,
@@ -6789,7 +6789,7 @@ pub const Lowerer = struct {
         module_idx: u32,
         type_scope: *TypeCloneScope,
         env: BindingEnv,
-        expr: mir.Expr,
+        expr: typed_cir.Expr,
     ) std.mem.Allocator.Error!void {
         const key: TypeCloneScope.ExprKey = .{
             .module_idx = module_idx,
@@ -9166,7 +9166,7 @@ pub const Lowerer = struct {
         self: *Lowerer,
         type_scope: *TypeCloneScope,
         env: BindingEnv,
-        expr: mir.Expr,
+        expr: typed_cir.Expr,
     ) std.mem.Allocator.Error!Var {
         return self.lookupSpecializedExprVar(expr.module().module_idx, env, expr.idx) orelse
             try self.scopeVar(type_scope, expr.solved_var);

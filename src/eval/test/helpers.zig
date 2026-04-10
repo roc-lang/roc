@@ -68,7 +68,7 @@ pub const ParsedResources = struct {
     parse_ast: *parse.AST,
     can: *Can,
     checker: *Check,
-    mir_modules: check.MIR.Modules,
+    typed_cir_modules: check.TypedCIR.Modules,
     expr_idx: CIR.Expr.Idx,
     builtin_module: builtin_loading.LoadedModule,
     builtin_indices: CIR.BuiltinIndices,
@@ -178,8 +178,8 @@ pub fn cleanupParseAndCanonical(allocator: std.mem.Allocator, resources: ParsedR
     resources.can.deinit();
     resources.parse_ast.deinit();
     allocator.free(resources.imported_envs);
-    var mir_modules = resources.mir_modules;
-    mir_modules.deinit();
+    var typed_cir_modules = resources.typed_cir_modules;
+    typed_cir_modules.deinit();
     var builtin_module = resources.builtin_module;
     builtin_module.deinit();
     if (!resources.published_owns_module_env) {
@@ -309,7 +309,7 @@ fn lowerToLir(
         all_module_envs[i + 2] = extra.module_env;
     }
 
-    var mono_lowerer = try monotype.Lower.Lowerer.init(allocator, &resources.mir_modules, 1);
+    var mono_lowerer = try monotype.Lower.Lowerer.init(allocator, &resources.typed_cir_modules, 1);
     defer mono_lowerer.deinit();
     const mono = try mono_lowerer.run(0);
     debugValidateMonotypeTypes(&mono.types);
@@ -416,24 +416,24 @@ fn parseAndCanonicalizeProgramWrapped(
         module_env.imports.resolveImports(module_env, all_module_envs);
     }
 
-    var mir_source_modules = try allocator.alloc(check.MIR.Modules.SourceModule, extra_modules.items.len + 2);
-    defer allocator.free(mir_source_modules);
-    mir_source_modules[0] = .{ .owned_checked = .{
+    var typed_cir_source_modules = try allocator.alloc(check.TypedCIR.Modules.SourceModule, extra_modules.items.len + 2);
+    defer allocator.free(typed_cir_source_modules);
+    typed_cir_source_modules[0] = .{ .owned_checked = .{
         .env = main_checked.module_env,
         .owned_source = main_checked.owned_source,
     } };
-    mir_source_modules[1] = .{ .precompiled = builtin_module.env };
+    typed_cir_source_modules[1] = .{ .precompiled = builtin_module.env };
     for (extra_modules.items, 0..) |extra, i| {
-        mir_source_modules[i + 2] = .{ .owned_checked = .{
+        typed_cir_source_modules[i + 2] = .{ .owned_checked = .{
             .env = extra.module_env,
             .owned_source = extra.owned_source,
         } };
     }
 
-    const mir_modules = try check.MIR.Modules.publish(allocator, mir_source_modules);
+    const typed_cir_modules = try check.TypedCIR.Modules.publish(allocator, typed_cir_source_modules);
     errdefer {
-        var mir_modules_mut = mir_modules;
-        mir_modules_mut.deinit();
+        var typed_cir_modules_mut = typed_cir_modules;
+        typed_cir_modules_mut.deinit();
     }
     main_checked.published_owns_module_env = true;
     main_checked.owned_source = null;
@@ -447,7 +447,7 @@ fn parseAndCanonicalizeProgramWrapped(
         .parse_ast = main_checked.parse_ast,
         .can = main_checked.can,
         .checker = main_checked.checker,
-        .mir_modules = mir_modules,
+        .typed_cir_modules = typed_cir_modules,
         .expr_idx = expr_idx,
         .builtin_module = builtin_module,
         .builtin_indices = builtin_indices,

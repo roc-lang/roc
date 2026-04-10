@@ -9,6 +9,7 @@ Progress so far:
 - monotype now borrows the published boundary instead of owning and destroying it before later stages
 - published typed CIR no longer exposes mutable type/ident-store access to later stages
 - monotype now clones solved type/ident state into monotype-owned module state before specialization, so published source typing state is read-only in practice
+- the active checker/monotype/eval path no longer uses the misleading `MIR` name; it is named `TypedCIR` instead
 - full `test-eval`, `test-monotype`, `test-cor-pipeline`, and `test-eval-host-effects` are green on this slice
 - the remaining unfinished work is the monotype-side specialization refactor:
   - specialization data is still not fully monotype-owned in its final explicit form

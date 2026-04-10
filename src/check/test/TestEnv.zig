@@ -11,7 +11,7 @@ const collections = @import("collections");
 const Allocators = base.Allocators;
 
 const Check = @import("../Check.zig");
-const MIR = @import("../mir.zig");
+const TypedCIR = @import("../typed_cir.zig");
 const report_mod = @import("../report.zig");
 
 const testing = std.testing;
@@ -437,7 +437,7 @@ pub fn deinit(self: *TestEnv) void {
     }
 }
 
-pub fn takePublishedSourceModule(self: *TestEnv) MIR.Modules.SourceModule {
+pub fn takePublishedSourceModule(self: *TestEnv) TypedCIR.Modules.SourceModule {
     self.published_owns_module_env = true;
     const owned_source = self.owned_source;
     self.owned_source = null;

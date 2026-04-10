@@ -4,20 +4,20 @@ const can = @import("can");
 const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
 const TestEnv = @import("./TestEnv.zig");
-const MIR = @import("../mir.zig");
+const TypedCIR = @import("../typed_cir.zig");
 
-test "MIR exposes solved vars on defs exprs and patterns" {
+test "typed CIR exposes solved vars on defs exprs and patterns" {
     var test_env = try TestEnv.init("Test",
         \\id = \x -> x
         \\answer = id(42)
     );
     defer test_env.deinit();
 
-    const source_modules = [_]MIR.Modules.SourceModule{
+    const source_modules = [_]TypedCIR.Modules.SourceModule{
         test_env.takePublishedSourceModule(),
         .{ .precompiled = test_env.builtin_module.env },
     };
-    var modules = try MIR.Modules.publish(std.testing.allocator, &source_modules);
+    var modules = try TypedCIR.Modules.publish(std.testing.allocator, &source_modules);
     defer modules.deinit();
     const module = modules.module(0);
     const defs = test_env.module_env.store.sliceDefs(test_env.module_env.all_defs);
@@ -42,17 +42,17 @@ test "MIR exposes solved vars on defs exprs and patterns" {
     }
 }
 
-test "published MIR survives checker teardown" {
+test "published typed CIR survives checker teardown" {
     var test_env = try TestEnv.init("Test",
         \\a = 1
         \\b = a
     );
 
-    const source_modules = [_]MIR.Modules.SourceModule{
+    const source_modules = [_]TypedCIR.Modules.SourceModule{
         test_env.takePublishedSourceModule(),
         .{ .precompiled = test_env.builtin_module.env },
     };
-    var modules = try MIR.Modules.publish(std.testing.allocator, &source_modules);
+    var modules = try TypedCIR.Modules.publish(std.testing.allocator, &source_modules);
     defer modules.deinit();
 
     const expected_name = try std.testing.allocator.dupe(u8, modules.module(0).name());
