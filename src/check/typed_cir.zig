@@ -3,8 +3,6 @@ const base = @import("base");
 const can = @import("can");
 const collections = @import("collections");
 const types = @import("types");
-const Check = @import("Check.zig");
-
 const ModuleEnv = can.ModuleEnv;
 const CIR = can.CIR;
 const Var = types.Var;
@@ -83,17 +81,12 @@ pub const Modules = struct {
     modules: []ModuleData,
 
     pub const SourceModule = union(enum) {
-        checked: *const Check,
         precompiled: *ModuleEnv,
         owned_checked: OwnedCheckedModule,
         owned_cached: CachedModule,
 
         fn initModuleData(self: @This(), allocator: Allocator) Allocator.Error!ModuleData {
             return switch (self) {
-                .checked => |checker| blk: {
-                    try checker.cir.getIdentStore().enableRuntimeInserts(allocator);
-                    break :blk ModuleData.initBorrowed(checker.cir);
-                },
                 .precompiled => |module_env| blk: {
                     try module_env.getIdentStore().enableRuntimeInserts(allocator);
                     break :blk ModuleData.initBorrowed(module_env);

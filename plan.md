@@ -1,19 +1,23 @@
 ## Zero-Copy Typed CIR Boundary Plan
 
-Status: in_progress
+Status: completed
 
 Progress so far:
 
-- `src/check/mir.zig` no longer stores a duplicate published tree; it now wraps real `ModuleEnv` state directly.
+- `src/check/typed_cir.zig` is now the published typed-CIR boundary helper; there is no duplicate published source tree.
 - publication is zero-copy for checked modules in the active eval/test pipeline
 - monotype now borrows the published boundary instead of owning and destroying it before later stages
 - published typed CIR no longer exposes mutable type/ident-store access to later stages
 - monotype now clones solved type/ident state into monotype-owned module state before specialization, so published source typing state is read-only in practice
 - the active checker/monotype/eval path no longer uses the misleading `MIR` name; it is named `TypedCIR` instead
 - full `test-eval`, `test-monotype`, `test-cor-pipeline`, and `test-eval-host-effects` are green on this slice
-- the remaining unfinished work is the monotype-side specialization refactor:
-  - specialization data is still not fully monotype-owned in its final explicit form
-  - the boundary still uses a `MIR` wrapper module/name instead of publishing typed CIR directly as the only named source artifact
+- the publication API no longer offers borrowed checked-module publication; checked modules transfer ownership one-way into published typed CIR
+
+Completion notes:
+
+- published typed CIR is now the only source-level typing truth after checking
+- monotype specialization state is entirely monotype-owned and lives outside published typed CIR
+- the remaining cloned solved type/ident stores are monotype-owned specialization workspace, not checker-boundary publication residue
 
 ## Goal
 

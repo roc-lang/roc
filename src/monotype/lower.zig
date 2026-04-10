@@ -130,11 +130,11 @@ const Ctx = struct {
         }
 
         pub fn findCommonIdent(self: @This(), text: []const u8) ?Ident.Idx {
-            return self.source_module.findCommonIdent(text);
+            return self.identStoreConst().findByString(text);
         }
 
         pub fn getIdent(self: @This(), idx: Ident.Idx) []const u8 {
-            return self.source_module.getIdent(idx);
+            return self.identStoreConst().getText(idx);
         }
 
         pub fn getString(self: @This(), idx: StringLiteral.Idx) []const u8 {
