@@ -34,6 +34,24 @@ fn flushStderr() void {
     }
 }
 
+fn numericFromStrLowLevel(num_type: []const u8) CIR.Expr.LowLevel {
+    if (std.mem.eql(u8, num_type, "U8")) return .u8_from_str;
+    if (std.mem.eql(u8, num_type, "I8")) return .i8_from_str;
+    if (std.mem.eql(u8, num_type, "U16")) return .u16_from_str;
+    if (std.mem.eql(u8, num_type, "I16")) return .i16_from_str;
+    if (std.mem.eql(u8, num_type, "U32")) return .u32_from_str;
+    if (std.mem.eql(u8, num_type, "I32")) return .i32_from_str;
+    if (std.mem.eql(u8, num_type, "U64")) return .u64_from_str;
+    if (std.mem.eql(u8, num_type, "I64")) return .i64_from_str;
+    if (std.mem.eql(u8, num_type, "U128")) return .u128_from_str;
+    if (std.mem.eql(u8, num_type, "I128")) return .i128_from_str;
+    if (std.mem.eql(u8, num_type, "Dec")) return .dec_from_str;
+    if (std.mem.eql(u8, num_type, "F32")) return .f32_from_str;
+    if (std.mem.eql(u8, num_type, "F64")) return .f64_from_str;
+
+    unreachable;
+}
+
 fn stderrWriter() *std.Io.Writer {
     if (!stderr_initialized) {
         stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
@@ -276,7 +294,7 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) !std.ArrayList(CIR.Def.Id
 
         const from_str = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.from_str", .{num_type});
         if (env.common.findIdent(from_str)) |ident| {
-            try low_level_map.put(ident, .num_from_str);
+            try low_level_map.put(ident, numericFromStrLowLevel(num_type));
         }
     }
 

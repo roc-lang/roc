@@ -2819,82 +2819,57 @@ pub const Interpreter = struct {
             },
 
             // ── Numeric parsing ──
-            .num_from_str => blk: {
+            .u8_from_str,
+            .i8_from_str,
+            .u16_from_str,
+            .i16_from_str,
+            .u32_from_str,
+            .i32_from_str,
+            .u64_from_str,
+            .i64_from_str,
+            .u128_from_str,
+            .i128_from_str,
+            .dec_from_str,
+            .f32_from_str,
+            .f64_from_str,
+            => blk: {
+                const parse_spec = ll.op.numericParseSpec() orelse
+                    return self.runtimeError("typed from_str low-level missing numeric parse spec");
                 const ret_layout_val = self.layout_store.getLayout(ll.ret_layout);
                 if (ret_layout_val.tag != .tag_union) {
-                    return self.runtimeError("num_from_str expected a tag union return layout");
+                    return self.runtimeError("typed from_str expected a tag union return layout");
                 }
 
                 const tu_data = self.layout_store.getTagUnionData(ret_layout_val.data.tag_union.idx);
-                const variants = self.layout_store.getTagUnionVariants(tu_data);
-                var payload_idx: ?layout_mod.Idx = null;
-                for (0..variants.len) |i| {
-                    const v_payload = variants.get(@intCast(i)).payload_layout;
-                    const candidate_payload = self.unwrapSingleFieldPayloadLayout(v_payload) orelse v_payload;
-                    const payload_layout = self.layout_store.getLayout(candidate_payload);
-                    switch (payload_layout.tag) {
-                        .scalar => {
-                            payload_idx = candidate_payload;
-                            break;
-                        },
-                        else => {},
-                    }
-                    if (candidate_payload == .dec) {
-                        payload_idx = candidate_payload;
-                        break;
-                    }
-                }
-
-                const ok_payload_idx = payload_idx orelse return self.runtimeError("num_from_str missing numeric payload layout");
                 const result = try self.alloc(ll.ret_layout);
                 const roc_str = valueToRocStr(args[0]);
 
-                if (ok_payload_idx == .dec) {
-                    dev_wrappers.roc_builtins_dec_from_str(
+                switch (parse_spec) {
+                    .dec => dev_wrappers.roc_builtins_dec_from_str(
                         result.ptr,
                         roc_str.bytes,
                         roc_str.length,
                         roc_str.capacity_or_alloc_ptr,
                         tu_data.discriminant_offset,
-                    );
-                    break :blk result;
-                }
-
-                if (ok_payload_idx == .f32 or ok_payload_idx == .f64) {
-                    dev_wrappers.roc_builtins_float_from_str(
+                    ),
+                    .float => |float| dev_wrappers.roc_builtins_float_from_str(
                         result.ptr,
                         roc_str.bytes,
                         roc_str.length,
                         roc_str.capacity_or_alloc_ptr,
-                        if (ok_payload_idx == .f32) 4 else 8,
+                        float.width_bytes,
                         tu_data.discriminant_offset,
-                    );
-                    break :blk result;
+                    ),
+                    .int => |int| dev_wrappers.roc_builtins_int_from_str(
+                        result.ptr,
+                        roc_str.bytes,
+                        roc_str.length,
+                        roc_str.capacity_or_alloc_ptr,
+                        int.width_bytes,
+                        int.signed,
+                        tu_data.discriminant_offset,
+                    ),
                 }
-
-                const int_width: u8 = switch (ok_payload_idx) {
-                    .u8, .i8 => 1,
-                    .u16, .i16 => 2,
-                    .u32, .i32 => 4,
-                    .u64, .i64 => 8,
-                    .u128, .i128 => 16,
-                    else => return self.runtimeError("num_from_str unsupported integer payload layout"),
-                };
-                const is_signed: bool = switch (ok_payload_idx) {
-                    .i8, .i16, .i32, .i64, .i128 => true,
-                    .u8, .u16, .u32, .u64, .u128 => false,
-                    else => return self.runtimeError("num_from_str unsupported integer signedness"),
-                };
-
-                dev_wrappers.roc_builtins_int_from_str(
-                    result.ptr,
-                    roc_str.bytes,
-                    roc_str.length,
-                    roc_str.capacity_or_alloc_ptr,
-                    int_width,
-                    is_signed,
-                    tu_data.discriminant_offset,
-                );
                 break :blk result;
             },
             .num_from_numeral => args[0], // identity

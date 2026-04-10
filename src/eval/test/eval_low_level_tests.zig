@@ -905,6 +905,66 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "5" },
     },
     .{
+        .name = "low_level - U8.from_str parses explicit unsigned width",
+        .source =
+        \\{
+        \\match U8.from_str("42") {
+        \\    Ok(value) => value
+        \\    Err(_) => 0.U8
+        \\}
+        \\}
+        ,
+        .expected = .{ .inspect_str = "42" },
+    },
+    .{
+        .name = "low_level - U128.from_str parses explicit 128-bit integer",
+        .source =
+        \\{
+        \\match U128.from_str("340282366920938463463374607431768211455") {
+        \\    Ok(value) => U128.to_str(value)
+        \\    Err(_) => "bad"
+        \\}
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"340282366920938463463374607431768211455\"" },
+    },
+    .{
+        .name = "low_level - F32.from_str parses explicit float width",
+        .source =
+        \\{
+        \\match F32.from_str("3.5") {
+        \\    Ok(value) => F32.to_str(value)
+        \\    Err(_) => "bad"
+        \\}
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"3.5\"" },
+    },
+    .{
+        .name = "low_level - Dec.from_str parses explicit decimal",
+        .source =
+        \\{
+        \\match Dec.from_str("12.5") {
+        \\    Ok(value) => Dec.to_str(value)
+        \\    Err(_) => "bad"
+        \\}
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"12.5\"" },
+    },
+    .{
+        .name = "low_level - I64.from_str preserves explicit error path",
+        .source =
+        \\{
+        \\match I64.from_str("nope") {
+        \\    Ok(_) => "wrong"
+        \\    Err(_) => "err"
+        \\}
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"err\"" },
+    },
+    .{
         .name = "low_level - Dec.to_str returns string representation of decimal",
         .source =
         \\{

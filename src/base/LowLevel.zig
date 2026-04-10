@@ -105,7 +105,19 @@ pub const LowLevel = enum {
 
     // Numeric parsing operations
     num_from_numeral,
-    num_from_str,
+    u8_from_str,
+    i8_from_str,
+    u16_from_str,
+    i16_from_str,
+    u32_from_str,
+    i32_from_str,
+    u64_from_str,
+    i64_from_str,
+    u128_from_str,
+    i128_from_str,
+    dec_from_str,
+    f32_from_str,
+    f64_from_str,
 
     // Numeric conversion operations (U8)
     u8_to_i8_wrap,
@@ -402,6 +414,17 @@ pub const LowLevel = enum {
         requires_explicit_summary,
     };
 
+    pub const NumericParseSpec = union(enum) {
+        int: struct {
+            width_bytes: u8,
+            signed: bool,
+        },
+        float: struct {
+            width_bytes: u8,
+        },
+        dec,
+    };
+
     /// Some borrow-mode low-levels still need the source owner to remain live
     /// until the result has been fully materialized. This is separate from
     /// argument ownership: the source is still borrowed, but RC insertion must
@@ -422,6 +445,25 @@ pub const LowLevel = enum {
             .list_prepend => arg_index == 1,
             .list_set => arg_index == 2,
             else => false,
+        };
+    }
+
+    pub fn numericParseSpec(self: LowLevel) ?NumericParseSpec {
+        return switch (self) {
+            .u8_from_str => .{ .int = .{ .width_bytes = 1, .signed = false } },
+            .i8_from_str => .{ .int = .{ .width_bytes = 1, .signed = true } },
+            .u16_from_str => .{ .int = .{ .width_bytes = 2, .signed = false } },
+            .i16_from_str => .{ .int = .{ .width_bytes = 2, .signed = true } },
+            .u32_from_str => .{ .int = .{ .width_bytes = 4, .signed = false } },
+            .i32_from_str => .{ .int = .{ .width_bytes = 4, .signed = true } },
+            .u64_from_str => .{ .int = .{ .width_bytes = 8, .signed = false } },
+            .i64_from_str => .{ .int = .{ .width_bytes = 8, .signed = true } },
+            .u128_from_str => .{ .int = .{ .width_bytes = 16, .signed = false } },
+            .i128_from_str => .{ .int = .{ .width_bytes = 16, .signed = true } },
+            .f32_from_str => .{ .float = .{ .width_bytes = 4 } },
+            .f64_from_str => .{ .float = .{ .width_bytes = 8 } },
+            .dec_from_str => .dec,
+            else => null,
         };
     }
 
@@ -460,7 +502,20 @@ pub const LowLevel = enum {
             .num_negate, .num_abs, .num_sqrt, .num_log, .num_round, .num_floor, .num_ceiling, .num_to_str => &.{.borrow},
             .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_plus, .num_minus, .num_times, .num_div_by, .num_div_trunc_by, .num_rem_by, .num_mod_by, .num_abs_diff, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_pow => &.{ .borrow, .borrow },
             .num_from_numeral => &.{.borrow},
-            .num_from_str => &.{.borrow},
+            .u8_from_str,
+            .i8_from_str,
+            .u16_from_str,
+            .i16_from_str,
+            .u32_from_str,
+            .i32_from_str,
+            .u64_from_str,
+            .i64_from_str,
+            .u128_from_str,
+            .i128_from_str,
+            .dec_from_str,
+            .f32_from_str,
+            .f64_from_str,
+            => &.{.borrow},
 
             .u8_to_i8_wrap,
             .u8_to_i8_try,

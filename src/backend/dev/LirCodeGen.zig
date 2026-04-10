@@ -2846,10 +2846,20 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     return try self.generateFloatDecTryUnsafeConversion(ll, args);
                 },
 
-                // ── Generic numeric operations (not emitted by LIR lowering) ──
-                // The LIR lowering phase resolves these to type-specific operations
-                // (int_add_wrap, dec_add, float_add, etc.) before code generation.
-                .num_from_str => {
+                .u8_from_str,
+                .i8_from_str,
+                .u16_from_str,
+                .i16_from_str,
+                .u32_from_str,
+                .i32_from_str,
+                .u64_from_str,
+                .i64_from_str,
+                .u128_from_str,
+                .i128_from_str,
+                .dec_from_str,
+                .f32_from_str,
+                .f64_from_str,
+                => {
                     return try self.generateNumFromStr(ll, args);
                 },
                 .list_sublist => {
@@ -5477,12 +5487,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return .{ .stack = .{ .offset = result_offset } };
         }
 
-        /// Generate code for num_from_str: Str -> Result(Num, [InvalidNumStr])
-        /// Dispatches to the appropriate C wrapper based on the target numeric type.
+        /// Generate code for typed `*_from_str` low-levels:
+        /// Str -> Result(Num, [InvalidNumStr])
         fn generateNumFromStr(self: *Self, ll: anytype, args: []const LocalId) Allocator.Error!ValueLocation {
             if (args.len != 1) unreachable;
             const str_loc = try self.emitValueLocal(args[0]);
             const str_off = try self.ensureOnStack(str_loc, roc_str_size);
+            const parse_spec = ll.op.numericParseSpec() orelse
+                std.debug.panic("generateNumFromStr: expected typed from_str op, got {s}", .{@tagName(ll.op)});
 
             const ls = self.layout_store;
             const ret_layout_val = ls.getLayout(ll.ret_layout);
@@ -5494,97 +5506,45 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.zeroStackArea(result_offset, tu_data.size);
             const disc_offset: u32 = tu_data.discriminant_offset;
 
-            // Find the Ok variant's numeric payload layout. The Err payload can now be a
-            // real single-tag union rather than ZST, so we cannot guess by "first non-zst".
-            const variants = ls.getTagUnionVariants(tu_data);
-            var payload_idx: ?layout.Idx = null;
-            for (0..variants.len) |i| {
-                const v_payload = variants.get(@intCast(i)).payload_layout;
-                const payload_choice = self.unwrapSingleFieldPayloadLayout(v_payload) orelse v_payload;
-                const payload_layout = ls.getLayout(payload_choice);
-                switch (payload_layout.tag) {
-                    .scalar => {
-                        payload_idx = payload_choice;
-                        break;
-                    },
-                    else => {},
-                }
-                if (payload_choice == .dec) {
-                    payload_idx = payload_choice;
-                    break;
-                }
-            }
-            const ok_payload_idx = payload_idx orelse
-                std.debug.panic("generateNumFromStr: missing numeric payload in return layout {}", .{@intFromEnum(ll.ret_layout)});
-
             const base_reg = frame_ptr;
 
-            if (ok_payload_idx == .dec) {
-                const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_dec_from_str);
-                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                try builder.addLeaArg(base_reg, result_offset);
-                try builder.addMemArg(base_reg, str_off);
-                try builder.addMemArg(base_reg, str_off + 8);
-                try builder.addMemArg(base_reg, str_off + 16);
-                try builder.addImmArg(@intCast(disc_offset));
-                try self.callBuiltin(&builder, fn_addr, .dec_from_str);
-            } else if (ok_payload_idx == .f32 or ok_payload_idx == .f64) {
-                const float_width: u8 = if (ok_payload_idx == .f32) 4 else 8;
-                const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_float_from_str);
-                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                try builder.addLeaArg(base_reg, result_offset);
-                try builder.addMemArg(base_reg, str_off);
-                try builder.addMemArg(base_reg, str_off + 8);
-                try builder.addMemArg(base_reg, str_off + 16);
-                try builder.addImmArg(@intCast(float_width));
-                try builder.addImmArg(@intCast(disc_offset));
-                try self.callBuiltin(&builder, fn_addr, .float_from_str);
-            } else {
-                const int_width: u8 = switch (ok_payload_idx) {
-                    .u8, .i8 => 1,
-                    .u16, .i16 => 2,
-                    .u32, .i32 => 4,
-                    .u64, .i64 => 8,
-                    .u128, .i128 => 16,
-                    else => unreachable,
-                };
-                const is_signed: bool = switch (ok_payload_idx) {
-                    .i8, .i16, .i32, .i64, .i128 => true,
-                    .u8, .u16, .u32, .u64, .u128 => false,
-                    else => unreachable,
-                };
-                const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_int_from_str);
-                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                try builder.addLeaArg(base_reg, result_offset);
-                try builder.addMemArg(base_reg, str_off);
-                try builder.addMemArg(base_reg, str_off + 8);
-                try builder.addMemArg(base_reg, str_off + 16);
-                try builder.addImmArg(@intCast(int_width));
-                try builder.addImmArg(if (is_signed) @as(i64, 1) else @as(i64, 0));
-                try builder.addImmArg(@intCast(disc_offset));
-                try self.callBuiltin(&builder, fn_addr, .int_from_str);
+            switch (parse_spec) {
+                .dec => {
+                    const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_dec_from_str);
+                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    try builder.addLeaArg(base_reg, result_offset);
+                    try builder.addMemArg(base_reg, str_off);
+                    try builder.addMemArg(base_reg, str_off + 8);
+                    try builder.addMemArg(base_reg, str_off + 16);
+                    try builder.addImmArg(@intCast(disc_offset));
+                    try self.callBuiltin(&builder, fn_addr, .dec_from_str);
+                },
+                .float => |float| {
+                    const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_float_from_str);
+                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    try builder.addLeaArg(base_reg, result_offset);
+                    try builder.addMemArg(base_reg, str_off);
+                    try builder.addMemArg(base_reg, str_off + 8);
+                    try builder.addMemArg(base_reg, str_off + 16);
+                    try builder.addImmArg(@intCast(float.width_bytes));
+                    try builder.addImmArg(@intCast(disc_offset));
+                    try self.callBuiltin(&builder, fn_addr, .float_from_str);
+                },
+                .int => |int| {
+                    const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_int_from_str);
+                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    try builder.addLeaArg(base_reg, result_offset);
+                    try builder.addMemArg(base_reg, str_off);
+                    try builder.addMemArg(base_reg, str_off + 8);
+                    try builder.addMemArg(base_reg, str_off + 16);
+                    try builder.addImmArg(@intCast(int.width_bytes));
+                    try builder.addImmArg(if (int.signed) @as(i64, 1) else @as(i64, 0));
+                    try builder.addImmArg(@intCast(disc_offset));
+                    try self.callBuiltin(&builder, fn_addr, .int_from_str);
+                },
             }
 
             return .{ .stack = .{ .offset = result_offset } };
-        }
-
-        fn unwrapSingleFieldPayloadLayout(self: *Self, layout_idx: layout.Idx) ?layout.Idx {
-            const layout_val = self.layout_store.getLayout(layout_idx);
-            if (layout_val.tag != .struct_) return null;
-
-            const struct_data = self.layout_store.getStructData(layout_val.data.struct_.idx);
-            const fields = self.layout_store.struct_fields.sliceRange(struct_data.getFields());
-            if (fields.len != 1) return null;
-
-            const field = fields.get(0);
-            if (field.index != 0) return null;
-
-            if (builtin.mode == .Debug) {
-                const field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(layout_val.data.struct_.idx, 0);
-                std.debug.assert(field_offset == 0);
-            }
-
-            return field.layout;
         }
 
         // ── Float/Dec try_unsafe conversion info ──

@@ -43,8 +43,6 @@ test "eval tests" {
     std.testing.refAllDecls(@import("crash_context.zig"));
     std.testing.refAllDecls(@import("value.zig"));
     std.testing.refAllDecls(@import("interpreter.zig"));
-    std.testing.refAllDecls(@import("fold_type.zig"));
-    std.testing.refAllDecls(@import("value_to_cir.zig"));
     std.testing.refAllDecls(@import("stack.zig"));
     std.testing.refAllDecls(@import("test/RuntimeHostEnv.zig"));
     std.testing.refAllDecls(@import("test/helpers.zig"));
