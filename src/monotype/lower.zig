@@ -2233,43 +2233,52 @@ pub const Lowerer = struct {
         env: BindingEnv,
         expr_idx: CIR.Expr.Idx,
     ) std.mem.Allocator.Error!ast.ExprId {
+        return self.lowerSolvedExpr(module_idx, type_scope, env, self.ctx.solved(module_idx).expr(expr_idx));
+    }
+
+    fn lowerSolvedExpr(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeCloneScope,
+        env: BindingEnv,
+        expr: solved_cir.Expr,
+    ) std.mem.Allocator.Error!ast.ExprId {
         self.requireFrozenLoweringSemanticTypes(module_idx, type_scope);
-        const cir_env = self.ctx.env(module_idx);
-        const expr = cir_env.store.getExpr(expr_idx);
-        switch (expr) {
+        const cir_env = expr.env;
+        switch (expr.data) {
             .e_nominal => |nominal| return self.lowerTransparentNominalExprWithType(
                 module_idx,
                 type_scope,
                 env,
-                expr_idx,
+                expr.idx,
                 nominal.backing_expr,
-                try self.lowerExprType(module_idx, type_scope, env, expr_idx, expr),
-                ModuleEnv.varFrom(expr_idx),
+                try self.lowerExprType(module_idx, type_scope, env, expr.idx, expr.data),
+                expr.solved_var,
             ),
             .e_nominal_external => |nominal| return self.lowerTransparentNominalExprWithType(
                 module_idx,
                 type_scope,
                 env,
-                expr_idx,
+                expr.idx,
                 nominal.backing_expr,
-                try self.lowerExprType(module_idx, type_scope, env, expr_idx, expr),
-                ModuleEnv.varFrom(expr_idx),
+                try self.lowerExprType(module_idx, type_scope, env, expr.idx, expr.data),
+                expr.solved_var,
             ),
             else => {},
         }
 
-        if (expr == .e_call) {
-            if (self.callRootCalleeIsRuntimeError(module_idx, expr.e_call.func)) {
+        if (expr.data == .e_call) {
+            if (self.callRootCalleeIsRuntimeError(module_idx, expr.data.e_call.func)) {
                 return self.lowerErroneousExprWithType(
                     module_idx,
                     type_scope,
                     env,
-                    expr_idx,
-                    try self.lowerExprType(module_idx, type_scope, env, expr_idx, expr),
+                    expr.idx,
+                    try self.lowerExprType(module_idx, type_scope, env, expr.idx, expr.data),
                 );
             }
 
-            if (try self.maybeLowerSpecialCallExpr(module_idx, type_scope, env, expr_idx, expr.e_call, null)) |special| {
+            if (try self.maybeLowerSpecialCallExpr(module_idx, type_scope, env, expr.idx, expr.data.e_call, null)) |special| {
                 return special;
             }
 
@@ -2277,9 +2286,9 @@ pub const Lowerer = struct {
                 module_idx,
                 type_scope,
                 env,
-                expr_idx,
-                expr.e_call.func,
-                cir_env.store.sliceExpr(expr.e_call.args),
+                expr.idx,
+                expr.data.e_call.func,
+                cir_env.store.sliceExpr(expr.data.e_call.args),
             );
             return try self.program.store.addExpr(.{
                 .ty = lowered_call.result_ty,
@@ -2287,13 +2296,13 @@ pub const Lowerer = struct {
             });
         }
 
-        const ty = try self.lowerExprType(module_idx, type_scope, env, expr_idx, expr);
+        const ty = try self.lowerExprType(module_idx, type_scope, env, expr.idx, expr.data);
 
-        if (expr == .e_str) {
-            return self.lowerStringExpr(module_idx, type_scope, env, ty, expr.e_str);
+        if (expr.data == .e_str) {
+            return self.lowerStringExpr(module_idx, type_scope, env, ty, expr.data.e_str);
         }
 
-        const data: ast.Expr.Data = switch (expr) {
+        const data: ast.Expr.Data = switch (expr.data) {
             .e_num => |num| try self.lowerNumericIntLiteralData(ty, num.value),
             .e_frac_f32 => |frac| .{ .frac_f32_lit = frac.value },
             .e_frac_f64 => |frac| .{ .frac_f64_lit = frac.value },
@@ -2320,14 +2329,14 @@ pub const Lowerer = struct {
             .e_lookup_required => |_| debugTodo("monotype.lowerExpr required lookup"),
             .e_call => unreachable,
             .e_lambda => |lambda| {
-                const lowered = try self.lowerAnonymousClosure(module_idx, type_scope, env, expr_idx, ty, lambda.args, lambda.body, null);
+                const lowered = try self.lowerAnonymousClosure(module_idx, type_scope, env, expr.idx, ty, lambda.args, lambda.body, null);
                 return try self.program.store.addExpr(.{
                     .ty = lowered.ty,
                     .data = .{ .clos = lowered.data },
                 });
             },
             .e_closure => |closure| {
-                const lowered = try self.lowerClosureExpr(module_idx, type_scope, env, expr_idx, ty, closure, null);
+                const lowered = try self.lowerClosureExpr(module_idx, type_scope, env, expr.idx, ty, closure, null);
                 return try self.program.store.addExpr(.{
                     .ty = lowered.ty,
                     .data = .{ .clos = lowered.data },
@@ -2339,7 +2348,7 @@ pub const Lowerer = struct {
                 type_scope,
                 env,
                 ty,
-                try self.scopedExprResultVar(module_idx, type_scope, env, expr_idx),
+                try self.scopedSolvedExprResultVar(type_scope, env, expr),
                 record,
             ),
             .e_empty_record => .unit,
@@ -2348,7 +2357,7 @@ pub const Lowerer = struct {
                 type_scope,
                 env,
                 ty,
-                try self.scopedExprResultVar(module_idx, type_scope, env, expr_idx),
+                try self.scopedSolvedExprResultVar(type_scope, env, expr),
                 tuple.elems,
             ) },
             .e_list => |list| .{ .list = try self.lowerListExprsWithExpectedType(
@@ -2356,7 +2365,7 @@ pub const Lowerer = struct {
                 type_scope,
                 env,
                 ty,
-                try self.scopedExprResultVar(module_idx, type_scope, env, expr_idx),
+                try self.scopedSolvedExprResultVar(type_scope, env, expr),
                 list.elems,
             ) },
             .e_empty_list => .{ .list = ast.Span(ast.ExprId).empty() },
@@ -2376,7 +2385,7 @@ pub const Lowerer = struct {
                         type_scope,
                         env,
                         try self.requireExprTypeFact(module_idx, type_scope, binop.lhs),
-                        try self.scopedExprResultVar(module_idx, type_scope, env, binop.lhs),
+                        self.requireExprResultFact(module_idx, type_scope, binop.lhs),
                         binop.lhs,
                         binop.rhs,
                     );
@@ -2426,11 +2435,11 @@ pub const Lowerer = struct {
                     } };
                 }
                 const arithmetic_fact = switch (binop.op) {
-                    .add, .sub, .mul, .div, .rem, .div_trunc, .lt, .gt, .le, .ge, .eq => self.requireArithmeticBinopFact(module_idx, type_scope, expr_idx),
+                    .add, .sub, .mul, .div, .rem, .div_trunc, .lt, .gt, .le, .ge, .eq => self.requireArithmeticBinopFact(module_idx, type_scope, expr.idx),
                     else => null,
                 };
                 const arithmetic_type_fact = switch (binop.op) {
-                    .add, .sub, .mul, .div, .rem, .div_trunc, .lt, .gt, .le, .ge, .eq => self.requireArithmeticBinopTypeFact(module_idx, type_scope, expr_idx),
+                    .add, .sub, .mul, .div, .rem, .div_trunc, .lt, .gt, .le, .ge, .eq => self.requireArithmeticBinopTypeFact(module_idx, type_scope, expr.idx),
                     else => null,
                 };
                 break :blk .{ .low_level = .{
@@ -2467,7 +2476,7 @@ pub const Lowerer = struct {
                         module_idx,
                         type_scope,
                         env,
-                        expr_idx,
+                        expr.idx,
                         dot.field_name,
                     );
                     return try self.program.store.addExpr(.{
@@ -2478,16 +2487,16 @@ pub const Lowerer = struct {
                 break :blk .{ .access = .{
                     .record = try self.lowerExpr(module_idx, type_scope, env, dot.receiver),
                     .field = try self.ctx.copyExecutableIdent(module_idx, dot.field_name),
-                    .field_index = self.requireExprFieldIndexFact(module_idx, type_scope, expr_idx),
+                    .field_index = self.requireExprFieldIndexFact(module_idx, type_scope, expr.idx),
                 } };
             },
             .e_tag => |tag| try self.lowerTagExprWithExpectedType(
                 module_idx,
                 type_scope,
                 env,
-                expr_idx,
+                expr.idx,
                 ty,
-                try self.scopedExprResultVar(module_idx, type_scope, env, expr_idx),
+                try self.scopedSolvedExprResultVar(type_scope, env, expr),
                 tag.name,
                 tag.args,
             ),
@@ -2495,9 +2504,9 @@ pub const Lowerer = struct {
                 module_idx,
                 type_scope,
                 env,
-                expr_idx,
+                expr.idx,
                 ty,
-                try self.scopedExprResultVar(module_idx, type_scope, env, expr_idx),
+                try self.scopedSolvedExprResultVar(type_scope, env, expr),
                 tag.name,
                 .{ .span = .{ .start = 0, .len = 0 } },
             ),
@@ -2539,7 +2548,7 @@ pub const Lowerer = struct {
                     module_idx,
                     type_scope,
                     env,
-                    expr_idx,
+                    expr.idx,
                     dispatch.method_name,
                 );
                 return try self.program.store.addExpr(.{
@@ -2547,7 +2556,7 @@ pub const Lowerer = struct {
                     .data = .{ .call = lowered_call.data },
                 });
             },
-            else => debugTodoExpr(expr),
+            else => debugTodoExpr(expr.data),
         };
 
         return try self.program.store.addExpr(.{ .ty = ty, .data = data });
@@ -5293,29 +5302,47 @@ pub const Lowerer = struct {
         expected_ty: type_mod.TypeId,
         expected_var: ?Var,
     ) std.mem.Allocator.Error!ast.ExprId {
+        return self.lowerSolvedExprWithExpectedType(
+            module_idx,
+            type_scope,
+            env,
+            self.ctx.solved(module_idx).expr(expr_idx),
+            expected_ty,
+            expected_var,
+        );
+    }
+
+    fn lowerSolvedExprWithExpectedType(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeCloneScope,
+        env: BindingEnv,
+        expr: solved_cir.Expr,
+        expected_ty: type_mod.TypeId,
+        expected_var: ?Var,
+    ) std.mem.Allocator.Error!ast.ExprId {
         self.requireFrozenLoweringSemanticTypes(module_idx, type_scope);
-        const cir_env = self.ctx.env(module_idx);
-        const expr = cir_env.store.getExpr(expr_idx);
+        const cir_env = expr.env;
         if (expected_var != null) {
-            switch (expr) {
+            switch (expr.data) {
                 .e_call => |call| {
                     _ = try self.lowerCallResultFact(
                         module_idx,
                         type_scope,
                         env,
-                        expr_idx,
+                        expr.idx,
                         call.func,
                         cir_env.store.sliceExpr(call.args),
                     );
                 },
                 .e_dot_access => |dot| {
                     if (dot.args != null) {
-                        _ = self.requireExplicitCallFact(module_idx, type_scope, expr_idx);
+                        _ = self.requireExplicitCallFact(module_idx, type_scope, expr.idx);
                     }
                 },
                 .e_type_var_dispatch => |dispatch| {
                     _ = dispatch;
-                    _ = self.requireExplicitCallFact(module_idx, type_scope, expr_idx);
+                    _ = self.requireExplicitCallFact(module_idx, type_scope, expr.idx);
                 },
                 .e_binop => |_| {},
                 else => {},
@@ -5323,15 +5350,15 @@ pub const Lowerer = struct {
         }
         const target_ty = blk: {
             if (self.ctx.types.getType(expected_ty) != .placeholder) break :blk expected_ty;
-            break :blk try self.requireExprTypeFact(module_idx, type_scope, expr_idx);
+            break :blk try self.requireExprTypeFact(module_idx, type_scope, expr.idx);
         };
 
-        return switch (expr) {
+        return switch (expr.data) {
             .e_nominal => |nominal| self.lowerTransparentNominalExprWithType(
                 module_idx,
                 type_scope,
                 env,
-                expr_idx,
+                expr.idx,
                 nominal.backing_expr,
                 target_ty,
                 expected_var,
@@ -5340,7 +5367,7 @@ pub const Lowerer = struct {
                 module_idx,
                 type_scope,
                 env,
-                expr_idx,
+                expr.idx,
                 nominal.backing_expr,
                 target_ty,
                 expected_var,
@@ -5371,12 +5398,12 @@ pub const Lowerer = struct {
                         module_idx,
                         type_scope,
                         env,
-                        expr_idx,
+                        expr.idx,
                         target_ty,
                     );
                 }
 
-                if (try self.maybeLowerSpecialCallExpr(module_idx, type_scope, env, expr_idx, call, target_ty)) |special| {
+                if (try self.maybeLowerSpecialCallExpr(module_idx, type_scope, env, expr.idx, call, target_ty)) |special| {
                     break :blk try self.program.store.addExpr(.{
                         .ty = self.program.store.getExpr(special).ty,
                         .data = self.program.store.getExpr(special).data,
@@ -5386,7 +5413,7 @@ pub const Lowerer = struct {
                     module_idx,
                     type_scope,
                     env,
-                    expr_idx,
+                    expr.idx,
                     call.func,
                     cir_env.store.sliceExpr(call.args),
                 );
@@ -5400,7 +5427,7 @@ pub const Lowerer = struct {
                     module_idx,
                     type_scope,
                     env,
-                    expr_idx,
+                    expr.idx,
                     target_ty,
                     lambda.args,
                     lambda.body,
@@ -5416,7 +5443,7 @@ pub const Lowerer = struct {
                     module_idx,
                     type_scope,
                     env,
-                    expr_idx,
+                    expr.idx,
                     target_ty,
                     closure,
                     expected_var,
@@ -5439,7 +5466,7 @@ pub const Lowerer = struct {
                 type_scope,
                 env,
                 target_ty,
-                expected_var orelse try self.scopedExprResultVar(module_idx, type_scope, env, expr_idx),
+                expected_var orelse try self.scopedSolvedExprResultVar(type_scope, env, expr),
                 record,
             ),
             .e_tuple => |tuple| try self.program.store.addExpr(.{
@@ -5449,7 +5476,7 @@ pub const Lowerer = struct {
                     type_scope,
                     env,
                     target_ty,
-                    expected_var orelse try self.scopedExprResultVar(module_idx, type_scope, env, expr_idx),
+                    expected_var orelse try self.scopedSolvedExprResultVar(type_scope, env, expr),
                     tuple.elems,
                 ) },
             }),
@@ -5460,7 +5487,7 @@ pub const Lowerer = struct {
                     type_scope,
                     env,
                     target_ty,
-                    expected_var orelse try self.scopedExprResultVar(module_idx, type_scope, env, expr_idx),
+                    expected_var orelse try self.scopedSolvedExprResultVar(type_scope, env, expr),
                     list.elems,
                 ) },
             }),
@@ -5507,9 +5534,9 @@ pub const Lowerer = struct {
                     module_idx,
                     type_scope,
                     env,
-                    expr_idx,
+                    expr.idx,
                     target_ty,
-                    expected_var orelse try self.scopedExprResultVar(module_idx, type_scope, env, expr_idx),
+                    expected_var orelse try self.scopedSolvedExprResultVar(type_scope, env, expr),
                     tag.name,
                     tag.args,
                 ),
@@ -5520,16 +5547,16 @@ pub const Lowerer = struct {
                     module_idx,
                     type_scope,
                     env,
-                    expr_idx,
+                    expr.idx,
                     target_ty,
-                    expected_var orelse try self.scopedExprResultVar(module_idx, type_scope, env, expr_idx),
+                    expected_var orelse try self.scopedSolvedExprResultVar(type_scope, env, expr),
                     tag.name,
                     .{ .span = .{ .start = 0, .len = 0 } },
                 ),
             }),
             .e_lookup_local => |lookup| blk: {
                 if (self.ctx.types.getType(target_ty) != .func) {
-                    break :blk try self.lowerExpr(module_idx, type_scope, env, expr_idx);
+                    break :blk try self.lowerSolvedExpr(module_idx, type_scope, env, expr);
                 }
                 const symbol = try self.lookupOrSpecializeLocal(module_idx, type_scope, env, lookup.pattern_idx, target_ty, expected_var);
                 break :blk try self.program.store.addExpr(.{
@@ -5539,7 +5566,7 @@ pub const Lowerer = struct {
             },
             .e_lookup_external => |lookup| blk: {
                 if (self.ctx.types.getType(target_ty) != .func) {
-                    break :blk try self.lowerExpr(module_idx, type_scope, env, expr_idx);
+                    break :blk try self.lowerSolvedExpr(module_idx, type_scope, env, expr);
                 }
                 const symbol = try self.lookupOrSpecializeExternal(module_idx, lookup, target_ty, expected_var);
                 break :blk try self.program.store.addExpr(.{
@@ -5549,13 +5576,13 @@ pub const Lowerer = struct {
             },
             .e_dot_access => |dot| blk: {
                 if (dot.args == null) {
-                    break :blk try self.lowerExpr(module_idx, type_scope, env, expr_idx);
+                    break :blk try self.lowerSolvedExpr(module_idx, type_scope, env, expr);
                 }
                 const lowered_call = try self.lowerRecordedMethodCall(
                     module_idx,
                     type_scope,
                     env,
-                    expr_idx,
+                    expr.idx,
                     dot.field_name,
                 );
                 break :blk try self.program.store.addExpr(.{
@@ -5568,7 +5595,7 @@ pub const Lowerer = struct {
                     module_idx,
                     type_scope,
                     env,
-                    expr_idx,
+                    expr.idx,
                     dispatch.method_name,
                 );
                 break :blk try self.program.store.addExpr(.{
@@ -5576,7 +5603,7 @@ pub const Lowerer = struct {
                     .data = .{ .call = lowered_call.data },
                 });
             },
-            else => try self.lowerExpr(module_idx, type_scope, env, expr_idx),
+            else => try self.lowerSolvedExpr(module_idx, type_scope, env, expr),
         };
     }
 
