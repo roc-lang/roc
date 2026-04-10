@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const base = @import("base");
 const can = @import("can");
 const symbol_mod = @import("symbol");
 const type_mod = @import("type.zig");
@@ -12,11 +13,22 @@ pub const SourceFn = struct {
     def_idx: can.CIR.Def.Idx,
 };
 
+pub const CheckerSeed = struct {
+    type_store: checker_types.Store,
+    ident_store: base.Ident.Store,
+    root_var: checker_types.Var,
+
+    pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+        self.ident_store.deinit(allocator);
+        self.type_store.deinit();
+    }
+};
+
 pub const Pending = struct {
     source_symbol: symbol_mod.Symbol,
     source: SourceFn,
     ty: type_mod.TypeId,
-    expected_checker_var: ?checker_types.Var,
+    expected_checker_seed: ?CheckerSeed,
     specialized_symbol: symbol_mod.Symbol,
     emitted: bool = false,
 };
@@ -40,6 +52,11 @@ pub const Queue = struct {
     }
 
     pub fn deinit(self: *Queue) void {
+        for (self.pending.items) |*item| {
+            if (item.expected_checker_seed) |*seed| {
+                seed.deinit(self.allocator);
+            }
+        }
         self.pending.deinit(self.allocator);
         self.by_key.deinit();
     }
@@ -51,7 +68,7 @@ pub const Queue = struct {
         source_symbol: symbol_mod.Symbol,
         source: SourceFn,
         ty: type_mod.TypeId,
-        expected_checker_var: ?checker_types.Var,
+        expected_checker_seed: ?CheckerSeed,
     ) std.mem.Allocator.Error!symbol_mod.Symbol {
         const key: Key = .{
             .source_symbol = source_symbol,
@@ -63,8 +80,11 @@ pub const Queue = struct {
 
         if (self.by_key.get(key)) |idx| {
             const item = &self.pending.items[idx];
-            if (item.expected_checker_var == null and expected_checker_var != null) {
-                item.expected_checker_var = expected_checker_var;
+            if (expected_checker_seed) |seed| {
+                if (item.expected_checker_seed) |*existing| {
+                    existing.deinit(self.allocator);
+                }
+                item.expected_checker_seed = seed;
             }
             return item.specialized_symbol;
         }
@@ -79,7 +99,7 @@ pub const Queue = struct {
             .source_symbol = source_symbol,
             .source = source,
             .ty = ty,
-            .expected_checker_var = expected_checker_var,
+            .expected_checker_seed = expected_checker_seed,
             .specialized_symbol = specialized_symbol,
         });
         try self.by_key.put(key, self.pending.items.len - 1);

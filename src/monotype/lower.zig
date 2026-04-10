@@ -74,24 +74,12 @@ const Ctx = struct {
     types: type_mod.Store,
     idents: base.Ident.Store,
     source_modules: *typed_cir.Modules,
-    type_modules: []TypeModuleState,
     builtin_module_idx: u32,
     top_level_symbols: std.AutoHashMap(TopLevelKey, symbol_mod.Symbol),
     pattern_symbols: std.AutoHashMap(PatternKey, symbol_mod.Symbol),
 
-    const TypeModuleState = struct {
-        type_store: types.Store,
-        ident_store: base.Ident.Store,
-
-        fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
-            self.ident_store.deinit(allocator);
-            self.type_store.deinit();
-        }
-    };
-
     const Module = struct {
         source_module: typed_cir.Module,
-        type_state: *TypeModuleState,
 
         pub fn allDefs(self: @This()) []const CIR.Def.Idx {
             return self.source_module.allDefs();
@@ -102,19 +90,11 @@ const Ctx = struct {
         }
 
         pub fn typeStoreConst(self: @This()) *const types.Store {
-            return &self.type_state.type_store;
-        }
-
-        pub fn typeStoreMut(self: @This()) *types.Store {
-            return &self.type_state.type_store;
+            return self.source_module.typeStoreConst();
         }
 
         pub fn identStoreConst(self: @This()) *const base.Ident.Store {
-            return &self.type_state.ident_store;
-        }
-
-        pub fn identStoreMut(self: @This()) *base.Ident.Store {
-            return &self.type_state.ident_store;
+            return self.source_module.identStoreConst();
         }
 
         pub fn commonIdents(self: @This()) CommonIdents {
@@ -149,19 +129,6 @@ const Ctx = struct {
             return self.source_module.resolvedImportModule(import_idx);
         }
 
-        pub fn lookupMethodIdentFromModule(
-            self: @This(),
-            source_module: Module,
-            type_ident: Ident.Idx,
-            method_ident: Ident.Idx,
-        ) ?Ident.Idx {
-            return self.source_module.lookupMethodIdentFromModule(source_module.source_module, type_ident, method_ident);
-        }
-
-        pub fn exposedNodeIndexById(self: @This(), ident_idx: Ident.Idx) ?u16 {
-            return self.source_module.exposedNodeIndexById(ident_idx);
-        }
-
         pub fn nodeTag(self: @This(), idx: CIR.Node.Idx) CIR.Node.Tag {
             return self.source_module.nodeTag(idx);
         }
@@ -186,8 +153,31 @@ const Ctx = struct {
             return self.source_module.pattern(idx);
         }
 
-        pub fn typeAnnoVar(self: @This(), idx: CIR.TypeAnno.Idx) Var {
-            return self.source_module.typeAnnoVar(idx);
+        pub fn exprType(self: @This(), idx: CIR.Expr.Idx) Var {
+            return self.source_module.exprType(idx);
+        }
+
+        pub fn patternType(self: @This(), idx: CIR.Pattern.Idx) Var {
+            return self.source_module.patternType(idx);
+        }
+
+        pub fn typeAnnoType(self: @This(), idx: CIR.TypeAnno.Idx) Var {
+            return self.source_module.typeAnnoType(idx);
+        }
+
+        pub fn staticDispatchSiteRequirement(
+            self: @This(),
+            expr_idx: CIR.Expr.Idx,
+            method_name: Ident.Idx,
+        ) ?types.StaticDispatchSiteRequirement {
+            return self.source_module.staticDispatchSiteRequirement(expr_idx, method_name);
+        }
+
+        pub fn resolvedStaticDispatchTarget(
+            self: @This(),
+            expr_idx: CIR.Expr.Idx,
+        ) ?types.ResolvedStaticDispatchSite {
+            return self.source_module.resolvedStaticDispatchTarget(expr_idx);
         }
 
         pub fn getStatement(self: @This(), idx: CIR.Statement.Idx) CIR.Statement {
@@ -262,30 +252,12 @@ const Ctx = struct {
         typed_cir_modules: *typed_cir.Modules,
         builtin_module_idx: u32,
     ) std.mem.Allocator.Error!Ctx {
-        const type_modules = try allocator.alloc(TypeModuleState, typed_cir_modules.moduleCount());
-        errdefer allocator.free(type_modules);
-
-        var built_type_modules: usize = 0;
-        errdefer {
-            for (type_modules[0..built_type_modules]) |*type_state| type_state.deinit(allocator);
-        }
-
-        for (0..typed_cir_modules.moduleCount()) |module_idx| {
-            const module = typed_cir_modules.module(@intCast(module_idx));
-            type_modules[module_idx] = .{
-                .type_store = try module.typeStoreConst().clone(allocator),
-                .ident_store = try module.identStoreConst().clone(allocator),
-            };
-            built_type_modules += 1;
-        }
-
         return .{
             .allocator = allocator,
             .symbols = symbol_mod.Store.init(allocator),
             .types = type_mod.Store.init(allocator),
             .idents = try base.Ident.Store.initCapacity(allocator, 256),
             .source_modules = typed_cir_modules,
-            .type_modules = type_modules,
             .builtin_module_idx = builtin_module_idx,
             .top_level_symbols = std.AutoHashMap(TopLevelKey, symbol_mod.Symbol).init(allocator),
             .pattern_symbols = std.AutoHashMap(PatternKey, symbol_mod.Symbol).init(allocator),
@@ -293,8 +265,6 @@ const Ctx = struct {
     }
 
     fn deinit(self: *Ctx) void {
-        for (self.type_modules) |*type_state| type_state.deinit(self.allocator);
-        self.allocator.free(self.type_modules);
         self.pattern_symbols.deinit();
         self.top_level_symbols.deinit();
         self.idents.deinit(self.allocator);
@@ -305,7 +275,6 @@ const Ctx = struct {
     fn mirModule(self: *const Ctx, module_idx: u32) Module {
         return .{
             .source_module = self.source_modules.module(module_idx),
-            .type_state = @constCast(&self.type_modules[module_idx]),
         };
     }
 
@@ -376,14 +345,27 @@ const Ctx = struct {
     ) std.mem.Allocator.Error!base.Ident.Idx {
         if (ident.isNone()) return ident;
         const text = self.mirModule(module_idx).getIdent(ident);
+        return self.copyExecutableIdentText(text);
+    }
+
+    fn copyExecutableIdentFromStore(
+        self: *Ctx,
+        idents: *const base.Ident.Store,
+        ident: base.Ident.Idx,
+    ) std.mem.Allocator.Error!base.Ident.Idx {
+        if (ident.isNone()) return ident;
+        return self.copyExecutableIdentText(idents.getText(ident));
+    }
+
+    fn copyExecutableIdentText(
+        self: *Ctx,
+        text: []const u8,
+    ) std.mem.Allocator.Error!base.Ident.Idx {
         return self.idents.insert(self.allocator, base.Ident.for_text(text));
     }
 };
 
-const ResolvedTarget = struct {
-    module_idx: u32,
-    def_idx: CIR.Def.Idx,
-};
+const ResolvedTarget = semantic_facts.ResolvedDispatchTargetFact;
 
 const ExpectedTypeFact = struct {
     ty: type_mod.TypeId,
@@ -464,6 +446,17 @@ pub const Lowerer = struct {
         solved_var: ?Var = null,
     };
 
+    const FrozenTypedBinding = struct {
+        symbol: symbol_mod.Symbol,
+        checker_seed: ?specializations_mod.CheckerSeed = null,
+
+        fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+            if (self.checker_seed) |*seed| {
+                seed.deinit(allocator);
+            }
+        }
+    };
+
     const BindingValue = struct {
         typed: ?TypedBinding = null,
         local_fn_source: ?LocalFnSourceRef = null,
@@ -471,6 +464,20 @@ pub const Lowerer = struct {
     };
 
     const BindingEnv = std.AutoHashMap(PatternKey, BindingValue);
+
+    const FrozenBindingValue = struct {
+        typed: ?FrozenTypedBinding = null,
+        local_fn_source: ?LocalFnSourceRef = null,
+        local_fn_seed_var: ?Var = null,
+
+        fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+            if (self.typed) |*typed| {
+                typed.deinit(allocator);
+            }
+        }
+    };
+
+    const FrozenBindingEnv = std.AutoHashMap(PatternKey, FrozenBindingValue);
 
     fn putTypedBinding(
         self: *Lowerer,
@@ -542,16 +549,42 @@ pub const Lowerer = struct {
 
     const LocalFnGroupState = struct {
         module_idx: u32,
-        declaration_env: BindingEnv,
+        declaration_env: FrozenBindingEnv,
         insertion_index: usize,
         sources: []LocalFnSource,
         pending: std.ArrayList(LocalFnPending),
 
         fn deinit(self: *LocalFnGroupState, allocator: std.mem.Allocator) void {
+            var env_iter = self.declaration_env.valueIterator();
+            while (env_iter.next()) |value| {
+                value.deinit(allocator);
+            }
             self.declaration_env.deinit();
             allocator.free(self.sources);
             for (self.pending.items) |pending| allocator.free(pending.arg_tys);
             self.pending.deinit(allocator);
+        }
+    };
+
+    const TypeWorkspace = struct {
+        module_idx: u32,
+        type_store: types.Store,
+        ident_store: base.Ident.Store,
+
+        fn initEmpty(
+            allocator: std.mem.Allocator,
+            module: Ctx.Module,
+        ) std.mem.Allocator.Error!TypeWorkspace {
+            return .{
+                .module_idx = module.source_module.module_idx,
+                .type_store = try types.Store.init(allocator),
+                .ident_store = try base.Ident.Store.initCapacity(allocator, 16),
+            };
+        }
+
+        fn deinit(self: *TypeWorkspace, allocator: std.mem.Allocator) void {
+            self.ident_store.deinit(allocator);
+            self.type_store.deinit();
         }
     };
 
@@ -561,7 +594,12 @@ pub const Lowerer = struct {
         const PatternTypeKey = semantic_facts.PatternTypeKey;
         const RecordDestructKey = semantic_facts.RecordDestructKey;
 
-        var_map: std.AutoHashMap(Var, Var),
+        allocator: std.mem.Allocator,
+        workspace: *TypeWorkspace,
+        owns_workspace: bool,
+        workspace_module_idx: u32,
+        source_var_map: std.AutoHashMap(TypeKey, Var),
+        instantiation_var_map: std.AutoHashMap(Var, Var),
         active_type_cache: std.AutoHashMap(TypeKey, type_mod.TypeId),
         provisional_type_cache: std.AutoHashMap(TypeKey, type_mod.TypeId),
         type_cache: std.AutoHashMap(TypeKey, type_mod.TypeId),
@@ -574,8 +612,8 @@ pub const Lowerer = struct {
             self: *TypeCloneScope,
             allocator: std.mem.Allocator,
             module: Ctx.Module,
-        ) void {
-            self.initCloneAllFromParent(allocator, module, null);
+        ) std.mem.Allocator.Error!void {
+            try self.initCloneAllFromParent(allocator, module, null);
         }
 
         fn initCloneAllFromParent(
@@ -583,45 +621,81 @@ pub const Lowerer = struct {
             allocator: std.mem.Allocator,
             module: Ctx.Module,
             parent: ?*const TypeCloneScope,
-        ) void {
-            self.initWithRankBehavior(allocator, module, .ignore_rank);
+        ) std.mem.Allocator.Error!void {
+            self.allocator = allocator;
             if (parent) |scope| {
-                var iter = scope.var_map.iterator();
+                self.workspace = scope.workspace;
+                self.owns_workspace = false;
+                self.workspace_module_idx = scope.workspace_module_idx;
+            } else {
+                self.workspace = try allocator.create(TypeWorkspace);
+                errdefer allocator.destroy(self.workspace);
+                self.workspace.* = try TypeWorkspace.initEmpty(allocator, module);
+                self.owns_workspace = true;
+                self.workspace_module_idx = self.workspace.module_idx;
+            }
+
+            self.initWithRankBehavior(.ignore_rank);
+            if (parent) |scope| {
+                var iter = scope.source_var_map.iterator();
                 while (iter.next()) |entry| {
-                    self.var_map.put(entry.key_ptr.*, entry.value_ptr.*) catch unreachable;
+                    try self.source_var_map.put(entry.key_ptr.*, entry.value_ptr.*);
+                }
+                var inst_iter = scope.instantiation_var_map.iterator();
+                while (inst_iter.next()) |entry| {
+                    try self.instantiation_var_map.put(entry.key_ptr.*, entry.value_ptr.*);
                 }
                 var type_iter = scope.type_cache.iterator();
                 while (type_iter.next()) |entry| {
-                    self.type_cache.put(entry.key_ptr.*, entry.value_ptr.*) catch unreachable;
+                    try self.type_cache.put(entry.key_ptr.*, entry.value_ptr.*);
                 }
                 var provisional_iter = scope.provisional_type_cache.iterator();
                 while (provisional_iter.next()) |entry| {
-                    self.provisional_type_cache.put(entry.key_ptr.*, entry.value_ptr.*) catch unreachable;
+                    try self.provisional_type_cache.put(entry.key_ptr.*, entry.value_ptr.*);
                 }
             }
         }
 
         fn initWithRankBehavior(
             self: *TypeCloneScope,
-            allocator: std.mem.Allocator,
-            module: Ctx.Module,
             rank_behavior: Instantiator.RankBehavior,
         ) void {
-            self.var_map = std.AutoHashMap(Var, Var).init(allocator);
-            self.active_type_cache = std.AutoHashMap(TypeKey, type_mod.TypeId).init(allocator);
-            self.provisional_type_cache = std.AutoHashMap(TypeKey, type_mod.TypeId).init(allocator);
-            self.type_cache = std.AutoHashMap(TypeKey, type_mod.TypeId).init(allocator);
-            self.facts = semantic_facts.Mutable.init(allocator);
-            self.nominal_type_cache = std.StringHashMap(type_mod.TypeId).init(allocator);
+            self.source_var_map = std.AutoHashMap(TypeKey, Var).init(self.allocator);
+            self.instantiation_var_map = std.AutoHashMap(Var, Var).init(self.allocator);
+            self.active_type_cache = std.AutoHashMap(TypeKey, type_mod.TypeId).init(self.allocator);
+            self.provisional_type_cache = std.AutoHashMap(TypeKey, type_mod.TypeId).init(self.allocator);
+            self.type_cache = std.AutoHashMap(TypeKey, type_mod.TypeId).init(self.allocator);
+            self.facts = semantic_facts.Mutable.init(self.allocator);
+            self.nominal_type_cache = std.StringHashMap(type_mod.TypeId).init(self.allocator);
             self.scratch_nominal_key = .empty;
             self.instantiator = .{
-                .store = module.typeStoreMut(),
-                .idents = module.identStoreConst(),
-                .var_map = &self.var_map,
+                .store = &self.workspace.type_store,
+                .idents = &self.workspace.ident_store,
+                .var_map = &self.instantiation_var_map,
                 .current_rank = .outermost,
                 .rigid_behavior = .fresh_flex,
                 .rank_behavior = rank_behavior,
             };
+        }
+
+        fn typeStoreConst(self: *const TypeCloneScope) *const types.Store {
+            return &self.workspace.type_store;
+        }
+
+        fn typeStoreMut(self: *TypeCloneScope) *types.Store {
+            return &self.workspace.type_store;
+        }
+
+        fn identStoreConst(self: *const TypeCloneScope) *const base.Ident.Store {
+            return &self.workspace.ident_store;
+        }
+
+        fn identStoreMut(self: *TypeCloneScope) *base.Ident.Store {
+            return &self.workspace.ident_store;
+        }
+
+        fn getIdent(self: *const TypeCloneScope, idx: base.Ident.Idx) []const u8 {
+            return self.identStoreConst().getText(idx);
         }
 
         fn deinit(self: *TypeCloneScope) void {
@@ -635,7 +709,12 @@ pub const Lowerer = struct {
             self.active_type_cache.deinit();
             self.provisional_type_cache.deinit();
             self.type_cache.deinit();
-            self.var_map.deinit();
+            self.instantiation_var_map.deinit();
+            self.source_var_map.deinit();
+            if (self.owns_workspace) {
+                self.workspace.deinit(self.allocator);
+                self.allocator.destroy(self.workspace);
+            }
         }
     };
 
@@ -944,7 +1023,7 @@ pub const Lowerer = struct {
                     .def_idx = def_idx,
                     .pattern_idx = mir_def.pattern.idx,
                     .is_function = isLambdaExpr(mir_def.expr.data),
-                    .needs_specialization = mir_module.typeStoreConst().needsInstantiation(mir_def.expr.solved_var),
+                    .needs_specialization = mir_module.typeStoreConst().needsInstantiation(mir_def.expr.ty()),
                 });
                 try self.top_level_symbols_by_pattern.put(.{
                     .module_idx = @intCast(module_idx),
@@ -986,12 +1065,12 @@ pub const Lowerer = struct {
                 if (self.isTopLevelFunction(bind_symbol)) break :blk null;
 
                 var type_scope: TypeCloneScope = undefined;
-                type_scope.initCloneAll(self.allocator, mir_module);
+                try type_scope.initCloneAll(self.allocator, mir_module);
                 defer type_scope.deinit();
                 var binding_env = BindingEnv.init(self.allocator);
                 defer binding_env.deinit();
-                const bind_var = solved_def.pattern.solved_var;
-                const bind_expected_var = try self.scopeVar(&type_scope, bind_var);
+                const bind_var = solved_def.pattern.ty();
+                const bind_expected_var = try self.scopeVar(&type_scope, module_idx, bind_var);
                 try self.collectExprFactsWithExplicitResultVar(
                     module_idx,
                     &type_scope,
@@ -1032,12 +1111,12 @@ pub const Lowerer = struct {
         const bind_symbol = self.lookupTopLevelSymbol(module_idx, solved_def.pattern.idx) orelse try self.ctx.addSyntheticSymbol(base.Ident.Idx.NONE);
 
         var type_scope: TypeCloneScope = undefined;
-        type_scope.initCloneAll(self.allocator, mir_module);
+        try type_scope.initCloneAll(self.allocator, mir_module);
         defer type_scope.deinit();
         var binding_env = BindingEnv.init(self.allocator);
         defer binding_env.deinit();
-        const bind_var = solved_def.pattern.solved_var;
-        const bind_expected_var = try self.scopeVar(&type_scope, bind_var);
+        const bind_var = solved_def.pattern.ty();
+        const bind_expected_var = try self.scopeVar(&type_scope, module_idx, bind_var);
         try self.collectExprFactsWithExplicitResultVar(
             module_idx,
             &type_scope,
@@ -1117,20 +1196,21 @@ pub const Lowerer = struct {
         if (self.emitted_defs_by_symbol.get(pending.specialized_symbol)) |existing| return existing;
         const mir_module = self.ctx.mirModule(pending.source.module_idx);
         const solved_def = mir_module.def(pending.source.def_idx);
-        const specialized_checker_var = try self.requireSpecializedTopLevelCheckerVar(pending);
+
+        var type_scope: TypeCloneScope = undefined;
+        try type_scope.initCloneAll(self.allocator, mir_module);
+        defer type_scope.deinit();
+        const specialized_checker_var = try self.materializeSpecializedTopLevelCheckerVar(&type_scope, pending);
 
         if (solved_def.expr.data == .e_hosted_lambda) {
-            return try self.lowerHostedTopLevelDef(
+            return try self.lowerHostedTopLevelDefWithScope(
                 pending.source.module_idx,
                 pending.source.def_idx,
                 pending.specialized_symbol,
                 specialized_checker_var,
+                &type_scope,
             );
         }
-
-        var type_scope: TypeCloneScope = undefined;
-        type_scope.initCloneAll(self.allocator, mir_module);
-        defer type_scope.deinit();
 
         var binding_env = BindingEnv.init(self.allocator);
         defer binding_env.deinit();
@@ -1161,43 +1241,54 @@ pub const Lowerer = struct {
         expected_var: ?Var,
     ) std.mem.Allocator.Error!ast.DefId {
         const mir_module = self.ctx.mirModule(module_idx);
+        var type_scope: TypeCloneScope = undefined;
+        try type_scope.initCloneAll(self.allocator, mir_module);
+        defer type_scope.deinit();
+        return self.lowerHostedTopLevelDefWithScope(module_idx, def_idx, bind_symbol, expected_var, &type_scope);
+    }
+
+    fn lowerHostedTopLevelDefWithScope(
+        self: *Lowerer,
+        module_idx: u32,
+        def_idx: CIR.Def.Idx,
+        bind_symbol: symbol_mod.Symbol,
+        expected_var: ?Var,
+        type_scope: *TypeCloneScope,
+    ) std.mem.Allocator.Error!ast.DefId {
+        const mir_module = self.ctx.mirModule(module_idx);
         const solved_def = mir_module.def(def_idx);
         const hosted = switch (solved_def.expr.data) {
             .e_hosted_lambda => |hosted| hosted,
             else => debugPanic("monotype invariant violated: attempted to lower non-hosted def as hosted top-level", .{}),
         };
 
-        var type_scope: TypeCloneScope = undefined;
-        type_scope.initCloneAll(self.allocator, mir_module);
-        defer type_scope.deinit();
-
-        const source_expr_var = solved_def.expr.solved_var;
-        const source_fn_var = try self.scopeVar(&type_scope, expected_var orelse source_expr_var);
-        try type_scope.var_map.put(source_expr_var, source_fn_var);
-        if (expected_var) |var_| {
-            try self.unifySpecializedCheckerVars(module_idx, source_fn_var, var_);
-        }
-        _ = try self.ensureExplicitFunctionFact(module_idx, &type_scope, source_fn_var);
-        try self.freezeExplicitFunctionTypeFacts(module_idx, &type_scope);
+        const source_expr_var = solved_def.expr.ty();
+        const source_fn_var = expected_var orelse try self.scopeVar(type_scope, module_idx, source_expr_var);
+        try type_scope.source_var_map.put(.{
+            .module_idx = module_idx,
+            .var_ = source_expr_var,
+        }, source_fn_var);
+        _ = try self.ensureExplicitFunctionFact(module_idx, type_scope, source_fn_var);
+        try self.freezeExplicitFunctionTypeFacts(module_idx, type_scope);
 
         const arg_patterns = self.ctx.mirModule(module_idx).slicePatterns(hosted.args);
-        const fn_fact = try self.ensureExplicitFunctionFact(module_idx, &type_scope, source_fn_var);
+        const fn_fact = try self.ensureExplicitFunctionFact(module_idx, type_scope, source_fn_var);
         const arg_count = fn_fact.arg_vars.len;
         const arg_tys = try self.allocator.alloc(type_mod.TypeId, arg_count);
         defer self.allocator.free(arg_tys);
         for (0..arg_count) |i| {
-            arg_tys[i] = try self.requireFunctionArgType(module_idx, &type_scope, source_fn_var, i);
+            arg_tys[i] = try self.requireFunctionArgType(module_idx, type_scope, source_fn_var, i);
         }
         const lowered_args = try self.allocator.alloc(ast.TypedSymbol, arg_count);
         defer self.allocator.free(lowered_args);
         for (0..arg_count) |i| {
             lowered_args[i] = if (i < arg_patterns.len)
-                try self.bindLambdaArg(module_idx, &type_scope, arg_patterns[i], arg_tys[i])
+                try self.bindLambdaArg(module_idx, type_scope, arg_patterns[i], arg_tys[i])
             else
                 try self.makeUnitArgWithType(arg_tys[i]);
         }
 
-        const bind_ty = try self.buildCurriedFuncType(arg_tys, try self.requireFunctionRetType(module_idx, &type_scope, source_fn_var));
+        const bind_ty = try self.buildCurriedFuncType(arg_tys, try self.requireFunctionRetType(module_idx, type_scope, source_fn_var));
         const lowered = try self.program.store.addDef(.{
             .bind = .{
                 .ty = try self.ctx.types.addType(bind_ty),
@@ -1219,13 +1310,86 @@ pub const Lowerer = struct {
         return lowered;
     }
 
-    fn requireSpecializedTopLevelCheckerVar(
-        _: *Lowerer,
+    fn snapshotSpecializationCheckerVarFromStores(
+        self: *Lowerer,
+        source_store: *const types.Store,
+        source_idents: *const base.Ident.Store,
+        source_var: Var,
+    ) std.mem.Allocator.Error!specializations_mod.CheckerSeed {
+        var type_store = try types.Store.init(self.allocator);
+        errdefer type_store.deinit();
+        var ident_store = try base.Ident.Store.initCapacity(self.allocator, 16);
+        errdefer ident_store.deinit(self.allocator);
+        var var_map = std.AutoHashMap(Var, Var).init(self.allocator);
+        defer var_map.deinit();
+        const root_var = try check.copy_import.copyVar(
+            source_store,
+            &type_store,
+            source_var,
+            &var_map,
+            source_idents,
+            &ident_store,
+            self.allocator,
+        );
+        return .{
+            .type_store = type_store,
+            .ident_store = ident_store,
+            .root_var = root_var,
+        };
+    }
+
+    fn snapshotSpecializationCheckerVarFromModule(
+        self: *Lowerer,
+        module_idx: u32,
+        source_var: Var,
+    ) std.mem.Allocator.Error!specializations_mod.CheckerSeed {
+        const source_module = self.ctx.mirModule(module_idx);
+        return self.snapshotSpecializationCheckerVarFromStores(
+            source_module.typeStoreConst(),
+            source_module.identStoreConst(),
+            source_var,
+        );
+    }
+
+    fn snapshotSpecializationCheckerVarFromScope(
+        self: *Lowerer,
+        type_scope: *const TypeCloneScope,
+        source_var: Var,
+    ) std.mem.Allocator.Error!specializations_mod.CheckerSeed {
+        return self.snapshotSpecializationCheckerVarFromStores(
+            type_scope.typeStoreConst(),
+            type_scope.identStoreConst(),
+            source_var,
+        );
+    }
+
+    fn materializeSpecializedTopLevelCheckerVar(
+        self: *Lowerer,
+        type_scope: *TypeCloneScope,
         pending: specializations_mod.Pending,
     ) std.mem.Allocator.Error!Var {
-        return pending.expected_checker_var orelse debugPanic(
+        const seed = pending.expected_checker_seed orelse debugPanic(
             "monotype specialization invariant violated: missing checker specialization facts for top-level def {d}:{d}",
             .{ pending.source.module_idx, @intFromEnum(pending.source.def_idx) },
+        );
+        return try self.materializeCheckerSeed(type_scope, seed);
+    }
+
+    fn materializeCheckerSeed(
+        self: *Lowerer,
+        type_scope: *TypeCloneScope,
+        seed: specializations_mod.CheckerSeed,
+    ) std.mem.Allocator.Error!Var {
+        var var_map = std.AutoHashMap(Var, Var).init(self.allocator);
+        defer var_map.deinit();
+        return try check.copy_import.copyVar(
+            &seed.type_store,
+            type_scope.typeStoreMut(),
+            seed.root_var,
+            &var_map,
+            &seed.ident_store,
+            type_scope.identStoreMut(),
+            self.allocator,
         );
     }
 
@@ -1242,17 +1406,31 @@ pub const Lowerer = struct {
     ) std.mem.Allocator.Error!ast.LetFn {
         const solved_expr = self.ctx.mirModule(module_idx).expr(expr_idx);
         const expr = solved_expr.data;
-        const source_expr_var = solved_expr.solved_var;
-        const source_fn_var = try self.scopeVar(type_scope, source_seed_var orelse source_expr_var);
-        try type_scope.var_map.put(source_expr_var, source_fn_var);
-        if (expected_var) |var_| {
-            try self.unifySpecializedCheckerVars(module_idx, source_fn_var, var_);
+        const source_expr_var = solved_expr.ty();
+        const source_seed_source_var = source_seed_var orelse source_expr_var;
+        const source_fn_var = expected_var orelse try self.scopeVar(type_scope, module_idx, source_seed_source_var);
+        try type_scope.source_var_map.put(.{
+            .module_idx = module_idx,
+            .var_ = source_expr_var,
+        }, source_fn_var);
+        if (source_seed_source_var != source_expr_var) {
+            try type_scope.source_var_map.put(.{
+                .module_idx = module_idx,
+                .var_ = source_seed_source_var,
+            }, source_fn_var);
         }
         var arg_index: usize = 0;
         while (true) : (arg_index += 1) {
-            const source_arg_var = self.lookupFunctionArgVar(module_idx, source_expr_var, arg_index) orelse break;
-            const scoped_arg_var = self.lookupFunctionArgVar(module_idx, source_fn_var, arg_index) orelse break;
-            try type_scope.var_map.put(source_arg_var, scoped_arg_var);
+            const source_arg_var = self.lookupFunctionArgVarInStore(
+                self.ctx.mirModule(module_idx).typeStoreConst(),
+                source_seed_source_var,
+                arg_index,
+            ) orelse break;
+            const scoped_arg_var = self.lookupFunctionArgVar(module_idx, type_scope, source_fn_var, arg_index) orelse break;
+            try type_scope.source_var_map.put(.{
+                .module_idx = module_idx,
+                .var_ = source_arg_var,
+            }, scoped_arg_var);
         }
         _ = try self.ensureExplicitFunctionFact(module_idx, type_scope, source_fn_var);
         try self.freezeExplicitFunctionTypeFacts(module_idx, type_scope);
@@ -1713,38 +1891,55 @@ pub const Lowerer = struct {
         };
         if (type_scope.facts.expr_source_function_facts.contains(key)) return;
 
+        const SeedVarRef = struct {
+            module_idx: u32,
+            var_: Var,
+        };
         const mir_module = self.ctx.mirModule(module_idx);
-        const seed_var_opt: ?Var = switch (mir_module.expr(expr_idx).data) {
+        const seed_var_opt: ?SeedVarRef = switch (mir_module.expr(expr_idx).data) {
             .e_lookup_local => |lookup| blk: {
                 if (env.get(.{
                     .module_idx = module_idx,
                     .pattern_idx = @intFromEnum(lookup.pattern_idx),
                 })) |entry| {
                     if (entry.local_fn_seed_var) |seed_var| {
-                        break :blk seed_var;
+                        break :blk .{
+                            .module_idx = module_idx,
+                            .var_ = seed_var,
+                        };
                     }
                     if (entry.local_fn_source) |source| {
                         const group = self.local_fn_groups.items[source.group_index];
-                        break :blk group.sources[source.source_index].seed_var;
+                        break :blk .{
+                            .module_idx = module_idx,
+                            .var_ = group.sources[source.source_index].seed_var,
+                        };
                     }
                     return;
                 }
 
                 const symbol = self.lookupTopLevelSymbol(module_idx, lookup.pattern_idx) orelse return;
                 const top_level = self.top_level_defs_by_symbol.get(symbol) orelse return;
-                break :blk try self.copyTopLevelDefExprVarToModule(top_level.module_idx, top_level.def_idx, module_idx);
+                break :blk .{
+                    .module_idx = top_level.module_idx,
+                    .var_ = self.ctx.mirModule(top_level.module_idx).def(top_level.def_idx).expr.ty(),
+                };
             },
             .e_lookup_external => |lookup| blk: {
                 const target_module_idx = mir_module.resolvedImportModule(lookup.module_idx) orelse return;
-                break :blk try self.copyTopLevelDefExprVarToModule(target_module_idx, @enumFromInt(lookup.target_node_idx), module_idx);
+                break :blk .{
+                    .module_idx = target_module_idx,
+                    .var_ = self.ctx.mirModule(target_module_idx).def(@enumFromInt(lookup.target_node_idx)).expr.ty(),
+                };
             },
             else => return,
         };
-        const seed_var = seed_var_opt orelse return;
-        if (self.lookupFunctionRetVar(module_idx, seed_var) == null) return;
+        const seed_var_ref = seed_var_opt orelse return;
+        const scoped_seed_var = try self.scopeVar(type_scope, seed_var_ref.module_idx, seed_var_ref.var_);
+        if (self.lookupFunctionRetVar(module_idx, type_scope, scoped_seed_var) == null) return;
         const fact: ExprSourceFunctionFact = .{
-            .seed_var = seed_var,
-            .arity = self.functionArgCount(module_idx, type_scope, seed_var),
+            .seed_var = scoped_seed_var,
+            .arity = self.functionArgCount(module_idx, type_scope, scoped_seed_var),
         };
         try self.putExprSourceFunctionFact(module_idx, type_scope, expr_idx, fact);
     }
@@ -1762,6 +1957,45 @@ pub const Lowerer = struct {
         };
         return type_scope.facts.call_facts.get(key) orelse
             debugPanic("monotype explicit call fact invariant violated: missing explicit call fact", .{});
+    }
+
+    fn putResolvedDispatchTargetFact(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeCloneScope,
+        expr_idx: CIR.Expr.Idx,
+        fact: ResolvedTarget,
+    ) std.mem.Allocator.Error!void {
+        _ = self;
+        const key: TypeCloneScope.ExprKey = .{
+            .module_idx = module_idx,
+            .expr_idx = expr_idx,
+        };
+        if (type_scope.facts.resolved_dispatch_target_facts.get(key)) |existing| {
+            if (existing.module_idx != fact.module_idx or existing.def_idx != fact.def_idx) {
+                debugPanic(
+                    "monotype explicit dispatch target invariant violated: conflicting dispatch targets in module {d}",
+                    .{module_idx},
+                );
+            }
+            return;
+        }
+        try type_scope.facts.resolved_dispatch_target_facts.put(key, fact);
+    }
+
+    fn requireResolvedDispatchTargetFact(
+        self: *const Lowerer,
+        module_idx: u32,
+        type_scope: *const TypeCloneScope,
+        expr_idx: CIR.Expr.Idx,
+    ) ResolvedTarget {
+        _ = self;
+        const key: TypeCloneScope.ExprKey = .{
+            .module_idx = module_idx,
+            .expr_idx = expr_idx,
+        };
+        return type_scope.facts.resolved_dispatch_target_facts.get(key) orelse
+            debugPanic("monotype explicit dispatch target invariant violated: missing explicit dispatch target fact", .{});
     }
 
     fn putExplicitCallTypeFact(
@@ -2238,7 +2472,7 @@ pub const Lowerer = struct {
         try self.collectExprFacts(module_idx, type_scope, env, chain.func_expr_idx);
 
         var call_scope: TypeCloneScope = undefined;
-        call_scope.initCloneAll(self.allocator, self.ctx.mirModule(module_idx));
+        try call_scope.initCloneAllFromParent(self.allocator, self.ctx.mirModule(module_idx), type_scope);
         defer call_scope.deinit();
 
         const cloned_func_var = try call_scope.instantiator.instantiateVar(source_func_var);
@@ -2248,7 +2482,7 @@ pub const Lowerer = struct {
             const cloned_arg_var = try self.requireFunctionArgVar(module_idx, &call_scope, cloned_func_var, i);
             try self.collectExprFacts(module_idx, type_scope, env, arg_expr_idx);
             const actual_arg_var = try self.lookupCallArgSpecializationVar(module_idx, type_scope, env, arg_expr_idx);
-            try self.unifySpecializedCheckerVars(module_idx, cloned_arg_var, actual_arg_var);
+            try self.unifySpecializedCheckerVars(module_idx, &call_scope, cloned_arg_var, actual_arg_var);
         }
 
         const fact = try self.buildExplicitCallFact(
@@ -2272,24 +2506,15 @@ pub const Lowerer = struct {
         explicit_result_var: ?Var,
     ) std.mem.Allocator.Error!ExplicitCallFact {
         const args = self.getRecordedMethodArgs(module_idx, expr_idx, method_name);
-        const target = if (args.implicit_receiver) |receiver_expr_idx| blk: {
-            const receiver_var = try self.lookupCallArgSpecializationVar(module_idx, type_scope, env, receiver_expr_idx);
-            break :blk self.resolveMonomorphicDispatchTargetFromReceiverVar(
-                module_idx,
-                type_scope,
-                receiver_var,
-                method_name,
-            );
-        } else self.lookupResolvedDispatchTarget(module_idx, expr_idx) orelse
-            self.resolveMonomorphicDispatchTarget(module_idx, type_scope, env, expr_idx, method_name);
-        const source_fn_var = try self.copyTopLevelDefExprVarToModule(
-            target.module_idx,
-            target.def_idx,
-            module_idx,
+        const target = self.lookupResolvedDispatchTarget(module_idx, expr_idx) orelse debugPanic(
+            "monotype static dispatch invariant violated: missing resolved dispatch target for expr {d} in module {d}",
+            .{ expr_idx, module_idx },
         );
+        try self.putResolvedDispatchTargetFact(module_idx, type_scope, expr_idx, target);
+        const source_fn_var = try self.copyTopLevelDefExprVarToScope(type_scope, target.module_idx, target.def_idx);
 
         var call_scope: TypeCloneScope = undefined;
-        call_scope.initCloneAll(self.allocator, self.ctx.mirModule(module_idx));
+        try call_scope.initCloneAllFromParent(self.allocator, self.ctx.mirModule(module_idx), type_scope);
         defer call_scope.deinit();
 
         const cloned_func_var = try call_scope.instantiator.instantiateVar(source_fn_var);
@@ -2441,7 +2666,7 @@ pub const Lowerer = struct {
                 expr.idx,
                 nominal.backing_expr,
                 try self.lowerExprType(module_idx, type_scope, env, expr.idx, expr.data),
-                expr.solved_var,
+                expr.ty(),
             ),
             .e_nominal_external => |nominal| return self.lowerTransparentNominalExprWithType(
                 module_idx,
@@ -2450,7 +2675,7 @@ pub const Lowerer = struct {
                 expr.idx,
                 nominal.backing_expr,
                 try self.lowerExprType(module_idx, type_scope, env, expr.idx, expr.data),
-                expr.solved_var,
+                expr.ty(),
             ),
             else => {},
         }
@@ -2508,7 +2733,7 @@ pub const Lowerer = struct {
                 });
             },
             .e_lookup_external => |lookup| {
-                const symbol = try self.lookupOrSpecializeExternal(module_idx, lookup, ty, null);
+                const symbol = try self.lookupOrSpecializeExternal(module_idx, type_scope, lookup, ty, null);
                 return try self.program.store.addExpr(.{
                     .ty = self.lookupKnownSymbolType(symbol) orelse ty,
                     .data = .{ .var_ = symbol },
@@ -3167,16 +3392,16 @@ pub const Lowerer = struct {
     ) std.mem.Allocator.Error!LoweredClosure {
         const mir_module = self.ctx.mirModule(module_idx);
         var closure_scope: TypeCloneScope = undefined;
-        closure_scope.initCloneAllFromParent(self.allocator, mir_module, type_scope);
+        try closure_scope.initCloneAllFromParent(self.allocator, mir_module, type_scope);
         defer closure_scope.deinit();
         const scope = &closure_scope;
         const arg_patterns = mir_module.slicePatterns(args_span);
-        const source_expr_var = self.ctx.mirModule(module_idx).expr(source_expr_idx).solved_var;
-        const source_fn_var = try self.scopeVar(scope, source_expr_var);
-        try scope.var_map.put(source_expr_var, source_fn_var);
-        if (expected_var) |var_| {
-            try self.unifySpecializedCheckerVars(module_idx, source_fn_var, var_);
-        }
+        const source_expr_var = self.ctx.mirModule(module_idx).expr(source_expr_idx).ty();
+        const source_fn_var = expected_var orelse try self.scopeVar(scope, module_idx, source_expr_var);
+        try scope.source_var_map.put(.{
+            .module_idx = module_idx,
+            .var_ = source_expr_var,
+        }, source_fn_var);
         _ = try self.ensureExplicitFunctionFact(module_idx, scope, source_fn_var);
         try self.freezeExplicitFunctionTypeFacts(module_idx, scope);
         const first_arg_ty = if (arg_patterns.len == 0)
@@ -3974,7 +4199,7 @@ pub const Lowerer = struct {
                 elem_pattern_idx,
                 elem_expr,
                 elem_ty,
-                self.lookupListElemSolvedVar(module_idx, scrutinee_solved_var),
+                self.lookupListElemSolvedVar(module_idx, type_scope, scrutinee_solved_var),
                 &branch_env,
                 &binding_decls,
             );
@@ -4002,7 +4227,7 @@ pub const Lowerer = struct {
                     elem_pattern_idx,
                     elem_expr,
                     elem_ty,
-                    self.lookupListElemSolvedVar(module_idx, scrutinee_solved_var),
+                    self.lookupListElemSolvedVar(module_idx, type_scope, scrutinee_solved_var),
                     &branch_env,
                     &binding_decls,
                 );
@@ -4380,16 +4605,12 @@ pub const Lowerer = struct {
             if (!isLambdaExpr(self.ctx.mirModule(module_idx).expr(stmt.s_decl.expr).data)) break;
         }
 
-        var seed_scope: TypeCloneScope = undefined;
-        seed_scope.initCloneAll(self.allocator, mir_module);
-        defer seed_scope.deinit();
-
         for (cir_stmts[start_idx..end_idx]) |stmt_idx| {
             const decl = mir_module.getStatement(stmt_idx).s_decl;
             try self.putLocalFnSeedBinding(env, .{
                 .module_idx = module_idx,
                 .pattern_idx = @intFromEnum(decl.pattern),
-            }, try seed_scope.instantiator.instantiateVar(self.ctx.mirModule(module_idx).expr(decl.expr).solved_var));
+            }, mir_module.expr(decl.expr).ty());
         }
 
         return end_idx;
@@ -4404,7 +4625,6 @@ pub const Lowerer = struct {
         start_idx: usize,
         lowered: *std.ArrayList(ast.StmtId),
     ) std.mem.Allocator.Error!?PreparedLocalLambdaGroup {
-        _ = type_scope;
         if (start_idx >= cir_stmts.len) return null;
 
         const mir_module = self.ctx.mirModule(module_idx);
@@ -4426,23 +4646,19 @@ pub const Lowerer = struct {
 
         group.* = .{
             .module_idx = module_idx,
-            .declaration_env = BindingEnv.init(self.allocator),
+            .declaration_env = FrozenBindingEnv.init(self.allocator),
             .insertion_index = lowered.items.len,
             .sources = sources,
             .pending = .empty,
         };
         errdefer group.deinit(self.allocator);
 
-        var seed_scope: TypeCloneScope = undefined;
-        seed_scope.initCloneAll(self.allocator, mir_module);
-        defer seed_scope.deinit();
-
         for (cir_stmts[start_idx..end_idx], 0..) |stmt_idx, group_i| {
             const decl = mir_module.getStatement(stmt_idx).s_decl;
             group.sources[group_i] = .{
                 .pattern_idx = decl.pattern,
                 .expr_idx = decl.expr,
-                .seed_var = try seed_scope.instantiator.instantiateVar(self.ctx.mirModule(module_idx).expr(decl.expr).solved_var),
+                .seed_var = mir_module.expr(decl.expr).ty(),
                 .source_symbol = try self.requirePatternSymbolOnly(module_idx, decl.pattern),
             };
         }
@@ -4460,7 +4676,7 @@ pub const Lowerer = struct {
             });
         }
 
-        group.declaration_env = try self.cloneEnv(env.*);
+        group.declaration_env = try self.freezeBindingEnv(type_scope, env.*);
         return .{
             .group_index = group_index,
             .group_end = end_idx,
@@ -4618,6 +4834,7 @@ pub const Lowerer = struct {
                 );
                 const elem_solved_var = self.lookupListElemSolvedVar(
                     module_idx,
+                    type_scope,
                     try self.exprResultVar(module_idx, type_scope, env.*, for_stmt.expr),
                 );
 
@@ -4753,6 +4970,7 @@ pub const Lowerer = struct {
         );
         const elem_solved_var = self.lookupListElemSolvedVar(
             module_idx,
+            type_scope,
             try self.exprResultVar(module_idx, type_scope, incoming_env, iterable_expr_idx),
         );
 
@@ -5146,8 +5364,8 @@ pub const Lowerer = struct {
         binop: CIR.Expr.Binop,
     ) std.mem.Allocator.Error!ArithmeticBinopFact {
         const mir_module = self.ctx.mirModule(module_idx);
-        const site_requirement = mir_module.typeStoreConst().findStaticDispatchSiteRequirement(
-            self.ctx.mirModule(module_idx).expr(expr_idx).solved_var,
+        const site_requirement = mir_module.staticDispatchSiteRequirement(
+            expr_idx,
             self.arithmeticBinopMethodName(module_idx, binop.op),
         ) orelse debugPanic(
             "monotype invariant violated: missing arithmetic static dispatch site for expr {d} in module {d}",
@@ -5155,10 +5373,11 @@ pub const Lowerer = struct {
         );
 
         var call_scope: TypeCloneScope = undefined;
-        call_scope.initCloneAll(self.allocator, mir_module);
+        try call_scope.initCloneAllFromParent(self.allocator, mir_module, type_scope);
         defer call_scope.deinit();
 
-        const cloned_func_var = try call_scope.instantiator.instantiateVar(site_requirement.fn_var);
+        const scoped_site_fn_var = try self.scopeVar(&call_scope, module_idx, site_requirement.fn_var);
+        const cloned_func_var = try call_scope.instantiator.instantiateVar(scoped_site_fn_var);
         const lhs_expected_var = self.lookupCurriedFunctionArgVar(module_idx, &call_scope, cloned_func_var, 0) orelse debugPanic(
             "monotype invariant violated: arithmetic fact missing lhs arg for expr {d} in module {d}",
             .{ expr_idx, module_idx },
@@ -5170,11 +5389,13 @@ pub const Lowerer = struct {
 
         try self.unifySpecializedCheckerVars(
             module_idx,
+            &call_scope,
             lhs_expected_var,
             try self.lookupCallArgSpecializationVar(module_idx, type_scope, env, binop.lhs),
         );
         try self.unifySpecializedCheckerVars(
             module_idx,
+            &call_scope,
             rhs_expected_var,
             try self.lookupCallArgSpecializationVar(module_idx, type_scope, env, binop.rhs),
         );
@@ -5192,30 +5413,14 @@ pub const Lowerer = struct {
         };
     }
 
-    fn copyTopLevelDefBindingVarToModule(
+    fn copyTopLevelDefExprVarToScope(
         self: *Lowerer,
+        type_scope: *TypeCloneScope,
         source_module_idx: u32,
         def_idx: CIR.Def.Idx,
-        dest_module_idx: u32,
     ) std.mem.Allocator.Error!Var {
-        const source_var = self.ctx.mirModule(source_module_idx).def(def_idx).pattern.solved_var;
-        return if (source_module_idx == dest_module_idx)
-            source_var
-        else
-            try self.copyCheckerVarToModule(source_module_idx, dest_module_idx, source_var);
-    }
-
-    fn copyTopLevelDefExprVarToModule(
-        self: *Lowerer,
-        source_module_idx: u32,
-        def_idx: CIR.Def.Idx,
-        dest_module_idx: u32,
-    ) std.mem.Allocator.Error!Var {
-        const source_var = self.ctx.mirModule(source_module_idx).def(def_idx).expr.solved_var;
-        return if (source_module_idx == dest_module_idx)
-            source_var
-        else
-            try self.copyCheckerVarToModule(source_module_idx, dest_module_idx, source_var);
+        const source_var = self.ctx.mirModule(source_module_idx).def(def_idx).expr.ty();
+        return try self.scopeVar(type_scope, source_module_idx, source_var);
     }
 
     fn lowerRecordedMethodCall(
@@ -5260,16 +5465,8 @@ pub const Lowerer = struct {
             );
         }
 
-        const target = if (args.implicit_receiver != null) blk: {
-            break :blk self.resolveMonomorphicDispatchTargetFromReceiverVar(
-                module_idx,
-                type_scope,
-                fact.arg_vars[0],
-                method_name,
-            );
-        } else self.lookupResolvedDispatchTarget(module_idx, expr_idx) orelse
-            self.resolveMonomorphicDispatchTarget(module_idx, type_scope, env, expr_idx, method_name);
-        const callee = try self.lowerResolvedTargetCallee(module_idx, target, fn_ty, fact.fn_var);
+        const target = self.requireResolvedDispatchTargetFact(module_idx, type_scope, expr_idx);
+        const callee = try self.lowerResolvedTargetCallee(module_idx, type_scope, target, fn_ty, fact.fn_var);
 
         return .{
             .data = try self.buildCurriedCallFromLowered(callee, lowered_args, applied_result_tys),
@@ -5418,7 +5615,7 @@ pub const Lowerer = struct {
             );
             try self.collectExprFacts(module_idx, type_scope, env, receiver_expr_idx);
             const actual_arg_var = try self.lookupCallArgSpecializationVar(module_idx, type_scope, env, receiver_expr_idx);
-            try self.unifySpecializedCheckerVars(module_idx, cloned_arg_var, actual_arg_var);
+            try self.unifySpecializedCheckerVars(module_idx, type_scope, cloned_arg_var, actual_arg_var);
             arg_index += 1;
         }
 
@@ -5429,7 +5626,7 @@ pub const Lowerer = struct {
             );
             try self.collectExprFacts(module_idx, type_scope, env, arg_expr_idx);
             const actual_arg_var = try self.lookupCallArgSpecializationVar(module_idx, type_scope, env, arg_expr_idx);
-            try self.unifySpecializedCheckerVars(module_idx, cloned_arg_var, actual_arg_var);
+            try self.unifySpecializedCheckerVars(module_idx, type_scope, cloned_arg_var, actual_arg_var);
         }
     }
 
@@ -5470,7 +5667,7 @@ pub const Lowerer = struct {
                 });
             },
             .e_lookup_external => |lookup| {
-                const symbol = try self.lookupOrSpecializeExternal(module_idx, lookup, expected_fn_ty, null);
+                const symbol = try self.lookupOrSpecializeExternal(module_idx, type_scope, lookup, expected_fn_ty, null);
                 return try self.program.store.addExpr(.{
                     .ty = self.lookupKnownSymbolType(symbol) orelse expected_fn_ty,
                     .data = .{ .var_ = symbol },
@@ -5755,7 +5952,7 @@ pub const Lowerer = struct {
                 if (self.ctx.types.getType(target_ty) != .func) {
                     break :blk try self.lowerSolvedExpr(module_idx, type_scope, env, expr);
                 }
-                const symbol = try self.lookupOrSpecializeExternal(module_idx, lookup, target_ty, expected_var);
+                const symbol = try self.lookupOrSpecializeExternal(module_idx, type_scope, lookup, target_ty, expected_var);
                 break :blk try self.program.store.addExpr(.{
                     .ty = self.lookupKnownSymbolType(symbol) orelse target_ty,
                     .data = .{ .var_ = symbol },
@@ -5805,7 +6002,7 @@ pub const Lowerer = struct {
         expected_var: ?Var,
     ) std.mem.Allocator.Error!ast.ExprId {
         const backing_var = self.resolveTransparentBackingVar(
-            module_idx,
+            type_scope,
             expected_var orelse try self.exprResultVar(module_idx, type_scope, env, expr_idx),
         );
         const backing_ty = if (self.ctx.types.getType(nominal_ty) != .placeholder)
@@ -5824,18 +6021,17 @@ pub const Lowerer = struct {
 
     fn resolveTransparentBackingVar(
         self: *const Lowerer,
-        module_idx: u32,
+        type_scope: *const TypeCloneScope,
         source_var: ?Var,
     ) ?Var {
         const root = source_var orelse return null;
-        const mir_module = self.ctx.mirModule(module_idx);
-        const resolved = mir_module.typeStoreConst().resolveVar(root);
+        const resolved = type_scope.typeStoreConst().resolveVar(root);
         return switch (resolved.desc.content) {
             .structure => |flat| switch (flat) {
-                .nominal_type => |nominal| self.resolveTransparentBackingVar(module_idx, mir_module.typeStoreConst().getNominalBackingVar(nominal)),
+                .nominal_type => |nominal| self.resolveTransparentBackingVar(type_scope, type_scope.typeStoreConst().getNominalBackingVar(nominal)),
                 else => root,
             },
-            .alias => |alias| self.resolveTransparentBackingVar(module_idx, mir_module.typeStoreConst().getAliasBackingVar(alias)),
+            .alias => |alias| self.resolveTransparentBackingVar(type_scope, type_scope.typeStoreConst().getAliasBackingVar(alias)),
             else => root,
         };
     }
@@ -6068,7 +6264,7 @@ pub const Lowerer = struct {
     }
 
     fn exprVarIsErroneous(self: *Lowerer, module_idx: u32, expr_idx: CIR.Expr.Idx) bool {
-        return self.ctx.mirModule(module_idx).typeStoreConst().resolveVar(self.ctx.mirModule(module_idx).expr(expr_idx).solved_var).desc.content == .err;
+        return self.ctx.mirModule(module_idx).typeStoreConst().resolveVar(self.ctx.mirModule(module_idx).exprType(expr_idx)).desc.content == .err;
     }
 
     fn callRootCalleeIsRuntimeError(self: *const Lowerer, module_idx: u32, func_expr_idx: CIR.Expr.Idx) bool {
@@ -6390,7 +6586,7 @@ pub const Lowerer = struct {
                     "monotype explicit pattern fact invariant violated: tag pattern missing explicit source solved var in module {d}",
                     .{module_idx},
                 );
-                const expected_discriminant = try self.requireTagDiscriminantForSolvedVar(module_idx, source_var, tag.name);
+                const expected_discriminant = try self.requireTagDiscriminantForSolvedVar(module_idx, type_scope, source_var, tag.name);
                 try self.bindPatternTagDiscriminantFact(module_idx, type_scope, pattern_idx, expected_discriminant);
                 const arg_patterns = mir_module.slicePatterns(tag.args);
                 const arg_tys = try self.requireTagPayloadTypesFromMonotype(
@@ -6424,6 +6620,7 @@ pub const Lowerer = struct {
                         destruct_idx,
                         try self.requireRecordFieldIndexForSolvedVar(
                             module_idx,
+                            type_scope,
                             source_solved_var orelse debugPanic(
                                 "monotype explicit pattern fact invariant violated: record destructure missing explicit source solved var in module {d}",
                                 .{module_idx},
@@ -6699,6 +6896,7 @@ pub const Lowerer = struct {
                 try self.collectPatternFacts(module_idx, type_scope, for_stmt.patt);
                 const elem_var = self.lookupListElemSolvedVar(
                     module_idx,
+                    type_scope,
                     self.requireExprResultFact(module_idx, type_scope, for_stmt.expr),
                 ) orelse debugPanic(
                     "monotype explicit pattern fact invariant violated: for statement missing explicit iterable element solved var in module {d}",
@@ -6741,6 +6939,7 @@ pub const Lowerer = struct {
                             expr_idx,
                             try self.requireRecordFieldIndexForSolvedVar(
                                 module_idx,
+                                type_scope,
                                 self.requireExprResultFact(module_idx, type_scope, dot.receiver),
                                 dot.field_name,
                             ),
@@ -6753,6 +6952,7 @@ pub const Lowerer = struct {
 
                     const expected_discriminant = try self.requireTagDiscriminantForSolvedVar(
                         module_idx,
+                        type_scope,
                         self.requireExprResultFact(module_idx, type_scope, expr_idx),
                         tag.name,
                     );
@@ -6764,6 +6964,7 @@ pub const Lowerer = struct {
 
                     const expected_discriminant = try self.requireTagDiscriminantForSolvedVar(
                         module_idx,
+                        type_scope,
                         self.requireExprResultFact(module_idx, type_scope, expr_idx),
                         tag.name,
                     );
@@ -6831,7 +7032,7 @@ pub const Lowerer = struct {
             },
             .e_list => |list| blk: {
                 const list_result_var = explicit_result_var orelse try self.scopedSolvedExprResultVar(type_scope, env, expr);
-                const elem_result_var = self.lookupListElemSolvedVar(module_idx, list_result_var);
+                const elem_result_var = self.lookupListElemSolvedVar(module_idx, type_scope, list_result_var);
                 for (mir_module.sliceExpr(list.elems)) |elem| {
                     try self.collectExprFactsWithExplicitResultVar(
                         module_idx,
@@ -6894,14 +7095,25 @@ pub const Lowerer = struct {
                 }
                 const call_result_var = explicit_result_var orelse try self.scopedSolvedExprResultVar(type_scope, env, expr);
                 const callee_var = self.requireExprResultFact(module_idx, type_scope, call.func);
+
+                var call_scope: TypeCloneScope = undefined;
+                try call_scope.initCloneAllFromParent(self.allocator, self.ctx.mirModule(module_idx), type_scope);
+                defer call_scope.deinit();
+
+                const cloned_func_var = try call_scope.instantiator.instantiateVar(callee_var);
+                for (mir_module.sliceExpr(call.args), 0..) |arg_expr, i| {
+                    const cloned_arg_var = try self.requireFunctionArgVar(module_idx, &call_scope, cloned_func_var, i);
+                    const actual_arg_var = try self.lookupCallArgSpecializationVar(module_idx, type_scope, env, arg_expr);
+                    try self.unifySpecializedCheckerVars(module_idx, &call_scope, cloned_arg_var, actual_arg_var);
+                }
                 try self.putExplicitCallFact(
                     module_idx,
                     type_scope,
                     expr.idx,
                     try self.buildExplicitCallFact(
                         module_idx,
-                        type_scope,
-                        callee_var,
+                        &call_scope,
+                        cloned_func_var,
                         call_result_var,
                         mir_module.sliceExpr(call.args).len,
                     ),
@@ -7049,6 +7261,7 @@ pub const Lowerer = struct {
                 try self.collectPatternFacts(module_idx, type_scope, for_expr.patt);
                 const elem_var = self.lookupListElemSolvedVar(
                     module_idx,
+                    type_scope,
                     self.requireExprResultFact(module_idx, type_scope, for_expr.expr),
                 ) orelse debugPanic(
                     "monotype explicit pattern fact invariant violated: for expression missing explicit iterable element solved var in module {d}",
@@ -7113,7 +7326,7 @@ pub const Lowerer = struct {
         type_scope: *TypeCloneScope,
         pattern_idx: CIR.Pattern.Idx,
     ) std.mem.Allocator.Error!Var {
-        return try self.scopeVar(type_scope, self.ctx.mirModule(module_idx).pattern(pattern_idx).solved_var);
+        return try self.scopeVar(type_scope, module_idx, self.ctx.mirModule(module_idx).patternType(pattern_idx));
     }
 
     fn requirePatternTypeFact(
@@ -7215,7 +7428,7 @@ pub const Lowerer = struct {
             else => {},
         }
 
-        const resolved = self.ctx.mirModule(module_idx).typeStoreConst().resolveVar(self.ctx.mirModule(module_idx).expr(expr_idx).solved_var);
+        const resolved = self.ctx.mirModule(module_idx).typeStoreConst().resolveVar(self.ctx.mirModule(module_idx).exprType(expr_idx));
         if (resolved.desc.content == .flex) {
             const constraints = self.ctx.mirModule(module_idx).typeStoreConst().sliceStaticDispatchConstraints(
                 resolved.desc.content.flex.constraints,
@@ -7236,9 +7449,8 @@ pub const Lowerer = struct {
         type_scope: *TypeCloneScope,
         var_: Var,
     ) std.mem.Allocator.Error!type_mod.TypeId {
-        const mir_module = self.ctx.mirModule(module_idx);
-        const resolved = mir_module.typeStoreConst().resolveVar(var_);
-        if (self.defaultNumeralPrimitiveForContent(mir_module, resolved.desc.content)) |prim| {
+        const resolved = type_scope.typeStoreConst().resolveVar(var_);
+        if (self.defaultNumeralPrimitiveForContent(type_scope, resolved.desc.content)) |prim| {
             return self.makePrimitiveType(prim);
         }
         const key: TypeCloneScope.TypeKey = .{ .module_idx = module_idx, .var_ = resolved.var_ };
@@ -7260,7 +7472,7 @@ pub const Lowerer = struct {
         const lowered: type_mod.Content = switch (resolved.desc.content) {
             .structure => |flat| switch (flat) {
                 .fn_pure, .fn_effectful, .fn_unbound => |func| blk: {
-                    const arg_slice = mir_module.typeStoreConst().sliceVars(func.args);
+                    const arg_slice = type_scope.typeStoreConst().sliceVars(func.args);
                     const arg_ids = try self.allocator.alloc(type_mod.TypeId, arg_slice.len);
                     defer self.allocator.free(arg_ids);
                     for (arg_slice, 0..) |arg_var, i| {
@@ -7274,7 +7486,7 @@ pub const Lowerer = struct {
                 .empty_record => .{ .record = .{ .fields = type_mod.Span(type_mod.Field).empty() } },
                 .empty_tag_union => .{ .tag_union = .{ .tags = type_mod.Span(type_mod.Tag).empty() } },
                 .tuple => |tuple| blk: {
-                    const elems = mir_module.typeStoreConst().sliceVars(tuple.elems);
+                    const elems = type_scope.typeStoreConst().sliceVars(tuple.elems);
                     const lowered_elems = try self.allocator.alloc(type_mod.TypeId, elems.len);
                     defer self.allocator.free(lowered_elems);
                     for (elems, 0..) |elem_var, i| {
@@ -7284,15 +7496,15 @@ pub const Lowerer = struct {
                 },
                 .nominal_type => |nominal| try self.lowerNominalType(module_idx, type_scope, placeholder, nominal),
             },
-            .alias => |alias| .{ .link = try self.lowerInstantiatedType(module_idx, type_scope, mir_module.typeStoreConst().getAliasBackingVar(alias)) },
+            .alias => |alias| .{ .link = try self.lowerInstantiatedType(module_idx, type_scope, type_scope.typeStoreConst().getAliasBackingVar(alias)) },
             .flex => |flex| blk: {
-                if (try self.defaultPrimitiveForConstraints(module_idx, mir_module, flex.constraints)) |prim| {
+                if (try self.defaultPrimitiveForConstraints(module_idx, type_scope, flex.constraints)) |prim| {
                     break :blk .{ .primitive = prim };
                 }
                 break :blk .placeholder;
             },
             .rigid => |rigid| blk: {
-                if (try self.defaultPrimitiveForConstraints(module_idx, mir_module, rigid.constraints)) |prim| {
+                if (try self.defaultPrimitiveForConstraints(module_idx, type_scope, rigid.constraints)) |prim| {
                     break :blk .{ .primitive = prim };
                 }
                 break :blk .placeholder;
@@ -7331,26 +7543,26 @@ pub const Lowerer = struct {
         var next_tags = initial_tags;
         var next_ext = initial_ext;
         while (true) {
-            const tags_slice = mir_module.typeStoreConst().getTagsSlice(next_tags);
+            const tags_slice = type_scope.typeStoreConst().getTagsSlice(next_tags);
             try lowered_tags.ensureUnusedCapacity(self.allocator, next_tags.len());
             for (0..tags_slice.len) |i| {
                 const tag_name = tags_slice.items(.name)[i];
-                const tag_args = mir_module.typeStoreConst().sliceVars(tags_slice.items(.args)[i]);
+                const tag_args = type_scope.typeStoreConst().sliceVars(tags_slice.items(.args)[i]);
                 const arg_ids = try self.allocator.alloc(type_mod.TypeId, tag_args.len);
                 defer self.allocator.free(arg_ids);
                 for (tag_args, 0..) |arg_var, j| {
                     arg_ids[j] = try self.lowerInstantiatedType(module_idx, type_scope, arg_var);
                 }
                 lowered_tags.appendAssumeCapacity(.{
-                    .name = try self.ctx.copyExecutableIdent(module_idx, tag_name),
+                    .name = try self.ctx.copyExecutableIdentFromStore(type_scope.identStoreConst(), tag_name),
                     .args = try self.ctx.types.addTypeSpan(arg_ids),
                 });
             }
 
-            const resolved_ext = mir_module.typeStoreConst().resolveVar(next_ext);
+            const resolved_ext = type_scope.typeStoreConst().resolveVar(next_ext);
             switch (resolved_ext.desc.content) {
                 .alias => |alias| {
-                    next_ext = mir_module.typeStoreConst().getAliasBackingVar(alias);
+                    next_ext = type_scope.typeStoreConst().getAliasBackingVar(alias);
                 },
                 .structure => |flat| switch (flat) {
                     .tag_union => |tag_union| {
@@ -7362,11 +7574,11 @@ pub const Lowerer = struct {
                 },
                 .flex => |flex| {
                     if (flex.constraints.len() == 0) break;
-                    self.debugPanicUnresolvedTypeVar(mir_module, module_idx, resolved_ext.var_);
+                    self.debugPanicUnresolvedTypeVar(module_idx, type_scope, resolved_ext.var_);
                 },
                 .rigid => |rigid| {
                     if (rigid.constraints.len() == 0) break;
-                    self.debugPanicUnresolvedTypeVar(mir_module, module_idx, resolved_ext.var_);
+                    self.debugPanicUnresolvedTypeVar(module_idx, type_scope, resolved_ext.var_);
                 },
                 .err => return .placeholder,
             }
@@ -7427,26 +7639,25 @@ pub const Lowerer = struct {
         initial_fields: types.RecordField.SafeMultiList.Range,
         initial_ext: Var,
     ) std.mem.Allocator.Error!type_mod.Content {
-        const mir_module = self.ctx.mirModule(module_idx);
         var lowered_fields = std.ArrayList(type_mod.Field).empty;
         defer lowered_fields.deinit(self.allocator);
 
         var next_fields = initial_fields;
         var next_ext = initial_ext;
         while (true) {
-            const fields_slice = mir_module.typeStoreConst().getRecordFieldsSlice(next_fields);
+            const fields_slice = type_scope.typeStoreConst().getRecordFieldsSlice(next_fields);
             try lowered_fields.ensureUnusedCapacity(self.allocator, next_fields.len());
             for (0..fields_slice.len) |i| {
                 lowered_fields.appendAssumeCapacity(.{
-                    .name = try self.ctx.copyExecutableIdent(module_idx, fields_slice.items(.name)[i]),
+                    .name = try self.ctx.copyExecutableIdentFromStore(type_scope.identStoreConst(), fields_slice.items(.name)[i]),
                     .ty = try self.lowerInstantiatedType(module_idx, type_scope, fields_slice.items(.var_)[i]),
                 });
             }
 
-            const resolved_ext = mir_module.typeStoreConst().resolveVar(next_ext);
+            const resolved_ext = type_scope.typeStoreConst().resolveVar(next_ext);
             switch (resolved_ext.desc.content) {
                 .alias => |alias| {
-                    next_ext = mir_module.typeStoreConst().getAliasBackingVar(alias);
+                    next_ext = type_scope.typeStoreConst().getAliasBackingVar(alias);
                 },
                 .structure => |flat| switch (flat) {
                     .record => |record| {
@@ -7455,11 +7666,11 @@ pub const Lowerer = struct {
                     },
                     .record_unbound => |fields| {
                         next_fields = fields;
-                        const ext_fields_slice = mir_module.typeStoreConst().getRecordFieldsSlice(next_fields);
+                        const ext_fields_slice = type_scope.typeStoreConst().getRecordFieldsSlice(next_fields);
                         try lowered_fields.ensureUnusedCapacity(self.allocator, next_fields.len());
                         for (0..ext_fields_slice.len) |i| {
                             lowered_fields.appendAssumeCapacity(.{
-                                .name = try self.ctx.copyExecutableIdent(module_idx, ext_fields_slice.items(.name)[i]),
+                                .name = try self.ctx.copyExecutableIdentFromStore(type_scope.identStoreConst(), ext_fields_slice.items(.name)[i]),
                                 .ty = try self.lowerInstantiatedType(module_idx, type_scope, ext_fields_slice.items(.var_)[i]),
                             });
                         }
@@ -7470,11 +7681,11 @@ pub const Lowerer = struct {
                 },
                 .flex => |flex| {
                     if (flex.constraints.len() == 0) break;
-                    self.debugPanicUnresolvedTypeVar(mir_module, module_idx, resolved_ext.var_);
+                    self.debugPanicUnresolvedTypeVar(module_idx, type_scope, resolved_ext.var_);
                 },
                 .rigid => |rigid| {
                     if (rigid.constraints.len() == 0) break;
-                    self.debugPanicUnresolvedTypeVar(mir_module, module_idx, resolved_ext.var_);
+                    self.debugPanicUnresolvedTypeVar(module_idx, type_scope, resolved_ext.var_);
                 },
                 .err => return .placeholder,
             }
@@ -7497,13 +7708,12 @@ pub const Lowerer = struct {
         type_scope: *TypeCloneScope,
         fields: types.RecordField.SafeMultiList.Range,
     ) std.mem.Allocator.Error!type_mod.Content {
-        const mir_module = self.ctx.mirModule(module_idx);
-        const fields_slice = mir_module.typeStoreConst().getRecordFieldsSlice(fields);
+        const fields_slice = type_scope.typeStoreConst().getRecordFieldsSlice(fields);
         const lowered_fields = try self.allocator.alloc(type_mod.Field, fields_slice.len);
         defer self.allocator.free(lowered_fields);
         for (0..fields_slice.len) |i| {
             lowered_fields[i] = .{
-                .name = try self.ctx.copyExecutableIdent(module_idx, fields_slice.items(.name)[i]),
+                .name = try self.ctx.copyExecutableIdentFromStore(type_scope.identStoreConst(), fields_slice.items(.name)[i]),
                 .ty = try self.lowerInstantiatedType(module_idx, type_scope, fields_slice.items(.var_)[i]),
             };
         }
@@ -7524,8 +7734,7 @@ pub const Lowerer = struct {
         nominal_type_id: type_mod.TypeId,
         nominal: types.NominalType,
     ) std.mem.Allocator.Error!type_mod.Content {
-        const mir_module = self.ctx.mirModule(module_idx);
-        const defining = try self.resolveNominalDefiningIdentity(module_idx, nominal);
+        const defining = try self.resolveNominalDefiningIdentity(type_scope, nominal);
         const defining_ident = defining.ident;
         const defining_module = defining.module;
 
@@ -7533,19 +7742,19 @@ pub const Lowerer = struct {
             return .{ .primitive = .str };
         }
         if (defining_ident.eql(defining_module.commonIdents().list)) {
-            const args = mir_module.typeStoreConst().sliceNominalArgs(nominal);
+            const args = type_scope.typeStoreConst().sliceNominalArgs(nominal);
             if (args.len != 1) debugPanic("monotype.lowerNominalType List expected one type argument", .{});
             return .{ .list = try self.lowerInstantiatedType(module_idx, type_scope, args[0]) };
         }
         if (defining_ident.eql(defining_module.commonIdents().box)) {
-            const args = mir_module.typeStoreConst().sliceNominalArgs(nominal);
+            const args = type_scope.typeStoreConst().sliceNominalArgs(nominal);
             if (args.len != 1) debugPanic("monotype.lowerNominalType Box expected one type argument", .{});
             return .{ .box = try self.lowerInstantiatedType(module_idx, type_scope, args[0]) };
         }
         if (defining_ident.eql(defining_module.commonIdents().bool_type)) return .{ .primitive = .bool };
         if (builtinNumPrim(defining_module, defining_ident)) |prim| return .{ .primitive = prim };
 
-        const nominal_args = mir_module.typeStoreConst().sliceNominalArgs(nominal);
+        const nominal_args = type_scope.typeStoreConst().sliceNominalArgs(nominal);
         const lowered_args = try self.allocator.alloc(type_mod.TypeId, nominal_args.len);
         defer self.allocator.free(lowered_args);
         for (nominal_args, 0..) |arg_var, i| {
@@ -7561,7 +7770,7 @@ pub const Lowerer = struct {
         errdefer self.allocator.free(owned_key);
         try type_scope.nominal_type_cache.put(owned_key, nominal_type_id);
 
-        const backing_var = mir_module.typeStoreConst().getNominalBackingVar(nominal);
+        const backing_var = type_scope.typeStoreConst().getNominalBackingVar(nominal);
         return .{ .nominal = try self.lowerInstantiatedType(module_idx, type_scope, backing_var) };
     }
 
@@ -7573,13 +7782,12 @@ pub const Lowerer = struct {
 
     fn resolveNominalDefiningIdentity(
         self: *const Lowerer,
-        module_idx: u32,
+        type_scope: *const TypeCloneScope,
         nominal: types.NominalType,
     ) std.mem.Allocator.Error!NominalDefiningIdentity {
-        const mir_module = self.ctx.mirModule(module_idx);
-        const defining_module_idx = self.ctx.findModuleIdxByName(mir_module.getIdent(nominal.origin_module));
+        const defining_module_idx = self.ctx.findModuleIdxByName(type_scope.getIdent(nominal.origin_module));
         const defining_module = self.ctx.mirModule(defining_module_idx);
-        const defining_ident = defining_module.findCommonIdent(mir_module.getIdent(nominal.ident.ident_idx)) orelse debugPanic(
+        const defining_ident = defining_module.findCommonIdent(type_scope.getIdent(nominal.ident.ident_idx)) orelse debugPanic(
             "monotype.lowerNominalType missing target ident in defining module",
             .{},
         );
@@ -7618,17 +7826,17 @@ pub const Lowerer = struct {
 
     fn defaultNumeralPrimitiveForContent(
         self: *Lowerer,
-        mir_module: Ctx.Module,
+        type_scope: *const TypeCloneScope,
         content: types.Content,
     ) ?type_mod.Prim {
         _ = self;
         return switch (content) {
             .flex => |flex| if (flex.name) |name|
-                builtinNumPrim(mir_module, name) orelse
-                    (if (constraintsContainFromNumeral(mir_module, flex.constraints)) .dec else null)
-            else if (constraintsContainFromNumeral(mir_module, flex.constraints)) .dec else null,
-            .rigid => |rigid| builtinNumPrim(mir_module, rigid.name) orelse
-                (if (constraintsContainFromNumeral(mir_module, rigid.constraints)) .dec else null),
+                builtinNumPrimInStore(type_scope.identStoreConst(), name) orelse
+                    (if (constraintsContainFromNumeral(type_scope.typeStoreConst(), flex.constraints)) .dec else null)
+            else if (constraintsContainFromNumeral(type_scope.typeStoreConst(), flex.constraints)) .dec else null,
+            .rigid => |rigid| builtinNumPrimInStore(type_scope.identStoreConst(), rigid.name) orelse
+                (if (constraintsContainFromNumeral(type_scope.typeStoreConst(), rigid.constraints)) .dec else null),
             else => null,
         };
     }
@@ -7636,12 +7844,12 @@ pub const Lowerer = struct {
     fn defaultPrimitiveForConstraints(
         self: *Lowerer,
         module_idx: u32,
-        mir_module: Ctx.Module,
+        type_scope: *const TypeCloneScope,
         constraints: types.StaticDispatchConstraint.SafeList.Range,
     ) std.mem.Allocator.Error!?type_mod.Prim {
         if (constraints.len() == 0) return null;
 
-        if (constraintsContainFromNumeral(mir_module, constraints)) {
+        if (constraintsContainFromNumeral(type_scope.typeStoreConst(), constraints)) {
             return .dec;
         }
 
@@ -7652,11 +7860,12 @@ pub const Lowerer = struct {
 
     fn debugPanicUnresolvedTypeVar(
         self: *Lowerer,
-        mir_module: Ctx.Module,
         module_idx: u32,
+        type_scope: *const TypeCloneScope,
         var_: Var,
     ) noreturn {
-        const resolved = mir_module.typeStoreConst().resolveVar(var_);
+        const source_module = self.ctx.mirModule(module_idx);
+        const resolved = type_scope.typeStoreConst().resolveVar(var_);
         switch (resolved.desc.content) {
             .flex => |flex| {
                 std.debug.print(
@@ -7669,11 +7878,11 @@ pub const Lowerer = struct {
                         flex.constraints.len(),
                     },
                 );
-                for (mir_module.typeStoreConst().sliceStaticDispatchConstraints(flex.constraints)) |constraint| {
+                for (type_scope.typeStoreConst().sliceStaticDispatchConstraints(flex.constraints)) |constraint| {
                     std.debug.print(
                         "  constraint fn={s} origin={s}\n",
                         .{
-                            self.ctx.getTypeIdentText(module_idx, constraint.fn_name),
+                            type_scope.getIdent(constraint.fn_name),
                             @tagName(constraint.origin),
                         },
                     );
@@ -7686,15 +7895,15 @@ pub const Lowerer = struct {
                         @intFromEnum(var_),
                         @intFromEnum(resolved.var_),
                         module_idx,
-                        self.ctx.getTypeIdentText(module_idx, rigid.name),
+                        type_scope.getIdent(rigid.name),
                         rigid.constraints.len(),
                     },
                 );
-                for (mir_module.typeStoreConst().sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
+                for (type_scope.typeStoreConst().sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
                     std.debug.print(
                         "  constraint fn={s} origin={s}\n",
                         .{
-                            self.ctx.getTypeIdentText(module_idx, constraint.fn_name),
+                            type_scope.getIdent(constraint.fn_name),
                             @tagName(constraint.origin),
                         },
                     );
@@ -7703,7 +7912,6 @@ pub const Lowerer = struct {
             else => {},
         }
         const raw: u32 = @intFromEnum(var_);
-        const source_module = self.ctx.mirModule(module_idx);
         if (raw < source_module.nodeCount()) {
             const node_idx: CIR.Node.Idx = @enumFromInt(raw);
             const node_tag = source_module.nodeTag(node_idx);
@@ -8324,23 +8532,32 @@ pub const Lowerer = struct {
         };
     }
 
-    fn lookupListElemSolvedVar(self: *const Lowerer, module_idx: u32, source_solved_var: ?Var) ?Var {
+    fn lookupListElemSolvedVar(
+        self: *const Lowerer,
+        module_idx: u32,
+        type_scope: *const TypeCloneScope,
+        source_solved_var: ?Var,
+    ) ?Var {
         const root = source_solved_var orelse return null;
         const mir_module = self.ctx.mirModule(module_idx);
-        const resolved = mir_module.typeStoreConst().resolveVar(root);
+        const resolved = type_scope.typeStoreConst().resolveVar(root);
         return switch (resolved.desc.content) {
             .structure => |flat| switch (flat) {
                 .nominal_type => |nominal| blk: {
-                    if (!nominal.ident.ident_idx.eql(mir_module.commonIdents().list)) {
-                        break :blk self.lookupListElemSolvedVar(module_idx, mir_module.typeStoreConst().getNominalBackingVar(nominal));
+                    if (!std.mem.eql(
+                        u8,
+                        type_scope.getIdent(nominal.ident.ident_idx),
+                        mir_module.getIdent(mir_module.commonIdents().list),
+                    )) {
+                        break :blk self.lookupListElemSolvedVar(module_idx, type_scope, type_scope.typeStoreConst().getNominalBackingVar(nominal));
                     }
-                    const args = mir_module.typeStoreConst().sliceNominalArgs(nominal);
+                    const args = type_scope.typeStoreConst().sliceNominalArgs(nominal);
                     if (args.len != 1) break :blk null;
                     break :blk args[0];
                 },
                 else => null,
             },
-            .alias => |alias| self.lookupListElemSolvedVar(module_idx, mir_module.typeStoreConst().getAliasBackingVar(alias)),
+            .alias => |alias| self.lookupListElemSolvedVar(module_idx, type_scope, type_scope.typeStoreConst().getAliasBackingVar(alias)),
             else => null,
         };
     }
@@ -8424,6 +8641,7 @@ pub const Lowerer = struct {
     fn requireTagDiscriminantForSolvedVar(
         self: *Lowerer,
         module_idx: u32,
+        type_scope: *const TypeCloneScope,
         union_var: Var,
         tag_name: base.Ident.Idx,
     ) std.mem.Allocator.Error!u16 {
@@ -8436,12 +8654,12 @@ pub const Lowerer = struct {
         try pending.append(self.allocator, union_var);
 
         while (pending.pop()) |current| {
-            const resolved = mir_module.typeStoreConst().resolveVar(current);
+            const resolved = type_scope.typeStoreConst().resolveVar(current);
             switch (resolved.desc.content) {
                 .structure => |flat| switch (flat) {
-                    .nominal_type => |nominal| try pending.append(self.allocator, mir_module.typeStoreConst().getNominalBackingVar(nominal)),
+                    .nominal_type => |nominal| try pending.append(self.allocator, type_scope.typeStoreConst().getNominalBackingVar(nominal)),
                     .tag_union => |tag_union| {
-                        const tags = mir_module.typeStoreConst().getTagsSlice(tag_union.tags);
+                        const tags = type_scope.typeStoreConst().getTagsSlice(tag_union.tags);
                         try names.ensureUnusedCapacity(self.allocator, tags.len);
                         for (0..tags.len) |i| {
                             names.appendAssumeCapacity(tags.items(.name)[i]);
@@ -8451,7 +8669,7 @@ pub const Lowerer = struct {
                     .empty_tag_union => {},
                     else => debugPanic("monotype explicit semantic fact invariant violated: attempted to read tag discriminant from non-tag-union solved var", .{}),
                 },
-                .alias => |alias| try pending.append(self.allocator, mir_module.typeStoreConst().getAliasBackingVar(alias)),
+                .alias => |alias| try pending.append(self.allocator, type_scope.typeStoreConst().getAliasBackingVar(alias)),
                 .flex => |flex| {
                     if (flex.constraints.len() == 0) continue;
                     debugPanic("monotype explicit semantic fact invariant violated: attempted to read tag discriminant from constrained flex var", .{});
@@ -8464,7 +8682,7 @@ pub const Lowerer = struct {
             }
         }
 
-        std.mem.sort(base.Ident.Idx, names.items, mir_module.identStoreConst(), struct {
+        std.mem.sort(base.Ident.Idx, names.items, type_scope.identStoreConst(), struct {
             fn lessThan(idents: *const base.Ident.Store, a: base.Ident.Idx, b: base.Ident.Idx) bool {
                 return std.mem.order(u8, idents.getText(a), idents.getText(b)) == .lt;
             }
@@ -8474,7 +8692,7 @@ pub const Lowerer = struct {
         var prev: ?base.Ident.Idx = null;
         for (names.items) |name| {
             if (prev) |prev_name| {
-                if (std.mem.eql(u8, mir_module.getIdent(name), mir_module.getIdent(prev_name))) continue;
+                if (std.mem.eql(u8, type_scope.getIdent(name), type_scope.getIdent(prev_name))) continue;
             }
             names.items[write_index] = name;
             write_index += 1;
@@ -8482,7 +8700,7 @@ pub const Lowerer = struct {
         }
 
         for (names.items[0..write_index], 0..) |name, i| {
-            if (name == tag_name) return @intCast(i);
+            if (std.mem.eql(u8, type_scope.getIdent(name), mir_module.getIdent(tag_name))) return @intCast(i);
         }
 
         debugPanic("monotype explicit semantic fact invariant violated: missing tag discriminant in solved type", .{});
@@ -8491,6 +8709,7 @@ pub const Lowerer = struct {
     fn requireRecordFieldIndexForSolvedVar(
         self: *Lowerer,
         module_idx: u32,
+        type_scope: *const TypeCloneScope,
         record_var: Var,
         field_name: base.Ident.Idx,
     ) std.mem.Allocator.Error!u16 {
@@ -8503,12 +8722,12 @@ pub const Lowerer = struct {
         try pending.append(self.allocator, record_var);
 
         while (pending.pop()) |current| {
-            const resolved = mir_module.typeStoreConst().resolveVar(current);
+            const resolved = type_scope.typeStoreConst().resolveVar(current);
             switch (resolved.desc.content) {
                 .structure => |flat| switch (flat) {
-                    .nominal_type => |nominal| try pending.append(self.allocator, mir_module.typeStoreConst().getNominalBackingVar(nominal)),
+                    .nominal_type => |nominal| try pending.append(self.allocator, type_scope.typeStoreConst().getNominalBackingVar(nominal)),
                     .record => |record| {
-                        const fields = mir_module.typeStoreConst().getRecordFieldsSlice(record.fields);
+                        const fields = type_scope.typeStoreConst().getRecordFieldsSlice(record.fields);
                         try names.ensureUnusedCapacity(self.allocator, fields.len);
                         for (fields.items(.name)) |name| {
                             names.appendAssumeCapacity(name);
@@ -8516,7 +8735,7 @@ pub const Lowerer = struct {
                         try pending.append(self.allocator, record.ext);
                     },
                     .record_unbound => |fields_range| {
-                        const fields = mir_module.typeStoreConst().getRecordFieldsSlice(fields_range);
+                        const fields = type_scope.typeStoreConst().getRecordFieldsSlice(fields_range);
                         try names.ensureUnusedCapacity(self.allocator, fields.len);
                         for (fields.items(.name)) |name| {
                             names.appendAssumeCapacity(name);
@@ -8525,7 +8744,7 @@ pub const Lowerer = struct {
                     .empty_record => {},
                     else => debugPanic("monotype explicit semantic fact invariant violated: attempted to read field index from non-record solved var", .{}),
                 },
-                .alias => |alias| try pending.append(self.allocator, mir_module.typeStoreConst().getAliasBackingVar(alias)),
+                .alias => |alias| try pending.append(self.allocator, type_scope.typeStoreConst().getAliasBackingVar(alias)),
                 .flex => |flex| {
                     if (flex.constraints.len() == 0) continue;
                     debugPanic("monotype explicit semantic fact invariant violated: attempted to read field index from constrained flex var", .{});
@@ -8538,7 +8757,7 @@ pub const Lowerer = struct {
             }
         }
 
-        std.mem.sort(base.Ident.Idx, names.items, mir_module.identStoreConst(), struct {
+        std.mem.sort(base.Ident.Idx, names.items, type_scope.identStoreConst(), struct {
             fn lessThan(idents: *const base.Ident.Store, a: base.Ident.Idx, b: base.Ident.Idx) bool {
                 return std.mem.order(u8, idents.getText(a), idents.getText(b)) == .lt;
             }
@@ -8548,7 +8767,7 @@ pub const Lowerer = struct {
         var prev: ?base.Ident.Idx = null;
         for (names.items) |name| {
             if (prev) |prev_name| {
-                if (std.mem.eql(u8, mir_module.getIdent(name), mir_module.getIdent(prev_name))) {
+                if (std.mem.eql(u8, type_scope.getIdent(name), type_scope.getIdent(prev_name))) {
                     debugPanic("monotype explicit semantic fact invariant violated: duplicate record field after solved row flattening", .{});
                 }
             }
@@ -8558,7 +8777,7 @@ pub const Lowerer = struct {
         }
 
         for (names.items[0..write_index], 0..) |name, i| {
-            if (name == field_name) return @intCast(i);
+            if (std.mem.eql(u8, type_scope.getIdent(name), mir_module.getIdent(field_name))) return @intCast(i);
         }
 
         debugPanic("monotype explicit semantic fact invariant violated: missing record field index in solved type", .{});
@@ -8789,6 +9008,7 @@ pub const Lowerer = struct {
     fn specializeLocalFnSource(
         self: *Lowerer,
         source_ref: LocalFnSourceRef,
+        caller_scope: *const TypeCloneScope,
         expected_ty: type_mod.TypeId,
         expected_var: ?Var,
     ) std.mem.Allocator.Error!symbol_mod.Symbol {
@@ -8818,17 +9038,27 @@ pub const Lowerer = struct {
         const pending_idx = group.pending.items.len - 1;
 
         var type_scope: TypeCloneScope = undefined;
-        type_scope.initCloneAll(self.allocator, self.ctx.mirModule(group.module_idx));
+        try type_scope.initCloneAll(self.allocator, self.ctx.mirModule(group.module_idx));
         defer type_scope.deinit();
+        var declaration_env = try self.materializeFrozenBindingEnv(&type_scope, group.declaration_env);
+        defer declaration_env.deinit();
+        const scoped_expected_var = if (expected_var) |var_| blk: {
+            const seed = try self.snapshotSpecializationCheckerVarFromScope(caller_scope, var_);
+            defer {
+                var owned_seed = seed;
+                owned_seed.deinit(self.allocator);
+            }
+            break :blk try self.materializeCheckerSeed(&type_scope, seed);
+        } else null;
         const letfn = try self.lowerLambdaLikeDefWithEnv(
             group.module_idx,
             &type_scope,
-            group.declaration_env,
+            declaration_env,
             specialized_symbol,
             source.expr_idx,
             false,
             source.seed_var,
-            expected_var,
+            scoped_expected_var,
         );
         group.pending.items[pending_idx].stmt_id = try self.program.store.addStmt(.{
             .local_fn = letfn,
@@ -8897,10 +9127,9 @@ pub const Lowerer = struct {
         expected_ty: type_mod.TypeId,
         expected_var: ?Var,
     ) std.mem.Allocator.Error!symbol_mod.Symbol {
-        _ = type_scope;
         if (env.get(.{ .module_idx = module_idx, .pattern_idx = @intFromEnum(pattern_idx) })) |entry| {
             if (entry.local_fn_source) |source| {
-                return try self.specializeLocalFnSource(source, expected_ty, expected_var);
+                return try self.specializeLocalFnSource(source, type_scope, expected_ty, expected_var);
             }
             if (entry.typed) |typed| {
                 return typed.symbol;
@@ -8915,12 +9144,18 @@ pub const Lowerer = struct {
         if (self.top_level_defs_by_symbol.get(top_level_symbol)) |top_level| {
             self.assertNoFirstClassBuiltinStrInspect(top_level.module_idx, top_level.def_idx, "local");
             if (top_level.is_function) {
-                const source_expected_var = expected_var orelse self.ctx.mirModule(top_level.module_idx).def(top_level.def_idx).expr.solved_var;
+                const seed = if (expected_var) |var_|
+                    try self.snapshotSpecializationCheckerVarFromScope(type_scope, var_)
+                else
+                    try self.snapshotSpecializationCheckerVarFromModule(
+                        top_level.module_idx,
+                        self.ctx.mirModule(top_level.module_idx).def(top_level.def_idx).expr.ty(),
+                    );
                 const published_expected_ty = try self.publishMonotypeType(expected_ty);
                 return try self.specializations.specializeFn(&self.ctx.symbols, &self.ctx.types, top_level_symbol, .{
                     .module_idx = top_level.module_idx,
                     .def_idx = top_level.def_idx,
-                }, published_expected_ty, source_expected_var);
+                }, published_expected_ty, seed);
             }
             try self.ensureTopLevelValueDefEmitted(top_level_symbol);
         }
@@ -8928,26 +9163,36 @@ pub const Lowerer = struct {
         return top_level_symbol;
     }
 
-    fn lookupFunctionArgVar(
+    fn lookupFunctionArgVarInStore(
         self: *const Lowerer,
-        module_idx: u32,
+        store: *const types.Store,
         fn_var: Var,
         arg_index: usize,
     ) ?Var {
-        const mir_module = self.ctx.mirModule(module_idx);
-        const resolved = mir_module.typeStoreConst().resolveVar(fn_var);
+        const resolved = store.resolveVar(fn_var);
         return switch (resolved.desc.content) {
             .structure => |flat| switch (flat) {
                 .fn_pure, .fn_effectful, .fn_unbound => |func| blk: {
-                    const args = mir_module.typeStoreConst().sliceVars(func.args);
+                    const args = store.sliceVars(func.args);
                     if (arg_index >= args.len) break :blk null;
                     break :blk args[arg_index];
                 },
                 else => null,
             },
-            .alias => |alias| self.lookupFunctionArgVar(module_idx, mir_module.typeStoreConst().getAliasBackingVar(alias), arg_index),
+            .alias => |alias| self.lookupFunctionArgVarInStore(store, store.getAliasBackingVar(alias), arg_index),
             else => null,
         };
+    }
+
+    fn lookupFunctionArgVar(
+        self: *const Lowerer,
+        module_idx: u32,
+        type_scope: *const TypeCloneScope,
+        fn_var: Var,
+        arg_index: usize,
+    ) ?Var {
+        _ = module_idx;
+        return self.lookupFunctionArgVarInStore(type_scope.typeStoreConst(), fn_var, arg_index);
     }
 
     fn putExplicitFunctionFact(
@@ -9021,23 +9266,23 @@ pub const Lowerer = struct {
         var arg_vars = std.ArrayList(Var).empty;
         defer arg_vars.deinit(self.allocator);
 
-        const node_ret_var = self.lookupFunctionRetVar(module_idx, fn_var) orelse debugPanic(
+        const node_ret_var = self.lookupFunctionRetVar(module_idx, type_scope, fn_var) orelse debugPanic(
             "monotype explicit function fact invariant violated: missing node return var in module {d}",
             .{module_idx},
         );
-        const synthetic_unit_arg = self.lookupFunctionArgVar(module_idx, fn_var, 0) == null;
+        const synthetic_unit_arg = self.lookupFunctionArgVar(module_idx, type_scope, fn_var, 0) == null;
         var current = fn_var;
         while (true) {
             var local_index: usize = 0;
-            while (self.lookupFunctionArgVar(module_idx, current, local_index)) |arg_var| : (local_index += 1) {
+            while (self.lookupFunctionArgVar(module_idx, type_scope, current, local_index)) |arg_var| : (local_index += 1) {
                 try arg_vars.append(self.allocator, arg_var);
             }
 
-            const ret_var = self.lookupFunctionRetVar(module_idx, current) orelse debugPanic(
+            const ret_var = self.lookupFunctionRetVar(module_idx, type_scope, current) orelse debugPanic(
                 "monotype explicit function fact invariant violated: missing function return var in module {d}",
                 .{module_idx},
             );
-            if (self.lookupFunctionArgVar(module_idx, ret_var, 0) == null) {
+            if (self.lookupFunctionArgVar(module_idx, type_scope, ret_var, 0) == null) {
                 const fact: ExplicitFunctionFact = .{
                     .arg_vars = try arg_vars.toOwnedSlice(self.allocator),
                     .synthetic_unit_arg = synthetic_unit_arg,
@@ -9159,7 +9404,7 @@ pub const Lowerer = struct {
         expr_idx: CIR.Expr.Idx,
     ) std.mem.Allocator.Error!Var {
         return self.lookupSpecializedExprVar(module_idx, env, expr_idx) orelse
-            try self.scopeVar(type_scope, self.ctx.mirModule(module_idx).expr(expr_idx).solved_var);
+            try self.scopeVar(type_scope, module_idx, self.ctx.mirModule(module_idx).exprType(expr_idx));
     }
 
     fn scopedSolvedExprResultVar(
@@ -9169,16 +9414,34 @@ pub const Lowerer = struct {
         expr: typed_cir.Expr,
     ) std.mem.Allocator.Error!Var {
         return self.lookupSpecializedExprVar(expr.module().module_idx, env, expr.idx) orelse
-            try self.scopeVar(type_scope, expr.solved_var);
+            try self.scopeVar(type_scope, expr.module().module_idx, expr.ty());
     }
 
     fn scopeVar(
-        _: *Lowerer,
+        self: *Lowerer,
         type_scope: *TypeCloneScope,
+        source_module_idx: u32,
         source_var: Var,
     ) std.mem.Allocator.Error!Var {
-        if (type_scope.var_map.get(source_var)) |scoped| return scoped;
-        return try type_scope.instantiator.instantiateVar(source_var);
+        const key: TypeCloneScope.TypeKey = .{
+            .module_idx = source_module_idx,
+            .var_ = source_var,
+        };
+        if (type_scope.source_var_map.get(key)) |scoped| return scoped;
+        const source_module = self.ctx.mirModule(source_module_idx);
+        var copy_map = std.AutoHashMap(Var, Var).init(self.allocator);
+        defer copy_map.deinit();
+        const scoped = try check.copy_import.copyVar(
+            source_module.typeStoreConst(),
+            type_scope.typeStoreMut(),
+            source_var,
+            &copy_map,
+            source_module.identStoreConst(),
+            type_scope.identStoreMut(),
+            self.allocator,
+        );
+        try type_scope.source_var_map.put(key, scoped);
+        return scoped;
     }
 
     fn lookupResolvedDispatchTarget(
@@ -9187,47 +9450,39 @@ pub const Lowerer = struct {
         expr_idx: CIR.Expr.Idx,
     ) ?ResolvedTarget {
         const source_module = self.ctx.mirModule(source_module_idx);
-        const resolved_site = source_module.typeStoreConst().findResolvedStaticDispatchSite(
-            self.ctx.mirModule(source_module_idx).expr(expr_idx).solved_var,
-        ) orelse return null;
+        const resolved_site = source_module.resolvedStaticDispatchTarget(expr_idx) orelse return null;
         return .{
             .module_idx = self.ctx.findModuleIdxByName(source_module.getIdent(resolved_site.target_module_name)),
             .def_idx = @enumFromInt(resolved_site.target_def_idx),
         };
     }
 
-    fn lookupResolvedTargetFnVar(
-        self: *Lowerer,
-        current_module_idx: u32,
-        target: ResolvedTarget,
-    ) std.mem.Allocator.Error!?Var {
-        const source_symbol = self.lookupTopLevelDefSymbol(target.module_idx, target.def_idx) orelse return null;
-        const top_level = self.top_level_defs_by_symbol.get(source_symbol) orelse return null;
-        if (top_level.needs_specialization) return null;
 
-        const target_fn_var = self.ctx.mirModule(target.module_idx).def(target.def_idx).expr.solved_var;
-        return if (current_module_idx == target.module_idx)
-            target_fn_var
-        else
-            try self.copyCheckerVarToModule(target.module_idx, current_module_idx, target_fn_var);
-    }
-
-    fn lookupFunctionRetVar(
+    fn lookupFunctionRetVarInStore(
         self: *const Lowerer,
-        module_idx: u32,
+        store: *const types.Store,
         fn_var: ?Var,
     ) ?Var {
         const var_ = fn_var orelse return null;
-        const mir_module = self.ctx.mirModule(module_idx);
-        const resolved = mir_module.typeStoreConst().resolveVar(var_);
+        const resolved = store.resolveVar(var_);
         return switch (resolved.desc.content) {
             .structure => |flat| switch (flat) {
                 .fn_pure, .fn_effectful, .fn_unbound => |func| func.ret,
                 else => null,
             },
-            .alias => |alias| self.lookupFunctionRetVar(module_idx, mir_module.typeStoreConst().getAliasBackingVar(alias)),
+            .alias => |alias| self.lookupFunctionRetVarInStore(store, store.getAliasBackingVar(alias)),
             else => null,
         };
+    }
+
+    fn lookupFunctionRetVar(
+        self: *const Lowerer,
+        module_idx: u32,
+        type_scope: *const TypeCloneScope,
+        fn_var: ?Var,
+    ) ?Var {
+        _ = module_idx;
+        return self.lookupFunctionRetVarInStore(type_scope.typeStoreConst(), fn_var);
     }
 
     fn unifyAppliedFunctionResultVar(
@@ -9252,7 +9507,7 @@ pub const Lowerer = struct {
         }
 
         if (applied_arg_count == total_args) {
-            return self.unifySpecializedCheckerVars(module_idx, result_var, fn_fact.final_ret_var);
+            return self.unifySpecializedCheckerVars(module_idx, type_scope, result_var, fn_fact.final_ret_var);
         }
 
         const remaining_args = total_args - applied_arg_count;
@@ -9266,10 +9521,10 @@ pub const Lowerer = struct {
         for (0..remaining_args) |i| {
             const result_arg_var = result_fact.arg_vars[i];
             const fn_arg_var = fn_fact.arg_vars[applied_arg_count + i];
-            try self.unifySpecializedCheckerVars(module_idx, result_arg_var, fn_arg_var);
+            try self.unifySpecializedCheckerVars(module_idx, type_scope, result_arg_var, fn_arg_var);
         }
 
-        try self.unifySpecializedCheckerVars(module_idx, result_fact.final_ret_var, fn_fact.final_ret_var);
+        try self.unifySpecializedCheckerVars(module_idx, type_scope, result_fact.final_ret_var, fn_fact.final_ret_var);
     }
 
     fn requireFunctionArgType(
@@ -9338,18 +9593,18 @@ pub const Lowerer = struct {
     fn unifySpecializedCheckerVars(
         self: *Lowerer,
         module_idx: u32,
+        type_scope: *TypeCloneScope,
         left: Var,
         right: Var,
     ) std.mem.Allocator.Error!void {
-        const mir_module = self.ctx.mirModule(module_idx);
         var problems = try check.problem.Store.init(self.allocator);
         defer problems.deinit(self.allocator);
         var snapshots = try check.snapshot.Store.initCapacity(self.allocator, 16);
         defer snapshots.deinit();
         var type_writer = try types.TypeWriter.initFromParts(
             self.allocator,
-            mir_module.typeStoreMut(),
-            mir_module.identStoreConst(),
+            type_scope.typeStoreMut(),
+            type_scope.identStoreConst(),
             null,
         );
         defer type_writer.deinit();
@@ -9357,8 +9612,8 @@ pub const Lowerer = struct {
         defer self.allocator.free(before_left);
         const before_right = try self.allocator.dupe(u8, try type_writer.writeGet(right, .one_line));
         defer self.allocator.free(before_right);
-        const before_left_resolved = mir_module.typeStoreConst().resolveVar(left);
-        const before_right_resolved = mir_module.typeStoreConst().resolveVar(right);
+        const before_left_resolved = type_scope.typeStoreConst().resolveVar(left);
+        const before_right_resolved = type_scope.typeStoreConst().resolveVar(right);
         var unify_scratch = try check.unifier.Scratch.init(self.allocator);
         defer unify_scratch.deinit();
         var occurs_scratch = try check.occurs.Scratch.init(self.allocator);
@@ -9366,9 +9621,9 @@ pub const Lowerer = struct {
 
         const result = try check.unifier.unify(
             self.allocator,
-            mir_module.identStoreConst(),
-            mir_module.qualifiedModuleIdent(),
-            mir_module.typeStoreMut(),
+            type_scope.identStoreConst(),
+            self.ctx.mirModule(module_idx).qualifiedModuleIdent(),
+            type_scope.typeStoreMut(),
             &problems,
             &snapshots,
             &type_writer,
@@ -9405,6 +9660,7 @@ pub const Lowerer = struct {
     fn lookupOrSpecializeExternal(
         self: *Lowerer,
         current_module_idx: u32,
+        type_scope: *TypeCloneScope,
         lookup: anytype,
         expected_ty: type_mod.TypeId,
         expected_var: ?Var,
@@ -9422,15 +9678,18 @@ pub const Lowerer = struct {
         if (self.top_level_defs_by_symbol.get(symbol)) |top_level| {
             self.assertNoFirstClassBuiltinStrInspect(top_level.module_idx, top_level.def_idx, "external");
             if (top_level.is_function) {
-                const source_expected_var = if (expected_var) |var_|
-                    try self.copyCheckerVarToModule(current_module_idx, top_level.module_idx, var_)
+                const seed = if (expected_var) |var_|
+                    try self.snapshotSpecializationCheckerVarFromScope(type_scope, var_)
                 else
-                    self.ctx.mirModule(top_level.module_idx).def(top_level.def_idx).expr.solved_var;
+                    try self.snapshotSpecializationCheckerVarFromModule(
+                        top_level.module_idx,
+                        self.ctx.mirModule(top_level.module_idx).def(top_level.def_idx).expr.ty(),
+                    );
                 const published_expected_ty = try self.publishMonotypeType(expected_ty);
                 return try self.specializations.specializeFn(&self.ctx.symbols, &self.ctx.types, symbol, .{
                     .module_idx = top_level.module_idx,
                     .def_idx = top_level.def_idx,
-                }, published_expected_ty, source_expected_var);
+                }, published_expected_ty, seed);
             }
             try self.ensureTopLevelValueDefEmitted(symbol);
         }
@@ -9454,28 +9713,13 @@ pub const Lowerer = struct {
         }
     }
 
-    fn copyCheckerVarToModule(
+    fn copyCheckerVarToScope(
         self: *Lowerer,
+        type_scope: *TypeCloneScope,
         source_module_idx: u32,
-        dest_module_idx: u32,
         source_var: Var,
     ) std.mem.Allocator.Error!Var {
-        if (source_module_idx == dest_module_idx) return source_var;
-
-        const source_module = self.ctx.mirModule(source_module_idx);
-        const dest_module = self.ctx.mirModule(dest_module_idx);
-        var var_map = std.AutoHashMap(Var, Var).init(self.allocator);
-        defer var_map.deinit();
-
-        return try check.copy_import.copyVar(
-            source_module.typeStoreConst(),
-            dest_module.typeStoreMut(),
-            source_var,
-            &var_map,
-            source_module.identStoreConst(),
-            dest_module.identStoreMut(),
-            self.allocator,
-        );
+        return self.scopeVar(type_scope, source_module_idx, source_var);
     }
 
     fn buildCurriedFuncType(
@@ -9538,10 +9782,12 @@ pub const Lowerer = struct {
     fn lowerResolvedTargetCallee(
         self: *Lowerer,
         current_module_idx: u32,
+        type_scope: *TypeCloneScope,
         target: ResolvedTarget,
         expected_ty: type_mod.TypeId,
         expected_var: ?Var,
     ) std.mem.Allocator.Error!ast.ExprId {
+        _ = current_module_idx;
         const source_symbol = self.lookupTopLevelDefSymbol(target.module_idx, target.def_idx) orelse debugPanic(
             "monotype static dispatch invariant violated: unresolved target symbol {d}:{d}",
             .{ target.module_idx, @intFromEnum(target.def_idx) },
@@ -9549,18 +9795,18 @@ pub const Lowerer = struct {
 
         const symbol = if (self.top_level_defs_by_symbol.get(source_symbol)) |top_level|
             if (top_level.is_function) blk: {
-                const source_expected_var = if (expected_var) |var_|
-                    if (current_module_idx == top_level.module_idx)
-                        var_
-                    else
-                        try self.copyCheckerVarToModule(current_module_idx, top_level.module_idx, var_)
+                const seed = if (expected_var) |var_|
+                    try self.snapshotSpecializationCheckerVarFromScope(type_scope, var_)
                 else
-                    self.ctx.mirModule(top_level.module_idx).def(top_level.def_idx).expr.solved_var;
+                    try self.snapshotSpecializationCheckerVarFromModule(
+                        top_level.module_idx,
+                        self.ctx.mirModule(top_level.module_idx).def(top_level.def_idx).expr.ty(),
+                    );
                 const published_expected_ty = try self.publishMonotypeType(expected_ty);
                 break :blk try self.specializations.specializeFn(&self.ctx.symbols, &self.ctx.types, source_symbol, .{
                     .module_idx = top_level.module_idx,
                     .def_idx = top_level.def_idx,
-                }, published_expected_ty, source_expected_var);
+                }, published_expected_ty, seed);
             } else blk: {
                 try self.ensureTopLevelValueDefEmitted(source_symbol);
                 break :blk source_symbol;
@@ -9574,130 +9820,6 @@ pub const Lowerer = struct {
         });
     }
 
-    fn resolveMonomorphicDispatchTarget(
-        self: *const Lowerer,
-        source_module_idx: u32,
-        type_scope: *const TypeCloneScope,
-        env: BindingEnv,
-        expr_idx: CIR.Expr.Idx,
-        method_name: base.Ident.Idx,
-    ) ResolvedTarget {
-        const receiver = self.resolveDispatchReceiverForExpr(
-            source_module_idx,
-            type_scope,
-            env,
-            expr_idx,
-            method_name,
-        );
-        return self.resolveMonomorphicDispatchTargetFromResolvedReceiver(
-            source_module_idx,
-            receiver,
-            method_name,
-        );
-    }
-
-    fn resolveMonomorphicDispatchTargetFromReceiverVar(
-        self: *const Lowerer,
-        source_module_idx: u32,
-        type_scope: *const TypeCloneScope,
-        receiver_var: Var,
-        method_name: base.Ident.Idx,
-    ) ResolvedTarget {
-        const receiver = self.resolveDispatchReceiverVar(
-            source_module_idx,
-            type_scope,
-            receiver_var,
-            method_name,
-        );
-        return self.resolveMonomorphicDispatchTargetFromResolvedReceiver(
-            source_module_idx,
-            receiver,
-            method_name,
-        );
-    }
-
-    fn resolveMonomorphicDispatchTargetFromResolvedReceiver(
-        self: *const Lowerer,
-        source_module_idx: u32,
-        receiver: DispatchReceiver,
-        method_name: base.Ident.Idx,
-    ) ResolvedTarget {
-        const source_module = self.ctx.mirModule(source_module_idx);
-        const method_ident = receiver.target_module.lookupMethodIdentFromModule(
-            source_module,
-            receiver.type_ident,
-            method_name,
-        ) orelse debugPanic(
-            "monotype static dispatch invariant violated: missing method {s} for receiver type {s} in module {s}",
-            .{
-                source_module.getIdent(method_name),
-                source_module.getIdent(receiver.type_ident),
-                receiver.target_module.name(),
-            },
-        );
-        const target_node_idx = receiver.target_module.exposedNodeIndexById(method_ident) orelse debugPanic(
-            "monotype static dispatch invariant violated: method {s} is not exposed in module {s}",
-            .{
-                receiver.target_module.getIdent(method_ident),
-                receiver.target_module.name(),
-            },
-        );
-        return .{
-            .module_idx = receiver.target_module_idx,
-            .def_idx = @enumFromInt(@as(u32, @intCast(target_node_idx))),
-        };
-    }
-
-    const DispatchReceiver = struct {
-        target_module_idx: u32,
-        target_module: Ctx.Module,
-        type_ident: base.Ident.Idx,
-    };
-
-    fn resolveDispatchReceiverForExpr(
-        self: *const Lowerer,
-        source_module_idx: u32,
-        type_scope: *const TypeCloneScope,
-        env: BindingEnv,
-        expr_idx: CIR.Expr.Idx,
-        method_name: base.Ident.Idx,
-    ) DispatchReceiver {
-        const source_module = self.ctx.mirModule(source_module_idx);
-        const expr = source_module.expr(expr_idx).data;
-        return switch (expr) {
-            .e_dot_access => |dot| self.resolveDispatchReceiverExprVar(
-                source_module_idx,
-                type_scope,
-                env,
-                dot.receiver,
-                method_name,
-            ),
-            .e_type_var_dispatch => |dispatch| blk: {
-                const stmt = self.ctx.mirModule(source_module_idx).getStatement(dispatch.type_var_alias_stmt);
-                const type_var = self.ctx.mirModule(source_module_idx).typeAnnoVar(stmt.s_type_var_alias.type_var_anno);
-                break :blk self.resolveDispatchReceiverVar(source_module_idx, type_scope, type_var, method_name);
-            },
-            else => debugPanic(
-                "monotype static dispatch invariant violated: unsupported dispatch expr {s} for method {s}",
-                .{ @tagName(expr), source_module.getIdent(method_name) },
-            ),
-        };
-    }
-
-    fn resolveDispatchReceiverExprVar(
-        self: *const Lowerer,
-        source_module_idx: u32,
-        type_scope: *const TypeCloneScope,
-        env: BindingEnv,
-        receiver_expr_idx: CIR.Expr.Idx,
-        method_name: base.Ident.Idx,
-    ) DispatchReceiver {
-        const receiver_var = self.lookupSpecializedExprVar(source_module_idx, env, receiver_expr_idx) orelse
-            type_scope.var_map.get(self.ctx.mirModule(source_module_idx).expr(receiver_expr_idx).solved_var) orelse
-            self.ctx.mirModule(source_module_idx).expr(receiver_expr_idx).solved_var;
-        return self.resolveDispatchReceiverVar(source_module_idx, type_scope, receiver_var, method_name);
-    }
-
     fn lookupScopedFunctionArgVar(
         self: *const Lowerer,
         module_idx: u32,
@@ -9705,49 +9827,11 @@ pub const Lowerer = struct {
         fn_var: Var,
         arg_index: usize,
     ) ?Var {
-        const scoped_fn_var = type_scope.var_map.get(fn_var) orelse fn_var;
-        return self.lookupFunctionArgVar(module_idx, scoped_fn_var, arg_index);
-    }
-
-    fn resolveDispatchReceiverVar(
-        self: *const Lowerer,
-        source_module_idx: u32,
-        type_scope: *const TypeCloneScope,
-        receiver_var: Var,
-        method_name: base.Ident.Idx,
-    ) DispatchReceiver {
-        const source_module = self.ctx.mirModule(source_module_idx);
-        const scoped_receiver_var = type_scope.var_map.get(receiver_var) orelse receiver_var;
-        const resolved = source_module.typeStoreConst().resolveVar(scoped_receiver_var);
-        return switch (resolved.desc.content) {
-            .alias => |alias| self.resolveDispatchReceiverVar(source_module_idx, type_scope, source_module.typeStoreConst().getAliasBackingVar(alias), method_name),
-            .structure => |flat| switch (flat) {
-                .nominal_type => |nominal| {
-                    const target_module_idx = self.ctx.findModuleIdxByName(source_module.getIdent(nominal.origin_module));
-                    return .{
-                        .target_module_idx = target_module_idx,
-                        .target_module = self.ctx.mirModule(target_module_idx),
-                        .type_ident = nominal.ident.ident_idx,
-                    };
-                },
-                else => debugPanic(
-                    "monotype static dispatch invariant violated: receiver for method {s} resolved to non-nominal {s}",
-                    .{ source_module.getIdent(method_name), @tagName(flat) },
-                ),
-            },
-            .err => debugPanic(
-                "monotype static dispatch invariant violated: receiver for method {s} is erroneous during lowering",
-                .{source_module.getIdent(method_name)},
-            ),
-            .flex => debugPanic(
-                "monotype static dispatch invariant violated: receiver for method {s} remained flex during lowering",
-                .{source_module.getIdent(method_name)},
-            ),
-            .rigid => debugPanic(
-                "monotype static dispatch invariant violated: receiver for method {s} remained rigid during lowering",
-                .{source_module.getIdent(method_name)},
-            ),
-        };
+        const scoped_fn_var = type_scope.source_var_map.get(.{
+            .module_idx = module_idx,
+            .var_ = fn_var,
+        }) orelse fn_var;
+        return self.lookupFunctionArgVar(module_idx, type_scope, scoped_fn_var, arg_index);
     }
 
     fn lookupTopLevelSymbol(self: *const Lowerer, module_idx: u32, pattern_idx: CIR.Pattern.Idx) ?symbol_mod.Symbol {
@@ -9782,6 +9866,70 @@ pub const Lowerer = struct {
         var iter = env.iterator();
         while (iter.next()) |entry| {
             try out.put(entry.key_ptr.*, entry.value_ptr.*);
+        }
+        return out;
+    }
+
+    fn freezeBindingEnv(
+        self: *Lowerer,
+        type_scope: *const TypeCloneScope,
+        env: BindingEnv,
+    ) std.mem.Allocator.Error!FrozenBindingEnv {
+        var out = FrozenBindingEnv.init(self.allocator);
+        errdefer {
+            var iter = out.valueIterator();
+            while (iter.next()) |value| {
+                value.deinit(self.allocator);
+            }
+            out.deinit();
+        }
+
+        var iter = env.iterator();
+        while (iter.next()) |entry| {
+            const frozen_typed = if (entry.value_ptr.typed) |typed| blk: {
+                break :blk FrozenTypedBinding{
+                    .symbol = typed.symbol,
+                    .checker_seed = if (typed.solved_var) |var_|
+                        try self.snapshotSpecializationCheckerVarFromScope(type_scope, var_)
+                    else
+                        null,
+                };
+            } else null;
+
+            try out.put(entry.key_ptr.*, .{
+                .typed = frozen_typed,
+                .local_fn_source = entry.value_ptr.local_fn_source,
+                .local_fn_seed_var = entry.value_ptr.local_fn_seed_var,
+            });
+        }
+        return out;
+    }
+
+    fn materializeFrozenBindingEnv(
+        self: *Lowerer,
+        type_scope: *TypeCloneScope,
+        frozen_env: FrozenBindingEnv,
+    ) std.mem.Allocator.Error!BindingEnv {
+        var out = BindingEnv.init(self.allocator);
+        errdefer out.deinit();
+
+        var iter = frozen_env.iterator();
+        while (iter.next()) |entry| {
+            const typed = if (entry.value_ptr.typed) |frozen_typed| blk: {
+                break :blk TypedBinding{
+                    .symbol = frozen_typed.symbol,
+                    .solved_var = if (frozen_typed.checker_seed) |seed|
+                        try self.materializeCheckerSeed(type_scope, seed)
+                    else
+                        null,
+                };
+            } else null;
+
+            try out.put(entry.key_ptr.*, .{
+                .typed = typed,
+                .local_fn_source = entry.value_ptr.local_fn_source,
+                .local_fn_seed_var = entry.value_ptr.local_fn_seed_var,
+            });
         }
         return out;
     }
@@ -9833,6 +9981,24 @@ fn builtinNumPrim(mir_module: Ctx.Module, ident: base.Ident.Idx) ?type_mod.Prim 
     return null;
 }
 
+fn builtinNumPrimInStore(idents: *const base.Ident.Store, ident: base.Ident.Idx) ?type_mod.Prim {
+    const text = idents.getText(ident);
+    if (std.mem.eql(u8, text, "U8")) return .u8;
+    if (std.mem.eql(u8, text, "I8")) return .i8;
+    if (std.mem.eql(u8, text, "U16")) return .u16;
+    if (std.mem.eql(u8, text, "I16")) return .i16;
+    if (std.mem.eql(u8, text, "U32")) return .u32;
+    if (std.mem.eql(u8, text, "I32")) return .i32;
+    if (std.mem.eql(u8, text, "U64")) return .u64;
+    if (std.mem.eql(u8, text, "I64")) return .i64;
+    if (std.mem.eql(u8, text, "U128")) return .u128;
+    if (std.mem.eql(u8, text, "I128")) return .i128;
+    if (std.mem.eql(u8, text, "F32")) return .f32;
+    if (std.mem.eql(u8, text, "F64")) return .f64;
+    if (std.mem.eql(u8, text, "Dec")) return .dec;
+    return null;
+}
+
 fn isBuiltinBoolTagUnion(env: *const ModuleEnv, tags_slice: anytype) bool {
     if (tags_slice.len != 2) return false;
 
@@ -9880,10 +10046,10 @@ fn isBuiltinBoolTagUnionSlice(mir_module: Ctx.Module, tags: []const type_mod.Tag
 }
 
 fn constraintsContainFromNumeral(
-    mir_module: Ctx.Module,
+    type_store: *const types.Store,
     range: types.StaticDispatchConstraint.SafeList.Range,
 ) bool {
-    for (mir_module.typeStoreConst().sliceStaticDispatchConstraints(range)) |constraint| {
+    for (type_store.sliceStaticDispatchConstraints(range)) |constraint| {
         if (constraint.origin == .from_numeral) return true;
     }
     return false;
