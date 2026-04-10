@@ -23,6 +23,7 @@ const type_mod = @import("type.zig");
 const semantic_facts = @import("semantic_facts.zig");
 const specializations_mod = @import("specializations.zig");
 const symbol_mod = @import("symbol");
+const solved_cir = check.SolvedCIR;
 
 const ModuleEnv = can.ModuleEnv;
 const CIR = can.CIR;
@@ -69,6 +70,7 @@ const Ctx = struct {
     types: type_mod.Store,
     idents: base.Ident.Store,
     all_module_envs: []const *const ModuleEnv,
+    solved_modules: solved_cir.Modules,
     builtin_module_idx: u32,
     top_level_symbols: std.AutoHashMap(TopLevelKey, symbol_mod.Symbol),
     pattern_symbols: std.AutoHashMap(PatternKey, symbol_mod.Symbol),
@@ -94,6 +96,7 @@ const Ctx = struct {
             .types = type_mod.Store.init(allocator),
             .idents = try base.Ident.Store.initCapacity(allocator, 256),
             .all_module_envs = all_module_envs,
+            .solved_modules = solved_cir.Modules.init(all_module_envs),
             .builtin_module_idx = builtin_module_idx,
             .top_level_symbols = std.AutoHashMap(TopLevelKey, symbol_mod.Symbol).init(allocator),
             .pattern_symbols = std.AutoHashMap(PatternKey, symbol_mod.Symbol).init(allocator),
@@ -110,6 +113,10 @@ const Ctx = struct {
 
     fn env(self: *const Ctx, module_idx: u32) *const ModuleEnv {
         return self.all_module_envs[module_idx];
+    }
+
+    fn solved(self: *const Ctx, module_idx: u32) solved_cir.Module {
+        return self.solved_modules.module(module_idx);
     }
 
     fn getTypeIdentText(self: *const Ctx, module_idx: u32, ident: base.Ident.Idx) []const u8 {
@@ -728,12 +735,12 @@ pub const Lowerer = struct {
 
     fn registerAllTopLevelDefs(self: *Lowerer) std.mem.Allocator.Error!void {
         for (self.ctx.all_module_envs, 0..) |env, module_idx| {
+            const solved_module = self.ctx.solved(@intCast(module_idx));
             for (env.store.sliceDefs(env.all_defs)) |def_idx| {
-                const def = env.store.getDef(def_idx);
-                if (def.kind != .let) continue;
+                const solved_def = solved_module.def(def_idx);
+                if (solved_def.data.kind != .let) continue;
 
-                const pattern = env.store.getPattern(def.pattern);
-                const ident = switch (pattern) {
+                const ident = switch (solved_def.pattern.data) {
                     .assign => |assign| assign.ident,
                     else => continue,
                 };
@@ -742,13 +749,13 @@ pub const Lowerer = struct {
                 try self.top_level_defs_by_symbol.put(symbol, .{
                     .module_idx = @intCast(module_idx),
                     .def_idx = def_idx,
-                    .pattern_idx = def.pattern,
-                    .is_function = isLambdaExpr(env.store.getExpr(def.expr)),
-                    .needs_specialization = env.types.needsInstantiation(ModuleEnv.varFrom(def.expr)),
+                    .pattern_idx = solved_def.pattern.idx,
+                    .is_function = isLambdaExpr(solved_def.expr.data),
+                    .needs_specialization = env.types.needsInstantiation(solved_def.expr.solved_var),
                 });
                 try self.top_level_symbols_by_pattern.put(.{
                     .module_idx = @intCast(module_idx),
-                    .pattern_idx = @intFromEnum(def.pattern),
+                    .pattern_idx = @intFromEnum(solved_def.pattern.idx),
                 }, symbol);
             }
         }
@@ -770,19 +777,19 @@ pub const Lowerer = struct {
         def_idx: CIR.Def.Idx,
     ) std.mem.Allocator.Error!?ast.DefId {
         const env = self.ctx.env(module_idx);
-        const def = env.store.getDef(def_idx);
+        const solved_def = self.ctx.solved(module_idx).def(def_idx);
 
-        if (def.kind == .let) {
-            const bind_symbol = self.lookupTopLevelSymbol(module_idx, def.pattern) orelse return null;
+        if (solved_def.data.kind == .let) {
+            const bind_symbol = self.lookupTopLevelSymbol(module_idx, solved_def.pattern.idx) orelse return null;
             if (self.emitted_defs_by_symbol.get(bind_symbol)) |existing| return existing;
-            if (env.store.getExpr(def.expr) == .e_hosted_lambda) {
+            if (solved_def.expr.data == .e_hosted_lambda) {
                 return try self.lowerHostedTopLevelDef(module_idx, def_idx, bind_symbol, null);
             }
         }
 
-        return switch (def.kind) {
+        return switch (solved_def.data.kind) {
             .let => blk: {
-                const bind_symbol = self.lookupTopLevelSymbol(module_idx, def.pattern) orelse break :blk null;
+                const bind_symbol = self.lookupTopLevelSymbol(module_idx, solved_def.pattern.idx) orelse break :blk null;
                 if (self.emitted_defs_by_symbol.get(bind_symbol)) |existing| break :blk existing;
                 if (self.isTopLevelFunction(bind_symbol)) break :blk null;
 
@@ -791,22 +798,22 @@ pub const Lowerer = struct {
                 defer type_scope.deinit();
                 var binding_env = BindingEnv.init(self.allocator);
                 defer binding_env.deinit();
-                const bind_var = ModuleEnv.varFrom(def.pattern);
+                const bind_var = solved_def.pattern.solved_var;
                 const bind_expected_var = try self.scopeVar(&type_scope, bind_var);
                 try self.collectExprFactsWithExplicitResultVar(
                     module_idx,
                     &type_scope,
                     binding_env,
-                    def.expr,
+                    solved_def.expr.idx,
                     bind_expected_var,
                 );
                 try self.freezeLoweringSemanticTypes(module_idx, &type_scope);
-                const bind_expected_ty = try self.requireExprTypeFact(module_idx, &type_scope, def.expr);
+                const bind_expected_ty = try self.requireExprTypeFact(module_idx, &type_scope, solved_def.expr.idx);
                 const body = try self.lowerExprFactWithExpectedType(
                     module_idx,
                     &type_scope,
                     binding_env,
-                    def.expr,
+                    solved_def.expr.idx,
                     bind_expected_ty,
                     bind_expected_var,
                 );
@@ -829,30 +836,30 @@ pub const Lowerer = struct {
         fx_var: Var,
     ) std.mem.Allocator.Error!ast.DefId {
         const env = self.ctx.env(module_idx);
-        const def = env.store.getDef(def_idx);
-        const bind_symbol = self.lookupTopLevelSymbol(module_idx, def.pattern) orelse try self.ctx.addSyntheticSymbol(base.Ident.Idx.NONE);
+        const solved_def = self.ctx.solved(module_idx).def(def_idx);
+        const bind_symbol = self.lookupTopLevelSymbol(module_idx, solved_def.pattern.idx) orelse try self.ctx.addSyntheticSymbol(base.Ident.Idx.NONE);
 
         var type_scope: TypeCloneScope = undefined;
         type_scope.initCloneAll(self.allocator, @constCast(env));
         defer type_scope.deinit();
         var binding_env = BindingEnv.init(self.allocator);
         defer binding_env.deinit();
-        const bind_var = ModuleEnv.varFrom(def.pattern);
+        const bind_var = solved_def.pattern.solved_var;
         const bind_expected_var = try self.scopeVar(&type_scope, bind_var);
         try self.collectExprFactsWithExplicitResultVar(
             module_idx,
             &type_scope,
             binding_env,
-            def.expr,
+            solved_def.expr.idx,
             bind_expected_var,
         );
         try self.freezeLoweringSemanticTypes(module_idx, &type_scope);
-        const bind_expected_ty = try self.requireExprTypeFact(module_idx, &type_scope, def.expr);
+        const bind_expected_ty = try self.requireExprTypeFact(module_idx, &type_scope, solved_def.expr.idx);
         const body = try self.lowerExprFactWithExpectedType(
             module_idx,
             &type_scope,
             binding_env,
-            def.expr,
+            solved_def.expr.idx,
             bind_expected_ty,
             bind_expected_var,
         );
@@ -917,10 +924,10 @@ pub const Lowerer = struct {
     ) std.mem.Allocator.Error!ast.DefId {
         if (self.emitted_defs_by_symbol.get(pending.specialized_symbol)) |existing| return existing;
         const env = self.ctx.env(pending.source.module_idx);
-        const def = env.store.getDef(pending.source.def_idx);
+        const solved_def = self.ctx.solved(pending.source.module_idx).def(pending.source.def_idx);
         const specialized_checker_var = try self.requireSpecializedTopLevelCheckerVar(pending);
 
-        if (env.store.getExpr(def.expr) == .e_hosted_lambda) {
+        if (solved_def.expr.data == .e_hosted_lambda) {
             return try self.lowerHostedTopLevelDef(
                 pending.source.module_idx,
                 pending.source.def_idx,
@@ -941,7 +948,7 @@ pub const Lowerer = struct {
             &type_scope,
             binding_env,
             pending.specialized_symbol,
-            def.expr,
+            solved_def.expr.idx,
             isRecursiveTopLevelDef(env, pending.source.def_idx),
             null,
             specialized_checker_var,
@@ -962,9 +969,8 @@ pub const Lowerer = struct {
         expected_var: ?Var,
     ) std.mem.Allocator.Error!ast.DefId {
         const env = self.ctx.env(module_idx);
-        const def = env.store.getDef(def_idx);
-        const expr = env.store.getExpr(def.expr);
-        const hosted = switch (expr) {
+        const solved_def = self.ctx.solved(module_idx).def(def_idx);
+        const hosted = switch (solved_def.expr.data) {
             .e_hosted_lambda => |hosted| hosted,
             else => debugPanic("monotype invariant violated: attempted to lower non-hosted def as hosted top-level", .{}),
         };
@@ -973,7 +979,7 @@ pub const Lowerer = struct {
         type_scope.initCloneAll(self.allocator, @constCast(env));
         defer type_scope.deinit();
 
-        const source_expr_var = ModuleEnv.varFrom(def.expr);
+        const source_expr_var = solved_def.expr.solved_var;
         const source_fn_var = try self.scopeVar(&type_scope, expected_var orelse source_expr_var);
         try type_scope.var_map.put(source_expr_var, source_fn_var);
         if (expected_var) |var_| {
@@ -1044,8 +1050,9 @@ pub const Lowerer = struct {
         expected_var: ?Var,
     ) std.mem.Allocator.Error!ast.LetFn {
         const env = self.ctx.env(module_idx);
-        const expr = env.store.getExpr(expr_idx);
-        const source_expr_var = ModuleEnv.varFrom(expr_idx);
+        const solved_expr = self.ctx.solved(module_idx).expr(expr_idx);
+        const expr = solved_expr.data;
+        const source_expr_var = solved_expr.solved_var;
         const source_fn_var = try self.scopeVar(type_scope, source_seed_var orelse source_expr_var);
         try type_scope.var_map.put(source_expr_var, source_fn_var);
         if (expected_var) |var_| {
@@ -1671,7 +1678,7 @@ pub const Lowerer = struct {
         result_var: ?Var,
     ) std.mem.Allocator.Error!void {
         try self.bindExplicitExprResultFact(module_idx, type_scope, expr_idx, result_var);
-        try self.collectExprFacts(module_idx, type_scope, env, expr_idx);
+        try self.collectSolvedExprFacts(module_idx, type_scope, env, self.ctx.solved(module_idx).expr(expr_idx));
     }
 
     fn freezeLoweringSemanticTypes(
@@ -4995,8 +5002,7 @@ pub const Lowerer = struct {
         def_idx: CIR.Def.Idx,
         dest_module_idx: u32,
     ) std.mem.Allocator.Error!Var {
-        const def = self.ctx.env(source_module_idx).store.getDef(def_idx);
-        const source_var = ModuleEnv.varFrom(def.pattern);
+        const source_var = self.ctx.solved(source_module_idx).def(def_idx).pattern.solved_var;
         return if (source_module_idx == dest_module_idx)
             source_var
         else
@@ -5009,8 +5015,7 @@ pub const Lowerer = struct {
         def_idx: CIR.Def.Idx,
         dest_module_idx: u32,
     ) std.mem.Allocator.Error!Var {
-        const def = self.ctx.env(source_module_idx).store.getDef(def_idx);
-        const source_var = ModuleEnv.varFrom(def.expr);
+        const source_var = self.ctx.solved(source_module_idx).def(def_idx).expr.solved_var;
         return if (source_module_idx == dest_module_idx)
             source_var
         else
@@ -6140,15 +6145,24 @@ pub const Lowerer = struct {
         type_scope: *TypeCloneScope,
         pattern_idx: CIR.Pattern.Idx,
     ) std.mem.Allocator.Error!void {
+        return self.collectSolvedPatternFacts(module_idx, type_scope, self.ctx.solved(module_idx).pattern(pattern_idx));
+    }
+
+    fn collectSolvedPatternFacts(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeCloneScope,
+        pattern: solved_cir.Pattern,
+    ) std.mem.Allocator.Error!void {
         const key: TypeCloneScope.PatternTypeKey = .{
             .module_idx = module_idx,
-            .pattern_idx = pattern_idx,
+            .pattern_idx = pattern.idx,
         };
         if (type_scope.facts.collected_pattern_facts.contains(key)) return;
 
         try type_scope.facts.collected_pattern_facts.put(key, {});
-        const pattern = self.ctx.env(module_idx).store.getPattern(pattern_idx);
-        switch (pattern) {
+        const solved_module = self.ctx.solved(module_idx);
+        switch (pattern.data) {
             .assign,
             .underscore,
             .num_literal,
@@ -6159,38 +6173,38 @@ pub const Lowerer = struct {
             .str_literal,
             .runtime_error,
             => {},
-            .as => |as_pat| try self.collectPatternFacts(module_idx, type_scope, as_pat.pattern),
+            .as => |as_pat| try self.collectSolvedPatternFacts(module_idx, type_scope, solved_module.pattern(as_pat.pattern)),
             .applied_tag => |tag| {
-                for (self.ctx.env(module_idx).store.slicePatterns(tag.args)) |arg_pat| {
-                    try self.collectPatternFacts(module_idx, type_scope, arg_pat);
+                for (solved_module.env.store.slicePatterns(tag.args)) |arg_pat| {
+                    try self.collectSolvedPatternFacts(module_idx, type_scope, solved_module.pattern(arg_pat));
                 }
             },
             .record_destructure => |record| {
-                for (self.ctx.env(module_idx).store.sliceRecordDestructs(record.destructs)) |destruct_idx| {
-                    try self.collectPatternFacts(
+                for (solved_module.env.store.sliceRecordDestructs(record.destructs)) |destruct_idx| {
+                    try self.collectSolvedPatternFacts(
                         module_idx,
                         type_scope,
-                        self.ctx.env(module_idx).store.getRecordDestruct(destruct_idx).kind.toPatternIdx(),
+                        solved_module.pattern(solved_module.env.store.getRecordDestruct(destruct_idx).kind.toPatternIdx()),
                     );
                 }
             },
             .list => |list| {
-                for (self.ctx.env(module_idx).store.slicePatterns(list.patterns)) |child_pat| {
-                    try self.collectPatternFacts(module_idx, type_scope, child_pat);
+                for (solved_module.env.store.slicePatterns(list.patterns)) |child_pat| {
+                    try self.collectSolvedPatternFacts(module_idx, type_scope, solved_module.pattern(child_pat));
                 }
                 if (list.rest_info) |rest| {
                     if (rest.pattern) |rest_pat| {
-                        try self.collectPatternFacts(module_idx, type_scope, rest_pat);
+                        try self.collectSolvedPatternFacts(module_idx, type_scope, solved_module.pattern(rest_pat));
                     }
                 }
             },
             .tuple => |tuple| {
-                for (self.ctx.env(module_idx).store.slicePatterns(tuple.patterns)) |elem_pat| {
-                    try self.collectPatternFacts(module_idx, type_scope, elem_pat);
+                for (solved_module.env.store.slicePatterns(tuple.patterns)) |elem_pat| {
+                    try self.collectSolvedPatternFacts(module_idx, type_scope, solved_module.pattern(elem_pat));
                 }
             },
-            .nominal => |nominal| try self.collectPatternFacts(module_idx, type_scope, nominal.backing_pattern),
-            .nominal_external => |nominal| try self.collectPatternFacts(module_idx, type_scope, nominal.backing_pattern),
+            .nominal => |nominal| try self.collectSolvedPatternFacts(module_idx, type_scope, solved_module.pattern(nominal.backing_pattern)),
+            .nominal_external => |nominal| try self.collectSolvedPatternFacts(module_idx, type_scope, solved_module.pattern(nominal.backing_pattern)),
         }
     }
 
@@ -6633,16 +6647,26 @@ pub const Lowerer = struct {
         env: BindingEnv,
         expr_idx: CIR.Expr.Idx,
     ) std.mem.Allocator.Error!void {
+        return self.collectSolvedExprFacts(module_idx, type_scope, env, self.ctx.solved(module_idx).expr(expr_idx));
+    }
+
+    fn collectSolvedExprFacts(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeCloneScope,
+        env: BindingEnv,
+        expr: solved_cir.Expr,
+    ) std.mem.Allocator.Error!void {
         const key: TypeCloneScope.ExprKey = .{
             .module_idx = module_idx,
-            .expr_idx = expr_idx,
+            .expr_idx = expr.idx,
         };
-        const cir_env = self.ctx.env(module_idx);
-        const expr = cir_env.store.getExpr(expr_idx);
-        if (type_scope.facts.collected_expr_facts.contains(key) and type_scope.facts.expr_result_var_facts.contains(key) and (!exprNeedsExplicitCallFact(expr) or type_scope.facts.call_facts.contains(key))) return;
+        const cir_env = expr.env;
+        if (type_scope.facts.collected_expr_facts.contains(key) and type_scope.facts.expr_result_var_facts.contains(key) and (!exprNeedsExplicitCallFact(expr.data) or type_scope.facts.call_facts.contains(key))) return;
         const explicit_result_var = type_scope.facts.expr_result_var_facts.get(key);
+        const solved_module = self.ctx.solved(module_idx);
 
-        const result_var: Var = switch (expr) {
+        const result_var: Var = switch (expr.data) {
             .e_num,
             .e_frac_f32,
             .e_frac_f64,
@@ -6664,15 +6688,15 @@ pub const Lowerer = struct {
             .e_hosted_lambda,
             .e_runtime_error,
             .e_crash,
-            => explicit_result_var orelse try self.scopedExprResultVar(module_idx, type_scope, env, expr_idx),
+            => explicit_result_var orelse try self.scopedSolvedExprResultVar(type_scope, env, expr),
             .e_str => |str_expr| blk: {
                 for (cir_env.store.sliceExpr(str_expr.span)) |part| {
-                    try self.collectExprFacts(module_idx, type_scope, env, part);
+                    try self.collectSolvedExprFacts(module_idx, type_scope, env, solved_module.expr(part));
                 }
-                break :blk explicit_result_var orelse try self.scopedExprResultVar(module_idx, type_scope, env, expr_idx);
+                break :blk explicit_result_var orelse try self.scopedSolvedExprResultVar(type_scope, env, expr);
             },
             .e_list => |list| blk: {
-                const list_result_var = explicit_result_var orelse try self.scopedExprResultVar(module_idx, type_scope, env, expr_idx);
+                const list_result_var = explicit_result_var orelse try self.scopedSolvedExprResultVar(type_scope, env, expr);
                 const elem_result_var = self.lookupListElemSolvedVar(module_idx, list_result_var);
                 for (cir_env.store.sliceExpr(list.elems)) |elem| {
                     try self.collectExprFactsWithExplicitResultVar(
@@ -6687,16 +6711,16 @@ pub const Lowerer = struct {
             },
             .e_tuple => |tuple| blk: {
                 for (cir_env.store.sliceExpr(tuple.elems)) |elem| {
-                    try self.collectExprFacts(module_idx, type_scope, env, elem);
+                    try self.collectSolvedExprFacts(module_idx, type_scope, env, solved_module.expr(elem));
                 }
-                break :blk explicit_result_var orelse try self.scopedExprResultVar(module_idx, type_scope, env, expr_idx);
+                break :blk explicit_result_var orelse try self.scopedSolvedExprResultVar(type_scope, env, expr);
             },
             .e_call => |call| blk: {
                 if (try self.collectSourceSeededCallFacts(
                     module_idx,
                     type_scope,
                     env,
-                    expr_idx,
+                    expr.idx,
                     call.func,
                     cir_env.store.sliceExpr(call.args),
                     explicit_result_var,
@@ -6710,7 +6734,7 @@ pub const Lowerer = struct {
                                 module_idx,
                                 type_scope,
                                 env,
-                                expr_idx,
+                                expr.idx,
                                 dot.field_name,
                                 explicit_result_var,
                             );
@@ -6722,7 +6746,7 @@ pub const Lowerer = struct {
                             module_idx,
                             type_scope,
                             env,
-                            expr_idx,
+                            expr.idx,
                             dispatch.method_name,
                             explicit_result_var,
                         );
@@ -6730,16 +6754,16 @@ pub const Lowerer = struct {
                     },
                     else => {},
                 }
-                try self.collectExprFacts(module_idx, type_scope, env, call.func);
+                try self.collectSolvedExprFacts(module_idx, type_scope, env, solved_module.expr(call.func));
                 for (cir_env.store.sliceExpr(call.args)) |arg_expr| {
-                    try self.collectExprFacts(module_idx, type_scope, env, arg_expr);
+                    try self.collectSolvedExprFacts(module_idx, type_scope, env, solved_module.expr(arg_expr));
                 }
-                const call_result_var = explicit_result_var orelse try self.scopedExprResultVar(module_idx, type_scope, env, expr_idx);
+                const call_result_var = explicit_result_var orelse try self.scopedSolvedExprResultVar(type_scope, env, expr);
                 const callee_var = self.requireExprResultFact(module_idx, type_scope, call.func);
                 try self.putExplicitCallFact(
                     module_idx,
                     type_scope,
-                    expr_idx,
+                    expr.idx,
                     try self.buildExplicitCallFact(
                         module_idx,
                         type_scope,
@@ -6753,12 +6777,12 @@ pub const Lowerer = struct {
             .e_record => |record| blk: {
                 for (cir_env.store.sliceRecordFields(record.fields)) |field_idx| {
                     const field = cir_env.store.getRecordField(field_idx);
-                    try self.collectExprFacts(module_idx, type_scope, env, field.value);
+                    try self.collectSolvedExprFacts(module_idx, type_scope, env, solved_module.expr(field.value));
                 }
                 if (record.ext) |ext_expr| {
-                    try self.collectExprFacts(module_idx, type_scope, env, ext_expr);
+                    try self.collectSolvedExprFacts(module_idx, type_scope, env, solved_module.expr(ext_expr));
                 }
-                break :blk explicit_result_var orelse try self.scopedExprResultVar(module_idx, type_scope, env, expr_idx);
+                break :blk explicit_result_var orelse try self.scopedSolvedExprResultVar(type_scope, env, expr);
             },
             .e_block => |block| blk: {
                 var body_env = try self.cloneEnv(env);
@@ -6773,70 +6797,70 @@ pub const Lowerer = struct {
                     try self.collectStmtFacts(module_idx, type_scope, &body_env, block_stmts[stmt_index]);
                     stmt_index += 1;
                 }
-                try self.collectExprFacts(module_idx, type_scope, body_env, block.final_expr);
+                try self.collectSolvedExprFacts(module_idx, type_scope, body_env, solved_module.expr(block.final_expr));
                 break :blk explicit_result_var orelse self.requireExprResultFact(module_idx, type_scope, block.final_expr);
             },
             .e_tag => |tag| blk: {
                 for (cir_env.store.sliceExpr(tag.args)) |arg_expr| {
-                    try self.collectExprFacts(module_idx, type_scope, env, arg_expr);
+                    try self.collectSolvedExprFacts(module_idx, type_scope, env, solved_module.expr(arg_expr));
                 }
-                break :blk explicit_result_var orelse try self.scopedExprResultVar(module_idx, type_scope, env, expr_idx);
+                break :blk explicit_result_var orelse try self.scopedSolvedExprResultVar(type_scope, env, expr);
             },
             .e_nominal => |nominal| blk: {
-                try self.collectExprFacts(module_idx, type_scope, env, nominal.backing_expr);
-                break :blk explicit_result_var orelse try self.scopedExprResultVar(module_idx, type_scope, env, expr_idx);
+                try self.collectSolvedExprFacts(module_idx, type_scope, env, solved_module.expr(nominal.backing_expr));
+                break :blk explicit_result_var orelse try self.scopedSolvedExprResultVar(type_scope, env, expr);
             },
             .e_nominal_external => |nominal| blk: {
-                try self.collectExprFacts(module_idx, type_scope, env, nominal.backing_expr);
-                break :blk explicit_result_var orelse try self.scopedExprResultVar(module_idx, type_scope, env, expr_idx);
+                try self.collectSolvedExprFacts(module_idx, type_scope, env, solved_module.expr(nominal.backing_expr));
+                break :blk explicit_result_var orelse try self.scopedSolvedExprResultVar(type_scope, env, expr);
             },
             .e_binop => |binop| blk: {
-                try self.collectExprFacts(module_idx, type_scope, env, binop.lhs);
-                try self.collectExprFacts(module_idx, type_scope, env, binop.rhs);
-                break :blk explicit_result_var orelse try self.scopedExprResultVar(module_idx, type_scope, env, expr_idx);
+                try self.collectSolvedExprFacts(module_idx, type_scope, env, solved_module.expr(binop.lhs));
+                try self.collectSolvedExprFacts(module_idx, type_scope, env, solved_module.expr(binop.rhs));
+                break :blk explicit_result_var orelse try self.scopedSolvedExprResultVar(type_scope, env, expr);
             },
             .e_unary_minus => |unary| blk: {
-                try self.collectExprFacts(module_idx, type_scope, env, unary.expr);
-                break :blk explicit_result_var orelse try self.scopedExprResultVar(module_idx, type_scope, env, expr_idx);
+                try self.collectSolvedExprFacts(module_idx, type_scope, env, solved_module.expr(unary.expr));
+                break :blk explicit_result_var orelse try self.scopedSolvedExprResultVar(type_scope, env, expr);
             },
             .e_unary_not => |unary| blk: {
-                try self.collectExprFacts(module_idx, type_scope, env, unary.expr);
-                break :blk explicit_result_var orelse try self.scopedExprResultVar(module_idx, type_scope, env, expr_idx);
+                try self.collectSolvedExprFacts(module_idx, type_scope, env, solved_module.expr(unary.expr));
+                break :blk explicit_result_var orelse try self.scopedSolvedExprResultVar(type_scope, env, expr);
             },
             .e_dot_access => |dot| blk: {
-                try self.collectExprFacts(module_idx, type_scope, env, dot.receiver);
+                try self.collectSolvedExprFacts(module_idx, type_scope, env, solved_module.expr(dot.receiver));
                 if (dot.args) |dispatch_args| {
                     for (cir_env.store.sliceExpr(dispatch_args)) |arg_expr| {
-                        try self.collectExprFacts(module_idx, type_scope, env, arg_expr);
+                        try self.collectSolvedExprFacts(module_idx, type_scope, env, solved_module.expr(arg_expr));
                     }
                     const call_fact = try self.collectRecordedMethodCallFact(
                         module_idx,
                         type_scope,
                         env,
-                        expr_idx,
+                        expr.idx,
                         dot.field_name,
                         explicit_result_var,
                     );
                     break :blk call_fact.result_var;
                 }
-                break :blk explicit_result_var orelse try self.scopedExprResultVar(module_idx, type_scope, env, expr_idx);
+                break :blk explicit_result_var orelse try self.scopedSolvedExprResultVar(type_scope, env, expr);
             },
             .e_type_var_dispatch => |dispatch| blk: {
                 for (cir_env.store.sliceExpr(dispatch.args)) |arg_expr| {
-                    try self.collectExprFacts(module_idx, type_scope, env, arg_expr);
+                    try self.collectSolvedExprFacts(module_idx, type_scope, env, solved_module.expr(arg_expr));
                 }
                 const call_fact = try self.collectRecordedMethodCallFact(
                     module_idx,
                     type_scope,
                     env,
-                    expr_idx,
+                    expr.idx,
                     dispatch.method_name,
                     explicit_result_var,
                 );
                 break :blk call_fact.result_var;
             },
             .e_match => |match_expr| blk: {
-                try self.collectExprFacts(module_idx, type_scope, env, match_expr.cond);
+                try self.collectSolvedExprFacts(module_idx, type_scope, env, solved_module.expr(match_expr.cond));
                 const cond_var = self.requireExprResultFact(module_idx, type_scope, match_expr.cond);
                 const branches = cir_env.store.matchBranchSlice(match_expr.branches);
                 for (branches) |branch_idx| {
@@ -6855,9 +6879,9 @@ pub const Lowerer = struct {
                         );
                     }
                     if (branch.guard) |guard_expr| {
-                        try self.collectExprFacts(module_idx, type_scope, branch_env, guard_expr);
+                        try self.collectSolvedExprFacts(module_idx, type_scope, branch_env, solved_module.expr(guard_expr));
                     }
-                    try self.collectExprFacts(module_idx, type_scope, branch_env, branch.value);
+                    try self.collectSolvedExprFacts(module_idx, type_scope, branch_env, solved_module.expr(branch.value));
                 }
                 if (branches.len == 0) {
                     return debugPanic("monotype explicit expr fact invariant violated: match expression missing branches", .{});
@@ -6868,26 +6892,26 @@ pub const Lowerer = struct {
             .e_if => |if_expr| blk: {
                 for (cir_env.store.sliceIfBranches(if_expr.branches)) |branch_id| {
                     const branch = cir_env.store.getIfBranch(branch_id);
-                    try self.collectExprFacts(module_idx, type_scope, env, branch.cond);
-                    try self.collectExprFacts(module_idx, type_scope, env, branch.body);
+                    try self.collectSolvedExprFacts(module_idx, type_scope, env, solved_module.expr(branch.cond));
+                    try self.collectSolvedExprFacts(module_idx, type_scope, env, solved_module.expr(branch.body));
                 }
-                try self.collectExprFacts(module_idx, type_scope, env, if_expr.final_else);
+                try self.collectSolvedExprFacts(module_idx, type_scope, env, solved_module.expr(if_expr.final_else));
                 break :blk explicit_result_var orelse self.requireExprResultFact(module_idx, type_scope, if_expr.final_else);
             },
             .e_expect => |expect| blk: {
-                try self.collectExprFacts(module_idx, type_scope, env, expect.body);
-                break :blk explicit_result_var orelse try self.scopedExprResultVar(module_idx, type_scope, env, expr_idx);
+                try self.collectSolvedExprFacts(module_idx, type_scope, env, solved_module.expr(expect.body));
+                break :blk explicit_result_var orelse try self.scopedSolvedExprResultVar(type_scope, env, expr);
             },
             .e_dbg => |dbg| blk: {
-                try self.collectExprFacts(module_idx, type_scope, env, dbg.expr);
-                break :blk explicit_result_var orelse try self.scopedExprResultVar(module_idx, type_scope, env, expr_idx);
+                try self.collectSolvedExprFacts(module_idx, type_scope, env, solved_module.expr(dbg.expr));
+                break :blk explicit_result_var orelse try self.scopedSolvedExprResultVar(type_scope, env, expr);
             },
             .e_return => |ret| blk: {
-                try self.collectExprFacts(module_idx, type_scope, env, ret.expr);
-                break :blk explicit_result_var orelse try self.scopedExprResultVar(module_idx, type_scope, env, expr_idx);
+                try self.collectSolvedExprFacts(module_idx, type_scope, env, solved_module.expr(ret.expr));
+                break :blk explicit_result_var orelse try self.scopedSolvedExprResultVar(type_scope, env, expr);
             },
             .e_for => |for_expr| blk: {
-                try self.collectExprFacts(module_idx, type_scope, env, for_expr.expr);
+                try self.collectSolvedExprFacts(module_idx, type_scope, env, solved_module.expr(for_expr.expr));
                 try self.collectPatternFacts(module_idx, type_scope, for_expr.patt);
                 const elem_var = self.lookupListElemSolvedVar(
                     module_idx,
@@ -6905,29 +6929,29 @@ pub const Lowerer = struct {
                     elem_var,
                     &body_env,
                 );
-                try self.collectExprFacts(module_idx, type_scope, body_env, for_expr.body);
-                break :blk explicit_result_var orelse try self.scopedExprResultVar(module_idx, type_scope, env, expr_idx);
+                try self.collectSolvedExprFacts(module_idx, type_scope, body_env, solved_module.expr(for_expr.body));
+                break :blk explicit_result_var orelse try self.scopedSolvedExprResultVar(type_scope, env, expr);
             },
             .e_run_low_level => |ll| blk: {
                 for (cir_env.store.sliceExpr(ll.args)) |arg_expr| {
-                    try self.collectExprFacts(module_idx, type_scope, env, arg_expr);
+                    try self.collectSolvedExprFacts(module_idx, type_scope, env, solved_module.expr(arg_expr));
                 }
-                break :blk explicit_result_var orelse try self.scopedExprResultVar(module_idx, type_scope, env, expr_idx);
+                break :blk explicit_result_var orelse try self.scopedSolvedExprResultVar(type_scope, env, expr);
             },
-            else => debugTodoExpr(expr),
+            else => debugTodoExpr(expr.data),
         };
 
         try type_scope.facts.expr_result_var_facts.put(key, result_var);
         try type_scope.facts.collected_expr_facts.put(key, {});
-        try self.recordExprSourceFunctionFact(module_idx, type_scope, env, expr_idx);
-        if (expr == .e_binop) {
-            const binop = expr.e_binop;
+        try self.recordExprSourceFunctionFact(module_idx, type_scope, env, expr.idx);
+        if (expr.data == .e_binop) {
+            const binop = expr.data.e_binop;
             switch (binop.op) {
                 .add, .sub, .mul, .div, .rem, .div_trunc, .lt, .gt, .le, .ge, .eq => try self.putArithmeticBinopFact(
                     module_idx,
                     type_scope,
-                    expr_idx,
-                    try self.lowerArithmeticBinopFact(module_idx, type_scope, env, expr_idx, binop),
+                    expr.idx,
+                    try self.lowerArithmeticBinopFact(module_idx, type_scope, env, expr.idx, binop),
                 ),
                 else => {},
             }
@@ -9000,6 +9024,16 @@ pub const Lowerer = struct {
     ) std.mem.Allocator.Error!Var {
         return self.lookupSpecializedExprVar(module_idx, env, expr_idx) orelse
             try self.scopeVar(type_scope, ModuleEnv.varFrom(expr_idx));
+    }
+
+    fn scopedSolvedExprResultVar(
+        self: *Lowerer,
+        type_scope: *TypeCloneScope,
+        env: BindingEnv,
+        expr: solved_cir.Expr,
+    ) std.mem.Allocator.Error!Var {
+        return self.lookupSpecializedExprVar(expr.module_idx, env, expr.idx) orelse
+            try self.scopeVar(type_scope, expr.solved_var);
     }
 
     fn scopeVar(

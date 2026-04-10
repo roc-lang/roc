@@ -1,234 +1,215 @@
-## Final Audit Cleanup Plan
+## Checker-To-Monotype Typed CIR Plan
 
-Status: completed
+Status: in progress
 
 Goal:
-- Eliminate every remaining non-TODO audit finding in the active pipeline so the next fresh audit finds none of them.
-- Remove the issue at its source instead of papering over it.
-- Leave no dead APIs, dead symbols, dead exports, dead enum entries, or dead helper paths behind.
+- Move Roc from the current `checked CIR + solved-var graph` checker→monotype boundary to the `cor` shape: an explicit typed solved artifact at the boundary.
+- First publish immutable settled type facts from the checker.
+- Then move from those side facts to a fully typed CIR/AST representation.
+- Then delete every obsolete side table, freeze/materialization path, and alternate source of truth so the typed tree is the only possible source of truth.
+- Keep correctness and runtime performance at the long-term ideal end state; implementation time does not matter.
 
 Design bar:
 - Long-term ideal and perfect is the goal.
-- Correctness and explicit-fact ownership come first.
-- Runtime performance matters just as much as architecture.
-- No heuristics, no workarounds, no fallbacks, no “good enough for now” cleanup.
-- Implementation time does not matter; only the long-term ideal end state matters.
-
-Reference model:
-- When in doubt, use `~/code/cor` as the architectural guide for how stage boundaries and explicit facts should work.
-- If this compiler intentionally does something different from `cor`, that difference must be justified as the long-term ideal design for this compiler rather than a convenience.
-- At the end of implementation, explicitly report every place where the final design still differs from `cor`, with the reason that difference is long-term ideal here.
+- No heuristics, no workarounds, no fallbacks, no “good enough for now”.
+- Every later stage must consume explicit facts produced earlier.
+- When in doubt, use `~/code/cor` as the model.
+- If we intentionally diverge from `cor`, that divergence must be justified as the long-term ideal design here rather than a convenience, and that justification must be reported at the end of implementation.
 
 Testing rule:
-- Every phase below must add or update tests that specifically prove the cleanup worked.
-- The goal is not just “existing tests still pass”; the goal is also “new targeted tests would fail before this cleanup and pass after it.”
+- Every phase below must add or update tests that specifically prove the phase worked.
+- Existing tests staying green is necessary but not sufficient.
+- The final state must pass the full relevant test suites.
 
-Files currently implicated:
-- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/lower.zig`
-- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/lambdamono/layout_facts.zig`
-- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/eval/interpreter.zig`
-- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/builtins/dev_wrappers.zig`
-- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/builtins/static_lib.zig`
-- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/backend/dev/LirCodeGen.zig`
-- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/backend/dev/object_reader.zig`
+Reference model:
+- `cor` monotype starts from an already-typed solved AST:
+  - `/Users/rtfeldman/code/cor/experiments/lss/monotype/lower.ml`
+- Roc should move toward that same stage-boundary shape in phases rather than preserving the current `CIR node id + solved var` contract forever.
 
-## Phase 1: Eliminate Monotype Freeze-Time Reification
+Current problem:
+- Roc monotype still starts from checked CIR ids plus solved checker vars:
+  - `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/lower.zig`
+  - `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/semantic_facts.zig`
+- That is why monotype still needs a settled-var-type materialization subphase instead of directly consuming an explicitly typed solved tree.
 
-Problem:
-- Monotype still reifies solved vars into monotype types during freeze/publication in `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/lower.zig`.
-- This is no longer late fallback logic, but it is still a stage-internal solved-var -> monotype-type reconstruction step.
-
-Current audit sites:
-- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/lower.zig:1615`
-- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/lower.zig:1625`
-- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/lower.zig:1659`
-- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/lower.zig:6981`
-- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/lower.zig:8814`
-- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/lower.zig:8820`
-
-Ideal end state:
-- Monotype lowering consumes a fully settled explicit monotype-facts artifact.
-- The artifact already contains the monotype types needed by later monotype lowering code.
-- Freeze/publication does not lower solved vars into monotype types on demand.
-- `lowerInstantiatedType(...)` is not used by monotype fact publication or lowering.
-
-Implementation steps:
-- Identify every fact category currently frozen from solved vars in monotype:
-  - expr types
-  - pattern types
-  - source types
-  - call types
-  - function arg/ret types
-- Move ownership of those typed facts to the point where the specialization is considered settled.
-- Introduce or refine a dedicated finalized monotype-facts artifact that is complete before ordinary monotype lowering consumes it.
-- Change all monotype lowering consumers to read only from that finalized artifact.
-- Delete the freeze/publication reification helpers and any remaining call sites.
-- Remove any now-dead data plumbing used only to support the old freeze-time reification path.
-
-Validation:
-- Full compiler tests stay green.
-- A fresh audit should find no solved-var -> monotype-type publication path in monotype.
-- No remaining relevant uses of `lowerInstantiatedType(...)` remain in `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/lower.zig`.
-- Add or update targeted tests that prove monotype consumes already-finalized typed facts rather than reifying them during lowering/publication.
-
-Completion criteria:
-- The six audit sites above are gone or no longer perform solved-var -> monotype reification.
-- No replacement helper exists elsewhere doing the same work under a new name.
-- Monotype has one explicit finalized typed-facts boundary and consumes only that.
-
-Completed:
-- Ordinary monotype typed-fact freezing no longer lowers solved vars independently at each expr/pattern/call/function/arithmetic fact site.
-- Those consumers now read one explicit settled var-type artifact first.
-
-## Phase 2: Eliminate Lambdamono Runtime-Representation Structural Comparison
-
-Problem:
-- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/lambdamono/layout_facts.zig` still computes runtime-representation equivalence classes by structurally comparing layouts during publication.
-
-Current audit sites:
-- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/lambdamono/layout_facts.zig:274`
-- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/lambdamono/layout_facts.zig:292`
-- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/lambdamono/layout_facts.zig:303`
-
-Ideal end state:
-- Runtime-representation class identity is explicit, not derived by structural comparison.
-- `lambdamono` publishes explicit representation-class facts from earlier explicit layout construction facts.
-- No structural “same runtime representation?” comparison logic remains in `layout_facts.zig`.
-
-Implementation steps:
-- Trace where runtime-representation class identity is actually needed downstream.
-- Introduce an explicit representation-class identity or bridge-class fact at the point where executable layout facts are finalized.
-- Make class identity flow as explicit data instead of being recomputed by shape comparison.
-- Remove structural comparison helpers and their call sites from `layout_facts.zig`.
-- Remove any now-dead helper types or caches that existed only to support that comparison pass.
-
-Validation:
-- Existing layout-sensitive tests stay green.
-- Boxed erased-callable tests still pass.
-- No structural runtime-representation comparison helper remains in `layout_facts.zig`.
-- Add or update targeted tests that force the affected runtime-representation-class paths and prove the explicit class facts are sufficient without structural comparison.
-
-Completion criteria:
-- The three audit sites above are gone.
-- There is no remaining “same runtime representation” comparison logic in `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/lambdamono/layout_facts.zig`.
-- Runtime-representation class identity is explicit stage data, not recovered by comparison.
-
-Completed:
-- The runtime-representation equivalence-class pass was deleted.
-- `FromIr` now uses already-committed physical element layouts directly for the remaining list reinterpret decision.
-
-## Phase 3: Eliminate Interpreter Boxed-List Layout Peeling
-
-Problem:
-- The interpreter still peels boxed-list layouts recursively at runtime in `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/eval/interpreter.zig`.
-
-Current audit site:
-- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/eval/interpreter.zig:2155`
-
-Ideal end state:
-- The interpreter receives explicit resolved list-layout facts.
-- Runtime execution does not inspect nested layout shape to rediscover list element/storage layout.
-- Boxed-list handling consumes explicit pre-attached facts only.
-
-Implementation steps:
-- Trace all interpreter sites that currently depend on `resolveListLayout(...)` or equivalent layout peeling.
-- Add the missing explicit list-layout fact to the earliest stage that already knows it precisely.
-- Thread that fact through IR/LIR/execution metadata until the interpreter can consume it directly.
-- Replace interpreter runtime peeling with direct use of the attached list-layout fact.
-- Delete `resolveListLayout(...)` and any now-dead recursive peeling helpers.
-
-Validation:
-- List tests, boxed list tests, and boxed erased-callable tests stay green.
-- No runtime recursive list-layout peeling remains in the interpreter.
-- Add or update targeted tests that execute the affected boxed-list operations and prove the interpreter consumes explicit resolved list-layout facts.
-
-Completion criteria:
-- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/eval/interpreter.zig:2155` is gone.
-- No equivalent recursive boxed-list layout peeling logic remains elsewhere in the interpreter.
-- Execution consumes only explicit resolved list-layout facts.
-
-Completed:
-- The interpreter runtime peeling helper was deleted.
-- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/layout/store.zig` now records explicit resolved list-layout facts that execution consumes directly.
-
-## Phase 4: Remove Every Trace of the Old Safe-Append Cheating Path
-
-Problem:
-- Dead residue from the old `list_append_safe` cheating path still exists in the code base even though active lowering no longer uses it.
-
-Current audit sites:
-- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/builtins/dev_wrappers.zig:1036`
-- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/builtins/static_lib.zig:106`
-- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/backend/dev/LirCodeGen.zig:142`
-- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/backend/dev/LirCodeGen.zig:233`
-- `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/backend/dev/object_reader.zig:889`
-
-Ideal end state:
-- The safe-append cheating path does not exist anywhere in the repo.
-- There is no safe append wrapper, export, symbol entry, enum entry, object-reader entry, or dead comment residue related to that path.
-
-Implementation steps:
-- Delete the dead safe append wrapper from `dev_wrappers.zig`.
-- Remove the corresponding export from `static_lib.zig`.
-- Remove every corresponding builtin enum/mapping entry from `LirCodeGen.zig`.
-- Remove the corresponding object-reader symbol table entry from `object_reader.zig`.
-- Search the repo for all remaining `list_append_safe` and `roc_builtins_list_append_safe` references and delete them.
-- Remove any comments that mention the old cheating path.
-
-Validation:
-- Dev backend tests stay green.
-- Static lib still builds.
-- Object reader still resolves the remaining builtin symbol set correctly.
-- Add or update targeted tests that ensure only the unsafe append symbol path exists and that no safe append residue remains reachable.
-
-Completion criteria:
-- `rg "list_append_safe|roc_builtins_list_append_safe" /Users/rtfeldman/.codex/worktrees/1d55/roc/src` returns no matches.
-- There is no dead residue of the old cheating path anywhere in the active source tree.
-
-Completed:
-- The dead safe-append wrapper, export, backend enum mapping, and object-reader symbol entry were deleted.
-- The source tree no longer contains `list_append_safe` or `roc_builtins_list_append_safe`.
-
-## Phase 5: Final Audit And Lock-In
+## Phase 1: Checker Publishes Immutable Settled Type Facts
 
 Goal:
-- Prove that all four current non-TODO audit findings are gone, with no renamed residue.
+- Move settled type publication upstream to the checker boundary.
+- Monotype must stop being the stage that first turns solved vars into authoritative typed facts.
+
+Ideal end state:
+- After checking is complete, there is one immutable settled-facts artifact keyed by solved CIR nodes/bindings.
+- That artifact contains every type fact monotype needs:
+  - expr types
+  - pattern types
+  - binding types
+  - function arg/ret types
+  - any other typed structural fact monotype currently depends on
+- Monotype does not materialize those facts itself.
+
+Implementation steps:
+- Identify every type fact currently first materialized inside monotype.
+- Introduce a checker-owned settled-facts artifact and publish those facts there.
+- Make the checker own the publication timing: facts only appear once the relevant solved state is final.
+- Make monotype receive that artifact explicitly as input.
+- Delete the monotype boundary assumption that it is responsible for first materialization of settled types.
+
+Testing:
+- Add targeted tests that prove monotype can run entirely from checker-published settled type facts.
+- Add regression tests for previously tricky cases:
+  - polymorphic functions
+  - higher-order functions
+  - closures with captures
+  - boxed erased lambdas
+  - zero-arg functions
+
+Completion criteria:
+- Checker owns settled type publication.
+- Monotype no longer first-publishes settled expr/pattern/function/call types.
+- The checker→monotype boundary has one explicit immutable settled-type artifact.
+
+Progress:
+- Added a checker-owned solved wrapper layer in `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/check/solved_cir.zig`.
+- Added a targeted wrapper test in `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/check/test/solved_cir_test.zig`.
+- Monotype top-level def lowering and semantic-fact collection now consume that solved wrapper layer instead of starting directly from raw checked CIR lookups in the converted paths.
+
+## Phase 2: Monotype Consumes Only Checker-Published Settled Facts
+
+Goal:
+- Remove the remaining monotype-side settled-var-type materializer as an architectural boundary concept.
+
+Ideal end state:
+- Monotype consumes only checker-published settled facts.
+- Ordinary monotype lowering never asks “what monotype type does this solved var become?”
+- `lowerInstantiatedType(...)` no longer serves as a stage-boundary materializer.
+
+Implementation steps:
+- Redirect every monotype type consumer to the checker-published artifact.
+- Remove monotype entry subphases whose only job is settled-var-type publication.
+- Collapse any remaining monotype-side typed fact freeze/publication code into plain consumption logic.
+- Delete the now-dead monotype-side publication helpers and supporting side tables.
+
+Testing:
+- Add targeted tests that fail if monotype attempts to lower solved vars at boundary time.
+- Keep full eval, host-effects, and cor-pipeline suites green.
+
+Completion criteria:
+- No monotype boundary materializer remains.
+- Monotype typed facts are fully upstream-owned.
+- Monotype entry is consumption-only with respect to settled types.
+
+## Phase 3: Introduce Typed CIR Nodes
+
+Goal:
+- Change representation, not semantics: move from side facts keyed by CIR node ids to a typed CIR where types live on the nodes.
+
+Ideal end state:
+- Expr and pattern nodes carry their settled types directly.
+- Binding/function nodes carry the type facts they semantically own.
+- The typed tree itself visibly encodes the invariants that side tables currently hide.
+
+Implementation steps:
+- Extend CIR (or introduce a typed solved CIR layer) so every relevant node carries its settled type.
+- Migrate the checker-published settled facts into typed-node construction.
+- Make the typed CIR immutable and authoritative.
+- Keep node-local explicit facts on the nodes rather than parallel side tables whenever the fact is semantically owned by that node.
+
+Testing:
+- Add targeted construction/round-trip tests for typed CIR publication.
+- Add regressions covering:
+  - nested closures
+  - polymorphic call sites
+  - pattern-heavy code
+  - tag/record/list structure
+
+Completion criteria:
+- There is a typed solved CIR/AST layer analogous in role to `cor`’s typed solved AST.
+- All essential settled type facts are directly reachable from the typed nodes.
+
+Progress:
+- The first typed solved layer now exists as a wrapper over checked CIR:
+  - `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/check/solved_cir.zig`
+- This is not yet the final typed CIR representation, but it establishes the explicit checker-owned typed boundary needed for the later full migration.
+
+## Phase 4: Migrate Monotype To Typed CIR Consumption
+
+Goal:
+- Make monotype structurally match `cor`: consume typed solved nodes directly rather than `node id + side table`.
+
+Ideal end state:
+- Monotype lowering takes typed CIR/AST as input.
+- The typed tree, not side tables, is the primary and normal source of type truth.
+- The monotype API and internals become simpler and more obviously correct.
+
+Implementation steps:
+- Rewrite monotype lowering entrypoints to accept typed CIR/AST nodes.
+- Replace node-id lookups and side-table fetches with direct typed-node consumption.
+- Convert typed structural facts that belong on nodes to direct node reads.
+- Keep only stage-local scratch state that is truly builder-internal and not a second source of truth.
+
+Testing:
+- Add targeted tests that would fail if monotype still depended on old side tables.
+- Keep all existing suites green.
+
+Completion criteria:
+- Monotype input is typed CIR/AST.
+- Monotype no longer uses checker-published parallel settled-type side tables as its normal input format.
+
+Progress:
+- Monotype top-level boundary and semantic-fact collection have begun migrating to the solved wrapper layer.
+- Ordinary monotype lowering still uses the older internal node-id/side-table model beyond those converted entry paths, so this phase is not complete yet.
+
+## Phase 5: Delete Obsolete Side Tables And Old Boundary Machinery
+
+Goal:
+- After typed CIR is in place and monotype consumes it, delete every obsolete source of truth so the typed tree is the only possible source of truth.
+
+Ideal end state:
+- No obsolete side-table path remains for settled expr/pattern/function/call types.
+- No old freeze/materialization/publication helpers remain.
+- No code path can accidentally keep using the pre-typed-CIR boundary.
+
+Implementation steps:
+- Delete old checker→monotype settled-type side tables that are now redundant.
+- Delete obsolete monotype semantic-facts entries and helpers that only existed to bridge the old boundary.
+- Delete unused APIs, caches, helper functions, and dead comments tied to the old model.
+- Add invariant checks where useful so future code cannot quietly reintroduce parallel sources of truth.
+
+Testing:
+- Add targeted tests or assertions that fail if deleted machinery reappears or if typed-node facts are absent.
+- Keep full regression suites green after deletion.
+
+Completion criteria:
+- The typed CIR/AST is the only source of truth for settled typing at the checker→monotype boundary.
+- There is no remaining obsolete side-table or materialization machinery left in the code base for this boundary.
+
+## Phase 6: Final Audit And Verification
+
+Goal:
+- Prove the migration is complete and there is no residue.
 
 Steps:
-- Run targeted searches for:
-  - `lowerInstantiatedType`
-  - runtime-representation comparison helpers in `layout_facts.zig`
-  - interpreter list-layout peeling helpers
-  - `list_append_safe`
-- Re-run the full relevant test suites.
-- Perform a fresh from-scratch audit of the active pipeline:
+- Run a fresh from-scratch audit focused on:
   - reinfer
   - reintern
   - redoing work
-  - hacks
-  - shortcuts
-  - fallbacks
-- Update this file to mark every phase complete only after the code and audit both confirm the issue is actually gone.
+  - stale side tables
+  - obsolete materializers
+  - duplicate sources of truth
+  - hacks, shortcuts, fallbacks, heuristics
+- Search specifically for old boundary machinery names and categories.
+- Verify that typed CIR/AST is now the only source of truth.
+- Explicitly list any intentional divergence from `cor`, with the justification for why it is long-term ideal here.
 
 Required verification:
 - `zig build test-eval -- --threads 1`
 - `zig build test-eval-host-effects -- --threads 1`
 - `zig build test-cor-pipeline`
-
-Required targeted verification:
-- Targeted searches that prove the old code paths are gone:
-  - `rg "list_append_safe|roc_builtins_list_append_safe" /Users/rtfeldman/.codex/worktrees/1d55/roc/src`
-  - `rg "resolveListLayout" /Users/rtfeldman/.codex/worktrees/1d55/roc/src/eval/interpreter.zig`
-  - `rg "same runtime representation|runtime representation comparison|refsHaveSameRuntimeRepresentation" /Users/rtfeldman/.codex/worktrees/1d55/roc/src/lambdamono/layout_facts.zig`
-- Any additional targeted test commands added during implementation for the four cleanup areas.
+- any new targeted commands added during implementation for typed CIR publication and consumption
 
 Success condition:
-- The next fresh audit does not find any of the four issues listed above.
-- There is no trace of their old implementation paths left in the code base.
-- The final implementation report explicitly lists any intentional divergences from `~/code/cor`, with the justification for why each divergence is long-term ideal here.
-
-Completed:
-- Verification ran successfully:
-  - `zig build test-eval -- --threads 1`
-  - `zig build test-eval-host-effects -- --threads 1`
-  - `zig build test-cor-pipeline`
+- The next fresh audit does not find any checker→monotype re-materialization or duplicate-source-of-truth residue.
+- Monotype consumes typed CIR/AST directly.
+- The old obsolete side tables and boundary machinery are gone.
+- All relevant tests pass.
