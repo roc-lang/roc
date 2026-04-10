@@ -170,6 +170,10 @@ const Ctx = struct {
             return self.source_module.typeAnnoType(idx);
         }
 
+        pub fn exprIdxFromTypeVar(self: @This(), var_: Var) ?CIR.Expr.Idx {
+            return self.source_module.exprIdxFromTypeVar(var_);
+        }
+
         pub fn staticDispatchSiteRequirement(
             self: @This(),
             expr_idx: CIR.Expr.Idx,
@@ -3014,15 +3018,38 @@ pub const Lowerer = struct {
     ) std.mem.Allocator.Error!ExplicitCallFact {
         const args = self.getRecordedMethodArgs(module_idx, expr_idx, method_name);
         const dispatch_expr_idx = self.recordedMethodDispatchExprIdx(module_idx, expr_idx, method_name);
-        const target = try self.resolveRecordedDispatchTarget(
-            module_idx,
-            type_scope,
-            expr_idx,
-            dispatch_expr_idx,
-            method_name,
-            args,
-        );
-        try self.putResolvedDispatchTargetFact(module_idx, type_scope, expr_idx, target);
+        const target = if (type_scope.facts.resolved_dispatch_target_facts.get(.{
+            .module_idx = module_idx,
+            .expr_idx = expr_idx,
+        })) |existing|
+            existing
+        else blk: {
+            const dispatch_target = if (type_scope.facts.resolved_dispatch_target_facts.get(.{
+                .module_idx = module_idx,
+                .expr_idx = dispatch_expr_idx,
+            })) |existing_dispatch|
+                existing_dispatch
+            else if (self.lookupResolvedDispatchTarget(module_idx, dispatch_expr_idx)) |resolved_dispatch|
+                blk_dispatch: {
+                    try self.putResolvedDispatchTargetFact(module_idx, type_scope, dispatch_expr_idx, resolved_dispatch);
+                    break :blk_dispatch resolved_dispatch;
+                }
+            else debugPanic(
+                "monotype explicit dispatch target invariant violated: missing dispatch target fact for call expr {d} ({s}), dispatch expr {d} ({s}), method {s}, module {d}",
+                .{
+                    expr_idx,
+                    @tagName(self.ctx.mirModule(module_idx).expr(expr_idx).data),
+                    dispatch_expr_idx,
+                    @tagName(self.ctx.mirModule(module_idx).expr(dispatch_expr_idx).data),
+                    self.ctx.mirModule(module_idx).getIdent(method_name),
+                    module_idx,
+                },
+            );
+            if (dispatch_expr_idx != expr_idx) {
+                try self.putResolvedDispatchTargetFact(module_idx, type_scope, expr_idx, dispatch_target);
+            }
+            break :blk dispatch_target;
+        };
         const source_fn_var = try self.copyTopLevelDefExprVarToScope(type_scope, target.module_idx, target.def_idx);
 
         var call_scope: TypeCloneScope = undefined;
@@ -10055,12 +10082,24 @@ pub const Lowerer = struct {
         const resolved_source = source_store.resolveVar(source_var);
         const key = self.sourceTypeKey(source_module_idx, resolved_source.var_);
         if (type_scope.source_var_map.get(key)) |existing| {
+            try self.publishResolvedDispatchTargetsForSourceVar(
+                source_module_idx,
+                type_scope,
+                resolved_source.var_,
+                existing,
+            );
             return existing;
         }
 
         const workspace_store = type_scope.typeStoreConst();
         const resolved_workspace = workspace_store.resolveVar(workspace_var);
         try type_scope.source_var_map.put(key, resolved_workspace.var_);
+        try self.publishResolvedDispatchTargetsForSourceVar(
+            source_module_idx,
+            type_scope,
+            resolved_source.var_,
+            resolved_workspace.var_,
+        );
         switch (resolved_workspace.desc.content) {
             .flex, .rigid, .err => {
                 switch (resolved_source.desc.content) {
@@ -10096,6 +10135,51 @@ pub const Lowerer = struct {
             type_scope,
         );
         return resolved_workspace.var_;
+    }
+
+    fn publishResolvedDispatchTargetsForSourceVar(
+        self: *Lowerer,
+        source_module_idx: u32,
+        type_scope: *TypeCloneScope,
+        source_var: Var,
+        workspace_var: Var,
+    ) std.mem.Allocator.Error!void {
+        const source_module = self.ctx.mirModule(source_module_idx);
+        const source_store = source_module.typeStoreConst();
+        const resolved_source = source_store.resolveVar(source_var);
+
+        const constraints = switch (resolved_source.desc.content) {
+            .alias => |alias| {
+                try self.publishResolvedDispatchTargetsForSourceVar(
+                    source_module_idx,
+                    type_scope,
+                    source_store.getAliasBackingVar(alias),
+                    workspace_var,
+                );
+                return;
+            },
+            .flex => |flex| source_store.sliceStaticDispatchConstraints(flex.constraints),
+            .rigid => |rigid| source_store.sliceStaticDispatchConstraints(rigid.constraints),
+            else => return,
+        };
+
+        for (constraints) |constraint| {
+            if (constraint.origin != .method_call) continue;
+            const site_expr_var = constraint.site_expr_var orelse continue;
+            const site_expr_idx = source_module.exprIdxFromTypeVar(site_expr_var) orelse continue;
+            if (self.lookupResolvedDispatchTarget(source_module_idx, site_expr_idx)) |resolved| {
+                try self.putResolvedDispatchTargetFact(source_module_idx, type_scope, site_expr_idx, resolved);
+                continue;
+            }
+
+            const target = try self.resolveAttachedMethodTargetFromWorkspaceVar(
+                source_module_idx,
+                type_scope,
+                workspace_var,
+                constraint.fn_name,
+            );
+            try self.putResolvedDispatchTargetFact(source_module_idx, type_scope, site_expr_idx, target);
+        }
     }
 
     fn formatVarTextFromStore(
@@ -11194,82 +11278,19 @@ pub const Lowerer = struct {
         };
     }
 
-    fn resolveRecordedDispatchTarget(
-        self: *Lowerer,
-        module_idx: u32,
-        type_scope: *TypeCloneScope,
-        call_expr_idx: CIR.Expr.Idx,
-        dispatch_expr_idx: CIR.Expr.Idx,
-        method_name: base.Ident.Idx,
-        args: RecordedMethodArgs,
-    ) std.mem.Allocator.Error!ResolvedTarget {
-        const source_module = self.ctx.mirModule(module_idx);
-        if (self.lookupResolvedDispatchTarget(module_idx, dispatch_expr_idx)) |resolved| return resolved;
-
-        const site_requirement = source_module.staticDispatchSiteRequirement(dispatch_expr_idx, method_name) orelse
-            debugPanic(
-                "monotype static dispatch invariant violated: missing dispatch site requirement for expr {d} ({s}) at call site {d} ({s}) for method {s} in module {d}",
-                .{
-                    dispatch_expr_idx,
-                    @tagName(source_module.expr(dispatch_expr_idx).data),
-                    call_expr_idx,
-                    @tagName(source_module.expr(call_expr_idx).data),
-                    source_module.getIdent(method_name),
-                    module_idx,
-                },
-            );
-        _ = site_requirement;
-
-        return switch (source_module.expr(dispatch_expr_idx).data) {
-            .e_dot_access => {
-                const receiver_expr_idx = args.implicit_receiver orelse debugPanic(
-                    "monotype static dispatch invariant violated: generic dot-access dispatch missing receiver expr",
-                    .{},
-                );
-                return try self.resolveSpecializedDispatchTargetFromWorkspaceVar(
-                    module_idx,
-                    type_scope,
-                    self.requireExprResultFact(module_idx, type_scope, receiver_expr_idx),
-                    method_name,
-                );
-            },
-            .e_type_var_dispatch => |dispatch| {
-                const alias_stmt = source_module.getStatement(dispatch.type_var_alias_stmt);
-                const source_alias_var = switch (alias_stmt) {
-                    .s_type_var_alias => |type_var_alias| source_module.typeAnnoType(type_var_alias.type_var_anno),
-                    else => debugPanic(
-                        "monotype static dispatch invariant violated: type-var dispatch alias stmt was not a type-var alias",
-                        .{},
-                    ),
-                };
-                const scoped_alias_var = try self.scopeVar(type_scope, module_idx, source_alias_var);
-                return try self.resolveSpecializedDispatchTargetFromWorkspaceVar(
-                    module_idx,
-                    type_scope,
-                    scoped_alias_var,
-                    method_name,
-                );
-            },
-            else => debugPanic(
-                "monotype static dispatch invariant violated: unresolved generic dispatch attached to unsupported expr kind {s}",
-                .{@tagName(source_module.expr(dispatch_expr_idx).data)},
-            ),
-        };
-    }
-
-    const SourceDispatchReceiverIdentity = struct {
+    const WorkspaceDispatchReceiverIdentity = struct {
         module_idx: u32,
         type_name: []const u8,
     };
 
-    fn resolveSourceDispatchReceiverIdentity(
+    fn resolveWorkspaceDispatchReceiverIdentity(
         self: *const Lowerer,
         type_scope: *const TypeCloneScope,
         receiver_var: Var,
-    ) ?SourceDispatchReceiverIdentity {
+    ) ?WorkspaceDispatchReceiverIdentity {
         const resolved = type_scope.typeStoreConst().resolveVar(receiver_var);
         return switch (resolved.desc.content) {
-            .alias => |alias| self.resolveSourceDispatchReceiverIdentity(
+            .alias => |alias| self.resolveWorkspaceDispatchReceiverIdentity(
                 type_scope,
                 type_scope.typeStoreConst().getAliasBackingVar(alias),
             ),
@@ -11284,14 +11305,14 @@ pub const Lowerer = struct {
         };
     }
 
-    fn resolveSpecializedDispatchTargetFromWorkspaceVar(
+    fn resolveAttachedMethodTargetFromWorkspaceVar(
         self: *Lowerer,
-        module_idx: u32,
+        source_module_idx: u32,
         type_scope: *TypeCloneScope,
         receiver_var: Var,
         method_name: base.Ident.Idx,
     ) std.mem.Allocator.Error!ResolvedTarget {
-        const source_module = self.ctx.mirModule(module_idx);
+        const source_module = self.ctx.mirModule(source_module_idx);
         var receiver_writer = try types.TypeWriter.initFromParts(
             self.allocator,
             type_scope.typeStoreConst(),
@@ -11303,10 +11324,10 @@ pub const Lowerer = struct {
         const receiver_text = try receiver_writer.writeGet(receiver_var, .one_line);
         const receiver_copy = try self.allocator.dupe(u8, receiver_text);
         defer self.allocator.free(receiver_copy);
-        const receiver = self.resolveSourceDispatchReceiverIdentity(type_scope, receiver_var) orelse {
+        const receiver = self.resolveWorkspaceDispatchReceiverIdentity(type_scope, receiver_var) orelse {
             debugPanic(
                 "monotype static dispatch invariant violated: specialized dispatch receiver for method {s} was not nominal in module {d}; receiver var {d} => {s}",
-                .{ source_module.getIdent(method_name), module_idx, @intFromEnum(receiver_var), receiver_copy },
+                .{ source_module.getIdent(method_name), source_module_idx, @intFromEnum(receiver_var), receiver_copy },
             );
         };
         const receiver_module = self.ctx.mirModule(receiver.module_idx);

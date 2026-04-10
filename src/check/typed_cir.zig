@@ -288,6 +288,11 @@ pub const Module = struct {
         return ModuleEnv.varFrom(idx);
     }
 
+    pub fn exprIdxFromTypeVar(self: @This(), var_: Var) ?CIR.Expr.Idx {
+        _ = self;
+        return @enumFromInt(@intFromEnum(ModuleEnv.nodeIdxFrom(var_)));
+    }
+
     pub fn staticDispatchSiteRequirement(
         self: @This(),
         expr_idx: CIR.Expr.Idx,
