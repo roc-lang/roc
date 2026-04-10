@@ -14,7 +14,6 @@ const Interpreter = eval.Interpreter;
 const RuntimeHostEnv = eval.RuntimeHostEnv;
 const HostLirCodeGen = backend.HostLirCodeGen;
 const ExecutableMemory = backend.ExecutableMemory;
-
 fn expectInspect(comptime source: []const u8, expected: []const u8) !void {
     var compiled = try helpers.compileInspectedExpr(testing.allocator, source);
     defer compiled.deinit(testing.allocator);

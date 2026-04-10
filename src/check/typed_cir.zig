@@ -148,6 +148,11 @@ pub const Modules = struct {
 };
 
 pub const Module = struct {
+    pub const DispatchSite = union(enum) {
+        resolved: types.ResolvedStaticDispatchSite,
+        requirement: types.StaticDispatchSiteRequirement,
+    };
+
     allocator: Allocator,
     module_idx: u32,
     data_store: *ModuleData,
@@ -224,6 +229,19 @@ pub const Module = struct {
         });
     }
 
+    pub fn lookupMethodIdentByText(
+        self: @This(),
+        type_name: []const u8,
+        method_name: []const u8,
+    ) ?Ident.Idx {
+        const local_type_ident = self.findCommonIdent(type_name) orelse return null;
+        const local_method_ident = self.findCommonIdent(method_name) orelse return null;
+        return self.env().method_idents.get(self.env().gpa, MethodKey{
+            .type_ident = local_type_ident,
+            .method_ident = local_method_ident,
+        });
+    }
+
     pub fn exposedNodeIndexById(self: @This(), ident_idx: Ident.Idx) ?u16 {
         return self.env().getExposedNodeIndexById(ident_idx);
     }
@@ -251,13 +269,27 @@ pub const Module = struct {
         };
     }
 
+    pub fn defType(self: @This(), idx: CIR.Def.Idx) Var {
+        const def_data = self.env().store.getDef(idx);
+        return self.patternType(def_data.pattern);
+    }
+
+    pub fn exprType(self: @This(), idx: CIR.Expr.Idx) Var {
+        _ = self;
+        return ModuleEnv.varFrom(idx);
+    }
+
     pub fn expr(self: @This(), idx: CIR.Expr.Idx) Expr {
         return .{
             .owner = self,
             .idx = idx,
             .data = self.env().store.getExpr(idx),
-            .solved_var = ModuleEnv.varFrom(idx),
         };
+    }
+
+    pub fn patternType(self: @This(), idx: CIR.Pattern.Idx) Var {
+        _ = self;
+        return ModuleEnv.varFrom(idx);
     }
 
     pub fn pattern(self: @This(), idx: CIR.Pattern.Idx) Pattern {
@@ -265,13 +297,44 @@ pub const Module = struct {
             .owner = self,
             .idx = idx,
             .data = self.env().store.getPattern(idx),
-            .solved_var = ModuleEnv.varFrom(idx),
         };
     }
 
-    pub fn typeAnnoVar(self: @This(), idx: CIR.TypeAnno.Idx) Var {
+    pub fn typeAnnoType(self: @This(), idx: CIR.TypeAnno.Idx) Var {
         _ = self;
         return ModuleEnv.varFrom(idx);
+    }
+
+    pub fn staticDispatchSiteRequirement(
+        self: @This(),
+        expr_idx: CIR.Expr.Idx,
+        method_name: Ident.Idx,
+    ) ?types.StaticDispatchSiteRequirement {
+        return self.typeStoreConst().findStaticDispatchSiteRequirement(
+            self.exprType(expr_idx),
+            method_name,
+        );
+    }
+
+    pub fn resolvedStaticDispatchTarget(
+        self: @This(),
+        expr_idx: CIR.Expr.Idx,
+    ) ?types.ResolvedStaticDispatchSite {
+        return self.typeStoreConst().findResolvedStaticDispatchSite(self.exprType(expr_idx));
+    }
+
+    pub fn dispatchSite(
+        self: @This(),
+        expr_idx: CIR.Expr.Idx,
+        method_name: Ident.Idx,
+    ) ?DispatchSite {
+        if (self.resolvedStaticDispatchTarget(expr_idx)) |resolved| {
+            return .{ .resolved = resolved };
+        }
+        if (self.staticDispatchSiteRequirement(expr_idx, method_name)) |requirement| {
+            return .{ .requirement = requirement };
+        }
+        return null;
     }
 
     pub fn getStatement(self: @This(), idx: CIR.Statement.Idx) CIR.Statement {
@@ -347,10 +410,13 @@ pub const Expr = struct {
     owner: Module,
     idx: CIR.Expr.Idx,
     data: CIR.Expr,
-    solved_var: Var,
 
     pub fn module(self: @This()) Module {
         return self.owner;
+    }
+
+    pub fn ty(self: @This()) Var {
+        return self.owner.exprType(self.idx);
     }
 };
 
@@ -358,9 +424,12 @@ pub const Pattern = struct {
     owner: Module,
     idx: CIR.Pattern.Idx,
     data: CIR.Pattern,
-    solved_var: Var,
 
     pub fn module(self: @This()) Module {
         return self.owner;
+    }
+
+    pub fn ty(self: @This()) Var {
+        return self.owner.patternType(self.idx);
     }
 };

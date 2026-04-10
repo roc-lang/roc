@@ -1148,12 +1148,19 @@ const ProcLowerer = struct {
         const target = try self.lowerVar(bind);
         const expr = self.parent.input.store.getExpr(expr_id);
         return switch (expr) {
-            .var_ => |value| try self.parent.store.addCFStmt(.{ .assign_ref = .{
-                .target = target,
-                .result = .{ .alias_of = .{ .owner = try self.lowerVar(value) } },
-                .op = .{ .local = try self.lowerVar(value) },
-                .next = next,
-            } }),
+            .var_ => |value| blk: {
+                const source = try self.lowerVar(value);
+                if (source == target) break :blk next;
+                if (self.localMatchesShape(source, self.localLayout(target), self.localLayoutRef(target))) {
+                    break :blk try self.parent.store.addCFStmt(.{ .assign_ref = .{
+                        .target = target,
+                        .result = .{ .alias_of = .{ .owner = source } },
+                        .op = .{ .local = source },
+                        .next = next,
+                    } });
+                }
+                break :blk try self.bridgeValueIntoLocal(source, target, next);
+            },
             .lit => |lit| try self.parent.store.addCFStmt(.{ .assign_literal = .{
                 .target = target,
                 .result = .fresh,

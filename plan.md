@@ -1,501 +1,446 @@
-## Zero-Copy Typed CIR Boundary Plan
+## Typed CIR Transition Plan
 
-Status: completed
+Status: in_progress
 
-Progress so far:
+This plan replaces the previous completed plan.
 
-- `src/check/typed_cir.zig` is now the published typed-CIR boundary helper; there is no duplicate published source tree.
-- publication is zero-copy for checked modules in the active eval/test pipeline
-- monotype now borrows the published boundary instead of owning and destroying it before later stages
-- published typed CIR no longer exposes mutable type/ident-store access to later stages
-- monotype now clones solved type/ident state into monotype-owned module state before specialization, so published source typing state is read-only in practice
-- the active checker/monotype/eval path no longer uses the misleading `MIR` name; it is named `TypedCIR` instead
-- full `test-eval`, `test-monotype`, `test-cor-pipeline`, and `test-eval-host-effects` are green on this slice
-- the publication API no longer offers borrowed checked-module publication; checked modules transfer ownership one-way into published typed CIR
+The goal is to move from the current state to the long-term ideal typed-CIR architecture:
 
-Completion notes:
+- one published typed CIR boundary artifact
+- one canonical solved type store owned by that boundary
+- zero per-node type duplication
+- typed access exposed only through typed-CIR API methods
+- no downstream stage relying on raw `node idx == type idx` knowledge
+- no duplicate MIR tree
+- no cloned checker module stores used as general monotype workspace
+- no remnants of the old boundary model left anywhere in the code base
 
-- published typed CIR is now the only source-level typing truth after checking
-- monotype specialization state is entirely monotype-owned and lives outside published typed CIR
-- the remaining cloned solved type/ident stores are monotype-owned specialization workspace, not checker-boundary publication residue
+This plan is explicitly about the long-term ideal implementation.
+Do not choose shortcuts, temporary shims, fallback logic, or “good enough for tests” changes.
+When design tradeoffs appear, prefer:
 
-## Goal
+- explicit stage contracts
+- immutable published artifacts
+- one source of truth
+- zero semantic recovery in later stages
+- runtime/compiler performance that follows from clean architecture, not from hidden coupling
 
-Replace the current published-MIR boundary with the long-term ideal design:
+When in doubt, use `~/code/cor` as the architectural guide in spirit:
 
-- the checker publishes one owned typed CIR artifact directly
-- publication is zero-copy ownership transfer, not clone/wrap/adapter construction
-- typed CIR is the only source of source-level solved typing truth after checking
-- monotype consumes typed CIR directly
-- monotype specialization state lives entirely on the monotype side
-- no duplicated MIR tree exists
-- no checker-style solved type store is mutated by monotype
-- all relevant tests pass afterward
+- publish an explicitly typed solved source program
+- make later stages consume that published artifact only
+- keep specialization state local to the specializing stage
 
-This plan is explicitly about correctness and compiler runtime performance, not implementation convenience.
-If a choice trades long-term architecture or performance for short-term ease, reject it.
+The intentional divergence from `cor` is representational, not architectural:
 
-When in doubt, use `~/code/cor` as the architectural guide:
+- `cor` physically stores type handles on AST nodes
+- Roc should keep the existing dense node-index-to-type-store-index invariant internally
+- but that invariant must be fully encapsulated inside typed-CIR APIs so downstream stages consume a typed source boundary without knowing the storage trick
 
-- `cor` publishes one explicit solved typed tree before monotype
-- monotype lowers from that tree
-- specialization and later executable lowering are downstream concerns
+That divergence is the long-term ideal here because it preserves the same semantic contract as `cor` while avoiding per-node memory duplication.
 
-Any intentional divergence from `cor` must be justified at the end as the long-term ideal design here, not as a short-term expedient.
+## Goal State
 
-## Why This Plan Exists
+At the end of this plan:
 
-Current state is better than the old checker-internal leakage, but still not ideal:
-
-- we still publish a separate `MIR` artifact in `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/check/mir.zig`
-- that artifact still owns a cloned checker `types.Store`
-- monotype still treats that solved checker-style store as part of its input
-- monotype still performs specialization by cloning/instantiating solved vars rather than consuming a pure source boundary plus monotype-owned specialization artifacts
-
-That means we are still paying for:
-
-- an extra publication structure
-- a clone of checker solved state
-- conceptual duplication between typed CIR and MIR
-- a muddled boundary where source typing facts and monotype specialization facts are not cleanly separated
-
-The ideal design is stricter and simpler:
-
-- checked typed CIR is published once
-- ownership transfers out of the checker once
-- monotype never mutates published typed CIR
-- specialization results are stored separately as monotype artifacts keyed by specialization
-
-## End State
-
-When this plan is complete:
-
-- `CIR` nodes are the published typed boundary; there is no second duplicated MIR tree
-- every published expr/pattern/def/binding node carries or can directly index its settled source type facts
-- the checker publishes that typed CIR by moving ownership, not cloning
-- the checker has no remaining responsibility for that published artifact after publication
-- monotype reads only published typed CIR and monotype-owned caches/artifacts
-- monotype does not call any checker-style `typeStoreMut()` on boundary data
-- monotype specialization artifacts are keyed by specialization and source identity, not by mutating the published source tree
-- old MIR naming, files, helpers, tests, and comments are deleted or renamed away unless they truly remain as zero-copy publication helpers with no duplicate storage
+1. Published typed CIR is the only checker-to-monotype source boundary.
+2. Typed CIR owns:
+   - CIR nodes
+   - solved type store
+   - ident/import/module metadata needed by later stages
+3. Typed CIR exposes typed accessors such as:
+   - `exprType(expr_idx)`
+   - `patType(pat_idx)`
+   - `defType(def_idx)`
+   - `annotationType(...)`
+4. No code outside typed-CIR is allowed to:
+   - call `ModuleEnv.varFrom(...)`
+   - cast source node indices to type vars directly
+   - rely on raw node-index/type-index coupling
+5. Monotype consumes typed CIR only through typed-CIR APIs.
+6. Monotype specialization state is entirely monotype-owned:
+   - specialization table
+   - per-specialization instantiation cache
+   - per-specialization scratch
+7. Monotype does not clone whole per-module checker stores as workspace.
+8. Monotype does not mutate checker-style solved stores.
+9. Static dispatch targets are resolved before monotype and published explicitly in typed CIR.
+10. All old APIs, wrappers, side channels, and residue for the previous architecture are deleted.
 
 ## Non-Negotiable Invariants
 
-These invariants must hold at every phase, and the final state must make them obvious in code:
+1. There must be exactly one published typed source boundary artifact.
+2. That artifact must be immutable after publication.
+3. Later stages must consume explicit facts from typed CIR, not reconstruct or guess them.
+4. The `node idx == type idx` relationship is an internal representation detail only.
+5. No later stage may know that detail directly.
+6. If a stage needs a source type, it asks typed CIR for it.
+7. Specialization-specific monotype facts must not live in published typed CIR.
+8. Published typed CIR contains source solved facts only; specialization results live on the monotype side.
+9. No clone of the full typed source/type-store graph may remain in the final architecture.
+10. No compatibility wrapper layer (`MIR`, borrowed views, duplicate typed trees, temporary side tables) may remain in the final architecture.
 
-1. Published typed CIR is immutable.
-2. Published typed CIR is owned.
-3. Publication is a one-way boundary: checker finishes, publishes, and does not keep using the published data as checker working state.
-4. Published typed CIR contains only source-level solved facts, not monotype specialization results.
-5. Monotype specialization state is monotype-owned only.
-6. A source node has one source solved type identity, but may have many monotype specializations.
-7. Later stages consume explicit earlier facts only.
-8. No clones exist merely to defend against our own boundary bugs once ownership transfer is in place.
-9. No debug-vs-release architectural split is allowed.
-10. No fallback reconstruction of missing source typing facts is allowed anywhere in monotype or later stages.
+## Current Problems To Eliminate
 
-## Important Architectural Clarifications
+### A. Published boundary still leaks storage conventions
 
-### Typed CIR Is Not Monomorphic
+Even after the typed-CIR work, the architecture still remembers too much of the old world:
 
-Typed CIR is the published solved source program.
-It is not already monomorphic and must not pretend to be.
+- raw node ids still imply solved vars by convention
+- downstream code can still reason in terms of checker storage mechanics instead of typed-CIR contract
 
-That means:
+The final system must expose typed source facts only through typed-CIR API.
 
-- source node idx -> source solved checker var/type fact
-- `(specialization key, source node idx)` -> monotype instance
+### B. Monotype specialization still reuses checker-style store machinery
 
-The published source tree stores the first thing.
-Monotype-owned specialization artifacts store the second thing.
+Today monotype still contains residue like:
 
-### Lambda Sets Are Not Part Of This Boundary
+- cloned module type stores / ident stores
+- checker-style unification during specialization
+- cross-module var copying
 
-Lambda sets appear later, after monotype, just as they do in `cor`.
-They are not a blocker for publishing typed CIR directly.
+That is not the long-term ideal.
+Monotype should own specialization state directly, in a `cor`-style specialization model.
 
-So this plan must not delay the typed-CIR transition waiting on lambda-set design.
+### C. Static dispatch target resolution still happens too late
 
-### Zero-Copy Means Ownership Transfer, Not Borrowing
+Today monotype still inspects solved type shape to resolve some dispatch targets.
+That is semantic recovery after the checker should already know the answer.
+Typed CIR should publish resolved dispatch targets explicitly.
 
-Acceptable:
+## Highest-Quality Final Architecture
 
-- checker constructs data
-- checker moves ownership of finalized typed CIR and associated solved type data into the published artifact
-- checker stops using it
+### Published Typed CIR
 
-Unacceptable:
+Typed CIR should be a published, owned, immutable source artifact with:
 
-- checker publishes borrowed views into still-owned checker storage
-- debug-only frozen-bit schemes replacing ownership transfer
-- release-only zero-copy with debug-only clone
+- source CIR nodes
+- solved type store
+- identifier store
+- import resolution facts
+- method resolution facts
+- any other checker-known semantic source facts that later stages need
 
-## Source Of Truth Layout After Transition
+Typed CIR should expose typed/source-semantic APIs and hide storage details.
 
-There should be exactly three memory domains:
+Example API shape:
 
-1. Published typed CIR boundary.
-   - source tree
-   - source solved types
-   - source names/imports/method facts
-   - source evaluation-order facts
-   - immutable
+- `expr(expr_idx) -> CIR.Expr`
+- `exprType(expr_idx) -> types.Var`
+- `pattern(pattern_idx) -> CIR.Pattern`
+- `patternType(pattern_idx) -> types.Var`
+- `def(def_idx) -> CIR.Def`
+- `defType(def_idx) -> types.Var`
+- `resolvedImportModule(...)`
+- `resolvedStaticDispatchTarget(expr_idx) -> ResolvedTarget`
 
-2. Monotype global artifacts.
+Important:
+
+- typed CIR does not physically duplicate the type handle into each node
+- typed CIR internally may continue using the dense index invariant
+- but no consumer outside typed CIR knows about it
+
+### Monotype
+
+Monotype should consume typed CIR and own all specialization machinery itself.
+
+Its storage should conceptually split into:
+
+1. Immutable published typed source input
+2. Monotype global outputs/caches:
    - monotype type interner
    - specialization table
-   - proc-spec table
-   - frozen monotype bodies
-   - global work queues and caches
+   - emitted proc/value tables
+3. Per-specialization scratch:
+   - local instantiation cache for solved source vars reachable in that specialization
+   - source-node to specialized monotype type scratch
+   - local symbol/binding scratch
 
-3. Per-specialization monotype scratch.
-   - temporary arrays/maps keyed by source node id within one specialization
-   - discarded after that specialization is frozen
+This means:
 
-Published typed CIR must never become a fourth-place dumping ground for monotype specialization state.
+- no cloned checker module stores
+- no checker unification inside monotype
+- no mutation of published source solved state
 
-## Things To Watch Out For
+### Static Dispatch
 
-These are the main ways this migration can go wrong:
+Static dispatch should be resolved by the checker and published in typed CIR.
 
-- Accidentally keeping both typed CIR and duplicated MIR alive.
-- Letting monotype continue to mutate a checker-style solved store after the new boundary lands.
-- Smuggling monotype specialization results back onto source nodes.
-- Preserving old APIs under new names.
-- Keeping clone-based publication “temporarily” after ownership transfer is already feasible.
-- Reintroducing debug-only architecture differences.
-- Mixing reporting-only checker state with publishable boundary state in a way that blocks ownership transfer.
-- Forgetting cross-module imported-var handling; imports must be explicit published facts, not a reason to keep checker state alive.
-- Losing source regions/spans needed for diagnostics while moving ownership.
-- Treating local-function specialization facts as source-level truth instead of specialization artifacts.
+Monotype should see either:
 
-## Phase 0: Freeze Terminology And Success Criteria
+- a fully resolved target def/module on the source node, or
+- a fully desugared direct-call source form
 
-Goal:
+Monotype must not:
 
-- Stop pretending the duplicate published tree is inherently “MIR” in the monomorphic sense.
-- Define the target architecture in code and docs before touching storage again.
+- chase aliases
+- chase nominals
+- inspect receiver type shape
+- look methods up by module/type name
 
-Implementation steps:
+## Phase 1: Make Typed CIR The Only Typed Source API
 
-- Audit and enumerate every place where `MIR` currently means “published solved boundary”.
-- Decide the final public term:
-  - preferred: published typed CIR
-  - acceptable only if it is not misleading: keep `MIR` as a thin publication module name with no duplicate tree inside it
-- Update comments in:
-  - `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/check/mir.zig`
-  - `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/lower.zig`
-  - `/Users/rtfeldman/.codex/worktrees/1d55/roc/plan.md`
-  so they state the real target:
-  - one published typed CIR boundary
-  - monotype specialization state lives elsewhere
+### 1.1 Define the public typed-CIR contract
 
-Required tests:
+Create or tighten the typed-CIR module so it is the only legal API for later stages.
 
-- none specific beyond keeping the tree green
+Requirements:
 
-Completion criteria:
+- all source-node/type access goes through typed-CIR methods
+- raw `ModuleEnv`/checker storage details are private
+- typed-CIR provides all source facts needed by monotype
 
-- the intended end state is described consistently
-- comments no longer imply the published source tree is already monomorphic
+Do not add convenience backdoors.
+If later code needs a fact, typed CIR should publish it explicitly.
 
-## Phase 1: Define The Published Typed-CIR Ownership Boundary
+### 1.2 Move all raw type lookups behind typed-CIR methods
 
-Goal:
+Audit every use in `src/` of:
 
-- Make it explicit which data must transfer out of the checker and which data must remain checker-internal.
+- `ModuleEnv.varFrom(...)`
+- direct node-id to type-var casting
+- direct checker `types.Store` lookups that correspond to source node typing
 
-Implementation steps:
-
-- Split checker state conceptually into:
-  - publishable typed-CIR boundary data
-  - checker-only reporting/workspace data
-- For each field currently cloned into `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/check/mir.zig`, classify it as one of:
-  - must move to published typed CIR
-  - must stay checker-only
-  - should be recomputed nowhere and therefore must move
-- Build a table in code/comments for:
-  - CIR node storage
-  - solved `types.Store`
-  - string/ident stores
-  - import resolution
-  - method lookup ids
-  - evaluation order
-  - exposed items
-  - any module indexing structures
-- Identify exactly what diagnostics still need after publication.
-- Refuse to keep publishable state checker-owned just because it is convenient.
-
-Required tests:
-
-- targeted ownership-boundary test additions proving published typed CIR survives checker teardown
-- tests that prove reporting-only state can still be torn down independently after publication
+Replace them with typed-CIR API calls.
 
 Completion criteria:
 
-- every currently cloned field has a planned move/retain/delete outcome
-- no “we’ll see later” ownership ambiguity remains
+- no code outside typed-CIR may access source solved types by raw index convention
+- the only remaining knowledge of the index invariant lives inside typed-CIR implementation
 
-## Phase 2: Make Publication A Real Move, Not A Clone
+### 1.3 Delete old naming and boundary residue
 
-Goal:
+Delete all remaining residue of:
 
-- Replace clone-based publication with zero-copy transfer of finalized checker output.
+- `MIR`
+- old borrowed boundary wrappers
+- duplicated “published source tree” language if it no longer matches reality
 
-Implementation steps:
+The boundary should be described consistently as typed CIR.
 
-- Redesign the publication API so checker finalization produces:
-  - one owned typed-CIR artifact
-  - one owned solved type store paired with it
-- Remove clone helpers from the boundary path for:
-  - `types.Store`
-  - string/ident interners
-  - evaluation order
-  - exposed items
-  - any remaining boundary-owned vectors or tables
-- Make publication consume or move the finalized checker module state instead of borrowing it.
-- After move, checker must not retain usable aliases to the transferred data.
-- If necessary, split checker finalization into:
-  - finish solving
-  - publish/move typed CIR
-  - discard checker-only temporary state
+## Phase 2: Publish Explicit Static Dispatch Facts In Typed CIR
 
-Required tests:
+### 2.1 Identify every static dispatch form at the checker boundary
 
-- teardown tests proving published typed CIR remains valid after full checker teardown
-- tests proving there is no clone-based duplicate copy by checking pointer/ownership relationships where practical
-- regression tests for imports, methods, and module order across publication
+Catalog all source forms whose target can be resolved by the checker.
 
-Completion criteria:
+For each form, define the exact published fact shape.
 
-- clone-based publication path is gone from the boundary
-- ownership is transferred, not copied
-- checker teardown no longer threatens published typed CIR lifetime
+Minimum required fact content:
 
-## Phase 3: Stop Monotype From Mutating Published Source Typing State
+- resolved target module
+- resolved target def or symbol
+- any explicit receiver/type-evidence facts needed downstream
 
-Goal:
+### 2.2 Publish resolved dispatch targets during checking
 
-- Remove the remaining architectural blocker to a truly immutable published source boundary.
+The checker should publish the resolved target directly into typed CIR.
 
-Implementation steps:
+This must happen before monotype.
 
-- Audit every `typeStoreMut()` and checker-style var unification path reached from `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/lower.zig`.
-- Categorize them into:
-  - source-type lookup that should become read-only
-  - specialization bookkeeping that should become monotype-local
-  - import copying that should become explicit published facts or monotype-owned instantiation state
-- Eliminate monotype mutation of published solved checker vars.
-- Replace `TypeCloneScope` responsibilities that currently depend on mutating checker-style solved state with monotype-owned specialization data:
-  - source var -> specialized mono type mapping
-  - source node -> specialized mono type mapping
-  - proc specialization key -> proc spec id
-  - local-fn specialization mapping
-- Make source type instantiation read from published typed CIR and write only monotype-owned artifacts.
+No fallback path:
 
-Required tests:
+- if dispatch is unresolved, that is a checker problem
+- monotype should never attempt semantic recovery
 
-- targeted tests for polymorphic top-level functions
-- targeted tests for local polymorphic functions
-- tests for imported polymorphic functions across modules
-- tests for closures and higher-order calls where specialization multiplies source nodes
+### 2.3 Convert monotype to consume explicit dispatch facts only
+
+Delete monotype code that:
+
+- resolves dispatch receiver vars from type shape
+- chases aliases/nominals to infer target type/module
+- looks up method symbols during lowering
+
+Replace it with direct use of typed-CIR dispatch facts.
 
 Completion criteria:
 
-- monotype no longer mutates published source solved type state
-- published typed CIR is actually immutable in practice, not just by convention
+- no `resolveDispatchReceiver*`
+- no `resolveMonomorphicDispatchTarget*`
+- no type-shape-driven method lookup remains in monotype
 
-## Phase 4: Define Explicit Monotype Specialization Storage
+## Phase 3: Replace Monotype’s Cloned Checker Stores With Monotype-Owned Specialization State
 
-Goal:
+### 3.1 Define explicit monotype specialization storage
 
-- Give specialization its own first-class storage model so it no longer parasitizes checker-style solved state.
+Design the monotype-owned specialization data structures.
 
-Implementation steps:
+They should include:
 
-- Introduce explicit monotype-owned data structures for:
-  - `SpecKey`
-  - `ProcSpec`
-  - frozen monotype bodies
-  - per-specialization expr type arrays
-  - per-specialization pattern type arrays
-  - symbol binding/state arrays
-  - pending work queues for newly discovered specializations
-- Ensure the specialization key includes every fact that can change generated monotype code.
-- Keep per-specialization source-node mappings dense and source-id keyed, not hash-map-heavy, whenever ids are dense.
-- Ensure a single source proc can yield many proc specializations without mutating the published source tree.
-- Move any current specialization-time semantic fact storage out of checker-style structures into these monotype-owned artifacts.
+- specialization key
+  - source function identity
+  - specialization-driving monotype input shape
+  - any enclosing specialization identity needed for local fns
+- specialization table
+  - pending/in-progress/completed state
+- per-specialization local instantiation cache
+- per-specialization scratch for lowered node types/bindings
 
-Required tests:
+This should mirror `cor`’s specialization-local cloning idea, not checker module cloning.
 
-- targeted tests exercising multiple specializations of the same source proc
-- tests proving two specializations of one source node produce distinct monotype results without altering source facts
-- performance-sensitive tests or assertions around dense node-indexed storage shape where practical
+### 3.2 Restrict cloning to specialization-local instantiation only
 
-Completion criteria:
+If solved source vars still need cloning/instantiation, clone only the reachable solved vars for the current specialization.
 
-- specialization storage is explicit and monotype-owned
-- no checker-style mutation remains necessary for specialization
+Do not clone whole module stores.
 
-## Phase 5: Make Monotype A Pure Consumer Of Published Typed CIR
+The local instantiation cache should:
 
-Goal:
+- start empty per specialization
+- populate only for reachable source vars in that specialization
+- be discarded when specialization lowering completes
 
-- Align Roc’s checker -> monotype boundary with `cor` in substance.
+### 3.3 Remove checker-style unification from monotype
 
-Implementation steps:
+Delete monotype usage of checker unification machinery as specialization workspace.
 
-- Rewrite monotype entrypoints so their source-level input is only:
-  - published typed CIR
-  - monotype-owned specialization state
-- Eliminate any remaining dependence on:
-  - duplicated MIR node structures
-  - wrapper-only node readers
-  - checker-owned env pointers
-  - clone-time translation caches whose only purpose was to compensate for the old boundary
-- Ensure every source-level fact monotype needs is read directly from published typed CIR.
-- Ensure every specialization-level fact monotype needs is read directly from monotype-owned artifacts.
+That includes:
 
-Required tests:
+- checker problem stores as ordinary monotype specialization infrastructure
+- checker unify/occurs scratch as ordinary monotype specialization infrastructure
+- mutation of cloned checker stores to drive specialization
 
-- targeted tests that fail if monotype reaches outside published typed CIR for source facts
-- end-to-end tests covering:
-  - nested closures
-  - higher-order polymorphism
-  - boxed lambdas
-  - patterns with many child nodes
-  - multi-module import specialization
+Replace with explicit monotype-side specialization bookkeeping.
 
-Completion criteria:
+### 3.4 Remove cross-module checker-var copying from monotype
 
-- monotype has a clean two-input model:
-  - published typed CIR
-  - monotype-owned specialization artifacts
+Delete `copyCheckerVarToModule(...)`-style logic.
 
-## Phase 6: Delete The Duplicate MIR Structure Entirely
+Cross-module specialization should use:
 
-Goal:
+- explicit published source identities from typed CIR
+- monotype-owned specialization keys
+- monotype-owned local instantiation caches
 
-- Remove the duplicate-tree idea completely.
+not copying mutable solved vars between checker store clones.
 
-Implementation steps:
+### 3.5 Delete full-module type/ident store cloning in monotype context init
 
-- Delete the current duplicated publication structure in `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/check/mir.zig` if it still stores copied nodes.
-- If a publication helper module is still useful, reduce it to boundary orchestration only:
-  - publish typed CIR
-  - transfer ownership
-  - no duplicate tree storage
-- Rename files/types as needed so the code no longer suggests there is a second source tree.
-- Remove stale tests that were only asserting the duplicated-MIR transition shape.
+Delete monotype startup logic that clones every module’s:
 
-Required tests:
+- `types.Store`
+- `Ident.Store`
 
-- tests proving the checker publishes typed CIR directly
-- no test should require a duplicate MIR node store to exist
+Monotype should keep only:
+
+- published typed CIR input
+- monotype-owned specialization/interner/output state
 
 Completion criteria:
 
-- there is no duplicate published MIR tree left in memory
-- there is only the published typed CIR source tree
+- no whole-module `types.Store.clone(...)` in monotype
+- no whole-module `Ident.Store.clone(...)` in monotype
+- no checker-store mutation APIs in ordinary monotype lowering
 
-## Phase 7: Delete Old Clone-Oriented And Wrapper-Oriented Machinery
+## Phase 4: Make Typed CIR The Only Source Of Source Typing Truth
 
-Goal:
+### 4.1 Audit and remove parallel source typing side channels
 
-- Remove every remaining artifact that existed only because we used clone-based MIR publication.
+Find and delete any remaining side channels that duplicate or bypass typed-CIR source typing facts.
 
-Implementation steps:
+Examples to audit:
 
-- Delete obsolete clone helpers from the publication path.
-- Delete wrapper/adapter APIs that only existed to make the old MIR look like checker data.
-- Delete stale terminology:
-  - `SolvedCIR`
-  - duplicate-MIR comments
-  - “publish by clone” descriptions
-- Delete dead tests that encode obsolete boundary behavior.
-- Search specifically for residue in:
-  - `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/check/`
-  - `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/`
-  - `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/eval/test/`
+- legacy side tables
+- helper wrappers around the old boundary
+- cached source-node typing maps outside typed CIR
 
-Required tests:
+The rule is:
 
-- targeted residue tests/search-based checks where practical
-- all regression suites still green
+- if it is source solved typing, it belongs in typed CIR
+- if it is specialization-specific, it belongs in monotype
 
-Completion criteria:
+There should be nothing in between.
 
-- no clone-oriented boundary machinery remains
-- no duplicate-tree wording remains
-- no wrapper residue remains
+### 4.2 Enforce API boundaries in type signatures
 
-## Phase 8: Performance And Invariant Hardening
+Refactor stage entrypoints so that:
 
-Goal:
+- checker outputs typed CIR
+- monotype accepts typed CIR
+- monotype does not accept raw checker module env/state as an alternative
 
-- Ensure the new architecture is not only cleaner, but actually the performance-oriented end state we want.
+Make the wrong thing impossible at the type/API level.
 
-Implementation steps:
+### 4.3 Delete obsolete implementation hooks
 
-- Audit publication to confirm it is zero-copy in the steady state.
-- Audit specialization storage for unnecessary hashing, copying, or per-node allocations.
-- Prefer dense arrays keyed by source node id within a proc specialization.
-- Ensure source-level interner/storage ownership is transferred once, not duplicated.
-- Add assertions that enforce:
-  - published typed CIR immutability
-  - no monotype mutation of source solved type data
-  - specialization artifacts never become a second source-level truth
+Delete any API that only exists to support the old architecture, including:
 
-Required tests:
+- mutable typed-CIR accessors not needed by the final design
+- raw checker-source-type accessor helpers used by later stages
+- back-compat wrappers around the old boundary contract
 
-- targeted tests for multi-specialization workloads
-- any useful debug assertions that trip if source data is mutated or if specialization state leaks into source storage
+## Phase 5: Verification And Audit
 
-Completion criteria:
+### 5.1 Add targeted tests for typed-CIR API encapsulation
 
-- the implementation reflects the performance intent, not just the architectural shape
+Add focused tests proving:
 
-## Phase 9: Final Audit And Verification
+- typed CIR provides source node typing through its API
+- later stages no longer depend on raw index-casting conventions
+- typed CIR remains valid as the only source typing boundary
 
-Goal:
+### 5.2 Add targeted tests for explicit static dispatch facts
 
-- Prove the transition is complete and no residue remains.
+Add tests covering:
 
-Audit checklist:
+- nominal receiver dispatch
+- alias receiver dispatch
+- imported-module dispatch
+- dispatch through resolved type aliases/attached methods
 
-- Search for duplicate MIR-tree storage.
-- Search for clone-based publication in the checker -> monotype boundary path.
-- Search for monotype mutation of published source solved type state.
-- Search for stale wrapper/adapter APIs.
-- Search for comments claiming MIR is monomorphic when it is not.
-- Search for any later-stage source-fact reconstruction that should have been explicit.
+These tests must verify monotype succeeds without type-shape rediscovery logic.
 
-Required verification:
+### 5.3 Add targeted tests for monotype specialization model
+
+Add tests covering:
+
+- repeated specializations of the same source fn at multiple types
+- local functions specialized in multiple contexts
+- cross-module specialization
+- polymorphic higher-order cases that previously depended on cloned checker stores
+
+### 5.4 Full-suite verification
+
+The plan is complete only when all relevant suites pass, including at minimum:
 
 - `zig build test-monotype`
 - `zig build test-eval -- --threads 1`
 - `zig build test-eval-host-effects -- --threads 1`
 - `zig build test-cor-pipeline`
-- relevant checker tests
-- all new targeted publication/specialization tests added during the migration
 
-Final success condition:
+Also run any newly relevant checker/typed-CIR-focused tests introduced by the work.
 
-- checker publishes typed CIR directly by ownership transfer
-- no duplicate MIR tree exists
-- typed CIR is the only source-level typing truth after checking
-- monotype specialization state is entirely monotype-owned
-- published typed CIR is immutable
-- monotype consumes published typed CIR directly
-- all relevant tests pass
+### 5.5 Final architecture audit
 
-## Expected Justification At The End
+Do a final fresh audit and confirm:
 
-At the end of implementation, report:
+- no code outside typed CIR knows about raw node-index/type-index equivalence
+- no monotype whole-module checker-store clones remain
+- no checker-style unification remains in monotype specialization flow
+- no static dispatch target recovery remains in monotype
+- no duplicate boundary artifact remains
+- no obsolete wrapper machinery remains anywhere in `src/`
 
-- whether any divergence from `cor` remains
-- why that divergence is long-term ideal here
-- whether zero-copy publication is fully achieved
-- whether any transitional boundary residue remains
+## Explicit Things To Watch Out For
 
-If the answer to the last question is anything other than “no”, the plan is not complete.
+1. Do not accidentally reintroduce a duplicate “typed tree” while trying to clean up typed CIR.
+2. Do not preserve old APIs “for convenience”.
+3. Do not hide checker-store mutation behind a renamed helper and call it progress.
+4. Do not let monotype specialization facts leak back into typed CIR.
+5. Do not trade away memory by physically duplicating per-node type handles unless there is a truly compelling reason. The current plan assumes there is not.
+6. Do not let static dispatch remain half-resolved. Either checker publishes the target or compilation fails earlier.
+7. Do not stop at “tests pass” if old architectural residue still exists.
+
+## Definition Of Done
+
+This plan is complete only when all of the following are true:
+
+- typed CIR is the only published typed source boundary
+- source solved typing is accessed only through typed-CIR API
+- raw node-index/type-index coupling is fully encapsulated
+- monotype owns specialization state directly
+- monotype no longer clones whole checker module stores
+- monotype no longer mutates checker-style solved stores
+- monotype no longer resolves static dispatch targets from type shape
+- old boundary machinery is deleted with no residue left in `src/`
+- targeted tests and full verification suites pass

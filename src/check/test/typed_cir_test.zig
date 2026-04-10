@@ -27,15 +27,15 @@ test "typed CIR exposes solved vars on defs exprs and patterns" {
     for (defs) |def_idx| {
         const mir_def = module.def(def_idx);
         try std.testing.expectEqual(def_idx, mir_def.idx);
-        try std.testing.expectEqual(ModuleEnv.varFrom(mir_def.data.expr), mir_def.expr.solved_var);
-        try std.testing.expectEqual(ModuleEnv.varFrom(mir_def.data.pattern), mir_def.pattern.solved_var);
+        try std.testing.expectEqual(ModuleEnv.varFrom(mir_def.data.expr), mir_def.expr.ty());
+        try std.testing.expectEqual(ModuleEnv.varFrom(mir_def.data.pattern), mir_def.pattern.ty());
 
         switch (mir_def.expr.data) {
             .e_lambda => |lambda| {
                 const arg_patterns = test_env.module_env.store.slicePatterns(lambda.args);
                 try std.testing.expect(arg_patterns.len > 0);
                 const mir_arg = module.pattern(arg_patterns[0]);
-                try std.testing.expectEqual(ModuleEnv.varFrom(arg_patterns[0]), mir_arg.solved_var);
+                try std.testing.expectEqual(ModuleEnv.varFrom(arg_patterns[0]), mir_arg.ty());
             },
             else => {},
         }

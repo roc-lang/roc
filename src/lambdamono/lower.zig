@@ -2134,7 +2134,11 @@ const Lowerer = struct {
         const fn_entry = specializations.lookupFn(self.fenv, symbol) orelse
             debugPanic("lambdamono.lower.makeErasedPackedFnExpr missing function");
         try self.collectFnExecutableFacts(inst, mono_cache, fn_entry.fn_def);
-        const captures = try self.captureBindingsFromTypedSymbols(inst, fn_entry.fn_def.captures);
+        const capture_ty = forced_capture_ty orelse if (capture_expr) |capture| self.output.getExpr(capture).ty else null;
+        const captures = if (capture_ty) |explicit_capture_ty|
+            try self.captureBindingsFromTypedSymbolsAtType(inst, fn_entry.fn_def.captures, explicit_capture_ty)
+        else
+            try self.captureBindingsFromTypedSymbols(inst, fn_entry.fn_def.captures);
         defer self.allocator.free(captures);
         self.sortCaptureBindings(captures);
         const sig = try self.buildErasedSpecializationSig(
@@ -2152,7 +2156,6 @@ const Lowerer = struct {
             sig,
             captures,
         );
-        const capture_ty = forced_capture_ty orelse if (capture_expr) |capture| self.output.getExpr(capture).ty else null;
         return try self.output.addExpr(.{
             .ty = try self.makeErasedFnType(capture_ty),
             .data = .{ .packed_fn = .{
@@ -2593,6 +2596,25 @@ const Lowerer = struct {
                 .symbol = capture.symbol,
                 .solved_ty = env_entry.ty,
                 .lowered_ty = env_entry.exec_ty,
+            };
+        }
+        self.sortCaptureBindings(out);
+        return out;
+    }
+
+    fn captureBindingsFromTypedSymbolsAtType(
+        self: *Lowerer,
+        inst: *InstScope,
+        captures_span: solved.Ast.Span(solved.Ast.TypedSymbol),
+        capture_record_ty: type_mod.TypeId,
+    ) std.mem.Allocator.Error![]lower_type.CaptureBinding {
+        const captures = self.input.store.sliceTypedSymbolSpan(captures_span);
+        const out = try self.allocator.alloc(lower_type.CaptureBinding, captures.len);
+        for (captures, 0..) |capture, i| {
+            out[i] = .{
+                .symbol = capture.symbol,
+                .solved_ty = try self.cloneInstType(inst, capture.ty),
+                .lowered_ty = self.requireCaptureFieldExecutableType(capture_record_ty, capture.symbol),
             };
         }
         self.sortCaptureBindings(out);
