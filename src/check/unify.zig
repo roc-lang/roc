@@ -45,16 +45,13 @@ const base = @import("base");
 const tracy = @import("tracy");
 const collections = @import("collections");
 const types_mod = @import("types");
-const can = @import("can");
-
 const problem_mod = @import("problem.zig");
 const occurs = @import("occurs.zig");
 const snapshot_mod = @import("snapshot.zig");
 
-const ModuleEnv = can.ModuleEnv;
-
 const Ident = base.Ident;
 const MkSafeList = collections.SafeList;
+const Allocator = std.mem.Allocator;
 
 const ResolvedVarDesc = types_mod.ResolvedVarDesc;
 const ResolvedVarDescs = types_mod.ResolvedVarDescs;
@@ -114,7 +111,9 @@ pub const Result = union(enum) {
 /// * Compares variable contents for equality
 /// * Merges unified variables so 1 is "root" and the other is "redirect"
 pub fn unify(
-    module_env: *ModuleEnv,
+    gpa: Allocator,
+    ident_store: *const Ident.Store,
+    qualified_module_ident: Ident.Idx,
     types: *types_mod.Store,
     problems: *problem_mod.Store,
     snapshots: *snapshot_mod.Store,
@@ -127,7 +126,9 @@ pub fn unify(
     b: Var,
 ) std.mem.Allocator.Error!Result {
     return unifyInContext(
-        module_env,
+        gpa,
+        ident_store,
+        qualified_module_ident,
         types,
         problems,
         snapshots,
@@ -149,7 +150,9 @@ pub fn unify(
 ///
 /// This function accepts a context and optional constraint origin var (for better error reporting)
 pub fn unifyInContext(
-    module_env: *ModuleEnv,
+    gpa: Allocator,
+    ident_store: *const Ident.Store,
+    qualified_module_ident: Ident.Idx,
     types: *types_mod.Store,
     problems: *problem_mod.Store,
     snapshots: *snapshot_mod.Store,
@@ -169,7 +172,7 @@ pub fn unifyInContext(
     unify_scratch.reset();
 
     // Unify
-    var unifier = Unifier.init(module_env, types, unify_scratch, occurs_scratch);
+    var unifier = Unifier.init(ident_store, qualified_module_ident, types, unify_scratch, occurs_scratch);
     unifier.unifyGuarded(a, b) catch |err| {
         const problem: Problem = blk: {
             switch (err) {
@@ -192,7 +195,7 @@ pub fn unifyInContext(
                 },
             }
         };
-        const problem_idx = try problems.appendProblem(module_env.gpa, problem);
+        const problem_idx = try problems.appendProblem(gpa, problem);
         types.union_(a, b, .{
             .content = .err,
             .rank = Rank.generalized,
@@ -224,7 +227,8 @@ pub fn unifyInContext(
 const Unifier = struct {
     const Self = @This();
 
-    module_env: *ModuleEnv,
+    ident_store: *const Ident.Store,
+    qualified_module_ident: Ident.Idx,
     types_store: *types_mod.Store,
     scratch: *Scratch,
     occurs_scratch: *occurs.Scratch,
@@ -234,13 +238,15 @@ const Unifier = struct {
 
     /// Init unifier
     pub fn init(
-        module_env: *ModuleEnv,
+        ident_store: *const Ident.Store,
+        qualified_module_ident: Ident.Idx,
         types_store: *types_mod.Store,
         scratch: *Scratch,
         occurs_scratch: *occurs.Scratch,
     ) Unifier {
         return .{
-            .module_env = module_env,
+            .ident_store = ident_store,
+            .qualified_module_ident = qualified_module_ident,
             .types_store = types_store,
             .scratch = scratch,
             .occurs_scratch = occurs_scratch,
@@ -249,7 +255,7 @@ const Unifier = struct {
     }
 
     fn getTypeIdentText(self: *const Self, idx: Ident.Idx) []const u8 {
-        return self.module_env.getIdentStore().getText(idx);
+        return self.ident_store.getText(idx);
     }
 
     // merge
@@ -708,7 +714,7 @@ const Unifier = struct {
                     },
                     .empty_tag_union => {
                         // If this nominal is opaque and we're not in the origin module, error
-                        if (!a_type.canLiftInner(self.module_env.qualified_module_ident)) {
+                        if (!a_type.canLiftInner(self.qualified_module_ident)) {
                             return error.TypeMismatch;
                         }
 
@@ -730,7 +736,7 @@ const Unifier = struct {
                     },
                     .empty_record => {
                         // If this nominal is opaque and we're not in the origin module, error
-                        if (!a_type.canLiftInner(self.module_env.qualified_module_ident)) {
+                        if (!a_type.canLiftInner(self.qualified_module_ident)) {
                             return error.TypeMismatch;
                         }
 
@@ -830,7 +836,7 @@ const Unifier = struct {
                     },
                     .nominal_type => |b_type| {
                         // If this nominal is opaque and we're not in the origin module, error
-                        if (!b_type.canLiftInner(self.module_env.qualified_module_ident)) {
+                        if (!b_type.canLiftInner(self.qualified_module_ident)) {
                             return error.TypeMismatch;
                         }
 
@@ -876,7 +882,7 @@ const Unifier = struct {
                     },
                     .nominal_type => |b_type| {
                         // If this nominal is opaque and we're not in the origin module, error
-                        if (!b_type.canLiftInner(self.module_env.qualified_module_ident)) {
+                        if (!b_type.canLiftInner(self.qualified_module_ident)) {
                             return error.TypeMismatch;
                         }
 
@@ -957,7 +963,7 @@ const Unifier = struct {
                     },
                     .nominal_type => |b_type| {
                         // If this nominal is opaque and we're not in the origin module, error
-                        if (!b_type.canLiftInner(self.module_env.qualified_module_ident)) {
+                        if (!b_type.canLiftInner(self.qualified_module_ident)) {
                             return error.TypeMismatch;
                         }
 
@@ -1101,7 +1107,7 @@ const Unifier = struct {
         defer trace.end();
 
         // If this nominal is opaque and we're not in the origin module, error
-        if (!nominal_type.canLiftInner(self.module_env.qualified_module_ident)) {
+        if (!nominal_type.canLiftInner(self.qualified_module_ident)) {
             return error.TypeMismatch;
         }
 
@@ -1202,7 +1208,7 @@ const Unifier = struct {
         defer trace.end();
 
         // If this nominal is opaque and we're not in the origin module, error
-        if (!nominal_type.canLiftInner(self.module_env.qualified_module_ident)) {
+        if (!nominal_type.canLiftInner(self.qualified_module_ident)) {
             return error.TypeMismatch;
         }
 
@@ -1586,7 +1592,7 @@ const Unifier = struct {
                                         &range,
                                         next_fields.items(.name),
                                         next_fields.items(.var_),
-                                        self.module_env.getIdentStore(),
+                                        self.ident_store,
                                     );
 
                                     ext = .{ .ext = ext_record.ext };
@@ -1599,7 +1605,7 @@ const Unifier = struct {
                                         &range,
                                         next_fields.items(.name),
                                         next_fields.items(.var_),
-                                        self.module_env.getIdentStore(),
+                                        self.ident_store,
                                     );
 
                                     return .{ .ext = ext, .range = range };
@@ -2070,7 +2076,7 @@ const Unifier = struct {
                                 &range,
                                 next_tags.items(.name),
                                 next_tags.items(.args),
-                                self.module_env.getIdentStore(),
+                                self.ident_store,
                             );
 
                             ext_var = ext_tag_union.ext;

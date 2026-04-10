@@ -496,7 +496,9 @@ fn unifyInContext(self: *Self, a: Var, b: Var, env: *Env, ctx: problem.Context) 
 
     // Unify
     const result = try unifier.unifyInContext(
-        self.cir,
+        self.cir.gpa,
+        self.cir.getIdentStoreConst(),
+        self.cir.qualified_module_ident,
         self.types,
         &self.problems,
         &self.snapshots,
@@ -6561,375 +6563,325 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
         defer _ = self.constraint_check_stack.pop();
 
         dispatch_resolution: while (true) {
-        if (dispatcher_content == .err) {
-            // If the root type is an error, then skip constraint checking
-            const constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
-            for (constraints) |constraint| {
-                try self.markConstraintFunctionAsError(constraint, env);
-            }
-            try self.unifyWith(deferred_constraint.var_, .err, env);
-            break :dispatch_resolution;
-        } else if (dispatcher_content == .rigid) {
-            // Get the rigid variable and the constraints it has defined
-            const rigid = dispatcher_content.rigid;
-            const rigid_constraints = self.types.sliceStaticDispatchConstraints(rigid.constraints);
-
-            // Get the deferred constraints to validate against
-            const deferred_constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
-
-            // Build a map of constraints the rigid has
-            self.ident_to_var_map.clearRetainingCapacity();
-            try self.ident_to_var_map.ensureUnusedCapacity(@intCast(rigid_constraints.len));
-            for (rigid_constraints) |rigid_constraint| {
-                self.ident_to_var_map.putAssumeCapacity(rigid_constraint.fn_name, rigid_constraint.fn_var);
-            }
-
-            // Iterate over the constraints
-            for (deferred_constraints) |constraint| {
-                // Extract the function and return type from the constraint
-                const resolved_constraint = self.types.resolveVar(constraint.fn_var);
-                const mb_resolved_func = resolved_constraint.desc.content.unwrapFunc();
-                std.debug.assert(mb_resolved_func != null);
-                const resolved_func = mb_resolved_func.?;
-
-                // Then, lookup the inferred constraint in the actual list of rigid constraints
-                if (self.ident_to_var_map.get(constraint.fn_name)) |rigid_var| {
-                    // Unify the actual function var against the inferred var
-                    //
-                    // TODO: For better error messages, we should check if these
-                    // types are functions, unify each arg, etc. This should look
-                    // similar to e_call
-                    const result = try self.unify(rigid_var, constraint.fn_var, env);
-                    if (result.isProblem()) {
-                        try self.unifyWith(deferred_constraint.var_, .err, env);
-                        try self.unifyWith(resolved_func.ret, .err, env);
-                    }
-                } else {
-                    try self.reportConstraintError(
-                        deferred_constraint.var_,
-                        constraint,
-                        .{ .missing_method = .nominal },
-                        env,
-                        is_numeric_default_pass,
-                    );
-                    continue;
+            if (dispatcher_content == .err) {
+                // If the root type is an error, then skip constraint checking
+                const constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
+                for (constraints) |constraint| {
+                    try self.markConstraintFunctionAsError(constraint, env);
                 }
-            }
-            break :dispatch_resolution;
-        } else if (dispatcher_content == .structure and dispatcher_content.structure == .nominal_type) {
-            // If the root type is a nominal type, then this is valid static dispatch
-            const nominal_type = dispatcher_content.structure.nominal_type;
+                try self.unifyWith(deferred_constraint.var_, .err, env);
+                break :dispatch_resolution;
+            } else if (dispatcher_content == .rigid) {
+                // Get the rigid variable and the constraints it has defined
+                const rigid = dispatcher_content.rigid;
+                const rigid_constraints = self.types.sliceStaticDispatchConstraints(rigid.constraints);
 
-            // Get the module ident that this type was defined in
-            const original_module_ident = nominal_type.origin_module;
+                // Get the deferred constraints to validate against
+                const deferred_constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
 
-            // Check if the nominal type in question is defined in this module
-            const is_this_module = original_module_ident.eql(self.builtin_ctx.module_name);
+                // Build a map of constraints the rigid has
+                self.ident_to_var_map.clearRetainingCapacity();
+                try self.ident_to_var_map.ensureUnusedCapacity(@intCast(rigid_constraints.len));
+                for (rigid_constraints) |rigid_constraint| {
+                    self.ident_to_var_map.putAssumeCapacity(rigid_constraint.fn_name, rigid_constraint.fn_var);
+                }
 
-            // Get the list of exposed items to check
-            const original_env: *const ModuleEnv = blk: {
-                if (is_this_module) {
-                    break :blk self.cir;
-                } else if (original_module_ident.eql(self.cir.idents.builtin_module)) {
-                    // For builtin types, use the builtin module environment directly
-                    if (self.builtin_ctx.builtin_module) |builtin_env| {
-                        break :blk builtin_env;
+                // Iterate over the constraints
+                for (deferred_constraints) |constraint| {
+                    // Extract the function and return type from the constraint
+                    const resolved_constraint = self.types.resolveVar(constraint.fn_var);
+                    const mb_resolved_func = resolved_constraint.desc.content.unwrapFunc();
+                    std.debug.assert(mb_resolved_func != null);
+                    const resolved_func = mb_resolved_func.?;
+
+                    // Then, lookup the inferred constraint in the actual list of rigid constraints
+                    if (self.ident_to_var_map.get(constraint.fn_name)) |rigid_var| {
+                        // Unify the actual function var against the inferred var
+                        //
+                        // TODO: For better error messages, we should check if these
+                        // types are functions, unify each arg, etc. This should look
+                        // similar to e_call
+                        const result = try self.unify(rigid_var, constraint.fn_var, env);
+                        if (result.isProblem()) {
+                            try self.unifyWith(deferred_constraint.var_, .err, env);
+                            try self.unifyWith(resolved_func.ret, .err, env);
+                        }
                     } else {
-                        // This happens when compiling the Builtin module itself
+                        try self.reportConstraintError(
+                            deferred_constraint.var_,
+                            constraint,
+                            .{ .missing_method = .nominal },
+                            env,
+                            is_numeric_default_pass,
+                        );
+                        continue;
+                    }
+                }
+                break :dispatch_resolution;
+            } else if (dispatcher_content == .structure and dispatcher_content.structure == .nominal_type) {
+                // If the root type is a nominal type, then this is valid static dispatch
+                const nominal_type = dispatcher_content.structure.nominal_type;
+
+                // Get the module ident that this type was defined in
+                const original_module_ident = nominal_type.origin_module;
+
+                // Check if the nominal type in question is defined in this module
+                const is_this_module = original_module_ident.eql(self.builtin_ctx.module_name);
+
+                // Get the list of exposed items to check
+                const original_env: *const ModuleEnv = blk: {
+                    if (is_this_module) {
                         break :blk self.cir;
-                    }
-                } else {
-                    // For types from other modules (not this module, not builtin), find the
-                    // module environment from imported_modules by matching the qualified module name.
-                    // We use qualified_module_ident (package-qualified) for comparison since origin_module
-                    // is also package-qualified (e.g., "pf.Builder" rather than just "Builder").
-                    for (self.imported_modules) |imported_env| {
-                        const imported_name = if (!imported_env.qualified_module_ident.isNone())
-                            imported_env.getIdent(imported_env.qualified_module_ident)
-                        else
-                            imported_env.module_name;
-                        const imported_module_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text(imported_name));
-                        if (imported_module_ident.eql(original_module_ident)) {
-                            break :blk imported_env;
+                    } else if (original_module_ident.eql(self.cir.idents.builtin_module)) {
+                        // For builtin types, use the builtin module environment directly
+                        if (self.builtin_ctx.builtin_module) |builtin_env| {
+                            break :blk builtin_env;
+                        } else {
+                            // This happens when compiling the Builtin module itself
+                            break :blk self.cir;
                         }
-                    }
-
-                    // Could not find the module environment. This is an internal compiler error.
-                    std.debug.panic("Unable to find module environment for type {s} from module {s}", .{ self.cir.getIdent(nominal_type.ident.ident_idx), self.cir.getIdent(original_module_ident) });
-                }
-            };
-
-            // Get some data about the nominal type
-            const region = self.getRegionAt(deferred_constraint.var_);
-
-            // Iterate over the constraints
-            const constraints_range = deferred_constraint.constraints;
-            const constraints_len = constraints_range.len();
-            const constraints_start: usize = @intFromEnum(constraints_range.start);
-            var constraint_i: usize = 0;
-            while (constraint_i < constraints_len) : (constraint_i += 1) {
-                // Re-fetch by index each iteration because nested unification can append
-                // constraints and reallocate the backing array.
-                const constraint = self.types.static_dispatch_constraints.items.items[constraints_start + constraint_i];
-                const constraint_fn_resolved = self.types.resolveVar(constraint.fn_var).desc.content;
-                if (constraint_fn_resolved == .err) {
-                    // If this constraint is already an error, the skip this pass
-                    continue;
-                }
-
-                if (constraint.fn_name.eql(self.cir.idents.is_eq) and
-                    self.nominalSupportsImplicitIsEq(nominal_type))
-                {
-                    try self.satisfyImplicitEqualityConstraint(
-                        deferred_constraint.var_,
-                        constraint.fn_var,
-                        env,
-                        region,
-                    );
-                    continue;
-                }
-
-                // Look up the method in the original env using index-based lookup.
-                // Methods are stored with qualified names like "Type.method" (or "Module.Type.method" for builtins).
-                const method_ident = original_env.lookupMethodIdentFromEnvConst(self.cir, nominal_type.ident.ident_idx, constraint.fn_name) orelse {
-                    // Method name doesn't exist in target module
-                    try self.reportConstraintError(
-                        deferred_constraint.var_,
-                        constraint,
-                        .{ .missing_method = .nominal },
-                        env,
-                        is_numeric_default_pass,
-                    );
-                    continue;
-                };
-
-                // Get the def index in the original env
-                const node_idx_in_original_env = original_env.getExposedNodeIndexById(method_ident) orelse {
-                    // The ident exists but isn't exposed as a def
-                    try self.reportConstraintError(
-                        deferred_constraint.var_,
-                        constraint,
-                        .{ .missing_method = .nominal },
-                        env,
-                        is_numeric_default_pass,
-                    );
-                    continue;
-                };
-
-                const def_idx: CIR.Def.Idx = @enumFromInt(@as(u32, @intCast(node_idx_in_original_env)));
-                const def_var: Var = ModuleEnv.varFrom(def_idx);
-
-                // Track whether we just processed a cycle participant
-                var cycle_method_expr_var: ?Var = null;
-
-                if (is_this_module) {
-                    // Check if we've processed this def already.
-                    const def = original_env.store.getDef(def_idx);
-                    const mb_processing_def = self.top_level_ptrns.get(def.pattern);
-                    if (mb_processing_def) |processing_def| {
-                        std.debug.assert(processing_def.def_idx == def_idx);
-                        switch (processing_def.status) {
-                            .not_processed => {
-                                var sub_env = try self.env_pool.acquire();
-                                errdefer self.env_pool.release(sub_env);
-
-                                try sub_env.var_pool.pushRank();
-                                std.debug.assert(sub_env.rank() == .outermost);
-
-                                try self.checkDef(processing_def.def_idx, &sub_env);
-
-                                if (self.defer_generalize) {
-                                    std.debug.assert(self.cycle_root_def != null);
-
-                                    // Cycle detected: store env for merge at cycle root.
-                                    try self.deferred_cycle_envs.append(self.gpa, sub_env);
-                                    // Use the def's closure/expr var directly (same
-                                    // as e_lookup_local .not_processed). After checkDef,
-                                    // e_closure rank elevation has already run, so the
-                                    // closure var is at rank 2 — safe for unification.
-                                    const def_expr_var = ModuleEnv.varFrom(def.expr);
-                                    cycle_method_expr_var = def_expr_var;
-                                } else {
-                                    std.debug.assert(sub_env.rank() == .outermost);
-                                    self.env_pool.release(sub_env);
-                                }
-                            },
-                            .processing => {
-                                if (!isFunctionDef(&self.cir.store, self.cir.store.getExpr(def.expr))) {
-                                    if (builtin.mode == .Debug) {
-                                        std.debug.panic(
-                                            "frontend invariant violated: recursive non-function top-level method/value def {d} reached type checking",
-                                            .{@intFromEnum(processing_def.def_idx)},
-                                        );
-                                    } else unreachable;
-                                }
-
-                                // Create a fresh flex var at the current rank for
-                                // the method type. Using def_var directly (rank
-                                // outermost) would pull body vars to a lower rank
-                                // and prevent generalization.
-                                cycle_method_expr_var = try self.fresh(env, region);
-
-                                // Check if this is mutual recursion through dispatch.
-                                if (self.current_processing_def) |current_def| {
-                                    if (current_def != processing_def.def_idx) {
-                                        if (self.cycle_root_def == null) {
-                                            // First cycle detection: no prior cycle should be in progress.
-                                            std.debug.assert(!self.defer_generalize);
-                                            std.debug.assert(self.deferred_cycle_envs.items.len == 0);
-                                            std.debug.assert(self.deferred_def_unifications.items.len == 0);
-                                            self.cycle_root_def = processing_def.def_idx;
-                                        }
-                                        self.defer_generalize = true;
-                                    }
-                                }
-                            },
-                            .processed => {},
+                    } else {
+                        // For types from other modules (not this module, not builtin), find the
+                        // module environment from imported_modules by matching the qualified module name.
+                        // We use qualified_module_ident (package-qualified) for comparison since origin_module
+                        // is also package-qualified (e.g., "pf.Builder" rather than just "Builder").
+                        for (self.imported_modules) |imported_env| {
+                            const imported_name = if (!imported_env.qualified_module_ident.isNone())
+                                imported_env.getIdent(imported_env.qualified_module_ident)
+                            else
+                                imported_env.module_name;
+                            const imported_module_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text(imported_name));
+                            if (imported_module_ident.eql(original_module_ident)) {
+                                break :blk imported_env;
+                            }
                         }
-                    }
-                }
 
-                // Copy the actual method from the dest module env to this module env
-                const method_var = if (cycle_method_expr_var) |expr_var_for_method| blk: {
-                    // Cycle participant or recursive self-dispatch: use the
-                    // fresh flex var instead of def_var to avoid rank lowering.
-                    break :blk expr_var_for_method;
-                } else if (is_this_module) blk: {
-                    if (self.types.resolveVar(def_var).desc.rank == .generalized)
-                        break :blk try self.instantiateVar(def_var, env, .use_last_var)
-                    else
-                        break :blk def_var;
-                } else blk: {
-                    // Copy the method from the other module's type store
-                    const copied_var = try self.copyVar(def_var, original_env, region);
-                    break :blk try self.instantiateVar(copied_var, env, .{ .explicit = region });
+                        // Could not find the module environment. This is an internal compiler error.
+                        std.debug.panic("Unable to find module environment for type {s} from module {s}", .{ self.cir.getIdent(nominal_type.ident.ident_idx), self.cir.getIdent(original_module_ident) });
+                    }
                 };
 
-                // Unwrap the constraint type
-                const constraint_fn = constraint_fn_resolved.unwrapFunc() orelse {
-                    _ = try self.unifyInContext(method_var, constraint.fn_var, env, .{
-                        .method_type = .{
-                            .constraint_var = constraint.fn_var,
-                            .dispatcher_name = nominal_type.ident.ident_idx,
-                            .method_name = constraint.fn_name,
-                        },
-                    });
-                    try self.unifyWith(deferred_constraint.var_, .err, env);
-                    continue;
-                };
+                // Get some data about the nominal type
+                const region = self.getRegionAt(deferred_constraint.var_);
 
-                const fn_result = try self.unifyInContext(method_var, constraint.fn_var, env, .{
-                    .method_type = .{
-                        .constraint_var = deferred_constraint.var_,
-                        .dispatcher_name = nominal_type.ident.ident_idx,
-                        .method_name = constraint.fn_name,
-                    },
-                });
-                if (!fn_result.isProblem()) {
-                    try self.recordResolvedStaticDispatchSite(constraint.fn_var, original_env, def_idx);
-                }
-
-                // If there was a problem, then ensure the error gets propagated
-                // to all args and return types.
-                if (fn_result.isProblem()) {
-                    // Use iterator instead of slice because unifyWith may trigger reallocations
-                    var args_iter = self.types.iterVars(constraint_fn.args);
-                    while (args_iter.next()) |arg| {
-                        // Propagate the error to args — necessary because constraint fn args
-                        // are shared with actual expression vars (e.g., binop lhs/rhs), and
-                        // leaving them non-err after a dispatch failure causes type confusion.
-                        try self.unifyWith(arg, .err, env);
+                // Iterate over the constraints
+                const constraints_range = deferred_constraint.constraints;
+                const constraints_len = constraints_range.len();
+                const constraints_start: usize = @intFromEnum(constraints_range.start);
+                var constraint_i: usize = 0;
+                while (constraint_i < constraints_len) : (constraint_i += 1) {
+                    // Re-fetch by index each iteration because nested unification can append
+                    // constraints and reallocate the backing array.
+                    const constraint = self.types.static_dispatch_constraints.items.items[constraints_start + constraint_i];
+                    const constraint_fn_resolved = self.types.resolveVar(constraint.fn_var).desc.content;
+                    if (constraint_fn_resolved == .err) {
+                        // If this constraint is already an error, the skip this pass
+                        continue;
                     }
-                    try self.unifyWith(deferred_constraint.var_, .err, env);
-                    try self.unifyWith(constraint_fn.ret, .err, env);
-                }
 
-                // Note: from_numeral constraint validation happens during comptime evaluation
-                // in ComptimeEvaluator.validateDeferredNumericLiterals()
-            }
-            break :dispatch_resolution;
-        } else if (dispatcher_content == .structure and
-            (dispatcher_content.structure == .record or
-                dispatcher_content.structure == .tuple or
-                dispatcher_content.structure == .tag_union or
-                dispatcher_content.structure == .empty_record or
-                dispatcher_content.structure == .empty_tag_union))
-        {
-            // Anonymous structural types (records, tuples, tag unions) have implicit is_eq
-            // only if all their components also support is_eq
-            const constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
-            for (constraints) |constraint| {
-                // Check if this is a call to is_eq (anonymous types have implicit structural equality)
-                if (constraint.fn_name.eql(self.cir.idents.is_eq)) {
-                    // Check if all components of this anonymous type support is_eq
-                    if (self.typeSupportsIsEq(dispatcher_content.structure)) {
+                    if (constraint.fn_name.eql(self.cir.idents.is_eq) and
+                        self.nominalSupportsImplicitIsEq(nominal_type))
+                    {
                         try self.satisfyImplicitEqualityConstraint(
                             deferred_constraint.var_,
                             constraint.fn_var,
                             env,
-                            self.getRegionAt(deferred_constraint.var_),
+                            region,
                         );
-                    } else {
-                        // Some component doesn't support is_eq (e.g., contains a function)
-                        try self.reportEqualityError(
-                            deferred_constraint.var_,
-                            constraint,
-                            env,
-                        );
+                        continue;
                     }
-                } else {
-                    // Structural types (other than is_eq) cannot have methods called on them.
-                    // The user must explicitly wrap the value in a nominal type.
-                    try self.reportConstraintError(
-                        deferred_constraint.var_,
-                        constraint,
-                        .not_nominal,
-                        env,
-                        is_numeric_default_pass,
-                    );
-                }
-            }
-            break :dispatch_resolution;
-        } else if (dispatcher_content == .flex) {
-            const flex_constraints = self.types.sliceStaticDispatchConstraints(dispatcher_content.flex.constraints);
-            if (is_numeric_default_pass and self.flexHasFromNumeralConstraint(flex_constraints)) {
-                if (dispatcher_resolved.desc.rank != .generalized) {
-                    try self.unifyWith(deferred_constraint.var_, try self.mkDecContent(env), env);
-                    dispatcher_resolved = self.types.resolveVar(deferred_constraint.var_);
-                    dispatcher_content = dispatcher_resolved.desc.content;
-                    continue :dispatch_resolution;
-                }
 
-                try self.validateGeneralizedNumericConstraintsAsDec(
-                    deferred_constraint,
-                    env,
-                    is_numeric_default_pass,
-                );
-                break :dispatch_resolution;
-            }
-
-            // If the dispatcher is a flex, hold onto the constraint to try again later.
-            // Note: flex vars with from_numeral constraints are validated separately
-            // in checkFlexVarConstraintCompatibility after type checking completes.
-            _ = try self.scratch_deferred_static_dispatch_constraints.append(deferred_constraint);
-            break :dispatch_resolution;
-        } else {
-            // If the root type is anything but a nominal type or anonymous structural type, push an error
-            // This handles function types, which do not support any methods
-
-            const constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
-            if (constraints.len > 0) {
-                // Report errors for ALL failing constraints, not just the first one
-                for (constraints) |constraint| {
-                    // For is_eq constraints, use the specific equality error message
-                    // Use ident index comparison instead of string comparison
-                    if (constraint.fn_name.eql(self.cir.idents.is_eq)) {
-                        try self.reportEqualityError(
+                    // Look up the method in the original env using index-based lookup.
+                    // Methods are stored with qualified names like "Type.method" (or "Module.Type.method" for builtins).
+                    const method_ident = original_env.lookupMethodIdentFromEnvConst(self.cir, nominal_type.ident.ident_idx, constraint.fn_name) orelse {
+                        // Method name doesn't exist in target module
+                        try self.reportConstraintError(
                             deferred_constraint.var_,
                             constraint,
+                            .{ .missing_method = .nominal },
                             env,
+                            is_numeric_default_pass,
                         );
+                        continue;
+                    };
+
+                    // Get the def index in the original env
+                    const node_idx_in_original_env = original_env.getExposedNodeIndexById(method_ident) orelse {
+                        // The ident exists but isn't exposed as a def
+                        try self.reportConstraintError(
+                            deferred_constraint.var_,
+                            constraint,
+                            .{ .missing_method = .nominal },
+                            env,
+                            is_numeric_default_pass,
+                        );
+                        continue;
+                    };
+
+                    const def_idx: CIR.Def.Idx = @enumFromInt(@as(u32, @intCast(node_idx_in_original_env)));
+                    const def_var: Var = ModuleEnv.varFrom(def_idx);
+
+                    // Track whether we just processed a cycle participant
+                    var cycle_method_expr_var: ?Var = null;
+
+                    if (is_this_module) {
+                        // Check if we've processed this def already.
+                        const def = original_env.store.getDef(def_idx);
+                        const mb_processing_def = self.top_level_ptrns.get(def.pattern);
+                        if (mb_processing_def) |processing_def| {
+                            std.debug.assert(processing_def.def_idx == def_idx);
+                            switch (processing_def.status) {
+                                .not_processed => {
+                                    var sub_env = try self.env_pool.acquire();
+                                    errdefer self.env_pool.release(sub_env);
+
+                                    try sub_env.var_pool.pushRank();
+                                    std.debug.assert(sub_env.rank() == .outermost);
+
+                                    try self.checkDef(processing_def.def_idx, &sub_env);
+
+                                    if (self.defer_generalize) {
+                                        std.debug.assert(self.cycle_root_def != null);
+
+                                        // Cycle detected: store env for merge at cycle root.
+                                        try self.deferred_cycle_envs.append(self.gpa, sub_env);
+                                        // Use the def's closure/expr var directly (same
+                                        // as e_lookup_local .not_processed). After checkDef,
+                                        // e_closure rank elevation has already run, so the
+                                        // closure var is at rank 2 — safe for unification.
+                                        const def_expr_var = ModuleEnv.varFrom(def.expr);
+                                        cycle_method_expr_var = def_expr_var;
+                                    } else {
+                                        std.debug.assert(sub_env.rank() == .outermost);
+                                        self.env_pool.release(sub_env);
+                                    }
+                                },
+                                .processing => {
+                                    if (!isFunctionDef(&self.cir.store, self.cir.store.getExpr(def.expr))) {
+                                        if (builtin.mode == .Debug) {
+                                            std.debug.panic(
+                                                "frontend invariant violated: recursive non-function top-level method/value def {d} reached type checking",
+                                                .{@intFromEnum(processing_def.def_idx)},
+                                            );
+                                        } else unreachable;
+                                    }
+
+                                    // Create a fresh flex var at the current rank for
+                                    // the method type. Using def_var directly (rank
+                                    // outermost) would pull body vars to a lower rank
+                                    // and prevent generalization.
+                                    cycle_method_expr_var = try self.fresh(env, region);
+
+                                    // Check if this is mutual recursion through dispatch.
+                                    if (self.current_processing_def) |current_def| {
+                                        if (current_def != processing_def.def_idx) {
+                                            if (self.cycle_root_def == null) {
+                                                // First cycle detection: no prior cycle should be in progress.
+                                                std.debug.assert(!self.defer_generalize);
+                                                std.debug.assert(self.deferred_cycle_envs.items.len == 0);
+                                                std.debug.assert(self.deferred_def_unifications.items.len == 0);
+                                                self.cycle_root_def = processing_def.def_idx;
+                                            }
+                                            self.defer_generalize = true;
+                                        }
+                                    }
+                                },
+                                .processed => {},
+                            }
+                        }
+                    }
+
+                    // Copy the actual method from the dest module env to this module env
+                    const method_var = if (cycle_method_expr_var) |expr_var_for_method| blk: {
+                        // Cycle participant or recursive self-dispatch: use the
+                        // fresh flex var instead of def_var to avoid rank lowering.
+                        break :blk expr_var_for_method;
+                    } else if (is_this_module) blk: {
+                        if (self.types.resolveVar(def_var).desc.rank == .generalized)
+                            break :blk try self.instantiateVar(def_var, env, .use_last_var)
+                        else
+                            break :blk def_var;
+                    } else blk: {
+                        // Copy the method from the other module's type store
+                        const copied_var = try self.copyVar(def_var, original_env, region);
+                        break :blk try self.instantiateVar(copied_var, env, .{ .explicit = region });
+                    };
+
+                    // Unwrap the constraint type
+                    const constraint_fn = constraint_fn_resolved.unwrapFunc() orelse {
+                        _ = try self.unifyInContext(method_var, constraint.fn_var, env, .{
+                            .method_type = .{
+                                .constraint_var = constraint.fn_var,
+                                .dispatcher_name = nominal_type.ident.ident_idx,
+                                .method_name = constraint.fn_name,
+                            },
+                        });
+                        try self.unifyWith(deferred_constraint.var_, .err, env);
+                        continue;
+                    };
+
+                    const fn_result = try self.unifyInContext(method_var, constraint.fn_var, env, .{
+                        .method_type = .{
+                            .constraint_var = deferred_constraint.var_,
+                            .dispatcher_name = nominal_type.ident.ident_idx,
+                            .method_name = constraint.fn_name,
+                        },
+                    });
+                    if (!fn_result.isProblem()) {
+                        try self.recordResolvedStaticDispatchSite(constraint.fn_var, original_env, def_idx);
+                    }
+
+                    // If there was a problem, then ensure the error gets propagated
+                    // to all args and return types.
+                    if (fn_result.isProblem()) {
+                        // Use iterator instead of slice because unifyWith may trigger reallocations
+                        var args_iter = self.types.iterVars(constraint_fn.args);
+                        while (args_iter.next()) |arg| {
+                            // Propagate the error to args — necessary because constraint fn args
+                            // are shared with actual expression vars (e.g., binop lhs/rhs), and
+                            // leaving them non-err after a dispatch failure causes type confusion.
+                            try self.unifyWith(arg, .err, env);
+                        }
+                        try self.unifyWith(deferred_constraint.var_, .err, env);
+                        try self.unifyWith(constraint_fn.ret, .err, env);
+                    }
+
+                    // Note: from_numeral constraint validation happens during comptime evaluation
+                    // in ComptimeEvaluator.validateDeferredNumericLiterals()
+                }
+                break :dispatch_resolution;
+            } else if (dispatcher_content == .structure and
+                (dispatcher_content.structure == .record or
+                    dispatcher_content.structure == .tuple or
+                    dispatcher_content.structure == .tag_union or
+                    dispatcher_content.structure == .empty_record or
+                    dispatcher_content.structure == .empty_tag_union))
+            {
+                // Anonymous structural types (records, tuples, tag unions) have implicit is_eq
+                // only if all their components also support is_eq
+                const constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
+                for (constraints) |constraint| {
+                    // Check if this is a call to is_eq (anonymous types have implicit structural equality)
+                    if (constraint.fn_name.eql(self.cir.idents.is_eq)) {
+                        // Check if all components of this anonymous type support is_eq
+                        if (self.typeSupportsIsEq(dispatcher_content.structure)) {
+                            try self.satisfyImplicitEqualityConstraint(
+                                deferred_constraint.var_,
+                                constraint.fn_var,
+                                env,
+                                self.getRegionAt(deferred_constraint.var_),
+                            );
+                        } else {
+                            // Some component doesn't support is_eq (e.g., contains a function)
+                            try self.reportEqualityError(
+                                deferred_constraint.var_,
+                                constraint,
+                                env,
+                            );
+                        }
                     } else {
+                        // Structural types (other than is_eq) cannot have methods called on them.
+                        // The user must explicitly wrap the value in a nominal type.
                         try self.reportConstraintError(
                             deferred_constraint.var_,
                             constraint,
@@ -6939,13 +6891,63 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         );
                     }
                 }
+                break :dispatch_resolution;
+            } else if (dispatcher_content == .flex) {
+                const flex_constraints = self.types.sliceStaticDispatchConstraints(dispatcher_content.flex.constraints);
+                if (is_numeric_default_pass and self.flexHasFromNumeralConstraint(flex_constraints)) {
+                    if (dispatcher_resolved.desc.rank != .generalized) {
+                        try self.unifyWith(deferred_constraint.var_, try self.mkDecContent(env), env);
+                        dispatcher_resolved = self.types.resolveVar(deferred_constraint.var_);
+                        dispatcher_content = dispatcher_resolved.desc.content;
+                        continue :dispatch_resolution;
+                    }
+
+                    try self.validateGeneralizedNumericConstraintsAsDec(
+                        deferred_constraint,
+                        env,
+                        is_numeric_default_pass,
+                    );
+                    break :dispatch_resolution;
+                }
+
+                // If the dispatcher is a flex, hold onto the constraint to try again later.
+                // Note: flex vars with from_numeral constraints are validated separately
+                // in checkFlexVarConstraintCompatibility after type checking completes.
+                _ = try self.scratch_deferred_static_dispatch_constraints.append(deferred_constraint);
+                break :dispatch_resolution;
             } else {
-                // Deferred constraint checks should always have at least one constraint.
-                // If we hit this, there's a compiler bug in how constraints are tracked.
-                std.debug.assert(false);
+                // If the root type is anything but a nominal type or anonymous structural type, push an error
+                // This handles function types, which do not support any methods
+
+                const constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
+                if (constraints.len > 0) {
+                    // Report errors for ALL failing constraints, not just the first one
+                    for (constraints) |constraint| {
+                        // For is_eq constraints, use the specific equality error message
+                        // Use ident index comparison instead of string comparison
+                        if (constraint.fn_name.eql(self.cir.idents.is_eq)) {
+                            try self.reportEqualityError(
+                                deferred_constraint.var_,
+                                constraint,
+                                env,
+                            );
+                        } else {
+                            try self.reportConstraintError(
+                                deferred_constraint.var_,
+                                constraint,
+                                .not_nominal,
+                                env,
+                                is_numeric_default_pass,
+                            );
+                        }
+                    }
+                } else {
+                    // Deferred constraint checks should always have at least one constraint.
+                    // If we hit this, there's a compiler bug in how constraints are tracked.
+                    std.debug.assert(false);
+                }
+                break :dispatch_resolution;
             }
-            break :dispatch_resolution;
-        }
         }
     }
 

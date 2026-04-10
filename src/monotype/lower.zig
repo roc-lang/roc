@@ -9143,7 +9143,6 @@ pub const Lowerer = struct {
         right: Var,
     ) std.mem.Allocator.Error!void {
         const mir_module = self.ctx.mirModule(module_idx);
-        const env = mir_module.moduleEnvMut();
         var problems = try check.problem.Store.init(self.allocator);
         defer problems.deinit(self.allocator);
         var snapshots = try check.snapshot.Store.initCapacity(self.allocator, 16);
@@ -9167,8 +9166,10 @@ pub const Lowerer = struct {
         defer occurs_scratch.deinit();
 
         const result = try check.unifier.unify(
-            env,
-            &env.types,
+            self.allocator,
+            mir_module.identStoreConst(),
+            mir_module.qualifiedModuleIdent(),
+            mir_module.typeStoreMut(),
             &problems,
             &snapshots,
             &type_writer,
@@ -9606,7 +9607,7 @@ fn isLambdaExpr(expr: CIR.Expr) bool {
 }
 
 fn isRecursiveTopLevelDef(mir_module: mir.Module, def_idx: CIR.Def.Idx) bool {
-    const evaluation_order = mir_module.moduleEnvConst().evaluation_order orelse return false;
+    const evaluation_order = mir_module.evaluationOrder() orelse return false;
     for (evaluation_order.sccs) |scc| {
         for (scc.defs) |member| {
             if (member == def_idx) return scc.is_recursive;

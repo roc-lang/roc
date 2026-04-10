@@ -259,14 +259,6 @@ pub const Module = struct {
         return &@constCast(self.env).types;
     }
 
-    pub fn moduleEnvConst(self: @This()) *const ModuleEnv {
-        return self.env;
-    }
-
-    pub fn moduleEnvMut(self: @This()) *ModuleEnv {
-        return @constCast(self.env);
-    }
-
     pub fn identStoreConst(self: @This()) *const Ident.Store {
         return self.env.getIdentStoreConst();
     }
@@ -281,6 +273,14 @@ pub const Module = struct {
 
     pub fn commonIdents(self: @This()) ModuleEnv.CommonIdents {
         return self.env.idents;
+    }
+
+    pub fn qualifiedModuleIdent(self: @This()) Ident.Idx {
+        return self.env.qualified_module_ident;
+    }
+
+    pub fn evaluationOrder(self: @This()) ?*can.DependencyGraph.EvaluationOrder {
+        return self.env.evaluation_order;
     }
 
     pub fn findCommonIdent(self: @This(), text: []const u8) ?Ident.Idx {
