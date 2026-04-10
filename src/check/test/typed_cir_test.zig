@@ -2,7 +2,6 @@ const std = @import("std");
 const can = @import("can");
 
 const CIR = can.CIR;
-const ModuleEnv = can.ModuleEnv;
 const TestEnv = @import("./TestEnv.zig");
 const TypedCIR = @import("../typed_cir.zig");
 
@@ -25,17 +24,17 @@ test "typed CIR exposes solved vars on defs exprs and patterns" {
     try std.testing.expect(defs.len >= 2);
 
     for (defs) |def_idx| {
-        const mir_def = module.def(def_idx);
-        try std.testing.expectEqual(def_idx, mir_def.idx);
-        try std.testing.expectEqual(ModuleEnv.varFrom(mir_def.data.expr), mir_def.expr.ty());
-        try std.testing.expectEqual(ModuleEnv.varFrom(mir_def.data.pattern), mir_def.pattern.ty());
+        const typed_cir_def = module.def(def_idx);
+        try std.testing.expectEqual(def_idx, typed_cir_def.idx);
+        try std.testing.expectEqual(module.exprType(typed_cir_def.data.expr), typed_cir_def.expr.ty());
+        try std.testing.expectEqual(module.patternType(typed_cir_def.data.pattern), typed_cir_def.pattern.ty());
 
-        switch (mir_def.expr.data) {
+        switch (typed_cir_def.expr.data) {
             .e_lambda => |lambda| {
                 const arg_patterns = test_env.module_env.store.slicePatterns(lambda.args);
                 try std.testing.expect(arg_patterns.len > 0);
-                const mir_arg = module.pattern(arg_patterns[0]);
-                try std.testing.expectEqual(ModuleEnv.varFrom(arg_patterns[0]), mir_arg.ty());
+                const typed_cir_arg = module.pattern(arg_patterns[0]);
+                try std.testing.expectEqual(module.patternType(arg_patterns[0]), typed_cir_arg.ty());
             },
             else => {},
         }

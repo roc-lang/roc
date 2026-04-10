@@ -16,8 +16,6 @@ pub const problem = @import("problem.zig");
 pub const report = @import("report.zig");
 /// **Exhaustiveness Checking**
 pub const exhaustive = @import("exhaustive.zig");
-/// **Cross-module type copying**
-pub const copy_import = @import("copy_import.zig");
 pub const TypedCIR = @import("typed_cir.zig");
 
 pub const Check = @import("Check.zig");
@@ -27,7 +25,6 @@ pub const ReportBuilder = report.ReportBuilder;
 
 test "check tests" {
     std.testing.refAllDecls(@import("Check.zig"));
-    std.testing.refAllDecls(@import("copy_import.zig"));
     std.testing.refAllDecls(@import("exhaustive.zig"));
     std.testing.refAllDecls(@import("occurs.zig"));
     std.testing.refAllDecls(@import("problem.zig"));

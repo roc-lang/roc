@@ -2163,6 +2163,16 @@ const core_tests = [_]TestCase{
     .{ .name = "inspect: match record payload tag", .source = "match Err({ code: 1, msg: \"boom\" }) { Err({ code, msg: _msg }) => code, Ok(_) => 0 }", .expected = .{ .inspect_str = "1.0" } },
     .{ .name = "inspect: direct list pattern destructure sum", .source = "match [1, 2, 3] { [a, b, c] => a + b + c, _ => 0 }", .expected = .{ .inspect_str = "6.0" } },
     .{ .name = "inspect: List.len on literal", .source = "List.len([1, 2, 3])", .expected = .{ .inspect_str = "3" } },
+    .{
+        .name = "inspect: generic local List.len specialization stays resolved",
+        .source_kind = .module,
+        .source =
+        \\measure = |xs| xs.len()
+        \\
+        \\main = (measure([1, 2, 3]), measure(["a", "bb"]))
+        ,
+        .expected = .{ .inspect_str = "(3, 2)" },
+    },
     .{ .name = "inspect: List.fold builtin sum", .source = "List.fold([1, 2, 3], 0, |acc, item| acc + item)", .expected = .{ .inspect_str = "6.0" } },
     .{ .name = "inspect: List.any true on integers", .source = "List.any([1, 0, 1, 0, -1], |x| x > 0)", .expected = .{ .inspect_str = "True" } },
     .{ .name = "inspect: List.any false on positive integers with negative predicate", .source = "List.any([9, 8, 7, 6, 5], |x| x < 0)", .expected = .{ .inspect_str = "False" } },
@@ -2173,6 +2183,21 @@ const core_tests = [_]TestCase{
     .{ .name = "inspect: List.contains false for missing element", .source = "List.contains([-1, -2, -3, 1, 2, 3], 0)", .expected = .{ .inspect_str = "False" } },
     .{ .name = "inspect: List.contains true when element is found", .source = "List.contains([1, 2, 3, 4, 5], 3)", .expected = .{ .inspect_str = "True" } },
     .{ .name = "inspect: List.contains false on empty list", .source = "List.contains([], 3333)", .expected = .{ .inspect_str = "False" } },
+    .{
+        .name = "inspect: generic local attached method specialization on nominal",
+        .source_kind = .module,
+        .source =
+        \\Counter := [Counter(U64)].{
+        \\  get : Counter -> U64
+        \\  get = |Counter.Counter(n)| n
+        \\}
+        \\
+        \\read = |value| value.get()
+        \\
+        \\main = (read(Counter.Counter(5)), read(Counter.Counter(8)))
+        ,
+        .expected = .{ .inspect_str = "(5, 8)" },
+    },
     .{ .name = "inspect: empty record literal", .source = "{}", .expected = .{ .inspect_str = "{}" } },
     .{ .name = "inspect: decimal literal one eighth", .source = "0.125", .expected = .{ .inspect_str = "0.125" } },
     .{ .name = "inspect: decimal addition one tenth plus two tenths", .source = "0.1 + 0.2", .expected = .{ .inspect_str = "0.3" } },

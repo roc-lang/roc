@@ -55,6 +55,12 @@ pub const ExplicitFunctionTypeFact = struct {
 };
 
 pub const ResolvedDispatchTargetFact = struct {
+    /// Concrete target chosen for a source dispatch site in a particular specialization.
+    ///
+    /// These facts come from one of two explicit publication paths:
+    /// - checker-resolved source sites carried through typed CIR
+    /// - monotype specialization-local publication once a polymorphic receiver has been
+    ///   bound to an exact workspace type
     module_idx: u32,
     def_idx: CIR.Def.Idx,
 };
