@@ -259,6 +259,14 @@ pub const Module = struct {
         return &@constCast(self.env).types;
     }
 
+    pub fn moduleEnvConst(self: @This()) *const ModuleEnv {
+        return self.env;
+    }
+
+    pub fn moduleEnvMut(self: @This()) *ModuleEnv {
+        return @constCast(self.env);
+    }
+
     pub fn identStoreConst(self: @This()) *const Ident.Store {
         return self.env.getIdentStoreConst();
     }

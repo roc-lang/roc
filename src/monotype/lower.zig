@@ -110,10 +110,6 @@ const Ctx = struct {
         self.types.deinit();
     }
 
-    fn env(self: *const Ctx, module_idx: u32) *const ModuleEnv {
-        return self.mir_modules.module(module_idx).env;
-    }
-
     fn mirModule(self: *const Ctx, module_idx: u32) mir.Module {
         return self.mir_modules.module(module_idx);
     }
@@ -176,7 +172,7 @@ const Ctx = struct {
         ident: base.Ident.Idx,
     ) std.mem.Allocator.Error!base.Ident.Idx {
         if (ident.isNone()) return ident;
-        const text = self.env(module_idx).getIdent(ident);
+        const text = self.mirModule(module_idx).getIdent(ident);
         return self.idents.insert(self.allocator, base.Ident.for_text(text));
     }
 };
@@ -946,7 +942,7 @@ pub const Lowerer = struct {
             binding_env,
             pending.specialized_symbol,
             solved_def.expr.idx,
-            isRecursiveTopLevelDef(mir_module.env, pending.source.def_idx),
+            isRecursiveTopLevelDef(mir_module, pending.source.def_idx),
             null,
             specialized_checker_var,
         );
@@ -5633,14 +5629,14 @@ pub const Lowerer = struct {
         source_var: ?Var,
     ) ?Var {
         const root = source_var orelse return null;
-        const env = self.ctx.env(module_idx);
-        const resolved = env.types.resolveVar(root);
+        const mir_module = self.ctx.mirModule(module_idx);
+        const resolved = mir_module.typeStoreConst().resolveVar(root);
         return switch (resolved.desc.content) {
             .structure => |flat| switch (flat) {
-                .nominal_type => |nominal| self.resolveTransparentBackingVar(module_idx, env.types.getNominalBackingVar(nominal)),
+                .nominal_type => |nominal| self.resolveTransparentBackingVar(module_idx, mir_module.typeStoreConst().getNominalBackingVar(nominal)),
                 else => root,
             },
-            .alias => |alias| self.resolveTransparentBackingVar(module_idx, env.types.getAliasBackingVar(alias)),
+            .alias => |alias| self.resolveTransparentBackingVar(module_idx, mir_module.typeStoreConst().getAliasBackingVar(alias)),
             else => root,
         };
     }
@@ -7043,7 +7039,7 @@ pub const Lowerer = struct {
     ) std.mem.Allocator.Error!type_mod.TypeId {
         const mir_module = self.ctx.mirModule(module_idx);
         const resolved = mir_module.typeStoreConst().resolveVar(var_);
-        if (self.defaultNumeralPrimitiveForContent(mir_module.env, resolved.desc.content)) |prim| {
+        if (self.defaultNumeralPrimitiveForContent(mir_module, resolved.desc.content)) |prim| {
             return self.makePrimitiveType(prim);
         }
         const key: TypeCloneScope.TypeKey = .{ .module_idx = module_idx, .var_ = resolved.var_ };
@@ -7091,13 +7087,13 @@ pub const Lowerer = struct {
             },
             .alias => |alias| .{ .link = try self.lowerInstantiatedType(module_idx, type_scope, mir_module.typeStoreConst().getAliasBackingVar(alias)) },
             .flex => |flex| blk: {
-                if (try self.defaultPrimitiveForConstraints(module_idx, mir_module.env, flex.constraints)) |prim| {
+                if (try self.defaultPrimitiveForConstraints(module_idx, mir_module, flex.constraints)) |prim| {
                     break :blk .{ .primitive = prim };
                 }
                 break :blk .placeholder;
             },
             .rigid => |rigid| blk: {
-                if (try self.defaultPrimitiveForConstraints(module_idx, mir_module.env, rigid.constraints)) |prim| {
+                if (try self.defaultPrimitiveForConstraints(module_idx, mir_module, rigid.constraints)) |prim| {
                     break :blk .{ .primitive = prim };
                 }
                 break :blk .placeholder;
@@ -7129,18 +7125,18 @@ pub const Lowerer = struct {
         initial_tags: types.Tag.SafeMultiList.Range,
         initial_ext: Var,
     ) std.mem.Allocator.Error!type_mod.Content {
-        const env = self.ctx.env(module_idx);
+        const mir_module = self.ctx.mirModule(module_idx);
         var lowered_tags = std.ArrayList(type_mod.Tag).empty;
         defer lowered_tags.deinit(self.allocator);
 
         var next_tags = initial_tags;
         var next_ext = initial_ext;
         while (true) {
-            const tags_slice = env.types.getTagsSlice(next_tags);
+            const tags_slice = mir_module.typeStoreConst().getTagsSlice(next_tags);
             try lowered_tags.ensureUnusedCapacity(self.allocator, next_tags.len());
             for (0..tags_slice.len) |i| {
                 const tag_name = tags_slice.items(.name)[i];
-                const tag_args = env.types.sliceVars(tags_slice.items(.args)[i]);
+                const tag_args = mir_module.typeStoreConst().sliceVars(tags_slice.items(.args)[i]);
                 const arg_ids = try self.allocator.alloc(type_mod.TypeId, tag_args.len);
                 defer self.allocator.free(arg_ids);
                 for (tag_args, 0..) |arg_var, j| {
@@ -7152,10 +7148,10 @@ pub const Lowerer = struct {
                 });
             }
 
-            const resolved_ext = env.types.resolveVar(next_ext);
+            const resolved_ext = mir_module.typeStoreConst().resolveVar(next_ext);
             switch (resolved_ext.desc.content) {
                 .alias => |alias| {
-                    next_ext = env.types.getAliasBackingVar(alias);
+                    next_ext = mir_module.typeStoreConst().getAliasBackingVar(alias);
                 },
                 .structure => |flat| switch (flat) {
                     .tag_union => |tag_union| {
@@ -7167,17 +7163,17 @@ pub const Lowerer = struct {
                 },
                 .flex => |flex| {
                     if (flex.constraints.len() == 0) break;
-                    self.debugPanicUnresolvedTypeVar(env, module_idx, resolved_ext.var_);
+                    self.debugPanicUnresolvedTypeVar(mir_module, module_idx, resolved_ext.var_);
                 },
                 .rigid => |rigid| {
                     if (rigid.constraints.len() == 0) break;
-                    self.debugPanicUnresolvedTypeVar(env, module_idx, resolved_ext.var_);
+                    self.debugPanicUnresolvedTypeVar(mir_module, module_idx, resolved_ext.var_);
                 },
                 .err => return .placeholder,
             }
         }
 
-        if (isBuiltinBoolTagUnionSlice(env, lowered_tags.items)) {
+        if (isBuiltinBoolTagUnionSlice(mir_module, lowered_tags.items)) {
             return .{ .primitive = .bool };
         }
 
@@ -7232,14 +7228,14 @@ pub const Lowerer = struct {
         initial_fields: types.RecordField.SafeMultiList.Range,
         initial_ext: Var,
     ) std.mem.Allocator.Error!type_mod.Content {
-        const env = self.ctx.env(module_idx);
+        const mir_module = self.ctx.mirModule(module_idx);
         var lowered_fields = std.ArrayList(type_mod.Field).empty;
         defer lowered_fields.deinit(self.allocator);
 
         var next_fields = initial_fields;
         var next_ext = initial_ext;
         while (true) {
-            const fields_slice = env.types.getRecordFieldsSlice(next_fields);
+            const fields_slice = mir_module.typeStoreConst().getRecordFieldsSlice(next_fields);
             try lowered_fields.ensureUnusedCapacity(self.allocator, next_fields.len());
             for (0..fields_slice.len) |i| {
                 lowered_fields.appendAssumeCapacity(.{
@@ -7248,10 +7244,10 @@ pub const Lowerer = struct {
                 });
             }
 
-            const resolved_ext = env.types.resolveVar(next_ext);
+            const resolved_ext = mir_module.typeStoreConst().resolveVar(next_ext);
             switch (resolved_ext.desc.content) {
                 .alias => |alias| {
-                    next_ext = env.types.getAliasBackingVar(alias);
+                    next_ext = mir_module.typeStoreConst().getAliasBackingVar(alias);
                 },
                 .structure => |flat| switch (flat) {
                     .record => |record| {
@@ -7260,7 +7256,7 @@ pub const Lowerer = struct {
                     },
                     .record_unbound => |fields| {
                         next_fields = fields;
-                        const ext_fields_slice = env.types.getRecordFieldsSlice(next_fields);
+                        const ext_fields_slice = mir_module.typeStoreConst().getRecordFieldsSlice(next_fields);
                         try lowered_fields.ensureUnusedCapacity(self.allocator, next_fields.len());
                         for (0..ext_fields_slice.len) |i| {
                             lowered_fields.appendAssumeCapacity(.{
@@ -7275,11 +7271,11 @@ pub const Lowerer = struct {
                 },
                 .flex => |flex| {
                     if (flex.constraints.len() == 0) break;
-                    self.debugPanicUnresolvedTypeVar(env, module_idx, resolved_ext.var_);
+                    self.debugPanicUnresolvedTypeVar(mir_module, module_idx, resolved_ext.var_);
                 },
                 .rigid => |rigid| {
                     if (rigid.constraints.len() == 0) break;
-                    self.debugPanicUnresolvedTypeVar(env, module_idx, resolved_ext.var_);
+                    self.debugPanicUnresolvedTypeVar(mir_module, module_idx, resolved_ext.var_);
                 },
                 .err => return .placeholder,
             }
@@ -7302,8 +7298,8 @@ pub const Lowerer = struct {
         type_scope: *TypeCloneScope,
         fields: types.RecordField.SafeMultiList.Range,
     ) std.mem.Allocator.Error!type_mod.Content {
-        const env = self.ctx.env(module_idx);
-        const fields_slice = env.types.getRecordFieldsSlice(fields);
+        const mir_module = self.ctx.mirModule(module_idx);
+        const fields_slice = mir_module.typeStoreConst().getRecordFieldsSlice(fields);
         const lowered_fields = try self.allocator.alloc(type_mod.Field, fields_slice.len);
         defer self.allocator.free(lowered_fields);
         for (0..fields_slice.len) |i| {
@@ -7329,28 +7325,28 @@ pub const Lowerer = struct {
         nominal_type_id: type_mod.TypeId,
         nominal: types.NominalType,
     ) std.mem.Allocator.Error!type_mod.Content {
-        const env = self.ctx.env(module_idx);
+        const mir_module = self.ctx.mirModule(module_idx);
         const defining = try self.resolveNominalDefiningIdentity(module_idx, nominal);
         const defining_ident = defining.ident;
-        const defining_env = defining.env;
+        const defining_module = defining.module;
 
-        if (defining_ident.eql(defining_env.idents.str) or defining_ident.eql(defining_env.idents.builtin_str)) {
+        if (defining_ident.eql(defining_module.commonIdents().str) or defining_ident.eql(defining_module.commonIdents().builtin_str)) {
             return .{ .primitive = .str };
         }
-        if (defining_ident.eql(defining_env.idents.list)) {
-            const args = env.types.sliceNominalArgs(nominal);
+        if (defining_ident.eql(defining_module.commonIdents().list)) {
+            const args = mir_module.typeStoreConst().sliceNominalArgs(nominal);
             if (args.len != 1) debugPanic("monotype.lowerNominalType List expected one type argument", .{});
             return .{ .list = try self.lowerInstantiatedType(module_idx, type_scope, args[0]) };
         }
-        if (defining_ident.eql(defining_env.idents.box)) {
-            const args = env.types.sliceNominalArgs(nominal);
+        if (defining_ident.eql(defining_module.commonIdents().box)) {
+            const args = mir_module.typeStoreConst().sliceNominalArgs(nominal);
             if (args.len != 1) debugPanic("monotype.lowerNominalType Box expected one type argument", .{});
             return .{ .box = try self.lowerInstantiatedType(module_idx, type_scope, args[0]) };
         }
-        if (defining_ident.eql(defining_env.idents.bool_type)) return .{ .primitive = .bool };
-        if (builtinNumPrim(defining_env, defining_ident)) |prim| return .{ .primitive = prim };
+        if (defining_ident.eql(defining_module.commonIdents().bool_type)) return .{ .primitive = .bool };
+        if (builtinNumPrim(defining_module, defining_ident)) |prim| return .{ .primitive = prim };
 
-        const nominal_args = env.types.sliceNominalArgs(nominal);
+        const nominal_args = mir_module.typeStoreConst().sliceNominalArgs(nominal);
         const lowered_args = try self.allocator.alloc(type_mod.TypeId, nominal_args.len);
         defer self.allocator.free(lowered_args);
         for (nominal_args, 0..) |arg_var, i| {
@@ -7366,13 +7362,13 @@ pub const Lowerer = struct {
         errdefer self.allocator.free(owned_key);
         try type_scope.nominal_type_cache.put(owned_key, nominal_type_id);
 
-        const backing_var = env.types.getNominalBackingVar(nominal);
+        const backing_var = mir_module.typeStoreConst().getNominalBackingVar(nominal);
         return .{ .nominal = try self.lowerInstantiatedType(module_idx, type_scope, backing_var) };
     }
 
     const NominalDefiningIdentity = struct {
         module_idx: u32,
-        env: *const ModuleEnv,
+        module: mir.Module,
         ident: base.Ident.Idx,
     };
 
@@ -7381,16 +7377,16 @@ pub const Lowerer = struct {
         module_idx: u32,
         nominal: types.NominalType,
     ) std.mem.Allocator.Error!NominalDefiningIdentity {
-        const env = self.ctx.env(module_idx);
-        const defining_module_idx = findModuleIdxByName(self.ctx.mir_modules.all_module_envs, env.getIdent(nominal.origin_module));
-        const defining_env = self.ctx.env(defining_module_idx);
-        const defining_ident = defining_env.common.findIdent(env.getIdent(nominal.ident.ident_idx)) orelse debugPanic(
+        const mir_module = self.ctx.mirModule(module_idx);
+        const defining_module_idx = self.ctx.mir_modules.findModuleIdxByName(mir_module.getIdent(nominal.origin_module));
+        const defining_module = self.ctx.mirModule(defining_module_idx);
+        const defining_ident = defining_module.findCommonIdent(mir_module.getIdent(nominal.ident.ident_idx)) orelse debugPanic(
             "monotype.lowerNominalType missing target ident in defining module",
             .{},
         );
         return .{
             .module_idx = defining_module_idx,
-            .env = defining_env,
+            .module = defining_module,
             .ident = defining_ident,
         };
     }
@@ -7423,17 +7419,17 @@ pub const Lowerer = struct {
 
     fn defaultNumeralPrimitiveForContent(
         self: *Lowerer,
-        env: *const ModuleEnv,
+        mir_module: mir.Module,
         content: types.Content,
     ) ?type_mod.Prim {
         _ = self;
         return switch (content) {
             .flex => |flex| if (flex.name) |name|
-                builtinNumPrim(env, name) orelse
-                    (if (constraintsContainFromNumeral(env, flex.constraints)) .dec else null)
-            else if (constraintsContainFromNumeral(env, flex.constraints)) .dec else null,
-            .rigid => |rigid| builtinNumPrim(env, rigid.name) orelse
-                (if (constraintsContainFromNumeral(env, rigid.constraints)) .dec else null),
+                builtinNumPrim(mir_module, name) orelse
+                    (if (constraintsContainFromNumeral(mir_module, flex.constraints)) .dec else null)
+            else if (constraintsContainFromNumeral(mir_module, flex.constraints)) .dec else null,
+            .rigid => |rigid| builtinNumPrim(mir_module, rigid.name) orelse
+                (if (constraintsContainFromNumeral(mir_module, rigid.constraints)) .dec else null),
             else => null,
         };
     }
@@ -7441,12 +7437,12 @@ pub const Lowerer = struct {
     fn defaultPrimitiveForConstraints(
         self: *Lowerer,
         module_idx: u32,
-        env: *const ModuleEnv,
+        mir_module: mir.Module,
         constraints: types.StaticDispatchConstraint.SafeList.Range,
     ) std.mem.Allocator.Error!?type_mod.Prim {
         if (constraints.len() == 0) return null;
 
-        if (constraintsContainFromNumeral(env, constraints)) {
+        if (constraintsContainFromNumeral(mir_module, constraints)) {
             return .dec;
         }
 
@@ -7457,11 +7453,11 @@ pub const Lowerer = struct {
 
     fn debugPanicUnresolvedTypeVar(
         self: *Lowerer,
-        env: *const ModuleEnv,
+        mir_module: mir.Module,
         module_idx: u32,
         var_: Var,
     ) noreturn {
-        const resolved = env.types.resolveVar(var_);
+        const resolved = mir_module.typeStoreConst().resolveVar(var_);
         switch (resolved.desc.content) {
             .flex => |flex| {
                 std.debug.print(
@@ -7474,7 +7470,7 @@ pub const Lowerer = struct {
                         flex.constraints.len(),
                     },
                 );
-                for (env.types.sliceStaticDispatchConstraints(flex.constraints)) |constraint| {
+                for (mir_module.typeStoreConst().sliceStaticDispatchConstraints(flex.constraints)) |constraint| {
                     std.debug.print(
                         "  constraint fn={s} origin={s}\n",
                         .{
@@ -7495,7 +7491,7 @@ pub const Lowerer = struct {
                         rigid.constraints.len(),
                     },
                 );
-                for (env.types.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
+                for (mir_module.typeStoreConst().sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
                     std.debug.print(
                         "  constraint fn={s} origin={s}\n",
                         .{
@@ -7508,11 +7504,11 @@ pub const Lowerer = struct {
             else => {},
         }
         const raw: u32 = @intFromEnum(var_);
-        const mir_module = self.ctx.mirModule(module_idx);
-        if (raw < mir_module.nodeCount()) {
+        const source_module = self.ctx.mirModule(module_idx);
+        if (raw < source_module.nodeCount()) {
             const node_idx: CIR.Node.Idx = @enumFromInt(raw);
-            const node_tag = mir_module.nodeTag(node_idx);
-            const region = mir_module.regionAt(node_idx);
+            const node_tag = source_module.nodeTag(node_idx);
+            const region = source_module.regionAt(node_idx);
             debugPanic(
                 "monotype invariant violated: unresolved type var {d} in module {d} (node tag {s}, start {d}, end {d})",
                 .{
@@ -8232,7 +8228,7 @@ pub const Lowerer = struct {
         union_var: Var,
         tag_name: base.Ident.Idx,
     ) std.mem.Allocator.Error!u16 {
-        const env = self.ctx.env(module_idx);
+        const mir_module = self.ctx.mirModule(module_idx);
         var names = std.ArrayList(base.Ident.Idx).empty;
         defer names.deinit(self.allocator);
 
@@ -8241,12 +8237,12 @@ pub const Lowerer = struct {
         try pending.append(self.allocator, union_var);
 
         while (pending.pop()) |current| {
-            const resolved = env.types.resolveVar(current);
+            const resolved = mir_module.typeStoreConst().resolveVar(current);
             switch (resolved.desc.content) {
                 .structure => |flat| switch (flat) {
-                    .nominal_type => |nominal| try pending.append(self.allocator, env.types.getNominalBackingVar(nominal)),
+                    .nominal_type => |nominal| try pending.append(self.allocator, mir_module.typeStoreConst().getNominalBackingVar(nominal)),
                     .tag_union => |tag_union| {
-                        const tags = env.types.getTagsSlice(tag_union.tags);
+                        const tags = mir_module.typeStoreConst().getTagsSlice(tag_union.tags);
                         try names.ensureUnusedCapacity(self.allocator, tags.len);
                         for (0..tags.len) |i| {
                             names.appendAssumeCapacity(tags.items(.name)[i]);
@@ -8256,7 +8252,7 @@ pub const Lowerer = struct {
                     .empty_tag_union => {},
                     else => debugPanic("monotype explicit semantic fact invariant violated: attempted to read tag discriminant from non-tag-union solved var", .{}),
                 },
-                .alias => |alias| try pending.append(self.allocator, env.types.getAliasBackingVar(alias)),
+                .alias => |alias| try pending.append(self.allocator, mir_module.typeStoreConst().getAliasBackingVar(alias)),
                 .flex => |flex| {
                     if (flex.constraints.len() == 0) continue;
                     debugPanic("monotype explicit semantic fact invariant violated: attempted to read tag discriminant from constrained flex var", .{});
@@ -8269,7 +8265,7 @@ pub const Lowerer = struct {
             }
         }
 
-        std.mem.sort(base.Ident.Idx, names.items, env.getIdentStoreConst(), struct {
+        std.mem.sort(base.Ident.Idx, names.items, mir_module.identStoreConst(), struct {
             fn lessThan(idents: *const base.Ident.Store, a: base.Ident.Idx, b: base.Ident.Idx) bool {
                 return std.mem.order(u8, idents.getText(a), idents.getText(b)) == .lt;
             }
@@ -8279,7 +8275,7 @@ pub const Lowerer = struct {
         var prev: ?base.Ident.Idx = null;
         for (names.items) |name| {
             if (prev) |prev_name| {
-                if (std.mem.eql(u8, env.getIdent(name), env.getIdent(prev_name))) continue;
+                if (std.mem.eql(u8, mir_module.getIdent(name), mir_module.getIdent(prev_name))) continue;
             }
             names.items[write_index] = name;
             write_index += 1;
@@ -8299,7 +8295,7 @@ pub const Lowerer = struct {
         record_var: Var,
         field_name: base.Ident.Idx,
     ) std.mem.Allocator.Error!u16 {
-        const env = self.ctx.env(module_idx);
+        const mir_module = self.ctx.mirModule(module_idx);
         var names = std.ArrayList(base.Ident.Idx).empty;
         defer names.deinit(self.allocator);
 
@@ -8308,12 +8304,12 @@ pub const Lowerer = struct {
         try pending.append(self.allocator, record_var);
 
         while (pending.pop()) |current| {
-            const resolved = env.types.resolveVar(current);
+            const resolved = mir_module.typeStoreConst().resolveVar(current);
             switch (resolved.desc.content) {
                 .structure => |flat| switch (flat) {
-                    .nominal_type => |nominal| try pending.append(self.allocator, env.types.getNominalBackingVar(nominal)),
+                    .nominal_type => |nominal| try pending.append(self.allocator, mir_module.typeStoreConst().getNominalBackingVar(nominal)),
                     .record => |record| {
-                        const fields = env.types.getRecordFieldsSlice(record.fields);
+                        const fields = mir_module.typeStoreConst().getRecordFieldsSlice(record.fields);
                         try names.ensureUnusedCapacity(self.allocator, fields.len);
                         for (fields.items(.name)) |name| {
                             names.appendAssumeCapacity(name);
@@ -8321,7 +8317,7 @@ pub const Lowerer = struct {
                         try pending.append(self.allocator, record.ext);
                     },
                     .record_unbound => |fields_range| {
-                        const fields = env.types.getRecordFieldsSlice(fields_range);
+                        const fields = mir_module.typeStoreConst().getRecordFieldsSlice(fields_range);
                         try names.ensureUnusedCapacity(self.allocator, fields.len);
                         for (fields.items(.name)) |name| {
                             names.appendAssumeCapacity(name);
@@ -8330,7 +8326,7 @@ pub const Lowerer = struct {
                     .empty_record => {},
                     else => debugPanic("monotype explicit semantic fact invariant violated: attempted to read field index from non-record solved var", .{}),
                 },
-                .alias => |alias| try pending.append(self.allocator, env.types.getAliasBackingVar(alias)),
+                .alias => |alias| try pending.append(self.allocator, mir_module.typeStoreConst().getAliasBackingVar(alias)),
                 .flex => |flex| {
                     if (flex.constraints.len() == 0) continue;
                     debugPanic("monotype explicit semantic fact invariant violated: attempted to read field index from constrained flex var", .{});
@@ -8343,7 +8339,7 @@ pub const Lowerer = struct {
             }
         }
 
-        std.mem.sort(base.Ident.Idx, names.items, env.getIdentStoreConst(), struct {
+        std.mem.sort(base.Ident.Idx, names.items, mir_module.identStoreConst(), struct {
             fn lessThan(idents: *const base.Ident.Store, a: base.Ident.Idx, b: base.Ident.Idx) bool {
                 return std.mem.order(u8, idents.getText(a), idents.getText(b)) == .lt;
             }
@@ -8353,7 +8349,7 @@ pub const Lowerer = struct {
         var prev: ?base.Ident.Idx = null;
         for (names.items) |name| {
             if (prev) |prev_name| {
-                if (std.mem.eql(u8, env.getIdent(name), env.getIdent(prev_name))) {
+                if (std.mem.eql(u8, mir_module.getIdent(name), mir_module.getIdent(prev_name))) {
                     debugPanic("monotype explicit semantic fact invariant violated: duplicate record field after solved row flattening", .{});
                 }
             }
@@ -8739,18 +8735,18 @@ pub const Lowerer = struct {
         fn_var: Var,
         arg_index: usize,
     ) ?Var {
-        const env = self.ctx.env(module_idx);
-        const resolved = env.types.resolveVar(fn_var);
+        const mir_module = self.ctx.mirModule(module_idx);
+        const resolved = mir_module.typeStoreConst().resolveVar(fn_var);
         return switch (resolved.desc.content) {
             .structure => |flat| switch (flat) {
                 .fn_pure, .fn_effectful, .fn_unbound => |func| blk: {
-                    const args = env.types.sliceVars(func.args);
+                    const args = mir_module.typeStoreConst().sliceVars(func.args);
                     if (arg_index >= args.len) break :blk null;
                     break :blk args[arg_index];
                 },
                 else => null,
             },
-            .alias => |alias| self.lookupFunctionArgVar(module_idx, env.types.getAliasBackingVar(alias), arg_index),
+            .alias => |alias| self.lookupFunctionArgVar(module_idx, mir_module.typeStoreConst().getAliasBackingVar(alias), arg_index),
             else => null,
         };
     }
@@ -9146,15 +9142,16 @@ pub const Lowerer = struct {
         left: Var,
         right: Var,
     ) std.mem.Allocator.Error!void {
-        const env = @constCast(self.ctx.env(module_idx));
+        const mir_module = self.ctx.mirModule(module_idx);
+        const env = mir_module.moduleEnvMut();
         var problems = try check.problem.Store.init(self.allocator);
         defer problems.deinit(self.allocator);
         var snapshots = try check.snapshot.Store.initCapacity(self.allocator, 16);
         defer snapshots.deinit();
         var type_writer = try types.TypeWriter.initFromParts(
             self.allocator,
-            &env.types,
-            env.getIdentStoreConst(),
+            mir_module.typeStoreMut(),
+            mir_module.identStoreConst(),
             null,
         );
         defer type_writer.deinit();
@@ -9162,8 +9159,8 @@ pub const Lowerer = struct {
         defer self.allocator.free(before_left);
         const before_right = try self.allocator.dupe(u8, try type_writer.writeGet(right, .one_line));
         defer self.allocator.free(before_right);
-        const before_left_resolved = env.types.resolveVar(left);
-        const before_right_resolved = env.types.resolveVar(right);
+        const before_left_resolved = mir_module.typeStoreConst().resolveVar(left);
+        const before_right_resolved = mir_module.typeStoreConst().resolveVar(right);
         var unify_scratch = try check.unifier.Scratch.init(self.allocator);
         defer unify_scratch.deinit();
         var occurs_scratch = try check.occurs.Scratch.init(self.allocator);
@@ -9265,18 +9262,18 @@ pub const Lowerer = struct {
     ) std.mem.Allocator.Error!Var {
         if (source_module_idx == dest_module_idx) return source_var;
 
-        const source_env = self.ctx.env(source_module_idx);
-        const dest_env = @constCast(self.ctx.env(dest_module_idx));
+        const source_module = self.ctx.mirModule(source_module_idx);
+        const dest_module = self.ctx.mirModule(dest_module_idx);
         var var_map = std.AutoHashMap(Var, Var).init(self.allocator);
         defer var_map.deinit();
 
         return try check.copy_import.copyVar(
-            &source_env.types,
-            &dest_env.types,
+            source_module.typeStoreConst(),
+            dest_module.typeStoreMut(),
             source_var,
             &var_map,
-            source_env.getIdentStoreConst(),
-            dest_env.getIdentStore(),
+            source_module.identStoreConst(),
+            dest_module.identStoreMut(),
             self.allocator,
         );
     }
@@ -9608,8 +9605,8 @@ fn isLambdaExpr(expr: CIR.Expr) bool {
     };
 }
 
-fn isRecursiveTopLevelDef(env: *const ModuleEnv, def_idx: CIR.Def.Idx) bool {
-    const evaluation_order = env.evaluation_order orelse return false;
+fn isRecursiveTopLevelDef(mir_module: mir.Module, def_idx: CIR.Def.Idx) bool {
+    const evaluation_order = mir_module.moduleEnvConst().evaluation_order orelse return false;
     for (evaluation_order.sccs) |scc| {
         for (scc.defs) |member| {
             if (member == def_idx) return scc.is_recursive;
@@ -9618,20 +9615,21 @@ fn isRecursiveTopLevelDef(env: *const ModuleEnv, def_idx: CIR.Def.Idx) bool {
     return false;
 }
 
-fn builtinNumPrim(env: *const ModuleEnv, ident: base.Ident.Idx) ?type_mod.Prim {
-    if (ident.eql(env.idents.u8) or ident.eql(env.idents.u8_type)) return .u8;
-    if (ident.eql(env.idents.i8) or ident.eql(env.idents.i8_type)) return .i8;
-    if (ident.eql(env.idents.u16) or ident.eql(env.idents.u16_type)) return .u16;
-    if (ident.eql(env.idents.i16) or ident.eql(env.idents.i16_type)) return .i16;
-    if (ident.eql(env.idents.u32) or ident.eql(env.idents.u32_type)) return .u32;
-    if (ident.eql(env.idents.i32) or ident.eql(env.idents.i32_type)) return .i32;
-    if (ident.eql(env.idents.u64) or ident.eql(env.idents.u64_type)) return .u64;
-    if (ident.eql(env.idents.i64) or ident.eql(env.idents.i64_type)) return .i64;
-    if (ident.eql(env.idents.u128) or ident.eql(env.idents.u128_type)) return .u128;
-    if (ident.eql(env.idents.i128) or ident.eql(env.idents.i128_type)) return .i128;
-    if (ident.eql(env.idents.f32) or ident.eql(env.idents.f32_type)) return .f32;
-    if (ident.eql(env.idents.f64) or ident.eql(env.idents.f64_type)) return .f64;
-    if (ident.eql(env.idents.dec) or ident.eql(env.idents.dec_type)) return .dec;
+fn builtinNumPrim(mir_module: mir.Module, ident: base.Ident.Idx) ?type_mod.Prim {
+    const idents = mir_module.commonIdents();
+    if (ident.eql(idents.u8) or ident.eql(idents.u8_type)) return .u8;
+    if (ident.eql(idents.i8) or ident.eql(idents.i8_type)) return .i8;
+    if (ident.eql(idents.u16) or ident.eql(idents.u16_type)) return .u16;
+    if (ident.eql(idents.i16) or ident.eql(idents.i16_type)) return .i16;
+    if (ident.eql(idents.u32) or ident.eql(idents.u32_type)) return .u32;
+    if (ident.eql(idents.i32) or ident.eql(idents.i32_type)) return .i32;
+    if (ident.eql(idents.u64) or ident.eql(idents.u64_type)) return .u64;
+    if (ident.eql(idents.i64) or ident.eql(idents.i64_type)) return .i64;
+    if (ident.eql(idents.u128) or ident.eql(idents.u128_type)) return .u128;
+    if (ident.eql(idents.i128) or ident.eql(idents.i128_type)) return .i128;
+    if (ident.eql(idents.f32) or ident.eql(idents.f32_type)) return .f32;
+    if (ident.eql(idents.f64) or ident.eql(idents.f64_type)) return .f64;
+    if (ident.eql(idents.dec) or ident.eql(idents.dec_type)) return .dec;
     return null;
 }
 
@@ -9658,19 +9656,20 @@ fn isBuiltinBoolTagUnion(env: *const ModuleEnv, tags_slice: anytype) bool {
     return saw_true and saw_false;
 }
 
-fn isBuiltinBoolTagUnionSlice(env: *const ModuleEnv, tags: []const type_mod.Tag) bool {
+fn isBuiltinBoolTagUnionSlice(mir_module: mir.Module, tags: []const type_mod.Tag) bool {
     if (tags.len != 2) return false;
 
     var saw_true = false;
     var saw_false = false;
+    const idents = mir_module.commonIdents();
     for (tags) |tag| {
         const args_len = tag.args.len;
         if (args_len != 0) return false;
-        if (tag.name.eql(env.idents.true_tag)) {
+        if (tag.name.eql(idents.true_tag)) {
             saw_true = true;
             continue;
         }
-        if (tag.name.eql(env.idents.false_tag)) {
+        if (tag.name.eql(idents.false_tag)) {
             saw_false = true;
             continue;
         }
@@ -9681,10 +9680,10 @@ fn isBuiltinBoolTagUnionSlice(env: *const ModuleEnv, tags: []const type_mod.Tag)
 }
 
 fn constraintsContainFromNumeral(
-    env: *const ModuleEnv,
+    mir_module: mir.Module,
     range: types.StaticDispatchConstraint.SafeList.Range,
 ) bool {
-    for (env.types.sliceStaticDispatchConstraints(range)) |constraint| {
+    for (mir_module.typeStoreConst().sliceStaticDispatchConstraints(range)) |constraint| {
         if (constraint.origin == .from_numeral) return true;
     }
     return false;
@@ -9707,24 +9706,6 @@ fn binopToLowLevel(op: CIR.Expr.Binop.Op) base.LowLevel {
         .@"and" => debugTodo("monotype.binop and"),
         .@"or" => debugTodo("monotype.binop or"),
     };
-}
-
-fn findModuleIdxByName(all_module_envs: []const *const ModuleEnv, target_name: []const u8) u32 {
-    for (all_module_envs, 0..) |env, idx| {
-        if (std.mem.eql(u8, moduleName(env), target_name)) return @intCast(idx);
-    }
-
-    debugPanic(
-        "monotype static dispatch invariant violated: missing target module {s}",
-        .{target_name},
-    );
-}
-
-fn moduleName(env: *const ModuleEnv) []const u8 {
-    if (!env.qualified_module_ident.isNone()) {
-        return env.getIdent(env.qualified_module_ident);
-    }
-    return env.module_name;
 }
 
 fn debugTodo(comptime msg: []const u8) noreturn {

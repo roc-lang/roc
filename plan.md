@@ -136,7 +136,8 @@ Completion criteria:
 Progress:
 - The live monotype consumer no longer contains direct `ctx.env(...).store`, `expr.env`, or `cir_env.store` reads.
 - Type-cloning entrypoints in monotype now accept MIR modules directly rather than raw checker env pointers.
-- Remaining work in this phase is the solved-type/text/import side of the boundary: monotype still reaches into checker `ModuleEnv` for some type-store and name-resolution services that need to move behind MIR next.
+- Monotype no longer reaches into raw checker `ModuleEnv` directly for solved-type/text/import services either; those now flow through MIR methods.
+- Remaining work in this phase is that MIR itself still borrows checker-owned `ModuleEnv` state for solved types, idents, strings, and import/method metadata. That keeps the boundary transitional even though the monotype side is now clean.
 
 ## Phase 4: Delete The Wrapper Layer And Old Boundary APIs
 
