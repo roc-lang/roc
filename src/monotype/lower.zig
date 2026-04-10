@@ -470,13 +470,15 @@ pub const Lowerer = struct {
         solved_var: ?Var = null,
     };
 
+    const FrozenCheckerVar = specializations_mod.FrozenCheckerVar;
+
     const FrozenTypedBinding = struct {
         symbol: symbol_mod.Symbol,
-        checker_seed: ?specializations_mod.CheckerSeed = null,
+        checker_var: ?FrozenCheckerVar = null,
 
         fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
-            if (self.checker_seed) |*seed| {
-                seed.deinit(allocator);
+            if (self.checker_var) |*checker_var| {
+                checker_var.deinit(allocator);
             }
         }
     };
@@ -492,7 +494,7 @@ pub const Lowerer = struct {
     const FrozenBindingValue = struct {
         typed: ?FrozenTypedBinding = null,
         local_fn_source: ?LocalFnSourceRef = null,
-        local_fn_seed_var: ?specializations_mod.CheckerSeed = null,
+        local_fn_seed_var: ?FrozenCheckerVar = null,
 
         fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
             if (self.typed) |*typed| {
@@ -1344,12 +1346,24 @@ pub const Lowerer = struct {
         return lowered;
     }
 
-    fn snapshotSpecializationCheckerVarFromStores(
+    fn materializeSpecializedTopLevelCheckerVar(
+        self: *Lowerer,
+        type_scope: *TypeCloneScope,
+        pending: specializations_mod.Pending,
+    ) std.mem.Allocator.Error!Var {
+        const frozen = pending.expected_checker_seed orelse debugPanic(
+            "monotype specialization invariant violated: missing frozen checker seed for top-level specialization symbol {d}",
+            .{pending.specialized_symbol.raw()},
+        );
+        return try self.materializeFrozenCheckerVar(type_scope, frozen);
+    }
+
+    fn freezeCheckerVarFromStores(
         self: *Lowerer,
         source_store: *const types.Store,
         source_idents: *const base.Ident.Store,
         source_var: Var,
-    ) std.mem.Allocator.Error!specializations_mod.CheckerSeed {
+    ) std.mem.Allocator.Error!FrozenCheckerVar {
         var type_store = try types.Store.init(self.allocator);
         errdefer type_store.deinit();
         var ident_store = try base.Ident.Store.initCapacity(self.allocator, 16);
@@ -1372,56 +1386,31 @@ pub const Lowerer = struct {
         };
     }
 
-    fn snapshotSpecializationCheckerVarFromModule(
-        self: *Lowerer,
-        module_idx: u32,
-        source_var: Var,
-    ) std.mem.Allocator.Error!specializations_mod.CheckerSeed {
-        const source_module = self.ctx.mirModule(module_idx);
-        return self.snapshotSpecializationCheckerVarFromStores(
-            source_module.typeStoreConst(),
-            source_module.identStoreConst(),
-            source_var,
-        );
-    }
-
-    fn snapshotSpecializationCheckerVarFromScope(
+    fn freezeCheckerVarFromScope(
         self: *Lowerer,
         type_scope: *const TypeCloneScope,
         source_var: Var,
-    ) std.mem.Allocator.Error!specializations_mod.CheckerSeed {
-        return self.snapshotSpecializationCheckerVarFromStores(
+    ) std.mem.Allocator.Error!FrozenCheckerVar {
+        return self.freezeCheckerVarFromStores(
             type_scope.typeStoreConst(),
             type_scope.identStoreConst(),
             source_var,
         );
     }
 
-    fn materializeSpecializedTopLevelCheckerVar(
+    fn materializeFrozenCheckerVar(
         self: *Lowerer,
         type_scope: *TypeCloneScope,
-        pending: specializations_mod.Pending,
-    ) std.mem.Allocator.Error!Var {
-        const seed = pending.expected_checker_seed orelse debugPanic(
-            "monotype specialization invariant violated: missing checker specialization facts for top-level def {d}:{d}",
-            .{ pending.source.module_idx, @intFromEnum(pending.source.def_idx) },
-        );
-        return try self.materializeCheckerSeed(type_scope, seed);
-    }
-
-    fn materializeCheckerSeed(
-        self: *Lowerer,
-        type_scope: *TypeCloneScope,
-        seed: specializations_mod.CheckerSeed,
+        frozen: FrozenCheckerVar,
     ) std.mem.Allocator.Error!Var {
         var var_map = std.AutoHashMap(Var, Var).init(self.allocator);
         defer var_map.deinit();
         const copied_root = try check.copy_import.copyVar(
-            &seed.type_store,
+            &frozen.type_store,
             type_scope.typeStoreMut(),
-            seed.root_var,
+            frozen.root_var,
             &var_map,
-            &seed.ident_store,
+            &frozen.ident_store,
             type_scope.identStoreMut(),
             self.allocator,
         );
@@ -7892,6 +7881,7 @@ pub const Lowerer = struct {
         return .{ .nominal = .{
             .module_idx = defining.module_idx,
             .ident = try self.ctx.copyExecutableIdent(defining.module_idx, defining_ident),
+            .is_opaque = nominal.is_opaque,
             .args = try self.ctx.types.addTypeSpan(lowered_args),
             .backing = try self.lowerInstantiatedType(module_idx, type_scope, backing_var),
         } };
@@ -9125,12 +9115,12 @@ pub const Lowerer = struct {
         var declaration_env = try self.materializeFrozenBindingEnv(&type_scope, group.declaration_env);
         defer declaration_env.deinit();
         const scoped_expected_var = if (expected_var) |var_| blk: {
-            const seed = try self.snapshotSpecializationCheckerVarFromScope(caller_scope, var_);
+            const frozen = try self.freezeCheckerVarFromScope(caller_scope, var_);
             defer {
-                var owned_seed = seed;
-                owned_seed.deinit(self.allocator);
+                var owned = frozen;
+                owned.deinit(self.allocator);
             }
-            break :blk try self.materializeCheckerSeed(&type_scope, seed);
+            break :blk try self.materializeFrozenCheckerVar(&type_scope, frozen);
         } else null;
         const letfn = try self.lowerLambdaLikeDefWithEnv(
             group.module_idx,
@@ -9226,18 +9216,15 @@ pub const Lowerer = struct {
         if (self.top_level_defs_by_symbol.get(top_level_symbol)) |top_level| {
             self.assertNoFirstClassBuiltinStrInspect(top_level.module_idx, top_level.def_idx, "local");
             if (top_level.is_function) {
-                const seed = if (expected_var) |var_|
-                    try self.snapshotSpecializationCheckerVarFromScope(type_scope, var_)
-                else
-                    try self.snapshotSpecializationCheckerVarFromModule(
-                        top_level.module_idx,
-                        self.ctx.mirModule(top_level.module_idx).defType(top_level.def_idx),
-                    );
                 const published_expected_ty = try self.publishMonotypeType(expected_ty);
+                const expected_checker_seed = if (expected_var) |var_|
+                    try self.freezeCheckerVarFromScope(type_scope, var_)
+                else
+                    null;
                 return try self.specializations.specializeFn(&self.ctx.symbols, &self.ctx.types, top_level_symbol, .{
                     .module_idx = top_level.module_idx,
                     .def_idx = top_level.def_idx,
-                }, published_expected_ty, seed);
+                }, published_expected_ty, expected_checker_seed);
             }
             try self.ensureTopLevelValueDefEmitted(top_level_symbol);
         }
@@ -9979,18 +9966,15 @@ pub const Lowerer = struct {
         if (self.top_level_defs_by_symbol.get(symbol)) |top_level| {
             self.assertNoFirstClassBuiltinStrInspect(top_level.module_idx, top_level.def_idx, "external");
             if (top_level.is_function) {
-                const seed = if (expected_var) |var_|
-                    try self.snapshotSpecializationCheckerVarFromScope(type_scope, var_)
-                else
-                    try self.snapshotSpecializationCheckerVarFromModule(
-                        top_level.module_idx,
-                        self.ctx.mirModule(top_level.module_idx).defType(top_level.def_idx),
-                    );
                 const published_expected_ty = try self.publishMonotypeType(expected_ty);
+                const expected_checker_seed = if (expected_var) |var_|
+                    try self.freezeCheckerVarFromScope(type_scope, var_)
+                else
+                    null;
                 return try self.specializations.specializeFn(&self.ctx.symbols, &self.ctx.types, symbol, .{
                     .module_idx = top_level.module_idx,
                     .def_idx = top_level.def_idx,
-                }, published_expected_ty, seed);
+                }, published_expected_ty, expected_checker_seed);
             }
             try self.ensureTopLevelValueDefEmitted(symbol);
         }
@@ -10096,18 +10080,15 @@ pub const Lowerer = struct {
 
         const symbol = if (self.top_level_defs_by_symbol.get(source_symbol)) |top_level|
             if (top_level.is_function) blk: {
-                const seed = if (expected_var) |var_|
-                    try self.snapshotSpecializationCheckerVarFromScope(type_scope, var_)
-                else
-                    try self.snapshotSpecializationCheckerVarFromModule(
-                        top_level.module_idx,
-                        self.ctx.mirModule(top_level.module_idx).defType(top_level.def_idx),
-                    );
                 const published_expected_ty = try self.publishMonotypeType(expected_ty);
+                const expected_checker_seed = if (expected_var) |var_|
+                    try self.freezeCheckerVarFromScope(type_scope, var_)
+                else
+                    null;
                 break :blk try self.specializations.specializeFn(&self.ctx.symbols, &self.ctx.types, source_symbol, .{
                     .module_idx = top_level.module_idx,
                     .def_idx = top_level.def_idx,
-                }, published_expected_ty, seed);
+                }, published_expected_ty, expected_checker_seed);
             } else blk: {
                 try self.ensureTopLevelValueDefEmitted(source_symbol);
                 break :blk source_symbol;
@@ -10173,7 +10154,7 @@ pub const Lowerer = struct {
 
     fn freezeBindingEnv(
         self: *Lowerer,
-        type_scope: *const TypeCloneScope,
+        type_scope: *TypeCloneScope,
         env: BindingEnv,
     ) std.mem.Allocator.Error!FrozenBindingEnv {
         var out = FrozenBindingEnv.init(self.allocator);
@@ -10190,8 +10171,8 @@ pub const Lowerer = struct {
             const frozen_typed = if (entry.value_ptr.typed) |typed| blk: {
                 break :blk FrozenTypedBinding{
                     .symbol = typed.symbol,
-                    .checker_seed = if (typed.solved_var) |var_|
-                        try self.snapshotSpecializationCheckerVarFromScope(type_scope, var_)
+                    .checker_var = if (typed.solved_var) |var_|
+                        try self.freezeCheckerVarFromScope(type_scope, var_)
                     else
                         null,
                 };
@@ -10201,7 +10182,7 @@ pub const Lowerer = struct {
                 .typed = frozen_typed,
                 .local_fn_source = entry.value_ptr.local_fn_source,
                 .local_fn_seed_var = if (entry.value_ptr.local_fn_seed_var) |var_|
-                    try self.snapshotSpecializationCheckerVarFromScope(type_scope, var_)
+                    try self.freezeCheckerVarFromScope(type_scope, var_)
                 else
                     null,
             });
@@ -10222,8 +10203,8 @@ pub const Lowerer = struct {
             const typed = if (entry.value_ptr.typed) |frozen_typed| blk: {
                 break :blk TypedBinding{
                     .symbol = frozen_typed.symbol,
-                    .solved_var = if (frozen_typed.checker_seed) |seed|
-                        try self.materializeCheckerSeed(type_scope, seed)
+                    .solved_var = if (frozen_typed.checker_var) |frozen_var|
+                        try self.materializeFrozenCheckerVar(type_scope, frozen_var)
                     else
                         null,
                 };
@@ -10232,8 +10213,8 @@ pub const Lowerer = struct {
             try out.put(entry.key_ptr.*, .{
                 .typed = typed,
                 .local_fn_source = entry.value_ptr.local_fn_source,
-                .local_fn_seed_var = if (entry.value_ptr.local_fn_seed_var) |seed|
-                    try self.materializeCheckerSeed(type_scope, seed)
+                .local_fn_seed_var = if (entry.value_ptr.local_fn_seed_var) |frozen_var|
+                    try self.materializeFrozenCheckerVar(type_scope, frozen_var)
                 else
                     null,
             });

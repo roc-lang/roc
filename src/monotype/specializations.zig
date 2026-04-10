@@ -4,19 +4,18 @@ const std = @import("std");
 const builtin = @import("builtin");
 const base = @import("base");
 const can = @import("can");
+const types = @import("types");
 const symbol_mod = @import("symbol");
 const type_mod = @import("type.zig");
-const checker_types = @import("types");
-
 pub const SourceFn = struct {
     module_idx: u32,
     def_idx: can.CIR.Def.Idx,
 };
 
-pub const CheckerSeed = struct {
-    type_store: checker_types.Store,
+pub const FrozenCheckerVar = struct {
+    type_store: types.Store,
     ident_store: base.Ident.Store,
-    root_var: checker_types.Var,
+    root_var: types.Var,
 
     pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
         self.ident_store.deinit(allocator);
@@ -28,7 +27,7 @@ pub const Pending = struct {
     source_symbol: symbol_mod.Symbol,
     source: SourceFn,
     ty: type_mod.TypeId,
-    expected_checker_seed: ?CheckerSeed,
+    expected_checker_seed: ?FrozenCheckerVar = null,
     specialized_symbol: symbol_mod.Symbol,
     emitted: bool = false,
 };
@@ -64,29 +63,28 @@ pub const Queue = struct {
     pub fn specializeFn(
         self: *Queue,
         symbols: *symbol_mod.Store,
-        types: *type_mod.Store,
+        mono_types: *type_mod.Store,
         source_symbol: symbol_mod.Symbol,
         source: SourceFn,
         ty: type_mod.TypeId,
-        expected_checker_seed: ?CheckerSeed,
+        expected_checker_seed: ?FrozenCheckerVar,
     ) std.mem.Allocator.Error!symbol_mod.Symbol {
         const key: Key = .{
             .source_symbol = source_symbol,
             .ty = ty,
         };
         if (comptime builtin.mode == .Debug) {
-            std.debug.assert(try types.keyId(ty) == ty);
+            std.debug.assert(try mono_types.keyId(ty) == ty);
         }
 
         if (self.by_key.get(key)) |idx| {
-            const item = &self.pending.items[idx];
             if (expected_checker_seed) |seed| {
-                if (item.expected_checker_seed) |*existing| {
-                    existing.deinit(self.allocator);
+                if (self.pending.items[idx].expected_checker_seed) |*existing_seed| {
+                    existing_seed.deinit(self.allocator);
                 }
-                item.expected_checker_seed = seed;
+                self.pending.items[idx].expected_checker_seed = seed;
             }
-            return item.specialized_symbol;
+            return self.pending.items[idx].specialized_symbol;
         }
 
         const source_entry = symbols.get(source_symbol);

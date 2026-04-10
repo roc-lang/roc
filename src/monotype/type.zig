@@ -45,6 +45,7 @@ pub const Field = struct {
 pub const Nominal = struct {
     module_idx: u32,
     ident: base.Ident.Idx,
+    is_opaque: bool,
     args: TypeSpan,
     backing: TypeId,
 };
@@ -393,6 +394,7 @@ pub const Store = struct {
                 break :blk .{ .nominal = .{
                     .module_idx = nominal.module_idx,
                     .ident = nominal.ident,
+                    .is_opaque = nominal.is_opaque,
                     .args = try self.addTypeSpan(lowered_args),
                     .backing = try self.canonicalizeResolvedInner(nominal.backing, active),
                 } };
@@ -491,6 +493,7 @@ pub const Store = struct {
                 break :blk .{ .nominal = .{
                     .module_idx = nominal.module_idx,
                     .ident = nominal.ident,
+                    .is_opaque = nominal.is_opaque,
                     .args = try self.addTypeSpan(lowered_args),
                     .backing = try self.canonicalizePublishedInner(nominal.backing, active),
                 } };
@@ -628,6 +631,7 @@ pub const Store = struct {
                         try self_builder.store.appendInternKeyValue(@as(u8, 12));
                         try self_builder.store.appendInternKeyValue(nominal.module_idx);
                         try self_builder.store.appendInternKeyValue(@as(u32, @bitCast(nominal.ident)));
+                        try self_builder.store.appendInternKeyValue(@as(u8, @intFromBool(nominal.is_opaque)));
                         const args = self_builder.store.sliceTypeSpan(nominal.args);
                         try self_builder.store.appendInternKeyValue(@as(u32, @intCast(args.len)));
                         for (args) |arg| {
@@ -747,6 +751,7 @@ pub const Store = struct {
                 const right_nominal = right.nominal;
                 if (nominal.module_idx != right_nominal.module_idx) break :blk false;
                 if (nominal.ident != right_nominal.ident) break :blk false;
+                if (nominal.is_opaque != right_nominal.is_opaque) break :blk false;
                 const left_args = self.sliceTypeSpan(nominal.args);
                 const right_args = self.sliceTypeSpan(right_nominal.args);
                 if (left_args.len != right_args.len) break :blk false;
@@ -820,18 +825,21 @@ test "nominal identity preserves generic arguments" {
     const foo_u8 = try store.internResolved(.{ .nominal = .{
         .module_idx = 7,
         .ident = foo_ident,
+        .is_opaque = true,
         .args = try store.addTypeSpan(&.{u8_ty}),
         .backing = bool_ty,
     } });
     const foo_i64 = try store.internResolved(.{ .nominal = .{
         .module_idx = 7,
         .ident = foo_ident,
+        .is_opaque = true,
         .args = try store.addTypeSpan(&.{i64_ty}),
         .backing = bool_ty,
     } });
     const foo_u8_again = try store.internResolved(.{ .nominal = .{
         .module_idx = 7,
         .ident = foo_ident,
+        .is_opaque = true,
         .args = try store.addTypeSpan(&.{u8_ty}),
         .backing = bool_ty,
     } });
