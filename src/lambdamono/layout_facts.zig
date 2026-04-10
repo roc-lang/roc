@@ -170,7 +170,7 @@ pub const Facts = struct {
             switch (current) {
                 .canonical => return null,
                 .local => |node_id| switch (self.graph.getNode(node_id)) {
-                    .nominal => |backing| current = backing,
+                    .nominal => |nominal| current = nominal,
                     .tag_union => |variants| {
                         const variant_count = self.graph.getRefs(variants).len;
                         const prim: layout_mod.Idx = switch (variant_count) {
@@ -222,7 +222,7 @@ pub const Facts = struct {
             switch (current) {
                 .canonical => return current,
                 .local => |node_id| switch (self.graph.getNode(node_id)) {
-                    .nominal => |backing| current = backing,
+                    .nominal => |nominal| current = nominal,
                     else => return current,
                 },
             }
@@ -277,7 +277,7 @@ pub const Facts = struct {
             switch (current) {
                 .canonical => debugPanic("lambdamono.layout_facts.resolveUnionLayout expected local layout"),
                 .local => |node_id| switch (self.graph.getNode(node_id)) {
-                    .nominal => |backing| current = backing,
+                    .nominal => |nominal| current = nominal,
                     .tag_union => return current,
                     else => debugPanic("lambdamono.layout_facts.resolveUnionLayout expected nominal or tag union"),
                 },
@@ -291,7 +291,7 @@ pub const Facts = struct {
             switch (current) {
                 .canonical => debugPanic("lambdamono.layout_facts.resolveStructLayout expected local layout"),
                 .local => |node_id| switch (self.graph.getNode(node_id)) {
-                    .nominal => |backing| current = backing,
+                    .nominal => |nominal| current = nominal,
                     .struct_ => return current,
                     else => debugPanic("lambdamono.layout_facts.resolveStructLayout expected nominal or struct"),
                 },

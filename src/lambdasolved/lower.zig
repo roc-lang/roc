@@ -372,7 +372,7 @@ const Lowerer = struct {
             .placeholder => debugPanic("lambdasolved.instantiateTypeRec leaked monotype builder placeholder"),
             .unbd => type_mod.Node.unbd,
             .link => unreachable,
-            .nominal => |backing| type_mod.Node{ .nominal = try self.instantiateTypeRec(backing, cache) },
+            .nominal => |nominal| type_mod.Node{ .nominal = try self.instantiateTypeRec(nominal.backing, cache) },
             .func => |func| blk: {
                 break :blk type_mod.Node{ .content = .{ .func = .{
                     .arg = try self.instantiateTypeRec(func.arg, cache),

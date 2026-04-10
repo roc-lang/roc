@@ -42,6 +42,13 @@ pub const Field = struct {
     ty: TypeId,
 };
 
+pub const Nominal = struct {
+    module_idx: u32,
+    ident: base.Ident.Idx,
+    args: TypeSpan,
+    backing: TypeId,
+};
+
 pub const Content = union(enum) {
     placeholder,
     unbd,
@@ -50,7 +57,7 @@ pub const Content = union(enum) {
         arg: TypeId,
         ret: TypeId,
     },
-    nominal: TypeId,
+    nominal: Nominal,
     list: TypeId,
     box: TypeId,
     tuple: TypeSpan,
@@ -160,7 +167,7 @@ pub const Store = struct {
         while (true) {
             switch (self.types.items[@intFromEnum(current)]) {
                 .link => |next| current = next,
-                .nominal => |next| current = next,
+                .nominal => |nominal| current = nominal.backing,
                 else => |content| return content,
             }
         }
@@ -265,7 +272,12 @@ pub const Store = struct {
             .link => unreachable,
             .func => |func| try self.publishedContainsPlaceholderVisited(func.arg, visited) or
                 try self.publishedContainsPlaceholderVisited(func.ret, visited),
-            .nominal => |backing| try self.publishedContainsPlaceholderVisited(backing, visited),
+            .nominal => |nominal| {
+                for (self.sliceTypeSpan(nominal.args)) |arg| {
+                    if (try self.publishedContainsPlaceholderVisited(arg, visited)) return true;
+                }
+                return try self.publishedContainsPlaceholderVisited(nominal.backing, visited);
+            },
             .list => |elem| try self.publishedContainsPlaceholderVisited(elem, visited),
             .box => |elem| try self.publishedContainsPlaceholderVisited(elem, visited),
             .tuple => |tuple| blk: {
@@ -306,7 +318,12 @@ pub const Store = struct {
             .primitive => true,
             .func => |func| try self.isFullyResolvedVisited(func.arg, visited) and
                 try self.isFullyResolvedVisited(func.ret, visited),
-            .nominal => |backing| try self.isFullyResolvedVisited(backing, visited),
+            .nominal => |nominal| {
+                for (self.sliceTypeSpan(nominal.args)) |arg| {
+                    if (!try self.isFullyResolvedVisited(arg, visited)) return false;
+                }
+                return try self.isFullyResolvedVisited(nominal.backing, visited);
+            },
             .list => |elem| try self.isFullyResolvedVisited(elem, visited),
             .box => |elem| try self.isFullyResolvedVisited(elem, visited),
             .tuple => |tuple| blk: {
@@ -366,7 +383,20 @@ pub const Store = struct {
                 .arg = try self.canonicalizeResolvedInner(func.arg, active),
                 .ret = try self.canonicalizeResolvedInner(func.ret, active),
             } },
-            .nominal => |backing| .{ .nominal = try self.canonicalizeResolvedInner(backing, active) },
+            .nominal => |nominal| blk: {
+                const args = self.sliceTypeSpan(nominal.args);
+                const lowered_args = try self.allocator.alloc(TypeId, args.len);
+                defer self.allocator.free(lowered_args);
+                for (args, 0..) |arg, i| {
+                    lowered_args[i] = try self.canonicalizeResolvedInner(arg, active);
+                }
+                break :blk .{ .nominal = .{
+                    .module_idx = nominal.module_idx,
+                    .ident = nominal.ident,
+                    .args = try self.addTypeSpan(lowered_args),
+                    .backing = try self.canonicalizeResolvedInner(nominal.backing, active),
+                } };
+            },
             .list => |elem| .{ .list = try self.canonicalizeResolvedInner(elem, active) },
             .box => |elem| .{ .box = try self.canonicalizeResolvedInner(elem, active) },
             .tuple => |tuple| blk: {
@@ -451,7 +481,20 @@ pub const Store = struct {
                 .arg = try self.canonicalizePublishedInner(func.arg, active),
                 .ret = try self.canonicalizePublishedInner(func.ret, active),
             } },
-            .nominal => |backing| .{ .nominal = try self.canonicalizePublishedInner(backing, active) },
+            .nominal => |nominal| blk: {
+                const args = self.sliceTypeSpan(nominal.args);
+                const lowered_args = try self.allocator.alloc(TypeId, args.len);
+                defer self.allocator.free(lowered_args);
+                for (args, 0..) |arg, i| {
+                    lowered_args[i] = try self.canonicalizePublishedInner(arg, active);
+                }
+                break :blk .{ .nominal = .{
+                    .module_idx = nominal.module_idx,
+                    .ident = nominal.ident,
+                    .args = try self.addTypeSpan(lowered_args),
+                    .backing = try self.canonicalizePublishedInner(nominal.backing, active),
+                } };
+            },
             .list => |elem| .{ .list = try self.canonicalizePublishedInner(elem, active) },
             .box => |elem| .{ .box = try self.canonicalizePublishedInner(elem, active) },
             .tuple => |tuple| blk: {
@@ -581,9 +624,16 @@ pub const Store = struct {
                         try self_builder.serializeType(func.arg);
                         try self_builder.serializeType(func.ret);
                     },
-                    .nominal => |backing| {
+                    .nominal => |nominal| {
                         try self_builder.store.appendInternKeyValue(@as(u8, 12));
-                        try self_builder.serializeType(backing);
+                        try self_builder.store.appendInternKeyValue(nominal.module_idx);
+                        try self_builder.store.appendInternKeyValue(@as(u32, @bitCast(nominal.ident)));
+                        const args = self_builder.store.sliceTypeSpan(nominal.args);
+                        try self_builder.store.appendInternKeyValue(@as(u32, @intCast(args.len)));
+                        for (args) |arg| {
+                            try self_builder.serializeType(arg);
+                        }
+                        try self_builder.serializeType(nominal.backing);
                     },
                     .list => |elem| {
                         try self_builder.store.appendInternKeyValue(@as(u8, 13));
@@ -693,7 +743,18 @@ pub const Store = struct {
             .placeholder => false,
             .unbd => false,
             .link => unreachable,
-            .nominal => |backing| self.equalIdsVisited(backing, right.nominal, visited),
+            .nominal => |nominal| blk: {
+                const right_nominal = right.nominal;
+                if (nominal.module_idx != right_nominal.module_idx) break :blk false;
+                if (nominal.ident != right_nominal.ident) break :blk false;
+                const left_args = self.sliceTypeSpan(nominal.args);
+                const right_args = self.sliceTypeSpan(right_nominal.args);
+                if (left_args.len != right_args.len) break :blk false;
+                for (left_args, right_args) |left_arg, right_arg| {
+                    if (!try self.equalIdsVisited(left_arg, right_arg, visited)) break :blk false;
+                }
+                break :blk try self.equalIdsVisited(nominal.backing, right_nominal.backing, visited);
+            },
             .primitive => |prim| prim == right.primitive,
             .func => |func| blk: {
                 const right_func = right.func;
@@ -742,6 +803,41 @@ pub const Store = struct {
 
 test "monotype type tests" {
     std.testing.refAllDecls(@This());
+}
+
+test "nominal identity preserves generic arguments" {
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const bool_ty = try store.internResolved(.{ .primitive = .bool });
+    const u8_ty = try store.internResolved(.{ .primitive = .u8 });
+    const i64_ty = try store.internResolved(.{ .primitive = .i64 });
+    const foo_ident: base.Ident.Idx = .{
+        .attributes = .{ .effectful = false, .ignored = false, .reassignable = false },
+        .idx = 1,
+    };
+
+    const foo_u8 = try store.internResolved(.{ .nominal = .{
+        .module_idx = 7,
+        .ident = foo_ident,
+        .args = try store.addTypeSpan(&.{u8_ty}),
+        .backing = bool_ty,
+    } });
+    const foo_i64 = try store.internResolved(.{ .nominal = .{
+        .module_idx = 7,
+        .ident = foo_ident,
+        .args = try store.addTypeSpan(&.{i64_ty}),
+        .backing = bool_ty,
+    } });
+    const foo_u8_again = try store.internResolved(.{ .nominal = .{
+        .module_idx = 7,
+        .ident = foo_ident,
+        .args = try store.addTypeSpan(&.{u8_ty}),
+        .backing = bool_ty,
+    } });
+
+    try std.testing.expect(foo_u8 == foo_u8_again);
+    try std.testing.expect(!store.equalIds(foo_u8, foo_i64));
 }
 
 fn debugPanic(comptime msg: []const u8) noreturn {

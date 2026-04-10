@@ -7889,7 +7889,12 @@ pub const Lowerer = struct {
         try type_scope.nominal_type_cache.put(owned_key, nominal_type_id);
 
         const backing_var = type_scope.typeStoreConst().getNominalBackingVar(nominal);
-        return .{ .nominal = try self.lowerInstantiatedType(module_idx, type_scope, backing_var) };
+        return .{ .nominal = .{
+            .module_idx = defining.module_idx,
+            .ident = try self.ctx.copyExecutableIdent(defining.module_idx, defining_ident),
+            .args = try self.ctx.types.addTypeSpan(lowered_args),
+            .backing = try self.lowerInstantiatedType(module_idx, type_scope, backing_var),
+        } };
     }
 
     const NominalDefiningIdentity = struct {
@@ -8645,7 +8650,7 @@ pub const Lowerer = struct {
         child_ty: type_mod.TypeId,
     ) type_mod.TypeId {
         return switch (self.ctx.types.getTypePreservingNominal(parent_ty)) {
-            .nominal => |backing| if (child_ty == backing) parent_ty else child_ty,
+            .nominal => |nominal| if (child_ty == nominal.backing) parent_ty else child_ty,
             else => child_ty,
         };
     }
@@ -9626,29 +9631,30 @@ pub const Lowerer = struct {
                         "monotype static dispatch invariant violated: generic dot-access dispatch missing receiver expr",
                         .{},
                     );
-                    return try self.resolveSpecializedDispatchTargetForVar(
+                    return try self.resolveRecordedDispatchTargetForType(
                         module_idx,
-                        type_scope,
-                        self.requireExprResultFact(module_idx, type_scope, receiver_expr_idx),
+                        try self.instantiatePublishedVarType(
+                            module_idx,
+                            type_scope,
+                            self.requireExprResultFact(module_idx, type_scope, receiver_expr_idx),
+                        ),
                         method_name,
                     );
                 },
                 .e_type_var_dispatch => |dispatch| {
                     const alias_stmt = source_module.getStatement(dispatch.type_var_alias_stmt);
-                    const alias_var = switch (alias_stmt) {
-                        .s_type_var_alias => |type_var_alias| source_module.typeAnnoType(type_var_alias.type_var_anno),
+                    const alias_ty = switch (alias_stmt) {
+                        .s_type_var_alias => |type_var_alias| try self.instantiatePublishedVarType(
+                            module_idx,
+                            type_scope,
+                            source_module.typeAnnoType(type_var_alias.type_var_anno),
+                        ),
                         else => debugPanic(
                             "monotype static dispatch invariant violated: type-var dispatch alias stmt was not a type-var alias",
                             .{},
                         ),
                     };
-                    const scoped_alias_var = try self.scopeVar(type_scope, module_idx, alias_var);
-                    return try self.resolveSpecializedDispatchTargetForVar(
-                        module_idx,
-                        type_scope,
-                        scoped_alias_var,
-                        method_name,
-                    );
+                    return try self.resolveRecordedDispatchTargetForType(module_idx, alias_ty, method_name);
                 },
                 else => debugPanic(
                     "monotype static dispatch invariant violated: generic dispatch requirement attached to unsupported expr kind {s}",
@@ -9658,80 +9664,98 @@ pub const Lowerer = struct {
         };
     }
 
-    fn resolveSpecializedDispatchTargetForVar(
+    fn resolveRecordedDispatchTargetForType(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
-        dispatcher_var: Var,
-        method_name: base.Ident.Idx,
-    ) std.mem.Allocator.Error!ResolvedTarget {
-        const store = type_scope.typeStoreConst();
-        var current = dispatcher_var;
-        while (true) {
-            const resolved = store.resolveVar(current);
-            switch (resolved.desc.content) {
-                .structure => |flat| switch (flat) {
-                    .nominal_type => |nominal| return self.resolveNominalDispatchTarget(
-                        module_idx,
-                        type_scope,
-                        nominal,
-                        method_name,
-                    ),
-                    else => debugPanic(
-                        "monotype static dispatch invariant violated: specialized dispatch receiver for method {s} was not nominal",
-                        .{self.ctx.mirModule(module_idx).getIdent(method_name)},
-                    ),
-                },
-                .alias => |alias| current = store.getAliasBackingVar(alias),
-                .flex => debugPanic(
-                    "monotype static dispatch invariant violated: specialized dispatch receiver for method {s} remained flex",
-                    .{self.ctx.mirModule(module_idx).getIdent(method_name)},
-                ),
-                .rigid => debugPanic(
-                    "monotype static dispatch invariant violated: specialized dispatch receiver for method {s} remained rigid",
-                    .{self.ctx.mirModule(module_idx).getIdent(method_name)},
-                ),
-                .err => debugPanic(
-                    "monotype static dispatch invariant violated: specialized dispatch receiver for method {s} became error",
-                    .{self.ctx.mirModule(module_idx).getIdent(method_name)},
-                ),
-            }
-        }
-    }
-
-    fn resolveNominalDispatchTarget(
-        self: *Lowerer,
-        module_idx: u32,
-        type_scope: *const TypeCloneScope,
-        nominal: types.NominalType,
+        receiver_ty: type_mod.TypeId,
         method_name: base.Ident.Idx,
     ) std.mem.Allocator.Error!ResolvedTarget {
         const source_module = self.ctx.mirModule(module_idx);
-        const target_module_idx = self.ctx.findModuleIdxByName(type_scope.getIdent(nominal.origin_module));
-        const target_module = self.ctx.mirModule(target_module_idx);
-        const method_ident = target_module.lookupMethodIdentByText(
-            type_scope.getIdent(nominal.ident.ident_idx),
-            source_module.getIdent(method_name),
-        ) orelse debugPanic(
-            "monotype static dispatch invariant violated: missing method {s} for type {s} in module {s}",
+        const receiver = switch (try self.resolveDispatchReceiverIdentity(receiver_ty)) {
+            .some => |identity| identity,
+            else => debugPanic(
+                "monotype static dispatch invariant violated: specialized dispatch receiver for method {s} was not nominal",
+                .{source_module.getIdent(method_name)},
+            ),
+        };
+
+        const target_module = self.ctx.mirModule(receiver.module_idx);
+        const method_ident = target_module.lookupMethodIdentByText(receiver.type_name, source_module.getIdent(method_name)) orelse debugPanic(
+            "monotype static dispatch invariant violated: missing method {s} for nominal {s} in module {s}",
             .{
                 source_module.getIdent(method_name),
-                type_scope.getIdent(nominal.ident.ident_idx),
-                type_scope.getIdent(nominal.origin_module),
+                receiver.type_name,
+                target_module.name(),
             },
         );
         const exposed = target_module.exposedNodeIndexById(method_ident) orelse debugPanic(
-            "monotype static dispatch invariant violated: resolved method {s} for type {s} was not exposed in module {s}",
+            "monotype static dispatch invariant violated: resolved method {s} for nominal {s} was not exposed in module {s}",
             .{
                 source_module.getIdent(method_name),
-                type_scope.getIdent(nominal.ident.ident_idx),
-                type_scope.getIdent(nominal.origin_module),
+                receiver.type_name,
+                target_module.name(),
             },
         );
         return .{
-            .module_idx = target_module_idx,
+            .module_idx = receiver.module_idx,
             .def_idx = @enumFromInt(@as(u32, @intCast(exposed))),
         };
+    }
+
+    const DispatchReceiverIdentity = union(enum) {
+        some: struct {
+            module_idx: u32,
+            type_name: []const u8,
+        },
+        none,
+    };
+
+    fn resolveDispatchReceiverIdentity(
+        self: *const Lowerer,
+        receiver_ty: type_mod.TypeId,
+    ) std.mem.Allocator.Error!DispatchReceiverIdentity {
+        return switch (self.ctx.types.getTypePreservingNominal(receiver_ty)) {
+            .nominal => |nominal| .{ .some = .{
+                .module_idx = nominal.module_idx,
+                .type_name = self.ctx.idents.getText(nominal.ident),
+            } },
+            .list => .{ .some = .{
+                .module_idx = self.ctx.builtin_module_idx,
+                .type_name = self.ctx.mirModule(self.ctx.builtin_module_idx).getIdent(self.ctx.mirModule(self.ctx.builtin_module_idx).commonIdents().list),
+            } },
+            .box => .{ .some = .{
+                .module_idx = self.ctx.builtin_module_idx,
+                .type_name = self.ctx.mirModule(self.ctx.builtin_module_idx).getIdent(self.ctx.mirModule(self.ctx.builtin_module_idx).commonIdents().box),
+            } },
+            .primitive => |prim| .{ .some = .{
+                .module_idx = self.ctx.builtin_module_idx,
+                .type_name = self.builtinDispatchTypeName(prim),
+            } },
+            else => .none,
+        };
+    }
+
+    fn builtinDispatchTypeName(self: *const Lowerer, prim: type_mod.Prim) []const u8 {
+        const builtin_module = self.ctx.mirModule(self.ctx.builtin_module_idx);
+        const idents = builtin_module.commonIdents();
+        return builtin_module.getIdent(switch (prim) {
+            .bool => idents.bool_type,
+            .str => idents.str,
+            .u8 => idents.u8,
+            .i8 => idents.i8,
+            .u16 => idents.u16,
+            .i16 => idents.i16,
+            .u32 => idents.u32,
+            .i32 => idents.i32,
+            .u64 => idents.u64,
+            .i64 => idents.i64,
+            .u128 => idents.u128,
+            .i128 => idents.i128,
+            .f32 => idents.f32,
+            .f64 => idents.f64,
+            .dec => idents.dec,
+            .erased => debugPanic("monotype static dispatch invariant violated: erased receiver cannot dispatch methods", .{}),
+        });
     }
 
 

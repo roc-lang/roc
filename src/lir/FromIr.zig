@@ -424,7 +424,7 @@ const ProcLowerer = struct {
             switch (current) {
                 .canonical => return current,
                 .local => |node_id| switch (self.parent.input.layouts.getNode(node_id)) {
-                    .nominal => |backing| current = backing,
+                    .nominal => |nominal| current = nominal,
                     else => return current,
                 },
             }
@@ -437,7 +437,7 @@ const ProcLowerer = struct {
             switch (current) {
                 .canonical => return null,
                 .local => |node_id| switch (self.parent.input.layouts.getNode(node_id)) {
-                    .nominal => |backing| current = backing,
+                    .nominal => |nominal| current = nominal,
                     .list => |elem| return elem,
                     else => return null,
                 },
@@ -451,7 +451,7 @@ const ProcLowerer = struct {
             switch (current) {
                 .canonical => debugPanic("lir.from_ir expected local logical box layout ref"),
                 .local => |node_id| switch (self.parent.input.layouts.getNode(node_id)) {
-                    .nominal => |backing| current = backing,
+                    .nominal => |nominal| current = nominal,
                     .box => |child| return child,
                     else => debugPanic("lir.from_ir expected box logical layout ref"),
                 },
@@ -465,7 +465,7 @@ const ProcLowerer = struct {
             switch (current) {
                 .canonical => return ref,
                 .local => |node_id| switch (self.parent.input.layouts.getNode(node_id)) {
-                    .nominal => |backing| current = backing,
+                    .nominal => |nominal| current = nominal,
                     .box => |child| return child,
                     else => return ref,
                 },
@@ -487,7 +487,7 @@ const ProcLowerer = struct {
             switch (current) {
                 .canonical => debugPanic("lir.from_ir expected local logical struct layout ref"),
                 .local => |node_id| switch (self.parent.input.layouts.getNode(node_id)) {
-                    .nominal => |backing| current = backing,
+                    .nominal => |nominal| current = nominal,
                     .struct_ => |fields| return self.parent.input.layouts.getFields(fields)[field_index].child,
                     else => debugPanic("lir.from_ir expected struct logical layout ref"),
                 },
@@ -505,7 +505,7 @@ const ProcLowerer = struct {
             switch (current) {
                 .canonical => debugPanic("lir.from_ir expected local logical tag-union layout ref"),
                 .local => |node_id| switch (self.parent.input.layouts.getNode(node_id)) {
-                    .nominal => |backing| current = backing,
+                    .nominal => |nominal| current = nominal,
                     .tag_union => |variants| return self.parent.input.layouts.getRefs(variants)[tag_discriminant],
                     else => debugPanic("lir.from_ir expected tag-union logical layout ref"),
                 },
@@ -522,7 +522,7 @@ const ProcLowerer = struct {
             switch (current) {
                 .canonical => debugPanic("lir.from_ir expected local logical tag-union layout ref"),
                 .local => |node_id| switch (self.parent.input.layouts.getNode(node_id)) {
-                    .nominal => |backing| current = backing,
+                    .nominal => |nominal| current = nominal,
                     .tag_union => |variants| {
                         const prim: layout_mod.Idx = switch (self.parent.input.layouts.getRefs(variants).len) {
                             0...0xff => .u8,

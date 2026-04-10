@@ -633,8 +633,11 @@ fn debugValidateMonotypeTypes(types_store: *const monotype.Type.Store) void {
             .link => |target| {
                 debugAssertValidMonoTypeRef(types_store, @enumFromInt(@as(u32, @intCast(i))), "link.target", target, type_len);
             },
-            .nominal => |backing| {
-                debugAssertValidMonoTypeRef(types_store, @enumFromInt(@as(u32, @intCast(i))), "nominal.backing", backing, type_len);
+            .nominal => |nominal| {
+                for (types_store.sliceTypeSpan(nominal.args)) |arg| {
+                    debugAssertValidMonoTypeRef(types_store, @enumFromInt(@as(u32, @intCast(i))), "nominal.arg", arg, type_len);
+                }
+                debugAssertValidMonoTypeRef(types_store, @enumFromInt(@as(u32, @intCast(i))), "nominal.backing", nominal.backing, type_len);
             },
             .primitive => {},
             .func => |func| {
