@@ -27,6 +27,10 @@ const mir = check.MIR;
 
 const ModuleEnv = can.ModuleEnv;
 const CIR = can.CIR;
+const Ident = base.Ident;
+const StringLiteral = base.StringLiteral;
+const CommonIdents = ModuleEnv.CommonIdents;
+const EvaluationOrder = can.DependencyGraph.EvaluationOrder;
 const Var = types.Var;
 const Instantiator = instantiate.Instantiator;
 const dec_scale_i128: i128 = 1_000_000_000_000_000_000;
@@ -69,10 +73,179 @@ const Ctx = struct {
     symbols: symbol_mod.Store,
     types: type_mod.Store,
     idents: base.Ident.Store,
-    mir_modules: *mir.Modules,
+    source_modules: *mir.Modules,
+    type_modules: []TypeModuleState,
     builtin_module_idx: u32,
     top_level_symbols: std.AutoHashMap(TopLevelKey, symbol_mod.Symbol),
     pattern_symbols: std.AutoHashMap(PatternKey, symbol_mod.Symbol),
+
+    const TypeModuleState = struct {
+        type_store: types.Store,
+        ident_store: base.Ident.Store,
+
+        fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+            self.ident_store.deinit(allocator);
+            self.type_store.deinit();
+        }
+    };
+
+    const Module = struct {
+        source_module: mir.Module,
+        type_state: *TypeModuleState,
+
+        pub fn allDefs(self: @This()) []const CIR.Def.Idx {
+            return self.source_module.allDefs();
+        }
+
+        pub fn nodeCount(self: @This()) usize {
+            return self.source_module.nodeCount();
+        }
+
+        pub fn typeStoreConst(self: @This()) *const types.Store {
+            return &self.type_state.type_store;
+        }
+
+        pub fn typeStoreMut(self: @This()) *types.Store {
+            return &self.type_state.type_store;
+        }
+
+        pub fn identStoreConst(self: @This()) *const base.Ident.Store {
+            return &self.type_state.ident_store;
+        }
+
+        pub fn identStoreMut(self: @This()) *base.Ident.Store {
+            return &self.type_state.ident_store;
+        }
+
+        pub fn commonIdents(self: @This()) CommonIdents {
+            return self.source_module.commonIdents();
+        }
+
+        pub fn qualifiedModuleIdent(self: @This()) Ident.Idx {
+            return self.source_module.qualifiedModuleIdent();
+        }
+
+        pub fn evaluationOrder(self: @This()) ?*const EvaluationOrder {
+            return self.source_module.evaluationOrder();
+        }
+
+        pub fn findCommonIdent(self: @This(), text: []const u8) ?Ident.Idx {
+            return self.source_module.findCommonIdent(text);
+        }
+
+        pub fn getIdent(self: @This(), idx: Ident.Idx) []const u8 {
+            return self.source_module.getIdent(idx);
+        }
+
+        pub fn getString(self: @This(), idx: StringLiteral.Idx) []const u8 {
+            return self.source_module.getString(idx);
+        }
+
+        pub fn name(self: @This()) []const u8 {
+            return self.source_module.name();
+        }
+
+        pub fn resolvedImportModule(self: @This(), import_idx: CIR.Import.Idx) ?u32 {
+            return self.source_module.resolvedImportModule(import_idx);
+        }
+
+        pub fn lookupMethodIdentFromModule(
+            self: @This(),
+            source_module: Module,
+            type_ident: Ident.Idx,
+            method_ident: Ident.Idx,
+        ) ?Ident.Idx {
+            return self.source_module.lookupMethodIdentFromModule(source_module.source_module, type_ident, method_ident);
+        }
+
+        pub fn exposedNodeIndexById(self: @This(), ident_idx: Ident.Idx) ?u16 {
+            return self.source_module.exposedNodeIndexById(ident_idx);
+        }
+
+        pub fn nodeTag(self: @This(), idx: CIR.Node.Idx) CIR.Node.Tag {
+            return self.source_module.nodeTag(idx);
+        }
+
+        pub fn regionAt(self: @This(), idx: CIR.Node.Idx) base.Region {
+            return self.source_module.regionAt(idx);
+        }
+
+        pub fn sliceDefs(self: @This(), span: CIR.Def.Span) []const CIR.Def.Idx {
+            return self.source_module.sliceDefs(span);
+        }
+
+        pub fn def(self: @This(), idx: CIR.Def.Idx) mir.Def {
+            return self.source_module.def(idx);
+        }
+
+        pub fn expr(self: @This(), idx: CIR.Expr.Idx) mir.Expr {
+            return self.source_module.expr(idx);
+        }
+
+        pub fn pattern(self: @This(), idx: CIR.Pattern.Idx) mir.Pattern {
+            return self.source_module.pattern(idx);
+        }
+
+        pub fn typeAnnoVar(self: @This(), idx: CIR.TypeAnno.Idx) Var {
+            return self.source_module.typeAnnoVar(idx);
+        }
+
+        pub fn getStatement(self: @This(), idx: CIR.Statement.Idx) CIR.Statement {
+            return self.source_module.getStatement(idx);
+        }
+
+        pub fn getRecordField(self: @This(), idx: CIR.RecordField.Idx) CIR.RecordField {
+            return self.source_module.getRecordField(idx);
+        }
+
+        pub fn getRecordDestruct(self: @This(), idx: CIR.Pattern.RecordDestruct.Idx) CIR.Pattern.RecordDestruct {
+            return self.source_module.getRecordDestruct(idx);
+        }
+
+        pub fn getIfBranch(self: @This(), idx: CIR.Expr.IfBranch.Idx) CIR.Expr.IfBranch {
+            return self.source_module.getIfBranch(idx);
+        }
+
+        pub fn getMatchBranch(self: @This(), idx: CIR.Expr.Match.Branch.Idx) CIR.Expr.Match.Branch {
+            return self.source_module.getMatchBranch(idx);
+        }
+
+        pub fn getMatchBranchPattern(self: @This(), idx: CIR.Expr.Match.BranchPattern.Idx) CIR.Expr.Match.BranchPattern {
+            return self.source_module.getMatchBranchPattern(idx);
+        }
+
+        pub fn sliceExpr(self: @This(), span: CIR.Expr.Span) []const CIR.Expr.Idx {
+            return self.source_module.sliceExpr(span);
+        }
+
+        pub fn slicePatterns(self: @This(), span: CIR.Pattern.Span) []const CIR.Pattern.Idx {
+            return self.source_module.slicePatterns(span);
+        }
+
+        pub fn sliceStatements(self: @This(), span: CIR.Statement.Span) []const CIR.Statement.Idx {
+            return self.source_module.sliceStatements(span);
+        }
+
+        pub fn sliceRecordFields(self: @This(), span: CIR.RecordField.Span) []const CIR.RecordField.Idx {
+            return self.source_module.sliceRecordFields(span);
+        }
+
+        pub fn sliceRecordDestructs(self: @This(), span: CIR.Pattern.RecordDestruct.Span) []const CIR.Pattern.RecordDestruct.Idx {
+            return self.source_module.sliceRecordDestructs(span);
+        }
+
+        pub fn sliceIfBranches(self: @This(), span: CIR.Expr.IfBranch.Span) []const CIR.Expr.IfBranch.Idx {
+            return self.source_module.sliceIfBranches(span);
+        }
+
+        pub fn matchBranchSlice(self: @This(), span: CIR.Expr.Match.Branch.Span) []const CIR.Expr.Match.Branch.Idx {
+            return self.source_module.matchBranchSlice(span);
+        }
+
+        pub fn sliceMatchBranchPatterns(self: @This(), span: CIR.Expr.Match.BranchPattern.Span) []const CIR.Expr.Match.BranchPattern.Idx {
+            return self.source_module.sliceMatchBranchPatterns(span);
+        }
+    };
 
     const TopLevelKey = struct {
         module_idx: u32,
@@ -89,12 +262,30 @@ const Ctx = struct {
         mir_modules: *mir.Modules,
         builtin_module_idx: u32,
     ) std.mem.Allocator.Error!Ctx {
+        const type_modules = try allocator.alloc(TypeModuleState, mir_modules.moduleCount());
+        errdefer allocator.free(type_modules);
+
+        var built_type_modules: usize = 0;
+        errdefer {
+            for (type_modules[0..built_type_modules]) |*type_state| type_state.deinit(allocator);
+        }
+
+        for (0..mir_modules.moduleCount()) |module_idx| {
+            const module = mir_modules.module(@intCast(module_idx));
+            type_modules[module_idx] = .{
+                .type_store = try module.typeStoreConst().clone(allocator),
+                .ident_store = try module.identStoreConst().clone(allocator),
+            };
+            built_type_modules += 1;
+        }
+
         return .{
             .allocator = allocator,
             .symbols = symbol_mod.Store.init(allocator),
             .types = type_mod.Store.init(allocator),
             .idents = try base.Ident.Store.initCapacity(allocator, 256),
-            .mir_modules = mir_modules,
+            .source_modules = mir_modules,
+            .type_modules = type_modules,
             .builtin_module_idx = builtin_module_idx,
             .top_level_symbols = std.AutoHashMap(TopLevelKey, symbol_mod.Symbol).init(allocator),
             .pattern_symbols = std.AutoHashMap(PatternKey, symbol_mod.Symbol).init(allocator),
@@ -102,6 +293,8 @@ const Ctx = struct {
     }
 
     fn deinit(self: *Ctx) void {
+        for (self.type_modules) |*type_state| type_state.deinit(self.allocator);
+        self.allocator.free(self.type_modules);
         self.pattern_symbols.deinit();
         self.top_level_symbols.deinit();
         self.idents.deinit(self.allocator);
@@ -109,8 +302,19 @@ const Ctx = struct {
         self.types.deinit();
     }
 
-    fn mirModule(self: *const Ctx, module_idx: u32) mir.Module {
-        return self.mir_modules.module(module_idx);
+    fn mirModule(self: *const Ctx, module_idx: u32) Module {
+        return .{
+            .source_module = self.source_modules.module(module_idx),
+            .type_state = @constCast(&self.type_modules[module_idx]),
+        };
+    }
+
+    fn moduleCount(self: *const Ctx) usize {
+        return self.source_modules.moduleCount();
+    }
+
+    fn findModuleIdxByName(self: *const Ctx, target_name: []const u8) u32 {
+        return self.source_modules.findModuleIdxByName(target_name);
     }
 
     fn getTypeIdentText(self: *const Ctx, module_idx: u32, ident: base.Ident.Idx) []const u8 {
@@ -369,7 +573,7 @@ pub const Lowerer = struct {
         fn initCloneAll(
             self: *TypeCloneScope,
             allocator: std.mem.Allocator,
-            module: mir.Module,
+            module: Ctx.Module,
         ) void {
             self.initCloneAllFromParent(allocator, module, null);
         }
@@ -377,7 +581,7 @@ pub const Lowerer = struct {
         fn initCloneAllFromParent(
             self: *TypeCloneScope,
             allocator: std.mem.Allocator,
-            module: mir.Module,
+            module: Ctx.Module,
             parent: ?*const TypeCloneScope,
         ) void {
             self.initWithRankBehavior(allocator, module, .ignore_rank);
@@ -400,7 +604,7 @@ pub const Lowerer = struct {
         fn initWithRankBehavior(
             self: *TypeCloneScope,
             allocator: std.mem.Allocator,
-            module: mir.Module,
+            module: Ctx.Module,
             rank_behavior: Instantiator.RankBehavior,
         ) void {
             self.var_map = std.AutoHashMap(Var, Var).init(allocator);
@@ -723,7 +927,7 @@ pub const Lowerer = struct {
     }
 
     fn registerAllTopLevelDefs(self: *Lowerer) std.mem.Allocator.Error!void {
-        for (0..self.ctx.mir_modules.moduleCount()) |module_idx| {
+        for (0..self.ctx.moduleCount()) |module_idx| {
             const mir_module = self.ctx.mirModule(@intCast(module_idx));
             for (mir_module.allDefs()) |def_idx| {
                 const mir_def = mir_module.def(def_idx);
@@ -7363,7 +7567,7 @@ pub const Lowerer = struct {
 
     const NominalDefiningIdentity = struct {
         module_idx: u32,
-        module: mir.Module,
+        module: Ctx.Module,
         ident: base.Ident.Idx,
     };
 
@@ -7373,7 +7577,7 @@ pub const Lowerer = struct {
         nominal: types.NominalType,
     ) std.mem.Allocator.Error!NominalDefiningIdentity {
         const mir_module = self.ctx.mirModule(module_idx);
-        const defining_module_idx = self.ctx.mir_modules.findModuleIdxByName(mir_module.getIdent(nominal.origin_module));
+        const defining_module_idx = self.ctx.findModuleIdxByName(mir_module.getIdent(nominal.origin_module));
         const defining_module = self.ctx.mirModule(defining_module_idx);
         const defining_ident = defining_module.findCommonIdent(mir_module.getIdent(nominal.ident.ident_idx)) orelse debugPanic(
             "monotype.lowerNominalType missing target ident in defining module",
@@ -7414,7 +7618,7 @@ pub const Lowerer = struct {
 
     fn defaultNumeralPrimitiveForContent(
         self: *Lowerer,
-        mir_module: mir.Module,
+        mir_module: Ctx.Module,
         content: types.Content,
     ) ?type_mod.Prim {
         _ = self;
@@ -7432,7 +7636,7 @@ pub const Lowerer = struct {
     fn defaultPrimitiveForConstraints(
         self: *Lowerer,
         module_idx: u32,
-        mir_module: mir.Module,
+        mir_module: Ctx.Module,
         constraints: types.StaticDispatchConstraint.SafeList.Range,
     ) std.mem.Allocator.Error!?type_mod.Prim {
         if (constraints.len() == 0) return null;
@@ -7448,7 +7652,7 @@ pub const Lowerer = struct {
 
     fn debugPanicUnresolvedTypeVar(
         self: *Lowerer,
-        mir_module: mir.Module,
+        mir_module: Ctx.Module,
         module_idx: u32,
         var_: Var,
     ) noreturn {
@@ -8987,7 +9191,7 @@ pub const Lowerer = struct {
             self.ctx.mirModule(source_module_idx).expr(expr_idx).solved_var,
         ) orelse return null;
         return .{
-            .module_idx = self.ctx.mir_modules.findModuleIdxByName(source_module.getIdent(resolved_site.target_module_name)),
+            .module_idx = self.ctx.findModuleIdxByName(source_module.getIdent(resolved_site.target_module_name)),
             .def_idx = @enumFromInt(resolved_site.target_def_idx),
         };
     }
@@ -9446,7 +9650,7 @@ pub const Lowerer = struct {
 
     const DispatchReceiver = struct {
         target_module_idx: u32,
-        target_module: mir.Module,
+        target_module: Ctx.Module,
         type_ident: base.Ident.Idx,
     };
 
@@ -9519,7 +9723,7 @@ pub const Lowerer = struct {
             .alias => |alias| self.resolveDispatchReceiverVar(source_module_idx, type_scope, source_module.typeStoreConst().getAliasBackingVar(alias), method_name),
             .structure => |flat| switch (flat) {
                 .nominal_type => |nominal| {
-                    const target_module_idx = self.ctx.mir_modules.findModuleIdxByName(source_module.getIdent(nominal.origin_module));
+                    const target_module_idx = self.ctx.findModuleIdxByName(source_module.getIdent(nominal.origin_module));
                     return .{
                         .target_module_idx = target_module_idx,
                         .target_module = self.ctx.mirModule(target_module_idx),
@@ -9601,7 +9805,7 @@ fn isLambdaExpr(expr: CIR.Expr) bool {
     };
 }
 
-fn isRecursiveTopLevelDef(mir_module: mir.Module, def_idx: CIR.Def.Idx) bool {
+fn isRecursiveTopLevelDef(mir_module: Ctx.Module, def_idx: CIR.Def.Idx) bool {
     const evaluation_order = mir_module.evaluationOrder() orelse return false;
     for (evaluation_order.sccs) |scc| {
         for (scc.defs) |member| {
@@ -9611,7 +9815,7 @@ fn isRecursiveTopLevelDef(mir_module: mir.Module, def_idx: CIR.Def.Idx) bool {
     return false;
 }
 
-fn builtinNumPrim(mir_module: mir.Module, ident: base.Ident.Idx) ?type_mod.Prim {
+fn builtinNumPrim(mir_module: Ctx.Module, ident: base.Ident.Idx) ?type_mod.Prim {
     const idents = mir_module.commonIdents();
     if (ident.eql(idents.u8) or ident.eql(idents.u8_type)) return .u8;
     if (ident.eql(idents.i8) or ident.eql(idents.i8_type)) return .i8;
@@ -9652,7 +9856,7 @@ fn isBuiltinBoolTagUnion(env: *const ModuleEnv, tags_slice: anytype) bool {
     return saw_true and saw_false;
 }
 
-fn isBuiltinBoolTagUnionSlice(mir_module: mir.Module, tags: []const type_mod.Tag) bool {
+fn isBuiltinBoolTagUnionSlice(mir_module: Ctx.Module, tags: []const type_mod.Tag) bool {
     if (tags.len != 2) return false;
 
     var saw_true = false;
@@ -9676,7 +9880,7 @@ fn isBuiltinBoolTagUnionSlice(mir_module: mir.Module, tags: []const type_mod.Tag
 }
 
 fn constraintsContainFromNumeral(
-    mir_module: mir.Module,
+    mir_module: Ctx.Module,
     range: types.StaticDispatchConstraint.SafeList.Range,
 ) bool {
     for (mir_module.typeStoreConst().sliceStaticDispatchConstraints(range)) |constraint| {

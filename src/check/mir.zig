@@ -152,9 +152,6 @@ pub const Modules = struct {
         );
     }
 
-    pub fn rawModuleEnv(self: @This(), module_idx: u32) *const ModuleEnv {
-        return self.modules[module_idx].env;
-    }
 };
 
 pub const Module = struct {
@@ -178,16 +175,8 @@ pub const Module = struct {
         return &self.env().types;
     }
 
-    pub fn typeStoreMut(self: @This()) *types.Store {
-        return &self.env().types;
-    }
-
     pub fn identStoreConst(self: @This()) *const Ident.Store {
         return self.env().getIdentStoreConst();
-    }
-
-    pub fn identStoreMut(self: @This()) *Ident.Store {
-        return self.env().getIdentStore();
     }
 
     pub fn commonIdents(self: @This()) CommonIdents {

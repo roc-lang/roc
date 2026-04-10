@@ -7,10 +7,12 @@ Progress so far:
 - `src/check/mir.zig` no longer stores a duplicate published tree; it now wraps real `ModuleEnv` state directly.
 - publication is zero-copy for checked modules in the active eval/test pipeline
 - monotype now borrows the published boundary instead of owning and destroying it before later stages
+- published typed CIR no longer exposes mutable type/ident-store access to later stages
+- monotype now clones solved type/ident state into monotype-owned module state before specialization, so published source typing state is read-only in practice
 - full `test-eval`, `test-monotype`, `test-cor-pipeline`, and `test-eval-host-effects` are green on this slice
 - the remaining unfinished work is the monotype-side specialization refactor:
-  - published source typing state is still mutable from monotype through `typeStoreMut()`
-  - specialization data is still not fully monotype-owned
+  - specialization data is still not fully monotype-owned in its final explicit form
+  - the boundary still uses a `MIR` wrapper module/name instead of publishing typed CIR directly as the only named source artifact
 
 ## Goal
 
