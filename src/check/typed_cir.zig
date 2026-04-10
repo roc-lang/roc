@@ -80,6 +80,11 @@ pub const Modules = struct {
     allocator: Allocator,
     modules: []ModuleData,
 
+    pub const ResolvedMethodTarget = struct {
+        module_idx: u32,
+        def_idx: CIR.Def.Idx,
+    };
+
     pub const SourceModule = union(enum) {
         precompiled: *ModuleEnv,
         owned_checked: OwnedCheckedModule,
@@ -143,6 +148,21 @@ pub const Modules = struct {
             "typed CIR invariant violated: missing target module {s}",
             .{target_name},
         );
+    }
+
+    pub fn resolveAttachedMethodTarget(
+        self: @This(),
+        receiver_module_idx: u32,
+        receiver_type_name: []const u8,
+        method_name: []const u8,
+    ) ?ResolvedMethodTarget {
+        const target_module = self.module(receiver_module_idx);
+        const method_ident = target_module.lookupMethodIdentByText(receiver_type_name, method_name) orelse return null;
+        const exposed = target_module.exposedNodeIndexById(method_ident) orelse return null;
+        return .{
+            .module_idx = receiver_module_idx,
+            .def_idx = @enumFromInt(@as(u32, @intCast(exposed))),
+        };
     }
 
 };

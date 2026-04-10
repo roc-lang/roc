@@ -9666,26 +9666,21 @@ pub const Lowerer = struct {
             ),
         };
 
-        const target_module = self.ctx.mirModule(receiver.module_idx);
-        const method_ident = target_module.lookupMethodIdentByText(receiver.type_name, source_module.getIdent(method_name)) orelse debugPanic(
+        const resolved = self.ctx.source_modules.resolveAttachedMethodTarget(
+            receiver.module_idx,
+            receiver.type_name,
+            source_module.getIdent(method_name),
+        ) orelse debugPanic(
             "monotype static dispatch invariant violated: missing method {s} for nominal {s} in module {s}",
             .{
                 source_module.getIdent(method_name),
                 receiver.type_name,
-                target_module.name(),
-            },
-        );
-        const exposed = target_module.exposedNodeIndexById(method_ident) orelse debugPanic(
-            "monotype static dispatch invariant violated: resolved method {s} for nominal {s} was not exposed in module {s}",
-            .{
-                source_module.getIdent(method_name),
-                receiver.type_name,
-                target_module.name(),
+                self.ctx.mirModule(receiver.module_idx).name(),
             },
         );
         return .{
-            .module_idx = receiver.module_idx,
-            .def_idx = @enumFromInt(@as(u32, @intCast(exposed))),
+            .module_idx = resolved.module_idx,
+            .def_idx = resolved.def_idx,
         };
     }
 
