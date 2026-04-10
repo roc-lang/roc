@@ -37,6 +37,12 @@ pub const ExposedItems = struct {
         self.items.deinit(allocator);
     }
 
+    pub fn clone(self: *const Self, allocator: Allocator) !Self {
+        return .{
+            .items = try self.items.clone(allocator),
+        };
+    }
+
     /// Add an exposed item by its interned ID (pass @bitCast(base.Ident.Idx) to u32)
     pub fn addExposedById(self: *Self, allocator: Allocator, ident_idx: IdentIdx) !void {
         // Add with value 0 to indicate "exposed but not yet defined"

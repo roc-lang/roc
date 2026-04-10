@@ -441,10 +441,6 @@ pub const Lowerer = struct {
         mir_modules: mir.Modules,
         builtin_module_idx: u32,
     ) std.mem.Allocator.Error!Lowerer {
-        for (0..mir_modules.moduleCount()) |module_idx| {
-            try mir_modules.module(@intCast(module_idx)).enableRuntimeInserts();
-        }
-
         return .{
             .allocator = allocator,
             .ctx = try Ctx.init(allocator, mir_modules, builtin_module_idx),
@@ -8969,7 +8965,7 @@ pub const Lowerer = struct {
         env: BindingEnv,
         expr: mir.Expr,
     ) std.mem.Allocator.Error!Var {
-        return self.lookupSpecializedExprVar(expr.module_idx, env, expr.idx) orelse
+        return self.lookupSpecializedExprVar(expr.module().module_idx, env, expr.idx) orelse
             try self.scopeVar(type_scope, expr.solved_var);
     }
 

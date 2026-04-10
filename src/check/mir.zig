@@ -1,7 +1,9 @@
 const std = @import("std");
 const base = @import("base");
 const can = @import("can");
+const collections = @import("collections");
 const types = @import("types");
+const Check = @import("Check.zig");
 
 const ModuleEnv = can.ModuleEnv;
 const CIR = can.CIR;
@@ -9,6 +11,11 @@ const Var = types.Var;
 const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
 const StringLiteral = base.StringLiteral;
+const ExposedItems = collections.ExposedItems;
+const MethodIdents = ModuleEnv.MethodIdents;
+const MethodKey = ModuleEnv.MethodKey;
+const CommonIdents = ModuleEnv.CommonIdents;
+const EvaluationOrder = can.DependencyGraph.EvaluationOrder;
 
 const ModuleData = struct {
     all_defs: CIR.Def.Span,
@@ -44,6 +51,17 @@ const ModuleData = struct {
     match_branch_patterns: []CIR.Expr.Match.BranchPattern,
     match_branch_patterns_present: []bool,
 
+    type_store: types.Store,
+    ident_store: Ident.Store,
+    string_store: StringLiteral.Store,
+    exposed_items: ExposedItems,
+    resolved_import_modules: []CIR.Import.ResolvedModuleIdx,
+    display_module_name_idx: Ident.Idx,
+    qualified_module_ident: Ident.Idx,
+    common_idents: CommonIdents,
+    method_idents: MethodIdents,
+    evaluation_order: ?EvaluationOrder,
+
     fn init(allocator: Allocator, env: *const ModuleEnv) Allocator.Error!ModuleData {
         const node_count: usize = env.store.nodes.len();
 
@@ -71,6 +89,19 @@ const ModuleData = struct {
             .match_branches_present = try allocator.alloc(bool, node_count),
             .match_branch_patterns = try allocator.alloc(CIR.Expr.Match.BranchPattern, node_count),
             .match_branch_patterns_present = try allocator.alloc(bool, node_count),
+            .type_store = try env.types.clone(allocator),
+            .ident_store = try env.getIdentStoreConst().clone(allocator),
+            .string_store = try env.common.strings.clone(allocator),
+            .exposed_items = try env.common.exposed_items.clone(allocator),
+            .resolved_import_modules = try allocator.dupe(CIR.Import.ResolvedModuleIdx, env.imports.resolved_modules.items.items),
+            .display_module_name_idx = env.display_module_name_idx,
+            .qualified_module_ident = env.qualified_module_ident,
+            .common_idents = env.idents,
+            .method_idents = try env.method_idents.clone(allocator),
+            .evaluation_order = if (env.evaluation_order) |evaluation_order|
+                try evaluation_order.clone(allocator)
+            else
+                null,
         };
         errdefer data.deinit(allocator);
 
@@ -151,6 +182,13 @@ const ModuleData = struct {
     }
 
     fn deinit(self: *ModuleData, allocator: Allocator) void {
+        if (self.evaluation_order) |*evaluation_order| evaluation_order.deinit();
+        self.method_idents.deinit(allocator);
+        allocator.free(self.resolved_import_modules);
+        self.exposed_items.deinit(allocator);
+        self.string_store.deinit(allocator);
+        self.ident_store.deinit(allocator);
+        self.type_store.deinit();
         allocator.free(self.match_branch_patterns_present);
         allocator.free(self.match_branch_patterns);
         allocator.free(self.match_branches_present);
@@ -178,11 +216,22 @@ const ModuleData = struct {
 
 pub const Modules = struct {
     allocator: Allocator,
-    all_module_envs: []const *const ModuleEnv,
     modules: []ModuleData,
 
-    pub fn init(allocator: Allocator, all_module_envs: []const *const ModuleEnv) Allocator.Error!Modules {
-        const modules = try allocator.alloc(ModuleData, all_module_envs.len);
+    pub const SourceModule = union(enum) {
+        checked: *const Check,
+        precompiled: *const ModuleEnv,
+
+        fn env(self: @This()) *const ModuleEnv {
+            return switch (self) {
+                .checked => |checker| checker.cir,
+                .precompiled => |module_env| module_env,
+            };
+        }
+    };
+
+    pub fn publish(allocator: Allocator, source_modules: []const SourceModule) Allocator.Error!Modules {
+        const modules = try allocator.alloc(ModuleData, source_modules.len);
         errdefer allocator.free(modules);
 
         var built_count: usize = 0;
@@ -190,14 +239,13 @@ pub const Modules = struct {
             for (modules[0..built_count]) |*module_data| module_data.deinit(allocator);
         }
 
-        for (all_module_envs, 0..) |module_env, i| {
-            modules[i] = try ModuleData.init(allocator, module_env);
+        for (source_modules, 0..) |source_module, i| {
+            modules[i] = try ModuleData.init(allocator, source_module.env());
             built_count += 1;
         }
 
         return .{
             .allocator = allocator,
-            .all_module_envs = all_module_envs,
             .modules = modules,
         };
     }
@@ -213,10 +261,9 @@ pub const Modules = struct {
 
     pub fn module(self: @This(), module_idx: u32) Module {
         return .{
+            .allocator = self.allocator,
             .module_idx = module_idx,
-            .env = self.all_module_envs[module_idx],
-            .data_store = &self.modules[module_idx],
-            .all_module_envs = self.all_module_envs,
+            .data_store = @constCast(&self.modules[module_idx]),
         };
     }
 
@@ -233,10 +280,9 @@ pub const Modules = struct {
 };
 
 pub const Module = struct {
+    allocator: Allocator,
     module_idx: u32,
-    env: *const ModuleEnv,
-    data_store: *const ModuleData,
-    all_module_envs: []const *const ModuleEnv,
+    data_store: *ModuleData,
 
     fn sliceFromSpan(self: @This(), comptime T: type, span: base.DataSpan) []const T {
         if (span.len == 0) return &.{};
@@ -252,58 +298,59 @@ pub const Module = struct {
     }
 
     pub fn typeStoreConst(self: @This()) *const types.Store {
-        return &self.env.types;
+        return &self.data_store.type_store;
     }
 
     pub fn typeStoreMut(self: @This()) *types.Store {
-        return &@constCast(self.env).types;
+        return &self.data_store.type_store;
     }
 
     pub fn identStoreConst(self: @This()) *const Ident.Store {
-        return self.env.getIdentStoreConst();
+        return &self.data_store.ident_store;
     }
 
     pub fn identStoreMut(self: @This()) *Ident.Store {
-        return @constCast(self.env).getIdentStore();
+        return &self.data_store.ident_store;
     }
 
-    pub fn enableRuntimeInserts(self: @This()) Allocator.Error!void {
-        try self.identStoreMut().enableRuntimeInserts(@constCast(self.env).gpa);
-    }
-
-    pub fn commonIdents(self: @This()) ModuleEnv.CommonIdents {
-        return self.env.idents;
+    pub fn commonIdents(self: @This()) CommonIdents {
+        return self.data_store.common_idents;
     }
 
     pub fn qualifiedModuleIdent(self: @This()) Ident.Idx {
-        return self.env.qualified_module_ident;
+        return self.data_store.qualified_module_ident;
     }
 
-    pub fn evaluationOrder(self: @This()) ?*can.DependencyGraph.EvaluationOrder {
-        return self.env.evaluation_order;
+    pub fn evaluationOrder(self: @This()) ?*const EvaluationOrder {
+        if (self.data_store.evaluation_order) |*evaluation_order| return evaluation_order;
+        return null;
     }
 
     pub fn findCommonIdent(self: @This(), text: []const u8) ?Ident.Idx {
-        return self.env.common.findIdent(text);
+        return self.identStoreConst().findByString(text);
     }
 
     pub fn getIdent(self: @This(), idx: Ident.Idx) []const u8 {
-        return self.env.getIdent(idx);
+        return self.identStoreConst().getText(idx);
     }
 
     pub fn getString(self: @This(), idx: StringLiteral.Idx) []const u8 {
-        return self.env.getString(idx);
+        return self.data_store.string_store.get(idx);
     }
 
     pub fn name(self: @This()) []const u8 {
-        if (!self.env.qualified_module_ident.isNone()) {
-            return self.env.getIdent(self.env.qualified_module_ident);
+        if (!self.data_store.qualified_module_ident.isNone()) {
+            return self.getIdent(self.data_store.qualified_module_ident);
         }
-        return self.env.module_name;
+        return self.getIdent(self.data_store.display_module_name_idx);
     }
 
     pub fn resolvedImportModule(self: @This(), import_idx: CIR.Import.Idx) ?u32 {
-        return self.env.imports.getResolvedModule(import_idx);
+        const idx = @intFromEnum(import_idx);
+        if (idx >= self.data_store.resolved_import_modules.len) return null;
+        const resolved = self.data_store.resolved_import_modules[idx];
+        if (resolved.isNone()) return null;
+        return @intFromEnum(resolved);
     }
 
     pub fn lookupMethodIdentFromModule(
@@ -312,11 +359,19 @@ pub const Module = struct {
         type_ident: Ident.Idx,
         method_ident: Ident.Idx,
     ) ?Ident.Idx {
-        return self.env.lookupMethodIdentFromEnvConst(source_module.env, type_ident, method_ident);
+        const type_name = source_module.getIdent(type_ident);
+        const method_name = source_module.getIdent(method_ident);
+        const local_type_ident = self.findCommonIdent(type_name) orelse return null;
+        const local_method_ident = self.findCommonIdent(method_name) orelse return null;
+        var method_idents = &self.data_store.method_idents;
+        return method_idents.get(self.allocator, MethodKey{
+            .type_ident = local_type_ident,
+            .method_ident = local_method_ident,
+        });
     }
 
     pub fn exposedNodeIndexById(self: @This(), ident_idx: Ident.Idx) ?u16 {
-        return self.env.getExposedNodeIndexById(ident_idx);
+        return self.data_store.exposed_items.getNodeIndexById(self.allocator, @bitCast(ident_idx));
     }
 
     pub fn nodeTag(self: @This(), idx: CIR.Node.Idx) CIR.Node.Tag {
@@ -336,10 +391,7 @@ pub const Module = struct {
         std.debug.assert(self.data_store.defs_present[raw]);
         const data = self.data_store.defs[raw];
         return .{
-            .module_idx = self.module_idx,
-            .env = self.env,
-            .module_data = self.data_store,
-            .all_module_envs = self.all_module_envs,
+            .owner = self,
             .idx = idx,
             .data = data,
             .pattern = self.pattern(data.pattern),
@@ -351,10 +403,7 @@ pub const Module = struct {
         const raw = @intFromEnum(idx);
         std.debug.assert(self.data_store.exprs_present[raw]);
         return .{
-            .module_idx = self.module_idx,
-            .env = self.env,
-            .module_data = self.data_store,
-            .all_module_envs = self.all_module_envs,
+            .owner = self,
             .idx = idx,
             .data = self.data_store.exprs[raw],
             .solved_var = self.data_store.node_vars[raw],
@@ -365,10 +414,7 @@ pub const Module = struct {
         const raw = @intFromEnum(idx);
         std.debug.assert(self.data_store.patterns_present[raw]);
         return .{
-            .module_idx = self.module_idx,
-            .env = self.env,
-            .module_data = self.data_store,
-            .all_module_envs = self.all_module_envs,
+            .owner = self,
             .idx = idx,
             .data = self.data_store.patterns[raw],
             .solved_var = self.data_store.node_vars[raw],
@@ -449,60 +495,36 @@ pub const Module = struct {
 };
 
 pub const Def = struct {
-    module_idx: u32,
-    env: *const ModuleEnv,
-    module_data: *const ModuleData,
-    all_module_envs: []const *const ModuleEnv,
+    owner: Module,
     idx: CIR.Def.Idx,
     data: CIR.Def,
     pattern: Pattern,
     expr: Expr,
 
     pub fn module(self: @This()) Module {
-        return .{
-            .module_idx = self.module_idx,
-            .env = self.env,
-            .data_store = self.module_data,
-            .all_module_envs = self.all_module_envs,
-        };
+        return self.owner;
     }
 };
 
 pub const Expr = struct {
-    module_idx: u32,
-    env: *const ModuleEnv,
-    module_data: *const ModuleData,
-    all_module_envs: []const *const ModuleEnv,
+    owner: Module,
     idx: CIR.Expr.Idx,
     data: CIR.Expr,
     solved_var: Var,
 
     pub fn module(self: @This()) Module {
-        return .{
-            .module_idx = self.module_idx,
-            .env = self.env,
-            .data_store = self.module_data,
-            .all_module_envs = self.all_module_envs,
-        };
+        return self.owner;
     }
 };
 
 pub const Pattern = struct {
-    module_idx: u32,
-    env: *const ModuleEnv,
-    module_data: *const ModuleData,
-    all_module_envs: []const *const ModuleEnv,
+    owner: Module,
     idx: CIR.Pattern.Idx,
     data: CIR.Pattern,
     solved_var: Var,
 
     pub fn module(self: @This()) Module {
-        return .{
-            .module_idx = self.module_idx,
-            .env = self.env,
-            .data_store = self.module_data,
-            .all_module_envs = self.all_module_envs,
-        };
+        return self.owner;
     }
 };
 

@@ -332,6 +332,15 @@ pub const Store = struct {
         self.unregisterFromTracking();
     }
 
+    /// Clone this store into fresh owned memory.
+    pub fn clone(self: *const Store, gpa: std.mem.Allocator) std.mem.Allocator.Error!Store {
+        return .{
+            .interner = try self.interner.clone(gpa),
+            .attributes = try self.attributes.clone(gpa),
+            .next_unique_name = self.next_unique_name,
+        };
+    }
+
     /// Insert a new identifier into the store.
     pub fn insert(self: *Store, gpa: std.mem.Allocator, ident: Ident) std.mem.Allocator.Error!Idx {
         const idx = try self.interner.insert(gpa, ident.raw_text);

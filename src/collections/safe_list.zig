@@ -350,6 +350,14 @@ pub fn SafeList(comptime T: type) type {
             self.items.deinit(gpa);
         }
 
+        /// Clone this list into fresh owned memory.
+        pub fn clone(self: *const SafeList(T), gpa: Allocator) Allocator.Error!SafeList(T) {
+            var cloned = try SafeList(T).initCapacity(gpa, self.items.capacity);
+            errdefer cloned.deinit(gpa);
+            try cloned.items.appendSlice(gpa, self.items.items);
+            return cloned;
+        }
+
         /// Get the length of this list.
         pub fn len(self: *const SafeList(T)) u64 {
             return @intCast(self.items.items.len);
@@ -605,6 +613,26 @@ pub fn SafeMultiList(comptime T: type) type {
         /// Deinitialize the memory of a `SafeMultiList`.
         pub fn deinit(self: *SafeMultiList(T), gpa: Allocator) void {
             self.items.deinit(gpa);
+        }
+
+        /// Clone this multilist into fresh owned memory.
+        pub fn clone(self: *const SafeMultiList(T), gpa: Allocator) Allocator.Error!SafeMultiList(T) {
+            if (self.items.len == 0) {
+                return SafeMultiList(T){ .items = .{} };
+            }
+
+            const MultiArrayListType = std.MultiArrayList(T);
+            const total_bytes = MultiArrayListType.capacityInBytes(self.items.capacity);
+            const fresh_bytes = try gpa.alignedAlloc(u8, .of(T), total_bytes);
+            @memcpy(fresh_bytes[0..total_bytes], self.items.bytes[0..total_bytes]);
+
+            return SafeMultiList(T){
+                .items = .{
+                    .bytes = @ptrCast(fresh_bytes.ptr),
+                    .len = self.items.len,
+                    .capacity = self.items.capacity,
+                },
+            };
         }
 
         /// Get the length of this list.

@@ -55,6 +55,13 @@ pub const Store = struct {
         self.buffer.deinit(gpa);
     }
 
+    /// Clone this store into fresh owned memory.
+    pub fn clone(self: *const Store, gpa: std.mem.Allocator) std.mem.Allocator.Error!Store {
+        return .{
+            .buffer = try self.buffer.clone(gpa),
+        };
+    }
+
     /// Insert a new string into a `Store`.
     ///
     /// Deduplicates: if an identical string already exists, returns its index.

@@ -165,6 +165,22 @@ pub const Store = struct {
         self.resolved_static_dispatch_sites.deinit(self.gpa);
     }
 
+    /// Clone this store into fresh owned memory.
+    pub fn clone(self: *const Self, gpa: Allocator) Allocator.Error!Self {
+        return .{
+            .gpa = gpa,
+            .slots = .{ .backing = try self.slots.backing.clone(gpa) },
+            .descs = .{ .backing = try self.descs.backing.clone(gpa) },
+            .vars = try self.vars.clone(gpa),
+            .record_fields = try self.record_fields.clone(gpa),
+            .tags = try self.tags.clone(gpa),
+            .static_dispatch_constraints = try self.static_dispatch_constraints.clone(gpa),
+            .static_dispatch_site_requirements = try self.static_dispatch_site_requirements.clone(gpa),
+            .resolved_static_dispatch_sites = try self.resolved_static_dispatch_sites.clone(gpa),
+            .from_numeral_flex_count = self.from_numeral_flex_count,
+        };
+    }
+
     /// Return the number of type variables in the store.
     pub fn len(self: *const Self) u64 {
         return self.slots.backing.len();

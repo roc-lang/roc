@@ -108,6 +108,26 @@ pub fn deinit(self: *SmallStringInterner, gpa: std.mem.Allocator) void {
     self.hash_table.deinit(gpa);
 }
 
+/// Clone this interner into fresh owned memory that supports inserts.
+pub fn clone(self: *const SmallStringInterner, gpa: std.mem.Allocator) std.mem.Allocator.Error!SmallStringInterner {
+    var bytes = collections.SafeList(u8){};
+    errdefer bytes.deinit(gpa);
+    try bytes.items.ensureTotalCapacity(gpa, self.bytes.items.items.len);
+    try bytes.items.appendSlice(gpa, self.bytes.items.items);
+
+    var hash_table = collections.SafeList(Idx){};
+    errdefer hash_table.deinit(gpa);
+    try hash_table.items.ensureTotalCapacity(gpa, self.hash_table.items.items.len);
+    try hash_table.items.appendSlice(gpa, self.hash_table.items.items);
+
+    return .{
+        .bytes = bytes,
+        .hash_table = hash_table,
+        .entry_count = self.entry_count,
+        .supports_inserts = true,
+    };
+}
+
 /// Find a string in the hash table using linear probing.
 /// Returns the Idx if found, or the slot index where it should be inserted if not found.
 pub fn findStringOrSlot(self: *const SmallStringInterner, string: []const u8) struct { idx: ?Idx, slot: u64 } {

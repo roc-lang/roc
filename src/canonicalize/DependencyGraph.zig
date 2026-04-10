@@ -80,6 +80,29 @@ pub const EvaluationOrder = struct {
 
     allocator: std.mem.Allocator,
 
+    pub fn clone(self: *const EvaluationOrder, allocator: std.mem.Allocator) std.mem.Allocator.Error!EvaluationOrder {
+        const sccs = try allocator.alloc(SCC, self.sccs.len);
+        errdefer allocator.free(sccs);
+
+        var built: usize = 0;
+        errdefer {
+            for (sccs[0..built]) |scc| allocator.free(scc.defs);
+        }
+
+        for (self.sccs, 0..) |scc, i| {
+            sccs[i] = .{
+                .defs = try allocator.dupe(CIR.Def.Idx, scc.defs),
+                .is_recursive = scc.is_recursive,
+            };
+            built += 1;
+        }
+
+        return .{
+            .sccs = sccs,
+            .allocator = allocator,
+        };
+    }
+
     pub fn deinit(self: *EvaluationOrder) void {
         for (self.sccs) |scc| {
             self.allocator.free(scc.defs);

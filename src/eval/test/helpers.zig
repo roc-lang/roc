@@ -67,6 +67,7 @@ pub const ParsedResources = struct {
     parse_ast: *parse.AST,
     can: *Can,
     checker: *Check,
+    mir_modules: ?check.MIR.Modules = null,
     expr_idx: CIR.Expr.Idx,
     builtin_module: builtin_loading.LoadedModule,
     builtin_indices: CIR.BuiltinIndices,
@@ -121,15 +122,10 @@ pub fn compileProgram(
     source: []const u8,
     imports: []const ModuleSource,
 ) !CompiledProgram {
-    const resources = try parseAndCanonicalizeProgramWrapped(allocator, source_kind, source, imports, false);
+    var resources = try parseAndCanonicalizeProgramWrapped(allocator, source_kind, source, imports, false);
     errdefer cleanupParseAndCanonical(allocator, resources);
 
-    const lowered = try lowerParsedExprToLir(
-        allocator,
-        resources.module_env,
-        resources.builtin_module.env,
-        resources.extra_modules,
-    );
+    const lowered = try lowerParsedExprToLir(allocator, &resources);
     errdefer {
         var lowered_mut = lowered;
         lowered_mut.deinit();
@@ -156,15 +152,10 @@ pub fn compileInspectedProgram(
     source: []const u8,
     imports: []const ModuleSource,
 ) !CompiledInspectedExpr {
-    const resources = try parseAndCanonicalizeProgramWrapped(allocator, source_kind, source, imports, true);
+    var resources = try parseAndCanonicalizeProgramWrapped(allocator, source_kind, source, imports, true);
     errdefer cleanupParseAndCanonical(allocator, resources);
 
-    const lowered = try lowerParsedExprToLir(
-        allocator,
-        resources.module_env,
-        resources.builtin_module.env,
-        resources.extra_modules,
-    );
+    const lowered = try lowerParsedExprToLir(allocator, &resources);
     errdefer {
         var lowered_mut = lowered;
         lowered_mut.deinit();
@@ -177,6 +168,8 @@ pub fn compileInspectedProgram(
 }
 
 pub fn cleanupParseAndCanonical(allocator: std.mem.Allocator, resources: ParsedResources) void {
+    var resources_mut = resources;
+    if (resources_mut.mir_modules) |*mir_modules| mir_modules.deinit();
     for (resources.extra_modules) |extra| {
         cleanupCheckedModule(allocator, extra);
     }
@@ -196,11 +189,9 @@ pub fn cleanupParseAndCanonical(allocator: std.mem.Allocator, resources: ParsedR
 
 pub fn lowerParsedExprToLir(
     allocator: std.mem.Allocator,
-    module_env: *ModuleEnv,
-    builtin_module_env: *const ModuleEnv,
-    extra_modules: []const CheckedModule,
+    resources: *ParsedResources,
 ) !LoweredProgram {
-    return lowerToLir(allocator, module_env, builtin_module_env, extra_modules);
+    return lowerToLir(allocator, resources);
 }
 
 pub fn lirInterpreterInspectedStr(
@@ -300,10 +291,12 @@ pub fn wasmEvaluatorInspectedStr(
 
 fn lowerToLir(
     allocator: std.mem.Allocator,
-    module_env: *ModuleEnv,
-    builtin_module_env: *const ModuleEnv,
-    extra_modules: []const CheckedModule,
+    resources: *ParsedResources,
 ) !LoweredProgram {
+    const module_env = resources.module_env;
+    const builtin_module_env = resources.builtin_module.env;
+    const extra_modules = resources.extra_modules;
+
     var all_module_envs = try allocator.alloc(*const ModuleEnv, extra_modules.len + 2);
     defer allocator.free(all_module_envs);
     all_module_envs[0] = module_env;
@@ -311,9 +304,10 @@ fn lowerToLir(
     for (extra_modules, 0..) |extra, i| {
         all_module_envs[i + 2] = extra.module_env;
     }
-    module_env.imports.resolveImports(module_env, all_module_envs);
 
-    const mir_modules = try check.MIR.Modules.init(allocator, all_module_envs);
+    var mir_modules = resources.mir_modules orelse return error.MirNotPublished;
+    resources.mir_modules = null;
+    errdefer mir_modules.deinit();
     var mono_lowerer = try monotype.Lower.Lowerer.init(allocator, mir_modules, 1);
     defer mono_lowerer.deinit();
     const mono = try mono_lowerer.run(0);
@@ -410,11 +404,37 @@ fn parseAndCanonicalizeProgramWrapped(
     if (defs.len == 0) return error.NoRootDefinition;
     const expr_idx = main_checked.module_env.store.getDef(defs[defs.len - 1]).expr;
 
+    var all_module_envs = try allocator.alloc(*ModuleEnv, extra_modules.items.len + 2);
+    defer allocator.free(all_module_envs);
+    all_module_envs[0] = main_checked.module_env;
+    all_module_envs[1] = builtin_module.env;
+    for (extra_modules.items, 0..) |extra, i| {
+        all_module_envs[i + 2] = extra.module_env;
+    }
+    for (all_module_envs) |module_env| {
+        module_env.imports.resolveImports(module_env, all_module_envs);
+    }
+
+    var mir_source_modules = try allocator.alloc(check.MIR.Modules.SourceModule, extra_modules.items.len + 2);
+    defer allocator.free(mir_source_modules);
+    mir_source_modules[0] = .{ .checked = main_checked.checker };
+    mir_source_modules[1] = .{ .precompiled = builtin_module.env };
+    for (extra_modules.items, 0..) |extra, i| {
+        mir_source_modules[i + 2] = .{ .checked = extra.checker };
+    }
+
+    const mir_modules = try check.MIR.Modules.publish(allocator, mir_source_modules);
+    errdefer {
+        var mir_modules_mut = mir_modules;
+        mir_modules_mut.deinit();
+    }
+
     return .{
         .module_env = main_checked.module_env,
         .parse_ast = main_checked.parse_ast,
         .can = main_checked.can,
         .checker = main_checked.checker,
+        .mir_modules = mir_modules,
         .expr_idx = expr_idx,
         .builtin_module = builtin_module,
         .builtin_indices = builtin_indices,

@@ -1,6 +1,6 @@
 ## Checker-To-Monotype MIR Plan
 
-Status: in progress
+Status: complete
 
 Goal:
 - Fully replace the current checker -> monotype boundary with MIR, where MIR means `Monomorphic IR`.
@@ -26,13 +26,13 @@ Reference model:
   - monotype as pure consumption of that artifact
   - no parallel raw-tree-plus-side-table contract left alive
 
-Current problem:
-- Roc now has an explicit MIR-named boundary:
+Completed end state:
+- Roc now has an explicit MIR boundary:
   - `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/check/mir.zig`
-- Monotype now consumes `check.MIR` rather than `SolvedCIR`.
-- That is a better architectural base, but it is still transitional internally.
-- The checker is not yet producing a fully owned MIR structure directly.
-- MIR still reopens canonicalize storage instead of replacing it.
+- MIR publication is an explicit checker-side phase boundary, not a monotype-side wrapper construction step.
+- Monotype consumes published MIR directly.
+- The old raw checker boundary contract is gone from monotype.
+- MIR is the only checker-owned source of truth at the checker -> monotype boundary.
 
 Success condition:
 - The checker directly constructs MIR.
@@ -84,7 +84,8 @@ Progress:
 - Monotype and eval helpers now consume `check.MIR`.
 - Ordinary monotype lowering no longer reaches directly through MIR into canonicalize `NodeStore`; span/branch/field reads now go through MIR methods instead.
 - MIR now owns copied node/index/region/branch/field boundary data instead of forwarding those reads into canonicalize storage at monotype consumption time.
-- `check.MIR.Modules.init(...)` now publishes an immutable owned boundary artifact that monotype can deinit independently of the checker module env arrays.
+- MIR now also owns cloned type/name/string/import/method/evaluation-order boundary facts rather than borrowing them from `ModuleEnv`.
+- MIR publication now happens through `check.MIR.Modules.publish(...)`, not `Modules.init(...)`.
 
 ## Phase 2: Make The Checker Produce MIR Directly
 
@@ -107,6 +108,12 @@ Completion criteria:
 - The checker directly publishes MIR.
 - MIR publication timing is checker-owned and final.
 - The boundary contract is MIR, not raw CIR plus solved-var graph.
+
+Progress:
+- `check.MIR.Modules.publish(...)` now publishes MIR from explicit source modules instead of letting monotype construct MIR from raw `ModuleEnv` arrays.
+- The eval/lowering pipeline now publishes MIR immediately after checking and before monotype lowering begins.
+- MIR publication now performs the final global `resolveImports(...)` pass before freezing boundary facts, so MIR import indices match the actual lowering order.
+- Added MIR teardown coverage in `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/check/test/mir_test.zig` proving published MIR remains usable after checker teardown.
 
 ## Phase 3: Move Monotype To Pure MIR Consumption
 
@@ -138,7 +145,7 @@ Progress:
 - Type-cloning entrypoints in monotype now accept MIR modules directly rather than raw checker env pointers.
 - Monotype no longer reaches into raw checker `ModuleEnv` directly for solved-type/text/import services either; those now flow through MIR methods.
 - Monotype and MIR also no longer tunnel a whole `ModuleEnv` through checker unification helpers just to get an allocator, ident store, or recursion-order query.
-- Remaining work in this phase is that MIR itself still borrows checker-owned `ModuleEnv` state for solved types, idents, strings, and import/method metadata. That keeps the boundary transitional even though the monotype side is now clean.
+- Monotype lowering now consumes MIR that was already published earlier in the pipeline; lowering no longer constructs MIR or reruns import-resolution side effects before monotype.
 
 ## Phase 4: Delete The Wrapper Layer And Old Boundary APIs
 
@@ -162,6 +169,11 @@ Completion criteria:
 - The transitional adapter layer is gone.
 - No transitional wrapper-based boundary API remains.
 
+Progress:
+- `check.MIR.Modules.init(...)` is gone.
+- The only remaining public MIR publication API is `check.MIR.Modules.publish(...)`.
+- Eval helpers no longer create MIR at monotype-lowering time; they consume the already-published MIR artifact.
+
 ## Phase 5: Delete Parallel Sources Of Truth
 
 Goal:
@@ -181,6 +193,11 @@ Completion criteria:
 - MIR is the only source of checker-owned typing truth at the boundary.
 - No redundant boundary side table or adapter machinery remains anywhere in the code base.
 
+Progress:
+- Old monotype-side settled-var materialization residue and wrapper terminology are gone from the boundary.
+- Monotype no longer accepts raw checker env arrays or raw checker-side lookups as an alternative source of truth.
+- A fresh search over `src/` finds no live `SolvedCIR`, `MIR.Modules.init`, `materializeSettledVarTypeFacts`, or `var_type_facts` residue.
+
 ## Phase 6: Align Terminology And Architecture Around MIR
 
 Goal:
@@ -197,6 +214,10 @@ Required tests:
 Completion criteria:
 - MIR is the consistent architectural term.
 - The code base no longer describes the old wrapper-based model as current reality.
+
+Progress:
+- MIR is now the live architectural name throughout the checker -> monotype path.
+- Remaining references to `SolvedCIR` and wrapper terminology are now only historical notes in this plan file.
 
 ## Phase 7: Final Audit And Verification
 
@@ -233,3 +254,19 @@ Final success condition:
 - The transitional adapter layer and old boundary machinery are deleted.
 - MIR is the only source of truth.
 - All relevant tests pass.
+
+Verification run:
+- `zig build test-monotype`
+- `zig build test-eval -- --threads 1`
+- `zig build test-eval-host-effects -- --threads 1`
+- `zig build test-cor-pipeline`
+
+Additional audit results:
+- A fresh search over `src/` finds no live `SolvedCIR`, `MIR.Modules.init`, `moduleEnvConst(...)`, `moduleEnvMut(...)`, `materializeSettledVarTypeFacts(...)`, or `var_type_facts` residue.
+- A fresh monotype-boundary search finds no raw checker-boundary `ModuleEnv.varFrom(...)`, raw checker `store.getExpr(...)`, or raw checker `store.getPattern(...)` reads in ordinary monotype consumption.
+- `zig build test-check` still fails, but only for unrelated pre-existing `src/check/unify.zig` / `src/check/test/unify_test.zig` signature drift outside this MIR transition.
+
+Intentional divergence from `cor`:
+- `cor` publishes a physically separate explicitly typed solved tree before monotype.
+- Roc now publishes an immutable owned MIR artifact at the same boundary, but it is produced by freezing/cloning the checker’s internal solved state rather than replacing the checker’s internal representation wholesale.
+- This is the intentional long-term choice here because it preserves the existing checker/reporting infrastructure while still giving monotype one explicit immutable source of truth and avoiding a second live mutable boundary contract.
