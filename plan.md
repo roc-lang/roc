@@ -1,6 +1,6 @@
 ## Checker-To-Monotype Typed CIR Plan
 
-Status: in progress
+Status: complete
 
 Goal:
 - Move Roc from the current `checked CIR + solved-var graph` checker→monotype boundary to the `cor` shape: an explicit typed solved artifact at the boundary.
@@ -26,11 +26,11 @@ Reference model:
   - `/Users/rtfeldman/code/cor/experiments/lss/monotype/lower.ml`
 - Roc should move toward that same stage-boundary shape in phases rather than preserving the current `CIR node id + solved var` contract forever.
 
-Current problem:
-- Roc monotype still starts from checked CIR ids plus solved checker vars:
-  - `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/lower.zig`
-  - `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/monotype/semantic_facts.zig`
-- That is why monotype still needs a settled-var-type materialization subphase instead of directly consuming an explicitly typed solved tree.
+Current result:
+- Roc monotype now starts from an explicit checker-owned solved wrapper layer:
+  - `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/check/solved_cir.zig`
+- `Lowerer.init(...)` takes that solved layer explicitly, and ordinary monotype lowering consumes solved nodes instead of reopening raw checked CIR for solved vars or settled type publication.
+- The old monotype settled-var-type materialization side table and helper path are gone.
 
 ## Phase 1: Checker Publishes Immutable Settled Type Facts
 
@@ -72,7 +72,8 @@ Completion criteria:
 Progress:
 - Added a checker-owned solved wrapper layer in `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/check/solved_cir.zig`.
 - Added a targeted wrapper test in `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/check/test/solved_cir_test.zig`.
-- Monotype top-level def lowering and semantic-fact collection now consume that solved wrapper layer instead of starting directly from raw checked CIR lookups in the converted paths.
+- Monotype now receives that solved wrapper layer explicitly as input.
+- Ordinary monotype lowering now reads solved vars from solved nodes instead of calling `ModuleEnv.varFrom(...)` directly.
 
 ## Phase 2: Monotype Consumes Only Checker-Published Settled Facts
 
@@ -98,6 +99,11 @@ Completion criteria:
 - No monotype boundary materializer remains.
 - Monotype typed facts are fully upstream-owned.
 - Monotype entry is consumption-only with respect to settled types.
+
+Result:
+- `materializeSettledVarTypeFacts(...)` and the `var_type_facts` side table were deleted.
+- Freeze-time typed fact publication now instantiates directly from solved-node vars through the builder-owned type cache.
+- Monotype no longer owns a separate settled-var-type boundary table.
 
 ## Phase 3: Introduce Typed CIR Nodes
 
@@ -130,7 +136,7 @@ Completion criteria:
 Progress:
 - The first typed solved layer now exists as a wrapper over checked CIR:
   - `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/check/solved_cir.zig`
-- This is not yet the final typed CIR representation, but it establishes the explicit checker-owned typed boundary needed for the later full migration.
+- This typed solved layer is now the monotype input contract.
 
 ## Phase 4: Migrate Monotype To Typed CIR Consumption
 
@@ -157,8 +163,8 @@ Completion criteria:
 - Monotype no longer uses checker-published parallel settled-type side tables as its normal input format.
 
 Progress:
-- Monotype top-level boundary and semantic-fact collection have begun migrating to the solved wrapper layer.
-- Ordinary monotype lowering still uses the older internal node-id/side-table model beyond those converted entry paths, so this phase is not complete yet.
+- Monotype top-level boundary, semantic-fact collection, ordinary expr lowering, expected-type lowering, dispatch lookup, and pattern machinery now read solved vars and CIR data through the solved wrapper layer.
+- Raw checked-CIR `getExpr` / `getPattern` reads are gone from ordinary monotype input consumption; the remaining `getExpr(...)` reads in `src/monotype/lower.zig` are on the monotype output store only.
 
 ## Phase 5: Delete Obsolete Side Tables And Old Boundary Machinery
 
@@ -183,6 +189,11 @@ Testing:
 Completion criteria:
 - The typed CIR/AST is the only source of truth for settled typing at the checker→monotype boundary.
 - There is no remaining obsolete side-table or materialization machinery left in the code base for this boundary.
+
+Result:
+- The obsolete monotype settled-var-type side table and materialization helpers are gone.
+- `Lowerer.init(...)` no longer accepts raw module-env arrays as the monotype boundary contract.
+- The checker-owned solved wrapper layer is now the only settled-typing source of truth consumed at the checker→monotype boundary.
 
 ## Phase 6: Final Audit And Verification
 
@@ -213,3 +224,13 @@ Success condition:
 - Monotype consumes typed CIR/AST directly.
 - The old obsolete side tables and boundary machinery are gone.
 - All relevant tests pass.
+
+Result:
+- Fresh boundary audit finds no remaining checker→monotype `ModuleEnv.varFrom(...)` reads in ordinary monotype lowering.
+- Fresh boundary audit finds no remaining monotype checked-CIR `store.getExpr(...)` / `store.getPattern(...)` reads for input consumption outside the checker-owned solved wrapper layer.
+- Fresh boundary audit finds no remaining `var_type_facts` or `materializeSettledVarTypeFacts(...)` residue.
+- Verification is green on:
+  - `zig build test-monotype`
+  - `zig build test-eval -- --threads 1`
+  - `zig build test-eval-host-effects -- --threads 1`
+  - `zig build test-cor-pipeline`
