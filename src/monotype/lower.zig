@@ -1,4 +1,4 @@
-//! Monotype lowering from checked CIR.
+//! Monotype lowering from checker MIR.
 //!
 //! This follows cor's strategy:
 //! - lower solved checker facts into a monomorphic type graph
@@ -23,7 +23,7 @@ const type_mod = @import("type.zig");
 const semantic_facts = @import("semantic_facts.zig");
 const specializations_mod = @import("specializations.zig");
 const symbol_mod = @import("symbol");
-const solved_cir = check.SolvedCIR;
+const mir = check.MIR;
 
 const ModuleEnv = can.ModuleEnv;
 const CIR = can.CIR;
@@ -69,7 +69,7 @@ const Ctx = struct {
     symbols: symbol_mod.Store,
     types: type_mod.Store,
     idents: base.Ident.Store,
-    solved_modules: solved_cir.Modules,
+    mir_modules: mir.Modules,
     builtin_module_idx: u32,
     top_level_symbols: std.AutoHashMap(TopLevelKey, symbol_mod.Symbol),
     pattern_symbols: std.AutoHashMap(PatternKey, symbol_mod.Symbol),
@@ -86,7 +86,7 @@ const Ctx = struct {
 
     fn init(
         allocator: std.mem.Allocator,
-        solved_modules: solved_cir.Modules,
+        mir_modules: mir.Modules,
         builtin_module_idx: u32,
     ) std.mem.Allocator.Error!Ctx {
         return .{
@@ -94,7 +94,7 @@ const Ctx = struct {
             .symbols = symbol_mod.Store.init(allocator),
             .types = type_mod.Store.init(allocator),
             .idents = try base.Ident.Store.initCapacity(allocator, 256),
-            .solved_modules = solved_modules,
+            .mir_modules = mir_modules,
             .builtin_module_idx = builtin_module_idx,
             .top_level_symbols = std.AutoHashMap(TopLevelKey, symbol_mod.Symbol).init(allocator),
             .pattern_symbols = std.AutoHashMap(PatternKey, symbol_mod.Symbol).init(allocator),
@@ -110,11 +110,11 @@ const Ctx = struct {
     }
 
     fn env(self: *const Ctx, module_idx: u32) *const ModuleEnv {
-        return self.solved_modules.env(module_idx);
+        return self.mir_modules.env(module_idx);
     }
 
-    fn solved(self: *const Ctx, module_idx: u32) solved_cir.Module {
-        return self.solved_modules.module(module_idx);
+    fn mirModule(self: *const Ctx, module_idx: u32) mir.Module {
+        return self.mir_modules.module(module_idx);
     }
 
     fn getTypeIdentText(self: *const Ctx, module_idx: u32, ident: base.Ident.Idx) []const u8 {
@@ -441,17 +441,17 @@ pub const Lowerer = struct {
 
     pub fn init(
         allocator: std.mem.Allocator,
-        solved_modules: solved_cir.Modules,
+        mir_modules: mir.Modules,
         builtin_module_idx: u32,
     ) std.mem.Allocator.Error!Lowerer {
-        for (solved_modules.all_module_envs) |env| {
+        for (mir_modules.all_module_envs) |env| {
             const mutable_env = @constCast(env);
             try mutable_env.getIdentStore().enableRuntimeInserts(mutable_env.gpa);
         }
 
         return .{
             .allocator = allocator,
-            .ctx = try Ctx.init(allocator, solved_modules, builtin_module_idx),
+            .ctx = try Ctx.init(allocator, mir_modules, builtin_module_idx),
             .program = Program.init(allocator),
             .strings = .{},
             .specializations = specializations_mod.Queue.init(allocator),
@@ -732,8 +732,8 @@ pub const Lowerer = struct {
     }
 
     fn registerAllTopLevelDefs(self: *Lowerer) std.mem.Allocator.Error!void {
-        for (self.ctx.solved_modules.all_module_envs, 0..) |env, module_idx| {
-            const solved_module = self.ctx.solved(@intCast(module_idx));
+        for (self.ctx.mir_modules.all_module_envs, 0..) |env, module_idx| {
+            const solved_module = self.ctx.mirModule(@intCast(module_idx));
             for (env.store.sliceDefs(env.all_defs)) |def_idx| {
                 const solved_def = solved_module.def(def_idx);
                 if (solved_def.data.kind != .let) continue;
@@ -775,7 +775,7 @@ pub const Lowerer = struct {
         def_idx: CIR.Def.Idx,
     ) std.mem.Allocator.Error!?ast.DefId {
         const env = self.ctx.env(module_idx);
-        const solved_def = self.ctx.solved(module_idx).def(def_idx);
+        const solved_def = self.ctx.mirModule(module_idx).def(def_idx);
 
         if (solved_def.data.kind == .let) {
             const bind_symbol = self.lookupTopLevelSymbol(module_idx, solved_def.pattern.idx) orelse return null;
@@ -834,7 +834,7 @@ pub const Lowerer = struct {
         fx_var: Var,
     ) std.mem.Allocator.Error!ast.DefId {
         const env = self.ctx.env(module_idx);
-        const solved_def = self.ctx.solved(module_idx).def(def_idx);
+        const solved_def = self.ctx.mirModule(module_idx).def(def_idx);
         const bind_symbol = self.lookupTopLevelSymbol(module_idx, solved_def.pattern.idx) orelse try self.ctx.addSyntheticSymbol(base.Ident.Idx.NONE);
 
         var type_scope: TypeCloneScope = undefined;
@@ -922,7 +922,7 @@ pub const Lowerer = struct {
     ) std.mem.Allocator.Error!ast.DefId {
         if (self.emitted_defs_by_symbol.get(pending.specialized_symbol)) |existing| return existing;
         const env = self.ctx.env(pending.source.module_idx);
-        const solved_def = self.ctx.solved(pending.source.module_idx).def(pending.source.def_idx);
+        const solved_def = self.ctx.mirModule(pending.source.module_idx).def(pending.source.def_idx);
         const specialized_checker_var = try self.requireSpecializedTopLevelCheckerVar(pending);
 
         if (solved_def.expr.data == .e_hosted_lambda) {
@@ -967,7 +967,7 @@ pub const Lowerer = struct {
         expected_var: ?Var,
     ) std.mem.Allocator.Error!ast.DefId {
         const env = self.ctx.env(module_idx);
-        const solved_def = self.ctx.solved(module_idx).def(def_idx);
+        const solved_def = self.ctx.mirModule(module_idx).def(def_idx);
         const hosted = switch (solved_def.expr.data) {
             .e_hosted_lambda => |hosted| hosted,
             else => debugPanic("monotype invariant violated: attempted to lower non-hosted def as hosted top-level", .{}),
@@ -1047,7 +1047,7 @@ pub const Lowerer = struct {
         expected_var: ?Var,
     ) std.mem.Allocator.Error!ast.LetFn {
         const env = self.ctx.env(module_idx);
-        const solved_expr = self.ctx.solved(module_idx).expr(expr_idx);
+        const solved_expr = self.ctx.mirModule(module_idx).expr(expr_idx);
         const expr = solved_expr.data;
         const source_expr_var = solved_expr.solved_var;
         const source_fn_var = try self.scopeVar(type_scope, source_seed_var orelse source_expr_var);
@@ -1069,7 +1069,7 @@ pub const Lowerer = struct {
         const lambda = switch (expr) {
             .e_lambda => |lambda| lambda,
             .e_closure => |closure| blk: {
-                const lambda_expr = self.ctx.solved(module_idx).expr(closure.lambda_idx).data;
+                const lambda_expr = self.ctx.mirModule(module_idx).expr(closure.lambda_idx).data;
                 if (lambda_expr != .e_lambda) unreachable;
                 break :blk lambda_expr.e_lambda;
             },
@@ -1521,7 +1521,7 @@ pub const Lowerer = struct {
         if (type_scope.facts.expr_source_function_facts.contains(key)) return;
 
         const current_env = self.ctx.env(module_idx);
-        const seed_var_opt: ?Var = switch (self.ctx.solved(module_idx).expr(expr_idx).data) {
+        const seed_var_opt: ?Var = switch (self.ctx.mirModule(module_idx).expr(expr_idx).data) {
             .e_lookup_local => |lookup| blk: {
                 if (env.get(.{
                     .module_idx = module_idx,
@@ -1674,7 +1674,7 @@ pub const Lowerer = struct {
         result_var: ?Var,
     ) std.mem.Allocator.Error!void {
         try self.bindExplicitExprResultFact(module_idx, type_scope, expr_idx, result_var);
-        try self.collectSolvedExprFacts(module_idx, type_scope, env, self.ctx.solved(module_idx).expr(expr_idx));
+        try self.collectSolvedExprFacts(module_idx, type_scope, env, self.ctx.mirModule(module_idx).expr(expr_idx));
     }
 
     fn freezeLoweringSemanticTypes(
@@ -2228,7 +2228,7 @@ pub const Lowerer = struct {
         env: BindingEnv,
         expr_idx: CIR.Expr.Idx,
     ) std.mem.Allocator.Error!ast.ExprId {
-        return self.lowerSolvedExpr(module_idx, type_scope, env, self.ctx.solved(module_idx).expr(expr_idx));
+        return self.lowerSolvedExpr(module_idx, type_scope, env, self.ctx.mirModule(module_idx).expr(expr_idx));
     }
 
     fn lowerSolvedExpr(
@@ -2236,7 +2236,7 @@ pub const Lowerer = struct {
         module_idx: u32,
         type_scope: *TypeCloneScope,
         env: BindingEnv,
-        expr: solved_cir.Expr,
+        expr: mir.Expr,
     ) std.mem.Allocator.Error!ast.ExprId {
         self.requireFrozenLoweringSemanticTypes(module_idx, type_scope);
         const cir_env = expr.env;
@@ -2616,7 +2616,7 @@ pub const Lowerer = struct {
         func_expr_idx: CIR.Expr.Idx,
     ) ?ResolvedTopLevelSource {
         const current_env = self.ctx.env(current_module_idx);
-        return switch (self.ctx.solved(current_module_idx).expr(func_expr_idx).data) {
+        return switch (self.ctx.mirModule(current_module_idx).expr(func_expr_idx).data) {
             .e_lookup_local => |lookup| blk: {
                 if (env.get(.{
                     .module_idx = current_module_idx,
@@ -2654,7 +2654,7 @@ pub const Lowerer = struct {
         const env = self.ctx.env(module_idx);
         const inspect_ident = env.common.findIdent("Builtin.Str.inspect") orelse return false;
         const def = env.store.getDef(def_idx);
-        return switch (self.ctx.solved(module_idx).pattern(def.pattern).data) {
+        return switch (self.ctx.mirModule(module_idx).pattern(def.pattern).data) {
             .assign => |assign| assign.ident.eql(inspect_ident),
             else => false,
         };
@@ -2978,7 +2978,7 @@ pub const Lowerer = struct {
         defer closure_scope.deinit();
         const scope = &closure_scope;
         const arg_patterns = cir_env.store.slicePatterns(args_span);
-        const source_expr_var = self.ctx.solved(module_idx).expr(source_expr_idx).solved_var;
+        const source_expr_var = self.ctx.mirModule(module_idx).expr(source_expr_idx).solved_var;
         const source_fn_var = try self.scopeVar(scope, source_expr_var);
         try scope.var_map.put(source_expr_var, source_fn_var);
         if (expected_var) |var_| {
@@ -3073,7 +3073,7 @@ pub const Lowerer = struct {
         expected_var: ?Var,
     ) std.mem.Allocator.Error!LoweredClosure {
         _ = closure.captures;
-        const lambda_expr = self.ctx.solved(module_idx).expr(closure.lambda_idx).data;
+        const lambda_expr = self.ctx.mirModule(module_idx).expr(closure.lambda_idx).data;
         if (lambda_expr != .e_lambda) unreachable;
         return try self.lowerAnonymousClosure(module_idx, type_scope, env, source_expr_idx, closure_ty, lambda_expr.e_lambda.args, lambda_expr.e_lambda.body, expected_var);
     }
@@ -3158,7 +3158,7 @@ pub const Lowerer = struct {
         pattern_idx: CIR.Pattern.Idx,
     ) bool {
         const cir_env = self.ctx.env(module_idx);
-        const pattern = self.ctx.solved(module_idx).pattern(pattern_idx).data;
+        const pattern = self.ctx.mirModule(module_idx).pattern(pattern_idx).data;
         return switch (pattern) {
             .assign, .underscore => true,
             .as => |as_pat| self.patternIsIrrefutableStructural(module_idx, as_pat.pattern),
@@ -3309,7 +3309,7 @@ pub const Lowerer = struct {
 
     fn patternNeedsPredicateDesugaring(self: *Lowerer, module_idx: u32, pattern_idx: CIR.Pattern.Idx) bool {
         const cir_env = self.ctx.env(module_idx);
-        const pattern = self.ctx.solved(module_idx).pattern(pattern_idx).data;
+        const pattern = self.ctx.mirModule(module_idx).pattern(pattern_idx).data;
         return switch (pattern) {
             .list => true,
             .num_literal,
@@ -3415,7 +3415,7 @@ pub const Lowerer = struct {
         branch_value: CIR.Expr.Idx,
         else_expr: ast.ExprId,
     ) std.mem.Allocator.Error!ast.ExprId {
-        const pattern = self.ctx.solved(module_idx).pattern(match_pattern_idx).data;
+        const pattern = self.ctx.mirModule(module_idx).pattern(match_pattern_idx).data;
         return switch (pattern) {
             .list => |list| try self.lowerExactListPatternBranch(
                 module_idx,
@@ -3576,7 +3576,7 @@ pub const Lowerer = struct {
         else_expr: ast.ExprId,
     ) std.mem.Allocator.Error!ast.ExprId {
         const cir_env = self.ctx.env(module_idx);
-        const pattern = self.ctx.solved(module_idx).pattern(pattern_idx).data;
+        const pattern = self.ctx.mirModule(module_idx).pattern(pattern_idx).data;
         return switch (pattern) {
             .assign, .underscore => then_expr,
             .as => |as_pat| self.lowerPatternGuardExpr(
@@ -3978,7 +3978,7 @@ pub const Lowerer = struct {
             source_solved_var,
         );
         const effective_source_ty = self.requirePatternSourceTypeFact(module_idx, type_scope, pattern_idx);
-        const pattern = self.ctx.solved(module_idx).pattern(pattern_idx).data;
+        const pattern = self.ctx.mirModule(module_idx).pattern(pattern_idx).data;
         switch (pattern) {
             .assign => |assign| {
                 const bind: ast.TypedSymbol = .{
@@ -4178,13 +4178,13 @@ pub const Lowerer = struct {
         const cir_env = self.ctx.env(module_idx);
         const first_stmt = cir_env.store.getStatement(cir_stmts[start_idx]);
         if (first_stmt != .s_decl) return null;
-        if (!isLambdaExpr(self.ctx.solved(module_idx).expr(first_stmt.s_decl.expr).data)) return null;
+        if (!isLambdaExpr(self.ctx.mirModule(module_idx).expr(first_stmt.s_decl.expr).data)) return null;
 
         var end_idx = start_idx;
         while (end_idx < cir_stmts.len) : (end_idx += 1) {
             const stmt = cir_env.store.getStatement(cir_stmts[end_idx]);
             if (stmt != .s_decl) break;
-            if (!isLambdaExpr(self.ctx.solved(module_idx).expr(stmt.s_decl.expr).data)) break;
+            if (!isLambdaExpr(self.ctx.mirModule(module_idx).expr(stmt.s_decl.expr).data)) break;
         }
 
         var seed_scope: TypeCloneScope = undefined;
@@ -4196,7 +4196,7 @@ pub const Lowerer = struct {
             try self.putLocalFnSeedBinding(env, .{
                 .module_idx = module_idx,
                 .pattern_idx = @intFromEnum(decl.pattern),
-            }, try seed_scope.instantiator.instantiateVar(self.ctx.solved(module_idx).expr(decl.expr).solved_var));
+            }, try seed_scope.instantiator.instantiateVar(self.ctx.mirModule(module_idx).expr(decl.expr).solved_var));
         }
 
         return end_idx;
@@ -4217,13 +4217,13 @@ pub const Lowerer = struct {
         const cir_env = self.ctx.env(module_idx);
         const first_stmt = cir_env.store.getStatement(cir_stmts[start_idx]);
         if (first_stmt != .s_decl) return null;
-        if (!isLambdaExpr(self.ctx.solved(module_idx).expr(first_stmt.s_decl.expr).data)) return null;
+        if (!isLambdaExpr(self.ctx.mirModule(module_idx).expr(first_stmt.s_decl.expr).data)) return null;
 
         var end_idx = start_idx;
         while (end_idx < cir_stmts.len) : (end_idx += 1) {
             const stmt = cir_env.store.getStatement(cir_stmts[end_idx]);
             if (stmt != .s_decl) break;
-            if (!isLambdaExpr(self.ctx.solved(module_idx).expr(stmt.s_decl.expr).data)) break;
+            if (!isLambdaExpr(self.ctx.mirModule(module_idx).expr(stmt.s_decl.expr).data)) break;
         }
 
         const group = try self.allocator.create(LocalFnGroupState);
@@ -4249,7 +4249,7 @@ pub const Lowerer = struct {
             group.sources[group_i] = .{
                 .pattern_idx = decl.pattern,
                 .expr_idx = decl.expr,
-                .seed_var = try seed_scope.instantiator.instantiateVar(self.ctx.solved(module_idx).expr(decl.expr).solved_var),
+                .seed_var = try seed_scope.instantiator.instantiateVar(self.ctx.mirModule(module_idx).expr(decl.expr).solved_var),
                 .source_symbol = try self.requirePatternSymbolOnly(module_idx, decl.pattern),
             };
         }
@@ -4599,7 +4599,7 @@ pub const Lowerer = struct {
         type_scope: *TypeCloneScope,
         pattern_idx: CIR.Pattern.Idx,
     ) std.mem.Allocator.Error!ast.PatId {
-        const pattern = self.ctx.solved(module_idx).pattern(pattern_idx).data;
+        const pattern = self.ctx.mirModule(module_idx).pattern(pattern_idx).data;
         const ty = try self.requirePatternTypeFact(module_idx, type_scope, pattern_idx);
         return switch (pattern) {
             .assign => |assign| self.program.store.addPat(.{
@@ -4659,7 +4659,7 @@ pub const Lowerer = struct {
         pattern_idx: CIR.Pattern.Idx,
         ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!ast.PatId {
-        const pattern = self.ctx.solved(module_idx).pattern(pattern_idx).data;
+        const pattern = self.ctx.mirModule(module_idx).pattern(pattern_idx).data;
         return switch (pattern) {
             .assign => |assign| try self.program.store.addPat(.{
                 .ty = ty,
@@ -4878,7 +4878,7 @@ pub const Lowerer = struct {
         method_name: base.Ident.Idx,
     ) RecordedMethodArgs {
         const cir_env = self.ctx.env(module_idx);
-        return switch (self.ctx.solved(module_idx).expr(expr_idx).data) {
+        return switch (self.ctx.mirModule(module_idx).expr(expr_idx).data) {
             .e_dot_access => |dot| blk: {
                 if (dot.args == null or !dot.field_name.eql(method_name)) {
                     debugPanic("monotype static dispatch invariant violated: unexpected dot-access dispatch shape", .{});
@@ -4897,7 +4897,7 @@ pub const Lowerer = struct {
                     .explicit_args = cir_env.store.sliceExpr(dispatch.args),
                 };
             },
-            .e_call => |call| switch (self.ctx.solved(module_idx).expr(call.func).data) {
+            .e_call => |call| switch (self.ctx.mirModule(module_idx).expr(call.func).data) {
                 .e_dot_access => |dot| blk: {
                     if (!dot.field_name.eql(method_name)) {
                         debugPanic("monotype static dispatch invariant violated: mismatched dot-access method name", .{});
@@ -4954,7 +4954,7 @@ pub const Lowerer = struct {
     ) std.mem.Allocator.Error!ArithmeticBinopFact {
         const source_env = @constCast(self.ctx.env(module_idx));
         const site_requirement = source_env.types.findStaticDispatchSiteRequirement(
-            self.ctx.solved(module_idx).expr(expr_idx).solved_var,
+            self.ctx.mirModule(module_idx).expr(expr_idx).solved_var,
             self.arithmeticBinopMethodName(module_idx, binop.op),
         ) orelse debugPanic(
             "monotype invariant violated: missing arithmetic static dispatch site for expr {d} in module {d}",
@@ -5005,7 +5005,7 @@ pub const Lowerer = struct {
         def_idx: CIR.Def.Idx,
         dest_module_idx: u32,
     ) std.mem.Allocator.Error!Var {
-        const source_var = self.ctx.solved(source_module_idx).def(def_idx).pattern.solved_var;
+        const source_var = self.ctx.mirModule(source_module_idx).def(def_idx).pattern.solved_var;
         return if (source_module_idx == dest_module_idx)
             source_var
         else
@@ -5018,7 +5018,7 @@ pub const Lowerer = struct {
         def_idx: CIR.Def.Idx,
         dest_module_idx: u32,
     ) std.mem.Allocator.Error!Var {
-        const source_var = self.ctx.solved(source_module_idx).def(def_idx).expr.solved_var;
+        const source_var = self.ctx.mirModule(source_module_idx).def(def_idx).expr.solved_var;
         return if (source_module_idx == dest_module_idx)
             source_var
         else
@@ -5144,8 +5144,8 @@ pub const Lowerer = struct {
         try frames.append(self.allocator, arg_exprs);
 
         var root_func_expr_idx = func_expr_idx;
-        while (self.ctx.solved(module_idx).expr(root_func_expr_idx).data == .e_call) {
-            const nested_call = self.ctx.solved(module_idx).expr(root_func_expr_idx).data.e_call;
+        while (self.ctx.mirModule(module_idx).expr(root_func_expr_idx).data == .e_call) {
+            const nested_call = self.ctx.mirModule(module_idx).expr(root_func_expr_idx).data.e_call;
             try frames.append(self.allocator, cir_env.store.sliceExpr(nested_call.args));
             root_func_expr_idx = nested_call.func;
         }
@@ -5259,7 +5259,7 @@ pub const Lowerer = struct {
         func_expr_idx: CIR.Expr.Idx,
         expected_fn_ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!?ast.ExprId {
-        const func_expr = self.ctx.solved(module_idx).expr(func_expr_idx).data;
+        const func_expr = self.ctx.mirModule(module_idx).expr(func_expr_idx).data;
 
         switch (func_expr) {
             .e_lookup_local => |lookup| {
@@ -5300,7 +5300,7 @@ pub const Lowerer = struct {
             module_idx,
             type_scope,
             env,
-            self.ctx.solved(module_idx).expr(expr_idx),
+            self.ctx.mirModule(module_idx).expr(expr_idx),
             expected_ty,
             expected_var,
         );
@@ -5311,7 +5311,7 @@ pub const Lowerer = struct {
         module_idx: u32,
         type_scope: *TypeCloneScope,
         env: BindingEnv,
-        expr: solved_cir.Expr,
+        expr: mir.Expr,
         expected_ty: type_mod.TypeId,
         expected_var: ?Var,
     ) std.mem.Allocator.Error!ast.ExprId {
@@ -5655,7 +5655,7 @@ pub const Lowerer = struct {
         call_expr_idx: CIR.Expr.Idx,
         call: anytype,
     ) std.mem.Allocator.Error!?ast.ExprId {
-        return switch (self.ctx.solved(module_idx).expr(call.func).data) {
+        return switch (self.ctx.mirModule(module_idx).expr(call.func).data) {
             .e_dot_access => |dot| if (dot.args != null) blk: {
                 const lowered_call = try self.lowerRecordedMethodCall(
                     module_idx,
@@ -5875,15 +5875,15 @@ pub const Lowerer = struct {
     }
 
     fn exprVarIsErroneous(self: *Lowerer, module_idx: u32, expr_idx: CIR.Expr.Idx) bool {
-        return self.ctx.env(module_idx).types.resolveVar(self.ctx.solved(module_idx).expr(expr_idx).solved_var).desc.content == .err;
+        return self.ctx.env(module_idx).types.resolveVar(self.ctx.mirModule(module_idx).expr(expr_idx).solved_var).desc.content == .err;
     }
 
     fn callRootCalleeIsRuntimeError(self: *const Lowerer, module_idx: u32, func_expr_idx: CIR.Expr.Idx) bool {
         var current = func_expr_idx;
-        while (self.ctx.solved(module_idx).expr(current).data == .e_call) {
-            current = self.ctx.solved(module_idx).expr(current).data.e_call.func;
+        while (self.ctx.mirModule(module_idx).expr(current).data == .e_call) {
+            current = self.ctx.mirModule(module_idx).expr(current).data.e_call.func;
         }
-        return switch (self.ctx.solved(module_idx).expr(current).data) {
+        return switch (self.ctx.mirModule(module_idx).expr(current).data) {
             .e_runtime_error, .e_crash => true,
             else => false,
         };
@@ -5897,7 +5897,7 @@ pub const Lowerer = struct {
         expr_idx: CIR.Expr.Idx,
         expected_ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!ast.ExprId {
-        const expr = self.ctx.solved(module_idx).expr(expr_idx).data;
+        const expr = self.ctx.mirModule(module_idx).expr(expr_idx).data;
         return switch (expr) {
             .e_block => |block| try self.program.store.addExpr(.{
                 .ty = expected_ty,
@@ -6027,7 +6027,7 @@ pub const Lowerer = struct {
             type_scope,
             self.requireExprResultFact(module_idx, type_scope, expr_idx),
         );
-        const expr = self.ctx.solved(module_idx).expr(expr_idx).data;
+        const expr = self.ctx.mirModule(module_idx).expr(expr_idx).data;
         try type_scope.facts.expr_type_facts.put(
             key,
             try self.normalizeDefaultNumericLiteralType(module_idx, expr_idx, expr, lowered),
@@ -6086,14 +6086,14 @@ pub const Lowerer = struct {
         type_scope: *TypeCloneScope,
         pattern_idx: CIR.Pattern.Idx,
     ) std.mem.Allocator.Error!void {
-        return self.collectSolvedPatternFacts(module_idx, type_scope, self.ctx.solved(module_idx).pattern(pattern_idx));
+        return self.collectSolvedPatternFacts(module_idx, type_scope, self.ctx.mirModule(module_idx).pattern(pattern_idx));
     }
 
     fn collectSolvedPatternFacts(
         self: *Lowerer,
         module_idx: u32,
         type_scope: *TypeCloneScope,
-        pattern: solved_cir.Pattern,
+        pattern: mir.Pattern,
     ) std.mem.Allocator.Error!void {
         const key: TypeCloneScope.PatternTypeKey = .{
             .module_idx = module_idx,
@@ -6102,7 +6102,7 @@ pub const Lowerer = struct {
         if (type_scope.facts.collected_pattern_facts.contains(key)) return;
 
         try type_scope.facts.collected_pattern_facts.put(key, {});
-        const solved_module = self.ctx.solved(module_idx);
+        const solved_module = self.ctx.mirModule(module_idx);
         switch (pattern.data) {
             .assign,
             .underscore,
@@ -6167,7 +6167,7 @@ pub const Lowerer = struct {
         try self.bindPatternSourceTypeFact(module_idx, type_scope, pattern_idx, effective_source_ty);
 
         const cir_env = self.ctx.env(module_idx);
-        const pattern = self.ctx.solved(module_idx).pattern(pattern_idx).data;
+        const pattern = self.ctx.mirModule(module_idx).pattern(pattern_idx).data;
         switch (pattern) {
             .assign,
             .underscore,
@@ -6316,7 +6316,7 @@ pub const Lowerer = struct {
         source_solved_var: Var,
         env: *BindingEnv,
     ) std.mem.Allocator.Error!void {
-        const pattern = self.ctx.solved(module_idx).pattern(pattern_idx).data;
+        const pattern = self.ctx.mirModule(module_idx).pattern(pattern_idx).data;
         switch (pattern) {
             .assign => |assign| {
                 const symbol = try self.ctx.getOrCreatePatternSymbol(module_idx, pattern_idx, assign.ident);
@@ -6538,7 +6538,7 @@ pub const Lowerer = struct {
         var iter = type_scope.facts.collected_expr_facts.keyIterator();
         while (iter.next()) |key_ptr| {
             const expr_idx = key_ptr.expr_idx;
-            const expr = self.ctx.solved(module_idx).expr(expr_idx).data;
+            const expr = self.ctx.mirModule(module_idx).expr(expr_idx).data;
             switch (expr) {
                 .e_dot_access => |dot| {
                     if (dot.args == null) {
@@ -6588,7 +6588,7 @@ pub const Lowerer = struct {
         env: BindingEnv,
         expr_idx: CIR.Expr.Idx,
     ) std.mem.Allocator.Error!void {
-        return self.collectSolvedExprFacts(module_idx, type_scope, env, self.ctx.solved(module_idx).expr(expr_idx));
+        return self.collectSolvedExprFacts(module_idx, type_scope, env, self.ctx.mirModule(module_idx).expr(expr_idx));
     }
 
     fn collectSolvedExprFacts(
@@ -6596,7 +6596,7 @@ pub const Lowerer = struct {
         module_idx: u32,
         type_scope: *TypeCloneScope,
         env: BindingEnv,
-        expr: solved_cir.Expr,
+        expr: mir.Expr,
     ) std.mem.Allocator.Error!void {
         const key: TypeCloneScope.ExprKey = .{
             .module_idx = module_idx,
@@ -6605,7 +6605,7 @@ pub const Lowerer = struct {
         const cir_env = expr.env;
         if (type_scope.facts.collected_expr_facts.contains(key) and type_scope.facts.expr_result_var_facts.contains(key) and (!exprNeedsExplicitCallFact(expr.data) or type_scope.facts.call_facts.contains(key))) return;
         const explicit_result_var = type_scope.facts.expr_result_var_facts.get(key);
-        const solved_module = self.ctx.solved(module_idx);
+        const solved_module = self.ctx.mirModule(module_idx);
 
         const result_var: Var = switch (expr.data) {
             .e_num,
@@ -6668,7 +6668,7 @@ pub const Lowerer = struct {
                 )) |call_fact| {
                     break :blk call_fact.result_var;
                 }
-                switch (self.ctx.solved(module_idx).expr(call.func).data) {
+                switch (self.ctx.mirModule(module_idx).expr(call.func).data) {
                     .e_dot_access => |dot| {
                         if (dot.args != null) {
                             const call_fact = try self.collectRecordedMethodCallFact(
@@ -6920,7 +6920,7 @@ pub const Lowerer = struct {
         type_scope: *TypeCloneScope,
         pattern_idx: CIR.Pattern.Idx,
     ) std.mem.Allocator.Error!Var {
-        return try self.scopeVar(type_scope, self.ctx.solved(module_idx).pattern(pattern_idx).solved_var);
+        return try self.scopeVar(type_scope, self.ctx.mirModule(module_idx).pattern(pattern_idx).solved_var);
     }
 
     fn requirePatternTypeFact(
@@ -6986,7 +6986,7 @@ pub const Lowerer = struct {
         pattern_idx: CIR.Pattern.Idx,
     ) ?struct { tag_name: base.Ident.Idx, payload_pattern: CIR.Pattern.Idx } {
         const cir_env = self.ctx.env(module_idx);
-        const pattern = self.ctx.solved(module_idx).pattern(pattern_idx).data;
+        const pattern = self.ctx.mirModule(module_idx).pattern(pattern_idx).data;
         return switch (pattern) {
             .applied_tag => |tag| blk: {
                 const args = cir_env.store.slicePatterns(tag.args);
@@ -7022,7 +7022,7 @@ pub const Lowerer = struct {
             else => {},
         }
 
-        const resolved = self.ctx.env(module_idx).types.resolveVar(self.ctx.solved(module_idx).expr(expr_idx).solved_var);
+        const resolved = self.ctx.env(module_idx).types.resolveVar(self.ctx.mirModule(module_idx).expr(expr_idx).solved_var);
         if (resolved.desc.content == .flex) {
             const constraints = self.ctx.env(module_idx).types.sliceStaticDispatchConstraints(
                 resolved.desc.content.flex.constraints,
@@ -7384,7 +7384,7 @@ pub const Lowerer = struct {
         nominal: types.NominalType,
     ) std.mem.Allocator.Error!NominalDefiningIdentity {
         const env = self.ctx.env(module_idx);
-        const defining_module_idx = findModuleIdxByName(self.ctx.solved_modules.all_module_envs, env.getIdent(nominal.origin_module));
+        const defining_module_idx = findModuleIdxByName(self.ctx.mir_modules.all_module_envs, env.getIdent(nominal.origin_module));
         const defining_env = self.ctx.env(defining_module_idx);
         const defining_ident = defining_env.common.findIdent(env.getIdent(nominal.ident.ident_idx)) orelse debugPanic(
             "monotype.lowerNominalType missing target ident in defining module",
@@ -7540,7 +7540,7 @@ pub const Lowerer = struct {
         arg_ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!ast.TypedSymbol {
         _ = type_scope;
-        return switch (self.ctx.solved(module_idx).pattern(pattern_idx).data) {
+        return switch (self.ctx.mirModule(module_idx).pattern(pattern_idx).data) {
             .assign => |assign| .{
                 .ty = arg_ty,
                 .symbol = try self.ctx.getOrCreatePatternSymbol(module_idx, pattern_idx, assign.ident),
@@ -7576,7 +7576,7 @@ pub const Lowerer = struct {
     }
 
     fn patternNeedsBindingDecls(self: *Lowerer, module_idx: u32, pattern_idx: CIR.Pattern.Idx) bool {
-        const pattern = self.ctx.solved(module_idx).pattern(pattern_idx).data;
+        const pattern = self.ctx.mirModule(module_idx).pattern(pattern_idx).data;
         return switch (pattern) {
             .assign, .underscore => false,
             .as => true,
@@ -7589,7 +7589,7 @@ pub const Lowerer = struct {
     }
 
     fn patternCanCollectStructuralBindings(self: *Lowerer, module_idx: u32, pattern_idx: CIR.Pattern.Idx) bool {
-        const pattern = self.ctx.solved(module_idx).pattern(pattern_idx).data;
+        const pattern = self.ctx.mirModule(module_idx).pattern(pattern_idx).data;
         return switch (pattern) {
             .assign, .as, .underscore, .record_destructure, .tuple => true,
             .nominal => |nominal| self.patternCanCollectStructuralBindings(module_idx, nominal.backing_pattern),
@@ -7618,7 +7618,7 @@ pub const Lowerer = struct {
         pattern_idx: CIR.Pattern.Idx,
         ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!ast.TypedSymbol {
-        const pattern = self.ctx.solved(module_idx).pattern(pattern_idx).data;
+        const pattern = self.ctx.mirModule(module_idx).pattern(pattern_idx).data;
         const symbol = switch (pattern) {
             .assign => |assign| try self.ctx.getOrCreatePatternSymbol(module_idx, pattern_idx, assign.ident),
             else => try self.ctx.addSyntheticSymbol(base.Ident.Idx.NONE),
@@ -7664,7 +7664,7 @@ pub const Lowerer = struct {
             source_solved_var,
         );
         const cir_env = self.ctx.env(module_idx);
-        const pattern = self.ctx.solved(module_idx).pattern(pattern_idx).data;
+        const pattern = self.ctx.mirModule(module_idx).pattern(pattern_idx).data;
         switch (pattern) {
             .assign => {
                 try self.putTypedBinding(env, .{
@@ -7878,7 +7878,7 @@ pub const Lowerer = struct {
             source_solved_var,
         );
         const cir_env = self.ctx.env(module_idx);
-        const pattern = self.ctx.solved(module_idx).pattern(pattern_idx).data;
+        const pattern = self.ctx.mirModule(module_idx).pattern(pattern_idx).data;
         switch (pattern) {
             .assign => try self.appendPatternBindingOrReassign(module_idx, pattern_idx, source_ty, source_expr, env, lowered),
             .as => |as_pat| {
@@ -8036,7 +8036,7 @@ pub const Lowerer = struct {
         );
         const effective_source_ty = self.requirePatternSourceTypeFact(module_idx, type_scope, pattern_idx);
         const cir_env = self.ctx.env(module_idx);
-        const pattern = self.ctx.solved(module_idx).pattern(pattern_idx).data;
+        const pattern = self.ctx.mirModule(module_idx).pattern(pattern_idx).data;
 
         if (self.patternNeedsBindingDecls(module_idx, pattern_idx)) {
             return self.lowerStructuralPatWithType(module_idx, type_scope, pattern_idx, effective_source_ty, source_solved_var, env, decls);
@@ -8377,7 +8377,7 @@ pub const Lowerer = struct {
         pattern_idx: CIR.Pattern.Idx,
         env: *BindingEnv,
     ) std.mem.Allocator.Error!void {
-        const pattern = self.ctx.solved(module_idx).pattern(pattern_idx).data;
+        const pattern = self.ctx.mirModule(module_idx).pattern(pattern_idx).data;
         switch (pattern) {
             .assign => |assign| {
                 const symbol = try self.ctx.getOrCreatePatternSymbol(module_idx, pattern_idx, assign.ident);
@@ -8437,7 +8437,7 @@ pub const Lowerer = struct {
             source_ty,
             source_solved_var,
         );
-        const pattern = self.ctx.solved(module_idx).pattern(pattern_idx).data;
+        const pattern = self.ctx.mirModule(module_idx).pattern(pattern_idx).data;
         switch (pattern) {
             .assign => |assign| {
                 const symbol = try self.ctx.getOrCreatePatternSymbol(module_idx, pattern_idx, assign.ident);
@@ -8541,7 +8541,7 @@ pub const Lowerer = struct {
         type_scope: *TypeCloneScope,
         pattern_idx: CIR.Pattern.Idx,
     ) std.mem.Allocator.Error!ast.TypedSymbol {
-        const pattern = self.ctx.solved(module_idx).pattern(pattern_idx).data;
+        const pattern = self.ctx.mirModule(module_idx).pattern(pattern_idx).data;
         return switch (pattern) {
             .assign => |assign| .{
                 .ty = try self.requirePatternTypeFact(module_idx, type_scope, pattern_idx),
@@ -8560,7 +8560,7 @@ pub const Lowerer = struct {
         module_idx: u32,
         pattern_idx: CIR.Pattern.Idx,
     ) std.mem.Allocator.Error!symbol_mod.Symbol {
-        const pattern = self.ctx.solved(module_idx).pattern(pattern_idx).data;
+        const pattern = self.ctx.mirModule(module_idx).pattern(pattern_idx).data;
         return switch (pattern) {
             .assign => |assign| try self.ctx.getOrCreatePatternSymbol(module_idx, pattern_idx, assign.ident),
             .as => |as_pat| try self.ctx.getOrCreatePatternSymbol(module_idx, pattern_idx, as_pat.ident),
@@ -8576,7 +8576,7 @@ pub const Lowerer = struct {
         pattern_idx: CIR.Pattern.Idx,
         ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!ast.TypedSymbol {
-        const pattern = self.ctx.solved(module_idx).pattern(pattern_idx).data;
+        const pattern = self.ctx.mirModule(module_idx).pattern(pattern_idx).data;
         return switch (pattern) {
             .assign => |assign| .{
                 .ty = ty,
@@ -8721,7 +8721,7 @@ pub const Lowerer = struct {
         if (self.top_level_defs_by_symbol.get(top_level_symbol)) |top_level| {
             self.assertNoFirstClassBuiltinStrInspect(top_level.module_idx, top_level.def_idx, "local");
             if (top_level.is_function) {
-                const source_expected_var = expected_var orelse self.ctx.solved(top_level.module_idx).def(top_level.def_idx).expr.solved_var;
+                const source_expected_var = expected_var orelse self.ctx.mirModule(top_level.module_idx).def(top_level.def_idx).expr.solved_var;
                 const published_expected_ty = try self.publishMonotypeType(expected_ty);
                 return try self.specializations.specializeFn(&self.ctx.symbols, &self.ctx.types, top_level_symbol, .{
                     .module_idx = top_level.module_idx,
@@ -8944,7 +8944,7 @@ pub const Lowerer = struct {
         env: BindingEnv,
         expr_idx: CIR.Expr.Idx,
     ) ?Var {
-        const expr = self.ctx.solved(module_idx).expr(expr_idx).data;
+        const expr = self.ctx.mirModule(module_idx).expr(expr_idx).data;
         return switch (expr) {
             .e_lookup_local => |lookup| if (env.get(.{
                 .module_idx = module_idx,
@@ -8965,14 +8965,14 @@ pub const Lowerer = struct {
         expr_idx: CIR.Expr.Idx,
     ) std.mem.Allocator.Error!Var {
         return self.lookupSpecializedExprVar(module_idx, env, expr_idx) orelse
-            try self.scopeVar(type_scope, self.ctx.solved(module_idx).expr(expr_idx).solved_var);
+            try self.scopeVar(type_scope, self.ctx.mirModule(module_idx).expr(expr_idx).solved_var);
     }
 
     fn scopedSolvedExprResultVar(
         self: *Lowerer,
         type_scope: *TypeCloneScope,
         env: BindingEnv,
-        expr: solved_cir.Expr,
+        expr: mir.Expr,
     ) std.mem.Allocator.Error!Var {
         return self.lookupSpecializedExprVar(expr.module_idx, env, expr.idx) orelse
             try self.scopeVar(type_scope, expr.solved_var);
@@ -8994,10 +8994,10 @@ pub const Lowerer = struct {
     ) ?ResolvedTarget {
         const source_env = self.ctx.env(source_module_idx);
         const resolved_site = source_env.types.findResolvedStaticDispatchSite(
-            self.ctx.solved(source_module_idx).expr(expr_idx).solved_var,
+            self.ctx.mirModule(source_module_idx).expr(expr_idx).solved_var,
         ) orelse return null;
         return .{
-            .module_idx = findModuleIdxByName(self.ctx.solved_modules.all_module_envs, source_env.getIdent(resolved_site.target_module_name)),
+            .module_idx = findModuleIdxByName(self.ctx.mir_modules.all_module_envs, source_env.getIdent(resolved_site.target_module_name)),
             .def_idx = @enumFromInt(resolved_site.target_def_idx),
         };
     }
@@ -9011,7 +9011,7 @@ pub const Lowerer = struct {
         const top_level = self.top_level_defs_by_symbol.get(source_symbol) orelse return null;
         if (top_level.needs_specialization) return null;
 
-        const target_fn_var = self.ctx.solved(target.module_idx).def(target.def_idx).expr.solved_var;
+        const target_fn_var = self.ctx.mirModule(target.module_idx).def(target.def_idx).expr.solved_var;
         return if (current_module_idx == target.module_idx)
             target_fn_var
         else
@@ -9229,7 +9229,7 @@ pub const Lowerer = struct {
                 const source_expected_var = if (expected_var) |var_|
                     try self.copyCheckerVarToModule(current_module_idx, top_level.module_idx, var_)
                 else
-                    self.ctx.solved(top_level.module_idx).def(top_level.def_idx).expr.solved_var;
+                    self.ctx.mirModule(top_level.module_idx).def(top_level.def_idx).expr.solved_var;
                 const published_expected_ty = try self.publishMonotypeType(expected_ty);
                 return try self.specializations.specializeFn(&self.ctx.symbols, &self.ctx.types, symbol, .{
                     .module_idx = top_level.module_idx,
@@ -9359,7 +9359,7 @@ pub const Lowerer = struct {
                     else
                         try self.copyCheckerVarToModule(current_module_idx, top_level.module_idx, var_)
                 else
-                    self.ctx.solved(top_level.module_idx).def(top_level.def_idx).expr.solved_var;
+                    self.ctx.mirModule(top_level.module_idx).def(top_level.def_idx).expr.solved_var;
                 const published_expected_ty = try self.publishMonotypeType(expected_ty);
                 break :blk try self.specializations.specializeFn(&self.ctx.symbols, &self.ctx.types, source_symbol, .{
                     .module_idx = top_level.module_idx,
@@ -9467,7 +9467,7 @@ pub const Lowerer = struct {
         method_name: base.Ident.Idx,
     ) DispatchReceiver {
         const source_env = self.ctx.env(source_module_idx);
-        const expr = self.ctx.solved(source_module_idx).expr(expr_idx).data;
+        const expr = self.ctx.mirModule(source_module_idx).expr(expr_idx).data;
         return switch (expr) {
             .e_dot_access => |dot| self.resolveDispatchReceiverExprVar(
                 source_module_idx,
@@ -9478,7 +9478,7 @@ pub const Lowerer = struct {
             ),
             .e_type_var_dispatch => |dispatch| blk: {
                 const stmt = source_env.store.getStatement(dispatch.type_var_alias_stmt);
-                const type_var = self.ctx.solved(source_module_idx).typeAnnoVar(stmt.s_type_var_alias.type_var_anno);
+                const type_var = self.ctx.mirModule(source_module_idx).typeAnnoVar(stmt.s_type_var_alias.type_var_anno);
                 break :blk self.resolveDispatchReceiverVar(source_module_idx, type_scope, type_var, method_name);
             },
             else => debugPanic(
@@ -9497,8 +9497,8 @@ pub const Lowerer = struct {
         method_name: base.Ident.Idx,
     ) DispatchReceiver {
         const receiver_var = self.lookupSpecializedExprVar(source_module_idx, env, receiver_expr_idx) orelse
-            type_scope.var_map.get(self.ctx.solved(source_module_idx).expr(receiver_expr_idx).solved_var) orelse
-            self.ctx.solved(source_module_idx).expr(receiver_expr_idx).solved_var;
+            type_scope.var_map.get(self.ctx.mirModule(source_module_idx).expr(receiver_expr_idx).solved_var) orelse
+            self.ctx.mirModule(source_module_idx).expr(receiver_expr_idx).solved_var;
         return self.resolveDispatchReceiverVar(source_module_idx, type_scope, receiver_var, method_name);
     }
 
@@ -9527,7 +9527,7 @@ pub const Lowerer = struct {
             .alias => |alias| self.resolveDispatchReceiverVar(source_module_idx, type_scope, source_env.types.getAliasBackingVar(alias), method_name),
             .structure => |flat| switch (flat) {
                 .nominal_type => |nominal| {
-                    const target_module_idx = findModuleIdxByName(self.ctx.solved_modules.all_module_envs, source_env.getIdent(nominal.origin_module));
+                    const target_module_idx = findModuleIdxByName(self.ctx.mir_modules.all_module_envs, source_env.getIdent(nominal.origin_module));
                     return .{
                         .target_module_idx = target_module_idx,
                         .target_env = self.ctx.env(target_module_idx),

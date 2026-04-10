@@ -313,8 +313,8 @@ fn lowerToLir(
     }
     module_env.imports.resolveImports(module_env, all_module_envs);
 
-    const solved_modules = check.SolvedCIR.Modules.init(all_module_envs);
-    var mono_lowerer = try monotype.Lower.Lowerer.init(allocator, solved_modules, 1);
+    const mir_modules = check.MIR.Modules.init(all_module_envs);
+    var mono_lowerer = try monotype.Lower.Lowerer.init(allocator, mir_modules, 1);
     defer mono_lowerer.deinit();
     const mono = try mono_lowerer.run(0);
     debugValidateMonotypeTypes(&mono.types);

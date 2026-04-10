@@ -18,7 +18,7 @@ pub const report = @import("report.zig");
 pub const exhaustive = @import("exhaustive.zig");
 /// **Cross-module type copying**
 pub const copy_import = @import("copy_import.zig");
-pub const SolvedCIR = @import("solved_cir.zig");
+pub const MIR = @import("mir.zig");
 
 pub const Check = @import("Check.zig");
 pub const TestEnv = @import("test/TestEnv.zig");
@@ -35,7 +35,7 @@ test "check tests" {
     std.testing.refAllDecls(@import("problem/store.zig"));
     std.testing.refAllDecls(@import("problem/types.zig"));
     std.testing.refAllDecls(@import("report.zig"));
-    std.testing.refAllDecls(@import("solved_cir.zig"));
+    std.testing.refAllDecls(@import("mir.zig"));
     std.testing.refAllDecls(@import("snapshot.zig"));
     std.testing.refAllDecls(@import("unify.zig"));
     std.testing.refAllDecls(@import("snapshot/diff.zig"));
@@ -54,7 +54,7 @@ test "check tests" {
     std.testing.refAllDecls(@import("test/generalize_redirect_test.zig"));
     std.testing.refAllDecls(@import("test/exhaustiveness_test.zig"));
     std.testing.refAllDecls(@import("test/repros_test.zig"));
-    std.testing.refAllDecls(@import("test/solved_cir_test.zig"));
+    std.testing.refAllDecls(@import("test/mir_test.zig"));
 
     // Cross-module monomorphization tests
     std.testing.refAllDecls(@import("test/cross_module_mono_test.zig"));
