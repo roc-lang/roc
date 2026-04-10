@@ -59,6 +59,11 @@ pub const Module = struct {
             .solved_var = ModuleEnv.varFrom(idx),
         };
     }
+
+    pub fn typeAnnoVar(self: @This(), idx: CIR.TypeAnno.Idx) Var {
+        _ = self;
+        return ModuleEnv.varFrom(idx);
+    }
 };
 
 pub const Def = struct {
