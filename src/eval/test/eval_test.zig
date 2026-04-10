@@ -2057,6 +2057,25 @@ test "if block with local bindings - regression" {
     , 0, .no_trace);
 }
 
+test "bare underscore assignment" {
+    try runExpectI64(
+        \\{
+        \\    _ = 42
+        \\    1
+        \\}
+    , 1, .no_trace);
+}
+
+test "bare underscore assignment discards expression" {
+    try runExpectI64(
+        \\{
+        \\    x = 10
+        \\    _ = x + 5
+        \\    x
+        \\}
+    , 10, .no_trace);
+}
+
 test "List.len returns proper U64 nominal type for method calls - regression" {
     // Regression test for InvalidMethodReceiver when calling methods on List.len result
     // Bug report: `n = List.len([]); _str = n.to_str()` crashed with InvalidMethodReceiver
