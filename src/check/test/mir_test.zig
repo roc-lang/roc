@@ -13,7 +13,8 @@ test "MIR exposes solved vars on defs exprs and patterns" {
     );
     defer test_env.deinit();
 
-    const modules = MIR.Modules.init(&.{test_env.module_env});
+    var modules = try MIR.Modules.init(std.testing.allocator, &.{test_env.module_env});
+    defer modules.deinit();
     const module = modules.module(0);
     const defs = test_env.module_env.store.sliceDefs(test_env.module_env.all_defs);
 

@@ -83,6 +83,8 @@ Progress:
 - Added targeted MIR coverage in `/Users/rtfeldman/.codex/worktrees/1d55/roc/src/check/test/mir_test.zig`.
 - Monotype and eval helpers now consume `check.MIR`.
 - Ordinary monotype lowering no longer reaches directly through MIR into canonicalize `NodeStore`; span/branch/field reads now go through MIR methods instead.
+- MIR now owns copied node/index/region/branch/field boundary data instead of forwarding those reads into canonicalize storage at monotype consumption time.
+- `check.MIR.Modules.init(...)` now publishes an immutable owned boundary artifact that monotype can deinit independently of the checker module env arrays.
 
 ## Phase 2: Make The Checker Produce MIR Directly
 
@@ -133,7 +135,8 @@ Completion criteria:
 
 Progress:
 - The live monotype consumer no longer contains direct `ctx.env(...).store`, `expr.env`, or `cir_env.store` reads.
-- Remaining work in this phase is structural rather than naming/access cleanup: MIR itself still forwards to canonicalize storage internally instead of being the owned checker-built artifact.
+- Type-cloning entrypoints in monotype now accept MIR modules directly rather than raw checker env pointers.
+- Remaining work in this phase is the solved-type/text/import side of the boundary: monotype still reaches into checker `ModuleEnv` for some type-store and name-resolution services that need to move behind MIR next.
 
 ## Phase 4: Delete The Wrapper Layer And Old Boundary APIs
 
