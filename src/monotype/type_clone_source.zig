@@ -8,7 +8,10 @@
 const std = @import("std");
 const base = @import("base");
 const types_mod = @import("types");
-const semantic_facts = @import("semantic_facts.zig");
+const TypeKey = struct {
+    module_idx: u32,
+    var_: Var,
+};
 
 const TypesStore = types_mod.Store;
 const Var = types_mod.Var;
@@ -26,7 +29,7 @@ const Tag = types_mod.Tag;
 const NominalType = types_mod.NominalType;
 
 pub const VarMapping = std.AutoHashMap(Var, Var);
-pub const ScopedVarMapping = std.AutoHashMap(semantic_facts.TypeKey, Var);
+pub const ScopedVarMapping = std.AutoHashMap(TypeKey, Var);
 
 fn copyIdent(
     source_idents: *const base.Ident.Store,
@@ -84,7 +87,7 @@ pub fn copyVarFromModule(
     allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!Var {
     const resolved = source_store.resolveVar(source_var);
-    const key: semantic_facts.TypeKey = .{
+    const key: TypeKey = .{
         .module_idx = source_module_idx,
         .var_ = resolved.var_,
     };

@@ -293,24 +293,6 @@ pub const Module = struct {
         return @enumFromInt(@intFromEnum(ModuleEnv.nodeIdxFrom(var_)));
     }
 
-    pub fn staticDispatchSiteRequirement(
-        self: @This(),
-        expr_idx: CIR.Expr.Idx,
-        method_name: Ident.Idx,
-    ) ?types.StaticDispatchSiteRequirement {
-        return self.typeStoreConst().findStaticDispatchSiteRequirement(
-            self.exprType(expr_idx),
-            method_name,
-        );
-    }
-
-    pub fn resolvedStaticDispatchTarget(
-        self: @This(),
-        expr_idx: CIR.Expr.Idx,
-    ) ?types.ResolvedStaticDispatchSite {
-        return self.typeStoreConst().findResolvedStaticDispatchSite(self.exprType(expr_idx));
-    }
-
     pub fn resolveAttachedMethodTarget(
         self: @This(),
         source_module: Module,

@@ -597,9 +597,10 @@ const Lowerer = struct {
         mono_cache: *lower_type.MonoCache,
         solved_ty: TypeVarId,
     ) std.mem.Allocator.Error!void {
+        if (inst.binding_type_facts.contains(solved_ty)) return;
         const lowered_ty = try self.publishExecutableTypeFact(mono_cache, solved_ty);
         if (inst.binding_type_facts.get(solved_ty)) |existing| {
-            if (existing != lowered_ty) {
+            if (existing != lowered_ty and !self.types.equalIds(existing, lowered_ty)) {
                 debugPanic("lambdamono.lower.recordBindingTypeFact conflicting executable binding type");
             }
             return;
@@ -613,9 +614,8 @@ const Lowerer = struct {
         solved_ty: TypeVarId,
         lowered_ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!void {
-        _ = self;
         if (inst.binding_type_facts.get(solved_ty)) |existing| {
-            if (existing != lowered_ty) {
+            if (existing != lowered_ty and !self.types.equalIds(existing, lowered_ty)) {
                 debugPanic("lambdamono.lower.recordExplicitSolvedBindingTypeFact conflicting executable binding type");
             }
             return;
@@ -632,7 +632,7 @@ const Lowerer = struct {
         const solved_ty = try self.cloneInstType(inst, source_ty);
         const lowered_ty = self.requireExprTypeFact(inst, body_expr);
         if (inst.binding_type_facts.get(solved_ty)) |existing| {
-            if (existing != lowered_ty) {
+            if (existing != lowered_ty and !self.types.equalIds(existing, lowered_ty)) {
                 debugPanic("lambdamono.lower.recordBindingTypeFactFromExpr conflicting executable binding type");
             }
             return;
@@ -3231,7 +3231,11 @@ const Lowerer = struct {
         switch (left) {
             .primitive => |prim| switch (right) {
                 .primitive => |other| {
-                    if (prim != other) debugPanic("lambdamono.lower.unify incompatible primitives");
+                    if (prim != other) {
+                        if (prim == .dec) return .{ .primitive = other };
+                        if (other == .dec) return .{ .primitive = prim };
+                        debugPanic("lambdamono.lower.unify incompatible primitives");
+                    }
                     return .{ .primitive = prim };
                 },
                 .lambda_set => if (prim == .erased)

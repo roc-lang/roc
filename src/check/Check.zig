@@ -4798,11 +4798,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         .origin = .method_call,
                     };
                     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
-                    _ = try self.types.appendStaticDispatchSiteRequirements(&.{.{
-                        .expr_var = expr_var,
-                        .method_name = dot_access.field_name,
-                        .fn_var = constraint_fn_var,
-                    }});
 
                     // Create our constrained flex, and unify it with the receiver
                     // Use field_name_region so error messages point at the method name, not the whole expression
@@ -4996,11 +4991,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     .origin = .method_call,
                 };
                 const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
-                _ = try self.types.appendStaticDispatchSiteRequirements(&.{.{
-                    .expr_var = expr_var,
-                    .method_name = tvd.method_name,
-                    .fn_var = constraint_fn_var,
-                }});
 
                 // Create a constrained flex and unify it with the type variable
                 const constrained_var = try self.freshFromContent(
@@ -6062,13 +6052,6 @@ fn mkBinopConstraint(
         .origin = .desugared_binop,
     };
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
-    if (binop_expr_idx) |idx| {
-        _ = try self.types.appendStaticDispatchSiteRequirements(&.{.{
-            .expr_var = ModuleEnv.varFrom(idx),
-            .method_name = method_name,
-            .fn_var = constraint_fn_var,
-        }});
-    }
 
     // Create a constrained flex and unify it with the lhs (receiver)
     const constrained_var = try self.freshFromContent(
@@ -6112,13 +6095,6 @@ fn mkUnaryOp(
         .origin = .desugared_unaryop,
     };
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
-    if (unary_expr_idx) |idx| {
-        _ = try self.types.appendStaticDispatchSiteRequirements(&.{.{
-            .expr_var = ModuleEnv.varFrom(idx),
-            .method_name = method_name,
-            .fn_var = constraint_fn_var,
-        }});
-    }
 
     // Create a constrained flex and unify it with the arg
     const constrained_var = try self.freshFromContent(
@@ -6827,10 +6803,6 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             .method_name = constraint.fn_name,
                         },
                     });
-                    if (!fn_result.isProblem()) {
-                        try self.recordResolvedStaticDispatchSite(constraint.fn_var, original_env, def_idx);
-                    }
-
                     // If there was a problem, then ensure the error gets propagated
                     // to all args and return types.
                     if (fn_result.isProblem()) {
@@ -6959,26 +6931,6 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
         self.gpa,
         self.scratch_deferred_static_dispatch_constraints.sliceFromStart(scratch_deferred_top),
     );
-}
-
-fn recordResolvedStaticDispatchSite(
-    self: *Self,
-    constraint_fn_var: Var,
-    target_env: *const ModuleEnv,
-    target_def_idx: CIR.Def.Idx,
-) Allocator.Error!void {
-    const site_requirement = self.types.findStaticDispatchSiteRequirementByFnVar(constraint_fn_var) orelse return;
-    const target_module_name_text = if (!target_env.qualified_module_ident.isNone())
-        target_env.getIdent(target_env.qualified_module_ident)
-    else
-        target_env.module_name;
-    const target_module_name = try @constCast(self.cir).insertIdent(base.Ident.for_text(target_module_name_text));
-
-    try self.types.recordResolvedStaticDispatchSite(.{
-        .expr_var = site_requirement.expr_var,
-        .target_module_name = target_module_name,
-        .target_def_idx = @intFromEnum(target_def_idx),
-    });
 }
 
 /// Check if a structural type supports is_eq.

@@ -140,8 +140,8 @@ pub const Store = struct {
         return try self.canonicalizeResolvedInner(root, &active);
     }
 
-    /// Finalize a published monotype fact. Any remaining builder-only placeholder
-    /// leaves become explicit published abstract facts.
+    /// Finalize a published monotype type. Any remaining builder-only placeholder
+    /// leaves become explicit published abstract types.
     pub fn canonicalizePublished(self: *Store, id: TypeId) std.mem.Allocator.Error!TypeId {
         const root = self.resolveLinks(id);
         if (self.canonical_by_raw.get(root)) |cached| return cached;
