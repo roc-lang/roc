@@ -85,8 +85,8 @@ table tr td {
   font-family: var(--font-mono);
   background-color: var(--violet-bg);
   color: var(--text-color);
-  width: 100%;
   margin-bottom: 16px;
+  margin-left: 28px;
   padding: 12px 16px;
   border-left: 4px solid var(--violet);
   display: flex;
@@ -94,6 +94,7 @@ table tr td {
   gap: 8px;
   white-space: pre-wrap;
   position: relative;
+  overflow: visible;
 }
 
 .entry-signature-code {
@@ -122,12 +123,16 @@ table tr td {
 
 .entry-anchor {
   visibility: hidden;
-  flex-shrink: 0;
-  display: inline-block;
   color: var(--violet);
   text-decoration: none;
   user-select: none;
   transition: visibility 2s;
+  position: absolute;
+  left: -28px;
+  display: flex;
+  align-items: center;
+  height: 100%;
+  top: 0;
 }
 
 .entry-anchor .link-icon {
@@ -135,6 +140,15 @@ table tr td {
   height: 18px;
   fill: currentColor;
   vertical-align: middle;
+}
+
+.entry h2,
+.entry h3,
+.entry h4,
+.entry h5,
+.entry h6 {
+  margin-left: 28px;
+  position: relative;
 }
 
 .entry-signature:hover .entry-anchor,

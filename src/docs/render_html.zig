@@ -467,14 +467,15 @@ fn renderEntryTree(
                 // Heading level scales with depth: depth 1 -> h2, depth 2 -> h3, etc.
                 const heading_level: u8 = @intCast(@min(depth + 1, 6));
                 try w.print("            <h{d}>", .{heading_level});
-                try writeHtmlEscaped(w, node.name);
-                try w.writeAll(" <a href=\"#");
+                try w.writeAll("<a href=\"#");
                 try writeHtmlEscaped(w, anchor_id);
                 try w.writeAll("\" class=\"entry-anchor\" aria-label=\"Permalink to ");
                 try writeHtmlEscaped(w, node.name);
                 try w.writeAll("\">");
                 try w.writeAll(link_svg_use);
-                try w.print("</a></h{d}>\n", .{heading_level});
+                try w.writeAll("</a> ");
+                try writeHtmlEscaped(w, node.name);
+                try w.print("</h{d}>\n", .{heading_level});
 
                 // Nominal types also show their type definition below the heading
                 if (entry.kind == .nominal) {
@@ -488,9 +489,6 @@ fn renderEntryTree(
             } else {
                 // Signature block - styled as code, not a heading
                 try w.writeAll("            <div class=\"entry-signature\">\n");
-                try w.writeAll("                <code class=\"entry-signature-code\">");
-                try renderEntrySignature(w, ctx, entry);
-                try w.writeAll("</code>\n");
                 try w.writeAll("                <a href=\"#");
                 try writeHtmlEscaped(w, anchor_id);
                 try w.writeAll("\" class=\"entry-anchor\" aria-label=\"Permalink to ");
@@ -498,6 +496,9 @@ fn renderEntryTree(
                 try w.writeAll("\">");
                 try w.writeAll(link_svg_use);
                 try w.writeAll("</a>\n");
+                try w.writeAll("                <code class=\"entry-signature-code\">");
+                try renderEntrySignature(w, ctx, entry);
+                try w.writeAll("</code>\n");
                 try w.writeAll("            </div>\n");
             }
 
