@@ -121,7 +121,6 @@ const Lowerer = struct {
         self.input.types = type_mod.Store.init(self.allocator);
         self.input.strings = .{};
         self.input.idents = try base.Ident.Store.initCapacity(self.allocator, 1);
-        self.input.program = mono.Lower.Program.init(self.allocator);
         return result;
     }
 

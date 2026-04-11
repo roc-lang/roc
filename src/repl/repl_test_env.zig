@@ -45,6 +45,11 @@ pub const TestEnv = struct {
     }
 
     pub fn deinit(self: *TestEnv) void {
+        var it = self.allocations.iterator();
+        while (it.next()) |entry| {
+            const ptr = @as(*anyopaque, @ptrFromInt(entry.key_ptr.*));
+            freeTrackedBytes(self.allocator, ptr, entry.value_ptr.*);
+        }
         self.allocations.deinit();
         self.crash.deinit();
     }

@@ -146,6 +146,7 @@ const Lowerer = struct {
         self.root_defs = .empty;
         self.input.symbols = symbol_mod.Store.init(self.allocator);
         self.input.strings = .{};
+        self.input.idents.deinit(self.allocator);
         self.input.idents = try base.Ident.Store.initCapacity(self.allocator, 1);
         self.types = type_mod.Store.init(self.allocator);
         return result;

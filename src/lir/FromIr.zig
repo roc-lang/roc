@@ -98,6 +98,9 @@ const Lowerer = struct {
             .root_procs = self.root_procs,
             .proc_ids_by_symbol = self.proc_ids_by_symbol,
         };
+        self.ir_to_layout.deinit();
+        self.local_layout_refs.deinit();
+        self.proc_ret_layout_refs.deinit();
         self.input.deinit();
         return result;
     }

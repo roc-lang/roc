@@ -8,7 +8,7 @@ const testing = std.testing;
 const posix = std.posix;
 
 const alloc = std.testing.allocator;
-const Backend = enum { interpreter, dev, wasm, llvm };
+const Backend = @import("eval").EvalBackend;
 
 /// Run expression on interpreter only (for tests with known dev backend bugs).
 fn expectInterpreter(expr: []const u8, expected: []const u8) !void {
@@ -25,6 +25,7 @@ fn expectInterpreter(expr: []const u8, expected: []const u8) !void {
 }
 
 fn expectBackend(backend: Backend, expr: []const u8, expected: []const u8) !void {
+    if (!Repl.backendAvailable(backend)) return;
     var test_env = TestEnv.init(alloc);
     defer test_env.deinit();
     var repl = switch (backend) {
@@ -248,6 +249,7 @@ test "Repl - list fold with concat" {
 // sessions so we test each backend separately but with the same expectations.
 
 fn expectStateful(backend: Backend, steps: []const [2][]const u8) !void {
+    if (!Repl.backendAvailable(backend)) return;
     var test_env = TestEnv.init(alloc);
     defer test_env.deinit();
     var repl = switch (backend) {
@@ -275,6 +277,7 @@ fn expectStateful(backend: Backend, steps: []const [2][]const u8) !void {
 }
 
 fn expectStepsFinal(backend: Backend, steps: []const []const u8, expected: []const u8) !void {
+    if (!Repl.backendAvailable(backend)) return;
     var test_env = TestEnv.init(alloc);
     defer test_env.deinit();
     var repl = switch (backend) {
@@ -306,6 +309,7 @@ fn expectStepsFinal(backend: Backend, steps: []const []const u8, expected: []con
 
 fn expectStepsFinalInChild(backend: Backend, steps: []const []const u8, expected: []const u8) !void {
     if (builtin.os.tag == .windows) return error.SkipZigTest;
+    if (!Repl.backendAvailable(backend)) return;
 
     const pid = try posix.fork();
 

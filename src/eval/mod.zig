@@ -4,6 +4,26 @@
 
 const std = @import("std");
 
+/// Backends available for evaluating Roc code.
+pub const EvalBackend = enum {
+    interpreter,
+    dev,
+    wasm,
+    llvm,
+};
+
+/// Whether a backend is currently implemented in this compiler build.
+pub fn backendAvailable(backend_kind: EvalBackend) bool {
+    return switch (backend_kind) {
+        .interpreter => true,
+        .dev => true,
+        // TODO: implement statement-only LIR wasm backend coverage in the evaluator.
+        .wasm => false,
+        // TODO: implement statement-only LIR LLVM codegen.
+        .llvm => false,
+    };
+}
+
 /// Compile-time value representation for the dev backend
 pub const comptime_value = @import("comptime_value.zig");
 /// Executable memory for running generated code (re-exported from backend module)
@@ -34,6 +54,8 @@ pub const RuntimeHostEnv = @import("test/RuntimeHostEnv.zig");
 pub const TestEnv = RuntimeHostEnv;
 /// Shared cor-style eval test helpers.
 pub const test_helpers = @import("test/helpers.zig");
+/// Shared parsing/checking/lowering pipeline.
+pub const pipeline = @import("pipeline.zig");
 
 test "eval tests" {
     std.testing.refAllDecls(@This());
@@ -46,6 +68,7 @@ test "eval tests" {
     std.testing.refAllDecls(@import("stack.zig"));
     std.testing.refAllDecls(@import("test/RuntimeHostEnv.zig"));
     std.testing.refAllDecls(@import("test/helpers.zig"));
+    std.testing.refAllDecls(@import("pipeline.zig"));
     std.testing.refAllDecls(@import("test/cor_pipeline_test.zig"));
     std.testing.refAllDecls(@import("test/stack_test.zig"));
 }

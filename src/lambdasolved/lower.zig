@@ -99,10 +99,7 @@ const Lowerer = struct {
         self.output = ast.Store.init(self.allocator);
         self.root_defs = .empty;
         self.types = type_mod.Store.init(self.allocator);
-        self.input.store = LiftedAst.Store.init(self.allocator);
-        self.input.root_defs = .empty;
         self.input.symbols = symbol_mod.Store.init(self.allocator);
-        self.input.types = LiftedType.Store.init(self.allocator);
         self.input.strings = .{};
         self.input.idents = try base.Ident.Store.initCapacity(self.allocator, 1);
         return result;
