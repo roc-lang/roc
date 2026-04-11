@@ -1,4 +1,4 @@
-# TODO implement: import "../../README.md" as readme : Str
+import "../../README.md" as readme : Str
 
 # Note 1: I tried to demonstrate all Roc syntax (possible in a single app file),
 # but I probably forgot some things. Let @Anton know on zulip if you spot something missing, or make a github issue.
@@ -400,7 +400,7 @@ main! = |_args| {
 	print!(letter_to_str(A))
 	print!(letter_to_str(C)) # C is not in [A, B] but we passed it in the signature of letter_to_str
 
-	# TODO echo!(readme);
+	print!(readme.contains("Roc"))
 
 	# Commented out so CI tests can pass
 	# crash "Avoid using crash in production software!"
@@ -411,7 +411,7 @@ main! = |_args| {
 # Top level expects only run when using `roc test file.roc`
 expect Bool.True != Bool.False
 
-# Multi-line expect
+## Multi-line expect that confirms basic math works.
 expect {
 	x = 4
 	y = 5

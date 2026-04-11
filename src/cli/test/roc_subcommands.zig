@@ -1430,6 +1430,13 @@ fn runEchoExpectFailure(opt_args: []const []const u8, roc_file: []const u8) !voi
     try std.testing.expect(result.term == .Exited and result.term.Exited != 0);
 }
 
+test "echo platform: list concat with refcounted elements issue 9316 (interpreter)" {
+    try runEchoExpectOutput(&.{}, "test/echo/issue_9316.roc", "[\"BAZ\", \"DUCK\", \"XYZ\", \"ABC\"]\n");
+}
+test "echo platform: list concat with refcounted elements issue 9316 (dev backend)" {
+    try runEchoExpectOutput(&.{"--opt=dev"}, "test/echo/issue_9316.roc", "[\"BAZ\", \"DUCK\", \"XYZ\", \"ABC\"]\n");
+}
+
 test "echo platform: no main is not a default app (interpreter)" {
     try runEchoExpectFailure(&.{"--opt=interpreter"}, "test/echo/no_main.roc");
 }
@@ -1475,7 +1482,8 @@ const all_syntax_common_suffix =
     "\"other color\"\n" ++
     "\"Names: Alice, Bob, Charlie\"\n" ++
     "\"A\"\n" ++
-    "\"other letter\"\n";
+    "\"other letter\"\n" ++
+    "True\n";
 
 const all_syntax_expected_stdout =
     all_syntax_common_prefix ++
@@ -1510,4 +1518,31 @@ test "echo platform: all_syntax_test.roc prints expected output (dev backend)" {
     try std.testing.expectEqualStrings(all_syntax_expected_stdout, run_result.stdout);
     // TODO: dev backend doesn't produce dbg output
     try std.testing.expectEqualStrings("", run_result.stderr);
+}
+
+test "echo platform: roc test all_syntax_test.roc passes" {
+    const allocator = std.testing.allocator;
+
+    const result = try util.runRoc(allocator, &.{ "test", "--no-cache" }, "test/echo/all_syntax_test.roc");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try util.checkSuccess(result);
+
+    const has_passed = std.mem.indexOf(u8, result.stdout, "passed") != null;
+    try std.testing.expect(has_passed);
+}
+
+test "roc docs Builtin.roc succeeds" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "docs", "--no-cache" }, "src/build/roc/Builtin.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try util.checkSuccess(result);
+
+    const has_generated = std.mem.indexOf(u8, result.stdout, "Generated docs for") != null;
+    try testing.expect(has_generated);
 }

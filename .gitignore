@@ -92,6 +92,7 @@ roc_linux_x86_64.tar.gz
 
 # nix
 result
+build.zig.zon2json-lock
 
 # Only keep Cargo.lock dependencies for the main compiler.
 # Examples and test only crates should be fine to be unlocked.
