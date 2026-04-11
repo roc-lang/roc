@@ -432,6 +432,12 @@ fn addChildToEntryTree(
     }
 }
 
+fn writeIndent(w: Writer, level: usize) !void {
+    const max_indent = "                                        "; // 40 spaces (10 levels of 4)
+    const spaces = @min(level * 4, max_indent.len);
+    try w.writeAll(max_indent[0..spaces]);
+}
+
 fn renderEntryTree(
     w: Writer,
     ctx: *const RenderContext,
@@ -446,6 +452,10 @@ fn renderEntryTree(
         return;
     }
 
+    // Base indent: depth 1 = 2 levels (8 spaces), depth 2 = 4 levels (16 spaces), etc.
+    // Each depth adds 2 indent levels: one for the entry, one for the children-container wrapper.
+    const base = depth * 2;
+
     // Render this node if it's a leaf entry
     if (node.is_leaf) {
         if (node.entry) |entry| {
@@ -453,10 +463,9 @@ fn renderEntryTree(
             const type_class = if (node.is_type) "entry-type" else "entry-value";
 
             // Render entry as styled div (not a heading element)
-            try w.writeAll("        <div class=\"entry ");
+            try writeIndent(w, base);
+            try w.writeAll("<div class=\"entry ");
             try w.writeAll(type_class);
-            try w.writeAll(" entry-depth-");
-            try w.print("{d}", .{depth - 1});
             try w.writeAll("\" id=\"");
             try writeHtmlEscaped(w, node.full_path);
             try w.writeAll("\">\n");
@@ -466,7 +475,8 @@ fn renderEntryTree(
                 // Types rendered as a heading, with an optional type definition below.
                 // Heading level scales with depth: depth 1 -> h2, depth 2 -> h3, etc.
                 const heading_level: u8 = @intCast(@min(depth + 1, 6));
-                try w.print("            <h{d}>", .{heading_level});
+                try writeIndent(w, base + 1);
+                try w.print("<h{d}>", .{heading_level});
                 try w.writeAll("<a href=\"#");
                 try writeHtmlEscaped(w, anchor_id);
                 try w.writeAll("\" class=\"entry-anchor\" aria-label=\"Permalink to ");
@@ -480,7 +490,8 @@ fn renderEntryTree(
                 // Nominal types also show their type definition below the heading
                 if (entry.kind == .nominal) {
                     if (entry.type_signature) |sig| {
-                        try w.writeAll("            <code class=\"entry-type-def\">");
+                        try writeIndent(w, base + 1);
+                        try w.writeAll("<code class=\"entry-type-def\">");
                         try w.writeAll(":= ");
                         try renderDocTypeHtml(w, ctx, sig, false);
                         try w.writeAll("</code>\n");
@@ -488,52 +499,62 @@ fn renderEntryTree(
                 }
             } else {
                 // Signature block - styled as code, not a heading
-                try w.writeAll("            <div class=\"entry-signature\">\n");
-                try w.writeAll("                <a href=\"#");
+                try writeIndent(w, base + 1);
+                try w.writeAll("<div class=\"entry-signature\">\n");
+                try writeIndent(w, base + 2);
+                try w.writeAll("<a href=\"#");
                 try writeHtmlEscaped(w, anchor_id);
                 try w.writeAll("\" class=\"entry-anchor\" aria-label=\"Permalink to ");
                 try writeHtmlEscaped(w, node.name);
                 try w.writeAll("\">");
                 try w.writeAll(link_svg_use);
                 try w.writeAll("</a>\n");
-                try w.writeAll("                <code class=\"entry-signature-code\">");
+                try writeIndent(w, base + 2);
+                try w.writeAll("<code class=\"entry-signature-code\">");
                 try renderEntrySignature(w, ctx, entry);
                 try w.writeAll("</code>\n");
-                try w.writeAll("            </div>\n");
+                try writeIndent(w, base + 1);
+                try w.writeAll("</div>\n");
             }
 
             // Doc comment
             if (entry.doc_comment) |doc| {
-                try w.writeAll("            <div class=\"entry-doc\">\n");
+                try writeIndent(w, base + 1);
+                try w.writeAll("<div class=\"entry-doc\">\n");
                 try renderDocComment(w, doc);
-                try w.writeAll("            </div>\n");
+                try writeIndent(w, base + 1);
+                try w.writeAll("</div>\n");
             }
 
             // Children container
             if (node.children.items.len > 0) {
-                try w.writeAll("            <div class=\"entry-children-container\">\n");
+                try writeIndent(w, base + 1);
+                try w.writeAll("<div class=\"entry-children-container\">\n");
                 for (node.children.items) |child| {
                     try renderEntryTree(w, ctx, child, depth + 1);
                 }
-                try w.writeAll("            </div>\n");
+                try writeIndent(w, base + 1);
+                try w.writeAll("</div>\n");
             }
 
-            try w.writeAll("        </div>\n");
+            try writeIndent(w, base);
+            try w.writeAll("</div>\n");
         }
     } else if (node.children.items.len > 0) {
         // Non-leaf group node — render a group header and recurse at deeper depth
-        try w.writeAll("        <div class=\"entry-group entry-depth-");
-        try w.print("{d}", .{depth - 1});
-        try w.writeAll("\" id=\"");
+        try writeIndent(w, base);
+        try w.writeAll("<div class=\"entry-group\" id=\"");
         try writeHtmlEscaped(w, node.full_path);
         try w.writeAll("\">\n");
-        try w.writeAll("            <div class=\"entry-group-header\">");
+        try writeIndent(w, base + 1);
+        try w.writeAll("<div class=\"entry-group-header\">");
         try writeHtmlEscaped(w, node.name);
         try w.writeAll("</div>\n");
         for (node.children.items) |child| {
             try renderEntryTree(w, ctx, child, depth + 1);
         }
-        try w.writeAll("        </div>\n");
+        try writeIndent(w, base);
+        try w.writeAll("</div>\n");
     }
 }
 

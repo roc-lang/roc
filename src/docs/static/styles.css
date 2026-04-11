@@ -27,12 +27,12 @@
   --sidebar-bg-color: hsl(from var(--violet-bg) h calc(s * 1.05) calc(l * 0.95));
 
   /* Type scale: 1.33x multiplier for clear hierarchy */
-  --font-xs: 12px;
-  --font-sm: 14px;
-  --font-base: 16px;
-  --font-lg: 21px;
-  --font-xl: 28px;
-  --font-2xl: 37px;
+  --font-xs: 0.75rem;
+  --font-sm: 0.875rem;
+  --font-base: 1rem;
+  --font-lg: 1.3125rem;
+  --font-xl: 1.75rem;
+  --font-2xl: 2.3125rem;
 
   /* Font weights */
   --weight-normal: 400;
@@ -86,7 +86,6 @@ table tr td {
   background-color: var(--violet-bg);
   color: var(--text-color);
   margin-bottom: 16px;
-  margin-left: 28px;
   padding: 12px 16px;
   border-left: 4px solid var(--violet);
   display: flex;
@@ -114,6 +113,7 @@ table tr td {
   white-space: pre-wrap;
   font-size: var(--font-base);
   line-height: 1.5;
+  margin-left: 28px;
 }
 
 .entry-signature-code strong {
@@ -199,29 +199,7 @@ table tr td {
 
 .entry-children-container {
     margin-top: 16px;
-    margin-left: 0;
-}
-
-/* Depth-specific indentation (32px per level) */
-.entry-depth-0 {
-    margin-top: 36px;
-    margin-bottom: 36px;
-}
-
-.entry-depth-1 {
-    padding-left: 32px;
-}
-
-.entry-depth-2 {
-    padding-left: 64px;
-}
-
-.entry-depth-3 {
-    padding-left: 96px;
-}
-
-.entry-depth-4 {
-    padding-left: 128px;
+    margin-left: 28px;
 }
 
 /* Entry type vs value styling */
@@ -241,14 +219,6 @@ table tr td {
     line-height: 1.5;
 }
 
-/* Nested types get lighter background */
-.entry-depth-1.entry-type > .entry-signature,
-.entry-depth-2.entry-type > .entry-signature,
-.entry-depth-3.entry-type > .entry-signature,
-.entry-depth-4.entry-type > .entry-signature {
-    background-color: hsl(from var(--violet-bg) h s calc(l * 1.02));
-    border-left-color: hsl(from var(--violet) h calc(s * 0.8) calc(l * 1.1));
-}
 
 .pkg-full-name a {
   padding-top: 12px;
@@ -311,7 +281,7 @@ main {
   grid-column-end: content-end;
   box-sizing: border-box;
   position: relative;
-  font-size: var(--font-sm);
+  font-size: var(--font-base);
   line-height: 1.6;
   margin-top: 2px;
   padding: 16px;
@@ -415,7 +385,7 @@ p {
 
 footer {
   max-width: var(--main-content-max-width);
-  font-size: 14px;
+  font-size: var(--font-sm);
   box-sizing: border-box;
   padding: 16px;
 }
@@ -435,7 +405,7 @@ footer p {
   box-sizing: border-box;
   min-height: 40px;
   min-width: 48px;
-  padding: 8px 16px;
+  padding-left: 16px;
   font-family: var(--font-mono);
 }
 
@@ -460,8 +430,8 @@ footer p {
   overflow: hidden;
   text-overflow: ellipsis;
   margin-left: 20px;
-  padding-left: 27px;
-  border-left: 2px solid rgb(from var(--gray) r g b / .30);
+  padding-left: 16px;
+  border-left: 4px solid rgb(from var(--gray) r g b / .30);
   white-space: nowrap;
   display: flex;
   align-items: center;
@@ -494,7 +464,7 @@ footer p {
     text-decoration: none;
     color: inherit;
     display: inline-block;
-    padding: 8px 16px;
+    padding-left: 16px;
     width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -635,7 +605,7 @@ code {
 }
 
 p code {
-  padding: 0 8px;
+  padding: 0 4px;
 }
 
 code a,
@@ -719,13 +689,12 @@ pre>samp {
 }
 
 #module-search {
-  border-radius: 8px;
   display: block;
   position: relative;
   box-sizing: border-box;
   width: 100%;
   max-width: 600px;
-  font-size: 16px;
+  font-size: var(--font-base);
   line-height: 18px;
   color: var(--faded-color);
   background-color: var(--body-bg-color);
@@ -771,7 +740,7 @@ pre>samp {
 }
 
 #search-type-ahead .type-ahead-link {
-  font-size: 1rem;
+  font-size: var(--font-base);
   color: var(--text-color);
   line-height: 2em;
   position: relative;
@@ -798,7 +767,7 @@ pre>samp {
 
   .type-ahead-module-name, .type-ahead-def-name {
     color: var(--violet);
-    font-size: 1rem;
+    font-size: var(--font-base);
   }
 }
 
@@ -878,23 +847,6 @@ pre>samp {
         --main-content-width: minmax(calc(100% - 32px), 60ch);
     }
 
-    /* Responsive indentation for hierarchical entries */
-    .entry-depth-1 {
-        padding-left: 20px;
-    }
-
-    .entry-depth-2 {
-        padding-left: 40px;
-    }
-
-    .entry-depth-3 {
-        padding-left: 60px;
-    }
-
-    .entry-depth-4 {
-        padding-left: 80px;
-    }
-
     #module-search-form {
         padding: 16px 16px;
         height: auto;
@@ -947,7 +899,7 @@ pre>samp {
 
     main {
         padding: 18px;
-        font-size: 16px;
+        font-size: var(--font-base);
         padding-top: calc(16px + 16px + 1lh + 16px);
     }
 
@@ -964,7 +916,7 @@ pre>samp {
     }
 
     h4 {
-        font-size: 16px;
+        font-size: var(--font-base);
     }
 
     body {
