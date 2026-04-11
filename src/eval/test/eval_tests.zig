@@ -2112,6 +2112,20 @@ const core_tests = [_]TestCase{
     .{ .name = "inspect: Dec to_str", .source = "{ a : Dec\n    a = 100.0.Dec\n    Dec.to_str(a)\n}", .expected = .{ .inspect_str = "\"100.0\"" } },
 
     // Remaining semantic ports from interpreter_style_test.zig
+    .{ .name = "inspect: match list rest binds slice", .source = "match [1, 2, 3] { [first, .. as rest] => match rest { [second, ..] => first + second, _ => 0 }, _ => 0 }", .expected = .{ .inspect_str = "3.0" } },
+    .{
+        .name = "inspect: simple for loop sum",
+        .source =
+        \\{
+        \\    var total = 0
+        \\    for n in [1, 2, 3, 4] {
+        \\        total = total + n
+        \\    }
+        \\    total
+        \\}
+        ,
+        .expected = .{ .inspect_str = "10.0" },
+    },
     .{ .name = "inspect: inline identity lambda on string", .source = "(|x| x)(\"Hello\")", .expected = .{ .inspect_str = "\"Hello\"" } },
     .{ .name = "inspect: inline increment lambda on dec literal", .source = "(|n| n + 1)(41)", .expected = .{ .inspect_str = "42.0" } },
     .{ .name = "inspect: inline binary add lambda on dec literals", .source = "(|a, b| a + b)(40, 2)", .expected = .{ .inspect_str = "42.0" } },

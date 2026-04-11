@@ -2780,6 +2780,69 @@ pub fn build(b: *std.Build) void {
         eval_host_effects_run_args,
     );
 
+    const eval_legacy_test = b.addTest(.{
+        .name = "eval_legacy_test",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/eval/eval_legacy_test_root.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+        .filters = test_filters,
+    });
+    configureBackend(eval_legacy_test, target);
+    roc_modules.addModuleDependencies(eval_legacy_test, .eval);
+    eval_legacy_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
+    eval_legacy_test.step.dependOn(&write_compiled_builtins.step);
+
+    const run_eval_legacy_test = b.addRunArtifact(eval_legacy_test);
+    if (run_args.len != 0) {
+        run_eval_legacy_test.addArgs(run_args);
+    }
+    eval_test_step.dependOn(&run_eval_legacy_test.step);
+
+    const module_env_serialization_test = b.addTest(.{
+        .name = "module_env_serialization_test",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/eval/module_env_serialization_test_root.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+        .filters = test_filters,
+    });
+    configureBackend(module_env_serialization_test, target);
+    roc_modules.addModuleDependencies(module_env_serialization_test, .eval);
+    module_env_serialization_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
+    module_env_serialization_test.step.dependOn(&write_compiled_builtins.step);
+
+    const run_module_env_serialization_test = b.addRunArtifact(module_env_serialization_test);
+    if (run_args.len != 0) {
+        run_module_env_serialization_test.addArgs(run_args);
+    }
+    eval_test_step.dependOn(&run_module_env_serialization_test.step);
+
+    const mono_emit_test = b.addTest(.{
+        .name = "mono_emit_test",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/eval/mono_emit_test_root.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+        .filters = test_filters,
+    });
+    configureBackend(mono_emit_test, target);
+    roc_modules.addModuleDependencies(mono_emit_test, .eval);
+    mono_emit_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
+    mono_emit_test.step.dependOn(&write_compiled_builtins.step);
+
+    const run_mono_emit_test = b.addRunArtifact(mono_emit_test);
+    if (run_args.len != 0) {
+        run_mono_emit_test.addArgs(run_args);
+    }
+    eval_test_step.dependOn(&run_mono_emit_test.step);
+
     const cor_pipeline_test = b.addTest(.{
         .name = "cor_pipeline_eval",
         .root_module = b.createModule(.{
