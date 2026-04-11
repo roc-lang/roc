@@ -1056,10 +1056,8 @@ fn hostListConcat(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]co
 
     const a_data: usize = @intCast(std.mem.readInt(u32, buffer[list_a_ptr..][0..4], .little));
     const a_len: usize = @intCast(std.mem.readInt(u32, buffer[list_a_ptr + 4 ..][0..4], .little));
-    const a_cap: usize = @intCast(std.mem.readInt(u32, buffer[list_a_ptr + 8 ..][0..4], .little));
     const b_data: usize = @intCast(std.mem.readInt(u32, buffer[list_b_ptr..][0..4], .little));
     const b_len: usize = @intCast(std.mem.readInt(u32, buffer[list_b_ptr + 4 ..][0..4], .little));
-    const b_cap: usize = @intCast(std.mem.readInt(u32, buffer[list_b_ptr + 8 ..][0..4], .little));
     const new_len = a_len + b_len;
 
     if (elem_width == 0) {

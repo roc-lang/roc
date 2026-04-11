@@ -675,10 +675,10 @@ fn emitRcAtPtr(
                 const field_layout = ls.getLayout(field_layout_idx);
                 if (!ls.layoutContainsRefcounted(field_layout)) continue;
 
-                const field_size = ls.getStructFieldSize(struct_idx, @intCast(field_i));
+                const field_size = self.structFieldSizeBySortedIndexWasm(struct_idx, @intCast(field_i));
                 if (field_size == 0) continue;
 
-                const field_offset = ls.getStructFieldOffset(struct_idx, @intCast(field_i));
+                const field_offset = self.structFieldOffsetBySortedIndexWasm(struct_idx, @intCast(field_i));
                 const field_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
                 try self.emitLocalGet(value_ptr_local);
                 if (field_offset > 0) {
@@ -1548,8 +1548,8 @@ fn compareCompositeByLayout(self: *Self, lhs_local: u32, rhs_local: u32, layout_
             var first = true;
             var field_i: u32 = 0;
             while (field_i < field_count) : (field_i += 1) {
-                const field_offset = ls.getStructFieldOffset(struct_idx, @intCast(field_i));
-                const field_size = ls.getStructFieldSize(struct_idx, @intCast(field_i));
+                const field_offset = self.structFieldOffsetBySortedIndexWasm(struct_idx, @intCast(field_i));
+                const field_size = self.structFieldSizeBySortedIndexWasm(struct_idx, @intCast(field_i));
                 const field_layout_idx = ls.getStructFieldLayout(struct_idx, @intCast(field_i));
 
                 if (field_size == 0) continue;
@@ -4931,7 +4931,7 @@ fn generateRefOp(self: *Self, op: RefOp, target_layout: layout.Idx) Allocator.Er
             };
             const payload_layout = ls.getLayout(payload_layout_idx);
             if (payload_layout.tag == .struct_) {
-                const field_offset = ls.getStructFieldOffsetByOriginalIndex(payload_layout.data.struct_.idx, payload.payload_idx);
+                const field_offset = self.structFieldOffsetByOriginalIndexWasm(payload_layout.data.struct_.idx, payload.payload_idx);
                 if (field_offset > 0) {
                     self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
                     WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(field_offset)) catch return error.OutOfMemory;
@@ -5144,6 +5144,60 @@ fn layoutStorageByteAlign(self: *const Self, layout_idx: layout.Idx) u32 {
         .list, .list_of_zst, .box, .box_of_zst => 4,
         else => self.layoutByteAlign(layout_idx),
     };
+}
+
+fn alignUp(value: u32, alignment: u32) u32 {
+    const mask = alignment - 1;
+    return (value + mask) & ~mask;
+}
+
+fn structFieldOffsetByOriginalIndexWasm(self: *const Self, struct_idx: layout.StructIdx, original_idx: u16) u32 {
+    const ls = self.getLayoutStore();
+    const struct_data = ls.getStructData(struct_idx);
+    const fields = ls.struct_fields.sliceRange(struct_data.getFields());
+    var offset: u32 = 0;
+    for (0..fields.len) |i| {
+        const field = fields.get(i);
+        const field_align = self.layoutStorageByteAlign(field.layout);
+        offset = alignUp(offset, field_align);
+        if (field.index == original_idx) return offset;
+        offset += self.layoutStorageByteSize(field.layout);
+    }
+    unreachable;
+}
+
+fn structFieldSizeByOriginalIndexWasm(self: *const Self, struct_idx: layout.StructIdx, original_idx: u16) u32 {
+    const ls = self.getLayoutStore();
+    const struct_data = ls.getStructData(struct_idx);
+    const fields = ls.struct_fields.sliceRange(struct_data.getFields());
+    for (0..fields.len) |i| {
+        const field = fields.get(i);
+        if (field.index == original_idx) return self.layoutStorageByteSize(field.layout);
+    }
+    unreachable;
+}
+
+fn structFieldOffsetBySortedIndexWasm(self: *const Self, struct_idx: layout.StructIdx, sorted_index: u32) u32 {
+    const ls = self.getLayoutStore();
+    const struct_data = ls.getStructData(struct_idx);
+    const fields = ls.struct_fields.sliceRange(struct_data.getFields());
+    var offset: u32 = 0;
+    for (0..fields.len) |i| {
+        const field = fields.get(i);
+        const field_align = self.layoutStorageByteAlign(field.layout);
+        offset = alignUp(offset, field_align);
+        if (i == sorted_index) return offset;
+        offset += self.layoutStorageByteSize(field.layout);
+    }
+    unreachable;
+}
+
+fn structFieldSizeBySortedIndexWasm(self: *const Self, struct_idx: layout.StructIdx, sorted_index: u32) u32 {
+    const ls = self.getLayoutStore();
+    const struct_data = ls.getStructData(struct_idx);
+    const fields = ls.struct_fields.sliceRange(struct_data.getFields());
+    if (sorted_index >= fields.len) unreachable;
+    return self.layoutStorageByteSize(fields.get(sorted_index).layout);
 }
 
 /// Emit a store instruction for the given value type at an address already on the stack.
@@ -5412,7 +5466,7 @@ fn generateStruct(self: *Self, r: anytype) Allocator.Error!void {
     defer self.allocator.free(field_val_types);
 
     for (fields, 0..) |field_expr_id, i| {
-        const field_byte_size = ls.getStructFieldSizeByOriginalIndex(l.data.struct_.idx, @intCast(i));
+        const field_byte_size = self.structFieldSizeByOriginalIndexWasm(l.data.struct_.idx, @intCast(i));
         const field_layout_idx = ls.getStructFieldLayoutByOriginalIndex(l.data.struct_.idx, @intCast(i));
         const is_composite = self.isCompositeLayout(field_layout_idx);
         const field_vt = WasmLayout.resultValTypeWithStore(field_layout_idx, ls);
@@ -5456,9 +5510,9 @@ fn generateStruct(self: *Self, r: anytype) Allocator.Error!void {
 
     // Store each field from pre-computed locals
     for (fields, 0..) |_, i| {
-        const field_offset = ls.getStructFieldOffsetByOriginalIndex(l.data.struct_.idx, @intCast(i));
+        const field_offset = self.structFieldOffsetByOriginalIndexWasm(l.data.struct_.idx, @intCast(i));
         const field_layout_idx = ls.getStructFieldLayoutByOriginalIndex(l.data.struct_.idx, @intCast(i));
-        const field_byte_size = ls.getStructFieldSizeByOriginalIndex(l.data.struct_.idx, @intCast(i));
+        const field_byte_size = self.structFieldSizeByOriginalIndexWasm(l.data.struct_.idx, @intCast(i));
         const is_composite = self.isCompositeLayout(field_layout_idx);
 
         if (is_composite and field_byte_size > 0) {
@@ -5490,8 +5544,8 @@ fn generateStructAccess(self: *Self, sa: anytype) Allocator.Error!void {
     const struct_layout = ls.getLayout(sa.struct_layout);
     std.debug.assert(struct_layout.tag == .struct_);
 
-    const field_offset = ls.getStructFieldOffsetByOriginalIndex(struct_layout.data.struct_.idx, sa.field_idx);
-    const field_byte_size = ls.getStructFieldSizeByOriginalIndex(struct_layout.data.struct_.idx, sa.field_idx);
+    const field_offset = self.structFieldOffsetByOriginalIndexWasm(struct_layout.data.struct_.idx, sa.field_idx);
+    const field_byte_size = self.structFieldSizeByOriginalIndexWasm(struct_layout.data.struct_.idx, sa.field_idx);
     const field_layout = ls.getLayout(ls.getStructFieldLayoutByOriginalIndex(struct_layout.data.struct_.idx, sa.field_idx));
 
     // Check if the field is a composite type
@@ -5593,8 +5647,6 @@ fn generateList(self: *Self, l: anytype) Allocator.Error!void {
     if (elems.len == 0) {
         // Empty list — same as empty_list
         const base_offset = try self.allocStackMemory(12, 4);
-        try self.emitZeroInit(self.fp_local, base_offset);
-        // Actually we need to zero-init at the right location
         const base_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
         try self.emitFpOffset(base_offset);
         self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
@@ -6498,8 +6550,8 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             const record_layout_idx = self.procLocalLayoutIdx(args[1]);
             const record_layout = ls.getLayout(record_layout_idx);
             const record_idx = record_layout.data.struct_.idx;
-            const len_field_off = ls.getStructFieldOffsetByOriginalIndex(record_idx, 0);
-            const start_field_off = ls.getStructFieldOffsetByOriginalIndex(record_idx, 1);
+            const len_field_off = self.structFieldOffsetByOriginalIndexWasm(record_idx, 0);
+            const start_field_off = self.structFieldOffsetByOriginalIndexWasm(record_idx, 1);
             if (builtin.mode == .Debug) {
                 const sd = ls.getStructData(record_idx);
                 const sorted_fields = ls.struct_fields.sliceRange(sd.getFields());
@@ -6509,11 +6561,11 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                         .{sorted_fields.len},
                     );
                 }
-                const record_size = ls.getStructData(record_idx).size;
+                const record_size = self.layoutStorageByteSize(record_layout_idx);
                 if (ls.getStructFieldLayoutByOriginalIndex(record_idx, 0) != .u64 or
                     ls.getStructFieldLayoutByOriginalIndex(record_idx, 1) != .u64 or
-                    ls.getStructFieldSizeByOriginalIndex(record_idx, 0) != 8 or
-                    ls.getStructFieldSizeByOriginalIndex(record_idx, 1) != 8 or
+                    self.structFieldSizeByOriginalIndexWasm(record_idx, 0) != 8 or
+                    self.structFieldSizeByOriginalIndexWasm(record_idx, 1) != 8 or
                     record_size != 16)
                 {
                     std.debug.panic(
@@ -6941,9 +6993,8 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             var problem_size: ?u32 = null;
             for (0..fields.len) |i| {
                 const field = fields.get(i);
-                const field_layout = ls.getLayout(field.layout);
-                const field_size = ls.layoutSizeAlign(field_layout).size;
-                const field_offset = ls.getStructFieldOffsetByOriginalIndex(rec_idx, field.index);
+                const field_size = self.layoutStorageByteSize(field.layout);
+                const field_offset = self.structFieldOffsetByOriginalIndexWasm(rec_idx, field.index);
                 switch (field_size) {
                     8 => {
                         index_off = field_offset;
@@ -10236,7 +10287,6 @@ fn generateLLListPrepend(self: *Self, args: anytype, ret_layout: layout.Idx) All
 fn generateLLListConcat(self: *Self, args: anytype, ret_layout: layout.Idx) Allocator.Error!void {
     const elem_size = self.getListElemSize(ret_layout);
     const elem_align = self.getListElemAlign(ret_layout);
-
     if (elem_size == 0) {
         try self.emitProcLocal(args[0]);
         const a_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
