@@ -11,7 +11,7 @@
 //!
 //!   1. **Interpreter** — walks the LIR directly.
 //!   2. **Dev backend** — lowers LIR to native machine code.
-//!   3. **WASM backend** — currently not implemented for statement-only LIR.
+//!   3. **WASM backend** — statement-only LIR compiled to wasm.
 //!   4. **LLVM backend** — currently not implemented for statement-only LIR.
 //!
 //! ALL backends run via Str.inspect and must produce identical output strings.
@@ -130,7 +130,7 @@ const BackendDetail = struct {
 
 const NUM_BACKENDS = 4; // interpreter, dev, wasm, llvm
 const BACKEND_NAMES = [NUM_BACKENDS][]const u8{ "interpreter", "dev", "wasm", "llvm" };
-const WASM_BACKEND_IMPLEMENTED = false;
+const WASM_BACKEND_IMPLEMENTED = true;
 const LLVM_BACKEND_IMPLEMENTED = false;
 
 const TestOutcome = struct {

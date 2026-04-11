@@ -231,9 +231,7 @@ pub fn wasmEvaluatorInspectedStr(
     allocator: std.mem.Allocator,
     lowered: *const LoweredProgram,
 ) ![]u8 {
-    _ = allocator;
-    _ = lowered;
-    @panic("TODO: wasm eval backend not implemented for the cor-style inspect-only pipeline");
+    return @import("eval").wasm_evaluator.evalLoweredToStr(allocator, lowered);
 }
 
 fn valueToRocStr(val: Value) RocStr {

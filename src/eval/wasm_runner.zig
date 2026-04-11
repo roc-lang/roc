@@ -1,52 +1,44 @@
-//! WebAssembly execution runner for the REPL and eval tests.
+//! WebAssembly execution runner for eval and REPL.
 //!
 //! Provides host-function bindings and memory management for running
 //! Roc expressions compiled to WebAssembly via the Bytebox runtime.
 
 const std = @import("std");
 const builtins = @import("builtins");
-const can = @import("can");
-const eval_mod = @import("eval");
 const bytebox = @import("bytebox");
 const i128h = builtins.compiler_rt_128;
 
-const ModuleEnv = can.ModuleEnv;
-const CIR = can.CIR;
-const WasmEvaluator = eval_mod.WasmEvaluator;
-
 /// Errors that can occur during WebAssembly evaluation.
 pub const WasmEvalError = error{
-    WasmEvaluatorInitFailed,
-    WasmGenerateCodeFailed,
     WasmExecFailed,
-    UnsupportedLayout,
     OutOfMemory,
 };
 
-/// Compiles and executes a Roc expression via the WebAssembly backend, returning the result as a string.
-pub fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) WasmEvalError![]const u8 {
+/// Executes a wasm module and returns the Str.inspect result as a string.
+pub fn runWasmStr(
+    allocator: std.mem.Allocator,
+    wasm_bytes: []const u8,
+    has_imports: bool,
+) WasmEvalError![]u8 {
     wasm_heap_ptr = 65536;
 
-    var wasm_eval = WasmEvaluator.init(allocator) catch return error.WasmEvaluatorInitFailed;
-    defer wasm_eval.deinit();
-
-    const all_module_envs = [_]*ModuleEnv{ @constCast(builtin_module_env), module_env };
-    var wasm_result = wasm_eval.generateWasm(module_env, expr_idx, &all_module_envs) catch return error.WasmGenerateCodeFailed;
-    defer wasm_result.deinit();
-
-    if (wasm_result.wasm_bytes.len == 0) return error.WasmGenerateCodeFailed;
+    if (wasm_bytes.len == 0) return error.WasmExecFailed;
 
     var arena_impl = std.heap.ArenaAllocator.init(allocator);
     defer arena_impl.deinit();
     const arena = arena_impl.allocator();
 
     var module_def = bytebox.createModuleDefinition(arena, .{}) catch return error.WasmExecFailed;
-    module_def.decode(wasm_result.wasm_bytes) catch return error.WasmExecFailed;
+    module_def.decode(wasm_bytes) catch {
+        return error.WasmExecFailed;
+    };
 
-    var module_instance = bytebox.createModuleInstance(.Stack, module_def, std.heap.page_allocator) catch return error.WasmExecFailed;
+    var module_instance = bytebox.createModuleInstance(.Stack, module_def, std.heap.page_allocator) catch {
+        return error.WasmExecFailed;
+    };
     defer module_instance.destroy();
 
-    if (wasm_result.has_imports) {
+    if (has_imports) {
         var env_imports = bytebox.ModuleImportPackage.init("env", null, null, allocator) catch return error.WasmExecFailed;
         defer env_imports.deinit();
 
@@ -68,8 +60,14 @@ pub fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, ex
         env_imports.addHostFunction("roc_u128_mod", &[_]bytebox.ValType{ .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostU128Mod, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_dec_div", &[_]bytebox.ValType{ .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostDecDiv, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_dec_div_trunc", &[_]bytebox.ValType{ .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostDecDivTrunc, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_i8_mod_by", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{.I32}, hostI8ModBy, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_u8_mod_by", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{.I32}, hostU8ModBy, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_i16_mod_by", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{.I32}, hostI16ModBy, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_u16_mod_by", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{.I32}, hostU16ModBy, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_i32_mod_by", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{.I32}, hostI32ModBy, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_u32_mod_by", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{.I32}, hostU32ModBy, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_i64_mod_by", &[_]bytebox.ValType{ .I64, .I64 }, &[_]bytebox.ValType{.I64}, hostI64ModBy, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_u64_mod_by", &[_]bytebox.ValType{ .I64, .I64 }, &[_]bytebox.ValType{.I64}, hostU64ModBy, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_i128_to_str", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{.I32}, hostI128ToStr, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_u128_to_str", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{.I32}, hostU128ToStr, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_float_to_str", &[_]bytebox.ValType{ .I64, .I32, .I32 }, &[_]bytebox.ValType{.I32}, hostFloatToStr, null) catch return error.WasmExecFailed;
@@ -94,7 +92,13 @@ pub fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, ex
         }) |entry| {
             env_imports.addHostFunction(entry[0], &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{}, entry[1], null) catch return error.WasmExecFailed;
         }
-        env_imports.addHostFunction("roc_str_from_utf8", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostStrFromUtf8, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction(
+            "roc_str_from_utf8",
+            &[_]bytebox.ValType{ .I32, .I32, .I32, .I32, .I32, .I32, .I32, .I32, .I32, .I32, .I32 },
+            &[_]bytebox.ValType{},
+            hostStrFromUtf8,
+            null,
+        ) catch return error.WasmExecFailed;
 
         inline for (.{
             .{ "roc_str_with_prefix", hostStrWithPrefix },
@@ -117,23 +121,27 @@ pub fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, ex
         env_imports.addHostFunction("roc_list_reverse", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostListReverse, null) catch return error.WasmExecFailed;
 
         const imports = [_]bytebox.ModuleImportPackage{env_imports};
-        module_instance.instantiate(.{ .stack_size = 1024 * 256, .imports = &imports }) catch return error.WasmExecFailed;
+        module_instance.instantiate(.{ .stack_size = 1024 * 256, .imports = &imports }) catch {
+            return error.WasmExecFailed;
+        };
     } else {
-        module_instance.instantiate(.{ .stack_size = 1024 * 256 }) catch return error.WasmExecFailed;
+        module_instance.instantiate(.{ .stack_size = 1024 * 256 }) catch {
+            return error.WasmExecFailed;
+        };
     }
 
-    const handle = module_instance.getFunctionHandle("main") catch return error.WasmExecFailed;
+    const handle = module_instance.getFunctionHandle("main") catch {
+        return error.WasmExecFailed;
+    };
     var params = [1]bytebox.Val{.{ .I32 = 0 }};
     var returns: [1]bytebox.Val = undefined;
-    _ = module_instance.invoke(handle, &params, &returns, .{}) catch |err| {
-        std.debug.print("wasm invoke failed: {}\n", .{err});
+    _ = module_instance.invoke(handle, &params, &returns, .{}) catch {
         return error.WasmExecFailed;
     };
 
     const str_ptr: u32 = @bitCast(returns[0].I32);
     const mem_slice = module_instance.memoryAll();
     if (str_ptr + 12 > mem_slice.len) {
-        std.debug.print("wasm result ptr out of bounds: ptr={d} mem={d}\n", .{ str_ptr, mem_slice.len });
         return error.WasmExecFailed;
     }
 
@@ -141,7 +149,6 @@ pub fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, ex
     const str_data: []const u8 = if (byte11 & 0x80 != 0) sd: {
         const sso_len: u32 = byte11 & 0x7F;
         if (sso_len > 11) {
-            std.debug.print("wasm invalid SSO len: {d}\n", .{sso_len});
             return error.WasmExecFailed;
         }
         break :sd mem_slice[str_ptr..][0..sso_len];
@@ -149,7 +156,6 @@ pub fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, ex
         const data_ptr: u32 = @bitCast(mem_slice[str_ptr..][0..4].*);
         const data_len: u32 = @bitCast(mem_slice[str_ptr + 4 ..][0..4].*);
         if (data_ptr + data_len > mem_slice.len) {
-            std.debug.print("wasm heap str out of bounds: ptr={d} len={d} mem={d}\n", .{ data_ptr, data_len, mem_slice.len });
             return error.WasmExecFailed;
         }
         break :sd mem_slice[data_ptr..][0..data_len];
@@ -283,12 +289,52 @@ fn hostU128Mod(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const
     writeU128ToMem(buffer, @intCast(params[2].I32), readU128FromMem(buffer, @intCast(params[0].I32)) % readU128FromMem(buffer, @intCast(params[1].I32)));
 }
 
+fn hostI8ModBy(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
+    const lhs: i8 = @intCast(params[0].I32);
+    const rhs: i8 = @intCast(params[1].I32);
+    results[0] = .{ .I32 = @intCast(@mod(lhs, rhs)) };
+}
+
+fn hostU8ModBy(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
+    const lhs: u8 = @intCast(params[0].I32);
+    const rhs: u8 = @intCast(params[1].I32);
+    results[0] = .{ .I32 = @intCast(@mod(lhs, rhs)) };
+}
+
+fn hostI16ModBy(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
+    const lhs: i16 = @intCast(params[0].I32);
+    const rhs: i16 = @intCast(params[1].I32);
+    results[0] = .{ .I32 = @intCast(@mod(lhs, rhs)) };
+}
+
+fn hostU16ModBy(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
+    const lhs: u16 = @intCast(params[0].I32);
+    const rhs: u16 = @intCast(params[1].I32);
+    results[0] = .{ .I32 = @intCast(@mod(lhs, rhs)) };
+}
+
 fn hostI32ModBy(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
-    results[0] = .{ .I32 = @mod(params[0].I32, params[1].I32) };
+    const lhs: i32 = params[0].I32;
+    const rhs: i32 = params[1].I32;
+    results[0] = .{ .I32 = @mod(lhs, rhs) };
+}
+
+fn hostU32ModBy(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
+    const lhs: u32 = @bitCast(params[0].I32);
+    const rhs: u32 = @bitCast(params[1].I32);
+    results[0] = .{ .I32 = @bitCast(@mod(lhs, rhs)) };
 }
 
 fn hostI64ModBy(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
-    results[0] = .{ .I64 = @mod(params[0].I64, params[1].I64) };
+    const lhs: i64 = params[0].I64;
+    const rhs: i64 = params[1].I64;
+    results[0] = .{ .I64 = @mod(lhs, rhs) };
+}
+
+fn hostU64ModBy(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
+    const lhs: u64 = @bitCast(params[0].I64);
+    const rhs: u64 = @bitCast(params[1].I64);
+    results[0] = .{ .I64 = @bitCast(@mod(lhs, rhs)) };
 }
 
 fn hostDecDiv(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
@@ -314,13 +360,11 @@ fn hostI128ToStr(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]con
         results[0] = .{ .I32 = 0 };
         return;
     }
-    var fmt_buf: [48]u8 = undefined;
-    const formatted = std.fmt.bufPrint(&fmt_buf, "{d}", .{readI128FromMem(buffer, val_ptr)}) catch {
-        results[0] = .{ .I32 = 0 };
-        return;
-    };
-    @memcpy(buffer[buf_ptr..][0..formatted.len], formatted);
-    results[0] = .{ .I32 = @intCast(formatted.len) };
+    const value = readI128FromMem(buffer, val_ptr);
+    var fmt_buf: [40]u8 = undefined;
+    const slice = std.fmt.bufPrint(&fmt_buf, "{}", .{value}) catch &.{};
+    @memcpy(buffer[buf_ptr..][0..slice.len], slice);
+    results[0] = .{ .I32 = @intCast(slice.len) };
 }
 
 fn hostU128ToStr(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
@@ -331,13 +375,11 @@ fn hostU128ToStr(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]con
         results[0] = .{ .I32 = 0 };
         return;
     }
-    var fmt_buf: [48]u8 = undefined;
-    const formatted = std.fmt.bufPrint(&fmt_buf, "{d}", .{readU128FromMem(buffer, val_ptr)}) catch {
-        results[0] = .{ .I32 = 0 };
-        return;
-    };
-    @memcpy(buffer[buf_ptr..][0..formatted.len], formatted);
-    results[0] = .{ .I32 = @intCast(formatted.len) };
+    const value = readU128FromMem(buffer, val_ptr);
+    var fmt_buf: [40]u8 = undefined;
+    const slice = std.fmt.bufPrint(&fmt_buf, "{}", .{value}) catch &.{};
+    @memcpy(buffer[buf_ptr..][0..slice.len], slice);
+    results[0] = .{ .I32 = @intCast(slice.len) };
 }
 
 fn hostFloatToStr(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
@@ -379,6 +421,7 @@ fn hostIntToStr(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]cons
 
     const signed_value: i128 = @bitCast((@as(u128, high) << 64) | @as(u128, low));
     const unsigned_value: u128 = (@as(u128, high) << 64) | @as(u128, low);
+
 
     var fmt_buf: [48]u8 = undefined;
     const formatted = (if (is_signed) switch (int_width) {
@@ -452,24 +495,34 @@ fn hostDecToF32(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]cons
 
 fn hostListStrEq(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
     const buffer = module.store.getMemory(0).buffer();
-    const a_ptr: usize = @intCast(params[0].I32);
-    const b_ptr: usize = @intCast(params[1].I32);
-    if (a_ptr + 12 > buffer.len or b_ptr + 12 > buffer.len) {
+    const a_list_ptr: usize = @intCast(params[0].I32);
+    const b_list_ptr: usize = @intCast(params[1].I32);
+    if (a_list_ptr + 12 > buffer.len or b_list_ptr + 12 > buffer.len) {
         results[0] = .{ .I32 = 0 };
         return;
     }
-    const a_data_ptr: usize = @intCast(std.mem.readInt(u32, buffer[a_ptr..][0..4], .little));
-    const a_len: usize = @intCast(std.mem.readInt(u32, buffer[a_ptr + 4 ..][0..4], .little));
-    const b_data_ptr: usize = @intCast(std.mem.readInt(u32, buffer[b_ptr..][0..4], .little));
-    const b_len: usize = @intCast(std.mem.readInt(u32, buffer[b_ptr + 4 ..][0..4], .little));
+    const a_data_ptr: usize = @intCast(std.mem.readInt(u32, buffer[a_list_ptr..][0..4], .little));
+    const a_len: usize = @intCast(std.mem.readInt(u32, buffer[a_list_ptr + 4 ..][0..4], .little));
+    const b_data_ptr: usize = @intCast(std.mem.readInt(u32, buffer[b_list_ptr..][0..4], .little));
+    const b_len: usize = @intCast(std.mem.readInt(u32, buffer[b_list_ptr + 4 ..][0..4], .little));
     if (a_len != b_len) {
         results[0] = .{ .I32 = 0 };
         return;
     }
+    if (a_len == 0) {
+        results[0] = .{ .I32 = 1 };
+        return;
+    }
     for (0..a_len) |i| {
-        const a = readWasmStr(buffer, a_data_ptr + i * 12);
-        const b = readWasmStr(buffer, b_data_ptr + i * 12);
-        if (a.len != b.len or !std.mem.eql(u8, a.data[0..a.len], b.data[0..b.len])) {
+        const a_elem_ptr = a_data_ptr + i * 12;
+        const b_elem_ptr = b_data_ptr + i * 12;
+        const a = readWasmStr(buffer, a_elem_ptr);
+        const b = readWasmStr(buffer, b_elem_ptr);
+        if (a.len != b.len) {
+            results[0] = .{ .I32 = 0 };
+            return;
+        }
+        if (!std.mem.eql(u8, a.data[0..a.len], b.data[0..b.len])) {
             results[0] = .{ .I32 = 0 };
             return;
         }
@@ -479,30 +532,43 @@ fn hostListStrEq(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]con
 
 fn hostListListEq(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
     const buffer = module.store.getMemory(0).buffer();
-    const a_ptr: usize = @intCast(params[0].I32);
-    const b_ptr: usize = @intCast(params[1].I32);
+    const a_list_ptr: usize = @intCast(params[0].I32);
+    const b_list_ptr: usize = @intCast(params[1].I32);
     const inner_elem_size: usize = @intCast(params[2].I32);
-    if (a_ptr + 12 > buffer.len or b_ptr + 12 > buffer.len) {
+    if (a_list_ptr + 12 > buffer.len or b_list_ptr + 12 > buffer.len) {
         results[0] = .{ .I32 = 0 };
         return;
     }
-    const a_data_ptr: usize = @intCast(std.mem.readInt(u32, buffer[a_ptr..][0..4], .little));
-    const a_len: usize = @intCast(std.mem.readInt(u32, buffer[a_ptr + 4 ..][0..4], .little));
-    const b_data_ptr: usize = @intCast(std.mem.readInt(u32, buffer[b_ptr..][0..4], .little));
-    const b_len: usize = @intCast(std.mem.readInt(u32, buffer[b_ptr + 4 ..][0..4], .little));
+    const a_data_ptr: usize = @intCast(std.mem.readInt(u32, buffer[a_list_ptr..][0..4], .little));
+    const a_len: usize = @intCast(std.mem.readInt(u32, buffer[a_list_ptr + 4 ..][0..4], .little));
+    const b_data_ptr: usize = @intCast(std.mem.readInt(u32, buffer[b_list_ptr..][0..4], .little));
+    const b_len: usize = @intCast(std.mem.readInt(u32, buffer[b_list_ptr + 4 ..][0..4], .little));
     if (a_len != b_len) {
         results[0] = .{ .I32 = 0 };
         return;
     }
+    if (a_len == 0) {
+        results[0] = .{ .I32 = 1 };
+        return;
+    }
     for (0..a_len) |i| {
-        const a_inner_ptr = a_data_ptr + i * 12;
-        const b_inner_ptr = b_data_ptr + i * 12;
-        const a_inner_data: usize = @intCast(std.mem.readInt(u32, buffer[a_inner_ptr..][0..4], .little));
-        const a_inner_len: usize = @intCast(std.mem.readInt(u32, buffer[a_inner_ptr + 4 ..][0..4], .little));
-        const b_inner_data: usize = @intCast(std.mem.readInt(u32, buffer[b_inner_ptr..][0..4], .little));
-        const b_inner_len: usize = @intCast(std.mem.readInt(u32, buffer[b_inner_ptr + 4 ..][0..4], .little));
-        const inner_bytes = a_inner_len * inner_elem_size;
-        if (a_inner_len != b_inner_len or !std.mem.eql(u8, buffer[a_inner_data..][0..inner_bytes], buffer[b_inner_data..][0..inner_bytes])) {
+        const a_elem_ptr = a_data_ptr + i * 12;
+        const b_elem_ptr = b_data_ptr + i * 12;
+        const a_data_inner: usize = @intCast(std.mem.readInt(u32, buffer[a_elem_ptr..][0..4], .little));
+        const a_len_inner: usize = @intCast(std.mem.readInt(u32, buffer[a_elem_ptr + 4 ..][0..4], .little));
+        const b_data_inner: usize = @intCast(std.mem.readInt(u32, buffer[b_elem_ptr..][0..4], .little));
+        const b_len_inner: usize = @intCast(std.mem.readInt(u32, buffer[b_elem_ptr + 4 ..][0..4], .little));
+        if (a_len_inner != b_len_inner) {
+            results[0] = .{ .I32 = 0 };
+            return;
+        }
+        if (a_len_inner == 0) continue;
+        const total_bytes = a_len_inner * inner_elem_size;
+        if (a_data_inner + total_bytes > buffer.len or b_data_inner + total_bytes > buffer.len) {
+            results[0] = .{ .I32 = 0 };
+            return;
+        }
+        if (!std.mem.eql(u8, buffer[a_data_inner..][0..total_bytes], buffer[b_data_inner..][0..total_bytes])) {
             results[0] = .{ .I32 = 0 };
             return;
         }
@@ -510,7 +576,47 @@ fn hostListListEq(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]co
     results[0] = .{ .I32 = 1 };
 }
 
-var wasm_heap_ptr: u32 = 65536;
+fn readWasmStr(buffer: []u8, str_ptr: usize) struct { data: [*]const u8, len: usize } {
+    const bytes = buffer[str_ptr..][0..12];
+    if ((bytes[11] & 0x80) != 0) {
+        return .{ .data = bytes[0..11].ptr, .len = bytes[11] & 0x7F };
+    } else {
+        const data_ptr: usize = @intCast(std.mem.readInt(u32, bytes[0..4], .little));
+        const len: usize = @intCast(std.mem.readInt(u32, bytes[4..8], .little));
+        return .{ .data = buffer[data_ptr..].ptr, .len = len };
+    }
+}
+
+fn writeWasmStr(buffer: []u8, result_ptr: usize, data: [*]const u8, len: usize) void {
+    if (len < 12) {
+        @memset(buffer[result_ptr..][0..12], 0);
+        @memcpy(buffer[result_ptr..][0..len], data[0..len]);
+        buffer[result_ptr + 11] = @intCast(len | 0x80);
+    } else {
+        const data_ptr = allocWasmData(buffer, 1, len);
+        @memcpy(buffer[data_ptr..][0..len], data[0..len]);
+        std.mem.writeInt(u32, buffer[result_ptr..][0..4], data_ptr, .little);
+        std.mem.writeInt(u32, buffer[result_ptr + 4 ..][0..4], @intCast(len), .little);
+        std.mem.writeInt(u32, buffer[result_ptr + 8 ..][0..4], @intCast(len), .little);
+    }
+}
+
+fn writeWasmEmptyStr(buffer: []u8, result_ptr: usize) void {
+    @memset(buffer[result_ptr..][0..12], 0);
+    buffer[result_ptr + 11] = 0x80;
+}
+
+fn rocStrFromWasmSlice(data: [*]const u8, len: usize) builtins.str.RocStr {
+    if (len < @sizeOf(builtins.str.RocStr)) {
+        return builtins.str.RocStr.fromSliceSmall(data[0..len]);
+    }
+
+    return .{
+        .bytes = @constCast(data),
+        .length = len,
+        .capacity_or_alloc_ptr = len,
+    };
+}
 
 fn allocExtraBytes(alignment: u32) u32 {
     const ptr_width: u32 = 8;
@@ -588,48 +694,6 @@ fn hostRocCrashed(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]co
     if (msg_ptr + msg_len <= buffer.len) std.debug.print("Roc crashed: {s}\n", .{buffer[msg_ptr..][0..msg_len]});
 }
 
-fn readWasmStr(buffer: []u8, str_ptr: usize) struct { data: [*]const u8, len: usize } {
-    const bytes = buffer[str_ptr..][0..12];
-    if ((bytes[11] & 0x80) != 0) {
-        return .{ .data = bytes[0..11].ptr, .len = bytes[11] & 0x7F };
-    } else {
-        const data_ptr: usize = @intCast(std.mem.readInt(u32, bytes[0..4], .little));
-        const len: usize = @intCast(std.mem.readInt(u32, bytes[4..8], .little));
-        return .{ .data = buffer[data_ptr..].ptr, .len = len };
-    }
-}
-
-fn writeWasmStr(buffer: []u8, result_ptr: usize, data: [*]const u8, len: usize) void {
-    if (len < 12) {
-        @memset(buffer[result_ptr..][0..12], 0);
-        @memcpy(buffer[result_ptr..][0..len], data[0..len]);
-        buffer[result_ptr + 11] = @intCast(len | 0x80);
-    } else {
-        const data_ptr = allocWasmData(buffer, 1, len);
-        @memcpy(buffer[data_ptr..][0..len], data[0..len]);
-        std.mem.writeInt(u32, buffer[result_ptr..][0..4], data_ptr, .little);
-        std.mem.writeInt(u32, buffer[result_ptr + 4 ..][0..4], @intCast(len), .little);
-        std.mem.writeInt(u32, buffer[result_ptr + 8 ..][0..4], @intCast(len), .little);
-    }
-}
-
-fn writeWasmEmptyStr(buffer: []u8, result_ptr: usize) void {
-    @memset(buffer[result_ptr..][0..12], 0);
-    buffer[result_ptr + 11] = 0x80;
-}
-
-fn rocStrFromWasmSlice(data: [*]const u8, len: usize) builtins.str.RocStr {
-    if (len < @sizeOf(builtins.str.RocStr)) {
-        return builtins.str.RocStr.fromSliceSmall(data[0..len]);
-    }
-
-    return .{
-        .bytes = @constCast(data),
-        .length = len,
-        .capacity_or_alloc_ptr = len,
-    };
-}
-
 fn isWhitespace(c: u8) bool {
     return c == ' ' or c == '\t' or c == '\n' or c == '\r' or c == 0x0b or c == 0x0c;
 }
@@ -639,9 +703,9 @@ fn hostStrTrim(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const
     const str = readWasmStr(buffer, @intCast(params[0].I32));
     const slice = str.data[0..str.len];
     var start: usize = 0;
-    while (start < slice.len and isWhitespace(slice[start])) : (start += 1) {}
-    var end: usize = slice.len;
-    while (end > start and isWhitespace(slice[end - 1])) : (end -= 1) {}
+    var end: usize = str.len;
+    while (start < end and isWhitespace(slice[start])) start += 1;
+    while (end > start and isWhitespace(slice[end - 1])) end -= 1;
     writeWasmStr(buffer, @intCast(params[1].I32), slice[start..].ptr, end - start);
 }
 
@@ -650,7 +714,7 @@ fn hostStrTrimStart(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]
     const str = readWasmStr(buffer, @intCast(params[0].I32));
     const slice = str.data[0..str.len];
     var start: usize = 0;
-    while (start < slice.len and isWhitespace(slice[start])) : (start += 1) {}
+    while (start < slice.len and isWhitespace(slice[start])) start += 1;
     writeWasmStr(buffer, @intCast(params[1].I32), slice[start..].ptr, slice.len - start);
 }
 
@@ -659,8 +723,8 @@ fn hostStrTrimEnd(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]co
     const str = readWasmStr(buffer, @intCast(params[0].I32));
     const slice = str.data[0..str.len];
     var end: usize = slice.len;
-    while (end > 0 and isWhitespace(slice[end - 1])) : (end -= 1) {}
-    writeWasmStr(buffer, @intCast(params[1].I32), slice[0..end].ptr, end);
+    while (end > 0 and isWhitespace(slice[end - 1])) end -= 1;
+    writeWasmStr(buffer, @intCast(params[1].I32), slice.ptr, end);
 }
 
 fn hostStrWithAsciiLowercased(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
@@ -672,8 +736,8 @@ fn hostStrWithAsciiLowercased(_: ?*anyopaque, module: *bytebox.ModuleInstance, p
     }
     const dest_start = wasm_heap_ptr;
     wasm_heap_ptr += @intCast(str.len);
-    for (str.data[0..str.len], 0..) |c, i| {
-        buffer[dest_start + i] = if (c >= 'A' and c <= 'Z') c + 32 else c;
+    for (0..str.len) |i| {
+        buffer[dest_start + i] = std.ascii.toLower(str.data[i]);
     }
     writeWasmStr(buffer, @intCast(params[1].I32), buffer[dest_start..].ptr, str.len);
 }
@@ -687,8 +751,8 @@ fn hostStrWithAsciiUppercased(_: ?*anyopaque, module: *bytebox.ModuleInstance, p
     }
     const dest_start = wasm_heap_ptr;
     wasm_heap_ptr += @intCast(str.len);
-    for (str.data[0..str.len], 0..) |c, i| {
-        buffer[dest_start + i] = if (c >= 'a' and c <= 'z') c - 32 else c;
+    for (0..str.len) |i| {
+        buffer[dest_start + i] = std.ascii.toUpper(str.data[i]);
     }
     writeWasmStr(buffer, @intCast(params[1].I32), buffer[dest_start..].ptr, str.len);
 }
@@ -697,6 +761,65 @@ fn hostStrReleaseExcessCapacity(_: ?*anyopaque, module: *bytebox.ModuleInstance,
     const buffer = module.store.getMemory(0).buffer();
     const str = readWasmStr(buffer, @intCast(params[0].I32));
     writeWasmStr(buffer, @intCast(params[1].I32), str.data, str.len);
+}
+
+fn hostStrWithCapacity(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    const buffer = module.store.getMemory(0).buffer();
+    const cap: usize = @intCast(@as(u32, @bitCast(params[0].I32)));
+    const result_ptr: usize = @intCast(params[1].I32);
+    if (cap < 12) {
+        writeWasmEmptyStr(buffer, result_ptr);
+        return;
+    }
+    const dest_start = allocWasmData(buffer, 1, cap);
+    std.mem.writeInt(u32, buffer[result_ptr..][0..4], dest_start, .little);
+    std.mem.writeInt(u32, buffer[result_ptr + 4 ..][0..4], 0, .little);
+    std.mem.writeInt(u32, buffer[result_ptr + 8 ..][0..4], @intCast(cap), .little);
+}
+
+fn hostStrEscapeAndQuote(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    const buffer = module.store.getMemory(0).buffer();
+    const str = readWasmStr(buffer, @intCast(params[0].I32));
+    const slice = str.data[0..str.len];
+    const result_ptr: usize = @intCast(params[1].I32);
+
+    var extra: usize = 0;
+    for (slice) |ch| {
+        if (ch == '\\' or ch == '"') extra += 1;
+    }
+
+    const result_len = slice.len + extra + 2;
+    if (result_len < 12) {
+        var small: [12]u8 = .{0} ** 12;
+        small[0] = '"';
+        var pos: usize = 1;
+        for (slice) |ch| {
+            if (ch == '\\' or ch == '"') {
+                small[pos] = '\\';
+                pos += 1;
+            }
+            small[pos] = ch;
+            pos += 1;
+        }
+        small[pos] = '"';
+        writeWasmStr(buffer, result_ptr, small[0..].ptr, result_len);
+        return;
+    }
+
+    const dest_start = wasm_heap_ptr;
+    wasm_heap_ptr += @intCast(result_len);
+    buffer[dest_start] = '"';
+    var pos: usize = dest_start + 1;
+    for (slice) |ch| {
+        if (ch == '\\' or ch == '"') {
+            buffer[pos] = '\\';
+            pos += 1;
+        }
+        buffer[pos] = ch;
+        pos += 1;
+    }
+    buffer[pos] = '"';
+    writeWasmStr(buffer, result_ptr, buffer[dest_start..].ptr, result_len);
 }
 
 fn hostStrWithPrefix(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
@@ -755,120 +878,6 @@ fn hostStrConcat(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]con
         @memcpy(buffer[dest_start + lhs.len ..][0..rhs.len], rhs.data[0..rhs.len]);
     }
     writeWasmStr(buffer, @intCast(params[2].I32), buffer[dest_start..].ptr, total_len);
-}
-
-fn hostStrEscapeAndQuote(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
-    const buffer = module.store.getMemory(0).buffer();
-    const str = readWasmStr(buffer, @intCast(params[0].I32));
-    const slice = str.data[0..str.len];
-    const result_ptr: usize = @intCast(params[1].I32);
-
-    var extra: usize = 0;
-    for (slice) |ch| {
-        if (ch == '\\' or ch == '"') extra += 1;
-    }
-
-    const result_len = slice.len + extra + 2;
-    if (result_len < 12) {
-        var small: [12]u8 = .{0} ** 12;
-        small[0] = '"';
-        var pos: usize = 1;
-        for (slice) |ch| {
-            if (ch == '\\' or ch == '"') {
-                small[pos] = '\\';
-                pos += 1;
-            }
-            small[pos] = ch;
-            pos += 1;
-        }
-        small[pos] = '"';
-        writeWasmStr(buffer, result_ptr, small[0..].ptr, result_len);
-        return;
-    }
-
-    const dest_start = wasm_heap_ptr;
-    wasm_heap_ptr += @intCast(result_len);
-    buffer[dest_start] = '"';
-    var pos: usize = dest_start + 1;
-    for (slice) |ch| {
-        if (ch == '\\' or ch == '"') {
-            buffer[pos] = '\\';
-            pos += 1;
-        }
-        buffer[pos] = ch;
-        pos += 1;
-    }
-    buffer[pos] = '"';
-    writeWasmStr(buffer, result_ptr, buffer[dest_start..].ptr, result_len);
-}
-
-fn hostStrRepeat(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
-    const buffer = module.store.getMemory(0).buffer();
-    const str = readWasmStr(buffer, @intCast(params[0].I32));
-    const count: usize = @intCast(@as(u32, @bitCast(params[1].I32)));
-    if (count == 0 or str.len == 0) {
-        writeWasmEmptyStr(buffer, @intCast(params[2].I32));
-        return;
-    }
-    const total_len = str.len * count;
-    const dest_start = wasm_heap_ptr;
-    wasm_heap_ptr += @intCast(total_len);
-    var offset: usize = 0;
-    for (0..count) |_| {
-        @memcpy(buffer[dest_start + offset ..][0..str.len], str.data[0..str.len]);
-        offset += str.len;
-    }
-    writeWasmStr(buffer, @intCast(params[2].I32), buffer[dest_start..].ptr, total_len);
-}
-
-fn hostStrReserve(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
-    const buffer = module.store.getMemory(0).buffer();
-    const str = readWasmStr(buffer, @intCast(params[0].I32));
-    const extra_cap: usize = @intCast(@as(u32, @bitCast(params[1].I32)));
-    const result_ptr: usize = @intCast(params[2].I32);
-    const needed = str.len + extra_cap;
-    if (needed < 12) {
-        writeWasmStr(buffer, result_ptr, str.data, str.len);
-        return;
-    }
-    const dest_start = allocWasmData(buffer, 1, needed);
-    @memcpy(buffer[dest_start..][0..str.len], str.data[0..str.len]);
-    std.mem.writeInt(u32, buffer[result_ptr..][0..4], dest_start, .little);
-    std.mem.writeInt(u32, buffer[result_ptr + 4 ..][0..4], @intCast(str.len), .little);
-    std.mem.writeInt(u32, buffer[result_ptr + 8 ..][0..4], @intCast(needed), .little);
-}
-
-fn hostStrWithCapacity(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
-    const buffer = module.store.getMemory(0).buffer();
-    const cap: usize = @intCast(@as(u32, @bitCast(params[0].I32)));
-    const result_ptr: usize = @intCast(params[1].I32);
-    if (cap < 12) {
-        writeWasmEmptyStr(buffer, result_ptr);
-        return;
-    }
-    const dest_start = allocWasmData(buffer, 1, cap);
-    std.mem.writeInt(u32, buffer[result_ptr..][0..4], dest_start, .little);
-    std.mem.writeInt(u32, buffer[result_ptr + 4 ..][0..4], 0, .little);
-    std.mem.writeInt(u32, buffer[result_ptr + 8 ..][0..4], @intCast(cap), .little);
-}
-
-fn hostStrCaselessAsciiEquals(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
-    const buffer = module.store.getMemory(0).buffer();
-    const a = readWasmStr(buffer, @intCast(params[0].I32));
-    const b = readWasmStr(buffer, @intCast(params[1].I32));
-    if (a.len != b.len) {
-        results[0] = .{ .I32 = 0 };
-        return;
-    }
-    for (0..a.len) |i| {
-        const ac = if (a.data[i] >= 'A' and a.data[i] <= 'Z') a.data[i] + 32 else a.data[i];
-        const bc = if (b.data[i] >= 'A' and b.data[i] <= 'Z') b.data[i] + 32 else b.data[i];
-        if (ac != bc) {
-            results[0] = .{ .I32 = 0 };
-            return;
-        }
-    }
-    results[0] = .{ .I32 = 1 };
 }
 
 fn hostStrSplit(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
@@ -946,6 +955,61 @@ fn hostStrJoinWith(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]c
     writeWasmStr(buffer, @intCast(params[2].I32), buffer[dest_start..].ptr, total_len);
 }
 
+fn hostStrRepeat(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    const buffer = module.store.getMemory(0).buffer();
+    const str = readWasmStr(buffer, @intCast(params[0].I32));
+    const count: usize = @intCast(@as(u32, @bitCast(params[1].I32)));
+    if (count == 0 or str.len == 0) {
+        writeWasmEmptyStr(buffer, @intCast(params[2].I32));
+        return;
+    }
+    const total_len = str.len * count;
+    const dest_start = wasm_heap_ptr;
+    wasm_heap_ptr += @intCast(total_len);
+    var offset: usize = 0;
+    for (0..count) |_| {
+        @memcpy(buffer[dest_start + offset ..][0..str.len], str.data[0..str.len]);
+        offset += str.len;
+    }
+    writeWasmStr(buffer, @intCast(params[2].I32), buffer[dest_start..].ptr, total_len);
+}
+
+fn hostStrReserve(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    const buffer = module.store.getMemory(0).buffer();
+    const str = readWasmStr(buffer, @intCast(params[0].I32));
+    const extra_cap: usize = @intCast(@as(u32, @bitCast(params[1].I32)));
+    const result_ptr: usize = @intCast(params[2].I32);
+    const needed = str.len + extra_cap;
+    if (needed < 12) {
+        writeWasmStr(buffer, result_ptr, str.data, str.len);
+        return;
+    }
+    const dest_start = allocWasmData(buffer, 1, needed);
+    @memcpy(buffer[dest_start..][0..str.len], str.data[0..str.len]);
+    std.mem.writeInt(u32, buffer[result_ptr..][0..4], dest_start, .little);
+    std.mem.writeInt(u32, buffer[result_ptr + 4 ..][0..4], @intCast(str.len), .little);
+    std.mem.writeInt(u32, buffer[result_ptr + 8 ..][0..4], @intCast(needed), .little);
+}
+
+fn hostStrCaselessAsciiEquals(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
+    const buffer = module.store.getMemory(0).buffer();
+    const a = readWasmStr(buffer, @intCast(params[0].I32));
+    const b = readWasmStr(buffer, @intCast(params[1].I32));
+    if (a.len != b.len) {
+        results[0] = .{ .I32 = 0 };
+        return;
+    }
+    for (0..a.len) |i| {
+        const ac = if (a.data[i] >= 'A' and a.data[i] <= 'Z') a.data[i] + 32 else a.data[i];
+        const bc = if (b.data[i] >= 'A' and b.data[i] <= 'Z') b.data[i] + 32 else b.data[i];
+        if (ac != bc) {
+            results[0] = .{ .I32 = 0 };
+            return;
+        }
+    }
+    results[0] = .{ .I32 = 1 };
+}
+
 fn hostListAppendUnsafe(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
     const buffer = module.store.getMemory(0).buffer();
     const list_ptr: usize = @intCast(params[0].I32);
@@ -1021,13 +1085,22 @@ fn hostStrFromUtf8(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]c
     const result_ptr: usize = @intCast(params[1].I32);
     const result_size: usize = @intCast(params[2].I32);
     const disc_offset: usize = @intCast(params[3].I32);
+    const disc_size: usize = @intCast(params[4].I32);
+    const ok_disc: u32 = @bitCast(params[5].I32);
+    const err_disc: u32 = @bitCast(params[6].I32);
+    const index_off: usize = @intCast(params[7].I32);
+    const index_size: usize = @intCast(params[8].I32);
+    const problem_off: usize = @intCast(params[9].I32);
+    const problem_size: usize = @intCast(params[10].I32);
+    if (list_ptr + 12 > buffer.len or result_ptr + result_size > buffer.len) return;
     const data_ptr: usize = @intCast(std.mem.readInt(u32, buffer[list_ptr..][0..4], .little));
     const len: usize = @intCast(std.mem.readInt(u32, buffer[list_ptr + 4 ..][0..4], .little));
+    if (data_ptr + len > buffer.len) return;
     const data = buffer[data_ptr..][0..len];
     @memset(buffer[result_ptr..][0..result_size], 0);
     if (std.unicode.utf8ValidateSlice(data)) {
         writeWasmStr(buffer, result_ptr, data.ptr, len);
-        std.mem.writeInt(u32, buffer[result_ptr + disc_offset ..][0..4], 1, .little);
+        writeWasmTagDiscriminant(buffer, result_ptr, disc_offset, disc_size, ok_disc);
     } else {
         var index: usize = 0;
         while (index < data.len) {
@@ -1040,13 +1113,45 @@ fn hostStrFromUtf8(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]c
                     error.Utf8EncodesSurrogateHalf => .EncodesSurrogateHalf,
                     error.Utf8CodepointTooLarge => .CodepointTooLarge,
                 };
-                std.mem.writeInt(u64, buffer[result_ptr..][0..8], @intCast(index), .little);
-                buffer[result_ptr + 8] = @intFromEnum(problem);
+                writeWasmInt(buffer, result_ptr + index_off, index_size, @intCast(index));
+                writeWasmInt(buffer, result_ptr + problem_off, problem_size, @intFromEnum(problem));
                 break;
             };
             index += next_num_bytes;
         }
-        std.mem.writeInt(u32, buffer[result_ptr + disc_offset ..][0..4], 0, .little);
+        writeWasmTagDiscriminant(buffer, result_ptr, disc_offset, disc_size, err_disc);
+    }
+}
+
+fn writeWasmTagDiscriminant(
+    buffer: []u8,
+    base_ptr: usize,
+    disc_offset: usize,
+    disc_size: usize,
+    value: u32,
+) void {
+    const dst = base_ptr + disc_offset;
+    switch (disc_size) {
+        1 => buffer[dst] = @intCast(value),
+        2 => std.mem.writeInt(u16, buffer[dst..][0..2], @intCast(value), .little),
+        4 => std.mem.writeInt(u32, buffer[dst..][0..4], value, .little),
+        else => std.debug.panic(
+            "wasm invariant violated: unsupported tag discriminant size {d}",
+            .{disc_size},
+        ),
+    }
+}
+
+fn writeWasmInt(buffer: []u8, dst: usize, size: usize, value: u64) void {
+    switch (size) {
+        1 => buffer[dst] = @intCast(value),
+        2 => std.mem.writeInt(u16, buffer[dst..][0..2], @intCast(value), .little),
+        4 => std.mem.writeInt(u32, buffer[dst..][0..4], @intCast(value), .little),
+        8 => std.mem.writeInt(u64, buffer[dst..][0..8], value, .little),
+        else => std.debug.panic(
+            "wasm invariant violated: unsupported integer write size {d}",
+            .{size},
+        ),
     }
 }
 
@@ -1120,3 +1225,5 @@ fn writeFloatParseResult(comptime T: type, buffer: []u8, out_ptr: usize, disc_of
     @memcpy(buffer[out_ptr..][0..value_bytes.len], value_bytes);
     buffer[out_ptr + disc_offset] = 1 - r.errorcode;
 }
+
+var wasm_heap_ptr: u32 = 65536;

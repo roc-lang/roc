@@ -124,9 +124,8 @@ pub const Repl = struct {
     pub fn backendAvailable(backend_kind: Backend) bool {
         return switch (backend_kind) {
             .interpreter => true,
-            // TODO: stabilize REPL dev backend lowering for statement-only LIR.
-            .dev => false,
-            .wasm => false,
+            .dev => true,
+            .wasm => true,
             .llvm => false,
         };
     }
@@ -559,7 +558,7 @@ pub const Repl = struct {
         return switch (self.backend) {
             .interpreter => self.evaluateWithInterpreter(lowered),
             .dev => self.evaluateWithDev(lowered, "Dev"),
-            .wasm => .{ .eval_error = try self.allocator.dupe(u8, "Wasm backend not implemented for REPL") },
+            .wasm => self.evaluateWithWasm(lowered),
             .llvm => .{ .eval_error = try self.allocator.dupe(u8, "LLVM backend not implemented for REPL") },
         };
     }
@@ -648,6 +647,13 @@ pub const Repl = struct {
             ret_buf.ptr,
             self.roc_ops,
         );
+        return .{ .expression = output };
+    }
+
+    fn evaluateWithWasm(self: *Repl, lowered: *const LoweredProgram) !StepResult {
+        const output = eval_mod.wasm_evaluator.evalLoweredToStr(self.allocator, lowered) catch |err| {
+            return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "Wasm backend error: {s}", .{@errorName(err)}) };
+        };
         return .{ .expression = output };
     }
 

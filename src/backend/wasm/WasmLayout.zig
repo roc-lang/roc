@@ -88,6 +88,7 @@ fn scalarValType(l: layout.Layout) ValType {
             .f64 => .f64,
             .dec => .i32, // pointer to stack memory
         },
+        .opaque_ptr => .i32,
         .str => .i32, // pointer
     };
 }

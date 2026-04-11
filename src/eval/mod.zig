@@ -17,8 +17,7 @@ pub fn backendAvailable(backend_kind: EvalBackend) bool {
     return switch (backend_kind) {
         .interpreter => true,
         .dev => true,
-        // TODO: implement statement-only LIR wasm backend coverage in the evaluator.
-        .wasm => false,
+        .wasm => true,
         // TODO: implement statement-only LIR LLVM codegen.
         .llvm => false,
     };
@@ -62,6 +61,10 @@ pub const TestRunner = @import("test_runner.zig").TestRunner;
 pub const test_helpers = @import("test/helpers.zig");
 /// Shared parsing/checking/lowering pipeline.
 pub const pipeline = @import("pipeline.zig");
+/// LIR-backed wasm evaluator.
+pub const wasm_evaluator = @import("wasm_evaluator.zig");
+/// Bytebox runner for wasm modules.
+pub const wasm_runner = @import("wasm_runner.zig");
 
 test "eval tests" {
     std.testing.refAllDecls(@This());
@@ -76,6 +79,8 @@ test "eval tests" {
     std.testing.refAllDecls(@import("test/RuntimeHostEnv.zig"));
     std.testing.refAllDecls(@import("test/helpers.zig"));
     std.testing.refAllDecls(@import("pipeline.zig"));
+    std.testing.refAllDecls(@import("wasm_evaluator.zig"));
+    std.testing.refAllDecls(@import("wasm_runner.zig"));
     std.testing.refAllDecls(@import("test/cor_pipeline_test.zig"));
     std.testing.refAllDecls(@import("test/stack_test.zig"));
 }

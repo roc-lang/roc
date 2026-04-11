@@ -205,12 +205,64 @@ const Lowerer = struct {
         return self.store.insertString(self.input.strings.get(idx));
     }
 
-    fn lowerLiteral(self: *Lowerer, lit: ir.Ast.Lit) std.mem.Allocator.Error!LIR.LiteralValue {
+    fn lowerLiteralWithLayout(
+        self: *Lowerer,
+        lit: ir.Ast.Lit,
+        layout_ref: ir.Layout.Ref,
+    ) std.mem.Allocator.Error!LIR.LiteralValue {
+        const layout_idx = try self.lowerLayoutId(layout_ref);
         return switch (lit) {
-            .int => |value| .{ .i128_literal = .{ .value = value, .layout_idx = .i128 } },
-            .f32 => |value| .{ .f32_literal = value },
-            .f64 => |value| .{ .f64_literal = value },
-            .dec => |value| .{ .dec_literal = value },
+            .int => |value| switch (layout_idx) {
+                .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64 => blk: {
+                    const is_unsigned = layout_idx == .u8 or layout_idx == .u16 or layout_idx == .u32 or layout_idx == .u64;
+                    if (builtin.mode == .Debug and is_unsigned and value < 0) {
+                        std.debug.panic(
+                            "LIR lowering invariant violated: negative int literal {d} for unsigned layout {}",
+                            .{ value, layout_idx },
+                        );
+                    }
+                    const lit_value: i64 = if (is_unsigned)
+                        @bitCast(@as(u64, @intCast(value)))
+                    else
+                        @intCast(value);
+                    break :blk .{ .i64_literal = .{
+                        .value = lit_value,
+                        .layout_idx = layout_idx,
+                    } };
+                },
+                .u128, .i128 => .{ .i128_literal = .{ .value = value, .layout_idx = layout_idx } },
+                else => std.debug.panic(
+                    "LIR lowering invariant violated: int literal with non-int layout {}",
+                    .{layout_idx},
+                ),
+            },
+            .f32 => |value| blk: {
+                if (builtin.mode == .Debug and layout_idx != .f32) {
+                    std.debug.panic(
+                        "LIR lowering invariant violated: f32 literal with non-f32 layout {}",
+                        .{layout_idx},
+                    );
+                }
+                break :blk .{ .f32_literal = value };
+            },
+            .f64 => |value| blk: {
+                if (builtin.mode == .Debug and layout_idx != .f64) {
+                    std.debug.panic(
+                        "LIR lowering invariant violated: f64 literal with non-f64 layout {}",
+                        .{layout_idx},
+                    );
+                }
+                break :blk .{ .f64_literal = value };
+            },
+            .dec => |value| blk: {
+                if (builtin.mode == .Debug and layout_idx != .dec) {
+                    std.debug.panic(
+                        "LIR lowering invariant violated: dec literal with non-dec layout {}",
+                        .{layout_idx},
+                    );
+                }
+                break :blk .{ .dec_literal = value };
+            },
             .str => |value| .{ .str_literal = try self.lowerStringId(value) },
             .bool => |value| .{ .bool_literal = value },
         };
@@ -1255,7 +1307,7 @@ const ProcLowerer = struct {
             .lit => |lit| try self.parent.store.addCFStmt(.{ .assign_literal = .{
                 .target = target,
                 .result = .fresh,
-                .value = try self.parent.lowerLiteral(lit),
+                .value = try self.parent.lowerLiteralWithLayout(lit, bind.layout),
                 .next = next,
             } }),
             .fn_ptr => |name| try self.parent.store.addCFStmt(.{ .assign_literal = .{

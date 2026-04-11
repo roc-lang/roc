@@ -38,10 +38,16 @@ const increfDataPtrC = builtins.utils.increfDataPtrC;
 const decrefDataPtrC = builtins.utils.decrefDataPtrC;
 const freeDataPtrC = builtins.utils.freeDataPtrC;
 const rcNone = builtins.utils.rcNone;
+const copy_fallback = dev_wrappers.copy_fallback;
 
 // List builtin functions - using C-compatible wrappers to avoid ABI issues
 // with 24-byte RocList struct returns on aarch64
 const RocList = builtins.list.RocList;
+const listConcat = builtins.list.listConcat;
+const listPrepend = builtins.list.listPrepend;
+const listReplace = builtins.list.listReplace;
+const listReserve = builtins.list.listReserve;
+const listReleaseExcessCapacity = builtins.list.listReleaseExcessCapacity;
 
 // String builtins
 const strToUtf8C = builtins.str.strToUtf8C;
@@ -66,8 +72,6 @@ const strDropSuffix = builtins.str.strDropSuffix;
 const strWithAsciiLowercased = builtins.str.strWithAsciiLowercased;
 const strWithAsciiUppercased = builtins.str.strWithAsciiUppercased;
 const strFromUtf8Lossy = builtins.str.fromUtf8Lossy;
-const strFromUtf8C = builtins.str.fromUtf8C;
-const FromUtf8Try = builtins.str.FromUtf8Try;
 
 const Relocation = @import("Relocation.zig").Relocation;
 
@@ -130,9 +134,9 @@ pub const BuiltinFn = enum {
     str_drop_prefix,
     str_drop_suffix,
     str_with_ascii_lowercased,
-    str_with_ascii_uppercased,
-    str_from_utf8_lossy,
-    str_from_utf8,
+        str_with_ascii_uppercased,
+        str_from_utf8_lossy,
+        str_from_utf8,
     str_escape_and_quote,
     dbg_str,
 
@@ -222,7 +226,7 @@ pub const BuiltinFn = enum {
             .str_with_ascii_lowercased => "roc_builtins_str_with_ascii_lowercased",
             .str_with_ascii_uppercased => "roc_builtins_str_with_ascii_uppercased",
             .str_from_utf8_lossy => "roc_builtins_str_from_utf8_lossy",
-            .str_from_utf8 => "roc_builtins_str_from_utf8",
+            .str_from_utf8 => "roc_builtins_str_from_utf8_result",
             .str_escape_and_quote => "roc_builtins_str_escape_and_quote",
             .dbg_str => "roc_builtins_dbg_str",
 
@@ -455,13 +459,6 @@ fn wrapStrWithAsciiUppercased(out: *RocStr, str_bytes: ?[*]u8, str_len: usize, s
 fn wrapStrFromUtf8Lossy(out: *RocStr, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, roc_ops: *RocOps) callconv(.c) void {
     const list = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
     out.* = strFromUtf8Lossy(list, roc_ops);
-}
-
-/// Wrapper: fromUtf8C(RocList, UpdateMode, *RocOps) -> FromUtf8Try
-fn wrapStrFromUtf8(out: [*]u8, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, roc_ops: *RocOps) callconv(.c) void {
-    const list = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
-    const result = strFromUtf8C(list, .Immutable, roc_ops);
-    @as(*FromUtf8Try, @ptrCast(@alignCast(out))).* = result;
 }
 
 /// Wrapper: escape special characters and wrap in double quotes for Str.inspect
@@ -1765,13 +1762,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const list_b_off = try self.ensureOnStack(list_b_loc, roc_list_size);
                     const result_offset = self.codegen.allocStackSlot(roc_str_size);
                     const alignment_bytes = elem_size_align.alignment.toByteUnits();
-                    const elements_refcounted: bool = blk: {
-                        const ret_layout = ls.getLayout(ll.ret_layout);
-                        if (ret_layout.tag == .list) {
-                            break :blk ls.layoutContainsRefcounted(ls.getLayout(ret_layout.data.list));
-                        }
-                        break :blk false;
-                    };
                     const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_concat);
 
                     {
@@ -1820,13 +1810,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const elem_off = try self.ensureOnStack(elem_loc, elem_size_align.size);
                     const result_offset = self.codegen.allocStackSlot(roc_str_size);
                     const alignment_bytes = elem_size_align.alignment.toByteUnits();
-                    const elements_refcounted: bool = blk: {
-                        const ret_layout = ls.getLayout(ll.ret_layout);
-                        if (ret_layout.tag == .list) {
-                            break :blk ls.layoutContainsRefcounted(ls.getLayout(ret_layout.data.list));
-                        }
-                        break :blk false;
-                    };
                     const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_prepend);
 
                     {
@@ -2745,84 +2728,101 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 .str_from_utf8 => {
                     // str_from_utf8(list) -> Result Str [BadUtf8 {problem: Utf8Problem, index: U64}]
-                    // The C builtin returns FromUtf8Try {byte_index: u64, string: RocStr, is_ok: bool, problem_code: u8}
-                    // We must convert it to the Roc tag union layout.
                     if (args.len != 1) unreachable;
                     const list_loc = try self.emitValueLocal(args[0]);
                     const list_off = try self.ensureOnStack(list_loc, roc_list_size);
 
                     const roc_ops_reg = self.roc_ops_reg orelse unreachable;
-                    const raw_size: i32 = @intCast(@sizeOf(FromUtf8Try));
-                    const raw_offset = self.codegen.allocStackSlot(raw_size);
-
-                    // Call C builtin: fn(out, list_bytes, list_len, list_cap, roc_ops) -> void
-                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                    try builder.addLeaArg(frame_ptr, raw_offset);
-                    try builder.addMemArg(frame_ptr, list_off);
-                    try builder.addMemArg(frame_ptr, list_off + 8);
-                    try builder.addMemArg(frame_ptr, list_off + 16);
-                    try builder.addRegArg(roc_ops_reg);
-                    try self.callBuiltin(&builder, @intFromPtr(&wrapStrFromUtf8), .str_from_utf8);
-
-                    // Now convert the C struct to a Roc tag union.
-                    // FromUtf8Try layout: byte_index(u64)@0, string(RocStr)@8, is_ok(bool)@32, problem_code(u8)@33
-                    // Result tag union: [Err [BadUtf8 {index: U64, problem: Utf8Problem}], Ok Str]
-                    //   Err(0): payload = {index: U64@0, problem: U8@8}
-                    //   Ok(1): payload = Str (24 bytes)@0
-                    //   discriminant at offset = max payload size = 24
                     const ls = self.layout_store;
                     const ret_layout_val = ls.getLayout(ll.ret_layout);
                     if (ret_layout_val.tag == .tag_union) {
                         const tu_data = ls.getTagUnionData(ret_layout_val.data.tag_union.idx);
+                        const variants = ls.getTagUnionVariants(tu_data);
+                        var ok_disc: ?u16 = null;
+                        var err_disc: ?u16 = null;
+                        var err_record_idx: ?layout.StructIdx = null;
+                        for (0..variants.len) |i| {
+                            const v_payload = variants.get(@intCast(i)).payload_layout;
+                            const candidate = self.unwrapSingleFieldPayloadLayout(v_payload) orelse v_payload;
+                            if (candidate == .str) {
+                                ok_disc = @intCast(i);
+                            } else {
+                                err_disc = @intCast(i);
+                                const err_layout = ls.getLayout(candidate);
+                                err_record_idx = switch (err_layout.tag) {
+                                    .struct_ => err_layout.data.struct_.idx,
+                                    .tag_union => inner: {
+                                        const inner_tu = ls.getTagUnionData(err_layout.data.tag_union.idx);
+                                        const inner_v = ls.getTagUnionVariants(inner_tu);
+                                        if (inner_v.len == 0) break :inner null;
+                                        const inner_payload = inner_v.get(0).payload_layout;
+                                        const unwrapped = self.unwrapSingleFieldPayloadLayout(inner_payload) orelse inner_payload;
+                                        const inner_layout = ls.getLayout(unwrapped);
+                                        if (inner_layout.tag == .struct_) break :inner inner_layout.data.struct_.idx;
+                                        break :inner null;
+                                    },
+                                    else => null,
+                                };
+                            }
+                        }
+
+                        const resolved_ok = ok_disc orelse std.debug.panic(
+                            "LIR/codegen invariant violated: str_from_utf8 had no Ok(Str) variant",
+                            .{},
+                        );
+                        const resolved_err = err_disc orelse std.debug.panic(
+                            "LIR/codegen invariant violated: str_from_utf8 had no Err variant",
+                            .{},
+                        );
+                        const rec_idx = err_record_idx orelse std.debug.panic(
+                            "LIR/codegen invariant violated: str_from_utf8 could not resolve error record layout",
+                            .{},
+                        );
+                        const index_off = ls.getStructFieldOffsetByOriginalIndex(rec_idx, 0);
+                        const index_size = ls.getStructFieldSizeByOriginalIndex(rec_idx, 0);
+                        const problem_off = ls.getStructFieldOffsetByOriginalIndex(rec_idx, 1);
+                        const problem_size = ls.getStructFieldSizeByOriginalIndex(rec_idx, 1);
                         const tag_size = tu_data.size;
                         const disc_offset = tu_data.discriminant_offset;
                         const disc_size = tu_data.discriminant_size;
+                        if (builtin.mode == .Debug and index_size != 8) {
+                            std.debug.panic(
+                                "LIR/codegen invariant violated: str_from_utf8 index size {d} != 8",
+                                .{index_size},
+                            );
+                        }
+                        if (builtin.mode == .Debug and problem_size != 1) {
+                            std.debug.panic(
+                                "LIR/codegen invariant violated: str_from_utf8 problem size {d} != 1",
+                                .{problem_size},
+                            );
+                        }
 
                         const result_slot = self.codegen.allocStackSlot(tag_size);
                         try self.zeroStackArea(result_slot, tag_size);
 
-                        // Load is_ok byte from C struct (offset 32)
-                        const ok_reg = try self.allocTempGeneral();
-                        try self.emitLoadStackW8(ok_reg, raw_offset + 32);
-                        try self.emitCmpImm(ok_reg, 0);
-                        self.codegen.freeGeneral(ok_reg);
+                        // Call C builtin that writes the Roc tag union directly.
+                        var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                        try builder.addLeaArg(frame_ptr, result_slot);
+                        try builder.addMemArg(frame_ptr, list_off);
+                        try builder.addMemArg(frame_ptr, list_off + 8);
+                        try builder.addMemArg(frame_ptr, list_off + 16);
+                        try builder.addImmArg(@intCast(resolved_ok));
+                        try builder.addImmArg(@intCast(resolved_err));
+                        try builder.addImmArg(@intCast(disc_offset));
+                        try builder.addImmArg(@intCast(disc_size));
+                        try builder.addImmArg(@intCast(index_off));
+                        try builder.addImmArg(@intCast(problem_off));
+                        try builder.addRegArg(roc_ops_reg);
+                        try self.callBuiltin(&builder, @intFromPtr(&dev_wrappers.roc_builtins_str_from_utf8_result), .str_from_utf8);
 
-                        // Jump to Err branch if is_ok == 0
-                        const err_patch = try self.codegen.emitCondJump(condEqual());
-
-                        // === OK branch: copy string (24 bytes from raw+8 to result+0) ===
-                        {
-                            const temp_reg = try self.allocTempGeneral();
-                            try self.copyChunked(temp_reg, frame_ptr, raw_offset + 8, frame_ptr, result_slot, 24);
-                            self.codegen.freeGeneral(temp_reg);
-                        }
-                        try self.storeDiscriminant(result_slot + @as(i32, @intCast(disc_offset)), 1, disc_size);
-                        const end_patch = try self.codegen.emitJump();
-
-                        // === ERR branch ===
-                        self.codegen.patchJump(err_patch, self.codegen.currentOffset());
-                        // Copy byte_index (8 bytes from raw+0 to result+0) as the 'index' field
-                        {
-                            const temp_reg = try self.allocTempGeneral();
-                            try self.copyChunked(temp_reg, frame_ptr, raw_offset, frame_ptr, result_slot, 8);
-                            self.codegen.freeGeneral(temp_reg);
-                        }
-                        // Copy problem_code (1 byte from raw+33 to result+8) as the 'problem' field
-                        {
-                            const prob_reg = try self.allocTempGeneral();
-                            try self.emitLoadStackW8(prob_reg, raw_offset + 33);
-                            try self.emitStoreStackW8(result_slot + 8, prob_reg);
-                            self.codegen.freeGeneral(prob_reg);
-                        }
-                        try self.storeDiscriminant(result_slot + @as(i32, @intCast(disc_offset)), 0, disc_size);
-
-                        // === END ===
-                        self.codegen.patchJump(end_patch, self.codegen.currentOffset());
-                        return .{ .stack = .{ .offset = result_slot } };
+                        return self.stackLocationForLayout(ll.ret_layout, result_slot);
                     }
 
-                    // Fallback: return raw C struct (for contexts that don't need tag union)
-                    return .{ .stack = .{ .offset = raw_offset } };
+                    std.debug.panic(
+                        "LIR/codegen invariant violated: str_from_utf8 expected tag union layout",
+                        .{},
+                    );
                 },
 
                 // ── Remaining list low-level operations ──
@@ -2855,13 +2855,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // We need a scratch slot for the old element (out_element param)
                     const old_elem_slot = self.codegen.allocStackSlot(@intCast(if (elem_size_align.size > 0) elem_size_align.size else 8));
                     const alignment_bytes = elem_size_align.alignment.toByteUnits();
-                    const elements_refcounted: bool = blk: {
-                        const ret_layout = ls.getLayout(ll.ret_layout);
-                        if (ret_layout.tag == .list) {
-                            break :blk ls.layoutContainsRefcounted(ls.getLayout(ret_layout.data.list));
-                        }
-                        break :blk false;
-                    };
                     const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_replace);
 
                     {
@@ -3306,90 +3299,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .compare,
                 => {
                     std.debug.panic("UNIMPLEMENTED low-level op: {s}", .{@tagName(ll.op)});
-                },
-                .list_sort_with => {
-                    // list_sort_with(list, comparator) -> List
-                    if (args.len != 2) unreachable;
-                    const list_loc = try self.generateExpr(args[0]);
-
-                    const ls = self.layout_store;
-                    const roc_ops_reg = self.roc_ops_reg orelse unreachable;
-
-                    const ret_layout = ls.getLayout(ll.ret_layout);
-                    const elem_size_align: layout.SizeAlign = switch (ret_layout.tag) {
-                        .list => ls.layoutSizeAlign(ls.getLayout(ret_layout.data.list)),
-                        .list_of_zst => .{ .size = 0, .alignment = .@"1" },
-                        else => unreachable,
-                    };
-                    const elements_refcounted: bool = switch (ret_layout.tag) {
-                        .list => ls.layoutContainsRefcounted(ls.getLayout(ret_layout.data.list)),
-                        else => false,
-                    };
-
-                    // The comparator proc must be explicit in LIR; codegen does not
-                    // recover callables from the function-value expression.
-                    if (ll.callable_proc.isNone()) {
-                        if (builtin.mode == .Debug) {
-                            std.debug.panic(
-                                "LIR/codegen invariant violated: list_sort_with is missing callable_proc metadata",
-                                .{},
-                            );
-                        }
-                        unreachable;
-                    }
-                    const cmp_code_offset: usize = try self.resolveComparatorOffset(ll.callable_proc);
-
-                    // Compute the absolute address of the lambda at runtime using
-                    // PC-relative addressing: emit LEA/ADR that resolves to the
-                    // lambda's code address when the instruction executes.
-                    const cmp_addr_slot = self.codegen.allocStackSlot(8);
-                    {
-                        const current = self.codegen.currentOffset();
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            // ADR X9, (target - current)
-                            const rel: i21 = @intCast(@as(i64, @intCast(cmp_code_offset)) - @as(i64, @intCast(current)));
-                            try self.codegen.emit.adr(.X9, rel);
-                            try self.codegen.emitStoreStack(.w64, cmp_addr_slot, .X9);
-                        } else {
-                            // LEA RAX, [RIP + (target - current - 7)]
-                            // 7 = size of the LEA instruction itself (REX + opcode + modrm + disp32)
-                            const rel: i32 = @intCast(@as(i64, @intCast(cmp_code_offset)) - @as(i64, @intCast(current)) - 7);
-                            try self.codegen.emit.leaRegRipRel(.RAX, rel);
-                            try self.codegen.emitStoreStack(.w64, cmp_addr_slot, .RAX);
-                        }
-
-                        // Record this as an internal address patch so deferred-prologue
-                        // proc body shifts can update it.
-                        try self.internal_addr_patches.append(self.allocator, .{
-                            .instr_offset = current,
-                            .target_offset = cmp_code_offset,
-                        });
-                    }
-
-                    const list_off = try self.ensureOnStack(list_loc, roc_list_size);
-                    const result_offset = self.codegen.allocStackSlot(roc_list_size);
-                    const alignment_bytes = elem_size_align.alignment.toByteUnits();
-                    const fn_addr: usize = @intFromPtr(&wrapListSortWith);
-
-                    {
-                        // wrapListSortWith(out, list_bytes, list_len, list_cap, cmp_fn_addr, alignment, element_width, elements_refcounted, roc_ops)
-                        const base_reg = frame_ptr;
-                        var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-
-                        try builder.addLeaArg(base_reg, result_offset);
-                        try builder.addMemArg(base_reg, list_off);
-                        try builder.addMemArg(base_reg, list_off + 8);
-                        try builder.addMemArg(base_reg, list_off + 16);
-                        try builder.addMemArg(base_reg, cmp_addr_slot);
-                        try builder.addImmArg(@intCast(alignment_bytes));
-                        try builder.addImmArg(@intCast(elem_size_align.size));
-                        try builder.addImmArg(if (elements_refcounted) @as(usize, 1) else 0);
-                        try builder.addRegArg(roc_ops_reg);
-
-                        try self.callBuiltin(&builder, fn_addr, .list_sort_with);
-                    }
-
-                    return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
                 },
                 .box_box => {
                     // Box.box(value) -> Box(value): heap-allocate and copy value
@@ -4388,13 +4297,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const spare_off = try self.ensureOnStack(spare_loc, 8);
             const result_offset = self.codegen.allocStackSlot(roc_str_size);
             const alignment_bytes = elem_size_align.alignment.toByteUnits();
-            const elements_refcounted: bool = blk: {
-                const ret_layout = ls.getLayout(ll.ret_layout);
-                if (ret_layout.tag == .list) {
-                    break :blk ls.layoutContainsRefcounted(ls.getLayout(ret_layout.data.list));
-                }
-                break :blk false;
-            };
             const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_reserve);
 
             {
@@ -4437,13 +4339,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const list_off = try self.ensureOnStack(list_loc, roc_list_size);
             const result_offset = self.codegen.allocStackSlot(roc_str_size);
             const alignment_bytes = elem_size_align.alignment.toByteUnits();
-            const elements_refcounted: bool = blk: {
-                const ret_layout = ls.getLayout(ll.ret_layout);
-                if (ret_layout.tag == .list) {
-                    break :blk ls.layoutContainsRefcounted(ls.getLayout(ret_layout.data.list));
-                }
-                break :blk false;
-            };
             const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_release_excess_capacity);
 
             {
@@ -4617,12 +4512,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const after_align = self.codegen.currentOffset();
             self.codegen.patchJump(ptr_aligned_patch, after_align);
 
+            // Seamless slices store a pointer in capacity_or_alloc_ptr; skip len<=cap check.
+            try self.codegen.emitLoadImm(tmp_reg, std.math.minInt(i64));
+            try self.emitAndRegs(.w64, tmp_reg, len_reg, tmp_reg);
+            try self.emitCmpImm(tmp_reg, 0);
+            const seamless_patch = try self.emitJumpIfNotEqual();
+
             // Non-small RocStrs must satisfy len <= capacity.
             try self.emitCmpReg(len_reg, cap_reg);
             const len_ok_patch = try self.codegen.emitCondJump(condBelowOrEqual());
             try self.emitDebugCrashInvalidStrLocal(local, "length exceeds capacity");
             const done = self.codegen.currentOffset();
             self.codegen.patchJump(len_ok_patch, done);
+            self.codegen.patchJump(seamless_patch, done);
             self.codegen.patchJump(small_patch, done);
         }
 
@@ -10200,6 +10102,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 else => loc,
             };
+        }
+
+        fn unwrapSingleFieldPayloadLayout(self: *Self, layout_idx: layout.Idx) ?layout.Idx {
+            const layout_val = self.layout_store.getLayout(layout_idx);
+            if (layout_val.tag != .struct_) return null;
+
+            const struct_data = self.layout_store.getStructData(layout_val.data.struct_.idx);
+            const fields = self.layout_store.struct_fields.sliceRange(struct_data.getFields());
+            if (fields.len != 1) return null;
+
+            const field = fields.get(0);
+            if (field.index != 0) return null;
+            return field.layout;
         }
 
         fn coerceImmediateForStackCopy(self: *Self, loc: ValueLocation) Allocator.Error!ValueLocation {
