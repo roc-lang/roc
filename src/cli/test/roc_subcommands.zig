@@ -1544,3 +1544,17 @@ test "echo platform: roc test all_syntax_test.roc passes" {
     const has_passed = std.mem.indexOf(u8, result.stdout, "passed") != null;
     try std.testing.expect(has_passed);
 }
+
+test "roc docs Builtin.roc succeeds" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "docs", "--no-cache" }, "src/build/roc/Builtin.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try util.checkSuccess(result);
+
+    const has_generated = std.mem.indexOf(u8, result.stdout, "Generated docs for") != null;
+    try testing.expect(has_generated);
+}
