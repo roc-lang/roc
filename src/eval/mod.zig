@@ -26,6 +26,8 @@ pub fn backendAvailable(backend_kind: EvalBackend) bool {
 
 /// Compile-time value representation for the dev backend
 pub const comptime_value = @import("comptime_value.zig");
+/// Compile-time evaluator for top-level declarations
+pub const ComptimeEvaluator = @import("comptime_evaluator.zig").ComptimeEvaluator;
 /// Executable memory for running generated code (re-exported from backend module)
 const backend = @import("backend");
 pub const ExecutableMemory = backend.ExecutableMemory;
@@ -45,6 +47,8 @@ pub const CrashState = crash_context.CrashState;
 /// Concrete runtime value for the interpreter
 pub const value = @import("value.zig");
 pub const Value = value.Value;
+/// Stack value representation used by the interpreter
+pub const StackValue = @import("StackValue.zig");
 /// LIR expression interpreter
 pub const interpreter = @import("interpreter.zig");
 pub const Interpreter = interpreter.Interpreter;
@@ -52,6 +56,8 @@ pub const Interpreter = interpreter.Interpreter;
 pub const RuntimeHostEnv = @import("test/RuntimeHostEnv.zig");
 /// Backward-compatible export for existing eval test helpers and tests.
 pub const TestEnv = RuntimeHostEnv;
+/// Snapshot/eval runner for expect statements.
+pub const TestRunner = @import("test_runner.zig").TestRunner;
 /// Shared cor-style eval test helpers.
 pub const test_helpers = @import("test/helpers.zig");
 /// Shared parsing/checking/lowering pipeline.
@@ -66,6 +72,7 @@ test "eval tests" {
     std.testing.refAllDecls(@import("value.zig"));
     std.testing.refAllDecls(@import("interpreter.zig"));
     std.testing.refAllDecls(@import("stack.zig"));
+    std.testing.refAllDecls(@import("comptime_evaluator.zig"));
     std.testing.refAllDecls(@import("test/RuntimeHostEnv.zig"));
     std.testing.refAllDecls(@import("test/helpers.zig"));
     std.testing.refAllDecls(@import("pipeline.zig"));

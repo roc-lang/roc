@@ -2296,6 +2296,7 @@ pub const Coordinator = struct {
             env,
             self.builtin_modules.builtin_module.env,
             task.imported_envs,
+            self.target,
             self.io,
         ) catch {
             return .{

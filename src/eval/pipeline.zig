@@ -351,6 +351,10 @@ pub fn parseCheckModule(
     };
 }
 
+pub fn exprSourcePrefixLen(inspect_wrap: bool) u32 {
+    return @intCast(if (inspect_wrap) "main = Str.inspect((".len else "main = ".len);
+}
+
 pub fn lowerParsedExprToLir(
     allocator: std.mem.Allocator,
     resources: *ParsedResources,

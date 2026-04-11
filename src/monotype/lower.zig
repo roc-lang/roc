@@ -5091,6 +5091,9 @@ pub const Lowerer = struct {
                     .body = try self.lowerExpr(module_idx, type_scope, body_env, while_stmt.body),
                 } }));
             },
+            .s_type_var_alias => |_| {
+                // Type var aliases are compile-time only; no runtime statement.
+            },
             else => debugTodoStmt(stmt),
         }
     }
@@ -5567,16 +5570,39 @@ pub const Lowerer = struct {
         method_name: base.Ident.Idx,
     ) std.mem.Allocator.Error!LoweredCall {
         const args = self.getRecordedMethodArgs(module_idx, expr_idx, method_name);
-        const receiver_expr_idx = args.implicit_receiver orelse blk: {
-            if (args.explicit_args.len == 0) {
-                return debugPanic(
-                    "monotype static dispatch invariant violated: method call missing receiver in module {d}",
-                    .{module_idx},
-                );
-            }
-            break :blk args.explicit_args[0];
+        const typed_cir_module = self.ctx.typedCirModule(module_idx);
+        const alias_stmt = switch (typed_cir_module.expr(expr_idx).data) {
+            .e_type_var_dispatch => |dispatch| dispatch.type_var_alias_stmt,
+            .e_call => |call| switch (typed_cir_module.expr(call.func).data) {
+                .e_type_var_dispatch => |dispatch| dispatch.type_var_alias_stmt,
+                else => null,
+            },
+            else => null,
         };
-        const receiver_var = self.requireExprResultVar(module_idx, type_scope, receiver_expr_idx);
+
+        const receiver_var = if (alias_stmt) |stmt_idx| blk: {
+            const stmt = typed_cir_module.getStatement(stmt_idx);
+            const type_var_anno = switch (stmt) {
+                .s_type_var_alias => |alias| alias.type_var_anno,
+                else => return debugPanic(
+                    "monotype static dispatch invariant violated: type-var dispatch missing alias statement in module {d}",
+                    .{module_idx},
+                ),
+            };
+            const source_var = typed_cir_module.typeAnnoType(type_var_anno);
+            break :blk try self.scopeVar(type_scope, module_idx, source_var);
+        } else blk: {
+            const receiver_expr_idx = args.implicit_receiver orelse blk_inner: {
+                if (args.explicit_args.len == 0) {
+                    return debugPanic(
+                        "monotype static dispatch invariant violated: method call missing receiver in module {d}",
+                        .{module_idx},
+                    );
+                }
+                break :blk_inner args.explicit_args[0];
+            };
+            break :blk self.requireExprResultVar(module_idx, type_scope, receiver_expr_idx);
+        };
         const target = try self.resolveAttachedMethodTargetFromWorkspaceVar(
             module_idx,
             type_scope,

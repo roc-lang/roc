@@ -12081,8 +12081,6 @@ pub fn canonicalizeBlockDecl(self: *Self, d: AST.Statement.Decl, mb_last_anno: ?
     const saved_pattern_reused_existing_var = self.pattern_reused_existing_var;
     self.allow_pattern_var_reuse = true;
     self.pattern_reused_existing_var = false;
-    defer self.allow_pattern_var_reuse = saved_allow_pattern_var_reuse;
-    defer self.pattern_reused_existing_var = saved_pattern_reused_existing_var;
 
     // Regular declaration - canonicalize as usual
     const pattern_idx = try self.canonicalizePattern(d.pattern) orelse inner_blk: {
@@ -12092,6 +12090,9 @@ pub fn canonicalizeBlockDecl(self: *Self, d: AST.Statement.Decl, mb_last_anno: ?
         } });
     };
     const pattern_reused_existing_var = self.pattern_reused_existing_var;
+
+    self.allow_pattern_var_reuse = saved_allow_pattern_var_reuse;
+    self.pattern_reused_existing_var = saved_pattern_reused_existing_var;
 
     // Check if the RHS is a lambda - if so, self-references are valid (for recursion).
     // Otherwise, set defining_patterns_start and defining_pattern for self-reference detection.

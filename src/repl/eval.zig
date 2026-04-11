@@ -77,8 +77,10 @@ const ParseOutcome = union(enum) {
 /// REPL state that tracks past definitions and evaluates expressions
 pub const Repl = struct {
     allocator: Allocator,
-    /// Map from variable name to source string for definitions
-    definitions: std.StringHashMap([]const u8),
+    /// Map from variable name to index in definitions_order
+    definitions: std.StringHashMap(usize),
+    /// Definitions in stable insertion order
+    definitions_order: std.array_list.Managed(Definition),
     /// Operations for the Roc runtime
     roc_ops: *RocOps,
     /// Shared crash context managed by the host (optional)
@@ -99,6 +101,11 @@ pub const Repl = struct {
     builtin_module: builtin_loading.LoadedModule,
     /// Resources from the last successful parse/check (owned for debug use)
     last_resources: ?ParsedResources,
+
+    const Definition = struct {
+        name: []const u8,
+        source: []const u8,
+    };
 
     pub fn init(allocator: Allocator, roc_ops: *RocOps, crash_ctx: ?*CrashContext) !Repl {
         return initInternal(allocator, roc_ops, crash_ctx, .interpreter);
@@ -133,7 +140,8 @@ pub const Repl = struct {
 
         return Repl{
             .allocator = allocator,
-            .definitions = std.StringHashMap([]const u8).init(allocator),
+            .definitions = std.StringHashMap(usize).init(allocator),
+            .definitions_order = std.array_list.Managed(Definition).init(allocator),
             .roc_ops = roc_ops,
             .crash_ctx = crash_ctx,
             .backend = backend_kind,
@@ -169,25 +177,32 @@ pub const Repl = struct {
 
     /// Add or replace a definition in the REPL context
     pub fn addOrReplaceDefinition(self: *Repl, source: []const u8, var_name: []const u8) !void {
-        if (self.definitions.fetchRemove(var_name)) |kv| {
-            self.allocator.free(kv.key);
-            self.allocator.free(kv.value);
+        if (self.definitions.getEntry(var_name)) |entry| {
+            const index = entry.value_ptr.*;
+            var definition = &self.definitions_order.items[index];
+            self.allocator.free(definition.source);
+            definition.source = try self.allocator.dupe(u8, source);
+            return;
         }
 
-        const owned_key = try self.allocator.dupe(u8, var_name);
+        const owned_name = try self.allocator.dupe(u8, var_name);
         const owned_source = try self.allocator.dupe(u8, source);
-        try self.definitions.put(owned_key, owned_source);
+        try self.definitions_order.append(.{
+            .name = owned_name,
+            .source = owned_source,
+        });
+        try self.definitions.put(owned_name, self.definitions_order.items.len - 1);
     }
 
     pub fn deinit(self: *Repl) void {
         self.clearLastResources();
 
-        var iterator = self.definitions.iterator();
-        while (iterator.next()) |kv| {
-            self.allocator.free(kv.key_ptr.*);
-            self.allocator.free(kv.value_ptr.*);
-        }
         self.definitions.deinit();
+        for (self.definitions_order.items) |definition| {
+            self.allocator.free(definition.name);
+            self.allocator.free(definition.source);
+        }
+        self.definitions_order.deinit();
 
         for (self.debug_can_html.items) |html| {
             self.allocator.free(html);
@@ -256,7 +271,8 @@ pub const Repl = struct {
 
     /// Process regular input (not special commands) - returns structured result
     fn processInputStructured(self: *Repl, input: []const u8) !StepResult {
-        const parse_result = try self.tryParseStatement(input);
+        const cleaned_input = stripTrailingComment(input);
+        const parse_result = try self.tryParseStatement(cleaned_input);
 
         switch (parse_result) {
             .assignment => |info| {
@@ -267,7 +283,12 @@ pub const Repl = struct {
                 return .{ .parse_error = try self.allocator.dupe(u8, "Imports not yet supported") };
             },
             .expression => {
-                const full_source = try self.buildFullSource(input);
+                const full_source = try self.buildFullSource(cleaned_input);
+                defer self.allocator.free(full_source);
+                return try self.evaluateSourceStructured(full_source);
+            },
+            .statement => {
+                const full_source = try self.buildFullSourceStatement(cleaned_input);
                 defer self.allocator.free(full_source);
                 return try self.evaluateSourceStructured(full_source);
             },
@@ -279,6 +300,36 @@ pub const Repl = struct {
         }
     }
 
+    fn stripTrailingComment(input: []const u8) []const u8 {
+        var in_string = false;
+        var escape = false;
+        for (input, 0..) |c, i| {
+            if (in_string) {
+                if (escape) {
+                    escape = false;
+                    continue;
+                }
+                if (c == '\\') {
+                    escape = true;
+                    continue;
+                }
+                if (c == '"') {
+                    in_string = false;
+                }
+                continue;
+            }
+
+            if (c == '"') {
+                in_string = true;
+                continue;
+            }
+            if (c == '#') {
+                return std.mem.trimRight(u8, input[0..i], " \t");
+            }
+        }
+        return std.mem.trimRight(u8, input, " \t");
+    }
+
     const ParseResult = union(enum) {
         assignment: struct {
             source: []const u8,
@@ -286,6 +337,7 @@ pub const Repl = struct {
         },
         import,
         expression,
+        statement,
         type_decl,
         parse_error: []const u8,
     };
@@ -372,11 +424,15 @@ pub const Repl = struct {
                             .var_name = ident_name,
                         } };
                     }
-                    return ParseResult.expression;
+                    return ParseResult.statement;
                 },
+                .type_anno => {
+                    return ParseResult{ .parse_error = try self.allocator.dupe(u8, "Type annotations are not supported in the REPL yet") };
+                },
+                .expr => return ParseResult.expression,
                 .import => return ParseResult.import,
                 .type_decl => return ParseResult.type_decl,
-                else => return ParseResult.expression,
+                else => return ParseResult.statement,
             }
         }
 
@@ -410,7 +466,7 @@ pub const Repl = struct {
 
     /// Build full source including all definitions wrapped in block syntax
     pub fn buildFullSource(self: *Repl, current_expr: []const u8) ![]const u8 {
-        if (self.definitions.count() == 0) {
+        if (self.definitions_order.items.len == 0) {
             return try self.allocator.dupe(u8, current_expr);
         }
 
@@ -418,15 +474,33 @@ pub const Repl = struct {
         errdefer buffer.deinit(self.allocator);
 
         try buffer.appendSlice(self.allocator, "{\n");
-        var iterator = self.definitions.iterator();
-        while (iterator.next()) |kv| {
+        for (self.definitions_order.items) |definition| {
             try buffer.appendSlice(self.allocator, "    ");
-            try buffer.appendSlice(self.allocator, kv.value_ptr.*);
+            try buffer.appendSlice(self.allocator, definition.source);
             try buffer.append(self.allocator, '\n');
         }
 
         try buffer.appendSlice(self.allocator, "    ");
         try buffer.appendSlice(self.allocator, current_expr);
+        try buffer.append(self.allocator, '\n');
+        try buffer.append(self.allocator, '}');
+
+        return try buffer.toOwnedSlice(self.allocator);
+    }
+
+    pub fn buildFullSourceStatement(self: *Repl, current_stmt: []const u8) ![]const u8 {
+        var buffer = std.ArrayList(u8).empty;
+        errdefer buffer.deinit(self.allocator);
+
+        try buffer.appendSlice(self.allocator, "{\n");
+        for (self.definitions_order.items) |definition| {
+            try buffer.appendSlice(self.allocator, "    ");
+            try buffer.appendSlice(self.allocator, definition.source);
+            try buffer.append(self.allocator, '\n');
+        }
+
+        try buffer.appendSlice(self.allocator, "    ");
+        try buffer.appendSlice(self.allocator, current_stmt);
         try buffer.append(self.allocator, '\n');
         try buffer.append(self.allocator, '}');
 
@@ -599,29 +673,17 @@ pub const Repl = struct {
         };
         errdefer resources.deinit(self.allocator);
 
-        const diagnostics = try resources.module_env.getDiagnostics();
-        if (diagnostics.len > 0) {
-            const diagnostic = diagnostics[0];
-            var report = try resources.module_env.diagnosticToReport(diagnostic, self.allocator, "repl");
-            defer report.deinit();
-
-            var output = std.array_list.Managed(u8).init(self.allocator);
-            var unmanaged = output.moveToUnmanaged();
-            var writer_alloc = std.Io.Writer.Allocating.fromArrayList(self.allocator, &unmanaged);
-            report.render(&writer_alloc.writer, .markdown) catch |err| switch (err) {
-                error.WriteFailed => return error.OutOfMemory,
-                else => return err,
-            };
-            unmanaged = writer_alloc.toArrayList();
-            output = unmanaged.toManaged(self.allocator);
-            const msg = try output.toOwnedSlice();
-            resources.deinit(self.allocator);
-            return .{ .canonicalize_error = msg };
-        }
-
         if (resources.checker.problems.problems.items.len > 0) {
             const problem = resources.checker.problems.problems.items[0];
             const empty_modules: []const *const ModuleEnv = &.{};
+            const line_starts = resources.module_env.common.line_starts.items.items;
+            const saved_line_start0 = if (line_starts.len > 0) line_starts[0] else 0;
+            if (line_starts.len > 0) {
+                line_starts[0] = eval_pipeline.exprSourcePrefixLen(inspect_wrap);
+            }
+            defer if (line_starts.len > 0) {
+                line_starts[0] = saved_line_start0;
+            };
             var report_builder = check.ReportBuilder.init(
                 self.allocator,
                 resources.module_env,
@@ -655,11 +717,56 @@ pub const Repl = struct {
             output = unmanaged.toManaged(self.allocator);
             const rendered = output.items;
             const trimmed = std.mem.trimRight(u8, rendered, " \t\r\n");
-            const msg = try self.allocator.dupe(u8, trimmed);
+            var msg: []const u8 = try self.allocator.dupe(u8, trimmed);
             output.deinit();
 
             resources.deinit(self.allocator);
+            msg = try stripReplWrapperFromReport(self.allocator, msg, inspect_wrap);
             return .{ .type_error = msg };
+        }
+
+        const diagnostics = try resources.module_env.getDiagnostics();
+        if (diagnostics.len > 0) {
+            const line_starts = resources.module_env.common.line_starts.items.items;
+            const saved_line_start0 = if (line_starts.len > 0) line_starts[0] else 0;
+            if (line_starts.len > 0) {
+                line_starts[0] = eval_pipeline.exprSourcePrefixLen(inspect_wrap);
+            }
+            defer if (line_starts.len > 0) {
+                line_starts[0] = saved_line_start0;
+            };
+            var error_diag_index: ?usize = null;
+            for (diagnostics, 0..) |diagnostic, i| {
+                var report = try resources.module_env.diagnosticToReport(diagnostic, self.allocator, "repl");
+                if (report.severity != .warning) {
+                    report.deinit();
+                    error_diag_index = i;
+                    break;
+                }
+                report.deinit();
+            }
+            if (error_diag_index == null) {
+                return .{ .ok = resources };
+            }
+            var report = try resources.module_env.diagnosticToReport(diagnostics[error_diag_index.?], self.allocator, "repl");
+            defer report.deinit();
+
+            var output = std.array_list.Managed(u8).init(self.allocator);
+            var unmanaged = output.moveToUnmanaged();
+            var writer_alloc = std.Io.Writer.Allocating.fromArrayList(self.allocator, &unmanaged);
+            report.render(&writer_alloc.writer, .markdown) catch |err| switch (err) {
+                error.WriteFailed => return error.OutOfMemory,
+                else => return err,
+            };
+            unmanaged = writer_alloc.toArrayList();
+            output = unmanaged.toManaged(self.allocator);
+            const rendered = output.items;
+            const trimmed = std.mem.trimRight(u8, rendered, " \t\r\n");
+            var msg: []const u8 = try self.allocator.dupe(u8, trimmed);
+            output.deinit();
+            resources.deinit(self.allocator);
+            msg = try stripReplWrapperFromReport(self.allocator, msg, inspect_wrap);
+            return .{ .canonicalize_error = msg };
         }
 
         return .{ .ok = resources };
@@ -693,6 +800,45 @@ pub const Repl = struct {
             const types_html = try self.allocator.dupe(u8, types_buffer.items);
             try self.debug_types_html.append(types_html);
         }
+    }
+
+    fn stripReplWrapperFromReport(allocator: Allocator, msg: []const u8, inspect_wrap: bool) ![]const u8 {
+        const prefix = if (inspect_wrap) "main = Str.inspect((" else "main = ";
+        const suffix = if (inspect_wrap) "))" else "";
+        const needle = if (inspect_wrap) "```roc\nmain = Str.inspect((" else "```roc\nmain = ";
+
+        if (std.mem.indexOf(u8, msg, needle) == null) {
+            return msg;
+        }
+
+        var output = std.ArrayList(u8).empty;
+        errdefer output.deinit(allocator);
+
+        var cursor: usize = 0;
+        while (true) {
+            const fence_start = std.mem.indexOfPos(u8, msg, cursor, "```roc\n") orelse break;
+            try output.appendSlice(allocator, msg[cursor..fence_start]);
+            try output.appendSlice(allocator, "```roc\n");
+
+            const line_start = fence_start + "```roc\n".len;
+            const line_end = std.mem.indexOfPos(u8, msg, line_start, "\n") orelse msg.len;
+            const line = msg[line_start..line_end];
+            if (std.mem.startsWith(u8, line, prefix)) {
+                var trimmed_line = line[prefix.len..];
+                if (inspect_wrap and std.mem.endsWith(u8, trimmed_line, suffix)) {
+                    trimmed_line = trimmed_line[0 .. trimmed_line.len - suffix.len];
+                }
+                try output.appendSlice(allocator, trimmed_line);
+            } else {
+                try output.appendSlice(allocator, line);
+            }
+
+            cursor = line_end;
+        }
+
+        try output.appendSlice(allocator, msg[cursor..]);
+        allocator.free(msg);
+        return try output.toOwnedSlice(allocator);
     }
 };
 

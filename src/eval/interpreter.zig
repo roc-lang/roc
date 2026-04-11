@@ -2066,11 +2066,31 @@ pub const Interpreter = struct {
             .box_decref => |box_plan| {
                 const alloc_ptr = val.read(?[*]u8);
                 const has_child = box_plan.child != null;
+                if (box_plan.child) |child_key| {
+                    if (alloc_ptr != null and builtins.utils.isUnique(alloc_ptr, &self.roc_ops)) {
+                        const data_ptr = self.readBoxedDataPointer(val) orelse {
+                            utils.decrefDataPtrC(alloc_ptr, @intCast(box_plan.elem_alignment), has_child, &self.roc_ops);
+                            return;
+                        };
+                        const child_val = Value{ .ptr = data_ptr };
+                        self.performRcPlan(resolver.plan(child_key), resolver, child_val, count);
+                    }
+                }
                 utils.decrefDataPtrC(alloc_ptr, @intCast(box_plan.elem_alignment), has_child, &self.roc_ops);
             },
             .box_free => |box_plan| {
                 const alloc_ptr = val.read(?[*]u8);
                 const has_child = box_plan.child != null;
+                if (box_plan.child) |child_key| {
+                    if (alloc_ptr != null and builtins.utils.isUnique(alloc_ptr, &self.roc_ops)) {
+                        const data_ptr = self.readBoxedDataPointer(val) orelse {
+                            utils.freeDataPtrC(alloc_ptr, @intCast(box_plan.elem_alignment), has_child, &self.roc_ops);
+                            return;
+                        };
+                        const child_val = Value{ .ptr = data_ptr };
+                        self.performRcPlan(resolver.plan(child_key), resolver, child_val, count);
+                    }
+                }
                 utils.freeDataPtrC(alloc_ptr, @intCast(box_plan.elem_alignment), has_child, &self.roc_ops);
             },
             .struct_ => |struct_plan| {
@@ -4511,27 +4531,6 @@ pub const Interpreter = struct {
         if (size > 0) {
             result.copyFrom(.{ .ptr = data_ptr }, size);
         }
-
-        // box_unbox consumes the box (OWNERSHIP.md:233-236):
-        //   1. Incref inner element's refcounted parts (new reference created)
-        //   2. If box is unique: decref inner element (about to be freed)
-        //   3. Decref box wrapper
-        // For unique boxes: incref(+1) + child_decref(-1) = net 0. Box freed.
-        // For shared boxes: incref(+1), no child_decref. Box refcount -1.
-        const elem_layout = self.layout_store.getLayout(ret_layout);
-        const contains_refcounted = self.layout_store.layoutContainsRefcounted(elem_layout);
-        const alloc_ptr = boxed.read(?[*]u8);
-
-        if (contains_refcounted) {
-            self.performRc(.incref, result, ret_layout, 1);
-            if (builtins.utils.isUnique(alloc_ptr, &self.roc_ops)) {
-                const inner_val = Value{ .ptr = data_ptr };
-                self.performRc(.decref, inner_val, ret_layout, 1);
-            }
-        }
-
-        const elem_align = elem_layout.alignment(self.layout_store.targetUsize()).toByteUnits();
-        builtins.utils.decrefDataPtrC(alloc_ptr, @intCast(elem_align), contains_refcounted, &self.roc_ops);
 
         return result;
     }

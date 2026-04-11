@@ -270,7 +270,7 @@ pub const ModuleTest = struct {
 /// unnamed wrappers) so callers can correct the reported totals.
 pub const ModuleTestsResult = struct {
     /// Compile/run steps for each module's tests, in creation order.
-    tests: [31]ModuleTest,
+    tests: [32]ModuleTest,
     /// Number of synthetic passes the summary must subtract when filters were injected.
     /// Includes aggregator ensures and unconditional wrapper tests.
     forced_passes: usize,
@@ -292,6 +292,7 @@ pub const ModuleType = enum {
     io,
     build_options,
     layout,
+    interpreter_layout,
     values,
     eval,
     ipc,
@@ -332,8 +333,9 @@ pub const ModuleType = enum {
             .can => &.{ .tracy, .builtins, .collections, .types, .base, .parse, .reporting, .build_options },
             .check => &.{ .tracy, .builtins, .collections, .base, .parse, .types, .can, .reporting },
             .layout => &.{ .tracy, .collections, .base, .types, .builtins, .can },
+            .interpreter_layout => &.{ .tracy, .collections, .base, .types, .builtins, .can },
             .values => &.{ .collections, .base, .builtins, .layout },
-            .eval => &.{ .tracy, .io, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .values, .build_options, .reporting, .backend, .lir, .symbol, .monotype, .monotype_lifted, .lambdasolved, .lambdamono, .ir, .roc_target, .sljmp },
+            .eval => &.{ .tracy, .io, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .interpreter_layout, .values, .build_options, .reporting, .backend, .lir, .symbol, .monotype, .monotype_lifted, .lambdasolved, .lambdamono, .ir, .roc_target, .sljmp },
             .compile => &.{ .tracy, .build_options, .io, .builtins, .collections, .base, .types, .parse, .can, .check, .reporting, .layout, .eval, .unbundle, .roc_target },
             .ipc => &.{},
             .repl => &.{ .base, .collections, .compile, .parse, .types, .can, .check, .builtins, .layout, .values, .eval, .backend, .roc_target, .lir, .monotype, .monotype_lifted, .lambdasolved, .lambdamono, .ir },
@@ -376,6 +378,7 @@ pub const RocModules = struct {
     io: *Module,
     build_options: *Module,
     layout: *Module,
+    interpreter_layout: *Module,
     values: *Module,
     eval: *Module,
     ipc: *Module,
@@ -422,6 +425,7 @@ pub const RocModules = struct {
                 .{ .root_source_file = build_options_step.getOutput() },
             ),
             .layout = b.addModule("layout", .{ .root_source_file = b.path("src/layout/mod.zig") }),
+            .interpreter_layout = b.addModule("interpreter_layout", .{ .root_source_file = b.path("src/interpreter_layout/mod.zig") }),
             .values = b.addModule("values", .{ .root_source_file = b.path("src/values/mod.zig") }),
             .eval = b.addModule("eval", .{ .root_source_file = b.path("src/eval/mod.zig") }),
             .ipc = b.addModule("ipc", .{ .root_source_file = b.path("src/ipc/mod.zig") }),
@@ -474,6 +478,7 @@ pub const RocModules = struct {
             .io,
             .build_options,
             .layout,
+            .interpreter_layout,
             .values,
             .eval,
             .ipc,
@@ -526,6 +531,7 @@ pub const RocModules = struct {
         step.root_module.addImport("io", self.io);
         step.root_module.addImport("build_options", self.build_options);
         step.root_module.addImport("layout", self.layout);
+        step.root_module.addImport("interpreter_layout", self.interpreter_layout);
         step.root_module.addImport("eval", self.eval);
         step.root_module.addImport("repl", self.repl);
         step.root_module.addImport("fmt", self.fmt);
@@ -577,6 +583,7 @@ pub const RocModules = struct {
             .io => self.io,
             .build_options => self.build_options,
             .layout => self.layout,
+            .interpreter_layout => self.interpreter_layout,
             .values => self.values,
             .eval => self.eval,
             .ipc => self.ipc,
@@ -632,6 +639,7 @@ pub const RocModules = struct {
             .check,
             .io,
             .layout,
+            .interpreter_layout,
             .values,
             .ipc,
             .repl,

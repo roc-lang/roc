@@ -1268,6 +1268,7 @@ pub const PackageEnv = struct {
         env: *ModuleEnv,
         builtin_module_env: *const ModuleEnv,
         imported_envs: []const *ModuleEnv,
+        target: roc_target.RocTarget,
         io: ?Io,
     ) !Check {
         // Load builtin indices from the binary data generated at build time
@@ -1308,7 +1309,17 @@ pub const PackageEnv = struct {
 
         // After type checking, evaluate top-level declarations at compile time
         const builtin_types_for_eval = BuiltinTypes.init(builtin_indices, builtin_module_env, builtin_module_env, builtin_module_env);
-        var comptime_evaluator = try eval.ComptimeEvaluator.init(gpa, env, imported_envs, &checker.problems, builtin_types_for_eval, builtin_module_env, &checker.import_mapping, io);
+        var comptime_evaluator = try eval.ComptimeEvaluator.init(
+            gpa,
+            env,
+            imported_envs,
+            &checker.problems,
+            builtin_types_for_eval,
+            builtin_module_env,
+            &checker.import_mapping,
+            target,
+            io,
+        );
         defer comptime_evaluator.deinit();
         _ = try comptime_evaluator.evalAll();
 
@@ -1367,7 +1378,7 @@ pub const PackageEnv = struct {
         env.store.resolvePendingLookups(env, imported_envs.items);
 
         const check_start = if (!threading.is_freestanding) std.time.nanoTimestamp() else 0;
-        var checker = try typeCheckModule(self.gpa, env, self.builtin_modules.builtin_module.env, imported_envs.items, self.io);
+        var checker = try typeCheckModule(self.gpa, env, self.builtin_modules.builtin_module.env, imported_envs.items, self.target, self.io);
         defer checker.deinit();
         const check_end = if (!threading.is_freestanding) std.time.nanoTimestamp() else 0;
         if (!threading.is_freestanding) {
