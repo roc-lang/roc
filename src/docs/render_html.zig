@@ -883,7 +883,7 @@ fn renderParagraphs(w: Writer, text: []const u8) !void {
             const para = std.mem.trim(u8, text[start..i], " \t\n\r");
             if (para.len > 0) {
                 try w.writeAll("                <p>");
-                try writeHtmlEscaped(w, para);
+                try writeDocText(w, para);
                 try w.writeAll("</p>\n");
             }
             // Skip past all consecutive blank lines
@@ -899,9 +899,40 @@ fn renderParagraphs(w: Writer, text: []const u8) !void {
     const para = std.mem.trim(u8, text[start..], " \t\n\r");
     if (para.len > 0) {
         try w.writeAll("                <p>");
-        try writeHtmlEscaped(w, para);
+        try writeDocText(w, para);
         try w.writeAll("</p>\n");
     }
+}
+
+/// Writes HTML-escaped text, rendering `inline code` spans as <code> elements.
+fn writeDocText(w: Writer, text: []const u8) !void {
+    var i: usize = 0;
+    var plain_start: usize = 0;
+    while (i < text.len) {
+        if (text[i] == '`') {
+            // Flush any plain text accumulated before this backtick
+            try writeHtmlEscaped(w, text[plain_start..i]);
+            i += 1;
+            // Find the closing backtick
+            const code_start = i;
+            while (i < text.len and text[i] != '`') i += 1;
+            if (i < text.len) {
+                // Found closing backtick — render as <code>
+                try w.writeAll("<code>");
+                try writeHtmlEscaped(w, text[code_start..i]);
+                try w.writeAll("</code>");
+                i += 1; // skip closing backtick
+            } else {
+                // No closing backtick — treat the opening backtick as literal text
+                try writeHtmlEscaped(w, text[code_start - 1 .. i]);
+            }
+            plain_start = i;
+        } else {
+            i += 1;
+        }
+    }
+    // Flush any remaining plain text
+    try writeHtmlEscaped(w, text[plain_start..]);
 }
 
 fn renderDocTypeHtml(w: Writer, ctx: *const RenderContext, doc_type: *const DocType, needs_parens: bool) !void {
