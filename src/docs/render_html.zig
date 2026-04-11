@@ -58,6 +58,9 @@ const RenderContext = struct {
     known_modules: std.StringHashMapUnmanaged(void),
     current_module: ?[]const u8,
     current_module_entries: ?[]const DocModel.DocEntry = null,
+    /// When true, the single module's page is rendered at the root (index.html),
+    /// so links to the module should point to the root instead of a subdirectory.
+    single_module_at_root: bool = false,
 
     fn init(package_docs: *const DocModel.PackageDocs, gpa: Allocator) RenderContext {
         var known = std.StringHashMapUnmanaged(void){};
@@ -99,17 +102,27 @@ pub fn renderPackageDocs(
     // Write static assets
     try writeStaticAssets(output_dir);
 
-    // Write package index page
-    try writePackageIndex(&ctx, gpa, output_dir);
-
-    // Write per-module pages
-    for (package_docs.modules) |*mod| {
+    if (package_docs.modules.len == 1) {
+        // Single module: write module content directly to root index.html
+        ctx.single_module_at_root = true;
+        const mod = &package_docs.modules[0];
         ctx.current_module = mod.name;
         ctx.current_module_entries = mod.entries;
-        try writeModulePage(&ctx, gpa, output_dir, mod);
+        try writeModulePageToDir(&ctx, gpa, output_dir, mod, "");
+        ctx.current_module = null;
+        ctx.current_module_entries = null;
+    } else {
+        // Multiple modules: write package index and per-module pages
+        try writePackageIndex(&ctx, gpa, output_dir);
+
+        for (package_docs.modules) |*mod| {
+            ctx.current_module = mod.name;
+            ctx.current_module_entries = mod.entries;
+            try writeModulePage(&ctx, gpa, output_dir, mod);
+        }
+        ctx.current_module = null;
+        ctx.current_module_entries = null;
     }
-    ctx.current_module = null;
-    ctx.current_module_entries = null;
 }
 
 fn writeStaticAssets(dir: std.fs.Dir) !void {
@@ -164,18 +177,24 @@ fn writeModulePage(ctx: *const RenderContext, gpa: Allocator, dir: std.fs.Dir, m
     var sub_dir = try dir.openDir(mod.name, .{});
     defer sub_dir.close();
 
-    const file = try sub_dir.createFile("index.html", .{});
+    try writeModulePageToDir(ctx, gpa, sub_dir, mod, "../");
+}
+
+/// Write a module's documentation page as index.html in the given directory.
+/// `base` is the relative path prefix for static assets (e.g. "" for root, "../" for subdirs).
+fn writeModulePageToDir(ctx: *const RenderContext, gpa: Allocator, dir: std.fs.Dir, mod: *const DocModel.ModuleDocs, base: []const u8) !void {
+    const file = try dir.createFile("index.html", .{});
     defer file.close();
     var buf: [4096]u8 = undefined;
     var bw = file.writer(&buf);
     const w = &bw.interface;
 
-    try writeHtmlHead(w, mod.name, "../");
+    try writeHtmlHead(w, mod.name, base);
     try writeBodyOpen(w);
-    try renderSidebar(w, ctx, gpa, "../");
+    try renderSidebar(w, ctx, gpa, base);
 
     // Main content
-    try writeMainOpen(w, ctx, "../");
+    try writeMainOpen(w, ctx, base);
     try w.writeAll("        <h1 class=\"module-name\">");
     try writeHtmlEscaped(w, mod.name);
     if (mod.kind == .type_module) {
@@ -657,9 +676,19 @@ fn renderSidebar(w: Writer, ctx: *const RenderContext, gpa: Allocator, base: []c
         try w.writeAll("\" data-module-name=\"");
         try writeHtmlEscaped(w, mod.name);
         try w.writeAll("\" href=\"");
-        try w.writeAll(base);
-        try writeHtmlEscaped(w, mod.name);
-        try w.writeAll("/\">");
+        if (ctx.single_module_at_root) {
+            // Single module rendered at root; link to root
+            if (base.len == 0) {
+                try w.writeAll(".");
+            } else {
+                try w.writeAll(base);
+            }
+        } else {
+            try w.writeAll(base);
+            try writeHtmlEscaped(w, mod.name);
+            try w.writeAll("/");
+        }
+        try w.writeAll("\">");
         try w.writeAll("<button class=\"entry-toggle\">&#9654;</button>");
         try w.writeAll("<span>");
         try writeHtmlEscaped(w, mod.name);
@@ -694,9 +723,14 @@ fn renderSearchEntry(
 ) !void {
     // Render this entry as a type-ahead list item
     try w.writeAll("            <li class=\"hidden\"><a class=\"type-ahead-link\" href=\"");
-    try w.writeAll(base);
-    try writeHtmlEscaped(w, module_name);
-    try w.writeAll("/#");
+    if (ctx.single_module_at_root) {
+        // Single module rendered at root; link to anchor on current page
+        try w.writeAll("#");
+    } else {
+        try w.writeAll(base);
+        try writeHtmlEscaped(w, module_name);
+        try w.writeAll("/#");
+    }
     try writeHtmlEscaped(w, entry.name);
     try w.writeAll("\">");
     try w.writeAll("<span class=\"type-ahead-module-name\">");
