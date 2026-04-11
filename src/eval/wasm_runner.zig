@@ -118,6 +118,7 @@ pub fn runWasmStr(
         env_imports.addHostFunction("roc_dec_from_str", &[_]bytebox.ValType{ .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostDecFromStr, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_float_from_str", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostFloatFromStr, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_list_append_unsafe", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostListAppendUnsafe, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_list_concat", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostListConcat, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_list_reverse", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostListReverse, null) catch return error.WasmExecFailed;
 
         const imports = [_]bytebox.ModuleImportPackage{env_imports};
@@ -1043,6 +1044,45 @@ fn hostListAppendUnsafe(_: ?*anyopaque, module: *bytebox.ModuleInstance, params:
     std.mem.writeInt(u32, buffer[result_ptr..][0..4], @intCast(data_ptr), .little);
     std.mem.writeInt(u32, buffer[result_ptr + 4 ..][0..4], @intCast(new_len), .little);
     std.mem.writeInt(u32, buffer[result_ptr + 8 ..][0..4], @intCast(cap), .little);
+}
+
+fn hostListConcat(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    const buffer = module.store.getMemory(0).buffer();
+    const list_a_ptr: usize = @intCast(params[0].I32);
+    const list_b_ptr: usize = @intCast(params[1].I32);
+    const elem_width: usize = @intCast(params[2].I32);
+    const alignment: u32 = @bitCast(params[3].I32);
+    const result_ptr: usize = @intCast(params[4].I32);
+
+    const a_data: usize = @intCast(std.mem.readInt(u32, buffer[list_a_ptr..][0..4], .little));
+    const a_len: usize = @intCast(std.mem.readInt(u32, buffer[list_a_ptr + 4 ..][0..4], .little));
+    const a_cap: usize = @intCast(std.mem.readInt(u32, buffer[list_a_ptr + 8 ..][0..4], .little));
+    const b_data: usize = @intCast(std.mem.readInt(u32, buffer[list_b_ptr..][0..4], .little));
+    const b_len: usize = @intCast(std.mem.readInt(u32, buffer[list_b_ptr + 4 ..][0..4], .little));
+    const b_cap: usize = @intCast(std.mem.readInt(u32, buffer[list_b_ptr + 8 ..][0..4], .little));
+    const new_len = a_len + b_len;
+
+    if (elem_width == 0) {
+        const data_ptr = if (a_len != 0) a_data else b_data;
+        std.mem.writeInt(u32, buffer[result_ptr..][0..4], @intCast(data_ptr), .little);
+        std.mem.writeInt(u32, buffer[result_ptr + 4 ..][0..4], @intCast(new_len), .little);
+        std.mem.writeInt(u32, buffer[result_ptr + 8 ..][0..4], @intCast(new_len), .little);
+        return;
+    }
+
+    const total_bytes: usize = new_len * elem_width;
+    const new_data = if (total_bytes == 0) 0 else allocWasmData(buffer, alignment, total_bytes);
+    if (a_len > 0 and a_data != 0) {
+        @memcpy(buffer[new_data..][0..a_len * elem_width], buffer[a_data..][0..a_len * elem_width]);
+    }
+    if (b_len > 0 and b_data != 0) {
+        const offset = a_len * elem_width;
+        @memcpy(buffer[new_data + offset ..][0..b_len * elem_width], buffer[b_data..][0..b_len * elem_width]);
+    }
+
+    std.mem.writeInt(u32, buffer[result_ptr..][0..4], @intCast(new_data), .little);
+    std.mem.writeInt(u32, buffer[result_ptr + 4 ..][0..4], @intCast(new_len), .little);
+    std.mem.writeInt(u32, buffer[result_ptr + 8 ..][0..4], @intCast(new_len), .little);
 }
 
 fn hostListReverse(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {

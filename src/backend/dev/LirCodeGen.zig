@@ -2778,28 +2778,79 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             "LIR/codegen invariant violated: str_from_utf8 could not resolve error record layout",
                             .{},
                         );
-                        const index_off = ls.getStructFieldOffsetByOriginalIndex(rec_idx, 0);
-                        const index_size = ls.getStructFieldSizeByOriginalIndex(rec_idx, 0);
-                        const problem_off = ls.getStructFieldOffsetByOriginalIndex(rec_idx, 1);
-                        const problem_size = ls.getStructFieldSizeByOriginalIndex(rec_idx, 1);
+                        const struct_data = ls.getStructData(rec_idx);
+                        const fields = ls.struct_fields.sliceRange(struct_data.getFields());
+                        var index_off: ?u32 = null;
+                        var index_size: ?u32 = null;
+                        var problem_off: ?u32 = null;
+                        var problem_size: ?u32 = null;
+                        for (0..fields.len) |i| {
+                            const field = fields.get(i);
+                            const field_layout = ls.getLayout(field.layout);
+                            const field_size = ls.layoutSizeAlign(field_layout).size;
+                            const field_off = ls.getStructFieldOffsetByOriginalIndex(rec_idx, field.index);
+                            switch (field_size) {
+                                8 => {
+                                    index_off = field_off;
+                                    index_size = field_size;
+                                },
+                                1 => {
+                                    problem_off = field_off;
+                                    problem_size = field_size;
+                                },
+                                else => {},
+                            }
+                        }
+                        const resolved_index_off = index_off orelse std.debug.panic(
+                            "LIR/codegen invariant violated: str_from_utf8 could not resolve index offset",
+                            .{},
+                        );
+                        const resolved_index_size = index_size orelse std.debug.panic(
+                            "LIR/codegen invariant violated: str_from_utf8 could not resolve index size",
+                            .{},
+                        );
+                        const resolved_problem_off = problem_off orelse std.debug.panic(
+                            "LIR/codegen invariant violated: str_from_utf8 could not resolve problem offset",
+                            .{},
+                        );
+                        const resolved_problem_size = problem_size orelse std.debug.panic(
+                            "LIR/codegen invariant violated: str_from_utf8 could not resolve problem size",
+                            .{},
+                        );
                         const tag_size = tu_data.size;
                         const disc_offset = tu_data.discriminant_offset;
                         const disc_size = tu_data.discriminant_size;
-                        if (builtin.mode == .Debug and index_size != 8) {
+                        if (builtin.mode == .Debug and resolved_index_size != 8) {
                             std.debug.panic(
                                 "LIR/codegen invariant violated: str_from_utf8 index size {d} != 8",
-                                .{index_size},
+                                .{resolved_index_size},
                             );
                         }
-                        if (builtin.mode == .Debug and problem_size != 1) {
+                        if (builtin.mode == .Debug and resolved_problem_size != 1) {
                             std.debug.panic(
                                 "LIR/codegen invariant violated: str_from_utf8 problem size {d} != 1",
-                                .{problem_size},
+                                .{resolved_problem_size},
                             );
                         }
 
                         const result_slot = self.codegen.allocStackSlot(tag_size);
                         try self.zeroStackArea(result_slot, tag_size);
+
+                        const layout_slot = self.codegen.allocStackSlot(@sizeOf(dev_wrappers.StrFromUtf8Layout));
+                        const layout_reg = try self.allocTempGeneral();
+                        try self.codegen.emitLoadImm(layout_reg, @bitCast(@as(i64, @intCast(resolved_ok))));
+                        try self.emitStore(.w64, frame_ptr, layout_slot, layout_reg);
+                        try self.codegen.emitLoadImm(layout_reg, @bitCast(@as(i64, @intCast(resolved_err))));
+                        try self.emitStore(.w64, frame_ptr, layout_slot + 8, layout_reg);
+                        try self.codegen.emitLoadImm(layout_reg, @bitCast(@as(i64, @intCast(disc_offset))));
+                        try self.emitStore(.w32, frame_ptr, layout_slot + 16, layout_reg);
+                        try self.codegen.emitLoadImm(layout_reg, @bitCast(@as(i64, @intCast(disc_size))));
+                        try self.emitStore(.w32, frame_ptr, layout_slot + 20, layout_reg);
+                        try self.codegen.emitLoadImm(layout_reg, @bitCast(@as(i64, @intCast(resolved_index_off))));
+                        try self.emitStore(.w32, frame_ptr, layout_slot + 24, layout_reg);
+                        try self.codegen.emitLoadImm(layout_reg, @bitCast(@as(i64, @intCast(resolved_problem_off))));
+                        try self.emitStore(.w32, frame_ptr, layout_slot + 28, layout_reg);
+                        self.codegen.freeGeneral(layout_reg);
 
                         // Call C builtin that writes the Roc tag union directly.
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
@@ -2807,12 +2858,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try builder.addMemArg(frame_ptr, list_off);
                         try builder.addMemArg(frame_ptr, list_off + 8);
                         try builder.addMemArg(frame_ptr, list_off + 16);
-                        try builder.addImmArg(@intCast(resolved_ok));
-                        try builder.addImmArg(@intCast(resolved_err));
-                        try builder.addImmArg(@intCast(disc_offset));
-                        try builder.addImmArg(@intCast(disc_size));
-                        try builder.addImmArg(@intCast(index_off));
-                        try builder.addImmArg(@intCast(problem_off));
+                        try builder.addLeaArg(frame_ptr, layout_slot);
                         try builder.addRegArg(roc_ops_reg);
                         try self.callBuiltin(&builder, @intFromPtr(&dev_wrappers.roc_builtins_str_from_utf8_result), .str_from_utf8);
 

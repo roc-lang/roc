@@ -229,18 +229,22 @@ fn writeDiscriminant(out: [*]u8, offset: u32, size: u32, value: u64) void {
     }
 }
 
-/// Converts a UTF-8 byte list to a RocStr, writing the full result union (string or error details) to an output buffer.
-pub fn roc_builtins_str_from_utf8_result(
-    out: [*]u8,
-    list_bytes: ?[*]u8,
-    list_len: usize,
-    list_cap: usize,
+pub const StrFromUtf8Layout = extern struct {
     ok_tag: u64,
     err_tag: u64,
     outer_disc_offset: u32,
     outer_disc_size: u32,
     err_index_offset: u32,
     err_problem_offset: u32,
+};
+
+/// Converts a UTF-8 byte list to a RocStr, writing the full result union (string or error details) to an output buffer.
+pub fn roc_builtins_str_from_utf8_result(
+    out: [*]u8,
+    list_bytes: ?[*]u8,
+    list_len: usize,
+    list_cap: usize,
+    layout: *const StrFromUtf8Layout,
     roc_ops: *RocOps,
 ) callconv(.c) void {
     const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
@@ -248,13 +252,13 @@ pub fn roc_builtins_str_from_utf8_result(
 
     if (result.is_ok) {
         utils.writeAs(RocStr, out, result.string, @src());
-        writeDiscriminant(out, outer_disc_offset, outer_disc_size, ok_tag);
+        writeDiscriminant(out, layout.outer_disc_offset, layout.outer_disc_size, layout.ok_tag);
         return;
     }
 
-    utils.writeAs(u64, out + err_index_offset, result.byte_index, @src());
-    utils.writeAs(u8, out + err_problem_offset, @intFromEnum(result.problem_code), @src());
-    writeDiscriminant(out, outer_disc_offset, outer_disc_size, err_tag);
+    utils.writeAs(u64, out + layout.err_index_offset, result.byte_index, @src());
+    utils.writeAs(u8, out + layout.err_problem_offset, @intFromEnum(result.problem_code), @src());
+    writeDiscriminant(out, layout.outer_disc_offset, layout.outer_disc_size, layout.err_tag);
 }
 
 /// Converts a UTF-8 byte list to a RocStr, returning the result components via separate out-pointers.
