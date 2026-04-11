@@ -69,6 +69,8 @@ cf_depth: u32 = 0,
 structured_control_depth: u32 = 0,
 /// Whether we're currently generating code inside a proc body.
 in_proc: bool = false,
+/// Current proc being compiled (debugging/tracing).
+current_proc_id: ?LIR.LirProcSpecId = null,
 /// Map from JoinPointId → loop depth (for jump → br targeting).
 join_point_depths: std.AutoHashMap(u32, u32),
 /// Map from JoinPointId → param local indices.
@@ -691,17 +693,17 @@ fn emitRcAtPtr(
             }
         },
         .tag_union => {
-            const tu_data = ls.getTagUnionData(l.data.tag_union.idx);
-            const variants = ls.getTagUnionVariants(tu_data);
+            const tu_layout = WasmLayout.tagUnionLayoutWithStore(l.data.tag_union.idx, ls);
+            const variants = ls.getTagUnionVariants(ls.getTagUnionData(l.data.tag_union.idx));
             if (variants.len == 0) return;
 
             const disc_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            if (tu_data.discriminant_size == 0) {
+            if (tu_layout.discriminant_size == 0) {
                 self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
                 WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
             } else {
                 try self.emitLocalGet(value_ptr_local);
-                try self.emitLoadBySize(tu_data.discriminant_size, tu_data.discriminant_offset);
+                try self.emitLoadBySize(tu_layout.discriminant_size, @intCast(tu_layout.discriminant_offset));
             }
             try self.emitLocalSet(disc_local);
 
@@ -1583,9 +1585,9 @@ fn compareTagUnionByLayout(self: *Self, lhs_local: u32, rhs_local: u32, layout_i
     const l = ls.getLayout(layout_idx);
     std.debug.assert(l.tag == .tag_union);
 
-    const tu_data = ls.getTagUnionData(l.data.tag_union.idx);
-    const disc_offset = tu_data.discriminant_offset;
-    const disc_size = tu_data.discriminant_size;
+    const tu_layout = WasmLayout.tagUnionLayoutWithStore(l.data.tag_union.idx, ls);
+    const disc_offset = tu_layout.discriminant_offset;
+    const disc_size = tu_layout.discriminant_size;
 
     // Allocate a local to hold the result
     const result_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -1596,7 +1598,7 @@ fn compareTagUnionByLayout(self: *Self, lhs_local: u32, rhs_local: u32, layout_i
         WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
     } else {
         try self.emitLocalGet(lhs_local);
-        try self.emitLoadBySize(disc_size, disc_offset);
+        try self.emitLoadBySize(disc_size, @intCast(disc_offset));
     }
     const lhs_disc = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalSet(lhs_disc);
@@ -1607,7 +1609,7 @@ fn compareTagUnionByLayout(self: *Self, lhs_local: u32, rhs_local: u32, layout_i
         WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
     } else {
         try self.emitLocalGet(rhs_local);
-        try self.emitLoadBySize(disc_size, disc_offset);
+        try self.emitLoadBySize(disc_size, @intCast(disc_offset));
     }
     const rhs_disc = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalSet(rhs_disc);
@@ -1640,7 +1642,7 @@ fn compareTagUnionByLayout(self: *Self, lhs_local: u32, rhs_local: u32, layout_i
     // Payload comparison: compare based on variant
     // For simplicity, compare the payload bytes up to discriminant_offset
     // using layout-aware comparison for the variant's payload layout
-    const variants = ls.getTagUnionVariants(tu_data);
+    const variants = ls.getTagUnionVariants(ls.getTagUnionData(l.data.tag_union.idx));
     if (variants.len > 0) {
         const payload_size = disc_offset; // Payload occupies bytes [0..disc_offset)
         if (payload_size > 0) {
@@ -4122,6 +4124,7 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
     self.storage.locals = std.AutoHashMap(u64, Storage.LocalInfo).init(self.allocator);
     self.storage.next_local_idx = 0;
     self.storage.local_types = .empty;
+    self.current_proc_id = proc_id;
     // Note: registered_procs is NOT cleared — all pre-registered proc_specs remain
     // visible. This is critical for mutual recursion: when compiling is_even's
     // body, calls to is_odd must find its func_idx without re-compilation.
@@ -4248,6 +4251,7 @@ const SavedState = struct {
     proc_return_local: u32,
     cf_depth: u32,
     in_proc: bool,
+    current_proc_id: ?LIR.LirProcSpecId,
 };
 
 /// Capture current codegen state for later restoration.
@@ -4266,6 +4270,7 @@ fn saveState(self: *Self) Allocator.Error!SavedState {
         .proc_return_local = self.proc_return_local,
         .cf_depth = self.cf_depth,
         .in_proc = self.in_proc,
+        .current_proc_id = self.current_proc_id,
     };
 }
 
@@ -4289,12 +4294,12 @@ fn restoreState(self: *Self, saved: SavedState) void {
     self.proc_return_local = saved.proc_return_local;
     self.cf_depth = saved.cf_depth;
     self.in_proc = saved.in_proc;
+    self.current_proc_id = saved.current_proc_id;
 }
 
 /// Generate code for a control flow statement (used in LirProcSpec bodies).
 fn generateCFStmt(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
     const stmt = self.store.getCFStmt(stmt_id);
-
     switch (stmt) {
         .assign_symbol => |assign| {
             std.debug.panic(
@@ -4408,6 +4413,18 @@ fn generateCFStmt(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
             const cond_local = self.storage.allocAnonymousLocal(cond_vt) catch return error.OutOfMemory;
             try self.emitProcLocal(sw.cond);
             try self.emitLocalSet(cond_local);
+            if (cond_vt == .i32) {
+                const cond_layout_idx = self.procLocalLayoutIdx(sw.cond);
+                const cond_size = self.layoutStorageByteSize(cond_layout_idx);
+                if (cond_size > 0 and cond_size < 4) {
+                    const mask: i32 = (@as(i32, 1) << @intCast(cond_size * 8)) - 1;
+                    try self.emitLocalGet(cond_local);
+                    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteI32(self.allocator, &self.body, mask) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
+                    try self.emitLocalSet(cond_local);
+                }
+            }
 
             const branches = self.store.getCFSwitchBranches(sw.branches);
 
@@ -4639,6 +4656,14 @@ fn generateCFStmt(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
             try self.generateCFStmt(free_stmt.next);
         },
         .runtime_error => {
+            var msg_buf: [64]u8 = undefined;
+            const proc_id = self.current_proc_id orelse @as(LIR.LirProcSpecId, @enumFromInt(0));
+            const msg = std.fmt.bufPrint(
+                &msg_buf,
+                "runtime_error {d} proc {d}",
+                .{ @intFromEnum(stmt_id), @intFromEnum(proc_id) },
+            ) catch "runtime_error";
+            try self.emitRocStaticStringCall(wasm_roc_ops_crashed_offset, msg);
             self.body.append(self.allocator, Op.@"unreachable") catch return error.OutOfMemory;
         },
         .crash => |crash| {
@@ -4852,14 +4877,24 @@ fn generateRefOp(self: *Self, op: RefOp, target_layout: layout.Idx) Allocator.Er
             const target_vt = self.resolveValType(target_layout);
             const source_vt: ValType = switch (source_layout.tag) {
                 .tag_union => blk: {
-                    const tu_data = ls.getTagUnionData(source_layout.data.tag_union.idx);
-                    const tu_size = ls.layoutSize(source_layout);
-                    if (tu_size <= 4 and tu_data.discriminant_offset == 0) {
-                        try self.emitProcLocal(disc.source);
+                    const tu_layout = WasmLayout.tagUnionLayoutWithStore(source_layout.data.tag_union.idx, ls);
+                    if (tu_layout.size <= 4 and tu_layout.discriminant_offset == 0) {
+                        if (tu_layout.discriminant_size == 0) {
+                            self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                            WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+                        } else {
+                            try self.emitProcLocal(disc.source);
+                            if (tu_layout.discriminant_size < 4) {
+                                const mask: i32 = (@as(i32, 1) << @intCast(tu_layout.discriminant_size * 8)) - 1;
+                                self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                                WasmModule.leb128WriteI32(self.allocator, &self.body, mask) catch return error.OutOfMemory;
+                                self.body.append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
+                            }
+                        }
                         break :blk self.procLocalValType(disc.source);
                     } else {
                         try self.emitProcLocal(disc.source);
-                        try self.emitLoadBySize(tu_data.discriminant_size, @intCast(tu_data.discriminant_offset));
+                        try self.emitLoadBySize(tu_layout.discriminant_size, @intCast(tu_layout.discriminant_offset));
                         break :blk .i32;
                     }
                 },
@@ -4871,9 +4906,9 @@ fn generateRefOp(self: *Self, op: RefOp, target_layout: layout.Idx) Allocator.Er
                             .{@tagName(inner_layout.tag)},
                         );
                     }
-                    const tu_data = ls.getTagUnionData(inner_layout.data.tag_union.idx);
+                    const tu_layout = WasmLayout.tagUnionLayoutWithStore(inner_layout.data.tag_union.idx, ls);
                     try self.emitProcLocal(disc.source);
-                    try self.emitLoadBySize(tu_data.discriminant_size, @intCast(tu_data.discriminant_offset));
+                    try self.emitLoadBySize(tu_layout.discriminant_size, @intCast(tu_layout.discriminant_offset));
                     break :blk .i32;
                 },
                 else => blk: {
@@ -5098,6 +5133,8 @@ fn layoutStorageByteSize(self: *const Self, layout_idx: layout.Idx) u32 {
         },
         .list, .list_of_zst => 12,
         .box, .box_of_zst => 4,
+        .tag_union => WasmLayout.tagUnionLayoutWithStore(l.data.tag_union.idx, ls).size,
+        .struct_ => WasmLayout.structSizeWithStore(l.data.struct_.idx, ls),
         else => self.layoutByteSize(layout_idx),
     };
 }
@@ -5142,6 +5179,8 @@ fn layoutStorageByteAlign(self: *const Self, layout_idx: layout.Idx) u32 {
             },
         },
         .list, .list_of_zst, .box, .box_of_zst => 4,
+        .tag_union => WasmLayout.tagUnionLayoutWithStore(l.data.tag_union.idx, ls).alignment,
+        .struct_ => WasmLayout.structAlignWithStore(l.data.struct_.idx, ls),
         else => self.layoutByteAlign(layout_idx),
     };
 }
@@ -5436,7 +5475,7 @@ fn generateStruct(self: *Self, r: anytype) Allocator.Error!void {
         return;
     }
 
-    const size = ls.layoutSize(l);
+    const size = WasmLayout.structSizeWithStore(l.data.struct_.idx, ls);
     if (size == 0) {
         // Zero-sized struct — push dummy pointer
         self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
@@ -5444,7 +5483,7 @@ fn generateStruct(self: *Self, r: anytype) Allocator.Error!void {
         return;
     }
 
-    const align_val: u32 = @intCast(l.data.struct_.alignment.toByteUnits());
+    const align_val: u32 = WasmLayout.structAlignWithStore(l.data.struct_.idx, ls);
 
     const frame_offset = try self.allocStackMemory(size, align_val);
 
@@ -5581,9 +5620,9 @@ fn generateTag(self: *Self, t: anytype) Allocator.Error!void {
 
     std.debug.assert(l.tag == .tag_union);
 
-    const tu_size = ls.layoutSize(l);
-    const tu_data = ls.getTagUnionData(l.data.tag_union.idx);
-    const disc_offset = tu_data.discriminant_offset;
+    const tu_layout = WasmLayout.tagUnionLayoutWithStore(l.data.tag_union.idx, ls);
+    const tu_size = tu_layout.size;
+    const disc_offset = tu_layout.discriminant_offset;
     if (tu_size <= 4 and disc_offset == 0) {
         // Small tag union — discriminant only, no payload (enum).
         // Still evaluate payload for side effects (e.g., early_return from ? operator).
@@ -5597,7 +5636,7 @@ fn generateTag(self: *Self, t: anytype) Allocator.Error!void {
         return;
     }
 
-    const align_val: u32 = @intCast(l.data.tag_union.alignment.toByteUnits());
+    const align_val: u32 = tu_layout.alignment;
     const frame_offset = try self.allocStackMemory(tu_size, align_val);
 
     const base_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -5625,7 +5664,7 @@ fn generateTag(self: *Self, t: anytype) Allocator.Error!void {
     }
 
     // Store discriminant AFTER payload (so it can't be overwritten)
-    const disc_size: u32 = tu_data.discriminant_size;
+    const disc_size: u32 = tu_layout.discriminant_size;
     if (disc_size != 0) {
         self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
         WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(t.discriminant)) catch return error.OutOfMemory;
@@ -6945,6 +6984,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             const ret_layout_val = ls.getLayout(ll.ret_layout);
             if (ret_layout_val.tag != .tag_union) unreachable;
             const tu_data = ls.getTagUnionData(ret_layout_val.data.tag_union.idx);
+            const tu_layout = WasmLayout.tagUnionLayoutWithStore(ret_layout_val.data.tag_union.idx, ls);
             const variants = ls.getTagUnionVariants(tu_data);
             var ok_disc: ?u16 = null;
             var err_disc: ?u16 = null;
@@ -6993,18 +7033,24 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             var problem_size: ?u32 = null;
             for (0..fields.len) |i| {
                 const field = fields.get(i);
+                const field_layout = ls.getLayout(field.layout);
                 const field_size = self.layoutStorageByteSize(field.layout);
                 const field_offset = self.structFieldOffsetByOriginalIndexWasm(rec_idx, field.index);
-                switch (field_size) {
-                    8 => {
-                        index_off = field_offset;
-                        index_size = field_size;
+                const is_index = switch (field_layout.tag) {
+                    .scalar => field_layout.data.scalar.tag == .int and switch (field_layout.data.scalar.data.int) {
+                        .u64, .i64 => true,
+                        else => false,
                     },
-                    1 => {
-                        problem_off = field_offset;
-                        problem_size = field_size;
-                    },
-                    else => {},
+                    else => false,
+                };
+                if (is_index) {
+                    index_off = field_offset;
+                    index_size = field_size;
+                    continue;
+                }
+                if (problem_off == null) {
+                    problem_off = field_offset;
+                    problem_size = field_size;
                 }
             }
             const resolved_index_off = index_off orelse std.debug.panic(
@@ -7023,21 +7069,21 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 "WasmCodeGen invariant violated: str_from_utf8 could not resolve problem size",
                 .{},
             );
-            const index_offset = resolved_problem_off;
-            const problem_offset = resolved_index_off;
+            const index_offset = resolved_index_off;
+            const problem_offset = resolved_problem_off;
             const import_idx = self.str_from_utf8_import orelse unreachable;
             try self.emitProcLocal(args[0]);
             const input = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             try self.emitLocalSet(input);
-            const result_offset = try self.allocStackMemory(tu_data.size, 4);
+            const result_offset = try self.allocStackMemory(tu_layout.size, 4);
             try self.emitLocalGet(input);
             try self.emitFpOffset(result_offset);
             self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-            WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(tu_data.size)) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(tu_layout.size)) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-            WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(tu_data.discriminant_offset)) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(tu_layout.discriminant_offset)) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-            WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(tu_data.discriminant_size)) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(tu_layout.discriminant_size)) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
             WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(resolved_ok)) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
@@ -7071,9 +7117,9 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             const ls = self.getLayoutStore();
             const ret_layout_val = ls.getLayout(ll.ret_layout);
             if (ret_layout_val.tag != .tag_union) unreachable;
-            const tu_data = ls.getTagUnionData(ret_layout_val.data.tag_union.idx);
-            const disc_offset: u32 = tu_data.discriminant_offset;
-            const result_offset = try self.allocStackMemory(tu_data.size, 4);
+            const tu_layout = WasmLayout.tagUnionLayoutWithStore(ret_layout_val.data.tag_union.idx, ls);
+            const disc_offset: u32 = tu_layout.discriminant_offset;
+            const result_offset = try self.allocStackMemory(tu_layout.size, 4);
             const parse_spec = ll.op.numericParseSpec() orelse unreachable;
 
             try self.emitProcLocal(args[0]);
