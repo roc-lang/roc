@@ -494,7 +494,7 @@ fn boolDiscriminantIndex(
     return error.MissingTag;
 }
 
-fn evalExprToValue(
+pub fn evalExprToValue(
     allocator: std.mem.Allocator,
     src: []const u8,
 ) !struct {

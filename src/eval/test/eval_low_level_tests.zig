@@ -3190,4 +3190,15 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "8" },
     },
+    .{
+        .name = "issue 8750: List.fold render value",
+        .source =
+        \\{
+        \\    xs = [1, 2, 3]
+        \\    sum = xs->List.fold(0, |acc, x| acc + x)
+        \\    sum
+        \\}
+        ,
+        .expected = .{ .inspect_str = "6.0" },
+    },
 };

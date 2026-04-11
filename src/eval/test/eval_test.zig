@@ -5,6 +5,7 @@ const can = @import("can");
 const check = @import("check");
 const builtins = @import("builtins");
 const collections = @import("collections");
+const layout = @import("layout");
 
 const helpers = @import("helpers.zig");
 const TestEnv = @import("TestEnv.zig");
@@ -72,6 +73,25 @@ test "eval multi-field record" {
     try runExpectI64("{a: 1, b: 2, c: 3}.a", 1, .no_trace);
     try runExpectI64("{a: 1, b: 2, c: 3}.b", 2, .no_trace);
     try runExpectI64("{a: 1, b: 2, c: 3}.c", 3, .no_trace);
+}
+
+test "interpreter: empty list [] has list_of_zst layout" {
+    var compiled = try helpers.compileProgram(test_allocator, .expr, "[]", &.{});
+    defer compiled.deinit(test_allocator);
+
+    const ret_layout = compiled.lowered.lir_result.store.getProcSpec(compiled.lowered.main_proc).ret_layout;
+    const layout_val = compiled.lowered.lir_result.layouts.getLayout(ret_layout);
+    try testing.expectEqual(layout.LayoutTag.list, layout_val.tag);
+}
+
+test "interpreter: singleton list [1] has list of Dec layout" {
+    var compiled = try helpers.compileProgram(test_allocator, .expr, "[1]", &.{});
+    defer compiled.deinit(test_allocator);
+
+    const ret_layout = compiled.lowered.lir_result.store.getProcSpec(compiled.lowered.main_proc).ret_layout;
+    const layout_val = compiled.lowered.lir_result.layouts.getLayout(ret_layout);
+    try testing.expectEqual(layout.LayoutTag.list, layout_val.tag);
+    try testing.expectEqual(layout.Idx.dec, layout_val.data.list);
 }
 
 test "nested record access" {

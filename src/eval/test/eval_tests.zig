@@ -2,7 +2,9 @@
 
 const TestCase = @import("parallel_runner.zig").TestCase;
 const closure_recursion_tests = @import("eval_closure_recursion_tests.zig");
+const interpreter_style_tests = @import("eval_interpreter_style_tests.zig");
 const low_level_tests = @import("eval_low_level_tests.zig");
+const polymorphism_tests = @import("eval_polymorphism_tests.zig");
 const recursive_data_tests = @import("eval_recursive_data_tests.zig");
 
 /// All eval test cases, consumed by the parallel runner.
@@ -2279,4 +2281,4 @@ const core_tests = [_]TestCase{
     },
 };
 
-pub const tests = core_tests ++ closure_recursion_tests.tests ++ recursive_data_tests.tests ++ low_level_tests.tests;
+pub const tests = core_tests ++ closure_recursion_tests.tests ++ recursive_data_tests.tests ++ low_level_tests.tests ++ polymorphism_tests.tests ++ interpreter_style_tests.tests;

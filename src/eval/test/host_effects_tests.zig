@@ -8,6 +8,14 @@ fn dbg(bytes: []const u8) TestCase.ExpectedEvent {
     return .{ .dbg = bytes };
 }
 
+fn dbgContains(bytes: []const u8) TestCase.ExpectedEvent {
+    return .{ .dbg_contains = bytes };
+}
+
+fn dbgAny() TestCase.ExpectedEvent {
+    return .{ .dbg_any = {} };
+}
+
 fn expectFailed(bytes: []const u8) TestCase.ExpectedEvent {
     return .{ .expect_failed = bytes };
 }
@@ -493,6 +501,397 @@ pub const tests = [_]TestCase{
         \\}
     ,
         &.{ dbg("\"tick\""), dbg("\"tick\""), dbg("\"tick\"") },
+        .returned,
+    ),
+    // Legacy interpreter_style_test names preserved.
+    exprTest(
+        "interpreter: crash statement triggers crash error and message",
+        \\{
+        \\    crash "boom"
+        \\    0
+        \\}
+    ,
+        &.{ crashed("boom") },
+        .crashed,
+    ),
+    exprTest(
+        "interpreter: crash at end of block in if branch",
+        \\{
+        \\    f = |x| {
+        \\        if x == 0 {
+        \\            crash "division by zero"
+        \\        }
+        \\        42 / x
+        \\    }
+        \\    f(2)
+        \\}
+    ,
+        &.{},
+        .returned,
+    ),
+    exprTest(
+        "interpreter: expect expression succeeds",
+        \\{
+        \\    expect 1 == 1
+        \\    {}
+        \\}
+    ,
+        &.{},
+        .returned,
+    ),
+    exprTest(
+        "interpreter: expect expression failure crashes with message",
+        \\{
+        \\    expect 1 == 0
+        \\    {}
+        \\}
+    ,
+        &.{ expectFailed("expect failed") },
+        .returned,
+    ),
+    exprTest(
+        "interpreter: dbg statement in block",
+        \\{
+        \\    x = 42
+        \\    dbg x
+        \\    x + 1
+        \\}
+    ,
+        &.{ dbg("42.0") },
+        .returned,
+    ),
+    exprTest(
+        "interpreter: dbg statement with string",
+        \\{
+        \\    msg = "hello"
+        \\    dbg msg
+        \\    msg
+        \\}
+    ,
+        &.{ dbg("\"hello\"") },
+        .returned,
+    ),
+    exprTest(
+        "debug List.len expression",
+        \\{
+        \\    dbg List.len([1, 2, 3])
+        \\    0
+        \\}
+    ,
+        &.{ dbg("3") },
+        .returned,
+    ),
+    exprTest(
+        "dbg: integer literal",
+        \\{
+        \\    dbg 42
+        \\    123
+        \\}
+    ,
+        &.{ dbg("42.0") },
+        .returned,
+    ),
+    exprTest(
+        "dbg: negative integer",
+        \\{
+        \\    x = -99
+        \\    dbg x
+        \\    x
+        \\}
+    ,
+        &.{ dbg("-99.0") },
+        .returned,
+    ),
+    exprTest(
+        "dbg: float value",
+        \\{
+        \\    x : F64
+        \\    x = 3.14
+        \\    dbg x
+        \\    x
+        \\}
+    ,
+        &.{ dbgContains("3.14") },
+        .returned,
+    ),
+    exprTest(
+        "dbg: boolean True",
+        \\{
+        \\    dbg True
+        \\    False
+        \\}
+    ,
+        &.{ dbg("True") },
+        .returned,
+    ),
+    exprTest(
+        "dbg: boolean False",
+        \\{
+        \\    dbg False
+        \\    True
+        \\}
+    ,
+        &.{ dbg("False") },
+        .returned,
+    ),
+    exprTest(
+        "dbg: empty string",
+        \\{
+        \\    dbg ""
+        \\    "done"
+        \\}
+    ,
+        &.{ dbg("\"\"") },
+        .returned,
+    ),
+    exprTest(
+        "dbg: list of integers",
+        \\{
+        \\    xs = [1.I64, 2.I64, 3.I64]
+        \\    dbg xs
+        \\    xs
+        \\}
+    ,
+        &.{ dbg("[1, 2, 3]") },
+        .returned,
+    ),
+    exprTest(
+        "dbg: list of strings",
+        \\{
+        \\    xs = ["a", "b", "c"]
+        \\    dbg xs
+        \\    xs
+        \\}
+    ,
+        &.{ dbg("[\"a\", \"b\", \"c\"]") },
+        .returned,
+    ),
+    exprTest(
+        "dbg: tuple",
+        \\{
+        \\    t = (1, "two", 3)
+        \\    dbg t
+        \\    t
+        \\}
+    ,
+        &.{ dbg("(1.0, \"two\", 3.0)") },
+        .returned,
+    ),
+    exprTest(
+        "dbg: record",
+        \\{
+        \\    r = { name: "Alice", age: 30 }
+        \\    dbg r
+        \\    r
+        \\}
+    ,
+        &.{ dbg("{ age: 30.0, name: \"Alice\" }") },
+        .returned,
+    ),
+    exprTest(
+        "dbg: empty record",
+        \\{
+        \\    r = {}
+        \\    dbg r
+        \\    r
+        \\}
+    ,
+        &.{ dbg("{}") },
+        .returned,
+    ),
+    exprTest(
+        "dbg: tag without payload",
+        \\{
+        \\    x : [A, B, C]
+        \\    x = B
+        \\    dbg x
+        \\    x
+        \\}
+    ,
+        &.{ dbg("B") },
+        .returned,
+    ),
+    exprTest(
+        "dbg: tag with payload",
+        \\{
+        \\    x = Ok(42)
+        \\    dbg x
+        \\    match x { Ok(n) => n, Err(_) => 0 }
+        \\}
+    ,
+        &.{ dbg("Ok(42.0)") },
+        .returned,
+    ),
+    exprTest(
+        "dbg: function prints as unsupported or function marker",
+        \\{
+        \\    f = |x| x + 1
+        \\    dbg f
+        \\    f(5)
+        \\}
+    ,
+        &.{ dbgAny() },
+        .returned,
+    ),
+    exprTest(
+        "dbg: expression form returns unit",
+        \\{
+        \\    x = 42
+        \\    dbg x
+        \\    x + 1
+        \\}
+    ,
+        &.{ dbg("42.0") },
+        .returned,
+    ),
+    exprTest(
+        "dbg: multiple dbg calls in sequence",
+        \\{
+        \\    x = 1
+        \\    y = 2
+        \\    z = 3
+        \\    dbg x
+        \\    dbg y
+        \\    dbg z
+        \\    x + y + z
+        \\}
+    ,
+        &.{ dbg("1.0"), dbg("2.0"), dbg("3.0") },
+        .returned,
+    ),
+    exprTest(
+        "dbg: nested dbg calls",
+        \\{
+        \\    dbg(dbg(dbg(5)))
+        \\}
+    ,
+        &.{ dbg("5.0"), dbg("{}"), dbg("{}") },
+        .returned,
+    ),
+    exprTest(
+        "dbg: in if-then-else branch",
+        \\{
+        \\    x = 10
+        \\    if x > 5 {
+        \\        dbg "greater"
+        \\        True
+        \\    } else {
+        \\        dbg "less or equal"
+        \\        False
+        \\    }
+        \\}
+    ,
+        &.{ dbg("\"greater\"") },
+        .returned,
+    ),
+    exprTest(
+        "dbg: in match pattern",
+        \\{
+        \\    x = 5
+        \\    match x {
+        \\        0 => {
+        \\            dbg "zero"
+        \\        }
+        \\        _ => {
+        \\            dbg "other"
+        \\        }
+        \\    }
+        \\}
+    ,
+        &.{ dbg("\"other\"") },
+        .returned,
+    ),
+    exprTest(
+        "dbg: in for loop",
+        \\{
+        \\    items : List(I64)
+        \\    items = [1, 2, 3]
+        \\    for item in items {
+        \\        dbg item
+        \\    }
+        \\    items
+        \\}
+    ,
+        &.{ dbg("1"), dbg("2"), dbg("3") },
+        .returned,
+    ),
+    exprTest(
+        "dbg: as final expression returns unit",
+        \\{
+        \\    dbg 42
+        \\}
+    ,
+        &.{ dbg("42.0") },
+        .returned,
+    ),
+    exprTest(
+        "dbg: with arithmetic expression",
+        \\{
+        \\    dbg(2 + 3 * 4)
+        \\}
+    ,
+        &.{ dbg("14.0") },
+        .returned,
+    ),
+    exprTest(
+        "dbg: inside function body",
+        \\{
+        \\    double = |x| {
+        \\        dbg x
+        \\        x * 2
+        \\    }
+        \\    double(21)
+        \\}
+    ,
+        &.{ dbg("21.0") },
+        .returned,
+    ),
+    exprTest(
+        "dbg: function called multiple times",
+        \\{
+        \\    f = |x| {
+        \\        dbg x
+        \\        x
+        \\    }
+        \\    f(1) + f(2) + f(3)
+        \\}
+    ,
+        &.{ dbg("1.0"), dbg("2.0"), dbg("3.0") },
+        .returned,
+    ),
+    exprTest(
+        "dbg: with string containing special chars",
+        \\{
+        \\    dbg "hello\nworld"
+        \\    "done"
+        \\}
+    ,
+        &.{ dbgContains("hello\nworld") },
+        .returned,
+    ),
+    exprTest(
+        "dbg: large integer",
+        \\{
+        \\    x : I64
+        \\    x = 9223372036854775807
+        \\    dbg x
+        \\    x
+        \\}
+    ,
+        &.{ dbg("9223372036854775807") },
+        .returned,
+    ),
+    exprTest(
+        "dbg: variable after mutation in binding",
+        \\{
+        \\    x = 10
+        \\    dbg x
+        \\    y = x + 5
+        \\    dbg y
+        \\    y
+        \\}
+    ,
+        &.{ dbg("10.0"), dbg("15.0") },
         .returned,
     ),
 };

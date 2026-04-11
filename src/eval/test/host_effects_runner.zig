@@ -37,6 +37,8 @@ pub const TestCase = struct {
 
     pub const ExpectedEvent = union(enum) {
         dbg: []const u8,
+        dbg_contains: []const u8,
+        dbg_any: void,
         expect_failed: []const u8,
         crashed: []const u8,
     };
@@ -375,6 +377,14 @@ fn matchesExpectation(run: RuntimeHostEnv.RecordedRun, tc: TestCase) bool {
                 .dbg => |actual_msg| if (!std.mem.eql(u8, msg, actual_msg)) return false,
                 else => return false,
             },
+            .dbg_contains => |fragment| switch (actual) {
+                .dbg => |actual_msg| if (std.mem.indexOf(u8, actual_msg, fragment) == null) return false,
+                else => return false,
+            },
+            .dbg_any => switch (actual) {
+                .dbg => {},
+                else => return false,
+            },
             .expect_failed => |msg| switch (actual) {
                 .expect_failed => |actual_msg| if (!std.mem.eql(u8, msg, actual_msg)) return false,
                 else => return false,
@@ -704,6 +714,13 @@ fn printExpected(tc: TestCase) void {
             .dbg => |msg| {
                 std.debug.print("dbg=", .{});
                 printEscapedBytes(msg);
+            },
+            .dbg_contains => |msg| {
+                std.debug.print("dbg_contains=", .{});
+                printEscapedBytes(msg);
+            },
+            .dbg_any => {
+                std.debug.print("dbg=<any>", .{});
             },
             .expect_failed => |msg| {
                 std.debug.print("expect_failed=", .{});

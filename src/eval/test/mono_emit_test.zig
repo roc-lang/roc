@@ -125,6 +125,41 @@ test "end-to-end: emit block with let binding" {
     try testing.expect(std.mem.indexOf(u8, output, "x") != null);
 }
 
+test "end-to-end: emit tuple literal" {
+    const output = try emitFromSource(test_allocator, "(1, 2, 3)");
+    defer test_allocator.free(output);
+
+    try testing.expectEqualStrings("(1, 2, 3)", output);
+}
+
+test "end-to-end: emit nested tuple" {
+    const output = try emitFromSource(test_allocator, "((1, 2), (3, 4))");
+    defer test_allocator.free(output);
+
+    try testing.expectEqualStrings("((1, 2), (3, 4))", output);
+}
+
+test "end-to-end: emit tag application with single integer payload" {
+    const output = try emitFromSource(test_allocator, "Some 42");
+    defer test_allocator.free(output);
+
+    try testing.expect(std.mem.indexOf(u8, output, "Some") != null);
+}
+
+test "end-to-end: emit tag application with multiple arguments" {
+    const output = try emitFromSource(test_allocator, "Pair 1 2");
+    defer test_allocator.free(output);
+
+    try testing.expect(std.mem.indexOf(u8, output, "Pair") != null);
+}
+
+test "end-to-end: emit nested tag application" {
+    const output = try emitFromSource(test_allocator, "Outer (Inner 5)");
+    defer test_allocator.free(output);
+
+    try testing.expect(std.mem.indexOf(u8, output, "Outer") != null);
+}
+
 // Emitter tests
 
 test "emitter: identity function is polymorphic before type checking" {
