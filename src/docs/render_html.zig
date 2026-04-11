@@ -803,20 +803,91 @@ fn renderEntrySignature(w: Writer, ctx: *const RenderContext, entry: *const DocM
 }
 
 fn renderDocComment(w: Writer, doc: []const u8) !void {
-    // Split on blank lines into <p> tags
+    var pos: usize = 0;
+
+    while (true) {
+        const fence_pos = findCodeFence(doc, pos) orelse {
+            // No more code fences; render the rest as paragraphs
+            try renderParagraphs(w, doc[pos..]);
+            break;
+        };
+
+        // Render text before the code fence as paragraphs
+        if (fence_pos > pos) {
+            try renderParagraphs(w, doc[pos..fence_pos]);
+        }
+
+        // Skip past the opening fence line (```roc, ```, etc.)
+        pos = skipLine(doc, fence_pos);
+
+        // Find the closing fence
+        const close_pos = findCodeFence(doc, pos) orelse {
+            // Unclosed fence; render the rest as a code block
+            const code = std.mem.trimRight(u8, doc[pos..], "\n\r");
+            if (code.len > 0) {
+                try w.writeAll("                <pre><code>");
+                try writeHtmlEscaped(w, code);
+                try w.writeAll("</code></pre>\n");
+            }
+            break;
+        };
+
+        // Render the code block content
+        const code = std.mem.trimRight(u8, doc[pos..close_pos], "\n\r");
+        if (code.len > 0) {
+            try w.writeAll("                <pre><code>");
+            try writeHtmlEscaped(w, code);
+            try w.writeAll("</code></pre>\n");
+        }
+
+        // Skip past the closing fence line
+        pos = skipLine(doc, close_pos);
+    }
+}
+
+/// Returns the byte position of the next ``` that starts at a line boundary,
+/// searching from `start`. Returns null if none is found.
+fn findCodeFence(doc: []const u8, start: usize) ?usize {
+    var i = start;
+    // Ensure we begin at a line boundary; if not, advance to the next one
+    if (i > 0 and (i >= doc.len or doc[i - 1] != '\n')) {
+        while (i < doc.len and doc[i] != '\n') i += 1;
+        if (i < doc.len) i += 1;
+    }
+    while (i + 2 < doc.len) {
+        if (doc[i] == '`' and doc[i + 1] == '`' and doc[i + 2] == '`') {
+            return i;
+        }
+        // Advance to the next line
+        while (i < doc.len and doc[i] != '\n') i += 1;
+        if (i < doc.len) i += 1;
+    }
+    return null;
+}
+
+/// Returns the position right after the newline that ends the line starting at `pos`.
+fn skipLine(doc: []const u8, pos: usize) usize {
+    var i = pos;
+    while (i < doc.len and doc[i] != '\n') i += 1;
+    if (i < doc.len) i += 1;
+    return i;
+}
+
+/// Splits `text` on blank lines and emits each non-empty paragraph as a `<p>` element.
+fn renderParagraphs(w: Writer, text: []const u8) !void {
     var start: usize = 0;
     var i: usize = 0;
-    while (i < doc.len) {
-        if (i + 1 < doc.len and doc[i] == '\n' and doc[i + 1] == '\n') {
-            // Found blank line — emit paragraph
-            const para = std.mem.trim(u8, doc[start..i], " \t\n\r");
+    while (i < text.len) {
+        if (i + 1 < text.len and text[i] == '\n' and text[i + 1] == '\n') {
+            // Found a blank line — emit the accumulated paragraph
+            const para = std.mem.trim(u8, text[start..i], " \t\n\r");
             if (para.len > 0) {
                 try w.writeAll("                <p>");
                 try writeHtmlEscaped(w, para);
                 try w.writeAll("</p>\n");
             }
-            // Skip past blank lines
-            while (i < doc.len and (doc[i] == '\n' or doc[i] == '\r')) {
+            // Skip past all consecutive blank lines
+            while (i < text.len and (text[i] == '\n' or text[i] == '\r')) {
                 i += 1;
             }
             start = i;
@@ -824,8 +895,8 @@ fn renderDocComment(w: Writer, doc: []const u8) !void {
             i += 1;
         }
     }
-    // Final paragraph
-    const para = std.mem.trim(u8, doc[start..], " \t\n\r");
+    // Final paragraph (no trailing blank line)
+    const para = std.mem.trim(u8, text[start..], " \t\n\r");
     if (para.len > 0) {
         try w.writeAll("                <p>");
         try writeHtmlEscaped(w, para);
