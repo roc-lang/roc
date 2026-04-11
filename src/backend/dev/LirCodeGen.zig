@@ -1457,10 +1457,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     };
 
                     if (builtin.mode == .Debug and ll.ret_layout != list_elem_layout) {
-                        std.debug.panic(
-                            "LIR/codegen invariant violated: list_get_unsafe ret/elem layout mismatch (ret={d}, elem={d})",
-                            .{ @intFromEnum(ll.ret_layout), @intFromEnum(list_elem_layout) },
-                        );
+                        const ret_layout_val = ls.getLayout(ll.ret_layout);
+                        const elem_layout_val = ls.getLayout(list_elem_layout);
+                        const ret_list_like = ret_layout_val.tag == .list or ret_layout_val.tag == .list_of_zst;
+                        const elem_list_like = elem_layout_val.tag == .list or elem_layout_val.tag == .list_of_zst;
+                        const ret_box_like = ret_layout_val.tag == .box or ret_layout_val.tag == .box_of_zst;
+                        const elem_box_like = elem_layout_val.tag == .box or elem_layout_val.tag == .box_of_zst;
+
+                        if (!(ret_list_like and elem_list_like) and !(ret_box_like and elem_box_like)) {
+                            std.debug.panic(
+                                "LIR/codegen invariant violated: list_get_unsafe ret/elem layout mismatch (ret={d}, elem={d})",
+                                .{ @intFromEnum(ll.ret_layout), @intFromEnum(list_elem_layout) },
+                            );
+                        }
                     }
 
                     const elem_layout_idx = list_elem_layout;

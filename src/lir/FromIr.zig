@@ -435,7 +435,19 @@ const ProcLowerer = struct {
         var current = ref;
         while (true) {
             switch (current) {
-                .canonical => return null,
+                .canonical => |layout_idx| {
+                    const layout_val = self.parent.layouts.getLayout(layout_idx);
+                    switch (layout_val.tag) {
+                        .list => return .{ .canonical = layout_val.data.list },
+                        .list_of_zst => return .{ .canonical = .zst },
+                        .box => {
+                            current = .{ .canonical = layout_val.data.box };
+                            continue;
+                        },
+                        .box_of_zst => return null,
+                        else => return null,
+                    }
+                },
                 .local => |node_id| switch (self.parent.input.layouts.getNode(node_id)) {
                     .nominal => |nominal| current = nominal,
                     .list => |elem| return elem,
@@ -463,7 +475,14 @@ const ProcLowerer = struct {
         var current = ref;
         while (true) {
             switch (current) {
-                .canonical => return ref,
+                .canonical => |layout_idx| {
+                    const layout_val = self.parent.layouts.getLayout(layout_idx);
+                    return switch (layout_val.tag) {
+                        .box => .{ .canonical = layout_val.data.box },
+                        .box_of_zst => .{ .canonical = .zst },
+                        else => ref,
+                    };
+                },
                 .local => |node_id| switch (self.parent.input.layouts.getNode(node_id)) {
                     .nominal => |nominal| current = nominal,
                     .box => |child| return child,
@@ -477,6 +496,20 @@ const ProcLowerer = struct {
         return layout_val.tag == .list or layout_val.tag == .list_of_zst;
     }
 
+    fn isBoxLayout(layout_val: layout_mod.Layout) bool {
+        return layout_val.tag == .box or layout_val.tag == .box_of_zst;
+    }
+
+    fn layoutRuntimeEquivalent(self: *const ProcLowerer, left: layout_mod.Idx, right: layout_mod.Idx) bool {
+        if (left == right) return true;
+        const ls = &self.parent.layouts;
+        const left_val = ls.getLayout(left);
+        const right_val = ls.getLayout(right);
+        if (isListLayout(left_val) and isListLayout(right_val)) return true;
+        if (isBoxLayout(left_val) and isBoxLayout(right_val)) return true;
+        return false;
+    }
+
     fn structFieldLayoutRef(
         self: *ProcLowerer,
         ref: ir.Layout.Ref,
@@ -485,7 +518,24 @@ const ProcLowerer = struct {
         var current = ref;
         while (true) {
             switch (current) {
-                .canonical => debugPanic("lir.from_ir expected local logical struct layout ref"),
+                .canonical => |layout_idx| {
+                    const layout_val = self.parent.layouts.getLayout(layout_idx);
+                    switch (layout_val.tag) {
+                        .struct_ => {
+                            const struct_idx = layout_val.data.struct_.idx;
+                            const field_layout = self.parent.layouts.getStructFieldLayoutByOriginalIndex(
+                                struct_idx,
+                                field_index,
+                            );
+                            return .{ .canonical = field_layout };
+                        },
+                        .box => {
+                            current = .{ .canonical = layout_val.data.box };
+                            continue;
+                        },
+                        else => debugPanic("lir.from_ir expected struct logical layout ref"),
+                    }
+                },
                 .local => |node_id| switch (self.parent.input.layouts.getNode(node_id)) {
                     .nominal => |nominal| current = nominal,
                     .struct_ => |fields| return self.parent.input.layouts.getFields(fields)[field_index].child,
@@ -503,7 +553,22 @@ const ProcLowerer = struct {
         var current = ref;
         while (true) {
             switch (current) {
-                .canonical => debugPanic("lir.from_ir expected local logical tag-union layout ref"),
+                .canonical => |layout_idx| {
+                    const layout_val = self.parent.layouts.getLayout(layout_idx);
+                    switch (layout_val.tag) {
+                        .tag_union => {
+                            const tu_data = self.parent.layouts.getTagUnionData(layout_val.data.tag_union.idx);
+                            const variants = self.parent.layouts.getTagUnionVariants(tu_data);
+                            const payload_layout = variants.get(tag_discriminant).payload_layout;
+                            return .{ .canonical = payload_layout };
+                        },
+                        .box => {
+                            current = .{ .canonical = layout_val.data.box };
+                            continue;
+                        },
+                        else => debugPanic("lir.from_ir expected tag-union logical layout ref"),
+                    }
+                },
                 .local => |node_id| switch (self.parent.input.layouts.getNode(node_id)) {
                     .nominal => |nominal| current = nominal,
                     .tag_union => |variants| return self.parent.input.layouts.getRefs(variants)[tag_discriminant],
@@ -520,7 +585,27 @@ const ProcLowerer = struct {
         var current = ref;
         while (true) {
             switch (current) {
-                .canonical => debugPanic("lir.from_ir expected local logical tag-union layout ref"),
+                .canonical => |layout_idx| {
+                    const layout_val = self.parent.layouts.getLayout(layout_idx);
+                    switch (layout_val.tag) {
+                        .tag_union => {
+                            const tu_data = self.parent.layouts.getTagUnionData(layout_val.data.tag_union.idx);
+                            const prim: layout_mod.Idx = switch (tu_data.discriminant_size) {
+                                0, 1 => .u8,
+                                2 => .u16,
+                                4 => .u32,
+                                8 => .u64,
+                                else => unreachable,
+                            };
+                            return .{ .canonical = prim };
+                        },
+                        .box => {
+                            current = .{ .canonical = layout_val.data.box };
+                            continue;
+                        },
+                        else => debugPanic("lir.from_ir expected tag-union logical layout ref"),
+                    }
+                },
                 .local => |node_id| switch (self.parent.input.layouts.getNode(node_id)) {
                     .nominal => |nominal| current = nominal,
                     .tag_union => |variants| {
@@ -582,9 +667,12 @@ const ProcLowerer = struct {
             if (self.resolvedListElemLayoutRef(target_ref)) |target_elem_ref| {
                 const actual_elem_backing_ref = self.unwrapNominalRef(actual_elem_ref);
                 const target_elem_backing_ref = self.unwrapNominalRef(target_elem_ref);
+                const actual_elem_layout = try self.parent.lowerLayoutId(actual_elem_backing_ref);
+                const target_elem_layout = try self.parent.lowerLayoutId(target_elem_backing_ref);
                 if (layoutRefsEqual(actual_elem_ref, target_elem_ref) or
                     layoutRefsEqual(actual_elem_backing_ref, target_elem_backing_ref) or
-                    try self.parent.lowerLayoutId(actual_elem_backing_ref) == try self.parent.lowerLayoutId(target_elem_backing_ref))
+                    actual_elem_layout == target_elem_layout or
+                    self.layoutRuntimeEquivalent(actual_elem_layout, target_elem_layout))
                 {
                     return try self.parent.store.addCFStmt(.{ .assign_ref = .{
                         .target = target_local,

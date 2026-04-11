@@ -1149,14 +1149,32 @@ const Lowerer = struct {
     }
 
     fn overlayErasureTemplate(self: *Lowerer, template_ty: TypeVarId, actual_ty: TypeVarId) std.mem.Allocator.Error!TypeVarId {
+        var visited = std.ArrayList(TypePair).empty;
+        defer visited.deinit(self.allocator);
+        return self.overlayErasureTemplateRec(template_ty, actual_ty, &visited);
+    }
+
+    fn overlayErasureTemplateRec(
+        self: *Lowerer,
+        template_ty: TypeVarId,
+        actual_ty: TypeVarId,
+        visited: *std.ArrayList(TypePair),
+    ) std.mem.Allocator.Error!TypeVarId {
         const template_id = self.types.unlinkPreservingNominal(template_ty);
         const actual_id = self.types.unlinkPreservingNominal(actual_ty);
+
+        if (template_id == actual_id) return actual_ty;
+        const pair = TypePair{ .left = template_id, .right = actual_id };
+        for (visited.items) |seen| {
+            if (seen.left == pair.left and seen.right == pair.right) return actual_ty;
+        }
+        try visited.append(self.allocator, pair);
 
         return switch (self.types.getNode(template_id)) {
             .for_a => actual_ty,
             .nominal => |template_backing| switch (self.types.getNode(actual_id)) {
                 .nominal => |actual_backing| blk: {
-                    const lowered_backing = try self.overlayErasureTemplate(template_backing, actual_backing);
+                    const lowered_backing = try self.overlayErasureTemplateRec(template_backing, actual_backing, visited);
                     if (lowered_backing == actual_backing) break :blk actual_ty;
                     break :blk try self.types.fresh(.{ .nominal = lowered_backing });
                 },
@@ -1166,8 +1184,8 @@ const Lowerer = struct {
                 .func => |template_func| switch (self.types.getNode(actual_id)) {
                     .content => |actual_content| switch (actual_content) {
                         .func => |actual_func| blk: {
-                            const arg = try self.overlayErasureTemplate(template_func.arg, actual_func.arg);
-                            const ret = try self.overlayErasureTemplate(template_func.ret, actual_func.ret);
+                            const arg = try self.overlayErasureTemplateRec(template_func.arg, actual_func.arg, visited);
+                            const ret = try self.overlayErasureTemplateRec(template_func.ret, actual_func.ret, visited);
                             const lset = if (self.lambdaSetIsErased(template_func.lset))
                                 try self.freshPrimitiveType(.erased)
                             else
@@ -1188,7 +1206,7 @@ const Lowerer = struct {
                 .box => |template_elem| switch (self.types.getNode(actual_id)) {
                     .content => |actual_content| switch (actual_content) {
                         .box => |actual_elem| blk: {
-                            const elem = try self.overlayErasureTemplate(template_elem, actual_elem);
+                            const elem = try self.overlayErasureTemplateRec(template_elem, actual_elem, visited);
                             if (elem == actual_elem) break :blk actual_ty;
                             break :blk try self.types.freshContent(.{ .box = elem });
                         },
@@ -1199,7 +1217,7 @@ const Lowerer = struct {
                 .list => |template_elem| switch (self.types.getNode(actual_id)) {
                     .content => |actual_content| switch (actual_content) {
                         .list => |actual_elem| blk: {
-                            const elem = try self.overlayErasureTemplate(template_elem, actual_elem);
+                            const elem = try self.overlayErasureTemplateRec(template_elem, actual_elem, visited);
                             if (elem == actual_elem) break :blk actual_ty;
                             break :blk try self.types.freshContent(.{ .list = elem });
                         },
@@ -1964,6 +1982,8 @@ const Lowerer = struct {
         return switch (left) {
             .primitive => |prim| blk: {
                 if (prim != right.primitive) {
+                    if (prim == .dec) break :blk .{ .content = .{ .primitive = right.primitive } };
+                    if (right.primitive == .dec) break :blk .{ .content = .{ .primitive = prim } };
                     std.debug.panic(
                         "lambdasolved.unify incompatible primitives {s} vs {s}",
                         .{ @tagName(prim), @tagName(right.primitive) },
