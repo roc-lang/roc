@@ -10,6 +10,7 @@ const i128h = builtins.compiler_rt_128;
 
 /// Errors that can occur during WebAssembly evaluation.
 pub const WasmEvalError = error{
+    Crash,
     WasmExecFailed,
     OutOfMemory,
 };
@@ -21,6 +22,7 @@ pub fn runWasmStr(
     has_imports: bool,
 ) WasmEvalError![]u8 {
     wasm_heap_ptr = 65536;
+    wasm_crash_state = .none;
 
     if (wasm_bytes.len == 0) return error.WasmExecFailed;
 
@@ -29,11 +31,17 @@ pub fn runWasmStr(
     const arena = arena_impl.allocator();
 
     var module_def = bytebox.createModuleDefinition(arena, .{}) catch return error.WasmExecFailed;
-    module_def.decode(wasm_bytes) catch {
+    module_def.decode(wasm_bytes) catch |err| {
+        if (std.debug.runtime_safety) {
+            std.debug.print("wasm decode failed: {s}\n", .{@errorName(err)});
+        }
         return error.WasmExecFailed;
     };
 
-    var module_instance = bytebox.createModuleInstance(.Stack, module_def, std.heap.page_allocator) catch {
+    var module_instance = bytebox.createModuleInstance(.Stack, module_def, std.heap.page_allocator) catch |err| {
+        if (std.debug.runtime_safety) {
+            std.debug.print("wasm instance create failed: {s}\n", .{@errorName(err)});
+        }
         return error.WasmExecFailed;
     };
     defer module_instance.destroy();
@@ -119,24 +127,40 @@ pub fn runWasmStr(
         env_imports.addHostFunction("roc_float_from_str", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostFloatFromStr, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_list_append_unsafe", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostListAppendUnsafe, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_list_concat", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostListConcat, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_list_drop_at", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostListDropAt, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_list_reverse", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostListReverse, null) catch return error.WasmExecFailed;
 
         const imports = [_]bytebox.ModuleImportPackage{env_imports};
-        module_instance.instantiate(.{ .stack_size = 1024 * 256, .imports = &imports }) catch {
+        module_instance.instantiate(.{ .stack_size = 1024 * 256, .imports = &imports }) catch |err| {
+            if (std.debug.runtime_safety) {
+                std.debug.print("wasm instantiate failed: {s}\n", .{@errorName(err)});
+            }
             return error.WasmExecFailed;
         };
     } else {
-        module_instance.instantiate(.{ .stack_size = 1024 * 256 }) catch {
+        module_instance.instantiate(.{ .stack_size = 1024 * 256 }) catch |err| {
+            if (std.debug.runtime_safety) {
+                std.debug.print("wasm instantiate failed: {s}\n", .{@errorName(err)});
+            }
             return error.WasmExecFailed;
         };
     }
 
-    const handle = module_instance.getFunctionHandle("main") catch {
+    const handle = module_instance.getFunctionHandle("main") catch |err| {
+        if (std.debug.runtime_safety) {
+            std.debug.print("wasm get main handle failed: {s}\n", .{@errorName(err)});
+        }
         return error.WasmExecFailed;
     };
     var params = [1]bytebox.Val{.{ .I32 = 0 }};
     var returns: [1]bytebox.Val = undefined;
-    _ = module_instance.invoke(handle, &params, &returns, .{}) catch {
+    _ = module_instance.invoke(handle, &params, &returns, .{}) catch |err| {
+        if (wasm_crash_state == .crashed) {
+            return error.Crash;
+        }
+        if (std.debug.runtime_safety) {
+            std.debug.print("wasm invoke failed: {s}\n", .{@errorName(err)});
+        }
         return error.WasmExecFailed;
     };
 
@@ -684,6 +708,7 @@ fn hostRocExpectFailed(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: 
     const msg_ptr: u32 = @bitCast(buffer[args_ptr..][0..4].*);
     const msg_len: u32 = @bitCast(buffer[args_ptr + 4 ..][0..4].*);
     if (msg_ptr + msg_len <= buffer.len) std.debug.print("Expect failed: {s}\n", .{buffer[msg_ptr..][0..msg_len]});
+    wasm_crash_state = .crashed;
 }
 
 fn hostRocCrashed(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
@@ -693,6 +718,7 @@ fn hostRocCrashed(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]co
     const msg_ptr: u32 = @bitCast(buffer[args_ptr..][0..4].*);
     const msg_len: u32 = @bitCast(buffer[args_ptr + 4 ..][0..4].*);
     if (msg_ptr + msg_len <= buffer.len) std.debug.print("Roc crashed: {s}\n", .{buffer[msg_ptr..][0..msg_len]});
+    wasm_crash_state = .crashed;
 }
 
 fn isWhitespace(c: u8) bool {
@@ -1083,6 +1109,58 @@ fn hostListConcat(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]co
     std.mem.writeInt(u32, buffer[result_ptr + 8 ..][0..4], @intCast(new_len), .little);
 }
 
+fn hostListDropAt(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    const buffer = module.store.getMemory(0).buffer();
+    const list_ptr: usize = @intCast(params[0].I32);
+    const elem_width: usize = @intCast(params[1].I32);
+    const alignment: u32 = @bitCast(params[2].I32);
+    const index: usize = @intCast(params[3].I32);
+    const result_ptr: usize = @intCast(params[4].I32);
+
+    const data_ptr: usize = @intCast(std.mem.readInt(u32, buffer[list_ptr..][0..4], .little));
+    const len: usize = @intCast(std.mem.readInt(u32, buffer[list_ptr + 4 ..][0..4], .little));
+    const cap: usize = @intCast(std.mem.readInt(u32, buffer[list_ptr + 8 ..][0..4], .little));
+
+    if (index >= len) {
+        std.mem.writeInt(u32, buffer[result_ptr..][0..4], @intCast(data_ptr), .little);
+        std.mem.writeInt(u32, buffer[result_ptr + 4 ..][0..4], @intCast(len), .little);
+        std.mem.writeInt(u32, buffer[result_ptr + 8 ..][0..4], @intCast(cap), .little);
+        return;
+    }
+
+    const new_len = len - 1;
+    if (new_len == 0) {
+        std.mem.writeInt(u32, buffer[result_ptr..][0..4], 0, .little);
+        std.mem.writeInt(u32, buffer[result_ptr + 4 ..][0..4], 0, .little);
+        std.mem.writeInt(u32, buffer[result_ptr + 8 ..][0..4], 0, .little);
+        return;
+    }
+
+    if (elem_width == 0) {
+        std.mem.writeInt(u32, buffer[result_ptr..][0..4], @intCast(data_ptr), .little);
+        std.mem.writeInt(u32, buffer[result_ptr + 4 ..][0..4], @intCast(new_len), .little);
+        std.mem.writeInt(u32, buffer[result_ptr + 8 ..][0..4], @intCast(new_len), .little);
+        return;
+    }
+
+    const new_data = allocWasmData(buffer, alignment, new_len * elem_width);
+    const head_size = index * elem_width;
+    if (head_size != 0 and data_ptr != 0) {
+        @memcpy(buffer[new_data..][0..head_size], buffer[data_ptr..][0..head_size]);
+    }
+    const tail_size = (len - index - 1) * elem_width;
+    if (tail_size != 0 and data_ptr != 0) {
+        @memcpy(
+            buffer[new_data + head_size ..][0..tail_size],
+            buffer[data_ptr + (index + 1) * elem_width ..][0..tail_size],
+        );
+    }
+
+    std.mem.writeInt(u32, buffer[result_ptr..][0..4], @intCast(new_data), .little);
+    std.mem.writeInt(u32, buffer[result_ptr + 4 ..][0..4], @intCast(new_len), .little);
+    std.mem.writeInt(u32, buffer[result_ptr + 8 ..][0..4], @intCast(new_len), .little);
+}
+
 fn hostListReverse(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
     const buffer = module.store.getMemory(0).buffer();
     const list_ptr: usize = @intCast(params[0].I32);
@@ -1264,4 +1342,10 @@ fn writeFloatParseResult(comptime T: type, buffer: []u8, out_ptr: usize, disc_of
     buffer[out_ptr + disc_offset] = 1 - r.errorcode;
 }
 
+const WasmCrashState = enum {
+    none,
+    crashed,
+};
+
 var wasm_heap_ptr: u32 = 65536;
+var wasm_crash_state: WasmCrashState = .none;

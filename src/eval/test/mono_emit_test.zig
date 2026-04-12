@@ -32,6 +32,18 @@ fn emitFromSource(allocator: std.mem.Allocator, source: []const u8) ![]const u8 
     return try allocator.dupe(u8, emitter.getOutput());
 }
 
+fn emitFromModuleSource(allocator: std.mem.Allocator, source: []const u8) ![]const u8 {
+    const resources = try helpers.parseAndCanonicalizeProgram(allocator, .module, source, &.{});
+    defer helpers.cleanupParseAndCanonical(allocator, resources);
+
+    var emitter = Emitter.init(allocator, resources.module_env);
+    defer emitter.deinit();
+
+    try emitter.emitExpr(resources.expr_idx);
+
+    return try allocator.dupe(u8, emitter.getOutput());
+}
+
 test "end-to-end: emit integer literal" {
     const output = try emitFromSource(test_allocator, "42");
     defer test_allocator.free(output);
@@ -140,21 +152,37 @@ test "end-to-end: emit nested tuple" {
 }
 
 test "end-to-end: emit tag application with single integer payload" {
-    const output = try emitFromSource(test_allocator, "Some 42");
+    const source =
+        \\Maybe := [Some(I64)]
+        \\
+        \\main = Maybe.Some(42)
+    ;
+    const output = try emitFromModuleSource(test_allocator, source);
     defer test_allocator.free(output);
 
     try testing.expect(std.mem.indexOf(u8, output, "Some") != null);
 }
 
 test "end-to-end: emit tag application with multiple arguments" {
-    const output = try emitFromSource(test_allocator, "Pair 1 2");
+    const source =
+        \\Pair := [Pair(I64, I64)]
+        \\
+        \\main = Pair.Pair(1, 2)
+    ;
+    const output = try emitFromModuleSource(test_allocator, source);
     defer test_allocator.free(output);
 
     try testing.expect(std.mem.indexOf(u8, output, "Pair") != null);
 }
 
 test "end-to-end: emit nested tag application" {
-    const output = try emitFromSource(test_allocator, "Outer (Inner 5)");
+    const source =
+        \\Outer := [Outer(Inner)]
+        \\Inner := [Inner(I64)]
+        \\
+        \\main = Outer.Outer(Inner.Inner(5))
+    ;
+    const output = try emitFromModuleSource(test_allocator, source);
     defer test_allocator.free(output);
 
     try testing.expect(std.mem.indexOf(u8, output, "Outer") != null);
@@ -192,10 +220,7 @@ test "emitter: can emit identity function applied to integer" {
 
 /// Helper to evaluate an expression via Str.inspect and return its output.
 fn evalToInspect(allocator: std.mem.Allocator, source: []const u8) ![]u8 {
-    const inspected = try helpers.allocInspectedExprSource(allocator, source);
-    defer allocator.free(inspected);
-
-    var compiled = try helpers.compileInspectedExpr(allocator, inspected);
+    var compiled = try helpers.compileInspectedExpr(allocator, source);
     defer compiled.deinit(allocator);
 
     return helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);

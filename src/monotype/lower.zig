@@ -2550,11 +2550,10 @@ pub const Lowerer = struct {
             .e_dot_access => |dot| dot,
             else => debugPanic("monotype invariant violated: expected dot access for field index lookup", .{}),
         };
-        return try self.requireRecordFieldIndexForSolvedVar(
-            module_idx,
-            type_scope,
-            self.requireExprResultVar(module_idx, type_scope, dot.receiver),
-            dot.field_name,
+        const receiver_ty = try self.requireExprType(module_idx, type_scope, dot.receiver);
+        return self.requireRecordFieldIndexFromMonotypeType(
+            receiver_ty,
+            self.ctx.typedCirModule(module_idx).getIdent(dot.field_name),
         );
     }
 
@@ -2992,6 +2991,11 @@ pub const Lowerer = struct {
                 });
             },
             .e_binop => |binop| blk: {
+                if (binop.op == .eq or binop.op == .ne) {
+                    if (try self.maybeLowerNominalEqBinop(module_idx, type_scope, env, expr.idx, binop)) |lowered| {
+                        return lowered;
+                    }
+                }
                 if (binop.op == .ne) {
                     const eq_args = try self.lowerHomogeneousBinopArgs(
                         module_idx,
@@ -3081,6 +3085,8 @@ pub const Lowerer = struct {
                         env,
                         expr.idx,
                         dot.field_name,
+                    ) orelse return self.makeRuntimeErrorExpr(
+                        try self.lowerExprType(module_idx, type_scope, env, expr.idx, expr.data),
                     );
                     return try self.program.store.addExpr(.{
                         .ty = lowered_call.result_ty,
@@ -3153,6 +3159,8 @@ pub const Lowerer = struct {
                     env,
                     expr.idx,
                     dispatch.method_name,
+                ) orelse return self.makeRuntimeErrorExpr(
+                    try self.lowerExprType(module_idx, type_scope, env, expr.idx, expr.data),
                 );
                 return try self.program.store.addExpr(.{
                     .ty = lowered_call.result_ty,
@@ -3482,6 +3490,16 @@ pub const Lowerer = struct {
         bytes: []const u8,
     ) std.mem.Allocator.Error!base.StringLiteral.Idx {
         return self.strings.insert(self.allocator, bytes);
+    }
+
+    fn makeRuntimeErrorExpr(
+        self: *Lowerer,
+        ty: type_mod.TypeId,
+    ) std.mem.Allocator.Error!ast.ExprId {
+        return try self.program.store.addExpr(.{
+            .ty = ty,
+            .data = .{ .runtime_error = try self.internStringLiteral("runtime error") },
+        });
     }
 
     fn copySourceStringLiteral(
@@ -3949,14 +3967,7 @@ pub const Lowerer = struct {
             .frac_f64_literal,
             .str_literal,
             => true,
-            .record_destructure => |record| blk: {
-                for (typed_cir_module.sliceRecordDestructs(record.destructs)) |destruct_idx| {
-                    if (self.patternNeedsPredicateDesugaring(module_idx, typed_cir_module.getRecordDestruct(destruct_idx).kind.toPatternIdx())) {
-                        break :blk true;
-                    }
-                }
-                break :blk false;
-            },
+            .record_destructure => true,
             .tuple => |tuple| blk: {
                 for (typed_cir_module.slicePatterns(tuple.patterns)) |elem_pattern_idx| {
                     if (self.patternNeedsPredicateDesugaring(module_idx, elem_pattern_idx)) break :blk true;
@@ -3965,13 +3976,55 @@ pub const Lowerer = struct {
             },
             .applied_tag => |tag| blk: {
                 for (typed_cir_module.slicePatterns(tag.args)) |arg_pattern_idx| {
-                    if (self.patternNeedsPredicateDesugaring(module_idx, arg_pattern_idx)) break :blk true;
+                    if (self.patternNeedsPredicateDesugaringInTagPayload(module_idx, arg_pattern_idx)) break :blk true;
                 }
                 break :blk false;
             },
             .as => |as_pat| self.patternNeedsPredicateDesugaring(module_idx, as_pat.pattern),
             .nominal => |nominal| self.patternNeedsPredicateDesugaring(module_idx, nominal.backing_pattern),
             .nominal_external => |nominal| self.patternNeedsPredicateDesugaring(module_idx, nominal.backing_pattern),
+            else => false,
+        };
+    }
+
+    fn patternNeedsPredicateDesugaringInTagPayload(self: *Lowerer, module_idx: u32, pattern_idx: CIR.Pattern.Idx) bool {
+        const typed_cir_module = self.ctx.typedCirModule(module_idx);
+        const pattern = self.ctx.typedCirModule(module_idx).pattern(pattern_idx).data;
+        return switch (pattern) {
+            .list => true,
+            .num_literal,
+            .small_dec_literal,
+            .dec_literal,
+            .frac_f32_literal,
+            .frac_f64_literal,
+            .str_literal,
+            => true,
+            .record_destructure => |record| blk: {
+                for (typed_cir_module.sliceRecordDestructs(record.destructs)) |destruct_idx| {
+                    if (self.patternNeedsPredicateDesugaringInTagPayload(
+                        module_idx,
+                        typed_cir_module.getRecordDestruct(destruct_idx).kind.toPatternIdx(),
+                    )) {
+                        break :blk true;
+                    }
+                }
+                break :blk false;
+            },
+            .tuple => |tuple| blk: {
+                for (typed_cir_module.slicePatterns(tuple.patterns)) |elem_pattern_idx| {
+                    if (self.patternNeedsPredicateDesugaringInTagPayload(module_idx, elem_pattern_idx)) break :blk true;
+                }
+                break :blk false;
+            },
+            .applied_tag => |tag| blk: {
+                for (typed_cir_module.slicePatterns(tag.args)) |arg_pattern_idx| {
+                    if (self.patternNeedsPredicateDesugaringInTagPayload(module_idx, arg_pattern_idx)) break :blk true;
+                }
+                break :blk false;
+            },
+            .as => |as_pat| self.patternNeedsPredicateDesugaringInTagPayload(module_idx, as_pat.pattern),
+            .nominal => |nominal| self.patternNeedsPredicateDesugaringInTagPayload(module_idx, nominal.backing_pattern),
+            .nominal_external => |nominal| self.patternNeedsPredicateDesugaringInTagPayload(module_idx, nominal.backing_pattern),
             else => false,
         };
     }
@@ -4007,21 +4060,50 @@ pub const Lowerer = struct {
         while (idx > 0) {
             idx -= 1;
             const branch = typed_cir_module.getMatchBranch(branches[idx]);
-            const branch_pattern = typed_cir_module.getMatchBranchPattern(typed_cir_module.sliceMatchBranchPatterns(branch.patterns)[0]);
-            current = try self.lowerPredicateMatchBranch(
-                module_idx,
-                type_scope,
-                env,
-                result_ty,
-                expected_result_var,
-                scrutinee_expr,
-                scrutinee.ty,
-                scrutinee.solved_var,
-                branch_pattern.pattern,
-                branch_pattern.pattern,
-                branch.value,
-                current,
-            );
+            const branch_pattern_ids = typed_cir_module.sliceMatchBranchPatterns(branch.patterns);
+            const bind_pattern_idx = blk: {
+                for (branch_pattern_ids) |pattern_id| {
+                    const pattern = typed_cir_module.getMatchBranchPattern(pattern_id);
+                    if (!pattern.degenerate) break :blk pattern.pattern;
+                }
+                break :blk typed_cir_module.getMatchBranchPattern(branch_pattern_ids[0]).pattern;
+            };
+            var pat_idx = branch_pattern_ids.len;
+            while (pat_idx > 0) {
+                pat_idx -= 1;
+                const branch_pattern = typed_cir_module.getMatchBranchPattern(branch_pattern_ids[pat_idx]);
+                if (branch_pattern.degenerate) {
+                    const runtime_error = try self.program.store.addExpr(.{
+                        .ty = result_ty,
+                        .data = .{ .runtime_error = try self.internStringLiteral("degenerate match branch") },
+                    });
+                    current = try self.lowerPatternGuardExpr(
+                        module_idx,
+                        type_scope,
+                        scrutinee_expr,
+                        scrutinee.ty,
+                        branch_pattern.pattern,
+                        runtime_error,
+                        current,
+                    );
+                    continue;
+                }
+
+                current = try self.lowerPredicateMatchBranch(
+                    module_idx,
+                    type_scope,
+                    env,
+                    result_ty,
+                    expected_result_var,
+                    scrutinee_expr,
+                    scrutinee.ty,
+                    scrutinee.solved_var,
+                    branch_pattern.pattern,
+                    bind_pattern_idx,
+                    branch.value,
+                    current,
+                );
+            }
         }
 
         return .{
@@ -4056,6 +4138,7 @@ pub const Lowerer = struct {
                 scrutinee_expr,
                 scrutinee_ty,
                 scrutinee_solved_var,
+                match_pattern_idx,
                 bind_pattern_idx,
                 list,
                 branch_value,
@@ -4076,6 +4159,7 @@ pub const Lowerer = struct {
                 scrutinee_expr,
                 scrutinee_ty,
                 scrutinee_solved_var,
+                match_pattern_idx,
                 pattern,
                 bind_pattern_idx,
                 branch_value,
@@ -4123,7 +4207,7 @@ pub const Lowerer = struct {
                 branch_value,
                 else_expr,
             ),
-            .assign, .underscore, .record_destructure, .tuple => try self.lowerStructuredPredicateMatchBranch(
+            .assign, .underscore, .record_destructure, .tuple, .applied_tag => try self.lowerStructuredPredicateMatchBranch(
                 module_idx,
                 type_scope,
                 incoming_env,
@@ -4164,13 +4248,24 @@ pub const Lowerer = struct {
         try self.bindPatternFromSourceExpr(
             module_idx,
             type_scope,
-            bind_pattern_idx,
+            match_pattern_idx,
             scrutinee_expr,
             scrutinee_ty,
             scrutinee_solved_var,
             &branch_env,
             &binding_decls,
         );
+        if (match_pattern_idx != bind_pattern_idx) {
+            try self.recordPatternStructuralInfoFromSourceType(
+                module_idx,
+                type_scope,
+                bind_pattern_idx,
+                scrutinee_ty,
+                scrutinee_solved_var,
+            );
+            try self.aliasPatternBindings(module_idx, match_pattern_idx, bind_pattern_idx, &branch_env);
+        }
+        try self.collectBranchValueInfo(module_idx, type_scope, branch_env, branch_value, expected_result_var);
 
         const then_expr = try self.wrapExprWithBindingDecls(
             try self.lowerExprWithExpectedType(
@@ -4193,6 +4288,161 @@ pub const Lowerer = struct {
             then_expr,
             else_expr,
         );
+    }
+
+    const GuardEntry = struct {
+        pattern_idx: CIR.Pattern.Idx,
+        expr: ast.ExprId,
+    };
+
+    fn lowerTagPatternGuardExpr(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeCloneScope,
+        scrutinee_expr: ast.ExprId,
+        scrutinee_ty: type_mod.TypeId,
+        pattern_idx: CIR.Pattern.Idx,
+        tag: @FieldType(CIR.Pattern, "applied_tag"),
+        then_expr: ast.ExprId,
+        else_expr: ast.ExprId,
+    ) std.mem.Allocator.Error!ast.ExprId {
+        if (self.ctx.types.getType(scrutinee_ty) == .primitive and self.ctx.types.getType(scrutinee_ty).primitive == .bool) {
+            if (self.ctx.typedCirModule(module_idx).slicePatterns(tag.args).len != 0) {
+                return debugPanic("monotype bool pattern invariant violated: Bool tags cannot carry arguments", .{});
+            }
+            const bool_pat = try self.program.store.addPat(.{
+                .ty = scrutinee_ty,
+                .data = .{ .bool_lit = self.requireBoolLiteralValue(module_idx, tag.name) },
+            });
+            const branches = [_]ast.Branch{
+                .{ .pat = bool_pat, .body = then_expr },
+                .{ .pat = try self.program.store.addPat(.{ .ty = scrutinee_ty, .data = .{ .var_ = symbol_mod.Symbol.none } }), .body = else_expr },
+            };
+            return try self.program.store.addExpr(.{
+                .ty = self.program.store.getExpr(then_expr).ty,
+                .data = .{ .when = .{
+                    .cond = scrutinee_expr,
+                    .branches = try self.program.store.addBranchSpan(&branches),
+                } },
+            });
+        }
+
+        var guard_entries = std.ArrayList(GuardEntry).empty;
+        defer guard_entries.deinit(self.allocator);
+
+        const tag_pat = try self.lowerGuardablePattern(module_idx, type_scope, pattern_idx, &guard_entries);
+
+        var current = then_expr;
+        var idx = guard_entries.items.len;
+        while (idx > 0) {
+            idx -= 1;
+            const guard = guard_entries.items[idx];
+            const guard_ty = self.requirePatternSourceType(module_idx, type_scope, guard.pattern_idx);
+            current = try self.lowerPatternGuardExpr(
+                module_idx,
+                type_scope,
+                guard.expr,
+                guard_ty,
+                guard.pattern_idx,
+                current,
+                else_expr,
+            );
+        }
+
+        const branches = [_]ast.Branch{
+            .{ .pat = tag_pat, .body = current },
+            .{ .pat = try self.program.store.addPat(.{ .ty = scrutinee_ty, .data = .{ .var_ = symbol_mod.Symbol.none } }), .body = else_expr },
+        };
+        return try self.program.store.addExpr(.{
+            .ty = self.program.store.getExpr(then_expr).ty,
+            .data = .{ .when = .{
+                .cond = scrutinee_expr,
+                .branches = try self.program.store.addBranchSpan(&branches),
+            } },
+        });
+    }
+
+    fn lowerGuardablePattern(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeCloneScope,
+        pattern_idx: CIR.Pattern.Idx,
+        guard_entries: *std.ArrayList(GuardEntry),
+    ) std.mem.Allocator.Error!ast.PatId {
+        const typed_cir_module = self.ctx.typedCirModule(module_idx);
+        const pattern = typed_cir_module.pattern(pattern_idx).data;
+        const pattern_ty = self.requirePatternSourceType(module_idx, type_scope, pattern_idx);
+        switch (pattern) {
+            .assign => |assign| return self.program.store.addPat(.{
+                .ty = pattern_ty,
+                .data = .{ .var_ = try self.ctx.getOrCreatePatternSymbol(module_idx, pattern_idx, assign.ident) },
+            }),
+            .as => |as_pat| {
+                const symbol = try self.ctx.getOrCreatePatternSymbol(module_idx, pattern_idx, as_pat.ident);
+                const pat_id = try self.program.store.addPat(.{
+                    .ty = pattern_ty,
+                    .data = .{ .var_ = symbol },
+                });
+                try guard_entries.append(self.allocator, .{
+                    .pattern_idx = as_pat.pattern,
+                    .expr = try self.makeVarExpr(pattern_ty, symbol),
+                });
+                return pat_id;
+            },
+            .underscore => return self.program.store.addPat(.{
+                .ty = pattern_ty,
+                .data = .{ .var_ = symbol_mod.Symbol.none },
+            }),
+            .nominal => |nominal| return self.lowerGuardablePattern(module_idx, type_scope, nominal.backing_pattern, guard_entries),
+            .nominal_external => |nominal| return self.lowerGuardablePattern(module_idx, type_scope, nominal.backing_pattern, guard_entries),
+            .applied_tag => |tag| {
+                if (self.ctx.types.getType(pattern_ty) == .primitive and self.ctx.types.getType(pattern_ty).primitive == .bool) {
+                    if (typed_cir_module.slicePatterns(tag.args).len != 0) {
+                        return debugPanic("monotype bool pattern invariant violated: Bool tags cannot carry arguments", .{});
+                    }
+                    return self.program.store.addPat(.{
+                        .ty = pattern_ty,
+                        .data = .{ .bool_lit = self.requireBoolLiteralValue(module_idx, tag.name) },
+                    });
+                }
+                const arg_patterns = typed_cir_module.slicePatterns(tag.args);
+                const lowered_args = try self.allocator.alloc(ast.PatId, arg_patterns.len);
+                defer self.allocator.free(lowered_args);
+                for (arg_patterns, 0..) |arg_pat, i| {
+                    lowered_args[i] = try self.lowerGuardablePattern(module_idx, type_scope, arg_pat, guard_entries);
+                }
+                return self.program.store.addPat(.{
+                    .ty = pattern_ty,
+                    .data = .{ .tag = .{
+                        .name = try self.ctx.copyExecutableIdent(module_idx, tag.name),
+                        .discriminant = self.requirePatternTagDiscriminant(module_idx, type_scope, pattern_idx),
+                        .args = try self.program.store.addPatSpan(lowered_args),
+                    } },
+                });
+            },
+            .list,
+            .record_destructure,
+            .tuple,
+            .num_literal,
+            .small_dec_literal,
+            .dec_literal,
+            .frac_f32_literal,
+            .frac_f64_literal,
+            .str_literal,
+            .runtime_error,
+            => {
+                const symbol = try self.ctx.addSyntheticSymbol(base.Ident.Idx.NONE);
+                const pat_id = try self.program.store.addPat(.{
+                    .ty = pattern_ty,
+                    .data = .{ .var_ = symbol },
+                });
+                try guard_entries.append(self.allocator, .{
+                    .pattern_idx = pattern_idx,
+                    .expr = try self.makeVarExpr(pattern_ty, symbol),
+                });
+                return pat_id;
+            },
+        }
     }
 
     fn lowerPatternGuardExpr(
@@ -4237,6 +4487,9 @@ pub const Lowerer = struct {
                 else_expr,
             ),
             .record_destructure => |record| blk: {
+                if (self.ctx.types.getType(scrutinee_ty) != .record) {
+                    return self.makeRuntimeErrorExpr(self.program.store.getExpr(then_expr).ty);
+                }
                 var current = then_expr;
                 const destructs = typed_cir_module.sliceRecordDestructs(record.destructs);
                 var idx = destructs.len;
@@ -4267,6 +4520,9 @@ pub const Lowerer = struct {
                 break :blk current;
             },
             .tuple => |tuple| blk: {
+                if (self.ctx.types.getType(scrutinee_ty) != .tuple) {
+                    return self.makeRuntimeErrorExpr(self.program.store.getExpr(then_expr).ty);
+                }
                 var current = then_expr;
                 const elem_patterns = typed_cir_module.slicePatterns(tuple.patterns);
                 var idx = elem_patterns.len;
@@ -4313,8 +4569,94 @@ pub const Lowerer = struct {
                     } },
                 });
             },
-            .list => debugTodo("monotype.lowerPatternGuardExpr nested list pattern"),
-            .applied_tag => debugTodo("monotype.lowerPatternGuardExpr nested tag pattern"),
+            .list => |list| blk: {
+                const elem_ty = self.requirePatternListElemType(module_idx, type_scope, pattern_idx);
+                const bool_ty = try self.makePrimitiveType(.bool);
+                const u64_ty = try self.makePrimitiveType(.u64);
+                const patterns = typed_cir_module.slicePatterns(list.patterns);
+                const prefix_len: usize = if (list.rest_info) |rest| @intCast(rest.index) else patterns.len;
+                const suffix_len = patterns.len - prefix_len;
+
+                const len_expr = try self.makeLowLevelExpr(u64_ty, .list_len, &.{scrutinee_expr});
+                const expected_len_expr = try self.makeU64LiteralExpr(@intCast(patterns.len));
+                const cond_expr = if (list.rest_info != null)
+                    try self.makeLowLevelExpr(bool_ty, .num_is_gte, &.{ len_expr, expected_len_expr })
+                else
+                    try self.makeLowLevelExpr(bool_ty, .num_is_eq, &.{ len_expr, expected_len_expr });
+
+                var current = then_expr;
+                var idx = patterns.len;
+                while (idx > 0) {
+                    idx -= 1;
+                    const elem_pattern_idx = patterns[idx];
+                    if (!self.patternNeedsAnyExplicitMatch(module_idx, elem_pattern_idx)) continue;
+                    const elem_index_expr = if (idx < prefix_len)
+                        try self.makeU64LiteralExpr(@intCast(idx))
+                    else blk_index: {
+                        const suffix_index = idx - prefix_len;
+                        const suffix_start = try self.makeLowLevelExpr(
+                            u64_ty,
+                            .num_minus,
+                            &.{ len_expr, try self.makeU64LiteralExpr(@intCast(suffix_len)) },
+                        );
+                        if (suffix_index == 0) break :blk_index suffix_start;
+                        break :blk_index try self.makeLowLevelExpr(
+                            u64_ty,
+                            .num_plus,
+                            &.{ suffix_start, try self.makeU64LiteralExpr(@intCast(suffix_index)) },
+                        );
+                    };
+                    const elem_expr = try self.makeLowLevelExpr(elem_ty, .list_get_unsafe, &.{ scrutinee_expr, elem_index_expr });
+                    current = try self.lowerPatternGuardExpr(
+                        module_idx,
+                        type_scope,
+                        elem_expr,
+                        elem_ty,
+                        elem_pattern_idx,
+                        current,
+                        else_expr,
+                    );
+                }
+
+                if (list.rest_info) |rest| {
+                    if (rest.pattern) |rest_pattern_idx| {
+                        if (self.patternNeedsAnyExplicitMatch(module_idx, rest_pattern_idx)) {
+                            const start_expr = try self.makeU64LiteralExpr(rest.index);
+                            const rest_len_expr = try self.makeLowLevelExpr(u64_ty, .num_minus, &.{ len_expr, expected_len_expr });
+                            const bounds_expr = try self.makeListSliceBoundsExpr(start_expr, rest_len_expr);
+                            const rest_expr = try self.makeLowLevelExpr(scrutinee_ty, .list_sublist, &.{ scrutinee_expr, bounds_expr });
+                            current = try self.lowerPatternGuardExpr(
+                                module_idx,
+                                type_scope,
+                                rest_expr,
+                                scrutinee_ty,
+                                rest_pattern_idx,
+                                current,
+                                else_expr,
+                            );
+                        }
+                    }
+                }
+
+                break :blk try self.program.store.addExpr(.{
+                    .ty = self.program.store.getExpr(then_expr).ty,
+                    .data = .{ .if_ = .{
+                        .cond = cond_expr,
+                        .then_body = current,
+                        .else_body = else_expr,
+                    } },
+                });
+            },
+            .applied_tag => |tag| try self.lowerTagPatternGuardExpr(
+                module_idx,
+                type_scope,
+                scrutinee_expr,
+                scrutinee_ty,
+                pattern_idx,
+                tag,
+                then_expr,
+                else_expr,
+            ),
             else => debugTodoPattern(pattern),
         };
     }
@@ -4329,7 +4671,8 @@ pub const Lowerer = struct {
         scrutinee_expr: ast.ExprId,
         scrutinee_ty: type_mod.TypeId,
         scrutinee_solved_var: ?Var,
-        pattern_idx: CIR.Pattern.Idx,
+        match_pattern_idx: CIR.Pattern.Idx,
+        bind_pattern_idx: CIR.Pattern.Idx,
         branch_value: CIR.Expr.Idx,
     ) std.mem.Allocator.Error!ast.ExprId {
         var branch_env = try self.cloneEnv(incoming_env);
@@ -4340,13 +4683,24 @@ pub const Lowerer = struct {
         try self.bindPatternFromSourceExpr(
             module_idx,
             type_scope,
-            pattern_idx,
+            match_pattern_idx,
             scrutinee_expr,
             scrutinee_ty,
             scrutinee_solved_var,
             &branch_env,
             &binding_decls,
         );
+        if (match_pattern_idx != bind_pattern_idx) {
+            try self.recordPatternStructuralInfoFromSourceType(
+                module_idx,
+                type_scope,
+                bind_pattern_idx,
+                scrutinee_ty,
+                scrutinee_solved_var,
+            );
+            try self.aliasPatternBindings(module_idx, match_pattern_idx, bind_pattern_idx, &branch_env);
+        }
+        try self.collectBranchValueInfo(module_idx, type_scope, branch_env, branch_value, expected_result_var);
 
         return try self.wrapExprWithBindingDecls(
             try self.lowerExprWithExpectedType(
@@ -4361,6 +4715,29 @@ pub const Lowerer = struct {
         );
     }
 
+    fn collectBranchValueInfo(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeCloneScope,
+        branch_env: BindingEnv,
+        branch_value: CIR.Expr.Idx,
+        expected_result_var: ?Var,
+    ) std.mem.Allocator.Error!void {
+        if (expected_result_var) |result_var| {
+            try self.collectExprInfoWithResultVar(
+                module_idx,
+                type_scope,
+                branch_env,
+                branch_value,
+                result_var,
+            );
+        } else {
+            try self.collectExprInfo(module_idx, type_scope, branch_env, branch_value);
+        }
+        try self.finalizeExprTypes(module_idx, type_scope);
+        try self.finalizePatternTypes(module_idx, type_scope);
+    }
+
     fn lowerExactListPatternBranch(
         self: *Lowerer,
         module_idx: u32,
@@ -4371,6 +4748,7 @@ pub const Lowerer = struct {
         scrutinee_expr: ast.ExprId,
         scrutinee_ty: type_mod.TypeId,
         scrutinee_solved_var: ?Var,
+        match_pattern_idx: CIR.Pattern.Idx,
         bind_pattern_idx: CIR.Pattern.Idx,
         list_pattern: @FieldType(CIR.Pattern, "list"),
         branch_value: CIR.Expr.Idx,
@@ -4379,11 +4757,11 @@ pub const Lowerer = struct {
         try self.recordPatternStructuralInfoFromSourceType(
             module_idx,
             type_scope,
-            bind_pattern_idx,
+            match_pattern_idx,
             scrutinee_ty,
             scrutinee_solved_var,
         );
-        const elem_ty = self.requirePatternListElemType(module_idx, type_scope, bind_pattern_idx);
+        const elem_ty = self.requirePatternListElemType(module_idx, type_scope, match_pattern_idx);
         const bool_ty = try self.makePrimitiveType(.bool);
         const u64_ty = try self.makePrimitiveType(.u64);
         const patterns = self.ctx.typedCirModule(module_idx).slicePatterns(list_pattern.patterns);
@@ -4468,13 +4846,24 @@ pub const Lowerer = struct {
         try self.bindPatternFromSourceExpr(
             module_idx,
             type_scope,
-            bind_pattern_idx,
+            match_pattern_idx,
             scrutinee_expr,
             scrutinee_ty,
             scrutinee_solved_var,
             &branch_env,
             &binding_decls,
         );
+        if (match_pattern_idx != bind_pattern_idx) {
+            try self.recordPatternStructuralInfoFromSourceType(
+                module_idx,
+                type_scope,
+                bind_pattern_idx,
+                scrutinee_ty,
+                scrutinee_solved_var,
+            );
+            try self.aliasPatternBindings(module_idx, match_pattern_idx, bind_pattern_idx, &branch_env);
+        }
+        try self.collectBranchValueInfo(module_idx, type_scope, branch_env, branch_value, expected_result_var);
 
         const then_expr = try self.wrapExprWithBindingDecls(
             try self.lowerExprWithExpectedType(
@@ -4507,6 +4896,7 @@ pub const Lowerer = struct {
         scrutinee_expr: ast.ExprId,
         scrutinee_ty: type_mod.TypeId,
         scrutinee_solved_var: ?Var,
+        match_pattern_idx: CIR.Pattern.Idx,
         pattern: CIR.Pattern,
         bind_pattern_idx: CIR.Pattern.Idx,
         branch_value: CIR.Expr.Idx,
@@ -4527,6 +4917,7 @@ pub const Lowerer = struct {
             scrutinee_expr,
             scrutinee_ty,
             scrutinee_solved_var,
+            match_pattern_idx,
             bind_pattern_idx,
             branch_value,
         );
@@ -4664,7 +5055,121 @@ pub const Lowerer = struct {
                 env,
                 decls,
             ),
-            .list,
+            .applied_tag => |tag| {
+                if (self.ctx.types.getType(effective_source_ty) == .primitive and self.ctx.types.getType(effective_source_ty).primitive == .bool) {
+                    if (self.ctx.typedCirModule(module_idx).slicePatterns(tag.args).len != 0) {
+                        return debugPanic("monotype bool pattern invariant violated: Bool tags cannot carry arguments", .{});
+                    }
+                    return;
+                }
+                const arg_patterns = self.ctx.typedCirModule(module_idx).slicePatterns(tag.args);
+                const arg_tys = try self.requireTagPayloadTypesFromMonotype(
+                    module_idx,
+                    effective_source_ty,
+                    tag.name,
+                );
+                if (arg_patterns.len != arg_tys.len) {
+                    return debugPanic(
+                        "monotype pattern invariant violated: tag pattern arity {d} did not match payload arity {d} in module {d}",
+                        .{ arg_patterns.len, arg_tys.len, module_idx },
+                    );
+                }
+                for (arg_patterns, arg_tys, 0..) |arg_pattern_idx, arg_ty, i| {
+                    const payload_expr = try self.makeTagPayloadExpr(
+                        module_idx,
+                        type_scope,
+                        source_expr,
+                        effective_source_ty,
+                        pattern_idx,
+                        tag,
+                        i,
+                        arg_ty,
+                    );
+                    try self.bindPatternFromSourceExpr(
+                        module_idx,
+                        type_scope,
+                        arg_pattern_idx,
+                        payload_expr,
+                        arg_ty,
+                        try self.requirePatternSolvedVar(module_idx, type_scope, arg_pattern_idx),
+                        env,
+                        decls,
+                    );
+                }
+            },
+            .list => |list| {
+                const elem_ty = self.requirePatternListElemType(module_idx, type_scope, pattern_idx);
+                const u64_ty = try self.makePrimitiveType(.u64);
+                const patterns = self.ctx.typedCirModule(module_idx).slicePatterns(list.patterns);
+                const prefix_len: usize = if (list.rest_info) |rest| @intCast(rest.index) else patterns.len;
+                const suffix_len = patterns.len - prefix_len;
+                const len_expr = try self.makeLowLevelExpr(u64_ty, .list_len, &.{source_expr});
+                const elem_solved_var = self.lookupListElemSolvedVar(module_idx, type_scope, source_solved_var);
+
+                for (patterns[0..prefix_len], 0..) |elem_pattern_idx, i| {
+                    const index_expr = try self.makeU64LiteralExpr(@intCast(i));
+                    const elem_expr = try self.makeLowLevelExpr(elem_ty, .list_get_unsafe, &.{ source_expr, index_expr });
+                    try self.bindPatternFromSourceExpr(
+                        module_idx,
+                        type_scope,
+                        elem_pattern_idx,
+                        elem_expr,
+                        elem_ty,
+                        elem_solved_var,
+                        env,
+                        decls,
+                    );
+                }
+
+                if (suffix_len != 0) {
+                    const suffix_start = try self.makeLowLevelExpr(
+                        u64_ty,
+                        .num_minus,
+                        &.{ len_expr, try self.makeU64LiteralExpr(@intCast(suffix_len)) },
+                    );
+                    for (patterns[prefix_len..], 0..) |elem_pattern_idx, i| {
+                        const index_expr = if (i == 0)
+                            suffix_start
+                        else
+                            try self.makeLowLevelExpr(
+                                u64_ty,
+                                .num_plus,
+                                &.{ suffix_start, try self.makeU64LiteralExpr(@intCast(i)) },
+                            );
+                        const elem_expr = try self.makeLowLevelExpr(elem_ty, .list_get_unsafe, &.{ source_expr, index_expr });
+                        try self.bindPatternFromSourceExpr(
+                            module_idx,
+                            type_scope,
+                            elem_pattern_idx,
+                            elem_expr,
+                            elem_ty,
+                            elem_solved_var,
+                            env,
+                            decls,
+                        );
+                    }
+                }
+
+                if (list.rest_info) |rest| {
+                    if (rest.pattern) |rest_pattern_idx| {
+                        const expected_len_expr = try self.makeU64LiteralExpr(@intCast(patterns.len));
+                        const start_expr = try self.makeU64LiteralExpr(rest.index);
+                        const rest_len_expr = try self.makeLowLevelExpr(u64_ty, .num_minus, &.{ len_expr, expected_len_expr });
+                        const bounds_expr = try self.makeListSliceBoundsExpr(start_expr, rest_len_expr);
+                        const rest_expr = try self.makeLowLevelExpr(effective_source_ty, .list_sublist, &.{ source_expr, bounds_expr });
+                        try self.bindPatternFromSourceExpr(
+                            module_idx,
+                            type_scope,
+                            rest_pattern_idx,
+                            rest_expr,
+                            effective_source_ty,
+                            source_solved_var,
+                            env,
+                            decls,
+                        );
+                    }
+                }
+            },
             .num_literal,
             .small_dec_literal,
             .dec_literal,
@@ -4674,6 +5179,241 @@ pub const Lowerer = struct {
             => {},
             else => debugTodoPattern(pattern),
         }
+    }
+
+    fn aliasPatternBindings(
+        self: *Lowerer,
+        module_idx: u32,
+        match_pattern_idx: CIR.Pattern.Idx,
+        bind_pattern_idx: CIR.Pattern.Idx,
+        env: *BindingEnv,
+    ) std.mem.Allocator.Error!void {
+        if (match_pattern_idx == bind_pattern_idx) return;
+        const typed_cir_module = self.ctx.typedCirModule(module_idx);
+        const match_pattern = typed_cir_module.pattern(match_pattern_idx).data;
+        const bind_pattern = typed_cir_module.pattern(bind_pattern_idx).data;
+
+        switch (match_pattern) {
+            .assign => {
+                if (bind_pattern != .assign) {
+                    debugPanic("monotype invariant violated: mismatched or-pattern binding shapes", .{});
+                }
+                try self.aliasBindingEntry(module_idx, match_pattern_idx, bind_pattern_idx, env);
+            },
+            .as => |match_as| {
+                if (bind_pattern != .as) {
+                    debugPanic("monotype invariant violated: mismatched or-pattern binding shapes", .{});
+                }
+                const bind_as = bind_pattern.as;
+                try self.aliasBindingEntry(module_idx, match_pattern_idx, bind_pattern_idx, env);
+                try self.aliasPatternBindings(module_idx, match_as.pattern, bind_as.pattern, env);
+            },
+            .underscore => {
+                if (bind_pattern != .underscore) {
+                    debugPanic("monotype invariant violated: mismatched or-pattern binding shapes", .{});
+                }
+            },
+            .nominal => |match_nominal| {
+                const bind_backing = switch (bind_pattern) {
+                    .nominal => |nominal| nominal.backing_pattern,
+                    .nominal_external => |nominal| nominal.backing_pattern,
+                    else => debugPanic("monotype invariant violated: mismatched or-pattern binding shapes", .{}),
+                };
+                try self.aliasPatternBindings(module_idx, match_nominal.backing_pattern, bind_backing, env);
+            },
+            .nominal_external => |match_nominal| {
+                const bind_backing = switch (bind_pattern) {
+                    .nominal => |nominal| nominal.backing_pattern,
+                    .nominal_external => |nominal| nominal.backing_pattern,
+                    else => debugPanic("monotype invariant violated: mismatched or-pattern binding shapes", .{}),
+                };
+                try self.aliasPatternBindings(module_idx, match_nominal.backing_pattern, bind_backing, env);
+            },
+            .record_destructure => |match_record| {
+                if (bind_pattern != .record_destructure) {
+                    debugPanic("monotype invariant violated: mismatched or-pattern binding shapes", .{});
+                }
+                const bind_record = bind_pattern.record_destructure;
+                const match_destructs = typed_cir_module.sliceRecordDestructs(match_record.destructs);
+                const bind_destructs = typed_cir_module.sliceRecordDestructs(bind_record.destructs);
+                for (match_destructs) |match_destruct_idx| {
+                    const match_destruct = typed_cir_module.getRecordDestruct(match_destruct_idx);
+                    const match_label = typed_cir_module.getIdent(match_destruct.label);
+                    var bind_destruct_idx: ?CIR.Pattern.RecordDestruct.Idx = null;
+                    for (bind_destructs) |candidate_idx| {
+                        const candidate = typed_cir_module.getRecordDestruct(candidate_idx);
+                        if (std.mem.eql(u8, typed_cir_module.getIdent(candidate.label), match_label)) {
+                            bind_destruct_idx = candidate_idx;
+                            break;
+                        }
+                    }
+                    const resolved_bind_destruct = bind_destruct_idx orelse debugPanic(
+                        "monotype invariant violated: mismatched or-pattern record destructure fields",
+                        .{},
+                    );
+                    const bind_destruct = typed_cir_module.getRecordDestruct(resolved_bind_destruct);
+                    try self.aliasPatternBindings(
+                        module_idx,
+                        match_destruct.kind.toPatternIdx(),
+                        bind_destruct.kind.toPatternIdx(),
+                        env,
+                    );
+                }
+            },
+            .tuple => |match_tuple| {
+                if (bind_pattern != .tuple) {
+                    debugPanic("monotype invariant violated: mismatched or-pattern binding shapes", .{});
+                }
+                const bind_tuple = bind_pattern.tuple;
+                const match_elems = typed_cir_module.slicePatterns(match_tuple.patterns);
+                const bind_elems = typed_cir_module.slicePatterns(bind_tuple.patterns);
+                if (match_elems.len != bind_elems.len) {
+                    debugPanic("monotype invariant violated: mismatched or-pattern tuple arity", .{});
+                }
+                for (match_elems, bind_elems) |match_elem, bind_elem| {
+                    try self.aliasPatternBindings(module_idx, match_elem, bind_elem, env);
+                }
+            },
+            .list => |match_list| {
+                if (bind_pattern != .list) {
+                    debugPanic("monotype invariant violated: mismatched or-pattern binding shapes", .{});
+                }
+                const bind_list = bind_pattern.list;
+                const match_patterns = typed_cir_module.slicePatterns(match_list.patterns);
+                const bind_patterns = typed_cir_module.slicePatterns(bind_list.patterns);
+                if (match_patterns.len != bind_patterns.len) {
+                    debugPanic("monotype invariant violated: mismatched or-pattern list arity", .{});
+                }
+                const match_rest = match_list.rest_info;
+                const bind_rest = bind_list.rest_info;
+                if ((match_rest == null) != (bind_rest == null)) {
+                    debugPanic("monotype invariant violated: mismatched or-pattern list rest shape", .{});
+                }
+                if (match_rest != null and bind_rest != null) {
+                    if (match_rest.?.index != bind_rest.?.index) {
+                        debugPanic("monotype invariant violated: mismatched or-pattern list rest index", .{});
+                    }
+                    if ((match_rest.?.pattern == null) != (bind_rest.?.pattern == null)) {
+                        debugPanic("monotype invariant violated: mismatched or-pattern list rest pattern", .{});
+                    }
+                }
+                for (match_patterns, bind_patterns) |match_elem, bind_elem| {
+                    try self.aliasPatternBindings(module_idx, match_elem, bind_elem, env);
+                }
+                if (match_rest) |rest| {
+                    if (rest.pattern) |match_rest_pattern| {
+                        try self.aliasPatternBindings(module_idx, match_rest_pattern, bind_rest.?.pattern.?, env);
+                    }
+                }
+            },
+            .applied_tag => |match_tag| {
+                if (bind_pattern != .applied_tag) {
+                    debugPanic("monotype invariant violated: mismatched or-pattern binding shapes", .{});
+                }
+                const bind_tag = bind_pattern.applied_tag;
+                const match_args = typed_cir_module.slicePatterns(match_tag.args);
+                const bind_args = typed_cir_module.slicePatterns(bind_tag.args);
+                if (match_args.len != bind_args.len) {
+                    debugPanic("monotype invariant violated: mismatched or-pattern tag arity", .{});
+                }
+                for (match_args, bind_args) |match_arg, bind_arg| {
+                    try self.aliasPatternBindings(module_idx, match_arg, bind_arg, env);
+                }
+            },
+            .num_literal,
+            .small_dec_literal,
+            .dec_literal,
+            .frac_f32_literal,
+            .frac_f64_literal,
+            .str_literal,
+            => {},
+            else => debugTodoPattern(match_pattern),
+        }
+    }
+
+    fn aliasBindingEntry(
+        self: *Lowerer,
+        module_idx: u32,
+        match_pattern_idx: CIR.Pattern.Idx,
+        bind_pattern_idx: CIR.Pattern.Idx,
+        env: *BindingEnv,
+    ) std.mem.Allocator.Error!void {
+        _ = self;
+        const match_key: PatternKey = .{
+            .module_idx = module_idx,
+            .pattern_idx = @intFromEnum(match_pattern_idx),
+        };
+        const bind_key: PatternKey = .{
+            .module_idx = module_idx,
+            .pattern_idx = @intFromEnum(bind_pattern_idx),
+        };
+        const entry = env.get(match_key) orelse debugPanic(
+            "monotype invariant violated: missing match binding for or-pattern aliasing",
+            .{},
+        );
+        try env.put(bind_key, entry);
+    }
+
+    fn makeTagPayloadExpr(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeCloneScope,
+        scrutinee_expr: ast.ExprId,
+        scrutinee_ty: type_mod.TypeId,
+        pattern_idx: CIR.Pattern.Idx,
+        tag: @FieldType(CIR.Pattern, "applied_tag"),
+        payload_index: usize,
+        payload_ty: type_mod.TypeId,
+    ) std.mem.Allocator.Error!ast.ExprId {
+        const typed_cir_module = self.ctx.typedCirModule(module_idx);
+        const arg_patterns = typed_cir_module.slicePatterns(tag.args);
+        const arg_tys = try self.requireTagPayloadTypesFromMonotype(module_idx, scrutinee_ty, tag.name);
+        if (arg_patterns.len != arg_tys.len) {
+            return debugPanic(
+                "monotype pattern invariant violated: tag payload arity {d} did not match payload types {d} in module {d}",
+                .{ arg_patterns.len, arg_tys.len, module_idx },
+            );
+        }
+        if (payload_index >= arg_tys.len) {
+            return debugPanic("monotype pattern invariant violated: tag payload index out of bounds", .{});
+        }
+
+        const lowered_args = try self.allocator.alloc(ast.PatId, arg_tys.len);
+        defer self.allocator.free(lowered_args);
+        var payload_symbol: symbol_mod.Symbol = symbol_mod.Symbol.none;
+        for (arg_tys, 0..) |arg_ty, i| {
+            const symbol = try self.ctx.addSyntheticSymbol(base.Ident.Idx.NONE);
+            if (i == payload_index) payload_symbol = symbol;
+            lowered_args[i] = try self.program.store.addPat(.{
+                .ty = arg_ty,
+                .data = .{ .var_ = symbol },
+            });
+        }
+
+        const tag_pat = try self.program.store.addPat(.{
+            .ty = scrutinee_ty,
+            .data = .{ .tag = .{
+                .name = try self.ctx.copyExecutableIdent(module_idx, tag.name),
+                .discriminant = self.requirePatternTagDiscriminant(module_idx, type_scope, pattern_idx),
+                .args = try self.program.store.addPatSpan(lowered_args),
+            } },
+        });
+        const payload_expr = try self.makeVarExpr(payload_ty, payload_symbol);
+        const fallback_expr = try self.program.store.addExpr(.{
+            .ty = payload_ty,
+            .data = .{ .runtime_error = try self.internStringLiteral("tag payload extraction failed") },
+        });
+        const branches = [_]ast.Branch{
+            .{ .pat = tag_pat, .body = payload_expr },
+            .{ .pat = try self.program.store.addPat(.{ .ty = scrutinee_ty, .data = .{ .var_ = symbol_mod.Symbol.none } }), .body = fallback_expr },
+        };
+        return try self.program.store.addExpr(.{
+            .ty = payload_ty,
+            .data = .{ .when = .{
+                .cond = scrutinee_expr,
+                .branches = try self.program.store.addBranchSpan(&branches),
+            } },
+        });
     }
 
     fn lowerBlockExpr(
@@ -5091,6 +5831,15 @@ pub const Lowerer = struct {
                     .body = try self.lowerExpr(module_idx, type_scope, body_env, while_stmt.body),
                 } }));
             },
+            .s_alias_decl => |_| {
+                // Type declarations are compile-time only; no runtime statement.
+            },
+            .s_nominal_decl => |_| {
+                // Type declarations are compile-time only; no runtime statement.
+            },
+            .s_type_anno => |_| {
+                // Type annotations are compile-time only; no runtime statement.
+            },
             .s_type_var_alias => |_| {
                 // Type var aliases are compile-time only; no runtime statement.
             },
@@ -5365,13 +6114,31 @@ pub const Lowerer = struct {
             .record => {},
             else => debugPanic("monotype invariant violated: record expression lowered with non-record type", .{}),
         }
-        std.mem.sort(ast.FieldExpr, out, &self.ctx.idents, struct {
-            fn lessThan(idents: *const base.Ident.Store, a: ast.FieldExpr, b: ast.FieldExpr) bool {
-                return std.mem.order(u8, idents.getText(a.name), idents.getText(b.name)) == .lt;
+        const OrderedField = struct {
+            index: u16,
+            field: ast.FieldExpr,
+        };
+        const ordered = try self.allocator.alloc(OrderedField, out.len);
+        defer self.allocator.free(ordered);
+        for (out, 0..) |field, i| {
+            ordered[i] = .{
+                .index = self.requireRecordFieldIndexFromMonotypeType(record_ty, self.ctx.idents.getText(field.name)),
+                .field = field,
+            };
+        }
+        std.mem.sort(OrderedField, ordered, {}, struct {
+            fn lessThan(_: void, a: OrderedField, b: OrderedField) bool {
+                return a.index < b.index;
             }
         }.lessThan);
 
-        return try self.program.store.addFieldExprSpan(out);
+        const sorted = try self.allocator.alloc(ast.FieldExpr, ordered.len);
+        defer self.allocator.free(sorted);
+        for (ordered, 0..) |entry, i| {
+            sorted[i] = entry.field;
+        }
+
+        return try self.program.store.addFieldExprSpan(sorted);
     }
 
     fn lowerRecordExpr(
@@ -5380,16 +6147,16 @@ pub const Lowerer = struct {
         type_scope: *TypeCloneScope,
         env: BindingEnv,
         record_ty: type_mod.TypeId,
-        record_var: ?Var,
+        record_var: Var,
         record: @FieldType(CIR.Expr, "e_record"),
     ) std.mem.Allocator.Error!ast.ExprId {
-        _ = record_var;
         if (record.ext) |base_expr_idx| {
             return self.lowerRecordUpdateExpr(
                 module_idx,
                 type_scope,
                 env,
                 record_ty,
+                record_var,
                 base_expr_idx,
                 record.fields,
             );
@@ -5413,9 +6180,11 @@ pub const Lowerer = struct {
         type_scope: *TypeCloneScope,
         env: BindingEnv,
         record_ty: type_mod.TypeId,
+        record_var: Var,
         base_expr_idx: CIR.Expr.Idx,
         update_fields_span: CIR.RecordField.Span,
     ) std.mem.Allocator.Error!ast.ExprId {
+        _ = record_var;
         const record = switch (self.ctx.types.getType(record_ty)) {
             .record => |record| record,
             else => debugPanic("monotype invariant violated: record update lowered with non-record type", .{}),
@@ -5442,12 +6211,15 @@ pub const Lowerer = struct {
 
         const typed_cir_module = self.ctx.typedCirModule(module_idx);
         const update_field_ids = typed_cir_module.sliceRecordFields(update_fields_span);
-        const lowered_updates = try self.allocator.alloc(ast.FieldExpr, update_field_ids.len);
+        const lowered_updates = try self.allocator.alloc(struct {
+            name_text: []const u8,
+            value: ast.ExprId,
+        }, update_field_ids.len);
         defer self.allocator.free(lowered_updates);
         for (update_field_ids, 0..) |field_idx, i| {
             const field = typed_cir_module.getRecordField(field_idx);
             lowered_updates[i] = .{
-                .name = try self.ctx.copyExecutableIdent(module_idx, field.name),
+                .name_text = typed_cir_module.getIdent(field.name),
                 .value = try self.lowerExprWithExpectedType(
                     module_idx,
                     type_scope,
@@ -5460,26 +6232,49 @@ pub const Lowerer = struct {
         }
 
         const final_fields = self.ctx.types.sliceFields(record.fields);
-        const lowered_fields = try self.allocator.alloc(ast.FieldExpr, final_fields.len);
-        defer self.allocator.free(lowered_fields);
+        const OrderedField = struct {
+            index: u16,
+            field: ast.FieldExpr,
+        };
+        const ordered_fields = try self.allocator.alloc(OrderedField, final_fields.len);
+        defer self.allocator.free(ordered_fields);
         for (final_fields, 0..) |field, i| {
+            const field_name_text = self.ctx.idents.getText(field.name);
+            const field_index = self.requireRecordFieldIndexFromMonotypeType(record_ty, field_name_text);
             const value = blk: {
                 for (lowered_updates) |updated| {
-                    if (updated.name == field.name) break :blk updated.value;
+                    if (std.mem.eql(u8, updated.name_text, field_name_text)) {
+                        break :blk updated.value;
+                    }
                 }
                 break :blk try self.program.store.addExpr(.{
                     .ty = field.ty,
                     .data = .{ .access = .{
                         .record = base_expr,
                         .field = field.name,
-                        .field_index = @intCast(i),
+                        .field_index = field_index,
                     } },
                 });
             };
-            lowered_fields[i] = .{
-                .name = field.name,
-                .value = value,
+            ordered_fields[i] = .{
+                .index = field_index,
+                .field = .{
+                    .name = field.name,
+                    .value = value,
+                },
             };
+        }
+
+        std.mem.sort(OrderedField, ordered_fields, {}, struct {
+            fn lessThan(_: void, a: OrderedField, b: OrderedField) bool {
+                return a.index < b.index;
+            }
+        }.lessThan);
+
+        const lowered_fields = try self.allocator.alloc(ast.FieldExpr, ordered_fields.len);
+        defer self.allocator.free(lowered_fields);
+        for (ordered_fields, 0..) |entry, i| {
+            lowered_fields[i] = entry.field;
         }
 
         const rebuilt_record = try self.program.store.addExpr(.{
@@ -5568,7 +6363,7 @@ pub const Lowerer = struct {
         env: BindingEnv,
         expr_idx: CIR.Expr.Idx,
         method_name: base.Ident.Idx,
-    ) std.mem.Allocator.Error!LoweredCall {
+    ) std.mem.Allocator.Error!?LoweredCall {
         const args = self.getRecordedMethodArgs(module_idx, expr_idx, method_name);
         const typed_cir_module = self.ctx.typedCirModule(module_idx);
         const alias_stmt = switch (typed_cir_module.expr(expr_idx).data) {
@@ -5608,7 +6403,7 @@ pub const Lowerer = struct {
             type_scope,
             receiver_var,
             method_name,
-        );
+        ) orelse return null;
         const source_fn_var = try self.copyTopLevelDefExprVarToScope(type_scope, target.module_idx, target.def_idx);
 
         const arg_exprs = blk: {
@@ -5645,6 +6440,73 @@ pub const Lowerer = struct {
             .data = try self.buildCurriedCallFromLowered(callee, lowered_args, call_info.applied_result_tys),
             .result_ty = call_info.result_ty,
         };
+    }
+
+    fn maybeLowerNominalEqBinop(
+        self: *Lowerer,
+        module_idx: u32,
+        type_scope: *TypeCloneScope,
+        env: BindingEnv,
+        expr_idx: CIR.Expr.Idx,
+        binop: CIR.Expr.Binop,
+    ) std.mem.Allocator.Error!?ast.ExprId {
+        if (binop.op != .eq and binop.op != .ne) return null;
+
+        const operand_ty = try self.requireExprType(module_idx, type_scope, binop.lhs);
+        switch (self.ctx.types.getTypePreservingNominal(operand_ty)) {
+            .nominal => |nominal| {
+                const method_name = self.ctx.typedCirModule(module_idx).commonIdents().is_eq;
+                const receiver_var = self.requireExprResultVar(module_idx, type_scope, binop.lhs);
+                const target = try self.resolveAttachedMethodTargetFromWorkspaceVar(
+                    module_idx,
+                    type_scope,
+                    receiver_var,
+                    method_name,
+                ) orelse {
+                    _ = nominal;
+                    return null;
+                };
+                const source_fn_var = try self.copyTopLevelDefExprVarToScope(type_scope, target.module_idx, target.def_idx);
+                const arg_exprs = [_]CIR.Expr.Idx{ binop.lhs, binop.rhs };
+
+                var call_info = try self.prepareCallInfo(module_idx, type_scope, expr_idx, source_fn_var, &arg_exprs);
+                defer call_info.deinit(self.allocator);
+
+                const callee = try self.lowerResolvedTargetCallee(module_idx, type_scope, target, call_info.fn_ty, call_info.fn_var);
+
+                const lowered_args = try self.allocator.alloc(ast.ExprId, arg_exprs.len);
+                defer self.allocator.free(lowered_args);
+                for (arg_exprs, 0..) |arg_expr_idx, i| {
+                    lowered_args[i] = try self.lowerExprWithExpectedType(
+                        module_idx,
+                        type_scope,
+                        env,
+                        arg_expr_idx,
+                        call_info.arg_tys[i],
+                        call_info.arg_vars[i],
+                    );
+                }
+
+                const eq_expr = try self.program.store.addExpr(.{
+                    .ty = call_info.result_ty,
+                    .data = .{ .call = try self.buildCurriedCallFromLowered(callee, lowered_args, call_info.applied_result_tys) },
+                });
+
+                if (binop.op == .ne) {
+                    const bool_ty = try self.makePrimitiveType(.bool);
+                    return try self.program.store.addExpr(.{
+                        .ty = bool_ty,
+                        .data = .{ .low_level = .{
+                            .op = .bool_not,
+                            .args = try self.program.store.addExprSpan(&.{eq_expr}),
+                        } },
+                    });
+                }
+
+                return eq_expr;
+            },
+            else => return null,
+        }
     }
 
     fn lowerCurriedCall(
@@ -5987,7 +6849,7 @@ pub const Lowerer = struct {
                     env,
                     expr.idx,
                     dot.field_name,
-                );
+                ) orelse break :blk try self.makeRuntimeErrorExpr(target_ty);
                 break :blk try self.program.store.addExpr(.{
                     .ty = lowered_call.result_ty,
                     .data = .{ .call = lowered_call.data },
@@ -6000,7 +6862,7 @@ pub const Lowerer = struct {
                     env,
                     expr.idx,
                     dispatch.method_name,
-                );
+                ) orelse break :blk try self.makeRuntimeErrorExpr(target_ty);
                 break :blk try self.program.store.addExpr(.{
                     .ty = lowered_call.result_ty,
                     .data = .{ .call = lowered_call.data },
@@ -6071,6 +6933,8 @@ pub const Lowerer = struct {
                     env,
                     call_expr_idx,
                     dot.field_name,
+                ) orelse break :blk try self.makeRuntimeErrorExpr(
+                    try self.requireExprType(module_idx, type_scope, call_expr_idx),
                 );
                 break :blk try self.program.store.addExpr(.{
                     .ty = lowered_call.result_ty,
@@ -6084,6 +6948,8 @@ pub const Lowerer = struct {
                     env,
                     call_expr_idx,
                     dispatch.method_name,
+                ) orelse break :blk try self.makeRuntimeErrorExpr(
+                    try self.requireExprType(module_idx, type_scope, call_expr_idx),
                 );
                 break :blk try self.program.store.addExpr(.{
                     .ty = lowered_call.result_ty,
@@ -6565,13 +7431,39 @@ pub const Lowerer = struct {
         source_ty: type_mod.TypeId,
         source_solved_var: ?Var,
     ) std.mem.Allocator.Error!void {
-        if (!self.ctx.types.isFullyResolved(source_ty)) {
+        var effective_source_ty = source_ty;
+        if (source_solved_var) |var_| {
+            const pattern = self.ctx.typedCirModule(module_idx).pattern(pattern_idx).data;
+            const source_kind = self.ctx.types.getTypePreservingNominal(source_ty);
+            const needs_solved_ty = switch (pattern) {
+                .applied_tag => |tag| switch (source_kind) {
+                    .tag_union => false,
+                    .primitive => |prim| blk: {
+                        if (prim != .bool) break :blk true;
+                        const tag_args_len = self.ctx.typedCirModule(module_idx).slicePatterns(tag.args).len;
+                        break :blk tag_args_len != 0;
+                    },
+                    else => true,
+                },
+                .record_destructure => source_kind != .record,
+                .list => source_kind != .list,
+                .tuple => source_kind != .tuple,
+                else => false,
+            };
+            if (needs_solved_ty) {
+                effective_source_ty = try self.instantiatePublishedVarType(
+                    module_idx,
+                    type_scope,
+                    var_,
+                );
+            }
+        }
+        if (!self.ctx.types.isFullyResolved(effective_source_ty)) {
             return debugPanic(
                 "monotype pattern invariant violated: structural pattern source type was not fully resolved before recording in module {d}",
                 .{module_idx},
             );
         }
-        const effective_source_ty = source_ty;
         try self.recordPatternSourceType(module_idx, type_scope, pattern_idx, effective_source_ty);
 
         const typed_cir_module = self.ctx.typedCirModule(module_idx);
@@ -6644,7 +7536,7 @@ pub const Lowerer = struct {
                                 "monotype pattern invariant violated: record destructure missing source solved var in module {d}",
                                 .{module_idx},
                             ),
-                            destruct.label,
+                            typed_cir_module.getIdent(destruct.label),
                         ),
                     );
                     const field_index = self.requireRecordDestructFieldIndex(module_idx, type_scope, destruct_idx);
@@ -6683,6 +7575,20 @@ pub const Lowerer = struct {
             },
             .tuple => |tuple| {
                 const elem_patterns = typed_cir_module.slicePatterns(tuple.patterns);
+                if (self.ctx.types.getTypePreservingNominal(effective_source_ty) != .tuple) {
+                    for (elem_patterns) |child_pattern_idx| {
+                        const elem_solved_var = try self.requirePatternSolvedVar(module_idx, type_scope, child_pattern_idx);
+                        const elem_ty = try self.instantiatePublishedVarType(module_idx, type_scope, elem_solved_var);
+                        try self.recordPatternStructuralInfoFromSourceType(
+                            module_idx,
+                            type_scope,
+                            child_pattern_idx,
+                            elem_ty,
+                            elem_solved_var,
+                        );
+                    }
+                    return;
+                }
                 const elem_tys = self.requireTupleElemTypesFromMonotype(effective_source_ty);
                 if (elem_patterns.len != elem_tys.len) {
                     return debugPanic(
@@ -7174,13 +8080,19 @@ pub const Lowerer = struct {
         type_scope: *TypeCloneScope,
         expr_idx: CIR.Expr.Idx,
     ) std.mem.Allocator.Error!type_mod.TypeId {
-        _ = self;
         const key: TypeCloneScope.ExprKey = .{
             .module_idx = module_idx,
             .expr_idx = expr_idx,
         };
         return type_scope.memo.expr_type_cache.get(key) orelse
-            debugPanic("monotype expr invariant violated: missing expr type cache entry", .{});
+            debugPanic(
+                "monotype expr invariant violated: missing expr type cache entry (module {d} expr {d} tag {s})",
+                .{
+                    module_idx,
+                    @intFromEnum(expr_idx),
+                    @tagName(self.ctx.typedCirModule(module_idx).expr(expr_idx).data),
+                },
+            );
     }
 
     fn requirePatternSolvedVar(
@@ -7969,14 +8881,11 @@ pub const Lowerer = struct {
             },
             .underscore => {},
             .record_destructure => |record| {
-                switch (self.ctx.types.getType(source.ty)) {
-                    .record => {},
-                    else => debugPanic(
-                        "monotype invariant violated: record destructure source symbol {d} has non-record type {d}",
-                        .{ source.symbol.raw(), @intFromEnum(source.ty) },
-                    ),
-                }
-                const source_expr = try self.makeVarExpr(source.ty, source.symbol);
+                const source_is_record = self.ctx.types.getType(source.ty) == .record;
+                const source_expr = if (source_is_record)
+                    try self.makeVarExpr(source.ty, source.symbol)
+                else
+                    null;
                 for (typed_cir_module.sliceRecordDestructs(record.destructs)) |destruct_idx| {
                     const destruct = typed_cir_module.getRecordDestruct(destruct_idx);
                     const child_pattern_idx = destruct.kind.toPatternIdx();
@@ -7986,14 +8895,17 @@ pub const Lowerer = struct {
                         .ty = field_ty,
                         .symbol = try self.ctx.addSyntheticSymbol(base.Ident.Idx.NONE),
                     };
-                    const field_expr = try self.program.store.addExpr(.{
-                        .ty = field_ty,
-                        .data = .{ .access = .{
-                            .record = source_expr,
-                            .field = try self.ctx.copyExecutableIdent(module_idx, destruct.label),
-                            .field_index = self.requireRecordDestructFieldIndex(module_idx, type_scope, destruct_idx),
-                        } },
-                    });
+                    const field_expr = if (source_is_record)
+                        try self.program.store.addExpr(.{
+                            .ty = field_ty,
+                            .data = .{ .access = .{
+                                .record = source_expr.?,
+                                .field = try self.ctx.copyExecutableIdent(module_idx, destruct.label),
+                                .field_index = self.requireRecordDestructFieldIndex(module_idx, type_scope, destruct_idx),
+                            } },
+                        })
+                    else
+                        try self.makeRuntimeErrorExpr(field_ty);
                     try decls.append(self.allocator, .{
                         .bind = field_bind,
                         .body = field_expr,
@@ -8012,7 +8924,11 @@ pub const Lowerer = struct {
             },
             .tuple => |tuple| {
                 const elem_patterns = typed_cir_module.slicePatterns(tuple.patterns);
-                const source_expr = try self.makeVarExpr(source.ty, source.symbol);
+                const source_is_tuple = self.ctx.types.getType(source.ty) == .tuple;
+                const source_expr = if (source_is_tuple)
+                    try self.makeVarExpr(source.ty, source.symbol)
+                else
+                    null;
                 for (elem_patterns, 0..) |elem_pattern_idx, i| {
                     const elem_ty = self.requirePatternSourceType(module_idx, type_scope, elem_pattern_idx);
                     const elem_bind: ast.TypedSymbol = .{
@@ -8021,7 +8937,10 @@ pub const Lowerer = struct {
                     };
                     try decls.append(self.allocator, .{
                         .bind = elem_bind,
-                        .body = try self.makeTupleAccessExpr(source_expr, elem_ty, i),
+                        .body = if (source_is_tuple)
+                            try self.makeTupleAccessExpr(source_expr.?, elem_ty, i)
+                        else
+                            try self.makeRuntimeErrorExpr(elem_ty),
                     });
                     if (!self.patternCanCollectStructuralBindings(module_idx, elem_pattern_idx)) continue;
                     try self.collectStructuralBindingDeclsWithSolvedVar(
@@ -8537,14 +9456,32 @@ pub const Lowerer = struct {
         };
     }
 
+    fn requireRecordFieldIndexFromMonotypeType(
+        self: *Lowerer,
+        record_ty: type_mod.TypeId,
+        field_name_text: []const u8,
+    ) u16 {
+        const record = switch (self.ctx.types.getType(record_ty)) {
+            .record => |record| record,
+            else => debugPanic("monotype invariant violated: expected record type for field index lookup", .{}),
+        };
+        const fields = self.ctx.types.sliceFields(record.fields);
+        for (fields, 0..) |field, i| {
+            if (std.mem.eql(u8, self.ctx.idents.getText(field.name), field_name_text)) {
+                return @intCast(i);
+            }
+        }
+        debugPanic("monotype invariant violated: missing record field index in monotype type", .{});
+    }
+
     fn requireRecordFieldIndexForSolvedVar(
         self: *Lowerer,
         module_idx: u32,
         type_scope: *const TypeCloneScope,
         record_var: Var,
-        field_name: base.Ident.Idx,
+        field_name_text: []const u8,
     ) std.mem.Allocator.Error!u16 {
-        const typed_cir_module = self.ctx.typedCirModule(module_idx);
+        _ = module_idx;
         var names = std.ArrayList(base.Ident.Idx).empty;
         defer names.deinit(self.allocator);
 
@@ -8608,7 +9545,7 @@ pub const Lowerer = struct {
         }
 
         for (names.items[0..write_index], 0..) |name, i| {
-            if (std.mem.eql(u8, type_scope.getIdent(name), typed_cir_module.getIdent(field_name))) return @intCast(i);
+            if (std.mem.eql(u8, type_scope.getIdent(name), field_name_text)) return @intCast(i);
         }
 
         debugPanic("monotype invariant violated: missing record field index in solved type", .{});
@@ -8810,6 +9747,7 @@ pub const Lowerer = struct {
             .as => |as_pat| try self.ctx.getOrCreatePatternSymbol(module_idx, pattern_idx, as_pat.ident),
             .nominal => |nominal| try self.requirePatternSymbolOnly(module_idx, nominal.backing_pattern),
             .nominal_external => |nominal| try self.requirePatternSymbolOnly(module_idx, nominal.backing_pattern),
+            .underscore => try self.ctx.addSyntheticSymbol(base.Ident.Idx.NONE),
             else => debugTodoPattern(pattern),
         };
     }
@@ -8832,6 +9770,10 @@ pub const Lowerer = struct {
             },
             .nominal => |nominal| try self.requirePatternBinderWithType(module_idx, nominal.backing_pattern, ty),
             .nominal_external => |nominal| try self.requirePatternBinderWithType(module_idx, nominal.backing_pattern, ty),
+            .underscore => .{
+                .ty = ty,
+                .symbol = try self.ctx.addSyntheticSymbol(base.Ident.Idx.NONE),
+            },
             else => debugTodoPattern(pattern),
         };
     }
@@ -10618,7 +11560,7 @@ pub const Lowerer = struct {
         type_scope: *TypeCloneScope,
         receiver_var: Var,
         method_name: base.Ident.Idx,
-    ) std.mem.Allocator.Error!ResolvedTarget {
+    ) std.mem.Allocator.Error!?ResolvedTarget {
         const source_module = self.ctx.typedCirModule(source_module_idx);
         var receiver_writer = try types.TypeWriter.initFromParts(
             self.allocator,
@@ -10631,26 +11573,12 @@ pub const Lowerer = struct {
         const receiver_text = try receiver_writer.writeGet(receiver_var, .one_line);
         const receiver_copy = try self.allocator.dupe(u8, receiver_text);
         defer self.allocator.free(receiver_copy);
-        const receiver = self.resolveWorkspaceDispatchReceiverIdentity(type_scope, receiver_var) orelse {
-            debugPanic(
-                "monotype static dispatch invariant violated: specialized dispatch receiver for method {s} was not nominal in module {d}; receiver var {d} => {s}",
-                .{ source_module.getIdent(method_name), source_module_idx, @intFromEnum(receiver_var), receiver_copy },
-            );
-        };
+        const receiver = self.resolveWorkspaceDispatchReceiverIdentity(type_scope, receiver_var) orelse return null;
         const receiver_module = self.ctx.typedCirModule(receiver.module_idx);
         const resolved = receiver_module.resolveAttachedMethodTargetByText(
             receiver.type_name,
             source_module.getIdent(method_name),
-        ) orelse debugPanic(
-            "monotype static dispatch invariant violated: missing method {s} for nominal {s} in module {s}; receiver var {d} => {s}",
-            .{
-                source_module.getIdent(method_name),
-                receiver.type_name,
-                receiver_module.name(),
-                @intFromEnum(receiver_var),
-                receiver_copy,
-            },
-        );
+        ) orelse return null;
         return .{
             .module_idx = resolved.module_idx,
             .def_idx = resolved.def_idx,

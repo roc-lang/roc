@@ -54,10 +54,6 @@ pub const CompiledProgram = struct {
 
 pub const CompiledInspectedExpr = CompiledProgram;
 
-pub fn allocInspectedExprSource(allocator: std.mem.Allocator, source: []const u8) ![]u8 {
-    return std.fmt.allocPrint(allocator, "Str.inspect(({s}))", .{source});
-}
-
 pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8) !ParsedResources {
     return parseAndCanonicalizeProgram(allocator, .expr, source, &.{});
 }
@@ -231,7 +227,7 @@ pub fn wasmEvaluatorInspectedStr(
     allocator: std.mem.Allocator,
     lowered: *const LoweredProgram,
 ) ![]u8 {
-    return @import("eval").wasm_evaluator.evalLoweredToStr(allocator, lowered);
+    return @import("../wasm_evaluator.zig").evalLoweredToStr(allocator, lowered);
 }
 
 fn valueToRocStr(val: Value) RocStr {
@@ -282,12 +278,21 @@ fn readNumericI128(val: Value, layout_val: layout_mod.Layout) !i128 {
     return error.NotNumeric;
 }
 
-fn resolveRecordFields(
-    types_store: *const types.Store,
-    initial_var: types.Var,
-) ?types.RecordField.SafeMultiList.Slice {
-    var current_var = initial_var;
-    var guard = types.debug.IterationGuard.init("resolveRecordFields");
+fn recordFieldSemanticIndex(
+    allocator: std.mem.Allocator,
+    module_env: *const ModuleEnv,
+    record_var: types.Var,
+    field_name: []const u8,
+) !u16 {
+    const types_store = &module_env.types;
+    const ident_store = module_env.getIdentStoreConst();
+    var gathered = std.ArrayList(types.RecordField).empty;
+    defer gathered.deinit(allocator);
+    var seen = std.AutoHashMap(base.Ident.Idx, void).init(allocator);
+    defer seen.deinit();
+
+    var current_var = record_var;
+    var guard = types.debug.IterationGuard.init("recordFieldSemanticIndex");
     while (true) {
         guard.tick();
         const resolved = types_store.resolveVar(current_var);
@@ -297,34 +302,39 @@ fn resolveRecordFields(
                 continue;
             },
             .structure => |flat| switch (flat) {
-                .record => |record| return types_store.getRecordFieldsSlice(record.fields),
-                .record_unbound => |fields| return types_store.getRecordFieldsSlice(fields),
-                else => return null,
+                .record => |record| {
+                    const fields_slice = types_store.getRecordFieldsSlice(record.fields);
+                    for (fields_slice.items(.name), fields_slice.items(.var_)) |name, var_| {
+                        if (seen.contains(name)) continue;
+                        try seen.put(name, {});
+                        try gathered.append(allocator, .{ .name = name, .var_ = var_ });
+                    }
+                    current_var = record.ext;
+                    continue;
+                },
+                .record_unbound => |fields| {
+                    const fields_slice = types_store.getRecordFieldsSlice(fields);
+                    for (fields_slice.items(.name), fields_slice.items(.var_)) |name, var_| {
+                        if (seen.contains(name)) continue;
+                        try seen.put(name, {});
+                        try gathered.append(allocator, .{ .name = name, .var_ = var_ });
+                    }
+                    break;
+                },
+                .empty_record => break,
+                .nominal_type => |nominal| {
+                    current_var = types_store.getNominalBackingVar(nominal);
+                    continue;
+                },
+                else => return error.NotRecord,
             },
-            else => return null,
+            else => return error.NotRecord,
         }
-    }
-    return null;
-}
-
-fn recordFieldSemanticIndex(
-    allocator: std.mem.Allocator,
-    module_env: *const ModuleEnv,
-    record_fields: types.RecordField.SafeMultiList.Slice,
-    field_name: []const u8,
-) !u16 {
-    const ident_store = module_env.getIdentStoreConst();
-    const count = record_fields.len;
-    var copied = try allocator.alloc(types.RecordField, count);
-    defer allocator.free(copied);
-
-    for (0..count) |i| {
-        copied[i] = record_fields.get(@intCast(i));
+        break;
     }
 
-    std.mem.sort(types.RecordField, copied, ident_store, types.RecordField.sortByNameAsc);
-
-    for (copied, 0..) |field, i| {
+    std.mem.sort(types.RecordField, gathered.items, ident_store, types.RecordField.sortByNameAsc);
+    for (gathered.items, 0..) |field, i| {
         if (std.mem.eql(u8, ident_store.getText(field.name), field_name)) {
             return @intCast(i);
         }
@@ -392,40 +402,61 @@ fn boolDiscriminantIndex(
     return error.MissingTag;
 }
 
-pub fn evalExprToValue(
-    allocator: std.mem.Allocator,
-    src: []const u8,
-) !struct {
-    compiled: CompiledProgram,
-    runtime_env: RuntimeHostEnv,
+pub const EvalState = struct {
+    compiled: *CompiledProgram,
+    runtime_env: *RuntimeHostEnv,
     interp: Interpreter,
     value: Value,
     ret_layout: LayoutIdx,
-} {
-    var compiled = try compileProgram(allocator, .expr, src, &.{});
-    errdefer compiled.deinit(allocator);
 
-    var runtime_env = RuntimeHostEnv.init(allocator);
-    errdefer runtime_env.deinit();
+    pub fn deinit(self: *EvalState, allocator: std.mem.Allocator) void {
+        self.interp.deinit();
+        self.runtime_env.deinit();
+        allocator.destroy(self.runtime_env);
+        self.compiled.deinit(allocator);
+        allocator.destroy(self.compiled);
+    }
+};
+
+pub fn evalExprToValue(
+    allocator: std.mem.Allocator,
+    src: []const u8,
+) !EvalState {
+    const compiled_ptr = try allocator.create(CompiledProgram);
+    errdefer allocator.destroy(compiled_ptr);
+    compiled_ptr.* = try compileProgram(allocator, .expr, src, &.{});
+    errdefer compiled_ptr.deinit(allocator);
+
+    const runtime_env_ptr = try allocator.create(RuntimeHostEnv);
+    errdefer allocator.destroy(runtime_env_ptr);
+    runtime_env_ptr.* = RuntimeHostEnv.init(allocator);
+    errdefer runtime_env_ptr.deinit();
+
+    var eval_state: EvalState = .{
+        .compiled = compiled_ptr,
+        .runtime_env = runtime_env_ptr,
+        .interp = undefined,
+        .value = undefined,
+        .ret_layout = undefined,
+    };
+    errdefer eval_state.deinit(allocator);
 
     var interp = try Interpreter.init(
         allocator,
-        &compiled.lowered.lir_result.store,
-        &compiled.lowered.lir_result.layouts,
-        runtime_env.get_ops(),
+        &eval_state.compiled.lowered.lir_result.store,
+        &eval_state.compiled.lowered.lir_result.layouts,
+        eval_state.runtime_env.get_ops(),
     );
     errdefer interp.deinit();
 
-    const result = try interp.eval(.{ .proc_id = compiled.lowered.main_proc });
-    const ret_layout = compiled.lowered.lir_result.store.getProcSpec(compiled.lowered.main_proc).ret_layout;
+    const result = try interp.eval(.{ .proc_id = eval_state.compiled.lowered.main_proc });
+    const ret_layout = eval_state.compiled.lowered.lir_result.store.getProcSpec(eval_state.compiled.lowered.main_proc).ret_layout;
 
-    return .{
-        .compiled = compiled,
-        .runtime_env = runtime_env,
-        .interp = interp,
-        .value = result.value,
-        .ret_layout = ret_layout,
-    };
+    eval_state.interp = interp;
+    eval_state.value = result.value;
+    eval_state.ret_layout = ret_layout;
+
+    return eval_state;
 }
 
 pub fn evalLoweredNumericI128(allocator: std.mem.Allocator, lowered: *const LoweredProgram) !i128 {
@@ -453,9 +484,7 @@ pub fn runExpectI64(src: []const u8, expected_int: i128, should_trace: TraceMode
     var eval_state = try evalExprToValue(interpreter_allocator, src);
     defer {
         eval_state.interp.dropValue(eval_state.value, eval_state.ret_layout);
-        eval_state.interp.deinit();
-        eval_state.runtime_env.deinit();
-        eval_state.compiled.deinit(interpreter_allocator);
+        eval_state.deinit(interpreter_allocator);
     }
 
     const layout_val = eval_state.compiled.lowered.lir_result.layouts.getLayout(eval_state.ret_layout);
@@ -468,9 +497,7 @@ pub fn runExpectSuccess(src: []const u8, should_trace: TraceMode) !void {
     var eval_state = try evalExprToValue(interpreter_allocator, src);
     defer {
         eval_state.interp.dropValue(eval_state.value, eval_state.ret_layout);
-        eval_state.interp.deinit();
-        eval_state.runtime_env.deinit();
-        eval_state.compiled.deinit(interpreter_allocator);
+        eval_state.deinit(interpreter_allocator);
     }
 
     try std.testing.expect(eval_state.runtime_env.terminationState() == .returned);
@@ -485,9 +512,7 @@ pub fn runExpectDec(src: []const u8, expected_dec: i128, should_trace: TraceMode
     var eval_state = try evalExprToValue(interpreter_allocator, src);
     defer {
         eval_state.interp.dropValue(eval_state.value, eval_state.ret_layout);
-        eval_state.interp.deinit();
-        eval_state.runtime_env.deinit();
-        eval_state.compiled.deinit(interpreter_allocator);
+        eval_state.deinit(interpreter_allocator);
     }
 
     const layout_val = eval_state.compiled.lowered.lir_result.layouts.getLayout(eval_state.ret_layout);
@@ -500,9 +525,7 @@ pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: TraceMo
     var eval_state = try evalExprToValue(interpreter_allocator, src);
     defer {
         eval_state.interp.dropValue(eval_state.value, eval_state.ret_layout);
-        eval_state.interp.deinit();
-        eval_state.runtime_env.deinit();
-        eval_state.compiled.deinit(interpreter_allocator);
+        eval_state.deinit(interpreter_allocator);
     }
 
     const layout_store = &eval_state.compiled.lowered.lir_result.layouts;
@@ -545,9 +568,7 @@ pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: Tra
     var eval_state = try evalExprToValue(interpreter_allocator, src);
     defer {
         eval_state.interp.dropValue(eval_state.value, eval_state.ret_layout);
-        eval_state.interp.deinit();
-        eval_state.runtime_env.deinit();
-        eval_state.compiled.deinit(interpreter_allocator);
+        eval_state.deinit(interpreter_allocator);
     }
 
     const layout_val = eval_state.compiled.lowered.lir_result.layouts.getLayout(eval_state.ret_layout);
@@ -561,10 +582,7 @@ pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: Tra
 }
 
 pub fn runDevOnlyExpectStr(src: []const u8, expected_str: []const u8) !void {
-    const inspected = try allocInspectedExprSource(interpreter_allocator, src);
-    defer interpreter_allocator.free(inspected);
-
-    var compiled = try compileInspectedExpr(interpreter_allocator, inspected);
+    var compiled = try compileInspectedExpr(interpreter_allocator, src);
     defer compiled.deinit(interpreter_allocator);
 
     const actual = try lirInterpreterInspectedStr(interpreter_allocator, &compiled.lowered);
@@ -578,9 +596,7 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
     var eval_state = try evalExprToValue(interpreter_allocator, src);
     defer {
         eval_state.interp.dropValue(eval_state.value, eval_state.ret_layout);
-        eval_state.interp.deinit();
-        eval_state.runtime_env.deinit();
-        eval_state.compiled.deinit(interpreter_allocator);
+        eval_state.deinit(interpreter_allocator);
     }
 
     const layout_store = &eval_state.compiled.lowered.lir_result.layouts;
@@ -615,9 +631,7 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
     var eval_state = try evalExprToValue(interpreter_allocator, src);
     defer {
         eval_state.interp.dropValue(eval_state.value, eval_state.ret_layout);
-        eval_state.interp.deinit();
-        eval_state.runtime_env.deinit();
-        eval_state.compiled.deinit(interpreter_allocator);
+        eval_state.deinit(interpreter_allocator);
     }
 
     const layout_store = &eval_state.compiled.lowered.lir_result.layouts;
@@ -626,14 +640,13 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
 
     const module_env = eval_state.compiled.resources.module_env;
     const expr_var = ModuleEnv.varFrom(eval_state.compiled.resources.expr_idx);
-    const record_fields = resolveRecordFields(&module_env.types, expr_var) orelse return error.NotRecord;
-
     const struct_idx = layout_val.data.struct_.idx;
     const struct_data = layout_store.getStructData(struct_idx);
     const sorted_fields = layout_store.struct_fields.sliceRange(struct_data.getFields());
 
+
     for (expected_fields) |expected| {
-        const semantic_index = try recordFieldSemanticIndex(interpreter_allocator, module_env, record_fields, expected.name);
+        const semantic_index = try recordFieldSemanticIndex(interpreter_allocator, module_env, expr_var, expected.name);
         var found = false;
         for (0..sorted_fields.len) |i| {
             const field = sorted_fields.get(@intCast(i));
@@ -655,9 +668,7 @@ pub fn runExpectListI64(src: []const u8, expected_elements: []const i64, should_
     var eval_state = try evalExprToValue(interpreter_allocator, src);
     defer {
         eval_state.interp.dropValue(eval_state.value, eval_state.ret_layout);
-        eval_state.interp.deinit();
-        eval_state.runtime_env.deinit();
-        eval_state.compiled.deinit(interpreter_allocator);
+        eval_state.deinit(interpreter_allocator);
     }
 
     const layout_store = &eval_state.compiled.lowered.lir_result.layouts;
@@ -671,6 +682,9 @@ pub fn runExpectListI64(src: []const u8, expected_elements: []const i64, should_
     try std.testing.expectEqual(expected_elements.len, rl.len());
 
     const elem_size = layout_store.layoutSize(elem_layout);
+    if (expected_elements.len == 0) {
+        if (rl.bytes == null) return;
+    }
     const bytes = rl.bytes orelse return error.NullListBytes;
     for (expected_elements, 0..) |expected, i| {
         const element_ptr = Value{ .ptr = bytes + i * elem_size };
@@ -688,9 +702,7 @@ pub fn runExpectListZst(src: []const u8, expected_element_count: usize, should_t
     var eval_state = try evalExprToValue(interpreter_allocator, src);
     defer {
         eval_state.interp.dropValue(eval_state.value, eval_state.ret_layout);
-        eval_state.interp.deinit();
-        eval_state.runtime_env.deinit();
-        eval_state.compiled.deinit(interpreter_allocator);
+        eval_state.deinit(interpreter_allocator);
     }
 
     const layout_store = &eval_state.compiled.lowered.lir_result.layouts;
