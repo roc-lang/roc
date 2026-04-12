@@ -15,6 +15,7 @@
 //! allowing the compiler to continue through all stages.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const builtins = @import("builtins");
 const build_options = @import("build_options");
@@ -51,6 +52,18 @@ const TestRunner = eval.TestRunner;
 var wasm_heap_memory: [64 * 1024 * 1024]u8 = undefined; // 64MB heap
 var fba: std.heap.FixedBufferAllocator = undefined;
 var allocator: Allocator = undefined;
+
+pub const std_options: std.Options = .{
+    .log_level = .warn,
+    .logFn = logFn,
+};
+
+fn logFn(comptime level: std.log.Level, comptime scope: @TypeOf(.enum_literal), comptime format: []const u8, args: anytype) void {
+    if (comptime builtin.target.os.tag == .freestanding) {
+        return;
+    }
+    std.log.defaultLog(level, scope, format, args);
+}
 
 const State = enum {
     START,
@@ -466,18 +479,18 @@ fn wasmRocExpectFailed(expect_failed_args: *const builtins.host_abi.RocExpectFai
     const trimmed = std.mem.trim(u8, source_bytes, " \t\n\r");
     // Format and record the message
     const formatted = std.fmt.allocPrint(allocator, "Expect failed: {s}", .{trimmed}) catch {
-        std.debug.panic("failed to allocate wasm expect failure message", .{});
+        @trap();
     };
-    ctx.recordCrash(formatted) catch |err| {
+    ctx.recordCrash(formatted) catch {
         allocator.free(formatted);
-        std.debug.panic("failed to record wasm expect failure: {}", .{err});
+        @trap();
     };
 }
 
 fn wasmRocCrashed(crashed_args: *const builtins.host_abi.RocCrashed, env: *anyopaque) callconv(.c) void {
     const ctx: *CrashContext = @ptrCast(@alignCast(env));
-    ctx.recordCrash(crashed_args.utf8_bytes[0..crashed_args.len]) catch |err| {
-        std.debug.panic("failed to record crash in wasm playground: {}", .{err});
+    ctx.recordCrash(crashed_args.utf8_bytes[0..crashed_args.len]) catch {
+        @trap();
     };
 }
 
@@ -811,7 +824,6 @@ fn handleReplState(message_type: MessageType, root: std.json.Value, response_buf
             var iterator = repl_ptr.definitions.iterator();
             while (iterator.next()) |kv| {
                 repl_ptr.allocator.free(kv.key_ptr.*);
-                repl_ptr.allocator.free(kv.value_ptr.*);
             }
             repl_ptr.definitions.clearRetainingCapacity();
             try writeReplClearResponse(response_buffer);
@@ -1604,7 +1616,18 @@ fn writeEvaluateTestsResponse(response_buffer: []u8, data: CompilerStageData) Re
     // Create interpreter infrastructure for test evaluation
     const empty_modules: []const *const ModuleEnv = &.{};
     const builtin_module_env: ?*const ModuleEnv = if (data.builtin_module) |bm| bm.env else null;
-    var test_runner = TestRunner.init(local_arena.allocator(), env, empty_modules, builtin_module_env) catch {
+    const builtin_types = data.builtin_types orelse {
+        try writeErrorResponse(response_buffer, .ERROR, "Missing builtin types for test runner.");
+        return;
+    };
+    var test_runner = TestRunner.init(
+        local_arena.allocator(),
+        env,
+        builtin_types,
+        empty_modules,
+        builtin_module_env,
+        &env.import_mapping,
+    ) catch {
         try writeErrorResponse(response_buffer, .ERROR, "Failed to initialize test runner.");
         return;
     };

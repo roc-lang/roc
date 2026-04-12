@@ -288,26 +288,29 @@ const is_freestanding = builtin.os.tag == .freestanding;
 
 // --- Static vtable instances ---
 
-const os_vtable = VTable{
-    .readFile = &osReadFile,
-    .readFileInto = &osReadFileInto,
-    .writeFile = &osWriteFile,
-    .fileExists = &osFileExists,
-    .stat = &osStat,
-    .listDir = &osListDir,
-    .dirName = &osDirName,
-    .baseName = &osBaseName,
-    .joinPath = &osJoinPath,
-    .canonicalize = &osCanonicalize,
-    .makePath = &osMakePath,
-    .rename = &osRename,
-    .getEnvVar = &osGetEnvVar,
-    .fetchUrl = &osFetchUrl,
-    .writeStdout = &osWriteStdout,
-    .writeStderr = &osWriteStderr,
-    .readStdin = &osReadStdin,
-    .isTty = &osIsTty,
-};
+const os_vtable: VTable = if (is_freestanding)
+    freestanding_vtable
+else
+    .{
+        .readFile = &OsImpl.osReadFile,
+        .readFileInto = &OsImpl.osReadFileInto,
+        .writeFile = &OsImpl.osWriteFile,
+        .fileExists = &OsImpl.osFileExists,
+        .stat = &OsImpl.osStat,
+        .listDir = &OsImpl.osListDir,
+        .dirName = &OsImpl.osDirName,
+        .baseName = &OsImpl.osBaseName,
+        .joinPath = &OsImpl.osJoinPath,
+        .canonicalize = &OsImpl.osCanonicalize,
+        .makePath = &OsImpl.osMakePath,
+        .rename = &OsImpl.osRename,
+        .getEnvVar = &OsImpl.osGetEnvVar,
+        .fetchUrl = &OsImpl.osFetchUrl,
+        .writeStdout = &OsImpl.osWriteStdout,
+        .writeStderr = &OsImpl.osWriteStderr,
+        .readStdin = &OsImpl.osReadStdin,
+        .isTty = &OsImpl.osIsTty,
+    };
 
 const testing_vtable = VTable{
     .readFile = &testingReadFile,
@@ -316,9 +319,9 @@ const testing_vtable = VTable{
     .fileExists = &testingFileExists,
     .stat = &testingStat,
     .listDir = &testingListDir,
-    .dirName = &osDirName,
-    .baseName = &osBaseName,
-    .joinPath = &osJoinPath,
+    .dirName = &testingDirName,
+    .baseName = &testingBaseName,
+    .joinPath = &testingJoinPath,
     .canonicalize = &testingCanonicalize,
     .makePath = &testingMakePath,
     .rename = &testingRename,
@@ -372,7 +375,7 @@ pub fn testing() Self {
 }
 
 // --- OS implementations ---
-
+const OsImpl = if (is_freestanding) struct {} else struct {
 fn osReadFile(_: ?*anyopaque, path: []const u8, allocator: Allocator) ReadError![]u8 {
     const file = std.fs.cwd().openFile(path, .{}) catch |err| return switch (err) {
         error.FileNotFound => error.FileNotFound,
@@ -535,6 +538,7 @@ fn osReadStdin(_: ?*anyopaque, buf: []u8) StdioError!usize {
 fn osIsTty(_: ?*anyopaque) bool {
     return std.fs.File.stdout().isTty();
 }
+};
 
 // --- Testing implementations — panic on every call ---
 
@@ -560,6 +564,18 @@ fn testingStat(_: ?*anyopaque, _: []const u8) StatError!FileInfo {
 
 fn testingListDir(_: ?*anyopaque, _: []const u8, _: Allocator) ListError![]FileEntry {
     @panic("listDir should not be called in this test");
+}
+
+fn testingDirName(_: ?*anyopaque, path: []const u8) ?[]const u8 {
+    return std.fs.path.dirname(path);
+}
+
+fn testingBaseName(_: ?*anyopaque, path: []const u8) []const u8 {
+    return std.fs.path.basename(path);
+}
+
+fn testingJoinPath(_: ?*anyopaque, parts: []const []const u8, allocator: Allocator) Allocator.Error![]const u8 {
+    return std.fs.path.join(allocator, parts);
 }
 
 fn testingCanonicalize(_: ?*anyopaque, _: []const u8, _: Allocator) CanonicalizeError![]const u8 {

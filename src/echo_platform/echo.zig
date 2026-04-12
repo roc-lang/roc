@@ -11,6 +11,7 @@
 //! modules, while delegating everything else to WasmFilesystem.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const compile = @import("compile");
 const echo_platform = @import("echo_platform");
 const roc_target = @import("roc_target");
@@ -25,6 +26,18 @@ const HostedFn = echo_platform.host_abi.HostedFn;
 const ReportingConfig = reporting.ReportingConfig;
 
 const Allocator = std.mem.Allocator;
+
+pub const std_options: std.Options = .{
+    .log_level = .warn,
+    .logFn = logFn,
+};
+
+fn logFn(comptime level: std.log.Level, comptime scope: @TypeOf(.enum_literal), comptime format: []const u8, args: anytype) void {
+    if (comptime builtin.target.os.tag == .freestanding) {
+        return;
+    }
+    std.log.defaultLog(level, scope, format, args);
+}
 
 // Fixed-size heap in WASM linear memory (64 MB).
 var wasm_heap_memory: [64 * 1024 * 1024]u8 = undefined;

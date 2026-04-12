@@ -2444,21 +2444,29 @@ pub const DeferredConstraintCheck = struct {
 /// Public helper functions for tests
 pub fn partitionFields(
     ident_store: *const Ident.Store,
+    qualified_module_ident: Ident.Idx,
+    types_store: *types_mod.Store,
     scratch: *Scratch,
+    occurs_scratch: *occurs.Scratch,
     a_fields_range: RecordFieldSafeList.Range,
     b_fields_range: RecordFieldSafeList.Range,
 ) std.mem.Allocator.Error!Unifier.PartitionedRecordFields {
-    return try Unifier.partitionFields(ident_store, scratch, a_fields_range, b_fields_range);
+    var unifier = Unifier.init(ident_store, qualified_module_ident, types_store, scratch, occurs_scratch);
+    return try unifier.partitionFields(scratch, a_fields_range, b_fields_range);
 }
 
 /// Partitions tags from two tag ranges for unification.
 pub fn partitionTags(
     ident_store: *const Ident.Store,
+    qualified_module_ident: Ident.Idx,
+    types_store: *types_mod.Store,
     scratch: *Scratch,
+    occurs_scratch: *occurs.Scratch,
     a_tags_range: TagSafeList.Range,
     b_tags_range: TagSafeList.Range,
 ) std.mem.Allocator.Error!Unifier.PartitionedTags {
-    return try Unifier.partitionTags(ident_store, scratch, a_tags_range, b_tags_range);
+    var unifier = Unifier.init(ident_store, qualified_module_ident, types_store, scratch, occurs_scratch);
+    return try unifier.partitionTags(scratch, a_tags_range, b_tags_range);
 }
 
 /// A reusable memory arena used across unification calls to avoid per-call allocations.

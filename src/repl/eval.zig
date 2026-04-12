@@ -1,6 +1,7 @@
 //! The evaluation part of the Read-Eval-Print-Loop (REPL)
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const parse = @import("parse");
 const can = @import("can");
@@ -122,12 +123,7 @@ pub const Repl = struct {
     }
 
     pub fn backendAvailable(backend_kind: Backend) bool {
-        return switch (backend_kind) {
-            .interpreter => true,
-            .dev => true,
-            .wasm => true,
-            .llvm => false,
-        };
+        return eval_mod.backendAvailable(backend_kind);
     }
 
     fn initInternal(allocator: Allocator, roc_ops: *RocOps, crash_ctx: ?*CrashContext, backend_kind: Backend) !Repl {
@@ -556,7 +552,10 @@ pub const Repl = struct {
         }
 
         return switch (self.backend) {
-            .interpreter => self.evaluateWithInterpreter(lowered),
+            .interpreter => if (comptime builtin.target.os.tag == .freestanding)
+                .{ .eval_error = try self.allocator.dupe(u8, "Backend unavailable") }
+            else
+                self.evaluateWithInterpreter(lowered),
             .dev => self.evaluateWithDev(lowered, "Dev"),
             .wasm => self.evaluateWithWasm(lowered),
             .llvm => .{ .eval_error = try self.allocator.dupe(u8, "LLVM backend not implemented for REPL") },
@@ -602,52 +601,56 @@ pub const Repl = struct {
     }
 
     fn evaluateWithDev(self: *Repl, lowered: *const LoweredProgram, backend_name: []const u8) !StepResult {
-        var codegen = try HostLirCodeGen.init(
-            self.allocator,
-            &lowered.lir_result.store,
-            &lowered.lir_result.layouts,
-            null,
-        );
-        defer codegen.deinit();
-        try codegen.compileAllProcSpecs(lowered.lir_result.store.getProcSpecs());
+        if (comptime builtin.cpu.arch == .wasm32) {
+            return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "{s} backend unavailable on wasm", .{backend_name}) };
+        } else {
+            var codegen = try HostLirCodeGen.init(
+                self.allocator,
+                &lowered.lir_result.store,
+                &lowered.lir_result.layouts,
+                null,
+            );
+            defer codegen.deinit();
+            try codegen.compileAllProcSpecs(lowered.lir_result.store.getProcSpecs());
 
-        const proc = lowered.lir_result.store.getProcSpec(lowered.main_proc);
-        const entrypoint = try codegen.generateEntrypointWrapper(
-            "roc_repl_main",
-            lowered.main_proc,
-            &.{},
-            proc.ret_layout,
-        );
+            const proc = lowered.lir_result.store.getProcSpec(lowered.main_proc);
+            const entrypoint = try codegen.generateEntrypointWrapper(
+                "roc_repl_main",
+                lowered.main_proc,
+                &.{},
+                proc.ret_layout,
+            );
 
-        var exec_mem = try ExecutableMemory.initWithEntryOffset(
-            codegen.getGeneratedCode(),
-            entrypoint.offset,
-        );
-        defer exec_mem.deinit();
+            var exec_mem = try ExecutableMemory.initWithEntryOffset(
+                codegen.getGeneratedCode(),
+                entrypoint.offset,
+            );
+            defer exec_mem.deinit();
 
-        const ret_layout = proc.ret_layout;
-        const size_align = lowered.lir_result.layouts.layoutSizeAlign(lowered.lir_result.layouts.getLayout(ret_layout));
-        const alloc_len = @max(size_align.size, 1);
-        const ret_buf = try self.allocator.alignedAlloc(u8, collections.max_roc_alignment, alloc_len);
-        defer self.allocator.free(ret_buf);
-        @memset(ret_buf, 0);
+            const ret_layout = proc.ret_layout;
+            const size_align = lowered.lir_result.layouts.layoutSizeAlign(lowered.lir_result.layouts.getLayout(ret_layout));
+            const alloc_len = @max(size_align.size, 1);
+            const ret_buf = try self.allocator.alignedAlloc(u8, collections.max_roc_alignment, alloc_len);
+            defer self.allocator.free(ret_buf);
+            @memset(ret_buf, 0);
 
-        exec_mem.callRocABI(@ptrCast(self.roc_ops), @ptrCast(ret_buf.ptr), null);
+            exec_mem.callRocABI(@ptrCast(self.roc_ops), @ptrCast(ret_buf.ptr), null);
 
-        if (self.crash_ctx) |ctx| {
-            if (ctx.crashMessage()) |msg| {
-                return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "{s} backend crash: {s}", .{ backend_name, msg }) };
+            if (self.crash_ctx) |ctx| {
+                if (ctx.crashMessage()) |msg| {
+                    return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "{s} backend crash: {s}", .{ backend_name, msg }) };
+                }
             }
-        }
 
-        const output = try copyReturnedRocStr(
-            self.allocator,
-            &lowered.lir_result.layouts,
-            ret_layout,
-            ret_buf.ptr,
-            self.roc_ops,
-        );
-        return .{ .expression = output };
+            const output = try copyReturnedRocStr(
+                self.allocator,
+                &lowered.lir_result.layouts,
+                ret_layout,
+                ret_buf.ptr,
+                self.roc_ops,
+            );
+            return .{ .expression = output };
+        }
     }
 
     fn evaluateWithWasm(self: *Repl, lowered: *const LoweredProgram) !StepResult {

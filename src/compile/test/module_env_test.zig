@@ -484,9 +484,9 @@ test "ModuleEnv serialization and interpreter evaluation" {
     const testing = std.testing;
     const gpa = std.heap.smp_allocator;
     const builtin_loading = eval.builtin_loading;
-    const EvalLirProgram = eval.LirProgram;
     const EvalInterpreter = eval.Interpreter;
     const EvalTestEnv = eval.TestEnv;
+    const eval_pipeline = eval.pipeline;
 
     const Check = check.Check;
     const Allocators = base.Allocators;
@@ -561,18 +561,25 @@ test "ModuleEnv serialization and interpreter evaluation" {
 
     // Test 1: Evaluate with the original ModuleEnv via LIR pipeline
     {
-        var lir_prog = EvalLirProgram.init(gpa, base.target.TargetUsize.native);
-        defer lir_prog.deinit();
-        const all_module_envs = [_]*ModuleEnv{ @constCast(builtin_module.env), &original_env };
-        var lower_result = try lir_prog.lowerExpr(&original_env, canonicalized_expr_idx.get_idx(), &all_module_envs, null);
-        defer lower_result.deinit();
+        const all_module_envs = [_]*const ModuleEnv{ &original_env, builtin_module.env };
+        const source_modules = [_]check.TypedCIR.Modules.SourceModule{
+            .{ .precompiled = &original_env },
+            .{ .precompiled = builtin_module.env },
+        };
+        var typed_cir_modules = try check.TypedCIR.Modules.publish(gpa, &source_modules);
+        defer typed_cir_modules.deinit();
+        var lowered = try eval_pipeline.lowerTypedCIRToLir(gpa, &typed_cir_modules, &all_module_envs);
+        defer lowered.deinit();
         var test_env = EvalTestEnv.init(gpa);
         defer test_env.deinit();
 
-        var interp = try EvalInterpreter.init(gpa, &lower_result.lir_store, lower_result.layout_store, test_env.get_ops());
+        var interp = try EvalInterpreter.init(gpa, &lowered.lir_result.store, &lowered.lir_result.layouts, test_env.get_ops());
         defer interp.deinit();
+        const proc = lowered.lir_result.store.getProcSpec(lowered.main_proc);
         const eval_result = try interp.eval(.{
-            .proc_id = lower_result.root_proc_id,
+            .proc_id = lowered.main_proc,
+            .arg_layouts = &.{},
+            .ret_layout = proc.ret_layout,
         });
         const value = switch (eval_result) {
             .value => |v| v,
@@ -580,7 +587,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
 
         // Read result — `5 + 8` produces a Dec (i128) via the default Num type
         const int_value = blk: {
-            const lay = lower_result.layout_store.getLayout(lower_result.result_layout);
+            const lay = lowered.lir_result.layouts.getLayout(proc.ret_layout);
             if (lay.tag == .scalar and lay.data.scalar.tag == .int) {
                 break :blk value.read(i128);
             } else {
@@ -590,7 +597,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
             }
         };
 
-        interp.dropValue(value, lower_result.result_layout);
+        interp.dropValue(value, proc.ret_layout);
         try test_env.checkForLeaks();
 
         try testing.expectEqual(@as(i128, 13), int_value);
@@ -669,18 +676,25 @@ test "ModuleEnv serialization and interpreter evaluation" {
                 @constCast(builtin_module.env).qualified_module_ident = builtin_module.env.display_module_name_idx;
             }
 
-            var lir_prog2 = EvalLirProgram.init(gpa, base.target.TargetUsize.native);
-            defer lir_prog2.deinit();
-            const all_module_envs2 = [_]*ModuleEnv{ @constCast(builtin_module.env), deserialized_env };
-            var lower_result2 = try lir_prog2.lowerExpr(deserialized_env, canonicalized_expr_idx.get_idx(), &all_module_envs2, null);
-            defer lower_result2.deinit();
+            const all_module_envs2 = [_]*const ModuleEnv{ deserialized_env, builtin_module.env };
+            const source_modules2 = [_]check.TypedCIR.Modules.SourceModule{
+                .{ .precompiled = deserialized_env },
+                .{ .precompiled = builtin_module.env },
+            };
+            var typed_cir_modules2 = try check.TypedCIR.Modules.publish(gpa, &source_modules2);
+            defer typed_cir_modules2.deinit();
+            var lowered2 = try eval_pipeline.lowerTypedCIRToLir(gpa, &typed_cir_modules2, &all_module_envs2);
+            defer lowered2.deinit();
             var test_env2 = EvalTestEnv.init(gpa);
             defer test_env2.deinit();
 
-            var interp2 = try EvalInterpreter.init(gpa, &lower_result2.lir_store, lower_result2.layout_store, test_env2.get_ops());
+            var interp2 = try EvalInterpreter.init(gpa, &lowered2.lir_result.store, &lowered2.lir_result.layouts, test_env2.get_ops());
             defer interp2.deinit();
+            const proc2 = lowered2.lir_result.store.getProcSpec(lowered2.main_proc);
             const eval_result2 = try interp2.eval(.{
-                .proc_id = lower_result2.root_proc_id,
+                .proc_id = lowered2.main_proc,
+                .arg_layouts = &.{},
+                .ret_layout = proc2.ret_layout,
             });
             const value2 = switch (eval_result2) {
                 .value => |v| v,
@@ -688,7 +702,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
 
             // Verify we get the same result from the deserialized ModuleEnv
             const int_value = blk: {
-                const lay = lower_result2.layout_store.getLayout(lower_result2.result_layout);
+                const lay = lowered2.lir_result.layouts.getLayout(proc2.ret_layout);
                 if (lay.tag == .scalar and lay.data.scalar.tag == .int) {
                     break :blk value2.read(i128);
                 } else {
@@ -697,7 +711,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
                 }
             };
 
-            interp2.dropValue(value2, lower_result2.result_layout);
+            interp2.dropValue(value2, proc2.ret_layout);
             try test_env2.checkForLeaks();
 
             try testing.expectEqual(@as(i128, 13), int_value);

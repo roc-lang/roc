@@ -1679,8 +1679,10 @@ pub const Store = struct {
 
         switch (l.tag) {
             .scalar => return l.data.scalar.tag == .str,
-            .list, .list_of_zst => return true,
-            .box, .box_of_zst => return true,
+            .list => return true,
+            .list_of_zst => return false,
+            .box => return true,
+            .box_of_zst => return false,
             .zst => return false,
             .struct_, .tag_union, .closure => {},
         }

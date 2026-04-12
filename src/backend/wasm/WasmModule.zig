@@ -653,14 +653,15 @@ fn encodeDataSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) !v
     try output.appendSlice(gpa, section_data.items);
 }
 
-fn encodeTableSection(_: *Self, gpa: Allocator, output: *std.ArrayList(u8)) !void {
+fn encodeTableSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) !void {
     var section_data: std.ArrayList(u8) = .empty;
     defer section_data.deinit(gpa);
 
     try leb128WriteU32(gpa, &section_data, 1); // 1 table
     try section_data.append(gpa, funcref); // element type: funcref
     try section_data.append(gpa, 0x00); // limits: no max
-    try leb128WriteU32(gpa, &section_data, 16); // min size (enough for RocOps functions)
+    const min_table_size: u32 = @intCast(@max(self.table_func_indices.items.len, 1));
+    try leb128WriteU32(gpa, &section_data, min_table_size);
 
     try output.append(gpa, @intFromEnum(SectionId.table_section));
     try leb128WriteU32(gpa, output, @intCast(section_data.items.len));

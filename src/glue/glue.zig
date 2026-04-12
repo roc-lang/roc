@@ -417,10 +417,13 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
     // 7. Run glue spec via selected backend
     var result_buf: ResultListFileStr = undefined;
 
-    eval_mod.runner.runtimeRun(
-        args.backend,
+    if (args.backend != .interpreter) {
+        stderr.print("Error running glue spec: backend unavailable\n", .{}) catch {};
+        return error.CompilationFailed;
+    }
+    @import("compile").runner.runViaInterpreter(
         gpa,
-        entry.platform_env,
+        @constCast(entry.platform_env),
         glue_build_env.builtin_modules,
         resolved.all_module_envs,
         entry.app_module_env,

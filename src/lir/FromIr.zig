@@ -664,7 +664,11 @@ const ProcLowerer = struct {
                 .local => |node_id| switch (self.parent.input.layouts.getNode(node_id)) {
                     .nominal => |nominal| current = nominal,
                     .tag_union => |variants| {
-                        const prim: layout_mod.Idx = switch (self.parent.input.layouts.getRefs(variants).len) {
+                        const prim: layout_mod.Idx = if (@bitSizeOf(usize) <= 32) switch (self.parent.input.layouts.getRefs(variants).len) {
+                            0...0xff => .u8,
+                            0x100...0xffff => .u16,
+                            0x1_0000...std.math.maxInt(u32) => .u32,
+                        } else switch (self.parent.input.layouts.getRefs(variants).len) {
                             0...0xff => .u8,
                             0x100...0xffff => .u16,
                             0x1_0000...0xffff_ffff => .u32,

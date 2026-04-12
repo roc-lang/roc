@@ -82,7 +82,9 @@ const TestEnv = struct {
     /// Helper function to call unify with args from TestEnv
     fn unify(self: *Self, a: Var, b: Var) std.mem.Allocator.Error!Result {
         return try unify_mod.unify(
-            self.module_env,
+            self.module_env.gpa,
+            self.module_env.getIdentStoreConst(),
+            self.module_env.qualified_module_ident,
             &self.module_env.types,
             &self.problems,
             &self.snapshots,
@@ -837,7 +839,15 @@ test "partitionFields - same record" {
 
     const range = try env.scratch.appendSliceGatheredFields(&[_]RecordField{ field_x, field_y });
 
-    const result = try unify_mod.partitionFields(env.module_env.getIdentStore(), &env.scratch, range, range);
+    const result = try unify_mod.partitionFields(
+        env.module_env.getIdentStoreConst(),
+        env.module_env.qualified_module_ident,
+        &env.module_env.types,
+        &env.scratch,
+        &env.occurs_scratch,
+        range,
+        range,
+    );
 
     try std.testing.expectEqual(0, result.only_in_a.len());
     try std.testing.expectEqual(0, result.only_in_b.len());
@@ -865,7 +875,15 @@ test "partitionFields - disjoint fields" {
     const a_range = try env.scratch.appendSliceGatheredFields(&[_]RecordField{ a1, a2 });
     const b_range = try env.scratch.appendSliceGatheredFields(&[_]RecordField{b1});
 
-    const result = try unify_mod.partitionFields(env.module_env.getIdentStore(), &env.scratch, a_range, b_range);
+    const result = try unify_mod.partitionFields(
+        env.module_env.getIdentStoreConst(),
+        env.module_env.qualified_module_ident,
+        &env.module_env.types,
+        &env.scratch,
+        &env.occurs_scratch,
+        a_range,
+        b_range,
+    );
 
     try std.testing.expectEqual(2, result.only_in_a.len());
     try std.testing.expectEqual(1, result.only_in_b.len());
@@ -894,7 +912,15 @@ test "partitionFields - overlapping fields" {
     const a_range = try env.scratch.appendSliceGatheredFields(&[_]RecordField{ a1, both });
     const b_range = try env.scratch.appendSliceGatheredFields(&[_]RecordField{ b1, both });
 
-    const result = try unify_mod.partitionFields(env.module_env.getIdentStore(), &env.scratch, a_range, b_range);
+    const result = try unify_mod.partitionFields(
+        env.module_env.getIdentStoreConst(),
+        env.module_env.qualified_module_ident,
+        &env.module_env.types,
+        &env.scratch,
+        &env.occurs_scratch,
+        a_range,
+        b_range,
+    );
 
     try std.testing.expectEqual(1, result.only_in_a.len());
     try std.testing.expectEqual(1, result.only_in_b.len());
@@ -926,7 +952,15 @@ test "partitionFields - reordering is normalized" {
     const a_range = try env.scratch.appendSliceGatheredFields(&[_]RecordField{ f3, f1, f2 });
     const b_range = try env.scratch.appendSliceGatheredFields(&[_]RecordField{ f1, f2, f3 });
 
-    const result = try unify_mod.partitionFields(env.module_env.getIdentStore(), &env.scratch, a_range, b_range);
+    const result = try unify_mod.partitionFields(
+        env.module_env.getIdentStoreConst(),
+        env.module_env.qualified_module_ident,
+        &env.module_env.types,
+        &env.scratch,
+        &env.occurs_scratch,
+        a_range,
+        b_range,
+    );
 
     try std.testing.expectEqual(0, result.only_in_a.len());
     try std.testing.expectEqual(0, result.only_in_b.len());
@@ -1085,7 +1119,15 @@ test "partitionTags - same tags" {
 
     const range = try env.scratch.appendSliceGatheredTags(&[_]Tag{ tag_x, tag_y });
 
-    const result = try unify_mod.partitionTags(env.module_env.getIdentStore(), &env.scratch, range, range);
+    const result = try unify_mod.partitionTags(
+        env.module_env.getIdentStoreConst(),
+        env.module_env.qualified_module_ident,
+        &env.module_env.types,
+        &env.scratch,
+        &env.occurs_scratch,
+        range,
+        range,
+    );
 
     try std.testing.expectEqual(0, result.only_in_a.len());
     try std.testing.expectEqual(0, result.only_in_b.len());
@@ -1113,7 +1155,15 @@ test "partitionTags - disjoint fields" {
     const a_range = try env.scratch.appendSliceGatheredTags(&[_]Tag{ a1, a2 });
     const b_range = try env.scratch.appendSliceGatheredTags(&[_]Tag{b1});
 
-    const result = try unify_mod.partitionTags(env.module_env.getIdentStore(), &env.scratch, a_range, b_range);
+    const result = try unify_mod.partitionTags(
+        env.module_env.getIdentStoreConst(),
+        env.module_env.qualified_module_ident,
+        &env.module_env.types,
+        &env.scratch,
+        &env.occurs_scratch,
+        a_range,
+        b_range,
+    );
 
     try std.testing.expectEqual(2, result.only_in_a.len());
     try std.testing.expectEqual(1, result.only_in_b.len());
@@ -1142,7 +1192,15 @@ test "partitionTags - overlapping tags" {
     const a_range = try env.scratch.appendSliceGatheredTags(&[_]Tag{ a1, both });
     const b_range = try env.scratch.appendSliceGatheredTags(&[_]Tag{ b1, both });
 
-    const result = try unify_mod.partitionTags(env.module_env.getIdentStore(), &env.scratch, a_range, b_range);
+    const result = try unify_mod.partitionTags(
+        env.module_env.getIdentStoreConst(),
+        env.module_env.qualified_module_ident,
+        &env.module_env.types,
+        &env.scratch,
+        &env.occurs_scratch,
+        a_range,
+        b_range,
+    );
 
     try std.testing.expectEqual(1, result.only_in_a.len());
     try std.testing.expectEqual(1, result.only_in_b.len());
@@ -1174,7 +1232,15 @@ test "partitionTags - reordering is normalized" {
     const a_range = try env.scratch.appendSliceGatheredTags(&[_]Tag{ f3, f1, f2 });
     const b_range = try env.scratch.appendSliceGatheredTags(&[_]Tag{ f1, f2, f3 });
 
-    const result = try unify_mod.partitionTags(env.module_env.getIdentStore(), &env.scratch, a_range, b_range);
+    const result = try unify_mod.partitionTags(
+        env.module_env.getIdentStoreConst(),
+        env.module_env.qualified_module_ident,
+        &env.module_env.types,
+        &env.scratch,
+        &env.occurs_scratch,
+        a_range,
+        b_range,
+    );
 
     try std.testing.expectEqual(0, result.only_in_a.len());
     try std.testing.expectEqual(0, result.only_in_b.len());

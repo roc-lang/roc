@@ -58,6 +58,10 @@ pub const Diagnostic = union(enum) {
         ident: Ident.Idx,
         region: Region,
     },
+    /// This expression was rewritten to crash because it failed type checking.
+    erroneous_value_expr: struct {
+        region: Region,
+    },
     qualified_ident_does_not_exist: struct {
         ident: Ident.Idx, // The full qualified identifier (e.g., "Stdout.line!")
         region: Region,
@@ -337,6 +341,7 @@ pub const Diagnostic = union(enum) {
             .self_referential_definition => |d| d.region,
             .circular_value_definition => |d| d.region,
             .erroneous_value_use => |d| d.region,
+            .erroneous_value_expr => |d| d.region,
             .qualified_ident_does_not_exist => |d| d.region,
             .invalid_top_level_statement => |d| d.region,
             .expr_not_canonicalized => |d| d.region,

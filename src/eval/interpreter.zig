@@ -519,6 +519,7 @@ pub const Interpreter = struct {
         visited: *std.ArrayList(DebugVisitedValue),
     ) void {
         if (builtin.mode != .Debug) return;
+        if (comptime builtin.target.os.tag == .freestanding) return;
 
         const layout_val = self.layout_store.getLayout(layout_idx);
         switch (layout_val.tag) {
@@ -663,62 +664,68 @@ pub const Interpreter = struct {
         layout_idx: layout_mod.Idx,
         comptime reason: []const u8,
     ) noreturn {
-        if (stmt_id) |id| {
-            const center = @as(usize, @intFromEnum(id));
-            const stmt_count = self.store.cf_stmts.items.len;
-            const start = center -| 3;
-            const end = @min(stmt_count, center + 4);
-            std.debug.print("LIR/interpreter stmt window around failing stmt {d}:\n", .{@intFromEnum(id)});
-            for (start..end) |i| {
-                const window_id: CFStmtId = @enumFromInt(@as(u32, @intCast(i)));
-                std.debug.print("  stmt {d}: {any}\n", .{ i, self.store.getCFStmt(window_id) });
-            }
+        if (comptime builtin.target.os.tag == .freestanding) {
+            @trap();
+        } else {
+            if (stmt_id) |id| {
+                const center = @as(usize, @intFromEnum(id));
+                const stmt_count = self.store.cf_stmts.items.len;
+                const start = center -| 3;
+                const end = @min(stmt_count, center + 4);
+                std.debug.print("LIR/interpreter stmt window around failing stmt {d}:\n", .{@intFromEnum(id)});
+                for (start..end) |i| {
+                    const window_id: CFStmtId = @enumFromInt(@as(u32, @intCast(i)));
+                    std.debug.print("  stmt {d}: {any}\n", .{ i, self.store.getCFStmt(window_id) });
+                }
 
-            switch (self.store.getCFStmt(id)) {
-                .assign_call => |assign| {
-                    const callee_proc = self.store.getProcSpec(assign.proc);
-                    std.debug.print(
-                        "LIR/interpreter failing assign_call callee proc {d}: name={d} body={any} ret_layout={d} hosted={any}\n",
-                        .{
-                            @intFromEnum(assign.proc),
-                            callee_proc.name.raw(),
-                            callee_proc.body,
-                            @intFromEnum(callee_proc.ret_layout),
-                            callee_proc.hosted,
-                        },
-                    );
-                    if (callee_proc.body) |body| {
-                        self.debugPrintStmtChain(body, 20);
-                    }
-                },
-                else => {},
+                switch (self.store.getCFStmt(id)) {
+                    .assign_call => |assign| {
+                        const callee_proc = self.store.getProcSpec(assign.proc);
+                        std.debug.print(
+                            "LIR/interpreter failing assign_call callee proc {d}: name={d} body={any} ret_layout={d} hosted={any}\n",
+                            .{
+                                @intFromEnum(assign.proc),
+                                callee_proc.name.raw(),
+                                callee_proc.body,
+                                @intFromEnum(callee_proc.ret_layout),
+                                callee_proc.hosted,
+                            },
+                        );
+                        if (callee_proc.body) |body| {
+                            self.debugPrintStmtChain(body, 20);
+                        }
+                    },
+                    else => {},
+                }
+
+                std.debug.panic(
+                    "LIR/interpreter invariant violated: proc {d} stmt {d}={any} assigned local {d} layout {d} invalid value shape: {s}",
+                    .{
+                        @intFromEnum(proc_id),
+                        @intFromEnum(id),
+                        self.store.getCFStmt(id),
+                        @intFromEnum(local_id),
+                        @intFromEnum(layout_idx),
+                        reason,
+                    },
+                );
             }
 
             std.debug.panic(
-                "LIR/interpreter invariant violated: proc {d} stmt {d}={any} assigned local {d} layout {d} invalid value shape: {s}",
+                "LIR/interpreter invariant violated: proc {d} assigned local {d} layout {d} invalid value shape: {s}",
                 .{
                     @intFromEnum(proc_id),
-                    @intFromEnum(id),
-                    self.store.getCFStmt(id),
                     @intFromEnum(local_id),
                     @intFromEnum(layout_idx),
                     reason,
                 },
             );
         }
-
-        std.debug.panic(
-            "LIR/interpreter invariant violated: proc {d} assigned local {d} layout {d} invalid value shape: {s}",
-            .{
-                @intFromEnum(proc_id),
-                @intFromEnum(local_id),
-                @intFromEnum(layout_idx),
-                reason,
-            },
-        );
+        unreachable;
     }
 
     fn debugPrintStmtChain(self: *LirInterpreter, start_stmt: CFStmtId, limit: usize) void {
+        if (comptime builtin.target.os.tag == .freestanding) return;
         std.debug.print(
             "LIR/interpreter stmt chain from {d}:\n",
             .{@intFromEnum(start_stmt)},
@@ -1181,6 +1188,7 @@ pub const Interpreter = struct {
                     const cond_value = self.readSwitchValue(frame.getLocal(cond_local), self.store.getLocal(cond_local).layout_idx);
                     if (cond_value == 0) {
                         self.roc_ops.expectFailed("expect failed");
+                        return error.Crash;
                     }
                     current = expect_stmt.next;
                 },
@@ -1780,11 +1788,20 @@ pub const Interpreter = struct {
             }, list_layout);
         }
         if (elem_size == 0) {
-            return self.rocListToValue(.{
-                .bytes = null,
-                .length = elem_locals.len,
-                .capacity_or_alloc_ptr = elem_locals.len,
-            }, list_layout);
+            var crash_boundary = self.enterCrashBoundary();
+            defer crash_boundary.deinit();
+            const sj = crash_boundary.set();
+            if (sj != 0) return error.Crash;
+            const sa = self.helper.sizeAlignOf(elem_layout);
+            const elems_rc = self.helper.containsRefcounted(elem_layout);
+            const list = builtins.list.RocList.list_allocate(
+                @intCast(sa.alignment.toByteUnits()),
+                elem_locals.len,
+                elem_size,
+                elems_rc,
+                &self.roc_ops,
+            );
+            return self.rocListToValue(list, list_layout);
         }
 
         const total_elem_bytes = elem_size * elem_locals.len;
@@ -2580,8 +2597,9 @@ pub const Interpreter = struct {
             },
             .list_append_unsafe => blk: {
                 const info = self.listElemInfo(arg_layout);
+                const list_val = self.valueToRocListForLayout(args[0], arg_layout);
                 const result = builtins.list.listAppendUnsafe(
-                    self.valueToRocListForLayout(args[0], arg_layout),
+                    list_val,
                     @ptrCast(args[1].ptr),
                     info.width,
                     &builtins.list.copy_fallback,
@@ -2753,12 +2771,13 @@ pub const Interpreter = struct {
             },
             .list_reserve => blk: {
                 const info = self.listElemInfo(arg_layout);
+                const list_val = self.valueToRocListForLayout(args[0], arg_layout);
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
                 if (sj != 0) return error.Crash;
                 const result = builtins.list.listReserve(
-                    self.valueToRocListForLayout(args[0], arg_layout),
+                    list_val,
                     info.alignment,
                     args[1].read(u64),
                     info.width,

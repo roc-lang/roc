@@ -849,6 +849,34 @@ pub const Lowerer = struct {
         return result;
     }
 
+    /// Lower a single expression as the root entrypoint for testing/evaluation.
+    /// This preserves the normal specialization pipeline while avoiding reparsing.
+    pub fn runRootExpr(
+        self: *Lowerer,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) std.mem.Allocator.Error!Result {
+        try self.registerAllTopLevelDefs();
+        const def_id = try self.lowerRootExpr(module_idx, expr_idx);
+        try self.program.root_defs.append(self.allocator, def_id);
+        try self.drainSpecializations();
+        try self.finalizeProgramTypes();
+
+        const result = Result{
+            .program = self.program,
+            .symbols = self.ctx.symbols,
+            .types = self.ctx.types,
+            .strings = self.strings,
+            .idents = self.ctx.idents,
+        };
+        self.program = Program.init(self.allocator);
+        self.ctx.symbols = symbol_mod.Store.init(self.allocator);
+        self.ctx.types = type_mod.Store.init(self.allocator);
+        self.ctx.idents = try base.Ident.Store.initCapacity(self.allocator, 1);
+        self.strings = .{};
+        return result;
+    }
+
     fn publishMonotypeType(self: *Lowerer, ty: type_mod.TypeId) std.mem.Allocator.Error!type_mod.TypeId {
         const published = try self.ctx.types.canonicalizePublished(ty);
         if (comptime builtin.mode == .Debug) {
@@ -1115,6 +1143,51 @@ pub const Lowerer = struct {
                 try self.program.root_defs.append(self.allocator, def_id);
             }
         }
+    }
+
+    fn lowerRootExpr(
+        self: *Lowerer,
+        module_idx: u32,
+        expr_idx: CIR.Expr.Idx,
+    ) std.mem.Allocator.Error!ast.DefId {
+        const typed_cir_module = self.ctx.typedCirModule(module_idx);
+
+        var type_scope: TypeCloneScope = undefined;
+        try type_scope.initCloneAll(self.allocator, typed_cir_module);
+        defer type_scope.deinit();
+        var binding_env = BindingEnv.init(self.allocator);
+        defer binding_env.deinit();
+
+        const expr_var = typed_cir_module.expr(expr_idx).ty();
+        const expected_var = try self.scopeVar(&type_scope, module_idx, expr_var);
+        try self.collectExprInfoWithResultVar(
+            module_idx,
+            &type_scope,
+            binding_env,
+            expr_idx,
+            expected_var,
+        );
+        try self.finalizeExprTypes(module_idx, &type_scope);
+        try self.finalizePatternTypes(module_idx, &type_scope);
+        const expected_ty = try self.requireExprType(module_idx, &type_scope, expr_idx);
+        const body = try self.lowerExprInfoWithExpectedType(
+            module_idx,
+            &type_scope,
+            binding_env,
+            expr_idx,
+            expected_ty,
+            expected_var,
+        );
+
+        const bind_symbol = try self.ctx.addSyntheticSymbol(base.Ident.Idx.NONE);
+        return try self.program.store.addDef(.{
+            .bind = .{ .ty = body.ty, .symbol = bind_symbol },
+            .value = .{ .run = .{
+                .bind = .{ .ty = body.ty, .symbol = bind_symbol },
+                .body = body.expr,
+                .entry_ty = expr_var,
+            } },
+        });
     }
 
     fn lowerTopLevelDef(
@@ -8652,45 +8725,49 @@ pub const Lowerer = struct {
         const resolved = type_scope.typeStoreConst().resolveVar(var_);
         switch (resolved.desc.content) {
             .flex => |flex| {
-                std.debug.print(
-                    "UNRESOLVED flex var={d} root={d} module={d} name={any} constraints_len={d}\n",
-                    .{
-                        @intFromEnum(var_),
-                        @intFromEnum(resolved.var_),
-                        module_idx,
-                        flex.name,
-                        flex.constraints.len(),
-                    },
-                );
-                for (type_scope.typeStoreConst().sliceStaticDispatchConstraints(flex.constraints)) |constraint| {
+                if (comptime builtin.target.os.tag != .freestanding) {
                     std.debug.print(
-                        "  constraint fn={s} origin={s}\n",
+                        "UNRESOLVED flex var={d} root={d} module={d} name={any} constraints_len={d}\n",
                         .{
-                            type_scope.getIdent(constraint.fn_name),
-                            @tagName(constraint.origin),
+                            @intFromEnum(var_),
+                            @intFromEnum(resolved.var_),
+                            module_idx,
+                            flex.name,
+                            flex.constraints.len(),
                         },
                     );
+                    for (type_scope.typeStoreConst().sliceStaticDispatchConstraints(flex.constraints)) |constraint| {
+                        std.debug.print(
+                            "  constraint fn={s} origin={s}\n",
+                            .{
+                                type_scope.getIdent(constraint.fn_name),
+                                @tagName(constraint.origin),
+                            },
+                        );
+                    }
                 }
             },
             .rigid => |rigid| {
-                std.debug.print(
-                    "UNRESOLVED rigid var={d} root={d} module={d} name={s} constraints_len={d}\n",
-                    .{
-                        @intFromEnum(var_),
-                        @intFromEnum(resolved.var_),
-                        module_idx,
-                        type_scope.getIdent(rigid.name),
-                        rigid.constraints.len(),
-                    },
-                );
-                for (type_scope.typeStoreConst().sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
+                if (comptime builtin.target.os.tag != .freestanding) {
                     std.debug.print(
-                        "  constraint fn={s} origin={s}\n",
+                        "UNRESOLVED rigid var={d} root={d} module={d} name={s} constraints_len={d}\n",
                         .{
-                            type_scope.getIdent(constraint.fn_name),
-                            @tagName(constraint.origin),
+                            @intFromEnum(var_),
+                            @intFromEnum(resolved.var_),
+                            module_idx,
+                            type_scope.getIdent(rigid.name),
+                            rigid.constraints.len(),
                         },
                     );
+                    for (type_scope.typeStoreConst().sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
+                        std.debug.print(
+                            "  constraint fn={s} origin={s}\n",
+                            .{
+                                type_scope.getIdent(constraint.fn_name),
+                                @tagName(constraint.origin),
+                            },
+                        );
+                    }
                 }
             },
             else => {},
@@ -12243,33 +12320,53 @@ fn binopToLowLevel(op: CIR.Expr.Binop.Op) base.LowLevel {
 }
 
 fn debugTodo(comptime msg: []const u8) noreturn {
+    if (comptime builtin.target.os.tag == .freestanding) {
+        @trap();
+    }
     if (builtin.mode == .Debug) {
         std.debug.panic("TODO {s}", .{msg});
-    } else unreachable;
+    }
+    unreachable;
 }
 
 fn debugPanic(comptime fmt: []const u8, args: anytype) noreturn {
+    if (comptime builtin.target.os.tag == .freestanding) {
+        @trap();
+    }
     if (builtin.mode == .Debug) {
         std.debug.panic(fmt, args);
-    } else unreachable;
+    }
+    unreachable;
 }
 
 fn debugTodoExpr(expr: CIR.Expr) noreturn {
+    if (comptime builtin.target.os.tag == .freestanding) {
+        @trap();
+    }
     if (builtin.mode == .Debug) {
         std.debug.panic("TODO monotype.lowerExpr expr {s}", .{@tagName(expr)});
-    } else unreachable;
+    }
+    unreachable;
 }
 
 fn debugTodoStmt(stmt: CIR.Statement) noreturn {
+    if (comptime builtin.target.os.tag == .freestanding) {
+        @trap();
+    }
     if (builtin.mode == .Debug) {
         std.debug.panic("TODO monotype.lowerStmt stmt {s}", .{@tagName(stmt)});
-    } else unreachable;
+    }
+    unreachable;
 }
 
 fn debugTodoPattern(pattern: CIR.Pattern) noreturn {
+    if (comptime builtin.target.os.tag == .freestanding) {
+        @trap();
+    }
     if (builtin.mode == .Debug) {
         std.debug.panic("TODO monotype.lowerPattern {s}", .{@tagName(pattern)});
-    } else unreachable;
+    }
+    unreachable;
 }
 
 test "monotype lower tests" {

@@ -3,6 +3,7 @@
 //! Provides interpreter-based evaluation support.
 
 const std = @import("std");
+const builtin = @import("builtin");
 
 /// Backends available for evaluating Roc code.
 pub const EvalBackend = enum {
@@ -14,6 +15,7 @@ pub const EvalBackend = enum {
 
 /// Whether a backend is currently implemented in this compiler build.
 pub fn backendAvailable(backend_kind: EvalBackend) bool {
+    if (builtin.target.os.tag == .freestanding and backend_kind != .wasm) return false;
     return switch (backend_kind) {
         .interpreter => true,
         .dev => true,
@@ -27,6 +29,8 @@ pub fn backendAvailable(backend_kind: EvalBackend) bool {
 pub const comptime_value = @import("comptime_value.zig");
 /// Compile-time evaluator for top-level declarations
 pub const ComptimeEvaluator = @import("comptime_evaluator.zig").ComptimeEvaluator;
+/// Dev backend evaluator for tests/CLI expect execution.
+pub const DevEvaluator = @import("dev_evaluator.zig").DevEvaluator;
 /// Executable memory for running generated code (re-exported from backend module)
 const backend = @import("backend");
 pub const ExecutableMemory = backend.ExecutableMemory;
@@ -49,7 +53,36 @@ pub const Value = value.Value;
 /// Stack value representation used by the interpreter
 pub const StackValue = @import("StackValue.zig");
 /// LIR expression interpreter
-pub const interpreter = @import("interpreter.zig");
+pub const interpreter = if (builtin.target.os.tag == .freestanding) struct {
+    pub const Interpreter = struct {
+        pub const EvalRequest = struct {
+            proc_id: @import("lir").LirProcSpecId,
+            arg_layouts: []const @import("layout").Idx = &.{},
+            ret_layout: ?@import("layout").Idx = null,
+            arg_ptr: ?*anyopaque = null,
+            ret_ptr: ?*anyopaque = null,
+        };
+
+        pub const EvalResult = union(enum) {
+            value: @import("value.zig").Value,
+        };
+
+        pub fn init(
+            _: std.mem.Allocator,
+            _: *const @import("lir").LirStore,
+            _: *const @import("layout").Store,
+            _: *const @import("builtins").host_abi.RocOps,
+        ) error{BackendUnavailable}!@This() {
+            return error.BackendUnavailable;
+        }
+
+        pub fn deinit(_: *@This()) void {}
+
+        pub fn eval(_: *@This(), _: EvalRequest) error{BackendUnavailable}!EvalResult {
+            return error.BackendUnavailable;
+        }
+    };
+} else @import("interpreter.zig");
 pub const Interpreter = interpreter.Interpreter;
 /// Production-faithful RocOps recorder used by eval tests.
 pub const RuntimeHostEnv = @import("test/RuntimeHostEnv.zig");
@@ -64,7 +97,14 @@ pub const pipeline = @import("pipeline.zig");
 /// LIR-backed wasm evaluator.
 pub const wasm_evaluator = @import("wasm_evaluator.zig");
 /// Bytebox runner for wasm modules.
-pub const wasm_runner = @import("wasm_runner.zig");
+pub const wasm_runner = if (builtin.target.os.tag == .freestanding) struct {
+    pub const EvalError = error{WasmExecFailed};
+
+    pub fn runWasmStr(_: std.mem.Allocator, _: []const u8, _: bool) EvalError![]u8 {
+        return error.WasmExecFailed;
+    }
+} else @import("wasm_runner.zig");
+
 
 test "eval tests" {
     std.testing.refAllDecls(@This());

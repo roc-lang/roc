@@ -100,7 +100,7 @@ pub const TailRecursionPass = struct {
                 .target = assign.target,
                 .result = assign.result,
                 .discriminant = assign.discriminant,
-                .args = assign.args,
+                .payload = assign.payload,
                 .next = next,
             } }),
             .set_local => |assign| self.store.addCFStmt(.{ .set_local = .{

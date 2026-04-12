@@ -17,7 +17,7 @@ const build_options = @import("build_options");
 const reporting = @import("reporting");
 const eval = @import("eval");
 const check = @import("check");
-const unbundle = @import("unbundle");
+const unbundle = if (is_freestanding) struct {} else @import("unbundle");
 const Io = @import("io").Io;
 
 const Report = reporting.Report;
@@ -62,10 +62,14 @@ else
     null;
 
 fn nativeFetchUrlImpl(_: ?*anyopaque, allocator: Allocator, url: []const u8, dest_path: []const u8) Io.FetchUrlError!void {
-    var alloc = allocator;
-    unbundle.download.downloadAndExtract(&alloc, url, dest_path) catch {
+    if (comptime is_freestanding) {
         return error.DownloadFailed;
-    };
+    } else {
+        var alloc = allocator;
+        unbundle.download.downloadAndExtract(&alloc, url, dest_path) catch {
+            return error.DownloadFailed;
+        };
+    }
 }
 
 fn freeSlice(gpa: Allocator, s: []u8) void {
@@ -1636,13 +1640,17 @@ pub const BuildEnv = struct {
 
         // Validate URL and extract hash
         const base58_hash = download.validateUrl(url) catch |err| {
-            std.log.err("Invalid package URL: {s} ({})", .{ url, err });
+            if (comptime !is_freestanding) {
+                std.log.err("Invalid package URL: {s} ({})", .{ url, err });
+            }
             return error.InvalidUrl;
         };
 
         // Get cache directory
         const cache_dir_path = self.getRocCacheDir(self.gpa) catch {
-            std.log.err("Could not determine cache directory", .{});
+            if (comptime !is_freestanding) {
+                std.log.err("Could not determine cache directory", .{});
+            }
             return error.NoCacheDir;
         };
         defer self.gpa.free(cache_dir_path);
@@ -1655,7 +1663,9 @@ pub const BuildEnv = struct {
             var d = std.fs.cwd().openDir(package_dir_path, .{}) catch |err| switch (err) {
                 error.FileNotFound => break :blk false,
                 else => {
-                    std.log.err("Failed to access package directory: {}", .{err});
+                    if (comptime !is_freestanding) {
+                        std.log.err("Failed to access package directory: {}", .{err});
+                    }
                     return error.FileError;
                 },
             };
@@ -1665,11 +1675,15 @@ pub const BuildEnv = struct {
 
         if (!already_cached) {
             // Not cached - need to download
-            std.log.info("Downloading package from {s}...", .{url});
+            if (comptime !is_freestanding) {
+                std.log.info("Downloading package from {s}...", .{url});
+            }
 
             // Create cache directory structure
             std.fs.cwd().makePath(cache_dir_path) catch |make_err| {
-                std.log.err("Failed to create cache directory: {}", .{make_err});
+                if (comptime !is_freestanding) {
+                    std.log.err("Failed to create cache directory: {}", .{make_err});
+                }
                 return error.FileError;
             };
 
@@ -1677,7 +1691,9 @@ pub const BuildEnv = struct {
             std.fs.cwd().makeDir(package_dir_path) catch |make_err| switch (make_err) {
                 error.PathAlreadyExists => {}, // Race condition, another process created it
                 else => {
-                    std.log.err("Failed to create package directory: {}", .{make_err});
+                    if (comptime !is_freestanding) {
+                        std.log.err("Failed to create package directory: {}", .{make_err});
+                    }
                     return error.FileError;
                 },
             };
@@ -1685,11 +1701,15 @@ pub const BuildEnv = struct {
             // Download and extract via io vtable (path-based, no Dir handle needed)
             self.filesystem.fetchUrl(self.gpa, url, package_dir_path) catch |fetch_err| {
                 std.fs.cwd().deleteTree(package_dir_path) catch {};
-                std.log.err("Failed to download package: {} (url: {s})", .{ fetch_err, url });
+                if (comptime !is_freestanding) {
+                    std.log.err("Failed to download package: {} (url: {s})", .{ fetch_err, url });
+                }
                 return error.DownloadFailed;
             };
 
-            std.log.info("Package cached at {s}", .{package_dir_path});
+            if (comptime !is_freestanding) {
+                std.log.info("Package cached at {s}", .{package_dir_path});
+            }
         }
 
         // Packages must have a main.roc entry point
@@ -1698,7 +1718,9 @@ pub const BuildEnv = struct {
         };
         std.fs.cwd().access(source_path, .{}) catch {
             self.gpa.free(source_path);
-            std.log.err("No main.roc found in package at {s}", .{package_dir_path});
+            if (comptime !is_freestanding) {
+                std.log.err("No main.roc found in package at {s}", .{package_dir_path});
+            }
             return error.NoPackageSource;
         };
         self.gpa.free(package_dir_path);

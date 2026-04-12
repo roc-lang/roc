@@ -182,15 +182,15 @@ const Lowerer = struct {
     fn finalizePublishedTypes(self: *Lowerer, facts: *layout_facts.Facts) std.mem.Allocator.Error!void {
         for (self.output.typed_symbols.items, 0..) |*bind, i| {
             try self.finalizeTypedSymbol(bind);
-            try facts.recordTypedSymbol(self.allocator, &self.types, i, bind.*);
+            try facts.recordTypedSymbol(self.allocator, &self.types, &self.input.idents, i, bind.*);
         }
         for (self.output.pats.items, 0..) |*pat, i| {
             pat.ty = try self.publishExecutableType(pat.ty);
-            try facts.recordPat(self.allocator, &self.types, &self.output, @enumFromInt(@as(u32, @intCast(i))), pat.*);
+            try facts.recordPat(self.allocator, &self.types, &self.input.idents, &self.output, @enumFromInt(@as(u32, @intCast(i))), pat.*);
         }
         for (self.output.exprs.items, 0..) |*expr, i| {
             try self.finalizeExpr(expr, i);
-            try facts.recordExpr(self.allocator, &self.types, &self.output, @enumFromInt(@as(u32, @intCast(i))), expr.*);
+            try facts.recordExpr(self.allocator, &self.types, &self.input.idents, &self.output, @enumFromInt(@as(u32, @intCast(i))), expr.*);
         }
         for (self.output.stmts.items) |*stmt| {
             try self.finalizeStmt(stmt);
@@ -205,7 +205,7 @@ const Lowerer = struct {
                 .val => |expr_id| def.result_ty orelse self.output.getExpr(expr_id).ty,
                 .run => |run_def| def.result_ty orelse self.output.getExpr(run_def.body).ty,
             };
-            try facts.recordDefRet(self.allocator, &self.types, def_id, ret_ty);
+            try facts.recordDefRet(self.allocator, &self.types, &self.input.idents, def_id, ret_ty);
         }
     }
 
@@ -792,7 +792,7 @@ const Lowerer = struct {
                     mono_cache,
                     specialized_fn_ty,
                     pending.name,
-                    &self.input.symbols,
+                    &self.input.symbols
                 )) {
                     .toplevel => {},
                     .lset => |capture_info| {
@@ -1143,7 +1143,7 @@ const Lowerer = struct {
                 &mono_cache,
                 t,
                 pending.name,
-                &self.input.symbols,
+                &self.input.symbols
             )) {
                 .toplevel => .{
                     .args = blk: {
@@ -2180,7 +2180,7 @@ const Lowerer = struct {
                 mono_cache,
                 requested_ty,
                 lambda.symbol,
-                &self.input.symbols,
+                &self.input.symbols
             )) {
                 .toplevel => null,
                 .lset => |capture_info| try self.publishExecutableType(capture_info.ty),
@@ -2365,7 +2365,7 @@ const Lowerer = struct {
                         mono_cache,
                         instantiated_ty,
                         symbol,
-                        &self.input.symbols,
+                        &self.input.symbols
                     )) {
                         .toplevel => break :blk .{
                             .ty = default_ty,
@@ -2513,7 +2513,7 @@ const Lowerer = struct {
                 mono_cache,
                 requested_ty,
                 lambda.symbol,
-                &self.input.symbols,
+                &self.input.symbols
             )) {
                 .toplevel => null,
                 .lset => |capture_info| try self.publishExecutableType(capture_info.ty),

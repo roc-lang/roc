@@ -22,6 +22,7 @@ const ModuleEnv = can.ModuleEnv;
 const CIR = can.CIR;
 const Allocators = base.Allocators;
 const FromIr = lir.FromIr;
+const is_freestanding = builtin.os.tag == .freestanding;
 
 pub const SourceKind = enum {
     expr,
@@ -71,11 +72,11 @@ pub const ParsedResources = struct {
     pub fn deinit(self: *ParsedResources, allocator: std.mem.Allocator) void {
         for (self.extra_modules) |module| cleanupCheckedModule(allocator, module);
         allocator.free(self.extra_modules);
-        self.typed_cir_modules.deinit();
-        self.builtin_module.deinit();
         self.checker.deinit();
         self.can.deinit();
         self.parse_ast.deinit();
+        self.typed_cir_modules.deinit();
+        self.builtin_module.deinit();
         allocator.free(self.imported_envs);
         if (!self.published_owns_module_env) {
             self.module_env.deinit();
@@ -235,7 +236,6 @@ pub fn parseCheckModule(
     builtin_indices: CIR.BuiltinIndices,
     available_imports: []const AvailableImport,
 ) !CheckedModule {
-    var parse_timer = try std.time.Timer.start();
     const owned_source = try makeModuleSource(allocator, source_kind, source, inspect_wrap);
     errdefer allocator.free(owned_source);
 
@@ -251,7 +251,15 @@ pub fn parseCheckModule(
     allocators.initInPlace(allocator);
     errdefer allocators.deinit();
 
-    const parse_ast = try parse.parse(&allocators, &module_env.common);
+    var parse_elapsed: u64 = 0;
+    var parse_ast: *parse.AST = undefined;
+    if (comptime !is_freestanding) {
+        var parse_timer = try std.time.Timer.start();
+        parse_ast = try parse.parse(&allocators, &module_env.common);
+        parse_elapsed = parse_timer.read();
+    } else {
+        parse_ast = try parse.parse(&allocators, &module_env.common);
+    }
     errdefer {
         parse_ast.deinit();
         allocators.deinit();
@@ -260,7 +268,6 @@ pub fn parseCheckModule(
     if (parse_ast.tokenize_diagnostics.items.len > 0 or parse_ast.parse_diagnostics.items.len > 0) {
         return error.ParseError;
     }
-    const parse_elapsed = parse_timer.read();
 
     try module_env.initCIRFields(module_name);
     const builtin_ctx: Check.BuiltinContext = .{
@@ -283,7 +290,6 @@ pub fn parseCheckModule(
         });
     }
 
-    var can_timer = try std.time.Timer.start();
     const czer = try allocator.create(Can);
     errdefer allocator.destroy(czer);
     czer.* = try Can.initModule(&allocators, module_env, parse_ast, .{
@@ -294,20 +300,35 @@ pub fn parseCheckModule(
         .imported_modules = if (available_imports.len == 0) null else &imported_modules,
     });
     errdefer czer.deinit();
-    try czer.canonicalizeFile();
-    if (hosted_transform) {
-        var modified_defs = try HostedCompiler.replaceAnnoOnlyWithHosted(module_env);
-        defer modified_defs.deinit(module_env.gpa);
-        var hosted_fns = try HostedCompiler.collectAndSortHostedFunctions(module_env);
-        defer {
-            for (hosted_fns.items) |hosted_fn| allocator.free(hosted_fn.name_text);
-            hosted_fns.deinit(module_env.gpa);
+    var can_elapsed: u64 = 0;
+    if (comptime !is_freestanding) {
+        var can_timer = try std.time.Timer.start();
+        try czer.canonicalizeFile();
+        if (hosted_transform) {
+            var modified_defs = try HostedCompiler.replaceAnnoOnlyWithHosted(module_env);
+            defer modified_defs.deinit(module_env.gpa);
+            var hosted_fns = try HostedCompiler.collectAndSortHostedFunctions(module_env);
+            defer {
+                for (hosted_fns.items) |hosted_fn| allocator.free(hosted_fn.name_text);
+                hosted_fns.deinit(module_env.gpa);
+            }
+            try HostedCompiler.assignHostedIndices(module_env, hosted_fns.items);
         }
-        try HostedCompiler.assignHostedIndices(module_env, hosted_fns.items);
+        can_elapsed = can_timer.read();
+    } else {
+        try czer.canonicalizeFile();
+        if (hosted_transform) {
+            var modified_defs = try HostedCompiler.replaceAnnoOnlyWithHosted(module_env);
+            defer modified_defs.deinit(module_env.gpa);
+            var hosted_fns = try HostedCompiler.collectAndSortHostedFunctions(module_env);
+            defer {
+                for (hosted_fns.items) |hosted_fn| allocator.free(hosted_fn.name_text);
+                hosted_fns.deinit(module_env.gpa);
+            }
+            try HostedCompiler.assignHostedIndices(module_env, hosted_fns.items);
+        }
     }
-    const can_elapsed = can_timer.read();
 
-    var check_timer = try std.time.Timer.start();
     const imported_envs_len: usize = if (available_imports.len == 0 and source_kind == .expr) 1 else available_imports.len + 2;
     const imported_envs = try allocator.alloc(*const ModuleEnv, imported_envs_len);
     errdefer allocator.free(imported_envs);
@@ -335,8 +356,14 @@ pub fn parseCheckModule(
         builtin_ctx,
     );
     errdefer checker.deinit();
-    try checker.checkFile();
-    const check_elapsed = check_timer.read();
+    var check_elapsed: u64 = 0;
+    if (comptime !is_freestanding) {
+        var check_timer = try std.time.Timer.start();
+        try checker.checkFile();
+        check_elapsed = check_timer.read();
+    } else {
+        try checker.checkFile();
+    }
 
     return .{
         .module_env = module_env,
@@ -443,6 +470,7 @@ fn makeModuleSource(
 
 fn debugValidateMonotypeTypes(types_store: *const monotype.Type.Store) void {
     if (builtin.mode != .Debug) return;
+    if (comptime builtin.target.os.tag == .freestanding) return;
     const type_len = types_store.types.items.len;
     for (types_store.types.items, 0..) |ty, i| {
         switch (ty) {
@@ -491,6 +519,7 @@ fn debugAssertValidMonoTypeRef(
     type_len: usize,
 ) void {
     _ = types_store;
+    if (comptime builtin.target.os.tag == .freestanding) return;
     if (@intFromEnum(child) >= type_len) {
         std.debug.print(
             "HELPER_MONO_BAD owner={d} label={s} child={d} len={d}\n",

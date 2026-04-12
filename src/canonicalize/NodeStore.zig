@@ -272,7 +272,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 72;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 73;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 45;
 /// Count of the statement nodes in the ModuleEnv
@@ -3291,6 +3291,10 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
             region = r.region;
             node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident) } });
         },
+        .erroneous_value_expr => |r| {
+            node.tag = .diag_erroneous_value_expr;
+            region = r.region;
+        },
         .qualified_ident_does_not_exist => |r| {
             node.tag = .diag_qualified_ident_does_not_exist;
             region = r.region;
@@ -3686,6 +3690,9 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         } },
         .diag_erroneous_value_use => return CIR.Diagnostic{ .erroneous_value_use = .{
             .ident = @bitCast(payload.diag_single_ident.ident),
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_erroneous_value_expr => return CIR.Diagnostic{ .erroneous_value_expr = .{
             .region = store.getRegionAt(node_idx),
         } },
         .diag_qualified_ident_does_not_exist => return CIR.Diagnostic{ .qualified_ident_does_not_exist = .{

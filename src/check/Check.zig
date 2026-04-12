@@ -1487,6 +1487,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     }
 
     try self.poisonErroneousValueUses();
+    try self.poisonErroneousValueExprs();
 
     // Note that we can't use SCCs to determine the order to resolve defs
     // because anonymous static dispatch makes function order not knowable
@@ -6357,6 +6358,17 @@ fn poisonErroneousValueUses(self: *Self) Allocator.Error!void {
             .region = self.cir.store.getExprRegion(entry.expr_idx),
         } });
         self.cir.store.replaceExprWithRuntimeError(entry.expr_idx, diagnostic_idx);
+    }
+}
+
+fn poisonErroneousValueExprs(self: *Self) Allocator.Error!void {
+    var iter = self.erroneous_value_exprs.keyIterator();
+    while (iter.next()) |expr_idx| {
+        if (self.cir.store.getExpr(expr_idx.*) == .e_runtime_error) continue;
+        const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
+            .region = self.cir.store.getExprRegion(expr_idx.*),
+        } });
+        self.cir.store.replaceExprWithRuntimeError(expr_idx.*, diagnostic_idx);
     }
 }
 

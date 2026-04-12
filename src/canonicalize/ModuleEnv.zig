@@ -856,6 +856,27 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .erroneous_value_expr => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "ERRONEOUS VALUE", .runtime_error);
+            try report.document.addReflowingText("This expression was rewritten to crash because it failed type checking.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Fix the earlier type error instead of trying to execute this expression.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
         .qualified_ident_does_not_exist => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
             const ident_name = self.getIdent(data.ident);

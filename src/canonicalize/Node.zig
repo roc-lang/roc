@@ -184,6 +184,7 @@ pub const Tag = enum {
     diag_self_referential_definition,
     diag_circular_value_definition,
     diag_erroneous_value_use,
+    diag_erroneous_value_expr,
     diag_qualified_ident_does_not_exist,
     diag_invalid_top_level_statement,
     diag_expr_not_canonicalized,

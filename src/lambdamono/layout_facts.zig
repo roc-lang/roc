@@ -6,6 +6,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const ast = @import("ast.zig");
+const base = @import("base");
 const type_mod = @import("type.zig");
 
 const layout_mod = @import("layout");
@@ -123,22 +124,24 @@ pub const Facts = struct {
         self: *Facts,
         allocator: std.mem.Allocator,
         mono_types: *type_mod.Store,
+        idents: *const base.Ident.Store,
         index: usize,
         value: ast.TypedSymbol,
     ) std.mem.Allocator.Error!void {
-        self.typed_symbol_layouts[index] = try self.layoutForPublishedType(allocator, mono_types, value.ty);
+        self.typed_symbol_layouts[index] = try self.layoutForPublishedType(allocator, mono_types, idents, value.ty);
     }
 
     pub fn recordExpr(
         self: *Facts,
         allocator: std.mem.Allocator,
         mono_types: *type_mod.Store,
+        idents: *const base.Ident.Store,
         store: *ast.Store,
         expr_id: ast.ExprId,
         expr: ast.Expr,
     ) std.mem.Allocator.Error!void {
         const i = @intFromEnum(expr_id);
-        self.expr_layouts[i] = try self.layoutForPublishedType(allocator, mono_types, expr.ty);
+        self.expr_layouts[i] = try self.layoutForPublishedType(allocator, mono_types, idents, expr.ty);
         self.expr_discriminant_layouts[i] = try self.maybeDiscriminantLayout(self.exprLayout(expr_id));
         switch (expr.data) {
             .tag => |tag| {
@@ -173,7 +176,11 @@ pub const Facts = struct {
                     .nominal => |nominal| current = nominal,
                     .tag_union => |variants| {
                         const variant_count = self.graph.getRefs(variants).len;
-                        const prim: layout_mod.Idx = switch (variant_count) {
+                        const prim: layout_mod.Idx = if (@bitSizeOf(usize) <= 32) switch (variant_count) {
+                            0...0xff => .u8,
+                            0x100...0xffff => .u16,
+                            0x1_0000...std.math.maxInt(u32) => .u32,
+                        } else switch (variant_count) {
                             0...0xff => .u8,
                             0x100...0xffff => .u16,
                             0x1_0000...0xffff_ffff => .u32,
@@ -191,12 +198,13 @@ pub const Facts = struct {
         self: *Facts,
         allocator: std.mem.Allocator,
         mono_types: *type_mod.Store,
+        idents: *const base.Ident.Store,
         store: *ast.Store,
         pat_id: ast.PatId,
         pat: ast.Pat,
     ) std.mem.Allocator.Error!void {
         const i = @intFromEnum(pat_id);
-        self.pat_layouts[i] = try self.layoutForPublishedType(allocator, mono_types, pat.ty);
+        self.pat_layouts[i] = try self.layoutForPublishedType(allocator, mono_types, idents, pat.ty);
         switch (pat.data) {
             .tag => |tag| {
                 if (store.slicePatSpan(tag.args).len == 0) return;
@@ -210,10 +218,11 @@ pub const Facts = struct {
         self: *Facts,
         allocator: std.mem.Allocator,
         mono_types: *type_mod.Store,
+        idents: *const base.Ident.Store,
         def_id: ast.DefId,
         ret_ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!void {
-        self.def_ret_layouts[@intFromEnum(def_id)] = try self.layoutForPublishedType(allocator, mono_types, ret_ty);
+        self.def_ret_layouts[@intFromEnum(def_id)] = try self.layoutForPublishedType(allocator, mono_types, idents, ret_ty);
     }
 
     fn unwrapNominalRef(self: *Facts, ref: layout_mod.GraphRef) layout_mod.GraphRef {
@@ -233,10 +242,11 @@ pub const Facts = struct {
         self: *Facts,
         allocator: std.mem.Allocator,
         mono_types: *type_mod.Store,
+        idents: *const base.Ident.Store,
         ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!layout_mod.GraphRef {
         if (self.type_layouts.get(ty)) |existing| return existing;
-        const lowered = try lowerType(allocator, mono_types, &self.graph, &self.cache, ty);
+        const lowered = try lowerType(allocator, mono_types, idents, &self.graph, &self.cache, ty);
         try self.type_layouts.put(ty, lowered);
         return lowered;
     }
@@ -303,16 +313,18 @@ pub const Facts = struct {
 fn lowerType(
     allocator: std.mem.Allocator,
     mono_types: *type_mod.Store,
+    idents: *const base.Ident.Store,
     graph: *layout_mod.Graph,
     cache: *LayoutCache,
     ty: type_mod.TypeId,
 ) std.mem.Allocator.Error!layout_mod.GraphRef {
-    return try lowerTypeRec(allocator, mono_types, graph, cache, ty);
+    return try lowerTypeRec(allocator, mono_types, idents, graph, cache, ty);
 }
 
 fn lowerTypeRec(
     allocator: std.mem.Allocator,
     mono_types: *type_mod.Store,
+    idents: *const base.Ident.Store,
     graph: *layout_mod.Graph,
     cache: *LayoutCache,
     ty: type_mod.TypeId,
@@ -337,7 +349,7 @@ fn lowerTypeRec(
             const local_ref: layout_mod.GraphRef = .{ .local = node_id };
             try cache.active_by_type.put(keyed_ty, local_ref);
 
-            graph.setNode(node_id, try lowerNode(allocator, mono_types, graph, cache, keyed_ty));
+            graph.setNode(node_id, try lowerNode(allocator, mono_types, idents, graph, cache, keyed_ty));
 
             _ = cache.active_by_type.remove(keyed_ty);
             try cache.resolved_by_type.put(keyed_ty, local_ref);
@@ -349,6 +361,7 @@ fn lowerTypeRec(
 fn lowerNode(
     allocator: std.mem.Allocator,
     mono_types: *type_mod.Store,
+    idents: *const base.Ident.Store,
     graph: *layout_mod.Graph,
     cache: *LayoutCache,
     ty: type_mod.TypeId,
@@ -357,20 +370,20 @@ fn lowerNode(
         .placeholder => debugPanic("lambdamono.layout_facts.lowerNode unresolved executable type"),
         .link => unreachable,
         .primitive => debugPanic("lambdamono.layout_facts.lowerNode primitive should have been returned directly"),
-        .nominal => |backing| .{ .nominal = try lowerTypeRec(allocator, mono_types, graph, cache, backing) },
-        .list => |elem| .{ .list = try lowerTypeRec(allocator, mono_types, graph, cache, elem) },
-        .box => |elem| .{ .box = try lowerTypeRec(allocator, mono_types, graph, cache, elem) },
+        .nominal => |backing| .{ .nominal = try lowerTypeRec(allocator, mono_types, idents, graph, cache, backing) },
+        .list => |elem| .{ .list = try lowerTypeRec(allocator, mono_types, idents, graph, cache, elem) },
+        .box => |elem| .{ .box = try lowerTypeRec(allocator, mono_types, idents, graph, cache, elem) },
         .erased_fn => |maybe_capture| blk: {
             var fields = [_]layout_mod.GraphField{
                 .{ .index = 0, .child = .{ .canonical = .opaque_ptr } },
                 .{ .index = 1, .child = if (maybe_capture) |capture|
-                    try lowerTypeRec(allocator, mono_types, graph, cache, capture)
+                    try lowerTypeRec(allocator, mono_types, idents, graph, cache, capture)
                 else
                     .{ .canonical = .opaque_ptr } },
             };
             break :blk .{ .struct_ = try graph.appendFields(allocator, &fields) };
         },
-        .tuple => |tuple| .{ .struct_ = try lowerTupleLikeSpan(allocator, mono_types, graph, cache, mono_types.sliceTypeSpan(tuple)) },
+        .tuple => |tuple| .{ .struct_ = try lowerTupleLikeSpan(allocator, mono_types, idents, graph, cache, mono_types.sliceTypeSpan(tuple)) },
         .record => |record| blk: {
             const fields = mono_types.sliceFields(record.fields);
             var graph_fields = std.ArrayList(layout_mod.GraphField).empty;
@@ -379,7 +392,7 @@ fn lowerNode(
             for (fields, 0..) |field, i| {
                 graph_fields.appendAssumeCapacity(.{
                     .index = @intCast(i),
-                    .child = try lowerTypeRec(allocator, mono_types, graph, cache, field.ty),
+                    .child = try lowerTypeRec(allocator, mono_types, idents, graph, cache, field.ty),
                 });
             }
             break :blk .{ .struct_ = try graph.appendFields(allocator, graph_fields.items) };
@@ -399,7 +412,7 @@ fn lowerNode(
                 const payload_node = try graph.reserveNode(allocator);
                 const payload_ref: layout_mod.GraphRef = .{ .local = payload_node };
                 variants.appendAssumeCapacity(payload_ref);
-                graph.setNode(payload_node, .{ .struct_ = try lowerTupleLikeSpan(allocator, mono_types, graph, cache, args) });
+                graph.setNode(payload_node, .{ .struct_ = try lowerTupleLikeSpan(allocator, mono_types, idents, graph, cache, args) });
             }
             break :blk .{ .tag_union = try graph.appendRefs(allocator, variants.items) };
         },
@@ -409,6 +422,7 @@ fn lowerNode(
 fn lowerTupleLikeSpan(
     allocator: std.mem.Allocator,
     mono_types: *type_mod.Store,
+    idents: *const base.Ident.Store,
     graph: *layout_mod.Graph,
     cache: *LayoutCache,
     elems: []const type_mod.TypeId,
@@ -419,7 +433,7 @@ fn lowerTupleLikeSpan(
     for (elems, 0..) |elem, i| {
         graph_fields.appendAssumeCapacity(.{
             .index = @intCast(i),
-            .child = try lowerTypeRec(allocator, mono_types, graph, cache, elem),
+            .child = try lowerTypeRec(allocator, mono_types, idents, graph, cache, elem),
         });
     }
     return try graph.appendFields(allocator, graph_fields.items);
