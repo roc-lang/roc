@@ -2647,7 +2647,7 @@ fn lowerExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator.Error!LirExprId {
                 .ret_layout = ret_layout,
             } }, region);
         },
-        .dbg_expr => |d| self.lowerDbg(d, mir_expr_id, region),
+        .dbg_expr => |d| self.lowerDbg(d, mono_idx, region),
         .expect => |e| self.lowerExpect(e, mono_idx, region),
         .for_loop => |f| self.lowerForLoop(f, mono_idx, region),
         .while_loop => |w| self.lowerWhileLoop(w, mono_idx, region),
@@ -5189,8 +5189,13 @@ fn lowerLowLevel(self: *Self, ll: anytype, mir_expr_id: MIR.ExprId, region: Regi
     return acc.finish(adapted_result, ret_layout, region);
 }
 
-fn lowerDbg(self: *Self, d: anytype, _: MIR.ExprId, region: Region) Allocator.Error!LirExprId {
-    const result_layout = try self.runtimeValueLayoutFromMirExpr(d.expr);
+fn lowerDbg(self: *Self, d: anytype, mono_idx: Monotype.Idx, region: Region) Allocator.Error!LirExprId {
+    // Use the dbg expression's own monotype for the result layout, not the inner
+    // expression's. The dbg expression's type is determined by the type checker and
+    // may differ from the inner expression's type (e.g., when dbg is the last
+    // expression in a unit-returning function, the dbg has type {} while the inner
+    // expression has the type of the debugged value).
+    const result_layout = try self.layoutFromMonotype(mono_idx);
     const lir_expr = try self.lowerExpr(d.expr);
     const lir_formatted = try self.lowerExpr(d.formatted);
 

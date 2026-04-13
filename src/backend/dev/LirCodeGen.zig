@@ -10011,6 +10011,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try builder.addRegArg(roc_ops_reg);
             try self.callBuiltin(&builder, @intFromPtr(&wrapRocDbg), .roc_dbg);
 
+            // When the dbg expression's result type is zero-sized (e.g., when dbg
+            // is the last expression in a unit-returning function), the inner value
+            // is not needed as a return value.
+            if (self.getLayoutSize(dbg_expr.result_layout) == 0) {
+                return .{ .immediate_i64 = 0 };
+            }
+
             // Evaluate and return the original value expression
             return try self.generateExpr(dbg_expr.expr);
         }
