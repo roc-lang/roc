@@ -51,6 +51,7 @@ const Lowerer = struct {
     types: type_mod.Store,
     def_id_by_symbol: std.AutoHashMap(Symbol, ast.DefId),
     current_return_ty: ?TypeVarId,
+    current_def_symbol: ?Symbol,
 
     const EnvEntry = struct {
         symbol: Symbol,
@@ -75,6 +76,7 @@ const Lowerer = struct {
             .types = type_mod.Store.init(allocator),
             .def_id_by_symbol = std.AutoHashMap(Symbol, ast.DefId).init(allocator),
             .current_return_ty = null,
+            .current_def_symbol = null,
         };
     }
 
@@ -366,7 +368,7 @@ const Lowerer = struct {
         }
 
         const lowered = switch (mono_ty) {
-            .placeholder => debugPanic("lambdasolved.instantiateTypeRec leaked monotype builder placeholder"),
+            .placeholder => debugPanic("lambdasolved.instantiateTypeRec leaked monotype builder placeholder", .{}),
             .unbd => type_mod.Node.unbd,
             .link => unreachable,
             .nominal => |nominal| type_mod.Node{ .nominal = try self.instantiateTypeRec(nominal.backing, cache) },
@@ -418,6 +420,15 @@ const Lowerer = struct {
                         .ty = try self.instantiateTypeRec(field.ty, cache),
                     };
                 }
+                std.mem.sort(type_mod.Field, out, &self.input.idents, struct {
+                    fn lessThan(idents: *const base.Ident.Store, a: type_mod.Field, b: type_mod.Field) bool {
+                        return std.mem.lessThan(
+                            u8,
+                            idents.getText(a.name),
+                            idents.getText(b.name),
+                        );
+                    }
+                }.lessThan);
                 break :blk type_mod.Node{ .content = .{ .record = .{
                     .fields = try self.types.addFields(out),
                 } } };
@@ -437,6 +448,9 @@ const Lowerer = struct {
         for (sccs) |group| {
             if (group.def_ids.len == 1) {
                 const def = self.output.getDef(group.def_ids[0]);
+                const previous_def = self.current_def_symbol;
+                self.current_def_symbol = def.bind.symbol;
+                defer self.current_def_symbol = previous_def;
                 switch (def.value) {
                     .fn_ => |fn_def| {
                         const t_fn = try self.types.freshUnbd();
@@ -476,7 +490,7 @@ const Lowerer = struct {
             defer self.allocator.free(rec_entries);
             for (group.def_ids, 0..) |def_id, i| {
                 const def = self.output.getDef(def_id);
-                if (def.value != .fn_) return debugPanic("lambdasolved.inferProgram non-function recursive SCC");
+                if (def.value != .fn_) return debugPanic("lambdasolved.inferProgram non-function recursive SCC", .{});
                 rec_entries[i] = .{
                     .symbol = def.bind.symbol,
                     .ty = try self.types.freshUnbd(),
@@ -492,6 +506,9 @@ const Lowerer = struct {
             for (group.def_ids, 0..) |def_id, i| {
                 const def = self.output.getDef(def_id);
                 const fn_def = def.value.fn_;
+                const previous_def = self.current_def_symbol;
+                self.current_def_symbol = def.bind.symbol;
+                defer self.current_def_symbol = previous_def;
                 generalized[i] = .{
                     .symbol = def.bind.symbol,
                     .ty = try self.inferFn(rec_env, rec_entries[i], fn_def),
@@ -554,7 +571,7 @@ const Lowerer = struct {
     fn inferHostedFn(self: *Lowerer, fn_entry: EnvEntry, hosted_fn: ast.HostedFnDef) std.mem.Allocator.Error!TypeVarId {
         const args = self.output.sliceTypedSymbolSpan(hosted_fn.args);
         if (args.len == 0) {
-            debugPanic("lambdasolved.inferHostedFn expected at least one executable arg");
+            debugPanic("lambdasolved.inferHostedFn expected at least one executable arg", .{});
         }
 
         const captures_span = try self.types.addCaptures(&.{});
@@ -571,8 +588,72 @@ const Lowerer = struct {
 
         const inferred = switch (expr.data) {
             .var_ => |symbol| blk: {
+                if (symbol.raw() >= self.input.symbols.len()) {
+                    return debugPanic(
+                        "lambdasolved.inferExpr invalid symbol {d} (store len {d})",
+                        .{ symbol.raw(), self.input.symbols.len() },
+                    );
+                }
+                const symbol_entry = self.input.symbols.get(symbol);
                 const env_ty = self.lookupEnv(venv, symbol) orelse {
-                    return debugPanic("lambdasolved.inferExpr unbound variable");
+                    if (symbol_entry.origin == .top_level_def and !self.def_id_by_symbol.contains(symbol)) {
+                        break :blk target_ty;
+                    }
+                    const origin_tag = @tagName(symbol_entry.origin);
+                    const symbol_name = if (symbol_entry.name.isNone())
+                        "<none>"
+                    else
+                        self.input.idents.getText(symbol_entry.name);
+                    const def_raw = if (self.current_def_symbol) |def_symbol| def_symbol.raw() else std.math.maxInt(u32);
+                    const def_name = def_name_blk: {
+                        if (self.current_def_symbol) |def_symbol| {
+                            const def_entry = self.input.symbols.get(def_symbol);
+                            break :def_name_blk if (def_entry.name.isNone()) "<none>" else self.input.idents.getText(def_entry.name);
+                        }
+                        break :def_name_blk "<none>";
+                    };
+                    const def_id_raw = if (self.def_id_by_symbol.get(symbol)) |def_id| @intFromEnum(def_id) else std.math.maxInt(u32);
+                    var use_count: usize = 0;
+                    var bind_count: usize = 0;
+                    var pat_bind_count: usize = 0;
+                    var capture_count: usize = 0;
+                    var reassign_target_count: usize = 0;
+                    var first_use_expr: ?ast.ExprId = null;
+                    if (self.current_def_symbol) |def_symbol| {
+                        if (self.def_id_by_symbol.get(def_symbol)) |def_id| {
+                            self.debugSymbolCounts(
+                                def_id,
+                                symbol,
+                                &use_count,
+                                &bind_count,
+                                &pat_bind_count,
+                                &capture_count,
+                                &reassign_target_count,
+                                &first_use_expr,
+                            );
+                        }
+                    }
+                    const first_use_raw: u32 = if (first_use_expr) |expr_id_local|
+                        @intFromEnum(expr_id_local)
+                    else
+                        std.math.maxInt(u32);
+                    return debugPanic(
+                        "lambdasolved.inferExpr unbound variable {d} ({s}) origin {s} in def {d} ({s}) uses {d} binds {d} pat_binds {d} captures {d} reassign_targets {d} first_use_expr {d} def_id {d}",
+                        .{
+                            symbol.raw(),
+                            symbol_name,
+                            origin_tag,
+                            def_raw,
+                            def_name,
+                            use_count,
+                            bind_count,
+                            pat_bind_count,
+                            capture_count,
+                            reassign_target_count,
+                            first_use_raw,
+                            def_id_raw,
+                        },
+                    );
                 };
                 const inst_ty = try self.instantiateGeneralized(env_ty);
                 try self.fixCaptures(venv, inst_ty, symbol);
@@ -589,7 +670,7 @@ const Lowerer = struct {
                 const args = self.output.sliceExprSpan(tag.args);
                 if (try self.isPrimitiveBoolType(target_ty)) {
                     if (args.len != 0) {
-                        return debugPanic("lambdasolved.bool tag invariant violated: bool tags cannot carry arguments");
+                        return debugPanic("lambdasolved.bool tag invariant violated: bool tags cannot carry arguments", .{});
                     }
                     break :blk target_ty;
                 }
@@ -617,6 +698,15 @@ const Lowerer = struct {
                         .ty = try self.inferExpr(venv, field.value),
                     };
                 }
+                std.mem.sort(type_mod.Field, field_tys, &self.input.idents, struct {
+                    fn lessThan(idents: *const base.Ident.Store, a: type_mod.Field, b: type_mod.Field) bool {
+                        return std.mem.lessThan(
+                            u8,
+                            idents.getText(a.name),
+                            idents.getText(b.name),
+                        );
+                    }
+                }.lessThan);
                 const wanted = try self.types.freshContent(.{ .record = .{
                     .fields = try self.types.addFields(field_tys),
                 } });
@@ -632,13 +722,13 @@ const Lowerer = struct {
                 const fields = switch (subject_node) {
                     .content => |content| switch (content) {
                         .record => |record| self.types.sliceFields(record.fields),
-                        else => return debugPanic("lambdasolved.access invariant violated: subject is not a record"),
+                        else => return debugPanic("lambdasolved.access invariant violated: subject is not a record", .{}),
                     },
-                    else => return debugPanic("lambdasolved.access invariant violated: subject record type is unresolved"),
+                    else => return debugPanic("lambdasolved.access invariant violated: subject record type is unresolved", .{}),
                 };
                 const field_ty = for (fields) |field| {
                     if (field.name.eql(access.field)) break field.ty;
-                } else return debugPanic("lambdasolved.access invariant violated: missing record field");
+                } else return debugPanic("lambdasolved.access invariant violated: missing record field", .{});
                 try self.unify(target_ty, field_ty);
                 break :blk target_ty;
             },
@@ -725,12 +815,12 @@ const Lowerer = struct {
                 const elems = switch (subject_node) {
                     .content => |content| switch (content) {
                         .tuple => |span| self.types.sliceTypeVarSpan(span),
-                        else => return debugPanic("lambdasolved.tuple_access invariant violated: subject is not a tuple"),
+                        else => return debugPanic("lambdasolved.tuple_access invariant violated: subject is not a tuple", .{}),
                     },
-                    else => return debugPanic("lambdasolved.tuple_access invariant violated: subject tuple type is unresolved"),
+                    else => return debugPanic("lambdasolved.tuple_access invariant violated: subject tuple type is unresolved", .{}),
                 };
                 if (tuple_access.elem_index >= elems.len) {
-                    return debugPanic("lambdasolved.tuple_access invariant violated: tuple index out of bounds");
+                    return debugPanic("lambdasolved.tuple_access invariant violated: tuple index out of bounds", .{});
                 }
                 try self.unify(target_ty, elems[tuple_access.elem_index]);
                 break :blk target_ty;
@@ -746,7 +836,7 @@ const Lowerer = struct {
                 break :blk target_ty;
             },
             .return_ => |ret| blk: {
-                const return_ty = self.current_return_ty orelse return debugPanic("lambdasolved.return invariant violated: return outside function");
+                const return_ty = self.current_return_ty orelse return debugPanic("lambdasolved.return invariant violated: return outside function", .{});
                 const value_ty = try self.inferExpr(venv, ret);
                 try self.unify(return_ty, value_ty);
                 break :blk try self.types.freshUnbd();
@@ -795,7 +885,7 @@ const Lowerer = struct {
                 break :blk try self.extendEnvOne(venv, .{ .symbol = decl.bind.symbol, .ty = decl.bind.ty });
             },
             .reassign => |reassign| blk: {
-                const target_ty = self.lookupEnv(venv, reassign.target) orelse return debugPanic("lambdasolved.inferStmt missing reassign target");
+                const target_ty = self.lookupEnv(venv, reassign.target) orelse return debugPanic("lambdasolved.inferStmt missing reassign target", .{});
                 const body_ty = try self.inferExpr(venv, reassign.body);
                 try self.unify(target_ty, body_ty);
                 break :blk try self.cloneEnv(venv);
@@ -814,7 +904,7 @@ const Lowerer = struct {
             },
             .crash => try self.cloneEnv(venv),
             .return_ => |expr_id| blk: {
-                const return_ty = self.current_return_ty orelse return debugPanic("lambdasolved.return_stmt invariant violated: return outside function");
+                const return_ty = self.current_return_ty orelse return debugPanic("lambdasolved.return_stmt invariant violated: return outside function", .{});
                 const value_ty = try self.inferExpr(venv, expr_id);
                 try self.unify(return_ty, value_ty);
                 break :blk try self.cloneEnv(venv);
@@ -865,7 +955,7 @@ const Lowerer = struct {
                 const arg_pats = self.output.slicePatSpan(tag.args);
                 if (try self.isPrimitiveBoolType(pat.ty)) {
                     if (arg_pats.len != 0) {
-                        return debugPanic("lambdasolved.bool pattern invariant violated: bool tags cannot carry arguments");
+                        return debugPanic("lambdasolved.bool pattern invariant violated: bool tags cannot carry arguments", .{});
                     }
                     break :blk .{
                         .additions = try self.allocator.alloc(EnvEntry, 0),
@@ -890,6 +980,196 @@ const Lowerer = struct {
                 break :blk .{ .additions = additions, .ty = pat.ty };
             },
         };
+    }
+
+    fn debugSymbolCounts(
+        self: *Lowerer,
+        def_id: ast.DefId,
+        symbol: Symbol,
+        use_count: *usize,
+        bind_count: *usize,
+        pat_bind_count: *usize,
+        capture_count: *usize,
+        reassign_target_count: *usize,
+        first_use_expr: *?ast.ExprId,
+    ) void {
+        const def = self.output.getDef(def_id);
+        if (def.bind.symbol == symbol) bind_count.* += 1;
+        switch (def.value) {
+            .fn_ => |fn_def| {
+                if (fn_def.arg.symbol == symbol) bind_count.* += 1;
+                const captures = self.output.sliceTypedSymbolSpan(fn_def.captures);
+                for (captures) |capture| {
+                    if (capture.symbol == symbol) capture_count.* += 1;
+                }
+                self.debugCountExprSymbol(
+                    fn_def.body,
+                    symbol,
+                    use_count,
+                    bind_count,
+                    pat_bind_count,
+                    reassign_target_count,
+                    first_use_expr,
+                );
+            },
+            .hosted_fn => |hosted_fn| {
+                if (hosted_fn.bind.symbol == symbol) bind_count.* += 1;
+                const args = self.output.sliceTypedSymbolSpan(hosted_fn.args);
+                for (args) |arg| {
+                    if (arg.symbol == symbol) bind_count.* += 1;
+                }
+            },
+            .val => |expr_id| self.debugCountExprSymbol(
+                expr_id,
+                symbol,
+                use_count,
+                bind_count,
+                pat_bind_count,
+                reassign_target_count,
+                first_use_expr,
+            ),
+            .run => |run_def| self.debugCountExprSymbol(
+                run_def.body,
+                symbol,
+                use_count,
+                bind_count,
+                pat_bind_count,
+                reassign_target_count,
+                first_use_expr,
+            ),
+        }
+    }
+
+    fn debugCountExprSymbol(
+        self: *Lowerer,
+        expr_id: ast.ExprId,
+        symbol: Symbol,
+        use_count: *usize,
+        bind_count: *usize,
+        pat_bind_count: *usize,
+        reassign_target_count: *usize,
+        first_use_expr: *?ast.ExprId,
+    ) void {
+        const expr = self.output.getExpr(expr_id);
+        switch (expr.data) {
+            .var_ => |expr_symbol| {
+                if (expr_symbol == symbol) use_count.* += 1;
+                if (expr_symbol == symbol and first_use_expr.* == null) first_use_expr.* = expr_id;
+            },
+            .int_lit,
+            .frac_f32_lit,
+            .frac_f64_lit,
+            .dec_lit,
+            .str_lit,
+            .bool_lit,
+            .unit,
+            .runtime_error,
+            => {},
+            .tag => |tag| for (self.output.sliceExprSpan(tag.args)) |arg| self.debugCountExprSymbol(arg, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr),
+            .record => |fields| {
+                for (self.output.sliceFieldExprSpan(fields)) |field| {
+                    self.debugCountExprSymbol(field.value, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr);
+                }
+            },
+            .access => |access| self.debugCountExprSymbol(access.record, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr),
+            .let_ => |let_expr| {
+                if (let_expr.bind.symbol == symbol) bind_count.* += 1;
+                self.debugCountExprSymbol(let_expr.body, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr);
+                self.debugCountExprSymbol(let_expr.rest, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr);
+            },
+            .call => |call| {
+                self.debugCountExprSymbol(call.func, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr);
+                self.debugCountExprSymbol(call.arg, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr);
+            },
+            .inspect => |value| self.debugCountExprSymbol(value, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr),
+            .low_level => |ll| for (self.output.sliceExprSpan(ll.args)) |arg| self.debugCountExprSymbol(arg, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr),
+            .when => |when_expr| {
+                self.debugCountExprSymbol(when_expr.cond, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr);
+                for (self.output.sliceBranchSpan(when_expr.branches)) |branch_id| {
+                    const branch = self.output.getBranch(branch_id);
+                    self.debugCountPatSymbol(branch.pat, symbol, pat_bind_count);
+                    self.debugCountExprSymbol(branch.body, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr);
+                }
+            },
+            .if_ => |if_expr| {
+                self.debugCountExprSymbol(if_expr.cond, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr);
+                self.debugCountExprSymbol(if_expr.then_body, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr);
+                self.debugCountExprSymbol(if_expr.else_body, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr);
+            },
+            .block => |block| {
+                for (self.output.sliceStmtSpan(block.stmts)) |stmt_id| {
+                    self.debugCountStmtSymbol(stmt_id, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr);
+                }
+                self.debugCountExprSymbol(block.final_expr, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr);
+            },
+            .tuple => |tuple| for (self.output.sliceExprSpan(tuple)) |arg| self.debugCountExprSymbol(arg, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr),
+            .tuple_access => |tuple_access| self.debugCountExprSymbol(tuple_access.tuple, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr),
+            .list => |list| for (self.output.sliceExprSpan(list)) |arg| self.debugCountExprSymbol(arg, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr),
+            .return_ => |ret| self.debugCountExprSymbol(ret, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr),
+            .for_ => |for_expr| {
+                self.debugCountPatSymbol(for_expr.patt, symbol, pat_bind_count);
+                self.debugCountExprSymbol(for_expr.iterable, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr);
+                self.debugCountExprSymbol(for_expr.body, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr);
+            },
+        }
+    }
+
+    fn debugCountStmtSymbol(
+        self: *Lowerer,
+        stmt_id: ast.StmtId,
+        symbol: Symbol,
+        use_count: *usize,
+        bind_count: *usize,
+        pat_bind_count: *usize,
+        reassign_target_count: *usize,
+        first_use_expr: *?ast.ExprId,
+    ) void {
+        const stmt = self.output.getStmt(stmt_id);
+        switch (stmt) {
+            .decl => |decl| {
+                if (decl.bind.symbol == symbol) bind_count.* += 1;
+                self.debugCountExprSymbol(decl.body, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr);
+            },
+            .var_decl => |decl| {
+                if (decl.bind.symbol == symbol) bind_count.* += 1;
+                self.debugCountExprSymbol(decl.body, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr);
+            },
+            .reassign => |reassign| {
+                if (reassign.target == symbol) reassign_target_count.* += 1;
+                self.debugCountExprSymbol(reassign.body, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr);
+            },
+            .expr => |expr_id| self.debugCountExprSymbol(expr_id, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr),
+            .debug => |expr_id| self.debugCountExprSymbol(expr_id, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr),
+            .expect => |expr_id| self.debugCountExprSymbol(expr_id, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr),
+            .crash => {},
+            .return_ => |expr_id| self.debugCountExprSymbol(expr_id, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr),
+            .break_ => {},
+            .for_ => |for_stmt| {
+                self.debugCountPatSymbol(for_stmt.patt, symbol, pat_bind_count);
+                self.debugCountExprSymbol(for_stmt.iterable, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr);
+                self.debugCountExprSymbol(for_stmt.body, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr);
+            },
+            .while_ => |while_stmt| {
+                self.debugCountExprSymbol(while_stmt.cond, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr);
+                self.debugCountExprSymbol(while_stmt.body, symbol, use_count, bind_count, pat_bind_count, reassign_target_count, first_use_expr);
+            },
+        }
+    }
+
+    fn debugCountPatSymbol(
+        self: *Lowerer,
+        pat_id: ast.PatId,
+        symbol: Symbol,
+        pat_bind_count: *usize,
+    ) void {
+        const pat = self.output.getPat(pat_id);
+        switch (pat.data) {
+            .var_ => |pat_symbol| {
+                if (pat_symbol == symbol) pat_bind_count.* += 1;
+            },
+            .bool_lit => {},
+            .tag => |tag| for (self.output.slicePatSpan(tag.args)) |arg| self.debugCountPatSymbol(arg, symbol, pat_bind_count),
+        }
     }
 
     fn freshPrimitiveType(self: *Lowerer, prim: type_mod.Prim) std.mem.Allocator.Error!TypeVarId {
@@ -976,7 +1256,56 @@ const Lowerer = struct {
             .runtime_error,
             => {},
             .tag => |tag| for (self.output.sliceExprSpan(tag.args)) |arg| try self.propagateExprErasure(arg, venv),
-            .record => |fields| for (self.output.sliceFieldExprSpan(fields)) |field| try self.propagateExprErasure(field.value, venv),
+            .record => |fields| blk: {
+                const field_values = self.output.sliceFieldExprSpan(fields);
+                for (field_values) |field| {
+                    try self.propagateExprErasure(field.value, venv);
+                }
+
+                const record_id = self.types.unlinkPreservingNominal(expr.ty);
+                const record_node = self.types.getNode(record_id);
+                const record = switch (record_node) {
+                    .content => |content| switch (content) {
+                        .record => |record| record,
+                        else => break :blk,
+                    },
+                    else => break :blk,
+                };
+
+                const record_fields = self.types.sliceFields(record.fields);
+                var needs_rebuild = record_fields.len != field_values.len;
+                if (!needs_rebuild) {
+                    for (record_fields, field_values) |record_field, field_value| {
+                        if (record_field.name != field_value.name or record_field.ty != self.output.getExpr(field_value.value).ty) {
+                            needs_rebuild = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (!needs_rebuild) break :blk;
+
+                const new_fields = try self.allocator.alloc(type_mod.Field, field_values.len);
+                defer self.allocator.free(new_fields);
+                for (field_values, 0..) |field_value, i| {
+                    new_fields[i] = .{
+                        .name = field_value.name,
+                        .ty = self.output.getExpr(field_value.value).ty,
+                    };
+                }
+                std.mem.sort(type_mod.Field, new_fields, &self.input.idents, struct {
+                    fn lessThan(idents: *const base.Ident.Store, a: type_mod.Field, b: type_mod.Field) bool {
+                        return std.mem.lessThan(
+                            u8,
+                            idents.getText(a.name),
+                            idents.getText(b.name),
+                        );
+                    }
+                }.lessThan);
+                expr.ty = try self.types.freshContent(.{ .record = .{
+                    .fields = try self.types.addFields(new_fields),
+                } });
+            },
             .access => |access| try self.propagateExprErasure(access.record, venv),
             .let_ => |*let_expr| {
                 try self.propagateExprErasure(let_expr.body, venv);
@@ -1001,13 +1330,12 @@ const Lowerer = struct {
                         const arg_ty = self.output.getExpr(call.arg).ty;
                         switch (op) {
                             .box_box => {
-                                const erased_arg_ty = try self.eraseCallableBoundaryType(arg_ty);
-                                expr.ty = try self.types.freshContent(.{ .box = erased_arg_ty });
+                                expr.ty = try self.types.freshContent(.{ .box = arg_ty });
                             },
                             .box_unbox => {
                                 const boxed_elem_ty = self.boxedPayloadType(arg_ty) orelse
-                                    return debugPanic("lambdasolved.propagateExprErasure box_unbox call expected boxed arg");
-                                expr.ty = try self.eraseCallableBoundaryType(boxed_elem_ty);
+                                    return debugPanic("lambdasolved.propagateExprErasure box_unbox call expected boxed arg", .{});
+                                expr.ty = boxed_elem_ty;
                             },
                             else => unreachable,
                         }
@@ -1023,24 +1351,21 @@ const Lowerer = struct {
                 switch (ll.op) {
                     .box_box => {
                         if (args.len != 1) {
-                            return debugPanic("lambdasolved.propagateExprErasure box_box expected one arg");
+                            return debugPanic("lambdasolved.propagateExprErasure box_box expected one arg", .{});
                         }
 
                         const arg_ty = self.output.getExpr(args[0]).ty;
-                        const erased_elem_ty = try self.eraseCallableBoundaryType(arg_ty);
-                        if (erased_elem_ty != arg_ty) {
-                            expr.ty = try self.types.freshContent(.{ .box = erased_elem_ty });
-                        }
+                        expr.ty = try self.types.freshContent(.{ .box = arg_ty });
                     },
                     .box_unbox => {
                         if (args.len != 1) {
-                            return debugPanic("lambdasolved.propagateExprErasure box_unbox expected one arg");
+                            return debugPanic("lambdasolved.propagateExprErasure box_unbox expected one arg", .{});
                         }
 
                         const arg_ty = self.output.getExpr(args[0]).ty;
                         const boxed_elem_ty = self.boxedPayloadType(arg_ty) orelse
-                            return debugPanic("lambdasolved.propagateExprErasure box_unbox expected boxed arg");
-                        expr.ty = try self.eraseCallableBoundaryType(boxed_elem_ty);
+                            return debugPanic("lambdasolved.propagateExprErasure box_unbox expected boxed arg", .{});
+                        expr.ty = boxed_elem_ty;
                     },
                     else => {},
                 }
@@ -1072,7 +1397,42 @@ const Lowerer = struct {
                 try self.propagateExprErasure(block.final_expr, block_env);
                 expr.ty = self.output.getExpr(block.final_expr).ty;
             },
-            .tuple => |tuple| for (self.output.sliceExprSpan(tuple)) |item| try self.propagateExprErasure(item, venv),
+            .tuple => |tuple| blk: {
+                const elem_values = self.output.sliceExprSpan(tuple);
+                for (elem_values) |item| {
+                    try self.propagateExprErasure(item, venv);
+                }
+
+                const tuple_id = self.types.unlinkPreservingNominal(expr.ty);
+                const tuple_node = self.types.getNode(tuple_id);
+                const tuple_span = switch (tuple_node) {
+                    .content => |content| switch (content) {
+                        .tuple => |tuple_span| tuple_span,
+                        else => break :blk,
+                    },
+                    else => break :blk,
+                };
+                const tuple_elems = self.types.sliceTypeVarSpan(tuple_span);
+                var needs_rebuild = tuple_elems.len != elem_values.len;
+                if (!needs_rebuild) {
+                    for (tuple_elems, elem_values) |tuple_elem, elem_value| {
+                        if (tuple_elem != self.output.getExpr(elem_value).ty) {
+                            needs_rebuild = true;
+                            break;
+                        }
+                    }
+                }
+                if (!needs_rebuild) break :blk;
+
+                const new_elems = try self.allocator.alloc(TypeVarId, elem_values.len);
+                defer self.allocator.free(new_elems);
+                for (elem_values, 0..) |elem_value, i| {
+                    new_elems[i] = self.output.getExpr(elem_value).ty;
+                }
+                expr.ty = try self.types.freshContent(.{
+                    .tuple = try self.types.addTypeVarSpan(new_elems),
+                });
+            },
             .tuple_access => |tuple_access| try self.propagateExprErasure(tuple_access.tuple, venv),
             .list => |list| for (self.output.sliceExprSpan(list)) |item| try self.propagateExprErasure(item, venv),
             .return_ => |ret| try self.propagateExprErasure(ret, venv),
@@ -1116,9 +1476,9 @@ const Lowerer = struct {
                         .ret = new_ret,
                     } });
                 },
-                else => debugPanic("lambdasolved.rewriteFunctionRetType expected function"),
+                else => debugPanic("lambdasolved.rewriteFunctionRetType expected function", .{}),
             },
-            else => debugPanic("lambdasolved.rewriteFunctionRetType expected function"),
+            else => debugPanic("lambdasolved.rewriteFunctionRetType expected function", .{}),
         };
     }
 
@@ -1139,9 +1499,9 @@ const Lowerer = struct {
                         .ret = func.ret,
                     } });
                 },
-                else => debugPanic("lambdasolved.rewriteFunctionLsetType expected function"),
+                else => debugPanic("lambdasolved.rewriteFunctionLsetType expected function", .{}),
             },
-            else => debugPanic("lambdasolved.rewriteFunctionLsetType expected function"),
+            else => debugPanic("lambdasolved.rewriteFunctionLsetType expected function", .{}),
         };
     }
 
@@ -1311,49 +1671,6 @@ const Lowerer = struct {
         };
     }
 
-    fn eraseCallableBoundaryType(self: *Lowerer, ty: TypeVarId) std.mem.Allocator.Error!TypeVarId {
-        var cache = std.AutoHashMap(TypeVarId, TypeVarId).init(self.allocator);
-        defer cache.deinit();
-        return try self.eraseCallableBoundaryTypeRec(ty, &cache);
-    }
-
-    fn eraseCallableBoundaryTypeRec(
-        self: *Lowerer,
-        ty: TypeVarId,
-        cache: *std.AutoHashMap(TypeVarId, TypeVarId),
-    ) std.mem.Allocator.Error!TypeVarId {
-        const id = self.types.unlinkPreservingNominal(ty);
-        if (cache.get(id)) |cached| return cached;
-
-        return switch (self.types.getNode(id)) {
-            .nominal => |backing| blk: {
-                const erased_backing = try self.eraseCallableBoundaryTypeRec(backing, cache);
-                if (erased_backing == backing) break :blk id;
-                const out = try self.types.fresh(.{ .nominal = erased_backing });
-                try cache.put(id, out);
-                break :blk out;
-            },
-            .content => |content| switch (content) {
-                .func => |func| blk: {
-                    if (self.lambdaSetIsErased(func.lset)) break :blk id;
-                    const erased_lset = try self.freshPrimitiveType(.erased);
-                    const out = try self.types.freshContent(.{ .func = .{
-                        .arg = func.arg,
-                        .lset = erased_lset,
-                        .ret = func.ret,
-                    } });
-                    try cache.put(id, out);
-                    break :blk out;
-                },
-                else => id,
-            },
-            .link => unreachable,
-            .unbd,
-            .for_a,
-            => id,
-        };
-    }
-
     fn lambdaSetIsErased(self: *Lowerer, lset_ty: TypeVarId) bool {
         const id = self.types.unlink(lset_ty);
         return switch (self.types.getNode(id)) {
@@ -1378,6 +1695,7 @@ const Lowerer = struct {
     }
 
     fn boxBoundaryBuiltinOpForSymbol(self: *Lowerer, symbol: Symbol) ?base.LowLevel {
+        if (self.boxBoundaryBuiltinOpByName(symbol)) |op| return op;
         const def_id = self.def_id_by_symbol.get(symbol) orelse return null;
         const def = self.output.getDef(def_id);
         const fn_def = switch (def.value) {
@@ -1397,6 +1715,35 @@ const Lowerer = struct {
                     else => null,
                 };
             },
+            else => null,
+        };
+    }
+
+    fn boxBoundaryBuiltinOpByName(self: *Lowerer, symbol: Symbol) ?base.LowLevel {
+        var current = symbol;
+        var depth: usize = 0;
+        while (depth < 4) : (depth += 1) {
+            const entry = self.input.symbols.get(current);
+            if (!entry.name.isNone() and entry.name.idx != std.math.maxInt(u29)) {
+                const name = self.input.idents.getText(entry.name);
+                if (std.mem.eql(u8, name, "Builtin.Box.box") or std.mem.eql(u8, name, "Box.box") or std.mem.eql(u8, name, "box")) return .box_box;
+                if (std.mem.eql(u8, name, "Builtin.Box.unbox") or std.mem.eql(u8, name, "Box.unbox") or std.mem.eql(u8, name, "unbox")) return .box_unbox;
+            }
+
+            const next = sourceSymbolFromOrigin(entry.origin) orelse return null;
+            if (next == current) return null;
+            current = next;
+        }
+
+        return null;
+    }
+
+    fn sourceSymbolFromOrigin(origin: symbol_mod.BindingOrigin) ?Symbol {
+        return switch (origin) {
+            .specialized_top_level_def => |info| Symbol.fromRaw(info.source_symbol),
+            .specialized_local_fn => |info| Symbol.fromRaw(info.source_symbol),
+            .lifted_local_fn => |info| Symbol.fromRaw(info.source_symbol),
+            .lifted_local_fn_alias => |info| Symbol.fromRaw(info.source_symbol),
             else => null,
         };
     }
@@ -1945,13 +2292,13 @@ const Lowerer = struct {
         const next_node: type_mod.Node = switch (self.types.getNode(l)) {
             .unbd => self.types.getNode(r),
             .for_a => {
-                return debugPanic("lambdasolved.unify generalized type without instantiation");
+                return debugPanic("lambdasolved.unify generalized type without instantiation", .{});
             },
             .link, .nominal => unreachable,
             .content => |left_content| switch (self.types.getNode(r)) {
                 .unbd => type_mod.Node{ .content = left_content },
                 .for_a => {
-                    return debugPanic("lambdasolved.unify generalized type without instantiation");
+                    return debugPanic("lambdasolved.unify generalized type without instantiation", .{});
                 },
                 .link, .nominal => unreachable,
                 .content => |right_content| try self.unifyContent(left_content, right_content, visited),
@@ -2006,7 +2353,7 @@ const Lowerer = struct {
                 const left_elems = self.types.sliceTypeVarSpan(tuple);
                 const right_elems = self.types.sliceTypeVarSpan(right.tuple);
                 if (left_elems.len != right_elems.len) {
-                    return debugPanic("lambdasolved.unify tuple arity mismatch");
+                    return debugPanic("lambdasolved.unify tuple arity mismatch", .{});
                 }
                 for (left_elems, right_elems) |left_elem, right_elem| {
                     try self.unifyRec(left_elem, right_elem, visited);
@@ -2046,7 +2393,7 @@ const Lowerer = struct {
                 matched = true;
                 const left_args = self.types.sliceTypeVarSpan(left_tag.args);
                 const right_args = self.types.sliceTypeVarSpan(right_tag.args);
-                if (left_args.len != right_args.len) return debugPanic("lambdasolved.unify tag arity mismatch");
+                if (left_args.len != right_args.len) return debugPanic("lambdasolved.unify tag arity mismatch", .{});
                 for (left_args, right_args) |left_arg, right_arg| {
                     try self.unifyRec(left_arg, right_arg, visited);
                 }
@@ -2131,13 +2478,13 @@ const Lowerer = struct {
         defer self.allocator.free(left);
         const right = try self.allocator.dupe(type_mod.Capture, self.types.sliceCaptures(right_span));
         defer self.allocator.free(right);
-        if (left.len != right.len) return debugPanic("lambdasolved.unify incompatible captures");
+        if (left.len != right.len) return debugPanic("lambdasolved.unify incompatible captures", .{});
 
         var merged = std.ArrayList(type_mod.Capture).empty;
         defer merged.deinit(self.allocator);
 
         for (left) |left_capture| {
-            const right_capture = findCaptureBySymbol(right, left_capture.symbol) orelse return debugPanic("lambdasolved.unify incompatible captures");
+            const right_capture = findCaptureBySymbol(right, left_capture.symbol) orelse return debugPanic("lambdasolved.unify incompatible captures", .{});
             try self.unifyRec(left_capture.ty, right_capture.ty, visited);
             try merged.append(self.allocator, left_capture);
         }
@@ -2165,7 +2512,7 @@ const Lowerer = struct {
             if (lambda.symbol != lambda_symbol) continue;
             for (self.types.sliceCaptures(lambda.captures)) |capture| {
                 const env_ty = self.lookupEnv(venv, capture.symbol) orelse
-                    return debugPanic("lambdasolved.fixCaptures missing capture binding");
+                    return debugPanic("lambdasolved.fixCaptures missing capture binding", .{});
                 try self.unify(capture.ty, env_ty);
             }
             return;
@@ -2208,9 +2555,9 @@ fn findCaptureBySymbol(captures: []const type_mod.Capture, symbol: Symbol) ?type
     return null;
 }
 
-fn debugPanic(comptime msg: []const u8) noreturn {
+fn debugPanic(comptime msg: []const u8, args: anytype) noreturn {
     @branchHint(.cold);
-    std.debug.panic("{s}", .{msg});
+    std.debug.panic(msg, args);
 }
 
 fn debugTodoLowLevel(op: base.LowLevel) noreturn {

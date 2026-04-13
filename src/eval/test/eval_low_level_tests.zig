@@ -3152,6 +3152,49 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "13.0" },
     },
     .{
+        .name = "boxed lambda round trip: rebox after helper chain",
+        .source =
+        \\{
+        \\make = |n| |x| x + n
+        \\wrap = |boxed| { value: boxed }
+        \\unwrap = |record| record.value
+        \\boxed = wrap(Box.box(make(3)))
+        \\reboxed = Box.box(Box.unbox(unwrap(boxed)))
+        \\f = Box.unbox(reboxed)
+        \\f(1) + f(2)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "9.0" },
+    },
+    .{
+        .name = "boxed lambda round trip: stored in record",
+        .source =
+        \\{
+        \\make = |n| |x| x + n
+        \\holder = { boxed: Box.box(make(4)) }
+        \\f = Box.unbox(holder.boxed)
+        \\f(2) + f(3)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "13.0" },
+    },
+    .{
+        .name = "boxed lambda round trip: stored in tag union",
+        .source =
+        \\{
+        \\make = |n| |x| x + n
+        \\boxed = Box.box(make(6))
+        \\tagged = if Bool.True Ok(boxed) else Err(boxed)
+        \\f = Box.unbox(match tagged {
+        \\    Ok(value) => value
+        \\    Err(value) => value
+        \\})
+        \\f(1) + f(2)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "15.0" },
+    },
+    .{
         .name = "boxed lambda round trip: polymorphic identity specialized after unboxing",
         .source =
         \\{
@@ -3174,6 +3217,22 @@ pub const tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .inspect_str = "{ n: 41.0, s: \"ok\" }" },
+    },
+    .{
+        .name = "host boundary: unboxed lambda is rejected",
+        .source_kind = .module,
+        .source =
+        \\import Platform
+        \\
+        \\main = Platform.apply!(|x: I64| x)
+        ,
+        .imports = &.{.{
+            .name = "Platform",
+            .source =
+            \\apply! : (I64 -> I64) -> I64 => {}
+            ,
+        }},
+        .expected = .{ .problem = {} },
     },
     .{
         .name = "issue 8555: method call syntax list.first() with match on Result",
