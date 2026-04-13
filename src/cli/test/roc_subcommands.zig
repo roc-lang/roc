@@ -1558,3 +1558,17 @@ test "roc docs Builtin.roc succeeds" {
     const has_generated = std.mem.indexOf(u8, result.stdout, "Generated docs for") != null;
     try testing.expect(has_generated);
 }
+
+test "roc test complex_package --verbose passes all tests" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "test", "--no-cache", "--verbose" }, "test/complex_package/main.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try util.checkSuccess(result);
+
+    try testing.expect(std.mem.indexOf(u8, result.stdout, "tests passed") != null);
+    try testing.expect(std.mem.indexOf(u8, result.stdout, "PASS") != null);
+}

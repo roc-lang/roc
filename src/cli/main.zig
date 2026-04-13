@@ -7070,20 +7070,14 @@ fn generateDocs(
     // If the path contains "platform", we're documenting a platform directly
     const is_documenting_platform = std.mem.indexOf(u8, module_path, "platform") != null;
 
-    // Determine the root package name from the module path
-    // Extract basename without extension (e.g., "app.roc" -> "app")
-    const basename = std.fs.path.basename(module_path);
-    const pkg_name = if (std.mem.endsWith(u8, basename, ".roc"))
-        try ctx.gpa.dupe(u8, basename[0 .. basename.len - 4])
-    else
-        try ctx.gpa.dupe(u8, basename);
-
     // Collect ModuleDocs from all compiled modules
     var module_docs_list = std.ArrayList(DocModel.ModuleDocs).empty;
     defer {
         for (module_docs_list.items) |*mod| mod.deinit(ctx.gpa);
         module_docs_list.deinit(ctx.gpa);
     }
+
+    var is_package = false;
 
     var sched_iter = build_env.schedulers.iterator();
     while (sched_iter.next()) |sched_entry| {
@@ -7098,6 +7092,13 @@ fn generateDocs(
                     continue;
                 }
 
+                // Skip package definition files — they just declare which modules
+                // are exposed and don't contain docs of their own.
+                if (mod_env.module_kind == .package) {
+                    is_package = true;
+                    continue;
+                }
+
                 var mod_docs = extract.extractModuleDocs(ctx.gpa, mod_env, sched_pkg_name) catch |err| {
                     std.debug.print("Warning: failed to extract docs for module {s}: {}\n", .{ module_state.name, err });
                     continue;
@@ -7109,6 +7110,20 @@ fn generateDocs(
             }
         }
     }
+
+    // Determine the package name for the docs header.
+    // For packages, use the parent directory name (e.g., "my_parser" from "my_parser/main.roc")
+    // since the entry file is just a package definition.
+    // For apps/platforms, use the filename without extension (e.g., "app" from "app.roc").
+    const pkg_name = if (is_package)
+        try ctx.gpa.dupe(u8, std.fs.path.basename(std.fs.path.dirname(module_path) orelse "."))
+    else blk: {
+        const basename = std.fs.path.basename(module_path);
+        break :blk if (std.mem.endsWith(u8, basename, ".roc"))
+            try ctx.gpa.dupe(u8, basename[0 .. basename.len - 4])
+        else
+            try ctx.gpa.dupe(u8, basename);
+    };
 
     const modules_slice = module_docs_list.toOwnedSlice(ctx.gpa) catch return;
 

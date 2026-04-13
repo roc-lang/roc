@@ -130,6 +130,7 @@ fn writeStaticAssets(dir: std.fs.Dir) !void {
     try dir.writeFile(.{ .sub_path = "search.js", .data = embedded_js });
 }
 
+
 fn writePackageIndex(ctx: *const RenderContext, gpa: Allocator, dir: std.fs.Dir) !void {
     const file = try dir.createFile("index.html", .{});
     defer file.close();
@@ -137,18 +138,13 @@ fn writePackageIndex(ctx: *const RenderContext, gpa: Allocator, dir: std.fs.Dir)
     var bw = file.writer(&buf);
     const w = &bw.interface;
 
-    // Create descriptive title for index page
-    var title_buf: [256]u8 = undefined;
-    const title = try std.fmt.bufPrint(&title_buf, "{s} - Documentation", .{ctx.package_docs.name});
-    try writeHtmlHead(w, title, "");
+    try writeHtmlHead(w, "Docs", "");
     try writeBodyOpen(w);
     try renderSidebar(w, ctx, gpa, "");
 
     // Main content
-    try writeMainOpen(w, ctx, "");
-    try w.writeAll("        <h1 class=\"module-name\">");
-    try writeHtmlEscaped(w, ctx.package_docs.name);
-    try w.writeAll("</h1>\n");
+    try writeMainOpen(w, ctx, gpa, "");
+    try w.writeAll("        <h1 class=\"module-name\">Docs</h1>\n");
 
     // Module list
     try w.writeAll("        <ul class=\"index-module-links\">\n");
@@ -189,12 +185,14 @@ fn writeModulePageToDir(ctx: *const RenderContext, gpa: Allocator, dir: std.fs.D
     var bw = file.writer(&buf);
     const w = &bw.interface;
 
-    try writeHtmlHead(w, mod.name, base);
+    var title_buf: [256]u8 = undefined;
+    const title = std.fmt.bufPrint(&title_buf, "{s} Docs", .{mod.name}) catch mod.name;
+    try writeHtmlHead(w, title, base);
     try writeBodyOpen(w);
     try renderSidebar(w, ctx, gpa, base);
 
     // Main content
-    try writeMainOpen(w, ctx, base);
+    try writeMainOpen(w, ctx, gpa, base);
     try w.writeAll("        <h1 class=\"module-name\">");
     try writeHtmlEscaped(w, mod.name);
     if (mod.kind == .type_module) {
@@ -202,17 +200,34 @@ fn writeModulePageToDir(ctx: *const RenderContext, gpa: Allocator, dir: std.fs.D
     }
     try w.writeAll("</h1>\n");
 
-    // Module doc comment
-    if (mod.module_doc) |doc| {
+    // Build entry tree (automatically collapses redundant top-level node
+    // matching the module name, e.g. Parser > Parser or Builtin > Builtin).
+    const entry_tree = try buildEntryTree(gpa, mod.entries, mod.name);
+    defer entry_tree.deinit(gpa);
+
+    // Show collapsed type definition at module level
+    if (entry_tree.collapsed_entry) |entry| {
+        if (entry.kind == .nominal) {
+            if (entry.type_signature) |sig| {
+                try w.writeAll("        <code class=\"entry-type-def\">");
+                try w.writeAll(":= ");
+                try renderDocTypeHtml(w, ctx, sig, false);
+                try w.writeAll("</code>\n");
+            }
+        }
+    }
+
+    // Module doc comment (fall back to collapsed entry's doc if module has none)
+    const doc_comment = mod.module_doc orelse
+        if (entry_tree.collapsed_entry) |entry| entry.doc_comment else null;
+    if (doc_comment) |doc| {
         try w.writeAll("        <div class=\"module-doc\">\n");
         try renderDocComment(w, doc);
         try w.writeAll("        </div>\n");
     }
 
-    // Entries - render as hierarchical tree
-    const tree = try buildEntryTree(gpa, mod.entries);
-    defer tree.deinit(gpa);
-    try renderEntryTree(w, ctx, tree, 0);
+    // Render entries
+    try renderEntryTree(w, ctx, entry_tree.root, 0);
 
     try writeFooter(w);
     try w.writeAll("    </main>\n");
@@ -266,7 +281,7 @@ const menu_toggle_svg =
     \\</svg>
 ;
 
-fn writeMainOpen(w: Writer, ctx: *const RenderContext, base: []const u8) !void {
+fn writeMainOpen(w: Writer, ctx: *const RenderContext, gpa: Allocator, base: []const u8) !void {
     try w.writeAll("    <main>\n");
     try w.writeAll("        <button class=\"menu-toggle\" aria-label=\"Toggle sidebar\">");
     try w.writeAll(menu_toggle_svg);
@@ -274,7 +289,7 @@ fn writeMainOpen(w: Writer, ctx: *const RenderContext, base: []const u8) !void {
     try w.writeAll("        <form id=\"module-search-form\">\n");
     try w.writeAll("            <input type=\"search\" id=\"module-search\" placeholder=\"Search Documentation\" autocomplete=\"off\" />\n");
     try w.writeAll("            <ul id=\"search-type-ahead\" class=\"hidden\">\n");
-    try renderSearchEntries(w, ctx, base);
+    try renderSearchEntries(w, ctx, gpa, base);
     try w.writeAll("            </ul>\n");
     try w.writeAll("        </form>\n");
 }
@@ -299,7 +314,21 @@ fn lessThanSidebarNode(_: void, a: *SidebarNode, b: *SidebarNode) bool {
     return std.mem.order(u8, a.name, b.name) == .lt;
 }
 
-fn buildEntryTree(gpa: Allocator, entries: []const DocModel.DocEntry) !*SidebarNode {
+const EntryTree = struct {
+    root: *SidebarNode,
+    /// When the tree had a single top-level child whose name matched the
+    /// module name (e.g. Parser.roc defining only `Parser`, or Builtin where
+    /// every entry lives under `Builtin.*`), that redundant level is collapsed
+    /// and the child's entry is stored here so callers can surface its type
+    /// definition at the module level.
+    collapsed_entry: ?*const DocModel.DocEntry,
+
+    fn deinit(self: EntryTree, gpa: Allocator) void {
+        self.root.deinit(gpa);
+    }
+};
+
+fn buildEntryTree(gpa: Allocator, entries: []const DocModel.DocEntry, module_name: []const u8) !EntryTree {
     const root = try SidebarNode.init(gpa, "", "", false);
 
     for (entries) |*entry| {
@@ -362,7 +391,23 @@ fn buildEntryTree(gpa: Allocator, entries: []const DocModel.DocEntry) !*SidebarN
         }
     }
 
-    return root;
+    // Collapse: when the tree has a single top-level child whose name matches
+    // the module, promote its children to the root and return its entry.
+    var collapsed_entry: ?*const DocModel.DocEntry = null;
+    if (root.children.items.len == 1 and
+        std.mem.eql(u8, root.children.items[0].name, module_name))
+    {
+        const collapsed = root.children.items[0];
+        collapsed_entry = collapsed.entry;
+
+        root.children.deinit(gpa);
+        root.children = collapsed.children;
+
+        collapsed.children = std.ArrayList(*SidebarNode).empty;
+        collapsed.deinit(gpa);
+    }
+
+    return .{ .root = root, .collapsed_entry = collapsed_entry };
 }
 
 /// Add a child entry to the content tree, splitting its name on dots
@@ -655,12 +700,10 @@ fn renderSidebarEntries(
 ) !void {
     _ = _depth; // No longer needed
 
-    // Build tree structure
-    const tree = try buildEntryTree(gpa, entries);
-    defer tree.deinit(gpa);
+    const entry_tree = try buildEntryTree(gpa, entries, module_name);
+    defer entry_tree.deinit(gpa);
 
-    // Render tree
-    try renderSidebarTree(w, module_name, tree, 0);
+    try renderSidebarTree(w, module_name, entry_tree.root, 0);
 }
 
 fn renderSidebar(w: Writer, ctx: *const RenderContext, gpa: Allocator, base: []const u8) !void {
@@ -678,9 +721,7 @@ fn renderSidebar(w: Writer, ctx: *const RenderContext, gpa: Allocator, base: []c
     try w.writeAll("</a>\n");
     try w.writeAll("            <h1 class=\"pkg-full-name\"><a href=\"");
     try w.writeAll(base);
-    try w.writeAll("\">");
-    try writeHtmlEscaped(w, ctx.package_docs.name);
-    try w.writeAll("</a></h1>\n");
+    try w.writeAll("\">Docs</a></h1>\n");
     try w.writeAll("        </div>\n");
 
     try w.writeAll("        <div class=\"module-links-container\">\n");
@@ -728,64 +769,60 @@ fn renderSidebar(w: Writer, ctx: *const RenderContext, gpa: Allocator, base: []c
     try w.writeAll("    </nav>\n");
 }
 
-fn renderSearchEntries(w: Writer, ctx: *const RenderContext, base: []const u8) !void {
+fn renderSearchEntries(w: Writer, ctx: *const RenderContext, gpa: Allocator, base: []const u8) !void {
     for (ctx.package_docs.modules) |mod| {
-        for (mod.entries) |*entry| {
-            try renderSearchEntry(w, ctx, mod.name, entry, base);
-        }
+        const entry_tree = try buildEntryTree(gpa, mod.entries, mod.name);
+        defer entry_tree.deinit(gpa);
+        try renderSearchTree(w, ctx, mod.name, entry_tree.root, base);
     }
 }
 
-fn renderSearchEntry(
+/// Walk the entry tree depth-first, emitting a search type-ahead <li> for
+/// every leaf node that carries a DocEntry.
+fn renderSearchTree(
     w: Writer,
     ctx: *const RenderContext,
     module_name: []const u8,
-    entry: *const DocModel.DocEntry,
+    node: *const SidebarNode,
     base: []const u8,
 ) !void {
-    // Render this entry as a type-ahead list item
-    try w.writeAll("            <li class=\"hidden\"><a class=\"type-ahead-link\" href=\"");
-    if (ctx.single_module_at_root) {
-        // Single module rendered at root; link to anchor on current page
-        try w.writeAll("#");
-    } else {
-        try w.writeAll(base);
-        try writeHtmlEscaped(w, module_name);
-        try w.writeAll("/#");
-    }
-    try writeHtmlEscaped(w, entry.name);
-    try w.writeAll("\">");
-    try w.writeAll("<span class=\"type-ahead-module-name\">");
-    try writeHtmlEscaped(w, module_name);
-    try w.writeAll("</span>");
-    try w.writeAll(".<span class=\"type-ahead-def-name\">");
-    // Display only the last component of the entry name
-    const display_name = if (std.mem.lastIndexOfScalar(u8, entry.name, '.')) |idx|
-        entry.name[idx + 1 ..]
-    else
-        entry.name;
-    try writeHtmlEscaped(w, display_name);
-    try w.writeAll("</span>");
-    if (entry.type_signature) |sig| {
-        try w.writeAll(" <span class=\"type-ahead-signature\">");
-        switch (entry.kind) {
-            .value, .alias => {
-                try w.writeAll(": ");
-                try renderDocTypeHtml(w, ctx, sig, false);
-            },
-            .nominal => {
-                try w.writeAll(":= ");
-                try renderDocTypeHtml(w, ctx, sig, false);
-            },
-            .@"opaque" => {},
+    if (node.entry) |entry| {
+        try w.writeAll("            <li class=\"hidden\"><a class=\"type-ahead-link\" href=\"");
+        if (ctx.single_module_at_root) {
+            try w.writeAll("#");
+        } else {
+            try w.writeAll(base);
+            try writeHtmlEscaped(w, module_name);
+            try w.writeAll("/#");
         }
+        try writeHtmlEscaped(w, node.full_path);
+        try w.writeAll("\">");
+        try w.writeAll("<span class=\"type-ahead-module-name\">");
+        try writeHtmlEscaped(w, module_name);
         try w.writeAll("</span>");
+        try w.writeAll(".<span class=\"type-ahead-def-name\">");
+        try writeHtmlEscaped(w, node.name);
+        try w.writeAll("</span>");
+        if (entry.type_signature) |sig| {
+            try w.writeAll(" <span class=\"type-ahead-signature\">");
+            switch (entry.kind) {
+                .value, .alias => {
+                    try w.writeAll(": ");
+                    try renderDocTypeHtml(w, ctx, sig, false);
+                },
+                .nominal => {
+                    try w.writeAll(":= ");
+                    try renderDocTypeHtml(w, ctx, sig, false);
+                },
+                .@"opaque" => {},
+            }
+            try w.writeAll("</span>");
+        }
+        try w.writeAll("</a></li>\n");
     }
-    try w.writeAll("</a></li>\n");
 
-    // Recurse into children
-    for (entry.children) |*child| {
-        try renderSearchEntry(w, ctx, module_name, child, base);
+    for (node.children.items) |child| {
+        try renderSearchTree(w, ctx, module_name, child, base);
     }
 }
 
