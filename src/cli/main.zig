@@ -5998,97 +5998,17 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
                     switch (result.result) {
                         .passed => try stdout.print("\x1b[32mPASS\x1b[0m: {s}:{}\n", .{ mr.path, region_info.start_line_idx + 1 }),
                         .skipped => try stdout.print("\x1b[33mSKIP\x1b[0m: {s}:{}\n", .{ mr.path, region_info.start_line_idx + 1 }),
-                        .failed => {
-                            // get error code snippet from source
-                            const src = mr.env.getSourceAll();
-                            const error_src = src[result.region.start.offset..result.region.end.offset];
-
-                            // check if the previous line is a doc comment
-                            const doc_comment: ?[]const u8 = blk: {
-                                const line_starts = mr.env.getLineStarts();
-                                const curr_line_start_idx = region_info.start_line_idx;
-                                const curr_line_start = line_starts[curr_line_start_idx];
-                                const prev_line_start = if (curr_line_start_idx > 0) line_starts[curr_line_start_idx - 1] else break :blk null;
-                                if (std.mem.startsWith(u8, src[prev_line_start..], "##")) {
-                                    break :blk std.mem.trim(u8, src[prev_line_start + 2 .. curr_line_start - 1], " ");
-                                }
-                                break :blk null;
-                            };
-
-                            try stderr.print("\n\x1b[31mFAIL\x1b[0m: {s}", .{mr.path});
-                            if (doc_comment) |comment| {
-                                try stderr.print("\n\x1b[0m{s}", .{comment});
-                            }
-
-                            try stderr.print("\x1b[31m\n𜸖\t", .{});
-
-                            for (error_src) |ch| {
-                                if (ch == '\n') {
-                                    try stderr.print("\n\u{2502}\u{00A0}\u{00A0}\t", .{});
-                                } else {
-                                    try stderr.print("{c}", .{ch});
-                                }
-                            }
-                            try stderr.print("\n\u{2514}\u{2500}> [line {}:{}]", .{ region_info.start_line_idx + 1, region_info.start_col_idx + 1 });
-
-                            try stderr.print("\x1b[31m", .{});
-
-                            if (result.error_msg) |msg| {
-                                try stderr.print(" - {s}", .{msg});
-                            }
-
-                            try stderr.print("\x1b[0m", .{});
-                            try stderr.print("\n", .{});
-                        },
+                        .failed => try printTestFailure(stderr, mr.path, mr.env, result.region, region_info, result.error_msg),
                     }
                 }
             }
         } else {
-            // Non-verbose mode: just show simple FAIL messages with line numbers
+            // Non-verbose mode: only show failures
             for (module_results.items) |mr| {
                 for (mr.results) |result| {
                     if (result.result == .failed) {
                         const region_info = mr.env.calcRegionInfo(result.region);
-                        // get error code snippet from source
-                        const src = mr.env.getSourceAll();
-                        const error_src = src[result.region.start.offset..result.region.end.offset];
-
-                        // check if the previous line is a doc comment
-                        const doc_comment: ?[]const u8 = blk: {
-                            const line_starts = mr.env.getLineStarts();
-                            const curr_line_start_idx = region_info.start_line_idx;
-                            const curr_line_start = line_starts[curr_line_start_idx];
-                            const prev_line_start = if (curr_line_start_idx > 0) line_starts[curr_line_start_idx - 1] else break :blk null;
-                            if (std.mem.startsWith(u8, src[prev_line_start..], "##")) {
-                                break :blk std.mem.trim(u8, src[prev_line_start + 2 .. curr_line_start - 1], " ");
-                            }
-                            break :blk null;
-                        };
-
-                        try stderr.print("\n\x1b[31mFAIL\x1b[0m: {s}", .{mr.path});
-                        if (doc_comment) |comment| {
-                            try stderr.print("\n\x1b[0m{s}", .{comment});
-                        }
-
-                        try stderr.print("\x1b[31m\n𜸖\t", .{});
-
-                        for (error_src) |ch| {
-                            if (ch == '\n') {
-                                try stderr.print("\n\u{2502}\u{00A0}\u{00A0}\t", .{});
-                            } else {
-                                try stderr.print("{c}", .{ch});
-                            }
-                        }
-                        try stderr.print("\n\u{2514}\u{2500}> [line {}:{}]", .{ region_info.start_line_idx + 1, region_info.start_col_idx + 1 });
-
-                        try stderr.print("\x1b[31m", .{});
-
-                        if (result.error_msg) |msg| {
-                            try stderr.print(" - {s}", .{msg});
-                        }
-
-                        try stderr.print("\x1b[0m", .{});
-                        try stderr.print("\n", .{});
+                        try printTestFailure(stderr, mr.path, mr.env, result.region, region_info, result.error_msg);
                     }
                 }
             }
@@ -6096,6 +6016,58 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
 
         return error.TestsFailed;
     }
+}
+
+/// Prints a formatted test failure to stderr, including the source snippet,
+/// an optional doc comment from the preceding line, and an optional error message.
+fn printTestFailure(
+    stderr: *std.Io.Writer,
+    path: []const u8,
+    env: *const ModuleEnv,
+    region: base.Region,
+    region_info: base.RegionInfo,
+    error_msg: ?[]const u8,
+) !void {
+    const src = env.getSourceAll();
+    const error_src = src[region.start.offset..region.end.offset];
+
+    // Check if the previous line is a doc comment
+    const doc_comment: ?[]const u8 = blk: {
+        const line_starts = env.getLineStarts();
+        const curr_line_start_idx = region_info.start_line_idx;
+        const curr_line_start = line_starts[curr_line_start_idx];
+        const prev_line_start = if (curr_line_start_idx > 0) line_starts[curr_line_start_idx - 1] else break :blk null;
+        const prev_line = std.mem.trimLeft(u8, src[prev_line_start..curr_line_start], " ");
+        if (std.mem.startsWith(u8, prev_line, "##")) {
+            break :blk std.mem.trim(u8, prev_line[2..], " \r\n");
+        }
+        break :blk null;
+    };
+
+    try stderr.print("\n\x1b[31mFAIL\x1b[0m: {s}", .{path});
+    if (doc_comment) |comment| {
+        try stderr.print("\n{s}", .{comment});
+    }
+
+    try stderr.print("\x1b[31m\n\u{250c}\t", .{});
+
+    var lines = std.mem.splitScalar(u8, error_src, '\n');
+    var first = true;
+    while (lines.next()) |line| {
+        if (!first) {
+            try stderr.print("\n\u{2502}\u{00A0}\u{00A0}\t", .{});
+        }
+        first = false;
+        try stderr.print("{s}", .{line});
+    }
+
+    try stderr.print("\n\u{2514}\u{2500}> [line {}:{}]", .{ region_info.start_line_idx + 1, region_info.start_col_idx + 1 });
+
+    if (error_msg) |msg| {
+        try stderr.print("\x1b[31m - {s}", .{msg});
+    }
+
+    try stderr.print("\x1b[0m\n", .{});
 }
 
 fn rocRepl(ctx: *CliContext, repl_args: cli_args.ReplArgs) !void {
