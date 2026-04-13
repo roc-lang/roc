@@ -607,6 +607,93 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
     };
 }
 
+pub fn cloneForEval(self: *const Self, gpa: std.mem.Allocator) std.mem.Allocator.Error!Self {
+    var common = try self.common.clone(gpa);
+    errdefer common.deinit(gpa);
+
+    var types = try self.types.clone(gpa);
+    errdefer types.deinit();
+
+    var requires_types = try self.requires_types.clone(gpa);
+    errdefer requires_types.deinit(gpa);
+
+    var for_clause_aliases = try self.for_clause_aliases.clone(gpa);
+    errdefer for_clause_aliases.deinit(gpa);
+
+    var provides_entries = try self.provides_entries.clone(gpa);
+    errdefer provides_entries.deinit(gpa);
+
+    var external_decls = try self.external_decls.clone(gpa);
+    errdefer external_decls.deinit(gpa);
+
+    var imports = try self.imports.clone(gpa);
+    errdefer imports.deinit(gpa);
+
+    var store = try self.store.clone(gpa);
+    errdefer store.deinit();
+
+    var deferred_numeric_literals = try self.deferred_numeric_literals.clone(gpa);
+    errdefer deferred_numeric_literals.deinit(gpa);
+
+    var import_mapping = types_mod.import_mapping.ImportMapping.init(gpa);
+    errdefer import_mapping.deinit();
+    {
+        var it = self.import_mapping.iterator();
+        while (it.next()) |entry| {
+            try import_mapping.put(entry.key_ptr.*, entry.value_ptr.*);
+        }
+    }
+
+    var method_idents = try self.method_idents.clone(gpa);
+    errdefer method_idents.deinit(gpa);
+
+    var rigid_vars = std.AutoHashMapUnmanaged(Ident.Idx, TypeVar){};
+    errdefer rigid_vars.deinit(gpa);
+    {
+        var it = self.rigid_vars.iterator();
+        while (it.next()) |entry| {
+            try rigid_vars.put(gpa, entry.key_ptr.*, entry.value_ptr.*);
+        }
+    }
+
+    var evaluation_order: ?*DependencyGraph.EvaluationOrder = null;
+    if (self.evaluation_order) |order| {
+        const cloned_order = try gpa.create(DependencyGraph.EvaluationOrder);
+        cloned_order.* = try order.clone(gpa);
+        errdefer cloned_order.deinit();
+        errdefer gpa.destroy(cloned_order);
+        evaluation_order = cloned_order;
+    }
+
+    return Self{
+        .gpa = gpa,
+        .common = common,
+        .types = types,
+        .module_kind = self.module_kind,
+        .all_defs = self.all_defs,
+        .all_statements = self.all_statements,
+        .exports = self.exports,
+        .requires_types = requires_types,
+        .for_clause_aliases = for_clause_aliases,
+        .provides_entries = provides_entries,
+        .rigid_vars = rigid_vars,
+        .builtin_statements = self.builtin_statements,
+        .external_decls = external_decls,
+        .imports = imports,
+        .module_name = self.module_name,
+        .display_module_name_idx = self.display_module_name_idx,
+        .qualified_module_ident = self.qualified_module_ident,
+        .diagnostics = self.diagnostics,
+        .store = store,
+        .evaluation_order = evaluation_order,
+        .idents = CommonIdents.find(&common),
+        .deferred_numeric_literals = deferred_numeric_literals,
+        .import_mapping = import_mapping,
+        .method_idents = method_idents,
+        .defer_numeric_defaults = self.defer_numeric_defaults,
+    };
+}
+
 /// Deinitialize the module environment.
 pub fn deinit(self: *Self) void {
     self.common.deinit(self.gpa);

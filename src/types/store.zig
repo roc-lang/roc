@@ -5,6 +5,7 @@ const std = @import("std");
 const tracy = @import("tracy");
 const base = @import("base");
 const collections = @import("collections");
+const builtin = @import("builtin");
 
 const types = @import("types.zig");
 const debug = @import("debug.zig");

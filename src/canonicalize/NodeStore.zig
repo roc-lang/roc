@@ -227,6 +227,29 @@ pub fn initCapacity(gpa: Allocator, capacity: usize) Allocator.Error!NodeStore {
     };
 }
 
+pub fn clone(self: *const NodeStore, gpa: Allocator) Allocator.Error!NodeStore {
+    var cloned = NodeStore{
+        .gpa = gpa,
+        .nodes = try self.nodes.clone(gpa),
+        .regions = try self.regions.clone(gpa),
+        .int128_values = try self.int128_values.clone(gpa),
+        .span2_data = try self.span2_data.clone(gpa),
+        .span_with_node_data = try self.span_with_node_data.clone(gpa),
+        .match_data = try self.match_data.clone(gpa),
+        .match_branch_data = try self.match_branch_data.clone(gpa),
+        .closure_data = try self.closure_data.clone(gpa),
+        .zero_arg_tag_data = try self.zero_arg_tag_data.clone(gpa),
+        .def_data = try self.def_data.clone(gpa),
+        .import_data = try self.import_data.clone(gpa),
+        .type_apply_data = try self.type_apply_data.clone(gpa),
+        .pattern_list_data = try self.pattern_list_data.clone(gpa),
+        .index_data = try self.index_data.clone(gpa),
+        .scratch = null,
+    };
+    errdefer cloned.deinit();
+    return cloned;
+}
+
 /// Deinitializes the NodeStore, freeing any allocated resources.
 pub fn deinit(store: *NodeStore) void {
     store.nodes.deinit(store.gpa);

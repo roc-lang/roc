@@ -46,6 +46,16 @@ pub fn deinit(self: *CommonEnv, gpa: std.mem.Allocator) void {
     // NOTE: Caller owns source and is responsible for freeing it.
 }
 
+pub fn clone(self: *const CommonEnv, gpa: std.mem.Allocator) std.mem.Allocator.Error!CommonEnv {
+    return CommonEnv{
+        .idents = try self.idents.clone(gpa),
+        .strings = try self.strings.clone(gpa),
+        .exposed_items = try self.exposed_items.clone(gpa),
+        .line_starts = try self.line_starts.clone(gpa),
+        .source = self.source,
+    };
+}
+
 /// Add the given offset to the memory addresses of all pointers in `self`.
 pub fn relocate(self: *CommonEnv, offset: isize) void {
     // Relocate all sub-structures

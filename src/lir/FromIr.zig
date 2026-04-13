@@ -368,6 +368,9 @@ const ProcLowerer = struct {
     ) layout_mod.Idx {
         const ls = &self.parent.layouts;
         const struct_layout = ls.getLayout(struct_layout_idx);
+        if (struct_layout.tag == .zst) {
+            return struct_layout_idx;
+        }
         if (builtin.mode == .Debug and struct_layout.tag != .struct_) {
             std.debug.panic(
                 "lir.from_ir invariant violated: expected struct layout for field lookup, got {s}",
@@ -396,7 +399,8 @@ const ProcLowerer = struct {
                 break :blk variants.get(tag_discriminant).payload_layout;
             },
             .box => self.lowerUnionPayloadLayout(union_layout.data.box, tag_discriminant),
-            .scalar, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .zst => {
+            .zst => .zst,
+            .scalar, .box_of_zst, .list, .list_of_zst, .struct_, .closure => {
                 if (builtin.mode == .Debug) {
                     std.debug.panic(
                         "lir.from_ir invariant violated: expected tag union layout for payload lookup, got {s}",
@@ -422,7 +426,8 @@ const ProcLowerer = struct {
                 };
             },
             .box => self.unionDiscriminantLayout(union_layout.data.box),
-            .scalar, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .zst => {
+            .zst => .u8,
+            .scalar, .box_of_zst, .list, .list_of_zst, .struct_, .closure => {
                 if (builtin.mode == .Debug) {
                     std.debug.panic(
                         "lir.from_ir invariant violated: expected tag union layout for discriminant lookup, got {s}",
@@ -471,6 +476,9 @@ const ProcLowerer = struct {
         layout_idx: layout_mod.Idx,
         ref: ir.Layout.Ref,
     ) bool {
+        if (self.localLayout(local_id) == .zst and layout_idx == .zst) {
+            return true;
+        }
         return self.localLayout(local_id) == layout_idx and
             layoutRefsEqual(self.localLayoutRef(local_id), ref);
     }
@@ -579,6 +587,7 @@ const ProcLowerer = struct {
                 .canonical => |layout_idx| {
                     const layout_val = self.parent.layouts.getLayout(layout_idx);
                     switch (layout_val.tag) {
+                        .zst => return .{ .canonical = layout_idx },
                         .struct_ => {
                             const struct_idx = layout_val.data.struct_.idx;
                             const field_layout = self.parent.layouts.getStructFieldLayoutByOriginalIndex(
@@ -625,6 +634,7 @@ const ProcLowerer = struct {
                             current = .{ .canonical = layout_val.data.box };
                             continue;
                         },
+                        .zst => return .{ .canonical = .zst },
                         else => debugPanic("lir.from_ir expected tag-union logical layout ref"),
                     }
                 },
@@ -663,6 +673,7 @@ const ProcLowerer = struct {
                             current = .{ .canonical = layout_val.data.box };
                             continue;
                         },
+                        .zst => return .{ .canonical = .u8 },
                         else => debugPanic("lir.from_ir expected tag-union logical layout ref"),
                     }
                 },
@@ -881,6 +892,9 @@ const ProcLowerer = struct {
         const ls = &self.parent.layouts;
         const actual_layout = self.localLayout(source_local);
         const target_layout = self.localLayout(target_local);
+        if (ls.getLayout(actual_layout).tag == .zst and ls.getLayout(target_layout).tag == .zst) {
+            return next;
+        }
         const actual_ref = self.localLayoutRef(source_local);
         const target_ref = self.localLayoutRef(target_local);
         const target_info = ls.getStructInfo(ls.getLayout(target_layout));
@@ -1318,6 +1332,9 @@ const ProcLowerer = struct {
                 .next = next,
             } }),
             .make_union => |union_expr| blk: {
+                if (self.parent.layouts.getLayout(self.localLayout(target)).tag == .zst) {
+                    break :blk next;
+                }
                 var payload_source: ?LIR.LocalId = null;
                 var payload_local: ?LIR.LocalId = null;
                 if (union_expr.payload) |payload| {
@@ -1348,14 +1365,28 @@ const ProcLowerer = struct {
                 }
                 break :blk assign_tag;
             },
-            .get_union_id => |value| try self.parent.store.addCFStmt(.{ .assign_ref = .{
-                .target = target,
-                .result = .fresh,
-                .op = .{ .discriminant = .{ .source = try self.lowerVar(value) } },
-                .next = next,
-            } }),
+            .get_union_id => |value| blk: {
+                const source_local = try self.lowerVar(value);
+                if (self.parent.layouts.getLayout(self.localLayout(source_local)).tag == .zst) {
+                    break :blk try self.parent.store.addCFStmt(.{ .assign_literal = .{
+                        .target = target,
+                        .result = .fresh,
+                        .value = .{ .i64_literal = .{ .value = 0, .layout_idx = self.localLayout(target) } },
+                        .next = next,
+                    } });
+                }
+                break :blk try self.parent.store.addCFStmt(.{ .assign_ref = .{
+                    .target = target,
+                    .result = .fresh,
+                    .op = .{ .discriminant = .{ .source = source_local } },
+                    .next = next,
+                } });
+            },
             .get_union_struct => |payload| blk: {
                 const source = try self.lowerVar(payload.value);
+                if (self.parent.layouts.getLayout(self.localLayout(source)).tag == .zst) {
+                    break :blk next;
+                }
                 const actual_payload_ref = self.unionPayloadLayoutRef(self.localLayoutRef(source), payload.tag_discriminant);
                 const actual_payload_layout = self.lowerUnionPayloadLayout(
                     self.localLayout(source),
@@ -1387,6 +1418,9 @@ const ProcLowerer = struct {
                 break :blk access;
             },
             .make_struct => |fields| blk: {
+                if (self.parent.layouts.getLayout(self.localLayout(target)).tag == .zst) {
+                    break :blk next;
+                }
                 const planned = try self.planStructFieldsIntoTarget(target, self.parent.input.store.sliceVarSpan(fields));
                 defer self.parent.allocator.free(planned.sources);
                 defer self.parent.allocator.free(planned.fields);
@@ -1424,6 +1458,9 @@ const ProcLowerer = struct {
             },
             .get_struct_field => |field| blk: {
                 const source = try self.lowerVar(field.record);
+                if (self.parent.layouts.getLayout(self.localLayout(source)).tag == .zst) {
+                    break :blk next;
+                }
                 const actual_field_ref = self.structFieldLayoutRef(self.localLayoutRef(source), field.field_index);
                 const actual_field_layout = self.lowerStructFieldLayout(self.localLayout(source), field.field_index);
                 if (self.localMatchesShape(target, actual_field_layout, actual_field_ref)) {

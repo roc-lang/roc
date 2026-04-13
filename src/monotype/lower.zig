@@ -3063,12 +3063,16 @@ pub const Lowerer = struct {
         }
 
         const data: ast.Expr.Data = switch (expr.data) {
-            .e_num => |num| try self.lowerNumericIntLiteralData(ty, num.value),
+            .e_num => |num| blk: {
+                break :blk try self.lowerNumericIntLiteralData(ty, num.value);
+            },
             .e_frac_f32 => |frac| .{ .frac_f32_lit = frac.value },
             .e_frac_f64 => |frac| .{ .frac_f64_lit = frac.value },
             .e_dec => |dec| try self.lowerNumericDecLiteralData(ty, dec.value.toI128()),
             .e_dec_small => |dec| try self.lowerNumericSmallDecLiteralData(ty, dec.value),
-            .e_typed_int => |num| try self.lowerNumericIntLiteralData(ty, num.value),
+            .e_typed_int => |num| blk: {
+                break :blk try self.lowerNumericIntLiteralData(ty, num.value);
+            },
             .e_typed_frac => |frac| try self.lowerNumericDecLiteralData(ty, @bitCast(frac.value.bytes)),
             .e_str_segment => |seg| .{ .str_lit = try self.copySourceStringLiteral(module_idx, seg.literal) },
             .e_str => unreachable,
@@ -5237,7 +5241,9 @@ pub const Lowerer = struct {
         pattern: CIR.Pattern,
     ) std.mem.Allocator.Error!ast.ExprId {
         const data: ast.Expr.Data = switch (pattern) {
-            .num_literal => |num| try self.lowerNumericIntLiteralData(target_ty, num.value),
+            .num_literal => |num| blk: {
+                break :blk try self.lowerNumericIntLiteralData(target_ty, num.value);
+            },
             .small_dec_literal => |dec| try self.lowerNumericSmallDecLiteralData(target_ty, dec.value),
             .dec_literal => |dec| try self.lowerNumericDecLiteralData(target_ty, dec.value.toI128()),
             .frac_f32_literal => |frac| .{ .frac_f32_lit = frac.value },
@@ -6887,6 +6893,7 @@ pub const Lowerer = struct {
         expected_ty: type_mod.TypeId,
         expected_var: ?Var,
     ) std.mem.Allocator.Error!ast.ExprId {
+        const typed_cir_module = self.ctx.typedCirModule(module_idx);
         const target_ty = blk: {
             if (self.ctx.types.getType(expected_ty) != .placeholder) break :blk expected_ty;
             break :blk try self.requireExprType(module_idx, type_scope, expr.idx);
@@ -6911,10 +6918,12 @@ pub const Lowerer = struct {
                 target_ty,
                 expected_var,
             ),
-            .e_num => |num| try self.program.store.addExpr(.{
-                .ty = target_ty,
-                .data = try self.lowerNumericIntLiteralData(target_ty, num.value),
-            }),
+            .e_num => |num| blk: {
+                break :blk try self.program.store.addExpr(.{
+                    .ty = target_ty,
+                    .data = try self.lowerNumericIntLiteralData(target_ty, num.value),
+                });
+            },
             .e_dec => |dec| try self.program.store.addExpr(.{
                 .ty = target_ty,
                 .data = try self.lowerNumericDecLiteralData(target_ty, dec.value.toI128()),
@@ -6923,10 +6932,12 @@ pub const Lowerer = struct {
                 .ty = target_ty,
                 .data = try self.lowerNumericSmallDecLiteralData(target_ty, dec.value),
             }),
-            .e_typed_int => |num| try self.program.store.addExpr(.{
-                .ty = target_ty,
-                .data = try self.lowerNumericIntLiteralData(target_ty, num.value),
-            }),
+            .e_typed_int => |num| blk: {
+                break :blk try self.program.store.addExpr(.{
+                    .ty = target_ty,
+                    .data = try self.lowerNumericIntLiteralData(target_ty, num.value),
+                });
+            },
             .e_typed_frac => |frac| try self.program.store.addExpr(.{
                 .ty = target_ty,
                 .data = try self.lowerNumericDecLiteralData(target_ty, @bitCast(frac.value.bytes)),
@@ -6954,7 +6965,7 @@ pub const Lowerer = struct {
                     env,
                     expr.idx,
                     call.func,
-                    self.ctx.typedCirModule(module_idx).sliceExpr(call.args),
+                    typed_cir_module.sliceExpr(call.args),
                 );
                 break :blk try self.program.store.addExpr(.{
                     .ty = lowered_call.result_ty,
@@ -8636,7 +8647,7 @@ pub const Lowerer = struct {
             }
         }
 
-        if (isBuiltinBoolTagUnionSlice(typed_cir_module, lowered_tags.items)) {
+        if (isBuiltinBoolTagUnionSlice(typed_cir_module, &self.ctx.idents, lowered_tags.items)) {
             return .{ .primitive = .bool };
         }
 
@@ -12558,7 +12569,11 @@ fn isBuiltinBoolTagUnion(env: *const ModuleEnv, tags_slice: anytype) bool {
     return saw_true and saw_false;
 }
 
-fn isBuiltinBoolTagUnionSlice(typed_cir_module: Ctx.Module, tags: []const type_mod.Tag) bool {
+fn isBuiltinBoolTagUnionSlice(
+    typed_cir_module: Ctx.Module,
+    exec_idents: *const base.Ident.Store,
+    tags: []const type_mod.Tag,
+) bool {
     if (tags.len != 2) return false;
 
     var saw_true = false;
@@ -12567,11 +12582,12 @@ fn isBuiltinBoolTagUnionSlice(typed_cir_module: Ctx.Module, tags: []const type_m
     for (tags) |tag| {
         const args_len = tag.args.len;
         if (args_len != 0) return false;
-        if (tag.name.eql(idents.true_tag)) {
+        const tag_name = exec_idents.getText(tag.name);
+        if (std.mem.eql(u8, tag_name, typed_cir_module.getIdent(idents.true_tag))) {
             saw_true = true;
             continue;
         }
-        if (tag.name.eql(idents.false_tag)) {
+        if (std.mem.eql(u8, tag_name, typed_cir_module.getIdent(idents.false_tag))) {
             saw_false = true;
             continue;
         }

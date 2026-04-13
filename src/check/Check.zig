@@ -4952,7 +4952,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 },
                 .expected => |annotation_idx| {
                     const annotation_var = ModuleEnv.varFrom(annotation_idx);
-                    if (self.varContainsUnboxedFunction(annotation_var)) {
+                    if (self.varContainsUnboxedFunctionInHostedSignature(annotation_var)) {
                         const region = self.cir.store.getAnnotationRegion(annotation_idx);
                         _ = try self.problems.appendProblem(self.gpa, .{ .hosted_unboxed_function = .{
                             .region = region,
@@ -7048,6 +7048,30 @@ fn nominalIsBoxType(self: *Self, nominal_type: types_mod.NominalType) bool {
 
 fn varContainsUnboxedFunction(self: *Self, var_: Var) bool {
     return self.varContainsUnboxedFunctionInternal(var_, false);
+}
+
+fn varContainsUnboxedFunctionInHostedSignature(self: *Self, var_: Var) bool {
+    return self.varContainsUnboxedFunctionInHostedSignatureInternal(var_, true);
+}
+
+fn varContainsUnboxedFunctionInHostedSignatureInternal(self: *Self, var_: Var, allow_top_fn: bool) bool {
+    const resolved = self.types.resolveVar(var_);
+    return switch (resolved.desc.content) {
+        .structure => |s| switch (s) {
+            .fn_pure, .fn_effectful, .fn_unbound => |func| blk: {
+                if (!allow_top_fn) break :blk true;
+                const args = self.types.sliceVars(func.args);
+                for (args) |arg_var| {
+                    if (self.varContainsUnboxedFunctionInternal(arg_var, false)) break :blk true;
+                }
+                if (self.varContainsUnboxedFunctionInternal(func.ret, false)) break :blk true;
+                break :blk false;
+            },
+            else => self.flatTypeContainsUnboxedFunction(s, false),
+        },
+        .alias => |alias| self.varContainsUnboxedFunctionInHostedSignatureInternal(self.types.getAliasBackingVar(alias), allow_top_fn),
+        .flex, .rigid, .err => false,
+    };
 }
 
 fn varContainsUnboxedFunctionInternal(self: *Self, var_: Var, boxed_allowed: bool) bool {

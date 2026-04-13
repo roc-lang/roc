@@ -790,6 +790,23 @@ pub const Import = struct {
             self.resolved_modules.deinit(allocator);
         }
 
+        pub fn clone(self: *const Store, allocator: std.mem.Allocator) std.mem.Allocator.Error!Store {
+            var result = Store{
+                .map = .{},
+                .imports = try self.imports.clone(allocator),
+                .import_idents = try self.import_idents.clone(allocator),
+                .resolved_modules = try self.resolved_modules.clone(allocator),
+            };
+            errdefer result.deinit(allocator);
+
+            for (result.imports.items.items, 0..) |string_idx, i| {
+                const import_idx = @as(Import.Idx, @enumFromInt(i));
+                try result.map.put(allocator, string_idx, import_idx);
+            }
+
+            return result;
+        }
+
         /// Deinit only the hash map, not the SafeLists.
         /// Used for cached modules where the SafeLists point into the cache buffer
         /// but the map was heap-allocated during deserialization.

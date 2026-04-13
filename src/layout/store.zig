@@ -454,6 +454,9 @@ pub const Store = struct {
         }
 
         const total_size = @as(u32, @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(max_alignment)))));
+        if (total_size == 0) {
+            return try self.ensureZstLayout();
+        }
         return self.internStructShape(
             std.mem.Alignment.fromByteUnits(max_alignment),
             total_size,
@@ -528,6 +531,9 @@ pub const Store = struct {
             discriminant_offset + discriminant_size,
             @intCast(tag_union_alignment.toByteUnits()),
         );
+        if (total_size == 0) {
+            return try self.ensureZstLayout();
+        }
 
         return self.internTagUnionShape(
             tag_union_alignment,
@@ -557,12 +563,16 @@ pub const Store = struct {
             current_offset += field_size_align.size;
         }
 
+        const total_size = @as(u32, @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(max_alignment)))));
+        if (total_size == 0) {
+            return Layout.zst();
+        }
+
         const fields_start = self.struct_fields.items.len;
         for (temp_fields.items) |field| {
             _ = try self.struct_fields.append(self.allocator, field);
         }
 
-        const total_size = @as(u32, @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(max_alignment)))));
         const struct_idx = StructIdx{ .int_idx = @intCast(self.struct_data.len()) };
         _ = try self.struct_data.append(self.allocator, .{
             .size = total_size,
@@ -600,6 +610,9 @@ pub const Store = struct {
             discriminant_offset + discriminant_size,
             @intCast(tag_union_alignment.toByteUnits()),
         );
+        if (total_size == 0) {
+            return Layout.zst();
+        }
 
         const variants_start: u32 = @intCast(self.tag_union_variants.len());
         for (variant_layouts) |variant_layout_idx| {
@@ -1553,8 +1566,7 @@ pub const Store = struct {
 
     /// Get or create an empty struct layout (for closures with no captures, empty records, etc.)
     fn getEmptyStructLayout(self: *Self) !Idx {
-        const empty_fields = [_]StructField{};
-        return self.internStructShape(.@"1", 0, empty_fields[0..]);
+        return self.ensureZstLayout();
     }
 
     /// Backwards-compat alias
