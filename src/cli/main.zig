@@ -46,6 +46,7 @@ const eval = @import("eval");
 const echo_platform = @import("echo_platform");
 const lsp = @import("lsp");
 const cli_repl = @import("repl.zig");
+const ansi_term = @import("ansi_term.zig");
 
 const cli_args = @import("cli_args.zig");
 const roc_target = @import("target.zig");
@@ -5321,7 +5322,7 @@ fn replayTestCache(
     } else {
         const total_tests = passed + failed;
         if (total_tests > 0) {
-            try stderr.print("Ran {} test(s): {} passed, {} failed in {d:.1}ms (cached)\n", .{ total_tests, passed, failed, elapsed_ms });
+            try stderr.print("Ran {} tests in {d:.1}ms (cached):\n    " ++ ansi_term.green ++ "{}" ++ ansi_term.reset ++ " passed\n    " ++ ansi_term.red ++ "{}" ++ ansi_term.reset ++ " failed\n", .{ total_tests, elapsed_ms, passed, failed });
         }
 
         if (args.verbose) {
@@ -5985,9 +5986,9 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
         const total_tests = total_passed + total_failed + total_skipped;
         if (total_tests > 0) {
             if (total_skipped > 0) {
-                try stderr.print("Ran {} test(s): {} passed, {} failed, {} skipped in {d:.1}ms\n", .{ total_tests, total_passed, total_failed, total_skipped, elapsed_ms });
+                try stderr.print("Ran {} tests in {d:.1}ms:\n    " ++ ansi_term.green ++ "{}" ++ ansi_term.reset ++ " passed\n    " ++ ansi_term.red ++ "{}" ++ ansi_term.reset ++ " failed\n    {} skipped\n", .{ total_tests, elapsed_ms, total_passed, total_failed, total_skipped });
             } else {
-                try stderr.print("Ran {} test(s): {} passed, {} failed in {d:.1}ms\n", .{ total_tests, total_passed, total_failed, elapsed_ms });
+                try stderr.print("Ran {} tests in {d:.1}ms:\n    " ++ ansi_term.green ++ "{}" ++ ansi_term.reset ++ " passed\n    " ++ ansi_term.red ++ "{}" ++ ansi_term.reset ++ " failed\n", .{ total_tests, elapsed_ms, total_passed, total_failed });
             }
         }
 
@@ -6039,29 +6040,39 @@ fn printTestFailure(
         const prev_line_start = if (curr_line_start_idx > 0) line_starts[curr_line_start_idx - 1] else break :blk null;
         const prev_line = std.mem.trimLeft(u8, src[prev_line_start..curr_line_start], " ");
         if (std.mem.startsWith(u8, prev_line, "##")) {
-            break :blk std.mem.trim(u8, prev_line[2..], " \r\n");
+            break :blk std.mem.trimRight(u8, prev_line, " \r\n");
         }
         break :blk null;
     };
 
     try stderr.print("\n\x1b[31mFAIL\x1b[0m: {s}", .{path});
-    if (doc_comment) |comment| {
-        try stderr.print("\n{s}", .{comment});
-    }
 
-    try stderr.print("\x1b[31m\n\u{250c}\t", .{});
+    try stderr.print("\x1b[31m", .{});
+
+    // Calculate the width needed to right-align line numbers
+    const last_line_num: usize = region_info.end_line_idx + 1;
+    const num_width: usize = blk: {
+        var digits: usize = 0;
+        var n = last_line_num;
+        while (n > 0) : (n /= 10) digits += 1;
+        break :blk if (digits == 0) 1 else digits;
+    };
+
+    var line_num: usize = region_info.start_line_idx + 1;
+
+    if (doc_comment) |comment| {
+        line_num -= 1;
+        try stderr.print("\n{d:[num_width]} \u{2502} ", .{ .d = line_num, .num_width = num_width });
+        try stderr.print("{s}", .{comment});
+        line_num += 1;
+    }
 
     var lines = std.mem.splitScalar(u8, error_src, '\n');
-    var first = true;
     while (lines.next()) |line| {
-        if (!first) {
-            try stderr.print("\n\u{2502}\u{00A0}\u{00A0}\t", .{});
-        }
-        first = false;
+        try stderr.print("\n{d:[num_width]} \u{2502} ", .{ .d = line_num, .num_width = num_width });
         try stderr.print("{s}", .{line});
+        line_num += 1;
     }
-
-    try stderr.print("\n\u{2514}\u{2500}> [line {}:{}]", .{ region_info.start_line_idx + 1, region_info.start_col_idx + 1 });
 
     if (error_msg) |msg| {
         try stderr.print("\x1b[31m - {s}", .{msg});

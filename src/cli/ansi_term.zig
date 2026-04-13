@@ -3,6 +3,11 @@ const std = @import("std");
 
 const CSI = "\x1B[";
 
+/// ANSI color escape sequences.
+pub const green = "\x1B[32m";
+pub const red = "\x1B[31m";
+pub const reset = "\x1B[0m";
+
 /// ASCII DEL character, used as backspace in terminals.
 pub const BACKSPACE: u8 = 127;
 /// ANSI escape sequence identifier for the up arrow key.
