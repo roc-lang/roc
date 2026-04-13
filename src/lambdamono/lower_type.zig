@@ -81,6 +81,9 @@ pub fn lambdaRepr(types: *solved.Type.Store, ty: TypeVarId) LambdaRepr {
             },
             else => debugPanic("lambdamono.lower_type.lambdaRepr expected lambda set"),
         },
+        .unbd,
+        .for_a,
+        => .erased,
         else => debugPanic("lambdamono.lower_type.lambdaRepr expected lambda set"),
     };
 }
@@ -170,12 +173,14 @@ fn lowerTypeRec(
     const lowered: mono.Content = switch (types.getNode(id)) {
         .link => unreachable,
         .nominal => |backing| .{ .nominal = try lowerTypeRec(types, mono_types, mono_cache, backing, symbols) },
-        .for_a => debugPanic("lambdamono.lower_type.lowerType generalized type survived instantiation"),
-        // Residual unbound solved vars are operationally erased in executable
-        // lowering. They must not fabricate empty tag-union layouts.
-        .unbd => .{ .primitive = .erased },
+        .for_a, .unbd => .{ .record = .{ .fields = mono.Span(mono.Field).empty() } },
         .content => |content| switch (content) {
-            .func => debugPanic("lambdamono.lower_type.lowerType unexpected function after unlinkExecutable"),
+            .func => blk: {
+                const unit_ty = try mono_types.internResolved(.{
+                    .record = .{ .fields = mono.Span(mono.Field).empty() },
+                });
+                break :blk .{ .erased_fn = unit_ty };
+            },
             .primitive => |prim| .{ .primitive = prim },
             .list => |elem| .{
                 .list = try lowerTypeRec(types, mono_types, mono_cache, elem, symbols),
@@ -306,10 +311,21 @@ fn unlinkExecutable(types: *solved.Type.Store, ty: TypeVarId) TypeVarId {
     return switch (types.getNode(id)) {
         .nominal => id,
         .content => |content| switch (content) {
-            .func => |func| unlinkExecutable(types, func.lset),
+            .func => |func| if (lambdaSetIsErased(types, func.lset)) id else unlinkExecutable(types, func.lset),
             else => id,
         },
         else => id,
+    };
+}
+
+fn lambdaSetIsErased(types: *solved.Type.Store, lset: TypeVarId) bool {
+    const id = types.unlink(lset);
+    return switch (types.getNode(id)) {
+        .content => |content| switch (content) {
+            .primitive => |prim| prim == .erased,
+            else => false,
+        },
+        else => false,
     };
 }
 

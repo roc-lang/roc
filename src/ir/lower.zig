@@ -4,6 +4,7 @@ const std = @import("std");
 const base = @import("base");
 const types = @import("types");
 const lambdamono = @import("lambdamono");
+const type_mod = lambdamono.Type;
 const symbol_mod = @import("symbol");
 const ast = @import("ast.zig");
 const layout_mod = @import("layout");
@@ -251,7 +252,7 @@ const Lowerer = struct {
                 .make_struct = try self.output.addVarSpan(&.{}),
             }),
             .record => |fields| {
-                const lowered_fields = try self.lowerFieldValues(&block, env, fields);
+                const lowered_fields = try self.lowerFieldValues(&block, env, expr.ty, fields);
                 if (lowered_fields == null) return if (block.has_term) block else debugPanic("ir.lower record missing terminator");
                 try self.emitLeafExpr(&block, expr.ty, "record", .{ .make_struct = lowered_fields.? });
             },
@@ -372,8 +373,14 @@ const Lowerer = struct {
                     if (lowered == null) return if (block.has_term) block else debugPanic("ir.lower packed_fn captures missing terminator");
                     break :blk lowered.?;
                 } else blk: {
-                    const erased_ty = try self.input.types.internResolved(.{ .primitive = .erased });
-                    const capture_box_ty = try self.input.types.internResolved(.{ .box = erased_ty });
+                    const capture_box_ty = if (packed_fn.capture_ty) |capture_ty|
+                        try self.input.types.internResolved(.{ .box = capture_ty })
+                    else blk_capture: {
+                        const unit_ty = try self.input.types.internResolved(.{ .record = .{
+                            .fields = type_mod.Span(type_mod.Field).empty(),
+                        } });
+                        break :blk_capture try self.input.types.internResolved(.{ .box = unit_ty });
+                    };
                     const null_ptr = try self.freshVar(capture_box_ty, "null_ptr");
                     try block.stmts.append(self.allocator, .{ .let_ = .{
                         .bind = null_ptr,
@@ -563,17 +570,60 @@ const Lowerer = struct {
         self: *Lowerer,
         block: *LoweredBlock,
         env: []const EnvEntry,
+        record_ty: type_mod.TypeId,
         span: lambdamono.Ast.Span(lambdamono.Ast.FieldExpr),
     ) std.mem.Allocator.Error!?ast.Span(ast.Var) {
         const fields = self.input.store.sliceFieldExprSpan(span);
-        const out = try self.allocator.alloc(ast.Var, fields.len);
-        defer self.allocator.free(out);
+        const lowered_values = try self.allocator.alloc(ast.Var, fields.len);
+        defer self.allocator.free(lowered_values);
         for (fields, 0..) |field, i| {
             const value = try self.lowerSubexprValue(block, env, field.value);
             if (value == null) return null;
-            out[i] = value.?;
+            lowered_values[i] = value.?;
         }
-        return try self.output.addVarSpan(out);
+
+        const ordered = try self.orderRecordFieldValues(record_ty, fields, lowered_values);
+        defer self.allocator.free(ordered);
+        return try self.output.addVarSpan(ordered);
+    }
+
+    fn orderRecordFieldValues(
+        self: *Lowerer,
+        record_ty: type_mod.TypeId,
+        fields: []const lambdamono.Ast.FieldExpr,
+        lowered_values: []const ast.Var,
+    ) std.mem.Allocator.Error![]ast.Var {
+        const record_fields = self.recordTypeFields(record_ty) orelse {
+            return try self.allocator.dupe(ast.Var, lowered_values);
+        };
+        if (record_fields.len != fields.len) {
+            debugPanic("ir.lower record field arity mismatch");
+        }
+
+        var by_name = std.AutoHashMap(base.Ident.Idx, ast.Var).init(self.allocator);
+        defer by_name.deinit();
+        try by_name.ensureTotalCapacity(@intCast(fields.len));
+        for (fields, 0..) |field, i| {
+            by_name.putAssumeCapacity(field.name, lowered_values[i]);
+        }
+
+        const ordered = try self.allocator.alloc(ast.Var, record_fields.len);
+        for (record_fields, 0..) |field, i| {
+            ordered[i] = by_name.get(field.name) orelse
+                debugPanic("ir.lower missing record field value for layout order");
+        }
+        return ordered;
+    }
+
+    fn recordTypeFields(
+        self: *Lowerer,
+        record_ty: type_mod.TypeId,
+    ) ?[]const type_mod.Field {
+        return switch (self.input.types.getTypePreservingNominal(record_ty)) {
+            .nominal => |backing| self.recordTypeFields(backing),
+            .record => |record| self.input.types.sliceFields(record.fields),
+            else => null,
+        };
     }
 
     fn lowerWhenExpr(

@@ -115,13 +115,13 @@ const Lowerer = struct {
     };
 
     fn init(allocator: std.mem.Allocator, input: solved.Lower.Result, entrypoints: []const Symbol) Lowerer {
-        return .{
+        var lowerer = Lowerer{
             .allocator = allocator,
             .input = input,
             .entrypoints = entrypoints,
             .output = ast.Store.init(allocator),
             .root_defs = .empty,
-            .types = type_mod.Store.init(allocator),
+            .types = undefined,
             .queue = specializations.Queue.init(allocator),
             .fenv = &.{},
             .pending_values = .empty,
@@ -132,6 +132,8 @@ const Lowerer = struct {
             .hosted_fn_symbols = std.AutoHashMap(Symbol, void).init(allocator),
             .entrypoint_wrappers = &.{},
         };
+        lowerer.types = type_mod.Store.init(allocator);
+        return lowerer;
     }
 
     fn deinit(self: *Lowerer) void {
@@ -1377,20 +1379,9 @@ const Lowerer = struct {
             .nominal => |backing| self.recordFieldType(backing, field_index),
             .record => |record| blk: {
                 const fields = self.types.sliceFields(record.fields);
-                if (fields.len == 0) break :blk null;
                 const target_index: usize = @intCast(field_index);
                 if (target_index >= fields.len) break :blk null;
-                for (fields) |field| {
-                    var count: usize = 0;
-                    const field_name = self.input.idents.getText(field.name);
-                    for (fields) |other| {
-                        if (std.mem.lessThan(u8, self.input.idents.getText(other.name), field_name)) {
-                            count += 1;
-                        }
-                    }
-                    if (count == target_index) break :blk field.ty;
-                }
-                break :blk null;
+                break :blk fields[target_index].ty;
             },
             else => null,
         };
@@ -1405,18 +1396,11 @@ const Lowerer = struct {
             .nominal => |backing| self.recordFieldByName(backing, field_name),
             .record => |record| blk: {
                 const fields = self.types.sliceFields(record.fields);
-                const target_name = self.input.idents.getText(field_name);
-                var index: u16 = 0;
-                var found_ty: ?type_mod.TypeId = null;
-                for (fields) |field| {
-                    const name = self.input.idents.getText(field.name);
+                for (fields, 0..) |field, i| {
                     if (field.name == field_name) {
-                        found_ty = field.ty;
-                    } else if (std.mem.lessThan(u8, name, target_name)) {
-                        index += 1;
+                        break :blk .{ .index = @intCast(i), .ty = field.ty };
                     }
                 }
-                if (found_ty) |ty| break :blk .{ .index = index, .ty = ty };
                 break :blk null;
             },
             else => null,
@@ -1433,18 +1417,11 @@ const Lowerer = struct {
             .nominal => |backing| self.recordFieldIndexByNameAndType(backing, field_name, field_ty),
             .record => |record| blk: {
                 const fields = self.types.sliceFields(record.fields);
-                const target_name = self.input.idents.getText(field_name);
-                var index: u16 = 0;
-                var found = false;
-                for (fields) |field| {
-                    const name = self.input.idents.getText(field.name);
+                for (fields, 0..) |field, i| {
                     if (field.name == field_name and field.ty == field_ty) {
-                        found = true;
-                    } else if (std.mem.lessThan(u8, name, target_name)) {
-                        index += 1;
+                        break :blk @intCast(i);
                     }
                 }
-                if (found) break :blk index;
                 break :blk null;
             },
             else => null,
@@ -1865,7 +1842,7 @@ const Lowerer = struct {
             .record => |fields| blk: {
                 const lowered_fields = try self.specializeFieldSpan(inst, mono_cache, venv, fields);
                 const record_ty = try self.recordTypeFromFields(lowered_fields);
-                const ordered_fields = try self.orderedRecordFieldsByName(lowered_fields);
+                const ordered_fields = try self.orderedRecordFields(record_ty, lowered_fields);
                 break :blk .{ .ty = record_ty, .data = .{ .record = ordered_fields } };
             },
             .access => |access| blk: {

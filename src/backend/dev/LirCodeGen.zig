@@ -9368,6 +9368,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             closure_local: LocalId,
             call_args: LocalSpan,
             ret_layout: layout.Idx,
+            capture_layout: ?layout.Idx,
         ) Allocator.Error!ValueLocation {
             const closure_layout = self.localLayout(closure_local);
             const runtime_closure_layout = self.runtimeRepresentationLayoutIdx(closure_layout);
@@ -9394,9 +9395,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             const capture_offset: i32 = @intCast(self.layout_store.getStructFieldOffsetByOriginalIndex(closure_idx, 1));
-            const capture_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(closure_idx, 1);
-            const capture_size = self.getLayoutSize(capture_layout);
-            const has_capture_arg = capture_layout != .zst;
+            const has_capture_arg = capture_layout != null;
 
             const arg_refs = self.store.getLocalSpan(call_args);
             const extra_args: usize = if (has_capture_arg) 1 else 0;
@@ -9415,13 +9414,34 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             if (has_capture_arg) {
-                const capture_loc = self.fieldLocationFromLayout(closure_offset + capture_offset, capture_size, capture_layout);
-                const capture_arg = self.requireExactValueLocationToLayout(capture_loc, capture_layout, capture_layout, "indirect_call.capture");
-                arg_infos[arg_refs.len] = .{
-                    .loc = capture_arg,
-                    .layout_idx = capture_layout,
-                    .num_regs = self.calcArgRegCount(capture_arg, capture_layout),
-                };
+                const capture_layout_idx = capture_layout.?;
+                const capture_size = self.getLayoutSize(capture_layout_idx);
+                if (capture_size == 0) {
+                    const capture_loc = self.fieldLocationFromLayout(closure_offset + capture_offset, 0, capture_layout_idx);
+                    const capture_arg = self.requireExactValueLocationToLayout(capture_loc, capture_layout_idx, capture_layout_idx, "indirect_call.capture");
+                    arg_infos[arg_refs.len] = .{
+                        .loc = capture_arg,
+                        .layout_idx = capture_layout_idx,
+                        .num_regs = self.calcArgRegCount(capture_arg, capture_layout_idx),
+                    };
+                } else {
+                    const capture_ptr_reg = try self.allocTempGeneral();
+                    try self.emitLoad(.w64, capture_ptr_reg, frame_ptr, closure_offset + capture_offset);
+
+                    const capture_stack_offset = self.codegen.allocStackSlot(capture_size);
+                    const temp_reg = try self.allocTempGeneral();
+                    try self.copyChunked(temp_reg, capture_ptr_reg, 0, frame_ptr, capture_stack_offset, capture_size);
+                    self.codegen.freeGeneral(temp_reg);
+                    self.codegen.freeGeneral(capture_ptr_reg);
+
+                    const capture_loc = self.fieldLocationFromLayout(capture_stack_offset, capture_size, capture_layout_idx);
+                    const capture_arg = self.requireExactValueLocationToLayout(capture_loc, capture_layout_idx, capture_layout_idx, "indirect_call.capture");
+                    arg_infos[arg_refs.len] = .{
+                        .loc = capture_arg,
+                        .layout_idx = capture_layout_idx,
+                        .num_regs = self.calcArgRegCount(capture_arg, capture_layout_idx),
+                    };
+                }
             }
 
             const needs_ret_ptr = self.needsInternalReturnByPointer(ret_layout);
@@ -12579,6 +12599,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         assign.closure,
                         assign.args,
                         self.localLayout(assign.target),
+                        assign.capture_layout,
                     );
                     try self.bindAssignedLocal(assign.target, value_loc);
                     try self.generateStmt(assign.next);
@@ -13155,11 +13176,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// 6. Returns `void`
         pub fn generateEntrypointWrapper(
             self: *Self,
-            _: []const u8,
+            name: []const u8,
             entry_proc: lir.LIR.LirProcSpecId,
             arg_layouts: []const layout.Idx,
             ret_layout: layout.Idx,
         ) Allocator.Error!ExportedSymbol {
+            _ = name;
             const func_start = self.codegen.currentOffset();
             var prologue_size: u8 = 0;
             var stack_alloc: u32 = 0;

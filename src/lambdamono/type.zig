@@ -509,6 +509,10 @@ pub const Store = struct {
         return write_index;
     }
 
+    fn ensureNoDuplicateFieldNames(fields: []const Field) void {
+        _ = fields;
+    }
+
     fn equalIdsVisited(
         self: *const Store,
         left: TypeId,

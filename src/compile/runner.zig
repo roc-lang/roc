@@ -24,7 +24,7 @@ const Symbol = @import("symbol").Symbol;
 /// Run a compiled Roc entrypoint expression through the interpreter.
 pub fn runViaInterpreter(
     gpa: std.mem.Allocator,
-    platform_env: *ModuleEnv,
+    entrypoint_env: *ModuleEnv,
     builtin_modules: *const BuiltinModules,
     all_module_envs: []*ModuleEnv,
     app_module_env: ?*ModuleEnv,
@@ -36,7 +36,6 @@ pub fn runViaInterpreter(
     if (comptime builtin.target.os.tag == .freestanding) {
         return error.InterpreterFailed;
     }
-    _ = app_module_env;
 
     const source_modules = try gpa.alloc(check.TypedCIR.Modules.SourceModule, all_module_envs.len);
     defer gpa.free(source_modules);
@@ -49,27 +48,45 @@ pub fn runViaInterpreter(
 
     const builtin_env = builtin_modules.builtin_module.env;
     var builtin_module_idx: ?u32 = null;
-    var platform_module_idx: ?u32 = null;
+    var entrypoint_module_idx: ?u32 = null;
     for (all_module_envs, 0..) |module_env, i| {
         if (module_env == builtin_env) builtin_module_idx = @intCast(i);
-        if (module_env == platform_env) platform_module_idx = @intCast(i);
+        if (module_env == entrypoint_env) entrypoint_module_idx = @intCast(i);
     }
 
-    const builtin_idx = builtin_module_idx orelse return error.CompilationFailed;
-    const platform_idx = platform_module_idx orelse return error.CompilationFailed;
+    const builtin_idx = builtin_module_idx orelse return error.BuiltinModuleNotFound;
+    const entry_idx = entrypoint_module_idx orelse return error.EntrypointModuleNotFound;
 
-    var mono_lowerer = try monotype.Lower.Lowerer.init(gpa, &typed_cir_modules, builtin_idx);
+    var app_module_idx: ?u32 = null;
+    if (app_module_env) |app_env| {
+        for (all_module_envs, 0..) |module_env, i| {
+            if (module_env == app_env) {
+                app_module_idx = @intCast(i);
+                break;
+            }
+        }
+    }
+
+    var mono_lowerer = try monotype.Lower.Lowerer.init(gpa, &typed_cir_modules, builtin_idx, app_module_idx);
     defer mono_lowerer.deinit();
-    const mono = try mono_lowerer.run(platform_idx);
+    const defs = entrypoint_env.store.sliceDefs(entrypoint_env.all_defs);
+    var entry_def: ?can.CIR.Def.Idx = null;
+    for (defs) |def_idx| {
+        const def = entrypoint_env.store.getDef(def_idx);
+        if (def.expr == entrypoint_expr) {
+            entry_def = def_idx;
+            break;
+        }
+    }
+    const entry_def_idx = entry_def orelse return error.EntrypointDefNotFound;
+
+    const entry_symbol = try mono_lowerer.specializeTopLevelDef(entry_idx, entry_def_idx);
+    const mono = try mono_lowerer.run(entry_idx);
 
     const lifted = try monotype_lifted.Lower.run(gpa, mono);
-    defer @constCast(&lifted).deinit();
     const solved = try lambdasolved.Lower.run(gpa, lifted);
-    defer @constCast(&solved).deinit();
-    const executable = try lambdamono.Lower.run(gpa, solved);
-    defer @constCast(&executable).deinit();
+    const executable = try lambdamono.Lower.runWithEntrypoints(gpa, solved, &.{entry_symbol});
     const lowered_ir = try ir.Lower.run(gpa, executable);
-    defer @constCast(&lowered_ir).deinit();
 
     var lir_result = try lir.FromIr.run(
         gpa,
@@ -79,32 +96,7 @@ pub fn runViaInterpreter(
         lowered_ir,
     );
     defer lir_result.deinit();
-
-    const defs = platform_env.store.sliceDefs(platform_env.all_defs);
-    var entry_def: ?can.CIR.Def.Idx = null;
-    for (defs) |def_idx| {
-        const def = platform_env.store.getDef(def_idx);
-        if (def.expr == entrypoint_expr) {
-            entry_def = def_idx;
-            break;
-        }
-    }
-    const entry_def_idx = entry_def orelse return error.CompilationFailed;
-
-    var entry_symbol: ?Symbol = null;
-    for (lowered_ir.symbols.entries.items, 0..) |entry, i| {
-        switch (entry.origin) {
-            .top_level_def => |origin| {
-                if (origin.module_idx == platform_idx and origin.def_idx == @intFromEnum(entry_def_idx)) {
-                    entry_symbol = Symbol.fromRaw(@intCast(i));
-                    break;
-                }
-            },
-            else => {},
-        }
-    }
-    const symbol = entry_symbol orelse return error.CompilationFailed;
-    const proc_id = lir_result.proc_ids_by_symbol.get(symbol.raw()) orelse return error.CompilationFailed;
+    const proc_id = lir_result.proc_ids_by_symbol.get(entry_symbol.raw()) orelse return error.EntrypointProcNotFound;
     const proc = lir_result.store.getProcSpec(proc_id);
 
     const arg_locals = lir_result.store.getLocalSpan(proc.args);

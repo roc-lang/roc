@@ -133,6 +133,7 @@ pub const tests = [_]TestCase{
     .{ .name = "interpreter: match list rest binds slice", .source = "match [1, 2, 3] { [first, .. as rest] => match rest { [second, ..] => first + second, _ => 0 }, _ => 0 }", .expected = .{ .inspect_str = "3.0" } },
     .{ .name = "interpreter: match empty list branch", .source = "match [] { [] => 42, _ => 0 }", .expected = .{ .inspect_str = "42.0" } },
     .{ .name = "interpreter: List.len on literal", .source = "List.len([1, 2, 3])", .expected = .{ .inspect_str = "3" } },
+    .{ .name = "interpreter: List.map with U64.from_str", .source = "List.map([\"2022\", \"22\"], U64.from_str)", .expected = .{ .inspect_str = "[Ok(2022), Ok(22)]" } },
     .{
         .name = "interpreter: simple for loop sum",
         .source =

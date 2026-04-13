@@ -394,7 +394,7 @@ pub fn lowerTypedCIRToLir(
     typed_cir_modules: *check.TypedCIR.Modules,
     module_envs: []const *const ModuleEnv,
 ) !LoweredProgram {
-    var mono_lowerer = try monotype.Lower.Lowerer.init(allocator, typed_cir_modules, 1);
+    var mono_lowerer = try monotype.Lower.Lowerer.init(allocator, typed_cir_modules, 1, null);
     defer mono_lowerer.deinit();
     const mono = try mono_lowerer.run(0);
     debugValidateMonotypeTypes(&mono.types);

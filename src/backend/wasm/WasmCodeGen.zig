@@ -4479,6 +4479,7 @@ fn generateCFStmt(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
                 .closure = assign.closure,
                 .args = assign.args,
                 .ret_layout = self.procLocalLayoutIdx(assign.target),
+                .capture_layout = assign.capture_layout,
             });
             try self.bindAssignedLocal(assign.target);
             try self.generateCFStmt(assign.next);
@@ -5277,18 +5278,18 @@ fn generateCallIndirect(self: *Self, c: anytype) Allocator.Error!void {
     try self.emitLoadOpSized(.i32, fn_size, fn_offset);
     try self.emitLocalSet(fn_ptr);
 
-    const capture_layout = ls.getStructFieldLayoutByOriginalIndex(struct_idx, 1);
-    const has_capture = capture_layout != .zst and self.layoutStorageByteSize(capture_layout) != 0;
+    const capture_layout = c.capture_layout;
+    const has_capture = capture_layout != null;
     if (comptime builtin.target.os.tag != .freestanding and std.debug.runtime_safety) {
         if (std.process.hasEnvVarConstant("ROC_WASM_DEBUG_INDIRECT")) {
-            const capture_layout_val = ls.getLayout(capture_layout);
+            const capture_layout_val = if (capture_layout) |layout_idx| ls.getLayout(layout_idx) else ls.getLayout(.zst);
             std.debug.print(
                 "wasm indirect: closure_layout={d} capture_layout={d} tag={s} size={d} has_capture={any}\n",
                 .{
                     @intFromEnum(closure_layout),
-                    @intFromEnum(capture_layout),
+                    @intFromEnum(capture_layout orelse .zst),
                     @tagName(capture_layout_val.tag),
-                    self.layoutStorageByteSize(capture_layout),
+                    self.layoutStorageByteSize(capture_layout orelse .zst),
                     has_capture,
                 },
             );
@@ -5297,23 +5298,33 @@ fn generateCallIndirect(self: *Self, c: anytype) Allocator.Error!void {
     var capture_local: u32 = 0;
     var capture_vt: ValType = .i32;
     if (has_capture) {
-        const capture_offset = self.structFieldOffsetByOriginalIndexWasm(struct_idx, 1);
-        const capture_size = self.structFieldSizeByOriginalIndexWasm(struct_idx, 1);
-        capture_vt = self.resolveValType(capture_layout);
-        capture_local = self.storage.allocAnonymousLocal(capture_vt) catch return error.OutOfMemory;
-        if (self.isCompositeLayout(capture_layout) and capture_size > 0) {
-            try self.emitLocalGet(struct_ptr);
-            if (capture_offset > 0) {
-                self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(capture_offset)) catch return error.OutOfMemory;
-                self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-            }
+        const capture_layout_idx = capture_layout.?;
+        if (capture_layout_idx == .zst) {
+            capture_vt = self.resolveValType(capture_layout_idx);
+            capture_local = self.storage.allocAnonymousLocal(capture_vt) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+            try self.emitLocalSet(capture_local);
         } else {
+            const capture_offset = self.structFieldOffsetByOriginalIndexWasm(struct_idx, 1);
+            const capture_ptr_size = self.structFieldSizeByOriginalIndexWasm(struct_idx, 1);
+            const capture_ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             try self.emitLocalGet(struct_ptr);
-            try self.emitLoadOpSized(capture_vt, capture_size, capture_offset);
-            try self.emitCanonicalizeScalarForLayout(capture_layout);
+            try self.emitLoadOpSized(.i32, capture_ptr_size, capture_offset);
+            try self.emitLocalSet(capture_ptr_local);
+
+            const capture_size = self.layoutStorageByteSize(capture_layout_idx);
+            capture_vt = self.resolveValType(capture_layout_idx);
+            capture_local = self.storage.allocAnonymousLocal(capture_vt) catch return error.OutOfMemory;
+            if (self.isCompositeLayout(capture_layout_idx) and capture_size > 0) {
+                try self.emitLocalGet(capture_ptr_local);
+            } else {
+                try self.emitLocalGet(capture_ptr_local);
+                try self.emitLoadOpSized(capture_vt, capture_size, 0);
+                try self.emitCanonicalizeScalarForLayout(capture_layout_idx);
+            }
+            try self.emitLocalSet(capture_local);
         }
-        try self.emitLocalSet(capture_local);
     }
 
     const arg_refs = self.store.getLocalSpan(c.args);

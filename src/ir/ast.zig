@@ -63,6 +63,7 @@ pub const Expr = union(enum) {
         record: Var,
         field_index: u16,
     },
+    layout_size: LayoutRef,
     call_direct: struct {
         proc: Symbol,
         args: Span(Var),
@@ -70,6 +71,7 @@ pub const Expr = union(enum) {
     call_indirect: struct {
         func: Var,
         args: Span(Var),
+        capture_layout: ?LayoutRef,
     },
     call_low_level: struct {
         op: base.LowLevel,

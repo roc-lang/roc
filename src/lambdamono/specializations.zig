@@ -23,7 +23,6 @@ pub const Pending = struct {
     requested_ty: TypeVarId,
     sig: SigKey,
     specialized_symbol: Symbol,
-    captures_new: ?[]lower_type.CaptureBinding = null,
     specialized: ?ast.FnDef = null,
 };
 
@@ -41,9 +40,6 @@ pub const Queue = struct {
     }
 
     pub fn deinit(self: *Queue) void {
-        for (self.items.items) |item| {
-            if (item.captures_new) |captures_new| self.allocator.free(captures_new);
-        }
         self.items.deinit(self.allocator);
         self.by_key.deinit();
     }
@@ -184,7 +180,6 @@ pub fn specializeFnErased(
     requested_name: Symbol,
     requested_ty: TypeVarId,
     sig: SigKey,
-    captures_new: []const lower_type.CaptureBinding,
 ) std.mem.Allocator.Error!Symbol {
     const entry = lookupFn(fenv, requested_name) orelse debugPanic("lambdamono.specializations.specializeFnErased missing function");
     if (queue.by_key.get(sig)) |idx| {
@@ -204,7 +199,6 @@ pub fn specializeFnErased(
         .requested_ty = requested_ty,
         .sig = sig,
         .specialized_symbol = specialized_symbol,
-        .captures_new = try queue.allocator.dupe(lower_type.CaptureBinding, captures_new),
     });
     try queue.by_key.put(sig, queue.items.items.len - 1);
     return specialized_symbol;

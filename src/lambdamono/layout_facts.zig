@@ -173,6 +173,15 @@ pub const Facts = struct {
             .packed_fn => |packed_fn| {
                 if (packed_fn.capture_ty) |capture_ty| {
                     _ = try self.layoutForPublishedType(allocator, mono_types, idents, capture_ty);
+                    const capture_box_ty = try mono_types.internResolved(.{ .box = capture_ty });
+                    _ = try self.layoutForPublishedType(allocator, mono_types, idents, capture_box_ty);
+                } else {
+                    const unit_ty = try mono_types.internResolved(.{ .record = .{
+                        .fields = type_mod.Span(type_mod.Field).empty(),
+                    } });
+                    _ = try self.layoutForPublishedType(allocator, mono_types, idents, unit_ty);
+                    const capture_box_ty = try mono_types.internResolved(.{ .box = unit_ty });
+                    _ = try self.layoutForPublishedType(allocator, mono_types, idents, capture_box_ty);
                 }
             },
             .call_indirect => |call| {

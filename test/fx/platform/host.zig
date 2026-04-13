@@ -669,6 +669,7 @@ const RocStr = builtins.str.RocStr;
 /// Returns {} and takes Str as argument
 fn hostedStderrLine(ops: *builtins.host_abi.RocOps, _: *anyopaque, args: *const extern struct { str: RocStr }) callconv(.c) void {
     const message = args.str.asSlice();
+    defer args.str.decref(ops);
 
     const host: *HostEnv = @ptrCast(@alignCast(ops.env));
 
@@ -836,6 +837,7 @@ fn hostedStdinLine(ops: *builtins.host_abi.RocOps, result: *RocStr, _: *anyopaqu
 /// Returns {} and takes Str as argument
 fn hostedStdoutLine(ops: *builtins.host_abi.RocOps, _: *anyopaque, args: *const extern struct { str: RocStr }) callconv(.c) void {
     const message = args.str.asSlice();
+    defer args.str.decref(ops);
 
     const host: *HostEnv = @ptrCast(@alignCast(ops.env));
 

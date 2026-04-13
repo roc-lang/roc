@@ -2302,6 +2302,19 @@ pub fn setupSharedMemoryWithCoordinator(ctx: *CliContext, roc_file_path: []const
         };
     }
 
+    var entrypoint_names = std.array_list.Managed([]const u8).initCapacity(ctx.arena, 32) catch {
+        return error.OutOfMemory;
+    };
+    defer entrypoint_names.deinit();
+    if (platform_main_path) |pmp| {
+        extractEntrypointDefNamesFromPlatform(ctx, pmp, &entrypoint_names) catch |err| {
+            return ctx.fail(.{ .entrypoint_extraction_failed = .{
+                .path = pmp,
+                .reason = @errorName(err),
+            } });
+        };
+    }
+
     // IMPORTANT: Create header FIRST before any module compilation.
     // The interpreter_shim expects the Header to be at FIRST_ALLOC_OFFSET (504).
     const Header = struct {
@@ -2515,13 +2528,32 @@ pub fn setupSharedMemoryWithCoordinator(ctx: *CliContext, roc_file_path: []const
     var def_indices_offset: u64 = 0;
     if (platform_main_env_offset != 0) {
         const platform_env: *ModuleEnv = @ptrFromInt(@as(usize, @intCast(platform_main_env_offset + shm_base_addr)));
-        const exports_slice = platform_env.store.sliceDefs(platform_env.exports);
-        entry_count = @intCast(exports_slice.len);
+        const platform_defs = platform_env.store.sliceDefs(platform_env.all_defs);
+        entry_count = @intCast(entrypoint_names.items.len);
 
         if (entry_count > 0) {
-            const def_indices_ptr = try shm_allocator.alloc(u32, exports_slice.len);
+            const def_indices_ptr = try shm_allocator.alloc(u32, entrypoint_names.items.len);
             def_indices_offset = @intFromPtr(def_indices_ptr.ptr) - shm_base_addr;
-            for (exports_slice, 0..) |def_idx, i| {
+            for (entrypoint_names.items, 0..) |entry_name, i| {
+                var found_def: ?can.CIR.Def.Idx = null;
+                for (platform_defs) |def_idx| {
+                    const def = platform_env.store.getDef(def_idx);
+                    const pattern = platform_env.store.getPattern(def.pattern);
+                    switch (pattern) {
+                        .assign => |assign| {
+                            const ident_name = platform_env.getIdent(assign.ident);
+                            if (std.mem.eql(u8, ident_name, entry_name)) {
+                                found_def = def_idx;
+                                break;
+                            }
+                        },
+                        else => {},
+                    }
+                }
+                const def_idx = found_def orelse {
+                    std.log.err("Entrypoint '{s}' not found in platform module", .{entry_name});
+                    return error.NoEntrypointsLowered;
+                };
                 def_indices_ptr[i] = @intFromEnum(def_idx);
             }
         }
@@ -3431,6 +3463,47 @@ fn extractEntrypointsFromPlatform(ctx: *CliContext, roc_file_path: []const u8, e
     }
 }
 
+/// Extract Roc identifier names (not FFI symbols) from the platform provides record.
+fn extractEntrypointDefNamesFromPlatform(ctx: *CliContext, roc_file_path: []const u8, entrypoints: *std.array_list.Managed([]const u8)) !void {
+    var source = std.fs.cwd().readFileAlloc(ctx.gpa, roc_file_path, std.math.maxInt(usize)) catch return error.NoPlatformFound;
+    source = base.source_utils.normalizeLineEndingsRealloc(ctx.gpa, source) catch |err| {
+        ctx.gpa.free(source);
+        return err;
+    };
+    defer ctx.gpa.free(source);
+
+    const module_name = try base.module_path.getModuleNameAlloc(ctx.arena, roc_file_path);
+
+    var env = ModuleEnv.init(ctx.gpa, source) catch return error.ParseFailed;
+    defer env.deinit();
+
+    env.common.source = source;
+    env.module_name = module_name;
+    try env.common.calcLineStarts(ctx.gpa);
+
+    var allocators2: Allocators = undefined;
+    allocators2.initInPlace(ctx.gpa);
+    defer allocators2.deinit();
+
+    const parse_ast = parse.parse(&allocators2, &env.common) catch return error.ParseFailed;
+    defer parse_ast.deinit();
+
+    const file_node = parse_ast.store.getFile();
+    const header = parse_ast.store.getHeader(file_node.header);
+
+    switch (header) {
+        .platform => |platform_header| {
+            const provides_coll = parse_ast.store.getCollection(platform_header.provides);
+            const provides_fields = parse_ast.store.recordFieldSlice(.{ .span = provides_coll.span });
+            for (provides_fields) |field_idx| {
+                const field = parse_ast.store.getRecordField(field_idx);
+                try entrypoints.append(try ctx.arena.dupe(u8, parse_ast.resolve(field.name)));
+            }
+        },
+        else => return error.NoPlatformFound,
+    }
+}
+
 /// Extract the embedded roc_shim library to the specified path for the given target.
 /// This library contains the shim code that runs in child processes to read ModuleEnv from shared memory.
 /// For native builds and roc run, use the native shim (pass null or native target).
@@ -4165,31 +4238,6 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         return error.InternalError;
     };
 
-    std.log.debug("Lowering expressions...", .{});
-
-    var source_modules = try ctx.gpa.alloc(check.TypedCIR.Modules.SourceModule, all_module_envs.len);
-    defer ctx.gpa.free(source_modules);
-    for (all_module_envs, 0..) |module_env, i| {
-        source_modules[i] = .{ .precompiled = module_env };
-    }
-
-    var typed_cir_modules = try check.TypedCIR.Modules.publish(ctx.gpa, source_modules);
-    defer typed_cir_modules.deinit();
-
-    var mono_lowerer = try monotype.Lower.Lowerer.init(ctx.gpa, &typed_cir_modules, builtin_module_idx);
-    defer mono_lowerer.deinit();
-    const mono = try mono_lowerer.run(platform_module_idx);
-
-    const lifted = try monotype_lifted.Lower.run(ctx.gpa, mono);
-    defer @constCast(&lifted).deinit();
-    const solved = try lambdasolved.Lower.run(ctx.gpa, lifted);
-    defer @constCast(&solved).deinit();
-    const executable = try lambdamono.Lower.run(ctx.gpa, solved);
-    defer @constCast(&executable).deinit();
-    var lowered_ir = try ir.Lower.run(ctx.gpa, executable);
-    var lowered_ir_live = true;
-    defer if (lowered_ir_live) lowered_ir.deinit();
-
     const platform_defs = platform_module.env.store.sliceDefs(platform_module.env.all_defs);
 
     const PendingEntrypointSource = struct {
@@ -4233,25 +4281,6 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         return error.NoEntrypointsLowered;
     }
 
-    const findEntrySymbol = struct {
-        fn run(ir_result: *const ir.Lower.Result, module_idx: u32, def_idx: can.CIR.Def.Idx) ?symbol.Symbol {
-            const target_def_idx: u32 = @intFromEnum(def_idx);
-            for (0..ir_result.symbols.len()) |sym_idx| {
-                const sym = symbol.Symbol.fromRaw(@intCast(sym_idx));
-                const entry = ir_result.symbols.get(sym);
-                switch (entry.origin) {
-                    .top_level_def => |origin| {
-                        if (origin.module_idx == module_idx and origin.def_idx == target_def_idx) {
-                            return sym;
-                        }
-                    },
-                    else => {},
-                }
-            }
-            return null;
-        }
-    }.run;
-
     const PendingEntrypointSymbol = struct {
         ffi_symbol: []const u8,
         roc_ident: []const u8,
@@ -4260,12 +4289,22 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     var pending_entrypoint_symbols = try std.ArrayList(PendingEntrypointSymbol).initCapacity(ctx.gpa, pending_entrypoint_sources.items.len);
     defer pending_entrypoint_symbols.deinit(ctx.gpa);
 
-    for (pending_entrypoint_sources.items) |pending| {
-        const entry_symbol = findEntrySymbol(&lowered_ir, platform_module_idx, pending.def_idx) orelse {
-            std.log.err("Entrypoint '{s}' not found in lowered symbols", .{pending.roc_ident});
-            continue;
-        };
+    std.log.debug("Lowering expressions...", .{});
 
+    var source_modules = try ctx.gpa.alloc(check.TypedCIR.Modules.SourceModule, all_module_envs.len);
+    defer ctx.gpa.free(source_modules);
+    for (all_module_envs, 0..) |module_env, i| {
+        source_modules[i] = .{ .precompiled = module_env };
+    }
+
+    var typed_cir_modules = try check.TypedCIR.Modules.publish(ctx.gpa, source_modules);
+    defer typed_cir_modules.deinit();
+
+    var mono_lowerer = try monotype.Lower.Lowerer.init(ctx.gpa, &typed_cir_modules, builtin_module_idx, plat.app_module_idx);
+    defer mono_lowerer.deinit();
+
+    for (pending_entrypoint_sources.items) |pending| {
+        const entry_symbol = try mono_lowerer.specializeTopLevelDef(platform_module_idx, pending.def_idx);
         try pending_entrypoint_symbols.append(ctx.gpa, .{
             .ffi_symbol = pending.ffi_symbol,
             .roc_ident = pending.roc_ident,
@@ -4273,10 +4312,24 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         });
     }
 
-    if (pending_entrypoint_symbols.items.len == 0) {
-        std.log.err("No entrypoints could be found in lowered symbols", .{});
-        return error.NoEntrypointsLowered;
+    const mono = try mono_lowerer.run(platform_module_idx);
+
+    const lifted = try monotype_lifted.Lower.run(ctx.gpa, mono);
+    const solved = try lambdasolved.Lower.run(ctx.gpa, lifted);
+
+    const entrypoint_symbols = try ctx.gpa.alloc(symbol.Symbol, pending_entrypoint_symbols.items.len);
+    defer ctx.gpa.free(entrypoint_symbols);
+    for (pending_entrypoint_symbols.items, 0..) |pending, i| {
+        entrypoint_symbols[i] = pending.symbol;
     }
+
+    var executable = try lambdamono.Lower.runWithEntrypoints(ctx.gpa, solved, entrypoint_symbols);
+    const entrypoint_wrappers = executable.entrypoint_wrappers;
+    executable.entrypoint_wrappers = &.{};
+    defer if (entrypoint_wrappers.len > 0) ctx.gpa.free(entrypoint_wrappers);
+    var lowered_ir = try ir.Lower.run(ctx.gpa, executable);
+    var lowered_ir_live = true;
+    defer if (lowered_ir_live) lowered_ir.deinit();
 
     var module_envs_const = try ctx.gpa.alloc(*const ModuleEnv, all_module_envs.len);
     defer ctx.gpa.free(module_envs_const);
@@ -4292,21 +4345,33 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     lowered_ir_live = false;
     defer lir_result.deinit();
 
+    if (entrypoint_wrappers.len != 0 and
+        entrypoint_wrappers.len != pending_entrypoint_symbols.items.len)
+    {
+        std.log.err("Entrypoint wrapper count mismatch (got {d}, expected {d})", .{
+            entrypoint_wrappers.len,
+            pending_entrypoint_symbols.items.len,
+        });
+        return error.InternalError;
+    }
     var entrypoints = try std.ArrayList(backend.Entrypoint).initCapacity(ctx.gpa, pending_entrypoint_symbols.items.len);
     defer entrypoints.deinit(ctx.gpa);
 
-    for (pending_entrypoint_symbols.items) |pending| {
-        const proc_id = lir_result.proc_ids_by_symbol.get(pending.symbol.raw()) orelse {
+    for (pending_entrypoint_symbols.items, 0..) |pending, i| {
+        const entry_symbol = if (entrypoint_wrappers.len == 0)
+            pending.symbol
+        else
+            entrypoint_wrappers[i];
+        const proc_id = lir_result.proc_ids_by_symbol.get(entry_symbol.raw()) orelse {
             std.log.err("Entrypoint '{s}' proc not found in LIR", .{pending.roc_ident});
             continue;
         };
         const proc_spec = lir_result.store.getProcSpec(proc_id);
         const arg_locals = lir_result.store.getLocalSpan(proc_spec.args);
         const arg_layouts = try ctx.arena.alloc(layout.Idx, arg_locals.len);
-        for (arg_locals, 0..) |local_id, i| {
-            arg_layouts[i] = lir_result.store.getLocal(local_id).layout_idx;
+        for (arg_locals, 0..) |local_id, arg_i| {
+            arg_layouts[arg_i] = lir_result.store.getLocal(local_id).layout_idx;
         }
-
         try entrypoints.append(ctx.gpa, .{
             .symbol_name = try std.fmt.allocPrint(ctx.arena, "roc__{s}", .{pending.ffi_symbol}),
             .proc = proc_id,

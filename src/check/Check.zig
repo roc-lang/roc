@@ -4950,7 +4950,14 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     // This shouldn't happen since hosted lambdas always have annotations
                     try self.unifyWith(expr_var, .err, env);
                 },
-                .expected => |_| {
+                .expected => |annotation_idx| {
+                    const annotation_var = ModuleEnv.varFrom(annotation_idx);
+                    if (self.varContainsUnboxedFunction(annotation_var)) {
+                        const region = self.cir.store.getAnnotationRegion(annotation_idx);
+                        _ = try self.problems.appendProblem(self.gpa, .{ .hosted_unboxed_function = .{
+                            .region = region,
+                        } });
+                    }
                     // The expr will be unified with the expected type below
                     // expr_var is a flex var by default, so no action is need here
                 },
@@ -5719,6 +5726,19 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
             .f32_type = self.cir.idents.f32_type,
             .f64_type = self.cir.idents.f64_type,
             .dec_type = self.cir.idents.dec_type,
+            .u8 = self.cir.idents.u8,
+            .i8 = self.cir.idents.i8,
+            .u16 = self.cir.idents.u16,
+            .i16 = self.cir.idents.i16,
+            .u32 = self.cir.idents.u32,
+            .i32 = self.cir.idents.i32,
+            .u64 = self.cir.idents.u64,
+            .i64 = self.cir.idents.i64,
+            .u128 = self.cir.idents.u128,
+            .i128 = self.cir.idents.i128,
+            .f32 = self.cir.idents.f32,
+            .f64 = self.cir.idents.f64,
+            .dec = self.cir.idents.dec,
         };
 
         const result = exhaustive.checkMatch(
@@ -7017,6 +7037,67 @@ fn typeSupportsIsEq(self: *Self, flat_type: types_mod.FlatType) bool {
                 if (!self.varSupportsIsEq(field_var)) return false;
             }
             return true;
+        },
+    };
+}
+
+fn nominalIsBoxType(self: *Self, nominal_type: types_mod.NominalType) bool {
+    return nominal_type.origin_module.eql(self.cir.idents.builtin_module) and
+        nominal_type.ident.ident_idx.eql(self.cir.idents.box);
+}
+
+fn varContainsUnboxedFunction(self: *Self, var_: Var) bool {
+    return self.varContainsUnboxedFunctionInternal(var_, false);
+}
+
+fn varContainsUnboxedFunctionInternal(self: *Self, var_: Var, boxed_allowed: bool) bool {
+    const resolved = self.types.resolveVar(var_);
+    return switch (resolved.desc.content) {
+        .structure => |s| self.flatTypeContainsUnboxedFunction(s, boxed_allowed),
+        .alias => |alias| self.varContainsUnboxedFunctionInternal(self.types.getAliasBackingVar(alias), boxed_allowed),
+        .flex, .rigid, .err => false,
+    };
+}
+
+fn flatTypeContainsUnboxedFunction(self: *Self, flat_type: types_mod.FlatType, boxed_allowed: bool) bool {
+    return switch (flat_type) {
+        .fn_pure, .fn_effectful, .fn_unbound => !boxed_allowed,
+        .empty_record, .empty_tag_union => false,
+        .record => |record| blk: {
+            const fields_slice = self.types.getRecordFieldsSlice(record.fields);
+            for (fields_slice.items(.var_)) |field_var| {
+                if (self.varContainsUnboxedFunctionInternal(field_var, boxed_allowed)) break :blk true;
+            }
+            break :blk false;
+        },
+        .record_unbound => |fields| blk: {
+            const fields_slice = self.types.getRecordFieldsSlice(fields);
+            for (fields_slice.items(.var_)) |field_var| {
+                if (self.varContainsUnboxedFunctionInternal(field_var, boxed_allowed)) break :blk true;
+            }
+            break :blk false;
+        },
+        .tuple => |tuple| blk: {
+            const elems = self.types.sliceVars(tuple.elems);
+            for (elems) |elem_var| {
+                if (self.varContainsUnboxedFunctionInternal(elem_var, boxed_allowed)) break :blk true;
+            }
+            break :blk false;
+        },
+        .tag_union => |tag_union| blk: {
+            const tags_slice = self.types.getTagsSlice(tag_union.tags);
+            for (tags_slice.items(.args)) |tag_args| {
+                const args = self.types.sliceVars(tag_args);
+                for (args) |arg_var| {
+                    if (self.varContainsUnboxedFunctionInternal(arg_var, boxed_allowed)) break :blk true;
+                }
+            }
+            break :blk false;
+        },
+        .nominal_type => |nominal| blk: {
+            if (self.nominalIsBoxType(nominal)) break :blk false;
+            const backing_var = self.types.getNominalBackingVar(nominal);
+            break :blk self.varContainsUnboxedFunctionInternal(backing_var, boxed_allowed);
         },
     };
 }

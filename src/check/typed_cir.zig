@@ -213,6 +213,10 @@ pub const Module = struct {
         return self.env().imports.getResolvedModule(import_idx);
     }
 
+    pub fn requiresTypes(self: @This()) []const ModuleEnv.RequiredType {
+        return self.env().requires_types.items.items;
+    }
+
     pub fn lookupMethodIdentFromModule(
         self: @This(),
         source_module: Module,

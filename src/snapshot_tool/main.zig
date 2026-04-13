@@ -4136,7 +4136,7 @@ fn processDevObjectSnapshot(
 
     const platform_module_idx: u32 = @intCast(platform_idx + 1);
 
-    var mono_lowerer = try monotype.Lower.Lowerer.init(allocator, &typed_cir_modules, 0);
+    var mono_lowerer = try monotype.Lower.Lowerer.init(allocator, &typed_cir_modules, 0, null);
     defer mono_lowerer.deinit();
     const mono = try mono_lowerer.run(platform_module_idx);
 

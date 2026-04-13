@@ -437,6 +437,20 @@ fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaqu
     const def_id: CIR.Def.Idx = @enumFromInt(def_idx);
     const entrypoint_expr = env_ptr.store.getDef(def_id).expr;
 
+    const defs = env_ptr.store.sliceDefs(env_ptr.all_defs);
+    var entry_def: ?CIR.Def.Idx = null;
+    for (defs) |def_idx_candidate| {
+        const def = env_ptr.store.getDef(def_idx_candidate);
+        if (def.expr == entrypoint_expr) {
+            entry_def = def_idx_candidate;
+            break;
+        }
+    }
+    const entry_def_idx = entry_def orelse {
+        roc_ops.crash("Interpreter shim: entry def not found");
+        return error.EvaluationFailed;
+    };
+
     // Create interpreter instance
     const builtin_env = builtin_modules.builtin_module.env;
 
@@ -484,48 +498,21 @@ fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaqu
     defer wrapped_allocator.free(module_envs_const);
     for (module_envs, 0..) |module_env, i| module_envs_const[i] = module_env;
 
-    var mono_lowerer = try monotype.Lower.Lowerer.init(wrapped_allocator, &typed_modules, builtin_module_idx);
+    var mono_lowerer = try monotype.Lower.Lowerer.init(wrapped_allocator, &typed_modules, builtin_module_idx, null);
     defer mono_lowerer.deinit();
+    const entry_symbol = try mono_lowerer.specializeTopLevelDef(primary_module_idx, entry_def_idx);
     const mono = try mono_lowerer.run(primary_module_idx);
     const lifted = try monotype_lifted.Lower.run(wrapped_allocator, mono);
-    defer @constCast(&lifted).deinit();
     const solved = try lambdasolved.Lower.run(wrapped_allocator, lifted);
-    defer @constCast(&solved).deinit();
-    const executable = try lambdamono.Lower.run(wrapped_allocator, solved);
-    defer @constCast(&executable).deinit();
-    var lowered_ir = try ir.Lower.run(wrapped_allocator, executable);
-    defer lowered_ir.deinit();
-
-    const defs = env_ptr.store.sliceDefs(env_ptr.all_defs);
-    var entry_def: ?CIR.Def.Idx = null;
-    for (defs) |def_idx_candidate| {
-        const def = env_ptr.store.getDef(def_idx_candidate);
-        if (def.expr == entrypoint_expr) {
-            entry_def = def_idx_candidate;
-            break;
-        }
-    }
-    const entry_def_idx = entry_def orelse {
-        roc_ops.crash("Interpreter shim: entry def not found");
-        return error.EvaluationFailed;
-    };
-
-    var entry_symbol: ?symbol.Symbol = null;
-    for (lowered_ir.symbols.entries.items, 0..) |entry, i| {
-        switch (entry.origin) {
-            .top_level_def => |origin| {
-                if (origin.module_idx == primary_module_idx and origin.def_idx == @intFromEnum(entry_def_idx)) {
-                    entry_symbol = symbol.Symbol.fromRaw(@intCast(i));
-                    break;
-                }
-            },
-            else => {},
-        }
-    }
-    const entry_sym = entry_symbol orelse {
-        roc_ops.crash("Interpreter shim: entry symbol not found");
-        return error.EvaluationFailed;
-    };
+    var executable = try lambdamono.Lower.runWithEntrypoints(wrapped_allocator, solved, &.{entry_symbol});
+    const entrypoint_wrappers = executable.entrypoint_wrappers;
+    executable.entrypoint_wrappers = &.{};
+    defer if (entrypoint_wrappers.len > 0) wrapped_allocator.free(entrypoint_wrappers);
+    const entry_symbol_for_lir = if (entrypoint_wrappers.len == 0)
+        entry_symbol
+    else
+        entrypoint_wrappers[0];
+    const lowered_ir = try ir.Lower.run(wrapped_allocator, executable);
 
     var lir_result = try lir.FromIr.run(
         wrapped_allocator,
@@ -536,7 +523,7 @@ fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaqu
     );
     defer lir_result.deinit();
 
-    const proc_id = lir_result.proc_ids_by_symbol.get(entry_sym.raw()) orelse {
+    const proc_id = lir_result.proc_ids_by_symbol.get(entry_symbol_for_lir.raw()) orelse {
         roc_ops.crash("Interpreter shim: entry proc not found");
         return error.EvaluationFailed;
     };

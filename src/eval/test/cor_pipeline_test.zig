@@ -85,6 +85,17 @@ fn pairHostedFn(ops_raw: *anyopaque, _: *anyopaque, args_raw: *anyopaque) callco
     ops.dbg(args.second.asSlice());
 }
 
+fn identityBoxedFn(ops_raw: *anyopaque, ret_raw: *anyopaque, args_raw: *anyopaque) callconv(.c) void {
+    const ops: *builtins.host_abi.RocOps = @ptrCast(@alignCast(ops_raw));
+    const ret_ptr: *usize = @ptrCast(@alignCast(ret_raw));
+    const arg_ptr: *const usize = @ptrCast(@alignCast(args_raw));
+    const boxed = arg_ptr.*;
+    if (boxed != 0) {
+        builtins.utils.increfDataPtrC(@ptrFromInt(boxed), 1, ops);
+    }
+    ret_ptr.* = boxed;
+}
+
 fn attachHostedFns(runtime_env: *RuntimeHostEnv, hosted_fns: []const builtins.host_abi.HostedFn) void {
     const ops = runtime_env.get_ops();
     ops.hosted_fns = .{
@@ -417,6 +428,52 @@ test "cor pipeline - hosted function survives boxed indirect-call round trip" {
     try testing.expectEqual(@as(usize, 2), dev_run.events.len);
     try testing.expectEqualStrings("hello", dev_run.events[0].bytes());
     try testing.expectEqualStrings("again", dev_run.events[1].bytes());
+}
+
+test "cor pipeline - boxed lambda round trip through host boundary" {
+    const hosted_fns = [_]builtins.host_abi.HostedFn{
+        builtins.host_abi.hostedFn(&identityBoxedFn),
+        builtins.host_abi.hostedFn(&echoHostedFn),
+    };
+    var compiled = try helpers.compileProgram(
+        testing.allocator,
+        .module,
+        \\import Platform
+        \\
+        \\main! = || {
+        \\    make = |n: I64| |x: I64| x + n
+        \\    boxed = Box.box(make(5))
+        \\    round = Platform.identity!(boxed)
+        \\    f = Box.unbox(round)
+        \\    Platform.line!(I64.to_str(f(1)))
+        \\    Platform.line!(I64.to_str(f(2)))
+        \\}
+        ,
+        &.{.{
+            .name = "Platform",
+            .source =
+            \\line! : Str => {}
+            \\identity! : Box(I64 -> I64) -> Box(I64 -> I64) => {}
+            ,
+        }},
+    );
+    defer compiled.deinit(testing.allocator);
+
+    try testing.expect(countIndirectCalls(&compiled) >= 1);
+
+    var interp_run = try runModuleWithInterpreter(testing.allocator, &compiled, &hosted_fns);
+    defer interp_run.deinit(testing.allocator);
+    try testing.expectEqual(RuntimeHostEnv.Termination.returned, interp_run.termination);
+    try testing.expectEqual(@as(usize, 2), interp_run.events.len);
+    try testing.expectEqualStrings("6", interp_run.events[0].bytes());
+    try testing.expectEqualStrings("7", interp_run.events[1].bytes());
+
+    var dev_run = try runModuleWithDevBackend(testing.allocator, &compiled, &hosted_fns);
+    defer dev_run.deinit(testing.allocator);
+    try testing.expectEqual(RuntimeHostEnv.Termination.returned, dev_run.termination);
+    try testing.expectEqual(@as(usize, 2), dev_run.events.len);
+    try testing.expectEqualStrings("6", dev_run.events[0].bytes());
+    try testing.expectEqualStrings("7", dev_run.events[1].bytes());
 }
 
 test "cor pipeline - zero-arg hosted proc call reaches host abi" {

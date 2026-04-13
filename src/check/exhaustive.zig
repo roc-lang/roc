@@ -58,16 +58,31 @@ pub const BuiltinIdents = struct {
     f32_type: Ident.Idx,
     f64_type: Ident.Idx,
     dec_type: Ident.Idx,
+    /// Unqualified numeric type identifiers (U8, I8, etc)
+    u8: Ident.Idx,
+    i8: Ident.Idx,
+    u16: Ident.Idx,
+    i16: Ident.Idx,
+    u32: Ident.Idx,
+    i32: Ident.Idx,
+    u64: Ident.Idx,
+    i64: Ident.Idx,
+    u128: Ident.Idx,
+    i128: Ident.Idx,
+    f32: Ident.Idx,
+    f64: Ident.Idx,
+    dec: Ident.Idx,
 
     /// Check if a nominal type is a builtin numeric type.
     /// Numeric types have [] as backing but are inhabited primitives.
     pub fn isBuiltinNumericType(self: BuiltinIdents, nominal: types.NominalType) bool {
-        // First check if it's from the Builtin module
-        if (!nominal.origin_module.eql(self.builtin_module)) {
-            return false;
-        }
-        // Then check if it's one of the numeric types
-        const ident = nominal.ident.ident_idx;
+        return self.isBuiltinNumericIdent(nominal.ident.ident_idx);
+    }
+
+    /// Check if an ident refers to a builtin numeric type.
+    pub fn isBuiltinNumericIdent(self: BuiltinIdents, ident: Ident.Idx) bool {
+        // Numeric types are builtin and have reserved names; treat them as builtin
+        // regardless of origin module to avoid false "uninhabited" errors.
         return ident.eql(self.u8_type) or
             ident.eql(self.i8_type) or
             ident.eql(self.u16_type) or
@@ -80,7 +95,20 @@ pub const BuiltinIdents = struct {
             ident.eql(self.i128_type) or
             ident.eql(self.f32_type) or
             ident.eql(self.f64_type) or
-            ident.eql(self.dec_type);
+            ident.eql(self.dec_type) or
+            ident.eql(self.u8) or
+            ident.eql(self.i8) or
+            ident.eql(self.u16) or
+            ident.eql(self.i16) or
+            ident.eql(self.u32) or
+            ident.eql(self.i32) or
+            ident.eql(self.u64) or
+            ident.eql(self.i64) or
+            ident.eql(self.u128) or
+            ident.eql(self.i128) or
+            ident.eql(self.f32) or
+            ident.eql(self.f64) or
+            ident.eql(self.dec);
     }
 };
 
@@ -992,6 +1020,10 @@ fn isTypeInhabited(type_store: *TypeStore, builtin_idents: BuiltinIdents, type_v
 
                     // Aliases - check the backing type
                     .alias => |alias| {
+                        if (builtin_idents.isBuiltinNumericIdent(alias.ident.ident_idx)) {
+                            try results.append(gpa, true);
+                            continue;
+                        }
                         const backing_var = type_store.getAliasBackingVar(alias);
                         try work_list.append(gpa, .{ .check_type = backing_var });
                     },

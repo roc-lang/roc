@@ -81,7 +81,7 @@ test "interpreter: empty list [] has list_of_zst layout" {
 
     const ret_layout = compiled.lowered.lir_result.store.getProcSpec(compiled.lowered.main_proc).ret_layout;
     const layout_val = compiled.lowered.lir_result.layouts.getLayout(ret_layout);
-    try testing.expectEqual(layout.LayoutTag.list, layout_val.tag);
+    try testing.expectEqual(layout.LayoutTag.list_of_zst, layout_val.tag);
 }
 
 test "interpreter: singleton list [1] has list of Dec layout" {

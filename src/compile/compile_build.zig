@@ -427,13 +427,16 @@ pub const BuildEnv = struct {
             .root_dir = pkg_root_dir,
         });
 
-        // Transfer provides entries and targets_config from header to package for platform roots
-        if (header_info.kind == .platform) {
+        // Transfer provides entries from header to package for app or platform roots.
+        // For platforms, also transfer targets_config.
+        if (header_info.kind == .platform or header_info.kind == .app or header_info.kind == .default_app) {
             if (self.packages.getPtr(pkg_name)) |pkg| {
                 pkg.provides_entries = header_info.provides_entries;
                 header_info.provides_entries = .{}; // Prevent double-free in deinit
-                pkg.targets_config = header_info.targets_config;
-                header_info.targets_config = null; // Prevent double-free in deinit
+                if (header_info.kind == .platform) {
+                    pkg.targets_config = header_info.targets_config;
+                    header_info.targets_config = null; // Prevent double-free in deinit
+                }
             }
         }
 
@@ -2293,7 +2296,7 @@ pub const BuildEnv = struct {
                     .is_app = is_app,
                     .is_platform_sibling = is_platform_sibling,
                     .depth = sched_mod.depth,
-                    .provides_entries = if (is_platform_main)
+                    .provides_entries = if (is_platform_main or is_app)
                         if (pkg_ptr) |p| p.provides_entries.items else &.{}
                     else
                         &.{},
@@ -2665,6 +2668,40 @@ pub const BuildEnv = struct {
                                 .platform_env = platform_module.env,
                                 .entrypoint_expr = def.expr,
                                 .app_module_env = app_module_env,
+                                .provides_entries = provides_entries,
+                            };
+                        }
+                    }
+                }
+            }
+
+            return error.NoModulesCompiled;
+        }
+
+        /// Find the entrypoint expression from the app's provides entries.
+        /// Used when the app module itself is the runnable entrypoint (e.g. glue specs).
+        pub fn findAppEntrypoint(self: *const ResolvedModules) !EntrypointInfo {
+            const app_idx = findAppModuleIndex(self.compiled_modules) orelse
+                return error.NoModulesCompiled;
+            const app_module = self.compiled_modules[app_idx];
+            const provides_entries = app_module.provides_entries;
+            if (provides_entries.len == 0) return error.NoModulesCompiled;
+
+            const app_env = app_module.env;
+            const app_defs = app_env.store.sliceDefs(app_env.all_defs);
+
+            for (provides_entries) |entry| {
+                for (app_defs) |def_idx| {
+                    const def = app_env.store.getDef(def_idx);
+                    const pattern = app_env.store.getPattern(def.pattern);
+                    if (pattern == .assign) {
+                        const ident_name = app_env.getIdent(pattern.assign.ident);
+                        if (std.mem.eql(u8, ident_name, entry.roc_ident)) {
+                            return .{
+                                .platform_idx = app_idx,
+                                .platform_env = app_env,
+                                .entrypoint_expr = def.expr,
+                                .app_module_env = app_env,
                                 .provides_entries = provides_entries,
                             };
                         }

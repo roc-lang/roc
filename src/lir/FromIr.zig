@@ -507,6 +507,7 @@ const ProcLowerer = struct {
                 },
                 .local => |node_id| switch (self.parent.input.layouts.getNode(node_id)) {
                     .nominal => |nominal| current = nominal,
+                    .box => |child| current = child,
                     .list => |elem| return elem,
                     else => return null,
                 },
@@ -595,6 +596,7 @@ const ProcLowerer = struct {
                 },
                 .local => |node_id| switch (self.parent.input.layouts.getNode(node_id)) {
                     .nominal => |nominal| current = nominal,
+                    .box => |child| current = child,
                     .struct_ => |fields| return self.parent.input.layouts.getFields(fields)[field_index].child,
                     else => debugPanic("lir.from_ir expected struct logical layout ref"),
                 },
@@ -628,6 +630,7 @@ const ProcLowerer = struct {
                 },
                 .local => |node_id| switch (self.parent.input.layouts.getNode(node_id)) {
                     .nominal => |nominal| current = nominal,
+                    .box => |child| current = child,
                     .tag_union => |variants| return self.parent.input.layouts.getRefs(variants)[tag_discriminant],
                     else => debugPanic("lir.from_ir expected tag-union logical layout ref"),
                 },
@@ -665,6 +668,7 @@ const ProcLowerer = struct {
                 },
                 .local => |node_id| switch (self.parent.input.layouts.getNode(node_id)) {
                     .nominal => |nominal| current = nominal,
+                    .box => |child| current = child,
                     .tag_union => |variants| {
                         const prim: layout_mod.Idx = if (@bitSizeOf(usize) <= 32) switch (self.parent.input.layouts.getRefs(variants).len) {
                             0...0xff => .u8,

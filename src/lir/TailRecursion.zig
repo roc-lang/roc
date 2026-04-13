@@ -75,6 +75,7 @@ pub const TailRecursionPass = struct {
                 .result = assign.result,
                 .closure = assign.closure,
                 .args = assign.args,
+                .capture_layout = assign.capture_layout,
                 .next = next,
             } }),
             .assign_low_level => |assign| self.store.addCFStmt(.{ .assign_low_level = .{

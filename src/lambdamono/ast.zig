@@ -59,6 +59,7 @@ pub const FieldExpr = struct {
 pub const PackedFn = struct {
     lambda: Symbol,
     captures: ?ExprId,
+    capture_ty: ?TypeId,
 };
 
 pub const Expr = struct {
@@ -98,6 +99,7 @@ pub const Expr = struct {
         call_indirect: struct {
             func: ExprId,
             args: Span(ExprId),
+            capture_ty: ?TypeId,
         },
         low_level: struct {
             op: base.LowLevel,

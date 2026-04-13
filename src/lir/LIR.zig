@@ -263,6 +263,7 @@ pub const CFStmt = union(enum) {
         result: ResultSemantics,
         closure: LocalId,
         args: LocalSpan,
+        capture_layout: ?layout.Idx,
         next: CFStmtId,
     },
     assign_low_level: struct {

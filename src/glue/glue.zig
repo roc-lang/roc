@@ -393,7 +393,7 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
         }
     }
 
-    // Get resolved module envs and find entrypoint
+    // Get resolved module envs and find glue spec entrypoint
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
 

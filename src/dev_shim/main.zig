@@ -434,35 +434,22 @@ fn evaluateFromSharedMemory(entry_idx: u32, host_roc_ops: *RocOps, ret_ptr: *any
     var typed_modules = try check.TypedCIR.Modules.publish(wrapped_allocator, source_modules);
     defer typed_modules.deinit();
 
-    var mono_lowerer = try monotype.Lower.Lowerer.init(wrapped_allocator, &typed_modules, builtin_module_idx);
+    var mono_lowerer = try monotype.Lower.Lowerer.init(wrapped_allocator, &typed_modules, builtin_module_idx, null);
     defer mono_lowerer.deinit();
+    const entry_symbol = try mono_lowerer.specializeTopLevelDef(primary_module_idx, entry_def_idx.?);
     const mono = try mono_lowerer.run(primary_module_idx);
     const lifted = try monotype_lifted.Lower.run(wrapped_allocator, mono);
     const solved = try lambdasolved.Lower.run(wrapped_allocator, lifted);
-    const mono_executable = try lambdamono.Lower.run(wrapped_allocator, solved);
-    var lowered_ir = try ir.Lower.run(wrapped_allocator, mono_executable);
-    var lowered_ir_live = true;
-    defer if (lowered_ir_live) lowered_ir.deinit();
-
-    const target_def_idx: u32 = @intFromEnum(entry_def_idx.?);
-    var entry_symbol: ?symbol.Symbol = null;
-    for (0..lowered_ir.symbols.len()) |sym_idx| {
-        const sym = symbol.Symbol.fromRaw(@intCast(sym_idx));
-        const entry = lowered_ir.symbols.get(sym);
-        switch (entry.origin) {
-            .top_level_def => |origin| {
-                if (origin.module_idx == primary_module_idx and origin.def_idx == target_def_idx) {
-                    entry_symbol = sym;
-                    break;
-                }
-            },
-            else => {},
-        }
-    }
-    if (entry_symbol == null) {
-        host_roc_ops.crash("Dev shim: entry symbol not found");
-        return error.CodeGenFailed;
-    }
+    const entrypoints = [_]symbol.Symbol{entry_symbol};
+    var mono_executable = try lambdamono.Lower.runWithEntrypoints(wrapped_allocator, solved, &entrypoints);
+    const entrypoint_wrappers = mono_executable.entrypoint_wrappers;
+    mono_executable.entrypoint_wrappers = &.{};
+    defer if (entrypoint_wrappers.len > 0) wrapped_allocator.free(entrypoint_wrappers);
+    const entry_symbol_for_lir = if (entrypoint_wrappers.len == 0)
+        entry_symbol
+    else
+        entrypoint_wrappers[0];
+    const lowered_ir = try ir.Lower.run(wrapped_allocator, mono_executable);
 
     var lowered_lir = try lir.FromIr.run(
         wrapped_allocator,
@@ -471,10 +458,9 @@ fn evaluateFromSharedMemory(entry_idx: u32, host_roc_ops: *RocOps, ret_ptr: *any
         base.target.TargetUsize.native,
         lowered_ir,
     );
-    lowered_ir_live = false;
     defer lowered_lir.deinit();
 
-    const proc_id = lowered_lir.proc_ids_by_symbol.get(entry_symbol.?.raw()) orelse {
+    const proc_id = lowered_lir.proc_ids_by_symbol.get(entry_symbol_for_lir.raw()) orelse {
         host_roc_ops.crash("Dev shim: entry proc not found");
         return error.CodeGenFailed;
     };
