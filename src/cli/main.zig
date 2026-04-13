@@ -7118,6 +7118,9 @@ fn generateDocs(
     };
     defer package_docs.deinit(ctx.gpa);
 
+    // Remove existing output directory to ensure a clean build
+    try std.fs.cwd().deleteTree(base_output_dir);
+
     // Create output directory
     std.fs.cwd().makePath(base_output_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
