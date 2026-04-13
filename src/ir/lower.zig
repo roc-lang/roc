@@ -367,12 +367,14 @@ const Lowerer = struct {
                     .expr = try self.output.addExpr(.{ .fn_ptr = packed_fn.lambda }),
                 } });
 
-                const captures = if (packed_fn.captures) |captures_expr| blk: {
+                const capture_ptr = if (packed_fn.captures) |captures_expr| blk: {
                     const lowered = try self.lowerSubexprValue(&block, env, captures_expr);
                     if (lowered == null) return if (block.has_term) block else debugPanic("ir.lower packed_fn captures missing terminator");
                     break :blk lowered.?;
                 } else blk: {
-                    const null_ptr = try self.freshOpaqueVar("null_ptr");
+                    const erased_ty = try self.input.types.internResolved(.{ .primitive = .erased });
+                    const capture_box_ty = try self.input.types.internResolved(.{ .box = erased_ty });
+                    const null_ptr = try self.freshVar(capture_box_ty, "null_ptr");
                     try block.stmts.append(self.allocator, .{ .let_ = .{
                         .bind = null_ptr,
                         .expr = try self.output.addExpr(.null_ptr),
@@ -380,11 +382,30 @@ const Lowerer = struct {
                     break :blk null_ptr;
                 };
 
+                const size_var = if (packed_fn.capture_ty) |capture_ty| blk: {
+                    const u32_ty = try self.input.types.internResolved(.{ .primitive = .u32 });
+                    const capture_layout = self.input.layout_facts.layoutForType(capture_ty);
+                    const size_var = try self.freshVar(u32_ty, "capture_size");
+                    try block.stmts.append(self.allocator, .{ .let_ = .{
+                        .bind = size_var,
+                        .expr = try self.output.addExpr(.{ .layout_size = capture_layout }),
+                    } });
+                    break :blk size_var;
+                } else blk: {
+                    const u32_ty = try self.input.types.internResolved(.{ .primitive = .u32 });
+                    const size_var = try self.freshVar(u32_ty, "capture_size");
+                    try block.stmts.append(self.allocator, .{ .let_ = .{
+                        .bind = size_var,
+                        .expr = try self.output.addExpr(.{ .lit = .{ .int = 0 } }),
+                    } });
+                    break :blk size_var;
+                };
+
                 const temp = try self.freshVar(expr.ty, "packed_fn");
                 try block.stmts.append(self.allocator, .{ .let_ = .{
                     .bind = temp,
                     .expr = try self.output.addExpr(.{
-                        .make_struct = try self.output.addVarSpan(&.{ fn_ptr, captures }),
+                        .make_struct = try self.output.addVarSpan(&.{ fn_ptr, capture_ptr, size_var }),
                     }),
                 } });
                 block.setTerm(.{ .value = temp });
@@ -400,6 +421,10 @@ const Lowerer = struct {
                     .expr = try self.output.addExpr(.{ .call_indirect = .{
                         .func = func.?,
                         .args = args.?,
+                        .capture_layout = if (call.capture_ty) |capture_ty|
+                            self.input.layout_facts.layoutForType(capture_ty)
+                        else
+                            null,
                     } }),
                 } });
                 block.setTerm(.{ .value = temp });
@@ -434,9 +459,10 @@ const Lowerer = struct {
     }
 
     fn freshVar(self: *Lowerer, ty: lambdamono.Type.TypeId, comptime label: []const u8) std.mem.Allocator.Error!ast.Var {
+        const symbol = try self.freshSymbol(label);
         return .{
             .layout = self.input.layout_facts.layoutForType(ty),
-            .symbol = try self.freshSymbol(label),
+            .symbol = symbol,
         };
     }
 

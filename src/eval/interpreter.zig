@@ -1128,7 +1128,13 @@ pub const Interpreter = struct {
                 .assign_call_indirect => |assign| {
                     const arg_locals = self.store.getLocalSpan(assign.args);
                     const arg_values = try self.collectLocalValues(frame, arg_locals);
-                    const result = try self.evalIndirectCall(frame, assign.closure, arg_values, try self.localLayouts(arg_locals));
+                    const result = try self.evalIndirectCall(
+                        frame,
+                        assign.closure,
+                        arg_values,
+                        try self.localLayouts(arg_locals),
+                        assign.capture_layout,
+                    );
                     self.setLocalChecked(
                         frame,
                         current,
@@ -1550,6 +1556,7 @@ pub const Interpreter = struct {
         closure_local: LocalId,
         args: []const Value,
         arg_layouts: []const layout_mod.Idx,
+        capture_layout: ?layout_mod.Idx,
     ) Error!IndirectCallResult {
         const closure_layout = self.store.getLocal(closure_local).layout_idx;
         const closure_value = frame.getLocal(closure_local);
@@ -1574,35 +1581,52 @@ pub const Interpreter = struct {
         const proc_id = self.decodeProcRef(closure_base.value.offset(fn_offset));
         const proc_spec = self.store.getProcSpec(proc_id);
         const proc_args = self.store.getLocalSpan(proc_spec.args);
+        const has_capture_arg = capture_layout != null;
 
-        if (proc_args.len == args.len) {
+        if (!has_capture_arg and proc_args.len == args.len) {
             return .{
                 .value = try self.evalProcById(proc_id, args, arg_layouts),
                 .layout = proc_spec.ret_layout,
             };
         }
 
-        if (proc_args.len != args.len + 1) {
+        if (!has_capture_arg or proc_args.len != args.len + 1) {
             std.debug.panic(
                 "LIR/interpreter invariant violated: indirect callee {d} expects {d} args, but call site provided {d} or {d} with captures",
                 .{ @intFromEnum(proc_id), proc_args.len, args.len, args.len + 1 },
             );
         }
 
-        const capture_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(closure_layout_val.data.struct_.idx, 1);
-        const capture_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(closure_layout_val.data.struct_.idx, 1);
-        const capture_value = self.normalizeValueToLayout(
-            closure_base.value.offset(capture_offset),
-            capture_layout,
-            capture_layout,
-        );
+        const capture_layout_idx = capture_layout.?;
+        const capture_value = blk: {
+            if (capture_layout_idx == .zst) break :blk Value.zst;
+
+            const capture_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(closure_layout_val.data.struct_.idx, 1);
+            const capture_ptr_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(closure_layout_val.data.struct_.idx, 1);
+            const capture_ptr_value = self.normalizeValueToLayout(
+                closure_base.value.offset(capture_offset),
+                capture_ptr_layout,
+                capture_ptr_layout,
+            );
+            const capture_ptr = self.readBoxedDataPointer(capture_ptr_value) orelse std.debug.panic(
+                "LIR/interpreter invariant violated: indirect call capture pointer is null",
+                .{},
+            );
+
+            const result = try self.alloc(capture_layout_idx);
+            const size = self.helper.sizeOf(capture_layout_idx);
+            if (size > 0) {
+                result.copyFrom(.{ .ptr = capture_ptr }, size);
+            }
+            break :blk result;
+        };
 
         const all_args = try self.arena.allocator().alloc(Value, args.len + 1);
         @memcpy(all_args[0..args.len], args);
         all_args[args.len] = capture_value;
         const all_arg_layouts = try self.arena.allocator().alloc(layout_mod.Idx, arg_layouts.len + 1);
         @memcpy(all_arg_layouts[0..arg_layouts.len], arg_layouts);
-        all_arg_layouts[arg_layouts.len] = capture_layout;
+        all_arg_layouts[arg_layouts.len] = capture_layout_idx;
         return .{
             .value = try self.evalProcById(proc_id, all_args, all_arg_layouts),
             .layout = proc_spec.ret_layout,

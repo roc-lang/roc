@@ -131,6 +131,16 @@ pub const Facts = struct {
         self.typed_symbol_layouts[index] = try self.layoutForPublishedType(allocator, mono_types, idents, value.ty);
     }
 
+    pub fn recordType(
+        self: *Facts,
+        allocator: std.mem.Allocator,
+        mono_types: *type_mod.Store,
+        idents: *const base.Ident.Store,
+        ty: type_mod.TypeId,
+    ) std.mem.Allocator.Error!void {
+        _ = try self.layoutForPublishedType(allocator, mono_types, idents, ty);
+    }
+
     pub fn recordExpr(
         self: *Facts,
         allocator: std.mem.Allocator,
@@ -159,6 +169,16 @@ pub const Facts = struct {
                     self.exprLayout(tuple_access.tuple),
                     @intCast(tuple_access.elem_index),
                 );
+            },
+            .packed_fn => |packed_fn| {
+                if (packed_fn.capture_ty) |capture_ty| {
+                    _ = try self.layoutForPublishedType(allocator, mono_types, idents, capture_ty);
+                }
+            },
+            .call_indirect => |call| {
+                if (call.capture_ty) |capture_ty| {
+                    _ = try self.layoutForPublishedType(allocator, mono_types, idents, capture_ty);
+                }
             },
             else => {},
         }
@@ -374,12 +394,15 @@ fn lowerNode(
         .list => |elem| .{ .list = try lowerTypeRec(allocator, mono_types, idents, graph, cache, elem) },
         .box => |elem| .{ .box = try lowerTypeRec(allocator, mono_types, idents, graph, cache, elem) },
         .erased_fn => |maybe_capture| blk: {
+            const capture_ty = maybe_capture orelse blk_capture: {
+                const unit_ty = try mono_types.internResolved(.{ .record = .{ .fields = type_mod.Span(type_mod.Field).empty() } });
+                break :blk_capture unit_ty;
+            };
+            const capture_box_ty = try mono_types.internResolved(.{ .box = capture_ty });
             var fields = [_]layout_mod.GraphField{
                 .{ .index = 0, .child = .{ .canonical = .opaque_ptr } },
-                .{ .index = 1, .child = if (maybe_capture) |capture|
-                    try lowerTypeRec(allocator, mono_types, idents, graph, cache, capture)
-                else
-                    .{ .canonical = .opaque_ptr } },
+                .{ .index = 1, .child = try lowerTypeRec(allocator, mono_types, idents, graph, cache, capture_box_ty) },
+                .{ .index = 2, .child = .{ .canonical = .u32 } },
             };
             break :blk .{ .struct_ = try graph.appendFields(allocator, &fields) };
         },

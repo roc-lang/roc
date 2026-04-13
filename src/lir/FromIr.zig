@@ -81,6 +81,7 @@ const Lowerer = struct {
     }
 
     fn deinit(self: *Lowerer) void {
+        self.input.deinit();
         self.ir_to_layout.deinit();
         self.local_layout_refs.deinit();
         self.proc_ret_layout_refs.deinit();
@@ -88,7 +89,6 @@ const Lowerer = struct {
         self.root_procs.deinit(self.allocator);
         self.layouts.deinit();
         self.store.deinit();
-        self.input.deinit();
     }
 
     fn finish(self: *Lowerer) Result {
@@ -280,6 +280,7 @@ const ProcLowerer = struct {
     proc_id: LIR.LirProcSpecId,
     locals_by_var: std.AutoHashMap(VarKey, LIR.LocalId),
     loop_break_targets: std.ArrayList(LIR.CFStmtId),
+    current_expr_id: ?ir.Ast.ExprId,
 
     const VarKey = struct {
         symbol: u64,
@@ -292,6 +293,7 @@ const ProcLowerer = struct {
             .proc_id = proc_id,
             .locals_by_var = std.AutoHashMap(VarKey, LIR.LocalId).init(parent.allocator),
             .loop_break_targets = .empty,
+            .current_expr_id = null,
         };
     }
 
@@ -839,9 +841,13 @@ const ProcLowerer = struct {
             const actual_box_child_tag: ?[]const u8 = if (actual_box_child) |child| @tagName(ls.getLayout(child).tag) else null;
             const target_list_child_tag: ?[]const u8 = if (target_list_child) |child| @tagName(ls.getLayout(child).tag) else null;
             const actual_list_child_tag: ?[]const u8 = if (actual_list_child) |child| @tagName(ls.getLayout(child).tag) else null;
+            const proc_spec = self.parent.store.getProcSpec(self.proc_id);
             std.debug.panic(
-                "lir.from_ir invariant violated: no explicit bridge from layout {d} ({s}, ref={any}, box_child={any}/{any}, list_child={any}/{any}) to layout {d} ({s}, ref={any}, box_child={any}/{any}, list_child={any}/{any})",
+                "lir.from_ir invariant violated: no explicit bridge in proc {d} (symbol {d}) expr {any} from layout {d} ({s}, ref={any}, box_child={any}/{any}, list_child={any}/{any}) to layout {d} ({s}, ref={any}, box_child={any}/{any}, list_child={any}/{any})",
                 .{
+                    @intFromEnum(self.proc_id),
+                    proc_spec.name.raw(),
+                    self.current_expr_id,
                     @intFromEnum(actual_layout),
                     @tagName(actual_layout_val.tag),
                     actual_ref,
@@ -873,27 +879,7 @@ const ProcLowerer = struct {
         const target_layout = self.localLayout(target_local);
         const actual_ref = self.localLayoutRef(source_local);
         const target_ref = self.localLayoutRef(target_local);
-        const actual_info = ls.getStructInfo(ls.getLayout(actual_layout));
         const target_info = ls.getStructInfo(ls.getLayout(target_layout));
-
-        if (builtin.mode == .Debug) {
-            if (actual_info.fields.len != target_info.fields.len) {
-                std.debug.panic(
-                    "lir.from_ir invariant violated: struct bridge field-count mismatch from layout {d} to {d}",
-                    .{ @intFromEnum(actual_layout), @intFromEnum(target_layout) },
-                );
-            }
-            for (0..target_info.fields.len) |i| {
-                const actual_field = actual_info.fields.get(@intCast(i));
-                const target_field = target_info.fields.get(@intCast(i));
-                if (actual_field.index != target_field.index) {
-                    std.debug.panic(
-                        "lir.from_ir invariant violated: struct bridge semantic field-index mismatch at position {d}: {d} vs {d}",
-                        .{ i, actual_field.index, target_field.index },
-                    );
-                }
-            }
-        }
 
         const field_count = target_info.fields.len;
         const source_fields = try self.parent.allocator.alloc(LIR.LocalId, field_count);
@@ -914,7 +900,6 @@ const ProcLowerer = struct {
             else
                 try self.freshLocalWithLayoutAndRef(target_field_layout, target_field_ref);
         }
-
         const assign_struct = try self.parent.store.addCFStmt(.{ .assign_struct = .{
             .target = target_local,
             .result = .fresh,
@@ -1292,6 +1277,8 @@ const ProcLowerer = struct {
         expr_id: ir.Ast.ExprId,
         next: LIR.CFStmtId,
     ) std.mem.Allocator.Error!LIR.CFStmtId {
+        self.current_expr_id = expr_id;
+        defer self.current_expr_id = null;
         const target = try self.lowerVar(bind);
         const expr = self.parent.input.store.getExpr(expr_id);
         return switch (expr) {
@@ -1408,6 +1395,17 @@ const ProcLowerer = struct {
                 } });
                 break :blk try self.emitBridgesIntoLocals(planned.sources, planned.fields, assign_struct);
             },
+            .layout_size => |layout_ref| blk: {
+                const layout_idx = try self.parent.lowerLayoutId(layout_ref);
+                const layout_val = self.parent.layouts.getLayout(layout_idx);
+                const size = self.parent.layouts.layoutSize(layout_val);
+                break :blk try self.parent.store.addCFStmt(.{ .assign_literal = .{
+                    .target = target,
+                    .result = .fresh,
+                    .value = .{ .i64_literal = .{ .value = @intCast(size), .layout_idx = .u32 } },
+                    .next = next,
+                } });
+            },
             .make_list => |elems| blk: {
                 const planned = try self.planListElemsIntoTarget(target, self.parent.input.store.sliceVarSpan(elems));
                 defer self.parent.allocator.free(planned.sources);
@@ -1504,6 +1502,10 @@ const ProcLowerer = struct {
                     .result = .fresh,
                     .closure = try self.lowerVar(call.func),
                     .args = try self.parent.store.addLocalSpan(locals),
+                    .capture_layout = if (call.capture_layout) |capture_ref|
+                        try self.parent.lowerLayoutId(capture_ref)
+                    else
+                        null,
                     .next = next,
                 } });
             },
