@@ -839,6 +839,7 @@ fn resolveBuiltinWrapper(name: []const u8) ?usize {
         .{ .name = "roc_builtins_str_with_ascii_uppercased", .addr = @intFromPtr(&dev_wrappers.roc_builtins_str_with_ascii_uppercased) },
         .{ .name = "roc_builtins_str_from_utf8_lossy", .addr = @intFromPtr(&dev_wrappers.roc_builtins_str_from_utf8_lossy) },
         .{ .name = "roc_builtins_str_escape_and_quote", .addr = @intFromPtr(&dev_wrappers.roc_builtins_str_escape_and_quote) },
+        .{ .name = "roc_builtins_roc_dbg", .addr = @intFromPtr(&dev_wrappers.roc_builtins_roc_dbg) },
         .{ .name = "roc_builtins_list_with_capacity", .addr = @intFromPtr(&dev_wrappers.roc_builtins_list_with_capacity) },
         .{ .name = "roc_builtins_list_append_unsafe", .addr = @intFromPtr(&dev_wrappers.roc_builtins_list_append_unsafe) },
         .{ .name = "roc_builtins_list_concat", .addr = @intFromPtr(&dev_wrappers.roc_builtins_list_concat) },

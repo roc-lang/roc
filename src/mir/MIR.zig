@@ -464,9 +464,10 @@ pub const Expr = union(enum) {
     /// Crash with message
     crash: StringLiteral.Idx,
 
-    /// Debug expression (evaluates to inner value)
+    /// Debug expression (prints formatted value via roc_dbg, evaluates to inner value)
     dbg_expr: struct {
         expr: ExprId,
+        formatted: ExprId,
     },
 
     /// Expect assertion

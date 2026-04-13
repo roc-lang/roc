@@ -1528,8 +1528,7 @@ test "echo platform: all_syntax_test.roc prints expected output (dev backend)" {
     try util.checkSuccess(run_result);
 
     try std.testing.expectEqualStrings(all_syntax_dev_expected_stdout, run_result.stdout);
-    // TODO: dev backend doesn't produce dbg output
-    try std.testing.expectEqualStrings("", run_result.stderr);
+    try std.testing.expectEqualStrings(all_syntax_expected_stderr, run_result.stderr);
 }
 
 test "echo platform: roc test all_syntax_test.roc passes" {

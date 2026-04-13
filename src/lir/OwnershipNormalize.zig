@@ -405,7 +405,10 @@ const Analyzer = struct {
             .low_level => |ll| {
                 for (self.store.getExprSpan(ll.args)) |arg| try self.analyzeExpr(arg);
             },
-            .dbg => |d| try self.analyzeExpr(d.expr),
+            .dbg => |d| {
+                try self.analyzeExpr(d.expr);
+                try self.analyzeExpr(d.formatted);
+            },
             .expect => |e| {
                 try self.analyzeExpr(e.cond);
                 try self.analyzeExpr(e.body);

@@ -401,9 +401,10 @@ pub const LirExpr = union(enum) {
         callable_proc: LirProcSpecId = LirProcSpecId.none,
     },
 
-    /// Debug expression (prints and returns value)
+    /// Debug expression (prints formatted value via roc_dbg, returns inner value)
     dbg: struct {
         expr: LirExprId,
+        formatted: LirExprId,
         result_layout: layout.Idx,
     },
 
