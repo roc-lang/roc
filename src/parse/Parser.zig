@@ -1668,6 +1668,25 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                 // continue to parse final expression
             }
         },
+        .Underscore => {
+            const start = self.pos;
+            if (self.peekNext() == .OpAssign) {
+                self.advance(); // Advance past Underscore
+                const patt_idx = try self.store.addPattern(.{ .underscore = .{
+                    .region = .{ .start = start, .end = self.pos },
+                } });
+                self.advance(); // Advance past OpAssign
+                const idx = try self.parseExpr();
+                const statement_idx = try self.store.addStatement(.{ .decl = .{
+                    .pattern = patt_idx,
+                    .body = idx,
+                    .region = .{ .start = start, .end = self.pos },
+                } });
+                return statement_idx;
+            } else {
+                // continue to parse final expression
+            }
+        },
         // Type Annotation (e.g. `Foo a : (a,a)`)
         .UpperIdent => {
             const start = self.pos;

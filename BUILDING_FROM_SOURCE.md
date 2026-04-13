@@ -12,6 +12,7 @@ If you run into any problems getting Roc built from source, please ask for help 
 Do a test run with
 ```
 zig build roc
+./zig-out/bin/roc version
 ```
 
 ## Using Nix
@@ -20,4 +21,5 @@ If you're familiar with nix and like using it, you can build the compiler like t
 ```
 nix develop ./src
 buildcmd
+./zig-out/bin/roc version
 ```

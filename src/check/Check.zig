@@ -1338,6 +1338,21 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
 
     std.debug.assert(env.rank() == .generalized);
 
+    // When checking the Builtin module directly (e.g., `roc check Builtin.roc`),
+    // the normal pipeline assigns a package-qualified module name like "module.Builtin".
+    // But the pre-compiled Builtin binary uses the unqualified "Builtin" as origin_module
+    // for all its types. This causes type mismatches when locally-defined types (using
+    // "module.Builtin") are unified with types from the pre-compiled module (using "Builtin").
+    // Fix: use the unqualified "Builtin" to match the pre-compiled module's convention.
+    if (self.builtin_ctx.builtin_module != null and
+        self.cir.display_module_name_idx.eql(self.cir.idents.builtin_module))
+    {
+        self.builtin_ctx.module_name = self.cir.idents.builtin_module;
+        // Also update qualified_module_ident so that opaque type checks
+        // (canLiftInner) allow pattern matching on types defined in this module.
+        self.cir.qualified_module_ident = self.cir.idents.builtin_module;
+    }
+
     // Copy builtin types (Bool, Try) into this module's type store
     // Note that bool_var and try_var will have generalized rank
     try self.copyBuiltinTypes();
