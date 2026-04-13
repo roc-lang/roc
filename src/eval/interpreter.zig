@@ -171,10 +171,13 @@ const InterpreterRocEnv = struct {
         const msg = roc_crashed.utf8_bytes[0..roc_crashed.len];
         if (self.crash_message) |old| self.allocator.free(old);
         self.crash_message = self.allocator.dupe(u8, msg) catch null;
-        const active_jmp_buf = self.active_jmp_buf orelse std.debug.panic(
-            "LIR/interpreter invariant violated: roc_crashed fired without an active jump buffer",
-            .{},
-        );
+        const active_jmp_buf = self.active_jmp_buf orelse blk: {
+            std.debug.print(
+                "LIR/interpreter invariant violated: roc_crashed fired without an active jump buffer\n",
+                .{},
+            );
+            std.process.abort();
+        };
         self.active_jmp_buf = null;
         longjmp(active_jmp_buf, 1);
     }
@@ -266,16 +269,6 @@ pub const Interpreter = struct {
             };
         }
 
-        fn getLocal(self: *const Frame, local_id: LocalId) Value {
-            const slot = self.locals[@intFromEnum(local_id)];
-            if (!slot.assigned) {
-                std.debug.panic(
-                    "LIR/interpreter invariant violated: local {d} was used before assignment in proc {d}",
-                    .{ @intFromEnum(local_id), @intFromEnum(self.proc_id) },
-                );
-            }
-            return slot.val;
-        }
     };
 
     const ExecOutcome = union(enum) {
@@ -365,6 +358,20 @@ pub const Interpreter = struct {
     fn triggerCrash(self: *LirInterpreter, message: []const u8) Error {
         self.roc_ops.crash(message);
         unreachable;
+    }
+
+    fn invariantFailed(self: *LirInterpreter, comptime fmt: []const u8, args: anytype) noreturn {
+        _ = self;
+        if (builtin.mode == .Debug) {
+            std.debug.print(fmt, args);
+            std.debug.print("\n", .{});
+            std.debug.assert(false);
+        }
+        unreachable;
+    }
+
+    fn invariantFailedError(self: *LirInterpreter, comptime fmt: []const u8, args: anytype) Error {
+        self.invariantFailed(fmt, args);
     }
 
     fn currentRocOps(self: *LirInterpreter) *RocOps {
@@ -509,6 +516,17 @@ pub const Interpreter = struct {
         frame.setLocal(local_id, value);
     }
 
+    fn getLocalChecked(self: *LirInterpreter, frame: *const Frame, local_id: LocalId) Error!Value {
+        const slot = frame.locals[@intFromEnum(local_id)];
+        if (!slot.assigned) {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: local {d} was used before assignment in proc {d}",
+                .{ @intFromEnum(local_id), @intFromEnum(frame.proc_id) },
+            );
+        }
+        return slot.val;
+    }
+
     fn debugAssertValueMatchesLayout(
         self: *LirInterpreter,
         proc_id: LirProcSpecId,
@@ -554,7 +572,9 @@ pub const Interpreter = struct {
                 for (visited.items) |entry| {
                     if (entry.ptr == key.ptr and entry.layout_idx == key.layout_idx) return;
                 }
-                visited.append(self.allocator, key) catch @panic("OOM");
+                visited.append(self.allocator, key) catch {
+                    self.invariantFailed("LIR/interpreter invariant violated: out of memory while validating value shape", .{});
+                };
                 self.debugAssertValueMatchesLayout(
                     proc_id,
                     stmt_id,
@@ -698,7 +718,7 @@ pub const Interpreter = struct {
                     else => {},
                 }
 
-                std.debug.panic(
+                self.invariantFailed(
                     "LIR/interpreter invariant violated: proc {d} stmt {d}={any} assigned local {d} layout {d} invalid value shape: {s}",
                     .{
                         @intFromEnum(proc_id),
@@ -711,7 +731,7 @@ pub const Interpreter = struct {
                 );
             }
 
-            std.debug.panic(
+            self.invariantFailed(
                 "LIR/interpreter invariant violated: proc {d} assigned local {d} layout {d} invalid value shape: {s}",
                 .{
                     @intFromEnum(proc_id),
@@ -922,14 +942,14 @@ pub const Interpreter = struct {
             return self.triggerCrash(stack_overflow_message);
         }
         if (args.len != arg_layouts.len) {
-            std.debug.panic(
+            return self.invariantFailedError(
                 "LIR/interpreter invariant violated: proc {d} received {d} args but {d} arg layouts",
                 .{ proc_spec.name.raw(), args.len, arg_layouts.len },
             );
         }
 
         if (proc_spec.hosted) |hosted| {
-            const param_layouts = self.localLayoutsFromSpan(proc_spec.args);
+            const param_layouts = try self.localLayoutsFromSpan(proc_spec.args);
             const normalized_args = try self.arena.allocator().alloc(Value, args.len);
             for (args, arg_layouts, param_layouts, 0..) |arg, arg_layout, param_layout, i| {
                 normalized_args[i] = try self.coerceValueToLayout(arg, arg_layout, param_layout);
@@ -954,13 +974,13 @@ pub const Interpreter = struct {
 
         const params = self.store.getLocalSpan(proc_spec.args);
         if (params.len != args.len) {
-            std.debug.panic(
+            return self.invariantFailedError(
                 "LIR/interpreter invariant violated: proc {d} expected {d} args but got {d}",
                 .{ proc_spec.name.raw(), params.len, args.len },
             );
         }
         if (params.len != arg_layouts.len) {
-            std.debug.panic(
+            return self.invariantFailedError(
                 "LIR/interpreter invariant violated: proc {d} expected {d} arg layouts but got {d}",
                 .{ proc_spec.name.raw(), params.len, arg_layouts.len },
             );
@@ -978,14 +998,14 @@ pub const Interpreter = struct {
                 ),
             );
         }
-        const outcome = try self.execStmtChain(&frame, requireProcBody(proc_id, proc_spec), null);
+        const outcome = try self.execStmtChain(&frame, self.requireProcBody(proc_id, proc_spec), null);
         return switch (outcome) {
             .returned => |ret_local| blk: {
                 trace.log(
                     "return proc={d} name={d} depth={d}",
                     .{ @intFromEnum(proc_id), proc_spec.name.raw(), self.call_depth },
                 );
-                const raw_result = frame.getLocal(ret_local);
+                const raw_result = try self.getLocalChecked(&frame, ret_local);
                 const raw_layout = self.store.getLocal(ret_local).layout_idx;
                 if (builtin.mode == .Debug) {
                     var visited = std.ArrayList(DebugVisitedValue).empty;
@@ -1004,11 +1024,11 @@ pub const Interpreter = struct {
                 }
                 break :blk coerced_result;
             },
-            .scope_exit => std.debug.panic(
+            .scope_exit => return self.invariantFailedError(
                 "LIR/interpreter invariant violated: proc {d} terminated via scope_exit",
                 .{proc_spec.name.raw()},
             ),
-            .loop_continue => std.debug.panic(
+            .loop_continue => return self.invariantFailedError(
                 "LIR/interpreter invariant violated: proc {d} terminated via loop_continue",
                 .{proc_spec.name.raw()},
             ),
@@ -1024,12 +1044,12 @@ pub const Interpreter = struct {
             .ret_layout = proc_spec.ret_layout,
             .locals = locals,
         };
-        try self.collectJoinPoints(&frame.join_points, requireProcBody(proc_id, proc_spec));
+        try self.collectJoinPoints(&frame.join_points, self.requireProcBody(proc_id, proc_spec));
         return frame;
     }
 
-    fn requireProcBody(proc_id: LirProcSpecId, proc_spec: LirProcSpec) CFStmtId {
-        return proc_spec.body orelse std.debug.panic(
+    fn requireProcBody(self: *LirInterpreter, proc_id: LirProcSpecId, proc_spec: LirProcSpec) CFStmtId {
+        return proc_spec.body orelse self.invariantFailed(
             "LIR/interpreter invariant violated: non-hosted proc {d} missing statement body",
             .{@intFromEnum(proc_id)},
         );
@@ -1178,7 +1198,7 @@ pub const Interpreter = struct {
                         current,
                         assign.target,
                         try self.coerceValueToLayout(
-                            frame.getLocal(assign.value),
+                            try self.getLocalChecked(frame, assign.value),
                             self.store.getLocal(assign.value).layout_idx,
                             self.store.getLocal(assign.target).layout_idx,
                         ),
@@ -1186,12 +1206,15 @@ pub const Interpreter = struct {
                     current = assign.next;
                 },
                 .debug => |debug_stmt| {
-                    self.roc_ops.dbg(self.readRocStr(frame.getLocal(debug_stmt.message)));
+                    self.roc_ops.dbg(self.readRocStr(try self.getLocalChecked(frame, debug_stmt.message)));
                     current = debug_stmt.next;
                 },
                 .expect => |expect_stmt| {
                     const cond_local = expect_stmt.condition;
-                    const cond_value = self.readSwitchValue(frame.getLocal(cond_local), self.store.getLocal(cond_local).layout_idx);
+                    const cond_value = try self.readSwitchValue(
+                        try self.getLocalChecked(frame, cond_local),
+                        self.store.getLocal(cond_local).layout_idx,
+                    );
                     if (cond_value == 0) {
                         self.roc_ops.expectFailed("expect failed");
                         return error.Crash;
@@ -1202,19 +1225,37 @@ pub const Interpreter = struct {
                     return self.runtimeError("RuntimeError");
                 },
                 .incref => |inc| {
-                    self.performRc(.incref, frame.getLocal(inc.value), self.store.getLocal(inc.value).layout_idx, inc.count);
+                    self.performRc(
+                        .incref,
+                        try self.getLocalChecked(frame, inc.value),
+                        self.store.getLocal(inc.value).layout_idx,
+                        inc.count,
+                    );
                     current = inc.next;
                 },
                 .decref => |dec| {
-                    self.performRc(.decref, frame.getLocal(dec.value), self.store.getLocal(dec.value).layout_idx, 0);
+                    self.performRc(
+                        .decref,
+                        try self.getLocalChecked(frame, dec.value),
+                        self.store.getLocal(dec.value).layout_idx,
+                        0,
+                    );
                     current = dec.next;
                 },
                 .free => |free_stmt| {
-                    self.performRc(.free, frame.getLocal(free_stmt.value), self.store.getLocal(free_stmt.value).layout_idx, 0);
+                    self.performRc(
+                        .free,
+                        try self.getLocalChecked(frame, free_stmt.value),
+                        self.store.getLocal(free_stmt.value).layout_idx,
+                        0,
+                    );
                     current = free_stmt.next;
                 },
                 .switch_stmt => |switch_stmt| {
-                    const cond_value = self.readSwitchValue(frame.getLocal(switch_stmt.cond), self.store.getLocal(switch_stmt.cond).layout_idx);
+                    const cond_value = try self.readSwitchValue(
+                        try self.getLocalChecked(frame, switch_stmt.cond),
+                        self.store.getLocal(switch_stmt.cond).layout_idx,
+                    );
                     const branches = self.store.getCFSwitchBranches(switch_stmt.branches);
                     var target = switch_stmt.default_branch;
                     for (branches) |branch| {
@@ -1230,7 +1271,7 @@ pub const Interpreter = struct {
                     switch (outcome) {
                         .returned => |ret_local| return .{ .returned = ret_local },
                         .scope_exit => current = scope_stmt.remainder,
-                        .loop_continue => std.debug.panic(
+                        .loop_continue => return self.invariantFailedError(
                             "LIR/interpreter invariant violated: loop_continue escaped borrow scope in proc {d}",
                             .{@intFromEnum(frame.proc_id)},
                         ),
@@ -1238,7 +1279,7 @@ pub const Interpreter = struct {
                 },
                 .scope_exit => |scope_stmt| {
                     if (stop_scope == null or stop_scope.? != scope_stmt.id) {
-                        std.debug.panic(
+                        return self.invariantFailedError(
                             "LIR/interpreter invariant violated: unexpected scope_exit {d} in proc {d}",
                             .{ @intFromEnum(scope_stmt.id), @intFromEnum(frame.proc_id) },
                         );
@@ -1246,7 +1287,7 @@ pub const Interpreter = struct {
                     return .scope_exit;
                 },
                 .for_list => |for_stmt| {
-                    const iterable = frame.getLocal(for_stmt.iterable);
+                    const iterable = try self.getLocalChecked(frame, for_stmt.iterable);
                     const list_layout = self.store.getLocal(for_stmt.iterable).layout_idx;
                     const resolved_iterable = self.resolveListBaseValue(iterable, list_layout);
                     const actual_elem_layout = for_stmt.iterable_elem_layout;
@@ -1270,7 +1311,7 @@ pub const Interpreter = struct {
                         switch (outcome) {
                             .returned => |ret_local| return .{ .returned = ret_local },
                             .loop_continue => {},
-                            .scope_exit => std.debug.panic(
+                            .scope_exit => return self.invariantFailedError(
                                 "LIR/interpreter invariant violated: unexpected scope_exit escaped for_list body in proc {d}",
                                 .{@intFromEnum(frame.proc_id)},
                             ),
@@ -1284,7 +1325,7 @@ pub const Interpreter = struct {
                     current = join_stmt.remainder;
                 },
                 .jump => |jump_stmt| {
-                    const join_info = frame.join_points.get(@intFromEnum(jump_stmt.target)) orelse std.debug.panic(
+                    const join_info = frame.join_points.get(@intFromEnum(jump_stmt.target)) orelse self.invariantFailed(
                         "LIR/interpreter invariant violated: missing join point {d} in proc {d}",
                         .{ @intFromEnum(jump_stmt.target), @intFromEnum(frame.proc_id) },
                     );
@@ -1292,7 +1333,7 @@ pub const Interpreter = struct {
                     const arg_values = try self.collectLocalValues(frame, arg_locals);
                     const params = self.store.getLocalSpan(join_info.params);
                     if (params.len != arg_values.len) {
-                        std.debug.panic(
+                        return self.invariantFailedError(
                             "LIR/interpreter invariant violated: jump to join point {d} passed {d} args but target expects {d}",
                             .{ @intFromEnum(jump_stmt.target), arg_values.len, params.len },
                         );
@@ -1321,14 +1362,7 @@ pub const Interpreter = struct {
         if (locals.len == 0) return &.{};
         const values = try self.arena.allocator().alloc(Value, locals.len);
         for (locals, 0..) |local_id, i| {
-            const slot = frame.locals[@intFromEnum(local_id)];
-            if (!slot.assigned) {
-                std.debug.panic(
-                    "LIR/interpreter invariant violated: local {d} was used before assignment in proc {d}",
-                    .{ @intFromEnum(local_id), @intFromEnum(frame.proc_id) },
-                );
-            }
-            values[i] = slot.val;
+            values[i] = try self.getLocalChecked(frame, local_id);
         }
         return values;
     }
@@ -1340,9 +1374,9 @@ pub const Interpreter = struct {
         return layouts;
     }
 
-    fn localLayoutsFromSpan(self: *LirInterpreter, locals: LocalSpan) []const layout_mod.Idx {
+    fn localLayoutsFromSpan(self: *LirInterpreter, locals: LocalSpan) Error![]const layout_mod.Idx {
         const local_ids = self.store.getLocalSpan(locals);
-        const layouts = self.arena.allocator().alloc(layout_mod.Idx, local_ids.len) catch @panic("OOM");
+        const layouts = try self.arena.allocator().alloc(layout_mod.Idx, local_ids.len);
         for (local_ids, 0..) |local_id, i| layouts[i] = self.store.getLocal(local_id).layout_idx;
         return layouts;
     }
@@ -1352,22 +1386,22 @@ pub const Interpreter = struct {
         layout: layout_mod.Idx,
     };
 
-    fn readSwitchValue(self: *LirInterpreter, value: Value, layout_idx: layout_mod.Idx) u64 {
+    fn readSwitchValue(self: *LirInterpreter, value: Value, layout_idx: layout_mod.Idx) Error!u64 {
         return switch (self.helper.sizeOf(layout_idx)) {
             0 => 0,
             1 => value.read(u8),
             2 => value.read(u16),
             4 => value.read(u32),
             8 => value.read(u64),
-            else => std.debug.panic(
+            else => return self.invariantFailedError(
                 "LIR/interpreter invariant violated: switch condition layout {d} is not a supported scalar width",
                 .{@intFromEnum(layout_idx)},
             ),
         };
     }
 
-    fn evalAssignSymbol(_: *LirInterpreter, symbol: Symbol, _: layout_mod.Idx) Error!Value {
-        std.debug.panic(
+    fn evalAssignSymbol(self: *LirInterpreter, symbol: Symbol, _: layout_mod.Idx) Error!Value {
+        return self.invariantFailedError(
             "LIR/interpreter TODO: assign_symbol for symbol {d} is not implemented yet",
             .{symbol.raw()},
         );
@@ -1376,12 +1410,12 @@ pub const Interpreter = struct {
     fn evalAssignRef(self: *LirInterpreter, frame: *const Frame, op: LIR.RefOp, target_layout: layout_mod.Idx) Error!Value {
         return switch (op) {
             .local => |source| self.coerceValueToLayout(
-                frame.getLocal(source),
+                try self.getLocalChecked(frame, source),
                 self.store.getLocal(source).layout_idx,
                 target_layout,
             ),
             .field => |field| blk: {
-                const source_val = frame.getLocal(field.source);
+                const source_val = try self.getLocalChecked(frame, field.source);
                 const source_layout = self.store.getLocal(field.source).layout_idx;
                 const struct_base = self.resolveStructBaseValue(source_val, source_layout);
                 const struct_layout_val = self.layout_store.getLayout(struct_base.layout);
@@ -1404,7 +1438,7 @@ pub const Interpreter = struct {
                     target_layout_val.tag != .box_of_zst and
                     field_value.isZst())
                 {
-                    std.debug.panic(
+                    self.invariantFailed(
                         "LIR/interpreter invariant violated: field projection source_local={d} source_layout={d} base_layout={d} field_idx={d} actual_field_layout={d} target_layout={d} normalized to ZST",
                         .{
                             @intFromEnum(field.source),
@@ -1419,12 +1453,12 @@ pub const Interpreter = struct {
                 break :blk field_value;
             },
             .tag_payload => |payload| blk: {
-                const source_val = frame.getLocal(payload.source);
+                const source_val = try self.getLocalChecked(frame, payload.source);
                 const source_layout = self.store.getLocal(payload.source).layout_idx;
                 const tag_base = self.resolveTagUnionBaseValue(source_val, source_layout);
                 const disc = self.helper.readTagDiscriminant(tag_base.value, tag_base.layout);
                 if (builtin.mode == .Debug and disc != payload.tag_discriminant) {
-                    std.debug.panic(
+                    self.invariantFailed(
                         "LIR/interpreter invariant violated: tag payload access expected discriminant {d} but observed {d}",
                         .{ payload.tag_discriminant, disc },
                     );
@@ -1449,7 +1483,7 @@ pub const Interpreter = struct {
                     },
                     else => {
                         if (builtin.mode == .Debug and payload.payload_idx != 0) {
-                            std.debug.panic(
+                            self.invariantFailed(
                                 "LIR/interpreter invariant violated: scalar tag payload access requested payload_idx {d} from non-struct payload layout {d}",
                                 .{ payload.payload_idx, @intFromEnum(actual_payload_layout) },
                             );
@@ -1459,12 +1493,12 @@ pub const Interpreter = struct {
                 }
             },
             .tag_payload_struct => |payload| blk: {
-                const source_val = frame.getLocal(payload.source);
+                const source_val = try self.getLocalChecked(frame, payload.source);
                 const source_layout = self.store.getLocal(payload.source).layout_idx;
                 const tag_base = self.resolveTagUnionBaseValue(source_val, source_layout);
                 const disc = self.helper.readTagDiscriminant(tag_base.value, tag_base.layout);
                 if (builtin.mode == .Debug and disc != payload.tag_discriminant) {
-                    std.debug.panic(
+                    self.invariantFailed(
                         "LIR/interpreter invariant violated: tag payload struct access expected discriminant {d} but observed {d}",
                         .{ payload.tag_discriminant, disc },
                     );
@@ -1473,17 +1507,17 @@ pub const Interpreter = struct {
                 break :blk try self.coerceValueToLayout(tag_base.value, actual_payload_layout, target_layout);
             },
             .list_reinterpret => |list_bridge| try self.coerceExplicitListValueToLayout(
-                frame.getLocal(list_bridge.backing_ref),
+                try self.getLocalChecked(frame, list_bridge.backing_ref),
                 self.store.getLocal(list_bridge.backing_ref).layout_idx,
                 target_layout,
             ),
             .nominal => |nominal| self.coerceExplicitNominalValueToLayout(
-                frame.getLocal(nominal.backing_ref),
+                try self.getLocalChecked(frame, nominal.backing_ref),
                 self.store.getLocal(nominal.backing_ref).layout_idx,
                 target_layout,
             ),
             .discriminant => |discriminant| blk: {
-                const source_val = frame.getLocal(discriminant.source);
+                const source_val = try self.getLocalChecked(frame, discriminant.source);
                 const source_layout = self.store.getLocal(discriminant.source).layout_idx;
                 const tag_base = self.resolveTagUnionBaseValue(source_val, source_layout);
                 const disc = self.helper.readTagDiscriminant(tag_base.value, tag_base.layout);
@@ -1493,7 +1527,7 @@ pub const Interpreter = struct {
                     2 => result.write(u16, disc),
                     4 => result.write(u32, disc),
                     8 => result.write(u64, disc),
-                    else => std.debug.panic(
+                    else => self.invariantFailed(
                         "LIR/interpreter invariant violated: discriminant local has unsupported layout {d}",
                         .{@intFromEnum(target_layout)},
                     ),
@@ -1545,7 +1579,10 @@ pub const Interpreter = struct {
             else => unreachable,
         };
         if (encoded == 0) {
-            std.debug.panic("LIR/interpreter invariant violated: attempted indirect call through null function pointer", .{});
+            self.invariantFailed(
+                "LIR/interpreter invariant violated: attempted indirect call through null function pointer",
+                .{},
+            );
         }
         return @enumFromInt(@as(u32, @intCast(encoded - 1)));
     }
@@ -1559,11 +1596,11 @@ pub const Interpreter = struct {
         capture_layout: ?layout_mod.Idx,
     ) Error!IndirectCallResult {
         const closure_layout = self.store.getLocal(closure_local).layout_idx;
-        const closure_value = frame.getLocal(closure_local);
+        const closure_value = try self.getLocalChecked(frame, closure_local);
         const closure_base = self.resolveStructBaseValue(closure_value, closure_layout);
         const closure_layout_val = self.layout_store.getLayout(closure_base.layout);
         if (closure_layout_val.tag != .struct_) {
-            std.debug.panic(
+            return self.invariantFailedError(
                 "LIR/interpreter invariant violated: indirect call closure local {d} does not have struct layout",
                 .{@intFromEnum(closure_local)},
             );
@@ -1572,7 +1609,7 @@ pub const Interpreter = struct {
         const fn_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(closure_layout_val.data.struct_.idx, 0);
         const fn_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(closure_layout_val.data.struct_.idx, 0);
         if (fn_layout != .opaque_ptr) {
-            std.debug.panic(
+            return self.invariantFailedError(
                 "LIR/interpreter invariant violated: indirect call closure field 0 layout {d} is not opaque_ptr",
                 .{@intFromEnum(fn_layout)},
             );
@@ -1591,7 +1628,7 @@ pub const Interpreter = struct {
         }
 
         if (!has_capture_arg or proc_args.len != args.len + 1) {
-            std.debug.panic(
+            return self.invariantFailedError(
                 "LIR/interpreter invariant violated: indirect callee {d} expects {d} args, but call site provided {d} or {d} with captures",
                 .{ @intFromEnum(proc_id), proc_args.len, args.len, args.len + 1 },
             );
@@ -1608,7 +1645,7 @@ pub const Interpreter = struct {
                 capture_ptr_layout,
                 capture_ptr_layout,
             );
-            const capture_ptr = self.readBoxedDataPointer(capture_ptr_value) orelse std.debug.panic(
+            const capture_ptr = self.readBoxedDataPointer(capture_ptr_value) orelse self.invariantFailed(
                 "LIR/interpreter invariant violated: indirect call capture pointer is null",
                 .{},
             );
@@ -1680,7 +1717,7 @@ pub const Interpreter = struct {
                     .base_layout = struct_layout,
                 };
             },
-            else => std.debug.panic(
+            else => self.invariantFailed(
                 "LIR/interpreter invariant violated: assign_struct target layout {d} is not a struct or boxed struct",
                 .{@intFromEnum(struct_layout)},
             ),
@@ -1693,7 +1730,7 @@ pub const Interpreter = struct {
         const base_layout_val = self.layout_store.getLayout(allocated.base_layout);
         if (base_layout_val.tag != .struct_) {
             if (field_locals.len != 0) {
-                std.debug.panic(
+                self.invariantFailed(
                     "LIR/interpreter invariant violated: boxed/zst struct literal for layout {d} had {d} fields but no struct base layout",
                     .{ @intFromEnum(struct_layout), field_locals.len },
                 );
@@ -1712,12 +1749,12 @@ pub const Interpreter = struct {
                 @intCast(i),
             );
             const field_value = try self.coerceValueToLayout(
-                frame.getLocal(field_local),
+                try self.getLocalChecked(frame, field_local),
                 self.store.getLocal(field_local).layout_idx,
                 field_layout,
             );
             if (builtin.mode == .Debug and field_value.isZst()) {
-                std.debug.panic(
+                self.invariantFailed(
                     "LIR/interpreter invariant violated: struct field local {d} in proc {d} had ZST value for non-ZST layout {d} (local_layout={d}, local_layout_data={any}, field_layout_data={any}, struct_layout_data={any}, field index {d} of struct layout {d})",
                     .{
                         @intFromEnum(field_local),
@@ -1789,7 +1826,7 @@ pub const Interpreter = struct {
             const payload_size = self.helper.sizeOf(payload_layout);
             if (payload_size > 0) {
                 const payload_value = try self.coerceValueToLayout(
-                    frame.getLocal(local),
+                    try self.getLocalChecked(frame, local),
                     self.store.getLocal(local).layout_idx,
                     payload_layout,
                 );
@@ -1837,19 +1874,19 @@ pub const Interpreter = struct {
         for (elem_locals, 0..) |elem_local, i| {
             const offset = i * elem_size;
             const elem_value = try self.coerceValueToLayout(
-                frame.getLocal(elem_local),
+                try self.getLocalChecked(frame, elem_local),
                 self.store.getLocal(elem_local).layout_idx,
                 elem_layout,
             );
             if (builtin.mode == .Debug and elem_layout_val.tag == .box and self.readBoxedDataPointer(elem_value) == null) {
-                std.debug.panic(
+                self.invariantFailed(
                     "LIR/interpreter invariant violated: list literal source local {d} in proc {d} had null boxed element for list elem layout {d}",
                     .{ @intFromEnum(elem_local), @intFromEnum(frame.proc_id), @intFromEnum(elem_layout) },
                 );
             }
             @memcpy(elem_data[offset..][0..elem_size], elem_value.readBytes(elem_size));
             if (builtin.mode == .Debug and elem_layout_val.tag == .box and self.readBoxedDataPointer(.{ .ptr = elem_data + offset }) == null) {
-                std.debug.panic(
+                self.invariantFailed(
                     "LIR/interpreter invariant violated: list literal wrote null boxed element at index {d} from local {d} in proc {d} for elem layout {d}",
                     .{ i, @intFromEnum(elem_local), @intFromEnum(frame.proc_id), @intFromEnum(elem_layout) },
                 );
@@ -2223,7 +2260,7 @@ pub const Interpreter = struct {
         list_val: Value,
         list_layout: layout_mod.Idx,
     ) ResolvedListBase {
-        const resolved_layout = self.layout_store.resolvedListLayoutIdx(list_layout) orelse std.debug.panic(
+        const resolved_layout = self.layout_store.resolvedListLayoutIdx(list_layout) orelse self.invariantFailed(
             "LIR/interpreter invariant violated: expected explicit resolved list layout for layout {d}",
             .{@intFromEnum(list_layout)},
         );
@@ -2274,7 +2311,7 @@ pub const Interpreter = struct {
     const ListElemInfo = struct { alignment: u32, width: usize, rc: bool };
 
     fn listElemInfo(self: *LirInterpreter, list_layout: layout_mod.Idx) ListElemInfo {
-        const resolved_layout = self.layout_store.resolvedListLayoutIdx(list_layout) orelse std.debug.panic(
+        const resolved_layout = self.layout_store.resolvedListLayoutIdx(list_layout) orelse self.invariantFailed(
             "LIR/interpreter invariant violated: expected explicit resolved list layout for layout {d}",
             .{@intFromEnum(list_layout)},
         );
@@ -2292,7 +2329,7 @@ pub const Interpreter = struct {
     }
 
     fn listElemLayout(self: *LirInterpreter, list_layout: layout_mod.Idx) layout_mod.Idx {
-        const resolved_layout = self.layout_store.resolvedListLayoutIdx(list_layout) orelse std.debug.panic(
+        const resolved_layout = self.layout_store.resolvedListLayoutIdx(list_layout) orelse self.invariantFailed(
             "LIR/interpreter invariant violated: expected explicit resolved list layout for layout {d}",
             .{@intFromEnum(list_layout)},
         );
@@ -3377,7 +3414,7 @@ pub const Interpreter = struct {
                 cmpOp(u128, a.read(u128), b.read(u128), op)
             else
                 cmpOp(i128, a.read(i128), b.read(i128), op),
-            else => std.debug.panic(
+            else => return self.invariantFailedError(
                 "LIR/interpreter invariant violated: non-equality compare on unsupported layout {d} size={d}",
                 .{ @intFromEnum(arg_layout), size },
             ),
@@ -3396,7 +3433,7 @@ pub const Interpreter = struct {
                     4 => a.read(f32) == b.read(f32),
                     8 => a.read(f64) == b.read(f64),
                     16 => a.read(i128) == b.read(i128),
-                    else => std.debug.panic(
+                    else => return self.invariantFailedError(
                         "LIR/interpreter invariant violated: fractional layout {d} has unsupported size {d}",
                         .{ @intFromEnum(layout_idx), self.helper.sizeOf(layout_idx) },
                     ),
@@ -3407,7 +3444,7 @@ pub const Interpreter = struct {
                     4 => if (isUnsigned(layout_idx)) a.read(u32) == b.read(u32) else a.read(i32) == b.read(i32),
                     8 => if (isUnsigned(layout_idx)) a.read(u64) == b.read(u64) else a.read(i64) == b.read(i64),
                     16 => if (isUnsigned(layout_idx)) a.read(u128) == b.read(u128) else a.read(i128) == b.read(i128),
-                    else => std.debug.panic(
+                    else => return self.invariantFailedError(
                         "LIR/interpreter invariant violated: scalar layout {d} has unsupported size {d}",
                         .{ @intFromEnum(layout_idx), self.helper.sizeOf(layout_idx) },
                     ),
@@ -3415,7 +3452,7 @@ pub const Interpreter = struct {
                 .opaque_ptr => switch (self.helper.sizeOf(layout_idx)) {
                     4 => a.read(u32) == b.read(u32),
                     8 => a.read(usize) == b.read(usize),
-                    else => std.debug.panic(
+                    else => return self.invariantFailedError(
                         "LIR/interpreter invariant violated: opaque pointer layout {d} has unsupported size {d}",
                         .{ @intFromEnum(layout_idx), self.helper.sizeOf(layout_idx) },
                     ),
@@ -3476,7 +3513,7 @@ pub const Interpreter = struct {
                 }
                 break :blk true;
             },
-            .closure => std.debug.panic(
+            .closure => return self.invariantFailedError(
                 "LIR/interpreter invariant violated: function equality survived lowering",
                 .{},
             ),
@@ -4172,12 +4209,12 @@ pub const Interpreter = struct {
                 const inner_layout = struct_layout_val.data.box;
                 const inner_layout_val = self.layout_store.getLayout(inner_layout);
                 if (inner_layout_val.tag != .struct_) {
-                    std.debug.panic(
+                    self.invariantFailed(
                         "LIR/interpreter invariant violated: field projection source layout {d} boxes non-struct layout {d}",
                         .{ @intFromEnum(struct_layout), @intFromEnum(inner_layout) },
                     );
                 }
-                const data_ptr = self.readBoxedDataPointer(struct_val) orelse std.debug.panic(
+                const data_ptr = self.readBoxedDataPointer(struct_val) orelse self.invariantFailed(
                     "LIR/interpreter invariant violated: boxed struct layout {d} had null data pointer for inner layout {d}",
                     .{ @intFromEnum(struct_layout), @intFromEnum(inner_layout) },
                 );
@@ -4190,7 +4227,7 @@ pub const Interpreter = struct {
                 .value = struct_val,
                 .layout = struct_layout,
             },
-            else => std.debug.panic(
+            else => self.invariantFailed(
                 "LIR/interpreter invariant violated: field projection source layout {d} is not a struct or boxed struct",
                 .{@intFromEnum(struct_layout)},
             ),
@@ -4205,7 +4242,7 @@ pub const Interpreter = struct {
         const union_layout_val = self.layout_store.getLayout(union_layout);
         if (union_layout_val.tag == .box) {
             const inner_layout = union_layout_val.data.box;
-            const data_ptr = self.readBoxedDataPointer(union_val) orelse std.debug.panic(
+            const data_ptr = self.readBoxedDataPointer(union_val) orelse self.invariantFailed(
                 "LIR/interpreter invariant violated: boxed tag union layout {d} had null data pointer for inner layout {d}",
                 .{ @intFromEnum(union_layout), @intFromEnum(inner_layout) },
             );
@@ -4253,7 +4290,7 @@ pub const Interpreter = struct {
         switch (actual_layout_val.tag) {
             .box => {
                 if (actual_layout_val.data.box == expected_layout) {
-                    const data_ptr = self.readBoxedDataPointer(value) orelse std.debug.panic(
+                    const data_ptr = self.readBoxedDataPointer(value) orelse self.invariantFailed(
                         "LIR/interpreter invariant violated: expected boxed layout {d} to contain data for inner layout {d}, but observed null box pointer",
                         .{ @intFromEnum(actual_layout), @intFromEnum(expected_layout) },
                     );
@@ -4314,7 +4351,7 @@ pub const Interpreter = struct {
             const actual_is_list = actual_layout_val.tag == .list or actual_layout_val.tag == .list_of_zst;
             const expected_is_list = expected_layout_val.tag == .list or expected_layout_val.tag == .list_of_zst;
             if (!actual_is_list or !expected_is_list) {
-                std.debug.panic(
+                self.invariantFailed(
                     "LIR/interpreter invariant violated: explicit list bridge expected list layouts, got actual={d} expected={d}",
                     .{ @intFromEnum(actual_layout), @intFromEnum(expected_layout) },
                 );
@@ -4338,7 +4375,7 @@ pub const Interpreter = struct {
             const actual_is_list = actual_layout_val.tag == .list or actual_layout_val.tag == .list_of_zst;
             const expected_is_list = expected_layout_val.tag == .list or expected_layout_val.tag == .list_of_zst;
             if (actual_is_box != expected_is_box or actual_is_list or expected_is_list) {
-                std.debug.panic(
+                self.invariantFailed(
                     "LIR/interpreter invariant violated: explicit nominal bridge expected non-list layouts on the same side of physical boxing, got actual={d} ({s}) expected={d} ({s})",
                     .{
                         @intFromEnum(actual_layout),
