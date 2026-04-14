@@ -25,8 +25,9 @@ const max_builtin_bytes = 1024 * 1024;
 
 // Stderr writer for diagnostic reporting
 var stderr_buffer: [4096]u8 = undefined;
-var stderr_writer: std.fs.File.Writer = undefined;
+var stderr_writer: std.Io.File.Writer = undefined;
 var stderr_initialized = false;
+var global_io: std.Io = undefined;
 
 fn flushStderr() void {
     if (stderr_initialized) {
@@ -54,7 +55,7 @@ fn numericFromStrLowLevel(num_type: []const u8) CIR.Expr.LowLevel {
 
 fn stderrWriter() *std.Io.Writer {
     if (!stderr_initialized) {
-        stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
+        stderr_writer = std.Io.File.stderr().writer(global_io, &stderr_buffer);
         stderr_initialized = true;
     }
     return &stderr_writer.interface;
@@ -1297,6 +1298,7 @@ fn readFileAllocPath(gpa: Allocator, io: std.Io, path: []const u8) ![]u8 {
 pub fn main(process_init: std.process.Init) !void {
     const gpa = process_init.gpa;
     const io = process_init.io;
+    global_io = io;
 
     var args_list = std.ArrayList([:0]const u8).empty;
     defer args_list.deinit(gpa);
@@ -1798,8 +1800,8 @@ fn serializeModuleEnv(
     const arena_alloc = arena.allocator();
 
     // Create output file
-    const file = try std.fs.cwd().createFile(output_path, .{ .read = true });
-    defer file.close();
+    const file = try std.Io.Dir.cwd().createFile(global_io, output_path, .{ .read = true });
+    defer file.close(global_io);
 
     // Serialize using CompactWriter
     var writer = collections.CompactWriter.init();
@@ -1809,7 +1811,7 @@ fn serializeModuleEnv(
     try serialized.serialize(env, arena_alloc, &writer);
 
     // Write to file
-    try writer.writeGather(arena_alloc, file);
+    try writer.writeGather(arena_alloc, file, global_io);
 }
 
 /// Find a type declaration by name in a compiled module
@@ -1876,10 +1878,10 @@ fn serializeBuiltinIndices(
     output_path: []const u8,
 ) !void {
     // Create output file
-    const file = try std.fs.cwd().createFile(output_path, .{});
-    defer file.close();
+    const file = try std.Io.Dir.cwd().createFile(global_io, output_path, .{});
+    defer file.close(global_io);
 
     // Write the struct directly as binary data
     // This is a simple struct with two u32 fields, so we can write it directly
-    try file.writeAll(std.mem.asBytes(&indices));
+    try file.writePositionalAll(global_io, std.mem.asBytes(&indices), 0);
 }

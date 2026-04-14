@@ -357,9 +357,9 @@ fn initAssumePrepared(
         .enclosing_func_name = null,
         // Initialize with null import_mapping - caller should call fixupTypeWriter() after storing Check
         .type_writer = try types_mod.TypeWriter.initFromParts(gpa, types, cir.getIdentStore(), null),
-        .deferred_def_unifications = .{},
-        .deferred_cycle_envs = .{},
-        .value_lookup_tracking = .{},
+        .deferred_def_unifications = .empty,
+        .deferred_cycle_envs = .empty,
+        .value_lookup_tracking = .empty,
         .erroneous_value_exprs = .empty,
         .erroneous_value_patterns = .empty,
         .has_can_diagnostics = if (cir.store.scratch) |scratch| scratch.diagnostics.top() > 0 else false,

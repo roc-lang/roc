@@ -24,7 +24,7 @@ pub const Store = struct {
     const Self = @This();
     const ALIGNMENT = std.mem.Alignment.@"16";
 
-    problems: std.ArrayListAligned(Problem, ALIGNMENT) = .{},
+    problems: std.ArrayListAligned(Problem, ALIGNMENT) = .empty,
 
     /// Backing storage for formatted pattern strings
     extra_strings_backing: ByteList,
