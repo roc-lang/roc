@@ -73,7 +73,11 @@ pub fn canonicalizeExpr(
     var czer = try Can.initModule(allocators, module_env, parse_ast, context);
     defer czer.deinit();
     const expr_idx: AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
-    return try czer.canonicalizeExpr(expr_idx);
+    const result = try czer.canonicalizeExpr(expr_idx);
+    if (module_env.store.scratch != null) {
+        module_env.diagnostics = try module_env.store.diagnosticSpanFrom(0);
+    }
+    return result;
 }
 
 test "compile tests" {

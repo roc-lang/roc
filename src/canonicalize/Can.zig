@@ -3137,7 +3137,6 @@ pub fn canonicalizeFile(
                 } });
             }
         }
-        try self.checkScopeForUnusedVariables(top_scope);
     }
 
     // Capture canonicalization diagnostics for later stages.
@@ -14113,6 +14112,9 @@ fn injectEchoPlatform(self: *Self) std.mem.Allocator.Error!void {
 
     // Add the def to scratch so it's included in all_defs
     try self.env.store.addScratchDef(def_idx);
+
+    // Mark the synthetic binding as used so it doesn't trigger unused-variable diagnostics.
+    try self.used_patterns.put(self.env.gpa, pattern_idx, {});
 
     // Introduce echo! into scope so the body can reference it
     try self.handleScopeIntroduceResult(

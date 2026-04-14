@@ -765,9 +765,75 @@ const Lowerer = struct {
                 break :blk target_ty;
             },
             .low_level => |ll| blk: {
-                for (self.output.sliceExprSpan(ll.args)) |arg| {
-                    const arg_ty = try self.inferExpr(venv, arg);
-                    try self.unify(arg_ty, arg_ty);
+                const args = self.output.sliceExprSpan(ll.args);
+                switch (ll.op) {
+                    .box_box => {
+                        if (args.len != 1) return debugPanic("lambdasolved.low_level box_box expected one arg", .{});
+                        const arg_ty = try self.inferExpr(venv, args[0]);
+                        const boxed_ty = try self.types.freshContent(.{ .box = arg_ty });
+                        try self.unify(target_ty, boxed_ty);
+                    },
+                    .box_unbox => {
+                        if (args.len != 1) return debugPanic("lambdasolved.low_level box_unbox expected one arg", .{});
+                        const arg_ty = try self.inferExpr(venv, args[0]);
+                        const elem_ty = try self.types.freshUnbd();
+                        const boxed_ty = try self.types.freshContent(.{ .box = elem_ty });
+                        try self.unify(arg_ty, boxed_ty);
+                        try self.unify(target_ty, elem_ty);
+                    },
+                    .bool_not => {
+                        if (args.len != 1) return debugPanic("lambdasolved.low_level bool_not expected one arg", .{});
+                        const arg_ty = try self.inferExpr(venv, args[0]);
+                        const bool_ty = try self.freshPrimitiveType(.bool);
+                        try self.unify(arg_ty, bool_ty);
+                        try self.unify(target_ty, bool_ty);
+                    },
+                    .num_is_eq,
+                    .num_is_gt,
+                    .num_is_gte,
+                    .num_is_lt,
+                    .num_is_lte,
+                    => {
+                        if (args.len != 2) return debugPanic("lambdasolved.low_level numeric comparison expected two args", .{});
+                        const lhs_ty = try self.inferExpr(venv, args[0]);
+                        const rhs_ty = try self.inferExpr(venv, args[1]);
+                        try self.unify(lhs_ty, rhs_ty);
+                        try self.unify(target_ty, try self.freshPrimitiveType(.bool));
+                    },
+                    .num_negate,
+                    .num_abs,
+                    .num_sqrt,
+                    .num_log,
+                    .num_round,
+                    .num_floor,
+                    .num_ceiling,
+                    => {
+                        if (args.len != 1) return debugPanic("lambdasolved.low_level unary numeric op expected one arg", .{});
+                        const arg_ty = try self.inferExpr(venv, args[0]);
+                        try self.unify(target_ty, arg_ty);
+                    },
+                    .num_plus,
+                    .num_minus,
+                    .num_times,
+                    .num_div_by,
+                    .num_div_trunc_by,
+                    .num_rem_by,
+                    .num_mod_by,
+                    .num_abs_diff,
+                    .num_pow,
+                    => {
+                        if (args.len != 2) return debugPanic("lambdasolved.low_level binary numeric op expected two args", .{});
+                        const lhs_ty = try self.inferExpr(venv, args[0]);
+                        const rhs_ty = try self.inferExpr(venv, args[1]);
+                        try self.unify(lhs_ty, rhs_ty);
+                        try self.unify(target_ty, lhs_ty);
+                    },
+                    else => {
+                        for (args) |arg| {
+                            const arg_ty = try self.inferExpr(venv, arg);
+                            try self.unify(arg_ty, arg_ty);
+                        }
+                    },
                 }
                 break :blk target_ty;
             },

@@ -60,7 +60,7 @@ fn handleRocStackOverflow() noreturn {
         kernel32.TerminateProcess(kernel32.GetCurrentProcess(), 134);
         @trap();
     } else if (comptime builtin.os.tag != .wasi) {
-        posix.write(posix.STDERR_FILENO, STACK_OVERFLOW_MESSAGE) catch {};
+        _ = posix.write(posix.STDERR_FILENO, STACK_OVERFLOW_MESSAGE) catch {};
         posix.exit(134);
     } else {
         std.process.exit(134);
@@ -94,12 +94,12 @@ fn handleRocAccessViolation(fault_addr: usize) noreturn {
     } else {
         // POSIX (and WASI fallback)
         const msg = "\nSegmentation fault (SIGSEGV) in this Roc program.\nFault address: ";
-        posix.write(posix.STDERR_FILENO, msg) catch {};
+        _ = posix.write(posix.STDERR_FILENO, msg) catch {};
 
         var addr_buf: [18]u8 = undefined;
         const addr_str = builtins.handlers.formatHex(fault_addr, &addr_buf);
-        posix.write(posix.STDERR_FILENO, addr_str) catch {};
-        posix.write(posix.STDERR_FILENO, "\n\n") catch {};
+        _ = posix.write(posix.STDERR_FILENO, addr_str) catch {};
+        _ = posix.write(posix.STDERR_FILENO, "\n\n") catch {};
         posix.exit(139);
     }
 }
@@ -125,7 +125,7 @@ fn handleRocArithmeticError() noreturn {
         kernel32.WriteFile(stderr_handle, DIVISION_BY_ZERO_MESSAGE.ptr, DIVISION_BY_ZERO_MESSAGE.len, &bytes_written, null);
         kernel32.ExitProcess(136);
     } else if (comptime builtin.os.tag != .wasi) {
-        posix.write(posix.STDERR_FILENO, DIVISION_BY_ZERO_MESSAGE) catch {};
+        _ = posix.write(posix.STDERR_FILENO, DIVISION_BY_ZERO_MESSAGE) catch {};
         posix.exit(136); // 128 + 8 (SIGFPE)
     } else {
         std.process.exit(136);
@@ -239,7 +239,7 @@ fn rocDeallocFn(roc_dealloc: *builtins.host_abi.RocDealloc, env: *anyopaque) cal
 
     for (host.roc_allocations.items, 0..) |alloc, i| {
         if (alloc.ptr == base_ptr) {
-            host.roc_allocations.swapRemove(i);
+            _ = host.roc_allocations.swapRemove(i);
             break;
         }
     }
@@ -283,7 +283,7 @@ fn rocReallocFn(roc_realloc: *builtins.host_abi.RocRealloc, env: *anyopaque) cal
 
     for (host.roc_allocations.items, 0..) |alloc, i| {
         if (alloc.ptr == old_base_ptr) {
-            host.roc_allocations.swapRemove(i);
+            _ = host.roc_allocations.swapRemove(i);
             break;
         }
     }
@@ -656,7 +656,7 @@ fn platform_main(args: [][*:0]u8) !c_int {
     }
 
     // Install signal handlers
-    builtins.handlers.install(handleRocStackOverflow, handleRocAccessViolation, handleRocArithmeticError);
+    _ = builtins.handlers.install(handleRocStackOverflow, handleRocAccessViolation, handleRocArithmeticError);
 
     var host_env = HostEnv{
         .gpa = std.heap.GeneralPurposeAllocator(.{ .safety = true }){},

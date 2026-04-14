@@ -6050,7 +6050,7 @@ fn checkBinopExpr(
                     try self.unifyWith(expr_var, .err, env);
                     return does_fx;
                 }
-            } else if (lhs_is_from_numeral or rhs_is_from_numeral) {
+            } else if (lhs_is_from_numeral and rhs_is_from_numeral) {
                 const arg_unify_result = try self.unify(lhs_var, rhs_var, env);
                 if (!arg_unify_result.isOk()) {
                     try self.unifyWith(expr_var, .err, env);

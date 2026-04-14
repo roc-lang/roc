@@ -1225,7 +1225,6 @@ pub const Interpreter = struct {
                     );
                     if (cond_value == 0) {
                         self.roc_ops.expectFailed("expect failed");
-                        return error.Crash;
                     }
                     current = expect_stmt.next;
                 },
@@ -1932,7 +1931,6 @@ pub const Interpreter = struct {
                 "LIR/interpreter invariant violated: indirect call capture pointer is null",
                 .{},
             );
-
             const result = try self.alloc(capture_layout_idx);
             const size = self.helper.sizeOf(capture_layout_idx);
             if (size > 0) {
@@ -4871,6 +4869,9 @@ pub const Interpreter = struct {
                 if (elem_size > 0) {
                     @memcpy(data_ptr[0..elem_size], arg.ptr[0..elem_size]);
                 }
+                if (self.helper.containsRefcounted(box_info.elem_layout_idx)) {
+                    self.performRc(.incref, arg, box_info.elem_layout_idx, 1);
+                }
 
                 const boxed = try self.alloc(ret_layout);
                 const target_usize = self.layout_store.targetUsize();
@@ -4893,6 +4894,9 @@ pub const Interpreter = struct {
         const size = self.helper.sizeOf(ret_layout);
         if (size > 0) {
             result.copyFrom(.{ .ptr = data_ptr }, size);
+        }
+        if (self.helper.containsRefcounted(ret_layout)) {
+            self.performRc(.incref, result, ret_layout, 1);
         }
 
         return result;

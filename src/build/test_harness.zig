@@ -335,7 +335,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                 posix.close(pipe_fds[0]);
 
                 if (cfg.use_process_groups) {
-                    std.c.setsid();
+                    _ = std.c.setsid();
                 }
 
                 var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);

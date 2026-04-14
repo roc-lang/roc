@@ -1804,6 +1804,9 @@ const Lowerer = struct {
         while (idx > 0) {
             idx -= 1;
             const capture = captures[idx];
+            const capture_name = self.input.symbols.get(capture.symbol).name;
+            const field_info = self.recordFieldByName(capture_record_ty, capture_name) orelse
+                debugPanic("lambdamono.lower.bindCaptureLets missing capture field");
             const captures_var = try self.output.addExpr(.{
                 .ty = capture_record_ty,
                 .data = .{ .var_ = captures_symbol },
@@ -1812,8 +1815,8 @@ const Lowerer = struct {
                 .ty = capture.lowered_ty,
                 .data = .{ .access = .{
                     .record = captures_var,
-                    .field = self.input.symbols.get(capture.symbol).name,
-                    .field_index = @intCast(idx),
+                    .field = capture_name,
+                    .field_index = field_info.index,
                 } },
             });
             result = try self.output.addExpr(.{
@@ -3482,34 +3485,32 @@ const Lowerer = struct {
         captures: []const lower_type.CaptureBinding,
         capture_ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!ast.ExprId {
-        if (builtin.mode == .Debug) {
-            const fields = switch (self.types.getTypePreservingNominal(capture_ty)) {
-                .nominal => |backing| switch (self.types.getTypePreservingNominal(backing)) {
-                    .record => |record| self.types.sliceFields(record.fields),
-                    else => debugPanic("lambdamono.lower.specializeCaptureRecord expected capture record"),
-                },
+        const capture_fields = switch (self.types.getTypePreservingNominal(capture_ty)) {
+            .nominal => |backing| switch (self.types.getTypePreservingNominal(backing)) {
                 .record => |record| self.types.sliceFields(record.fields),
                 else => debugPanic("lambdamono.lower.specializeCaptureRecord expected capture record"),
-            };
-            if (fields.len != captures.len) {
-                debugPanic("lambdamono.lower.specializeCaptureRecord capture field count mismatch");
-            }
-            for (fields, captures) |field, capture| {
-                if (field.name != self.input.symbols.get(capture.symbol).name) {
-                    debugPanic("lambdamono.lower.specializeCaptureRecord capture field order mismatch");
-                }
-            }
+            },
+            .record => |record| self.types.sliceFields(record.fields),
+            else => debugPanic("lambdamono.lower.specializeCaptureRecord expected capture record"),
+        };
+        if (builtin.mode == .Debug and capture_fields.len != captures.len) {
+            debugPanic("lambdamono.lower.specializeCaptureRecord capture field count mismatch");
         }
-        const fields = try self.allocator.alloc(ast.FieldExpr, captures.len);
+
+        const fields = try self.allocator.alloc(ast.FieldExpr, capture_fields.len);
         defer self.allocator.free(fields);
 
-        for (captures, 0..) |capture, i| {
+        for (capture_fields, 0..) |field, i| {
+            const symbol = self.symbolForCaptureBinding(captures, field.name) orelse
+                debugPanic("lambdamono.lower.specializeCaptureRecord missing capture field");
+            const capture = self.lookupCaptureBinding(captures, symbol) orelse
+                debugPanic("lambdamono.lower.specializeCaptureRecord missing capture binding");
             const capture_expr = try self.output.addExpr(.{
                 .ty = capture.lowered_ty,
                 .data = .{ .var_ = capture.symbol },
             });
             fields[i] = .{
-                .name = self.input.symbols.get(capture.symbol).name,
+                .name = field.name,
                 .value = capture_expr,
             };
         }
@@ -3705,6 +3706,30 @@ const Lowerer = struct {
             if (self.input.symbols.get(capture.symbol).name == field_name) {
                 return capture.symbol;
             }
+        }
+        return null;
+    }
+
+    fn symbolForCaptureBinding(
+        self: *Lowerer,
+        captures: []const lower_type.CaptureBinding,
+        field_name: base.Ident.Idx,
+    ) ?Symbol {
+        for (captures) |capture| {
+            if (self.input.symbols.get(capture.symbol).name == field_name) {
+                return capture.symbol;
+            }
+        }
+        return null;
+    }
+
+    fn lookupCaptureBinding(
+        _: *Lowerer,
+        captures: []const lower_type.CaptureBinding,
+        symbol: Symbol,
+    ) ?lower_type.CaptureBinding {
+        for (captures) |capture| {
+            if (capture.symbol == symbol) return capture;
         }
         return null;
     }

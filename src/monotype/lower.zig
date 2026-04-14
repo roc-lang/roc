@@ -3268,7 +3268,6 @@ pub const Lowerer = struct {
                     ) orelse {
                         return self.makeRuntimeErrorExprAt(
                             try self.lowerExprType(module_idx, type_scope, env, expr.idx, expr.data),
-                            "lowerSolvedExpr:missing_method_call_dot",
                         );
                     };
                     return try self.program.store.addExpr(.{
@@ -3349,7 +3348,6 @@ pub const Lowerer = struct {
                 ) orelse {
                     return self.makeRuntimeErrorExprAt(
                         try self.lowerExprType(module_idx, type_scope, env, expr.idx, expr.data),
-                        "lowerSolvedExpr:missing_method_call_type_var",
                     );
                 };
                 return try self.program.store.addExpr(.{
@@ -3691,9 +3689,7 @@ pub const Lowerer = struct {
     fn makeRuntimeErrorExprAt(
         self: *Lowerer,
         ty: type_mod.TypeId,
-        comptime reason: []const u8,
     ) std.mem.Allocator.Error!ast.ExprId {
-        _ = reason;
         return self.makeRuntimeErrorExpr(ty);
     }
 
@@ -4787,10 +4783,7 @@ pub const Lowerer = struct {
             ),
             .record_destructure => |record| blk: {
                 if (self.ctx.types.getType(scrutinee_ty) != .record) {
-                    return self.makeRuntimeErrorExprAt(
-                        self.program.store.getExpr(then_expr).ty,
-                        "lowerPatternGuardExpr:record_mismatch",
-                    );
+                    return self.makeRuntimeErrorExprAt(self.program.store.getExpr(then_expr).ty);
                 }
                 var current = then_expr;
                 const destructs = typed_cir_module.sliceRecordDestructs(record.destructs);
@@ -4823,10 +4816,7 @@ pub const Lowerer = struct {
             },
             .tuple => |tuple| blk: {
                 if (self.ctx.types.getType(scrutinee_ty) != .tuple) {
-                    return self.makeRuntimeErrorExprAt(
-                        self.program.store.getExpr(then_expr).ty,
-                        "lowerPatternGuardExpr:tuple_mismatch",
-                    );
+                    return self.makeRuntimeErrorExprAt(self.program.store.getExpr(then_expr).ty);
                 }
                 var current = then_expr;
                 const elem_patterns = typed_cir_module.slicePatterns(tuple.patterns);
@@ -6998,7 +6988,8 @@ pub const Lowerer = struct {
     ) std.mem.Allocator.Error!ast.ExprId {
         const typed_cir_module = self.ctx.typedCirModule(module_idx);
         const target_ty = blk: {
-            if (self.ctx.types.getType(expected_ty) != .placeholder) break :blk expected_ty;
+            const expected_kind = self.ctx.types.getType(expected_ty);
+            if (expected_kind != .placeholder and expected_kind != .unbd) break :blk expected_ty;
             break :blk try self.requireExprType(module_idx, type_scope, expr.idx);
         };
 
@@ -7237,10 +7228,7 @@ pub const Lowerer = struct {
                     env,
                     expr.idx,
                     dot.field_name,
-                ) orelse break :blk try self.makeRuntimeErrorExprAt(
-                    target_ty,
-                    "lowerSolvedExprWithExpectedType:missing_method_call_dot",
-                );
+                ) orelse break :blk try self.makeRuntimeErrorExprAt(target_ty);
                 break :blk try self.program.store.addExpr(.{
                     .ty = lowered_call.result_ty,
                     .data = .{ .call = lowered_call.data },
@@ -7253,10 +7241,7 @@ pub const Lowerer = struct {
                     env,
                     expr.idx,
                     dispatch.method_name,
-                ) orelse break :blk try self.makeRuntimeErrorExprAt(
-                    target_ty,
-                    "lowerSolvedExprWithExpectedType:missing_method_call_type_var",
-                );
+                ) orelse break :blk try self.makeRuntimeErrorExprAt(target_ty);
                 break :blk try self.program.store.addExpr(.{
                     .ty = lowered_call.result_ty,
                     .data = .{ .call = lowered_call.data },
@@ -7329,7 +7314,6 @@ pub const Lowerer = struct {
                     dot.field_name,
                 ) orelse break :blk try self.makeRuntimeErrorExprAt(
                     try self.requireExprType(module_idx, type_scope, call_expr_idx),
-                    "maybeLowerRecordedDispatchCallExpr:dot",
                 );
                 break :blk try self.program.store.addExpr(.{
                     .ty = lowered_call.result_ty,
@@ -7345,7 +7329,6 @@ pub const Lowerer = struct {
                     dispatch.method_name,
                 ) orelse break :blk try self.makeRuntimeErrorExprAt(
                     try self.requireExprType(module_idx, type_scope, call_expr_idx),
-                    "maybeLowerRecordedDispatchCallExpr:type_var",
                 );
                 break :blk try self.program.store.addExpr(.{
                     .ty = lowered_call.result_ty,
@@ -9297,10 +9280,7 @@ pub const Lowerer = struct {
                             } },
                         })
                     else
-                        try self.makeRuntimeErrorExprAt(
-                            field_ty,
-                            "collectStructuralBindingDecls:record_source_not_record",
-                        );
+                        try self.makeRuntimeErrorExprAt(field_ty);
                     try decls.append(self.allocator, .{
                         .bind = field_bind,
                         .body = field_expr,
@@ -9335,10 +9315,7 @@ pub const Lowerer = struct {
                         .body = if (source_is_tuple)
                             try self.makeTupleAccessExpr(source_expr.?, elem_ty, i)
                         else
-                            try self.makeRuntimeErrorExprAt(
-                                elem_ty,
-                                "collectStructuralBindingDecls:tuple_source_not_tuple",
-                            ),
+                            try self.makeRuntimeErrorExprAt(elem_ty),
                     });
                     if (!self.patternCanCollectStructuralBindings(module_idx, elem_pattern_idx)) continue;
                     try self.collectStructuralBindingDeclsWithSolvedVar(
