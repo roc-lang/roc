@@ -4449,8 +4449,8 @@ test "NodeStore empty CompactWriter roundtrip" {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const file = try tmp_dir.dir.createFile("test_empty_nodestore.dat", .{ .read = true });
-    defer file.close();
+    const file = try tmp_dir.dir.createFile(std.Options.debug_io, "test_empty_nodestore.dat", .{ .read = true });
+    defer file.close(std.Options.debug_io);
 
     // Serialize using CompactWriter
     var writer = CompactWriter.init();
@@ -4460,16 +4460,13 @@ test "NodeStore empty CompactWriter roundtrip" {
     try serialized.serialize(&original, gpa, &writer);
 
     // Write to file
-    try writer.writeGather(gpa, file);
+    try writer.writeGather(file, std.Options.debug_io);
 
     // Read back
-    try file.seekTo(0);
-    const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(file_size));
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(writer.total_bytes));
     defer gpa.free(buffer);
 
-    const read_len = try file.readAll(buffer);
-    try testing.expectEqual(buffer.len, read_len);
+    _ = try file.readPositionalAll(std.Options.debug_io, buffer, 0);
 
     // Cast and deserialize
     const serialized_ptr: *NodeStore.Serialized = @ptrCast(@alignCast(buffer.ptr));
@@ -4515,8 +4512,8 @@ test "NodeStore basic CompactWriter roundtrip" {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const file = try tmp_dir.dir.createFile("test_basic_nodestore.dat", .{ .read = true });
-    defer file.close();
+    const file = try tmp_dir.dir.createFile(std.Options.debug_io, "test_basic_nodestore.dat", .{ .read = true });
+    defer file.close(std.Options.debug_io);
 
     // Serialize
     var writer = CompactWriter.init();
@@ -4526,16 +4523,13 @@ test "NodeStore basic CompactWriter roundtrip" {
     try serialized.serialize(&original, gpa, &writer);
 
     // Write to file
-    try writer.writeGather(gpa, file);
+    try writer.writeGather(file, std.Options.debug_io);
 
     // Read back
-    try file.seekTo(0);
-    const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(file_size));
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(writer.total_bytes));
     defer gpa.free(buffer);
 
-    const read_len = try file.readAll(buffer);
-    try testing.expectEqual(buffer.len, read_len);
+    _ = try file.readPositionalAll(std.Options.debug_io, buffer, 0);
 
     // Cast and deserialize
     const serialized_ptr: *NodeStore.Serialized = @ptrCast(@alignCast(buffer.ptr));
@@ -4607,8 +4601,8 @@ test "NodeStore multiple nodes CompactWriter roundtrip" {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const file = try tmp_dir.dir.createFile("test_multiple_nodestore.dat", .{ .read = true });
-    defer file.close();
+    const file = try tmp_dir.dir.createFile(std.Options.debug_io, "test_multiple_nodestore.dat", .{ .read = true });
+    defer file.close(std.Options.debug_io);
 
     // Serialize
     var writer = CompactWriter.init();
@@ -4618,16 +4612,13 @@ test "NodeStore multiple nodes CompactWriter roundtrip" {
     try serialized.serialize(&original, gpa, &writer);
 
     // Write to file
-    try writer.writeGather(gpa, file);
+    try writer.writeGather(file, std.Options.debug_io);
 
     // Read back
-    try file.seekTo(0);
-    const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(file_size));
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(writer.total_bytes));
     defer gpa.free(buffer);
 
-    const read_len = try file.readAll(buffer);
-    try testing.expectEqual(buffer.len, read_len);
+    _ = try file.readPositionalAll(std.Options.debug_io, buffer, 0);
 
     // Cast and deserialize
     const serialized_ptr: *NodeStore.Serialized = @ptrCast(@alignCast(buffer.ptr));

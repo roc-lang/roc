@@ -431,7 +431,7 @@ test "Store empty CompactWriter roundtrip" {
     try std.testing.expect(@intFromPtr(serialized) != 0);
 
     // Write to file
-    try writer.writeGather(arena_allocator, file, io);
+    try writer.writeGather(file, io);
 
     // Read back
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", writer.total_bytes);
@@ -483,7 +483,7 @@ test "Store basic CompactWriter roundtrip" {
     try std.testing.expect(@intFromPtr(serialized) != 0);
 
     // Write to file
-    try writer.writeGather(arena_allocator, file, io);
+    try writer.writeGather(file, io);
 
     // Read back
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", writer.total_bytes);
@@ -549,7 +549,7 @@ test "Store comprehensive CompactWriter roundtrip" {
     try std.testing.expect(@intFromPtr(serialized) != 0);
 
     // Write to file
-    try writer.writeGather(arena_allocator, file, io);
+    try writer.writeGather(file, io);
 
     // Read back
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", writer.total_bytes);
@@ -600,7 +600,7 @@ test "Store CompactWriter roundtrip" {
     try std.testing.expect(@intFromPtr(serialized) != 0);
 
     // Write to file
-    try writer.writeGather(arena_allocator, file, io);
+    try writer.writeGather(file, io);
 
     // Read back
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", writer.total_bytes);
@@ -643,7 +643,7 @@ test "Store.Serialized roundtrip" {
     try serialized_ptr.serialize(&original, arena_alloc, &writer);
 
     // Write to file
-    try writer.writeGather(arena_alloc, tmp_file, io);
+    try writer.writeGather(tmp_file, io);
 
     // Read back
     const file_size = try tmp_file.getEndPos();
@@ -704,7 +704,7 @@ test "Store edge case indices CompactWriter roundtrip" {
     try std.testing.expect(@intFromPtr(serialized) != 0);
 
     // Write to file
-    try writer.writeGather(arena_allocator, file, io);
+    try writer.writeGather(file, io);
 
     // Read back
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", writer.total_bytes);

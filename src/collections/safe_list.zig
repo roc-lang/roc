@@ -1148,7 +1148,7 @@ test "SafeList empty list CompactWriter roundtrip" {
     try serialized.serialize(&original, gpa, &writer);
 
     // Write to file
-    try writer.writeGather(gpa, file, io);
+    try writer.writeGather(file, io);
 
     // Read back
     const file_size = writer.total_bytes;
@@ -1322,7 +1322,7 @@ test "SafeList CompactWriter complete roundtrip example" {
     try testing.expectEqual(@sizeOf(SafeList(u32).Serialized), serialized.offset);
 
     // Step 4: Write to file using vectored I/O
-    try writer.writeGather(gpa, file, io);
+    try writer.writeGather(file, io);
 
     // Step 5: Read file into 16-byte aligned buffer
     const file_size = writer.total_bytes;
@@ -1434,7 +1434,7 @@ test "SafeList CompactWriter multiple lists with different alignments" {
     try serialized_struct.serialize(&list_struct, gpa, &writer);
 
     // Write to file
-    try writer.writeGather(gpa, file, io);
+    try writer.writeGather(file, io);
 
     // Read back into aligned buffer
     const file_size = writer.total_bytes;
@@ -1615,7 +1615,7 @@ test "SafeList CompactWriter interleaved pattern with alignment tracking" {
     try serialized4.serialize(&list4, gpa, &writer);
 
     // Write to file
-    try writer.writeGather(gpa, file, io);
+    try writer.writeGather(file, io);
 
     // Read back and verify
     const file_size = writer.total_bytes;
@@ -1761,7 +1761,7 @@ test "SafeList CompactWriter brute-force alignment verification" {
             try serialized2.serialize(&list2, gpa, &writer);
 
             // Write to file
-            try writer.writeGather(gpa, file, io);
+            try writer.writeGather(file, io);
 
             // Read back
             const file_size = writer.total_bytes;
@@ -1863,7 +1863,7 @@ test "SafeMultiList CompactWriter roundtrip with file" {
     try serialized.serialize(&original, gpa, &writer);
 
     // Write to file
-    try writer.writeGather(gpa, file, io);
+    try writer.writeGather(file, io);
 
     // Read back into aligned buffer
     const file_size = writer.total_bytes;
@@ -1936,7 +1936,7 @@ test "SafeMultiList empty list CompactWriter roundtrip" {
     try serialized.serialize(&original, gpa, &writer);
 
     // Write to file
-    try writer.writeGather(gpa, file, io);
+    try writer.writeGather(file, io);
 
     // Read back
     const file_size = writer.total_bytes;
@@ -2008,29 +2008,23 @@ test "SafeMultiList CompactWriter multiple lists different alignments" {
     var writer = CompactWriter.init();
     defer writer.deinit(gpa);
 
-    // Serialize all lists in sequence, tracking byte offsets
-    var offset1: usize = 0;
-    var offset2: usize = 0;
-    var offset3: usize = 0;
-
-    // The offsets returned by appendAlloc are file offsets, not memory addresses
-    const serialized1_offset = writer.total_bytes;
+    // Serialize all lists in sequence, tracking byte offsets.
+    // Offsets are captured AFTER appendAlloc (which pads to alignment), then
+    // adjusted back by the struct size to get the actual start position.
     const serialized1 = try writer.appendAlloc(gpa, SafeMultiList(Type1).Serialized);
+    const offset1 = writer.total_bytes - @sizeOf(SafeMultiList(Type1).Serialized);
     try serialized1.serialize(&list1, gpa, &writer);
-    offset1 = serialized1_offset;
 
-    const serialized2_offset = writer.total_bytes;
     const serialized2 = try writer.appendAlloc(gpa, SafeMultiList(Type2).Serialized);
+    const offset2 = writer.total_bytes - @sizeOf(SafeMultiList(Type2).Serialized);
     try serialized2.serialize(&list2, gpa, &writer);
-    offset2 = serialized2_offset;
 
-    const serialized3_offset = writer.total_bytes;
     const serialized3 = try writer.appendAlloc(gpa, SafeMultiList(Type3).Serialized);
+    const offset3 = writer.total_bytes - @sizeOf(SafeMultiList(Type3).Serialized);
     try serialized3.serialize(&list3, gpa, &writer);
-    offset3 = serialized3_offset;
 
     // Write all to file in one go
-    try writer.writeGather(gpa, file, io);
+    try writer.writeGather(file, io);
 
     // Read back
     const file_size = writer.total_bytes;
@@ -2121,16 +2115,16 @@ test "SafeMultiList CompactWriter brute-force alignment verification" {
         var writer = CompactWriter.init();
         defer writer.deinit(gpa);
 
-        const offset1 = writer.total_bytes;
         const serialized1 = try writer.appendAlloc(gpa, SafeMultiList(TestType).Serialized);
+        const offset1 = writer.total_bytes - @sizeOf(SafeMultiList(TestType).Serialized);
         try serialized1.serialize(&list, gpa, &writer);
 
-        const offset2 = writer.total_bytes;
         const serialized2 = try writer.appendAlloc(gpa, SafeMultiList(TestType).Serialized);
+        const offset2 = writer.total_bytes - @sizeOf(SafeMultiList(TestType).Serialized);
         try serialized2.serialize(&list2, gpa, &writer);
 
         // Write to file
-        try writer.writeGather(gpa, file, io);
+        try writer.writeGather(file, io);
 
         // Read back
         const file_size = writer.total_bytes;
@@ -2228,7 +2222,7 @@ test "SafeMultiList CompactWriter various field alignments and sizes" {
 
             const serialized = try writer.appendAlloc(gpa, SafeMultiList(TestType).Serialized);
             try serialized.serialize(&list, gpa, &writer);
-            try writer.writeGather(gpa, file, io);
+            try writer.writeGather(file, io);
 
             // Read back
             const file_size = writer.total_bytes;
@@ -2388,7 +2382,7 @@ test "SafeMultiList CompactWriter verify exact memory layout" {
 
         const serialized = try writer.appendAlloc(gpa, SafeMultiList(TestStruct).Serialized);
         try serialized.serialize(&original, gpa, &writer);
-        try writer.writeGather(gpa, file, io);
+        try writer.writeGather(file, io);
 
         // Read back
         const file_size = writer.total_bytes;
@@ -2481,7 +2475,7 @@ test "SafeMultiList CompactWriter stress test many field types" {
 
         const serialized = try writer.appendAlloc(gpa, SafeMultiList(ComplexStruct).Serialized);
         try serialized.serialize(&list, gpa, &writer);
-        try writer.writeGather(gpa, file, io);
+        try writer.writeGather(file, io);
 
         // Read back
         const file_size = writer.total_bytes;
@@ -2547,7 +2541,7 @@ test "SafeMultiList CompactWriter empty with capacity" {
 
     const serialized = try writer.appendAlloc(gpa, SafeMultiList(TestStruct).Serialized);
     try serialized.serialize(&list, gpa, &writer);
-    try writer.writeGather(gpa, file, io);
+    try writer.writeGather(file, io);
 
     // Read back
     const file_size = writer.total_bytes;
@@ -2605,7 +2599,7 @@ test "SafeMultiList.Serialized roundtrip" {
     try serialized_ptr.serialize(&original, arena_alloc, &writer);
 
     // Write to file
-    try writer.writeGather(arena_alloc, tmp_file, io);
+    try writer.writeGather(tmp_file, io);
 
     // Read back
     const file_size = writer.total_bytes;

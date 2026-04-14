@@ -371,7 +371,7 @@ test "CommonEnv.Serialized roundtrip" {
     try serialized.serialize(&original, gpa, &writer);
 
     // Write to file
-    try writer.writeGather(gpa, tmp_file, io);
+    try writer.writeGather(tmp_file, io);
 
     // Read back with proper alignment
     const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, writer.total_bytes);
@@ -422,7 +422,7 @@ test "CommonEnv.Serialized roundtrip with empty data" {
     try serialized.serialize(&original, gpa, &writer);
 
     // Write to file
-    try writer.writeGather(gpa, tmp_file, io);
+    try writer.writeGather(tmp_file, io);
 
     // Read back with proper alignment
     const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, writer.total_bytes);
@@ -511,7 +511,7 @@ test "CommonEnv.Serialized roundtrip with large data" {
     try serialized.serialize(&original, gpa, &writer);
 
     // Write to file
-    try writer.writeGather(gpa, tmp_file, io);
+    try writer.writeGather(tmp_file, io);
 
     // Read back with proper alignment
     const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, writer.total_bytes);
@@ -588,7 +588,7 @@ test "CommonEnv.Serialized roundtrip with special characters" {
     try serialized.serialize(&original, gpa, &writer);
 
     // Write to file
-    try writer.writeGather(gpa, tmp_file, io);
+    try writer.writeGather(tmp_file, io);
 
     // Read back with proper alignment
     const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, writer.total_bytes);

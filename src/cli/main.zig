@@ -533,15 +533,15 @@ pub fn createTempDirStructure(allocs: *Allocators, exe_path: []const u8, exe_dis
         };
 
         // Try to create the fd file
-        const fd_file = std.Io.Dir.cwd().createFile(dir_name_with_txt, .{ .exclusive = true }) catch |err| switch (err) {
+        const fd_file = std.Io.Dir.cwd().createFile(std.Options.debug_io, dir_name_with_txt, .{ .exclusive = true }) catch |err| switch (err) {
             error.PathAlreadyExists => {
                 // File already exists, remove the directory and try again
-                std.Io.Dir.cwd().deleteDir(temp_dir_path) catch {};
+                std.Io.Dir.cwd().deleteDir(std.Options.debug_io, temp_dir_path) catch {};
                 continue;
             },
             else => {
                 // Clean up directory on other errors
-                std.Io.Dir.cwd().deleteDir(temp_dir_path) catch {};
+                std.Io.Dir.cwd().deleteDir(std.Options.debug_io, temp_dir_path) catch {};
                 return err;
             },
         };
@@ -550,12 +550,12 @@ pub fn createTempDirStructure(allocs: *Allocators, exe_path: []const u8, exe_dis
         // Write shared memory info to file (POSIX only - Windows uses command line args)
         const fd_str = try std.fmt.allocPrint(allocs.arena, "{}\n{}", .{ shm_handle.fd, shm_handle.size });
 
-        try fd_file.writeAll(fd_str);
+        try fd_file.writeStreamingAll(std.Options.debug_io, fd_str);
 
         // IMPORTANT: Flush and close the file explicitly before spawning child process
         // On Windows, having the file open can prevent child process access
-        try fd_file.sync(); // Ensure data is written to disk
-        fd_file.close();
+        try fd_file.sync(std.Options.debug_io); // Ensure data is written to disk
+        fd_file.close(std.Options.debug_io);
 
         // Create hardlink to executable in temp directory with display name
         const temp_exe_path = try std.fs.path.join(allocs.arena, &.{ temp_dir_path, exe_display_name });
@@ -1301,6 +1301,369 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
     }
 }
 
+/// Run using the dev shim: pre-link a shim with the host once, then pass CIR via
+/// shared memory for JIT compilation. Skips LLD linking on subsequent runs.
+fn rocRunDevShim(ctx: *CliContext, args: cli_args.RunArgs) !void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    // Initialize cache
+    const cache_config = CacheConfig{
+        .enabled = !args.no_cache,
+        .verbose = false,
+    };
+    var cache_manager = CacheManager.init(ctx.gpa, cache_config, io_mod.Io.default());
+
+    const exe_cache_dir = cache_manager.config.getExeCacheDir(ctx.arena) catch |err| {
+        return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
+    };
+
+    ensureCompilerCacheDirExists(exe_cache_dir) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => {
+            return ctx.fail(.{ .directory_create_failed = .{ .path = exe_cache_dir, .err = err } });
+        },
+    };
+
+    const exe_display_name = std.fs.path.basename(args.path);
+
+    const exe_display_name_with_ext = if (builtin.target.os.tag == .windows)
+        std.fmt.allocPrint(ctx.arena, "{s}.exe", .{exe_display_name}) catch |err| {
+            return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
+        }
+    else
+        ctx.arena.dupe(u8, exe_display_name) catch |err| {
+            return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
+        };
+
+    // Parse the app file to get the platform reference (needed for cache key)
+    const platform_spec = try extractPlatformSpecFromApp(ctx, args.path);
+
+    const app_dir = std.fs.path.dirname(args.path) orelse ".";
+    const platform_paths = try resolvePlatformSpecToPaths(ctx, platform_spec, app_dir);
+
+    const temp_dir_path = createUniqueTempDir(ctx) catch |err| {
+        return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
+    };
+
+    const exe_path = std.fs.path.join(ctx.arena, &.{ temp_dir_path, exe_display_name_with_ext }) catch |err| {
+        return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
+    };
+
+    // Validate platform header and get link spec
+    var link_spec: ?roc_target.TargetLinkSpec = null;
+    var targets_config: ?roc_target.TargetsConfig = null;
+    if (platform_paths.platform_source_path) |platform_source| {
+        if (platform_validation.validatePlatformHeader(ctx.arena, platform_source)) |validation| {
+            targets_config = validation.config;
+
+            if (validation.config.exe.len == 0 and validation.config.static_lib.len > 0) {
+                ctx.io.stderr().print("Error: This platform only produces static libraries.\n\n", .{}) catch {};
+                ctx.io.stderr().print("Use 'roc build' instead to produce the library artifact.\n", .{}) catch {};
+                return error.UnsupportedTarget;
+            }
+
+            if (args.target) |target_str| {
+                const parsed_target = roc_target.RocTarget.fromString(target_str) orelse {
+                    const result = platform_validation.targets_validator.ValidationResult{
+                        .invalid_target = .{ .target_str = target_str },
+                    };
+                    _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+                    return error.InvalidTarget;
+                };
+
+                if (validation.config.getLinkSpec(parsed_target, .exe)) |spec| {
+                    link_spec = spec;
+                } else {
+                    const result = platform_validation.createUnsupportedTargetResult(
+                        platform_source,
+                        parsed_target,
+                        .exe,
+                        validation.config,
+                    );
+                    _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+                    return error.UnsupportedTarget;
+                }
+            } else {
+                if (validation.config.getDefaultTarget(.exe)) |compatible_target| {
+                    link_spec = validation.config.getLinkSpec(compatible_target, .exe);
+                } else {
+                    const native_target = builder.RocTarget.detectNative();
+                    const result = platform_validation.createUnsupportedTargetResult(
+                        platform_source,
+                        native_target,
+                        .exe,
+                        validation.config,
+                    );
+                    _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+                    return error.UnsupportedTarget;
+                }
+            }
+        } else |err| {
+            switch (err) {
+                error.MissingTargetsSection => {
+                    ctx.io.stderr().print("Error: Platform is missing a targets section.\n\n", .{}) catch {};
+                    return error.PlatformNotSupported;
+                },
+                else => {
+                    std.log.debug("Could not validate platform header: {}", .{err});
+                },
+            }
+        }
+    }
+
+    const validated_link_spec = link_spec orelse {
+        ctx.io.stderr().print("Error: Platform does not support any target compatible with this system.\n", .{}) catch {};
+        return error.PlatformNotSupported;
+    };
+
+    // Extract entrypoints from platform source file
+    var entrypoints = std.array_list.Managed([]const u8).initCapacity(ctx.arena, 32) catch {
+        return error.OutOfMemory;
+    };
+
+    if (platform_paths.platform_source_path) |platform_source| {
+        extractEntrypointsFromPlatform(ctx, platform_source, &entrypoints) catch |err| {
+            return ctx.fail(.{ .entrypoint_extraction_failed = .{
+                .path = platform_source,
+                .reason = @errorName(err),
+            } });
+        };
+    } else {
+        return ctx.fail(.{ .entrypoint_extraction_failed = .{
+            .path = platform_paths.platform_source_path orelse "<unknown>",
+            .reason = "No platform source file found for entrypoint extraction",
+        } });
+    }
+
+    // Build the cache key from all inputs that affect the linked executable:
+    // app path, target, platform source mtime, and mtimes of all linked host files.
+    const platform_dir = if (platform_paths.platform_source_path) |p|
+        std.fs.path.dirname(p) orelse "."
+    else
+        ".";
+    const files_dir = if (targets_config) |cfg| cfg.files_dir orelse "targets" else "targets";
+    const target_name = @tagName(validated_link_spec.target);
+
+    var cache_hasher = std.hash.crc.Crc32.init();
+    cache_hasher.update(args.path);
+    cache_hasher.update(target_name);
+
+    // Hash platform source mtime (captures entrypoint and targets section changes)
+    if (platform_paths.platform_source_path) |p| {
+        cache_hasher.update(p);
+        if (std.Io.Dir.cwd().statFile(std.Options.debug_io, p, .{})) |stat| {
+            const mtime_ns: i96 = stat.mtime.nanoseconds;
+            const mtime_bytes: [12]u8 = @bitCast(mtime_ns);
+            cache_hasher.update(&mtime_bytes);
+        } else |_| {}
+    }
+
+    // Hash mtimes of all platform host files from the link spec
+    for (validated_link_spec.items) |item| {
+        switch (item) {
+            .file_path => |file_name| {
+                const host_file_path = std.fs.path.join(ctx.arena, &.{
+                    platform_dir, files_dir, target_name, file_name,
+                }) catch continue;
+                cache_hasher.update(host_file_path);
+                if (std.Io.Dir.cwd().statFile(std.Options.debug_io, host_file_path, .{})) |stat| {
+                    const mtime_ns: i96 = stat.mtime.nanoseconds;
+                    const mtime_bytes: [12]u8 = @bitCast(mtime_ns);
+                    cache_hasher.update(&mtime_bytes);
+                } else |_| {}
+            },
+            .app, .win_gui => {},
+        }
+    }
+
+    const exe_cache_name = std.fmt.allocPrint(ctx.arena, "roc_dev_{x}", .{cache_hasher.final()}) catch |err| {
+        return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
+    };
+
+    const exe_cache_name_with_ext = if (builtin.target.os.tag == .windows)
+        std.fmt.allocPrint(ctx.arena, "{s}.exe", .{exe_cache_name}) catch |err| {
+            return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
+        }
+    else
+        ctx.arena.dupe(u8, exe_cache_name) catch |err| {
+            return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
+        };
+
+    const exe_cache_path = std.fs.path.join(ctx.arena, &.{ exe_cache_dir, exe_cache_name_with_ext }) catch |err| {
+        return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
+    };
+
+    // Check if the dev shim executable already exists in cache
+    const cache_exists = if (args.no_cache) false else blk: {
+        std.Io.Dir.cwd().access(std.Options.debug_io, exe_cache_path, .{}) catch {
+            break :blk false;
+        };
+        break :blk true;
+    };
+
+    if (cache_exists) {
+        std.log.debug("Using cached dev shim executable: {s}", .{exe_cache_path});
+        createHardlink(ctx, exe_cache_path, exe_path) catch |err| {
+            std.log.debug("Hardlink from cache failed, copying: {}", .{err});
+            std.Io.Dir.cwd().copyFile(exe_cache_path, std.Io.Dir.cwd(), exe_path, std.Options.debug_io, .{}) catch |copy_err| {
+                return ctx.fail(.{ .file_write_failed = .{
+                    .path = exe_path,
+                    .err = copy_err,
+                } });
+            };
+        };
+    } else {
+        // Extract dev shim library to temp dir
+        const shim_filename = if (builtin.target.os.tag == .windows) "roc_dev_shim.lib" else "libroc_dev_shim.a";
+        const shim_path = std.fs.path.join(ctx.arena, &.{ temp_dir_path, shim_filename }) catch {
+            return error.OutOfMemory;
+        };
+
+        const selected_target = validated_link_spec.target;
+        extractDevShimLibrary(shim_path, selected_target) catch |err| {
+            return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
+        };
+
+        // Generate platform host shim
+        const platform_shim_path = try generatePlatformHostShim(ctx, temp_dir_path, entrypoints.items, selected_target, null, builtin.mode == .Debug);
+
+        // Link the host with our dev shim
+        var extra_args = std.array_list.Managed([]const u8).initCapacity(ctx.arena, 32) catch {
+            return error.OutOfMemory;
+        };
+
+        if (builtin.target.os.tag == .macos) {
+            extra_args.append("-lSystem") catch {
+                return error.OutOfMemory;
+            };
+        }
+
+        var object_files = std.array_list.Managed([]const u8).initCapacity(ctx.arena, 16) catch {
+            return error.OutOfMemory;
+        };
+
+        for (validated_link_spec.items) |item| {
+            switch (item) {
+                .file_path => |file_name| {
+                    const full_path = std.fs.path.join(ctx.arena, &.{
+                        platform_dir, files_dir, target_name, file_name,
+                    }) catch {
+                        return error.OutOfMemory;
+                    };
+                    object_files.append(full_path) catch {
+                        return error.OutOfMemory;
+                    };
+                },
+                .app => {
+                    object_files.append(shim_path) catch {
+                        return error.OutOfMemory;
+                    };
+                    if (platform_shim_path) |path| {
+                        object_files.append(path) catch {
+                            return error.OutOfMemory;
+                        };
+                    }
+                },
+                .win_gui => {},
+            }
+        }
+
+        const target_abi: linker.TargetAbi = if (validated_link_spec.target.isStatic()) .musl else .gnu;
+
+        const empty_files: []const []const u8 = &.{};
+
+        const platform_files_dir = std.fs.path.join(ctx.arena, &.{ platform_dir, files_dir }) catch {
+            return error.OutOfMemory;
+        };
+
+        const link_config = linker.LinkConfig{
+            .target_abi = target_abi,
+            .output_path = exe_path,
+            .object_files = object_files.items,
+            .platform_files_pre = empty_files,
+            .platform_files_post = empty_files,
+            .extra_args = extra_args.items,
+            .can_exit_early = false,
+            .disable_output = false,
+            .platform_files_dir = platform_files_dir,
+        };
+
+        linker.link(ctx, link_config) catch |err| {
+            return ctx.fail(.{ .linker_failed = .{
+                .err = err,
+                .target = @tagName(validated_link_spec.target),
+            } });
+        };
+
+        // Cache the linked executable
+        std.log.debug("Caching dev shim executable to: {s}", .{exe_cache_path});
+        std.Io.Dir.cwd().deleteFile(std.Options.debug_io, exe_cache_path) catch |err| switch (err) {
+            error.FileNotFound => {},
+            else => std.log.debug("Could not delete existing cache file: {}", .{err}),
+        };
+        createHardlink(ctx, exe_path, exe_cache_path) catch |err| {
+            std.log.debug("Hardlink to cache failed, copying: {}", .{err});
+            std.Io.Dir.cwd().copyFile(exe_path, std.Io.Dir.cwd(), exe_cache_path, std.Options.debug_io, .{}) catch |copy_err| {
+                std.log.debug("Failed to copy to cache: {}", .{copy_err});
+            };
+        };
+    }
+
+    // Set up shared memory with ModuleEnv using the Coordinator
+    const shm_result = try setupSharedMemoryWithCoordinator(ctx, args.path, args.allow_errors);
+
+    if (shm_result.error_count > 0 and !args.allow_errors) {
+        return error.TypeCheckingFailed;
+    }
+
+    const shm_handle = shm_result.handle;
+
+    defer {
+        if (comptime is_windows) {
+            _ = ipc.platform.windows.UnmapViewOfFile(shm_handle.ptr);
+            _ = ipc.platform.windows.CloseHandle(@ptrCast(shm_handle.fd));
+        } else {
+            _ = posix.munmap(shm_handle.ptr, shm_handle.mapped_size);
+            _ = c.close(shm_handle.fd);
+        }
+    }
+
+    std.log.debug("Launching dev shim executable: {s}", .{exe_path});
+    if (comptime is_windows) {
+        std.log.debug("Using Windows handle inheritance approach", .{});
+        try runWithWindowsHandleInheritance(ctx, exe_path, shm_handle, args.app_args);
+    } else {
+        std.log.debug("Using POSIX file descriptor inheritance approach", .{});
+        try runWithPosixFdInheritance(ctx, exe_path, shm_handle, args.app_args);
+    }
+    std.log.debug("Dev shim execution completed", .{});
+
+    if (shm_result.warning_count > 0) {
+        ctx.io.flush();
+        std.process.exit(2);
+    }
+}
+
+/// Extract the dev shim library to the given output path.
+fn extractDevShimLibrary(output_path: []const u8, target: ?roc_target.RocTarget) !void {
+    if (builtin.is_test) {
+        const shim_file = try std.Io.Dir.cwd().createFile(std.Options.debug_io, output_path, .{});
+        defer shim_file.close(std.Options.debug_io);
+        return;
+    }
+
+    const shim_data = if (target) |t|
+        DevShimLibraries.forTarget(t)
+    else
+        DevShimLibraries.native;
+
+    const shim_file = try std.Io.Dir.cwd().createFile(std.Options.debug_io, output_path, .{});
+    defer shim_file.close(std.Options.debug_io);
+
+    try shim_file.writeStreamingAll(std.Options.debug_io, shim_data);
+}
+
 const NativeRunTermination = union(enum) {
     success,
     exit_code: u8,
@@ -1499,7 +1862,7 @@ fn runWithWindowsHandleInheritance(ctx: *CliContext, exe_path: []const u8, shm_h
         } }),
     };
 
-    const cwd = std.Io.Dir.cwd().realpathAlloc(ctx.arena, ".") catch {
+    const cwd = std.Io.Dir.cwd().realPathFileAlloc(std.Options.debug_io, ".", ctx.arena) catch {
         return ctx.fail(.{ .directory_not_found = .{
             .path = ".",
         } });
@@ -2463,8 +2826,8 @@ fn extractEntrypointsFromPlatform(ctx: *CliContext, roc_file_path: []const u8, e
 pub fn extractReadRocFilePathShimLibrary(_: *CliContext, output_path: []const u8, target: ?RocTarget) !void {
     if (builtin.is_test) {
         // In test mode, create an empty file to avoid embedding issues
-        const shim_file = try std.Io.Dir.cwd().createFile(output_path, .{});
-        defer shim_file.close();
+        const shim_file = try std.Io.Dir.cwd().createFile(std.Options.debug_io, output_path, .{});
+        defer shim_file.close(std.Options.debug_io);
         return;
     }
 
@@ -5644,11 +6007,10 @@ fn printVerboseStats(writer: anytype, result: *const CheckResult) void {
 }
 
 /// Start an HTTP server to serve the generated documentation
-fn serveDocumentation(ctx: *CliContext, docs_dir: []const u8) !void {
+fn serveDocumentation(ctx: *CliContext, _: []const u8) !void {
     const stdout = ctx.io.stdout();
 
     // TODO: Zig 0.16 removed std.net — needs migration to std.Io networking API
-    _ = docs_dir;
     stdout.print("Error: Documentation server not yet supported with Zig 0.16\n", .{}) catch {};
     return error.Unexpected;
 }

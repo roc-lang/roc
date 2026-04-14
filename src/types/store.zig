@@ -1374,7 +1374,7 @@ test "Store empty CompactWriter roundtrip" {
     try std.testing.expect(@intFromPtr(serialized) != 0);
 
     // Write to file
-    try writer.writeGather(gpa, file, io);
+    try writer.writeGather(file, io);
 
     // Read back
     const file_size = writer.total_bytes;
@@ -1432,7 +1432,7 @@ test "Store basic CompactWriter roundtrip" {
     try std.testing.expect(@intFromPtr(serialized) != 0);
 
     // Write to file
-    try writer.writeGather(gpa, file, io);
+    try writer.writeGather(file, io);
 
     // Read back
     const file_size = writer.total_bytes;
@@ -1527,7 +1527,7 @@ test "Store comprehensive CompactWriter roundtrip" {
     try std.testing.expect(@intFromPtr(serialized) != 0);
 
     // Write to file
-    try writer.writeGather(gpa, file, io);
+    try writer.writeGather(file, io);
 
     // Read back
     const file_size = writer.total_bytes;
@@ -1645,7 +1645,7 @@ test "SlotStore.Serialized roundtrip" {
     try serialized_ptr.serialize(&slot_store, arena_allocator, &writer);
 
     // Write to file
-    try writer.writeGather(arena_allocator, file, io);
+    try writer.writeGather(file, io);
 
     // Read back
     const file_size = writer.total_bytes;
@@ -1707,7 +1707,7 @@ test "DescStore.Serialized roundtrip" {
     try serialized_ptr.serialize(&desc_store, arena_allocator, &writer);
 
     // Write to file
-    try writer.writeGather(arena_allocator, file, io);
+    try writer.writeGather(file, io);
 
     // Read back
     const file_size = writer.total_bytes;
@@ -1757,7 +1757,7 @@ test "Store.Serialized roundtrip" {
     try serialized_ptr.serialize(&store, gpa, &writer);
 
     // Write to file
-    try writer.writeGather(gpa, file, io);
+    try writer.writeGather(file, io);
 
     // Read back
     const file_size = writer.total_bytes;
@@ -1839,7 +1839,7 @@ test "Store multiple instances CompactWriter roundtrip" {
     try std.testing.expect(@intFromPtr(serialized3) != 0);
 
     // Write to file
-    try writer.writeGather(gpa, file, io);
+    try writer.writeGather(file, io);
 
     // Read back
     const file_size = writer.total_bytes;
@@ -1913,7 +1913,7 @@ test "SlotStore and DescStore serialization and deserialization" {
     try std.testing.expect(@intFromPtr(serialized) != 0);
 
     // Write to file
-    try writer.writeGather(arena_allocator, file, io);
+    try writer.writeGather(file, io);
 
     // Read back
     const file_size = writer.total_bytes;
@@ -1993,7 +1993,7 @@ test "Store with path compression CompactWriter roundtrip" {
     try std.testing.expect(@intFromPtr(serialized) != 0);
 
     // Write to file
-    try writer.writeGather(gpa, file, io);
+    try writer.writeGather(file, io);
 
     // Read back
     const file_size = writer.total_bytes;

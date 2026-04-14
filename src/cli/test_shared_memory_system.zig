@@ -39,11 +39,11 @@ test "platform resolution - basic cli platform" {
         \\main = "Hello, World!"
     ;
 
-    var roc_file = temp_dir.dir.createFile("test.roc", .{}) catch unreachable;
-    defer roc_file.close();
-    roc_file.writeAll(roc_content) catch unreachable;
+    var roc_file = temp_dir.dir.createFile(std.testing.io, "test.roc", .{}) catch unreachable;
+    defer roc_file.close(std.testing.io);
+    roc_file.writeStreamingAll(std.testing.io, roc_content) catch unreachable;
 
-    const roc_path = try temp_dir.dir.realpathAlloc(allocs.gpa, "test.roc");
+    const roc_path = try temp_dir.dir.realPathFileAlloc(std.testing.io, "test.roc", allocs.gpa);
     defer allocs.gpa.free(roc_path);
 
     // This should return CliError since we don't have the actual CLI platform installed
@@ -73,11 +73,11 @@ test "platform resolution - no platform in file" {
         \\42 + 58
     ;
 
-    var roc_file = temp_dir.dir.createFile("test.roc", .{}) catch unreachable;
-    defer roc_file.close();
-    roc_file.writeAll(roc_content) catch unreachable;
+    var roc_file = temp_dir.dir.createFile(std.testing.io, "test.roc", .{}) catch unreachable;
+    defer roc_file.close(std.testing.io);
+    roc_file.writeStreamingAll(std.testing.io, roc_content) catch unreachable;
 
-    const roc_path = try temp_dir.dir.realpathAlloc(allocs.gpa, "test.roc");
+    const roc_path = try temp_dir.dir.realPathFileAlloc(std.testing.io, "test.roc", allocs.gpa);
     defer allocs.gpa.free(roc_path);
 
     const result = main.resolvePlatformPaths(&ctx, roc_path);
@@ -125,11 +125,11 @@ test "platform resolution - insecure HTTP URL rejected" {
         \\main = "Hello, World!"
     ;
 
-    var roc_file = temp_dir.dir.createFile("test.roc", .{}) catch unreachable;
-    defer roc_file.close();
-    roc_file.writeAll(roc_content) catch unreachable;
+    var roc_file = temp_dir.dir.createFile(std.testing.io, "test.roc", .{}) catch unreachable;
+    defer roc_file.close(std.testing.io);
+    roc_file.writeStreamingAll(std.testing.io, roc_content) catch unreachable;
 
-    const roc_path = try temp_dir.dir.realpathAlloc(allocs.gpa, "test.roc");
+    const roc_path = try temp_dir.dir.realPathFileAlloc(std.testing.io, "test.roc", allocs.gpa);
     defer allocs.gpa.free(roc_path);
 
     // Insecure HTTP URLs (not localhost) should fail validation

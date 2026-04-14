@@ -379,7 +379,7 @@ test "SmallStringInterner empty CompactWriter roundtrip" {
     try std.testing.expect(@intFromPtr(serialized) != 0);
 
     // Write to file
-    try writer.writeGather(arena_allocator, file, io);
+    try writer.writeGather(file, io);
 
     // Read back
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", writer.total_bytes);
@@ -449,7 +449,7 @@ test "SmallStringInterner basic CompactWriter roundtrip" {
     try std.testing.expect(@intFromPtr(serialized) != 0);
 
     // Write to file
-    try writer.writeGather(arena_allocator, file, io);
+    try writer.writeGather(file, io);
 
     // Read back
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", writer.total_bytes);
@@ -522,7 +522,7 @@ test "SmallStringInterner with populated hashmap CompactWriter roundtrip" {
     try std.testing.expect(@intFromPtr(serialized) != 0);
 
     // Write to file
-    try writer.writeGather(arena_allocator, file, io);
+    try writer.writeGather(file, io);
 
     // Read back
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", writer.total_bytes);
@@ -583,7 +583,7 @@ test "SmallStringInterner CompactWriter roundtrip" {
     try std.testing.expect(@intFromPtr(serialized) != 0);
 
     // Write to file
-    try writer.writeGather(arena_allocator, file, io);
+    try writer.writeGather(file, io);
 
     // Read back
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", writer.total_bytes);
@@ -649,7 +649,7 @@ test "SmallStringInterner edge cases CompactWriter roundtrip" {
     try std.testing.expect(@intFromPtr(serialized) != 0);
 
     // Write to file
-    try writer.writeGather(arena_allocator, file, io);
+    try writer.writeGather(file, io);
 
     // Read back
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", writer.total_bytes);
@@ -737,7 +737,7 @@ test "SmallStringInterner edge cases CompactWriter roundtrip" {
 //     _ = try interner3.serialize(arena_allocator, &writer);
 
 //     // Write to file
-//     try writer.writeGather(arena_allocator, file);
+//     try writer.writeGather(file);
 
 //     // Read back
 //     try file.seekTo(0);
