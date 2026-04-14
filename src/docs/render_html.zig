@@ -595,10 +595,11 @@ fn renderEntryTree(
         try w.writeAll("<div class=\"entry-group\" id=\"");
         try writeHtmlEscaped(w, node.full_path);
         try w.writeAll("\">\n");
+        const heading_level: u8 = @intCast(@min(depth + 1, 6));
         try writeIndent(w, base + 1);
-        try w.writeAll("<div class=\"entry-group-header\">");
+        try w.print("<h{d} class=\"entry-group-header\">", .{heading_level});
         try writeHtmlEscaped(w, node.name);
-        try w.writeAll("</div>\n");
+        try w.print("</h{d}>\n", .{heading_level});
         for (node.children.items) |child| {
             try renderEntryTree(w, ctx, child, depth + 1);
         }
