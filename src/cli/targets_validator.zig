@@ -444,7 +444,7 @@ pub fn createValidationReport(
             try report.document.addLineBreak();
             try report.document.addText("  <platform>/");
             // Trim trailing slash from files_dir for cleaner display
-            const trimmed_files_dir = std.mem.trimRight(u8, info.files_dir, "/");
+            const trimmed_files_dir = std.mem.trimEnd(u8, info.files_dir, "/");
             try report.document.addAnnotated(trimmed_files_dir, .emphasized);
             try report.document.addText("/");
             try report.document.addAnnotated(@tagName(info.target), .emphasized);

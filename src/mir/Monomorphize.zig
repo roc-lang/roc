@@ -11061,7 +11061,7 @@ pub const Pass = struct {
                 const rhs_fields = result.monotype_store.getFields(rhs_mono.record.fields);
                 if (lhs_fields.len != rhs_fields.len) break :blk false;
 
-                var rhs_used = std.ArrayListUnmanaged(bool){};
+                var rhs_used: std.ArrayListUnmanaged(bool) = .empty;
                 defer rhs_used.deinit(self.allocator);
                 try rhs_used.resize(self.allocator, rhs_fields.len);
                 @memset(rhs_used.items, false);
@@ -11097,7 +11097,7 @@ pub const Pass = struct {
                 const rhs_tags = result.monotype_store.getTags(rhs_mono.tag_union.tags);
                 if (lhs_tags.len != rhs_tags.len) break :blk false;
 
-                var rhs_used = std.ArrayListUnmanaged(bool){};
+                var rhs_used: std.ArrayListUnmanaged(bool) = .empty;
                 defer rhs_used.deinit(self.allocator);
                 try rhs_used.resize(self.allocator, rhs_tags.len);
                 @memset(rhs_used.items, false);

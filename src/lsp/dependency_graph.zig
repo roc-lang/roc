@@ -38,8 +38,8 @@ pub const ModuleNode = struct {
             .name = try allocator.dupe(u8, name),
             .content_hash = std.mem.zeroes([32]u8),
             .exports_hash = std.mem.zeroes([32]u8),
-            .imports : std.ArrayList([]const u8) = .empty,
-            .dependents : std.ArrayList([]const u8) = .empty,
+            .imports = .empty,
+            .dependents = .empty,
             .depth = std.math.maxInt(u32),
         };
     }

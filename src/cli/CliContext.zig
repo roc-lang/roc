@@ -73,11 +73,11 @@ pub const Io = struct {
         const stderr_file = std.Io.File.stderr();
 
         // Enable ANSI escape sequences for colored output (needed on Windows)
-        _ = stdout_file.getOrEnableAnsiEscapeSupport();
-        _ = stderr_file.getOrEnableAnsiEscapeSupport();
+        stdout_file.enableAnsiEscapeCodes(std.Options.debug_io) catch {};
+        stderr_file.enableAnsiEscapeCodes(std.Options.debug_io) catch {};
 
-        self.stdout_writer = stdout_file.writer(&self.stdout_buffer);
-        self.stderr_writer = stderr_file.writer(&self.stderr_buffer);
+        self.stdout_writer = stdout_file.writer(std.Options.debug_io, &self.stdout_buffer);
+        self.stderr_writer = stderr_file.writer(std.Options.debug_io, &self.stderr_buffer);
     }
 
     /// Get the stdout writer interface

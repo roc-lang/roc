@@ -2786,9 +2786,7 @@ pub const Interpreter = struct {
                     // Create a new list with the element's layout and append to it.
                     const elem_layout = elt_arg.layout;
                     const elem_layout_idx = try self.runtime_layout_store.insertLayout(elem_layout);
-                    var new_list_layout = roc_list_arg.layout;
-                    new_list_layout.tag = .list;
-                    new_list_layout.data = .{ .list = elem_layout_idx };
+                    const new_list_layout = Layout.list(elem_layout_idx);
 
                     // Create new empty list with correct element layout
                     const non_null_bytes: [*]u8 = @ptrCast(elt_arg.ptr.?);
@@ -2890,7 +2888,7 @@ pub const Interpreter = struct {
                 // Allocate space for the result list
                 // If we upgraded the element layout, create a new list layout with the upgraded element
                 const result_layout: Layout = if (needs_element_layout_upgrade)
-                    Layout{ .tag = .list, .data = .{ .list = elem_layout_idx } }
+                    Layout.list(elem_layout_idx)
                 else
                     roc_list_arg.layout; // Same layout as input
 
@@ -5849,7 +5847,7 @@ pub const Interpreter = struct {
         const scalar = value.layout.getScalar();
         return switch (scalar.tag) {
             .int => NumericValue{ .int = value.asI128() },
-            .frac => switch (scalar.data.frac) {
+            .frac => switch (scalar.getFrac()) {
                 .f32 => {
                     const raw_ptr = value.ptr orelse return error.TypeMismatch;
                     return NumericValue{ .f32 = builtins.utils.readAs(f32, raw_ptr, @src()) };
@@ -7353,7 +7351,7 @@ pub const Interpreter = struct {
             const layouts_match = stored_elem_layout.eql(elem_layout);
             if (!layouts_match) {
                 const correct_elem_idx = try self.runtime_layout_store.insertLayout(elem_layout);
-                break :blk Layout{ .tag = .list, .data = .{ .list = correct_elem_idx } };
+                break :blk Layout.list(correct_elem_idx);
             } else {
                 break :blk list_layout;
             }
@@ -8560,7 +8558,7 @@ pub const Interpreter = struct {
                 const scalar = lay.getScalar();
                 switch (scalar.tag) {
                     .int => {
-                        const type_name = switch (scalar.data.int) {
+                        const type_name = switch (scalar.getInt()) {
                             .i8 => "I8",
                             .i16 => "I16",
                             .i32 => "I32",
@@ -8576,7 +8574,7 @@ pub const Interpreter = struct {
                         break :blk try self.runtime_types.freshFromContent(content);
                     },
                     .frac => {
-                        const type_name = switch (scalar.data.frac) {
+                        const type_name = switch (scalar.getFrac()) {
                             .dec => "Dec",
                             .f32 => "F32",
                             .f64 => "F64",
@@ -11862,7 +11860,7 @@ pub const Interpreter = struct {
                     // 1. For flex rt_vars, it would return Dec (scalar) layout instead of list
                     // 2. We have no elements to determine element layout from anyway
                     // The list_of_zst layout is the correct representation for empty lists.
-                    const list_layout = layout.Layout{ .tag = .list_of_zst, .data = undefined };
+                    const list_layout = layout.Layout.listOfZst();
                     const dest = try self.pushRaw(list_layout, 0, list_rt_var);
                     if (dest.ptr != null) {
                         dest.setRocList(RocList.empty());
@@ -11917,7 +11915,7 @@ pub const Interpreter = struct {
                     if (is_elem_zst) {
                         // Special case: list of ZSTs
                         // We can create the entire list immediately
-                        const list_layout = layout.Layout{ .tag = .list_of_zst, .data = undefined };
+                        const list_layout = layout.Layout.listOfZst();
                         const dest = try self.pushRaw(list_layout, 0, list_rt_var);
                         if (dest.ptr != null) {
                             var list = RocList.empty();
@@ -13525,7 +13523,7 @@ pub const Interpreter = struct {
             // Default to list of Dec for empty lists when type can't be determined
             const default_elem_layout = Layout.frac(types.Frac.Precision.dec);
             const elem_layout_idx = try self.runtime_layout_store.insertLayout(default_elem_layout);
-            break :blk Layout{ .tag = .list, .data = .{ .list = elem_layout_idx } };
+            break :blk Layout.list(elem_layout_idx);
         };
 
         const dest = try self.pushRaw(list_layout, 0, final_rt_var);
@@ -13985,14 +13983,7 @@ pub const Interpreter = struct {
 
         // Get a ZST layout for hosted functions (they have no captures)
         const zst_idx = try self.runtime_layout_store.ensureZstLayout();
-        const closure_layout = Layout{
-            .tag = .closure,
-            .data = .{
-                .closure = .{
-                    .captures_layout_idx = zst_idx,
-                },
-            },
-        };
+        const closure_layout = Layout.closure(zst_idx);
         const value = try self.pushRaw(closure_layout, 0, rt_var);
         self.registerDefValue(expr_idx, value);
         if (value.ptr) |ptr| {
@@ -15287,7 +15278,7 @@ pub const Interpreter = struct {
                         }
 
                         // Create the list layout with the correct element layout index
-                        const actual_list_layout = Layout{ .tag = .list, .data = .{ .list = list_elem_idx } };
+                        const actual_list_layout = Layout.list(list_elem_idx);
 
                         var dest = try self.pushRaw(actual_list_layout, 0, lc.list_rt_var);
                         dest.rt_var = lc.list_rt_var;
@@ -15999,10 +15990,7 @@ pub const Interpreter = struct {
                                 // Layout mismatch - create a tuple layout [payload, discriminant]
                                 // This is the same approach as layout_type == 1
                                 const disc_precision = tu_data.discriminantPrecision();
-                                const disc_layout = Layout{
-                                    .tag = .scalar,
-                                    .data = .{ .scalar = .{ .tag = .int, .data = .{ .int = disc_precision } } },
-                                };
+                                const disc_layout = Layout.int(disc_precision);
                                 var elem_layouts_fixed = [2]Layout{ values[0].layout, disc_layout };
                                 const proper_tuple_idx = try self.runtime_layout_store.putTuple(&elem_layouts_fixed);
                                 const proper_tuple_layout = self.runtime_layout_store.getLayout(proper_tuple_idx);

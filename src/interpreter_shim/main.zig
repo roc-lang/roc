@@ -157,15 +157,15 @@ const PlatformMutex = struct {
     const Self = @This();
 
     pub fn init() Self {
-        return .{ .inner = if (is_wasm32) {} else .{} };
+        return .{ .inner = if (is_wasm32) {} else std.Io.Mutex.init };
     }
 
     pub fn lock(self: *Self) void {
-        if (!is_wasm32) self.inner.lock();
+        if (!is_wasm32) self.inner.lockUncancelable(std.Options.debug_io);
     }
 
     pub fn unlock(self: *Self) void {
-        if (!is_wasm32) self.inner.unlock();
+        if (!is_wasm32) self.inner.unlock(std.Options.debug_io);
     }
 };
 
@@ -294,7 +294,7 @@ fn initializeOnce(roc_ops: *RocOps) ShimError!void {
 
         // Create shared memory allocator from coordination info
         // Note shm last the lifetime of the program and is never freed.
-        var shm = SharedMemoryAllocator.fromCoordination(allocator, std.Io.default(), page_size) catch |err| {
+        var shm = SharedMemoryAllocator.fromCoordination(allocator, std.Options.debug_io, page_size) catch |err| {
             const msg2 = std.fmt.bufPrint(&buf, "Failed to create shared memory allocator: {s}", .{@errorName(err)}) catch "Failed to create shared memory allocator";
             roc_ops.crash(msg2);
             return error.SharedMemoryError;

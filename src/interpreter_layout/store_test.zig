@@ -90,8 +90,8 @@ test "fromTypeVar - bool type" {
 
     const retrieved_layout = lt.layout_store.getLayout(bool_layout_idx);
     try testing.expect(retrieved_layout.tag == .scalar);
-    try testing.expectEqual(layout.ScalarTag.int, retrieved_layout.data.scalar.tag);
-    try testing.expectEqual(types.Int.Precision.u8, retrieved_layout.data.scalar.data.int);
+    try testing.expectEqual(layout.ScalarTag.int, retrieved_layout.getScalar().tag);
+    try testing.expectEqual(types.Int.Precision.u8, retrieved_layout.getScalar().getInt());
     try testing.expectEqual(@as(u32, 1), lt.layout_store.layoutSize(retrieved_layout));
 }
 
@@ -195,7 +195,7 @@ test "fromTypeVar - record with only zero-sized fields" {
     const record_idx = try lt.layout_store.fromTypeVar(0, record_var, &lt.type_scope, null);
     const record_layout = lt.layout_store.getLayout(record_idx);
     try testing.expect(record_layout.tag == .struct_);
-    const field_slice = lt.layout_store.struct_fields.sliceRange(lt.layout_store.getStructData(record_layout.data.struct_.idx).getFields());
+    const field_slice = lt.layout_store.struct_fields.sliceRange(lt.layout_store.getStructData(record_layout.getStruct().idx).getFields());
     try testing.expectEqual(@as(usize, 2), field_slice.len); // Both ZST fields are kept
 
     // Box of such a record should be box_of_zst since the record only contains ZST fields
@@ -271,14 +271,14 @@ test "deeply nested containers with inner ZST" {
     const outer_list_layout = lt.layout_store.getLayout(result_idx);
     try testing.expect(outer_list_layout.tag == .list);
 
-    const outer_box_layout = lt.layout_store.getLayout(outer_list_layout.data.list);
+    const outer_box_layout = lt.layout_store.getLayout(outer_list_layout.getIdx());
     try testing.expect(outer_box_layout.tag == .box);
 
-    const inner_list_layout = lt.layout_store.getLayout(outer_box_layout.data.box);
+    const inner_list_layout = lt.layout_store.getLayout(outer_box_layout.getIdx());
     try testing.expect(inner_list_layout.tag == .list);
 
     // The innermost element is Box(empty_record), which should resolve to box_of_zst
-    const inner_box_layout = lt.layout_store.getLayout(inner_list_layout.data.list);
+    const inner_box_layout = lt.layout_store.getLayout(inner_list_layout.getIdx());
     try testing.expect(inner_box_layout.tag == .box_of_zst);
 }
 
@@ -897,7 +897,7 @@ test "fromTypeVar - recursive nominal with Box has no double-boxing (issue #8916
     try testing.expect(nat_layout.tag == .tag_union);
 
     // Get the tag union data to inspect the Suc variant's payload layout
-    const tu_data = lt.layout_store.getTagUnionData(nat_layout.data.tag_union.idx);
+    const tu_data = lt.layout_store.getTagUnionData(nat_layout.getTagUnion().idx);
     const variants = lt.layout_store.getTagUnionVariants(tu_data);
 
     // Find the Suc variant
@@ -920,7 +920,7 @@ test "fromTypeVar - recursive nominal with Box has no double-boxing (issue #8916
 
     // CRITICAL: The element of this Box should be a tag_union, NOT another box.
     // Before the fix, this would be .box (double-boxing bug).
-    const box_elem_idx = suc_payload_layout.data.box;
+    const box_elem_idx = suc_payload_layout.getIdx();
     const box_elem_layout = lt.layout_store.getLayout(box_elem_idx);
     try testing.expect(box_elem_layout.tag == .tag_union);
 }
@@ -947,7 +947,7 @@ test "getRecordFieldOffsetByName - same alignment, alphabetical order" {
         &.{ start_ident, len_ident },
     );
     const record_layout = lt.layout_store.getLayout(record_idx);
-    const rid = record_layout.data.struct_.idx;
+    const rid = record_layout.getStruct().idx;
 
     // len < start alphabetically, so len is first
     try testing.expectEqual(@as(u32, 0), lt.layout_store.getRecordFieldOffsetByName(rid, len_ident));
@@ -973,7 +973,7 @@ test "getRecordFieldOffsetByName - same alignment, opposite alphabetical pattern
         &.{ zzz_ident, aaa_ident },
     );
     const record_layout = lt.layout_store.getLayout(record_idx);
-    const rid = record_layout.data.struct_.idx;
+    const rid = record_layout.getStruct().idx;
 
     try testing.expectEqual(@as(u32, 0), lt.layout_store.getRecordFieldOffsetByName(rid, aaa_ident));
     try testing.expectEqual(@as(u32, 8), lt.layout_store.getRecordFieldOffsetByName(rid, zzz_ident));
@@ -998,7 +998,7 @@ test "getRecordFieldOffsetByName - alignment overrides alphabetical order" {
         &.{ len_ident, start_ident },
     );
     const record_layout = lt.layout_store.getLayout(record_idx);
-    const rid = record_layout.data.struct_.idx;
+    const rid = record_layout.getStruct().idx;
 
     // start (U64, align=8) comes before len (U8, align=1) due to alignment sort
     try testing.expectEqual(@as(u32, 0), lt.layout_store.getRecordFieldOffsetByName(rid, start_ident));
@@ -1036,7 +1036,7 @@ test "record field names resolve correctly across module ident stores" {
         &.{ builtin_start, builtin_len },
     );
     const record_layout = layout_store.getLayout(record_idx);
-    const rid = record_layout.data.struct_.idx;
+    const rid = record_layout.getStruct().idx;
 
     try testing.expectEqual(@as(u32, 0), layout_store.getRecordFieldOffsetByName(rid, builtin_len));
     try testing.expectEqual(@as(u32, 8), layout_store.getRecordFieldOffsetByName(rid, builtin_start));

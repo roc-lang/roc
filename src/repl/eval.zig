@@ -1274,7 +1274,7 @@ fn formatList(
     } else if (lay.tag == .list_of_zst) {
         const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(ptr.?));
         const len = roc_list.len();
-        const zst_layout = Layout{ .tag = .zst, .data = .{ .zst = {} } };
+        const zst_layout = Layout.zst();
         var i: usize = 0;
         while (i < len) : (i += 1) {
             const rendered = try formatWithTypes(allocator, null, zst_layout, elem_type_var, module_env, layout_store);
@@ -1317,7 +1317,7 @@ fn formatBox(
             try out.appendSlice(rendered);
         }
     } else if (lay.tag == .box_of_zst) {
-        const zst_layout = Layout{ .tag = .zst, .data = .{ .zst = {} } };
+        const zst_layout = Layout.zst();
         const rendered = try formatWithTypes(allocator, null, zst_layout, inner_type_var, module_env, layout_store);
         defer allocator.free(rendered);
         try out.appendSlice(rendered);

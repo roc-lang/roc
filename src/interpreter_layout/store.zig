@@ -144,8 +144,8 @@ pub const Store = struct {
         const tag = @intFromEnum(scalar.tag);
 
         // Get the precision bits directly from the packed representation
-        // This works because in a packed union, all fields start at bit 0
-        const scalar_bits = @as(u7, @bitCast(scalar));
+        // Extract the meaningful 7 bits (4 data + 3 tag) from the 28-bit padded scalar
+        const scalar_bits: u7 = @truncate(@as(u28, @bitCast(scalar)));
         const precision = scalar_bits & 0xF; // Lower 4 bits contain precision for numeric types
 
         // Create masks for different tag ranges
@@ -646,7 +646,7 @@ pub const Store = struct {
     /// Get bundled information about a list layout's element
     pub fn getListInfo(self: *const Self, layout: Layout) ListInfo {
         std.debug.assert(layout.tag == .list or layout.tag == .list_of_zst);
-        const elem_layout_idx = layout.data.list;
+        const elem_layout_idx = layout.getIdx();
         const elem_layout = self.getLayout(elem_layout_idx);
         return ListInfo{
             .elem_layout_idx = elem_layout_idx,
@@ -660,7 +660,7 @@ pub const Store = struct {
     /// Get bundled information about a box layout's element
     pub fn getBoxInfo(self: *const Self, layout: Layout) BoxInfo {
         std.debug.assert(layout.tag == .box or layout.tag == .box_of_zst);
-        const elem_layout_idx = layout.data.box;
+        const elem_layout_idx = layout.getIdx();
         const elem_layout = self.getLayout(elem_layout_idx);
         return BoxInfo{
             .elem_layout_idx = elem_layout_idx,
@@ -674,10 +674,10 @@ pub const Store = struct {
     /// Get bundled information about a struct layout (unified for records and tuples)
     pub fn getStructInfo(self: *const Self, layout: Layout) StructInfo {
         std.debug.assert(layout.tag == .struct_);
-        const struct_data = self.getStructData(layout.data.struct_.idx);
+        const struct_data = self.getStructData(layout.getStruct().idx);
         return StructInfo{
             .data = struct_data,
-            .alignment = layout.data.struct_.alignment,
+            .alignment = layout.getStruct().alignment,
             .fields = self.struct_fields.sliceRange(struct_data.getFields()),
             .contains_refcounted = self.layoutContainsRefcounted(layout),
         };
@@ -690,11 +690,11 @@ pub const Store = struct {
     /// Get bundled information about a tag union layout
     pub fn getTagUnionInfo(self: *const Self, layout: Layout) TagUnionInfo {
         std.debug.assert(layout.tag == .tag_union);
-        const tu_data = self.getTagUnionData(layout.data.tag_union.idx);
+        const tu_data = self.getTagUnionData(layout.getTagUnion().idx);
         return TagUnionInfo{
-            .idx = layout.data.tag_union.idx,
+            .idx = layout.getTagUnion().idx,
             .data = tu_data,
-            .alignment = layout.data.tag_union.alignment,
+            .alignment = layout.getTagUnion().alignment,
             .variants = self.tag_union_variants.sliceRange(tu_data.getVariants()),
             .contains_refcounted = self.layoutContainsRefcounted(layout),
         };
@@ -703,14 +703,14 @@ pub const Store = struct {
     /// Get bundled information about a scalar layout
     pub fn getScalarInfo(self: *const Self, layout: Layout) ScalarInfo {
         std.debug.assert(layout.tag == .scalar);
-        const scalar = layout.data.scalar;
+        const scalar = layout.getScalar();
         const size_align = self.layoutSizeAlign(layout);
         return ScalarInfo{
             .tag = scalar.tag,
             .size = size_align.size,
             .alignment = @as(u32, 1) << @intFromEnum(size_align.alignment),
-            .int_precision = if (scalar.tag == .int) scalar.data.int else null,
-            .frac_precision = if (scalar.tag == .frac) scalar.data.frac else null,
+            .int_precision = if (scalar.tag == .int) scalar.getInt() else null,
+            .frac_precision = if (scalar.tag == .frac) scalar.getFrac() else null,
         };
     }
 
@@ -1035,14 +1035,14 @@ pub const Store = struct {
     pub fn layoutSizeAlign(self: *const Self, layout: Layout) SizeAlign {
         const target_usize = self.targetUsize();
         return switch (layout.tag) {
-            .scalar => switch (layout.data.scalar.tag) {
+            .scalar => switch (layout.getScalar().tag) {
                 .int => .{
-                    .size = @intCast(layout.data.scalar.data.int.size()),
-                    .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(layout.data.scalar.data.int.alignment().toByteUnits())),
+                    .size = @intCast(layout.getScalar().getInt().size()),
+                    .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(layout.getScalar().getInt().alignment().toByteUnits())),
                 },
                 .frac => .{
-                    .size = @intCast(layout.data.scalar.data.frac.size()),
-                    .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(layout.data.scalar.data.frac.alignment().toByteUnits())),
+                    .size = @intCast(layout.getScalar().getFrac().size()),
+                    .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(layout.getScalar().getFrac().alignment().toByteUnits())),
                 },
                 .str => .{
                     .size = @intCast(3 * target_usize.size()), // ptr, byte length, capacity
@@ -1059,13 +1059,13 @@ pub const Store = struct {
             },
             .struct_ => .{
                 // Use pre-computed size from StructData to avoid infinite recursion on recursive types
-                .size = @intCast(self.struct_data.get(@enumFromInt(layout.data.struct_.idx.int_idx)).size),
-                .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(layout.data.struct_.alignment.toByteUnits())),
+                .size = @intCast(self.struct_data.get(@enumFromInt(layout.getStruct().idx.int_idx)).size),
+                .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(layout.getStruct().alignment.toByteUnits())),
             },
             .closure => blk: {
                 // Closure layout: header + aligned capture data
                 const header_size = @sizeOf(layout_mod.Closure);
-                const captures_layout = self.getLayout(layout.data.closure.captures_layout_idx);
+                const captures_layout = self.getLayout(layout.getClosure().captures_layout_idx);
                 const captures_size_align = self.layoutSizeAlign(captures_layout);
                 const aligned_captures_offset = std.mem.alignForward(u32, header_size, @as(u32, @intCast(captures_size_align.alignment.toByteUnits())));
                 break :blk .{
@@ -1075,8 +1075,8 @@ pub const Store = struct {
             },
             .tag_union => .{
                 // Use pre-computed size from TagUnionData to avoid infinite recursion on recursive types
-                .size = @intCast(self.tag_union_data.get(@enumFromInt(layout.data.tag_union.idx.int_idx)).size),
-                .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(layout.data.tag_union.alignment.toByteUnits())),
+                .size = @intCast(self.tag_union_data.get(@enumFromInt(layout.getTagUnion().idx.int_idx)).size),
+                .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(layout.getTagUnion().alignment.toByteUnits())),
             },
             .zst => .{
                 .size = 0, // Zero-sized types have size 0
@@ -1122,7 +1122,7 @@ pub const Store = struct {
         }
 
         switch (l.tag) {
-            .scalar => return l.data.scalar.tag == .str,
+            .scalar => return l.getScalar().tag == .str,
             .list, .list_of_zst => return true,
             .box, .box_of_zst => return true,
             .zst => return false,
@@ -1133,7 +1133,7 @@ pub const Store = struct {
 
         const contains_refcounted = switch (l.tag) {
             .struct_ => blk: {
-                const sd = self.getStructData(l.data.struct_.idx);
+                const sd = self.getStructData(l.getStruct().idx);
                 const fields = self.struct_fields.sliceRange(sd.getFields());
                 for (0..fields.len) |i| {
                     const field_layout = self.getLayout(fields.get(i).layout);
@@ -1144,7 +1144,7 @@ pub const Store = struct {
                 break :blk false;
             },
             .tag_union => blk: {
-                const tu_data = self.getTagUnionData(l.data.tag_union.idx);
+                const tu_data = self.getTagUnionData(l.getTagUnion().idx);
                 const variants = self.getTagUnionVariants(tu_data);
                 for (0..variants.len) |i| {
                     const variant_layout = self.getLayout(variants.get(i).payload_layout);
@@ -1155,7 +1155,7 @@ pub const Store = struct {
                 break :blk false;
             },
             .closure => blk: {
-                const captures_layout = self.getLayout(l.data.closure.captures_layout_idx);
+                const captures_layout = self.getLayout(l.getClosure().captures_layout_idx);
                 break :blk try self.layoutContainsRefcountedInner(captures_layout, visit_states);
             },
             .scalar, .list, .list_of_zst, .box, .box_of_zst, .zst => unreachable,
@@ -1839,7 +1839,7 @@ pub const Store = struct {
                 // which would cause spurious cycle detection when the alias var is encountered
                 // again. See issue #8708.
                 if (current.desc.content != .alias) {
-                    try self.work.in_progress_vars.put(.{ .module_idx = self.current_module_idx, .var_ = current.var_ }, {});
+                    try self.work.in_progress_vars.put(self.allocator, .{ .module_idx = self.current_module_idx, .var_ = current.var_ }, {});
                 }
 
                 layout = switch (current.desc.content) {
@@ -2076,7 +2076,7 @@ pub const Store = struct {
                             // We store the range (indices) rather than a slice to avoid
                             // dangling pointers if the vars storage is reallocated.
                             const type_args_range = types.Store.getNominalArgsRange(nominal_type);
-                            try self.work.in_progress_nominals.put(nominal_key, .{
+                            try self.work.in_progress_nominals.put(self.allocator, nominal_key, .{
                                 .nominal_var = current.var_,
                                 .backing_var = resolved_backing.var_,
                                 .type_args_range = type_args_range,
@@ -2841,7 +2841,7 @@ pub const Store = struct {
 
         // For scalar types, return the appropriate sentinel value instead of inserting
         if (layout.tag == .scalar) {
-            const result = idxFromScalar(layout.data.scalar);
+            const result = idxFromScalar(layout.getScalar());
             return result;
         }
 

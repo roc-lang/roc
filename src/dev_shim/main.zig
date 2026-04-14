@@ -74,15 +74,15 @@ const PlatformMutex = struct {
     const Self = @This();
 
     pub fn init() Self {
-        return .{ .inner = .{} };
+        return .{ .inner = std.Io.Mutex.init };
     }
 
     pub fn lock(self: *Self) void {
-        self.inner.lock();
+        self.inner.lockUncancelable(std.Options.debug_io);
     }
 
     pub fn unlock(self: *Self) void {
-        self.inner.unlock();
+        self.inner.unlock(std.Options.debug_io);
     }
 };
 
@@ -213,7 +213,7 @@ fn initializeOnce(roc_ops: *RocOps) ShimError!void {
     if (roc__serialized_base_ptr == null) {
         const page_size = SharedMemoryAllocator.getSystemPageSize() catch 4096;
 
-        var shm = SharedMemoryAllocator.fromCoordination(allocator, std.Io.default(), page_size) catch |err| {
+        var shm = SharedMemoryAllocator.fromCoordination(allocator, std.Options.debug_io, page_size) catch |err| {
             const msg2 = std.fmt.bufPrint(&buf, "Failed to create shared memory allocator: {s}", .{@errorName(err)}) catch "Failed to create shared memory allocator";
             roc_ops.crash(msg2);
             return error.SharedMemoryError;

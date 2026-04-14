@@ -160,14 +160,14 @@ pub fn format(self: RocValue, allocator: std.mem.Allocator, ctx: FormatContext) 
                         return try allocator.dupe(u8, if (self.readBool()) "True" else "False");
                     }
                 }
-                const precision = scalar.data.int;
+                const precision = scalar.getInt();
                 return switch (precision) {
                     .u64, .u128 => try std.fmt.allocPrint(allocator, "{d}", .{self.readU128()}),
                     else => try std.fmt.allocPrint(allocator, "{d}", .{self.readI128()}),
                 };
             },
             .frac => {
-                return switch (scalar.data.frac) {
+                return switch (scalar.getFrac()) {
                     .f32 => blk: {
                         var buf: [400]u8 = undefined;
                         const slice = i128h.f64_to_str(&buf, @as(f64, self.readF32()));
@@ -370,8 +370,8 @@ pub fn equals(self: RocValue, other: RocValue, ctx: FormatContext) bool {
                     return self.readI128() == other.readI128();
                 },
                 .frac => {
-                    if (s_scalar.data.frac != o_scalar.data.frac) return false;
-                    return switch (s_scalar.data.frac) {
+                    if (s_scalar.getFrac() != o_scalar.getFrac()) return false;
+                    return switch (s_scalar.getFrac()) {
                         .f32 => @as(u32, @bitCast(self.readF32())) == @as(u32, @bitCast(other.readF32())),
                         .f64 => @as(u64, @bitCast(self.readF64())) == @as(u64, @bitCast(other.readF64())),
                         .dec => self.readDec().num == other.readDec().num,
@@ -677,8 +677,8 @@ test "equals zst" {
 }
 
 test "equals mismatched tags" {
-    const zst_layout = Layout{ .tag = .zst, .data = .{ .zst = {} } };
-    const box_zst_layout = Layout{ .tag = .box_of_zst, .data = .{ .box_of_zst = {} } };
+    const zst_layout = Layout.zst();
+    const box_zst_layout = Layout.boxOfZst();
     const va = RocValue.zst(zst_layout);
     const vb = RocValue.zst(box_zst_layout);
     const ctx = FormatContext{ .layout_store = undefined, .ident_store = null };

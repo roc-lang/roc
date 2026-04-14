@@ -43,23 +43,37 @@ pub const ScalarTag = enum(u3) {
     frac = 2, // Maps to Idx 12-14 (depending on precision)
 };
 
-/// The union portion of the Scalar packed tagged union.
-///
-/// Some scalars have extra information associated with them,
-/// such as the precision of a particular int or frac. This union
-/// stores that extra information.
-pub const ScalarUnion = packed union {
-    str: void,
-    int: types.Int.Precision,
-    frac: types.Frac.Precision,
-};
+/// Raw backing for scalar data (largest payload is Int.Precision = u4).
+/// In Zig 0.16, packed unions require uniform field widths, so we use
+/// a raw integer with typed accessors instead.
+pub const ScalarData = u4;
 
 /// A scalar value such as a str, int, or frac.
+/// Uses the Zig 0.16 pattern of packed struct with raw data + typed accessors.
 pub const Scalar = packed struct {
-    // This can't be a normal Zig tagged union because it uses a packed union to reduce memory use,
-    // and Zig tagged unions don't support being packed.
-    data: ScalarUnion,
+    data: ScalarData,
     tag: ScalarTag,
+    _pad: u21 = 0,
+
+    pub fn getInt(self: Scalar) types.Int.Precision {
+        return @enumFromInt(self.data);
+    }
+
+    pub fn getFrac(self: Scalar) types.Frac.Precision {
+        return @enumFromInt(@as(u3, @truncate(self.data)));
+    }
+
+    pub fn initStr() Scalar {
+        return .{ .data = 0, .tag = .str };
+    }
+
+    pub fn initInt(precision: types.Int.Precision) Scalar {
+        return .{ .data = @intFromEnum(precision), .tag = .int };
+    }
+
+    pub fn initFrac(precision: types.Frac.Precision) Scalar {
+        return .{ .data = @intFromEnum(precision), .tag = .frac };
+    }
 };
 
 /// Index into a Layout Store
@@ -126,20 +140,10 @@ pub const Closure = struct {
     source_env: *const @import("can").ModuleEnv,
 };
 
-/// The union portion of the Layout packed tagged union (the tag being LayoutTag).
-///
-/// The largest variant must fit in 28 bits to leave room for the u4 tag
-pub const LayoutUnion = packed union {
-    scalar: Scalar,
-    box: Idx,
-    box_of_zst: void,
-    list: Idx,
-    list_of_zst: void,
-    struct_: StructLayout,
-    closure: ClosureLayout,
-    zst: void,
-    tag_union: TagUnionLayout,
-};
+/// Raw backing type for the Layout data (28 bits).
+/// In Zig 0.16, packed unions require uniform field widths, so we use
+/// a raw integer with typed accessors on the Layout struct instead.
+pub const LayoutData = std.meta.Int(.unsigned, layout_bit_size - @bitSizeOf(LayoutTag));
 
 /// Unified struct field layout — used for both records and tuples at the layout level.
 /// At the LIR level, records and tuples are both just contiguous fields sorted by alignment.
@@ -532,23 +536,51 @@ pub const ScalarInfo = struct {
 /// by alignment and then by field name (records) or tuple index (tuples).
 /// We store the original source index for each field (for tuple element access).
 pub const Layout = packed struct {
-    // This can't be a normal Zig tagged union because it uses a packed union to reduce memory use,
-    // and Zig tagged unions don't support being packed.
-    data: LayoutUnion,
+    // Zig 0.16: packed unions require uniform field widths, so we use a raw
+    // integer backing with typed accessors (wrap/unwrap pattern from Zir.zig).
+    data: LayoutData,
     tag: LayoutTag,
+
+    // -- Typed accessors for unpacking the raw data field --
+
+    pub fn getScalar(self: Layout) Scalar {
+        return @bitCast(@as(std.meta.Int(.unsigned, @bitSizeOf(Scalar)), @truncate(self.data)));
+    }
+
+    pub fn getIdx(self: Layout) Idx {
+        return @enumFromInt(self.data);
+    }
+
+    pub fn getStruct(self: Layout) StructLayout {
+        return @bitCast(@as(std.meta.Int(.unsigned, @bitSizeOf(StructLayout)), @truncate(self.data)));
+    }
+
+    pub fn getClosure(self: Layout) ClosureLayout {
+        return @bitCast(@as(std.meta.Int(.unsigned, @bitSizeOf(ClosureLayout)), @truncate(self.data)));
+    }
+
+    pub fn getTagUnion(self: Layout) TagUnionLayout {
+        return @bitCast(@as(std.meta.Int(.unsigned, @bitSizeOf(TagUnionLayout)), @truncate(self.data)));
+    }
+
+    fn packData(val: anytype) LayoutData {
+        const T = @TypeOf(val);
+        const bits = @bitSizeOf(T);
+        return @intCast(@as(std.meta.Int(.unsigned, bits), @bitCast(val)));
+    }
 
     /// This layout's alignment, given a particular target usize.
     pub fn alignment(self: Layout, target_usize: target.TargetUsize) std.mem.Alignment {
         return switch (self.tag) {
-            .scalar => switch (self.data.scalar.tag) {
-                .int => self.data.scalar.data.int.alignment(),
-                .frac => self.data.scalar.data.frac.alignment(),
+            .scalar => switch (self.getScalar().tag) {
+                .int => self.getScalar().getInt().alignment(),
+                .frac => self.getScalar().getFrac().alignment(),
                 .str => target_usize.alignment(),
             },
             .box, .box_of_zst => target_usize.alignment(),
             .list, .list_of_zst => target_usize.alignment(),
-            .struct_ => self.data.struct_.alignment,
-            .tag_union => self.data.tag_union.alignment,
+            .struct_ => self.getStruct().alignment,
+            .tag_union => self.getTagUnion().alignment,
             .closure => target_usize.alignment(),
             .zst => std.mem.Alignment.@"1",
         };
@@ -556,12 +588,12 @@ pub const Layout = packed struct {
 
     /// int layout with the given precision
     pub fn int(precision: types.Int.Precision) Layout {
-        return Layout{ .data = .{ .scalar = .{ .data = .{ .int = precision }, .tag = .int } }, .tag = .scalar };
+        return .{ .data = packData(Scalar.initInt(precision)), .tag = .scalar };
     }
 
     /// frac layout with the given precision
     pub fn frac(precision: types.Frac.Precision) Layout {
-        return Layout{ .data = .{ .scalar = .{ .data = .{ .frac = precision }, .tag = .frac } }, .tag = .scalar };
+        return .{ .data = packData(Scalar.initFrac(precision)), .tag = .scalar };
     }
 
     /// Default number layout (Dec) for unresolved polymorphic number types
@@ -581,33 +613,33 @@ pub const Layout = packed struct {
 
     /// str layout
     pub fn str() Layout {
-        return Layout{ .data = .{ .scalar = .{ .data = .{ .str = {} }, .tag = .str } }, .tag = .scalar };
+        return .{ .data = packData(Scalar.initStr()), .tag = .scalar };
     }
 
     /// box layout with the given element layout
     pub fn box(elem_idx: Idx) Layout {
-        return Layout{ .data = .{ .box = elem_idx }, .tag = .box };
+        return .{ .data = @intFromEnum(elem_idx), .tag = .box };
     }
 
     /// box of zero-sized type layout (e.g. Box({}))
     pub fn boxOfZst() Layout {
-        return Layout{ .data = .{ .box_of_zst = {} }, .tag = .box_of_zst };
+        return .{ .data = 0, .tag = .box_of_zst };
     }
 
     /// list layout with the given element layout
     pub fn list(elem_idx: Idx) Layout {
-        return Layout{ .data = .{ .list = elem_idx }, .tag = .list };
+        return .{ .data = @intFromEnum(elem_idx), .tag = .list };
     }
 
     /// list of zero-sized type layout (e.g. List({}))
     pub fn listOfZst() Layout {
-        return Layout{ .data = .{ .list_of_zst = {} }, .tag = .list_of_zst };
+        return .{ .data = 0, .tag = .list_of_zst };
     }
 
     /// struct layout with the given alignment and struct metadata (e.g. size and field layouts)
     /// Used for both records and tuples — at the layout level they are identical.
     pub fn struct_(struct_alignment: std.mem.Alignment, struct_idx: StructIdx) Layout {
-        return Layout{ .data = .{ .struct_ = .{ .alignment = struct_alignment, .idx = struct_idx } }, .tag = .struct_ };
+        return .{ .data = packData(StructLayout{ .alignment = struct_alignment, .idx = struct_idx }), .tag = .struct_ };
     }
 
     /// Backwards-compat aliases
@@ -615,26 +647,23 @@ pub const Layout = packed struct {
     pub const tuple = struct_;
 
     pub fn closure(captures_layout_idx: Idx) Layout {
-        return Layout{
-            .data = .{ .closure = .{ .captures_layout_idx = captures_layout_idx } },
-            .tag = .closure,
-        };
+        return .{ .data = packData(ClosureLayout{ .captures_layout_idx = captures_layout_idx }), .tag = .closure };
     }
 
     /// Zero-sized type layout (empty records, empty tuples, phantom types, etc.)
     pub fn zst() Layout {
-        return Layout{ .data = .{ .zst = {} }, .tag = .zst };
+        return .{ .data = 0, .tag = .zst };
     }
 
     /// tag union layout with the given alignment and tag union metadata
     pub fn tagUnion(tu_alignment: std.mem.Alignment, tu_idx: TagUnionIdx) Layout {
-        return Layout{ .data = .{ .tag_union = .{ .alignment = tu_alignment, .idx = tu_idx } }, .tag = .tag_union };
+        return .{ .data = packData(TagUnionLayout{ .alignment = tu_alignment, .idx = tu_idx }), .tag = .tag_union };
     }
 
     /// Check if a layout represents a heap-allocated type that needs refcounting
     pub fn isRefcounted(self: Layout) bool {
         return switch (self.tag) {
-            .scalar => switch (self.data.scalar.tag) {
+            .scalar => switch (self.getScalar().tag) {
                 .str => true, // RocStr needs refcounting
                 else => false,
             },
@@ -650,21 +679,21 @@ pub const Layout = packed struct {
     pub fn eql(self: Layout, other: Layout) bool {
         if (self.tag != other.tag) return false;
         return switch (self.tag) {
-            .scalar => self.data.scalar.tag == other.data.scalar.tag and switch (self.data.scalar.tag) {
+            .scalar => self.getScalar().tag == other.getScalar().tag and switch (self.getScalar().tag) {
                 .str => true, // No additional data to compare
-                .int => self.data.scalar.data.int == other.data.scalar.data.int,
-                .frac => self.data.scalar.data.frac == other.data.scalar.data.frac,
+                .int => self.getScalar().getInt() == other.getScalar().getInt(),
+                .frac => self.getScalar().getFrac() == other.getScalar().getFrac(),
             },
-            .box => self.data.box == other.data.box,
+            .box => self.getIdx() == other.getIdx(),
             .box_of_zst => true, // No additional data
-            .list => self.data.list == other.data.list,
+            .list => self.getIdx() == other.getIdx(),
             .list_of_zst => true, // No additional data
-            .struct_ => self.data.struct_.alignment == other.data.struct_.alignment and
-                self.data.struct_.idx.int_idx == other.data.struct_.idx.int_idx,
-            .closure => self.data.closure.captures_layout_idx == other.data.closure.captures_layout_idx,
+            .struct_ => self.getStruct().alignment == other.getStruct().alignment and
+                self.getStruct().idx.int_idx == other.getStruct().idx.int_idx,
+            .closure => self.getClosure().captures_layout_idx == other.getClosure().captures_layout_idx,
             .zst => true, // No additional data
-            .tag_union => self.data.tag_union.alignment == other.data.tag_union.alignment and
-                self.data.tag_union.idx.int_idx == other.data.tag_union.idx.int_idx,
+            .tag_union => self.getTagUnion().alignment == other.getTagUnion().alignment and
+                self.getTagUnion().idx.int_idx == other.getTagUnion().idx.int_idx,
         };
     }
 };
@@ -735,26 +764,25 @@ test "Layout scalar data access" {
     // Test int
     const int_layout = Layout.int(.i32);
     try testing.expectEqual(LayoutTag.scalar, int_layout.tag);
-    try testing.expectEqual(ScalarTag.int, int_layout.data.scalar.tag);
-    try testing.expectEqual(types.Int.Precision.i32, int_layout.data.scalar.data.int);
+    try testing.expectEqual(ScalarTag.int, int_layout.getScalar().tag);
+    try testing.expectEqual(types.Int.Precision.i32, int_layout.getScalar().getInt());
 
     // Test frac
     const frac_layout = Layout.frac(.f64);
     try testing.expectEqual(LayoutTag.scalar, frac_layout.tag);
-    try testing.expectEqual(ScalarTag.frac, frac_layout.data.scalar.tag);
-    try testing.expectEqual(types.Frac.Precision.f64, frac_layout.data.scalar.data.frac);
+    try testing.expectEqual(ScalarTag.frac, frac_layout.getScalar().tag);
+    try testing.expectEqual(types.Frac.Precision.f64, frac_layout.getScalar().getFrac());
 
     // Test bool (now stored as u8)
     const bool_layout = Layout.boolType();
     try testing.expectEqual(LayoutTag.scalar, bool_layout.tag);
-    try testing.expectEqual(ScalarTag.int, bool_layout.data.scalar.tag);
-    try testing.expectEqual(types.Int.Precision.u8, bool_layout.data.scalar.data.int);
+    try testing.expectEqual(ScalarTag.int, bool_layout.getScalar().tag);
+    try testing.expectEqual(types.Int.Precision.u8, bool_layout.getScalar().getInt());
 
     // Test str
     const str_layout = Layout.str();
     try testing.expectEqual(LayoutTag.scalar, str_layout.tag);
-    try testing.expectEqual(ScalarTag.str, str_layout.data.scalar.tag);
-    try testing.expectEqual({}, str_layout.data.scalar.data.str);
+    try testing.expectEqual(ScalarTag.str, str_layout.getScalar().tag);
 }
 
 test "Layout non-scalar types" {
@@ -777,17 +805,17 @@ test "Layout scalar variants" {
     // Test scalar type creation
     const int_scalar = Layout.int(.i32);
     try testing.expectEqual(LayoutTag.scalar, int_scalar.tag);
-    try testing.expectEqual(ScalarTag.int, int_scalar.data.scalar.tag);
-    try testing.expectEqual(types.Int.Precision.i32, int_scalar.data.scalar.data.int);
+    try testing.expectEqual(ScalarTag.int, int_scalar.getScalar().tag);
+    try testing.expectEqual(types.Int.Precision.i32, int_scalar.getScalar().getInt());
 
     const str_scalar = Layout.str();
     try testing.expectEqual(LayoutTag.scalar, str_scalar.tag);
-    try testing.expectEqual(ScalarTag.str, str_scalar.data.scalar.tag);
+    try testing.expectEqual(ScalarTag.str, str_scalar.getScalar().tag);
 
     const frac_scalar = Layout.frac(.f64);
     try testing.expectEqual(LayoutTag.scalar, frac_scalar.tag);
-    try testing.expectEqual(ScalarTag.frac, frac_scalar.data.scalar.tag);
-    try testing.expectEqual(types.Frac.Precision.f64, frac_scalar.data.scalar.data.frac);
+    try testing.expectEqual(ScalarTag.frac, frac_scalar.getScalar().tag);
+    try testing.expectEqual(types.Frac.Precision.f64, frac_scalar.getScalar().getFrac());
 
     // Test zst variants separately
     const box_zst = Layout.boxOfZst();
@@ -802,79 +830,79 @@ test "Scalar memory optimization - comprehensive coverage" {
 
     const bool_layout = Layout.boolType();
     try testing.expectEqual(LayoutTag.scalar, bool_layout.tag);
-    try testing.expectEqual(ScalarTag.int, bool_layout.data.scalar.tag);
-    try testing.expectEqual(types.Int.Precision.u8, bool_layout.data.scalar.data.int);
+    try testing.expectEqual(ScalarTag.int, bool_layout.getScalar().tag);
+    try testing.expectEqual(types.Int.Precision.u8, bool_layout.getScalar().getInt());
 
     const str_layout = Layout.str();
     try testing.expectEqual(LayoutTag.scalar, str_layout.tag);
-    try testing.expectEqual(ScalarTag.str, str_layout.data.scalar.tag);
+    try testing.expectEqual(ScalarTag.str, str_layout.getScalar().tag);
 
     // Test ALL integer precisions
     const int_u8 = Layout.int(.u8);
     try testing.expectEqual(LayoutTag.scalar, int_u8.tag);
-    try testing.expectEqual(ScalarTag.int, int_u8.data.scalar.tag);
-    try testing.expectEqual(types.Int.Precision.u8, int_u8.data.scalar.data.int);
+    try testing.expectEqual(ScalarTag.int, int_u8.getScalar().tag);
+    try testing.expectEqual(types.Int.Precision.u8, int_u8.getScalar().getInt());
 
     const int_i8 = Layout.int(.i8);
     try testing.expectEqual(LayoutTag.scalar, int_i8.tag);
-    try testing.expectEqual(ScalarTag.int, int_i8.data.scalar.tag);
-    try testing.expectEqual(types.Int.Precision.i8, int_i8.data.scalar.data.int);
+    try testing.expectEqual(ScalarTag.int, int_i8.getScalar().tag);
+    try testing.expectEqual(types.Int.Precision.i8, int_i8.getScalar().getInt());
 
     const int_u16 = Layout.int(.u16);
     try testing.expectEqual(LayoutTag.scalar, int_u16.tag);
-    try testing.expectEqual(ScalarTag.int, int_u16.data.scalar.tag);
-    try testing.expectEqual(types.Int.Precision.u16, int_u16.data.scalar.data.int);
+    try testing.expectEqual(ScalarTag.int, int_u16.getScalar().tag);
+    try testing.expectEqual(types.Int.Precision.u16, int_u16.getScalar().getInt());
 
     const int_i16 = Layout.int(.i16);
     try testing.expectEqual(LayoutTag.scalar, int_i16.tag);
-    try testing.expectEqual(ScalarTag.int, int_i16.data.scalar.tag);
-    try testing.expectEqual(types.Int.Precision.i16, int_i16.data.scalar.data.int);
+    try testing.expectEqual(ScalarTag.int, int_i16.getScalar().tag);
+    try testing.expectEqual(types.Int.Precision.i16, int_i16.getScalar().getInt());
 
     const int_u32 = Layout.int(.u32);
     try testing.expectEqual(LayoutTag.scalar, int_u32.tag);
-    try testing.expectEqual(ScalarTag.int, int_u32.data.scalar.tag);
-    try testing.expectEqual(types.Int.Precision.u32, int_u32.data.scalar.data.int);
+    try testing.expectEqual(ScalarTag.int, int_u32.getScalar().tag);
+    try testing.expectEqual(types.Int.Precision.u32, int_u32.getScalar().getInt());
 
     const int_i32 = Layout.int(.i32);
     try testing.expectEqual(LayoutTag.scalar, int_i32.tag);
-    try testing.expectEqual(ScalarTag.int, int_i32.data.scalar.tag);
-    try testing.expectEqual(types.Int.Precision.i32, int_i32.data.scalar.data.int);
+    try testing.expectEqual(ScalarTag.int, int_i32.getScalar().tag);
+    try testing.expectEqual(types.Int.Precision.i32, int_i32.getScalar().getInt());
 
     const int_u64 = Layout.int(.u64);
     try testing.expectEqual(LayoutTag.scalar, int_u64.tag);
-    try testing.expectEqual(ScalarTag.int, int_u64.data.scalar.tag);
-    try testing.expectEqual(types.Int.Precision.u64, int_u64.data.scalar.data.int);
+    try testing.expectEqual(ScalarTag.int, int_u64.getScalar().tag);
+    try testing.expectEqual(types.Int.Precision.u64, int_u64.getScalar().getInt());
 
     const int_i64 = Layout.int(.i64);
     try testing.expectEqual(LayoutTag.scalar, int_i64.tag);
-    try testing.expectEqual(ScalarTag.int, int_i64.data.scalar.tag);
-    try testing.expectEqual(types.Int.Precision.i64, int_i64.data.scalar.data.int);
+    try testing.expectEqual(ScalarTag.int, int_i64.getScalar().tag);
+    try testing.expectEqual(types.Int.Precision.i64, int_i64.getScalar().getInt());
 
     const int_u128 = Layout.int(.u128);
     try testing.expectEqual(LayoutTag.scalar, int_u128.tag);
-    try testing.expectEqual(ScalarTag.int, int_u128.data.scalar.tag);
-    try testing.expectEqual(types.Int.Precision.u128, int_u128.data.scalar.data.int);
+    try testing.expectEqual(ScalarTag.int, int_u128.getScalar().tag);
+    try testing.expectEqual(types.Int.Precision.u128, int_u128.getScalar().getInt());
 
     const int_i128 = Layout.int(.i128);
     try testing.expectEqual(LayoutTag.scalar, int_i128.tag);
-    try testing.expectEqual(ScalarTag.int, int_i128.data.scalar.tag);
-    try testing.expectEqual(types.Int.Precision.i128, int_i128.data.scalar.data.int);
+    try testing.expectEqual(ScalarTag.int, int_i128.getScalar().tag);
+    try testing.expectEqual(types.Int.Precision.i128, int_i128.getScalar().getInt());
 
     // Test ALL fraction precisions
     const frac_f32 = Layout.frac(.f32);
     try testing.expectEqual(LayoutTag.scalar, frac_f32.tag);
-    try testing.expectEqual(ScalarTag.frac, frac_f32.data.scalar.tag);
-    try testing.expectEqual(types.Frac.Precision.f32, frac_f32.data.scalar.data.frac);
+    try testing.expectEqual(ScalarTag.frac, frac_f32.getScalar().tag);
+    try testing.expectEqual(types.Frac.Precision.f32, frac_f32.getScalar().getFrac());
 
     const frac_f64 = Layout.frac(.f64);
     try testing.expectEqual(LayoutTag.scalar, frac_f64.tag);
-    try testing.expectEqual(ScalarTag.frac, frac_f64.data.scalar.tag);
-    try testing.expectEqual(types.Frac.Precision.f64, frac_f64.data.scalar.data.frac);
+    try testing.expectEqual(ScalarTag.frac, frac_f64.getScalar().tag);
+    try testing.expectEqual(types.Frac.Precision.f64, frac_f64.getScalar().getFrac());
 
     const frac_dec = Layout.frac(.dec);
     try testing.expectEqual(LayoutTag.scalar, frac_dec.tag);
-    try testing.expectEqual(ScalarTag.frac, frac_dec.data.scalar.tag);
-    try testing.expectEqual(types.Frac.Precision.dec, frac_dec.data.scalar.data.frac);
+    try testing.expectEqual(ScalarTag.frac, frac_dec.getScalar().tag);
+    try testing.expectEqual(types.Frac.Precision.dec, frac_dec.getScalar().getFrac());
 }
 
 test "Non-scalar layout variants - fallback to indexed approach" {
@@ -883,18 +911,18 @@ test "Non-scalar layout variants - fallback to indexed approach" {
     // Test non-scalar box (should use .box tag with index)
     const box_non_scalar = Layout.box(@as(Idx, @enumFromInt(42)));
     try testing.expectEqual(LayoutTag.box, box_non_scalar.tag);
-    try testing.expectEqual(@as(u28, 42), @intFromEnum(box_non_scalar.data.box));
+    try testing.expectEqual(@as(u28, 42), @intFromEnum(box_non_scalar.getIdx()));
 
     // Test non-scalar list (should use .list tag with index)
     const list_non_scalar = Layout.list(@as(Idx, @enumFromInt(123)));
     try testing.expectEqual(LayoutTag.list, list_non_scalar.tag);
-    try testing.expectEqual(@as(u28, 123), @intFromEnum(list_non_scalar.data.list));
+    try testing.expectEqual(@as(u28, 123), @intFromEnum(list_non_scalar.getIdx()));
 
     // Test struct layout (definitely non-scalar)
     const struct_layout = Layout.struct_(std.mem.Alignment.@"8", StructIdx{ .int_idx = 456 });
     try testing.expectEqual(LayoutTag.struct_, struct_layout.tag);
-    try testing.expectEqual(std.mem.Alignment.@"8", struct_layout.data.struct_.alignment);
-    try testing.expectEqual(@as(u19, 456), struct_layout.data.struct_.idx.int_idx);
+    try testing.expectEqual(std.mem.Alignment.@"8", struct_layout.getStruct().alignment);
+    try testing.expectEqual(@as(u19, 456), struct_layout.getStruct().idx.int_idx);
 }
 
 test "Layout scalar precision coverage" {
@@ -904,16 +932,16 @@ test "Layout scalar precision coverage" {
     for ([_]types.Int.Precision{ .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128 }) |precision| {
         const int_layout = Layout.int(precision);
         try testing.expectEqual(LayoutTag.scalar, int_layout.tag);
-        try testing.expectEqual(ScalarTag.int, int_layout.data.scalar.tag);
-        try testing.expectEqual(precision, int_layout.data.scalar.data.int);
+        try testing.expectEqual(ScalarTag.int, int_layout.getScalar().tag);
+        try testing.expectEqual(precision, int_layout.getScalar().getInt());
     }
 
     // Test all frac precisions
     for ([_]types.Frac.Precision{ .f32, .f64, .dec }) |precision| {
         const frac_layout = Layout.frac(precision);
         try testing.expectEqual(LayoutTag.scalar, frac_layout.tag);
-        try testing.expectEqual(ScalarTag.frac, frac_layout.data.scalar.tag);
-        try testing.expectEqual(precision, frac_layout.data.scalar.data.frac);
+        try testing.expectEqual(ScalarTag.frac, frac_layout.getScalar().tag);
+        try testing.expectEqual(precision, frac_layout.getScalar().getFrac());
     }
 
     // Test complex layout types have correct tags

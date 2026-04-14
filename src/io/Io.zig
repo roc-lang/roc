@@ -14,6 +14,10 @@ const Allocator = std.mem.Allocator;
 
 const Self = @This();
 
+/// System Io instance for OS-level file operations.
+/// Uses std.Options.debug_io which is always available.
+const sys_io: std.Io = std.Options.debug_io;
+
 ctx: ?*anyopaque,
 vtable: VTable,
 
@@ -374,42 +378,36 @@ pub fn testing() Self {
 // --- OS implementations ---
 
 fn osReadFile(_: ?*anyopaque, path: []const u8, allocator: Allocator) ReadError![]u8 {
-    const file = std.Io.Dir.cwd().openFile(path, .{}) catch |err| return switch (err) {
-        error.FileNotFound => error.FileNotFound,
-        error.AccessDenied => error.AccessDenied,
-        else => error.IoError,
-    };
-    defer file.close();
-    return file.readToEndAlloc(allocator, max_file_size) catch |err| return switch (err) {
+    return std.Io.Dir.cwd().readFileAlloc(sys_io, path, allocator, .limited(max_file_size)) catch |err| return switch (err) {
         error.OutOfMemory => error.OutOfMemory,
         else => error.IoError,
     };
 }
 
 fn osReadFileInto(_: ?*anyopaque, path: []const u8, buffer: []u8) ReadError!usize {
-    const file = std.Io.Dir.cwd().openFile(path, .{}) catch |err| return switch (err) {
+    const file = std.Io.Dir.cwd().openFile(sys_io, path, .{}) catch |err| return switch (err) {
         error.FileNotFound => error.FileNotFound,
         error.AccessDenied => error.AccessDenied,
         else => error.IoError,
     };
-    defer file.close();
-    return file.readAll(buffer) catch return error.IoError;
+    defer file.close(sys_io);
+    return file.readPositionalAll(sys_io, buffer, 0) catch return error.IoError;
 }
 
 fn osWriteFile(_: ?*anyopaque, path: []const u8, data: []const u8) WriteError!void {
-    std.Io.Dir.cwd().writeFile(.{ .sub_path = path, .data = data }) catch |err| return switch (err) {
+    std.Io.Dir.cwd().writeFile(sys_io, .{ .sub_path = path, .data = data }) catch |err| return switch (err) {
         error.AccessDenied => error.AccessDenied,
         else => error.IoError,
     };
 }
 
 fn osFileExists(_: ?*anyopaque, path: []const u8) bool {
-    std.Io.Dir.cwd().access(path, .{}) catch return false;
+    std.Io.Dir.cwd().access(sys_io, path, .{}) catch return false;
     return true;
 }
 
 fn osStat(_: ?*anyopaque, path: []const u8) StatError!FileInfo {
-    const s = std.Io.Dir.cwd().statFile(path) catch |err| return switch (err) {
+    const s = std.Io.Dir.cwd().statFile(sys_io, path, .{}) catch |err| return switch (err) {
         error.FileNotFound => error.FileNotFound,
         error.AccessDenied => error.AccessDenied,
         else => error.IoError,
@@ -421,17 +419,17 @@ fn osStat(_: ?*anyopaque, path: []const u8) StatError!FileInfo {
             else => .other,
         },
         .size = s.size,
-        .mtime_ns = s.mtime,
+        .mtime_ns = @intCast(s.mtime.nanoseconds),
     };
 }
 
 fn osListDir(_: ?*anyopaque, path: []const u8, allocator: Allocator) ListError![]FileEntry {
-    var dir = std.Io.Dir.cwd().openDir(path, .{ .iterate = true }) catch |err| return switch (err) {
+    var dir = std.Io.Dir.cwd().openDir(sys_io, path, .{ .iterate = true }) catch |err| return switch (err) {
         error.FileNotFound => error.FileNotFound,
         error.AccessDenied => error.AccessDenied,
         else => error.IoError,
     };
-    defer dir.close();
+    defer dir.close(sys_io);
 
     var walker = dir.walk(allocator) catch return error.IoError;
     defer walker.deinit();
@@ -443,7 +441,7 @@ fn osListDir(_: ?*anyopaque, path: []const u8, allocator: Allocator) ListError![
     }
 
     while (true) {
-        const next = walker.next() catch return error.IoError;
+        const next = walker.next(sys_io) catch return error.IoError;
         const entry = next orelse break;
         const kind: FileKind = switch (entry.kind) {
             .file => .file,
@@ -473,7 +471,7 @@ fn osJoinPath(_: ?*anyopaque, parts: []const []const u8, allocator: Allocator) A
 }
 
 fn osCanonicalize(_: ?*anyopaque, path: []const u8, allocator: Allocator) CanonicalizeError![]const u8 {
-    return std.Io.Dir.realpathAlloc(allocator, path) catch |err| return switch (err) {
+    return std.Io.Dir.cwd().realPathFileAlloc(sys_io, path, allocator) catch |err| return switch (err) {
         error.FileNotFound => error.FileNotFound,
         error.AccessDenied => error.AccessDenied,
         error.OutOfMemory => error.OutOfMemory,
@@ -482,14 +480,14 @@ fn osCanonicalize(_: ?*anyopaque, path: []const u8, allocator: Allocator) Canoni
 }
 
 fn osMakePath(_: ?*anyopaque, path: []const u8) MakePathError!void {
-    std.Io.Dir.cwd().createDirPath(path) catch |err| return switch (err) {
+    std.Io.Dir.cwd().createDirPath(sys_io, path) catch |err| return switch (err) {
         error.AccessDenied => error.AccessDenied,
         else => error.IoError,
     };
 }
 
 fn osRename(_: ?*anyopaque, old_path: []const u8, new_path: []const u8) RenameError!void {
-    std.Io.Dir.cwd().rename(old_path, new_path) catch |err| return switch (err) {
+    std.Io.Dir.cwd().rename(old_path, std.Io.Dir.cwd(), new_path, sys_io) catch |err| return switch (err) {
         error.FileNotFound => error.FileNotFound,
         error.AccessDenied => error.AccessDenied,
         else => error.IoError,
@@ -497,10 +495,12 @@ fn osRename(_: ?*anyopaque, old_path: []const u8, new_path: []const u8) RenameEr
 }
 
 fn osGetEnvVar(_: ?*anyopaque, key: []const u8, allocator: Allocator) GetEnvVarError![]u8 {
-    return std.process.getEnvVarOwned(allocator, key) catch |err| return switch (err) {
-        error.OutOfMemory => error.OutOfMemory,
-        else => error.EnvironmentVariableNotFound,
-    };
+    // In Zig 0.16, environment access is via std.c.getenv (no allocator needed for lookup)
+    const key_z = allocator.dupeZ(u8, key) catch return error.OutOfMemory;
+    defer allocator.free(key_z);
+    const value = std.c.getenv(key_z) orelse return error.EnvironmentVariableNotFound;
+    const len = std.mem.len(value);
+    return allocator.dupe(u8, value[0..len]) catch return error.OutOfMemory;
 }
 
 /// fetchUrl is intentionally a stub in the default OS vtable.
@@ -512,28 +512,25 @@ fn osFetchUrl(_: ?*anyopaque, _: Allocator, _: []const u8, _: []const u8) FetchU
 }
 
 fn osWriteStdout(_: ?*anyopaque, data: []const u8) StdioError!void {
-    std.Io.File.stdout().writeAll(data) catch |err| return switch (err) {
+    std.Io.File.stdout().writeStreamingAll(sys_io, data) catch |err| return switch (err) {
         error.BrokenPipe => error.BrokenPipe,
         else => error.IoError,
     };
 }
 
 fn osWriteStderr(_: ?*anyopaque, data: []const u8) StdioError!void {
-    std.Io.File.stderr().writeAll(data) catch |err| return switch (err) {
+    std.Io.File.stderr().writeStreamingAll(sys_io, data) catch |err| return switch (err) {
         error.BrokenPipe => error.BrokenPipe,
         else => error.IoError,
     };
 }
 
 fn osReadStdin(_: ?*anyopaque, buf: []u8) StdioError!usize {
-    return std.Io.File.stdin().read(buf) catch |err| return switch (err) {
-        error.BrokenPipe => error.BrokenPipe,
-        else => error.IoError,
-    };
+    return std.Io.File.stdin().readStreaming(sys_io, &.{buf}) catch return error.IoError;
 }
 
 fn osIsTty(_: ?*anyopaque) bool {
-    return std.Io.File.stdout().isTty();
+    return std.Io.File.stdout().isTty(sys_io) catch false;
 }
 
 // --- Testing implementations — panic on every call ---
