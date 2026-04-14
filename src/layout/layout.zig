@@ -62,6 +62,8 @@ pub const Scalar = packed struct {
     // and Zig tagged unions don't support being packed.
     data: ScalarUnion,
     tag: ScalarTag,
+    // Pad to fill the full LayoutUnion width (28 bits)
+    _pad: std.meta.Int(.unsigned, layout_bit_size - @bitSizeOf(LayoutTag) - @bitSizeOf(ScalarUnion) - @bitSizeOf(ScalarTag)) = 0,
 };
 
 /// Index into a Layout Store
@@ -148,13 +150,13 @@ pub const Closure = struct {
 pub const LayoutUnion = packed union {
     scalar: Scalar,
     box: Idx,
-    box_of_zst: void,
+    box_of_zst: std.meta.Int(.unsigned, layout_bit_size - @bitSizeOf(LayoutTag)),
     list: Idx,
-    list_of_zst: void,
+    list_of_zst: std.meta.Int(.unsigned, layout_bit_size - @bitSizeOf(LayoutTag)),
     struct_: StructLayout,
     closure: ClosureLayout,
-    erased_callable: void,
-    zst: void,
+    erased_callable: std.meta.Int(.unsigned, layout_bit_size - @bitSizeOf(LayoutTag)),
+    zst: std.meta.Int(.unsigned, layout_bit_size - @bitSizeOf(LayoutTag)),
     tag_union: TagUnionLayout,
 };
 
