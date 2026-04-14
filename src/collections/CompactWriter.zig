@@ -28,104 +28,25 @@ allocated_memory: std.ArrayList(AllocatedMemory),
 
 pub fn init() CompactWriter {
     return CompactWriter{
-        .iovecs = .{},
+        .iovecs = .empty,
         .total_bytes = 0,
-        .allocated_memory = .{},
+        .allocated_memory = .empty,
     };
 }
 
-/// Does a pwritev() on UNIX systems.
-/// There is no usable equivalent of this on Windows
-/// (WriteFileGather has ludicrous alignment requirements that make it useless),
-/// so Windows must call
+/// Write all gathered buffers to a file sequentially using positional writes.
 pub fn writeGather(
     self: *@This(),
     allocator: std.mem.Allocator,
-    file: std.fs.File,
+    file: std.Io.File,
+    io: std.Io,
 ) !void {
-    // Handle partial writes (where pwritev returns that it only wrote some of the bytes)
-    var bytes_written: usize = 0;
-    var current_iovec: usize = 0;
-    var iovec_offset: usize = 0;
-    const total_size = self.total_bytes;
-
-    // Early return if nothing to write
-    if (total_size == 0 or self.iovecs.items.len == 0) return;
-
-    while (bytes_written < total_size) {
-        // Skip any iovecs that have been completely written
-        while (current_iovec < self.iovecs.items.len and
-            iovec_offset >= self.iovecs.items[current_iovec].iov_len)
-        {
-            current_iovec += 1;
-            iovec_offset = 0;
-        }
-
-        // Check if we've processed all iovecs
-        if (current_iovec >= self.iovecs.items.len) break;
-
-        // Count valid remaining iovecs (those with data to write)
-        var valid_iovec_count: usize = 0;
-        for (self.iovecs.items[current_iovec..], 0..) |iovec, j| {
-            const offset = if (j == 0) iovec_offset else 0;
-            if (iovec.iov_len > offset) {
-                valid_iovec_count += 1;
-            }
-        }
-
-        if (valid_iovec_count == 0) break;
-
-        // Create adjusted iovec array for partial writes
-        var adjusted_iovecs = try allocator.alloc(posix.iovec_const, valid_iovec_count);
-        defer allocator.free(adjusted_iovecs);
-
-        // Copy remaining iovecs, adjusting first one for partial write and filtering out empty ones
-        var adjusted_index: usize = 0;
-        for (self.iovecs.items[current_iovec..], 0..) |iovec, j| {
-            const offset = if (j == 0) iovec_offset else 0;
-
-            // Skip iovecs that have no remaining data
-            if (iovec.iov_len <= offset) continue;
-
-            // Handle potential null pointer when adding offset
-            const base_addr = @intFromPtr(iovec.iov_base);
-            const new_base = if (base_addr == 0 and offset == 0)
-                iovec.iov_base // Keep null if already null
-            else if (base_addr == 0)
-                @as([*]const u8, @ptrFromInt(offset)) // This shouldn't happen, but handle it
-            else
-                @as([*]const u8, @ptrFromInt(base_addr + offset));
-
-            adjusted_iovecs[adjusted_index] = .{
-                .base = new_base,
-                .len = iovec.iov_len - offset,
-            };
-            adjusted_index += 1;
-        }
-
-        // Sanity check - we should have filled all slots
-        std.debug.assert(adjusted_index == valid_iovec_count);
-
-        const n = try posix.pwritev(file.handle, adjusted_iovecs, bytes_written);
-
-        if (n == 0) return error.UnexpectedEof;
-
-        // Update position tracking
-        bytes_written += n;
-        var remaining = n;
-
-        // Figure out where we are now
-        while (remaining > 0 and current_iovec < self.iovecs.items.len) {
-            const iovec_remaining = self.iovecs.items[current_iovec].iov_len - iovec_offset;
-            if (remaining >= iovec_remaining) {
-                remaining -= iovec_remaining;
-                current_iovec += 1;
-                iovec_offset = 0;
-            } else {
-                iovec_offset += remaining;
-                remaining = 0;
-            }
-        }
+    _ = allocator;
+    var offset: u64 = 0;
+    for (self.iovecs.items) |iovec| {
+        const bytes = @as([*]const u8, @ptrCast(iovec.iov_base))[0..iovec.iov_len];
+        try file.writePositionalAll(io, bytes, offset);
+        offset += iovec.iov_len;
     }
 }
 

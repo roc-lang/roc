@@ -47,7 +47,7 @@ pub const DependencyGraph = struct {
     pub fn addEdge(self: *DependencyGraph, from_def: CIR.Def.Idx, to_def: CIR.Def.Idx) std.mem.Allocator.Error!void {
         const gop = try self.edges.getOrPut(self.allocator, from_def);
         if (!gop.found_existing) {
-            gop.value_ptr.* = .{};
+            gop.value_ptr.* = .empty;
         }
         try gop.value_ptr.append(self.allocator, to_def);
     }
@@ -509,9 +509,9 @@ const TarjanState = struct {
             .indices = .{},
             .lowlinks = .{},
             .visited = .{},
-            .stack = .{},
+            .stack = .empty,
             .on_stack = .{},
-            .sccs = .{},
+            .sccs = .empty,
             .allocator = allocator,
         };
     }
@@ -561,7 +561,7 @@ const TarjanState = struct {
         const v_lowlink = self.lowlinks.get(v).?;
         const v_index = self.indices.get(v).?;
         if (v_lowlink == v_index) {
-            var scc_defs = std.ArrayList(CIR.Def.Idx){};
+            var scc_defs: std.ArrayList(CIR.Def.Idx) = .empty;
 
             while (true) {
                 const w = self.stack.pop() orelse unreachable; // Stack should not be empty

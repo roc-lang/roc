@@ -1296,7 +1296,7 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
                     @as(CIR.Pattern.Idx, @enumFromInt(list_data.pattern_idx))
                 else
                     null;
-                break :blk @as(@TypeOf(@as(CIR.Pattern, undefined).list.rest_info), .{
+                break :blk @as(@FieldType(@FieldType(CIR.Pattern, "list"), "rest_info"), .{
                     .index = list_data.rest_index,
                     .pattern = rest_pattern,
                 });

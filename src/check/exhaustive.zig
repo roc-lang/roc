@@ -3272,8 +3272,13 @@ pub fn formatPattern(
     pattern: Pattern,
 ) error{OutOfMemory}!ByteListRange {
     const start = buf.items.len;
-    var writer = buf.writer();
-    try formatPatternInto(&writer, ident_store, string_store, pattern);
+    // Create an allocating writer backed by the managed list's memory
+    var unmanaged: std.ArrayList(u8) = .{ .items = buf.items, .capacity = buf.capacity };
+    var aw = std.Io.Writer.Allocating.fromArrayList(buf.allocator, &unmanaged);
+    formatPatternInto(&aw.writer, ident_store, string_store, pattern) catch return error.OutOfMemory;
+    unmanaged = aw.toArrayList();
+    buf.items = unmanaged.items;
+    buf.capacity = unmanaged.capacity;
     const end = buf.items.len;
 
     return ByteListRange{
@@ -3284,11 +3289,11 @@ pub fn formatPattern(
 
 /// Format a pattern as a string, into the provided writer
 fn formatPatternInto(
-    writer: *ByteList.Writer,
+    writer: *std.Io.Writer,
     ident_store: *const Ident.Store,
     string_store: *const StringLiteral.Store,
     pattern: Pattern,
-) ByteList.Writer.Error!void {
+) std.Io.Writer.Error!void {
     switch (pattern) {
         .anything => try writer.writeAll("_"),
 

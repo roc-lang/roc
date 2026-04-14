@@ -144,7 +144,7 @@ var debug_store_id_counter: if (enable_store_tracking) std.atomic.Value(u32) els
 var debug_store_map: if (enable_store_tracking) std.AutoHashMapUnmanaged(u32, StoreDebugInfo) else void = if (enable_store_tracking) .{} else {};
 
 /// Mutex protecting the debug_store_map.
-var debug_store_mutex: if (enable_store_tracking) std.Thread.Mutex else void = if (enable_store_tracking) .{} else {};
+var debug_store_mutex: if (enable_store_tracking) std.atomic.Mutex else void = if (enable_store_tracking) .unlocked else {};
 
 /// An interner for identifier names.
 pub const Store = struct {
@@ -194,7 +194,7 @@ pub const Store = struct {
         if (enable_store_tracking) {
             if (self.debug_id == 0) return; // Never registered
 
-            debug_store_mutex.lock();
+            while (!debug_store_mutex.tryLock()) {}
             defer debug_store_mutex.unlock();
 
             if (debug_store_map.fetchRemove(self.debug_id)) |entry| {
@@ -212,7 +212,7 @@ pub const Store = struct {
     /// Debug-only: track an Idx as belonging to this store.
     fn trackIdx(self: *Store, idx: Idx, src: std.builtin.SourceLocation) void {
         if (enable_store_tracking) {
-            debug_store_mutex.lock();
+            while (!debug_store_mutex.tryLock()) {}
             defer debug_store_mutex.unlock();
 
             const debug_id = self.getOrAssignDebugId(src);
@@ -232,7 +232,7 @@ pub const Store = struct {
                 return;
             }
 
-            debug_store_mutex.lock();
+            while (!debug_store_mutex.tryLock()) {}
             defer debug_store_mutex.unlock();
 
             const info = debug_store_map.get(self.debug_id) orelse {
@@ -264,7 +264,7 @@ pub const Store = struct {
                 return true;
             }
 
-            debug_store_mutex.lock();
+            while (!debug_store_mutex.tryLock()) {}
             defer debug_store_mutex.unlock();
 
             const info = debug_store_map.get(self.debug_id) orelse {

@@ -71,7 +71,7 @@ in_statement_position: bool = true,
 /// Track whether we're inside an expect block.
 /// When true, the ? operator crashes on Err instead of returning early.
 in_expect: bool = false,
-scopes: std.ArrayList(Scope) = .{},
+scopes: std.ArrayList(Scope) = .empty,
 /// Special scope for rigid type variables in annotations
 type_vars_scope: base.Scratch(TypeVarScope),
 /// Set of identifiers exposed from this module header (values not used)
@@ -297,7 +297,7 @@ fn initInternal(
         .allocators = allocators,
         .env = env,
         .parse_ir = parse_ir,
-        .scopes = .{},
+        .scopes = .empty,
         .function_regions = std.array_list.Managed(Region).init(gpa),
         .var_function_regions = std.AutoHashMapUnmanaged(Pattern.Idx, Region){},
         .var_patterns = std.AutoHashMapUnmanaged(Pattern.Idx, void){},
@@ -2300,7 +2300,7 @@ pub fn canonicalizeFile(
             name_ident: Ident.Idx,
             region: Region,
         };
-        var type_decls = std.ArrayList(TypeDeclInfo){};
+        var type_decls: std.ArrayList(TypeDeclInfo) = .empty;
         defer type_decls.deinit(gpa);
 
         // Map from type name to index in type_decls
@@ -2334,7 +2334,7 @@ pub fn canonicalizeFile(
         } else {
             // Step 2: Build dependency graph (edges from referencer to referenced)
             // For each type, collect which other types it references
-            var dependencies = std.ArrayList(std.ArrayList(usize)){};
+            var dependencies: std.ArrayList(std.ArrayList(usize)) = .empty;
             defer {
                 for (dependencies.items) |*dep_list| {
                     dep_list.deinit(gpa);
@@ -2350,7 +2350,7 @@ pub fn canonicalizeFile(
                 try self.collectTypeReferencesFromAST(info.type_decl.anno, &refs);
 
                 // Convert to indices in our type_decls array
-                var dep_list = std.ArrayList(usize){};
+                var dep_list: std.ArrayList(usize) = .empty;
                 var ref_iter = refs.keyIterator();
                 while (ref_iter.next()) |ref_ident| {
                     if (name_to_idx.get(ref_ident.*)) |idx| {
@@ -2381,8 +2381,8 @@ pub fn canonicalizeFile(
 
             var scc_result = blk: {
                 var result = SccResult{
-                    .sccs = std.ArrayList(std.ArrayList(usize)){},
-                    .is_recursive = std.ArrayList(bool){},
+                    .sccs = .empty,
+                    .is_recursive = .empty,
                     .allocator = gpa,
                 };
 
@@ -2393,7 +2393,7 @@ pub fn canonicalizeFile(
                 defer lowlinks.deinit(gpa);
                 var on_stack = std.AutoHashMapUnmanaged(usize, void){};
                 defer on_stack.deinit(gpa);
-                var stack = std.ArrayList(usize){};
+                var stack: std.ArrayList(usize) = .empty;
                 defer stack.deinit(gpa);
 
                 // Tarjan's strongconnect function (iterative to avoid stack overflow)
@@ -2403,7 +2403,7 @@ pub fn canonicalizeFile(
                     phase: enum { init, process_deps, finish },
                     last_child: ?usize, // Track which child we just finished processing
                 };
-                var call_stack = std.ArrayList(Frame){};
+                var call_stack: std.ArrayList(Frame) = .empty;
                 defer call_stack.deinit(gpa);
 
                 for (0..type_decls.items.len) |start_v| {
@@ -2460,7 +2460,7 @@ pub fn canonicalizeFile(
                                 const v_index = indices.get(v).?;
                                 if (v_lowlink == v_index) {
                                     // v is root of an SCC
-                                    var scc = std.ArrayList(usize){};
+                                    var scc: std.ArrayList(usize) = .empty;
                                     while (true) {
                                         const w = stack.pop() orelse unreachable;
                                         _ = on_stack.remove(w);
@@ -3788,7 +3788,10 @@ fn canonicalizeFileImport(self: *Self, fi: @TypeOf(@as(AST.Statement, undefined)
     defer self.env.gpa.free(full_path);
 
     // Read the file
-    const file_contents = std.fs.cwd().readFileAlloc(self.env.gpa, full_path, std.math.maxInt(u32)) catch |err| {
+    // TODO(zig-16): thread std.Io through canonicalization for file imports
+    const file_contents: []u8 = std.Io.Dir.cwd().readFileAlloc(
+        @as(std.Io, undefined), full_path, self.env.gpa, .unlimited,
+    ) catch |err| {
         const path_string = try self.env.insertString(path_text);
         const diag: Diagnostic = switch (err) {
             error.FileNotFound => .{ .file_import_not_found = .{
@@ -5198,7 +5201,7 @@ pub fn canonicalizeExpr(
                             const current_scope = &self.scopes.items[self.scopes.items.len - 1];
 
                             // Create the forward reference with an ArrayList for regions
-                            var reference_regions = std.ArrayList(Region){};
+                            var reference_regions: std.ArrayList(Region) = .empty;
                             try reference_regions.append(self.env.gpa, region);
 
                             const forward_ref: Scope.ForwardReference = .{
@@ -10663,7 +10666,7 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
         const current_scope = &self.scopes.items[self.scopes.items.len - 1];
         try current_scope.forward_references.put(self.env.gpa, ident_idx, .{
             .pattern_idx = pattern_idx,
-            .reference_regions = std.ArrayList(Region){},
+            .reference_regions = .empty,
         });
         try current_scope.idents.put(self.env.gpa, ident_idx, pattern_idx);
     }

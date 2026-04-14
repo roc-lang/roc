@@ -193,7 +193,7 @@ pub fn SafeRange(comptime Idx: type) type {
 /// less likely since indices are only created for valid list entries.
 pub fn SafeList(comptime T: type) type {
     return struct {
-        items: std.ArrayList(T) = .{},
+        items: std.ArrayList(T) = .empty,
 
         /// An index for an item in the list.
         pub const Idx = enum(u32) {
