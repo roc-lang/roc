@@ -109,7 +109,7 @@ const Lowerer = struct {
 
     fn instantiateProgram(self: *Lowerer) std.mem.Allocator.Error!void {
         for (self.input.store.defsSlice()) |def| {
-            _ = try self.instantiateDef(def);
+            try self.instantiateDef(def);
         }
     }
 
@@ -752,13 +752,13 @@ const Lowerer = struct {
                 break :blk target_ty;
             },
             .inspect => |value| blk: {
-                _ = try self.inferExpr(venv, value);
+                try self.inferExpr(venv, value);
                 try self.unify(target_ty, try self.freshPrimitiveType(.str));
                 break :blk target_ty;
             },
             .low_level => |ll| blk: {
                 for (self.output.sliceExprSpan(ll.args)) |arg| {
-                    _ = try self.inferExpr(venv, arg);
+                    try self.inferExpr(venv, arg);
                 }
                 break :blk target_ty;
             },
@@ -850,7 +850,7 @@ const Lowerer = struct {
                 try self.unify(iterable_ty, wanted_iterable);
                 const body_env = try self.extendEnvMany(venv, pat_result.additions);
                 defer self.allocator.free(body_env);
-                _ = try self.inferExpr(body_env, for_expr.body);
+                try self.inferExpr(body_env, for_expr.body);
                 break :blk target_ty;
             },
         };
@@ -891,15 +891,15 @@ const Lowerer = struct {
                 break :blk try self.cloneEnv(venv);
             },
             .expr => |expr_id| blk: {
-                _ = try self.inferExpr(venv, expr_id);
+                try self.inferExpr(venv, expr_id);
                 break :blk try self.cloneEnv(venv);
             },
             .debug => |expr_id| blk: {
-                _ = try self.inferExpr(venv, expr_id);
+                try self.inferExpr(venv, expr_id);
                 break :blk try self.cloneEnv(venv);
             },
             .expect => |expr_id| blk: {
-                _ = try self.inferExpr(venv, expr_id);
+                try self.inferExpr(venv, expr_id);
                 break :blk try self.cloneEnv(venv);
             },
             .crash => try self.cloneEnv(venv),
@@ -918,14 +918,14 @@ const Lowerer = struct {
                 try self.unify(iterable_ty, wanted_iterable);
                 const body_env = try self.extendEnvMany(venv, pat_result.additions);
                 defer self.allocator.free(body_env);
-                _ = try self.inferExpr(body_env, for_stmt.body);
+                try self.inferExpr(body_env, for_stmt.body);
                 break :blk try self.cloneEnv(venv);
             },
             .while_ => |while_stmt| blk: {
                 const cond_ty = try self.inferExpr(venv, while_stmt.cond);
                 const bool_ty = try self.types.freshContent(.{ .primitive = .bool });
                 try self.unify(cond_ty, bool_ty);
-                _ = try self.inferExpr(venv, while_stmt.body);
+                try self.inferExpr(venv, while_stmt.body);
                 break :blk try self.cloneEnv(venv);
             },
         };
@@ -936,8 +936,7 @@ const Lowerer = struct {
         ty: TypeVarId,
     };
 
-    fn inferPat(self: *Lowerer, venv: []const EnvEntry, pat_id: ast.PatId) std.mem.Allocator.Error!InferPatResult {
-        _ = venv;
+    fn inferPat(self: *Lowerer, _: []const EnvEntry, pat_id: ast.PatId) std.mem.Allocator.Error!InferPatResult {
         const pat = self.output.getPat(pat_id);
         return switch (pat.data) {
             .var_ => |symbol| blk: {
@@ -1951,8 +1950,7 @@ const Lowerer = struct {
         return null;
     }
 
-    fn lookupEnv(self: *Lowerer, venv: []const EnvEntry, symbol: Symbol) ?TypeVarId {
-        _ = self;
+    fn lookupEnv(_: *Lowerer, venv: []const EnvEntry, symbol: Symbol) ?TypeVarId {
         var i = venv.len;
         while (i > 0) {
             i -= 1;

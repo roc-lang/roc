@@ -138,7 +138,7 @@ pub const Facts = struct {
         idents: *const base.Ident.Store,
         ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!void {
-        _ = try self.layoutForPublishedType(allocator, mono_types, idents, ty);
+        try self.layoutForPublishedType(allocator, mono_types, idents, ty);
     }
 
     pub fn recordExpr(
@@ -172,21 +172,21 @@ pub const Facts = struct {
             },
             .packed_fn => |packed_fn| {
                 if (packed_fn.capture_ty) |capture_ty| {
-                    _ = try self.layoutForPublishedType(allocator, mono_types, idents, capture_ty);
+                    try self.layoutForPublishedType(allocator, mono_types, idents, capture_ty);
                     const capture_box_ty = try mono_types.internResolved(.{ .box = capture_ty });
-                    _ = try self.layoutForPublishedType(allocator, mono_types, idents, capture_box_ty);
+                    try self.layoutForPublishedType(allocator, mono_types, idents, capture_box_ty);
                 } else {
                     const unit_ty = try mono_types.internResolved(.{ .record = .{
                         .fields = type_mod.Span(type_mod.Field).empty(),
                     } });
-                    _ = try self.layoutForPublishedType(allocator, mono_types, idents, unit_ty);
+                    try self.layoutForPublishedType(allocator, mono_types, idents, unit_ty);
                     const capture_box_ty = try mono_types.internResolved(.{ .box = unit_ty });
-                    _ = try self.layoutForPublishedType(allocator, mono_types, idents, capture_box_ty);
+                    try self.layoutForPublishedType(allocator, mono_types, idents, capture_box_ty);
                 }
             },
             .call_indirect => |call| {
                 if (call.capture_ty) |capture_ty| {
-                    _ = try self.layoutForPublishedType(allocator, mono_types, idents, capture_ty);
+                    try self.layoutForPublishedType(allocator, mono_types, idents, capture_ty);
                 }
             },
             else => {},
@@ -380,7 +380,7 @@ fn lowerTypeRec(
 
             graph.setNode(node_id, try lowerNode(allocator, mono_types, idents, graph, cache, keyed_ty));
 
-            _ = cache.active_by_type.remove(keyed_ty);
+            cache.active_by_type.remove(keyed_ty);
             try cache.resolved_by_type.put(keyed_ty, local_ref);
             break :blk local_ref;
         },

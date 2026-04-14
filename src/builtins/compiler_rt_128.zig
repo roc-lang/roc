@@ -354,14 +354,14 @@ pub fn rem_i128(a: i128, b: i128) i128 {
     const an = (a ^ s_a) -% s_a;
     const bn = (b ^ s_b) -% s_b;
     var r: u128 = undefined;
-    _ = udivmod(u128, @as(u128, @bitCast(an)), @as(u128, @bitCast(bn)), &r);
+    udivmod(u128, @as(u128, @bitCast(an)), @as(u128, @bitCast(bn)), &r);
     return (@as(i128, @bitCast(r)) ^ s_a) -% s_a;
 }
 
 /// Unsigned 128-bit remainder.
 pub fn rem_u128(a: u128, b: u128) u128 {
     var r: u128 = undefined;
-    _ = udivmod(u128, a, b, &r);
+    udivmod(u128, a, b, &r);
     return r;
 }
 

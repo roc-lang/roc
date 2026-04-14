@@ -662,7 +662,7 @@ pub const Store = struct {
                     const fields_out_top: u32 = @intCast(fields_out.items.len);
                     const slice = self.sliceRecordFields(fields);
                     for (slice.items(.name), slice.items(.content)) |name, content| {
-                        _ = try fields_out.append(gpa, .{ .name = name, .content = content });
+                        try fields_out.append(gpa, .{ .name = name, .content = content });
                     }
                     const fields_out_range = fields_out.rangeToEnd(fields_out_top);
                     return RecordFieldSnapshot{ .record = fields_out_range };
@@ -688,7 +688,7 @@ pub const Store = struct {
         // Add immediate fields
         const record_fields = self.sliceRecordFields(record.fields);
         for (record_fields.items(.name), record_fields.items(.content)) |name, content| {
-            _ = try fields_out.append(gpa, .{ .name = name, .content = content });
+            try fields_out.append(gpa, .{ .name = name, .content = content });
         }
 
         // Follow extension chain
@@ -700,14 +700,14 @@ pub const Store = struct {
                     .record => |rec| {
                         const ext_fields = self.sliceRecordFields(rec.fields);
                         for (ext_fields.items(.name), ext_fields.items(.content)) |name, field_content| {
-                            _ = try fields_out.append(gpa, .{ .name = name, .content = field_content });
+                            try fields_out.append(gpa, .{ .name = name, .content = field_content });
                         }
                         ext_idx = rec.ext;
                     },
                     .record_unbound => |fields_range| {
                         const ext_fields = self.sliceRecordFields(fields_range);
                         for (ext_fields.items(.name), ext_fields.items(.content)) |name, field_content| {
-                            _ = try fields_out.append(gpa, .{ .name = name, .content = field_content });
+                            try fields_out.append(gpa, .{ .name = name, .content = field_content });
                         }
                         break;
                     },

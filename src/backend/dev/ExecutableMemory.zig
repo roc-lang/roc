@@ -149,7 +149,7 @@ fn freeMemory(memory: []align(std.heap.page_size_min) u8) void {
         .windows => {
             const result = std.os.windows.VirtualFree(memory.ptr, 0, std.os.windows.MEM_RELEASE);
             if (@typeInfo(@TypeOf(result)) == .error_union) {
-                _ = result catch {};
+                result catch {};
             }
         },
         // allocateMemory returns error.UnsupportedPlatform for other OSes,

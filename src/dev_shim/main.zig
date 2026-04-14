@@ -358,8 +358,8 @@ fn evaluateFromSharedMemory(entry_idx: u32, host_roc_ops: *RocOps, ret_ptr: *any
     const env_ptr = global_env_ptr orelse return error.ModuleEnvSetupFailed;
     const app_env = global_app_env_ptr orelse return error.ModuleEnvSetupFailed;
     const builtin_modules = global_builtin_modules orelse return error.ModuleEnvSetupFailed;
-    _ = global_full_imported_envs orelse return error.ModuleEnvSetupFailed;
-    _ = global_full_mutable_envs orelse return error.ModuleEnvSetupFailed;
+    if (global_full_imported_envs == null) return error.ModuleEnvSetupFailed;
+    if (global_full_mutable_envs == null) return error.ModuleEnvSetupFailed;
 
     if (entry_idx >= global_entry_count) {
         host_roc_ops.crash("Invalid entry index");

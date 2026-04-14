@@ -1794,7 +1794,7 @@ test "CallBuilder R12 save emits correct MOV instruction on Windows" {
     defer emit.deinit();
 
     var stack_offset: i32 = -16;
-    _ = try Builder.init(&emit, &stack_offset);
+    try Builder.init(&emit, &stack_offset);
 
     // On Windows, init should emit: mov [rbp-24], r12
     // mov [rbp+disp32], r12 = 4C 89 A5 E8 FF FF FF (for -24)

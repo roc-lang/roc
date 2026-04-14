@@ -85,7 +85,7 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
         .scratch_requires_entries = try base.Scratch(AST.RequiresEntry.Idx).init(gpa),
     };
 
-    _ = try store.nodes.append(gpa, .{
+    try store.nodes.append(gpa, .{
         .tag = .root,
         .main_token = 0,
         .data = .{ .lhs = 0, .rhs = 0 },

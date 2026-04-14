@@ -314,7 +314,7 @@ pub const Instantiator = struct {
             // Re-fetch the field data on each iteration since the backing array may have moved
             const field = self.store.record_fields.get(@enumFromInt(fields_start + i));
             const fresh_type = try self.instantiateVar(field.var_);
-            _ = try fresh_fields.append(self.store.gpa, RecordField{
+            try fresh_fields.append(self.store.gpa, RecordField{
                 .name = field.name,
                 .var_ = fresh_type,
             });
@@ -343,7 +343,7 @@ pub const Instantiator = struct {
             // Re-fetch the field data on each iteration since the backing array may have moved
             const field = self.store.record_fields.get(@enumFromInt(fields_start + i));
             const fresh_type = try self.instantiateVar(field.var_);
-            _ = try fresh_fields.append(self.store.gpa, RecordField{
+            try fresh_fields.append(self.store.gpa, RecordField{
                 .name = field.name,
                 .var_ = fresh_type,
             });
@@ -396,7 +396,7 @@ pub const Instantiator = struct {
 
             const fresh_args_range = try self.store.appendVars(fresh_args.items);
 
-            _ = try fresh_tags.append(self.store.gpa, Tag{
+            try fresh_tags.append(self.store.gpa, Tag{
                 .name = tag_name,
                 .args = fresh_args_range,
             });

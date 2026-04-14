@@ -30,13 +30,13 @@ test "ModuleEnv.Serialized roundtrip" {
     const hello_idx = try original.insertIdent(Ident.for_text("hello"));
     const world_idx = try original.insertIdent(Ident.for_text("world"));
 
-    _ = try original.insertString("test string");
+    try original.insertString("test string");
 
     try original.addExposedById(hello_idx);
 
-    _ = try original.common.line_starts.append(gpa, 0);
-    _ = try original.common.line_starts.append(gpa, 10);
-    _ = try original.common.line_starts.append(gpa, 20);
+    try original.common.line_starts.append(gpa, 0);
+    try original.common.line_starts.append(gpa, 10);
+    try original.common.line_starts.append(gpa, 20);
 
     // Initialize CIR fields to ensure imports are available
     try original.initCIRFields("TestModule");
@@ -46,7 +46,7 @@ test "ModuleEnv.Serialized roundtrip" {
     const import2 = try original.imports.getOrPut(gpa, &original.common.strings, "core.List");
     const import3 = try original.imports.getOrPut(gpa, &original.common.strings, "json.Json"); // duplicate - should return same as import1
 
-    _ = import2; // Mark as used
+    try testing.expect(import2 != import1);
 
     // First add to exposed items, then set node index
     try original.addExposedById(hello_idx);
@@ -78,7 +78,7 @@ test "ModuleEnv.Serialized roundtrip" {
     const file_size = try tmp_file.getEndPos();
     const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(file_size));
     defer gpa.free(buffer);
-    _ = try tmp_file.pread(buffer, 0);
+    try tmp_file.pread(buffer, 0);
 
     const deserialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(buffer.ptr)));
 
@@ -446,7 +446,7 @@ test "ModuleEnv pushExprTypesToSExprTree extracts and formats types" {
 
     // Now create a string expression that references the segment
     const expr_idx = try env.addExpr(.{ .e_str = .{ .span = Expr.Span{ .span = base.DataSpan{ .start = @intFromEnum(segment_idx), .len = 1 } } } }, base.Region.from_raw_offsets(0, 5));
-    _ = try env.types.freshFromContent(.{ .structure = .{ .nominal_type = str_nominal } });
+    try env.types.freshFromContent(.{ .structure = .{ .nominal_type = str_nominal } });
 
     // Create an S-expression tree
     var tree = base.SExprTree.init(gpa);
@@ -557,7 +557,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
     var checker = try Check.init(gpa, &original_env.types, &original_env, &imported_envs, null, &original_env.store.regions, builtin_ctx);
     defer checker.deinit();
 
-    _ = try checker.checkExprRepl(canonicalized_expr_idx.get_idx());
+    try checker.checkExprRepl(canonicalized_expr_idx.get_idx());
 
     // Test 1: Evaluate with the original ModuleEnv via LIR pipeline
     {
@@ -632,7 +632,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
         const file_size = try tmp_file.getEndPos();
         const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(@alignOf(ModuleEnv)), @intCast(file_size));
         defer gpa.free(buffer);
-        _ = try tmp_file.pread(buffer, 0);
+        try tmp_file.pread(buffer, 0);
 
         // Deserialize the ModuleEnv
         const deserialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(buffer.ptr + env_start_offset)));

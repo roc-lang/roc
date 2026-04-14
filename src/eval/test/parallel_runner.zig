@@ -1078,7 +1078,7 @@ pub fn main() !void {
         var wall_timer = Timer.start() catch unreachable;
 
         for (tests, 0..) |tc, i| {
-            _ = arena.reset(.retain_capacity);
+            arena.reset(.retain_capacity);
 
             const outcome = runSingleTest(arena.allocator(), tc);
 

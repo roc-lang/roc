@@ -93,9 +93,9 @@ test "Import.Store basic CompactWriter roundtrip" {
     var original = Import.Store.init();
     defer original.deinit(gpa);
 
-    _ = try original.getOrPut(gpa, &string_store, "json.Json");
-    _ = try original.getOrPut(gpa, &string_store, "core.List");
-    _ = try original.getOrPut(gpa, &string_store, "my.Module");
+    try original.getOrPut(gpa, &string_store, "json.Json");
+    try original.getOrPut(gpa, &string_store, "core.List");
+    try original.getOrPut(gpa, &string_store, "my.Module");
 
     try testing.expectEqual(@as(usize, 3), original.imports.len());
 
@@ -144,7 +144,7 @@ test "Import.Store duplicate imports CompactWriter roundtrip" {
     defer original.deinit(gpa);
 
     const idx1 = try original.getOrPut(gpa, &string_store, "test.Module");
-    _ = try original.getOrPut(gpa, &string_store, "another.Module");
+    try original.getOrPut(gpa, &string_store, "another.Module");
     const idx3 = try original.getOrPut(gpa, &string_store, "test.Module"); // duplicate
 
     // Verify deduplication worked

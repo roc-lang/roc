@@ -316,7 +316,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                 .flags = 0,
             };
             posix.sigaction(posix.SIG.INT, &default_action, null);
-            _ = std.c.raise(posix.SIG.INT);
+            std.c.raise(posix.SIG.INT);
         }
 
         fn launchChild(slot: *?ChildSlot, specs: []const Spec, test_idx: usize) bool {
@@ -335,7 +335,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                 posix.close(pipe_fds[0]);
 
                 if (cfg.use_process_groups) {
-                    _ = std.c.setsid();
+                    std.c.setsid();
                 }
 
                 var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -460,7 +460,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                 }
                 if (n_poll == 0) break;
 
-                _ = posix.poll(poll_fds[0..n_poll], 500) catch 0;
+                posix.poll(poll_fds[0..n_poll], 500) catch 0;
 
                 for (poll_fds[0..n_poll], 0..) |pfd, pi| {
                     const slot_idx = poll_map[pi];
@@ -530,7 +530,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
             var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
             defer arena.deinit();
             for (specs, 0..) |spec, i| {
-                _ = arena.reset(.retain_capacity);
+                arena.reset(.retain_capacity);
                 const unstable_result = cfg.runTest(arena.allocator(), spec);
                 results[i] = cfg.stabilizeResult(gpa, unstable_result);
             }

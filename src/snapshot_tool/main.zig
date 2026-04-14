@@ -1206,7 +1206,7 @@ fn processSnapshotContent(
             &can_ir.store.regions,
             builtin_ctx,
         );
-        _ = try checker.checkExprRepl(expr_idx.idx);
+        try checker.checkExprRepl(expr_idx.idx);
         module_envs_for_repl_expr = module_envs; // Keep alive
         break :blk checker;
     } else switch (content.meta.node_type) {
@@ -1343,11 +1343,11 @@ fn processSnapshotContent(
             defer comptime_evaluator.deinit();
 
             // First evaluate any top-level defs
-            _ = try comptime_evaluator.evalAll();
+            try comptime_evaluator.evalAll();
 
             // Then evaluate and fold the standalone expression if present
             if (Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx)) |expr_idx| {
-                _ = try comptime_evaluator.evalAndFoldExpr(expr_idx);
+                try comptime_evaluator.evalAndFoldExpr(expr_idx);
             }
         }
     }
@@ -1565,9 +1565,9 @@ fn processWorkItem(allocator: Allocator, context: *ProcessContext, item_id: usiz
     };
 
     if (success) {
-        _ = context.success_count.fetchAdd(1, .monotonic);
+        context.success_count.fetchAdd(1, .monotonic);
     } else {
-        _ = context.failed_count.fetchAdd(1, .monotonic);
+        context.failed_count.fetchAdd(1, .monotonic);
     }
 }
 
@@ -2524,7 +2524,7 @@ fn computeTransformedExprType(
         const needed_len: usize = @intCast(@intFromEnum(expr_var) + 1);
         var i: usize = current_len;
         while (i < needed_len) : (i += 1) {
-            _ = try can_ir.types.fresh();
+            try can_ir.types.fresh();
         }
     }
 
@@ -2618,7 +2618,7 @@ fn computeTransformedExprType(
                 const needed_len: usize = @intCast(@intFromEnum(pattern_var) + 1);
                 var i: usize = current_len;
                 while (i < needed_len) : (i += 1) {
-                    _ = try can_ir.types.fresh();
+                    try can_ir.types.fresh();
                 }
             }
             return pattern_var;
@@ -3290,7 +3290,7 @@ fn generateMonoSection(output: *DualOutput, can_ir: *ModuleEnv, _: ?CIR.Expr.Idx
 
     // Trim trailing newline (we added one too many at the end)
     if (mono_buffer.items.len > 0 and mono_buffer.items[mono_buffer.items.len - 1] == '\n') {
-        _ = mono_buffer.pop();
+        mono_buffer.pop();
     }
 
     // Validate the MONO output for both non-closure and closure transforms
@@ -3492,7 +3492,7 @@ fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, config:
         if (content.meta.node_type == .repl) {
             var parts = std.mem.splitSequence(u8, content.source, "»");
             // Skip the first part (before the first »)
-            _ = parts.next();
+            parts.next();
 
             while (parts.next()) |part| {
                 const trimmed = std.mem.trim(u8, part, " \t\r\n");
@@ -4502,7 +4502,7 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
     var parts = std.mem.splitSequence(u8, content.source, "»");
 
     // Skip the first part (before the first »)
-    _ = parts.next();
+    parts.next();
 
     while (parts.next()) |part| {
         // Trim whitespace and newlines
@@ -4582,7 +4582,7 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
                     // Note: alarm() is process-wide — in parallel mode, SIGALRM may be
                     // delivered to the wrong thread. The handler checks threadlocal panic_jmp,
                     // so it's harmless if the receiving thread isn't evaluating.
-                    _ = std.c.alarm(60);
+                    std.c.alarm(60);
                     defer _ = std.c.alarm(0);
 
                     const backend_output = backend_repl.step(input) catch |err| {

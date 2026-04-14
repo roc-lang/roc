@@ -1028,7 +1028,7 @@ fn isHelpFlag(arg: []const u8) bool {
 fn getFlagValue(arg: []const u8) ?[]const u8 {
     var iter = mem.splitScalar(u8, arg, '=');
     // ignore the flag key
-    _ = iter.next();
+    iter.next();
     return iter.next();
 }
 

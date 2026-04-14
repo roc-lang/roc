@@ -626,7 +626,7 @@ pub const BuildEnv = struct {
                         std.debug.print("[TRANSFER]   Module {s} not in scheduler, creating\n", .{coord_mod.name});
                     }
                     // Create the module in the scheduler
-                    _ = sched.ensureModule(coord_mod.name, coord_mod.path) catch continue;
+                    sched.ensureModule(coord_mod.name, coord_mod.path) catch continue;
                     maybe_sched_mod = sched.getModuleState(coord_mod.name);
                 }
                 const sched_mod = maybe_sched_mod orelse continue;
@@ -2047,7 +2047,7 @@ pub const BuildEnv = struct {
         while (it.next()) |e| {
             const pkg_name = e.key_ptr.*;
             const sched = e.value_ptr.*;
-            _ = self.packages.get(pkg_name).?;
+            std.debug.assert(self.packages.get(pkg_name) != null);
             var mi = sched.moduleNamesIterator();
             while (mi.next()) |me| {
                 const mod = me.key_ptr.*;

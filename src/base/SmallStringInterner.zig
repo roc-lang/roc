@@ -55,7 +55,7 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
     self.bytes = try collections.SafeList(u8).initCapacity(gpa, capacity * bytes_per_string);
 
     // Start with at least one byte to ensure Idx.unused (0) never points to valid data
-    _ = try self.bytes.append(gpa, 0);
+    try self.bytes.append(gpa, 0);
 
     // Initialize hash table with all zeros (Idx.unused)
     self.hash_table = try collections.SafeList(Idx).initCapacity(gpa, hash_table_capacity);
@@ -221,8 +221,8 @@ pub fn insert(self: *SmallStringInterner, gpa: std.mem.Allocator, string: []cons
 fn insertAt(self: *SmallStringInterner, gpa: std.mem.Allocator, string: []const u8, slot: u64) std.mem.Allocator.Error!Idx {
     const new_offset: Idx = @enumFromInt(self.bytes.len());
 
-    _ = try self.bytes.appendSlice(gpa, string);
-    _ = try self.bytes.append(gpa, 0);
+    try self.bytes.appendSlice(gpa, string);
+    try self.bytes.append(gpa, 0);
 
     // Add to hash table
     self.hash_table.items.items[@intCast(slot)] = new_offset;
@@ -344,7 +344,7 @@ test "SmallStringInterner empty CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
-    _ = try original.serialize(arena_allocator, &writer);
+    try original.serialize(arena_allocator, &writer);
 
     // Write to file
     try writer.writeGather(arena_allocator, file);
@@ -355,7 +355,7 @@ test "SmallStringInterner empty CompactWriter roundtrip" {
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
 
-    _ = try file.read(buffer);
+    try file.read(buffer);
 
     // Cast and relocate - empty interner should still work
     // The SmallStringInterner struct is at the beginning of the buffer
@@ -414,7 +414,7 @@ test "SmallStringInterner basic CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
-    _ = try original.serialize(arena_allocator, &writer);
+    try original.serialize(arena_allocator, &writer);
 
     // Write to file
     try writer.writeGather(arena_allocator, file);
@@ -425,7 +425,7 @@ test "SmallStringInterner basic CompactWriter roundtrip" {
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
 
-    _ = try file.read(buffer);
+    try file.read(buffer);
 
     // Cast and relocate
     const deserialized = @as(*SmallStringInterner, @ptrCast(@alignCast(buffer.ptr)));
@@ -487,7 +487,7 @@ test "SmallStringInterner with populated hashmap CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
-    _ = try original.serialize(arena_allocator, &writer);
+    try original.serialize(arena_allocator, &writer);
 
     // Write to file
     try writer.writeGather(arena_allocator, file);
@@ -498,7 +498,7 @@ test "SmallStringInterner with populated hashmap CompactWriter roundtrip" {
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
 
-    _ = try file.read(buffer);
+    try file.read(buffer);
 
     // Cast and relocate
     const deserialized = @as(*SmallStringInterner, @ptrCast(@alignCast(buffer.ptr)));
@@ -529,8 +529,8 @@ test "SmallStringInterner CompactWriter roundtrip" {
     var original = try SmallStringInterner.initCapacity(gpa, 5);
     defer original.deinit(gpa);
 
-    _ = try original.insert(gpa, "test1");
-    _ = try original.insert(gpa, "test2");
+    try original.insert(gpa, "test1");
+    try original.insert(gpa, "test2");
 
     // Create a temp file
     var tmp_dir = std.testing.tmpDir(.{});
@@ -547,7 +547,7 @@ test "SmallStringInterner CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
-    _ = try original.serialize(arena_allocator, &writer);
+    try original.serialize(arena_allocator, &writer);
 
     // Write to file
     try writer.writeGather(arena_allocator, file);
@@ -558,7 +558,7 @@ test "SmallStringInterner CompactWriter roundtrip" {
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
 
-    _ = try file.read(buffer);
+    try file.read(buffer);
 
     // Cast and relocate
     const deserialized = @as(*SmallStringInterner, @ptrCast(@alignCast(buffer.ptr)));
@@ -613,7 +613,7 @@ test "SmallStringInterner edge cases CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
-    _ = try original.serialize(arena_allocator, &writer);
+    try original.serialize(arena_allocator, &writer);
 
     // Write to file
     try writer.writeGather(arena_allocator, file);
@@ -624,7 +624,7 @@ test "SmallStringInterner edge cases CompactWriter roundtrip" {
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
 
-    _ = try file.read(buffer);
+    try file.read(buffer);
 
     // Cast and relocate
     const deserialized = @as(*SmallStringInterner, @ptrCast(@alignCast(buffer.ptr)));

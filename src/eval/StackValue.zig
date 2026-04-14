@@ -788,13 +788,11 @@ pub fn asF64(self: StackValue) f64 {
 }
 
 /// Read this StackValue's Dec value
-pub fn asDec(self: StackValue, roc_ops: *RocOps) RocDec {
+pub fn asDec(self: StackValue) RocDec {
     std.debug.assert(self.is_initialized); // Ensure initialized before reading
     std.debug.assert(self.ptr != null);
     std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .frac);
     std.debug.assert(self.layout.data.scalar.data.frac == .dec);
-    _ = roc_ops; // Unused after removing debug-only alignment check
-
     // Use memcpy for safe misaligned access in Release modes
     var result: RocDec = undefined;
     const raw_ptr: [*]u8 = @ptrCast(self.ptr.?);
@@ -1197,22 +1195,20 @@ pub const RecordAccessor = struct {
         return self.getFieldByIndex(sorted_index, field_rt_var);
     }
 
-    /// Get a field by its name text.
-    pub fn getFieldByName(self: RecordAccessor, field_name: []const u8, field_rt_var: types.Var) !StackValue {
-        const sorted_index = self.findFieldIndex(field_name) orelse {
+    /// Get a field by its ident index in the runtime layout store's ident store.
+    pub fn getFieldByIdent(self: RecordAccessor, field_ident: Ident.Idx, field_rt_var: types.Var) !StackValue {
+        const sorted_index = self.findFieldIndex(field_ident) orelse {
             return error.RecordIndexOutOfBounds;
         };
         return self.getFieldByIndex(sorted_index, field_rt_var);
     }
 
-    /// Find field index by comparing field name text.
-    /// Uses string comparison because ident indices are module-local —
-    /// the same field name from different modules has different Ident.Idx values.
-    pub fn findFieldIndex(self: RecordAccessor, field_name: []const u8) ?usize {
+    /// Find field index by comparing ident indices in the runtime layout store's ident space.
+    pub fn findFieldIndex(self: RecordAccessor, field_ident: Ident.Idx) ?usize {
         for (0..self.field_layouts.len) |idx| {
             const field = self.field_layouts.get(idx);
             if (field.name.eql(Ident.Idx.NONE)) continue;
-            if (std.mem.eql(u8, self.layout_cache.getFieldName(field.name), field_name)) {
+            if (field.name.eql(field_ident)) {
                 return idx;
             }
         }

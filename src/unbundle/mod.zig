@@ -35,5 +35,5 @@ pub const downloadAndExtractToBuffer = download.downloadAndExtractToBuffer;
 
 // Include tests
 test {
-    _ = @import("test_unbundle.zig");
+@import("test_unbundle.zig");
 }

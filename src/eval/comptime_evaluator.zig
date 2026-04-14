@@ -90,7 +90,7 @@ fn comptimeRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) v
     }
 
     // Update tracking with new pointer and size
-    _ = evaluator.roc_alloc_sizes.remove(old_ptr_addr);
+    evaluator.roc_alloc_sizes.remove(old_ptr_addr);
     evaluator.roc_alloc_sizes.put(@intFromPtr(new_ptr), realloc_args.new_length) catch {};
 
     realloc_args.answer = new_ptr;
@@ -441,7 +441,7 @@ pub const ComptimeEvaluator = struct {
                     .dec => {
                         // Dec is stored as RocDec struct with .num field of type i128
                         // The value is scaled by 10^18, so we need to unscale it to get the literal value
-                        const dec_value = stack_value.asDec(self.get_ops());
+                        const dec_value = stack_value.asDec();
                         const scaled_value = dec_value.num;
 
                         // Unscale by dividing by 10^18 to get the original literal value
@@ -897,7 +897,7 @@ pub const ComptimeEvaluator = struct {
                 const frac_precision = layout.data.scalar.data.frac;
                 switch (frac_precision) {
                     .dec => {
-                        const dec_value = stack_value.asDec(self.get_ops());
+                        const dec_value = stack_value.asDec();
                         const scaled_value = dec_value.num;
                         const unscaled_value = i128h.divTrunc_i128(scaled_value, builtins.dec.RocDec.one_point_zero_i128);
 
@@ -1081,7 +1081,7 @@ pub const ComptimeEvaluator = struct {
             // Create the span for args in index_data
             const index_data_start = self.env.store.index_data.len();
             for (arg_indices.items) |arg_idx| {
-                _ = try self.env.store.index_data.append(self.env.store.gpa, @intFromEnum(arg_idx));
+                try self.env.store.index_data.append(self.env.store.gpa, @intFromEnum(arg_idx));
             }
 
             // Create and return the tag expression
@@ -1178,7 +1178,7 @@ pub const ComptimeEvaluator = struct {
             // First, create the span for args in index_data
             const index_data_start = self.env.store.index_data.len();
             for (arg_indices.items) |arg_idx| {
-                _ = try self.env.store.index_data.append(self.env.store.gpa, @intFromEnum(arg_idx));
+                try self.env.store.index_data.append(self.env.store.gpa, @intFromEnum(arg_idx));
             }
 
             const tag_expr = CIR.Expr{
@@ -1235,7 +1235,7 @@ pub const ComptimeEvaluator = struct {
         // Create span in index_data for tuple elements
         const index_data_start = self.env.store.index_data.len();
         for (elem_indices.items) |elem_idx| {
-            _ = try self.env.store.index_data.append(self.env.store.gpa, @intFromEnum(elem_idx));
+            try self.env.store.index_data.append(self.env.store.gpa, @intFromEnum(elem_idx));
         }
 
         const tuple_expr = CIR.Expr{
@@ -1263,7 +1263,7 @@ pub const ComptimeEvaluator = struct {
                         .region = region,
                     },
                 };
-                _ = try self.problems.appendProblem(self.allocator, problem);
+                try self.problems.appendProblem(self.allocator, problem);
             },
             .expect_failed => {
                 const problem = Problem{
@@ -1272,7 +1272,7 @@ pub const ComptimeEvaluator = struct {
                         .region = region,
                     },
                 };
-                _ = try self.problems.appendProblem(self.allocator, problem);
+                try self.problems.appendProblem(self.allocator, problem);
             },
             .error_eval => {
                 const problem = Problem{
@@ -1281,7 +1281,7 @@ pub const ComptimeEvaluator = struct {
                         .region = region,
                     },
                 };
-                _ = try self.problems.appendProblem(self.allocator, problem);
+                try self.problems.appendProblem(self.allocator, problem);
             },
         }
     }
@@ -1340,7 +1340,7 @@ pub const ComptimeEvaluator = struct {
                                 .region = literal.region,
                             },
                         };
-                        _ = try self.problems.appendProblem(self.allocator, problem);
+                        try self.problems.appendProblem(self.allocator, problem);
                         // Mark this expression as failed so we skip evaluating it
                         try self.failed_literal_exprs.put(literal.expr_idx, {});
                         continue;
@@ -1360,7 +1360,7 @@ pub const ComptimeEvaluator = struct {
                                 .region = literal.region,
                             },
                         };
-                        _ = try self.problems.appendProblem(self.allocator, problem);
+                        try self.problems.appendProblem(self.allocator, problem);
                         // Mark this expression as failed so we skip evaluating it
                         try self.failed_literal_exprs.put(literal.expr_idx, {});
                     }
@@ -1414,7 +1414,7 @@ pub const ComptimeEvaluator = struct {
                         .region = literal.region,
                     },
                 };
-                _ = try self.problems.appendProblem(self.allocator, problem);
+                try self.problems.appendProblem(self.allocator, problem);
                 continue;
             };
 
@@ -1437,7 +1437,7 @@ pub const ComptimeEvaluator = struct {
                         .region = literal.region,
                     },
                 };
-                _ = try self.problems.appendProblem(self.allocator, problem);
+                try self.problems.appendProblem(self.allocator, problem);
                 continue;
             };
 
@@ -1668,7 +1668,7 @@ pub const ComptimeEvaluator = struct {
                     .region = region,
                 },
             };
-            _ = try self.problems.appendProblem(self.allocator, problem);
+            try self.problems.appendProblem(self.allocator, problem);
             return false;
         };
         defer func_value.decref(&self.interpreter.runtime_layout_store, roc_ops);
@@ -1685,7 +1685,7 @@ pub const ComptimeEvaluator = struct {
                     .region = region,
                 },
             };
-            _ = try self.problems.appendProblem(self.allocator, problem);
+            try self.problems.appendProblem(self.allocator, problem);
             return false;
         }
 
@@ -1704,7 +1704,7 @@ pub const ComptimeEvaluator = struct {
                     .region = region,
                 },
             };
-            _ = try self.problems.appendProblem(self.allocator, problem);
+            try self.problems.appendProblem(self.allocator, problem);
             return false;
         }
 
@@ -1763,7 +1763,7 @@ pub const ComptimeEvaluator = struct {
                         .region = region,
                     },
                 };
-                _ = try self.problems.appendProblem(self.allocator, problem);
+                try self.problems.appendProblem(self.allocator, problem);
                 return false;
             };
         } else {
@@ -1792,7 +1792,7 @@ pub const ComptimeEvaluator = struct {
                         .region = region,
                     },
                 };
-                _ = try self.problems.appendProblem(self.allocator, problem);
+                try self.problems.appendProblem(self.allocator, problem);
                 return false;
             };
         }
@@ -1886,13 +1886,13 @@ pub const ComptimeEvaluator = struct {
         var accessor = try dest.asRecord(&self.interpreter.runtime_layout_store);
 
         // Use self.env for field lookups since the record was built with self.env's idents
-        const is_neg_idx = accessor.findFieldIndex(self.env.getIdent(self.env.idents.is_negative)) orelse return error.OutOfMemory;
+        const is_neg_idx = accessor.findFieldIndex(self.env.idents.is_negative) orelse return error.OutOfMemory;
         try accessor.setFieldByIndex(is_neg_idx, is_negative, roc_ops);
 
-        const before_pt_idx = accessor.findFieldIndex(self.env.getIdent(self.env.idents.digits_before_pt)) orelse return error.OutOfMemory;
+        const before_pt_idx = accessor.findFieldIndex(self.env.idents.digits_before_pt) orelse return error.OutOfMemory;
         try accessor.setFieldByIndex(before_pt_idx, digits_before_pt, roc_ops);
 
-        const after_pt_idx = accessor.findFieldIndex(self.env.getIdent(self.env.idents.digits_after_pt)) orelse return error.OutOfMemory;
+        const after_pt_idx = accessor.findFieldIndex(self.env.idents.digits_after_pt) orelse return error.OutOfMemory;
         try accessor.setFieldByIndex(after_pt_idx, digits_after_pt, roc_ops);
 
         return dest;
@@ -1918,7 +1918,7 @@ pub const ComptimeEvaluator = struct {
                     .region = region,
                 },
             };
-            _ = try self.problems.appendProblem(self.allocator, problem);
+            try self.problems.appendProblem(self.allocator, problem);
             // Clear the message for next call
             self.interpreter.last_error_message = null;
             return false;
@@ -1941,7 +1941,7 @@ pub const ComptimeEvaluator = struct {
                             .region = region,
                         },
                     };
-                    _ = try self.problems.appendProblem(self.allocator, problem);
+                    try self.problems.appendProblem(self.allocator, problem);
                     return false;
                 }
                 return tag_value == 1;
@@ -1953,7 +1953,7 @@ pub const ComptimeEvaluator = struct {
                 if (isRecordStyleStruct(result.layout, &self.interpreter.runtime_layout_store)) {
                     var accessor = result.asRecord(&self.interpreter.runtime_layout_store) catch return true;
                     const layout_env = self.interpreter.runtime_layout_store.getEnv();
-                    const tag_idx = accessor.findFieldIndex(layout_env.getIdent(layout_env.idents.tag)) orelse return true;
+                    const tag_idx = accessor.findFieldIndex(layout_env.idents.tag) orelse return true;
                     const tag_rt_var = self.interpreter.runtime_types.fresh() catch return true;
                     break :blk accessor.getFieldByIndex(tag_idx, tag_rt_var) catch return true;
                 } else {
@@ -1976,7 +1976,7 @@ pub const ComptimeEvaluator = struct {
                                 .region = region,
                             },
                         };
-                        _ = try self.problems.appendProblem(self.allocator, problem);
+                        try self.problems.appendProblem(self.allocator, problem);
                     } else {
                         const error_msg = try self.problems.putFmtExtraString(
                             "Numeric literal validation failed",
@@ -1988,7 +1988,7 @@ pub const ComptimeEvaluator = struct {
                                 .region = region,
                             },
                         };
-                        _ = try self.problems.appendProblem(self.allocator, problem);
+                        try self.problems.appendProblem(self.allocator, problem);
                     }
                     return false;
                 }
@@ -2016,7 +2016,7 @@ pub const ComptimeEvaluator = struct {
         // Get the payload field from the Try record
         // Use layout store's env for field lookups
         const layout_env = self.interpreter.runtime_layout_store.getEnv();
-        const payload_idx = try_accessor.findFieldIndex(layout_env.getIdent(layout_env.idents.payload)) orelse {
+        const payload_idx = try_accessor.findFieldIndex(layout_env.idents.payload) orelse {
             // This should never happen - Try type must have a payload field
             return try std.fmt.allocPrint(self.allocator, "Internal error: from_numeral returned malformed Try value (missing payload field)", .{});
         };
@@ -2037,7 +2037,7 @@ pub const ComptimeEvaluator = struct {
 
             // Check if this has a payload field (for the Str)
             // Single-tag unions might not have a "tag" field, so we look for payload first
-            if (err_accessor.findFieldIndex(layout_env.getIdent(layout_env.idents.payload))) |err_payload_idx| {
+            if (err_accessor.findFieldIndex(layout_env.idents.payload)) |err_payload_idx| {
                 const err_payload_rt_var = self.interpreter.runtime_types.fresh() catch {
                     return try std.fmt.allocPrint(self.allocator, "Internal error: could not create rt_var for InvalidNumeral payload", .{});
                 };

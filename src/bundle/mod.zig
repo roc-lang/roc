@@ -38,6 +38,6 @@ pub const freeForZstd = bundle.freeForZstd;
 // - Streaming compression
 // - Large file handling
 test {
-    _ = @import("test_bundle.zig");
-    _ = @import("test_streaming.zig");
+    @import("test_bundle.zig");
+    @import("test_streaming.zig");
 }

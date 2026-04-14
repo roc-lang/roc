@@ -107,7 +107,7 @@ test "safeCast and safeRead" {
     const ptr = @as(*anyopaque, @ptrCast(&buffer));
 
     // Just verify this doesn't error - actual value is endianness dependent
-    _ = try safeRead(u16, ptr, 0, 4);
+    try safeRead(u16, ptr, 0, 4);
 
     try std.testing.expectError(error.BufferOverflow, safeRead(u32, ptr, 1, 4));
 }

@@ -73,16 +73,16 @@ pub const BuildEnvHandle = struct {
         if (!self.debug) return;
         const entry = self.owners.get(owner);
         const next = if (entry) |count| count + 1 else 1;
-        _ = self.owners.put(self.allocator, owner, next) catch {};
+        self.owners.put(self.allocator, owner, next) catch {};
     }
 
     fn removeOwner(self: *BuildEnvHandle, owner: []const u8) void {
         if (!self.debug) return;
         if (self.owners.get(owner)) |count| {
             if (count <= 1) {
-                _ = self.owners.remove(owner);
+                self.owners.remove(owner);
             } else {
-                _ = self.owners.put(self.allocator, owner, count - 1) catch {};
+                self.owners.put(self.allocator, owner, count - 1) catch {};
             }
         } else {
             std.debug.print("BuildEnvHandle: release without owner tracking: {s}\n", .{owner});

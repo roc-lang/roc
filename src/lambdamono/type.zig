@@ -335,7 +335,7 @@ pub const Store = struct {
         try self.buildCanonicalKey(root);
         try self.rememberScratchInternKey(root);
         try self.canonical_by_raw.put(root, root);
-        _ = active.remove(root);
+        active.remove(root);
         return root;
     }
 
@@ -509,8 +509,7 @@ pub const Store = struct {
         return write_index;
     }
 
-    fn ensureNoDuplicateFieldNames(fields: []const Field) void {
-        _ = fields;
+    fn ensureNoDuplicateFieldNames(_: []const Field) void {
     }
 
     fn equalIdsVisited(

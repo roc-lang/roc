@@ -413,8 +413,8 @@ test "getStaleModules returns only changed module when no dependents" {
     var graph = DependencyGraph.init(allocator);
     defer graph.deinit();
 
-    _ = try graph.getOrCreateModule("/path/to/A.roc", "A");
-    _ = try graph.getOrCreateModule("/path/to/B.roc", "B");
+    try graph.getOrCreateModule("/path/to/A.roc", "A");
+    try graph.getOrCreateModule("/path/to/B.roc", "B");
 
     // No dependencies between A and B
 
@@ -473,7 +473,7 @@ test "hasContentChanged detects changes" {
     var graph = DependencyGraph.init(allocator);
     defer graph.deinit();
 
-    _ = try graph.getOrCreateModule("/path/to/A.roc", "A");
+    try graph.getOrCreateModule("/path/to/A.roc", "A");
 
     const hash1 = DependencyGraph.computeContentHash("version 1");
     const hash2 = DependencyGraph.computeContentHash("version 2");
@@ -497,7 +497,7 @@ test "hasExportsChanged detects changes" {
     var graph = DependencyGraph.init(allocator);
     defer graph.deinit();
 
-    _ = try graph.getOrCreateModule("/path/to/A.roc", "A");
+    try graph.getOrCreateModule("/path/to/A.roc", "A");
 
     const hash1 = DependencyGraph.computeContentHash("exports v1");
     const hash2 = DependencyGraph.computeContentHash("exports v2");
@@ -541,8 +541,8 @@ test "clear removes all modules" {
     var graph = DependencyGraph.init(allocator);
     defer graph.deinit();
 
-    _ = try graph.getOrCreateModule("/path/to/A.roc", "A");
-    _ = try graph.getOrCreateModule("/path/to/B.roc", "B");
+    try graph.getOrCreateModule("/path/to/A.roc", "A");
+    try graph.getOrCreateModule("/path/to/B.roc", "B");
 
     try std.testing.expectEqual(@as(usize, 2), graph.count());
 

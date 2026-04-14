@@ -174,7 +174,7 @@ pub const CompletionBuilder = struct {
                 const name = module_state.name;
                 if (name.len == 0) continue;
 
-                _ = try self.addItem(.{
+                try self.addItem(.{
                     .label = name,
                     .kind = @intFromEnum(CompletionItemKind.module),
                     .detail = null,
@@ -196,7 +196,7 @@ pub const CompletionBuilder = struct {
                 const name = module_env.common.idents.getText(name_idx);
 
                 if (name.len > 0) {
-                    _ = try self.addItem(.{
+                    try self.addItem(.{
                         .label = name,
                         .kind = @intFromEnum(CompletionItemKind.module),
                         .detail = null,
@@ -249,7 +249,7 @@ pub const CompletionBuilder = struct {
         // We use the builtin type list as module names, because builtin modules
         // are surfaced as top-level namespaces for completion.
         for (builtin_completion.BUILTIN_TYPES) |builtin_name| {
-            _ = try self.addItem(.{
+            try self.addItem(.{
                 .label = builtin_name,
                 .kind = @intFromEnum(CompletionItemKind.module),
                 .detail = null,
@@ -323,7 +323,7 @@ pub const CompletionBuilder = struct {
                 }
             }
 
-            _ = try self.addItem(.{
+            try self.addItem(.{
                 .label = label,
                 .kind = kind,
                 .detail = detail,
@@ -431,7 +431,7 @@ pub const CompletionBuilder = struct {
                         stmt_idx,
                     ) catch null;
 
-                    _ = try self.addItem(.{
+                    try self.addItem(.{
                         .label = name,
                         .kind = @intFromEnum(CompletionItemKind.class),
                         .detail = null,
@@ -485,7 +485,7 @@ pub const CompletionBuilder = struct {
                 module_env.store.getPatternRegion(binding.pattern_idx).start.offset,
             ) catch null;
 
-            _ = try self.addItem(.{
+            try self.addItem(.{
                 .label = label,
                 .kind = kind,
                 .detail = detail,
@@ -536,7 +536,7 @@ pub const CompletionBuilder = struct {
                 def,
             ) catch null;
 
-            _ = try self.addItem(.{
+            try self.addItem(.{
                 .label = name,
                 .kind = kind,
                 .detail = detail,
@@ -594,7 +594,7 @@ pub const CompletionBuilder = struct {
                     stmt_idx,
                 ) catch null;
 
-                _ = try self.addItem(.{
+                try self.addItem(.{
                     .label = name,
                     .kind = kind,
                     .detail = detail,
@@ -758,7 +758,7 @@ pub const CompletionBuilder = struct {
                                 // Use a stack buffer; addItem duplicates accepted labels.
                                 var label_buf: [32]u8 = undefined;
                                 const label = std.fmt.bufPrint(&label_buf, "{d}", .{i}) catch continue;
-                                _ = try self.addItem(.{
+                                try self.addItem(.{
                                     .label = label,
                                     .kind = @intFromEnum(CompletionItemKind.field),
                                     .detail = detail,
@@ -918,7 +918,7 @@ pub const CompletionBuilder = struct {
                 tw.reset();
             }
 
-            _ = try self.addItem(.{
+            try self.addItem(.{
                 .label = field_name,
                 .kind = @intFromEnum(CompletionItemKind.field),
                 .detail = detail,
@@ -1136,7 +1136,7 @@ pub const CompletionBuilder = struct {
                 tw.reset();
             }
 
-            _ = try self.addItem(.{
+            try self.addItem(.{
                 .label = method_name,
                 .kind = @intFromEnum(CompletionItemKind.method),
                 .detail = detail,
@@ -1219,7 +1219,7 @@ pub const CompletionBuilder = struct {
                 // Extract documentation for the method definition.
                 const documentation = self.findMethodDocumentation(module_env, qualified_ident);
 
-                _ = try self.addItem(.{
+                try self.addItem(.{
                     .label = method_name,
                     .kind = @intFromEnum(CompletionItemKind.method),
                     .detail = detail,
@@ -1410,7 +1410,7 @@ pub const CompletionBuilder = struct {
                             // Show the tag signature (e.g. "SubVal(Str)") as detail
                             const detail = self.formatTagSignature(module_env, tag_name, t.args);
 
-                            _ = try self.addItem(.{
+                            try self.addItem(.{
                                 .label = tag_name,
                                 .kind = @intFromEnum(CompletionItemKind.enum_member),
                                 .detail = detail,
@@ -1557,7 +1557,7 @@ pub const CompletionBuilder = struct {
             const tag_name = module_env.getIdentText(name_idx);
             if (tag_name.len == 0) continue;
 
-            _ = try self.addItem(.{
+            try self.addItem(.{
                 .label = tag_name,
                 .kind = @intFromEnum(CompletionItemKind.enum_member),
                 .detail = null,

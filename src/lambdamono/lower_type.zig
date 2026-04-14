@@ -160,7 +160,7 @@ fn lowerTypeRec(
     if (mono_cache.provisional.get(id)) |provisional| {
         if (mono_types.isFullyResolved(provisional)) {
             const canonical = try mono_types.canonicalizeResolved(provisional);
-            _ = mono_cache.provisional.remove(id);
+            mono_cache.provisional.remove(id);
             try mono_cache.resolved.put(id, canonical);
             return canonical;
         }
@@ -236,7 +236,7 @@ fn lowerTypeRec(
     };
 
     mono_types.setType(placeholder, lowered);
-    _ = mono_cache.active.remove(id);
+    mono_cache.active.remove(id);
     if (mono_types.isFullyResolved(placeholder)) {
         const canonical = try mono_types.canonicalizeResolved(placeholder);
         try mono_cache.resolved.put(id, canonical);

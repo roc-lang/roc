@@ -850,9 +850,9 @@ pub const Import = struct {
             const idx = @as(Import.Idx, @enumFromInt(self.imports.len()));
 
             // Add to both the list and the map, with unresolved module initially
-            _ = try self.imports.append(allocator, string_idx);
-            _ = try self.import_idents.append(allocator, ident_idx orelse base.Ident.Idx.NONE);
-            _ = try self.resolved_modules.append(allocator, ResolvedModuleIdx.none);
+            try self.imports.append(allocator, string_idx);
+            try self.import_idents.append(allocator, ident_idx orelse base.Ident.Idx.NONE);
+            try self.resolved_modules.append(allocator, ResolvedModuleIdx.none);
             try self.map.put(allocator, string_idx, idx);
 
             return idx;

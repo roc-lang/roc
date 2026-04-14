@@ -360,8 +360,7 @@ pub const Interpreter = struct {
         unreachable;
     }
 
-    fn invariantFailed(self: *LirInterpreter, comptime fmt: []const u8, args: anytype) noreturn {
-        _ = self;
+    fn invariantFailed(_: *LirInterpreter, comptime fmt: []const u8, args: anytype) noreturn {
         if (builtin.mode == .Debug) {
             std.debug.print(fmt, args);
             std.debug.print("\n", .{});
@@ -430,7 +429,9 @@ pub const Interpreter = struct {
                 const i_align = self.helper.sizeAlignOf(arg_layouts[sorted_indices[i]]).alignment.toByteUnits();
                 const j_align = self.helper.sizeAlignOf(arg_layouts[sorted_indices[j]]).alignment.toByteUnits();
                 if (j_align > i_align or (j_align == i_align and sorted_indices[j] < sorted_indices[i])) {
-                    std.mem.swap(usize, &sorted_indices[i], &sorted_indices[j]);
+                const tmp = sorted_indices[i];
+                sorted_indices[i] = sorted_indices[j];
+                sorted_indices[j] = tmp;
                 }
             }
         }

@@ -37,9 +37,9 @@ pub const CompressingHashWriter = struct {
         };
 
         const ctx = c.ZSTD_createCCtx_advanced(custom_mem) orelse return std.mem.Allocator.Error.OutOfMemory;
-        errdefer _ = c.ZSTD_freeCCtx(ctx);
+        errdefer c.ZSTD_freeCCtx(ctx);
 
-        _ = c.ZSTD_CCtx_setParameter(ctx, c.ZSTD_c_compressionLevel, compression_level);
+        c.ZSTD_CCtx_setParameter(ctx, c.ZSTD_c_compressionLevel, compression_level);
 
         const out_buffer_size = c.ZSTD_CStreamOutSize();
         const out_buffer = try allocator_ptr.alloc(u8, out_buffer_size);
@@ -70,7 +70,7 @@ pub const CompressingHashWriter = struct {
     }
 
     pub fn deinit(self: *Self) void {
-        _ = c.ZSTD_freeCCtx(self.ctx);
+        c.ZSTD_freeCCtx(self.ctx);
         self.allocator_ptr.free(self.out_buffer);
         self.allocator_ptr.free(self.interface.buffer);
     }
@@ -78,7 +78,7 @@ pub const CompressingHashWriter = struct {
     fn flush(w: *std.io.Writer) WriterError!void {
         const self: *Self = @alignCast(@fieldParentPtr("interface", w));
         if (self.finished and w.end != 0) return WriterError.WriteFailed;
-        _ = self.compressAndHash(w.buffer[0..w.end], false) catch return error.WriteFailed;
+        self.compressAndHash(w.buffer[0..w.end], false) catch return error.WriteFailed;
         w.end = 0;
         return;
     }
@@ -86,7 +86,7 @@ pub const CompressingHashWriter = struct {
     fn drain(w: *std.io.Writer, data: []const []const u8, splat: usize) WriterError!usize {
         const self: *Self = @alignCast(@fieldParentPtr("interface", w));
         if (self.finished) return WriterError.WriteFailed;
-        _ = self.compressAndHash(w.buffer[0..w.end], false) catch return error.WriteFailed;
+        self.compressAndHash(w.buffer[0..w.end], false) catch return error.WriteFailed;
         w.end = 0;
         if (data.len == 0) return 0;
 
@@ -128,7 +128,7 @@ pub const CompressingHashWriter = struct {
 
     pub fn finish(self: *Self) WriterError!void {
         if (self.finished) return;
-        _ = self.compressAndHash(self.interface.buffer[0..self.interface.end], true) catch return error.WriteFailed;
+        self.compressAndHash(self.interface.buffer[0..self.interface.end], true) catch return error.WriteFailed;
         self.interface.end = 0;
         self.finished = true;
     }

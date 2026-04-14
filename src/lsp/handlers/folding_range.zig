@@ -174,7 +174,7 @@ fn popMatchingBracket(stack: *std.ArrayList(BracketInfo), expected_open: Token.T
         i -= 1;
         if (stack.items[i].tag == expected_open) {
             const info = stack.items[i];
-            _ = stack.orderedRemove(i);
+            stack.orderedRemove(i);
             return info;
         }
     }

@@ -101,9 +101,9 @@ pub const Store = struct {
         // Reserve canonical tag-union metadata index 0 for the shared two-nullary enum
         // representation. `layout.Idx.bool` is just a stable handle to this ordinary
         // tag-union layout so control-flow code can reference it conveniently.
-        _ = try tag_union_variants.append(allocator, .{ .payload_layout = .zst });
-        _ = try tag_union_variants.append(allocator, .{ .payload_layout = .zst });
-        _ = try tag_union_data.append(allocator, .{
+        try tag_union_variants.append(allocator, .{ .payload_layout = .zst });
+        try tag_union_variants.append(allocator, .{ .payload_layout = .zst });
+        try tag_union_data.append(allocator, .{
             .size = 1,
             .discriminant_offset = 0,
             .discriminant_size = 1,
@@ -115,23 +115,23 @@ pub const Store = struct {
 
         // Pre-populate primitive type layouts in order matching the Idx enum.
         // Changing the order of these can break things!
-        _ = try layouts.append(allocator, Layout.boolType());
-        _ = try layouts.append(allocator, Layout.str());
-        _ = try layouts.append(allocator, Layout.int(.u8));
-        _ = try layouts.append(allocator, Layout.int(.i8));
-        _ = try layouts.append(allocator, Layout.int(.u16));
-        _ = try layouts.append(allocator, Layout.int(.i16));
-        _ = try layouts.append(allocator, Layout.int(.u32));
-        _ = try layouts.append(allocator, Layout.int(.i32));
-        _ = try layouts.append(allocator, Layout.int(.u64));
-        _ = try layouts.append(allocator, Layout.int(.i64));
-        _ = try layouts.append(allocator, Layout.int(.u128));
-        _ = try layouts.append(allocator, Layout.int(.i128));
-        _ = try layouts.append(allocator, Layout.frac(.f32));
-        _ = try layouts.append(allocator, Layout.frac(.f64));
-        _ = try layouts.append(allocator, Layout.frac(.dec));
-        _ = try layouts.append(allocator, Layout.opaquePtr());
-        _ = try layouts.append(allocator, Layout.zst());
+        try layouts.append(allocator, Layout.boolType());
+        try layouts.append(allocator, Layout.str());
+        try layouts.append(allocator, Layout.int(.u8));
+        try layouts.append(allocator, Layout.int(.i8));
+        try layouts.append(allocator, Layout.int(.u16));
+        try layouts.append(allocator, Layout.int(.i16));
+        try layouts.append(allocator, Layout.int(.u32));
+        try layouts.append(allocator, Layout.int(.i32));
+        try layouts.append(allocator, Layout.int(.u64));
+        try layouts.append(allocator, Layout.int(.i64));
+        try layouts.append(allocator, Layout.int(.u128));
+        try layouts.append(allocator, Layout.int(.i128));
+        try layouts.append(allocator, Layout.frac(.f32));
+        try layouts.append(allocator, Layout.frac(.f64));
+        try layouts.append(allocator, Layout.frac(.dec));
+        try layouts.append(allocator, Layout.opaquePtr());
+        try layouts.append(allocator, Layout.zst());
 
         std.debug.assert(layouts.len() == num_primitives);
 
@@ -332,11 +332,11 @@ pub const Store = struct {
 
         const fields_start = self.struct_fields.items.len;
         for (fields) |field| {
-            _ = try self.struct_fields.append(self.allocator, field);
+            try self.struct_fields.append(self.allocator, field);
         }
 
         const struct_idx = StructIdx{ .int_idx = @intCast(self.struct_data.len()) };
-        _ = try self.struct_data.append(self.allocator, .{
+        try self.struct_data.append(self.allocator, .{
             .size = total_size,
             .fields = .{
                 .start = @intCast(fields_start),
@@ -368,13 +368,13 @@ pub const Store = struct {
 
         const variants_start: u32 = @intCast(self.tag_union_variants.len());
         for (variant_layouts) |variant_layout_idx| {
-            _ = try self.tag_union_variants.append(self.allocator, .{
+            try self.tag_union_variants.append(self.allocator, .{
                 .payload_layout = variant_layout_idx,
             });
         }
 
         const tag_union_data_idx: u32 = @intCast(self.tag_union_data.len());
-        _ = try self.tag_union_data.append(self.allocator, .{
+        try self.tag_union_data.append(self.allocator, .{
             .size = total_size,
             .discriminant_offset = discriminant_offset,
             .discriminant_size = discriminant_size,
@@ -570,11 +570,11 @@ pub const Store = struct {
 
         const fields_start = self.struct_fields.items.len;
         for (temp_fields.items) |field| {
-            _ = try self.struct_fields.append(self.allocator, field);
+            try self.struct_fields.append(self.allocator, field);
         }
 
         const struct_idx = StructIdx{ .int_idx = @intCast(self.struct_data.len()) };
-        _ = try self.struct_data.append(self.allocator, .{
+        try self.struct_data.append(self.allocator, .{
             .size = total_size,
             .fields = .{
                 .start = @intCast(fields_start),
@@ -616,13 +616,13 @@ pub const Store = struct {
 
         const variants_start: u32 = @intCast(self.tag_union_variants.len());
         for (variant_layouts) |variant_layout_idx| {
-            _ = try self.tag_union_variants.append(self.allocator, .{
+            try self.tag_union_variants.append(self.allocator, .{
                 .payload_layout = variant_layout_idx,
             });
         }
 
         const tag_union_data_idx: u32 = @intCast(self.tag_union_data.len());
-        _ = try self.tag_union_data.append(self.allocator, .{
+        try self.tag_union_data.append(self.allocator, .{
             .size = total_size,
             .discriminant_offset = discriminant_offset,
             .discriminant_size = discriminant_size,
@@ -1250,7 +1250,7 @@ pub const Store = struct {
         };
 
         for (graph.nodes.items, 0..) |_, i| {
-            _ = try finalizer.finalizeNode(@enumFromInt(i));
+            try finalizer.finalizeNode(@enumFromInt(i));
         }
 
         for (graph.nodes.items, 0..) |_, i| {

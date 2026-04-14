@@ -775,7 +775,7 @@ test "ForwardFrameBuilder stack alignment x86_64" {
     var frame = Builder.init(&emit);
     frame.setStackSize(50); // Not 16-byte aligned
 
-    _ = try frame.emitPrologue();
+    try frame.emitPrologue();
 
     // The actual_stack_alloc should be rounded up to 16-byte alignment
     try std.testing.expect(frame.actual_stack_alloc >= 50);
@@ -795,7 +795,7 @@ test "DeferredFrameBuilder basic prologue/epilogue x86_64" {
     frame.setStackSize(64);
     // No callee-saved registers used
 
-    _ = try frame.emitPrologue(&emit);
+    try frame.emitPrologue(&emit);
     try frame.emitEpilogue(&emit);
 
     // Should have generated: push rbp, mov rbp rsp, sub rsp N, mov rsp rbp, pop rbp, ret
@@ -820,7 +820,7 @@ test "DeferredFrameBuilder omit_if_possible skips empty frame x86_64" {
     try std.testing.expect(!frame.usesFramePointer());
     try std.testing.expectEqual(@as(u32, 0), frame.calculatePrologueSize());
 
-    _ = try frame.emitPrologue(&emit);
+    try frame.emitPrologue(&emit);
     try frame.emitEpilogue(&emit);
 
     // No prologue emitted; epilogue is just `ret`.
@@ -840,7 +840,7 @@ test "DeferredFrameBuilder omit_if_possible keeps frame when needed x86_64" {
     frame.setStackSize(16);
 
     try std.testing.expect(frame.usesFramePointer());
-    _ = try frame.emitPrologue(&emit);
+    try frame.emitPrologue(&emit);
 
     // Prologue starts with push rbp when frame pointer is used.
     try std.testing.expectEqual(@as(u8, 0x55), emit.buf.items[0]);
@@ -860,7 +860,7 @@ test "DeferredFrameBuilder with callee-saved mask x86_64" {
     frame.setCalleeSavedMask(rbx_bit | r12_bit);
     frame.setStackSize(128);
 
-    _ = try frame.emitPrologue(&emit);
+    try frame.emitPrologue(&emit);
     try frame.emitEpilogue(&emit);
 
     // Should include MOV saves/restores for RBX and R12
@@ -877,7 +877,7 @@ test "DeferredFrameBuilder stack alignment x86_64" {
     var frame = Builder.init();
     frame.setStackSize(50); // Not 16-byte aligned
 
-    _ = try frame.emitPrologue(&emit);
+    try frame.emitPrologue(&emit);
 
     // The actual_stack_alloc should be rounded up to 16-byte alignment
     try std.testing.expect(frame.actual_stack_alloc >= 50);
@@ -911,7 +911,7 @@ test "DeferredFrameBuilder Windows x86_64 no red zone" {
     frame.setCalleeSavedMask(r12_bit);
     frame.setStackSize(64);
 
-    _ = try frame.emitPrologue(&emit);
+    try frame.emitPrologue(&emit);
     try frame.emitEpilogue(&emit);
 
     // Windows requires stack allocation BEFORE mov saves

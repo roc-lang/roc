@@ -60,9 +60,16 @@ pub const Value = struct {
             const dest = self.ptr[0..size];
             const source = src.ptr[0..size];
             if (@intFromPtr(dest.ptr) <= @intFromPtr(source.ptr)) {
-                std.mem.copyForwards(u8, dest, source);
+                var i: usize = 0;
+                while (i < size) : (i += 1) {
+                    dest[i] = source[i];
+                }
             } else {
-                std.mem.copyBackwards(u8, dest, source);
+                var i: usize = size;
+                while (i > 0) {
+                    i -= 1;
+                    dest[i] = source[i];
+                }
             }
         }
     }

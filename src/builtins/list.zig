@@ -2933,7 +2933,7 @@ test "listAllocationPtr basic functionality" {
     // The allocation pointer should be valid and accessible
     if (alloc_ptr) |ptr| {
         // Should be able to access the data through the allocation pointer
-        _ = ptr; // Just verify it's not null
+        try std.testing.expect(@intFromPtr(ptr) != 0);
     }
 }
 
@@ -2946,7 +2946,9 @@ test "listAllocationPtr empty list" {
 
     const alloc_ptr = listAllocationPtr(empty_list, test_env.getOps());
     // Empty lists may have null allocation pointer
-    _ = alloc_ptr; // Just verify the function doesn't crash
+    if (alloc_ptr) |ptr| {
+        try std.testing.expect(@intFromPtr(ptr) != 0);
+    }
 }
 
 test "listIncref and listDecref public functions" {

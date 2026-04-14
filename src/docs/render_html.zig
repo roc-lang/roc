@@ -610,10 +610,7 @@ fn renderSidebarEntries(
     gpa: std.mem.Allocator,
     module_name: []const u8,
     entries: []const DocModel.DocEntry,
-    _depth: usize,
 ) !void {
-    _ = _depth; // No longer needed
-
     // Build tree structure
     const tree = try buildEntryTree(gpa, entries);
     defer tree.deinit(gpa);
@@ -667,7 +664,7 @@ fn renderSidebar(w: Writer, ctx: *const RenderContext, gpa: Allocator, base: []c
 
         // Sub-entries - grouped hierarchically
         try w.writeAll("                    <div class=\"sidebar-sub-entries\">\n");
-        try renderSidebarEntries(w, gpa, mod.name, mod.entries, 0);
+        try renderSidebarEntries(w, gpa, mod.name, mod.entries);
         try w.writeAll("                    </div>\n");
         try w.writeAll("                </div>\n");
     }

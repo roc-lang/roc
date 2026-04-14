@@ -139,17 +139,6 @@ pub const Modules = struct {
         };
     }
 
-    pub fn findModuleIdxByName(self: @This(), target_name: []const u8) u32 {
-        for (0..self.moduleCount()) |idx| {
-            if (std.mem.eql(u8, self.module(@intCast(idx)).name(), target_name)) return @intCast(idx);
-        }
-
-        std.debug.panic(
-            "typed CIR invariant violated: missing target module {s}",
-            .{target_name},
-        );
-    }
-
 };
 
 pub const Module = struct {
@@ -190,10 +179,6 @@ pub const Module = struct {
         return null;
     }
 
-    pub fn findCommonIdent(self: @This(), text: []const u8) ?Ident.Idx {
-        return self.identStoreConst().findByString(text);
-    }
-
     pub fn getIdent(self: @This(), idx: Ident.Idx) []const u8 {
         return self.env().getIdent(idx);
     }
@@ -217,16 +202,11 @@ pub const Module = struct {
         return self.env().requires_types.items.items;
     }
 
-    pub fn lookupMethodIdentFromModule(
+    pub fn lookupMethodIdent(
         self: @This(),
-        source_module: Module,
-        type_ident: Ident.Idx,
-        method_ident: Ident.Idx,
+        local_type_ident: Ident.Idx,
+        local_method_ident: Ident.Idx,
     ) ?Ident.Idx {
-        const type_name = source_module.getIdent(type_ident);
-        const method_name = source_module.getIdent(method_ident);
-        const local_type_ident = self.findCommonIdent(type_name) orelse return null;
-        const local_method_ident = self.findCommonIdent(method_name) orelse return null;
         return self.env().method_idents.get(self.env().gpa, MethodKey{
             .type_ident = local_type_ident,
             .method_ident = local_method_ident,
@@ -261,8 +241,7 @@ pub const Module = struct {
         return self.patternType(def_data.pattern);
     }
 
-    pub fn exprType(self: @This(), idx: CIR.Expr.Idx) Var {
-        _ = self;
+    pub fn exprType(_: @This(), idx: CIR.Expr.Idx) Var {
         return ModuleEnv.varFrom(idx);
     }
 
@@ -274,8 +253,7 @@ pub const Module = struct {
         };
     }
 
-    pub fn patternType(self: @This(), idx: CIR.Pattern.Idx) Var {
-        _ = self;
+    pub fn patternType(_: @This(), idx: CIR.Pattern.Idx) Var {
         return ModuleEnv.varFrom(idx);
     }
 
@@ -287,41 +265,20 @@ pub const Module = struct {
         };
     }
 
-    pub fn typeAnnoType(self: @This(), idx: CIR.TypeAnno.Idx) Var {
-        _ = self;
+    pub fn typeAnnoType(_: @This(), idx: CIR.TypeAnno.Idx) Var {
         return ModuleEnv.varFrom(idx);
     }
 
-    pub fn exprIdxFromTypeVar(self: @This(), var_: Var) ?CIR.Expr.Idx {
-        _ = self;
+    pub fn exprIdxFromTypeVar(_: @This(), var_: Var) ?CIR.Expr.Idx {
         return @enumFromInt(@intFromEnum(ModuleEnv.nodeIdxFrom(var_)));
     }
 
-    pub fn resolveAttachedMethodTarget(
+    pub fn resolveAttachedMethodTargetByIdents(
         self: @This(),
-        source_module: Module,
-        type_ident: Ident.Idx,
-        method_ident: Ident.Idx,
+        local_type_ident: Ident.Idx,
+        local_method_ident: Ident.Idx,
     ) ?Modules.ResolvedMethodTarget {
-        const local_method_ident = self.lookupMethodIdentFromModule(source_module, type_ident, method_ident) orelse return null;
-        const exposed = self.env().getExposedNodeIndexById(local_method_ident) orelse return null;
-        return .{
-            .module_idx = self.module_idx,
-            .def_idx = @enumFromInt(@as(u32, @intCast(exposed))),
-        };
-    }
-
-    pub fn resolveAttachedMethodTargetByText(
-        self: @This(),
-        type_name: []const u8,
-        method_name: []const u8,
-    ) ?Modules.ResolvedMethodTarget {
-        const local_type_ident = self.findCommonIdent(type_name) orelse return null;
-        const local_method_ident = self.findCommonIdent(method_name) orelse return null;
-        const method_ident = self.env().method_idents.get(self.env().gpa, MethodKey{
-            .type_ident = local_type_ident,
-            .method_ident = local_method_ident,
-        }) orelse return null;
+        const method_ident = self.lookupMethodIdent(local_type_ident, local_method_ident) orelse return null;
         const exposed = self.env().getExposedNodeIndexById(method_ident) orelse return null;
         return .{
             .module_idx = self.module_idx,

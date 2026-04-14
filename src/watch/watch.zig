@@ -323,7 +323,7 @@ pub const Watcher = struct {
                     self.allocator.free(data.buffer);
                     self.allocator.free(data.path);
                     if (data.overlapped.hEvent) |event| {
-                        _ = std.os.windows.CloseHandle(event);
+                        std.os.windows.CloseHandle(event);
                     }
                 }
                 self.impl.overlapped_data.deinit();
@@ -390,21 +390,21 @@ pub const Watcher = struct {
                     const SetEvent = struct {
                         extern "kernel32" fn SetEvent(hEvent: std.os.windows.HANDLE) callconv(.winapi) std.os.windows.BOOL;
                     }.SetEvent;
-                    _ = SetEvent(stop_event);
-                    _ = std.os.windows.CloseHandle(stop_event);
+                    SetEvent(stop_event);
+                    std.os.windows.CloseHandle(stop_event);
                     self.impl.stop_event = null;
                 }
 
                 // Close directory handles and overlapped events
                 for (self.impl.handles.items) |handle| {
-                    _ = std.os.windows.CloseHandle(handle);
+                    std.os.windows.CloseHandle(handle);
                 }
                 self.impl.handles.clearRetainingCapacity();
 
                 // Close event handles and clear overlapped data
                 for (self.impl.overlapped_data.items) |*data| {
                     if (data.overlapped.hEvent) |event| {
-                        _ = std.os.windows.CloseHandle(event);
+                        std.os.windows.CloseHandle(event);
                     }
                     self.allocator.free(data.buffer);
                     self.allocator.free(data.path);
@@ -516,7 +516,7 @@ pub const Watcher = struct {
         // Run the run loop with periodic checks for stop signal
         while (!self.should_stop.load(.seq_cst)) {
             // Run for 0.1 seconds at a time to check should_stop periodically
-            _ = CFRunLoopRunInMode(getKCFRunLoopDefaultMode(), 0.1, false);
+            CFRunLoopRunInMode(getKCFRunLoopDefaultMode(), 0.1, false);
         }
 
         // Clean up after run loop exits
@@ -848,7 +848,7 @@ pub const Watcher = struct {
         }.CreateEventW;
 
         const event_handle = CreateEventW(null, std.os.windows.TRUE, std.os.windows.FALSE, null) orelse {
-            _ = std.os.windows.CloseHandle(dir_handle);
+            std.os.windows.CloseHandle(dir_handle);
             return error.FailedToCreateEvent;
         };
 
@@ -946,7 +946,7 @@ pub const Watcher = struct {
         }
 
         // Reset the event for the next operation
-        _ = ResetEvent(self.impl.overlapped_data.items[index].overlapped.hEvent.?);
+        ResetEvent(self.impl.overlapped_data.items[index].overlapped.hEvent.?);
 
         // Process the file change notifications
         self.parseWindowsFileNotifications(index, bytes_transferred);
@@ -1045,7 +1045,7 @@ test "basic file watching" {
 
     const callback = struct {
         fn cb(event: WatchEvent) void {
-            _ = global.event_count.fetchAdd(1, .seq_cst);
+            global.event_count.fetchAdd(1, .seq_cst);
             global.mutex.lock();
             defer global.mutex.unlock();
             global.last_path = event.path;
@@ -1089,7 +1089,7 @@ test "recursive directory watching" {
 
     const callback = struct {
         fn cb(_: WatchEvent) void {
-            _ = global.event_count.fetchAdd(1, .seq_cst);
+            global.event_count.fetchAdd(1, .seq_cst);
         }
     }.cb;
 
@@ -1125,7 +1125,7 @@ test "multiple directories watching" {
 
     const callback = struct {
         fn cb(_: WatchEvent) void {
-            _ = global.event_count.fetchAdd(1, .seq_cst);
+            global.event_count.fetchAdd(1, .seq_cst);
         }
     }.cb;
 
@@ -1162,7 +1162,7 @@ test "file modification detection" {
 
     const callback = struct {
         fn cb(_: WatchEvent) void {
-            _ = global.event_count.fetchAdd(1, .seq_cst);
+            global.event_count.fetchAdd(1, .seq_cst);
         }
     }.cb;
 
@@ -1194,7 +1194,7 @@ test "rapid file creation" {
 
     const callback = struct {
         fn cb(_: WatchEvent) void {
-            _ = global.event_count.fetchAdd(1, .seq_cst);
+            global.event_count.fetchAdd(1, .seq_cst);
         }
     }.cb;
 
@@ -1239,7 +1239,7 @@ test "directory creation and file addition" {
 
     const callback = struct {
         fn cb(_: WatchEvent) void {
-            _ = global.event_count.fetchAdd(1, .seq_cst);
+            global.event_count.fetchAdd(1, .seq_cst);
         }
     }.cb;
 
@@ -1279,7 +1279,7 @@ test "start stop restart" {
 
     const callback = struct {
         fn cb(_: WatchEvent) void {
-            _ = global.event_count.fetchAdd(1, .seq_cst);
+            global.event_count.fetchAdd(1, .seq_cst);
         }
     }.cb;
 
@@ -1327,7 +1327,7 @@ test "thread safety" {
 
     const callback = struct {
         fn cb(event: WatchEvent) void {
-            _ = global.event_count.fetchAdd(1, .seq_cst);
+            global.event_count.fetchAdd(1, .seq_cst);
             global.mutex.lock();
             defer global.mutex.unlock();
             global.events.append(allocator, allocator.dupe(u8, event.path) catch return) catch return;
@@ -1395,7 +1395,7 @@ test "file rename detection" {
 
     const callback = struct {
         fn cb(_: WatchEvent) void {
-            _ = global.event_count.fetchAdd(1, .seq_cst);
+            global.event_count.fetchAdd(1, .seq_cst);
         }
     }.cb;
 
@@ -1435,7 +1435,7 @@ test "windows unicode filename handling" {
 
     const callback = struct {
         fn cb(event: WatchEvent) void {
-            _ = global.event_count.fetchAdd(1, .seq_cst);
+            global.event_count.fetchAdd(1, .seq_cst);
             global.mutex.lock();
             defer global.mutex.unlock();
             global.last_path = event.path;
@@ -1512,7 +1512,7 @@ test "windows long path handling" {
 
     const callback = struct {
         fn cb(_: WatchEvent) void {
-            _ = global.event_count.fetchAdd(1, .seq_cst);
+            global.event_count.fetchAdd(1, .seq_cst);
         }
     }.cb;
 

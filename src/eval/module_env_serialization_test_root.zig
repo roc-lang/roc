@@ -1,3 +1,3 @@
 test {
-    _ = @import("test/module_env_serialization_test.zig");
+@import("test/module_env_serialization_test.zig");
 }

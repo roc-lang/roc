@@ -253,7 +253,7 @@ test "ExposedItems empty CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(allocator);
 
-    _ = try original.serialize(allocator, &writer);
+    try original.serialize(allocator, &writer);
 
     // Write to file
     try writer.writeGather(allocator, file);
@@ -264,7 +264,7 @@ test "ExposedItems empty CompactWriter roundtrip" {
     const buffer = try allocator.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(file_size));
     defer allocator.free(buffer);
 
-    _ = try file.read(buffer);
+    try file.read(buffer);
 
     // Cast and relocate
     const deserialized = @as(*ExposedItems, @ptrCast(@alignCast(buffer.ptr + writer.total_bytes - @sizeOf(ExposedItems))));
@@ -310,7 +310,7 @@ test "ExposedItems basic CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(allocator);
 
-    _ = try original.serialize(allocator, &writer);
+    try original.serialize(allocator, &writer);
 
     // Write to file
     try writer.writeGather(allocator, file);
@@ -321,7 +321,7 @@ test "ExposedItems basic CompactWriter roundtrip" {
     const buffer = try allocator.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(@alignOf(ExposedItems.Serialized)), @intCast(file_size));
     defer allocator.free(buffer);
 
-    _ = try file.read(buffer);
+    try file.read(buffer);
 
     // The serialized ExposedItems.Serialized struct is at the beginning of the buffer
     // (appendAlloc is called first in serialize)
@@ -367,7 +367,7 @@ test "ExposedItems with duplicates CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(allocator);
 
-    _ = try original.serialize(allocator, &writer);
+    try original.serialize(allocator, &writer);
 
     // Write to file
     try writer.writeGather(allocator, file);
@@ -378,7 +378,7 @@ test "ExposedItems with duplicates CompactWriter roundtrip" {
     const buffer = try allocator.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(@alignOf(ExposedItems.Serialized)), @intCast(file_size));
     defer allocator.free(buffer);
 
-    _ = try file.read(buffer);
+    try file.read(buffer);
 
     // The serialized ExposedItems.Serialized struct is at the beginning of the buffer
     // (appendAlloc is called first in serialize)
@@ -433,7 +433,7 @@ test "ExposedItems comprehensive CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(allocator);
 
-    _ = try original.serialize(allocator, &writer);
+    try original.serialize(allocator, &writer);
 
     // Write to file
     try writer.writeGather(allocator, file);
@@ -445,7 +445,7 @@ test "ExposedItems comprehensive CompactWriter roundtrip" {
     const buffer = try allocator.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(serialized_align), @intCast(file_size));
     defer allocator.free(buffer);
 
-    _ = try file.read(buffer);
+    try file.read(buffer);
 
     // Cast to Serialized type and deserialize
     const serialized_ptr: *ExposedItems.Serialized = @ptrCast(@alignCast(buffer.ptr));
@@ -472,11 +472,11 @@ test "ExposedItems edge cases CompactWriter roundtrip" {
         var writer = CompactWriter.init();
         defer writer.deinit(allocator);
 
-        _ = try exposed.serialize(allocator, &writer);
+        try exposed.serialize(allocator, &writer);
 
         const buffer = try allocator.alloc(u8, writer.total_bytes);
         defer allocator.free(buffer);
-        _ = try writer.writeToBuffer(buffer);
+        try writer.writeToBuffer(buffer);
 
         const serialized_ptr = @as(*ExposedItems.Serialized, @ptrCast(@alignCast(buffer.ptr)));
         const deserialized = serialized_ptr.deserializeInto(@intFromPtr(buffer.ptr));
@@ -502,7 +502,7 @@ test "ExposedItems edge cases CompactWriter roundtrip" {
         var writer = CompactWriter.init();
         defer writer.deinit(allocator);
 
-        _ = try exposed.serialize(allocator, &writer);
+        try exposed.serialize(allocator, &writer);
 
         // Test writeGather
         try writer.writeGather(allocator, file);
@@ -513,7 +513,7 @@ test "ExposedItems edge cases CompactWriter roundtrip" {
         const buffer = try allocator.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(@alignOf(ExposedItems.Serialized)), @intCast(file_size));
         defer allocator.free(buffer);
 
-        _ = try file.read(buffer);
+        try file.read(buffer);
 
         const serialized_ptr = @as(*ExposedItems.Serialized, @ptrCast(@alignCast(buffer.ptr)));
         const deserialized = serialized_ptr.deserializeInto(@intFromPtr(buffer.ptr));

@@ -317,7 +317,7 @@ pub fn extractModuleDocs(gpa: Allocator, module_env: *const ModuleEnv, package_n
 
                 // Remove from top-level list (preserving source order)
                 gpa.free(entry.children); // Free empty children array
-                _ = entries_list.orderedRemove(i);
+                entries_list.orderedRemove(i);
                 continue; // Don't increment i, check same position again
             }
         }
@@ -475,7 +475,7 @@ fn reparentBuiltinChildren(gpa: Allocator, entries_list: *std.ArrayList(DocModel
 
                 // Remove from top-level list (preserving source order)
                 gpa.free(entry.children);
-                _ = entries_list.orderedRemove(j);
+                entries_list.orderedRemove(j);
                 continue;
             }
         }

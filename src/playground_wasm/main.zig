@@ -1633,7 +1633,7 @@ fn writeEvaluateTestsResponse(response_buffer: []u8, data: CompilerStageData) Re
     };
     defer test_runner.deinit();
 
-    _ = test_runner.eval_all() catch {
+    test_runner.eval_all() catch {
         try writeErrorResponse(response_buffer, .ERROR, "Failed to evaluate tests.");
         return;
     };
@@ -2123,7 +2123,7 @@ fn writeUnbundleErrorResponse(response: []u8, err: unbundle.UnbundleError) u8 {
         error.OutOfMemory => "Out of memory",
     };
 
-    _ = std.fmt.bufPrint(response, "{{\"success\":false,\"error\":\"{s}\"}}", .{error_msg}) catch {
+    std.fmt.bufPrint(response, "{{\"success\":false,\"error\":\"{s}\"}}", .{error_msg}) catch {
         return 1; // Response buffer too small
     };
     return 2; // Unbundle error

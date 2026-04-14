@@ -177,13 +177,12 @@ const Ctx = struct {
             return self.source_module.exprIdxFromTypeVar(var_);
         }
 
-        pub fn resolveAttachedMethodTarget(
+        pub fn resolveAttachedMethodTargetByIdents(
             self: @This(),
-            source_module: typed_cir.Module,
-            type_ident: Ident.Idx,
-            method_ident: Ident.Idx,
+            local_type_ident: Ident.Idx,
+            local_method_ident: Ident.Idx,
         ) ?typed_cir.Modules.ResolvedMethodTarget {
-            return self.source_module.resolveAttachedMethodTarget(source_module, type_ident, method_ident);
+            return self.source_module.resolveAttachedMethodTargetByIdents(local_type_ident, local_method_ident);
         }
 
         pub fn resolveAttachedMethodTargetByText(
@@ -191,7 +190,9 @@ const Ctx = struct {
             type_name: []const u8,
             method_name: []const u8,
         ) ?typed_cir.Modules.ResolvedMethodTarget {
-            return self.source_module.resolveAttachedMethodTargetByText(type_name, method_name);
+            const local_type_ident = self.findCommonIdent(type_name) orelse return null;
+            const local_method_ident = self.findCommonIdent(method_name) orelse return null;
+            return self.resolveAttachedMethodTargetByIdents(local_type_ident, local_method_ident);
         }
 
         pub fn getStatement(self: @This(), idx: CIR.Statement.Idx) CIR.Statement {
@@ -297,7 +298,13 @@ const Ctx = struct {
     }
 
     fn findModuleIdxByName(self: *const Ctx, target_name: []const u8) u32 {
-        return self.source_modules.findModuleIdxByName(target_name);
+        for (0..self.source_modules.moduleCount()) |idx| {
+            if (std.mem.eql(u8, self.source_modules.module(@intCast(idx)).name(), target_name)) return @intCast(idx);
+        }
+        return debugPanic(
+            "monotype invariant violated: missing target module {s}",
+            .{target_name},
+        );
     }
 
     fn getTypeIdentText(self: *const Ctx, module_idx: u32, ident: base.Ident.Idx) []const u8 {
@@ -501,12 +508,11 @@ pub const Lowerer = struct {
     const FrozenBindingEnv = std.AutoHashMap(PatternKey, FrozenBindingValue);
 
     fn putTypedBinding(
-        self: *Lowerer,
+        _: *Lowerer,
         env: *BindingEnv,
         key: PatternKey,
         typed: TypedBinding,
     ) std.mem.Allocator.Error!void {
-        _ = self;
         if (env.get(key)) |existing| {
             try env.put(key, .{
                 .typed = typed,
@@ -519,12 +525,11 @@ pub const Lowerer = struct {
     }
 
     fn putLocalFnSourceBinding(
-        self: *Lowerer,
+        _: *Lowerer,
         env: *BindingEnv,
         key: PatternKey,
         source: LocalFnSourceRef,
     ) std.mem.Allocator.Error!void {
-        _ = self;
         if (env.get(key)) |existing| {
             try env.put(key, .{
                 .typed = existing.typed,
@@ -537,12 +542,11 @@ pub const Lowerer = struct {
     }
 
     fn putLocalFnSeedBinding(
-        self: *Lowerer,
+        _: *Lowerer,
         env: *BindingEnv,
         key: PatternKey,
         seed_var: Var,
     ) std.mem.Allocator.Error!void {
-        _ = self;
         if (env.get(key)) |existing| {
             try env.put(key, .{
                 .typed = existing.typed,
@@ -877,7 +881,7 @@ pub const Lowerer = struct {
         );
 
         if (!top_level.is_function) {
-            _ = try self.ensureTopLevelValueDefEmitted(symbol);
+            try self.ensureTopLevelValueDefEmitted(symbol);
             return symbol;
         }
 
@@ -1493,7 +1497,7 @@ pub const Lowerer = struct {
             source_expr_var,
             expected_var,
         );
-        _ = try self.bindSourceVarToExistingWorkspace(module_idx, type_scope, source_expr_var, source_fn_var);
+        try self.bindSourceVarToExistingWorkspace(module_idx, type_scope, source_expr_var, source_fn_var);
 
         const arg_patterns = self.ctx.typedCirModule(module_idx).slicePatterns(hosted.args);
         const arg_count = self.functionArgCount(module_idx, type_scope, source_fn_var);
@@ -1621,9 +1625,9 @@ pub const Lowerer = struct {
             source_seed_source_var,
             expected_var,
         );
-        _ = try self.bindSourceVarToExistingWorkspace(module_idx, type_scope, source_expr_var, source_fn_var);
+        try self.bindSourceVarToExistingWorkspace(module_idx, type_scope, source_expr_var, source_fn_var);
         if (source_seed_source_var != source_expr_var) {
-            _ = try self.bindSourceVarToExistingWorkspace(module_idx, type_scope, source_seed_source_var, source_fn_var);
+            try self.bindSourceVarToExistingWorkspace(module_idx, type_scope, source_seed_source_var, source_fn_var);
         }
         var arg_index: usize = 0;
         while (true) : (arg_index += 1) {
@@ -1633,7 +1637,7 @@ pub const Lowerer = struct {
                 arg_index,
             ) orelse break;
             const scoped_arg_var = self.lookupFunctionArgVar(module_idx, type_scope, source_fn_var, arg_index) orelse break;
-            _ = try self.bindSourceVarToExistingWorkspace(module_idx, type_scope, source_arg_var, scoped_arg_var);
+            try self.bindSourceVarToExistingWorkspace(module_idx, type_scope, source_arg_var, scoped_arg_var);
         }
         const result_ty = try self.requireFunctionRetType(module_idx, type_scope, source_fn_var);
         const result_var = self.lookupFunctionNodeRetVar(module_idx, type_scope, source_fn_var);
@@ -1990,7 +1994,7 @@ pub const Lowerer = struct {
     }
 
     fn bindExprResultVar(
-        self: *Lowerer,
+        _: *Lowerer,
         module_idx: u32,
         type_scope: *TypeCloneScope,
         body_expr_idx: CIR.Expr.Idx,
@@ -2000,7 +2004,6 @@ pub const Lowerer = struct {
             "monotype lambda invariant violated: final lambda body missing function return var in module {d}",
             .{module_idx},
         );
-        _ = self;
         const key: TypeCloneScope.ExprKey = .{
             .module_idx = module_idx,
             .expr_idx = body_expr_idx,
@@ -2649,12 +2652,11 @@ pub const Lowerer = struct {
     }
 
     fn requirePatternSourceType(
-        self: *const Lowerer,
+        _: *const Lowerer,
         module_idx: u32,
         type_scope: *const TypeCloneScope,
         pattern_idx: CIR.Pattern.Idx,
     ) type_mod.TypeId {
-        _ = self;
         const key: TypeCloneScope.PatternTypeKey = .{
             .module_idx = module_idx,
             .pattern_idx = pattern_idx,
@@ -2664,13 +2666,12 @@ pub const Lowerer = struct {
     }
 
     fn recordPatternSourceType(
-        self: *Lowerer,
+        _: *Lowerer,
         module_idx: u32,
         type_scope: *TypeCloneScope,
         pattern_idx: CIR.Pattern.Idx,
         source_ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!void {
-        _ = self;
         const key: TypeCloneScope.PatternTypeKey = .{
             .module_idx = module_idx,
             .pattern_idx = pattern_idx,
@@ -2727,13 +2728,12 @@ pub const Lowerer = struct {
     }
 
     fn recordPatternTagDiscriminant(
-        self: *Lowerer,
+        _: *Lowerer,
         module_idx: u32,
         type_scope: *TypeCloneScope,
         pattern_idx: CIR.Pattern.Idx,
         discriminant: u16,
     ) std.mem.Allocator.Error!void {
-        _ = self;
         const key: TypeCloneScope.PatternTypeKey = .{
             .module_idx = module_idx,
             .pattern_idx = pattern_idx,
@@ -2748,12 +2748,11 @@ pub const Lowerer = struct {
     }
 
     fn requirePatternTagDiscriminant(
-        self: *const Lowerer,
+        _: *const Lowerer,
         module_idx: u32,
         type_scope: *const TypeCloneScope,
         pattern_idx: CIR.Pattern.Idx,
     ) u16 {
-        _ = self;
         const key: TypeCloneScope.PatternTypeKey = .{
             .module_idx = module_idx,
             .pattern_idx = pattern_idx,
@@ -2763,13 +2762,12 @@ pub const Lowerer = struct {
     }
 
     fn recordPatternListElemType(
-        self: *Lowerer,
+        _: *Lowerer,
         module_idx: u32,
         type_scope: *TypeCloneScope,
         pattern_idx: CIR.Pattern.Idx,
         elem_ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!void {
-        _ = self;
         const key: TypeCloneScope.PatternTypeKey = .{
             .module_idx = module_idx,
             .pattern_idx = pattern_idx,
@@ -2784,12 +2782,11 @@ pub const Lowerer = struct {
     }
 
     fn requirePatternListElemType(
-        self: *const Lowerer,
+        _: *const Lowerer,
         module_idx: u32,
         type_scope: *const TypeCloneScope,
         pattern_idx: CIR.Pattern.Idx,
     ) type_mod.TypeId {
-        _ = self;
         const key: TypeCloneScope.PatternTypeKey = .{
             .module_idx = module_idx,
             .pattern_idx = pattern_idx,
@@ -2799,13 +2796,12 @@ pub const Lowerer = struct {
     }
 
     fn recordRecordDestructFieldIndex(
-        self: *Lowerer,
+        _: *Lowerer,
         module_idx: u32,
         type_scope: *TypeCloneScope,
         destruct_idx: CIR.Pattern.RecordDestruct.Idx,
         field_index: u16,
     ) std.mem.Allocator.Error!void {
-        _ = self;
         const key: TypeCloneScope.RecordDestructKey = .{
             .module_idx = module_idx,
             .destruct_idx = destruct_idx,
@@ -2820,12 +2816,11 @@ pub const Lowerer = struct {
     }
 
     fn requireRecordDestructFieldIndex(
-        self: *const Lowerer,
+        _: *const Lowerer,
         module_idx: u32,
         type_scope: *const TypeCloneScope,
         destruct_idx: CIR.Pattern.RecordDestruct.Idx,
     ) u16 {
-        _ = self;
         const key: TypeCloneScope.RecordDestructKey = .{
             .module_idx = module_idx,
             .destruct_idx = destruct_idx,
@@ -2895,12 +2890,11 @@ pub const Lowerer = struct {
     }
 
     fn requireLambdaBodyReturnExpectation(
-        self: *const Lowerer,
+        _: *const Lowerer,
         module_idx: u32,
         result_ty: type_mod.TypeId,
         result_var_opt: ?Var,
     ) ExpectedType {
-        _ = self;
         return .{
             .ty = result_ty,
             .solved_var = result_var_opt orelse debugPanic(
@@ -2980,10 +2974,9 @@ pub const Lowerer = struct {
         self: *Lowerer,
         module_idx: u32,
         type_scope: *TypeCloneScope,
-        env: BindingEnv,
+        _: BindingEnv,
         expr_idx: CIR.Expr.Idx,
     ) std.mem.Allocator.Error!Var {
-        _ = env;
         return self.requireExprResultVar(module_idx, type_scope, expr_idx);
     }
 
@@ -3265,8 +3258,7 @@ pub const Lowerer = struct {
                 .args = try self.lowerExprSlice(module_idx, type_scope, env, &.{unary.expr}),
             } },
             .e_dot_access => |dot| blk: {
-                if (dot.args) |dispatch_args| {
-                    _ = dispatch_args;
+                if (dot.args) |_| {
                     const lowered_call = try self.lowerRecordedMethodCall(
                         module_idx,
                         type_scope,
@@ -3590,8 +3582,7 @@ pub const Lowerer = struct {
         };
     }
 
-    fn decFromWholeInt(self: *Lowerer, value: i128) std.mem.Allocator.Error!i128 {
-        _ = self;
+    fn decFromWholeInt(_: *Lowerer, value: i128) std.mem.Allocator.Error!i128 {
         const result = @mulWithOverflow(value, dec_scale_i128);
         if (result[1] != 0) {
             debugPanic(
@@ -3603,11 +3594,10 @@ pub const Lowerer = struct {
     }
 
     fn decFromFraction(
-        self: *Lowerer,
+        _: *Lowerer,
         numerator: i128,
         denominator_power_of_ten: u8,
     ) std.mem.Allocator.Error!i128 {
-        _ = self;
         const scale_power: u8 = if (denominator_power_of_ten >= 18) 0 else 18 - denominator_power_of_ten;
         var scale: i128 = 1;
         var i: u8 = 0;
@@ -3629,8 +3619,7 @@ pub const Lowerer = struct {
         return result[0];
     }
 
-    fn decToF64(self: *Lowerer, scaled_dec: i128) f64 {
-        _ = self;
+    fn decToF64(_: *Lowerer, scaled_dec: i128) f64 {
         return @as(f64, @floatFromInt(scaled_dec)) / 1_000_000_000_000_000_000.0;
     }
 
@@ -3662,11 +3651,10 @@ pub const Lowerer = struct {
 
     fn makeStringLiteralExpr(
         self: *Lowerer,
-        module_idx: u32,
+        _: u32,
         str_ty: type_mod.TypeId,
         bytes: []const u8,
     ) std.mem.Allocator.Error!ast.ExprId {
-        _ = module_idx;
         return try self.program.store.addExpr(.{
             .ty = str_ty,
             .data = .{ .str_lit = try self.internStringLiteral(bytes) },
@@ -3844,7 +3832,7 @@ pub const Lowerer = struct {
             source_expr_var,
             expected_var,
         );
-        _ = try self.bindSourceVarToExistingWorkspace(module_idx, scope, source_expr_var, source_fn_var);
+        try self.bindSourceVarToExistingWorkspace(module_idx, scope, source_expr_var, source_fn_var);
         const first_arg_ty = if (arg_patterns.len == 0)
             self.requireFunctionType(closure_ty).arg
         else
@@ -3932,7 +3920,6 @@ pub const Lowerer = struct {
         closure: CIR.Expr.Closure,
         expected_var: ?Var,
     ) std.mem.Allocator.Error!LoweredClosure {
-        _ = closure.captures;
         const lambda_expr = self.ctx.typedCirModule(module_idx).expr(closure.lambda_idx).data;
         if (lambda_expr != .e_lambda) unreachable;
         return try self.lowerAnonymousClosure(module_idx, type_scope, env, source_expr_idx, closure_ty, lambda_expr.e_lambda.args, lambda_expr.e_lambda.body, expected_var);
@@ -5612,13 +5599,12 @@ pub const Lowerer = struct {
     }
 
     fn aliasBindingEntry(
-        self: *Lowerer,
+        _: *Lowerer,
         module_idx: u32,
         match_pattern_idx: CIR.Pattern.Idx,
         bind_pattern_idx: CIR.Pattern.Idx,
         env: *BindingEnv,
     ) std.mem.Allocator.Error!void {
-        _ = self;
         const match_key: PatternKey = .{
             .module_idx = module_idx,
             .pattern_idx = @intFromEnum(match_pattern_idx),
@@ -5757,8 +5743,8 @@ pub const Lowerer = struct {
         incoming_env: BindingEnv,
         stmts_span: CIR.Statement.Span,
         final_expr_idx: CIR.Expr.Idx,
-        result_ty: type_mod.TypeId,
-        expected_result_var: ?Var,
+        _: type_mod.TypeId,
+        _: ?Var,
     ) std.mem.Allocator.Error!@FieldType(ast.Expr.Data, "block") {
         var info_env = try self.cloneEnv(incoming_env);
         defer info_env.deinit();
@@ -5772,8 +5758,6 @@ pub const Lowerer = struct {
             try self.collectStmtInfo(module_idx, type_scope, &info_env, info_stmts[stmt_index]);
             stmt_index += 1;
         }
-        _ = result_ty;
-        _ = expected_result_var;
         try self.collectExprInfo(module_idx, type_scope, info_env, final_expr_idx);
         try self.finalizeExprTypes(module_idx, type_scope);
         try self.finalizePatternTypes(module_idx, type_scope);
@@ -6460,11 +6444,10 @@ pub const Lowerer = struct {
         type_scope: *TypeCloneScope,
         env: BindingEnv,
         record_ty: type_mod.TypeId,
-        record_var: Var,
+        _: Var,
         base_expr_idx: CIR.Expr.Idx,
         update_fields_span: CIR.RecordField.Span,
     ) std.mem.Allocator.Error!ast.ExprId {
-        _ = record_var;
         const record = switch (self.ctx.types.getType(record_ty)) {
             .record => |record| record,
             else => debugPanic("monotype invariant violated: record update lowered with non-record type", .{}),
@@ -6734,7 +6717,7 @@ pub const Lowerer = struct {
 
         const operand_ty = try self.requireExprType(module_idx, type_scope, binop.lhs);
         switch (self.ctx.types.getTypePreservingNominal(operand_ty)) {
-            .nominal => |nominal| {
+            .nominal => |_| {
                 const method_name = self.ctx.typedCirModule(module_idx).commonIdents().is_eq;
                 const receiver_var = self.requireExprResultVar(module_idx, type_scope, binop.lhs);
                 const target = try self.resolveAttachedMethodTargetFromWorkspaceVar(
@@ -6743,7 +6726,6 @@ pub const Lowerer = struct {
                     receiver_var,
                     method_name,
                 ) orelse {
-                    _ = nominal;
                     return null;
                 };
                 const source_fn_var = try self.copyTopLevelDefExprVarToScope(type_scope, target.module_idx, target.def_idx);
@@ -7252,11 +7234,10 @@ pub const Lowerer = struct {
         env: BindingEnv,
         expr_idx: CIR.Expr.Idx,
         call: anytype,
-        result_ty_opt: ?type_mod.TypeId,
+        _: ?type_mod.TypeId,
     ) std.mem.Allocator.Error!?ast.ExprId {
         if (self.resolveDirectTopLevelSource(module_idx, env, call.func)) |source| {
             if (self.isBuiltinStrInspectSource(source.module_idx, source.def_idx)) {
-                _ = result_ty_opt;
                 const result_ty = try self.makePrimitiveType(.str);
                 std.debug.assert(self.ctx.types.getType(result_ty) == .primitive and self.ctx.types.getType(result_ty).primitive == .str);
                 if (try self.maybeLowerBuiltinSpecialCall(module_idx, type_scope, env, call, result_ty)) |special| {
@@ -7273,12 +7254,10 @@ pub const Lowerer = struct {
         module_idx: u32,
         type_scope: *TypeCloneScope,
         env: BindingEnv,
-        list_ty: type_mod.TypeId,
-        list_var: ?Var,
+        _: type_mod.TypeId,
+        _: ?Var,
         span: CIR.Expr.Span,
     ) std.mem.Allocator.Error!ast.Span(ast.ExprId) {
-        _ = list_ty;
-        _ = list_var;
         const exprs = self.ctx.typedCirModule(module_idx).sliceExpr(span);
         const out = try self.allocator.alloc(ast.ExprId, exprs.len);
         defer self.allocator.free(out);
@@ -7300,12 +7279,10 @@ pub const Lowerer = struct {
         module_idx: u32,
         type_scope: *TypeCloneScope,
         env: BindingEnv,
-        tuple_ty: type_mod.TypeId,
-        tuple_var: ?Var,
+        _: type_mod.TypeId,
+        _: ?Var,
         span: CIR.Expr.Span,
     ) std.mem.Allocator.Error!ast.Span(ast.ExprId) {
-        _ = tuple_ty;
-        _ = tuple_var;
         const exprs = self.ctx.typedCirModule(module_idx).sliceExpr(span);
         const out = try self.allocator.alloc(ast.ExprId, exprs.len);
         defer self.allocator.free(out);
@@ -7361,10 +7338,9 @@ pub const Lowerer = struct {
         module_idx: u32,
         type_scope: *TypeCloneScope,
         env: BindingEnv,
-        record_ty: type_mod.TypeId,
+        _: type_mod.TypeId,
         span: CIR.RecordField.Span,
     ) std.mem.Allocator.Error!ast.Span(ast.FieldExpr) {
-        _ = record_ty;
         const typed_cir_module = self.ctx.typedCirModule(module_idx);
         const fields = typed_cir_module.sliceRecordFields(span);
         const out = try self.allocator.alloc(ast.FieldExpr, fields.len);
@@ -7401,11 +7377,10 @@ pub const Lowerer = struct {
         env: BindingEnv,
         expr_idx: CIR.Expr.Idx,
         expected_ty: type_mod.TypeId,
-        expected_var: ?Var,
+        _: ?Var,
         tag_name: base.Ident.Idx,
         args_span: CIR.Expr.Span,
     ) std.mem.Allocator.Error!ast.Expr.Data {
-        _ = expected_var;
         if (self.ctx.types.getType(expected_ty) == .primitive and self.ctx.types.getType(expected_ty).primitive == .bool) {
             if (self.ctx.typedCirModule(module_idx).sliceExpr(args_span).len != 0) {
                 return debugPanic("monotype bool tag invariant violated: Bool tags cannot carry arguments", .{});
@@ -7546,12 +7521,11 @@ pub const Lowerer = struct {
     }
 
     fn requireExprResultVar(
-        self: *const Lowerer,
+        _: *const Lowerer,
         module_idx: u32,
         type_scope: *const TypeCloneScope,
         expr_idx: CIR.Expr.Idx,
     ) Var {
-        _ = self;
         const key: TypeCloneScope.ExprKey = .{
             .module_idx = module_idx,
             .expr_idx = expr_idx,
@@ -8390,12 +8364,11 @@ pub const Lowerer = struct {
     }
 
     fn requirePatternType(
-        self: *Lowerer,
+        _: *Lowerer,
         module_idx: u32,
         type_scope: *TypeCloneScope,
         pattern_idx: CIR.Pattern.Idx,
     ) std.mem.Allocator.Error!type_mod.TypeId {
-        _ = self;
         const key: TypeCloneScope.PatternTypeKey = .{
             .module_idx = module_idx,
             .pattern_idx = pattern_idx,
@@ -8408,12 +8381,10 @@ pub const Lowerer = struct {
         self: *Lowerer,
         module_idx: u32,
         type_scope: *TypeCloneScope,
-        env: BindingEnv,
+        _: BindingEnv,
         expr_idx: CIR.Expr.Idx,
-        expr: CIR.Expr,
+        _: CIR.Expr,
     ) std.mem.Allocator.Error!type_mod.TypeId {
-        _ = env;
-        _ = expr;
         return try self.requireExprType(module_idx, type_scope, expr_idx);
     }
 
@@ -8421,7 +8392,7 @@ pub const Lowerer = struct {
         self: *Lowerer,
         module_idx: u32,
         type_scope: *TypeCloneScope,
-        env: BindingEnv,
+        _: BindingEnv,
         match_expr: CIR.Expr.Match,
     ) std.mem.Allocator.Error!?type_mod.TypeId {
         const typed_cir_module = self.ctx.typedCirModule(module_idx);
@@ -8434,7 +8405,6 @@ pub const Lowerer = struct {
 
         const branch_pattern = typed_cir_module.getMatchBranchPattern(branch_patterns[0]);
         const tag_info = self.lookupSingleTagPayloadPattern(module_idx, branch_pattern.pattern) orelse return null;
-        _ = env;
         const cond_ty = try self.requireExprType(module_idx, type_scope, match_expr.cond);
         const payload_tys = try self.requireTagPayloadTypesFromMonotype(module_idx, cond_ty, tag_info.tag_name);
         if (payload_tys.len != 1) {
@@ -8522,7 +8492,7 @@ pub const Lowerer = struct {
         if (type_scope.provisional_type_cache.get(key)) |provisional| {
             if (self.ctx.types.isFullyResolved(provisional)) {
                 const canonical = try self.ctx.types.canonicalizeResolved(provisional);
-                _ = type_scope.provisional_type_cache.remove(key);
+                type_scope.provisional_type_cache.remove(key);
                 try type_scope.type_cache.put(key, canonical);
                 return canonical;
             }
@@ -8577,11 +8547,11 @@ pub const Lowerer = struct {
 
         self.ctx.types.setType(placeholder, lowered);
         if (lowered == .placeholder) {
-            _ = type_scope.active_type_cache.remove(key);
+            type_scope.active_type_cache.remove(key);
             return placeholder;
         }
 
-        _ = type_scope.active_type_cache.remove(key);
+        type_scope.active_type_cache.remove(key);
         if (self.ctx.types.isFullyResolved(placeholder)) {
             const canonical = try self.ctx.types.canonicalizeResolved(placeholder);
             try type_scope.type_cache.put(key, canonical);
@@ -8894,11 +8864,10 @@ pub const Lowerer = struct {
     }
 
     fn defaultNumeralPrimitiveForContent(
-        self: *Lowerer,
+        _: *Lowerer,
         type_scope: *const TypeCloneScope,
         content: types.Content,
     ) ?type_mod.Prim {
-        _ = self;
         return switch (content) {
             .flex => |flex| if (flex.name) |name|
                 builtinNumPrimInStore(type_scope.identStoreConst(), name) orelse
@@ -8911,8 +8880,8 @@ pub const Lowerer = struct {
     }
 
     fn defaultPrimitiveForConstraints(
-        self: *Lowerer,
-        module_idx: u32,
+        _: *Lowerer,
+        _: u32,
         type_scope: *const TypeCloneScope,
         constraints: types.StaticDispatchConstraint.SafeList.Range,
     ) std.mem.Allocator.Error!?type_mod.Prim {
@@ -8922,8 +8891,6 @@ pub const Lowerer = struct {
             return .dec;
         }
 
-        _ = self;
-        _ = module_idx;
         return null;
     }
 
@@ -9010,11 +8977,10 @@ pub const Lowerer = struct {
     fn bindLambdaArg(
         self: *Lowerer,
         module_idx: u32,
-        type_scope: *TypeCloneScope,
+        _: *TypeCloneScope,
         pattern_idx: CIR.Pattern.Idx,
         arg_ty: type_mod.TypeId,
     ) std.mem.Allocator.Error!ast.TypedSymbol {
-        _ = type_scope;
         return switch (self.ctx.typedCirModule(module_idx).pattern(pattern_idx).data) {
             .assign => |assign| .{
                 .ty = arg_ty,
@@ -9791,12 +9757,11 @@ pub const Lowerer = struct {
 
     fn requireRecordFieldIndexForSolvedVar(
         self: *Lowerer,
-        module_idx: u32,
+        _: u32,
         type_scope: *const TypeCloneScope,
         record_var: Var,
         field_name_text: []const u8,
     ) std.mem.Allocator.Error!u16 {
-        _ = module_idx;
         var names = std.ArrayList(base.Ident.Idx).empty;
         defer names.deinit(self.allocator);
 
@@ -10194,11 +10159,10 @@ pub const Lowerer = struct {
     }
 
     fn argTypeKeysEqual(
-        self: *Lowerer,
+        _: *Lowerer,
         left: []const type_mod.TypeId,
         right: []const type_mod.TypeId,
     ) bool {
-        _ = self;
         if (left.len != right.len) return false;
         for (left, right) |left_ty, right_ty| {
             if (left_ty != right_ty) return false;
@@ -10274,12 +10238,11 @@ pub const Lowerer = struct {
 
     fn lookupFunctionArgVar(
         self: *const Lowerer,
-        module_idx: u32,
+        _: u32,
         type_scope: *const TypeCloneScope,
         fn_var: Var,
         arg_index: usize,
     ) ?Var {
-        _ = module_idx;
         return self.lookupFunctionArgVarInStore(type_scope.typeStoreConst(), fn_var, arg_index);
     }
 
@@ -10302,12 +10265,11 @@ pub const Lowerer = struct {
 
     fn lookupCurriedFunctionArgVar(
         self: *Lowerer,
-        module_idx: u32,
+        _: u32,
         type_scope: *TypeCloneScope,
         fn_var: ?Var,
         arg_index: usize,
     ) ?Var {
-        _ = module_idx;
         const function_var = fn_var orelse return null;
         const store = type_scope.typeStoreConst();
         if (self.lookupFunctionArgVarInStore(store, function_var, 0) == null) {
@@ -10341,11 +10303,10 @@ pub const Lowerer = struct {
 
     fn lookupCurriedFunctionFinalRetVar(
         self: *Lowerer,
-        module_idx: u32,
+        _: u32,
         type_scope: *TypeCloneScope,
         fn_var: ?Var,
     ) ?Var {
-        _ = module_idx;
         const function_var = fn_var orelse return null;
         const store = type_scope.typeStoreConst();
         var current = function_var;
@@ -10358,11 +10319,10 @@ pub const Lowerer = struct {
 
     fn lookupFunctionNodeRetVar(
         self: *Lowerer,
-        module_idx: u32,
+        _: u32,
         type_scope: *TypeCloneScope,
         fn_var: ?Var,
     ) ?Var {
-        _ = module_idx;
         const function_var = fn_var orelse return null;
         return self.lookupFunctionRetVarInStore(type_scope.typeStoreConst(), function_var);
     }
@@ -10452,19 +10412,18 @@ pub const Lowerer = struct {
         expected_var: ?Var,
     ) std.mem.Allocator.Error!Var {
         if (expected_var) |expected| {
-            _ = try self.bindSourceVarToExistingWorkspace(module_idx, type_scope, source_fn_var, expected);
+            try self.bindSourceVarToExistingWorkspace(module_idx, type_scope, source_fn_var, expected);
             return expected;
         }
         return try self.scopeVar(type_scope, module_idx, source_fn_var);
     }
 
     fn putOrAssertSourceVarMapping(
-        self: *Lowerer,
+        _: *Lowerer,
         type_scope: *TypeCloneScope,
         key: TypeCloneScope.TypeKey,
         scoped_var: Var,
     ) std.mem.Allocator.Error!void {
-        _ = self;
         if (type_scope.source_var_map.get(key)) |existing| {
             if (existing != scoped_var) {
                 debugPanic(
@@ -10677,24 +10636,22 @@ pub const Lowerer = struct {
     }
 
     fn materializeWorkspaceTagUnionResidualVar(
-        self: *Lowerer,
+        _: *Lowerer,
         residual_tags: []const types.Tag,
         residual_ext: Var,
         type_scope: *TypeCloneScope,
     ) std.mem.Allocator.Error!Var {
-        _ = self;
         const workspace_store = type_scope.typeStoreMut();
         const content = try workspace_store.mkTagUnion(residual_tags, residual_ext);
         return try workspace_store.freshFromContentWithRank(content, types.Rank.generalized);
     }
 
     fn materializeWorkspaceRecordResidualVar(
-        self: *Lowerer,
+        _: *Lowerer,
         residual_fields: []const types.RecordField,
         terminal: FlattenedRecordTerminal,
         type_scope: *TypeCloneScope,
     ) std.mem.Allocator.Error!Var {
-        _ = self;
         const workspace_store = type_scope.typeStoreMut();
 
         const content: types.Content = switch (terminal) {
@@ -10723,11 +10680,10 @@ pub const Lowerer = struct {
     }
 
     fn flattenedRecordTerminalAsVar(
-        self: *Lowerer,
+        _: *Lowerer,
         terminal: FlattenedRecordTerminal,
         type_scope: *TypeCloneScope,
     ) std.mem.Allocator.Error!Var {
-        _ = self;
         const workspace_store = type_scope.typeStoreMut();
         return switch (terminal) {
             .var_ => |var_| var_,
@@ -10888,7 +10844,7 @@ pub const Lowerer = struct {
     fn gatherFlattenedRecordContent(
         self: *Lowerer,
         store: *const types.Store,
-        root_var: Var,
+        _: Var,
         content: types.Content,
         out: *std.ArrayList(types.RecordField),
     ) std.mem.Allocator.Error!FlattenedRecordTerminal {
@@ -10900,7 +10856,6 @@ pub const Lowerer = struct {
                     for (field_slice.items(.name), field_slice.items(.var_)) |name, var_| {
                         try out.append(self.allocator, .{ .name = name, .var_ = var_ });
                     }
-                    _ = root_var;
                     break :blk .unbound;
                 },
                 .empty_record => .empty_record,
@@ -10956,7 +10911,7 @@ pub const Lowerer = struct {
                 .alias => |workspace_alias| {
                     try self.assertMatchingIdentText(source_idents, type_scope.identStoreConst(), source_alias.ident.ident_idx, workspace_alias.ident.ident_idx, "alias");
                     try self.assertMatchingIdentText(source_idents, type_scope.identStoreConst(), source_alias.origin_module, workspace_alias.origin_module, "alias module");
-                    _ = try self.bindSourceVarToExistingWorkspace(
+                    try self.bindSourceVarToExistingWorkspace(
                         source_module_idx,
                         type_scope,
                         source_store.getAliasBackingVar(source_alias),
@@ -10971,7 +10926,7 @@ pub const Lowerer = struct {
                         );
                     }
                     for (source_args, workspace_args) |source_arg, workspace_arg| {
-                        _ = try self.bindSourceVarToExistingWorkspace(source_module_idx, type_scope, source_arg, workspace_arg);
+                        try self.bindSourceVarToExistingWorkspace(source_module_idx, type_scope, source_arg, workspace_arg);
                     }
                 },
                 else => debugPanic(
@@ -11003,9 +10958,9 @@ pub const Lowerer = struct {
                         );
                     }
                     for (source_args, workspace_args) |source_arg, workspace_arg| {
-                        _ = try self.bindSourceVarToExistingWorkspace(source_module_idx, type_scope, source_arg, workspace_arg);
+                        try self.bindSourceVarToExistingWorkspace(source_module_idx, type_scope, source_arg, workspace_arg);
                     }
-                    _ = try self.bindSourceVarToExistingWorkspace(source_module_idx, type_scope, source_func.ret, workspace_func.ret);
+                    try self.bindSourceVarToExistingWorkspace(source_module_idx, type_scope, source_func.ret, workspace_func.ret);
                 },
                 .tuple => |source_tuple| switch (workspace_content) {
                     .structure => |workspace_flat| switch (workspace_flat) {
@@ -11019,7 +10974,7 @@ pub const Lowerer = struct {
                                 );
                             }
                             for (source_elems, workspace_elems) |source_elem, workspace_elem| {
-                                _ = try self.bindSourceVarToExistingWorkspace(source_module_idx, type_scope, source_elem, workspace_elem);
+                                try self.bindSourceVarToExistingWorkspace(source_module_idx, type_scope, source_elem, workspace_elem);
                             }
                         },
                         else => debugPanic(
@@ -11043,7 +10998,7 @@ pub const Lowerer = struct {
                                     .{source_module_idx},
                                 );
                             }
-                            _ = try self.bindSourceVarToExistingWorkspace(
+                            try self.bindSourceVarToExistingWorkspace(
                                 source_module_idx,
                                 type_scope,
                                 source_store.getNominalBackingVar(source_nominal),
@@ -11058,7 +11013,7 @@ pub const Lowerer = struct {
                                 );
                             }
                             for (source_args, workspace_args) |source_arg, workspace_arg| {
-                                _ = try self.bindSourceVarToExistingWorkspace(source_module_idx, type_scope, source_arg, workspace_arg);
+                                try self.bindSourceVarToExistingWorkspace(source_module_idx, type_scope, source_arg, workspace_arg);
                             }
                         },
                         else => {
@@ -11068,7 +11023,7 @@ pub const Lowerer = struct {
                                     .{source_module_idx},
                                 );
                             }
-                            _ = try self.bindSourceVarToExistingWorkspace(
+                            try self.bindSourceVarToExistingWorkspace(
                                 source_module_idx,
                                 type_scope,
                                 source_store.getNominalBackingVar(source_nominal),
@@ -11095,7 +11050,7 @@ pub const Lowerer = struct {
                                 var matched = false;
                                 for (workspace_fields.items(.name), workspace_fields.items(.var_), 0..) |workspace_name, workspace_field_var, idx| {
                                     if (!std.mem.eql(u8, source_idents.getText(source_name), type_scope.identStoreConst().getText(workspace_name))) continue;
-                                    _ = try self.bindSourceVarToExistingWorkspace(source_module_idx, type_scope, source_field_var, workspace_field_var);
+                                    try self.bindSourceVarToExistingWorkspace(source_module_idx, type_scope, source_field_var, workspace_field_var);
                                     matched_workspace[idx] = true;
                                     matched = true;
                                     break;
@@ -11146,9 +11101,9 @@ pub const Lowerer = struct {
                                         .ext = workspace_record.ext,
                                     } },
                                 });
-                                _ = try self.bindSourceVarToExistingWorkspace(source_module_idx, type_scope, source_record.ext, workspace_only_var);
+                                try self.bindSourceVarToExistingWorkspace(source_module_idx, type_scope, source_record.ext, workspace_only_var);
                             } else if (source_only_fields.items.len == 0) {
-                                _ = try self.bindSourceVarToExistingWorkspace(source_module_idx, type_scope, source_record.ext, workspace_record.ext);
+                                try self.bindSourceVarToExistingWorkspace(source_module_idx, type_scope, source_record.ext, workspace_record.ext);
                             }
                             if (source_only_fields.items.len != 0) {
                                 var workspace_ext = workspace_record.ext;
@@ -11249,7 +11204,7 @@ pub const Lowerer = struct {
                                 var matched = false;
                                 for (workspace_fields.items(.name), workspace_fields.items(.var_)) |workspace_name, workspace_field_var| {
                                     if (!std.mem.eql(u8, source_idents.getText(source_name), type_scope.identStoreConst().getText(workspace_name))) continue;
-                                    _ = try self.bindSourceVarToExistingWorkspace(source_module_idx, type_scope, source_field_var, workspace_field_var);
+                                    try self.bindSourceVarToExistingWorkspace(source_module_idx, type_scope, source_field_var, workspace_field_var);
                                     matched = true;
                                     break;
                                 }
@@ -11287,7 +11242,7 @@ pub const Lowerer = struct {
                                 var matched = false;
                                 for (workspace_fields.items(.name), workspace_fields.items(.var_)) |workspace_name, workspace_field_var| {
                                     if (!std.mem.eql(u8, source_idents.getText(source_name), type_scope.identStoreConst().getText(workspace_name))) continue;
-                                    _ = try self.bindSourceVarToExistingWorkspace(source_module_idx, type_scope, source_field_var, workspace_field_var);
+                                    try self.bindSourceVarToExistingWorkspace(source_module_idx, type_scope, source_field_var, workspace_field_var);
                                     matched = true;
                                     break;
                                 }
@@ -11369,7 +11324,7 @@ pub const Lowerer = struct {
                                         );
                                     }
                                     for (source_args, workspace_args) |source_arg, workspace_arg| {
-                                        _ = try self.bindSourceVarToExistingWorkspace(source_module_idx, type_scope, source_arg, workspace_arg);
+                                        try self.bindSourceVarToExistingWorkspace(source_module_idx, type_scope, source_arg, workspace_arg);
                                     }
                                     matched_source[source_idx] = true;
                                     matched = true;
@@ -11448,14 +11403,14 @@ pub const Lowerer = struct {
                                     workspace_terminal_ext,
                                     type_scope,
                                 );
-                                _ = try self.bindSourceVarToExistingWorkspace(
+                                try self.bindSourceVarToExistingWorkspace(
                                     source_module_idx,
                                     type_scope,
                                     source_terminal_ext,
                                     residual_workspace_var,
                                 );
                             } else {
-                                _ = try self.bindSourceVarToExistingWorkspace(
+                                try self.bindSourceVarToExistingWorkspace(
                                     source_module_idx,
                                     type_scope,
                                     source_terminal_ext,
@@ -11541,14 +11496,13 @@ pub const Lowerer = struct {
     }
 
     fn assertMatchingIdentText(
-        self: *const Lowerer,
+        _: *const Lowerer,
         source_idents: *const base.Ident.Store,
         workspace_idents: *const base.Ident.Store,
         source_ident: base.Ident.Idx,
         workspace_ident: base.Ident.Idx,
         comptime context: []const u8,
     ) std.mem.Allocator.Error!void {
-        _ = self;
         if (std.mem.eql(u8, source_idents.getText(source_ident), workspace_idents.getText(workspace_ident))) return;
         debugPanic(
             "monotype specialization invariant violated: mismatched " ++ context ++ " identity while binding source types",
@@ -11965,23 +11919,21 @@ pub const Lowerer = struct {
 
     fn lookupFunctionRetVar(
         self: *const Lowerer,
-        module_idx: u32,
+        _: u32,
         type_scope: *const TypeCloneScope,
         fn_var: ?Var,
     ) ?Var {
-        _ = module_idx;
         return self.lookupFunctionRetVarInStore(type_scope.typeStoreConst(), fn_var);
     }
 
     fn materializeAppliedFunctionResultVar(
-        self: *Lowerer,
+        _: *Lowerer,
         module_idx: u32,
         type_scope: *TypeCloneScope,
         fn_var: Var,
         applied_arg_count: usize,
         result_var: Var,
     ) std.mem.Allocator.Error!Var {
-        _ = self;
         var remaining = applied_arg_count;
         var current = fn_var;
         while (true) {
@@ -12146,11 +12098,10 @@ pub const Lowerer = struct {
 
     fn functionArgCount(
         self: *Lowerer,
-        module_idx: u32,
+        _: u32,
         type_scope: *TypeCloneScope,
         fn_var: Var,
     ) usize {
-        _ = module_idx;
         const store = type_scope.typeStoreConst();
         if (self.lookupFunctionArgVarInStore(store, fn_var, 0) == null) {
             if (self.lookupFunctionRetVarInStore(store, fn_var) != null) return 1;
@@ -12325,13 +12276,12 @@ pub const Lowerer = struct {
 
     fn lowerResolvedTargetCallee(
         self: *Lowerer,
-        current_module_idx: u32,
+        _: u32,
         type_scope: *TypeCloneScope,
         target: ResolvedTarget,
         expected_ty: type_mod.TypeId,
         expected_var: ?Var,
     ) std.mem.Allocator.Error!ast.ExprId {
-        _ = current_module_idx;
         const source_symbol = self.lookupTopLevelDefSymbol(target.module_idx, target.def_idx) orelse debugPanic(
             "monotype static dispatch invariant violated: unresolved target symbol {d}:{d}",
             .{ target.module_idx, @intFromEnum(target.def_idx) },

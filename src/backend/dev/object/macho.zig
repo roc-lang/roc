@@ -352,7 +352,7 @@ pub const MachOWriter = struct {
         // Build string table with symbol names (Mach-O C ABI requires underscore prefix)
         for (self.symbols.items) |*sym| {
             try self.strtab.append(self.allocator, '_');
-            _ = try self.addString(sym.name);
+            try self.addString(sym.name);
         }
         const strtab_size: u32 = @intCast(self.strtab.items.len);
 
@@ -511,7 +511,7 @@ test "create minimal macho object" {
     try writer.setCode(&[_]u8{0xC3});
 
     // Add a symbol
-    _ = try writer.addSymbol(.{
+    try writer.addSymbol(.{
         .name = "_test_func",
         .section = 1, // __text
         .offset = 0,

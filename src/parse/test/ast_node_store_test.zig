@@ -791,7 +791,7 @@ test "NodeStore debug function" {
     defer store.deinit();
 
     // Add some nodes to make debug output more interesting
-    _ = try store.addHeader(.{
+    try store.addHeader(.{
         .type_module = .{
             .region = rand_region(),
         },

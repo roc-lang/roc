@@ -291,7 +291,7 @@ test "nested ZST detection - List of record with ZST field" {
 
     // Setup identifiers BEFORE Store.init so list_ident and box_ident get set correctly
     const list_ident_idx = try lt.module_env.insertIdent(Ident.for_text("List"));
-    _ = try lt.module_env.insertIdent(Ident.for_text("Box")); // Insert Box ident for box_ident lookup
+    try lt.module_env.insertIdent(Ident.for_text("Box")); // Insert Box ident for box_ident lookup
     const builtin_module_idx = try lt.module_env.insertIdent(Ident.for_text("Builtin"));
     // Set the builtin_module_ident so the layout store can recognize Builtin types
     lt.module_env.idents.builtin_module = builtin_module_idx;
@@ -358,7 +358,7 @@ test "nested ZST detection - deeply nested" {
 
     // Setup identifiers BEFORE Store.init so list_ident and box_ident get set correctly
     const list_ident_idx = try lt.module_env.insertIdent(Ident.for_text("List"));
-    _ = try lt.module_env.insertIdent(Ident.for_text("Box")); // Insert Box ident for box_ident lookup
+    try lt.module_env.insertIdent(Ident.for_text("Box")); // Insert Box ident for box_ident lookup
     const builtin_module_idx = try lt.module_env.insertIdent(Ident.for_text("Builtin"));
     // Set the builtin_module_ident so the layout store can recognize Builtin types
     lt.module_env.idents.builtin_module = builtin_module_idx;
@@ -415,7 +415,7 @@ test "fromTypeVar - flex var with method constraint returning open tag union" {
     // Setup identifiers BEFORE Store.init
     const list_ident_idx = try lt.module_env.insertIdent(Ident.for_text("List"));
     const try_ident_idx = try lt.module_env.insertIdent(Ident.for_text("Try"));
-    _ = try lt.module_env.insertIdent(Ident.for_text("Box"));
+    try lt.module_env.insertIdent(Ident.for_text("Box"));
     const builtin_module_idx = try lt.module_env.insertIdent(Ident.for_text("Builtin"));
     lt.module_env.idents.builtin_module = builtin_module_idx;
     const first_ident_idx = try lt.module_env.insertIdent(Ident.for_text("first"));
@@ -721,7 +721,7 @@ test "layoutSizeAlign - recursive nominal type with record containing List (issu
     // Setup identifiers
     const statement_ident_idx = try lt.module_env.insertIdent(Ident.for_text("Statement"));
     const list_ident_idx = try lt.module_env.insertIdent(Ident.for_text("List"));
-    _ = try lt.module_env.insertIdent(Ident.for_text("Box"));
+    try lt.module_env.insertIdent(Ident.for_text("Box"));
     const builtin_module_idx = try lt.module_env.insertIdent(Ident.for_text("Builtin"));
     lt.module_env.idents.builtin_module = builtin_module_idx;
 

@@ -2553,7 +2553,7 @@ pub const ReportBuilder = struct {
                     try report.document.addLineBreak();
 
                     // Explain WHY this field doesn't support equality
-                    _ = try self.explainWhyNoEquality(report, field_content_idx, "        ");
+                    try self.explainWhyNoEquality(report, field_content_idx, "        ");
                 }
             }
             try report.document.addAnnotated("Hint:", .emphasized);
@@ -2603,7 +2603,7 @@ pub const ReportBuilder = struct {
                     try report.document.addLineBreak();
 
                     // Explain WHY this element doesn't support equality
-                    _ = try self.explainWhyNoEquality(report, elem_content_idx, "        ");
+                    try self.explainWhyNoEquality(report, elem_content_idx, "        ");
                 }
             }
             try report.document.addAnnotated("Hint:", .emphasized);
@@ -2678,7 +2678,7 @@ pub const ReportBuilder = struct {
                     // Explain WHY each problematic payload doesn't support equality
                     for (args) |arg_content_idx| {
                         if (!self.snapshotSupportsEquality(arg_content_idx)) {
-                            _ = try self.explainWhyNoEquality(report, arg_content_idx, "        ");
+                            try self.explainWhyNoEquality(report, arg_content_idx, "        ");
                         }
                     }
                 }
@@ -2775,7 +2775,7 @@ pub const ReportBuilder = struct {
                             // Recurse with more indent
                             var deeper_indent_buf: [64]u8 = undefined;
                             const deeper_indent = std.fmt.bufPrint(&deeper_indent_buf, "{s}    ", .{indent}) catch indent;
-                            _ = try self.explainWhyNoEquality(report, field_content, deeper_indent);
+                            try self.explainWhyNoEquality(report, field_content, deeper_indent);
                             return true;
                         }
                     }
@@ -2795,7 +2795,7 @@ pub const ReportBuilder = struct {
                             // Recurse with more indent
                             var deeper_indent_buf: [64]u8 = undefined;
                             const deeper_indent = std.fmt.bufPrint(&deeper_indent_buf, "{s}    ", .{indent}) catch indent;
-                            _ = try self.explainWhyNoEquality(report, elem_content, deeper_indent);
+                            try self.explainWhyNoEquality(report, elem_content, deeper_indent);
                             return true;
                         }
                     }
@@ -2825,7 +2825,7 @@ pub const ReportBuilder = struct {
                                 // Recurse with more indent
                                 var deeper_indent_buf: [64]u8 = undefined;
                                 const deeper_indent = std.fmt.bufPrint(&deeper_indent_buf, "{s}    ", .{indent}) catch indent;
-                                _ = try self.explainWhyNoEquality(report, arg_content, deeper_indent);
+                                try self.explainWhyNoEquality(report, arg_content, deeper_indent);
                                 return true;
                             }
                         }
@@ -2846,7 +2846,7 @@ pub const ReportBuilder = struct {
                             // Recurse with more indent
                             var deeper_indent_buf: [64]u8 = undefined;
                             const deeper_indent = std.fmt.bufPrint(&deeper_indent_buf, "{s}    ", .{indent}) catch indent;
-                            _ = try self.explainWhyNoEquality(report, backing, deeper_indent);
+                            try self.explainWhyNoEquality(report, backing, deeper_indent);
                             return true;
                         }
                     }

@@ -36,14 +36,14 @@ fn handleStackOverflow() noreturn {
 
         const stderr_handle = kernel32.GetStdHandle(STD_ERROR_HANDLE);
         var bytes_written: DWORD = 0;
-        _ = kernel32.WriteFile(stderr_handle, STACK_OVERFLOW_MESSAGE.ptr, STACK_OVERFLOW_MESSAGE.len, &bytes_written, null);
+        kernel32.WriteFile(stderr_handle, STACK_OVERFLOW_MESSAGE.ptr, STACK_OVERFLOW_MESSAGE.len, &bytes_written, null);
         // Use TerminateProcess instead of ExitProcess: after a stack overflow the
         // stack is blown and ExitProcess's DLL cleanup can trigger a secondary crash.
-        _ = kernel32.TerminateProcess(kernel32.GetCurrentProcess(), 134);
+        kernel32.TerminateProcess(kernel32.GetCurrentProcess(), 134);
         @trap();
     } else if (comptime builtin.os.tag != .freestanding) {
         // POSIX: use direct write syscall for signal-safety
-        _ = posix.write(posix.STDERR_FILENO, STACK_OVERFLOW_MESSAGE) catch {};
+        posix.write(posix.STDERR_FILENO, STACK_OVERFLOW_MESSAGE) catch {};
         posix.exit(134);
     } else {
         // WASI fallback
@@ -69,10 +69,10 @@ fn handleArithmeticError() noreturn {
 
         const stderr_handle = kernel32.GetStdHandle(STD_ERROR_HANDLE);
         var bytes_written: DWORD = 0;
-        _ = kernel32.WriteFile(stderr_handle, ARITHMETIC_ERROR_MESSAGE.ptr, ARITHMETIC_ERROR_MESSAGE.len, &bytes_written, null);
+        kernel32.WriteFile(stderr_handle, ARITHMETIC_ERROR_MESSAGE.ptr, ARITHMETIC_ERROR_MESSAGE.len, &bytes_written, null);
         kernel32.ExitProcess(136);
     } else if (comptime builtin.os.tag != .freestanding) {
-        _ = posix.write(posix.STDERR_FILENO, ARITHMETIC_ERROR_MESSAGE) catch {};
+        posix.write(posix.STDERR_FILENO, ARITHMETIC_ERROR_MESSAGE) catch {};
         posix.exit(136); // 128 + 8 (SIGFPE)
     } else {
         std.process.exit(136);
@@ -99,20 +99,20 @@ fn handleAccessViolation(fault_addr: usize) noreturn {
         const msg2 = "\n\nPlease report this issue at: https://github.com/roc-lang/roc/issues\n\n";
         const stderr_handle = kernel32.GetStdHandle(STD_ERROR_HANDLE);
         var bytes_written: DWORD = 0;
-        _ = kernel32.WriteFile(stderr_handle, msg1.ptr, msg1.len, &bytes_written, null);
-        _ = kernel32.WriteFile(stderr_handle, addr_str.ptr, @intCast(addr_str.len), &bytes_written, null);
-        _ = kernel32.WriteFile(stderr_handle, msg2.ptr, msg2.len, &bytes_written, null);
+        kernel32.WriteFile(stderr_handle, msg1.ptr, msg1.len, &bytes_written, null);
+        kernel32.WriteFile(stderr_handle, addr_str.ptr, @intCast(addr_str.len), &bytes_written, null);
+        kernel32.WriteFile(stderr_handle, msg2.ptr, msg2.len, &bytes_written, null);
         kernel32.ExitProcess(139);
     } else {
         // POSIX (and WASI fallback): use direct write syscall for signal-safety
         const generic_msg = "\nSegmentation fault (SIGSEGV) in the Roc compiler.\nFault address: ";
-        _ = posix.write(posix.STDERR_FILENO, generic_msg) catch {};
+        posix.write(posix.STDERR_FILENO, generic_msg) catch {};
 
         // Write the fault address as hex
         var addr_buf: [18]u8 = undefined;
         const addr_str = handlers.formatHex(fault_addr, &addr_buf);
-        _ = posix.write(posix.STDERR_FILENO, addr_str) catch {};
-        _ = posix.write(posix.STDERR_FILENO, "\n\nPlease report this issue at: https://github.com/roc-lang/roc/issues\n\n") catch {};
+        posix.write(posix.STDERR_FILENO, addr_str) catch {};
+        posix.write(posix.STDERR_FILENO, "\n\nPlease report this issue at: https://github.com/roc-lang/roc/issues\n\n") catch {};
         posix.exit(139);
     }
 }

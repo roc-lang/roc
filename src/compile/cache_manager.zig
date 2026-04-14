@@ -244,11 +244,11 @@ pub const CacheManager = struct {
     pub fn computeCacheFilePath(self: *Self, cache_key: [32]u8, entries_dir: []const u8) ![]u8 {
         // Split key: first 2 chars for subdirectory, rest for filename
         var subdir_buf: [2]u8 = undefined;
-        _ = std.fmt.bufPrint(&subdir_buf, "{x}", .{cache_key[0..1]}) catch unreachable;
+        std.fmt.bufPrint(&subdir_buf, "{x}", .{cache_key[0..1]}) catch unreachable;
         const subdir = subdir_buf[0..];
 
         var filename_buf: [62]u8 = undefined;
-        _ = std.fmt.bufPrint(&filename_buf, "{x}", .{cache_key[1..32]}) catch unreachable;
+        std.fmt.bufPrint(&filename_buf, "{x}", .{cache_key[1..32]}) catch unreachable;
         const filename = filename_buf[0..];
 
         const cache_subdir = try std.fs.path.join(self.allocator, &[_][]const u8{ entries_dir, subdir });
@@ -268,7 +268,7 @@ pub const CacheManager = struct {
     pub fn ensureCacheSubdirIn(self: *Self, cache_key: [32]u8, entries_dir: []const u8) !void {
         // Print the hex of the first byte into a fixed-size buffer for the subdir
         var subdir_buf: [2]u8 = undefined;
-        _ = std.fmt.bufPrint(&subdir_buf, "{x}", .{cache_key[0..1]}) catch unreachable;
+        std.fmt.bufPrint(&subdir_buf, "{x}", .{cache_key[0..1]}) catch unreachable;
         const subdir = subdir_buf[0..];
         const full_subdir = try std.fs.path.join(self.allocator, &[_][]const u8{ entries_dir, subdir });
         defer self.allocator.free(full_subdir);
@@ -405,11 +405,11 @@ pub const CacheManager = struct {
 
         // Use same subdirectory structure as cache entries
         var subdir_buf: [2]u8 = undefined;
-        _ = std.fmt.bufPrint(&subdir_buf, "{x}", .{source_hash[0..1]}) catch unreachable;
+        std.fmt.bufPrint(&subdir_buf, "{x}", .{source_hash[0..1]}) catch unreachable;
         const subdir = subdir_buf[0..];
 
         var filename_buf: [67]u8 = undefined; // 62 chars for hash + 5 for ".meta"
-        _ = std.fmt.bufPrint(&filename_buf, "{x}.meta", .{source_hash[1..32]}) catch unreachable;
+        std.fmt.bufPrint(&filename_buf, "{x}.meta", .{source_hash[1..32]}) catch unreachable;
         const filename = filename_buf[0..67];
 
         const cache_subdir = try std.fs.path.join(self.allocator, &[_][]const u8{ entries_dir, subdir });

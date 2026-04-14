@@ -477,34 +477,34 @@ fn debugValidateMonotypeTypes(types_store: *const monotype.Type.Store) void {
             .placeholder => {},
             .unbd => {},
             .link => |target| {
-                debugAssertValidMonoTypeRef(types_store, @enumFromInt(@as(u32, @intCast(i))), "link.target", target, type_len);
+                debugAssertValidMonoTypeRef(@enumFromInt(@as(u32, @intCast(i))), "link.target", target, type_len);
             },
             .nominal => |nominal| {
                 for (types_store.sliceTypeSpan(nominal.args)) |arg| {
-                    debugAssertValidMonoTypeRef(types_store, @enumFromInt(@as(u32, @intCast(i))), "nominal.arg", arg, type_len);
+                    debugAssertValidMonoTypeRef(@enumFromInt(@as(u32, @intCast(i))), "nominal.arg", arg, type_len);
                 }
-                debugAssertValidMonoTypeRef(types_store, @enumFromInt(@as(u32, @intCast(i))), "nominal.backing", nominal.backing, type_len);
+                debugAssertValidMonoTypeRef(@enumFromInt(@as(u32, @intCast(i))), "nominal.backing", nominal.backing, type_len);
             },
             .primitive => {},
             .func => |func| {
-                debugAssertValidMonoTypeRef(types_store, @enumFromInt(@as(u32, @intCast(i))), "func.arg", func.arg, type_len);
-                debugAssertValidMonoTypeRef(types_store, @enumFromInt(@as(u32, @intCast(i))), "func.ret", func.ret, type_len);
+                debugAssertValidMonoTypeRef(@enumFromInt(@as(u32, @intCast(i))), "func.arg", func.arg, type_len);
+                debugAssertValidMonoTypeRef(@enumFromInt(@as(u32, @intCast(i))), "func.ret", func.ret, type_len);
             },
             .list => |elem| {
-                debugAssertValidMonoTypeRef(types_store, @enumFromInt(@as(u32, @intCast(i))), "list.elem", elem, type_len);
+                debugAssertValidMonoTypeRef(@enumFromInt(@as(u32, @intCast(i))), "list.elem", elem, type_len);
             },
             .box => |elem| {
-                debugAssertValidMonoTypeRef(types_store, @enumFromInt(@as(u32, @intCast(i))), "box.elem", elem, type_len);
+                debugAssertValidMonoTypeRef(@enumFromInt(@as(u32, @intCast(i))), "box.elem", elem, type_len);
             },
             .tuple => |tuple| for (types_store.sliceTypeSpan(tuple)) |elem| {
-                debugAssertValidMonoTypeRef(types_store, @enumFromInt(@as(u32, @intCast(i))), "tuple.elem", elem, type_len);
+                debugAssertValidMonoTypeRef(@enumFromInt(@as(u32, @intCast(i))), "tuple.elem", elem, type_len);
             },
             .record => |record| for (types_store.sliceFields(record.fields)) |field| {
-                debugAssertValidMonoTypeRef(types_store, @enumFromInt(@as(u32, @intCast(i))), "record.field", field.ty, type_len);
+                debugAssertValidMonoTypeRef(@enumFromInt(@as(u32, @intCast(i))), "record.field", field.ty, type_len);
             },
             .tag_union => |tag_union| for (types_store.sliceTags(tag_union.tags)) |tag| {
                 for (types_store.sliceTypeSpan(tag.args)) |arg| {
-                    debugAssertValidMonoTypeRef(types_store, @enumFromInt(@as(u32, @intCast(i))), "tag.arg", arg, type_len);
+                    debugAssertValidMonoTypeRef(@enumFromInt(@as(u32, @intCast(i))), "tag.arg", arg, type_len);
                 }
             },
         }
@@ -512,13 +512,11 @@ fn debugValidateMonotypeTypes(types_store: *const monotype.Type.Store) void {
 }
 
 fn debugAssertValidMonoTypeRef(
-    types_store: *const monotype.Type.Store,
     owner: monotype.Type.TypeId,
     comptime label: []const u8,
     child: monotype.Type.TypeId,
     type_len: usize,
 ) void {
-    _ = types_store;
     if (comptime builtin.target.os.tag == .freestanding) return;
     if (@intFromEnum(child) >= type_len) {
         std.debug.print(

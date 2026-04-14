@@ -1335,7 +1335,7 @@ test "comptime eval - U8 valid max value" {
     var result = try parseCheckAndEvalModule(src);
     defer cleanupEvalModule(&result);
 
-    _ = try result.evaluator.evalAll();
+    try result.evaluator.evalAll();
     if (result.problems.len() > 0) {
         std.debug.print("\nU8 valid max problems ({d}):\n", .{result.problems.len()});
         for (result.problems.problems.items) |problem| {
@@ -1358,7 +1358,7 @@ test "comptime eval - U8 too large with descriptive error" {
     var result = try parseCheckAndEvalModule(src);
     defer cleanupEvalModule(&result);
 
-    _ = try result.evaluator.evalAll();
+    try result.evaluator.evalAll();
     try testing.expect(result.problems.len() >= 1);
     try testing.expect(errorContains(result.problems, "256"));
     try testing.expect(errorContains(result.problems, "U8"));
@@ -1374,7 +1374,7 @@ test "comptime eval - U8 negative with descriptive error" {
     var result = try parseCheckAndEvalModule(src);
     defer cleanupEvalModule(&result);
 
-    _ = try result.evaluator.evalAll();
+    try result.evaluator.evalAll();
     try testing.expect(result.problems.len() >= 1);
     try testing.expect(errorContains(result.problems, "-5"));
     try testing.expect(errorContains(result.problems, "U8"));
@@ -1390,7 +1390,7 @@ test "comptime eval - U8 fractional with descriptive error" {
     var result = try parseCheckAndEvalModule(src);
     defer cleanupEvalModule(&result);
 
-    _ = try result.evaluator.evalAll();
+    try result.evaluator.evalAll();
     try testing.expect(result.problems.len() >= 1);
     try testing.expect(errorContains(result.problems, "U8"));
     try testing.expect(errorContains(result.problems, "whole numbers"));
@@ -1423,7 +1423,7 @@ test "comptime eval - I8 too small with descriptive error" {
     var result = try parseCheckAndEvalModule(src);
     defer cleanupEvalModule(&result);
 
-    _ = try result.evaluator.evalAll();
+    try result.evaluator.evalAll();
     try testing.expect(result.problems.len() >= 1);
     try testing.expect(errorContains(result.problems, "-129"));
     try testing.expect(errorContains(result.problems, "I8"));
@@ -1439,7 +1439,7 @@ test "comptime eval - I8 too large with descriptive error" {
     var result = try parseCheckAndEvalModule(src);
     defer cleanupEvalModule(&result);
 
-    _ = try result.evaluator.evalAll();
+    try result.evaluator.evalAll();
     try testing.expect(result.problems.len() >= 1);
     try testing.expect(errorContains(result.problems, "128"));
     try testing.expect(errorContains(result.problems, "I8"));
@@ -1454,7 +1454,7 @@ test "comptime eval - I8 fractional with descriptive error" {
     var result = try parseCheckAndEvalModule(src);
     defer cleanupEvalModule(&result);
 
-    _ = try result.evaluator.evalAll();
+    try result.evaluator.evalAll();
     try testing.expect(result.problems.len() >= 1);
     try testing.expect(errorContains(result.problems, "I8"));
     try testing.expect(errorContains(result.problems, "whole numbers"));
@@ -1471,7 +1471,7 @@ test "comptime eval - U16 valid max value" {
     var result = try parseCheckAndEvalModule(src);
     defer cleanupEvalModule(&result);
 
-    _ = try result.evaluator.evalAll();
+    try result.evaluator.evalAll();
     try testing.expectEqual(@as(usize, 0), result.problems.len());
 }
 
@@ -1484,7 +1484,7 @@ test "comptime eval - U16 too large with descriptive error" {
     var result = try parseCheckAndEvalModule(src);
     defer cleanupEvalModule(&result);
 
-    _ = try result.evaluator.evalAll();
+    try result.evaluator.evalAll();
     try testing.expect(result.problems.len() >= 1);
     try testing.expect(errorContains(result.problems, "65536"));
     try testing.expect(errorContains(result.problems, "U16"));
@@ -1499,7 +1499,7 @@ test "comptime eval - U16 negative with descriptive error" {
     var result = try parseCheckAndEvalModule(src);
     defer cleanupEvalModule(&result);
 
-    _ = try result.evaluator.evalAll();
+    try result.evaluator.evalAll();
     try testing.expect(result.problems.len() >= 1);
     try testing.expect(errorContains(result.problems, "U16"));
     try testing.expect(errorContains(result.problems, "cannot be negative"));
@@ -1518,7 +1518,7 @@ test "comptime eval - I16 valid range" {
     var result = try parseCheckAndEvalModule(src);
     defer cleanupEvalModule(&result);
 
-    _ = try result.evaluator.evalAll();
+    try result.evaluator.evalAll();
     try testing.expectEqual(@as(usize, 0), result.problems.len());
 }
 
@@ -1531,7 +1531,7 @@ test "comptime eval - I16 too small with descriptive error" {
     var result = try parseCheckAndEvalModule(src);
     defer cleanupEvalModule(&result);
 
-    _ = try result.evaluator.evalAll();
+    try result.evaluator.evalAll();
     try testing.expect(result.problems.len() >= 1);
     try testing.expect(errorContains(result.problems, "-32769"));
     try testing.expect(errorContains(result.problems, "I16"));
@@ -1546,7 +1546,7 @@ test "comptime eval - I16 too large with descriptive error" {
     var result = try parseCheckAndEvalModule(src);
     defer cleanupEvalModule(&result);
 
-    _ = try result.evaluator.evalAll();
+    try result.evaluator.evalAll();
     try testing.expect(result.problems.len() >= 1);
     try testing.expect(errorContains(result.problems, "32768"));
     try testing.expect(errorContains(result.problems, "I16"));
@@ -1563,7 +1563,7 @@ test "comptime eval - U32 valid max value" {
     var result = try parseCheckAndEvalModule(src);
     defer cleanupEvalModule(&result);
 
-    _ = try result.evaluator.evalAll();
+    try result.evaluator.evalAll();
     try testing.expectEqual(@as(usize, 0), result.problems.len());
 }
 
@@ -1576,7 +1576,7 @@ test "comptime eval - U32 too large with descriptive error" {
     var result = try parseCheckAndEvalModule(src);
     defer cleanupEvalModule(&result);
 
-    _ = try result.evaluator.evalAll();
+    try result.evaluator.evalAll();
     try testing.expect(result.problems.len() >= 1);
     try testing.expect(errorContains(result.problems, "4294967296"));
     try testing.expect(errorContains(result.problems, "U32"));
@@ -1591,7 +1591,7 @@ test "comptime eval - U32 negative with descriptive error" {
     var result = try parseCheckAndEvalModule(src);
     defer cleanupEvalModule(&result);
 
-    _ = try result.evaluator.evalAll();
+    try result.evaluator.evalAll();
     try testing.expect(result.problems.len() >= 1);
     try testing.expect(errorContains(result.problems, "U32"));
     try testing.expect(errorContains(result.problems, "cannot be negative"));
@@ -1610,7 +1610,7 @@ test "comptime eval - I32 valid range" {
     var result = try parseCheckAndEvalModule(src);
     defer cleanupEvalModule(&result);
 
-    _ = try result.evaluator.evalAll();
+    try result.evaluator.evalAll();
     try testing.expectEqual(@as(usize, 0), result.problems.len());
 }
 
@@ -1623,7 +1623,7 @@ test "comptime eval - I32 too small with descriptive error" {
     var result = try parseCheckAndEvalModule(src);
     defer cleanupEvalModule(&result);
 
-    _ = try result.evaluator.evalAll();
+    try result.evaluator.evalAll();
     try testing.expect(result.problems.len() >= 1);
     try testing.expect(errorContains(result.problems, "-2147483649"));
     try testing.expect(errorContains(result.problems, "I32"));
@@ -1638,7 +1638,7 @@ test "comptime eval - I32 too large with descriptive error" {
     var result = try parseCheckAndEvalModule(src);
     defer cleanupEvalModule(&result);
 
-    _ = try result.evaluator.evalAll();
+    try result.evaluator.evalAll();
     try testing.expect(result.problems.len() >= 1);
     try testing.expect(errorContains(result.problems, "2147483648"));
     try testing.expect(errorContains(result.problems, "I32"));
@@ -1655,7 +1655,7 @@ test "comptime eval - U64 valid max value" {
     var result = try parseCheckAndEvalModule(src);
     defer cleanupEvalModule(&result);
 
-    _ = try result.evaluator.evalAll();
+    try result.evaluator.evalAll();
     try testing.expectEqual(@as(usize, 0), result.problems.len());
 }
 
@@ -1668,7 +1668,7 @@ test "comptime eval - U64 too large with descriptive error" {
     var result = try parseCheckAndEvalModule(src);
     defer cleanupEvalModule(&result);
 
-    _ = try result.evaluator.evalAll();
+    try result.evaluator.evalAll();
     try testing.expect(result.problems.len() >= 1);
     try testing.expect(errorContains(result.problems, "U64"));
 }
@@ -1682,7 +1682,7 @@ test "comptime eval - U64 negative with descriptive error" {
     var result = try parseCheckAndEvalModule(src);
     defer cleanupEvalModule(&result);
 
-    _ = try result.evaluator.evalAll();
+    try result.evaluator.evalAll();
     try testing.expect(result.problems.len() >= 1);
     try testing.expect(errorContains(result.problems, "U64"));
     try testing.expect(errorContains(result.problems, "cannot be negative"));
@@ -1701,7 +1701,7 @@ test "comptime eval - I64 valid range" {
     var result = try parseCheckAndEvalModule(src);
     defer cleanupEvalModule(&result);
 
-    _ = try result.evaluator.evalAll();
+    try result.evaluator.evalAll();
     try testing.expectEqual(@as(usize, 0), result.problems.len());
 }
 
@@ -1714,7 +1714,7 @@ test "comptime eval - I64 too small with descriptive error" {
     var result = try parseCheckAndEvalModule(src);
     defer cleanupEvalModule(&result);
 
-    _ = try result.evaluator.evalAll();
+    try result.evaluator.evalAll();
     try testing.expect(result.problems.len() >= 1);
     try testing.expect(errorContains(result.problems, "I64"));
 }
@@ -1728,7 +1728,7 @@ test "comptime eval - I64 too large with descriptive error" {
     var result = try parseCheckAndEvalModule(src);
     defer cleanupEvalModule(&result);
 
-    _ = try result.evaluator.evalAll();
+    try result.evaluator.evalAll();
     try testing.expect(result.problems.len() >= 1);
     try testing.expect(errorContains(result.problems, "I64"));
 }
@@ -1742,7 +1742,7 @@ test "comptime eval - I64 fractional with descriptive error" {
     var result = try parseCheckAndEvalModule(src);
     defer cleanupEvalModule(&result);
 
-    _ = try result.evaluator.evalAll();
+    try result.evaluator.evalAll();
     try testing.expect(result.problems.len() >= 1);
     try testing.expect(errorContains(result.problems, "I64"));
     try testing.expect(errorContains(result.problems, "whole numbers"));
@@ -1759,7 +1759,7 @@ test "comptime eval - U128 valid max value" {
     var result = try parseCheckAndEvalModule(src);
     defer cleanupEvalModule(&result);
 
-    _ = try result.evaluator.evalAll();
+    try result.evaluator.evalAll();
     try testing.expectEqual(@as(usize, 0), result.problems.len());
 }
 
@@ -1772,7 +1772,7 @@ test "comptime eval - U128 negative with descriptive error" {
     var result = try parseCheckAndEvalModule(src);
     defer cleanupEvalModule(&result);
 
-    _ = try result.evaluator.evalAll();
+    try result.evaluator.evalAll();
     try testing.expect(result.problems.len() >= 1);
     try testing.expect(errorContains(result.problems, "U128"));
     try testing.expect(errorContains(result.problems, "cannot be negative"));
@@ -1787,7 +1787,7 @@ test "comptime eval - U128 fractional with descriptive error" {
     var result = try parseCheckAndEvalModule(src);
     defer cleanupEvalModule(&result);
 
-    _ = try result.evaluator.evalAll();
+    try result.evaluator.evalAll();
     try testing.expect(result.problems.len() >= 1);
     try testing.expect(errorContains(result.problems, "U128"));
     try testing.expect(errorContains(result.problems, "whole numbers"));
@@ -1806,7 +1806,7 @@ test "comptime eval - I128 valid range" {
     var result = try parseCheckAndEvalModule(src);
     defer cleanupEvalModule(&result);
 
-    _ = try result.evaluator.evalAll();
+    try result.evaluator.evalAll();
     try testing.expectEqual(@as(usize, 0), result.problems.len());
 }
 
@@ -1819,7 +1819,7 @@ test "comptime eval - I128 fractional with descriptive error" {
     var result = try parseCheckAndEvalModule(src);
     defer cleanupEvalModule(&result);
 
-    _ = try result.evaluator.evalAll();
+    try result.evaluator.evalAll();
     try testing.expect(result.problems.len() >= 1);
     try testing.expect(errorContains(result.problems, "I128"));
     try testing.expect(errorContains(result.problems, "whole numbers"));
@@ -1836,7 +1836,7 @@ test "comptime eval - F32 valid" {
     var result = try parseCheckAndEvalModule(src);
     defer cleanupEvalModule(&result);
 
-    _ = try result.evaluator.evalAll();
+    try result.evaluator.evalAll();
     if (result.problems.len() > 0) {
         std.debug.print("\nF32 problems ({d}):\n", .{result.problems.len()});
         for (result.problems.problems.items) |problem| {
@@ -1859,7 +1859,7 @@ test "comptime eval - F64 valid" {
     var result = try parseCheckAndEvalModule(src);
     defer cleanupEvalModule(&result);
 
-    _ = try result.evaluator.evalAll();
+    try result.evaluator.evalAll();
     try testing.expectEqual(@as(usize, 0), result.problems.len());
 }
 
@@ -1872,7 +1872,7 @@ test "comptime eval - Dec valid" {
     var result = try parseCheckAndEvalModule(src);
     defer cleanupEvalModule(&result);
 
-    _ = try result.evaluator.evalAll();
+    try result.evaluator.evalAll();
     try testing.expectEqual(@as(usize, 0), result.problems.len());
 }
 
@@ -1885,7 +1885,7 @@ test "comptime eval - F32 integer literal valid" {
     var result = try parseCheckAndEvalModule(src);
     defer cleanupEvalModule(&result);
 
-    _ = try result.evaluator.evalAll();
+    try result.evaluator.evalAll();
     try testing.expectEqual(@as(usize, 0), result.problems.len());
 }
 
@@ -1898,7 +1898,7 @@ test "comptime eval - F64 negative valid" {
     var result = try parseCheckAndEvalModule(src);
     defer cleanupEvalModule(&result);
 
-    _ = try result.evaluator.evalAll();
+    try result.evaluator.evalAll();
     try testing.expectEqual(@as(usize, 0), result.problems.len());
 }
 
@@ -1911,7 +1911,7 @@ test "comptime eval - to_str on unbound number literal" {
     var result = try parseCheckAndEvalModule(src);
     defer cleanupEvalModule(&result);
 
-    _ = try result.evaluator.evalAll();
+    try result.evaluator.evalAll();
 
     // Flex var defaults to Dec; Dec.to_str is provided by builtins
     try testing.expectEqual(@as(usize, 0), result.problems.len());

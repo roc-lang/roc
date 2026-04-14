@@ -15,6 +15,35 @@ pub const WasmEvalError = error{
     OutOfMemory,
 };
 
+fn readIntLittle(comptime T: type, buffer: []const u8, offset: usize) T {
+    const UInt = std.meta.Int(.unsigned, @bitSizeOf(T));
+    var result: UInt = 0;
+    var i: usize = 0;
+    while (i < @sizeOf(T)) : (i += 1) {
+        result |= @as(UInt, buffer[offset + i]) << @intCast(i * 8);
+    }
+    return @bitCast(result);
+}
+
+fn writeIntLittle(comptime T: type, buffer: []u8, offset: usize, value: T) void {
+    const UInt = std.meta.Int(.unsigned, @bitSizeOf(T));
+    var remaining: UInt = @bitCast(value);
+    var i: usize = 0;
+    while (i < @sizeOf(T)) : (i += 1) {
+        buffer[offset + i] = @intCast(remaining & 0xff);
+        remaining >>= 8;
+    }
+}
+
+fn bytesEqual(a: []const u8, b: []const u8) bool {
+    if (a.len != b.len) return false;
+    var i: usize = 0;
+    while (i < a.len) : (i += 1) {
+        if (a[i] != b[i]) return false;
+    }
+    return true;
+}
+
 /// Executes a wasm module and returns the Str.inspect result as a string.
 pub fn runWasmStr(
     allocator: std.mem.Allocator,
@@ -154,7 +183,7 @@ pub fn runWasmStr(
     };
     var params = [1]bytebox.Val{.{ .I32 = 0 }};
     var returns: [1]bytebox.Val = undefined;
-    _ = module_instance.invoke(handle, &params, &returns, .{}) catch |err| {
+    module_instance.invoke(handle, &params, &returns, .{}) catch |err| {
         if (wasm_crash_state == .crashed) {
             return error.Crash;
         }
@@ -196,18 +225,18 @@ fn hostDecMul(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const 
     const rhs_ptr: usize = @intCast(params[1].I32);
     const result_ptr: usize = @intCast(params[2].I32);
     if (lhs_ptr + 16 > buffer.len or rhs_ptr + 16 > buffer.len or result_ptr + 16 > buffer.len) return;
-    const lhs_low: u64 = std.mem.readInt(u64, buffer[lhs_ptr..][0..8], .little);
-    const lhs_high: u64 = std.mem.readInt(u64, buffer[lhs_ptr + 8 ..][0..8], .little);
+    const lhs_low: u64 = readIntLittle(u64, buffer, lhs_ptr);
+    const lhs_high: u64 = readIntLittle(u64, buffer, lhs_ptr + 8);
     const lhs_i128: i128 = @bitCast(@as(u128, lhs_high) << 64 | @as(u128, lhs_low));
-    const rhs_low: u64 = std.mem.readInt(u64, buffer[rhs_ptr..][0..8], .little);
-    const rhs_high: u64 = std.mem.readInt(u64, buffer[rhs_ptr + 8 ..][0..8], .little);
+    const rhs_low: u64 = readIntLittle(u64, buffer, rhs_ptr);
+    const rhs_high: u64 = readIntLittle(u64, buffer, rhs_ptr + 8);
     const rhs_i128: i128 = @bitCast(@as(u128, rhs_high) << 64 | @as(u128, rhs_low));
     const lhs_dec = RocDec{ .num = lhs_i128 };
     const rhs_dec = RocDec{ .num = rhs_i128 };
     const result = lhs_dec.mulWithOverflow(rhs_dec);
     const result_u128: u128 = @bitCast(result.value.num);
-    std.mem.writeInt(u64, buffer[result_ptr..][0..8], @truncate(result_u128), .little);
-    std.mem.writeInt(u64, buffer[result_ptr + 8 ..][0..8], @truncate(result_u128 >> 64), .little);
+    writeIntLittle(u64, buffer, result_ptr, @truncate(result_u128));
+    writeIntLittle(u64, buffer, result_ptr + 8, @truncate(result_u128 >> 64));
 }
 
 fn hostDecToStr(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
@@ -219,8 +248,8 @@ fn hostDecToStr(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]cons
         results[0] = .{ .I32 = 0 };
         return;
     }
-    const low: u64 = std.mem.readInt(u64, buffer[dec_ptr..][0..8], .little);
-    const high: u64 = std.mem.readInt(u64, buffer[dec_ptr + 8 ..][0..8], .little);
+    const low: u64 = readIntLittle(u64, buffer, dec_ptr);
+    const high: u64 = readIntLittle(u64, buffer, dec_ptr + 8);
     const dec_i128: i128 = @bitCast(@as(u128, high) << 64 | @as(u128, low));
     const dec = RocDec{ .num = dec_i128 };
     var fmt_buf: [RocDec.max_str_length]u8 = undefined;
@@ -239,7 +268,7 @@ fn hostStrEq(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const b
     }
     const a = readWasmStr(buffer, a_ptr);
     const b = readWasmStr(buffer, b_ptr);
-    results[0] = .{ .I32 = if (a.len == b.len and std.mem.eql(u8, a.data[0..a.len], b.data[0..b.len])) 1 else 0 };
+    results[0] = .{ .I32 = if (a.len == b.len and bytesEqual(a.data[0..a.len], b.data[0..b.len])) 1 else 0 };
 }
 
 fn hostListEq(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
@@ -251,10 +280,10 @@ fn hostListEq(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const 
         results[0] = .{ .I32 = 0 };
         return;
     }
-    const a_data_ptr: usize = @intCast(std.mem.readInt(u32, buffer[a_list_ptr..][0..4], .little));
-    const a_len: usize = @intCast(std.mem.readInt(u32, buffer[a_list_ptr + 4 ..][0..4], .little));
-    const b_data_ptr: usize = @intCast(std.mem.readInt(u32, buffer[b_list_ptr..][0..4], .little));
-    const b_len: usize = @intCast(std.mem.readInt(u32, buffer[b_list_ptr + 4 ..][0..4], .little));
+    const a_data_ptr: usize = @intCast(readIntLittle(u32, buffer, a_list_ptr));
+    const a_len: usize = @intCast(readIntLittle(u32, buffer, a_list_ptr + 4));
+    const b_data_ptr: usize = @intCast(readIntLittle(u32, buffer, b_list_ptr));
+    const b_len: usize = @intCast(readIntLittle(u32, buffer, b_list_ptr + 4));
     if (a_len != b_len) {
         results[0] = .{ .I32 = 0 };
         return;
@@ -268,30 +297,30 @@ fn hostListEq(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const 
         results[0] = .{ .I32 = 0 };
         return;
     }
-    results[0] = .{ .I32 = if (std.mem.eql(u8, buffer[a_data_ptr..][0..total_bytes], buffer[b_data_ptr..][0..total_bytes])) 1 else 0 };
+    results[0] = .{ .I32 = if (bytesEqual(buffer[a_data_ptr..][0..total_bytes], buffer[b_data_ptr..][0..total_bytes])) 1 else 0 };
 }
 
 fn readI128FromMem(buffer: []u8, ptr: usize) i128 {
-    const low = std.mem.readInt(u64, buffer[ptr..][0..8], .little);
-    const high = std.mem.readInt(i64, buffer[ptr + 8 ..][0..8], .little);
+    const low = readIntLittle(u64, buffer, ptr);
+    const high = readIntLittle(i64, buffer, ptr + 8);
     return @as(i128, high) << 64 | low;
 }
 
 fn readU128FromMem(buffer: []u8, ptr: usize) u128 {
-    const low = std.mem.readInt(u64, buffer[ptr..][0..8], .little);
-    const high = std.mem.readInt(u64, buffer[ptr + 8 ..][0..8], .little);
+    const low = readIntLittle(u64, buffer, ptr);
+    const high = readIntLittle(u64, buffer, ptr + 8);
     return @as(u128, high) << 64 | low;
 }
 
 fn writeI128ToMem(buffer: []u8, ptr: usize, val: i128) void {
     const as_u128: u128 = @bitCast(val);
-    std.mem.writeInt(u64, buffer[ptr..][0..8], @truncate(as_u128), .little);
-    std.mem.writeInt(u64, buffer[ptr + 8 ..][0..8], @truncate(as_u128 >> 64), .little);
+    writeIntLittle(u64, buffer, ptr, @truncate(as_u128));
+    writeIntLittle(u64, buffer, ptr + 8, @truncate(as_u128 >> 64));
 }
 
 fn writeU128ToMem(buffer: []u8, ptr: usize, val: u128) void {
-    std.mem.writeInt(u64, buffer[ptr..][0..8], @truncate(val), .little);
-    std.mem.writeInt(u64, buffer[ptr + 8 ..][0..8], @truncate(val >> 64), .little);
+    writeIntLittle(u64, buffer, ptr, @truncate(val));
+    writeIntLittle(u64, buffer, ptr + 8, @truncate(val >> 64));
 }
 
 fn hostI128DivS(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
@@ -526,10 +555,10 @@ fn hostListStrEq(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]con
         results[0] = .{ .I32 = 0 };
         return;
     }
-    const a_data_ptr: usize = @intCast(std.mem.readInt(u32, buffer[a_list_ptr..][0..4], .little));
-    const a_len: usize = @intCast(std.mem.readInt(u32, buffer[a_list_ptr + 4 ..][0..4], .little));
-    const b_data_ptr: usize = @intCast(std.mem.readInt(u32, buffer[b_list_ptr..][0..4], .little));
-    const b_len: usize = @intCast(std.mem.readInt(u32, buffer[b_list_ptr + 4 ..][0..4], .little));
+    const a_data_ptr: usize = @intCast(readIntLittle(u32, buffer, a_list_ptr));
+    const a_len: usize = @intCast(readIntLittle(u32, buffer, a_list_ptr + 4));
+    const b_data_ptr: usize = @intCast(readIntLittle(u32, buffer, b_list_ptr));
+    const b_len: usize = @intCast(readIntLittle(u32, buffer, b_list_ptr + 4));
     if (a_len != b_len) {
         results[0] = .{ .I32 = 0 };
         return;
@@ -547,7 +576,7 @@ fn hostListStrEq(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]con
             results[0] = .{ .I32 = 0 };
             return;
         }
-        if (!std.mem.eql(u8, a.data[0..a.len], b.data[0..b.len])) {
+        if (!bytesEqual(a.data[0..a.len], b.data[0..b.len])) {
             results[0] = .{ .I32 = 0 };
             return;
         }
@@ -564,10 +593,10 @@ fn hostListListEq(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]co
         results[0] = .{ .I32 = 0 };
         return;
     }
-    const a_data_ptr: usize = @intCast(std.mem.readInt(u32, buffer[a_list_ptr..][0..4], .little));
-    const a_len: usize = @intCast(std.mem.readInt(u32, buffer[a_list_ptr + 4 ..][0..4], .little));
-    const b_data_ptr: usize = @intCast(std.mem.readInt(u32, buffer[b_list_ptr..][0..4], .little));
-    const b_len: usize = @intCast(std.mem.readInt(u32, buffer[b_list_ptr + 4 ..][0..4], .little));
+    const a_data_ptr: usize = @intCast(readIntLittle(u32, buffer, a_list_ptr));
+    const a_len: usize = @intCast(readIntLittle(u32, buffer, a_list_ptr + 4));
+    const b_data_ptr: usize = @intCast(readIntLittle(u32, buffer, b_list_ptr));
+    const b_len: usize = @intCast(readIntLittle(u32, buffer, b_list_ptr + 4));
     if (a_len != b_len) {
         results[0] = .{ .I32 = 0 };
         return;
@@ -579,10 +608,10 @@ fn hostListListEq(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]co
     for (0..a_len) |i| {
         const a_elem_ptr = a_data_ptr + i * 12;
         const b_elem_ptr = b_data_ptr + i * 12;
-        const a_data_inner: usize = @intCast(std.mem.readInt(u32, buffer[a_elem_ptr..][0..4], .little));
-        const a_len_inner: usize = @intCast(std.mem.readInt(u32, buffer[a_elem_ptr + 4 ..][0..4], .little));
-        const b_data_inner: usize = @intCast(std.mem.readInt(u32, buffer[b_elem_ptr..][0..4], .little));
-        const b_len_inner: usize = @intCast(std.mem.readInt(u32, buffer[b_elem_ptr + 4 ..][0..4], .little));
+        const a_data_inner: usize = @intCast(readIntLittle(u32, buffer, a_elem_ptr));
+        const a_len_inner: usize = @intCast(readIntLittle(u32, buffer, a_elem_ptr + 4));
+        const b_data_inner: usize = @intCast(readIntLittle(u32, buffer, b_elem_ptr));
+        const b_len_inner: usize = @intCast(readIntLittle(u32, buffer, b_elem_ptr + 4));
         if (a_len_inner != b_len_inner) {
             results[0] = .{ .I32 = 0 };
             return;
@@ -593,7 +622,7 @@ fn hostListListEq(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]co
             results[0] = .{ .I32 = 0 };
             return;
         }
-        if (!std.mem.eql(u8, buffer[a_data_inner..][0..total_bytes], buffer[b_data_inner..][0..total_bytes])) {
+        if (!bytesEqual(buffer[a_data_inner..][0..total_bytes], buffer[b_data_inner..][0..total_bytes])) {
             results[0] = .{ .I32 = 0 };
             return;
         }
@@ -606,8 +635,8 @@ fn readWasmStr(buffer: []u8, str_ptr: usize) struct { data: [*]const u8, len: us
     if ((bytes[11] & 0x80) != 0) {
         return .{ .data = bytes[0..11].ptr, .len = bytes[11] & 0x7F };
     } else {
-        const data_ptr: usize = @intCast(std.mem.readInt(u32, bytes[0..4], .little));
-        const len: usize = @intCast(std.mem.readInt(u32, bytes[4..8], .little));
+        const data_ptr: usize = @intCast(readIntLittle(u32, buffer, str_ptr));
+        const len: usize = @intCast(readIntLittle(u32, buffer, str_ptr + 4));
         return .{ .data = buffer[data_ptr..].ptr, .len = len };
     }
 }
@@ -620,9 +649,9 @@ fn writeWasmStr(buffer: []u8, result_ptr: usize, data: [*]const u8, len: usize) 
     } else {
         const data_ptr = allocWasmData(buffer, 1, len);
         @memcpy(buffer[data_ptr..][0..len], data[0..len]);
-        std.mem.writeInt(u32, buffer[result_ptr..][0..4], data_ptr, .little);
-        std.mem.writeInt(u32, buffer[result_ptr + 4 ..][0..4], @intCast(len), .little);
-        std.mem.writeInt(u32, buffer[result_ptr + 8 ..][0..4], @intCast(len), .little);
+        writeIntLittle(u32, buffer, result_ptr, @intCast(data_ptr));
+        writeIntLittle(u32, buffer, result_ptr + 4, @intCast(len));
+        writeIntLittle(u32, buffer, result_ptr + 8, @intCast(len));
     }
 }
 
@@ -654,8 +683,8 @@ fn allocWasmData(buffer: []u8, alignment: u32, length: usize) u32 {
     const alloc_ptr = (wasm_heap_ptr + align_val - 1) & ~(align_val - 1);
     const data_ptr = alloc_ptr + extra_bytes;
     wasm_heap_ptr = @intCast(data_ptr + length);
-    std.mem.writeInt(u32, buffer[data_ptr - 8 ..][0..4], @intCast(length), .little);
-    std.mem.writeInt(u32, buffer[data_ptr - 4 ..][0..4], 1, .little);
+    writeIntLittle(u32, buffer, data_ptr - 8, @intCast(length));
+    writeIntLittle(u32, buffer, data_ptr - 4, 1);
     return data_ptr;
 }
 
@@ -680,7 +709,7 @@ fn hostRocRealloc(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]co
     const new_length: u32 = @bitCast(buffer[args_ptr + 4 ..][0..4].*);
     const old_data_ptr: u32 = @bitCast(buffer[args_ptr + 8 ..][0..4].*);
     const old_length: usize = if (old_data_ptr >= 8 and old_data_ptr <= buffer.len)
-        std.mem.readInt(u32, buffer[old_data_ptr - 8 ..][0..4], .little)
+        readIntLittle(u32, buffer, old_data_ptr - 8)
     else
         0;
     const data_ptr = allocWasmData(buffer, alignment, new_length);
@@ -799,9 +828,9 @@ fn hostStrWithCapacity(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: 
         return;
     }
     const dest_start = allocWasmData(buffer, 1, cap);
-    std.mem.writeInt(u32, buffer[result_ptr..][0..4], dest_start, .little);
-    std.mem.writeInt(u32, buffer[result_ptr + 4 ..][0..4], 0, .little);
-    std.mem.writeInt(u32, buffer[result_ptr + 8 ..][0..4], @intCast(cap), .little);
+    writeIntLittle(u32, buffer, result_ptr, @intCast(dest_start));
+    writeIntLittle(u32, buffer, result_ptr + 4, 0);
+    writeIntLittle(u32, buffer, result_ptr + 8, @intCast(cap));
 }
 
 fn hostStrEscapeAndQuote(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
@@ -869,7 +898,7 @@ fn hostStrDropPrefix(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*
     const buffer = module.store.getMemory(0).buffer();
     const str = readWasmStr(buffer, @intCast(params[0].I32));
     const prefix = readWasmStr(buffer, @intCast(params[1].I32));
-    if (prefix.len <= str.len and std.mem.eql(u8, str.data[0..prefix.len], prefix.data[0..prefix.len])) {
+    if (prefix.len <= str.len and bytesEqual(str.data[0..prefix.len], prefix.data[0..prefix.len])) {
         writeWasmStr(buffer, @intCast(params[2].I32), str.data + prefix.len, str.len - prefix.len);
     } else {
         writeWasmStr(buffer, @intCast(params[2].I32), str.data, str.len);
@@ -880,7 +909,7 @@ fn hostStrDropSuffix(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*
     const buffer = module.store.getMemory(0).buffer();
     const str = readWasmStr(buffer, @intCast(params[0].I32));
     const suffix = readWasmStr(buffer, @intCast(params[1].I32));
-    if (suffix.len <= str.len and std.mem.eql(u8, (str.data + str.len - suffix.len)[0..suffix.len], suffix.data[0..suffix.len])) {
+    if (suffix.len <= str.len and bytesEqual((str.data + str.len - suffix.len)[0..suffix.len], suffix.data[0..suffix.len])) {
         writeWasmStr(buffer, @intCast(params[2].I32), str.data, str.len - suffix.len);
     } else {
         writeWasmStr(buffer, @intCast(params[2].I32), str.data, str.len);
@@ -918,7 +947,7 @@ fn hostStrSplit(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]cons
     if (sep.len > 0 and str.len >= sep.len) {
         var i: usize = 0;
         while (i + sep.len <= str.len) {
-            if (std.mem.eql(u8, str_slice[i..][0..sep.len], sep_slice)) {
+            if (bytesEqual(str_slice[i..][0..sep.len], sep_slice)) {
                 count += 1;
                 i += sep.len;
             } else {
@@ -932,7 +961,7 @@ fn hostStrSplit(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]cons
     if (sep.len > 0) {
         var i: usize = 0;
         while (i + sep.len <= str.len) {
-            if (std.mem.eql(u8, str_slice[i..][0..sep.len], sep_slice)) {
+            if (bytesEqual(str_slice[i..][0..sep.len], sep_slice)) {
                 writeWasmStr(buffer, list_data_start + part_idx * 12, str_slice[start..].ptr, i - start);
                 part_idx += 1;
                 start = i + sep.len;
@@ -943,17 +972,17 @@ fn hostStrSplit(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]cons
         }
     }
     writeWasmStr(buffer, list_data_start + part_idx * 12, str_slice[start..].ptr, str.len - start);
-    std.mem.writeInt(u32, buffer[result_ptr..][0..4], @intCast(list_data_start), .little);
-    std.mem.writeInt(u32, buffer[result_ptr + 4 ..][0..4], @intCast(count), .little);
-    std.mem.writeInt(u32, buffer[result_ptr + 8 ..][0..4], @intCast(count), .little);
+    writeIntLittle(u32, buffer, result_ptr, @intCast(list_data_start));
+    writeIntLittle(u32, buffer, result_ptr + 4, @intCast(count));
+    writeIntLittle(u32, buffer, result_ptr + 8, @intCast(count));
 }
 
 fn hostStrJoinWith(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
     const buffer = module.store.getMemory(0).buffer();
     const list_ptr: usize = @intCast(params[0].I32);
     const sep = readWasmStr(buffer, @intCast(params[1].I32));
-    const list_data: usize = @intCast(std.mem.readInt(u32, buffer[list_ptr..][0..4], .little));
-    const list_len: usize = @intCast(std.mem.readInt(u32, buffer[list_ptr + 4 ..][0..4], .little));
+    const list_data: usize = @intCast(readIntLittle(u32, buffer, list_ptr));
+    const list_len: usize = @intCast(readIntLittle(u32, buffer, list_ptr + 4));
     if (list_len == 0) {
         writeWasmEmptyStr(buffer, @intCast(params[2].I32));
         return;
@@ -1013,9 +1042,9 @@ fn hostStrReserve(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]co
     }
     const dest_start = allocWasmData(buffer, 1, needed);
     @memcpy(buffer[dest_start..][0..str.len], str.data[0..str.len]);
-    std.mem.writeInt(u32, buffer[result_ptr..][0..4], dest_start, .little);
-    std.mem.writeInt(u32, buffer[result_ptr + 4 ..][0..4], @intCast(str.len), .little);
-    std.mem.writeInt(u32, buffer[result_ptr + 8 ..][0..4], @intCast(needed), .little);
+    writeIntLittle(u32, buffer, result_ptr, @intCast(dest_start));
+    writeIntLittle(u32, buffer, result_ptr + 4, @intCast(str.len));
+    writeIntLittle(u32, buffer, result_ptr + 8, @intCast(needed));
 }
 
 fn hostStrCaselessAsciiEquals(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
@@ -1045,17 +1074,17 @@ fn hostListAppendUnsafe(_: ?*anyopaque, module: *bytebox.ModuleInstance, params:
     const alignment: u32 = @bitCast(params[3].I32);
     const result_ptr: usize = @intCast(params[4].I32);
 
-    const data_ptr: usize = @intCast(std.mem.readInt(u32, buffer[list_ptr..][0..4], .little));
-    const len: usize = @intCast(std.mem.readInt(u32, buffer[list_ptr + 4 ..][0..4], .little));
-    const cap: usize = @intCast(std.mem.readInt(u32, buffer[list_ptr + 8 ..][0..4], .little));
+    const data_ptr: usize = @intCast(readIntLittle(u32, buffer, list_ptr));
+    const len: usize = @intCast(readIntLittle(u32, buffer, list_ptr + 4));
+    const cap: usize = @intCast(readIntLittle(u32, buffer, list_ptr + 8));
     const new_len = len + 1;
 
-    _ = alignment;
+    std.debug.assert(alignment > 0);
 
     if (elem_width == 0) {
-        std.mem.writeInt(u32, buffer[result_ptr..][0..4], @intCast(data_ptr), .little);
-        std.mem.writeInt(u32, buffer[result_ptr + 4 ..][0..4], @intCast(new_len), .little);
-        std.mem.writeInt(u32, buffer[result_ptr + 8 ..][0..4], @intCast(cap), .little);
+        writeIntLittle(u32, buffer, result_ptr, @intCast(data_ptr));
+        writeIntLittle(u32, buffer, result_ptr + 4, @intCast(new_len));
+        writeIntLittle(u32, buffer, result_ptr + 8, @intCast(cap));
         return;
     }
 
@@ -1067,9 +1096,9 @@ fn hostListAppendUnsafe(_: ?*anyopaque, module: *bytebox.ModuleInstance, params:
     }
     @memcpy(buffer[data_ptr + len * elem_width ..][0..elem_width], buffer[elem_ptr..][0..elem_width]);
 
-    std.mem.writeInt(u32, buffer[result_ptr..][0..4], @intCast(data_ptr), .little);
-    std.mem.writeInt(u32, buffer[result_ptr + 4 ..][0..4], @intCast(new_len), .little);
-    std.mem.writeInt(u32, buffer[result_ptr + 8 ..][0..4], @intCast(cap), .little);
+    writeIntLittle(u32, buffer, result_ptr, @intCast(data_ptr));
+    writeIntLittle(u32, buffer, result_ptr + 4, @intCast(new_len));
+    writeIntLittle(u32, buffer, result_ptr + 8, @intCast(cap));
 }
 
 fn hostListConcat(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
@@ -1080,17 +1109,17 @@ fn hostListConcat(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]co
     const alignment: u32 = @bitCast(params[3].I32);
     const result_ptr: usize = @intCast(params[4].I32);
 
-    const a_data: usize = @intCast(std.mem.readInt(u32, buffer[list_a_ptr..][0..4], .little));
-    const a_len: usize = @intCast(std.mem.readInt(u32, buffer[list_a_ptr + 4 ..][0..4], .little));
-    const b_data: usize = @intCast(std.mem.readInt(u32, buffer[list_b_ptr..][0..4], .little));
-    const b_len: usize = @intCast(std.mem.readInt(u32, buffer[list_b_ptr + 4 ..][0..4], .little));
+    const a_data: usize = @intCast(readIntLittle(u32, buffer, list_a_ptr));
+    const a_len: usize = @intCast(readIntLittle(u32, buffer, list_a_ptr + 4));
+    const b_data: usize = @intCast(readIntLittle(u32, buffer, list_b_ptr));
+    const b_len: usize = @intCast(readIntLittle(u32, buffer, list_b_ptr + 4));
     const new_len = a_len + b_len;
 
     if (elem_width == 0) {
         const data_ptr = if (a_len != 0) a_data else b_data;
-        std.mem.writeInt(u32, buffer[result_ptr..][0..4], @intCast(data_ptr), .little);
-        std.mem.writeInt(u32, buffer[result_ptr + 4 ..][0..4], @intCast(new_len), .little);
-        std.mem.writeInt(u32, buffer[result_ptr + 8 ..][0..4], @intCast(new_len), .little);
+        writeIntLittle(u32, buffer, result_ptr, @intCast(data_ptr));
+        writeIntLittle(u32, buffer, result_ptr + 4, @intCast(new_len));
+        writeIntLittle(u32, buffer, result_ptr + 8, @intCast(new_len));
         return;
     }
 
@@ -1104,9 +1133,9 @@ fn hostListConcat(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]co
         @memcpy(buffer[new_data + offset ..][0..b_len * elem_width], buffer[b_data..][0..b_len * elem_width]);
     }
 
-    std.mem.writeInt(u32, buffer[result_ptr..][0..4], @intCast(new_data), .little);
-    std.mem.writeInt(u32, buffer[result_ptr + 4 ..][0..4], @intCast(new_len), .little);
-    std.mem.writeInt(u32, buffer[result_ptr + 8 ..][0..4], @intCast(new_len), .little);
+    writeIntLittle(u32, buffer, result_ptr, @intCast(new_data));
+    writeIntLittle(u32, buffer, result_ptr + 4, @intCast(new_len));
+    writeIntLittle(u32, buffer, result_ptr + 8, @intCast(new_len));
 }
 
 fn hostListDropAt(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
@@ -1117,29 +1146,29 @@ fn hostListDropAt(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]co
     const index: usize = @intCast(params[3].I32);
     const result_ptr: usize = @intCast(params[4].I32);
 
-    const data_ptr: usize = @intCast(std.mem.readInt(u32, buffer[list_ptr..][0..4], .little));
-    const len: usize = @intCast(std.mem.readInt(u32, buffer[list_ptr + 4 ..][0..4], .little));
-    const cap: usize = @intCast(std.mem.readInt(u32, buffer[list_ptr + 8 ..][0..4], .little));
+    const data_ptr: usize = @intCast(readIntLittle(u32, buffer, list_ptr));
+    const len: usize = @intCast(readIntLittle(u32, buffer, list_ptr + 4));
+    const cap: usize = @intCast(readIntLittle(u32, buffer, list_ptr + 8));
 
     if (index >= len) {
-        std.mem.writeInt(u32, buffer[result_ptr..][0..4], @intCast(data_ptr), .little);
-        std.mem.writeInt(u32, buffer[result_ptr + 4 ..][0..4], @intCast(len), .little);
-        std.mem.writeInt(u32, buffer[result_ptr + 8 ..][0..4], @intCast(cap), .little);
+        writeIntLittle(u32, buffer, result_ptr, @intCast(data_ptr));
+        writeIntLittle(u32, buffer, result_ptr + 4, @intCast(len));
+        writeIntLittle(u32, buffer, result_ptr + 8, @intCast(cap));
         return;
     }
 
     const new_len = len - 1;
     if (new_len == 0) {
-        std.mem.writeInt(u32, buffer[result_ptr..][0..4], 0, .little);
-        std.mem.writeInt(u32, buffer[result_ptr + 4 ..][0..4], 0, .little);
-        std.mem.writeInt(u32, buffer[result_ptr + 8 ..][0..4], 0, .little);
+        writeIntLittle(u32, buffer, result_ptr, 0);
+        writeIntLittle(u32, buffer, result_ptr + 4, 0);
+        writeIntLittle(u32, buffer, result_ptr + 8, 0);
         return;
     }
 
     if (elem_width == 0) {
-        std.mem.writeInt(u32, buffer[result_ptr..][0..4], @intCast(data_ptr), .little);
-        std.mem.writeInt(u32, buffer[result_ptr + 4 ..][0..4], @intCast(new_len), .little);
-        std.mem.writeInt(u32, buffer[result_ptr + 8 ..][0..4], @intCast(new_len), .little);
+        writeIntLittle(u32, buffer, result_ptr, @intCast(data_ptr));
+        writeIntLittle(u32, buffer, result_ptr + 4, @intCast(new_len));
+        writeIntLittle(u32, buffer, result_ptr + 8, @intCast(new_len));
         return;
     }
 
@@ -1156,9 +1185,9 @@ fn hostListDropAt(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]co
         );
     }
 
-    std.mem.writeInt(u32, buffer[result_ptr..][0..4], @intCast(new_data), .little);
-    std.mem.writeInt(u32, buffer[result_ptr + 4 ..][0..4], @intCast(new_len), .little);
-    std.mem.writeInt(u32, buffer[result_ptr + 8 ..][0..4], @intCast(new_len), .little);
+    writeIntLittle(u32, buffer, result_ptr, @intCast(new_data));
+    writeIntLittle(u32, buffer, result_ptr + 4, @intCast(new_len));
+    writeIntLittle(u32, buffer, result_ptr + 8, @intCast(new_len));
 }
 
 fn hostListReverse(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
@@ -1168,14 +1197,14 @@ fn hostListReverse(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]c
     const alignment: u32 = @bitCast(params[2].I32);
     const result_ptr: usize = @intCast(params[3].I32);
 
-    const data_ptr: usize = @intCast(std.mem.readInt(u32, buffer[list_ptr..][0..4], .little));
-    const len: usize = @intCast(std.mem.readInt(u32, buffer[list_ptr + 4 ..][0..4], .little));
-    const cap: usize = @intCast(std.mem.readInt(u32, buffer[list_ptr + 8 ..][0..4], .little));
+    const data_ptr: usize = @intCast(readIntLittle(u32, buffer, list_ptr));
+    const len: usize = @intCast(readIntLittle(u32, buffer, list_ptr + 4));
+    const cap: usize = @intCast(readIntLittle(u32, buffer, list_ptr + 8));
 
     if (len < 2 or elem_width == 0) {
-        std.mem.writeInt(u32, buffer[result_ptr..][0..4], @intCast(data_ptr), .little);
-        std.mem.writeInt(u32, buffer[result_ptr + 4 ..][0..4], @intCast(len), .little);
-        std.mem.writeInt(u32, buffer[result_ptr + 8 ..][0..4], @intCast(cap), .little);
+        writeIntLittle(u32, buffer, result_ptr, @intCast(data_ptr));
+        writeIntLittle(u32, buffer, result_ptr + 4, @intCast(len));
+        writeIntLittle(u32, buffer, result_ptr + 8, @intCast(cap));
         return;
     }
 
@@ -1189,9 +1218,9 @@ fn hostListReverse(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]c
         );
     }
 
-    std.mem.writeInt(u32, buffer[result_ptr..][0..4], @intCast(reversed_data), .little);
-    std.mem.writeInt(u32, buffer[result_ptr + 4 ..][0..4], @intCast(len), .little);
-    std.mem.writeInt(u32, buffer[result_ptr + 8 ..][0..4], @intCast(len), .little);
+    writeIntLittle(u32, buffer, result_ptr, @intCast(reversed_data));
+    writeIntLittle(u32, buffer, result_ptr + 4, @intCast(len));
+    writeIntLittle(u32, buffer, result_ptr + 8, @intCast(len));
 }
 
 fn hostStrFromUtf8(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
@@ -1209,8 +1238,8 @@ fn hostStrFromUtf8(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]c
     const problem_off: usize = @intCast(params[9].I32);
     const problem_size: usize = @intCast(params[10].I32);
     if (list_ptr + 12 > buffer.len or result_ptr + result_size > buffer.len) return;
-    const data_ptr: usize = @intCast(std.mem.readInt(u32, buffer[list_ptr..][0..4], .little));
-    const len: usize = @intCast(std.mem.readInt(u32, buffer[list_ptr + 4 ..][0..4], .little));
+    const data_ptr: usize = @intCast(readIntLittle(u32, buffer, list_ptr));
+    const len: usize = @intCast(readIntLittle(u32, buffer, list_ptr + 4));
     if (data_ptr + len > buffer.len) return;
     const data = buffer[data_ptr..][0..len];
     @memset(buffer[result_ptr..][0..result_size], 0);
@@ -1249,8 +1278,8 @@ fn writeWasmTagDiscriminant(
     const dst = base_ptr + disc_offset;
     switch (disc_size) {
         1 => buffer[dst] = @intCast(value),
-        2 => std.mem.writeInt(u16, buffer[dst..][0..2], @intCast(value), .little),
-        4 => std.mem.writeInt(u32, buffer[dst..][0..4], value, .little),
+        2 => writeIntLittle(u16, buffer, dst, @intCast(value)),
+        4 => writeIntLittle(u32, buffer, dst, value),
         else => std.debug.panic(
             "wasm invariant violated: unsupported tag discriminant size {d}",
             .{disc_size},
@@ -1261,9 +1290,9 @@ fn writeWasmTagDiscriminant(
 fn writeWasmInt(buffer: []u8, dst: usize, size: usize, value: u64) void {
     switch (size) {
         1 => buffer[dst] = @intCast(value),
-        2 => std.mem.writeInt(u16, buffer[dst..][0..2], @intCast(value), .little),
-        4 => std.mem.writeInt(u32, buffer[dst..][0..4], @intCast(value), .little),
-        8 => std.mem.writeInt(u64, buffer[dst..][0..8], value, .little),
+        2 => writeIntLittle(u16, buffer, dst, @intCast(value)),
+        4 => writeIntLittle(u32, buffer, dst, @intCast(value)),
+        8 => writeIntLittle(u64, buffer, dst, value),
         else => std.debug.panic(
             "wasm invariant violated: unsupported integer write size {d}",
             .{size},

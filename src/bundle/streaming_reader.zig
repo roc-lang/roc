@@ -77,7 +77,7 @@ pub const DecompressingHashReader = struct {
     }
 
     pub fn deinit(self: *Self) void {
-        _ = c.ZSTD_freeDCtx(self.dctx);
+        c.ZSTD_freeDCtx(self.dctx);
         self.allocator_ptr.free(self.in_buffer);
         self.allocator_ptr.free(self.interface.buffer);
     }
@@ -148,7 +148,7 @@ pub const DecompressingHashReader = struct {
     /// Verify that the hash matches. This should be called after reading is complete.
     /// If there is remaining data, it will be discarded.
     pub fn verifyComplete(self: *Self) !void {
-        _ = self.interface.discardRemaining() catch {
+        self.interface.discardRemaining() catch {
             // When the hash does not match, discardRemaining will return a ReadFailed, so we have to ignore it
         };
 

@@ -338,7 +338,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
             } else if (value.layout.tag == .struct_) {
                 // Struct representing a tag union - check if record-style (named fields) or tuple-style (indices)
                 var rec_acc = try value.asRecord(ctx.layout_store);
-                if (rec_acc.findFieldIndex(ctx.env.getIdent(ctx.env.idents.tag))) |tag_field_idx| {
+                if (rec_acc.findFieldIndex(ctx.env.idents.tag)) |tag_field_idx| {
                     // Record-style: { tag, payload }
                     const field_rt = try ctx.runtime_types.fresh();
                     const tag_field = try rec_acc.getFieldByIndex(tag_field_idx, field_rt);
@@ -355,7 +355,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                             var out = std.array_list.AlignedManaged(u8, null).init(gpa);
                             errdefer out.deinit();
                             try out.appendSlice(tag_name);
-                            if (rec_acc.findFieldIndex(ctx.env.getIdent(ctx.env.idents.payload))) |pidx| {
+                            if (rec_acc.findFieldIndex(ctx.env.idents.payload)) |pidx| {
                                 const payload_field_rt = try ctx.runtime_types.fresh();
                                 const payload = try rec_acc.getFieldByIndex(pidx, payload_field_rt);
                                 const arg_vars = ctx.runtime_types.sliceVars(toVarRange(sorted_tag.args));

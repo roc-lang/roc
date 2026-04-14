@@ -109,7 +109,7 @@ fn printChar(state: *LineState) !void {
 fn deleteBefore(state: *LineState) !void {
     if (state.col_offset == 0) return;
     state.col_offset -= 1;
-    _ = state.line_buffer.orderedRemove(state.col_offset);
+    state.line_buffer.orderedRemove(state.col_offset);
     try ansi_term.setCursorColumn(state.out, state.prompt_width + state.col_offset);
     try state.out.writeAll(state.line_buffer.items[state.col_offset..]);
     try state.out.writeByte(' ');

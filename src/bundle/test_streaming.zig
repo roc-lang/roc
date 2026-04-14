@@ -83,7 +83,7 @@ test "simple streaming read" {
     defer decompressed_writer.deinit();
 
     // Stream the data from reader to writer
-    _ = try reader.interface.streamRemaining(&decompressed_writer.writer);
+    try reader.interface.streamRemaining(&decompressed_writer.writer);
     try decompressed_writer.writer.flush();
 
     var decompressed_list = decompressed_writer.toArrayList();
@@ -212,7 +212,7 @@ test "different compression levels" {
         var decompressed_writer: std.Io.Writer.Allocating = .init(allocator);
         defer decompressed_writer.deinit();
 
-        _ = try reader.interface.streamRemaining(&decompressed_writer.writer);
+        try reader.interface.streamRemaining(&decompressed_writer.writer);
 
         try std.testing.expectEqualStrings(test_data, decompressed_writer.written());
     }

@@ -276,7 +276,7 @@ const Unifier = struct {
             .content = new_content,
             .rank = Rank.min(vars.a.desc.rank, vars.b.desc.rank),
         });
-        _ = try self.scratch.fresh_vars.append(self.scratch.gpa, var_);
+        try self.scratch.fresh_vars.append(self.scratch.gpa, var_);
         return var_;
     }
 
@@ -291,7 +291,7 @@ const Unifier = struct {
         constraints: StaticDispatchConstraint.SafeList.Range,
     ) std.mem.Allocator.Error!void {
         if (constraints.len() > 0) {
-            _ = try self.scratch.deferred_constraints.append(self.scratch.gpa, DeferredConstraintCheck{
+            try self.scratch.deferred_constraints.append(self.scratch.gpa, DeferredConstraintCheck{
                 .var_ = self.unresolved_b orelse vars.b.var_,
                 .constraints = constraints,
             });
@@ -388,8 +388,8 @@ const Unifier = struct {
                 }
 
                 // Track these vars as being unified
-                _ = try self.scratch.visited_vars.append(self.scratch.gpa, a_var);
-                _ = try self.scratch.visited_vars.append(self.scratch.gpa, b_var);
+                try self.scratch.visited_vars.append(self.scratch.gpa, a_var);
+                try self.scratch.visited_vars.append(self.scratch.gpa, b_var);
                 defer self.scratch.visited_vars.items.items.len -= 2;
 
                 // Save and set unresolved_b for deferred constraint origin tracking.
@@ -1676,7 +1676,7 @@ const Unifier = struct {
             const ord = std.mem.order(u8, self.getTypeIdentText(a_next.name), self.getTypeIdentText(b_next.name));
             switch (ord) {
                 .eq => {
-                    _ = try scratch.in_both_fields.append(scratch.gpa, TwoRecordFields{
+                    try scratch.in_both_fields.append(scratch.gpa, TwoRecordFields{
                         .a = a_next,
                         .b = b_next,
                     });
@@ -1684,11 +1684,11 @@ const Unifier = struct {
                     b_i = b_i + 1;
                 },
                 .lt => {
-                    _ = try scratch.only_in_a_fields.append(scratch.gpa, a_next);
+                    try scratch.only_in_a_fields.append(scratch.gpa, a_next);
                     a_i = a_i + 1;
                 },
                 .gt => {
-                    _ = try scratch.only_in_b_fields.append(scratch.gpa, b_next);
+                    try scratch.only_in_b_fields.append(scratch.gpa, b_next);
                     b_i = b_i + 1;
                 },
             }
@@ -1697,14 +1697,14 @@ const Unifier = struct {
         // If b was shorter, add the extra a elems
         while (a_i < a_fields.len) {
             const a_next = a_fields[a_i];
-            _ = try scratch.only_in_a_fields.append(scratch.gpa, a_next);
+            try scratch.only_in_a_fields.append(scratch.gpa, a_next);
             a_i = a_i + 1;
         }
 
         // If a was shorter, add the extra b elems
         while (b_i < b_fields.len) {
             const b_next = b_fields[b_i];
-            _ = try scratch.only_in_b_fields.append(scratch.gpa, b_next);
+            try scratch.only_in_b_fields.append(scratch.gpa, b_next);
             b_i = b_i + 1;
         }
 
@@ -1760,7 +1760,7 @@ const Unifier = struct {
         // Here, it's safe to use a slice since appending fields cannot trigger
         // any reallocation
         for (self.scratch.in_both_fields.sliceRange(shared_fields_range)) |shared| {
-            _ = try self.types_store.appendRecordFields(&[_]RecordField{.{
+            try self.types_store.appendRecordFields(&[_]RecordField{.{
                 .name = shared.b.name,
                 .var_ = shared.b.var_,
             }});
@@ -1768,12 +1768,12 @@ const Unifier = struct {
 
         // Append combined fields
         if (mb_a_extended_fields) |extended_fields| {
-            _ = try self.types_store.appendRecordFields(
+            try self.types_store.appendRecordFields(
                 self.scratch.only_in_a_fields.sliceRange(extended_fields),
             );
         }
         if (mb_b_extended_fields) |extended_fields| {
-            _ = try self.types_store.appendRecordFields(
+            try self.types_store.appendRecordFields(
                 self.scratch.only_in_b_fields.sliceRange(extended_fields),
             );
         }
@@ -2145,16 +2145,16 @@ const Unifier = struct {
             const ord = std.mem.order(u8, self.getTypeIdentText(a_next.name), self.getTypeIdentText(b_next.name));
             switch (ord) {
                 .eq => {
-                    _ = try scratch.in_both_tags.append(scratch.gpa, TwoTags{ .a = a_next, .b = b_next });
+                    try scratch.in_both_tags.append(scratch.gpa, TwoTags{ .a = a_next, .b = b_next });
                     a_i = a_i + 1;
                     b_i = b_i + 1;
                 },
                 .lt => {
-                    _ = try scratch.only_in_a_tags.append(scratch.gpa, a_next);
+                    try scratch.only_in_a_tags.append(scratch.gpa, a_next);
                     a_i = a_i + 1;
                 },
                 .gt => {
-                    _ = try scratch.only_in_b_tags.append(scratch.gpa, b_next);
+                    try scratch.only_in_b_tags.append(scratch.gpa, b_next);
                     b_i = b_i + 1;
                 },
             }
@@ -2163,14 +2163,14 @@ const Unifier = struct {
         // If b was shorter, add the extra a elems
         while (a_i < a_tags.len) {
             const a_next = a_tags[a_i];
-            _ = try scratch.only_in_a_tags.append(scratch.gpa, a_next);
+            try scratch.only_in_a_tags.append(scratch.gpa, a_next);
             a_i = a_i + 1;
         }
 
         // If a was shorter, add the extra b elems
         while (b_i < b_tags.len) {
             const b_next = b_tags[b_i];
-            _ = try scratch.only_in_b_tags.append(scratch.gpa, b_next);
+            try scratch.only_in_b_tags.append(scratch.gpa, b_next);
             b_i = b_i + 1;
         }
 
@@ -2224,7 +2224,7 @@ const Unifier = struct {
         // Here, it's safe to use a slice since appending tags cannot trigger
         // any reallocation
         for (self.scratch.in_both_tags.sliceRange(shared_tags_range)) |tags| {
-            _ = try self.types_store.appendTags(&[_]Tag{.{
+            try self.types_store.appendTags(&[_]Tag{.{
                 .name = tags.b.name,
                 .args = tags.b.args,
             }});
@@ -2232,12 +2232,12 @@ const Unifier = struct {
 
         // Append combined tags
         if (mb_a_extended_tags) |extended_tags| {
-            _ = try self.types_store.appendTags(
+            try self.types_store.appendTags(
                 self.scratch.only_in_a_tags.sliceRange(extended_tags),
             );
         }
         if (mb_b_extended_tags) |extended_tags| {
-            _ = try self.types_store.appendTags(
+            try self.types_store.appendTags(
                 self.scratch.only_in_b_tags.sliceRange(extended_tags),
             );
         }
@@ -2331,8 +2331,8 @@ const Unifier = struct {
         }
 
         // Track these vars as being unified (in separate list from general unification to match legacy mark semantics)
-        _ = try self.scratch.constraint_visited_vars.append(self.scratch.gpa, a_constraint.fn_var);
-        _ = try self.scratch.constraint_visited_vars.append(self.scratch.gpa, b_constraint.fn_var);
+        try self.scratch.constraint_visited_vars.append(self.scratch.gpa, a_constraint.fn_var);
+        try self.scratch.constraint_visited_vars.append(self.scratch.gpa, b_constraint.fn_var);
         defer self.scratch.constraint_visited_vars.items.items.len -= 2;
 
         // Unify the constraint function types
@@ -2393,7 +2393,7 @@ const Unifier = struct {
             const ord = std.mem.order(u8, self.getTypeIdentText(a_next.fn_name), self.getTypeIdentText(b_next.fn_name));
             switch (ord) {
                 .eq => {
-                    _ = try scratch.in_both_static_dispatch_constraints.append(scratch.gpa, TwoStaticDispatchConstraints{
+                    try scratch.in_both_static_dispatch_constraints.append(scratch.gpa, TwoStaticDispatchConstraints{
                         .a = a_next,
                         .b = b_next,
                     });
@@ -2401,11 +2401,11 @@ const Unifier = struct {
                     b_i = b_i + 1;
                 },
                 .lt => {
-                    _ = try scratch.only_in_a_static_dispatch_constraints.append(scratch.gpa, a_next);
+                    try scratch.only_in_a_static_dispatch_constraints.append(scratch.gpa, a_next);
                     a_i = a_i + 1;
                 },
                 .gt => {
-                    _ = try scratch.only_in_b_static_dispatch_constraints.append(scratch.gpa, b_next);
+                    try scratch.only_in_b_static_dispatch_constraints.append(scratch.gpa, b_next);
                     b_i = b_i + 1;
                 },
             }
@@ -2414,14 +2414,14 @@ const Unifier = struct {
         // If b was shorter, add the extra a elems
         while (a_i < a_constraints.len) {
             const a_next = a_constraints[a_i];
-            _ = try scratch.only_in_a_static_dispatch_constraints.append(scratch.gpa, a_next);
+            try scratch.only_in_a_static_dispatch_constraints.append(scratch.gpa, a_next);
             a_i = a_i + 1;
         }
 
         // If a was shorter, add the extra b elems
         while (b_i < b_constraints.len) {
             const b_next = b_constraints[b_i];
-            _ = try scratch.only_in_b_static_dispatch_constraints.append(scratch.gpa, b_next);
+            try scratch.only_in_b_static_dispatch_constraints.append(scratch.gpa, b_next);
             b_i = b_i + 1;
         }
 
@@ -2621,7 +2621,7 @@ pub const Scratch = struct {
         const start_int = self.gathered_fields.len();
         const record_fields_slice = multi_list.sliceRange(range);
         for (record_fields_slice.items(.name), record_fields_slice.items(.var_)) |name, var_| {
-            _ = try self.gathered_fields.append(
+            try self.gathered_fields.append(
                 self.gpa,
                 RecordField{ .name = name, .var_ = var_ },
             );
@@ -2751,7 +2751,7 @@ pub const Scratch = struct {
         const start_int = self.gathered_tags.len();
         const tag_slice = multi_list.sliceRange(range);
         for (tag_slice.items(.name), tag_slice.items(.args)) |ident, args| {
-            _ = try self.gathered_tags.append(
+            try self.gathered_tags.append(
                 self.gpa,
                 Tag{ .name = ident, .args = args },
             );

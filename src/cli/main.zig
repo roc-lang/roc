@@ -199,8 +199,8 @@ const BuiltinsObjects = struct {
 };
 
 test "main cli tests" {
-    _ = @import("libc_finder.zig");
-    _ = @import("test_shared_memory_system.zig");
+    @import("libc_finder.zig");
+    @import("test_shared_memory_system.zig");
 }
 
 // Workaround for Zig standard library compilation issue on macOS ARM64.
@@ -257,7 +257,7 @@ fn ensureWindowsConsoleSupportsAnsiAndUtf8() void {
     const current_code_page = kernel32.GetConsoleOutputCP();
     if (current_code_page != 0 and current_code_page != 65001) {
         windows_console_previous_code_page = current_code_page;
-        _ = kernel32.SetConsoleOutputCP(65001);
+        kernel32.SetConsoleOutputCP(65001);
     }
     // Note: ANSI escape support is enabled in Io.init()
 }
@@ -266,7 +266,7 @@ fn restoreWindowsConsoleCodePage() void {
     if (!is_windows) return;
     if (windows_console_previous_code_page) |code_page| {
         windows_console_previous_code_page = null;
-        _ = std.os.windows.kernel32.SetConsoleOutputCP(code_page);
+        std.os.windows.kernel32.SetConsoleOutputCP(code_page);
     }
 }
 
@@ -595,7 +595,7 @@ pub fn main() !void {
     // Install stack overflow handler early, before any significant work.
     // This gives us a helpful error message instead of a generic segfault
     // if the compiler blows the stack (e.g., due to infinite recursion in type translation).
-    _ = base.stack_overflow.install();
+    base.stack_overflow.install();
 
     var gpa_tracy: tracy.TracyAllocator(null) = undefined;
     var gpa, const is_safe = gpa: {
@@ -1010,7 +1010,7 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
                     const result = platform_validation.targets_validator.ValidationResult{
                         .invalid_target = .{ .target_str = target_str },
                     };
-                    _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+                    platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
                     return error.InvalidTarget;
                 };
 
@@ -1023,7 +1023,7 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
                         .exe,
                         validation.config,
                     );
-                    _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+                    platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
                     return error.UnsupportedTarget;
                 }
             } else {
@@ -1039,7 +1039,7 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
                         .exe,
                         validation.config,
                     );
-                    _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+                    platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
                     return error.UnsupportedTarget;
                 }
             }
@@ -1256,11 +1256,11 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
     // to properly unmap the entire shared memory region and release kernel resources.
     defer {
         if (comptime is_windows) {
-            _ = ipc.platform.windows.UnmapViewOfFile(shm_handle.ptr);
-            _ = ipc.platform.windows.CloseHandle(@ptrCast(shm_handle.fd));
+            ipc.platform.windows.UnmapViewOfFile(shm_handle.ptr);
+            ipc.platform.windows.CloseHandle(@ptrCast(shm_handle.fd));
         } else {
-            _ = posix.munmap(shm_handle.ptr, shm_handle.mapped_size);
-            _ = c.close(shm_handle.fd);
+            posix.munmap(shm_handle.ptr, shm_handle.mapped_size) catch {};
+            if (c.close(shm_handle.fd) != 0) {}
         }
     }
 
@@ -1350,7 +1350,7 @@ fn rocRunDevShim(ctx: *CliContext, args: cli_args.RunArgs) !void {
                     const result = platform_validation.targets_validator.ValidationResult{
                         .invalid_target = .{ .target_str = target_str },
                     };
-                    _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+                    platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
                     return error.InvalidTarget;
                 };
 
@@ -1363,7 +1363,7 @@ fn rocRunDevShim(ctx: *CliContext, args: cli_args.RunArgs) !void {
                         .exe,
                         validation.config,
                     );
-                    _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+                    platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
                     return error.UnsupportedTarget;
                 }
             } else {
@@ -1377,7 +1377,7 @@ fn rocRunDevShim(ctx: *CliContext, args: cli_args.RunArgs) !void {
                         .exe,
                         validation.config,
                     );
-                    _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+                    platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
                     return error.UnsupportedTarget;
                 }
             }
@@ -1601,11 +1601,11 @@ fn rocRunDevShim(ctx: *CliContext, args: cli_args.RunArgs) !void {
 
     defer {
         if (comptime is_windows) {
-            _ = ipc.platform.windows.UnmapViewOfFile(shm_handle.ptr);
-            _ = ipc.platform.windows.CloseHandle(@ptrCast(shm_handle.fd));
+            ipc.platform.windows.UnmapViewOfFile(shm_handle.ptr);
+            ipc.platform.windows.CloseHandle(@ptrCast(shm_handle.fd));
         } else {
-            _ = posix.munmap(shm_handle.ptr, shm_handle.mapped_size);
-            _ = c.close(shm_handle.fd);
+            posix.munmap(shm_handle.ptr, shm_handle.mapped_size) catch {};
+            if (c.close(shm_handle.fd) != 0) {}
         }
     }
 
@@ -1799,12 +1799,12 @@ fn rocRunDefaultApp(ctx: *CliContext, args: cli_args.RunArgs, original_source: [
     build_env.filesystem = .{ .ctx = @ptrCast(&cli_echo_state), .vtable = cli_echo_vtable };
 
     build_env.discoverDependencies(args.path) catch |err| {
-        _ = build_env.renderDiagnostics(ctx.io.stderr());
+        build_env.renderDiagnostics(ctx.io.stderr());
         return err;
     };
 
     build_env.compileDiscovered() catch |err| {
-        _ = build_env.renderDiagnostics(ctx.io.stderr());
+        build_env.renderDiagnostics(ctx.io.stderr());
         return err;
     };
 
@@ -1979,8 +1979,8 @@ fn runWithWindowsHandleInheritance(ctx: *CliContext, exe_path: []const u8, shm_h
     const wait_result = windows.WaitForSingleObject(process_info.hProcess, windows.INFINITE);
     if (wait_result != 0) { // WAIT_OBJECT_0 = 0
         // Clean up handles before returning
-        _ = ipc.platform.windows.CloseHandle(process_info.hProcess);
-        _ = ipc.platform.windows.CloseHandle(process_info.hThread);
+        ipc.platform.windows.CloseHandle(process_info.hProcess);
+        ipc.platform.windows.CloseHandle(process_info.hThread);
         return ctx.fail(.{ .child_process_wait_failed = .{
             .command = exe_path,
             .err = error.ProcessWaitFailed,
@@ -1991,8 +1991,8 @@ fn runWithWindowsHandleInheritance(ctx: *CliContext, exe_path: []const u8, shm_h
     var exit_code: windows.DWORD = undefined;
     if (windows.GetExitCodeProcess(process_info.hProcess, &exit_code) == 0) {
         // Clean up handles before returning
-        _ = ipc.platform.windows.CloseHandle(process_info.hProcess);
-        _ = ipc.platform.windows.CloseHandle(process_info.hThread);
+        ipc.platform.windows.CloseHandle(process_info.hProcess);
+        ipc.platform.windows.CloseHandle(process_info.hThread);
         return ctx.fail(.{ .child_process_wait_failed = .{
             .command = exe_path,
             .err = error.ProcessExitCodeFailed,
@@ -2000,8 +2000,8 @@ fn runWithWindowsHandleInheritance(ctx: *CliContext, exe_path: []const u8, shm_h
     }
 
     // Clean up process handles
-    _ = ipc.platform.windows.CloseHandle(process_info.hProcess);
-    _ = ipc.platform.windows.CloseHandle(process_info.hThread);
+    ipc.platform.windows.CloseHandle(process_info.hProcess);
+    ipc.platform.windows.CloseHandle(process_info.hThread);
 
     // On Windows, clean up temp files after the child process exits.
     // (Unlike Unix, Windows locks files while they're being executed)
@@ -2017,12 +2017,12 @@ fn runWithWindowsHandleInheritance(ctx: *CliContext, exe_path: []const u8, shm_h
             const result = platform_validation.targets_validator.ValidationResult{
                 .process_crashed = .{ .exit_code = exit_code, .is_access_violation = true },
             };
-            _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+            platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
         } else if (exit_code >= 0xC0000000) { // NT status codes for exceptions
             const result = platform_validation.targets_validator.ValidationResult{
                 .process_crashed = .{ .exit_code = exit_code, .is_access_violation = false },
             };
-            _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+            platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
         }
         // Propagate the exit code (truncated to u8 for compatibility)
         std.process.exit(@truncate(exit_code));
@@ -2059,7 +2059,7 @@ fn runWithPosixFdInheritance(ctx: *CliContext, exe_path: []const u8, shm_handle:
 
     // Clear FD_CLOEXEC - the flag value is 1
     const new_flags = current_flags & ~@as(usize, 1);
-    _ = std.posix.fcntl(shm_handle.fd, std.posix.F.SETFD, new_flags) catch |err| {
+    std.posix.fcntl(shm_handle.fd, std.posix.F.SETFD, new_flags) catch |err| {
         return ctx.fail(.{ .shared_memory_failed = .{
             .operation = "set fd flags",
             .err = err,
@@ -2148,7 +2148,7 @@ fn runWithPosixFdInheritance(ctx: *CliContext, exe_path: []const u8, shm_handle:
             const result = platform_validation.targets_validator.ValidationResult{
                 .process_signaled = .{ .signal = signal },
             };
-            _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+            platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
             // Standard POSIX convention: exit with 128 + signal number
             std.process.exit(128 +| @as(u8, @truncate(signal)));
         },
@@ -2225,7 +2225,7 @@ fn writeToWindowsSharedMemory(data: []const u8, total_size: usize) !SharedMemory
         0,
         ipc.platform.SHARED_MEMORY_BASE_ADDR,
     ) orelse {
-        _ = ipc.platform.windows.CloseHandle(shm_handle);
+        ipc.platform.windows.CloseHandle(shm_handle);
         return error.SharedMemoryMapFailed;
     };
 
@@ -2420,7 +2420,7 @@ pub fn setupSharedMemoryWithCoordinator(ctx: *CliContext, roc_file_path: []const
         const pkg_name = try ctx.gpa.dupe(u8, shorthand);
         defer ctx.gpa.free(pkg_name);
 
-        _ = try coord.ensurePackage(pkg_name, pkg_dir);
+        try coord.ensurePackage(pkg_name, pkg_dir);
 
         // Add shorthand mapping to app package
         // The coordinator will automatically discover and queue modules from this package
@@ -2988,7 +2988,7 @@ fn extractExposedModulesFromPlatform(ctx: *CliContext, roc_file_path: []const u8
         .platform => |platform_header| {
             // Validate platform header has targets section (non-blocking warning)
             // This helps platform authors know they need to add targets
-            _ = validatePlatformHeader(ctx, parse_ast, roc_file_path);
+            validatePlatformHeader(ctx, parse_ast, roc_file_path);
 
             // Get the exposes collection
             const exposes_coll = parse_ast.store.getCollection(platform_header.exposes);
@@ -3042,7 +3042,7 @@ fn writeToPosixSharedMemory(data: []const u8, total_size: usize) !SharedMemoryHa
     const shm_name = "/ROC_FILE_TO_INTERPRET";
 
     // Unlink any existing shared memory object first
-    _ = posix.shm_unlink(shm_name);
+    posix.shm_unlink(shm_name) catch {};
 
     // Create shared memory object
     const shm_fd = posix.shm_open(shm_name, 0x0002 | 0x0200, 0o666); // O_RDWR | O_CREAT
@@ -3052,7 +3052,7 @@ fn writeToPosixSharedMemory(data: []const u8, total_size: usize) !SharedMemoryHa
 
     // Set the size of the shared memory object
     if (c.ftruncate(shm_fd, @intCast(total_size)) != 0) {
-        _ = c.close(shm_fd);
+        if (c.close(shm_fd) != 0) {}
         return error.SharedMemoryTruncateFailed;
     }
 
@@ -3067,7 +3067,7 @@ fn writeToPosixSharedMemory(data: []const u8, total_size: usize) !SharedMemoryHa
     );
     // mmap returns MAP_FAILED ((void*)-1) on error, not NULL
     if (mapped_ptr == posix.MAP_FAILED) {
-        _ = c.close(shm_fd);
+        if (c.close(shm_fd) != 0) {}
         return error.SharedMemoryMapFailed;
     }
     const mapped_memory = @as([*]u8, @ptrCast(mapped_ptr))[0..total_size];
@@ -3508,8 +3508,7 @@ fn extractEntrypointDefNamesFromPlatform(ctx: *CliContext, roc_file_path: []cons
 /// This library contains the shim code that runs in child processes to read ModuleEnv from shared memory.
 /// For native builds and roc run, use the native shim (pass null or native target).
 /// For cross-compilation, pass the target to get the appropriate shim.
-pub fn extractReadRocFilePathShimLibrary(ctx: *CliContext, output_path: []const u8, target: ?RocTarget) !void {
-    _ = ctx; // unused but kept for consistency
+pub fn extractReadRocFilePathShimLibrary(_: *CliContext, output_path: []const u8, target: ?RocTarget) !void {
 
     if (builtin.is_test) {
         // In test mode, create an empty file to avoid embedding issues
@@ -3677,7 +3676,7 @@ fn validateBundleWithCoordinator(
         if (build_env.getPlatformTargetsConfig()) |tc| {
             const pf_dir = std.fs.path.dirname(pf) orelse ".";
             if (platform_validation.validateAllTargetFilesExist(ctx.arena, tc, pf_dir)) |result| {
-                _ = platform_validation.renderValidationError(ctx.gpa, result, stderr);
+                platform_validation.renderValidationError(ctx.gpa, result, stderr);
                 return switch (result) {
                     .missing_target_file => error.MissingTargetFile,
                     .missing_files_directory => error.MissingFilesDirectory,
@@ -4044,7 +4043,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
 
     // Phase 2: Discover dependencies (parses headers once, extracts TargetsConfig)
     build_env.discoverDependencies(args.path) catch |err| {
-        _ = build_env.renderDiagnostics(ctx.io.stderr());
+        build_env.renderDiagnostics(ctx.io.stderr());
         return err;
     };
 
@@ -4065,7 +4064,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
             const result = platform_validation.targets_validator.ValidationResult{
                 .invalid_target = .{ .target_str = target_str },
             };
-            _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+            platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
             return error.InvalidTarget;
         };
 
@@ -4082,7 +4081,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
                 .exe,
                 targets_config,
             );
-            _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+            platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
             return error.UnsupportedTarget;
         };
 
@@ -4129,7 +4128,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
                 .host_os = @tagName(builtin.target.os.tag),
             },
         };
-        _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+        platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
         return error.UnsupportedCrossCompilation;
     }
 
@@ -4186,7 +4185,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     build_env.setTarget(target);
 
     build_env.compileDiscovered() catch |err| {
-        _ = build_env.renderDiagnostics(ctx.io.stderr());
+        build_env.renderDiagnostics(ctx.io.stderr());
         return err;
     };
 
@@ -4214,7 +4213,6 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         } });
     };
     const platform_module = plat.module;
-    _ = plat.platform_idx;
     const provides_entries = plat.provides_entries;
     std.log.debug("Found {} provides entries", .{provides_entries.len});
 
@@ -4448,7 +4446,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
                             .expected_full_path = full_path,
                         },
                     };
-                    _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+                    platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
                     return error.MissingTargetFile;
                 };
 
@@ -4604,7 +4602,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
 
     // Phase 2: Discover dependencies (parses headers once, extracts TargetsConfig)
     build_env.discoverDependencies(args.path) catch |err| {
-        _ = build_env.renderDiagnostics(ctx.io.stderr());
+        build_env.renderDiagnostics(ctx.io.stderr());
         return err;
     };
 
@@ -4626,7 +4624,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
             const result = platform_validation.targets_validator.ValidationResult{
                 .invalid_target = .{ .target_str = target_str },
             };
-            _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+            platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
             return error.InvalidTarget;
         };
 
@@ -4644,7 +4642,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
                 .exe, // Show exe as the expected type for error message
                 targets_config,
             );
-            _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+            platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
             return error.UnsupportedTarget;
         };
 
@@ -4711,7 +4709,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     build_env.setTarget(target);
 
     build_env.compileDiscovered() catch |err| {
-        _ = build_env.renderDiagnostics(ctx.io.stderr());
+        build_env.renderDiagnostics(ctx.io.stderr());
         return err;
     };
 
@@ -4759,7 +4757,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
                 .host_os = @tagName(host_os),
             },
         };
-        _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+        platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
         return error.UnsupportedCrossCompilation;
     }
 
@@ -4795,7 +4793,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
                             .expected_full_path = full_path,
                         },
                     };
-                    _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+                    platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
                     return error.MissingTargetFile;
                 };
 
@@ -5130,7 +5128,7 @@ fn appendTestCacheEntry(
         return;
     };
     cache_failure_reports.append(gpa, report_text) catch {
-        _ = cache_entries.pop();
+        cache_entries.pop();
         if (report_text.len > 0) gpa.free(report_text);
     };
 }
@@ -5523,7 +5521,7 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
     // Only run evalAll if evaluation_order is set (not cached modules)
     // Cached modules have evaluation_order = null since it's not serialized
     if (root_env.evaluation_order != null) {
-        _ = comptime_evaluator.evalAll() catch |err| {
+        comptime_evaluator.evalAll() catch |err| {
             try stderr.print("Failed to evaluate declarations: {}\n", .{err});
             comptime_evaluator.deinit();
             return err;
@@ -6253,11 +6251,10 @@ const CheckResultWithBuildEnv = struct {
 fn checkFileWithBuildEnvPreserved(
     ctx: *CliContext,
     filepath: []const u8,
-    collect_timing: bool,
+    _: bool,
     cache_config: CacheConfig,
     max_threads: ?usize,
 ) BuildAppError!CheckResultWithBuildEnv {
-    _ = collect_timing; // Timing is always collected by BuildEnv
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -6363,11 +6360,10 @@ fn checkFileWithBuildEnvPreserved(
 fn checkFileWithBuildEnv(
     ctx: *CliContext,
     filepath: []const u8,
-    collect_timing: bool,
+    _: bool,
     cache_config: CacheConfig,
     max_threads: ?usize,
 ) BuildAppError!CheckResult {
-    _ = collect_timing; // Timing is always collected by BuildEnv
     const trace = tracy.trace(@src());
     defer trace.end();
 

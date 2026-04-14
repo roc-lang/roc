@@ -45,7 +45,7 @@ pub inline fn alignedPtrCast(comptime T: type, ptr: anytype, src: std.builtin.So
             // 2. This is a debug-only check (comptime builtin.mode == .Debug)
             // 3. On non-WASM, this will trigger a trap with a stack trace
             // 4. The @src() parameter helps identify the call site in logs
-            _ = src; // Used for debugging context
+            std.debug.print("alignedPtrCast alignment failure at {s}:{d}\n", .{ src.file, src.line });
             unreachable;
         }
     }
@@ -357,7 +357,7 @@ pub fn increfRcPtrC(ptr_to_refcount: *isize, amount: isize, roc_ops: *RocOps) ca
                 ptr_to_refcount.* = refcount +% amount;
             },
             .atomic => {
-                _ = @atomicRmw(isize, ptr_to_refcount, .Add, amount, .monotonic);
+                @atomicRmw(isize, ptr_to_refcount, .Add, amount, .monotonic);
             },
             .none => unreachable,
         }
@@ -1187,7 +1187,7 @@ test "allocateWithRefcount basic functionality" {
 
     // Allocate memory with refcount
     const ptr = allocateWithRefcount(64, 8, false, ops);
-    _ = ptr; // Just verify it doesn't crash
+    try std.testing.expect(@intFromPtr(ptr) != 0);
 
     // Should have tracked the allocation
     try std.testing.expectEqual(@as(usize, 1), test_env.getAllocationCount());

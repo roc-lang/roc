@@ -1325,7 +1325,7 @@ pub fn numberOfNextCodepointBytes(bytes: []const u8, index: usize) Utf8DecodeErr
     if (codepoint_end_index > bytes.len) {
         return error.UnexpectedEof;
     }
-    _ = try unicode.utf8Decode(bytes[index..codepoint_end_index]);
+    try unicode.utf8Decode(bytes[index..codepoint_end_index]);
     return codepoint_end_index - index;
 }
 

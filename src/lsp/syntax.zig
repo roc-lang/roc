@@ -93,8 +93,7 @@ pub const SyntaxChecker = struct {
     }
 
     /// Check the file referenced by the URI and return diagnostics grouped by URI.
-    pub fn check(self: *SyntaxChecker, uri: []const u8, override_text: ?[]const u8, workspace_root: ?[]const u8) ![]Diagnostics.PublishDiagnostics {
-        _ = workspace_root; // Reserved for future use
+    pub fn check(self: *SyntaxChecker, uri: []const u8, override_text: ?[]const u8, _: ?[]const u8) ![]Diagnostics.PublishDiagnostics {
 
         self.mutex.lock();
         defer self.mutex.unlock();
@@ -2203,7 +2202,7 @@ pub const SyntaxChecker = struct {
                 // Always add tag completions for nominal types, not just as fallback.
                 // This handles e.g. `Record.` where Record is both a module and a nominal type.
                 if (module_env_opt) |module_env| {
-                    _ = try builder.addTagCompletionsForNominalType(module_env, module_name, null);
+                    try builder.addTagCompletionsForNominalType(module_env, module_name, null);
                 }
             },
             .after_value_dot => |record_access| {
@@ -2360,12 +2359,10 @@ fn extractSymbolFromDecl(
     module_env: *ModuleEnv,
     pattern_idx: CIR.Pattern.Idx,
     expr_idx: CIR.Expr.Idx,
-    source: []const u8,
+    _: []const u8,
     uri: []const u8,
     line_offsets: *const pos.LineOffsets,
 ) ?document_symbol_handler.SymbolInformation {
-    _ = source; // We use getIdentText instead of extracting from source
-
     // Check if RHS is a function
     const expr = module_env.store.getExpr(expr_idx);
     const is_function = switch (expr) {

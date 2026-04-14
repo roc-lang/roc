@@ -27,8 +27,8 @@ pub const module_path = @import("module_path.zig");
 pub const url = @import("url.zig");
 
 test {
-    _ = @import("Ident.zig");
-    _ = @import("module_path.zig");
+    @import("Ident.zig");
+    @import("module_path.zig");
 }
 
 /// Whether a function calls itself.

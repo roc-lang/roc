@@ -155,7 +155,7 @@ pub fn serializeModules(
 
     // 6. Write all to buffer
     const buffer = try allocator.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, writer.total_bytes);
-    _ = try writer.writeToBuffer(buffer);
+    try writer.writeToBuffer(buffer);
 
     return SerializedModulesResult{
         .bytes = buffer,

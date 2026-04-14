@@ -57,8 +57,7 @@ const Lowerer = struct {
         term: ast.Term,
         has_term: bool,
 
-        fn init(allocator: std.mem.Allocator) LoweredBlock {
-            _ = allocator;
+        fn init(_: std.mem.Allocator) LoweredBlock {
             return .{
                 .stmts = .empty,
                 .term = undefined,

@@ -121,7 +121,7 @@ pub const WorkerAllocators = struct {
 
     /// Reset arena between tasks (keeps capacity, frees memory)
     pub fn resetArena(self: *WorkerAllocators) void {
-        _ = self.arena_impl.reset(.retain_capacity);
+        self.arena_impl.reset(.retain_capacity);
     }
 };
 
@@ -284,8 +284,7 @@ pub const PackageState = struct {
     /// Package shorthands (alias -> target package name)
     shorthands: std.StringHashMap([]const u8),
 
-    pub fn init(gpa: Allocator, name: []const u8, root_dir: []const u8) PackageState {
-        _ = gpa; // Used for consistency but not needed for empty init
+    pub fn init(name: []const u8, root_dir: []const u8) PackageState {
         return .{
             .name = name,
             .root_dir = root_dir,
@@ -614,7 +613,7 @@ pub const Coordinator = struct {
         }
 
         const pkg = try self.gpa.create(PackageState);
-        pkg.* = PackageState.init(self.gpa, try self.gpa.dupe(u8, name), try self.gpa.dupe(u8, root_dir));
+        pkg.* = PackageState.init(try self.gpa.dupe(u8, name), try self.gpa.dupe(u8, root_dir));
         try self.packages.put(pkg.name, pkg);
         return pkg;
     }
@@ -681,18 +680,18 @@ pub const Coordinator = struct {
         // decrements inflight, so incrementing here would make isComplete() hang.
         const has_workers = threads_available and self.mode == .multi_threaded and self.max_threads > 1;
         if (has_workers) {
-            _ = self.inflight.fetchAdd(1, .monotonic);
+            self.inflight.fetchAdd(1, .monotonic);
         }
         self.task_channel.sendGrowable(task) catch |err| switch (err) {
             error.Closed => {
                 if (has_workers) {
-                    _ = self.inflight.fetchSub(1, .monotonic);
+                    self.inflight.fetchSub(1, .monotonic);
                 }
                 return;
             },
             error.OutOfMemory => {
                 if (has_workers) {
-                    _ = self.inflight.fetchSub(1, .monotonic);
+                    self.inflight.fetchSub(1, .monotonic);
                 }
                 return error.OutOfMemory;
             },
@@ -746,7 +745,7 @@ pub const Coordinator = struct {
                 // Multi-threaded: receive from workers via channel
                 // Use blocking recv with timeout to avoid busy spinning
                 if (self.result_channel.recvTimeout(10_000_000)) |result| { // 10ms timeout
-                    _ = self.inflight.fetchSub(1, .monotonic);
+                    self.inflight.fetchSub(1, .monotonic);
                     try self.handleResult(result);
                     made_progress = true;
                 }
@@ -2508,7 +2507,7 @@ test "Coordinator task queue" {
 
     // Create package and module
     const pkg = try coord.ensurePackage("app", "/test/app");
-    _ = try pkg.ensureModule(allocator, "Main", "/test/app/Main.roc");
+    try pkg.ensureModule(allocator, "Main", "/test/app/Main.roc");
 
     // Enqueue a task directly
     try coord.enqueueTask(.{
@@ -2565,7 +2564,7 @@ test "Coordinator isComplete logic" {
     try std.testing.expect(!coord.isComplete());
 
     // Clear task but add inflight
-    _ = coord.task_channel.tryRecv();
+    coord.task_channel.tryRecv();
     coord.inflight.store(1, .release);
     try std.testing.expect(!coord.isComplete());
 
@@ -2606,7 +2605,7 @@ test "Coordinator isComplete with multi_threaded max_threads=0 (inline fallback)
     try std.testing.expectEqual(@as(usize, 0), coord.inflight.load(.monotonic));
 
     // Drain the task — should be complete again
-    _ = coord.task_channel.tryRecv();
+    coord.task_channel.tryRecv();
     try std.testing.expect(coord.isComplete());
 }
 

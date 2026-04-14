@@ -161,7 +161,7 @@ test "typed numeric suffix still uses ordinary scope lookup" {
     var test_env = try TestEnv.init("123.UnknownType");
     defer test_env.deinit();
 
-    _ = try test_env.canonicalizeExpr();
+    try test_env.canonicalizeExpr();
 
     const diagnostics = try test_env.getDiagnostics();
     defer testing.allocator.free(diagnostics);

@@ -165,7 +165,7 @@ pub const CacheModule = struct {
         const header = @as(*const Header, @ptrCast(mapped_data.ptr));
 
         // Validate header (including version hash)
-        _ = Header.initFromBytes(@constCast(mapped_data)) catch |err| {
+        Header.initFromBytes(@constCast(mapped_data)) catch |err| {
             return switch (err) {
                 error.PartialRead => error.BufferTooSmall,
                 error.InvalidMagic => error.InvalidMagicNumber,

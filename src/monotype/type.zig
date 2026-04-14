@@ -450,7 +450,7 @@ pub const Store = struct {
         try self.buildCanonicalKey(root);
         try self.rememberScratchInternKey(root);
         try self.canonical_by_raw.put(root, root);
-        _ = active.remove(root);
+        active.remove(root);
         return root;
     }
 
@@ -549,7 +549,7 @@ pub const Store = struct {
         try self.buildCanonicalKey(root);
         try self.rememberScratchInternKey(root);
         try self.canonical_by_raw.put(root, root);
-        _ = active.remove(root);
+        active.remove(root);
         return root;
     }
 

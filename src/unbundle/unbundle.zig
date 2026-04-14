@@ -170,7 +170,7 @@ pub const DirExtractWriter = struct {
             // Flush before closing
             self.open_files.items[last_idx].writer.interface.flush() catch {};
             self.open_files.items[last_idx].file.close();
-            _ = self.open_files.orderedRemove(last_idx);
+            self.open_files.orderedRemove(last_idx);
         }
     }
 

@@ -2842,7 +2842,7 @@ pub inline fn swap_branchless(
     comptime indirect: bool,
 ) void {
     // While not guaranteed branchless, tested in godbolt for x86_64, aarch32, aarch64, riscv64, and wasm32.
-    _ = swap_branchless_return_gt(ptr, tmp, cmp, cmp_data, element_width, copy, indirect);
+    swap_branchless_return_gt(ptr, tmp, cmp, cmp_data, element_width, copy, indirect);
 }
 
 /// Requires that the refcount of cmp_data be incremented 1 time.

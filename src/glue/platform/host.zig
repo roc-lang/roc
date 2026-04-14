@@ -54,13 +54,13 @@ fn handleRocStackOverflow() noreturn {
 
         const stderr_handle = kernel32.GetStdHandle(STD_ERROR_HANDLE);
         var bytes_written: DWORD = 0;
-        _ = kernel32.WriteFile(stderr_handle, STACK_OVERFLOW_MESSAGE.ptr, STACK_OVERFLOW_MESSAGE.len, &bytes_written, null);
+        kernel32.WriteFile(stderr_handle, STACK_OVERFLOW_MESSAGE.ptr, STACK_OVERFLOW_MESSAGE.len, &bytes_written, null);
         // Use TerminateProcess instead of ExitProcess: after a stack overflow the
         // stack is blown and ExitProcess's DLL cleanup can trigger a secondary crash.
-        _ = kernel32.TerminateProcess(kernel32.GetCurrentProcess(), 134);
+        kernel32.TerminateProcess(kernel32.GetCurrentProcess(), 134);
         @trap();
     } else if (comptime builtin.os.tag != .wasi) {
-        _ = posix.write(posix.STDERR_FILENO, STACK_OVERFLOW_MESSAGE) catch {};
+        posix.write(posix.STDERR_FILENO, STACK_OVERFLOW_MESSAGE) catch {};
         posix.exit(134);
     } else {
         std.process.exit(134);
@@ -87,19 +87,19 @@ fn handleRocAccessViolation(fault_addr: usize) noreturn {
         const msg2 = "\n\n";
         const stderr_handle = kernel32.GetStdHandle(STD_ERROR_HANDLE);
         var bytes_written: DWORD = 0;
-        _ = kernel32.WriteFile(stderr_handle, msg1.ptr, msg1.len, &bytes_written, null);
-        _ = kernel32.WriteFile(stderr_handle, addr_str.ptr, @intCast(addr_str.len), &bytes_written, null);
-        _ = kernel32.WriteFile(stderr_handle, msg2.ptr, msg2.len, &bytes_written, null);
+        kernel32.WriteFile(stderr_handle, msg1.ptr, msg1.len, &bytes_written, null);
+        kernel32.WriteFile(stderr_handle, addr_str.ptr, @intCast(addr_str.len), &bytes_written, null);
+        kernel32.WriteFile(stderr_handle, msg2.ptr, msg2.len, &bytes_written, null);
         kernel32.ExitProcess(139);
     } else {
         // POSIX (and WASI fallback)
         const msg = "\nSegmentation fault (SIGSEGV) in this Roc program.\nFault address: ";
-        _ = posix.write(posix.STDERR_FILENO, msg) catch {};
+        posix.write(posix.STDERR_FILENO, msg) catch {};
 
         var addr_buf: [18]u8 = undefined;
         const addr_str = builtins.handlers.formatHex(fault_addr, &addr_buf);
-        _ = posix.write(posix.STDERR_FILENO, addr_str) catch {};
-        _ = posix.write(posix.STDERR_FILENO, "\n\n") catch {};
+        posix.write(posix.STDERR_FILENO, addr_str) catch {};
+        posix.write(posix.STDERR_FILENO, "\n\n") catch {};
         posix.exit(139);
     }
 }
@@ -122,10 +122,10 @@ fn handleRocArithmeticError() noreturn {
 
         const stderr_handle = kernel32.GetStdHandle(STD_ERROR_HANDLE);
         var bytes_written: DWORD = 0;
-        _ = kernel32.WriteFile(stderr_handle, DIVISION_BY_ZERO_MESSAGE.ptr, DIVISION_BY_ZERO_MESSAGE.len, &bytes_written, null);
+        kernel32.WriteFile(stderr_handle, DIVISION_BY_ZERO_MESSAGE.ptr, DIVISION_BY_ZERO_MESSAGE.len, &bytes_written, null);
         kernel32.ExitProcess(136);
     } else if (comptime builtin.os.tag != .wasi) {
-        _ = posix.write(posix.STDERR_FILENO, DIVISION_BY_ZERO_MESSAGE) catch {};
+        posix.write(posix.STDERR_FILENO, DIVISION_BY_ZERO_MESSAGE) catch {};
         posix.exit(136); // 128 + 8 (SIGFPE)
     } else {
         std.process.exit(136);
@@ -239,7 +239,7 @@ fn rocDeallocFn(roc_dealloc: *builtins.host_abi.RocDealloc, env: *anyopaque) cal
 
     for (host.roc_allocations.items, 0..) |alloc, i| {
         if (alloc.ptr == base_ptr) {
-            _ = host.roc_allocations.swapRemove(i);
+            host.roc_allocations.swapRemove(i);
             break;
         }
     }
@@ -283,7 +283,7 @@ fn rocReallocFn(roc_realloc: *builtins.host_abi.RocRealloc, env: *anyopaque) cal
 
     for (host.roc_allocations.items, 0..) |alloc, i| {
         if (alloc.ptr == old_base_ptr) {
-            _ = host.roc_allocations.swapRemove(i);
+            host.roc_allocations.swapRemove(i);
             break;
         }
     }
@@ -656,7 +656,7 @@ fn platform_main(args: [][*:0]u8) !c_int {
     }
 
     // Install signal handlers
-    _ = builtins.handlers.install(handleRocStackOverflow, handleRocAccessViolation, handleRocArithmeticError);
+    builtins.handlers.install(handleRocStackOverflow, handleRocAccessViolation, handleRocArithmeticError);
 
     var host_env = HostEnv{
         .gpa = std.heap.GeneralPurposeAllocator(.{ .safety = true }){},

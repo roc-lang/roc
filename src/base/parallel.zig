@@ -53,7 +53,7 @@ fn workerThread(comptime T: type, ctx: WorkerContext(T)) void {
             if (i >= ctx.work_item_count) break;
 
             // Clear arena between work items
-            _ = arena.reset(.retain_capacity);
+            arena.reset(.retain_capacity);
 
             ctx.worker_fn(arena.allocator(), ctx.context, i);
         }
@@ -173,8 +173,7 @@ test "process basic functionality" {
     };
 
     const TestWorker = struct {
-        fn worker(worker_allocator: std.mem.Allocator, item: *MyContext, item_id: usize) void {
-            _ = worker_allocator; // unused in this test
+        fn worker(_: std.mem.Allocator, item: *MyContext, item_id: usize) void {
             const value = item.items[item_id];
             if (value < 0) {
                 item.outputs[item_id] = -1;

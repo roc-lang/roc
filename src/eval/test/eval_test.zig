@@ -803,7 +803,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
         const file_size = try tmp_file.getEndPos();
         const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(@alignOf(ModuleEnv)), @intCast(file_size));
         defer gpa.free(buffer);
-        _ = try tmp_file.pread(buffer, 0);
+        try tmp_file.pread(buffer, 0);
 
         // Deserialize the ModuleEnv
         const deserialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(buffer.ptr + env_start_offset)));

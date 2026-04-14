@@ -1284,7 +1284,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 var frame_builder = CodeGen.DeferredFrameBuilder.init();
                 frame_builder.setCalleeSavedMask(self.codegen.callee_saved_used);
                 frame_builder.setStackSize(actual_locals);
-                _ = try frame_builder.emitPrologue(&self.codegen.emit);
+                try frame_builder.emitPrologue(&self.codegen.emit);
             }
             const prologue_size = self.codegen.currentOffset() - prologue_start;
 
@@ -3354,7 +3354,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     if (ret_layout_data.tag == .box_of_zst) {
                         // Boxing a ZST: evaluate the expression (for side effects) but
                         // return a null-like pointer since there's no data to store.
-                        _ = try self.emitValueLocal(args[0]);
+                        try self.emitValueLocal(args[0]);
                         const reg = try self.allocTempGeneral();
                         try self.codegen.emitLoadImm(reg, 0);
                         return .{ .general_reg = reg };
@@ -3366,7 +3366,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     // Handle ZST element even when layout tag is .box (not .box_of_zst)
                     if (elem_size == 0) {
-                        _ = try self.emitValueLocal(args[0]);
+                        try self.emitValueLocal(args[0]);
                         const reg = try self.allocTempGeneral();
                         try self.codegen.emitLoadImm(reg, 0);
                         return .{ .general_reg = reg };
@@ -3412,7 +3412,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     if (box_layout_data.tag == .box_of_zst) {
                         // Unboxing a ZST: evaluate the box expression (for side effects)
                         // but return a ZST (no data).
-                        _ = try self.emitValueLocal(args[0]);
+                        try self.emitValueLocal(args[0]);
                         return .{ .immediate_i64 = 0 };
                     }
 
@@ -3421,7 +3421,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     // Handle ZST element even when layout tag is .box (not .box_of_zst)
                     if (elem_size == 0) {
-                        _ = try self.emitValueLocal(args[0]);
+                        try self.emitValueLocal(args[0]);
                         return .{ .immediate_i64 = 0 };
                     }
                     const elem_layout_idx = box_info.elem_layout_idx;
@@ -8554,7 +8554,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.compiled_rc_helpers.put(cache_key, body_start);
 
             errdefer {
-                _ = self.compiled_rc_helpers.remove(cache_key);
+                self.compiled_rc_helpers.remove(cache_key);
                 self.codegen.stack_offset = saved_stack_offset;
                 self.codegen.callee_saved_used = saved_callee_saved_used;
                 self.codegen.callee_saved_available = saved_callee_saved_available;
@@ -8642,7 +8642,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 var frame_builder = CodeGen.DeferredFrameBuilder.init();
                 frame_builder.setCalleeSavedMask(self.codegen.callee_saved_used);
                 frame_builder.setStackSize(actual_locals);
-                _ = try frame_builder.emitPrologue(&self.codegen.emit);
+                try frame_builder.emitPrologue(&self.codegen.emit);
                 const prologue_size = self.codegen.currentOffset() - prologue_start;
 
                 self.codegen.emit.buf.appendSlice(self.allocator, body_bytes) catch return error.OutOfMemory;
@@ -9084,7 +9084,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         self.codegen.freeGeneral(heap_ptr);
                     }
 
-                    _ = struct_data;
                     const result_reg = try self.allocTempGeneral();
                     try self.emitLoad(.w64, result_reg, frame_ptr, heap_ptr_slot);
                     return .{ .general_reg = result_reg };
@@ -11502,7 +11501,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.early_return_ret_layout = proc.ret_layout;
 
             errdefer {
-                _ = self.proc_registry.remove(key);
+                self.proc_registry.remove(key);
                 self.codegen.stack_offset = saved_stack_offset;
                 self.codegen.callee_saved_used = saved_callee_saved_used;
                 self.codegen.callee_saved_available = saved_callee_saved_available;
@@ -11635,7 +11634,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 var frame_builder = CodeGen.DeferredFrameBuilder.init();
                 frame_builder.setCalleeSavedMask(self.codegen.callee_saved_used);
                 frame_builder.setStackSize(actual_locals);
-                _ = try frame_builder.emitPrologue(&self.codegen.emit);
+                try frame_builder.emitPrologue(&self.codegen.emit);
                 const prologue_size = self.codegen.currentOffset() - prologue_start;
 
                 // Re-append body
@@ -12763,7 +12762,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .scope_exit => {},
 
                 .incref => |inc| {
-                    _ = try self.generateIncref(.{
+                    try self.generateIncref(.{
                         .value = inc.value,
                         .layout_idx = self.localLayout(inc.value),
                         .count = inc.count,
@@ -12772,7 +12771,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
 
                 .decref => |dec| {
-                    _ = try self.generateDecref(.{
+                    try self.generateDecref(.{
                         .value = dec.value,
                         .layout_idx = self.localLayout(dec.value),
                     });
@@ -12780,7 +12779,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
 
                 .free => |free_stmt| {
-                    _ = try self.generateFree(.{
+                    try self.generateFree(.{
                         .value = free_stmt.value,
                         .layout_idx = self.localLayout(free_stmt.value),
                     });
@@ -13176,12 +13175,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// 6. Returns `void`
         pub fn generateEntrypointWrapper(
             self: *Self,
-            name: []const u8,
+            _: []const u8,
             entry_proc: lir.LIR.LirProcSpecId,
             arg_layouts: []const layout.Idx,
             ret_layout: layout.Idx,
         ) Allocator.Error!ExportedSymbol {
-            _ = name;
             const func_start = self.codegen.currentOffset();
             var prologue_size: u8 = 0;
             var stack_alloc: u32 = 0;
@@ -13233,7 +13231,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     var frame_builder = CodeGen.DeferredFrameBuilder.init();
                     frame_builder.setCalleeSavedMask(self.codegen.callee_saved_used);
                     frame_builder.setStackSize(actual_locals);
-                    _ = try frame_builder.emitPrologue(&self.codegen.emit);
+                    try frame_builder.emitPrologue(&self.codegen.emit);
                 }
                 const prologue_size_val = self.codegen.currentOffset() - prologue_start;
 

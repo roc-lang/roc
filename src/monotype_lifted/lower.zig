@@ -151,7 +151,7 @@ const Lowerer = struct {
     fn lowerProgram(self: *Lowerer) std.mem.Allocator.Error!void {
         for (self.input.program.root_defs.items) |def_id| {
             const def = self.input.program.store.getDef(def_id);
-            _ = try self.lowerDef(def);
+            try self.lowerDef(def);
         }
     }
 
@@ -164,7 +164,7 @@ const Lowerer = struct {
 
     fn emitLiftedDefs(self: *Lowerer, defs: []const ast.Def) std.mem.Allocator.Error!void {
         for (defs) |def| {
-            _ = try self.emitDef(def);
+            try self.emitDef(def);
         }
     }
 
@@ -955,11 +955,11 @@ const Lowerer = struct {
             },
             .decl => |decl| {
                 try self.collectFreeVarsExpr(decl.body, bound, free);
-                _ = try self.bindTemporarily(bound, decl.bind.symbol);
+                try self.bindTemporarily(bound, decl.bind.symbol);
             },
             .var_decl => |decl| {
                 try self.collectFreeVarsExpr(decl.body, bound, free);
-                _ = try self.bindTemporarily(bound, decl.bind.symbol);
+                try self.bindTemporarily(bound, decl.bind.symbol);
             },
             .reassign => |reassign| {
                 if (!reassign.target.isNone() and !bound.contains(reassign.target)) {
@@ -1011,8 +1011,7 @@ const Lowerer = struct {
         }
     }
 
-    fn lookupRenamedSymbol(self: *Lowerer, venv: []const Rename, symbol: Symbol) Symbol {
-        _ = self;
+    fn lookupRenamedSymbol(_: *Lowerer, venv: []const Rename, symbol: Symbol) Symbol {
         var i = venv.len;
         while (i > 0) {
             i -= 1;
@@ -1047,18 +1046,16 @@ const Lowerer = struct {
         return next;
     }
 
-    fn bindTemporarily(self: *Lowerer, bound: *std.AutoHashMap(Symbol, void), symbol: Symbol) std.mem.Allocator.Error!bool {
-        _ = self;
+    fn bindTemporarily(_: *Lowerer, bound: *std.AutoHashMap(Symbol, void), symbol: Symbol) std.mem.Allocator.Error!bool {
         if (symbol.isNone()) return false;
         if (bound.contains(symbol)) return false;
         try bound.put(symbol, {});
         return true;
     }
 
-    fn unbindTemporarily(self: *Lowerer, bound: *std.AutoHashMap(Symbol, void), symbol: Symbol, inserted: bool) void {
-        _ = self;
+    fn unbindTemporarily(_: *Lowerer, bound: *std.AutoHashMap(Symbol, void), symbol: Symbol, inserted: bool) void {
         if (inserted) {
-            _ = bound.remove(symbol);
+            bound.remove(symbol);
         }
     }
 
@@ -1209,8 +1206,7 @@ const Lowerer = struct {
         }
     }
 
-    fn sortTypedSymbols(self: *Lowerer, values: []ast.TypedSymbol) void {
-        _ = self;
+    fn sortTypedSymbols(_: *Lowerer, values: []ast.TypedSymbol) void {
         var i: usize = 0;
         while (i < values.len) : (i += 1) {
             var best = i;

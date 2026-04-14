@@ -1262,7 +1262,7 @@ fn getOrAllocTypedLocal(self: *Self, local_id: ProcLocalId, val_type: ValType) A
 }
 
 fn recordProcLocal(locals: *std.AutoHashMap(u64, void), local: ProcLocalId) Allocator.Error!void {
-    _ = try locals.getOrPut(@intFromEnum(local));
+    try locals.getOrPut(@intFromEnum(local));
 }
 
 fn recordRefOpLocals(locals: *std.AutoHashMap(u64, void), op: RefOp) Allocator.Error!void {
@@ -1405,7 +1405,7 @@ fn prebindProcLocals(self: *Self, proc: LirProcSpec) Allocator.Error!void {
         const local_id: ProcLocalId = @enumFromInt(@as(u32, @intCast(entry.key_ptr.*)));
         if (self.storage.getLocal(local_id) != null) continue;
         const vt = self.procLocalValType(local_id);
-        _ = try self.storage.allocLocal(local_id, vt);
+        try self.storage.allocLocal(local_id, vt);
     }
 }
 
@@ -4290,7 +4290,7 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
     for (args) |arg| {
         const local = self.store.getLocal(arg);
         const vt = self.resolveValType(local.layout_idx);
-        _ = self.storage.allocLocal(arg, vt) catch return error.OutOfMemory;
+        self.storage.allocLocal(arg, vt) catch return error.OutOfMemory;
     }
 
     try self.prebindProcLocals(proc);

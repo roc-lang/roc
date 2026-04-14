@@ -209,8 +209,7 @@ pub fn updateHeader(self: *SharedMemoryAllocator) void {
 }
 
 /// Deinitializes the shared memory allocator
-pub fn deinit(self: *SharedMemoryAllocator, gpa: std.mem.Allocator) void {
-    _ = gpa; // No longer needed since we don't store the name
+pub fn deinit(self: *SharedMemoryAllocator, _: std.mem.Allocator) void {
     // Update header before closing
     if (self.is_owner) {
         self.updateHeader();
@@ -282,7 +281,7 @@ fn alloc(ctx: *anyopaque, len: usize, ptr_align: std.mem.Alignment, _: usize) ?[
     }
 }
 
-fn resize(ctx: *anyopaque, buf: []u8, alignment: std.mem.Alignment, new_len: usize, _: usize) bool {
+fn resize(ctx: *anyopaque, buf: []u8, _: std.mem.Alignment, new_len: usize, _: usize) bool {
     const self: *SharedMemoryAllocator = @ptrCast(@alignCast(ctx));
     const buf_ptr = @intFromPtr(buf.ptr);
     const base = @intFromPtr(self.base_ptr);
@@ -297,7 +296,7 @@ fn resize(ctx: *anyopaque, buf: []u8, alignment: std.mem.Alignment, new_len: usi
         if (new_len <= buf.len) {
             // Shrinking - just update the offset
             const shrink_amount = buf.len - new_len;
-            _ = self.offset.fetchSub(shrink_amount, .monotonic);
+            self.offset.fetchSub(shrink_amount, .monotonic);
             return true;
         } else {
             // Growing - check if we have room
@@ -329,7 +328,7 @@ fn resize(ctx: *anyopaque, buf: []u8, alignment: std.mem.Alignment, new_len: usi
                             );
                             if (commit_result == null) {
                                 // Failed to commit - rollback the offset change
-                                _ = self.offset.fetchSub(grow_amount, .monotonic);
+                                self.offset.fetchSub(grow_amount, .monotonic);
                                 return false;
                             }
                         }
@@ -345,7 +344,6 @@ fn resize(ctx: *anyopaque, buf: []u8, alignment: std.mem.Alignment, new_len: usi
     if (new_len <= buf.len) {
         // For non-last allocations, just report success for shrinking
         // The extra space becomes wasted, but that's unavoidable
-        _ = alignment; // Suppress unused warning
         return true;
     }
 

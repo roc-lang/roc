@@ -121,7 +121,7 @@ fn runModuleWithInterpreter(
     );
     defer interp.deinit();
 
-    _ = try interp.eval(.{ .proc_id = compiled.lowered.main_proc });
+    try interp.eval(.{ .proc_id = compiled.lowered.main_proc });
     return try runtime_env.snapshot(allocator);
 }
 

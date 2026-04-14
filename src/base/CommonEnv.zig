@@ -259,14 +259,14 @@ pub fn calcLineStarts(self: *CommonEnv, gpa: std.mem.Allocator) !void {
     }
 
     // the first line starts at offset 0
-    _ = try self.line_starts.append(gpa, 0);
+    try self.line_starts.append(gpa, 0);
 
     // find all newlines in the source, save their offset
     var pos: u32 = 0;
     for (self.getSourceAll()) |c| {
         if (c == '\n') {
             // next line starts after the newline in the current position
-            _ = try self.line_starts.append(gpa, pos + 1);
+            try self.line_starts.append(gpa, pos + 1);
         }
         pos += 1;
     }
@@ -308,12 +308,12 @@ test "CommonEnv.Serialized roundtrip" {
     const hello_idx = try original.insertIdent(gpa, Ident.for_text("hello"));
     const world_idx = try original.insertIdent(gpa, Ident.for_text("world"));
 
-    _ = try original.insertString(gpa, "test string");
+    try original.insertString(gpa, "test string");
     try original.addExposedById(gpa, hello_idx);
 
-    _ = try original.line_starts.append(gpa, 0);
-    _ = try original.line_starts.append(gpa, 10);
-    _ = try original.line_starts.append(gpa, 20);
+    try original.line_starts.append(gpa, 0);
+    try original.line_starts.append(gpa, 10);
+    try original.line_starts.append(gpa, 20);
 
     // Create a CompactWriter
     var writer = CompactWriter.init();
@@ -336,7 +336,7 @@ test "CommonEnv.Serialized roundtrip" {
     const file_size = try tmp_file.getEndPos();
     const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(file_size));
     defer gpa.free(buffer);
-    _ = try tmp_file.pread(buffer, 0);
+    try tmp_file.pread(buffer, 0);
 
     // The Serialized struct is at the beginning of the buffer
     const deserialized_ptr = @as(*CommonEnv.Serialized, @ptrCast(@alignCast(buffer.ptr)));
@@ -386,7 +386,7 @@ test "CommonEnv.Serialized roundtrip with empty data" {
     const file_size = try tmp_file.getEndPos();
     const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(file_size));
     defer gpa.free(buffer);
-    _ = try tmp_file.pread(buffer, 0);
+    try tmp_file.pread(buffer, 0);
 
     // The Serialized struct is at the beginning of the buffer
     const deserialized_ptr = @as(*CommonEnv.Serialized, @ptrCast(@alignCast(buffer.ptr)));
@@ -469,7 +469,7 @@ test "CommonEnv.Serialized roundtrip with large data" {
     const file_size = try tmp_file.getEndPos();
     const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(file_size));
     defer gpa.free(buffer);
-    _ = try tmp_file.pread(buffer, 0);
+    try tmp_file.pread(buffer, 0);
 
     // The Serialized struct is at the beginning of the buffer
     const deserialized_ptr = @as(*CommonEnv.Serialized, @ptrCast(@alignCast(buffer.ptr)));
@@ -546,7 +546,7 @@ test "CommonEnv.Serialized roundtrip with special characters" {
     const file_size = try tmp_file.getEndPos();
     const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(file_size));
     defer gpa.free(buffer);
-    _ = try tmp_file.pread(buffer, 0);
+    try tmp_file.pread(buffer, 0);
 
     // The Serialized struct is at the beginning of the buffer
     const deserialized_ptr = @as(*CommonEnv.Serialized, @ptrCast(@alignCast(buffer.ptr)));

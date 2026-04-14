@@ -414,7 +414,7 @@ pub const Store = struct {
             .reassignable = false,
         };
 
-        _ = try self.attributes.append(gpa, attributes);
+        try self.attributes.append(gpa, attributes);
 
         const result = Idx{
             .attributes = attributes,
@@ -576,7 +576,7 @@ test "Ident.Store empty CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
-    _ = try original.serialize(arena_allocator, &writer);
+    try original.serialize(arena_allocator, &writer);
 
     // Write to file
     try writer.writeGather(arena_allocator, file);
@@ -645,7 +645,7 @@ test "Ident.Store basic CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
-    _ = try original.serialize(arena_allocator, &writer);
+    try original.serialize(arena_allocator, &writer);
 
     // Write to file
     try writer.writeGather(arena_allocator, file);
@@ -729,7 +729,7 @@ test "Ident.Store with genUnique CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
-    _ = try original.serialize(arena_allocator, &writer);
+    try original.serialize(arena_allocator, &writer);
 
     // Write to file
     try writer.writeGather(arena_allocator, file);
@@ -771,8 +771,8 @@ test "Ident.Store CompactWriter roundtrip" {
     var original = try Ident.Store.initCapacity(gpa, 5);
     defer original.deinit(gpa);
 
-    _ = try original.insert(gpa, Ident.for_text("test1"));
-    _ = try original.insert(gpa, Ident.for_text("test2"));
+    try original.insert(gpa, Ident.for_text("test1"));
+    try original.insert(gpa, Ident.for_text("test2"));
 
     // Create a temp file
     var tmp_dir = std.testing.tmpDir(.{});
@@ -789,7 +789,7 @@ test "Ident.Store CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
-    _ = try original.serialize(arena_allocator, &writer);
+    try original.serialize(arena_allocator, &writer);
 
     // Write to file
     try writer.writeGather(arena_allocator, file);
@@ -870,7 +870,7 @@ test "Ident.Store comprehensive CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
-    _ = try original.serialize(arena_allocator, &writer);
+    try original.serialize(arena_allocator, &writer);
 
     // Write to file
     try writer.writeGather(arena_allocator, file);

@@ -156,7 +156,7 @@ pub fn getSystemPageSize() !usize {
         .macos, .ios, .tvos, .watchos => blk: {
             var page_size_c: usize = undefined;
             var size: usize = @sizeOf(usize);
-            _ = std.c.sysctlbyname("hw.pagesize", &page_size_c, &size, null, 0);
+            std.c.sysctlbyname("hw.pagesize", &page_size_c, &size, null, 0);
             break :blk page_size_c;
         },
         .freebsd, .netbsd, .openbsd, .dragonfly => blk: {
@@ -215,7 +215,7 @@ pub fn createMapping(size: usize) SharedMemoryError!Handle {
 
             // Set the size of the shared memory
             std.posix.ftruncate(fd, size) catch {
-                _ = std.posix.close(fd);
+                std.posix.close(fd);
                 return error.FtruncateFailed;
             };
 
@@ -244,11 +244,11 @@ pub fn createMapping(size: usize) SharedMemoryError!Handle {
             }
 
             // Immediately unlink so it gets cleaned up when all references are closed
-            _ = posix.shm_unlink(shm_name_null_terminated);
+            posix.shm_unlink(shm_name_null_terminated);
 
             // Set the size of the shared memory
             std.posix.ftruncate(fd, size) catch {
-                _ = std.posix.close(fd);
+                std.posix.close(fd);
                 return error.FtruncateFailed;
             };
 
@@ -368,13 +368,13 @@ pub fn unmapMemory(ptr: *anyopaque, size: usize) void {
 
 fn unmapWindowsMemory(ptr: *anyopaque) void {
     if (comptime is_windows) {
-        _ = windows.UnmapViewOfFile(ptr);
+        windows.UnmapViewOfFile(ptr);
     }
 }
 
 fn unmapPosixMemory(ptr: *anyopaque, size: usize) void {
     if (comptime !is_windows) {
-        _ = posix.munmap(ptr, size);
+        posix.munmap(ptr, size);
     }
 }
 
@@ -395,7 +395,7 @@ fn closeWindowsHandle(handle: Handle, is_owner: bool) void {
         // On Windows, only the owner should close the handle
         // Inherited handles belong to the parent process
         if (is_owner) {
-            _ = windows.CloseHandle(handle);
+            windows.CloseHandle(handle);
         }
     }
 }
@@ -403,6 +403,6 @@ fn closeWindowsHandle(handle: Handle, is_owner: bool) void {
 fn closePosixHandle(handle: Handle) void {
     if (comptime !is_windows) {
         // POSIX always closes the fd
-        _ = posix.close(handle);
+        posix.close(handle);
     }
 }

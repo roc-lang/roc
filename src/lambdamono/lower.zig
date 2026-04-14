@@ -180,8 +180,7 @@ const Lowerer = struct {
         bind.ty = try self.publishExecutableType(bind.ty);
     }
 
-    fn finalizeExpr(self: *Lowerer, expr: *ast.Expr, expr_idx: usize) std.mem.Allocator.Error!void {
-        _ = expr_idx;
+    fn finalizeExpr(self: *Lowerer, expr: *ast.Expr, _: usize) std.mem.Allocator.Error!void {
         expr.ty = try self.publishExecutableType(expr.ty);
         switch (expr.data) {
             .let_ => |*let_expr| try self.finalizeTypedSymbol(&let_expr.bind),
@@ -394,7 +393,7 @@ const Lowerer = struct {
 
             arg_vars.clearRetainingCapacity();
             ret_vars.clearRetainingCapacity();
-            _ = try self.collectCurriedSignature(entry_fn_ty, &arg_vars, &ret_vars);
+            try self.collectCurriedSignature(entry_fn_ty, &arg_vars, &ret_vars);
             if (arg_vars.items.len != ret_vars.items.len) {
                 debugPanic("lambdamono.lower entrypoint wrapper arity mismatch");
             }
@@ -701,11 +700,10 @@ const Lowerer = struct {
     }
 
     fn requireLambdaDiscriminant(
-        self: *const Lowerer,
+        _: *const Lowerer,
         lambdas: []const solved.Type.Lambda,
         symbol: Symbol,
     ) u16 {
-        _ = self;
         for (lambdas, 0..) |lambda, i| {
             if (lambda.symbol == symbol) return @intCast(i);
         }
@@ -952,7 +950,7 @@ const Lowerer = struct {
         if (mono_cache.provisional.get(id)) |provisional| {
             if (self.types.isFullyResolved(provisional)) {
                 const canonical = try self.types.canonicalizeResolved(provisional);
-                _ = mono_cache.provisional.remove(id);
+                mono_cache.provisional.remove(id);
                 try mono_cache.resolved.put(id, canonical);
                 return canonical;
             }
@@ -1049,7 +1047,7 @@ const Lowerer = struct {
         };
 
         self.types.setType(placeholder, lowered);
-        _ = mono_cache.active.remove(id);
+        mono_cache.active.remove(id);
         if (self.types.isFullyResolved(placeholder)) {
             const canonical = try self.types.canonicalizeResolved(placeholder);
             try mono_cache.resolved.put(id, canonical);
@@ -2956,14 +2954,13 @@ const Lowerer = struct {
 
     fn makeErasedPackedFnExpr(
         self: *Lowerer,
-        inst: *InstScope,
+        _: *InstScope,
         mono_cache: *lower_type.MonoCache,
         requested_ty: TypeVarId,
         symbol: Symbol,
         capture_expr: ?ast.ExprId,
         forced_capture_ty: ?type_mod.TypeId,
     ) std.mem.Allocator.Error!ast.ExprId {
-        _ = inst;
         var capture_expr_opt = capture_expr;
         var capture_ty: ?type_mod.TypeId = forced_capture_ty orelse
             if (capture_expr) |capture| self.output.getExpr(capture).ty else null;
@@ -3461,10 +3458,9 @@ const Lowerer = struct {
     }
 
     fn commonErasedCaptureTypeFromFrozen(
-        self: *const Lowerer,
+        _: *const Lowerer,
         members: []const FrozenLambdaMemberFact,
     ) ?type_mod.TypeId {
-        _ = self;
         var common: ?type_mod.TypeId = null;
         for (members) |member| {
             const next = member.capture_ty;
@@ -3583,11 +3579,10 @@ const Lowerer = struct {
     }
 
     fn lookupTypedCapture(
-        self: *Lowerer,
+        _: *Lowerer,
         captures: []const solved.Ast.TypedSymbol,
         symbol: Symbol,
     ) ?solved.Ast.TypedSymbol {
-        _ = self;
         for (captures) |capture| {
             if (capture.symbol == symbol) return capture;
         }
@@ -4625,8 +4620,7 @@ const Lowerer = struct {
         return try self.input.types.addCaptures(out.items);
     }
 
-    fn lookupEnvEntry(self: *const Lowerer, venv: []const EnvEntry, symbol: Symbol) ?EnvEntry {
-        _ = self;
+    fn lookupEnvEntry(_: *const Lowerer, venv: []const EnvEntry, symbol: Symbol) ?EnvEntry {
         for (venv) |entry| {
             if (entry.symbol == symbol) return entry;
         }

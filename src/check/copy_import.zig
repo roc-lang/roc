@@ -283,7 +283,7 @@ fn copyRecordFields(
 
     for (source_fields.items(.name), source_fields.items(.var_)) |name, var_| {
         const translated_name = try copyImportedIdent(source_idents, dest_idents, name, allocator);
-        _ = try fresh_fields.append(allocator, .{
+        try fresh_fields.append(allocator, .{
             .name = translated_name,
             .var_ = try copyVar(source_store, dest_store, var_, var_mapping, source_idents, dest_idents, allocator),
         });
@@ -345,7 +345,7 @@ fn copyTagUnion(
         const dest_args_range = try dest_store.appendVars(dest_args.items);
         const translated_name = try copyImportedIdent(source_idents, dest_idents, name, allocator);
 
-        _ = try fresh_tags.append(allocator, .{
+        try fresh_tags.append(allocator, .{
             .name = translated_name,
             .args = dest_args_range,
         });

@@ -179,22 +179,22 @@ pub const Store = struct {
 
         // Pre-populate primitive type layouts in order matching the Idx enum.
         // Changing the order of these can break things!
-        _ = try layouts.append(allocator, Layout.boolType());
-        _ = try layouts.append(allocator, Layout.str());
-        _ = try layouts.append(allocator, Layout.int(.u8));
-        _ = try layouts.append(allocator, Layout.int(.i8));
-        _ = try layouts.append(allocator, Layout.int(.u16));
-        _ = try layouts.append(allocator, Layout.int(.i16));
-        _ = try layouts.append(allocator, Layout.int(.u32));
-        _ = try layouts.append(allocator, Layout.int(.i32));
-        _ = try layouts.append(allocator, Layout.int(.u64));
-        _ = try layouts.append(allocator, Layout.int(.i64));
-        _ = try layouts.append(allocator, Layout.int(.u128));
-        _ = try layouts.append(allocator, Layout.int(.i128));
-        _ = try layouts.append(allocator, Layout.frac(.f32));
-        _ = try layouts.append(allocator, Layout.frac(.f64));
-        _ = try layouts.append(allocator, Layout.frac(.dec));
-        _ = try layouts.append(allocator, Layout.zst());
+        try layouts.append(allocator, Layout.boolType());
+        try layouts.append(allocator, Layout.str());
+        try layouts.append(allocator, Layout.int(.u8));
+        try layouts.append(allocator, Layout.int(.i8));
+        try layouts.append(allocator, Layout.int(.u16));
+        try layouts.append(allocator, Layout.int(.i16));
+        try layouts.append(allocator, Layout.int(.u32));
+        try layouts.append(allocator, Layout.int(.i32));
+        try layouts.append(allocator, Layout.int(.u64));
+        try layouts.append(allocator, Layout.int(.i64));
+        try layouts.append(allocator, Layout.int(.u128));
+        try layouts.append(allocator, Layout.int(.i128));
+        try layouts.append(allocator, Layout.frac(.f32));
+        try layouts.append(allocator, Layout.frac(.f64));
+        try layouts.append(allocator, Layout.frac(.dec));
+        try layouts.append(allocator, Layout.zst());
 
         std.debug.assert(layouts.len() == num_primitives);
 
@@ -410,7 +410,7 @@ pub const Store = struct {
         // Store as StructFields (index = original position before sorting)
         const fields_start = self.struct_fields.items.len;
         for (temp_entries.items) |entry| {
-            _ = try self.struct_fields.append(self.allocator, .{
+            try self.struct_fields.append(self.allocator, .{
                 .index = entry.index,
                 .layout = entry.layout,
                 .name = entry.name,
@@ -431,7 +431,7 @@ pub const Store = struct {
         const total_size = @as(u32, @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(max_alignment)))));
         const fields_range = collections.NonEmptyRange{ .start = @intCast(fields_start), .count = @intCast(temp_entries.items.len) };
         const struct_idx = StructIdx{ .int_idx = @intCast(self.struct_data.len()) };
-        _ = try self.struct_data.append(self.allocator, .{
+        try self.struct_data.append(self.allocator, .{
             .size = total_size,
             .fields = fields_range,
         });
@@ -480,7 +480,7 @@ pub const Store = struct {
         // Append fields
         const fields_start = self.struct_fields.items.len;
         for (temp_fields.items) |sorted_field| {
-            _ = try self.struct_fields.append(self.allocator, sorted_field);
+            try self.struct_fields.append(self.allocator, sorted_field);
         }
 
         // Compute size and alignment
@@ -498,7 +498,7 @@ pub const Store = struct {
         const total_size = @as(u32, @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(max_alignment)))));
         const fields_range = collections.NonEmptyRange{ .start = @intCast(fields_start), .count = @intCast(temp_fields.items.len) };
         const struct_idx = StructIdx{ .int_idx = @intCast(self.struct_data.len()) };
-        _ = try self.struct_data.append(self.allocator, StructData{ .size = total_size, .fields = fields_range });
+        try self.struct_data.append(self.allocator, StructData{ .size = total_size, .fields = fields_range });
         return try self.insertLayout(Layout.struct_(std.mem.Alignment.fromByteUnits(max_alignment), struct_idx));
     }
 
@@ -520,7 +520,7 @@ pub const Store = struct {
             if (variant_size > max_payload_size) max_payload_size = variant_size;
             max_payload_alignment = max_payload_alignment.max(variant_alignment);
 
-            _ = try self.tag_union_variants.append(self.allocator, .{
+            try self.tag_union_variants.append(self.allocator, .{
                 .payload_layout = variant_layout_idx,
             });
         }
@@ -541,7 +541,7 @@ pub const Store = struct {
         );
 
         const tag_union_data_idx: u32 = @intCast(self.tag_union_data.len());
-        _ = try self.tag_union_data.append(self.allocator, .{
+        try self.tag_union_data.append(self.allocator, .{
             .size = total_size,
             .discriminant_offset = discriminant_offset,
             .discriminant_size = discriminant_size,
@@ -577,12 +577,12 @@ pub const Store = struct {
 
         const fields_start = self.struct_fields.items.len;
         for (temp_fields.items) |field| {
-            _ = try self.struct_fields.append(self.allocator, field);
+            try self.struct_fields.append(self.allocator, field);
         }
 
         const fields_range = collections.NonEmptyRange{ .start = @intCast(fields_start), .count = @intCast(temp_fields.items.len) };
         const struct_idx = StructIdx{ .int_idx = @intCast(self.struct_data.len()) };
-        _ = try self.struct_data.append(self.allocator, StructData{ .size = total_size, .fields = fields_range });
+        try self.struct_data.append(self.allocator, StructData{ .size = total_size, .fields = fields_range });
         const capture_layout = Layout.struct_(std.mem.Alignment.fromByteUnits(max_alignment), struct_idx);
         return try self.insertLayout(capture_layout);
     }
@@ -615,10 +615,10 @@ pub const Store = struct {
 
         // Create a struct layout with a single dummy field (StructData requires NonEmptyRange)
         const fields_start = self.struct_fields.items.len;
-        _ = try self.struct_fields.append(self.allocator, .{ .index = 0, .layout = .u64 });
+        try self.struct_fields.append(self.allocator, .{ .index = 0, .layout = .u64 });
         const fields_range = collections.NonEmptyRange{ .start = @intCast(fields_start), .count = 1 };
         const struct_idx = StructIdx{ .int_idx = @intCast(self.struct_data.len()) };
-        _ = try self.struct_data.append(self.allocator, StructData{ .size = total_size, .fields = fields_range });
+        try self.struct_data.append(self.allocator, StructData{ .size = total_size, .fields = fields_range });
         const union_layout = Layout.struct_(std.mem.Alignment.fromByteUnits(max_alignment), struct_idx);
         return try self.insertLayout(union_layout);
     }
@@ -746,7 +746,7 @@ pub const Store = struct {
         for (0..variants.len) |i| {
             const variant = variants.get(i);
             const payload_idx = if (i == variant_index) new_payload_layout_idx else variant.payload_layout;
-            _ = try self.tag_union_variants.append(self.allocator, .{
+            try self.tag_union_variants.append(self.allocator, .{
                 .payload_layout = payload_idx,
             });
 
@@ -767,7 +767,7 @@ pub const Store = struct {
 
         // Store new TagUnionData
         const tag_union_data_idx: u32 = @intCast(self.tag_union_data.len());
-        _ = try self.tag_union_data.append(self.allocator, .{
+        try self.tag_union_data.append(self.allocator, .{
             .size = total_size,
             .discriminant_offset = discriminant_offset,
             .discriminant_size = tu_data.discriminant_size,
@@ -958,7 +958,7 @@ pub const Store = struct {
 
         // Create new empty struct layout
         const struct_idx = StructIdx{ .int_idx = @intCast(self.struct_data.len()) };
-        _ = try self.struct_data.append(self.allocator, .{
+        try self.struct_data.append(self.allocator, .{
             .size = 0,
             .fields = collections.NonEmptyRange{ .start = 0, .count = 0 },
         });
@@ -1362,7 +1362,7 @@ pub const Store = struct {
 
         // Now add them to the struct_fields store in the sorted order
         for (temp_entries.items) |entry| {
-            _ = try self.struct_fields.append(self.allocator, .{
+            try self.struct_fields.append(self.allocator, .{
                 .index = entry.index,
                 .layout = entry.layout_idx,
                 .name = entry.name,
@@ -1385,7 +1385,7 @@ pub const Store = struct {
         const fields_range = collections.NonEmptyRange{ .start = @intCast(fields_start), .count = @intCast(num_resolved_fields) };
 
         const struct_idx = StructIdx{ .int_idx = @intCast(self.struct_data.len()) };
-        _ = try self.struct_data.append(self.allocator, StructData{
+        try self.struct_data.append(self.allocator, StructData{
             .size = total_size,
             .fields = fields_range,
         });
@@ -1445,7 +1445,7 @@ pub const Store = struct {
 
         // Now add them to the struct_fields store in the sorted order
         for (temp_fields.items) |sorted_field| {
-            _ = try self.struct_fields.append(self.allocator, sorted_field);
+            try self.struct_fields.append(self.allocator, sorted_field);
         }
 
         // Calculate max alignment and total size of all fields
@@ -1464,7 +1464,7 @@ pub const Store = struct {
         const fields_range = collections.NonEmptyRange{ .start = @intCast(fields_start), .count = @intCast(num_resolved_fields) };
 
         const struct_idx = StructIdx{ .int_idx = @intCast(self.struct_data.len()) };
-        _ = try self.struct_data.append(self.allocator, StructData{
+        try self.struct_data.append(self.allocator, StructData{
             .size = total_size,
             .fields = fields_range,
         });
@@ -1523,7 +1523,7 @@ pub const Store = struct {
             max_payload_alignment = max_payload_alignment.max(variant_alignment);
 
             // Store variant layout for runtime refcounting
-            _ = try self.tag_union_variants.append(self.allocator, .{
+            try self.tag_union_variants.append(self.allocator, .{
                 .payload_layout = variant_layout_idx,
             });
         }
@@ -1544,7 +1544,7 @@ pub const Store = struct {
 
         // Store TagUnionData
         const tag_union_data_idx: u32 = @intCast(self.tag_union_data.len());
-        _ = try self.tag_union_data.append(self.allocator, .{
+        try self.tag_union_data.append(self.allocator, .{
             .size = total_size,
             .discriminant_offset = discriminant_offset,
             .discriminant_size = discriminant_size,
@@ -2338,12 +2338,12 @@ pub const Store = struct {
                                 switch (pending_item.container) {
                                     .list => {
                                         // List({}) needs special runtime representation
-                                        _ = self.work.pending_containers.pop();
+                                        self.work.pending_containers.pop();
                                         break :blk Layout.listOfZst();
                                     },
                                     .box => {
                                         // Box({}) needs special runtime representation
-                                        _ = self.work.pending_containers.pop();
+                                        self.work.pending_containers.pop();
                                         break :blk Layout.boxOfZst();
                                     },
                                     else => {
@@ -2380,7 +2380,7 @@ pub const Store = struct {
                                 // the recursive call. Otherwise, if the recursive call resolves to
                                 // the same flex, it will see it in in_progress_vars and incorrectly
                                 // detect a cycle.
-                                _ = self.work.in_progress_vars.swapRemove(.{ .module_idx = self.current_module_idx, .var_ = current.var_ });
+                                self.work.in_progress_vars.swapRemove(.{ .module_idx = self.current_module_idx, .var_ = current.var_ });
                                 // Make a recursive call to compute the layout in the caller's module.
                                 // This avoids switching current_module_idx which would mess up pending
                                 // work items from the current module.
@@ -2448,7 +2448,7 @@ pub const Store = struct {
                                 // the recursive call. Otherwise, if the recursive call resolves to
                                 // the same rigid, it will see it in in_progress_vars and incorrectly
                                 // detect a cycle.
-                                _ = self.work.in_progress_vars.swapRemove(.{ .module_idx = self.current_module_idx, .var_ = current.var_ });
+                                self.work.in_progress_vars.swapRemove(.{ .module_idx = self.current_module_idx, .var_ = current.var_ });
                                 // Make a recursive call to compute the layout in the caller's module.
                                 // This avoids switching current_module_idx which would mess up pending
                                 // work items from the current module.
@@ -2523,7 +2523,7 @@ pub const Store = struct {
                     try self.layouts_by_module_var.put(layout_cache_key, layout_idx);
                 }
                 // Remove from in_progress now that it's done (regardless of caching)
-                _ = self.work.in_progress_vars.swapRemove(.{ .module_idx = self.current_module_idx, .var_ = current.var_ });
+                self.work.in_progress_vars.swapRemove(.{ .module_idx = self.current_module_idx, .var_ = current.var_ });
 
                 // Check if any in-progress nominals need their reserved layouts updated.
                 // When a nominal type's backing type finishes, update the nominal's placeholder.
@@ -2584,7 +2584,7 @@ pub const Store = struct {
 
                 // Remove the nominals we updated
                 for (nominals_to_remove.items) |key| {
-                    _ = self.work.in_progress_nominals.swapRemove(key);
+                    self.work.in_progress_nominals.swapRemove(key);
                 }
             } // end if (!skip_layout_computation)
 
@@ -2741,7 +2741,7 @@ pub const Store = struct {
 
                     // Remove from in_progress_vars now that it's cached (no longer "in progress").
                     // Use container_module_idx - this is the key that was added when processing started.
-                    _ = self.work.in_progress_vars.swapRemove(.{ .module_idx = container_module_idx, .var_ = container_var });
+                    self.work.in_progress_vars.swapRemove(.{ .module_idx = container_module_idx, .var_ = container_var });
 
                     // Check if any in-progress nominals need their reserved layouts updated.
                     // This handles the case where a nominal's backing type is a container (e.g., tag union).
@@ -2814,7 +2814,7 @@ pub const Store = struct {
 
                     // Remove the nominals we updated
                     for (nominals_to_remove_container.items) |key| {
-                        _ = self.work.in_progress_nominals.swapRemove(key);
+                        self.work.in_progress_nominals.swapRemove(key);
                     }
                 }
             }

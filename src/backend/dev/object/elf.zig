@@ -513,7 +513,7 @@ test "create minimal elf object" {
     try writer.setCode(&[_]u8{0xC3});
 
     // Add a symbol for the function
-    _ = try writer.addSymbol(.{
+    try writer.addSymbol(.{
         .name = "test_func",
         .section = .text,
         .offset = 0,

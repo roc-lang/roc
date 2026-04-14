@@ -480,7 +480,7 @@ pub fn evalLoweredNumericI128(allocator: std.mem.Allocator, lowered: *const Lowe
 }
 
 pub fn runExpectI64(src: []const u8, expected_int: i128, should_trace: TraceMode) !void {
-    _ = should_trace;
+    std.mem.doNotOptimizeAway(should_trace);
     var eval_state = try evalExprToValue(interpreter_allocator, src);
     defer {
         eval_state.interp.dropValue(eval_state.value, eval_state.ret_layout);
@@ -493,7 +493,7 @@ pub fn runExpectI64(src: []const u8, expected_int: i128, should_trace: TraceMode
 }
 
 pub fn runExpectSuccess(src: []const u8, should_trace: TraceMode) !void {
-    _ = should_trace;
+    std.mem.doNotOptimizeAway(should_trace);
     var eval_state = try evalExprToValue(interpreter_allocator, src);
     defer {
         eval_state.interp.dropValue(eval_state.value, eval_state.ret_layout);
@@ -508,7 +508,7 @@ pub fn runExpectIntDec(src: []const u8, expected_int: i128, should_trace: TraceM
 }
 
 pub fn runExpectDec(src: []const u8, expected_dec: i128, should_trace: TraceMode) !void {
-    _ = should_trace;
+    std.mem.doNotOptimizeAway(should_trace);
     var eval_state = try evalExprToValue(interpreter_allocator, src);
     defer {
         eval_state.interp.dropValue(eval_state.value, eval_state.ret_layout);
@@ -521,7 +521,7 @@ pub fn runExpectDec(src: []const u8, expected_dec: i128, should_trace: TraceMode
 }
 
 pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: TraceMode) !void {
-    _ = should_trace;
+    std.mem.doNotOptimizeAway(should_trace);
     var eval_state = try evalExprToValue(interpreter_allocator, src);
     defer {
         eval_state.interp.dropValue(eval_state.value, eval_state.ret_layout);
@@ -540,7 +540,7 @@ pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: TraceMo
 }
 
 pub fn runExpectError(src: []const u8, expected_error: anyerror, should_trace: TraceMode) !void {
-    _ = should_trace;
+    std.mem.doNotOptimizeAway(should_trace);
     var compiled = try compileProgram(interpreter_allocator, .expr, src, &.{});
     defer compiled.deinit(interpreter_allocator);
 
@@ -555,7 +555,7 @@ pub fn runExpectError(src: []const u8, expected_error: anyerror, should_trace: T
     );
     defer interp.deinit();
 
-    _ = interp.eval(.{ .proc_id = compiled.lowered.main_proc }) catch |err| {
+    interp.eval(.{ .proc_id = compiled.lowered.main_proc }) catch |err| {
         try std.testing.expectEqual(expected_error, err);
         return;
     };
@@ -564,7 +564,7 @@ pub fn runExpectError(src: []const u8, expected_error: anyerror, should_trace: T
 }
 
 pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: TraceMode) !void {
-    _ = should_trace;
+    std.mem.doNotOptimizeAway(should_trace);
     var eval_state = try evalExprToValue(interpreter_allocator, src);
     defer {
         eval_state.interp.dropValue(eval_state.value, eval_state.ret_layout);
@@ -592,7 +592,7 @@ pub fn runDevOnlyExpectStr(src: []const u8, expected_str: []const u8) !void {
 }
 
 pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElement, should_trace: TraceMode) !void {
-    _ = should_trace;
+    std.mem.doNotOptimizeAway(should_trace);
     var eval_state = try evalExprToValue(interpreter_allocator, src);
     defer {
         eval_state.interp.dropValue(eval_state.value, eval_state.ret_layout);
@@ -627,7 +627,7 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
 }
 
 pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, should_trace: TraceMode) !void {
-    _ = should_trace;
+    std.mem.doNotOptimizeAway(should_trace);
     var eval_state = try evalExprToValue(interpreter_allocator, src);
     defer {
         eval_state.interp.dropValue(eval_state.value, eval_state.ret_layout);
@@ -664,7 +664,7 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
 }
 
 pub fn runExpectListI64(src: []const u8, expected_elements: []const i64, should_trace: TraceMode) !void {
-    _ = should_trace;
+    std.mem.doNotOptimizeAway(should_trace);
     var eval_state = try evalExprToValue(interpreter_allocator, src);
     defer {
         eval_state.interp.dropValue(eval_state.value, eval_state.ret_layout);
@@ -698,7 +698,7 @@ pub fn runExpectEmptyListI64(src: []const u8, should_trace: TraceMode) !void {
 }
 
 pub fn runExpectListZst(src: []const u8, expected_element_count: usize, should_trace: TraceMode) !void {
-    _ = should_trace;
+    std.mem.doNotOptimizeAway(should_trace);
     var eval_state = try evalExprToValue(interpreter_allocator, src);
     defer {
         eval_state.interp.dropValue(eval_state.value, eval_state.ret_layout);
@@ -754,7 +754,7 @@ pub fn runExpectTypeMismatchAndCrash(src: []const u8) !void {
     );
     defer interp.deinit();
 
-    _ = interp.eval(.{ .proc_id = compiled.lowered.main_proc }) catch |err| {
+    interp.eval(.{ .proc_id = compiled.lowered.main_proc }) catch |err| {
         switch (err) {
             error.Crash, error.RuntimeError => return,
             else => return error.UnexpectedError,

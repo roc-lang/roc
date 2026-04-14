@@ -319,23 +319,23 @@ pub const Scratch = struct {
     }
 
     fn appendSeen(self: *Self, var_: Var) std.mem.Allocator.Error!void {
-        _ = try self.seen.append(self.gpa, var_);
+        try self.seen.append(self.gpa, var_);
     }
 
     fn popSeen(self: *Self) void {
-        _ = self.seen.items.pop();
+        self.seen.items.pop();
     }
 
     fn appendVisited(self: *Self, desc_idx: DescStoreIdx) std.mem.Allocator.Error!void {
-        _ = try self.visited.append(self.gpa, desc_idx);
+        try self.visited.append(self.gpa, desc_idx);
     }
 
     fn appendErrChain(self: *Self, var_: Var) std.mem.Allocator.Error!void {
-        _ = try self.err_chain.append(self.gpa, var_);
+        try self.err_chain.append(self.gpa, var_);
     }
 
     fn appendErrChainNominalVar(self: *Self, var_: Var) std.mem.Allocator.Error!void {
-        _ = try self.err_chain_nominal_vars.append(self.gpa, var_);
+        try self.err_chain_nominal_vars.append(self.gpa, var_);
     }
 
     fn errChainSlice(self: *const Scratch) []const Var {

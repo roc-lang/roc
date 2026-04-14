@@ -65,14 +65,14 @@ pub fn findLineStarts(gpa: Allocator, source: []const u8) !collections.SafeList(
     }
 
     // the first line starts at offset 0
-    _ = try line_starts.append(gpa, 0);
+    try line_starts.append(gpa, 0);
 
     // find all newlines in the source, save their offset
     var pos: u32 = 0;
     for (source) |c| {
         if (c == '\n') {
             // next line starts after the newline in the current position
-            _ = try line_starts.append(gpa, pos + 1);
+            try line_starts.append(gpa, pos + 1);
         }
         pos += 1;
     }
@@ -119,10 +119,10 @@ test "lineIdx" {
     defer line_starts.deinit(gpa);
 
     // Simple test case with lines at positions 0, 10, 20
-    _ = try line_starts.append(gpa, 0);
-    _ = try line_starts.append(gpa, 10);
-    _ = try line_starts.append(gpa, 20);
-    _ = try line_starts.append(gpa, 30);
+    try line_starts.append(gpa, 0);
+    try line_starts.append(gpa, 10);
+    try line_starts.append(gpa, 20);
+    try line_starts.append(gpa, 30);
 
     try std.testing.expectEqual(0, RegionInfo.lineIdx(line_starts.items.items, 0));
     try std.testing.expectEqual(0, RegionInfo.lineIdx(line_starts.items.items, 5));
@@ -142,9 +142,9 @@ test "columnIdx" {
     var line_starts = try SafeList(u32).initCapacity(gpa, 256);
     defer line_starts.deinit(gpa);
 
-    _ = try line_starts.append(gpa, 0);
-    _ = try line_starts.append(gpa, 10);
-    _ = try line_starts.append(gpa, 20);
+    try line_starts.append(gpa, 0);
+    try line_starts.append(gpa, 10);
+    try line_starts.append(gpa, 20);
 
     try std.testing.expectEqual(0, RegionInfo.columnIdx(line_starts.items.items, 0, 0));
     try std.testing.expectEqual(5, RegionInfo.columnIdx(line_starts.items.items, 0, 5));
@@ -161,9 +161,9 @@ test "getLineText" {
 
     const source = "line0\nline1\nline2";
 
-    _ = try line_starts.append(gpa, 0);
-    _ = try line_starts.append(gpa, 6);
-    _ = try line_starts.append(gpa, 12);
+    try line_starts.append(gpa, 0);
+    try line_starts.append(gpa, 6);
+    try line_starts.append(gpa, 12);
 
     try std.testing.expectEqualStrings("line0", RegionInfo.getLineText(source, line_starts.items.items, 0, 0));
     try std.testing.expectEqualStrings("line1", RegionInfo.getLineText(source, line_starts.items.items, 1, 1));
@@ -178,9 +178,9 @@ test "get" {
 
     const source = "line0\nline1\nline2";
 
-    _ = try line_starts.append(gpa, 0);
-    _ = try line_starts.append(gpa, 6);
-    _ = try line_starts.append(gpa, 12);
+    try line_starts.append(gpa, 0);
+    try line_starts.append(gpa, 6);
+    try line_starts.append(gpa, 12);
 
     const info1 = try RegionInfo.position(source, line_starts.items.items, 2, 4);
     try std.testing.expectEqual(0, info1.start_line_idx);

@@ -131,8 +131,8 @@ test "parser tests" {
 
 test {
     // Import test files to run their tests
-    _ = @import("HTML.zig");
-    _ = @import("test/ast_node_store_test.zig");
+    @import("HTML.zig");
+    @import("test/ast_node_store_test.zig");
 }
 
 test "parse error triggers errdefer cleanup" {

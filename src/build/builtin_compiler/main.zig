@@ -82,7 +82,7 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) !std.ArrayList(CIR.Def.Id
         // Fill the gap with fresh type variables
         var i: u64 = current_types;
         while (i < current_nodes) : (i += 1) {
-            _ = env.types.fresh() catch unreachable;
+            env.types.fresh() catch unreachable;
         }
     }
 

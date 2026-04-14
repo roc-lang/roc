@@ -358,7 +358,7 @@ test "open ext not allowed in type decl" {
     var test_env = try TestEnv.init(source);
     defer test_env.deinit();
 
-    _ = try test_env.canonicalizeExpr();
+    try test_env.canonicalizeExpr();
 
     const diagnostics = try test_env.getDiagnostics();
     defer testing.allocator.free(diagnostics);
