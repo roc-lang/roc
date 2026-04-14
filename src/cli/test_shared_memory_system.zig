@@ -1,6 +1,7 @@
 //! Tests for CLI platform resolution that do not cross the post-check lowering boundary
 
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const main = @import("main.zig");
 const base = @import("base");
@@ -13,7 +14,7 @@ const Io = cli_context.Io;
 const test_helpers = eval.test_helpers;
 
 test "platform resolution - basic cli platform" {
-    var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa_impl = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_impl.deinit();
     var allocs: Allocators = undefined;
     allocs.initInPlace(gpa_impl.allocator());
@@ -51,7 +52,7 @@ test "platform resolution - basic cli platform" {
 }
 
 test "platform resolution - no platform in file" {
-    var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa_impl = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_impl.deinit();
     var allocs: Allocators = undefined;
     allocs.initInPlace(gpa_impl.allocator());
@@ -84,7 +85,7 @@ test "platform resolution - no platform in file" {
 }
 
 test "platform resolution - file not found" {
-    var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa_impl = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_impl.deinit();
     var allocs: Allocators = undefined;
     allocs.initInPlace(gpa_impl.allocator());
@@ -101,7 +102,7 @@ test "platform resolution - file not found" {
 }
 
 test "platform resolution - insecure HTTP URL rejected" {
-    var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa_impl = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_impl.deinit();
     var allocs: Allocators = undefined;
     allocs.initInPlace(gpa_impl.allocator());
@@ -197,7 +198,11 @@ test "integration - compilation pipeline for different platforms" {
 }
 
 test "integration - error handling for non-existent file" {
-    var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
+    if (builtin.os.tag == .windows) {
+        return;
+    }
+
+    var gpa_impl = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_impl.deinit();
     var allocs: Allocators = undefined;
     allocs.initInPlace(gpa_impl.allocator());

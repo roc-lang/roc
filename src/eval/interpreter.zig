@@ -1443,8 +1443,7 @@ pub const Interpreter = struct {
         frame: *Frame,
         start_stmt: CFStmtId,
     ) Error!ExecOutcome {
-        var current = start_stmt;
-        while (true) {
+        var current = start_stmt;        while (true) {
             const stmt = self.store.getCFStmt(current);
             switch (stmt) {
                 .assign_ref => |assign| {

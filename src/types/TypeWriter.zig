@@ -592,7 +592,7 @@ fn writeRecord(self: *TypeWriter, writer: *ByteWrite, record: Record, root_var: 
                     break :blk flex_ext_occurrences > 1;
                 }
             },
-            .rigid => |_| blk: {
+            .rigid => blk: {
                 break :blk true;
             },
             .unbound => |unbound_var| blk: {

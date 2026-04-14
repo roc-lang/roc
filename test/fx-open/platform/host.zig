@@ -5,9 +5,9 @@ const build_options = @import("build_options");
 
 const trace_refcount = build_options.trace_refcount;
 
-/// Host environment - contains GeneralPurposeAllocator for leak detection
+/// Host environment - contains DebugAllocator for leak detection
 const HostEnv = struct {
-    gpa: std.heap.GeneralPurposeAllocator(.{}),
+    gpa: std.heap.DebugAllocator(.{}),
 };
 
 /// Roc allocation function with size-tracking metadata
@@ -270,7 +270,7 @@ fn buildArgsList(ops: *builtins.host_abi.RocOps, argc: c_int, argv: [*][*:0]u8) 
 /// Platform host entrypoint
 fn platform_main(argc: c_int, argv: [*][*:0]u8) !c_int {
     var host_env = HostEnv{
-        .gpa = std.heap.GeneralPurposeAllocator(.{}){},
+        .gpa = std.heap.DebugAllocator(.{}){},
     };
     defer {
         const leaked = host_env.gpa.deinit();

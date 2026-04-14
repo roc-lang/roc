@@ -807,7 +807,7 @@ pub const Expr = union(enum) {
 
                 try tree.endNode(begin, attrs);
             },
-            .e_empty_list => |_| {
+            .e_empty_list => {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("e-empty_list");
                 const region = ir.store.getExprRegion(expr_idx);
@@ -973,7 +973,7 @@ pub const Expr = union(enum) {
 
                 try tree.endNode(begin, attrs);
             },
-            .e_empty_record => |_| {
+            .e_empty_record => {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("e-empty_record");
                 const region = ir.store.getExprRegion(expr_idx);
@@ -1340,7 +1340,7 @@ pub const Expr = union(enum) {
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
-            .e_ellipsis => |_| {
+            .e_ellipsis => {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("e-not-implemented");
                 const region = ir.store.getExprRegion(expr_idx);
@@ -1348,7 +1348,7 @@ pub const Expr = union(enum) {
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
-            .e_anno_only => |_| {
+            .e_anno_only => {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("e-anno-only");
                 const region = ir.store.getExprRegion(expr_idx);

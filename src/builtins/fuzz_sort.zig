@@ -23,7 +23,7 @@ var allocator: std.mem.Allocator = undefined;
 /// TODO: Document fuzz_main.
 pub fn fuzz_main() !void {
     // Setup an allocator that will detect leaks/use-after-free/etc
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     // this will check for leaks and crash the program if it finds any
     defer std.debug.assert(gpa.deinit() == .ok);
     allocator = gpa.allocator();

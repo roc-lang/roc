@@ -1329,7 +1329,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
-        .if_condition_not_canonicalized => |_| blk: {
+        .if_condition_not_canonicalized => blk: {
             var report = Report.init(allocator, "INVALID IF CONDITION", .runtime_error);
             try report.document.addReflowingText("The condition in this ");
             try report.document.addKeyword("if");
@@ -1345,7 +1345,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText(").");
             break :blk report;
         },
-        .if_then_not_canonicalized => |_| blk: {
+        .if_then_not_canonicalized => blk: {
             var report = Report.init(allocator, "INVALID IF BRANCH", .runtime_error);
             try report.document.addReflowingText("The branch in this ");
             try report.document.addKeyword("if");
@@ -1355,7 +1355,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText("The branch must contain a valid expression. Check for syntax errors or missing values.");
             break :blk report;
         },
-        .if_else_not_canonicalized => |_| blk: {
+        .if_else_not_canonicalized => blk: {
             var report = Report.init(allocator, "INVALID IF BRANCH", .runtime_error);
             try report.document.addReflowingText("The ");
             try report.document.addKeyword("else");
@@ -1370,7 +1370,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addLineBreak();
             break :blk report;
         },
-        .if_expr_without_else => |_| blk: {
+        .if_expr_without_else => blk: {
             var report = Report.init(allocator, "IF EXPRESSION WITHOUT ELSE", .runtime_error);
             try report.document.addReflowingText("This ");
             try report.document.addKeyword("if");
@@ -1397,12 +1397,12 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText(" as a standalone statement.");
             break :blk report;
         },
-        .pattern_not_canonicalized => |_| blk: {
+        .pattern_not_canonicalized => blk: {
             var report = Report.init(allocator, "INVALID PATTERN", .runtime_error);
             try report.document.addReflowingText("This pattern contains invalid syntax or uses unsupported features.");
             break :blk report;
         },
-        .pattern_arg_invalid => |_| blk: {
+        .pattern_arg_invalid => blk: {
             var report = Report.init(allocator, "INVALID PATTERN ARGUMENT", .runtime_error);
             try report.document.addReflowingText("Pattern arguments must be valid patterns like identifiers, literals, or destructuring patterns.");
             break :blk report;

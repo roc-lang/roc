@@ -44,8 +44,7 @@ pub const MonoLlvmCodeGen = struct {
 
     pub fn generateCode(
         _: *MonoLlvmCodeGen,
-        _: lir.LIR.LirProcSpecId,
-        _: layout.Idx,
+        _: lir.LIR.LirProcSpecId,        _: layout.Idx,
     ) Error!GenerateResult {
         std.debug.panic(
             "todo implement LLVM codegen for statement-only LIR",
