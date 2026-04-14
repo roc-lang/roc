@@ -44,7 +44,7 @@ pub const DebugFlags = struct {
 /// Runs BuildEnv-backed syntax/type checks and converts reports to LSP diagnostics.
 pub const SyntaxChecker = struct {
     allocator: std.mem.Allocator,
-    mutex: std.Thread.Mutex = .{},
+    mutex: std.Io.Mutex = .{},
     /// Current build environment owned by the live check path.
     build_env: ?*BuildEnvHandle = null,
     /// Previous successful BuildEnv kept for module lookups (e.g., semantic tokens).
@@ -55,7 +55,7 @@ pub const SyntaxChecker = struct {
     /// Dependency graph for tracking module relationships and invalidation.
     dependency_graph: DependencyGraph,
     cache_config: CacheConfig = .{},
-    log_file: ?std.fs.File = null,
+    log_file: ?std.Io.File = null,
     debug: DebugFlags,
 
     // Owner tags used for BuildEnvHandle debugging.
@@ -63,7 +63,7 @@ pub const SyntaxChecker = struct {
     const owner_previous = "previous_build_env";
     const owner_snapshot = "snapshot";
 
-    pub fn init(allocator: std.mem.Allocator, debug: DebugFlags, log_file: ?std.fs.File) SyntaxChecker {
+    pub fn init(allocator: std.mem.Allocator, debug: DebugFlags, log_file: ?std.Io.File) SyntaxChecker {
         return .{
             .allocator = allocator,
             .dependency_graph = DependencyGraph.init(allocator),
@@ -106,7 +106,7 @@ pub const SyntaxChecker = struct {
             defer if (path) |p| self.allocator.free(p);
 
             const abs_path = if (path) |p|
-                std.fs.cwd().realpathAlloc(self.allocator, p) catch self.allocator.dupe(u8, p) catch null
+                std.Io.Dir.cwd().realpathAlloc(self.allocator, p) catch self.allocator.dupe(u8, p) catch null
             else
                 null;
             defer if (abs_path) |a| self.allocator.free(a);
@@ -152,7 +152,7 @@ pub const SyntaxChecker = struct {
         // Update dependency graph from successful build
         self.updateDependencyGraph(env);
 
-        var publish_list = std.ArrayList(Diagnostics.PublishDiagnostics){};
+        var publish_list : std.ArrayList(Diagnostics.PublishDiagnostics) = .empty;
         errdefer {
             for (publish_list.items) |*set| set.deinit(self.allocator);
             publish_list.deinit(self.allocator);
@@ -166,7 +166,7 @@ pub const SyntaxChecker = struct {
                 const mapped_path = if (entry.abs_path.len == 0) session.absolute_path else entry.abs_path;
                 const module_uri = try uri_util.pathToUri(self.allocator, mapped_path);
 
-                var diags = std.ArrayList(Diagnostics.Diagnostic){};
+                var diags : std.ArrayList(Diagnostics.Diagnostic) = .empty;
                 errdefer {
                     for (diags.items) |diag| {
                         self.allocator.free(diag.message);
@@ -1366,14 +1366,14 @@ pub const SyntaxChecker = struct {
             self.allocator.free(cache_dir);
 
             // Write file if it doesn't exist
-            if (std.fs.cwd().access(builtin_cache_path, .{})) |_| {
+            if (std.Io.Dir.cwd().access(builtin_cache_path, .{})) |_| {
                 // Already exists
             } else |_| {
                 // Create parent dirs and write embedded source
                 if (std.fs.path.dirname(builtin_cache_path)) |dir| {
-                    std.fs.cwd().makePath(dir) catch {};
+                    std.Io.Dir.cwd().makePath(dir) catch {};
                 }
-                const file = std.fs.cwd().createFile(builtin_cache_path, .{}) catch {
+                const file = std.Io.Dir.cwd().createFile(builtin_cache_path, .{}) catch {
                     self.allocator.free(builtin_cache_path);
                     return null;
                 };
@@ -1729,7 +1729,7 @@ pub const SyntaxChecker = struct {
         const target_pattern = cir_queries.findPatternAtOffset(module_env, target_offset) orelse return null;
 
         // Collect all references to this pattern
-        var regions = std.ArrayList(LspRange){};
+        var regions : std.ArrayList(LspRange) = .empty;
         errdefer regions.deinit(self.allocator);
 
         // Add the definition itself
@@ -1769,7 +1769,7 @@ pub const SyntaxChecker = struct {
         const path = uri_util.uriToPath(allocator, uri) catch return &[_]SymbolInformation{};
         defer allocator.free(path);
 
-        const absolute_path = std.fs.cwd().realpathAlloc(allocator, path) catch
+        const absolute_path = std.Io.Dir.cwd().realpathAlloc(allocator, path) catch
             allocator.dupe(u8, path) catch return &[_]SymbolInformation{};
         defer allocator.free(absolute_path);
 
@@ -1816,7 +1816,7 @@ pub const SyntaxChecker = struct {
         const line_offsets = pos.buildLineOffsets(allocator, source) catch return &[_]SymbolInformation{};
         defer line_offsets.deinit();
 
-        var symbols = std.ArrayList(SymbolInformation){};
+        var symbols : std.ArrayList(SymbolInformation) = .empty;
         errdefer {
             for (symbols.items) |*sym| {
                 allocator.free(sym.name);
@@ -2131,7 +2131,7 @@ pub const SyntaxChecker = struct {
         const cursor_offset = completion_context.computeOffset(source, line, character);
 
         // Collect completions based on context
-        var items = std.ArrayList(completion_handler.CompletionItem){};
+        var items : std.ArrayList(completion_handler.CompletionItem) = .empty;
         errdefer {
             for (items.items) |item| {
                 self.allocator.free(item.label);

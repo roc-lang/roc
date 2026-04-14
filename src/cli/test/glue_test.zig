@@ -78,7 +78,7 @@ test "glue command with CGlue generates expected C header (interpreter)" {
     const generated_path = std.fs.path.join(allocator, &.{ tmp_path, "roc_platform_abi.h" }) catch unreachable;
     defer allocator.free(generated_path);
 
-    const generated_content = std.fs.cwd().readFileAlloc(allocator, generated_path, 1024 * 1024) catch |err| {
+    const generated_content = std.Io.Dir.cwd().readFileAlloc(allocator, generated_path, 1024 * 1024) catch |err| {
         std.debug.print("\nFailed to read generated file '{s}': {}\n", .{ generated_path, err });
         try std.testing.expect(false);
         unreachable;
@@ -86,7 +86,7 @@ test "glue command with CGlue generates expected C header (interpreter)" {
     defer allocator.free(generated_content);
 
     // Read the expected header file
-    const expected_content = std.fs.cwd().readFileAlloc(allocator, "test/glue/fx_platform_cglue_expected.h", 1024 * 1024) catch |err| {
+    const expected_content = std.Io.Dir.cwd().readFileAlloc(allocator, "test/glue/fx_platform_cglue_expected.h", 1024 * 1024) catch |err| {
         std.debug.print("\nFailed to read expected file: {}\n", .{err});
         try std.testing.expect(false);
         unreachable;
@@ -153,7 +153,7 @@ test "glue command generated C header compiles with zig cc (interpreter)" {
     const test_c_path = std.fs.path.join(allocator, &.{ tmp_path, "test_header.c" }) catch unreachable;
     defer allocator.free(test_c_path);
 
-    std.fs.cwd().writeFile(.{
+    std.Io.Dir.cwd().writeFile(.{
         .sub_path = test_c_path,
         .data = test_c_content,
     }) catch |err| {
@@ -169,7 +169,7 @@ test "glue command generated C header compiles with zig cc (interpreter)" {
     defer allocator.free(include_flag);
 
     // Run: zig cc -c -std=c11 -Wall -Werror -I<tmp_path> test_header.c -o test_header.o
-    const cc_result = std.process.Child.run(.{
+    const cc_result = std.process.run(.{
         .allocator = allocator,
         .argv = &.{
             "zig",
@@ -197,7 +197,7 @@ test "glue command generated C header compiles with zig cc (interpreter)" {
         const header_path = std.fs.path.join(allocator, &.{ tmp_path, "roc_platform_abi.h" }) catch unreachable;
         defer allocator.free(header_path);
 
-        const header_content = std.fs.cwd().readFileAlloc(allocator, header_path, 1024 * 1024) catch "<failed to read header>";
+        const header_content = std.Io.Dir.cwd().readFileAlloc(allocator, header_path, 1024 * 1024) catch "<failed to read header>";
         defer if (header_content.ptr != "<failed to read header>".ptr) allocator.free(header_content);
 
         std.debug.print("\nzig cc compilation failed!\n", .{});
@@ -233,7 +233,7 @@ test "glue command with ZigGlue succeeds (interpreter)" {
     const generated_path = std.fs.path.join(allocator, &.{ tmp_path, "roc_platform_abi.zig" }) catch unreachable;
     defer allocator.free(generated_path);
 
-    const generated_content = std.fs.cwd().readFileAlloc(allocator, generated_path, 1024 * 1024) catch |err| {
+    const generated_content = std.Io.Dir.cwd().readFileAlloc(allocator, generated_path, 1024 * 1024) catch |err| {
         std.debug.print("\nFailed to read generated file '{s}': {}\n", .{ generated_path, err });
         try std.testing.expect(false);
         unreachable;

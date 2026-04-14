@@ -509,17 +509,17 @@ test "bundle and unbundle over socket stream" {
     defer socket_tmp.cleanup();
 
     // Get the real path of the temp directory
-    var real_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var real_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const real_path = try socket_tmp.dir.realpath(".", &real_path_buf);
 
-    var socket_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var socket_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const socket_path = try std.fmt.bufPrint(&socket_path_buf, "{s}/test.sock", .{real_path});
 
     // Create server thread
     const ServerContext = struct {
         socket_path: []const u8,
         bundle_path: []const u8,
-        bundle_dir: std.fs.Dir,
+        bundle_dir: std.Io.Dir,
         ready: std.Thread.ResetEvent = .{},
         done: std.Thread.ResetEvent = .{},
 

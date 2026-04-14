@@ -275,7 +275,7 @@ test "roc fmt reformats file in place" {
     defer tmp_dir.cleanup();
 
     // Read the source file
-    const cwd = std.fs.cwd();
+    const cwd = std.Io.Dir.cwd();
     const source_content = try cwd.readFileAlloc(gpa, "test/cli/needs_formatting.roc", 10 * 1024);
     defer gpa.free(source_content);
     const original_size = source_content.len;
@@ -297,7 +297,7 @@ test "roc fmt reformats file in place" {
     defer gpa.free(roc_path);
 
     // Run roc fmt on the temp file
-    const result = try std.process.Child.run(.{
+    const result = try std.process.run(.{
         .allocator = gpa,
         .argv = &.{ roc_path, "fmt", temp_file_path },
         .cwd = cwd_path,
@@ -324,7 +324,7 @@ test "roc fmt does not change well-formatted file" {
     const gpa = testing.allocator;
 
     // Read the well-formatted file before formatting
-    const cwd = std.fs.cwd();
+    const cwd = std.Io.Dir.cwd();
     const before_content = try cwd.readFileAlloc(gpa, "test/cli/well_formatted.roc", 10 * 1024);
     defer gpa.free(before_content);
 
@@ -346,7 +346,7 @@ test "roc fmt --stdin formats unformatted input" {
     const gpa = testing.allocator;
 
     // Read the unformatted file to use as stdin
-    const cwd = std.fs.cwd();
+    const cwd = std.Io.Dir.cwd();
     const input_content = try cwd.readFileAlloc(gpa, "test/cli/needs_formatting.roc", 10 * 1024);
     defer gpa.free(input_content);
 
@@ -358,7 +358,7 @@ test "roc fmt --stdin formats unformatted input" {
     defer gpa.free(roc_path);
 
     // Skip test if roc binary doesn't exist
-    std.fs.accessAbsolute(roc_path, .{}) catch {
+    std.Io.Dir.accessAbsolute(roc_path, .{}) catch {
         std.debug.print("Skipping test: roc binary not found at {s}\n", .{roc_path});
     };
 
@@ -401,7 +401,7 @@ test "roc fmt --stdin does not change well-formatted input" {
     const gpa = testing.allocator;
 
     // Read the well-formatted file to use as stdin
-    const cwd = std.fs.cwd();
+    const cwd = std.Io.Dir.cwd();
     const input_content = try cwd.readFileAlloc(gpa, "test/cli/well_formatted.roc", 10 * 1024);
     defer gpa.free(input_content);
 
@@ -413,7 +413,7 @@ test "roc fmt --stdin does not change well-formatted input" {
     defer gpa.free(roc_path);
 
     // Skip test if roc binary doesn't exist
-    std.fs.accessAbsolute(roc_path, .{}) catch {
+    std.Io.Dir.accessAbsolute(roc_path, .{}) catch {
         std.debug.print("Skipping test: roc binary not found at {s}\n", .{roc_path});
     };
 
@@ -627,7 +627,7 @@ test "roc build executable runs correctly (interpreter)" {
     try testing.expect(build_result.term == .Exited and build_result.term.Exited == 0);
 
     // Run the built executable
-    const run_result = try std.process.Child.run(.{
+    const run_result = try std.process.run(.{
         .allocator = gpa,
         .argv = &.{output_path},
         .max_output_bytes = 10 * 1024 * 1024,
@@ -696,7 +696,7 @@ test "roc build --opt=dev executable runs correctly for test/int/app.roc" {
     };
     try testing.expect(stat.size > 0);
 
-    const run_result = try std.process.Child.run(.{
+    const run_result = try std.process.run(.{
         .allocator = gpa,
         .argv = &.{output_path},
         .max_output_bytes = 10 * 1024 * 1024,
@@ -833,7 +833,7 @@ test "roc test cache invalidated by source change (interpreter)" {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const cwd = std.fs.cwd();
+    const cwd = std.Io.Dir.cwd();
 
     // Write a type module to temp dir (type name must match filename)
     const source_content = "CacheTest := {}\nadd = |a, b| a + b\nexpect { add(1, 2) == 3 }\n";
@@ -852,7 +852,7 @@ test "roc test cache invalidated by source change (interpreter)" {
     defer gpa.free(roc_path);
 
     // First run - populates cache
-    const result1 = try std.process.Child.run(.{
+    const result1 = try std.process.run(.{
         .allocator = gpa,
         .argv = &.{ roc_path, "test", "--opt=interpreter", temp_file_path },
         .cwd = cwd_path,
@@ -869,7 +869,7 @@ test "roc test cache invalidated by source change (interpreter)" {
     try tmp_dir.dir.writeFile(.{ .sub_path = "CacheTest.roc", .data = modified_content });
 
     // Second run - should NOT be cached (source changed)
-    const result2 = try std.process.Child.run(.{
+    const result2 = try std.process.run(.{
         .allocator = gpa,
         .argv = &.{ roc_path, "test", "--opt=interpreter", temp_file_path },
         .cwd = cwd_path,

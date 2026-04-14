@@ -297,7 +297,7 @@ pub fn SafeList(comptime T: type) type {
             pub fn deserializeInto(self: *const Serialized, base: usize) SafeList(T) {
                 // Handle empty list case
                 if (self.len == 0) {
-                    return SafeList(T){ .items = .{} };
+                    return SafeList(T){ .items = .empty };
                 }
 
                 // Apply the base address to convert from serialized offset to actual pointer
@@ -316,7 +316,7 @@ pub fn SafeList(comptime T: type) type {
             pub fn deserializeWithCopy(self: *const Serialized, base: usize, gpa: Allocator) Allocator.Error!SafeList(T) {
                 // Handle empty list case
                 if (self.len == 0) {
-                    return SafeList(T){ .items = .{} };
+                    return SafeList(T){ .items = .empty };
                 }
 
                 // Get pointer to source data in cache buffer
@@ -569,7 +569,7 @@ pub fn SafeList(comptime T: type) type {
 /// less likely since indices are only created for valid list entries.
 pub fn SafeMultiList(comptime T: type) type {
     return struct {
-        items: std.MultiArrayList(T) = .{},
+        items: std.MultiArrayList(T) = .empty,
 
         /// Index of an item in the list.
         pub const Idx = enum(u32) { first = 0, _ };
@@ -1224,9 +1224,9 @@ test "SafeList CompactWriter verify offset calculation" {
     _ = try list.append(gpa, 400);
 
     var writer = CompactWriter{
-        .iovecs = .{},
+        .iovecs = .empty,
         .total_bytes = 0,
-        .allocated_memory = .{},
+        .allocated_memory = .empty,
     };
     defer writer.deinit(gpa);
 
@@ -1260,9 +1260,9 @@ test "SafeList CompactWriter complete roundtrip example" {
     defer file.close();
 
     var writer = CompactWriter{
-        .iovecs = .{},
+        .iovecs = .empty,
         .total_bytes = 0,
-        .allocated_memory = .{},
+        .allocated_memory = .empty,
     };
     defer writer.deinit(gpa);
 
@@ -1350,9 +1350,9 @@ test "SafeList CompactWriter multiple lists with different alignments" {
     defer file.close();
 
     var writer = CompactWriter{
-        .iovecs = .{},
+        .iovecs = .empty,
         .total_bytes = 0,
-        .allocated_memory = .{},
+        .allocated_memory = .empty,
     };
     defer writer.deinit(gpa);
 
@@ -1474,9 +1474,9 @@ test "SafeList CompactWriter interleaved pattern with alignment tracking" {
     // multiple lists in an interleaved pattern
 
     var writer = CompactWriter{
-        .iovecs = .{},
+        .iovecs = .empty,
         .total_bytes = 0,
-        .allocated_memory = .{},
+        .allocated_memory = .empty,
     };
     defer writer.deinit(gpa);
 
@@ -1669,9 +1669,9 @@ test "SafeList CompactWriter brute-force alignment verification" {
 
             // Serialize everything
             var writer = CompactWriter{
-                .iovecs = .{},
+                .iovecs = .empty,
                 .total_bytes = 0,
-                .allocated_memory = .{},
+                .allocated_memory = .empty,
             };
             defer writer.deinit(gpa);
 

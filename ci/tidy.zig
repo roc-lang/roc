@@ -59,7 +59,7 @@ pub fn main() !void {
     }
 
     for (paths) |file_path| {
-        const bytes_read = (std.fs.cwd().readFile(file_path, file_buffer) catch |err| {
+        const bytes_read = (std.Io.Dir.cwd().readFile(file_path, file_buffer) catch |err| {
             std.debug.print("Error reading {s}: {}\n", .{ file_path, err });
             continue;
         }).len;
@@ -614,7 +614,7 @@ const DeadFilesDetector = struct {
 
 /// Lists all files in the repository using git ls-files.
 fn listFilePaths(allocator: Allocator) ![][]const u8 {
-    var result = std.ArrayList([]const u8){};
+    var result : std.ArrayList([]const u8) = .empty;
     errdefer {
         for (result.items) |path| {
             allocator.free(path);

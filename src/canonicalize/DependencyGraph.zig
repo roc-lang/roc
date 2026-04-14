@@ -388,7 +388,7 @@ pub fn getTopLevelConstants(
 ) std.mem.Allocator.Error![]const CIR.Def.Idx {
     const defs_slice = cir.store.sliceDefs(all_defs);
 
-    var constants = std.ArrayList(CIR.Def.Idx){};
+    var constants : std.ArrayList(CIR.Def.Idx) = .empty;
     errdefer constants.deinit(allocator);
 
     for (defs_slice) |def_idx| {

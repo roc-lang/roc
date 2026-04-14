@@ -37,7 +37,7 @@ pub const CompletionBuilder = struct {
     seen_labels: std.StringHashMap(void),
     builtin_module_env: ?*ModuleEnv,
     debug: DebugFlags = .{},
-    log_file: ?std.fs.File = null,
+    log_file: ?std.Io.File = null,
     /// Lazily-built scope map, shared across methods that need scope info.
     cached_scope: ?scope_map.ScopeMap = null,
     /// The qualified module ident idx the cached scope was built for (to detect
@@ -56,7 +56,7 @@ pub const CompletionBuilder = struct {
     }
 
     /// Initialize a new CompletionBuilder with debug logging.
-    pub fn initWithDebug(allocator: Allocator, items: *std.ArrayList(CompletionItem), builtin_module_env: ?*ModuleEnv, debug: DebugFlags, log_file: ?std.fs.File) CompletionBuilder {
+    pub fn initWithDebug(allocator: Allocator, items: *std.ArrayList(CompletionItem), builtin_module_env: ?*ModuleEnv, debug: DebugFlags, log_file: ?std.Io.File) CompletionBuilder {
         return .{
             .allocator = allocator,
             .items = items,
@@ -1435,7 +1435,7 @@ pub const CompletionBuilder = struct {
     }
 
     fn formatTagSignatureInner(self: *CompletionBuilder, module_env: *ModuleEnv, tag_name: []const u8, args_slice: []const CIR.TypeAnno.Idx) ![]const u8 {
-        var buf = std.ArrayList(u8){};
+        var buf : std.ArrayList(u8) = .empty;
         errdefer buf.deinit(self.allocator);
         try buf.appendSlice(self.allocator, tag_name);
         try buf.append(self.allocator, '(');

@@ -3317,7 +3317,7 @@ test "issue 9281: dev evaluator stack overflow with nested recursive opaque type
     const tmp_path = try tmp_dir.dir.realpathAlloc(test_allocator, ".");
     defer test_allocator.free(tmp_path);
 
-    const repo_root = try std.fs.cwd().realpathAlloc(test_allocator, ".");
+    const repo_root = try std.Io.Dir.cwd().realpathAlloc(test_allocator, ".");
     defer test_allocator.free(repo_root);
 
     const platform_main_path = try std.fs.path.join(test_allocator, &.{ repo_root, "test", "fx", "platform", "main.roc" });

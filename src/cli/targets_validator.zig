@@ -153,7 +153,7 @@ pub fn validatePlatformHasTargets(
 pub fn validateTargetFilesExist(
     allocator: Allocator,
     targets_config: TargetsConfig,
-    platform_dir: std.fs.Dir,
+    platform_dir: std.Io.Dir,
 ) !ValidationResult {
     const files_dir_path = targets_config.files_dir orelse return .{ .valid = {} };
 
@@ -194,7 +194,7 @@ fn validateTargetSpec(
     allocator: Allocator,
     spec: TargetLinkSpec,
     link_type: LinkType,
-    files_dir: std.fs.Dir,
+    files_dir: std.Io.Dir,
 ) !?ValidationResult {
     // Get target subdirectory name
     const target_subdir = @tagName(spec.target);
@@ -719,7 +719,7 @@ test "validateTargetFilesExist returns valid when no files_dir specified" {
         .shared_lib = &.{},
     };
 
-    const result = try validateTargetFilesExist(allocator, config, std.fs.cwd());
+    const result = try validateTargetFilesExist(allocator, config, std.Io.Dir.cwd());
     try std.testing.expectEqual(ValidationResult{ .valid = {} }, result);
 }
 

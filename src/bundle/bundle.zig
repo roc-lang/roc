@@ -126,7 +126,7 @@ pub fn bundle(
     compression_level: c_int,
     allocator: *std.mem.Allocator,
     output_writer: *std.Io.Writer,
-    base_dir: std.fs.Dir,
+    base_dir: std.Io.Dir,
     path_prefix: ?[]const u8,
     error_context: ?*ErrorContext,
 ) BundleError![]u8 {
@@ -510,9 +510,9 @@ const TarEntryReader = struct {
 
 /// Directory-based extract writer
 pub const DirExtractWriter = struct {
-    dir: std.fs.Dir,
+    dir: std.Io.Dir,
 
-    pub fn init(dir: std.fs.Dir) DirExtractWriter {
+    pub fn init(dir: std.Io.Dir) DirExtractWriter {
         return .{ .dir = dir };
     }
 
@@ -663,7 +663,7 @@ pub fn unbundleStream(
 /// If an InvalidPath error is returned, error_context will contain details about the invalid path.
 pub fn unbundle(
     input_reader: anytype,
-    extract_dir: std.fs.Dir,
+    extract_dir: std.Io.Dir,
     allocator: *std.mem.Allocator,
     filename: []const u8,
     error_context: ?*ErrorContext,

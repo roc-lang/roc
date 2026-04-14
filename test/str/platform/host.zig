@@ -81,20 +81,9 @@ fn rocReallocFn(roc_realloc: *RocRealloc, env: *anyopaque) callconv(.c) void {
 
 /// Roc debug function
 fn rocDbgFn(roc_dbg: *const RocDbg, env: *anyopaque) callconv(.c) void {
-    const host: *HostEnv = @ptrCast(@alignCast(env));
-    const allocator = host.arena.allocator();
-
+    _ = env;
     const message = roc_dbg.utf8_bytes[0..roc_dbg.len];
-    const bytes = std.fmt.allocPrint(allocator, "ROC DBG: {s}\n", .{message}) catch |err| {
-        std.log.err("Failed to allocate debug message: {s}", .{@errorName(err)});
-        return;
-    };
-    defer allocator.free(bytes);
-
-    std.fs.File.stderr().writeAll(bytes) catch |err| {
-        std.log.err("Failed to write debug message to stderr: {s}", .{@errorName(err)});
-        return;
-    };
+    std.debug.print("ROC DBG: {s}\n", .{message});
 }
 
 /// Roc expect failed function
@@ -136,7 +125,7 @@ fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
     _ = argc;
     _ = argv;
     platform_main() catch |err| {
-        std.fs.File.stderr().deprecatedWriter().print("HOST ERROR: {s}", .{@errorName(err)}) catch unreachable;
+        std.debug.print("HOST ERROR: {s}", .{@errorName(err)});
         return 1;
     };
     return 0;
@@ -149,8 +138,6 @@ fn platform_main() !void {
         .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
     };
     defer host_env.arena.deinit(); // Clean up all allocations on exit
-
-    const stdout = std.fs.File.stdout().deprecatedWriter();
 
     // Create the RocOps struct
     var roc_ops = RocOps{
@@ -181,14 +168,14 @@ fn platform_main() !void {
 
     // Get the string as a slice and print it
     const result_slice = roc_str.asSlice();
-    try stdout.print("{s}", .{result_slice});
+    std.debug.print("{s}", .{result_slice});
 
     // Verify the result contains the expected input
     const expected_substring = "Got the following from the host: string from host";
     if (std.mem.indexOf(u8, result_slice, expected_substring) != null) {
-        try stdout.print("\n\x1b[32mSUCCESS\x1b[0m: Result contains expected substring!\n", .{});
+        std.debug.print("\n\x1b[32mSUCCESS\x1b[0m: Result contains expected substring!\n", .{});
     } else {
-        try stdout.print("\n\x1b[31mFAIL\x1b[0m: Result does not contain expected substring!\n", .{});
+        std.debug.print("\n\x1b[31mFAIL\x1b[0m: Result does not contain expected substring!\n", .{});
         return error.TestFailed;
     }
 }

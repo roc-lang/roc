@@ -545,7 +545,7 @@ pub const MonoLlvmCodeGen = struct {
 
         if (std.process.getEnvVarOwned(self.allocator, "ROC_LLVM_KEEP_IR")) |keep_path| {
             defer self.allocator.free(keep_path);
-            builder.printToFilePath(std.fs.cwd(), keep_path) catch return error.CompilationFailed;
+            builder.printToFilePath(std.Io.Dir.cwd(), keep_path) catch return error.CompilationFailed;
         } else |_| {}
 
         const bitcode = builder.toBitcode(self.allocator, producer) catch return error.CompilationFailed;
@@ -580,7 +580,7 @@ pub const MonoLlvmCodeGen = struct {
         // so that proc bodies can call builtins like allocateWithRefcountC.
         const arg_layouts = self.store.getLayoutIdxSpan(proc.arg_layouts);
         const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
-        var param_types: std.ArrayList(LlvmBuilder.Type) = .{};
+        var param_types: std.ArrayList(LlvmBuilder.Type) = .empty;
         defer param_types.deinit(self.allocator);
         for (arg_layouts) |arg_layout| {
             param_types.append(self.allocator, try self.layoutToLlvmTypeFull(arg_layout)) catch return error.OutOfMemory;
@@ -911,7 +911,7 @@ pub const MonoLlvmCodeGen = struct {
 
         var switch_inst = wip.@"switch"(cond_val, default_block, @intCast(branches.len), .none) catch return error.CompilationFailed;
 
-        var branch_blocks: std.ArrayList(LlvmBuilder.Function.Block.Index) = .{};
+        var branch_blocks: std.ArrayList(LlvmBuilder.Function.Block.Index) = .empty;
         defer branch_blocks.deinit(self.allocator);
 
         for (branches) |branch| {
@@ -1785,7 +1785,7 @@ pub const MonoLlvmCodeGen = struct {
 
         // Promote existing symbol bindings to allocas for SSA correctness
         // (same as for_loop — loop body mutations must be visible after exit)
-        var promoted_keys: std.ArrayList(u64) = .{};
+        var promoted_keys: std.ArrayList(u64) = .empty;
         defer promoted_keys.deinit(self.allocator);
         {
             var sym_it = self.symbol_values.iterator();
@@ -1911,7 +1911,7 @@ pub const MonoLlvmCodeGen = struct {
         // mutations are visible after the loop exit (SSA domination fix).
         // The loop body may rebind variables via let_stmts; without allocas,
         // the new SSA values from the body block don't dominate the exit block.
-        var promoted_keys: std.ArrayList(u64) = .{};
+        var promoted_keys: std.ArrayList(u64) = .empty;
         defer promoted_keys.deinit(self.allocator);
         {
             var sym_it = self.symbol_values.iterator();
@@ -4572,7 +4572,7 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn endScope(self: *MonoLlvmCodeGen, scope: *ScopeSnapshot) Error!void {
-        var symbol_keys_to_remove: std.ArrayList(u64) = .{};
+        var symbol_keys_to_remove: std.ArrayList(u64) = .empty;
         defer symbol_keys_to_remove.deinit(self.allocator);
 
         var symbol_it = self.symbol_values.keyIterator();
@@ -4585,7 +4585,7 @@ pub const MonoLlvmCodeGen = struct {
             _ = self.symbol_values.remove(key);
         }
 
-        var closure_keys_to_remove: std.ArrayList(u64) = .{};
+        var closure_keys_to_remove: std.ArrayList(u64) = .empty;
         defer closure_keys_to_remove.deinit(self.allocator);
 
         var closure_it = self.closure_bindings.keyIterator();
@@ -4598,7 +4598,7 @@ pub const MonoLlvmCodeGen = struct {
             _ = self.closure_bindings.remove(key);
         }
 
-        var cell_keys_to_remove: std.ArrayList(u64) = .{};
+        var cell_keys_to_remove: std.ArrayList(u64) = .empty;
         defer cell_keys_to_remove.deinit(self.allocator);
 
         var cell_it = self.cell_allocas.keyIterator();
@@ -5693,7 +5693,7 @@ pub const MonoLlvmCodeGen = struct {
         const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
         const params = self.store.getPatternSpan(lambda.params);
 
-        var param_types: std.ArrayList(LlvmBuilder.Type) = .{};
+        var param_types: std.ArrayList(LlvmBuilder.Type) = .empty;
         defer param_types.deinit(self.allocator);
 
         for (params) |param_id| {
@@ -5765,7 +5765,7 @@ pub const MonoLlvmCodeGen = struct {
         const expected_params = fn_type.functionParameters(builder);
 
         const args = self.store.getExprSpan(args_span);
-        var arg_values: std.ArrayList(LlvmBuilder.Value) = .{};
+        var arg_values: std.ArrayList(LlvmBuilder.Value) = .empty;
         defer arg_values.deinit(self.allocator);
         const expected_params_copy = self.allocator.dupe(LlvmBuilder.Type, expected_params) catch return error.OutOfMemory;
         defer self.allocator.free(expected_params_copy);
@@ -5832,7 +5832,7 @@ pub const MonoLlvmCodeGen = struct {
         const params = self.store.getPatternSpan(lambda.params);
         const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
 
-        var param_types: std.ArrayList(LlvmBuilder.Type) = .{};
+        var param_types: std.ArrayList(LlvmBuilder.Type) = .empty;
         defer param_types.deinit(self.allocator);
 
         for (params) |param_id| {
@@ -5995,7 +5995,7 @@ pub const MonoLlvmCodeGen = struct {
         const expected_params = fn_type.functionParameters(builder);
 
         const args = self.store.getExprSpan(args_span);
-        var arg_values: std.ArrayList(LlvmBuilder.Value) = .{};
+        var arg_values: std.ArrayList(LlvmBuilder.Value) = .empty;
         defer arg_values.deinit(self.allocator);
         const expected_params_copy = self.allocator.dupe(LlvmBuilder.Type, expected_params) catch return error.OutOfMemory;
         defer self.allocator.free(expected_params_copy);

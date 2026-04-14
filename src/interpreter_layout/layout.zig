@@ -63,14 +63,7 @@ pub const Scalar = packed struct {
 };
 
 /// Index into a Layout Store
-pub const Idx = enum(@Type(.{
-    .int = .{
-        .signedness = .unsigned,
-        // Some Layout variants are just the Tag followed by Idx, so use as many
-        // bits as we can spare from the Layout for Idx.
-        .bits = layout_bit_size - @bitSizeOf(LayoutTag),
-    },
-})) {
+pub const Idx = enum(std.meta.Int(.unsigned, layout_bit_size - @bitSizeOf(LayoutTag))) {
     // Sentinel values for scalar builtin layouts. When we init the layout store, it automatically
     // adds entries for each of these at an index equal to the enum's value. That way, if you
     // look up one of these in the store, it's always returns the correct layout, and we can have
@@ -211,13 +204,7 @@ pub const TupleLayout = StructLayout;
 
 /// Index into the Store's struct data
 pub const StructIdx = packed struct {
-    int_idx: @Type(.{
-        .int = .{
-            .signedness = .unsigned,
-            // We need to be able to fit this in a Layout along with the alignment field in the StructLayout.
-            .bits = layout_bit_size - @bitSizeOf(LayoutTag) - @bitSizeOf(std.mem.Alignment),
-        },
-    }),
+    int_idx: std.meta.Int(.unsigned, layout_bit_size - @bitSizeOf(LayoutTag) - @bitSizeOf(std.mem.Alignment)),
 };
 
 /// Backwards-compat alias for `StructIdx`.
@@ -263,13 +250,7 @@ pub const TagUnionLayout = packed struct {
 
 /// Index into the Store's tag union data
 pub const TagUnionIdx = packed struct {
-    int_idx: @Type(.{
-        .int = .{
-            .signedness = .unsigned,
-            // Same bit budget as RecordIdx/TupleIdx
-            .bits = layout_bit_size - @bitSizeOf(LayoutTag) - @bitSizeOf(std.mem.Alignment),
-        },
-    }),
+    int_idx: std.meta.Int(.unsigned, layout_bit_size - @bitSizeOf(LayoutTag) - @bitSizeOf(std.mem.Alignment)),
 };
 
 /// Tag union data stored in the layout Store

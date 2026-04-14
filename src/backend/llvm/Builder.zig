@@ -4086,7 +4086,7 @@ pub const Function = struct {
     section: String = .none,
     alignment: Alignment = .default,
     blocks: []const Block = &.{},
-    instructions: std.MultiArrayList(Instruction) = .{},
+    instructions: std.MultiArrayList(Instruction) = .empty,
     names: [*]const String = &[0]String{},
     value_indices: [*]const u32 = &[0]u32{},
     strip: bool,
@@ -9692,12 +9692,12 @@ pub fn asmValue(
 /// Dumps the LLVM IR to stderr for debugging.
 pub fn dump(b: *Builder) void {
     var buffer: [4000]u8 = undefined;
-    const stderr: std.fs.File = .stderr();
+    const stderr: std.Io.File = .stderr();
     b.printToFile(stderr, &buffer) catch {};
 }
 
 /// Prints the LLVM IR to a file at the given path.
-pub fn printToFilePath(b: *Builder, dir: std.fs.Dir, path: []const u8) !void {
+pub fn printToFilePath(b: *Builder, dir: std.Io.Dir, path: []const u8) !void {
     var buffer: [4000]u8 = undefined;
     const file = try dir.createFile(path, .{});
     defer file.close();
@@ -9705,7 +9705,7 @@ pub fn printToFilePath(b: *Builder, dir: std.fs.Dir, path: []const u8) !void {
 }
 
 /// Prints the LLVM IR to a file handle.
-pub fn printToFile(b: *Builder, file: std.fs.File, buffer: []u8) !void {
+pub fn printToFile(b: *Builder, file: std.Io.File, buffer: []u8) !void {
     var fw = file.writer(buffer);
     try print(b, &fw.interface);
     try fw.interface.flush();

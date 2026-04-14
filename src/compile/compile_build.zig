@@ -1652,7 +1652,7 @@ pub const BuildEnv = struct {
 
         // Check if already cached
         const already_cached = blk: {
-            var d = std.fs.cwd().openDir(package_dir_path, .{}) catch |err| switch (err) {
+            var d = std.Io.Dir.cwd().openDir(package_dir_path, .{}) catch |err| switch (err) {
                 error.FileNotFound => break :blk false,
                 else => {
                     std.log.err("Failed to access package directory: {}", .{err});
@@ -1668,13 +1668,13 @@ pub const BuildEnv = struct {
             std.log.info("Downloading package from {s}...", .{url});
 
             // Create cache directory structure
-            std.fs.cwd().makePath(cache_dir_path) catch |make_err| {
+            std.Io.Dir.cwd().makePath(cache_dir_path) catch |make_err| {
                 std.log.err("Failed to create cache directory: {}", .{make_err});
                 return error.FileError;
             };
 
             // Create package directory
-            std.fs.cwd().makeDir(package_dir_path) catch |make_err| switch (make_err) {
+            std.Io.Dir.cwd().makeDir(package_dir_path) catch |make_err| switch (make_err) {
                 error.PathAlreadyExists => {}, // Race condition, another process created it
                 else => {
                     std.log.err("Failed to create package directory: {}", .{make_err});
@@ -1684,7 +1684,7 @@ pub const BuildEnv = struct {
 
             // Download and extract via io vtable (path-based, no Dir handle needed)
             self.filesystem.fetchUrl(self.gpa, url, package_dir_path) catch |fetch_err| {
-                std.fs.cwd().deleteTree(package_dir_path) catch {};
+                std.Io.Dir.cwd().deleteTree(package_dir_path) catch {};
                 std.log.err("Failed to download package: {} (url: {s})", .{ fetch_err, url });
                 return error.DownloadFailed;
             };
@@ -1696,7 +1696,7 @@ pub const BuildEnv = struct {
         const source_path = std.fs.path.join(self.gpa, &.{ package_dir_path, "main.roc" }) catch {
             return error.OutOfMemory;
         };
-        std.fs.cwd().access(source_path, .{}) catch {
+        std.Io.Dir.cwd().access(source_path, .{}) catch {
             self.gpa.free(source_path);
             std.log.err("No main.roc found in package at {s}", .{package_dir_path});
             return error.NoPackageSource;

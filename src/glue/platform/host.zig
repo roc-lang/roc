@@ -23,7 +23,7 @@ pub const std_options: std.Options = .{
 pub const panic = std.debug.FullPanic(panicImpl);
 
 fn panicImpl(msg: []const u8, addr: ?usize) noreturn {
-    const stderr: std.fs.File = .stderr();
+    const stderr: std.Io.File = .stderr();
     stderr.writeAll("\n=== PANIC (no stack trace) ===\n") catch {};
     stderr.writeAll(msg) catch {};
     if (addr) |a| {
@@ -173,7 +173,7 @@ fn rocAllocFn(roc_alloc: *builtins.host_abi.RocAlloc, env: *anyopaque) callconv(
     const result = allocator.rawAlloc(total_size, align_enum, @returnAddress());
 
     const base_ptr = result orelse {
-        const stderr: std.fs.File = .stderr();
+        const stderr: std.Io.File = .stderr();
         var buf: [256]u8 = undefined;
         const msg = std.fmt.bufPrint(&buf, "\x1b[31mHost error:\x1b[0m allocation failed for size={d} align={d}\n", .{
             total_size,
@@ -273,7 +273,7 @@ fn rocReallocFn(roc_realloc: *builtins.host_abi.RocRealloc, env: *anyopaque) cal
     const old_slice = @as([*]u8, @ptrCast(old_base_ptr))[0..old_total_size];
 
     const new_ptr = allocator.rawAlloc(new_total_size, align_enum, @returnAddress()) orelse {
-        const stderr: std.fs.File = .stderr();
+        const stderr: std.Io.File = .stderr();
         stderr.writeAll("\x1b[31mHost error:\x1b[0m reallocation failed, out of memory\n") catch {};
         std.process.exit(1);
     };
@@ -323,7 +323,7 @@ fn rocExpectFailedFn(roc_expect: *const builtins.host_abi.RocExpectFailed, _: *a
 /// Roc crashed function
 fn rocCrashedFn(roc_crashed: *const builtins.host_abi.RocCrashed, _: *anyopaque) callconv(.c) noreturn {
     const message = roc_crashed.utf8_bytes[0..roc_crashed.len];
-    const stderr: std.fs.File = .stderr();
+    const stderr: std.Io.File = .stderr();
     var buf: [256]u8 = undefined;
     var w = stderr.writer(&buf);
     w.interface.print("\n\x1b[31mRoc crashed:\x1b[0m {s}\n", .{message}) catch {};
@@ -433,7 +433,7 @@ comptime {
 fn __main() callconv(.c) void {}
 
 fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
-    const stderr_file: std.fs.File = .stderr();
+    const stderr_file: std.Io.File = .stderr();
 
     // Expect platform source path as first argument
     const arg_count: usize = @intCast(argc);
@@ -532,7 +532,7 @@ fn parseTypesJson(
 ) !RocList {
     // Parse the JSON
     const parsed = std.json.parseFromSlice([]const JsonModuleTypeInfo, allocator, json_str, .{}) catch |err| {
-        const stderr: std.fs.File = .stderr();
+        const stderr: std.Io.File = .stderr();
         stderr.writeAll("Error parsing types JSON: ") catch {};
         var buf: [64]u8 = undefined;
         const msg = std.fmt.bufPrint(&buf, "{}\n", .{err}) catch "unknown error\n";
@@ -667,7 +667,7 @@ fn platform_main(args: [][*:0]u8) !c_int {
         const remaining_count = host_env.roc_allocations.items.len;
 
         if (remaining_count > 0) {
-            const stderr_file: std.fs.File = .stderr();
+            const stderr_file: std.Io.File = .stderr();
             var buf: [512]u8 = undefined;
             const msg = std.fmt.bufPrint(&buf,
                 \\[Roc Memory Info] {d} allocation(s) not freed by Roc runtime.
@@ -685,7 +685,7 @@ fn platform_main(args: [][*:0]u8) !c_int {
 
         const leaked = host_env.gpa.deinit();
         if (leaked == .leak) {
-            const stderr_file: std.fs.File = .stderr();
+            const stderr_file: std.Io.File = .stderr();
             stderr_file.writeAll(
                 \\
                 \\[Roc Memory Info] Additional memory leak detected by GPA.
@@ -714,7 +714,7 @@ fn platform_main(args: [][*:0]u8) !c_int {
     // TODO: Extract actual entry points from compiled platform module
     const allocator = host_env.gpa.allocator();
 
-    const stdout: std.fs.File = .stdout();
+    const stdout: std.Io.File = .stdout();
 
     // Entry point names from args[entry_point_start_idx..], or default to ["main"] if none provided
     const default_entry_points = [_][]const u8{"main"};
@@ -850,7 +850,7 @@ fn platform_main(args: [][*:0]u8) !c_int {
     defer cleanupResult(&result, &roc_ops);
 
     // Handle the result
-    const stderr: std.fs.File = .stderr();
+    const stderr: std.Io.File = .stderr();
 
     switch (result.tag) {
         .Err => {
@@ -882,7 +882,7 @@ fn platform_main(args: [][*:0]u8) !c_int {
             };
 
             // Create output directory if needed
-            std.fs.cwd().makePath(out_dir) catch |err| {
+            std.Io.Dir.cwd().makePath(out_dir) catch |err| {
                 stderr.writeAll("Error: Could not create output directory: ") catch {};
                 var err_buf: [256]u8 = undefined;
                 const err_msg = std.fmt.bufPrint(&err_buf, "{}\n", .{err}) catch "unknown error\n";
@@ -900,7 +900,7 @@ fn platform_main(args: [][*:0]u8) !c_int {
                 };
                 defer allocator.free(file_path);
 
-                std.fs.cwd().writeFile(.{
+                std.Io.Dir.cwd().writeFile(.{
                     .sub_path = file_path,
                     .data = file.content.asSlice(),
                 }) catch |err| {

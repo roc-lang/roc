@@ -24,14 +24,14 @@ const LinkType = target_mod.LinkType;
 
 const is_windows = builtin.target.os.tag == .windows;
 
-var stderr_file_writer: std.fs.File.Writer = .{
-    .interface = std.fs.File.Writer.initInterface(&.{}),
-    .file = if (is_windows) undefined else std.fs.File.stderr(),
+var stderr_file_writer: std.Io.File.Writer = .{
+    .interface = std.Io.File.Writer.initInterface(&.{}),
+    .file = if (is_windows) undefined else std.Io.File.stderr(),
     .mode = .streaming,
 };
 
 fn stderrWriter() *std.Io.Writer {
-    if (is_windows) stderr_file_writer.file = std.fs.File.stderr();
+    if (is_windows) stderr_file_writer.file = std.Io.File.stderr();
     return &stderr_file_writer.interface;
 }
 
@@ -71,7 +71,7 @@ pub fn validatePlatformHeader(
     platform_source_path: []const u8,
 ) ValidationError!PlatformValidation {
     // Read platform source
-    var source = std.fs.cwd().readFileAlloc(allocator, platform_source_path, std.math.maxInt(usize)) catch {
+    var source = std.Io.Dir.cwd().readFileAlloc(allocator, platform_source_path, std.math.maxInt(usize)) catch {
         renderFileReadError(allocator, platform_source_path);
         return error.FileReadError;
     };
@@ -255,7 +255,7 @@ pub fn validateAllTargetFilesExist(
     config: TargetsConfig,
     platform_dir_path: []const u8,
 ) ?ValidationResult {
-    var platform_dir = std.fs.cwd().openDir(platform_dir_path, .{}) catch {
+    var platform_dir = std.Io.Dir.cwd().openDir(platform_dir_path, .{}) catch {
         return .{
             .missing_files_directory = .{
                 .platform_path = platform_dir_path,

@@ -72,7 +72,7 @@ pub const Io = @import("io").Io;
 // /// Print global stats to stderr
 // pub fn printGlobalStats() !void {
 //     var stderr_buffer: [1024]u8 = undefined;
-//     var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
+//     var stderr_writer = std.Io.File.stderr().writer(&stderr_buffer);
 //     const stderr = &stderr_writer.interface;
 //     try global_stats.print(stderr.any());
 // }

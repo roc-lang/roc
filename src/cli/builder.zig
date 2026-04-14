@@ -9,14 +9,14 @@ const Allocator = std.mem.Allocator;
 
 const is_windows = builtin.target.os.tag == .windows;
 
-var stderr_file_writer: std.fs.File.Writer = .{
-    .interface = std.fs.File.Writer.initInterface(&.{}),
-    .file = if (is_windows) undefined else std.fs.File.stderr(),
+var stderr_file_writer: std.Io.File.Writer = .{
+    .interface = std.Io.File.Writer.initInterface(&.{}),
+    .file = if (is_windows) undefined else std.Io.File.stderr(),
     .mode = .streaming,
 };
 
 fn stderrWriter() *std.Io.Writer {
-    if (is_windows) stderr_file_writer.file = std.fs.File.stderr();
+    if (is_windows) stderr_file_writer.file = std.Io.File.stderr();
     return &stderr_file_writer.interface;
 }
 
@@ -190,7 +190,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, config: CompileConfig) !bool {
     std.log.debug("CPU: '{s}', Features: '{s}'", .{ config.cpu, config.features });
 
     // Verify input file exists
-    std.fs.cwd().access(config.input_path, .{}) catch |err| {
+    std.Io.Dir.cwd().access(config.input_path, .{}) catch |err| {
         renderFileNotAccessibleError(gpa, config.input_path, err);
         return false;
     };

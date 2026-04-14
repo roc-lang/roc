@@ -326,7 +326,7 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
                 // Handle empty array case
                 if (self.entries_len == 0) {
                     return SortedArrayBuilder(K, V){
-                        .entries = .{},
+                        .entries = .empty,
                         .sorted = self.sorted,
                         .deduplicated = self.deduplicated,
                     };

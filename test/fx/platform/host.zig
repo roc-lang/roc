@@ -42,7 +42,7 @@ pub const std_options: std.Options = .{
 pub const panic = std.debug.FullPanic(panicImpl);
 
 fn panicImpl(msg: []const u8, addr: ?usize) noreturn {
-    const stderr: std.fs.File = .stderr();
+    const stderr: std.Io.File = .stderr();
     stderr.writeAll("\n=== PANIC (no stack trace) ===\n") catch {};
     stderr.writeAll(msg) catch {};
     if (addr) |a| {
@@ -320,7 +320,7 @@ fn parseTestSpec(allocator: std.mem.Allocator, spec: []const u8) ParseError![]Sp
 
         // Check for valid pattern prefix
         if (segment.len < 2) {
-            const stderr_file: std.fs.File = .stderr();
+            const stderr_file: std.Io.File = .stderr();
             stderr_file.writeAll("Error: Invalid spec segment '") catch {};
             stderr_file.writeAll(segment) catch {};
             stderr_file.writeAll("' - must start with 0<, 1>, or 2>\n") catch {};
@@ -332,7 +332,7 @@ fn parseTestSpec(allocator: std.mem.Allocator, spec: []const u8) ParseError![]Sp
             if (segment[0] == '1' and segment[1] == '>') break :blk .stdout_expect;
             if (segment[0] == '2' and segment[1] == '>') break :blk .stderr_expect;
             // Invalid pattern - report error
-            const stderr_file: std.fs.File = .stderr();
+            const stderr_file: std.Io.File = .stderr();
             stderr_file.writeAll("Error: Invalid spec segment '") catch {};
             stderr_file.writeAll(segment) catch {};
             stderr_file.writeAll("' - must start with 0<, 1>, or 2>\n") catch {};
@@ -404,7 +404,7 @@ fn rocAllocFn(roc_alloc: *builtins.host_abi.RocAlloc, env: *anyopaque) callconv(
     const result = allocator.rawAlloc(total_size, align_enum, @returnAddress());
 
     const base_ptr = result orelse {
-        const stderr: std.fs.File = .stderr();
+        const stderr: std.Io.File = .stderr();
         var buf: [256]u8 = undefined;
         const msg = std.fmt.bufPrint(&buf, "\x1b[31mHost error:\x1b[0m allocation failed for size={d} align={d}\n", .{
             total_size,
@@ -525,7 +525,7 @@ fn rocReallocFn(roc_realloc: *builtins.host_abi.RocRealloc, env: *anyopaque) cal
 
     // Allocate new memory with proper alignment
     const new_ptr = allocator.rawAlloc(new_total_size, align_enum, @returnAddress()) orelse {
-        const stderr: std.fs.File = .stderr();
+        const stderr: std.Io.File = .stderr();
         stderr.writeAll("\x1b[31mHost error:\x1b[0m reallocation failed, out of memory\n") catch {};
         std.process.exit(1);
     };
@@ -584,7 +584,7 @@ fn rocExpectFailedFn(roc_expect: *const builtins.host_abi.RocExpectFailed, env: 
 fn rocCrashedFn(roc_crashed: *const builtins.host_abi.RocCrashed, env: *anyopaque) callconv(.c) noreturn {
     _ = env;
     const message = roc_crashed.utf8_bytes[0..roc_crashed.len];
-    const stderr: std.fs.File = .stderr();
+    const stderr: std.Io.File = .stderr();
     var buf: [256]u8 = undefined;
     var w = stderr.writer(&buf);
     w.interface.print("\n\x1b[31mRoc crashed:\x1b[0m {s}\n", .{message}) catch {};
@@ -619,7 +619,7 @@ fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
     var self_test: HostSelfTest = .none;
     var i: usize = 1;
     const arg_count: usize = @intCast(argc);
-    const stderr_file: std.fs.File = .stderr();
+    const stderr_file: std.Io.File = .stderr();
     while (i < arg_count) : (i += 1) {
         const arg = std.mem.span(argv[i]);
         if (std.mem.eql(u8, arg, "--test-verbose")) {
@@ -678,7 +678,7 @@ fn hostedStderrLine(ops: *builtins.host_abi.RocOps, _: *anyopaque, args: *const 
 
     // Test mode: verify output matches expected
     if (host.test_state.enabled) {
-        const stderr_file: std.fs.File = .stderr();
+        const stderr_file: std.Io.File = .stderr();
         if (host.test_state.current_index < host.test_state.entries.len) {
             const entry = host.test_state.entries[host.test_state.current_index];
             if (entry.effect_type == .stderr_expect and std.mem.eql(u8, entry.value, message)) {
@@ -742,7 +742,7 @@ fn hostedStderrLine(ops: *builtins.host_abi.RocOps, _: *anyopaque, args: *const 
     }
 
     // Normal mode: write to stderr
-    const stderr: std.fs.File = .stderr();
+    const stderr: std.Io.File = .stderr();
     stderr.writeAll(message) catch {};
     stderr.writeAll("\n") catch {};
 }
@@ -755,7 +755,7 @@ fn hostedStdinLine(ops: *builtins.host_abi.RocOps, result: *RocStr, _: *anyopaqu
 
     // Test mode: consume next stdin_input entry from spec
     if (host.test_state.enabled) {
-        const stderr_file: std.fs.File = .stderr();
+        const stderr_file: std.Io.File = .stderr();
         if (host.test_state.current_index < host.test_state.entries.len) {
             const entry = host.test_state.entries[host.test_state.current_index];
             if (entry.effect_type == .stdin_input) {
@@ -804,7 +804,7 @@ fn hostedStdinLine(ops: *builtins.host_abi.RocOps, result: *RocStr, _: *anyopaqu
 
     // Normal mode: Read a line from stdin
     var buffer: [4096]u8 = undefined;
-    const stdin_file: std.fs.File = .stdin();
+    const stdin_file: std.Io.File = .stdin();
     const bytes_read = stdin_file.read(&buffer) catch {
         // Return empty string on error
         result.* = RocStr.empty();
@@ -845,7 +845,7 @@ fn hostedStdoutLine(ops: *builtins.host_abi.RocOps, _: *anyopaque, args: *const 
 
     // Test mode: verify output matches expected
     if (host.test_state.enabled) {
-        const stderr_file: std.fs.File = .stderr();
+        const stderr_file: std.Io.File = .stderr();
         if (host.test_state.current_index < host.test_state.entries.len) {
             const entry = host.test_state.entries[host.test_state.current_index];
             if (entry.effect_type == .stdout_expect and std.mem.eql(u8, entry.value, message)) {
@@ -909,7 +909,7 @@ fn hostedStdoutLine(ops: *builtins.host_abi.RocOps, _: *anyopaque, args: *const 
     }
 
     // Normal mode: write to stdout
-    const stdout: std.fs.File = .stdout();
+    const stdout: std.Io.File = .stdout();
     stdout.writeAll(message) catch {};
     stdout.writeAll("\n") catch {};
 }
@@ -1018,7 +1018,7 @@ fn platform_main(test_spec: ?[]const u8, test_verbose: bool) !c_int {
         // Only report remaining allocations if test passed (otherwise it's expected
         // that cleanup may be incomplete due to test failure)
         if (remaining_count > 0 and test_passed) {
-            const stderr_file: std.fs.File = .stderr();
+            const stderr_file: std.Io.File = .stderr();
             var buf: [512]u8 = undefined;
             const msg = std.fmt.bufPrint(&buf,
                 \\[Roc Memory Info] {d} allocation(s) not freed by Roc runtime.
@@ -1038,7 +1038,7 @@ fn platform_main(test_spec: ?[]const u8, test_verbose: bool) !c_int {
 
         const leaked = host_env.gpa.deinit();
         if (leaked == .leak) {
-            const stderr_file: std.fs.File = .stderr();
+            const stderr_file: std.Io.File = .stderr();
             stderr_file.writeAll(
                 \\
                 \\[Roc Memory Info] Additional memory leak detected by GPA.
@@ -1073,7 +1073,7 @@ fn platform_main(test_spec: ?[]const u8, test_verbose: bool) !c_int {
     if (host_env.test_state.enabled) {
         // Check if test failed or not all entries were consumed
         if (host_env.test_state.failed or host_env.test_state.current_index != host_env.test_state.entries.len) {
-            const stderr_file: std.fs.File = .stderr();
+            const stderr_file: std.Io.File = .stderr();
 
             // Print failure info
             if (host_env.test_state.failure_info) |info| {

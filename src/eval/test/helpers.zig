@@ -199,11 +199,11 @@ fn assertNoTypeProblems(allocator: std.mem.Allocator, module_env: *ModuleEnv, ch
 
 const TraceWriter = struct {
     buffer: [256]u8 = undefined,
-    writer: std.fs.File.Writer = undefined,
+    writer: std.Io.File.Writer = undefined,
 
     fn init() TraceWriter {
         var tw = TraceWriter{};
-        tw.writer = std.fs.File.stderr().writer(&tw.buffer);
+        tw.writer = std.Io.File.stderr().writer(&tw.buffer);
         return tw;
     }
 

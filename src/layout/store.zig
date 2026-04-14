@@ -2898,7 +2898,7 @@ pub const Store = struct {
 
                 // Check if any in-progress nominals need their reserved layouts updated.
                 // When a nominal type's backing type finishes, update the nominal's placeholder.
-                var nominals_to_remove = std.ArrayList(work.NominalKey){};
+                var nominals_to_remove : std.ArrayList(work.NominalKey) = .empty;
                 defer nominals_to_remove.deinit(self.allocator);
 
                 var nominal_iter = self.work.in_progress_nominals.iterator();
@@ -3120,7 +3120,7 @@ pub const Store = struct {
 
                     // Check if any in-progress nominals need their reserved layouts updated.
                     // This handles the case where a nominal's backing type is a container (e.g., tag union).
-                    var nominals_to_remove_container = std.ArrayList(work.NominalKey){};
+                    var nominals_to_remove_container : std.ArrayList(work.NominalKey) = .empty;
                     defer nominals_to_remove_container.deinit(self.allocator);
 
                     var nominal_iter_container = self.work.in_progress_nominals.iterator();

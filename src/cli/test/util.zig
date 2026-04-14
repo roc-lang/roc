@@ -21,13 +21,13 @@ fn createIsolatedTestCacheDir(allocator: std.mem.Allocator) ![]u8 {
     });
     defer allocator.free(cache_leaf);
 
-    const cwd_path = try std.fs.cwd().realpathAlloc(allocator, ".");
+    const cwd_path = try std.Io.Dir.cwd().realpathAlloc(allocator, ".");
     defer allocator.free(cwd_path);
 
     const cache_rel = try std.fs.path.join(allocator, &.{ ".zig-cache", "roc-test-cache", cache_leaf });
     defer allocator.free(cache_rel);
 
-    std.fs.cwd().makePath(cache_rel) catch |err| switch (err) {
+    std.Io.Dir.cwd().makePath(cache_rel) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
     };
@@ -70,7 +70,7 @@ fn runChild(
     var env_map = try buildIsolatedTestEnvMap(allocator, extra_env);
     defer env_map.deinit();
 
-    const result = try std.process.Child.run(.{
+    const result = try std.process.run(.{
         .allocator = allocator,
         .argv = argv,
         .cwd = cwd_path,
@@ -97,7 +97,7 @@ pub fn runRocCommandWithEnv(
     extra_env: ?*const std.process.EnvMap,
 ) !RocResult {
     // Get absolute path to roc binary from current working directory
-    const cwd_path = try std.fs.cwd().realpathAlloc(allocator, ".");
+    const cwd_path = try std.Io.Dir.cwd().realpathAlloc(allocator, ".");
     defer allocator.free(cwd_path);
     const roc_binary_name = if (@import("builtin").os.tag == .windows) "roc.exe" else "roc";
     const roc_path = try std.fs.path.join(allocator, &.{ cwd_path, "zig-out", "bin", roc_binary_name });
@@ -126,7 +126,7 @@ pub fn runRocWithEnv(
     extra_env: ?*const std.process.EnvMap,
 ) !RocResult {
     // Get absolute path to roc binary from current working directory
-    const cwd_path = try std.fs.cwd().realpathAlloc(allocator, ".");
+    const cwd_path = try std.Io.Dir.cwd().realpathAlloc(allocator, ".");
     defer allocator.free(cwd_path);
     const roc_binary_name = if (@import("builtin").os.tag == .windows) "roc.exe" else "roc";
     const roc_path = try std.fs.path.join(allocator, &.{ cwd_path, "zig-out", "bin", roc_binary_name });
@@ -245,7 +245,7 @@ pub fn checkTestSuccess(result: RocResult) !void {
 /// Helper to run roc with stdin input (for REPL testing)
 pub fn runRocWithStdin(allocator: std.mem.Allocator, args: []const []const u8, stdin_input: []const u8) !RocResult {
     // Get absolute path to roc binary from current working directory
-    const cwd_path = try std.fs.cwd().realpathAlloc(allocator, ".");
+    const cwd_path = try std.Io.Dir.cwd().realpathAlloc(allocator, ".");
     defer allocator.free(cwd_path);
     const roc_binary_name = if (@import("builtin").os.tag == .windows) "roc.exe" else "roc";
     const roc_path = try std.fs.path.join(allocator, &.{ cwd_path, "zig-out", "bin", roc_binary_name });

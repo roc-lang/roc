@@ -149,7 +149,7 @@ test "integration - shared memory setup and parsing" {
     defer allocs.deinit();
 
     // Get absolute path from current working directory
-    const cwd_path = std.fs.cwd().realpathAlloc(allocs.gpa, ".") catch return;
+    const cwd_path = std.Io.Dir.cwd().realpathAlloc(allocs.gpa, ".") catch return;
     defer allocs.gpa.free(cwd_path);
 
     // Create a CLI context for error reporting
@@ -200,7 +200,7 @@ test "integration - compilation pipeline for different platforms" {
     defer allocs.deinit();
 
     // Get absolute path from current working directory
-    const cwd_path = std.fs.cwd().realpathAlloc(allocs.gpa, ".") catch return;
+    const cwd_path = std.Io.Dir.cwd().realpathAlloc(allocs.gpa, ".") catch return;
     defer allocs.gpa.free(cwd_path);
 
     // Create a CLI context for error reporting
@@ -259,7 +259,7 @@ test "integration - error handling for non-existent file" {
     defer allocs.deinit();
 
     // Get absolute path from current working directory
-    const cwd_path = std.fs.cwd().realpathAlloc(allocs.gpa, ".") catch return;
+    const cwd_path = std.Io.Dir.cwd().realpathAlloc(allocs.gpa, ".") catch return;
     defer allocs.gpa.free(cwd_path);
 
     // Create a CLI context for error reporting
@@ -323,7 +323,7 @@ test "integration - automatic module dependency ordering" {
     defer allocs.deinit();
 
     // Get absolute path from current working directory
-    const cwd_path = std.fs.cwd().realpathAlloc(allocs.gpa, ".") catch return;
+    const cwd_path = std.Io.Dir.cwd().realpathAlloc(allocs.gpa, ".") catch return;
     defer allocs.gpa.free(cwd_path);
 
     // Create a CLI context for error reporting
@@ -381,7 +381,7 @@ test "integration - transitive module imports (module A imports module B)" {
     defer allocs.deinit();
 
     // Get absolute path from current working directory
-    const cwd_path = std.fs.cwd().realpathAlloc(allocs.gpa, ".") catch return;
+    const cwd_path = std.Io.Dir.cwd().realpathAlloc(allocs.gpa, ".") catch return;
     defer allocs.gpa.free(cwd_path);
 
     // Create a CLI context for error reporting
@@ -446,7 +446,7 @@ test "integration - diamond dependency pattern (A imports B and C, both import D
     defer allocs.deinit();
 
     // Get absolute path from current working directory
-    const cwd_path = std.fs.cwd().realpathAlloc(allocs.gpa, ".") catch return;
+    const cwd_path = std.Io.Dir.cwd().realpathAlloc(allocs.gpa, ".") catch return;
     defer allocs.gpa.free(cwd_path);
 
     // Create a CLI context for error reporting
@@ -501,7 +501,7 @@ test "integration - direct Core and Utils calls from app" {
     defer allocs.deinit();
 
     // Get absolute path from current working directory
-    const cwd_path = std.fs.cwd().realpathAlloc(allocs.gpa, ".") catch return;
+    const cwd_path = std.Io.Dir.cwd().realpathAlloc(allocs.gpa, ".") catch return;
     defer allocs.gpa.free(cwd_path);
 
     // Create a CLI context for error reporting

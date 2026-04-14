@@ -14,7 +14,7 @@
 //!
 //! Usage:
 //!   fn doSomething(ctx: *CliContext, path: []const u8) CliError!void {
-//!       const source = std.fs.cwd().readFileAlloc(ctx.gpa, path, ...) catch |err| {
+//!       const source = std.Io.Dir.cwd().readFileAlloc(ctx.gpa, path, ...) catch |err| {
 //!           return ctx.fail(.{ .file_not_found = .{ .path = path } });
 //!       };
 //!       defer ctx.gpa.free(source);
@@ -47,8 +47,8 @@ const ReportingConfig = reporting.ReportingConfig;
 /// Wraps stdout/stderr with buffered writers. When Zig's std.Io interface
 /// becomes available, this struct will be replaced with std.Io.
 pub const Io = struct {
-    stdout_writer: std.fs.File.Writer,
-    stderr_writer: std.fs.File.Writer,
+    stdout_writer: std.Io.File.Writer,
+    stderr_writer: std.Io.File.Writer,
     stdout_buffer: [4096]u8,
     stderr_buffer: [4096]u8,
 
@@ -69,8 +69,8 @@ pub const Io = struct {
     /// This MUST be called before using stdout() or stderr().
     /// Also enables ANSI escape sequences for colored output.
     pub fn initWriters(self: *Self) void {
-        const stdout_file = std.fs.File.stdout();
-        const stderr_file = std.fs.File.stderr();
+        const stdout_file = std.Io.File.stdout();
+        const stderr_file = std.Io.File.stderr();
 
         // Enable ANSI escape sequences for colored output (needed on Windows)
         _ = stdout_file.getOrEnableAnsiEscapeSupport();
@@ -201,7 +201,7 @@ pub const CliContext = struct {
     /// is properly recorded before the function returns.
     ///
     /// Usage:
-    ///   const file = std.fs.cwd().openFile(path, .{}) catch |err| {
+    ///   const file = std.Io.Dir.cwd().openFile(path, .{}) catch |err| {
     ///       return ctx.fail(.{ .file_not_found = .{ .path = path } });
     ///   };
     pub fn fail(self: *Self, problem: CliProblem) CliError {

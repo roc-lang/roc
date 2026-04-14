@@ -132,8 +132,8 @@ pub const LinkError = error{
 /// then falls back to the compile-time path (for local development builds).
 fn findDarwinSysroot(allocator: std.mem.Allocator) ![]const u8 {
     // Get the path to the currently running executable
-    var exe_path_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const exe_path = std.fs.selfExePath(&exe_path_buf) catch |err| {
+    var exe_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const exe_path = std.Io.Dir.selfExePath(&exe_path_buf) catch |err| {
         std.log.warn("Failed to get executable path: {}, falling back to compile-time path", .{err});
         return build_options.darwin_sysroot;
     };
@@ -154,7 +154,7 @@ fn findDarwinSysroot(allocator: std.mem.Allocator) ![]const u8 {
         return build_options.darwin_sysroot;
     };
 
-    std.fs.cwd().access(tbd_path, .{}) catch {
+    std.Io.Dir.cwd().access(tbd_path, .{}) catch {
         // Runtime path doesn't exist, fall back to compile-time path (local dev builds)
         return build_options.darwin_sysroot;
     };
@@ -174,7 +174,7 @@ fn findPlatformSysroot(allocator: std.mem.Allocator, platform_files_dir: ?[]cons
 
     // Verify it exists and has the expected structure (usr/lib/libSystem.tbd)
     const lib_path = std.fs.path.join(allocator, &.{ sysroot_path, "usr", "lib", "libSystem.tbd" }) catch return null;
-    std.fs.cwd().access(lib_path, .{}) catch return null;
+    std.Io.Dir.cwd().access(lib_path, .{}) catch return null;
 
     std.log.info("Using platform-provided macOS sysroot: {s}", .{sysroot_path});
     return sysroot_path;
@@ -185,7 +185,7 @@ fn findPlatformSysroot(allocator: std.mem.Allocator, platform_files_dir: ?[]cons
 /// which frameworks to bundle in their sysroot.
 /// Only links frameworks that have a .tbd file (skips header-only frameworks).
 fn discoverAndLinkFrameworks(allocator: std.mem.Allocator, args: *std.array_list.Managed([]const u8), frameworks_dir: []const u8) LinkError!void {
-    var dir = std.fs.cwd().openDir(frameworks_dir, .{ .iterate = true }) catch {
+    var dir = std.Io.Dir.cwd().openDir(frameworks_dir, .{ .iterate = true }) catch {
         // No frameworks directory - that's fine, just skip
         return;
     };
@@ -206,7 +206,7 @@ fn discoverAndLinkFrameworks(allocator: std.mem.Allocator, args: *std.array_list
             const tbd_path1 = std.fs.path.join(allocator, &.{ frameworks_dir, entry.name, tbd_name }) catch return LinkError.OutOfMemory;
             const tbd_path2 = std.fs.path.join(allocator, &.{ frameworks_dir, entry.name, "Versions", "Current", tbd_name }) catch return LinkError.OutOfMemory;
 
-            const has_tbd = std.fs.cwd().access(tbd_path1, .{}) catch std.fs.cwd().access(tbd_path2, .{}) catch null;
+            const has_tbd = std.Io.Dir.cwd().access(tbd_path1, .{}) catch std.Io.Dir.cwd().access(tbd_path2, .{}) catch null;
             if (has_tbd == null) continue; // Skip frameworks without TBD files
 
             const fw_name_copy = allocator.dupe(u8, fw_name) catch return LinkError.OutOfMemory;
@@ -422,10 +422,10 @@ fn buildLinkArgs(ctx: *CliContext, config: LinkConfig) LinkError!std.array_list.
                 const stack_probe_obj = stack_probe.generateStackProbeObject(ctx.arena) catch return LinkError.OutOfMemory;
                 // Write to a temp file and add to link line
                 const stack_probe_path = std.fs.path.join(ctx.arena, &.{
-                    std.fs.selfExeDirPathAlloc(ctx.arena) catch return LinkError.OutOfMemory,
+                    std.Io.Dir.selfExeDirPathAlloc(ctx.arena) catch return LinkError.OutOfMemory,
                     "stack_probe.obj",
                 }) catch return LinkError.OutOfMemory;
-                std.fs.cwd().writeFile(.{
+                std.Io.Dir.cwd().writeFile(.{
                     .sub_path = stack_probe_path,
                     .data = stack_probe_obj,
                 }) catch return LinkError.OutOfMemory;

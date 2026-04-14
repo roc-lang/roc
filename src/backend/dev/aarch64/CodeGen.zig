@@ -85,7 +85,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
                 .emit = Emit.init(allocator),
                 .allocator = allocator,
                 .stack_offset = 0,
-                .relocations = .{},
+                .relocations = .empty,
                 .locals = std.AutoHashMap(u32, ValueStorageMod.ValueLoc).init(allocator),
                 .free_general = CC.CALLER_SAVED_GENERAL_MASK,
                 .free_float = CC.CALLER_SAVED_FLOAT_MASK,

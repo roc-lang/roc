@@ -42,11 +42,11 @@ const runDevOnlyExpectStr = helpers.runDevOnlyExpectStr;
 
 const TraceWriterState = struct {
     buffer: [256]u8 = undefined,
-    writer: std.fs.File.Writer = undefined,
+    writer: std.Io.File.Writer = undefined,
 
     fn init() TraceWriterState {
         var state = TraceWriterState{};
-        state.writer = std.fs.File.stderr().writer(&state.buffer);
+        state.writer = std.Io.File.stderr().writer(&state.buffer);
         return state;
     }
 };

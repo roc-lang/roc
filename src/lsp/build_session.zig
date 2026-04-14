@@ -52,7 +52,7 @@ pub const BuildSession = struct {
         const path = try uri_util.uriToPath(allocator, uri);
         defer allocator.free(path);
 
-        const absolute_path = std.fs.cwd().realpathAlloc(allocator, path) catch
+        const absolute_path = std.Io.Dir.cwd().realpathAlloc(allocator, path) catch
             try allocator.dupe(u8, path);
         errdefer allocator.free(absolute_path);
 

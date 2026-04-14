@@ -152,7 +152,7 @@ const InitializationFlag = struct {
 /// On wasm32: no-op (single-threaded environment)
 /// On native: actual mutex for thread safety
 const PlatformMutex = struct {
-    inner: if (is_wasm32) void else std.Thread.Mutex,
+    inner: if (is_wasm32) void else std.Io.Mutex,
 
     const Self = @This();
 

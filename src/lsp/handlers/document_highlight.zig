@@ -94,7 +94,7 @@ pub fn handler(comptime ServerType: type) type {
                 defer result.deinit(self.allocator);
 
                 // Convert to DocumentHighlight array
-                var highlights = std.ArrayList(DocumentHighlight){};
+                var highlights : std.ArrayList(DocumentHighlight) = .empty;
                 defer highlights.deinit(self.allocator);
 
                 for (result.regions) |range| {
@@ -199,7 +199,7 @@ fn findHighlightsByToken(allocator: std.mem.Allocator, source: []const u8, line:
     }
 
     // Find all occurrences of the same identifier text
-    var highlights = std.ArrayList(DocumentHighlight){};
+    var highlights : std.ArrayList(DocumentHighlight) = .empty;
     errdefer highlights.deinit(allocator);
 
     for (tags, regions) |tag, region| {

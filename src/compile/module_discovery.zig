@@ -189,7 +189,7 @@ pub fn addImportedModulesToEnvMap(
         defer gpa.free(file_path);
 
         // Only add if the file exists
-        std.fs.cwd().access(file_path, .{}) catch continue;
+        std.Io.Dir.cwd().access(file_path, .{}) catch continue;
 
         // Add to module_envs with a placeholder env (just to pass the "contains" check)
         const module_ident = try env.insertIdent(base.Ident.for_text(module_name));

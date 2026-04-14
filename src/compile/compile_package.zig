@@ -1162,7 +1162,7 @@ pub const PackageEnv = struct {
             else if (comptime threading.is_freestanding)
                 false
             else blk: {
-                std.fs.cwd().access(file_path, .{}) catch break :blk false;
+                std.Io.Dir.cwd().access(file_path, .{}) catch break :blk false;
                 break :blk true;
             };
             if (!exists) continue;

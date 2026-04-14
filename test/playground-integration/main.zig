@@ -421,7 +421,7 @@ fn parseWasmResponseJson(allocator: std.mem.Allocator, response_json_slice: []co
 /// - `arena` allocator is the ArenaAllocator, used for other test harness allocations.
 /// - `wasm_path` is the path to the WASM file to load.
 fn setupWasm(gpa: std.mem.Allocator, arena: std.mem.Allocator, wasm_path: []const u8) !WasmInterface {
-    const wasm_data: []const u8 = std.fs.cwd().readFileAlloc(arena, wasm_path, std.math.maxInt(usize)) catch |err| {
+    const wasm_data: []const u8 = std.Io.Dir.cwd().readFileAlloc(arena, wasm_path, std.math.maxInt(usize)) catch |err| {
         logDebug("[ERROR] Failed to read WASM file '{s}': {}\n", .{ wasm_path, err });
         return err;
     };
@@ -922,8 +922,6 @@ pub fn main() !void {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    const stdout = std.fs.File.stdout().deprecatedWriter();
-
     // Handle CLI arguments
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
@@ -935,16 +933,16 @@ pub fn main() !void {
         if (std.mem.eql(u8, arg, "--verbose")) {
             verbose_mode = true;
         } else if (std.mem.eql(u8, arg, "--help")) {
-            try stdout.print("Usage: test-playground [options] [wasm-path]\n", .{});
-            try stdout.print("Options:\n", .{});
-            try stdout.print("  --verbose           Enable verbose mode\n", .{});
-            try stdout.print("  --wasm-path PATH    Path to the playground WASM file\n", .{});
-            try stdout.print("  --help              Display this help message\n", .{});
+            std.debug.print("Usage: test-playground [options] [wasm-path]\n", .{});
+            std.debug.print("Options:\n", .{});
+            std.debug.print("  --verbose           Enable verbose mode\n", .{});
+            std.debug.print("  --wasm-path PATH    Path to the playground WASM file\n", .{});
+            std.debug.print("  --help              Display this help message\n", .{});
             return;
         } else if (std.mem.eql(u8, arg, "--wasm-path")) {
             i += 1;
             if (i >= args.len) {
-                try stdout.print("Error: --wasm-path requires a path argument\n", .{});
+                std.debug.print("Error: --wasm-path requires a path argument\n", .{});
                 return;
             }
             wasm_path = args[i];

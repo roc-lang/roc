@@ -74,7 +74,7 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
     tmp_dir.dir.writeFile(.{ .sub_path = tmp_file_path, .data = input }) catch return;
 
     // Get absolute path
-    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const abs_path = tmp_dir.dir.realpath(tmp_file_path, &path_buf) catch return;
 
     // Process the input through BuildEnv

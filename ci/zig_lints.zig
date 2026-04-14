@@ -17,7 +17,7 @@ pub fn main() !void {
     const gpa = gpa_impl.allocator();
 
     var stdout_buffer: [4096]u8 = undefined;
-    var stdout_state = std.fs.File.stdout().writer(&stdout_buffer);
+    var stdout_state = std.Io.File.stdout().writer(&stdout_buffer);
     const stdout = &stdout_state.interface;
 
     var found_errors = false;
@@ -126,7 +126,7 @@ pub fn main() !void {
 }
 
 fn walkTree(allocator: Allocator, dir_path: []const u8, zig_files: *PathList) !void {
-    var dir = try std.fs.cwd().openDir(dir_path, .{ .iterate = true });
+    var dir = try std.Io.Dir.cwd().openDir(dir_path, .{ .iterate = true });
     defer dir.close();
 
     var it = dir.iterate();
@@ -165,7 +165,7 @@ fn checkSeparatorComments(allocator: Allocator, file_path: []const u8) ![]u8 {
     };
     defer allocator.free(source);
 
-    var errors = std.ArrayList(u8){};
+    var errors : std.ArrayList(u8) = .empty;
     errdefer errors.deinit(allocator);
 
     var line_num: usize = 1;
@@ -275,7 +275,7 @@ fn checkPubDocComments(allocator: Allocator, file_path: []const u8) ![]u8 {
     };
     defer allocator.free(source);
 
-    var errors = std.ArrayList(u8){};
+    var errors : std.ArrayList(u8) = .empty;
     errdefer errors.deinit(allocator);
 
     var line_num: usize = 1;
@@ -382,7 +382,7 @@ fn fileHasTopLevelComment(allocator: Allocator, file_path: []const u8) !bool {
 }
 
 fn readSourceFile(allocator: Allocator, path: []const u8) ![:0]u8 {
-    return try std.fs.cwd().readFileAllocOptions(
+    return try std.Io.Dir.cwd().readFileAllocOptions(
         allocator,
         path,
         max_file_bytes,

@@ -69,7 +69,7 @@ const InitializationFlag = struct {
 
 /// Mutex for thread-safe initialization.
 const PlatformMutex = struct {
-    inner: std.Thread.Mutex,
+    inner: std.Io.Mutex,
 
     const Self = @This();
 
