@@ -377,6 +377,7 @@ padding: 0px 16px;
     scrollbar-gutter: stable;
     padding: 16px 8px;
     transition: all .2s linear;
+    list-style: none;
 }
 
 p {
@@ -418,6 +419,9 @@ footer p {
 .sidebar-sub-entries {
     font-size: var(--font-sm);
     display: none;
+    list-style: none;
+    padding: 0;
+    margin: 0;
 }
 
 .active + .sidebar-sub-entries {
@@ -438,12 +442,12 @@ footer p {
   align-items: center;
 }
 
-.sidebar-sub-entries a:first-child {
+.sidebar-sub-entries > li:first-child > a {
     margin-top: 8px;
     padding-top: 0;
 }
 
-.sidebar-sub-entries a:last-child {
+.sidebar-sub-entries > li:last-child > a {
     margin-bottom: 8px;
     padding-bottom: 0;
 }

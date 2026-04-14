@@ -628,7 +628,7 @@ fn renderSidebarTree(
             for (0..depth - 1) |_| {
                 try w.writeAll("  ");
             }
-            try w.writeAll("<div class=\"sidebar-type\">\n");
+            try w.writeAll("<li class=\"sidebar-type\">\n");
             try w.writeAll("                        ");
             for (0..depth - 1) |_| {
                 try w.writeAll("  ");
@@ -642,7 +642,7 @@ fn renderSidebarTree(
             for (0..depth - 1) |_| {
                 try w.writeAll("  ");
             }
-            try w.writeAll("  <div class=\"sidebar-sub-entries\">\n");
+            try w.writeAll("  <ul class=\"sidebar-sub-entries\">\n");
 
             // Recurse for children
             for (node.children.items) |child| {
@@ -653,19 +653,19 @@ fn renderSidebarTree(
             for (0..depth - 1) |_| {
                 try w.writeAll("  ");
             }
-            try w.writeAll("  </div>\n");
+            try w.writeAll("  </ul>\n");
             try w.writeAll("                        ");
             for (0..depth - 1) |_| {
                 try w.writeAll("  ");
             }
-            try w.writeAll("</div>\n");
+            try w.writeAll("</li>\n");
         } else if (node.is_leaf) {
             if (depth == 1 and node.is_type) {
                 // Top-level type with no children — render with the same
                 // structure as types that have children so they all share
                 // a consistent visual style in the sidebar.
                 try w.writeAll("                        ");
-                try w.writeAll("<div class=\"sidebar-type\">\n");
+                try w.writeAll("<li class=\"sidebar-type\">\n");
                 try w.writeAll("                        ");
                 try w.writeAll("  <a class=\"sidebar-type-name\" href=\"#");
                 try writeHtmlEscaped(w, node.full_path);
@@ -673,18 +673,18 @@ fn renderSidebarTree(
                 try writeHtmlEscaped(w, node.name);
                 try w.writeAll("</a>\n");
                 try w.writeAll("                        ");
-                try w.writeAll("</div>\n");
+                try w.writeAll("</li>\n");
             } else {
                 // Render as link
                 try w.writeAll("                        ");
                 for (0..depth - 1) |_| {
                     try w.writeAll("  ");
                 }
-                try w.writeAll("<a href=\"#");
+                try w.writeAll("<li><a href=\"#");
                 try writeHtmlEscaped(w, node.full_path);
                 try w.writeAll("\">");
                 try writeHtmlEscaped(w, node.name);
-                try w.writeAll("</a>\n");
+                try w.writeAll("</a></li>\n");
             }
         }
     } else {
@@ -731,7 +731,7 @@ fn renderSidebar(w: Writer, ctx: *const RenderContext, gpa: Allocator, base: []c
     try w.writeAll("        </div>\n");
 
     try w.writeAll("        <div class=\"module-links-container\">\n");
-    try w.writeAll("            <div class=\"module-links\">\n");
+    try w.writeAll("            <ul class=\"module-links\">\n");
 
     for (ctx.package_docs.modules) |mod| {
         const is_active = if (ctx.current_module) |cur|
@@ -739,7 +739,7 @@ fn renderSidebar(w: Writer, ctx: *const RenderContext, gpa: Allocator, base: []c
         else
             false;
 
-        try w.writeAll("                <div class=\"sidebar-entry\">\n");
+        try w.writeAll("                <li class=\"sidebar-entry\">\n");
         try w.writeAll("                    <a class=\"sidebar-module-link");
         if (is_active) try w.writeAll(" active");
         try w.writeAll("\" data-module-name=\"");
@@ -764,13 +764,13 @@ fn renderSidebar(w: Writer, ctx: *const RenderContext, gpa: Allocator, base: []c
         try w.writeAll("</span></a>\n");
 
         // Sub-entries - grouped hierarchically
-        try w.writeAll("                    <div class=\"sidebar-sub-entries\">\n");
+        try w.writeAll("                    <ul class=\"sidebar-sub-entries\">\n");
         try renderSidebarEntries(w, gpa, mod.name, mod.entries, 0);
-        try w.writeAll("                    </div>\n");
-        try w.writeAll("                </div>\n");
+        try w.writeAll("                    </ul>\n");
+        try w.writeAll("                </li>\n");
     }
 
-    try w.writeAll("            </div>\n");
+    try w.writeAll("            </ul>\n");
     try w.writeAll("        </div>\n");
     try w.writeAll("    </nav>\n");
 }
