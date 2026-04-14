@@ -39,7 +39,7 @@ fn runDevBackendHostSelfTest(
 
     const cache_path = try std.fs.path.join(allocator, &.{ tmp_path, "roc-cache" });
     defer allocator.free(cache_path);
-    try tmp_dir.dir.makePath("roc-cache");
+    try tmp_dir.dir.createDirPath("roc-cache");
 
     const zig_local_cache_path = try std.fs.path.join(allocator, &.{ tmp_path, "zig-local-cache" });
     defer allocator.free(zig_local_cache_path);

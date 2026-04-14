@@ -391,7 +391,7 @@ pub fn renderPackageDocs(
     broken_links_out: ?*std.ArrayListUnmanaged(BrokenLink),
 ) !void {
     // Ensure the output directory exists
-    std.Io.Dir.cwd().makePath(output_dir_path) catch |err| switch (err) {
+    std.Io.Dir.cwd().createDirPath(output_dir_path) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
     };

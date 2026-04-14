@@ -50,9 +50,9 @@ pub const ScalarTag = enum(u3) {
 /// such as the precision of a particular int or frac. This union
 /// stores that extra information.
 pub const ScalarUnion = packed union {
-    str: void,
+    str: u4,
     int: types.Int.Precision,
-    frac: types.Frac.Precision,
+    frac: packed struct { precision: types.Frac.Precision, _pad: u1 = 0 },
     opaque_ptr: void,
 };
 
