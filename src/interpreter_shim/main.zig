@@ -36,7 +36,7 @@ fn allocator() Allocator {
 
 fn openRuntimeState(gpa: Allocator) !RuntimeState {
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
-    var shm = try SharedMemoryAllocator.fromCoordination(gpa, page_size);
+    var shm = try SharedMemoryAllocator.fromCoordination(gpa, std.Io.default(), page_size);
     errdefer shm.deinit(gpa);
 
     const header_offset = @sizeOf(SharedMemoryAllocator.Header);

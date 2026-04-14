@@ -72,7 +72,7 @@ fn nativeFetchUrlImpl(_: ?*anyopaque, allocator: Allocator, url: []const u8, des
         return error.DownloadFailed;
     } else {
         var alloc = allocator;
-        unbundle.download.downloadAndExtract(&alloc, url, dest_path) catch {
+        unbundle.download.downloadAndExtract(&alloc, Io.default(), url, dest_path) catch {
             return error.DownloadFailed;
         };
     }

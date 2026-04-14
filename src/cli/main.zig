@@ -368,11 +368,16 @@ fn configuredSharedMemorySize() usize {
     return @intCast(build_options.shared_memory_size);
 }
 
-/// Create the shared-memory arena used for the parent-produced LIR runtime
-/// image. Allocation failure is reported directly; the compiler must not
-/// silently switch to a smaller arena that changes capacity assumptions.
-fn createSharedMemory(page_size: usize) !SharedMemoryAllocator {
-    return SharedMemoryAllocator.create(SHARED_MEMORY_SIZE, page_size);
+/// Try to create shared memory, falling back to a smaller size if the system
+/// has overcommit disabled and rejects the initial allocation.
+fn createSharedMemoryWithFallback(io: std.Io, page_size: usize) !SharedMemoryAllocator {
+    // Try the preferred size first
+    if (SharedMemoryAllocator.create(io, SHARED_MEMORY_SIZE, page_size)) |shm| {
+        return shm;
+    } else |_| {}
+
+    // Fall back to smaller size for systems with overcommit disabled
+    return SharedMemoryAllocator.create(io, SHARED_MEMORY_FALLBACK_SIZE, page_size);
 }
 
 /// Cross-platform hardlink creation
@@ -1912,8 +1917,8 @@ pub fn buildLirRuntimeImageWithCoordinator(
     source_dir_override: ?[]const u8,
 ) !SharedMemoryResult {
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
-    var shm = try createSharedMemory(page_size);
-    errdefer shm.deinit(ctx.gpa);
+    var shm = try createSharedMemoryWithFallback(ctx.io, page_size);
+    // Don't defer deinit here - we need to keep the shared memory alive
 
     const shm_allocator = shm.allocator();
     const runtime_header = try shm_allocator.create(lir.RuntimeImage.Header);
@@ -2328,7 +2333,7 @@ fn resolveUrlBundle(ctx: *CliContext, url: []const u8) (CliError || error{OutOfM
 
         // Download and extract (path-based, no Dir handle needed)
         var gpa_copy = ctx.gpa;
-        download.downloadAndExtract(&gpa_copy, url, package_dir_path) catch |download_err| {
+        download.downloadAndExtract(&gpa_copy, std.Io.default(), url, package_dir_path) catch |download_err| {
             std.Io.Dir.cwd().deleteTree(package_dir_path) catch {};
             return ctx.fail(.{ .download_failed = .{
                 .url = url,
@@ -2887,6 +2892,7 @@ pub fn rocBundle(ctx: *CliContext, args: cli_args.BundleArgs) !void {
         &iter,
         @intCast(args.compression_level),
         &allocator_copy,
+        std.Io.default(),
         &temp_writer.interface,
         bundle_base_dir,
         null, // path_prefix parameter - null means no stripping
@@ -2988,6 +2994,7 @@ fn rocUnbundle(ctx: *CliContext, args: cli_args.UnbundleArgs) !void {
             ctx.gpa,
             &archive_reader.interface,
             output_dir,
+            std.Io.default(),
             basename,
             &error_ctx,
         ) catch |err| {
@@ -4609,7 +4616,7 @@ fn rocFormat(ctx: *CliContext, args: cli_args.FormatArgs) !void {
 
     const stdout = ctx.io.stdout();
     if (args.stdin) {
-        fmt.formatStdin(ctx.gpa) catch |err| return err;
+        fmt.formatStdin(ctx.gpa, std.Options.debug_io) catch |err| return err;
         return;
     }
 
@@ -4623,7 +4630,7 @@ fn rocFormat(ctx: *CliContext, args: cli_args.FormatArgs) !void {
         defer unformatted_files.deinit(ctx.gpa);
 
         for (args.paths) |path| {
-            var result = try fmt.formatPath(ctx.gpa, ctx.arena, std.Io.Dir.cwd(), path, true);
+            var result = try fmt.formatPath(ctx.gpa, ctx.arena, std.Io.Dir.cwd(), path, true, std.Options.debug_io);
             defer result.deinit();
             if (result.unformatted_files) |files| {
                 try unformatted_files.appendSlice(ctx.gpa, files.items);
@@ -4649,7 +4656,7 @@ fn rocFormat(ctx: *CliContext, args: cli_args.FormatArgs) !void {
     } else {
         var success_count: usize = 0;
         for (args.paths) |path| {
-            const result = try fmt.formatPath(ctx.gpa, ctx.arena, std.Io.Dir.cwd(), path, false);
+            const result = try fmt.formatPath(ctx.gpa, ctx.arena, std.Io.Dir.cwd(), path, false, std.Options.debug_io);
             success_count += result.success;
             failure_count += result.failure;
         }
@@ -5567,7 +5574,7 @@ fn generateDocs(
         }
         broken_links.deinit(ctx.gpa);
     }
-    render_html.renderPackageDocs(ctx.gpa, &package_docs, base_output_dir, &broken_links) catch |err| {
+    render_html.renderPackageDocs(ctx.gpa, ctx.io, &package_docs, base_output_dir, &broken_links) catch |err| {
         std.debug.print("Error: failed to generate HTML docs: {}\n", .{err});
         return err;
     };

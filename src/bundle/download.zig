@@ -56,6 +56,7 @@ pub fn validateUrl(url: []const u8) DownloadError![]const u8 {
 /// - Point to a tar.zst file created with `roc bundle`
 pub fn download(
     allocator: *std.mem.Allocator,
+    io: std.Io,
     url: []const u8,
     extract_dir: std.Io.Dir,
 ) DownloadError!void {
@@ -68,7 +69,7 @@ pub fn download(
     };
 
     // Create HTTP client
-    var client = std.http.Client{ .allocator = allocator.* };
+    var client = std.http.Client{ .allocator = allocator.*, .io = io };
     defer client.deinit();
 
     // Parse the URL
@@ -95,48 +96,42 @@ pub fn download(
             // 2. Avoid potential edge cases in networking stack implementations
             // 3. Reduce attack surface by accepting only the most common values
 
-            const port = uri.port orelse (if (std.mem.eql(u8, uri.scheme, "https")) HTTPS_DEFAULT_PORT else HTTP_DEFAULT_PORT);
+            // Resolve "localhost" using getaddrinfo and verify it's a loopback address
+            const AF_INET: i32 = 2;
+            const AF_INET6: i32 = if (builtin.os.tag == .linux) 10 else 30;
 
-            const address_list = std.net.getAddressList(allocator.*, "localhost", port) catch {
-                return error.LocalhostWasNotLoopback;
-            };
-            defer address_list.deinit();
-
-            if (address_list.addrs.len == 0) {
+            var result: ?*std.c.addrinfo = null;
+            const rc = std.c.getaddrinfo("localhost", null, null, &result);
+            if (@intFromEnum(rc) != 0 or result == null) {
                 return error.LocalhostWasNotLoopback;
             }
+            defer std.c.freeaddrinfo(result.?);
 
-            // Take the first address and verify it's loopback
-            const first_addr = address_list.addrs[0];
-            const is_loopback = switch (first_addr.any.family) {
-                std.posix.AF.INET => blk: {
-                    // Check if IPv4 address is exactly 127.0.0.1
-                    const addr = first_addr.in.sa.addr;
-                    // IPv4 addresses are in network byte order (big-endian)
-                    const expected = if (comptime builtin.cpu.arch.endian() == .little)
-                        IPV4_LOOPBACK_LE
-                    else
-                        IPV4_LOOPBACK_BE;
-                    break :blk addr == expected;
-                },
-                std.posix.AF.INET6 => blk: {
-                    // Check if IPv6 address is ::1
-                    const addr = first_addr.in6.sa.addr;
-                    for (addr[0..15]) |byte| {
-                        if (byte != 0) break :blk false;
-                    }
-                    break :blk addr[15] == 1;
-                },
-                else => false,
-            };
+            // Check if the resolved address is a loopback address
+            const addr_info = result.?;
+            const is_loopback = if (addr_info.family == AF_INET) blk: {
+                const sockaddr_in: *const std.posix.sockaddr.in = @ptrCast(@alignCast(addr_info.addr.?));
+                const addr = sockaddr_in.addr;
+                const expected: u32 = if (comptime builtin.cpu.arch.endian() == .little)
+                    IPV4_LOOPBACK_LE
+                else
+                    IPV4_LOOPBACK_BE;
+                break :blk addr == expected;
+            } else if (addr_info.family == AF_INET6) blk: {
+                const sockaddr_in6: *const std.posix.sockaddr.in6 = @ptrCast(@alignCast(addr_info.addr.?));
+                const addr = sockaddr_in6.addr;
+                for (addr[0..15]) |byte| {
+                    if (byte != 0) break :blk false;
+                }
+                break :blk addr[15] == 1;
+            } else false;
 
             if (!is_loopback) {
                 return error.LocalhostWasNotLoopback;
             }
 
             // Update the URI to use the resolved IP instead of "localhost"
-            // We need to format the address correctly
-            if (first_addr.any.family == std.posix.AF.INET) {
+            if (addr_info.family == AF_INET) {
                 // IPv4: just use "127.0.0.1" as the host
                 uri.host = .{ .percent_encoded = "127.0.0.1" };
             } else {
@@ -175,6 +170,6 @@ pub fn download(
     const reader = response.reader(&reader_buffer);
 
     // Stream directly to unbundleStream
-    var dir_writer = bundle.DirExtractWriter.init(extract_dir);
+    var dir_writer = bundle.DirExtractWriter.init(extract_dir, io);
     try bundle.unbundleStream(reader, dir_writer.extractWriter(), allocator, &expected_hash, null);
 }

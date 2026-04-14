@@ -20,6 +20,7 @@ const tokenize = parse.tokenize;
 const is_windows = builtin.target.os.tag == .windows;
 
 var stderr_file_writer: std.Io.File.Writer = .{
+    .io = std.Options.debug_io,
     .interface = std.Io.File.Writer.initInterface(&.{}),
     .file = if (is_windows) undefined else std.Io.File.stderr(),
     .mode = .streaming,
@@ -52,7 +53,7 @@ pub const FormattingResult = struct {
 /// Formats all roc files in the specified path.
 /// Handles both single files and directories
 /// Returns the number of files successfully formatted and that failed to format.
-pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: std.Io.Dir, path: []const u8, check: bool) !FormattingResult {
+pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: std.Io.Dir, path: []const u8, check: bool, io: std.Io) !FormattingResult {
     // TODO: update this to use the filesystem abstraction
     // When doing so, add a mock filesystem and some tests.
     const stderr = stderrWriter();
@@ -63,15 +64,15 @@ pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: st
     var unformatted_files = if (check) std.array_list.Managed([]const u8).init(gpa) else null;
 
     // First try as a directory.
-    if (base_dir.openDir(path, .{ .iterate = true })) |const_dir| {
+    if (base_dir.openDir(io, path, .{ .iterate = true })) |const_dir| {
         var dir = const_dir;
-        defer dir.close();
+        defer dir.close(io);
         // Walk is recursive.
         var walker = try dir.walk(arena);
         defer walker.deinit();
-        while (try walker.next()) |entry| {
+        while (try walker.next(io)) |entry| {
             if (entry.kind == .file) {
-                if (formatFilePath(gpa, entry.dir, entry.basename, if (unformatted_files) |*to_reformat| to_reformat else null)) |_| {
+                if (formatFilePath(gpa, entry.dir, entry.basename, if (unformatted_files) |*to_reformat| to_reformat else null, io)) |_| {
                     success_count += 1;
                 } else |err| switch (err) {
                     error.NotRocFile => {},
@@ -83,7 +84,7 @@ pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: st
             }
         }
     } else |_| {
-        if (formatFilePath(gpa, base_dir, path, if (unformatted_files) |*to_reformat| to_reformat else null)) |_| {
+        if (formatFilePath(gpa, base_dir, path, if (unformatted_files) |*to_reformat| to_reformat else null, io)) |_| {
             success_count += 1;
         } else |err| switch (err) {
             error.NotRocFile => {},
@@ -134,7 +135,7 @@ fn binarySearch(
 
 /// Formats a single roc file at the specified path.
 /// Returns errors on failure and files that don't end in `.roc`
-pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.Io.Dir, path: []const u8, unformatted_files: ?*std.array_list.Managed([]const u8)) !void {
+pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.Io.Dir, path: []const u8, unformatted_files: ?*std.array_list.Managed([]const u8), io: std.Io) !void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -146,20 +147,20 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.Io.Dir, path: []cons
     const format_file_frame = tracy.namedFrame("format_file");
     defer format_file_frame.end();
 
-    const input_file = try base_dir.openFile(path, .{ .mode = .read_only });
-    defer input_file.close();
+    const input_file = try base_dir.openFile(io, path, .{ .mode = .read_only });
+    defer input_file.close(io);
 
     const contents = blk: {
         const blk_trace = tracy.traceNamed(@src(), "readAllAlloc");
         defer blk_trace.end();
 
-        if (input_file.stat()) |stat| {
+        if (input_file.stat(io)) |stat| {
             // Attempt to allocate exactly the right size first.
             // The avoids needless reallocs and saves some perf.
             const size = stat.size;
             const buf = try gpa.alloc(u8, @intCast(size));
             errdefer gpa.free(buf);
-            if (try input_file.readAll(buf) != size) {
+            if (try input_file.readPositionalAll(io, buf, 0) != size) {
                 // This is unexpected, the file is smaller than the size from stat.
                 // It must have been modified inplace.
                 // TODO: handle this more gracefully.
@@ -167,9 +168,19 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.Io.Dir, path: []cons
             }
             break :blk buf;
         } else |_| {
-            // Fallback on readToEndAlloc.
-            const buf = try input_file.readToEndAlloc(gpa, std.math.maxInt(u32));
-            break :blk buf;
+            // Fallback: read using a streaming reader.
+            var read_buf: [4096]u8 = undefined;
+            var file_reader = input_file.readerStreaming(io, &read_buf);
+            var contents_list = std.ArrayList(u8).empty;
+            errdefer contents_list.deinit(gpa);
+            while (true) {
+                const n = file_reader.interface.readSliceShort(contents_list.addManyAsSlice(gpa, 4096) catch return error.OutOfMemory) catch |err| switch (err) {
+                    error.ReadFailed => return error.ReadFailed,
+                };
+                contents_list.shrinkRetainingCapacity(contents_list.items.len - 4096 + n);
+                if (n < 4096) break;
+            }
+            break :blk try contents_list.toOwnedSlice(gpa);
         }
     };
     defer gpa.free(contents);
@@ -200,17 +211,31 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.Io.Dir, path: []cons
             try unformatted_files.?.append(path);
         }
     } else { // Otherwise actually format it
-        const output_file = try base_dir.createFile(path, .{});
-        defer output_file.close();
+        const output_file = try base_dir.createFile(io, path, .{});
+        defer output_file.close(io);
         var output_buffer: [4096]u8 = undefined;
-        var output_writer = output_file.writer(&output_buffer);
+        var output_writer = output_file.writer(io, &output_buffer);
         try formatAst(parse_ast.*, &output_writer.interface);
     }
 }
 
 /// Format the contents of stdin and output the result to stdout
-pub fn formatStdin(gpa: std.mem.Allocator) !void {
-    const contents = try std.Io.File.stdin().readToEndAlloc(gpa, std.math.maxInt(u32));
+pub fn formatStdin(gpa: std.mem.Allocator, io: std.Io) !void {
+    const contents = blk: {
+        const stdin = std.Io.File.stdin();
+        var read_buf: [4096]u8 = undefined;
+        var stdin_reader = stdin.readerStreaming(io, &read_buf);
+        var contents_list = std.ArrayList(u8).empty;
+        errdefer contents_list.deinit(gpa);
+        while (true) {
+            const n = stdin_reader.interface.readSliceShort(contents_list.addManyAsSlice(gpa, 4096) catch return error.OutOfMemory) catch |err| switch (err) {
+                error.ReadFailed => return error.ReadFailed,
+            };
+            contents_list.shrinkRetainingCapacity(contents_list.items.len - 4096 + n);
+            if (n < 4096) break;
+        }
+        break :blk try contents_list.toOwnedSlice(gpa);
+    };
     defer gpa.free(contents);
 
     // ModuleEnv retains a reference to contents for diagnostics
@@ -232,7 +257,7 @@ pub fn formatStdin(gpa: std.mem.Allocator) !void {
     }
 
     var stdout_buffer: [4096]u8 = undefined;
-    var stdout_writer = std.Io.File.stdout().writer(&stdout_buffer);
+    var stdout_writer = std.Io.File.stdout().writer(io, &stdout_buffer);
     try formatAst(parse_ast.*, &stdout_writer.interface);
 }
 

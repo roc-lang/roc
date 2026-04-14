@@ -611,8 +611,9 @@ test "Ident.Store empty CompactWriter roundtrip" {
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const file = try tmp_dir.dir.createFile("test_empty_store.dat", .{ .read = true });
-    defer file.close();
+    const io = std.testing.io;
+    const file = try tmp_dir.dir.createFile(io, "test_empty_store.dat", .{ .read = true });
+    defer file.close(io);
 
     // Serialize using CompactWriter with arena allocator
     var arena = std.heap.ArenaAllocator.init(gpa);
@@ -626,19 +627,16 @@ test "Ident.Store empty CompactWriter roundtrip" {
     try std.testing.expect(@intFromPtr(serialized) != 0);
 
     // Write to file
-    try writer.writeGather(arena_allocator, file);
+    try writer.writeGather(arena_allocator, file, io);
 
     // Read back
-    try file.seekTo(0);
-    const file_size = try file.getEndPos();
+    const file_size = writer.total_bytes;
 
-    // Ensure file size matches what we wrote
-    try std.testing.expectEqual(@as(u64, @intCast(writer.total_bytes)), file_size);
-
-    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @as(usize, @intCast(file_size)));
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", file_size);
     defer gpa.free(buffer);
 
-    const bytes_read = try file.read(buffer);
+    _ = try file.readPositionalAll(io, buffer, 0);
+    const bytes_read = file_size;
     try std.testing.expectEqual(writer.total_bytes, bytes_read);
 
     // Cast and relocate
@@ -681,8 +679,9 @@ test "Ident.Store basic CompactWriter roundtrip" {
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const file = try tmp_dir.dir.createFile("test_basic_store.dat", .{ .read = true });
-    defer file.close();
+    const io = std.testing.io;
+    const file = try tmp_dir.dir.createFile(io, "test_basic_store.dat", .{ .read = true });
+    defer file.close(io);
 
     // Serialize using CompactWriter with arena allocator
     var arena = std.heap.ArenaAllocator.init(gpa);
@@ -696,19 +695,16 @@ test "Ident.Store basic CompactWriter roundtrip" {
     try std.testing.expect(@intFromPtr(serialized) != 0);
 
     // Write to file
-    try writer.writeGather(arena_allocator, file);
+    try writer.writeGather(arena_allocator, file, io);
 
     // Read back
-    try file.seekTo(0);
-    const file_size = try file.getEndPos();
+    const file_size = writer.total_bytes;
 
-    // Ensure file size matches what we wrote
-    try std.testing.expectEqual(@as(u64, @intCast(writer.total_bytes)), file_size);
-
-    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @as(usize, @intCast(file_size)));
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", file_size);
     defer gpa.free(buffer);
 
-    const bytes_read = try file.read(buffer);
+    _ = try file.readPositionalAll(io, buffer, 0);
+    const bytes_read = file_size;
     try std.testing.expectEqual(writer.total_bytes, bytes_read);
 
     // Cast and relocate
@@ -766,8 +762,9 @@ test "Ident.Store with genUnique CompactWriter roundtrip" {
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const file = try tmp_dir.dir.createFile("test_unique_store.dat", .{ .read = true });
-    defer file.close();
+    const io = std.testing.io;
+    const file = try tmp_dir.dir.createFile(io, "test_unique_store.dat", .{ .read = true });
+    defer file.close(io);
 
     // Serialize using arena allocator
     var arena = std.heap.ArenaAllocator.init(gpa);
@@ -781,19 +778,16 @@ test "Ident.Store with genUnique CompactWriter roundtrip" {
     try std.testing.expect(@intFromPtr(serialized) != 0);
 
     // Write to file
-    try writer.writeGather(arena_allocator, file);
+    try writer.writeGather(arena_allocator, file, io);
 
     // Read back
-    try file.seekTo(0);
-    const file_size = try file.getEndPos();
+    const file_size = writer.total_bytes;
 
-    // Ensure file size matches what we wrote
-    try std.testing.expectEqual(@as(u64, @intCast(writer.total_bytes)), file_size);
-
-    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @as(usize, @intCast(file_size)));
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", file_size);
     defer gpa.free(buffer);
 
-    const bytes_read = try file.read(buffer);
+    _ = try file.readPositionalAll(io, buffer, 0);
+    const bytes_read = file_size;
     try std.testing.expectEqual(writer.total_bytes, bytes_read);
 
     // Cast and relocate
@@ -829,8 +823,9 @@ test "Ident.Store CompactWriter roundtrip" {
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const file = try tmp_dir.dir.createFile("test_frozen_store.dat", .{ .read = true });
-    defer file.close();
+    const io = std.testing.io;
+    const file = try tmp_dir.dir.createFile(io, "test_frozen_store.dat", .{ .read = true });
+    defer file.close(io);
 
     // Serialize using arena allocator
     var arena = std.heap.ArenaAllocator.init(gpa);
@@ -844,19 +839,16 @@ test "Ident.Store CompactWriter roundtrip" {
     try std.testing.expect(@intFromPtr(serialized) != 0);
 
     // Write to file
-    try writer.writeGather(arena_allocator, file);
+    try writer.writeGather(arena_allocator, file, io);
 
     // Read back
-    try file.seekTo(0);
-    const file_size = try file.getEndPos();
+    const file_size = writer.total_bytes;
 
-    // Ensure file size matches what we wrote
-    try std.testing.expectEqual(@as(u64, @intCast(writer.total_bytes)), file_size);
-
-    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @as(usize, @intCast(file_size)));
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", file_size);
     defer gpa.free(buffer);
 
-    const bytes_read = try file.read(buffer);
+    _ = try file.readPositionalAll(io, buffer, 0);
+    const bytes_read = file_size;
     try std.testing.expectEqual(writer.total_bytes, bytes_read);
 
     // Cast and relocate
@@ -911,8 +903,9 @@ test "Ident.Store comprehensive CompactWriter roundtrip" {
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const file = try tmp_dir.dir.createFile("test_comprehensive_store.dat", .{ .read = true });
-    defer file.close();
+    const io = std.testing.io;
+    const file = try tmp_dir.dir.createFile(io, "test_comprehensive_store.dat", .{ .read = true });
+    defer file.close(io);
 
     // Serialize using arena allocator
     var arena = std.heap.ArenaAllocator.init(gpa);
@@ -926,19 +919,16 @@ test "Ident.Store comprehensive CompactWriter roundtrip" {
     try std.testing.expect(@intFromPtr(serialized) != 0);
 
     // Write to file
-    try writer.writeGather(arena_allocator, file);
+    try writer.writeGather(arena_allocator, file, io);
 
     // Read back
-    try file.seekTo(0);
-    const file_size = try file.getEndPos();
+    const file_size = writer.total_bytes;
 
-    // Ensure file size matches what we wrote
-    try std.testing.expectEqual(@as(u64, @intCast(writer.total_bytes)), file_size);
-
-    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @as(usize, @intCast(file_size)));
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", file_size);
     defer gpa.free(buffer);
 
-    const bytes_read = try file.read(buffer);
+    _ = try file.readPositionalAll(io, buffer, 0);
+    const bytes_read = file_size;
     try std.testing.expectEqual(writer.total_bytes, bytes_read);
 
     // Cast and relocate

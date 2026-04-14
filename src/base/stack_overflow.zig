@@ -42,22 +42,9 @@ fn handleStackOverflow() noreturn {
         _ = kernel32.TerminateProcess(kernel32.GetCurrentProcess(), 134);
         @trap();
     } else if (comptime builtin.os.tag != .freestanding) {
-        // POSIX: use direct write syscall for signal-safety
-        const written = posix.write(posix.STDERR_FILENO, STACK_OVERFLOW_MESSAGE) catch |err| {
-            if (comptime builtin.mode == .Debug) {
-                @panic(@errorName(err));
-            } else {
-                unreachable;
-            }
-        };
-        if (written != STACK_OVERFLOW_MESSAGE.len) {
-            if (comptime builtin.mode == .Debug) {
-                @panic("stack overflow handler short write");
-            } else {
-                unreachable;
-            }
-        }
-        posix.exit(134);
+        // POSIX: use raw write for signal-safety
+        _ = std.c.write(posix.STDERR_FILENO, STACK_OVERFLOW_MESSAGE.ptr, STACK_OVERFLOW_MESSAGE.len);
+        std.process.exit(134);
     } else {
         // WASI fallback
         std.process.exit(134);
@@ -85,21 +72,8 @@ fn handleArithmeticError() noreturn {
         _ = kernel32.WriteFile(stderr_handle, ARITHMETIC_ERROR_MESSAGE.ptr, ARITHMETIC_ERROR_MESSAGE.len, &bytes_written, null);
         kernel32.ExitProcess(136);
     } else if (comptime builtin.os.tag != .freestanding) {
-        const written = posix.write(posix.STDERR_FILENO, ARITHMETIC_ERROR_MESSAGE) catch |err| {
-            if (comptime builtin.mode == .Debug) {
-                @panic(@errorName(err));
-            } else {
-                unreachable;
-            }
-        };
-        if (written != ARITHMETIC_ERROR_MESSAGE.len) {
-            if (comptime builtin.mode == .Debug) {
-                @panic("arithmetic error handler short write");
-            } else {
-                unreachable;
-            }
-        }
-        posix.exit(136); // 128 + 8 (SIGFPE)
+        _ = std.c.write(posix.STDERR_FILENO, ARITHMETIC_ERROR_MESSAGE.ptr, ARITHMETIC_ERROR_MESSAGE.len);
+        std.process.exit(136); // 128 + 8 (SIGFPE)
     } else {
         std.process.exit(136);
     }
@@ -129,64 +103,17 @@ fn handleAccessViolation(fault_addr: usize) noreturn {
         _ = kernel32.WriteFile(stderr_handle, addr_str.ptr, @intCast(addr_str.len), &bytes_written, null);
         _ = kernel32.WriteFile(stderr_handle, msg2.ptr, msg2.len, &bytes_written, null);
         kernel32.ExitProcess(139);
-    } else if (comptime builtin.os.tag != .freestanding) {
-        // POSIX: use direct write syscall for signal-safety
+    } else {
+        // POSIX (and WASI fallback): use raw write for signal-safety
         const generic_msg = "\nSegmentation fault (SIGSEGV) in the Roc compiler.\nFault address: ";
-        {
-            const written = posix.write(posix.STDERR_FILENO, generic_msg) catch |err| {
-                if (comptime builtin.mode == .Debug) {
-                    @panic(@errorName(err));
-                } else {
-                    unreachable;
-                }
-            };
-            if (written != generic_msg.len) {
-                if (comptime builtin.mode == .Debug) {
-                    @panic("access violation handler short write (prefix)");
-                } else {
-                    unreachable;
-                }
-            }
-        }
+        _ = std.c.write(posix.STDERR_FILENO, generic_msg.ptr, generic_msg.len);
 
         // Write the fault address as hex
         var addr_buf: [18]u8 = undefined;
         const addr_str = handlers.formatHex(fault_addr, &addr_buf);
-        {
-            const written = posix.write(posix.STDERR_FILENO, addr_str) catch |err| {
-                if (comptime builtin.mode == .Debug) {
-                    @panic(@errorName(err));
-                } else {
-                    unreachable;
-                }
-            };
-            if (written != addr_str.len) {
-                if (comptime builtin.mode == .Debug) {
-                    @panic("access violation handler short write (addr)");
-                } else {
-                    unreachable;
-                }
-            }
-        }
-        {
-            const tail = "\n\nPlease report this issue at: https://github.com/roc-lang/roc/issues\n\n";
-            const written = posix.write(posix.STDERR_FILENO, tail) catch |err| {
-                if (comptime builtin.mode == .Debug) {
-                    @panic(@errorName(err));
-                } else {
-                    unreachable;
-                }
-            };
-            if (written != tail.len) {
-                if (comptime builtin.mode == .Debug) {
-                    @panic("access violation handler short write (tail)");
-                } else {
-                    unreachable;
-                }
-            }
-        }
-        posix.exit(139);
-    } else {
+        _ = std.c.write(posix.STDERR_FILENO, addr_str.ptr, addr_str.len);
+        const report_msg = "\n\nPlease report this issue at: https://github.com/roc-lang/roc/issues\n\n";
+        _ = std.c.write(posix.STDERR_FILENO, report_msg.ptr, report_msg.len);
         std.process.exit(139);
     }
 }
@@ -234,66 +161,102 @@ test "formatHex" {
     try std.testing.expectEqualStrings("0xdeadbeef", medium);
 }
 
+/// Check if we're being run as a subprocess to trigger stack overflow.
+/// This is called by tests to create a child process that will crash.
+/// Returns true if we should trigger the overflow (and not return).
+pub fn checkAndTriggerIfSubprocess() bool {
+    // Check for the special environment variable that signals we should crash
+    const env_val = std.c.getenv("ROC_TEST_TRIGGER_STACK_OVERFLOW") orelse return false;
+
+    if (std.mem.eql(u8, std.mem.span(env_val), "1")) {
+        // Install handler and trigger overflow
+        _ = install();
+        triggerStackOverflowForTest();
+        // Never returns
+    }
+    return false;
+}
+
 test "stack overflow handler produces helpful error message" {
     // Skip on freestanding targets - no process spawning or signal handling
     if (comptime builtin.os.tag == .freestanding) {
         return error.SkipZigTest;
     }
 
-    try testStackOverflowInChildProcess();
+    try testStackOverflowPosix();
 }
 
-fn testStackOverflowInChildProcess() !void {
-    const allocator = std.testing.allocator;
-    const helper_path = std.process.getEnvVarOwned(allocator, STACK_OVERFLOW_TEST_HELPER_ENV_VAR) catch |err| {
-        std.debug.print("Missing {s}: {s}\n", .{ STACK_OVERFLOW_TEST_HELPER_ENV_VAR, @errorName(err) });
-        return error.TestUnexpectedResult;
-    };
-    defer allocator.free(helper_path);
+fn testStackOverflowPosix() !void {
+    // Create a pipe to capture stderr from the child
+    var pipe_fds: [2]posix.fd_t = undefined;
+    if (std.c.pipe(&pipe_fds) != 0) return error.PipeFailed;
+    const pipe_read = pipe_fds[0];
+    const pipe_write = pipe_fds[1];
 
-    const result = try std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = &.{helper_path},
-        .max_output_bytes = 4096,
-    });
-    defer allocator.free(result.stdout);
-    defer allocator.free(result.stderr);
-
-    try verifyHandlerOutput(result.term, result.stderr);
-}
-
-fn verifyHandlerOutput(term: std.process.Child.Term, stderr_output: []const u8) !void {
-    const has_stack_overflow_msg = std.mem.indexOf(u8, stderr_output, "overflowed its stack memory") != null;
-    const has_segfault_msg = std.mem.indexOf(u8, stderr_output, "Segmentation fault") != null;
-
-    switch (term) {
-        .Exited => |code| {
-            // Exit code 134 = stack overflow detected
-            // Exit code 139 = generic segfault/access violation handler path
-            if (code == 134 or code == 139) {
-                try std.testing.expect(has_stack_overflow_msg or has_segfault_msg);
-                return;
-            }
-
-            std.debug.print("Unexpected exit code: {}\n", .{code});
-        },
-        .Signal => |sig| {
-            if (comptime builtin.os.tag != .windows and builtin.os.tag != .freestanding) {
-                if (sig == posix.SIG.SEGV or sig == posix.SIG.BUS) {
-                    // The handler might not have caught it - this can happen on some systems
-                    // where the signal delivery is different. Just warn and skip.
-                    std.debug.print("Warning: Stack overflow was not caught by handler (signal {})\n", .{sig});
-                    return error.SkipZigTest;
-                }
-            }
-
-            std.debug.print("Unexpected termination signal: {}\n", .{sig});
-        },
-        else => {
-            std.debug.print("Unexpected termination: {}\n", .{term});
-        },
+    const fork_result = std.c.fork();
+    if (fork_result < 0) {
+        _ = std.c.close(pipe_read);
+        _ = std.c.close(pipe_write);
+        return error.ForkFailed;
     }
 
-    std.debug.print("Stderr: {s}\n", .{stderr_output});
-    return error.TestUnexpectedResult;
+    if (fork_result == 0) {
+        // Child process
+        _ = std.c.close(pipe_read);
+
+        // Redirect stderr to the pipe
+        if (std.c.dup2(pipe_write, posix.STDERR_FILENO) < 0) std.process.exit(99);
+        _ = std.c.close(pipe_write);
+
+        // Install the handler and trigger stack overflow
+        _ = install();
+        triggerStackOverflowForTest();
+        // Should never reach here
+        unreachable;
+    } else {
+        // Parent process
+        _ = std.c.close(pipe_write);
+
+        // Wait for child to exit
+        var status: c_int = 0;
+        _ = std.c.waitpid(fork_result, &status, 0);
+
+        // Parse the wait status (Unix encoding)
+        const ustatus: u32 = @bitCast(status);
+        const exited_normally = (ustatus & 0x7f) == 0;
+        const exit_code: u8 = @truncate((ustatus >> 8) & 0xff);
+        const termination_signal: u8 = @truncate(ustatus & 0x7f);
+
+        // Read stderr output from child
+        var stderr_buf: [4096]u8 = undefined;
+        const read_result = std.c.read(pipe_read, &stderr_buf, stderr_buf.len);
+        const bytes_read: usize = if (read_result > 0) @intCast(read_result) else 0;
+        _ = std.c.close(pipe_read);
+
+        const stderr_output = stderr_buf[0..bytes_read];
+
+        try verifyHandlerOutput(exited_normally, exit_code, termination_signal, stderr_output);
+    }
+}
+
+fn verifyHandlerOutput(exited_normally: bool, exit_code: u8, termination_signal: u8, stderr_output: []const u8) !void {
+    // Exit code 134 = stack overflow detected
+    // Exit code 139 = generic segfault (handler caught it but didn't classify as stack overflow)
+    if (exited_normally and (exit_code == 134 or exit_code == 139)) {
+        // Check that our handler message was printed
+        const has_stack_overflow_msg = std.mem.indexOf(u8, stderr_output, "overflowed its stack memory") != null;
+        const has_segfault_msg = std.mem.indexOf(u8, stderr_output, "Segmentation fault") != null;
+
+        // Handler should have printed EITHER stack overflow message OR segfault message
+        try std.testing.expect(has_stack_overflow_msg or has_segfault_msg);
+    } else if (!exited_normally and (termination_signal == @intFromEnum(posix.SIG.SEGV) or termination_signal == @intFromEnum(posix.SIG.BUS))) {
+        // The handler might not have caught it - this can happen on some systems
+        // where the signal delivery is different. Just warn and skip.
+        std.debug.print("Warning: Stack overflow was not caught by handler (signal {})\n", .{termination_signal});
+        return error.SkipZigTest;
+    } else {
+        std.debug.print("Unexpected exit status: exited={}, code={}, signal={}\n", .{ exited_normally, exit_code, termination_signal });
+        std.debug.print("Stderr: {s}\n", .{stderr_output});
+        return error.TestUnexpectedResult;
+    }
 }
