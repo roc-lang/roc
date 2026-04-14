@@ -626,7 +626,7 @@ pub const BuildEnv = struct {
                         std.debug.print("[TRANSFER]   Module {s} not in scheduler, creating\n", .{coord_mod.name});
                     }
                     // Create the module in the scheduler
-                    sched.ensureModule(coord_mod.name, coord_mod.path) catch continue;
+                    _ = sched.ensureModule(coord_mod.name, coord_mod.path) catch continue;
                     maybe_sched_mod = sched.getModuleState(coord_mod.name);
                 }
                 const sched_mod = maybe_sched_mod orelse continue;
@@ -1018,7 +1018,7 @@ pub const BuildEnv = struct {
         // Now finalize numeric defaults for the app module. This must happen AFTER
         // checkPlatformRequirements so that numeric literals can be constrained by
         // platform types (e.g., I64) before defaulting to Dec.
-        try checker.verifyNumericDefaults();
+        try checker.finalizeNumericDefaults();
 
         // If there are type problems, convert them to reports and emit via sink
         if (checker.problems.problems.items.len > 0) {

@@ -988,7 +988,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
 pub fn replaceExprWithNum(store: *NodeStore, expr_idx: CIR.Expr.Idx, value: CIR.IntValue, num_kind: CIR.NumKind) !void {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
     const int128_idx: u32 = @intCast(store.int128_values.len());
-    try store.int128_values.append(store.gpa, @bitCast(value.bytes));
+    _ = try store.int128_values.append(store.gpa, @bitCast(value.bytes));
 
     var node = Node.init(.expr_num);
     node.setPayload(.{ .expr_num = .{
@@ -1014,7 +1014,7 @@ pub fn replaceExprWithZeroArgumentTag(
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
 
     const zero_arg_tag_idx: u32 = @intCast(store.zero_arg_tag_data.len());
-    try store.zero_arg_tag_data.append(store.gpa, .{
+    _ = try store.zero_arg_tag_data.append(store.gpa, .{
         .closure_name = @bitCast(closure_name),
         .variant_var = @intFromEnum(variant_var),
         .ext_var = @intFromEnum(ext_var),
@@ -1043,7 +1043,7 @@ pub fn replaceExprWithTuple(
     // Store element indices in index_data
     const index_data_start = store.index_data.len();
     for (elem_indices) |elem_idx| {
-        try store.index_data.append(store.gpa, @intFromEnum(elem_idx));
+        _ = try store.index_data.append(store.gpa, @intFromEnum(elem_idx));
     }
 
     var node = Node.init(.expr_tuple);
@@ -1070,7 +1070,7 @@ pub fn replaceExprWithTag(
     // Store argument indices in index_data
     const index_data_start = store.index_data.len();
     for (arg_indices) |arg_idx| {
-        try store.index_data.append(store.gpa, @intFromEnum(arg_idx));
+        _ = try store.index_data.append(store.gpa, @intFromEnum(arg_idx));
     }
 
     var node = Node.init(.expr_tag);
@@ -1627,7 +1627,7 @@ pub fn getExposedItem(store: *const NodeStore, exposedItem: CIR.ExposedItem.Idx)
 pub fn addStatement(store: *NodeStore, statement: CIR.Statement, region: base.Region) Allocator.Error!CIR.Statement.Idx {
     const node = try store.makeStatementNode(statement);
     const node_idx = try store.nodes.append(store.gpa, node);
-    try store.regions.append(store.gpa, region);
+    _ = try store.regions.append(store.gpa, region);
     return @enumFromInt(@intFromEnum(node_idx));
 }
 
@@ -1657,7 +1657,7 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
                 .start = 1,
                 .len = @intFromEnum(anno),
             } else .{ .start = 0, .len = 0 };
-            try store.span2_data.append(store.gpa, anno_data);
+            _ = try store.span2_data.append(store.gpa, anno_data);
 
             node.tag = .statement_decl;
             node.setPayload(.{ .statement_decl = .{
@@ -1672,7 +1672,7 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
                 .start = 1,
                 .len = @intFromEnum(anno),
             } else .{ .start = 0, .len = 0 };
-            try store.span2_data.append(store.gpa, anno_data);
+            _ = try store.span2_data.append(store.gpa, anno_data);
 
             node.tag = .statement_var;
             node.setPayload(.{ .statement_var = .{
@@ -1747,7 +1747,7 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
 
             // Store import data in typed list
             const import_data_idx: u32 = @intCast(store.import_data.len());
-            try store.import_data.append(store.gpa, .{
+            _ = try store.import_data.append(store.gpa, .{
                 .alias_tok = if (s.alias_tok) |alias| @as(u32, @bitCast(alias)) else 0,
                 .qualifier_tok = if (s.qualifier_tok) |qualifier| @as(u32, @bitCast(qualifier)) else 0,
                 .flags = flags,
@@ -1780,7 +1780,7 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
 
             const where_span2_idx_plus_one: u32 = if (s.where) |where_clause| blk: {
                 const idx: u32 = @intCast(store.span2_data.len());
-                try store.span2_data.append(store.gpa, .{
+                _ = try store.span2_data.append(store.gpa, .{
                     .start = where_clause.span.start,
                     .len = where_clause.span.len,
                 });
@@ -1853,7 +1853,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         .e_num => |e| {
             node.tag = .expr_num;
             const int128_idx: u32 = @intCast(store.int128_values.len());
-            try store.int128_values.append(store.gpa, @bitCast(e.value.bytes));
+            _ = try store.int128_values.append(store.gpa, @bitCast(e.value.bytes));
             node.setPayload(.{ .expr_num = .{
                 .kind = @intFromEnum(e.kind),
                 .val_kind = @intFromEnum(e.value.kind),
@@ -1903,7 +1903,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         .e_dec => |e| {
             node.tag = .expr_dec;
             const int128_idx: u32 = @intCast(store.int128_values.len());
-            try store.int128_values.append(store.gpa, e.value.num);
+            _ = try store.int128_values.append(store.gpa, e.value.num);
             node.setPayload(.{ .expr_dec = .{
                 .int128_idx = int128_idx,
                 .has_suffix = e.has_suffix,
@@ -1922,7 +1922,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         .e_typed_int => |e| {
             node.tag = .expr_typed_int;
             const int128_idx: u32 = @intCast(store.int128_values.len());
-            try store.int128_values.append(store.gpa, @bitCast(e.value.bytes));
+            _ = try store.int128_values.append(store.gpa, @bitCast(e.value.bytes));
             node.setPayload(.{ .expr_typed_int = .{
                 .type_name = @bitCast(e.type_name),
                 .val_kind = @intFromEnum(e.value.kind),
@@ -1932,7 +1932,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         .e_typed_frac => |e| {
             node.tag = .expr_typed_frac;
             const int128_idx: u32 = @intCast(store.int128_values.len());
-            try store.int128_values.append(store.gpa, @bitCast(e.value.bytes));
+            _ = try store.int128_values.append(store.gpa, @bitCast(e.value.bytes));
             node.setPayload(.{ .expr_typed_frac = .{
                 .type_name = @bitCast(e.type_name),
                 .val_kind = @intFromEnum(e.value.kind),
@@ -1977,7 +1977,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         .e_nominal_external => |e| {
             node.tag = .expr_nominal_external;
             const backing_span2_idx: u32 = @intCast(store.span2_data.len());
-            try store.span2_data.append(store.gpa, .{
+            _ = try store.span2_data.append(store.gpa, .{
                 .start = @intFromEnum(e.backing_expr),
                 .len = @intFromEnum(e.backing_type),
             });
@@ -1996,7 +1996,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 const packed_span = FunctionArgs.fromDataSpanUnchecked(args.span);
                 break :blk packed_span.toU32() + OPTIONAL_VALUE_OFFSET;
             } else 0;
-            try store.span_with_node_data.append(store.gpa, .{
+            _ = try store.span_with_node_data.append(store.gpa, .{
                 .start = e.field_name_region.start.offset,
                 .len = e.field_name_region.end.offset,
                 .node = packed_args,
@@ -2046,7 +2046,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             node.tag = .expr_type_var_dispatch;
             // Store args span in span2_data
             const span2_idx: u32 = @intCast(store.span2_data.len());
-            try store.span2_data.append(store.gpa, .{ .start = tvd.args.span.start, .len = tvd.args.span.len });
+            _ = try store.span2_data.append(store.gpa, .{ .start = tvd.args.span.start, .len = tvd.args.span.len });
 
             node.setPayload(.{ .expr_type_var_dispatch = .{
                 .type_var_alias_stmt = @intFromEnum(tvd.type_var_alias_stmt),
@@ -2057,7 +2057,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         .e_hosted_lambda => |hosted| {
             node.tag = .expr_hosted_lambda;
             const args_span2_idx: u32 = @intCast(store.span2_data.len());
-            try store.span2_data.append(store.gpa, .{
+            _ = try store.span2_data.append(store.gpa, .{
                 .start = hosted.args.span.start,
                 .len = hosted.args.span.len,
             });
@@ -2071,7 +2071,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         .e_run_low_level => |run_ll| {
             node.tag = .expr_run_low_level;
             const span2_idx: u32 = @intCast(store.span2_data.len());
-            try store.span2_data.append(store.gpa, .{ .start = run_ll.args.span.start, .len = run_ll.args.span.len });
+            _ = try store.span2_data.append(store.gpa, .{ .start = run_ll.args.span.start, .len = run_ll.args.span.len });
 
             node.setPayload(.{ .expr_run_low_level = .{
                 .op = @intFromEnum(run_ll.op),
@@ -2081,7 +2081,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         .e_match => |e| {
             node.tag = .expr_match;
             const match_data_idx: u32 = @intCast(store.match_data.len());
-            try store.match_data.append(store.gpa, .{
+            _ = try store.match_data.append(store.gpa, .{
                 .cond = @intFromEnum(e.cond),
                 .branches_start = e.branches.span.start,
                 .branches_len = e.branches.span.len,
@@ -2096,7 +2096,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         .e_if => |e| {
             node.tag = .expr_if_then_else;
             const branches_else_idx: u32 = @intCast(store.span_with_node_data.len());
-            try store.span_with_node_data.append(store.gpa, .{
+            _ = try store.span_with_node_data.append(store.gpa, .{
                 .start = e.branches.span.start,
                 .len = e.branches.span.len,
                 .node = @intFromEnum(e.final_else),
@@ -2109,7 +2109,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         .e_call => |e| {
             node.tag = .expr_call;
             const span2_idx: u32 = @intCast(store.span2_data.len());
-            try store.span2_data.append(store.gpa, .{ .start = e.args.span.start, .len = e.args.span.len });
+            _ = try store.span2_data.append(store.gpa, .{ .start = e.args.span.start, .len = e.args.span.len });
 
             node.setPayload(.{ .expr_call = .{
                 .func = @intFromEnum(e.func),
@@ -2121,7 +2121,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             node.tag = .expr_record;
             const fields_ext_idx: u32 = @intCast(store.span_with_node_data.len());
             const ext_value = if (e.ext) |ext| @intFromEnum(ext) else 0;
-            try store.span_with_node_data.append(store.gpa, .{
+            _ = try store.span_with_node_data.append(store.gpa, .{
                 .start = e.fields.span.start,
                 .len = e.fields.span.len,
                 .node = ext_value,
@@ -2137,7 +2137,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         .e_zero_argument_tag => |e| {
             node.tag = .expr_zero_argument_tag;
             const zero_arg_tag_idx: u32 = @intCast(store.zero_arg_tag_data.len());
-            try store.zero_arg_tag_data.append(store.gpa, .{
+            _ = try store.zero_arg_tag_data.append(store.gpa, .{
                 .closure_name = @bitCast(e.closure_name),
                 .variant_var = @intFromEnum(e.variant_var),
                 .ext_var = @intFromEnum(e.ext_var),
@@ -2151,7 +2151,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         .e_closure => |e| {
             node.tag = .expr_closure;
             const closure_data_idx: u32 = @intCast(store.closure_data.len());
-            try store.closure_data.append(store.gpa, .{
+            _ = try store.closure_data.append(store.gpa, .{
                 .lambda_idx = @intFromEnum(e.lambda_idx),
                 .captures_start = e.captures.span.start,
                 .captures_len = e.captures.span.len,
@@ -2221,7 +2221,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         .e_lookup_pending => |e| e.region,
         else => region,
     };
-    try store.regions.append(store.gpa, actual_region);
+    _ = try store.regions.append(store.gpa, actual_region);
     return @enumFromInt(@intFromEnum(node_idx));
 }
 
@@ -2237,7 +2237,7 @@ pub fn addRecordField(store: *NodeStore, recordField: CIR.RecordField, region: b
     } });
 
     const nid = try store.nodes.append(store.gpa, node);
-    try store.regions.append(store.gpa, region);
+    _ = try store.regions.append(store.gpa, region);
     return @enumFromInt(@intFromEnum(nid));
 }
 
@@ -2254,7 +2254,7 @@ pub fn addRecordDestruct(store: *NodeStore, record_destruct: CIR.Pattern.RecordD
         .SubPattern => |pattern_idx| .{ .start = 1, .len = @intFromEnum(pattern_idx) },
         .Rest => |pattern_idx| .{ .start = 2, .len = @intFromEnum(pattern_idx) },
     };
-    try store.span2_data.append(store.gpa, kind_data);
+    _ = try store.span2_data.append(store.gpa, kind_data);
 
     var node = Node.init(.record_destruct);
     node.setPayload(.{ .record_destruct = .{
@@ -2264,7 +2264,7 @@ pub fn addRecordDestruct(store: *NodeStore, record_destruct: CIR.Pattern.RecordD
     } });
 
     const nid = try store.nodes.append(store.gpa, node);
-    try store.regions.append(store.gpa, region);
+    _ = try store.regions.append(store.gpa, region);
     return @enumFromInt(@intFromEnum(nid));
 }
 
@@ -2281,7 +2281,7 @@ pub fn addCapture(store: *NodeStore, capture: CIR.Expr.Capture, region: base.Reg
     } });
 
     const nid = try store.nodes.append(store.gpa, node);
-    try store.regions.append(store.gpa, region);
+    _ = try store.regions.append(store.gpa, region);
     return @enumFromInt(@intFromEnum(nid));
 }
 
@@ -2292,7 +2292,7 @@ pub fn addCapture(store: *NodeStore, capture: CIR.Expr.Capture, region: base.Reg
 pub fn addMatchBranch(store: *NodeStore, branch: CIR.Expr.Match.Branch, region: base.Region) Allocator.Error!CIR.Expr.Match.Branch.Idx {
     const match_branch_idx: u32 = @intCast(store.match_branch_data.len());
     const guard_idx = if (branch.guard) |g| @intFromEnum(g) else 0;
-    try store.match_branch_data.append(store.gpa, .{
+    _ = try store.match_branch_data.append(store.gpa, .{
         .patterns_start = branch.patterns.span.start,
         .patterns_len = branch.patterns.span.len,
         .value = @intFromEnum(branch.value),
@@ -2306,7 +2306,7 @@ pub fn addMatchBranch(store: *NodeStore, branch: CIR.Expr.Match.Branch, region: 
     } });
 
     const nid = try store.nodes.append(store.gpa, node);
-    try store.regions.append(store.gpa, region);
+    _ = try store.regions.append(store.gpa, region);
     return @enumFromInt(@intFromEnum(nid));
 }
 
@@ -2321,7 +2321,7 @@ pub fn addMatchBranchPattern(store: *NodeStore, branchPattern: CIR.Expr.Match.Br
         .degenerate = @intFromBool(branchPattern.degenerate),
     } });
     const nid = try store.nodes.append(store.gpa, node);
-    try store.regions.append(store.gpa, region);
+    _ = try store.regions.append(store.gpa, region);
     return @enumFromInt(@intFromEnum(nid));
 }
 
@@ -2336,7 +2336,7 @@ pub fn addWhereClause(store: *NodeStore, whereClause: CIR.WhereClause, region: b
         .w_method => |where_method| {
             node.tag = .where_method;
             const args_ret_idx: u32 = @intCast(store.span_with_node_data.len());
-            try store.span_with_node_data.append(store.gpa, .{
+            _ = try store.span_with_node_data.append(store.gpa, .{
                 .start = where_method.args.span.start,
                 .len = where_method.args.span.len,
                 .node = @intFromEnum(where_method.ret),
@@ -2363,7 +2363,7 @@ pub fn addWhereClause(store: *NodeStore, whereClause: CIR.WhereClause, region: b
     }
 
     const nid = try store.nodes.append(store.gpa, node);
-    try store.regions.append(store.gpa, region);
+    _ = try store.regions.append(store.gpa, region);
     return @enumFromInt(@intFromEnum(nid));
 }
 
@@ -2407,7 +2407,7 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
         .nominal_external => |n| {
             node.tag = .pattern_nominal_external;
             const backing_span2_idx: u32 = @intCast(store.span2_data.len());
-            try store.span2_data.append(store.gpa, .{
+            _ = try store.span2_data.append(store.gpa, .{
                 .start = @intFromEnum(n.backing_pattern),
                 .len = @intFromEnum(n.backing_type),
             });
@@ -2442,7 +2442,7 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
                 .has_pattern = 0,
                 .pattern_idx = 0,
             };
-            try store.pattern_list_data.append(store.gpa, list_data);
+            _ = try store.pattern_list_data.append(store.gpa, list_data);
 
             node.setPayload(.{ .pattern_list = .{
                 .pattern_list_data_idx = pattern_list_data_idx,
@@ -2458,7 +2458,7 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
         .num_literal => |p| {
             node.tag = .pattern_num_literal;
             const int128_idx: u32 = @intCast(store.int128_values.len());
-            try store.int128_values.append(store.gpa, @bitCast(p.value.bytes));
+            _ = try store.int128_values.append(store.gpa, @bitCast(p.value.bytes));
             node.setPayload(.{ .pattern_num_literal = .{
                 .kind = @intFromEnum(p.kind),
                 .value_kind = @intFromEnum(p.value.kind),
@@ -2476,7 +2476,7 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
         .dec_literal => |p| {
             node.tag = .pattern_dec_literal;
             const int128_idx: u32 = @intCast(store.int128_values.len());
-            try store.int128_values.append(store.gpa, p.value.num);
+            _ = try store.int128_values.append(store.gpa, p.value.num);
             node.setPayload(.{ .pattern_dec_literal = .{
                 .int128_idx = int128_idx,
                 .has_suffix = p.has_suffix,
@@ -2514,7 +2514,7 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
     }
 
     const node_idx = try store.nodes.append(store.gpa, node);
-    try store.regions.append(store.gpa, region);
+    _ = try store.regions.append(store.gpa, region);
     return @enumFromInt(@intFromEnum(node_idx));
 }
 
@@ -2555,7 +2555,7 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
                     .value2 = @bitCast(pend.type_name),
                 },
             };
-            try store.type_apply_data.append(store.gpa, apply_data);
+            _ = try store.type_apply_data.append(store.gpa, apply_data);
             node.setPayload(.{ .ty_apply = .{
                 .name = @bitCast(a.name),
                 .args_start = a.args.span.start,
@@ -2598,7 +2598,7 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
                     .len = @bitCast(pend.type_name),
                 },
             };
-            try store.span2_data.append(store.gpa, base_data);
+            _ = try store.span2_data.append(store.gpa, base_data);
             node.setPayload(.{ .ty_lookup = .{
                 .name = @bitCast(t.name),
                 .base = @intFromEnum(@as(CIR.TypeAnno.LocalOrExternal.Tag, std.meta.activeTag(t.base))),
@@ -2639,7 +2639,7 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
         .@"fn" => |f| {
             node.tag = .ty_fn;
             const fn_info_span2_idx: u32 = @intCast(store.span2_data.len());
-            try store.span2_data.append(store.gpa, .{
+            _ = try store.span2_data.append(store.gpa, .{
                 .start = if (f.effectful) 1 else 0,
                 .len = @intFromEnum(f.ret),
             });
@@ -2664,7 +2664,7 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
     }
 
     const nid = try store.nodes.append(store.gpa, node);
-    try store.regions.append(store.gpa, region);
+    _ = try store.regions.append(store.gpa, region);
     return @enumFromInt(@intFromEnum(nid));
 }
 
@@ -2688,7 +2688,7 @@ pub fn addTypeHeader(store: *NodeStore, typeHeader: CIR.TypeHeader, region: base
     } });
 
     const nid = try store.nodes.append(store.gpa, node);
-    try store.regions.append(store.gpa, region);
+    _ = try store.regions.append(store.gpa, region);
     return @enumFromInt(@intFromEnum(nid));
 }
 
@@ -2704,7 +2704,7 @@ pub fn addAnnoRecordField(store: *NodeStore, annoRecordField: CIR.TypeAnno.Recor
     } });
 
     const nid = try store.nodes.append(store.gpa, node);
-    try store.regions.append(store.gpa, region);
+    _ = try store.regions.append(store.gpa, region);
     return @enumFromInt(@intFromEnum(nid));
 }
 
@@ -2717,7 +2717,7 @@ pub fn addAnnotation(store: *NodeStore, annotation: CIR.Annotation, region: base
 
     if (annotation.where) |where_clause| {
         const where_span2_idx: u32 = @intCast(store.span2_data.len());
-        try store.span2_data.append(store.gpa, .{
+        _ = try store.span2_data.append(store.gpa, .{
             .start = where_clause.span.start,
             .len = where_clause.span.len,
         });
@@ -2735,7 +2735,7 @@ pub fn addAnnotation(store: *NodeStore, annotation: CIR.Annotation, region: base
     }
 
     const nid = try store.nodes.append(store.gpa, node);
-    try store.regions.append(store.gpa, region);
+    _ = try store.regions.append(store.gpa, region);
     return @enumFromInt(@intFromEnum(nid));
 }
 
@@ -2752,7 +2752,7 @@ pub fn addExposedItem(store: *NodeStore, exposedItem: CIR.ExposedItem, region: b
     } });
 
     const nid = try store.nodes.append(store.gpa, node);
-    try store.regions.append(store.gpa, region);
+    _ = try store.regions.append(store.gpa, region);
     return @enumFromInt(@intFromEnum(nid));
 }
 
@@ -2766,7 +2766,7 @@ pub fn addDef(store: *NodeStore, def: CIR.Def, region: base.Region) Allocator.Er
     const def_data_idx: u32 = @intCast(store.def_data.len());
     const kind_encoded = def.kind.encode();
     const anno_idx = if (def.annotation) |anno| @intFromEnum(anno) else 0;
-    try store.def_data.append(store.gpa, .{
+    _ = try store.def_data.append(store.gpa, .{
         .pattern = @intFromEnum(def.pattern),
         .expr = @intFromEnum(def.expr),
         .kind_0 = kind_encoded[0],
@@ -2779,7 +2779,7 @@ pub fn addDef(store: *NodeStore, def: CIR.Def, region: base.Region) Allocator.Er
     } });
 
     const nid = try store.nodes.append(store.gpa, node);
-    try store.regions.append(store.gpa, region);
+    _ = try store.regions.append(store.gpa, region);
     return @enumFromInt(@intFromEnum(nid));
 }
 
@@ -2921,7 +2921,7 @@ pub fn spanFrom(store: *NodeStore, comptime field_name: []const u8, comptime Spa
     const index_start = store.index_data.len();
     std.debug.assert(end >= i);
     while (i < end) {
-        try store.index_data.append(store.gpa, @intFromEnum(scratch_field.items.items[i]));
+        _ = try store.index_data.append(store.gpa, @intFromEnum(scratch_field.items.items[i]));
         i += 1;
     }
     return .{ .span = .{ .start = @intCast(index_start), .len = @as(u32, @intCast(end)) - start } };
@@ -3210,7 +3210,7 @@ pub fn addIfBranch(store: *NodeStore, if_branch: CIR.Expr.IfBranch, region: base
         .body = @intFromEnum(if_branch.body),
     } });
     const node_idx = try store.nodes.append(store.gpa, node);
-    try store.regions.append(store.gpa, region);
+    _ = try store.regions.append(store.gpa, region);
     return @enumFromInt(@intFromEnum(node_idx));
 }
 
@@ -3288,7 +3288,7 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
             node.tag = .diag_redundant_exposed;
             region = r.region;
             const region_span2_idx: u32 = @intCast(store.span2_data.len());
-            try store.span2_data.append(store.gpa, .{
+            _ = try store.span2_data.append(store.gpa, .{
                 .start = r.original_region.start.offset,
                 .len = r.original_region.end.offset,
             });
@@ -3539,7 +3539,7 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
             node.tag = .diag_type_shadowed_warning;
             region = r.region;
             const region_span2_idx: u32 = @intCast(store.span2_data.len());
-            try store.span2_data.append(store.gpa, .{
+            _ = try store.span2_data.append(store.gpa, .{
                 .start = r.original_region.start.offset,
                 .len = r.original_region.end.offset,
             });
@@ -3549,7 +3549,7 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
             node.tag = .diag_type_parameter_conflict;
             region = r.region;
             const region_span2_idx: u32 = @intCast(store.span2_data.len());
-            try store.span2_data.append(store.gpa, .{
+            _ = try store.span2_data.append(store.gpa, .{
                 .start = r.original_region.start.offset,
                 .len = r.original_region.end.offset,
             });
@@ -3611,7 +3611,7 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
             node.tag = .diag_mutually_recursive_type_aliases;
             region = r.region;
             const region_span2_idx: u32 = @intCast(store.span2_data.len());
-            try store.span2_data.append(store.gpa, .{
+            _ = try store.span2_data.append(store.gpa, .{
                 .start = r.other_region.start.offset,
                 .len = r.other_region.end.offset,
             });
@@ -3625,7 +3625,7 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
     }
 
     const nid = @intFromEnum(try store.nodes.append(store.gpa, node));
-    try store.regions.append(store.gpa, region);
+    _ = try store.regions.append(store.gpa, region);
 
     // append to our scratch so we can get a span later of all our diagnostics
     try store.addScratch("diagnostics", @as(CIR.Diagnostic.Idx, @enumFromInt(nid)));
@@ -3655,7 +3655,7 @@ pub fn addMalformed(store: *NodeStore, diagnostic_idx: CIR.Diagnostic.Idx, regio
         .value = @intFromEnum(diagnostic_idx),
     } });
     const malformed_nid = try store.nodes.append(store.gpa, malformed_node);
-    try store.regions.append(store.gpa, region);
+    _ = try store.regions.append(store.gpa, region);
     return malformed_nid;
 }
 
@@ -4088,7 +4088,7 @@ pub fn addTypeVarSlot(store: *NodeStore, parent_node_idx: Node.Idx, region: base
         .parent_node_idx = @intFromEnum(parent_node_idx),
     } });
     const nid = try store.nodes.append(store.gpa, node);
-    try store.regions.append(store.gpa, region);
+    _ = try store.regions.append(store.gpa, region);
     return @enumFromInt(@intFromEnum(nid));
 }
 
@@ -4105,7 +4105,7 @@ pub fn fillInTypeVarSlotsThru(store: *NodeStore, target_idx: Node.Idx, parent_no
             .parent_node_idx = @intFromEnum(parent_node_idx),
         } });
         store.nodes.items.appendAssumeCapacity(node);
-        try store.regions.append(store.gpa, region);
+        _ = try store.regions.append(store.gpa, region);
     }
 }
 
@@ -4560,7 +4560,8 @@ test "NodeStore empty CompactWriter roundtrip" {
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(file_size));
     defer gpa.free(buffer);
 
-    try file.read(buffer);
+    const read_len = try file.readAll(buffer);
+    try testing.expectEqual(buffer.len, read_len);
 
     // Cast and deserialize
     const serialized_ptr: *NodeStore.Serialized = @ptrCast(@alignCast(buffer.ptr));
@@ -4625,7 +4626,8 @@ test "NodeStore basic CompactWriter roundtrip" {
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(file_size));
     defer gpa.free(buffer);
 
-    try file.read(buffer);
+    const read_len = try file.readAll(buffer);
+    try testing.expectEqual(buffer.len, read_len);
 
     // Cast and deserialize
     const serialized_ptr: *NodeStore.Serialized = @ptrCast(@alignCast(buffer.ptr));
@@ -4716,7 +4718,8 @@ test "NodeStore multiple nodes CompactWriter roundtrip" {
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(file_size));
     defer gpa.free(buffer);
 
-    try file.read(buffer);
+    const read_len = try file.readAll(buffer);
+    try testing.expectEqual(buffer.len, read_len);
 
     // Cast and deserialize
     const serialized_ptr: *NodeStore.Serialized = @ptrCast(@alignCast(buffer.ptr));

@@ -75,9 +75,14 @@ pub fn copyVar(
         allocator,
     );
 
+    const from_numeral_origin = switch (resolved.desc.content) {
+        .flex => resolved.desc.from_numeral_origin,
+        else => false,
+    };
     try dest_store.dangerousSetVarDesc(placeholder_var, .{
         .content = dest_content,
         .rank = types_mod.Rank.generalized,
+        .from_numeral_origin = from_numeral_origin,
     });
 
     return placeholder_var;

@@ -219,7 +219,10 @@ fn sanitizeUtf8(input: []const u8, allocator: std.mem.Allocator) []const u8 {
             in_i += 1;
         }
     }
-    allocator.resize(buf, out_i);
+    const resized = allocator.resize(buf, out_i);
+    if (!resized) {
+        // resize can fail but the buffer remains valid; keep original allocation
+    }
     return buf[0..out_i];
 }
 

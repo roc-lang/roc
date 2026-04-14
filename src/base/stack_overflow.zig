@@ -43,7 +43,20 @@ fn handleStackOverflow() noreturn {
         @trap();
     } else if (comptime builtin.os.tag != .freestanding) {
         // POSIX: use direct write syscall for signal-safety
-        posix.write(posix.STDERR_FILENO, STACK_OVERFLOW_MESSAGE) catch {};
+        const written = posix.write(posix.STDERR_FILENO, STACK_OVERFLOW_MESSAGE) catch |err| {
+            if (comptime builtin.mode == .Debug) {
+                @panic(@errorName(err));
+            } else {
+                unreachable;
+            }
+        };
+        if (written != STACK_OVERFLOW_MESSAGE.len) {
+            if (comptime builtin.mode == .Debug) {
+                @panic("stack overflow handler short write");
+            } else {
+                unreachable;
+            }
+        }
         posix.exit(134);
     } else {
         // WASI fallback
@@ -72,7 +85,20 @@ fn handleArithmeticError() noreturn {
         kernel32.WriteFile(stderr_handle, ARITHMETIC_ERROR_MESSAGE.ptr, ARITHMETIC_ERROR_MESSAGE.len, &bytes_written, null);
         kernel32.ExitProcess(136);
     } else if (comptime builtin.os.tag != .freestanding) {
-        posix.write(posix.STDERR_FILENO, ARITHMETIC_ERROR_MESSAGE) catch {};
+        const written = posix.write(posix.STDERR_FILENO, ARITHMETIC_ERROR_MESSAGE) catch |err| {
+            if (comptime builtin.mode == .Debug) {
+                @panic(@errorName(err));
+            } else {
+                unreachable;
+            }
+        };
+        if (written != ARITHMETIC_ERROR_MESSAGE.len) {
+            if (comptime builtin.mode == .Debug) {
+                @panic("arithmetic error handler short write");
+            } else {
+                unreachable;
+            }
+        }
         posix.exit(136); // 128 + 8 (SIGFPE)
     } else {
         std.process.exit(136);
@@ -103,17 +129,65 @@ fn handleAccessViolation(fault_addr: usize) noreturn {
         kernel32.WriteFile(stderr_handle, addr_str.ptr, @intCast(addr_str.len), &bytes_written, null);
         kernel32.WriteFile(stderr_handle, msg2.ptr, msg2.len, &bytes_written, null);
         kernel32.ExitProcess(139);
-    } else {
-        // POSIX (and WASI fallback): use direct write syscall for signal-safety
+    } else if (comptime builtin.os.tag != .freestanding) {
+        // POSIX: use direct write syscall for signal-safety
         const generic_msg = "\nSegmentation fault (SIGSEGV) in the Roc compiler.\nFault address: ";
-        posix.write(posix.STDERR_FILENO, generic_msg) catch {};
+        {
+            const written = posix.write(posix.STDERR_FILENO, generic_msg) catch |err| {
+                if (comptime builtin.mode == .Debug) {
+                    @panic(@errorName(err));
+                } else {
+                    unreachable;
+                }
+            };
+            if (written != generic_msg.len) {
+                if (comptime builtin.mode == .Debug) {
+                    @panic("access violation handler short write (prefix)");
+                } else {
+                    unreachable;
+                }
+            }
+        }
 
         // Write the fault address as hex
         var addr_buf: [18]u8 = undefined;
         const addr_str = handlers.formatHex(fault_addr, &addr_buf);
-        posix.write(posix.STDERR_FILENO, addr_str) catch {};
-        posix.write(posix.STDERR_FILENO, "\n\nPlease report this issue at: https://github.com/roc-lang/roc/issues\n\n") catch {};
+        {
+            const written = posix.write(posix.STDERR_FILENO, addr_str) catch |err| {
+                if (comptime builtin.mode == .Debug) {
+                    @panic(@errorName(err));
+                } else {
+                    unreachable;
+                }
+            };
+            if (written != addr_str.len) {
+                if (comptime builtin.mode == .Debug) {
+                    @panic("access violation handler short write (addr)");
+                } else {
+                    unreachable;
+                }
+            }
+        }
+        {
+            const tail = "\n\nPlease report this issue at: https://github.com/roc-lang/roc/issues\n\n";
+            const written = posix.write(posix.STDERR_FILENO, tail) catch |err| {
+                if (comptime builtin.mode == .Debug) {
+                    @panic(@errorName(err));
+                } else {
+                    unreachable;
+                }
+            };
+            if (written != tail.len) {
+                if (comptime builtin.mode == .Debug) {
+                    @panic("access violation handler short write (tail)");
+                } else {
+                    unreachable;
+                }
+            }
+        }
         posix.exit(139);
+    } else {
+        std.process.exit(139);
     }
 }
 

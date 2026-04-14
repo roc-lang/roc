@@ -212,15 +212,19 @@ fn divwide(comptime T: type, _u1: T, _u0: T, v: T, r: *T) T {
     }
 }
 
-fn udivmod(comptime T: type, a_: T, b_: T, maybe_rem: ?*T) T {
+fn DivMod(comptime T: type) type {
+    return struct {
+        quot: T,
+        rem: T,
+    };
+}
+
+fn udivmod(comptime T: type, a_: T, b_: T) DivMod(T) {
     const HalfT = HalveInt(T, false).HalfT;
     const SignedT = std.meta.Int(.signed, @bitSizeOf(T));
 
     if (b_ > a_) {
-        if (maybe_rem) |rem| {
-            rem.* = a_;
-        }
-        return 0;
+        return .{ .quot = 0, .rem = a_ };
     }
 
     const a: [2]HalfT = @bitCast(a_);
@@ -237,10 +241,7 @@ fn udivmod(comptime T: type, a_: T, b_: T, maybe_rem: ?*T) T {
             q[hi] = a[hi] / b[lo];
             q[lo] = divwide(HalfT, a[hi] % b[lo], a[lo], b[lo], &r[lo]);
         }
-        if (maybe_rem) |rem| {
-            rem.* = @bitCast(r);
-        }
-        return @bitCast(q);
+        return .{ .quot = @bitCast(q), .rem = @bitCast(r) };
     }
 
     const shift: Log2Int(T) = @clz(b[hi]) - @clz(a[hi]);
@@ -255,10 +256,7 @@ fn udivmod(comptime T: type, a_: T, b_: T, maybe_rem: ?*T) T {
         af -= bf & @as(T, @bitCast(s));
         bf = shr(bf, 1);
     }
-    if (maybe_rem) |rem| {
-        rem.* = @bitCast(af);
-    }
-    return @bitCast(q);
+    return .{ .quot = @bitCast(q), .rem = @bitCast(af) };
 }
 
 // Multiplication helpers
@@ -324,14 +322,14 @@ pub fn divTrunc_i128(a: i128, b: i128) i128 {
     const s_b = shr_i128(b, 127);
     const an = (a ^ s_a) -% s_a;
     const bn = (b ^ s_b) -% s_b;
-    const r = udivmod(u128, @bitCast(an), @bitCast(bn), null);
+    const q = udivmod(u128, @bitCast(an), @bitCast(bn)).quot;
     const s = s_a ^ s_b;
-    return (@as(i128, @bitCast(r)) ^ s) -% s;
+    return (@as(i128, @bitCast(q)) ^ s) -% s;
 }
 
 /// Unsigned 128-bit truncating division.
 pub fn divTrunc_u128(a: u128, b: u128) u128 {
-    return udivmod(u128, a, b, null);
+    return udivmod(u128, a, b).quot;
 }
 
 /// Signed 128-bit floor division.
@@ -353,16 +351,13 @@ pub fn rem_i128(a: i128, b: i128) i128 {
     const s_b = shr_i128(b, 127);
     const an = (a ^ s_a) -% s_a;
     const bn = (b ^ s_b) -% s_b;
-    var r: u128 = undefined;
-    udivmod(u128, @as(u128, @bitCast(an)), @as(u128, @bitCast(bn)), &r);
+    const r = udivmod(u128, @as(u128, @bitCast(an)), @as(u128, @bitCast(bn))).rem;
     return (@as(i128, @bitCast(r)) ^ s_a) -% s_a;
 }
 
 /// Unsigned 128-bit remainder.
 pub fn rem_u128(a: u128, b: u128) u128 {
-    var r: u128 = undefined;
-    udivmod(u128, a, b, &r);
-    return r;
+    return udivmod(u128, a, b).rem;
 }
 
 /// Signed 128-bit modulo (result has same sign as divisor).

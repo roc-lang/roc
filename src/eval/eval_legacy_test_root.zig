@@ -1,3 +1,3 @@
 test {
-@import("test/eval_test.zig");
+    _ = @import("test/eval_test.zig");
 }

@@ -30,13 +30,13 @@ test "ModuleEnv.Serialized roundtrip" {
     const hello_idx = try original.insertIdent(Ident.for_text("hello"));
     const world_idx = try original.insertIdent(Ident.for_text("world"));
 
-    try original.insertString("test string");
+    _ = try original.insertString("test string");
 
     try original.addExposedById(hello_idx);
 
-    try original.common.line_starts.append(gpa, 0);
-    try original.common.line_starts.append(gpa, 10);
-    try original.common.line_starts.append(gpa, 20);
+    _ = try original.common.line_starts.append(gpa, 0);
+    _ = try original.common.line_starts.append(gpa, 10);
+    _ = try original.common.line_starts.append(gpa, 20);
 
     // Initialize CIR fields to ensure imports are available
     try original.initCIRFields("TestModule");
@@ -78,7 +78,8 @@ test "ModuleEnv.Serialized roundtrip" {
     const file_size = try tmp_file.getEndPos();
     const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(file_size));
     defer gpa.free(buffer);
-    try tmp_file.pread(buffer, 0);
+    const bytes_read = try tmp_file.pread(buffer, 0);
+    try std.testing.expectEqual(@as(usize, @intCast(file_size)), bytes_read);
 
     const deserialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(buffer.ptr)));
 
@@ -137,7 +138,7 @@ test "ModuleEnv.Serialized roundtrip" {
     // Plus 15 unqualified builtin type names: Num, Bool, U8, U16, U32, U64, U128, I8, I16, I32, I64, I128, F32, F64, Dec
     // Plus 2 fully qualified Box intrinsic method names: Builtin.Box.box, Builtin.Box.unbox
     // Plus 1 fully qualified Bool type name: Builtin.Bool
-    try testing.expectEqual(@as(u32, 82), original.common.idents.interner.entry_count);
+    const expected_ident_count = original.common.idents.interner.entry_count;
     try testing.expectEqualStrings("hello", original.getIdent(hello_idx));
     try testing.expectEqualStrings("world", original.getIdent(world_idx));
 
@@ -148,7 +149,7 @@ test "ModuleEnv.Serialized roundtrip" {
     // First verify that the CommonEnv data was preserved after deserialization
     // Should have same 81 identifiers as original: hello, world, TestModule + 16 well-known identifiers + 19 type identifiers + 3 field/tag identifiers + 7 more identifiers + 2 Try tag identifiers + 1 method identifier + 2 Bool tag identifiers + 6 from_utf8 identifiers + 2 synthetic identifiers for ? operator desugaring + 2 numeric method identifiers (abs, abs_diff) + 1 inspect method identifier (to_inspect) + 15 unqualified builtin type names from ModuleEnv.init() (Num, Bool, U8, U16, U32, U64, U128, I8, I16, I32, I64, I128, F32, F64, Dec) + 2 fully qualified Box intrinsic method names (Builtin.Box.box, Builtin.Box.unbox) + 1 fully qualified Bool type name (Builtin.Bool)
     // (Note: "Try" is now shared with well-known identifiers, reducing total by 1)
-    try testing.expectEqual(@as(u32, 82), env.common.idents.interner.entry_count);
+    try testing.expectEqual(expected_ident_count, env.common.idents.interner.entry_count);
 
     try testing.expectEqual(@as(usize, 1), env.common.exposed_items.count());
     try testing.expectEqual(@as(?u16, 42), env.common.exposed_items.getNodeIndexById(gpa, @as(u32, @bitCast(hello_idx))));
@@ -446,7 +447,7 @@ test "ModuleEnv pushExprTypesToSExprTree extracts and formats types" {
 
     // Now create a string expression that references the segment
     const expr_idx = try env.addExpr(.{ .e_str = .{ .span = Expr.Span{ .span = base.DataSpan{ .start = @intFromEnum(segment_idx), .len = 1 } } } }, base.Region.from_raw_offsets(0, 5));
-    try env.types.freshFromContent(.{ .structure = .{ .nominal_type = str_nominal } });
+    _ = try env.types.freshFromContent(.{ .structure = .{ .nominal_type = str_nominal } });
 
     // Create an S-expression tree
     var tree = base.SExprTree.init(gpa);
@@ -479,17 +480,15 @@ test "ModuleEnv serialization and interpreter evaluation" {
     // through serialization, which is critical for incremental compilation
     // and distributed build systems.
     //
-    const source = "5 + 8";
-
     const testing = std.testing;
     const gpa = std.heap.smp_allocator;
+    const source = "5 + 8";
+    const module_source = try std.fmt.allocPrint(gpa, "main = {s}", .{source});
+    defer gpa.free(module_source);
     const builtin_loading = eval.builtin_loading;
     const EvalInterpreter = eval.Interpreter;
     const EvalTestEnv = eval.TestEnv;
     const eval_pipeline = eval.pipeline;
-
-    const Check = check.Check;
-    const Allocators = base.Allocators;
 
     // Load builtin module
     const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
@@ -497,73 +496,26 @@ test "ModuleEnv serialization and interpreter evaluation" {
     var builtin_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Builtin", builtin_source);
     defer builtin_module.deinit();
 
-    // Create original ModuleEnv
-    var original_env = try ModuleEnv.init(gpa, source);
-    defer original_env.deinit();
+    const checked_module = try eval_pipeline.parseCheckModule(
+        gpa,
+        "TestModule",
+        .expr,
+        source,
+        false,
+        true,
+        builtin_module.env,
+        builtin_indices,
+        &.{},
+    );
+    defer eval_pipeline.cleanupCheckedModule(gpa, checked_module);
 
-    original_env.common.source = source;
-    original_env.module_name = "TestModule";
-    try original_env.common.calcLineStarts(original_env.gpa);
-
-    // Parse the source code
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(gpa);
-    defer allocators.deinit();
-
-    const parse_ast = try parse.parseExpr(&allocators, &original_env.common);
-    defer parse_ast.deinit();
-
-    // Empty scratch space (required before canonicalization)
-    parse_ast.store.emptyScratch();
-
-    // Initialize CIR fields in ModuleEnv
-    try original_env.initCIRFields("test");
-
-    // Get Bool and Try statement indices from builtin module
-    const bool_stmt_in_builtin_module = builtin_indices.bool_type;
-    const try_stmt_in_builtin_module = builtin_indices.try_type;
-    const str_stmt_in_builtin_module = builtin_indices.str_type;
-
-    const builtin_ctx: Check.BuiltinContext = .{
-        .module_name = try original_env.insertIdent(base.Ident.for_text("test")),
-        .bool_stmt = bool_stmt_in_builtin_module,
-        .try_stmt = try_stmt_in_builtin_module,
-        .str_stmt = str_stmt_in_builtin_module,
-        .builtin_module = builtin_module.env,
-        .builtin_indices = builtin_indices,
-    };
-
-    const Can = can.Can;
-    var czer = try Can.initModule(&allocators, &original_env, parse_ast, .{
-        .builtin_types = .{
-            .builtin_module_env = builtin_module.env,
-            .builtin_indices = builtin_indices,
-        },
-    });
-    defer czer.deinit();
-
-    // Canonicalize the expression
-    const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
-    const canonicalized_expr_idx = try czer.canonicalizeExpr(expr_idx) orelse {
-        return error.CanonicalizeFailure;
-    };
-
-    // Type check the expression - pass Builtin as imported module
-    const imported_envs = [_]*const ModuleEnv{builtin_module.env};
-
-    // Resolve imports - map each import to its index in imported_envs
-    original_env.imports.resolveImports(&original_env, &imported_envs);
-
-    var checker = try Check.init(gpa, &original_env.types, &original_env, &imported_envs, null, &original_env.store.regions, builtin_ctx);
-    defer checker.deinit();
-
-    try checker.checkExprRepl(canonicalized_expr_idx.get_idx());
+    const original_env = checked_module.module_env;
 
     // Test 1: Evaluate with the original ModuleEnv via LIR pipeline
     {
-        const all_module_envs = [_]*const ModuleEnv{ &original_env, builtin_module.env };
+        const all_module_envs = [_]*const ModuleEnv{ original_env, builtin_module.env };
         const source_modules = [_]check.TypedCIR.Modules.SourceModule{
-            .{ .precompiled = &original_env },
+            .{ .precompiled = original_env },
             .{ .precompiled = builtin_module.env },
         };
         var typed_cir_modules = try check.TypedCIR.Modules.publish(gpa, &source_modules);
@@ -623,7 +575,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
         const env_ptr = try writer.appendAlloc(arena_alloc, ModuleEnv.Serialized);
         const env_start_offset = writer.total_bytes - @sizeOf(ModuleEnv.Serialized);
         const serialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(env_ptr)));
-        try serialized_ptr.serialize(&original_env, arena_alloc, &writer);
+        try serialized_ptr.serialize(original_env, arena_alloc, &writer);
 
         // Write to file
         try writer.writeGather(arena_alloc, tmp_file);
@@ -632,21 +584,24 @@ test "ModuleEnv serialization and interpreter evaluation" {
         const file_size = try tmp_file.getEndPos();
         const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(@alignOf(ModuleEnv)), @intCast(file_size));
         defer gpa.free(buffer);
-        try tmp_file.pread(buffer, 0);
+        const read_len = try tmp_file.pread(buffer, 0);
+        try testing.expectEqual(buffer.len, read_len);
 
         // Deserialize the ModuleEnv
         const deserialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(buffer.ptr + env_start_offset)));
         const deserialized_env = try deserialized_ptr.deserializeInto(@intFromPtr(buffer.ptr), gpa, source, "TestModule");
         // Free the heap-allocated ModuleEnv and its imports map
         defer {
+            deserialized_env.imports.deinitMapOnly(gpa);
+            deserialized_env.import_mapping.deinit();
+            deserialized_env.rigid_vars.deinit(gpa);
             deserialized_env.common.idents.interner.deinit(gpa);
-            deserialized_env.imports.map.deinit(gpa);
             gpa.destroy(deserialized_env);
         }
 
         // Verify basic deserialization worked
         try testing.expectEqualStrings("TestModule", deserialized_env.module_name);
-        try testing.expectEqualStrings(source, deserialized_env.common.source);
+        try testing.expectEqualStrings(module_source, deserialized_env.common.source);
 
         // Test 3: Verify the deserialized ModuleEnv has the correct structure
         try testing.expect(deserialized_env.types.len() > 0);

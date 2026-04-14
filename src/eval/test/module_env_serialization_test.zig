@@ -54,7 +54,8 @@ test "ModuleEnv serialization and LIR evaluation" {
     const file_size = try tmp_file.getEndPos();
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(@alignOf(ModuleEnv)), @intCast(file_size));
     defer gpa.free(buffer);
-    try tmp_file.pread(buffer, 0);
+    const read_len = try tmp_file.pread(buffer, 0);
+    try testing.expectEqual(buffer.len, read_len);
 
     const deserialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(buffer.ptr + env_start_offset)));
     const deserialized_env = try deserialized_ptr.deserializeInto(@intFromPtr(buffer.ptr), gpa, source, "TestModule");

@@ -555,7 +555,7 @@ pub fn runExpectError(src: []const u8, expected_error: anyerror, should_trace: T
     );
     defer interp.deinit();
 
-    interp.eval(.{ .proc_id = compiled.lowered.main_proc }) catch |err| {
+    _ = interp.eval(.{ .proc_id = compiled.lowered.main_proc }) catch |err| {
         try std.testing.expectEqual(expected_error, err);
         return;
     };
@@ -754,7 +754,7 @@ pub fn runExpectTypeMismatchAndCrash(src: []const u8) !void {
     );
     defer interp.deinit();
 
-    interp.eval(.{ .proc_id = compiled.lowered.main_proc }) catch |err| {
+    _ = interp.eval(.{ .proc_id = compiled.lowered.main_proc }) catch |err| {
         switch (err) {
             error.Crash, error.RuntimeError => return,
             else => return error.UnexpectedError,

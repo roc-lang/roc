@@ -1,6 +1,7 @@
 //! Executable monomorphic types.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const solved_type = @import("lambdasolved").Type;
 
@@ -335,7 +336,12 @@ pub const Store = struct {
         try self.buildCanonicalKey(root);
         try self.rememberScratchInternKey(root);
         try self.canonical_by_raw.put(root, root);
-        active.remove(root);
+        const removed = active.remove(root);
+        if (comptime builtin.mode == .Debug) {
+            std.debug.assert(removed);
+        } else if (!removed) {
+            unreachable;
+        }
         return root;
     }
 

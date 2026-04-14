@@ -90,7 +90,7 @@ fn comptimeRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) v
     }
 
     // Update tracking with new pointer and size
-    evaluator.roc_alloc_sizes.remove(old_ptr_addr);
+    _ = evaluator.roc_alloc_sizes.remove(old_ptr_addr);
     evaluator.roc_alloc_sizes.put(@intFromPtr(new_ptr), realloc_args.new_length) catch {};
 
     realloc_args.answer = new_ptr;
@@ -1081,7 +1081,7 @@ pub const ComptimeEvaluator = struct {
             // Create the span for args in index_data
             const index_data_start = self.env.store.index_data.len();
             for (arg_indices.items) |arg_idx| {
-                try self.env.store.index_data.append(self.env.store.gpa, @intFromEnum(arg_idx));
+                _ = try self.env.store.index_data.append(self.env.store.gpa, @intFromEnum(arg_idx));
             }
 
             // Create and return the tag expression
@@ -1178,7 +1178,7 @@ pub const ComptimeEvaluator = struct {
             // First, create the span for args in index_data
             const index_data_start = self.env.store.index_data.len();
             for (arg_indices.items) |arg_idx| {
-                try self.env.store.index_data.append(self.env.store.gpa, @intFromEnum(arg_idx));
+                _ = try self.env.store.index_data.append(self.env.store.gpa, @intFromEnum(arg_idx));
             }
 
             const tag_expr = CIR.Expr{
@@ -1235,7 +1235,7 @@ pub const ComptimeEvaluator = struct {
         // Create span in index_data for tuple elements
         const index_data_start = self.env.store.index_data.len();
         for (elem_indices.items) |elem_idx| {
-            try self.env.store.index_data.append(self.env.store.gpa, @intFromEnum(elem_idx));
+            _ = try self.env.store.index_data.append(self.env.store.gpa, @intFromEnum(elem_idx));
         }
 
         const tuple_expr = CIR.Expr{
@@ -1263,7 +1263,7 @@ pub const ComptimeEvaluator = struct {
                         .region = region,
                     },
                 };
-                try self.problems.appendProblem(self.allocator, problem);
+                _ = try self.problems.appendProblem(self.allocator, problem);
             },
             .expect_failed => {
                 const problem = Problem{
@@ -1272,7 +1272,7 @@ pub const ComptimeEvaluator = struct {
                         .region = region,
                     },
                 };
-                try self.problems.appendProblem(self.allocator, problem);
+                _ = try self.problems.appendProblem(self.allocator, problem);
             },
             .error_eval => {
                 const problem = Problem{
@@ -1281,7 +1281,7 @@ pub const ComptimeEvaluator = struct {
                         .region = region,
                     },
                 };
-                try self.problems.appendProblem(self.allocator, problem);
+                _ = try self.problems.appendProblem(self.allocator, problem);
             },
         }
     }
@@ -1340,7 +1340,7 @@ pub const ComptimeEvaluator = struct {
                                 .region = literal.region,
                             },
                         };
-                        try self.problems.appendProblem(self.allocator, problem);
+                        _ = try self.problems.appendProblem(self.allocator, problem);
                         // Mark this expression as failed so we skip evaluating it
                         try self.failed_literal_exprs.put(literal.expr_idx, {});
                         continue;
@@ -1360,7 +1360,7 @@ pub const ComptimeEvaluator = struct {
                                 .region = literal.region,
                             },
                         };
-                        try self.problems.appendProblem(self.allocator, problem);
+                        _ = try self.problems.appendProblem(self.allocator, problem);
                         // Mark this expression as failed so we skip evaluating it
                         try self.failed_literal_exprs.put(literal.expr_idx, {});
                     }
@@ -1414,7 +1414,7 @@ pub const ComptimeEvaluator = struct {
                         .region = literal.region,
                     },
                 };
-                try self.problems.appendProblem(self.allocator, problem);
+                _ = try self.problems.appendProblem(self.allocator, problem);
                 continue;
             };
 
@@ -1437,7 +1437,7 @@ pub const ComptimeEvaluator = struct {
                         .region = literal.region,
                     },
                 };
-                try self.problems.appendProblem(self.allocator, problem);
+                _ = try self.problems.appendProblem(self.allocator, problem);
                 continue;
             };
 
@@ -1668,7 +1668,7 @@ pub const ComptimeEvaluator = struct {
                     .region = region,
                 },
             };
-            try self.problems.appendProblem(self.allocator, problem);
+            _ = try self.problems.appendProblem(self.allocator, problem);
             return false;
         };
         defer func_value.decref(&self.interpreter.runtime_layout_store, roc_ops);
@@ -1685,7 +1685,7 @@ pub const ComptimeEvaluator = struct {
                     .region = region,
                 },
             };
-            try self.problems.appendProblem(self.allocator, problem);
+            _ = try self.problems.appendProblem(self.allocator, problem);
             return false;
         }
 
@@ -1704,7 +1704,7 @@ pub const ComptimeEvaluator = struct {
                     .region = region,
                 },
             };
-            try self.problems.appendProblem(self.allocator, problem);
+            _ = try self.problems.appendProblem(self.allocator, problem);
             return false;
         }
 
@@ -1763,7 +1763,7 @@ pub const ComptimeEvaluator = struct {
                         .region = region,
                     },
                 };
-                try self.problems.appendProblem(self.allocator, problem);
+                _ = try self.problems.appendProblem(self.allocator, problem);
                 return false;
             };
         } else {
@@ -1792,7 +1792,7 @@ pub const ComptimeEvaluator = struct {
                         .region = region,
                     },
                 };
-                try self.problems.appendProblem(self.allocator, problem);
+                _ = try self.problems.appendProblem(self.allocator, problem);
                 return false;
             };
         }
@@ -1918,7 +1918,7 @@ pub const ComptimeEvaluator = struct {
                     .region = region,
                 },
             };
-            try self.problems.appendProblem(self.allocator, problem);
+            _ = try self.problems.appendProblem(self.allocator, problem);
             // Clear the message for next call
             self.interpreter.last_error_message = null;
             return false;
@@ -1941,7 +1941,7 @@ pub const ComptimeEvaluator = struct {
                             .region = region,
                         },
                     };
-                    try self.problems.appendProblem(self.allocator, problem);
+                    _ = try self.problems.appendProblem(self.allocator, problem);
                     return false;
                 }
                 return tag_value == 1;
@@ -1976,7 +1976,7 @@ pub const ComptimeEvaluator = struct {
                                 .region = region,
                             },
                         };
-                        try self.problems.appendProblem(self.allocator, problem);
+                        _ = try self.problems.appendProblem(self.allocator, problem);
                     } else {
                         const error_msg = try self.problems.putFmtExtraString(
                             "Numeric literal validation failed",
@@ -1988,7 +1988,7 @@ pub const ComptimeEvaluator = struct {
                                 .region = region,
                             },
                         };
-                        try self.problems.appendProblem(self.allocator, problem);
+                        _ = try self.problems.appendProblem(self.allocator, problem);
                     }
                     return false;
                 }

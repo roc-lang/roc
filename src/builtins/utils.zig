@@ -17,6 +17,12 @@ const RocDbg = @import("host_abi.zig").RocDbg;
 const RocExpectFailed = @import("host_abi.zig").RocExpectFailed;
 const RocCrashed = @import("host_abi.zig").RocCrashed;
 
+inline fn debugPrint(comptime fmt: []const u8, args: anytype) void {
+    if (comptime builtin.os.tag != .freestanding) {
+        std.debug.print(fmt, args);
+    }
+}
+
 /// Performs a pointer cast with debug-mode alignment verification.
 ///
 /// In debug builds, verifies that the pointer is properly aligned for the target type
@@ -45,7 +51,7 @@ pub inline fn alignedPtrCast(comptime T: type, ptr: anytype, src: std.builtin.So
             // 2. This is a debug-only check (comptime builtin.mode == .Debug)
             // 3. On non-WASM, this will trigger a trap with a stack trace
             // 4. The @src() parameter helps identify the call site in logs
-            std.debug.print("alignedPtrCast alignment failure at {s}:{d}\n", .{ src.file, src.line });
+            debugPrint("alignedPtrCast alignment failure at {s}:{d}\n", .{ src.file, src.line });
             unreachable;
         }
     }
@@ -138,7 +144,7 @@ pub const TestEnv = struct {
                 else => {
                     // Use unreachable since we can't call roc_ops.crash in deinit
                     // This should never happen in properly written tests
-                    std.debug.print("Unsupported alignment in test deallocator cleanup: {d}\n", .{entry.value_ptr.alignment});
+                    debugPrint("Unsupported alignment in test deallocator cleanup: {d}\n", .{entry.value_ptr.alignment});
                     unreachable;
                 },
             }
@@ -163,11 +169,11 @@ pub const TestEnv = struct {
             16 => self.allocator.alignedAlloc(u8, std.mem.Alignment.@"16", roc_alloc.length),
             else => {
                 // Use unreachable since we can't call roc_ops.crash in test allocator
-                std.debug.print("Unsupported alignment in test allocator: {d}\n", .{roc_alloc.alignment});
+                debugPrint("Unsupported alignment in test allocator: {d}\n", .{roc_alloc.alignment});
                 unreachable;
             },
         } catch {
-            std.debug.print("Test allocation failed\n", .{});
+            debugPrint("Test allocation failed\n", .{});
             unreachable;
         };
 
@@ -180,7 +186,7 @@ pub const TestEnv = struct {
             .alignment = roc_alloc.alignment,
         }) catch {
             self.allocator.free(ptr);
-            std.debug.print("Failed to track test allocation\n", .{});
+            debugPrint("Failed to track test allocation\n", .{});
             unreachable;
         };
 
@@ -201,7 +207,7 @@ pub const TestEnv = struct {
                 8 => self.allocator.free(@as([]align(8) u8, @alignCast(slice))),
                 16 => self.allocator.free(@as([]align(16) u8, @alignCast(slice))),
                 else => {
-                    std.debug.print("Unsupported alignment in test deallocator: {d}\n", .{entry.value.alignment});
+                    debugPrint("Unsupported alignment in test deallocator: {d}\n", .{entry.value.alignment});
                     unreachable;
                 },
             }
@@ -224,11 +230,11 @@ pub const TestEnv = struct {
                 8 => self.allocator.realloc(@as([]align(8) u8, @alignCast(old_slice)), roc_realloc.new_length),
                 16 => self.allocator.realloc(@as([]align(16) u8, @alignCast(old_slice)), roc_realloc.new_length),
                 else => {
-                    std.debug.print("Unsupported alignment in test reallocator: {d}\n", .{entry.value.alignment});
+                    debugPrint("Unsupported alignment in test reallocator: {d}\n", .{entry.value.alignment});
                     unreachable;
                 },
             } catch {
-                std.debug.print("Test reallocation failed\n", .{});
+                debugPrint("Test reallocation failed\n", .{});
                 unreachable;
             };
 
@@ -240,13 +246,13 @@ pub const TestEnv = struct {
                 .alignment = entry.value.alignment,
             }) catch {
                 self.allocator.free(new_ptr);
-                std.debug.print("Failed to track test reallocation\n", .{});
+                debugPrint("Failed to track test reallocation\n", .{});
                 unreachable;
             };
 
             roc_realloc.answer = result;
         } else {
-            std.debug.print("Test realloc: pointer not found in allocation map\n", .{});
+            debugPrint("Test realloc: pointer not found in allocation map\n", .{});
             unreachable;
         }
     }
@@ -257,7 +263,7 @@ pub const TestEnv = struct {
 
     fn rocCrashedFn(roc_crashed: *const RocCrashed, _: *anyopaque) callconv(.c) noreturn {
         const message = roc_crashed.utf8_bytes[0..roc_crashed.len];
-        std.debug.print("Roc crashed: {s}\n", .{message});
+        debugPrint("Roc crashed: {s}\n", .{message});
         unreachable;
     }
 };
@@ -357,7 +363,18 @@ pub fn increfRcPtrC(ptr_to_refcount: *isize, amount: isize, roc_ops: *RocOps) ca
                 ptr_to_refcount.* = refcount +% amount;
             },
             .atomic => {
-                @atomicRmw(isize, ptr_to_refcount, .Add, amount, .monotonic);
+                const previous = @atomicRmw(isize, ptr_to_refcount, .Add, amount, .monotonic);
+                const new_refcount = previous +% amount;
+                if (new_refcount == POISON_VALUE) {
+                    if (builtin.mode == .Debug) {
+                        if (builtin.os.tag != .freestanding) {
+                            DebugRefcountTracker.printHistory(@intFromPtr(ptr_to_refcount));
+                        }
+                        roc_ops.crash("Use-after-free: incref on already-freed memory");
+                        return;
+                    }
+                    unreachable;
+                }
             },
             .none => unreachable,
         }
@@ -1010,7 +1027,7 @@ pub const DebugRefcountTracker = struct {
             shadow_rcs[idx] -= 1;
             logOp(rc_addr, .decref, 0, shadow_rcs[idx], site);
             if (shadow_rcs[idx] < 0) {
-                std.debug.print(
+                debugPrint(
                     "DebugRefcountTracker: refcount underflow at rc_addr=0x{x}\n",
                     .{rc_addr},
                 );
@@ -1044,7 +1061,7 @@ pub const DebugRefcountTracker = struct {
         var leak_count: usize = 0;
         for (rc_addrs[0..count], shadow_rcs[0..count]) |addr, rc| {
             if (rc > 0 and addr != 0) {
-                std.debug.print(
+                debugPrint(
                     "LEAK: rc_addr=0x{x} shadow_rc={d}\n",
                     .{ addr, rc },
                 );
@@ -1052,12 +1069,12 @@ pub const DebugRefcountTracker = struct {
                 for (op_log[0..op_count]) |op| {
                     if (op.rc_addr == addr) {
                         switch (op.kind) {
-                            .alloc => std.debug.print("  alloc(1)", .{}),
-                            .incref => std.debug.print("  incref(+{d})={d}", .{ op.amount, op.shadow_after }),
-                            .decref => std.debug.print("  decref={d}", .{op.shadow_after}),
-                            .free => std.debug.print("  free", .{}),
+                            .alloc => debugPrint("  alloc(1)", .{}),
+                            .incref => debugPrint("  incref(+{d})={d}", .{ op.amount, op.shadow_after }),
+                            .decref => debugPrint("  decref={d}", .{op.shadow_after}),
+                            .free => debugPrint("  free", .{}),
                         }
-                        std.debug.print(" via {s}\n", .{@tagName(op.site)});
+                        debugPrint(" via {s}\n", .{@tagName(op.site)});
                     }
                 }
                 leak_count += 1;
@@ -1069,16 +1086,16 @@ pub const DebugRefcountTracker = struct {
     pub fn printHistory(rc_addr: usize) void {
         if (!active) return;
 
-        std.debug.print("DebugRefcountTracker history for rc_addr=0x{x}\n", .{rc_addr});
+        debugPrint("DebugRefcountTracker history for rc_addr=0x{x}\n", .{rc_addr});
         for (op_log[0..op_count]) |op| {
             if (op.rc_addr == rc_addr) {
                 switch (op.kind) {
-                    .alloc => std.debug.print("  alloc(1)", .{}),
-                    .incref => std.debug.print("  incref(+{d})={d}", .{ op.amount, op.shadow_after }),
-                    .decref => std.debug.print("  decref={d}", .{op.shadow_after}),
-                    .free => std.debug.print("  free", .{}),
+                    .alloc => debugPrint("  alloc(1)", .{}),
+                    .incref => debugPrint("  incref(+{d})={d}", .{ op.amount, op.shadow_after }),
+                    .decref => debugPrint("  decref={d}", .{op.shadow_after}),
+                    .free => debugPrint("  free", .{}),
                 }
-                std.debug.print(" via {s}\n", .{@tagName(op.site)});
+                debugPrint(" via {s}\n", .{@tagName(op.site)});
             }
         }
     }

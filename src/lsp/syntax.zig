@@ -2202,7 +2202,8 @@ pub const SyntaxChecker = struct {
                 // Always add tag completions for nominal types, not just as fallback.
                 // This handles e.g. `Record.` where Record is both a module and a nominal type.
                 if (module_env_opt) |module_env| {
-                    try builder.addTagCompletionsForNominalType(module_env, module_name, null);
+                    const added = try builder.addTagCompletionsForNominalType(module_env, module_name, null);
+                    if (added) {} else {}
                 }
             },
             .after_value_dot => |record_access| {

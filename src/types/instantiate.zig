@@ -90,6 +90,7 @@ pub const Instantiator = struct {
             return resolved_var;
         }
 
+
         // Check if we've already instantiated this variable
         if (self.var_map.count() > 0) {
             if (self.var_map.get(resolved_var)) |fresh_var| {
@@ -147,12 +148,17 @@ pub const Instantiator = struct {
                     .rigid => Content{ .rigid = Rigid{ .name = rigid.name, .constraints = fresh_constraints } },
                 };
 
+                const from_numeral_origin = switch (resolved.desc.content) {
+                    .flex => resolved.desc.from_numeral_origin,
+                    else => false,
+                };
                 // Update the placeholder fresh var with the real content
                 try self.store.dangerousSetVarDesc(
                     fresh_var,
                     .{
                         .content = fresh_content,
                         .rank = self.current_rank,
+                        .from_numeral_origin = from_numeral_origin,
                     },
                 );
 
@@ -168,12 +174,17 @@ pub const Instantiator = struct {
 
                 const fresh_content = try self.instantiateContent(resolved.desc.content);
 
+                const from_numeral_origin = switch (resolved.desc.content) {
+                    .flex => resolved.desc.from_numeral_origin,
+                    else => false,
+                };
                 // Update the placeholder fresh var with the real content
                 try self.store.dangerousSetVarDesc(
                     fresh_var,
                     .{
                         .content = fresh_content,
                         .rank = self.current_rank,
+                        .from_numeral_origin = from_numeral_origin,
                     },
                 );
 

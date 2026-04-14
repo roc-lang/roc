@@ -24,7 +24,7 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
         // Fill the gap with fresh type variables
         var i: u64 = current_types;
         while (i < current_nodes) : (i += 1) {
-            env.types.fresh() catch unreachable;
+            _ = env.types.fresh() catch unreachable;
         }
     }
 
@@ -101,7 +101,7 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
             // Ensure types array has an entry for this new expression
             const expr_int = @intFromEnum(expr_idx);
             while (env.types.len() <= expr_int) {
-                try env.types.fresh();
+                _ = try env.types.fresh();
             }
 
             // Now replace the e_anno_only expression with the e_hosted_lambda

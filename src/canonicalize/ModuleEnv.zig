@@ -757,7 +757,7 @@ pub fn deinitCachedModule(self: *Self) void {
 
 /// Records a diagnostic error during canonicalization without blocking compilation.
 pub fn pushDiagnostic(self: *Self, reason: CIR.Diagnostic) std.mem.Allocator.Error!void {
-    try self.addDiagnostic(reason);
+    _ = try self.addDiagnostic(reason);
 }
 
 /// Creates a malformed node that represents a runtime error in the IR.
@@ -2936,7 +2936,7 @@ pub fn addTypeSlot(
 /// Adds an external declaration and returns its index
 pub fn pushExternalDecl(self: *Self, decl: CIR.ExternalDecl) std.mem.Allocator.Error!CIR.ExternalDecl.Idx {
     const idx = @as(u32, @intCast(self.external_decls.len()));
-    try self.external_decls.append(self.gpa, decl);
+    _ = try self.external_decls.append(self.gpa, decl);
     return @enumFromInt(idx);
 }
 
@@ -2949,7 +2949,7 @@ pub fn getExternalDecl(self: *const Self, idx: CIR.ExternalDecl.Idx) *const CIR.
 pub fn pushExternalDecls(self: *Self, decls: []const CIR.ExternalDecl) std.mem.Allocator.Error!CIR.ExternalDecl.Span {
     const start = @as(u32, @intCast(self.external_decls.len()));
     for (decls) |decl| {
-        try self.external_decls.append(self.gpa, decl);
+        _ = try self.external_decls.append(self.gpa, decl);
     }
     return CIR.ExternalDecl.Span{ .span = .{ .start = start, .len = @as(u32, @intCast(decls.len)) } };
 }

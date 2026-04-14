@@ -4,6 +4,7 @@
 //! simultaneously computing and verifying BLAKE3 hashes for data integrity.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const c = @cImport({
     @cDefine("ZSTD_STATIC_LINKING_ONLY", "1");
     @cInclude("zstd.h");
@@ -77,7 +78,13 @@ pub const DecompressingHashReader = struct {
     }
 
     pub fn deinit(self: *Self) void {
-        c.ZSTD_freeDCtx(self.dctx);
+        const rc = c.ZSTD_freeDCtx(self.dctx);
+        if (c.ZSTD_isError(rc) != 0) {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("ZSTD_freeDCtx failed: {s}", .{c.ZSTD_getErrorName(rc)});
+            }
+            unreachable;
+        }
         self.allocator_ptr.free(self.in_buffer);
         self.allocator_ptr.free(self.interface.buffer);
     }
@@ -148,10 +155,10 @@ pub const DecompressingHashReader = struct {
     /// Verify that the hash matches. This should be called after reading is complete.
     /// If there is remaining data, it will be discarded.
     pub fn verifyComplete(self: *Self) !void {
-        self.interface.discardRemaining() catch {
-            // When the hash does not match, discardRemaining will return a ReadFailed, so we have to ignore it
+        _ = self.interface.discardRemaining() catch |err| switch (err) {
+            error.ReadFailed => 0,
+            else => return err,
         };
-
         // The hash should have been verified during stream
         if (!self.hash_verified) {
             return error.HashMismatch;

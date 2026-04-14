@@ -1262,7 +1262,7 @@ fn getOrAllocTypedLocal(self: *Self, local_id: ProcLocalId, val_type: ValType) A
 }
 
 fn recordProcLocal(locals: *std.AutoHashMap(u64, void), local: ProcLocalId) Allocator.Error!void {
-    try locals.getOrPut(@intFromEnum(local));
+    _ = try locals.getOrPut(@intFromEnum(local));
 }
 
 fn recordRefOpLocals(locals: *std.AutoHashMap(u64, void), op: RefOp) Allocator.Error!void {
@@ -1405,7 +1405,7 @@ fn prebindProcLocals(self: *Self, proc: LirProcSpec) Allocator.Error!void {
         const local_id: ProcLocalId = @enumFromInt(@as(u32, @intCast(entry.key_ptr.*)));
         if (self.storage.getLocal(local_id) != null) continue;
         const vt = self.procLocalValType(local_id);
-        try self.storage.allocLocal(local_id, vt);
+        _ = try self.storage.allocLocal(local_id, vt);
     }
 }
 
@@ -4290,7 +4290,7 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
     for (args) |arg| {
         const local = self.store.getLocal(arg);
         const vt = self.resolveValType(local.layout_idx);
-        self.storage.allocLocal(arg, vt) catch return error.OutOfMemory;
+        _ = self.storage.allocLocal(arg, vt) catch return error.OutOfMemory;
     }
 
     try self.prebindProcLocals(proc);
@@ -4809,7 +4809,12 @@ fn generateCFStmt(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
         },
         .runtime_error => {
             var msg_buf: [64]u8 = undefined;
-            const proc_id = self.current_proc_id orelse @as(LIR.LirProcSpecId, @enumFromInt(0));
+            const proc_id = self.current_proc_id orelse {
+                if (comptime builtin.mode == .Debug) {
+                    std.debug.panic("runtime_error emitted without current proc", .{});
+                }
+                unreachable;
+            };
             const msg = std.fmt.bufPrint(
                 &msg_buf,
                 "runtime_error {d} proc {d}",

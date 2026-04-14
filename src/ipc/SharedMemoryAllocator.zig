@@ -296,7 +296,10 @@ fn resize(ctx: *anyopaque, buf: []u8, _: std.mem.Alignment, new_len: usize, _: u
         if (new_len <= buf.len) {
             // Shrinking - just update the offset
             const shrink_amount = buf.len - new_len;
-            self.offset.fetchSub(shrink_amount, .monotonic);
+            const previous_offset = self.offset.fetchSub(shrink_amount, .monotonic);
+            if (previous_offset < shrink_amount) {
+                unreachable;
+            }
             return true;
         } else {
             // Growing - check if we have room

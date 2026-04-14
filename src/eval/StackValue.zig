@@ -1207,8 +1207,8 @@ pub const RecordAccessor = struct {
     pub fn findFieldIndex(self: RecordAccessor, field_ident: Ident.Idx) ?usize {
         for (0..self.field_layouts.len) |idx| {
             const field = self.field_layouts.get(idx);
-            if (field.name.eql(Ident.Idx.NONE)) continue;
-            if (field.name.eql(field_ident)) {
+            if (field.name.ident == Ident.Idx.NONE) continue;
+            if (field.name.ident == field_ident) {
                 return idx;
             }
         }

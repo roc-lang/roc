@@ -1497,7 +1497,7 @@ pub const Lowerer = struct {
             source_expr_var,
             expected_var,
         );
-        try self.bindSourceVarToExistingWorkspace(module_idx, type_scope, source_expr_var, source_fn_var);
+        _ = try self.bindSourceVarToExistingWorkspace(module_idx, type_scope, source_expr_var, source_fn_var);
 
         const arg_patterns = self.ctx.typedCirModule(module_idx).slicePatterns(hosted.args);
         const arg_count = self.functionArgCount(module_idx, type_scope, source_fn_var);
@@ -1625,9 +1625,9 @@ pub const Lowerer = struct {
             source_seed_source_var,
             expected_var,
         );
-        try self.bindSourceVarToExistingWorkspace(module_idx, type_scope, source_expr_var, source_fn_var);
+        _ = try self.bindSourceVarToExistingWorkspace(module_idx, type_scope, source_expr_var, source_fn_var);
         if (source_seed_source_var != source_expr_var) {
-            try self.bindSourceVarToExistingWorkspace(module_idx, type_scope, source_seed_source_var, source_fn_var);
+            _ = try self.bindSourceVarToExistingWorkspace(module_idx, type_scope, source_seed_source_var, source_fn_var);
         }
         var arg_index: usize = 0;
         while (true) : (arg_index += 1) {
@@ -1637,7 +1637,7 @@ pub const Lowerer = struct {
                 arg_index,
             ) orelse break;
             const scoped_arg_var = self.lookupFunctionArgVar(module_idx, type_scope, source_fn_var, arg_index) orelse break;
-            try self.bindSourceVarToExistingWorkspace(module_idx, type_scope, source_arg_var, scoped_arg_var);
+            _ = try self.bindSourceVarToExistingWorkspace(module_idx, type_scope, source_arg_var, scoped_arg_var);
         }
         const result_ty = try self.requireFunctionRetType(module_idx, type_scope, source_fn_var);
         const result_var = self.lookupFunctionNodeRetVar(module_idx, type_scope, source_fn_var);
@@ -3832,7 +3832,7 @@ pub const Lowerer = struct {
             source_expr_var,
             expected_var,
         );
-        try self.bindSourceVarToExistingWorkspace(module_idx, scope, source_expr_var, source_fn_var);
+        _ = try self.bindSourceVarToExistingWorkspace(module_idx, scope, source_expr_var, source_fn_var);
         const first_arg_ty = if (arg_patterns.len == 0)
             self.requireFunctionType(closure_ty).arg
         else
@@ -8492,7 +8492,7 @@ pub const Lowerer = struct {
         if (type_scope.provisional_type_cache.get(key)) |provisional| {
             if (self.ctx.types.isFullyResolved(provisional)) {
                 const canonical = try self.ctx.types.canonicalizeResolved(provisional);
-                type_scope.provisional_type_cache.remove(key);
+                _ = type_scope.provisional_type_cache.remove(key);
                 try type_scope.type_cache.put(key, canonical);
                 return canonical;
             }
@@ -8547,11 +8547,11 @@ pub const Lowerer = struct {
 
         self.ctx.types.setType(placeholder, lowered);
         if (lowered == .placeholder) {
-            type_scope.active_type_cache.remove(key);
+            _ = type_scope.active_type_cache.remove(key);
             return placeholder;
         }
 
-        type_scope.active_type_cache.remove(key);
+        _ = type_scope.active_type_cache.remove(key);
         if (self.ctx.types.isFullyResolved(placeholder)) {
             const canonical = try self.ctx.types.canonicalizeResolved(placeholder);
             try type_scope.type_cache.put(key, canonical);
@@ -10412,7 +10412,7 @@ pub const Lowerer = struct {
         expected_var: ?Var,
     ) std.mem.Allocator.Error!Var {
         if (expected_var) |expected| {
-            try self.bindSourceVarToExistingWorkspace(module_idx, type_scope, source_fn_var, expected);
+            _ = try self.bindSourceVarToExistingWorkspace(module_idx, type_scope, source_fn_var, expected);
             return expected;
         }
         return try self.scopeVar(type_scope, module_idx, source_fn_var);
@@ -10911,7 +10911,7 @@ pub const Lowerer = struct {
                 .alias => |workspace_alias| {
                     try self.assertMatchingIdentText(source_idents, type_scope.identStoreConst(), source_alias.ident.ident_idx, workspace_alias.ident.ident_idx, "alias");
                     try self.assertMatchingIdentText(source_idents, type_scope.identStoreConst(), source_alias.origin_module, workspace_alias.origin_module, "alias module");
-                    try self.bindSourceVarToExistingWorkspace(
+                    _ = try self.bindSourceVarToExistingWorkspace(
                         source_module_idx,
                         type_scope,
                         source_store.getAliasBackingVar(source_alias),
@@ -10926,7 +10926,7 @@ pub const Lowerer = struct {
                         );
                     }
                     for (source_args, workspace_args) |source_arg, workspace_arg| {
-                        try self.bindSourceVarToExistingWorkspace(source_module_idx, type_scope, source_arg, workspace_arg);
+                        _ = try self.bindSourceVarToExistingWorkspace(source_module_idx, type_scope, source_arg, workspace_arg);
                     }
                 },
                 else => debugPanic(
@@ -10958,9 +10958,9 @@ pub const Lowerer = struct {
                         );
                     }
                     for (source_args, workspace_args) |source_arg, workspace_arg| {
-                        try self.bindSourceVarToExistingWorkspace(source_module_idx, type_scope, source_arg, workspace_arg);
+                        _ = try self.bindSourceVarToExistingWorkspace(source_module_idx, type_scope, source_arg, workspace_arg);
                     }
-                    try self.bindSourceVarToExistingWorkspace(source_module_idx, type_scope, source_func.ret, workspace_func.ret);
+                    _ = try self.bindSourceVarToExistingWorkspace(source_module_idx, type_scope, source_func.ret, workspace_func.ret);
                 },
                 .tuple => |source_tuple| switch (workspace_content) {
                     .structure => |workspace_flat| switch (workspace_flat) {
@@ -10974,7 +10974,7 @@ pub const Lowerer = struct {
                                 );
                             }
                             for (source_elems, workspace_elems) |source_elem, workspace_elem| {
-                                try self.bindSourceVarToExistingWorkspace(source_module_idx, type_scope, source_elem, workspace_elem);
+                                _ = try self.bindSourceVarToExistingWorkspace(source_module_idx, type_scope, source_elem, workspace_elem);
                             }
                         },
                         else => debugPanic(
@@ -10998,7 +10998,7 @@ pub const Lowerer = struct {
                                     .{source_module_idx},
                                 );
                             }
-                            try self.bindSourceVarToExistingWorkspace(
+                            _ = try self.bindSourceVarToExistingWorkspace(
                                 source_module_idx,
                                 type_scope,
                                 source_store.getNominalBackingVar(source_nominal),
@@ -11013,7 +11013,7 @@ pub const Lowerer = struct {
                                 );
                             }
                             for (source_args, workspace_args) |source_arg, workspace_arg| {
-                                try self.bindSourceVarToExistingWorkspace(source_module_idx, type_scope, source_arg, workspace_arg);
+                                _ = try self.bindSourceVarToExistingWorkspace(source_module_idx, type_scope, source_arg, workspace_arg);
                             }
                         },
                         else => {
@@ -11023,7 +11023,7 @@ pub const Lowerer = struct {
                                     .{source_module_idx},
                                 );
                             }
-                            try self.bindSourceVarToExistingWorkspace(
+                            _ = try self.bindSourceVarToExistingWorkspace(
                                 source_module_idx,
                                 type_scope,
                                 source_store.getNominalBackingVar(source_nominal),
@@ -11050,7 +11050,7 @@ pub const Lowerer = struct {
                                 var matched = false;
                                 for (workspace_fields.items(.name), workspace_fields.items(.var_), 0..) |workspace_name, workspace_field_var, idx| {
                                     if (!std.mem.eql(u8, source_idents.getText(source_name), type_scope.identStoreConst().getText(workspace_name))) continue;
-                                    try self.bindSourceVarToExistingWorkspace(source_module_idx, type_scope, source_field_var, workspace_field_var);
+                                    _ = try self.bindSourceVarToExistingWorkspace(source_module_idx, type_scope, source_field_var, workspace_field_var);
                                     matched_workspace[idx] = true;
                                     matched = true;
                                     break;
@@ -11101,9 +11101,9 @@ pub const Lowerer = struct {
                                         .ext = workspace_record.ext,
                                     } },
                                 });
-                                try self.bindSourceVarToExistingWorkspace(source_module_idx, type_scope, source_record.ext, workspace_only_var);
+                                _ = try self.bindSourceVarToExistingWorkspace(source_module_idx, type_scope, source_record.ext, workspace_only_var);
                             } else if (source_only_fields.items.len == 0) {
-                                try self.bindSourceVarToExistingWorkspace(source_module_idx, type_scope, source_record.ext, workspace_record.ext);
+                                _ = try self.bindSourceVarToExistingWorkspace(source_module_idx, type_scope, source_record.ext, workspace_record.ext);
                             }
                             if (source_only_fields.items.len != 0) {
                                 var workspace_ext = workspace_record.ext;
@@ -11204,7 +11204,7 @@ pub const Lowerer = struct {
                                 var matched = false;
                                 for (workspace_fields.items(.name), workspace_fields.items(.var_)) |workspace_name, workspace_field_var| {
                                     if (!std.mem.eql(u8, source_idents.getText(source_name), type_scope.identStoreConst().getText(workspace_name))) continue;
-                                    try self.bindSourceVarToExistingWorkspace(source_module_idx, type_scope, source_field_var, workspace_field_var);
+                                    _ = try self.bindSourceVarToExistingWorkspace(source_module_idx, type_scope, source_field_var, workspace_field_var);
                                     matched = true;
                                     break;
                                 }
@@ -11242,7 +11242,7 @@ pub const Lowerer = struct {
                                 var matched = false;
                                 for (workspace_fields.items(.name), workspace_fields.items(.var_)) |workspace_name, workspace_field_var| {
                                     if (!std.mem.eql(u8, source_idents.getText(source_name), type_scope.identStoreConst().getText(workspace_name))) continue;
-                                    try self.bindSourceVarToExistingWorkspace(source_module_idx, type_scope, source_field_var, workspace_field_var);
+                                    _ = try self.bindSourceVarToExistingWorkspace(source_module_idx, type_scope, source_field_var, workspace_field_var);
                                     matched = true;
                                     break;
                                 }
@@ -11324,7 +11324,7 @@ pub const Lowerer = struct {
                                         );
                                     }
                                     for (source_args, workspace_args) |source_arg, workspace_arg| {
-                                        try self.bindSourceVarToExistingWorkspace(source_module_idx, type_scope, source_arg, workspace_arg);
+                                        _ = try self.bindSourceVarToExistingWorkspace(source_module_idx, type_scope, source_arg, workspace_arg);
                                     }
                                     matched_source[source_idx] = true;
                                     matched = true;
@@ -11403,14 +11403,14 @@ pub const Lowerer = struct {
                                     workspace_terminal_ext,
                                     type_scope,
                                 );
-                                try self.bindSourceVarToExistingWorkspace(
+                                _ = try self.bindSourceVarToExistingWorkspace(
                                     source_module_idx,
                                     type_scope,
                                     source_terminal_ext,
                                     residual_workspace_var,
                                 );
                             } else {
-                                try self.bindSourceVarToExistingWorkspace(
+                                _ = try self.bindSourceVarToExistingWorkspace(
                                     source_module_idx,
                                     type_scope,
                                     source_terminal_ext,

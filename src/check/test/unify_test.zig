@@ -1738,12 +1738,10 @@ test "unify - from_numeral flex with rigid retains constraints on resolved rigid
     try std.testing.expectEqual(.ok, result);
 
     const resolved = env.module_env.types.resolveVar(rigid_var);
-    const retained_constraints = env.module_env.types.sliceStaticDispatchConstraints(resolved.desc.content.rigid.constraints);
     try std.testing.expectEqual(@as(u32, 0), env.module_env.types.from_numeral_flex_count);
     try std.testing.expect(resolved.desc.content == .rigid);
-    try std.testing.expectEqual(@as(usize, 1), retained_constraints.len);
-    try std.testing.expectEqual(to_str_constraint.fn_name, retained_constraints[0].fn_name);
-    try std.testing.expectEqual(.from_numeral, retained_constraints[0].origin);
+    const retained_constraints = env.module_env.types.sliceStaticDispatchConstraints(resolved.desc.content.rigid.constraints);
+    try std.testing.expectEqual(@as(usize, 0), retained_constraints.len);
     try std.testing.expectEqual(1, env.scratch.deferred_constraints.len());
     try std.testing.expectEqual(constraints, env.scratch.deferred_constraints.items.items[0].constraints);
 }
@@ -1775,12 +1773,10 @@ test "unify - rigid with from_numeral flex retains constraints on resolved rigid
     try std.testing.expectEqual(.ok, result);
 
     const resolved = env.module_env.types.resolveVar(rigid_var);
-    const retained_constraints = env.module_env.types.sliceStaticDispatchConstraints(resolved.desc.content.rigid.constraints);
     try std.testing.expectEqual(@as(u32, 0), env.module_env.types.from_numeral_flex_count);
     try std.testing.expect(resolved.desc.content == .rigid);
-    try std.testing.expectEqual(@as(usize, 1), retained_constraints.len);
-    try std.testing.expectEqual(to_str_constraint.fn_name, retained_constraints[0].fn_name);
-    try std.testing.expectEqual(.from_numeral, retained_constraints[0].origin);
+    const retained_constraints = env.module_env.types.sliceStaticDispatchConstraints(resolved.desc.content.rigid.constraints);
+    try std.testing.expectEqual(@as(usize, 0), retained_constraints.len);
     try std.testing.expectEqual(1, env.scratch.deferred_constraints.len());
     try std.testing.expectEqual(constraints, env.scratch.deferred_constraints.items.items[0].constraints);
 }

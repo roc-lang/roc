@@ -151,7 +151,12 @@ const Lowerer = struct {
     fn lowerProgram(self: *Lowerer) std.mem.Allocator.Error!void {
         for (self.input.program.root_defs.items) |def_id| {
             const def = self.input.program.store.getDef(def_id);
-            try self.lowerDef(def);
+            const lowered_id = try self.lowerDef(def);
+            if (comptime builtin.mode == .Debug) {
+                std.debug.assert(self.root_defs.items[self.root_defs.items.len - 1] == lowered_id);
+            } else if (self.root_defs.items[self.root_defs.items.len - 1] != lowered_id) {
+                unreachable;
+            }
         }
     }
 
@@ -164,7 +169,12 @@ const Lowerer = struct {
 
     fn emitLiftedDefs(self: *Lowerer, defs: []const ast.Def) std.mem.Allocator.Error!void {
         for (defs) |def| {
-            try self.emitDef(def);
+            const def_id = try self.emitDef(def);
+            if (comptime builtin.mode == .Debug) {
+                std.debug.assert(self.root_defs.items[self.root_defs.items.len - 1] == def_id);
+            } else if (self.root_defs.items[self.root_defs.items.len - 1] != def_id) {
+                unreachable;
+            }
         }
     }
 
@@ -916,10 +926,20 @@ const Lowerer = struct {
                 try self.collectFreeVarsExpr(if_expr.else_body, bound, free);
             },
             .block => |block| {
+                var added = std.ArrayList(Symbol).empty;
+                defer added.deinit(self.allocator);
                 for (self.input.program.store.sliceStmtSpan(block.stmts)) |stmt_id| {
-                    try self.collectFreeVarsStmt(stmt_id, bound, free);
+                    try self.collectFreeVarsStmtInBlock(stmt_id, bound, free, &added);
                 }
                 try self.collectFreeVarsExpr(block.final_expr, bound, free);
+                for (added.items) |symbol| {
+                    const removed = bound.remove(symbol);
+                    if (comptime builtin.mode == .Debug) {
+                        std.debug.assert(removed);
+                    } else if (!removed) {
+                        unreachable;
+                    }
+                }
             },
             .tuple => |tuple| for (self.input.program.store.sliceExprSpan(tuple)) |arg| try self.collectFreeVarsExpr(arg, bound, free),
             .tuple_access => |tuple_access| try self.collectFreeVarsExpr(tuple_access.tuple, bound, free),
@@ -931,7 +951,14 @@ const Lowerer = struct {
                 defer added.deinit(self.allocator);
                 try self.bindPatSymbols(for_expr.patt, bound, &added);
                 try self.collectFreeVarsExpr(for_expr.body, bound, free);
-                for (added.items) |symbol| _ = bound.remove(symbol);
+                for (added.items) |symbol| {
+                    const removed = bound.remove(symbol);
+                    if (comptime builtin.mode == .Debug) {
+                        std.debug.assert(removed);
+                    } else if (!removed) {
+                        unreachable;
+                    }
+                }
             },
         }
     }
@@ -955,11 +982,13 @@ const Lowerer = struct {
             },
             .decl => |decl| {
                 try self.collectFreeVarsExpr(decl.body, bound, free);
-                try self.bindTemporarily(bound, decl.bind.symbol);
+                const inserted = try self.bindTemporarily(bound, decl.bind.symbol);
+                defer self.unbindTemporarily(bound, decl.bind.symbol, inserted);
             },
             .var_decl => |decl| {
                 try self.collectFreeVarsExpr(decl.body, bound, free);
-                try self.bindTemporarily(bound, decl.bind.symbol);
+                const inserted = try self.bindTemporarily(bound, decl.bind.symbol);
+                defer self.unbindTemporarily(bound, decl.bind.symbol, inserted);
             },
             .reassign => |reassign| {
                 if (!reassign.target.isNone() and !bound.contains(reassign.target)) {
@@ -979,12 +1008,57 @@ const Lowerer = struct {
                 defer added.deinit(self.allocator);
                 try self.bindPatSymbols(for_stmt.patt, bound, &added);
                 try self.collectFreeVarsExpr(for_stmt.body, bound, free);
-                for (added.items) |symbol| _ = bound.remove(symbol);
+                for (added.items) |symbol| {
+                    const removed = bound.remove(symbol);
+                    if (comptime builtin.mode == .Debug) {
+                        std.debug.assert(removed);
+                    } else if (!removed) {
+                        unreachable;
+                    }
+                }
             },
             .while_ => |while_stmt| {
                 try self.collectFreeVarsExpr(while_stmt.cond, bound, free);
                 try self.collectFreeVarsExpr(while_stmt.body, bound, free);
             },
+        }
+    }
+
+    fn collectFreeVarsStmtInBlock(
+        self: *Lowerer,
+        stmt_id: MonoAst.StmtId,
+        bound: *std.AutoHashMap(Symbol, void),
+        free: *std.AutoHashMap(Symbol, type_mod.TypeId),
+        added: *std.ArrayList(Symbol),
+    ) std.mem.Allocator.Error!void {
+        const stmt = self.input.program.store.getStmt(stmt_id);
+        switch (stmt) {
+            .local_fn => |local_fn| {
+                const inserted_bind = try self.bindTemporarily(bound, local_fn.bind.symbol);
+                if (inserted_bind) {
+                    try added.append(self.allocator, local_fn.bind.symbol);
+                }
+
+                const inserted_arg = try self.bindTemporarily(bound, local_fn.arg.symbol);
+                defer self.unbindTemporarily(bound, local_fn.arg.symbol, inserted_arg);
+
+                try self.collectFreeVarsExpr(local_fn.body, bound, free);
+            },
+            .decl => |decl| {
+                try self.collectFreeVarsExpr(decl.body, bound, free);
+                const inserted = try self.bindTemporarily(bound, decl.bind.symbol);
+                if (inserted) {
+                    try added.append(self.allocator, decl.bind.symbol);
+                }
+            },
+            .var_decl => |decl| {
+                try self.collectFreeVarsExpr(decl.body, bound, free);
+                const inserted = try self.bindTemporarily(bound, decl.bind.symbol);
+                if (inserted) {
+                    try added.append(self.allocator, decl.bind.symbol);
+                }
+            },
+            else => try self.collectFreeVarsStmt(stmt_id, bound, free),
         }
     }
 
@@ -1055,7 +1129,12 @@ const Lowerer = struct {
 
     fn unbindTemporarily(_: *Lowerer, bound: *std.AutoHashMap(Symbol, void), symbol: Symbol, inserted: bool) void {
         if (inserted) {
-            bound.remove(symbol);
+            const removed = bound.remove(symbol);
+            if (comptime builtin.mode == .Debug) {
+                std.debug.assert(removed);
+            } else if (!removed) {
+                unreachable;
+            }
         }
     }
 

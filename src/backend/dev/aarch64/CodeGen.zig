@@ -428,7 +428,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
         pub fn emitPrologue(self: *Self) !void {
             var builder = DeferredFrameBuilder.init();
             builder.setCalleeSavedMask(self.callee_saved_used);
-            try builder.emitPrologue(&self.emit);
+            _ = try builder.emitPrologue(&self.emit);
         }
 
         /// Emit function epilogue and return

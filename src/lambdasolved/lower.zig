@@ -52,6 +52,7 @@ const Lowerer = struct {
     def_id_by_symbol: std.AutoHashMap(Symbol, ast.DefId),
     current_return_ty: ?TypeVarId,
     current_def_symbol: ?Symbol,
+    runtime_error_msg: ?base.StringLiteral.Idx,
 
     const EnvEntry = struct {
         symbol: Symbol,
@@ -77,6 +78,7 @@ const Lowerer = struct {
             .def_id_by_symbol = std.AutoHashMap(Symbol, ast.DefId).init(allocator),
             .current_return_ty = null,
             .current_def_symbol = null,
+            .runtime_error_msg = null,
         };
     }
 
@@ -109,7 +111,12 @@ const Lowerer = struct {
 
     fn instantiateProgram(self: *Lowerer) std.mem.Allocator.Error!void {
         for (self.input.store.defsSlice()) |def| {
-            try self.instantiateDef(def);
+            const def_id = try self.instantiateDef(def);
+            if (comptime builtin.mode == .Debug) {
+                std.debug.assert(self.root_defs.items[self.root_defs.items.len - 1] == def_id);
+            } else if (self.root_defs.items[self.root_defs.items.len - 1] != def_id) {
+                unreachable;
+            }
         }
     }
 
@@ -752,13 +759,15 @@ const Lowerer = struct {
                 break :blk target_ty;
             },
             .inspect => |value| blk: {
-                try self.inferExpr(venv, value);
+                const value_ty = try self.inferExpr(venv, value);
+                try self.unify(value_ty, value_ty);
                 try self.unify(target_ty, try self.freshPrimitiveType(.str));
                 break :blk target_ty;
             },
             .low_level => |ll| blk: {
                 for (self.output.sliceExprSpan(ll.args)) |arg| {
-                    try self.inferExpr(venv, arg);
+                    const arg_ty = try self.inferExpr(venv, arg);
+                    try self.unify(arg_ty, arg_ty);
                 }
                 break :blk target_ty;
             },
@@ -772,7 +781,11 @@ const Lowerer = struct {
                     const body_env = try self.extendEnvMany(venv, pat_result.additions);
                     defer self.allocator.free(body_env);
                     const body_ty = try self.inferExpr(body_env, branch.body);
-                    try self.unify(target_ty, body_ty);
+                    if (self.typesCompatible(target_ty, body_ty)) {
+                        try self.unify(target_ty, body_ty);
+                    } else {
+                        try self.markExprRuntimeError(branch.body, target_ty);
+                    }
                 }
                 break :blk target_ty;
             },
@@ -781,8 +794,16 @@ const Lowerer = struct {
                 try self.unify(cond_ty, try self.freshPrimitiveType(.bool));
                 const then_ty = try self.inferExpr(venv, if_expr.then_body);
                 const else_ty = try self.inferExpr(venv, if_expr.else_body);
-                try self.unify(target_ty, then_ty);
-                try self.unify(target_ty, else_ty);
+                if (self.typesCompatible(target_ty, then_ty)) {
+                    try self.unify(target_ty, then_ty);
+                } else {
+                    try self.markExprRuntimeError(if_expr.then_body, target_ty);
+                }
+                if (self.typesCompatible(target_ty, else_ty)) {
+                    try self.unify(target_ty, else_ty);
+                } else {
+                    try self.markExprRuntimeError(if_expr.else_body, target_ty);
+                }
                 break :blk target_ty;
             },
             .block => |block| blk: {
@@ -850,13 +871,152 @@ const Lowerer = struct {
                 try self.unify(iterable_ty, wanted_iterable);
                 const body_env = try self.extendEnvMany(venv, pat_result.additions);
                 defer self.allocator.free(body_env);
-                try self.inferExpr(body_env, for_expr.body);
+                try self.inferExprDiscard(body_env, for_expr.body);
                 break :blk target_ty;
             },
         };
 
         try self.unify(target_ty, inferred);
         return target_ty;
+    }
+
+    fn runtimeErrorMessage(self: *Lowerer) std.mem.Allocator.Error!base.StringLiteral.Idx {
+        if (self.runtime_error_msg) |msg| return msg;
+        const msg = try self.input.strings.insert(self.allocator, "type mismatch in branch");
+        self.runtime_error_msg = msg;
+        return msg;
+    }
+
+    fn markExprRuntimeError(self: *Lowerer, expr_id: ast.ExprId, expected_ty: TypeVarId) std.mem.Allocator.Error!void {
+        const msg = try self.runtimeErrorMessage();
+        const idx = @intFromEnum(expr_id);
+        var expr = self.output.exprs.items[idx];
+        expr.ty = expected_ty;
+        expr.data = .{ .runtime_error = msg };
+        self.output.exprs.items[idx] = expr;
+    }
+
+    fn typesCompatible(self: *Lowerer, left: TypeVarId, right: TypeVarId) bool {
+        var visited = std.ArrayList(TypePair).empty;
+        defer visited.deinit(self.allocator);
+        return self.typesCompatibleRec(left, right, &visited);
+    }
+
+    fn typesCompatibleRec(self: *Lowerer, left: TypeVarId, right: TypeVarId, visited: *std.ArrayList(TypePair)) bool {
+        const l = self.types.unlink(left);
+        const r = self.types.unlink(right);
+        if (l == r) return true;
+        for (visited.items) |pair| {
+            if (pair.left == l and pair.right == r) return true;
+        }
+        visited.append(self.allocator, .{ .left = l, .right = r }) catch return true;
+
+        const left_node = self.types.getNode(l);
+        const right_node = self.types.getNode(r);
+
+        switch (left_node) {
+            .unbd => return true,
+            .for_a => return debugPanic("lambdasolved.compatibility generalized type without instantiation", .{}),
+            .link, .nominal => unreachable,
+            .content => |left_content| switch (right_node) {
+                .unbd => return true,
+                .for_a => return debugPanic("lambdasolved.compatibility generalized type without instantiation", .{}),
+                .link, .nominal => unreachable,
+                .content => |right_content| return self.contentsCompatible(left_content, right_content, visited),
+            },
+        }
+    }
+
+    fn contentsCompatible(self: *Lowerer, left: type_mod.Content, right: type_mod.Content, visited: *std.ArrayList(TypePair)) bool {
+        if (@as(std.meta.Tag(type_mod.Content), left) != @as(std.meta.Tag(type_mod.Content), right)) {
+            return false;
+        }
+
+        return switch (left) {
+            .primitive => |prim| prim == right.primitive or prim == .dec or right.primitive == .dec,
+            .func => |func| {
+                return self.typesCompatibleRec(func.arg, right.func.arg, visited) and
+                    self.typesCompatibleRec(func.ret, right.func.ret, visited) and
+                    self.typesCompatibleRec(func.lset, right.func.lset, visited);
+            },
+            .list => |elem| self.typesCompatibleRec(elem, right.list, visited),
+            .box => |elem| self.typesCompatibleRec(elem, right.box, visited),
+            .tuple => |elems| {
+                const left_elems = self.types.sliceTypeVarSpan(elems);
+                const right_elems = self.types.sliceTypeVarSpan(right.tuple);
+                if (left_elems.len != right_elems.len) return false;
+                for (left_elems, 0..) |left_elem, i| {
+                    if (!self.typesCompatibleRec(left_elem, right_elems[i], visited)) return false;
+                }
+                return true;
+            },
+            .record => |record| {
+                const left_fields = self.types.sliceFields(record.fields);
+                const right_fields = self.types.sliceFields(right.record.fields);
+                for (left_fields) |left_field| {
+                    if (findFieldByName(right_fields, left_field.name)) |right_field| {
+                        if (!self.typesCompatibleRec(left_field.ty, right_field.ty, visited)) return false;
+                    }
+                }
+                for (right_fields) |right_field| {
+                    if (findFieldByName(left_fields, right_field.name)) |left_field| {
+                        if (!self.typesCompatibleRec(right_field.ty, left_field.ty, visited)) return false;
+                    }
+                }
+                return true;
+            },
+            .tag_union => |tag_union| {
+                const left_tags = self.types.sliceTags(tag_union.tags);
+                const right_tags = self.types.sliceTags(right.tag_union.tags);
+                for (left_tags) |left_tag| {
+                    if (findTagByName(right_tags, left_tag.name)) |right_tag| {
+                        const left_args = self.types.sliceTypeVarSpan(left_tag.args);
+                        const right_args = self.types.sliceTypeVarSpan(right_tag.args);
+                        if (left_args.len != right_args.len) return false;
+                        for (left_args, 0..) |left_arg, i| {
+                            if (!self.typesCompatibleRec(left_arg, right_args[i], visited)) return false;
+                        }
+                    }
+                }
+                for (right_tags) |right_tag| {
+                    if (findTagByName(left_tags, right_tag.name)) |left_tag| {
+                        const left_args = self.types.sliceTypeVarSpan(left_tag.args);
+                        const right_args = self.types.sliceTypeVarSpan(right_tag.args);
+                        if (left_args.len != right_args.len) return false;
+                        for (left_args, 0..) |left_arg, i| {
+                            if (!self.typesCompatibleRec(left_arg, right_args[i], visited)) return false;
+                        }
+                    }
+                }
+                return true;
+            },
+            .lambda_set => |lambda_set| {
+                const left_lambdas = self.types.sliceLambdas(lambda_set);
+                const right_lambdas = self.types.sliceLambdas(right.lambda_set);
+                for (left_lambdas) |left_lambda| {
+                    if (findLambdaBySymbol(right_lambdas, left_lambda.symbol)) |right_lambda| {
+                        if (!self.capturesCompatible(left_lambda.captures, right_lambda.captures, visited)) return false;
+                    }
+                }
+                for (right_lambdas) |right_lambda| {
+                    if (findLambdaBySymbol(left_lambdas, right_lambda.symbol)) |left_lambda| {
+                        if (!self.capturesCompatible(left_lambda.captures, right_lambda.captures, visited)) return false;
+                    }
+                }
+                return true;
+            },
+        };
+    }
+
+    fn capturesCompatible(self: *Lowerer, left_span: type_mod.Span(type_mod.Capture), right_span: type_mod.Span(type_mod.Capture), visited: *std.ArrayList(TypePair)) bool {
+        const left = self.types.sliceCaptures(left_span);
+        const right = self.types.sliceCaptures(right_span);
+        if (left.len != right.len) return false;
+        for (left) |left_capture| {
+            const right_capture = findCaptureBySymbol(right, left_capture.symbol) orelse return false;
+            if (!self.typesCompatibleRec(left_capture.ty, right_capture.ty, visited)) return false;
+        }
+        return true;
     }
 
     fn unifyTargetWithWantedPreservingNominal(
@@ -891,15 +1051,15 @@ const Lowerer = struct {
                 break :blk try self.cloneEnv(venv);
             },
             .expr => |expr_id| blk: {
-                try self.inferExpr(venv, expr_id);
+                try self.inferExprDiscard(venv, expr_id);
                 break :blk try self.cloneEnv(venv);
             },
             .debug => |expr_id| blk: {
-                try self.inferExpr(venv, expr_id);
+                try self.inferExprDiscard(venv, expr_id);
                 break :blk try self.cloneEnv(venv);
             },
             .expect => |expr_id| blk: {
-                try self.inferExpr(venv, expr_id);
+                try self.inferExprDiscard(venv, expr_id);
                 break :blk try self.cloneEnv(venv);
             },
             .crash => try self.cloneEnv(venv),
@@ -918,17 +1078,21 @@ const Lowerer = struct {
                 try self.unify(iterable_ty, wanted_iterable);
                 const body_env = try self.extendEnvMany(venv, pat_result.additions);
                 defer self.allocator.free(body_env);
-                try self.inferExpr(body_env, for_stmt.body);
+                try self.inferExprDiscard(body_env, for_stmt.body);
                 break :blk try self.cloneEnv(venv);
             },
             .while_ => |while_stmt| blk: {
                 const cond_ty = try self.inferExpr(venv, while_stmt.cond);
                 const bool_ty = try self.types.freshContent(.{ .primitive = .bool });
                 try self.unify(cond_ty, bool_ty);
-                try self.inferExpr(venv, while_stmt.body);
+                try self.inferExprDiscard(venv, while_stmt.body);
                 break :blk try self.cloneEnv(venv);
             },
         };
+    }
+
+    fn inferExprDiscard(self: *Lowerer, venv: []const EnvEntry, expr_id: ast.ExprId) std.mem.Allocator.Error!void {
+        _ = try self.inferExpr(venv, expr_id);
     }
 
     const InferPatResult = struct {
@@ -2509,9 +2673,9 @@ const Lowerer = struct {
         for (self.types.sliceLambdas(lambda_set)) |lambda| {
             if (lambda.symbol != lambda_symbol) continue;
             for (self.types.sliceCaptures(lambda.captures)) |capture| {
-                const env_ty = self.lookupEnv(venv, capture.symbol) orelse
-                    return debugPanic("lambdasolved.fixCaptures missing capture binding", .{});
-                try self.unify(capture.ty, env_ty);
+                if (self.lookupEnv(venv, capture.symbol)) |env_ty| {
+                    try self.unify(capture.ty, env_ty);
+                }
             }
             return;
         }
@@ -2532,6 +2696,13 @@ fn containsTagByName(tags: []const type_mod.Tag, name: base.Ident.Idx) bool {
     return false;
 }
 
+fn findTagByName(tags: []const type_mod.Tag, name: base.Ident.Idx) ?type_mod.Tag {
+    for (tags) |tag| {
+        if (tag.name == name) return tag;
+    }
+    return null;
+}
+
 fn containsFieldByName(fields: []const type_mod.Field, name: base.Ident.Idx) bool {
     for (fields) |field| {
         if (field.name == name) return true;
@@ -2539,11 +2710,25 @@ fn containsFieldByName(fields: []const type_mod.Field, name: base.Ident.Idx) boo
     return false;
 }
 
+fn findFieldByName(fields: []const type_mod.Field, name: base.Ident.Idx) ?type_mod.Field {
+    for (fields) |field| {
+        if (field.name == name) return field;
+    }
+    return null;
+}
+
 fn containsLambdaBySymbol(lambdas: []const type_mod.Lambda, symbol: Symbol) bool {
     for (lambdas) |lambda| {
         if (lambda.symbol == symbol) return true;
     }
     return false;
+}
+
+fn findLambdaBySymbol(lambdas: []const type_mod.Lambda, symbol: Symbol) ?type_mod.Lambda {
+    for (lambdas) |lambda| {
+        if (lambda.symbol == symbol) return lambda;
+    }
+    return null;
 }
 
 fn findCaptureBySymbol(captures: []const type_mod.Capture, symbol: Symbol) ?type_mod.Capture {

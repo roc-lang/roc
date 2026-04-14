@@ -393,7 +393,21 @@ const Lowerer = struct {
 
             arg_vars.clearRetainingCapacity();
             ret_vars.clearRetainingCapacity();
-            try self.collectCurriedSignature(entry_fn_ty, &arg_vars, &ret_vars);
+            const final_ret = try self.collectCurriedSignature(entry_fn_ty, &arg_vars, &ret_vars);
+            if (arg_vars.items.len == 0) {
+                if (comptime builtin.mode == .Debug) {
+                    std.debug.assert(final_ret == entry_fn_ty);
+                } else if (final_ret != entry_fn_ty) {
+                    unreachable;
+                }
+            } else {
+                const last_ret = ret_vars.items[ret_vars.items.len - 1];
+                if (comptime builtin.mode == .Debug) {
+                    std.debug.assert(final_ret == last_ret);
+                } else if (final_ret != last_ret) {
+                    unreachable;
+                }
+            }
             if (arg_vars.items.len != ret_vars.items.len) {
                 debugPanic("lambdamono.lower entrypoint wrapper arity mismatch");
             }
@@ -950,7 +964,12 @@ const Lowerer = struct {
         if (mono_cache.provisional.get(id)) |provisional| {
             if (self.types.isFullyResolved(provisional)) {
                 const canonical = try self.types.canonicalizeResolved(provisional);
-                mono_cache.provisional.remove(id);
+                const removed = mono_cache.provisional.remove(id);
+                if (comptime builtin.mode == .Debug) {
+                    std.debug.assert(removed);
+                } else if (!removed) {
+                    unreachable;
+                }
                 try mono_cache.resolved.put(id, canonical);
                 return canonical;
             }
@@ -1047,7 +1066,12 @@ const Lowerer = struct {
         };
 
         self.types.setType(placeholder, lowered);
-        mono_cache.active.remove(id);
+        const removed = mono_cache.active.remove(id);
+        if (comptime builtin.mode == .Debug) {
+            std.debug.assert(removed);
+        } else if (!removed) {
+            unreachable;
+        }
         if (self.types.isFullyResolved(placeholder)) {
             const canonical = try self.types.canonicalizeResolved(placeholder);
             try mono_cache.resolved.put(id, canonical);

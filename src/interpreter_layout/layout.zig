@@ -148,6 +148,13 @@ pub const LayoutUnion = packed union {
     tag_union: TagUnionLayout,
 };
 
+/// Field name plus the module that owns the Ident.Idx.
+/// This is explicit provenance so later stages never guess which ident store to use.
+pub const FieldName = struct {
+    module_idx: u32,
+    ident: Ident.Idx,
+};
+
 /// Unified struct field layout — used for both records and tuples at the layout level.
 /// At the LIR level, records and tuples are both just contiguous fields sorted by alignment.
 /// The `index` field stores the original source-level index:
@@ -160,12 +167,8 @@ pub const StructField = struct {
     layout: Idx,
     /// DEPRECATED: Optional field name (set for records, unset for tuples).
     ///
-    /// This field is incorrect by construction. `Ident.Idx` is module-local, but
-    /// by the time we have lowered to layouts the notion of "which module this
-    /// came from" has intentionally been erased. There is no principled way to
-    /// recover the correct `Ident.Store` from layout data alone, so looking this
-    /// up can only work by accident in the special case where the caller both has
-    /// access to the right ident store and happens to choose it.
+    /// This field is deprecated but now includes explicit module provenance so
+    /// lookups can be correct without heuristics.
     ///
     /// The long-term direction is to delete this field entirely.
     ///
@@ -181,7 +184,7 @@ pub const StructField = struct {
     /// go away. Once the remaining transitional lowering/layout consumers are
     /// removed or rewritten to use a non-name-based mechanism, this field should go
     /// from deprecated to deleted.
-    name: Ident.Idx = Ident.Idx.NONE,
+    name: FieldName = .{ .module_idx = std.math.maxInt(u32), .ident = Ident.Idx.NONE },
 
     /// A SafeMultiList for storing struct fields
     pub const SafeMultiList = collections.SafeMultiList(StructField);

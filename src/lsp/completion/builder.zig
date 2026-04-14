@@ -174,7 +174,7 @@ pub const CompletionBuilder = struct {
                 const name = module_state.name;
                 if (name.len == 0) continue;
 
-                try self.addItem(.{
+                _ = try self.addItem(.{
                     .label = name,
                     .kind = @intFromEnum(CompletionItemKind.module),
                     .detail = null,
@@ -196,7 +196,7 @@ pub const CompletionBuilder = struct {
                 const name = module_env.common.idents.getText(name_idx);
 
                 if (name.len > 0) {
-                    try self.addItem(.{
+                    _ = try self.addItem(.{
                         .label = name,
                         .kind = @intFromEnum(CompletionItemKind.module),
                         .detail = null,
@@ -249,7 +249,7 @@ pub const CompletionBuilder = struct {
         // We use the builtin type list as module names, because builtin modules
         // are surfaced as top-level namespaces for completion.
         for (builtin_completion.BUILTIN_TYPES) |builtin_name| {
-            try self.addItem(.{
+            _ = try self.addItem(.{
                 .label = builtin_name,
                 .kind = @intFromEnum(CompletionItemKind.module),
                 .detail = null,
@@ -323,12 +323,13 @@ pub const CompletionBuilder = struct {
                 }
             }
 
-            try self.addItem(.{
+            const added = try self.addItem(.{
                 .label = label,
                 .kind = kind,
                 .detail = detail,
                 .documentation = documentation,
             });
+            if (added) {} else {}
         }
     }
 
@@ -431,7 +432,7 @@ pub const CompletionBuilder = struct {
                         stmt_idx,
                     ) catch null;
 
-                    try self.addItem(.{
+                    _ = try self.addItem(.{
                         .label = name,
                         .kind = @intFromEnum(CompletionItemKind.class),
                         .detail = null,
@@ -758,11 +759,12 @@ pub const CompletionBuilder = struct {
                                 // Use a stack buffer; addItem duplicates accepted labels.
                                 var label_buf: [32]u8 = undefined;
                                 const label = std.fmt.bufPrint(&label_buf, "{d}", .{i}) catch continue;
-                                try self.addItem(.{
+                                const added = try self.addItem(.{
                                     .label = label,
                                     .kind = @intFromEnum(CompletionItemKind.field),
                                     .detail = detail,
                                 });
+                                if (added) {} else {}
                             }
                             return;
                         },
@@ -918,11 +920,12 @@ pub const CompletionBuilder = struct {
                 tw.reset();
             }
 
-            try self.addItem(.{
+            const added = try self.addItem(.{
                 .label = field_name,
                 .kind = @intFromEnum(CompletionItemKind.field),
                 .detail = detail,
             });
+            if (added) {} else {}
         }
     }
 
@@ -1136,11 +1139,12 @@ pub const CompletionBuilder = struct {
                 tw.reset();
             }
 
-            try self.addItem(.{
+            const added = try self.addItem(.{
                 .label = method_name,
                 .kind = @intFromEnum(CompletionItemKind.method),
                 .detail = detail,
             });
+            if (added) {} else {}
         }
     }
 
@@ -1219,12 +1223,13 @@ pub const CompletionBuilder = struct {
                 // Extract documentation for the method definition.
                 const documentation = self.findMethodDocumentation(module_env, qualified_ident);
 
-                try self.addItem(.{
+                const added = try self.addItem(.{
                     .label = method_name,
                     .kind = @intFromEnum(CompletionItemKind.method),
                     .detail = detail,
                     .documentation = documentation,
                 });
+                if (added) {} else {}
             }
         }
     }
@@ -1410,11 +1415,12 @@ pub const CompletionBuilder = struct {
                             // Show the tag signature (e.g. "SubVal(Str)") as detail
                             const detail = self.formatTagSignature(module_env, tag_name, t.args);
 
-                            try self.addItem(.{
+                            const added = try self.addItem(.{
                                 .label = tag_name,
                                 .kind = @intFromEnum(CompletionItemKind.enum_member),
                                 .detail = detail,
                             });
+                            if (added) {} else {}
                         },
                         else => {},
                     }

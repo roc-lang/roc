@@ -36,7 +36,7 @@ test {
     try std.testing.expectEqual(24, @sizeOf(FlatType));
     try std.testing.expectEqual(12, @sizeOf(Record));
     try std.testing.expectEqual(20, @sizeOf(NominalType)); // Increased from 16 due to is_opaque field
-    try std.testing.expectEqual(44, @sizeOf(StaticDispatchConstraint));
+    try std.testing.expectEqual(52, @sizeOf(StaticDispatchConstraint));
     try std.testing.expectEqual(16, @sizeOf(Func));
 }
 
@@ -90,6 +90,7 @@ pub const TypeScope = struct {
 pub const Descriptor = struct {
     content: Content,
     rank: Rank,
+    from_numeral_origin: bool = false,
 };
 
 /// In general, the rank tracks the number of let-bindings a variable is "under".

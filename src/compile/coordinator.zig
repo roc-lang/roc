@@ -121,7 +121,7 @@ pub const WorkerAllocators = struct {
 
     /// Reset arena between tasks (keeps capacity, frees memory)
     pub fn resetArena(self: *WorkerAllocators) void {
-        self.arena_impl.reset(.retain_capacity);
+        _ = self.arena_impl.reset(.retain_capacity);
     }
 };
 
@@ -680,18 +680,18 @@ pub const Coordinator = struct {
         // decrements inflight, so incrementing here would make isComplete() hang.
         const has_workers = threads_available and self.mode == .multi_threaded and self.max_threads > 1;
         if (has_workers) {
-            self.inflight.fetchAdd(1, .monotonic);
+            _ = self.inflight.fetchAdd(1, .monotonic);
         }
         self.task_channel.sendGrowable(task) catch |err| switch (err) {
             error.Closed => {
                 if (has_workers) {
-                    self.inflight.fetchSub(1, .monotonic);
+                    _ = self.inflight.fetchSub(1, .monotonic);
                 }
                 return;
             },
             error.OutOfMemory => {
                 if (has_workers) {
-                    self.inflight.fetchSub(1, .monotonic);
+                    _ = self.inflight.fetchSub(1, .monotonic);
                 }
                 return error.OutOfMemory;
             },
@@ -745,7 +745,7 @@ pub const Coordinator = struct {
                 // Multi-threaded: receive from workers via channel
                 // Use blocking recv with timeout to avoid busy spinning
                 if (self.result_channel.recvTimeout(10_000_000)) |result| { // 10ms timeout
-                    self.inflight.fetchSub(1, .monotonic);
+                    _ = self.inflight.fetchSub(1, .monotonic);
                     try self.handleResult(result);
                     made_progress = true;
                 }
@@ -2507,7 +2507,7 @@ test "Coordinator task queue" {
 
     // Create package and module
     const pkg = try coord.ensurePackage("app", "/test/app");
-    try pkg.ensureModule(allocator, "Main", "/test/app/Main.roc");
+    _ = try pkg.ensureModule(allocator, "Main", "/test/app/Main.roc");
 
     // Enqueue a task directly
     try coord.enqueueTask(.{
@@ -2564,7 +2564,7 @@ test "Coordinator isComplete logic" {
     try std.testing.expect(!coord.isComplete());
 
     // Clear task but add inflight
-    coord.task_channel.tryRecv();
+    if (coord.task_channel.tryRecv()) |_| {} else {}
     coord.inflight.store(1, .release);
     try std.testing.expect(!coord.isComplete());
 
@@ -2605,7 +2605,7 @@ test "Coordinator isComplete with multi_threaded max_threads=0 (inline fallback)
     try std.testing.expectEqual(@as(usize, 0), coord.inflight.load(.monotonic));
 
     // Drain the task — should be complete again
-    coord.task_channel.tryRecv();
+    if (coord.task_channel.tryRecv()) |_| {} else {}
     try std.testing.expect(coord.isComplete());
 }
 

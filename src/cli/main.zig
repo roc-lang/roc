@@ -199,8 +199,8 @@ const BuiltinsObjects = struct {
 };
 
 test "main cli tests" {
-    @import("libc_finder.zig");
-    @import("test_shared_memory_system.zig");
+    _ = @import("libc_finder.zig");
+    _ = @import("test_shared_memory_system.zig");
 }
 
 // Workaround for Zig standard library compilation issue on macOS ARM64.
@@ -590,12 +590,31 @@ var debug_allocator: std.heap.DebugAllocator(.{}) = .{
     .backing_allocator = std.heap.c_allocator,
 };
 
+fn renderValidationError(
+    allocator: std.mem.Allocator,
+    result: platform_validation.ValidationResult,
+    stderr: anytype,
+) void {
+    const rendered = platform_validation.renderValidationError(allocator, result, stderr);
+    if (rendered) {} else {}
+}
+
+fn renderDiagnostics(build_env: *BuildEnv, stderr: anytype) void {
+    const diag = build_env.renderDiagnostics(stderr);
+    if (diag.errors > 0) {} else {}
+}
+
 /// The CLI entrypoint for the Roc compiler.
 pub fn main() !void {
     // Install stack overflow handler early, before any significant work.
     // This gives us a helpful error message instead of a generic segfault
     // if the compiler blows the stack (e.g., due to infinite recursion in type translation).
-    base.stack_overflow.install();
+    const stack_overflow_installed = base.stack_overflow.install();
+    if (comptime builtin.mode == .Debug) {
+        std.debug.assert(stack_overflow_installed);
+    } else if (!stack_overflow_installed) {
+        unreachable;
+    }
 
     var gpa_tracy: tracy.TracyAllocator(null) = undefined;
     var gpa, const is_safe = gpa: {
@@ -1010,7 +1029,7 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
                     const result = platform_validation.targets_validator.ValidationResult{
                         .invalid_target = .{ .target_str = target_str },
                     };
-                    platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+                    renderValidationError(ctx.gpa, result, ctx.io.stderr());
                     return error.InvalidTarget;
                 };
 
@@ -1023,7 +1042,7 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
                         .exe,
                         validation.config,
                     );
-                    platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+                    renderValidationError(ctx.gpa, result, ctx.io.stderr());
                     return error.UnsupportedTarget;
                 }
             } else {
@@ -1039,7 +1058,7 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
                         .exe,
                         validation.config,
                     );
-                    platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+                    renderValidationError(ctx.gpa, result, ctx.io.stderr());
                     return error.UnsupportedTarget;
                 }
             }
@@ -1350,7 +1369,7 @@ fn rocRunDevShim(ctx: *CliContext, args: cli_args.RunArgs) !void {
                     const result = platform_validation.targets_validator.ValidationResult{
                         .invalid_target = .{ .target_str = target_str },
                     };
-                    platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+                    renderValidationError(ctx.gpa, result, ctx.io.stderr());
                     return error.InvalidTarget;
                 };
 
@@ -1363,7 +1382,7 @@ fn rocRunDevShim(ctx: *CliContext, args: cli_args.RunArgs) !void {
                         .exe,
                         validation.config,
                     );
-                    platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+                    renderValidationError(ctx.gpa, result, ctx.io.stderr());
                     return error.UnsupportedTarget;
                 }
             } else {
@@ -1377,7 +1396,7 @@ fn rocRunDevShim(ctx: *CliContext, args: cli_args.RunArgs) !void {
                         .exe,
                         validation.config,
                     );
-                    platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+                    renderValidationError(ctx.gpa, result, ctx.io.stderr());
                     return error.UnsupportedTarget;
                 }
             }
@@ -1799,12 +1818,12 @@ fn rocRunDefaultApp(ctx: *CliContext, args: cli_args.RunArgs, original_source: [
     build_env.filesystem = .{ .ctx = @ptrCast(&cli_echo_state), .vtable = cli_echo_vtable };
 
     build_env.discoverDependencies(args.path) catch |err| {
-        build_env.renderDiagnostics(ctx.io.stderr());
+        renderDiagnostics(&build_env, ctx.io.stderr());
         return err;
     };
 
     build_env.compileDiscovered() catch |err| {
-        build_env.renderDiagnostics(ctx.io.stderr());
+        renderDiagnostics(&build_env, ctx.io.stderr());
         return err;
     };
 
@@ -2017,12 +2036,12 @@ fn runWithWindowsHandleInheritance(ctx: *CliContext, exe_path: []const u8, shm_h
             const result = platform_validation.targets_validator.ValidationResult{
                 .process_crashed = .{ .exit_code = exit_code, .is_access_violation = true },
             };
-            platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+            renderValidationError(ctx.gpa, result, ctx.io.stderr());
         } else if (exit_code >= 0xC0000000) { // NT status codes for exceptions
             const result = platform_validation.targets_validator.ValidationResult{
                 .process_crashed = .{ .exit_code = exit_code, .is_access_violation = false },
             };
-            platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+            renderValidationError(ctx.gpa, result, ctx.io.stderr());
         }
         // Propagate the exit code (truncated to u8 for compatibility)
         std.process.exit(@truncate(exit_code));
@@ -2148,7 +2167,7 @@ fn runWithPosixFdInheritance(ctx: *CliContext, exe_path: []const u8, shm_handle:
             const result = platform_validation.targets_validator.ValidationResult{
                 .process_signaled = .{ .signal = signal },
             };
-            platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+            renderValidationError(ctx.gpa, result, ctx.io.stderr());
             // Standard POSIX convention: exit with 128 + signal number
             std.process.exit(128 +| @as(u8, @truncate(signal)));
         },
@@ -2420,7 +2439,7 @@ pub fn setupSharedMemoryWithCoordinator(ctx: *CliContext, roc_file_path: []const
         const pkg_name = try ctx.gpa.dupe(u8, shorthand);
         defer ctx.gpa.free(pkg_name);
 
-        try coord.ensurePackage(pkg_name, pkg_dir);
+        _ = try coord.ensurePackage(pkg_name, pkg_dir);
 
         // Add shorthand mapping to app package
         // The coordinator will automatically discover and queue modules from this package
@@ -2923,7 +2942,7 @@ fn checkPlatformRequirementsFromCoordinator(
     // Now finalize numeric defaults for the app module. This must happen AFTER
     // checkPlatformRequirements so that numeric literals can be constrained by
     // platform types (e.g., I64) before defaulting to Dec.
-    try checker.verifyNumericDefaults();
+    try checker.finalizeNumericDefaults();
 
     // If there are type problems, convert them to reports and add to app module
     if (checker.problems.problems.items.len > 0) {
@@ -2988,7 +3007,7 @@ fn extractExposedModulesFromPlatform(ctx: *CliContext, roc_file_path: []const u8
         .platform => |platform_header| {
             // Validate platform header has targets section (non-blocking warning)
             // This helps platform authors know they need to add targets
-            validatePlatformHeader(ctx, parse_ast, roc_file_path);
+            _ = validatePlatformHeader(ctx, parse_ast, roc_file_path);
 
             // Get the exposes collection
             const exposes_coll = parse_ast.store.getCollection(platform_header.exposes);
@@ -3676,7 +3695,7 @@ fn validateBundleWithCoordinator(
         if (build_env.getPlatformTargetsConfig()) |tc| {
             const pf_dir = std.fs.path.dirname(pf) orelse ".";
             if (platform_validation.validateAllTargetFilesExist(ctx.arena, tc, pf_dir)) |result| {
-                platform_validation.renderValidationError(ctx.gpa, result, stderr);
+                renderValidationError(ctx.gpa, result, stderr);
                 return switch (result) {
                     .missing_target_file => error.MissingTargetFile,
                     .missing_files_directory => error.MissingFilesDirectory,
@@ -4043,7 +4062,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
 
     // Phase 2: Discover dependencies (parses headers once, extracts TargetsConfig)
     build_env.discoverDependencies(args.path) catch |err| {
-        build_env.renderDiagnostics(ctx.io.stderr());
+        renderDiagnostics(&build_env, ctx.io.stderr());
         return err;
     };
 
@@ -4064,7 +4083,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
             const result = platform_validation.targets_validator.ValidationResult{
                 .invalid_target = .{ .target_str = target_str },
             };
-            platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+            renderValidationError(ctx.gpa, result, ctx.io.stderr());
             return error.InvalidTarget;
         };
 
@@ -4081,7 +4100,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
                 .exe,
                 targets_config,
             );
-            platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+            renderValidationError(ctx.gpa, result, ctx.io.stderr());
             return error.UnsupportedTarget;
         };
 
@@ -4128,7 +4147,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
                 .host_os = @tagName(builtin.target.os.tag),
             },
         };
-        platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+        renderValidationError(ctx.gpa, result, ctx.io.stderr());
         return error.UnsupportedCrossCompilation;
     }
 
@@ -4185,7 +4204,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     build_env.setTarget(target);
 
     build_env.compileDiscovered() catch |err| {
-        build_env.renderDiagnostics(ctx.io.stderr());
+        renderDiagnostics(&build_env, ctx.io.stderr());
         return err;
     };
 
@@ -4446,7 +4465,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
                             .expected_full_path = full_path,
                         },
                     };
-                    platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+                    renderValidationError(ctx.gpa, result, ctx.io.stderr());
                     return error.MissingTargetFile;
                 };
 
@@ -4602,7 +4621,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
 
     // Phase 2: Discover dependencies (parses headers once, extracts TargetsConfig)
     build_env.discoverDependencies(args.path) catch |err| {
-        build_env.renderDiagnostics(ctx.io.stderr());
+        renderDiagnostics(&build_env, ctx.io.stderr());
         return err;
     };
 
@@ -4624,7 +4643,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
             const result = platform_validation.targets_validator.ValidationResult{
                 .invalid_target = .{ .target_str = target_str },
             };
-            platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+            renderValidationError(ctx.gpa, result, ctx.io.stderr());
             return error.InvalidTarget;
         };
 
@@ -4642,7 +4661,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
                 .exe, // Show exe as the expected type for error message
                 targets_config,
             );
-            platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+            renderValidationError(ctx.gpa, result, ctx.io.stderr());
             return error.UnsupportedTarget;
         };
 
@@ -4709,7 +4728,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     build_env.setTarget(target);
 
     build_env.compileDiscovered() catch |err| {
-        build_env.renderDiagnostics(ctx.io.stderr());
+        renderDiagnostics(&build_env, ctx.io.stderr());
         return err;
     };
 
@@ -4757,7 +4776,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
                 .host_os = @tagName(host_os),
             },
         };
-        platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+        renderValidationError(ctx.gpa, result, ctx.io.stderr());
         return error.UnsupportedCrossCompilation;
     }
 
@@ -4793,7 +4812,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
                             .expected_full_path = full_path,
                         },
                     };
-                    platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+                    renderValidationError(ctx.gpa, result, ctx.io.stderr());
                     return error.MissingTargetFile;
                 };
 

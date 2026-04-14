@@ -173,7 +173,7 @@ pub fn isRecordStyleStruct(lay: Layout, layout_store: *layout.Store) bool {
     const fields = layout_store.struct_fields.sliceRange(struct_data.getFields());
     if (fields.len == 0) return false;
     // If the first field has a non-NONE name, it's record-style
-    return !fields.get(0).name.eql(base_pkg.Ident.Idx.NONE);
+    return fields.get(0).name.ident != base_pkg.Ident.Idx.NONE;
 }
 
 /// For a struct representing a tag union (record-style or tuple-style), return the
@@ -1984,17 +1984,18 @@ pub const Interpreter = struct {
                                 const record_layout = self.runtime_layout_store.getLayout(inner_variants.get(0).payload_layout);
 
                                 if (record_layout.tag == .struct_) {
+                                    const module_idx = self.runtime_layout_store.moduleIdxForEnv(self.env);
                                     // Write problem field
                                     const problem_offset = self.runtime_layout_store.getRecordFieldOffsetByName(
                                         record_layout.data.struct_.idx,
-                                        self.env.idents.problem,
+                                        .{ .module_idx = module_idx, .ident = self.env.idents.problem },
                                     );
                                     builtins.utils.writeAs(u8, ptr_u8 + problem_offset, @intFromEnum(result.problem_code), @src());
 
                                     // Write index field
                                     const index_offset = self.runtime_layout_store.getRecordFieldOffsetByName(
                                         record_layout.data.struct_.idx,
-                                        self.env.idents.index,
+                                        .{ .module_idx = module_idx, .ident = self.env.idents.index },
                                     );
                                     builtins.utils.writeAs(u64, ptr_u8 + index_offset, result.byte_index, @src());
                                 }
@@ -2170,8 +2171,8 @@ pub const Interpreter = struct {
                     const to_inspect_result = try self.evalWithExpectedType(closure_header.body_idx, roc_ops, null);
 
                     // Clean up: remove the binding and active closure
-                    self.active_closures.pop();
-                    self.bindings.pop();
+                    _ = self.active_closures.pop();
+                    _ = self.bindings.pop();
 
                     // Restore environment
                     self.env = saved_env;
@@ -9401,10 +9402,10 @@ pub const Interpreter = struct {
                                 // don't depend on substitutions and should keep their cached
                                 // runtime vars for consistency.
                                 const backing_resolved = module.types.resolveVar(ct_backing);
-                                self.translate_cache.remove(.{ .module = module, .var_ = backing_resolved.var_ });
+                                _ = self.translate_cache.remove(.{ .module = module, .var_ = backing_resolved.var_ });
                                 for (rigids.items) |rigid_var| {
                                     const rigid_resolved = module.types.resolveVar(rigid_var);
-                                    self.translate_cache.remove(.{ .module = module, .var_ = rigid_resolved.var_ });
+                                    _ = self.translate_cache.remove(.{ .module = module, .var_ = rigid_resolved.var_ });
                                 }
                             }
 
@@ -9653,7 +9654,7 @@ pub const Interpreter = struct {
         } else out_var;
 
         // Translation complete - remove from in-progress set
-        self.translation_in_progress.remove(key);
+        _ = self.translation_in_progress.remove(key);
 
         // Update the cache with the final var and current generation
         try self.translate_cache.put(key, .{ .var_ = final_var, .generation = self.poly_context_generation });
@@ -9882,7 +9883,7 @@ pub const Interpreter = struct {
 
         var i: usize = 0;
         while (i < params.len) : (i += 1) {
-            try unify.unifyInContext(
+            const unify_result = try unify.unifyInContext(
                 self.allocator,
                 self.root_env.common.getIdentStore(),
                 self.root_env.qualified_module_ident,
@@ -9896,6 +9897,7 @@ pub const Interpreter = struct {
                 args[i],
                 .none,
             );
+            if (unify_result.isProblem()) return error.TypeMismatch;
         }
         // ret_var may now be constrained
 
@@ -9927,7 +9929,19 @@ pub const Interpreter = struct {
         }
 
         // Ensure layout slot for return var
-        try self.getRuntimeLayout(substituted_ret);
+        const ret_layout = try self.getRuntimeLayout(substituted_ret);
+        switch (ret_layout.tag) {
+            .scalar,
+            .box,
+            .box_of_zst,
+            .list,
+            .list_of_zst,
+            .struct_,
+            .tag_union,
+            .closure,
+            .zst,
+            => {},
+        }
         const root_idx: usize = @intFromEnum(self.runtime_types.resolveVar(substituted_ret).var_);
         try self.ensureVarLayoutCapacity(root_idx + 1);
         // Decode: extract layout slot from encoded value (low 24 bits)
@@ -11456,7 +11470,7 @@ pub const Interpreter = struct {
                                 break :blk try self.runtime_types.freshFromContent(dec_content);
                             };
                             const dec_var = target_var;
-                            try unify.unify(
+                            _ = try unify.unify(
                                 self.allocator,
                                 self.root_env.common.getIdentStore(),
                                 self.root_env.qualified_module_ident,
@@ -11469,7 +11483,7 @@ pub const Interpreter = struct {
                                 lhs_rt_var,
                                 dec_var,
                             );
-                            try unify.unify(
+                            _ = try unify.unify(
                                 self.allocator,
                                 self.root_env.common.getIdentStore(),
                                 self.root_env.qualified_module_ident,
@@ -11484,7 +11498,7 @@ pub const Interpreter = struct {
                             );
                         } else if (lhs_is_flex and !rhs_is_flex) {
                             // LHS is flex, RHS is concrete - unify LHS with RHS
-                            try unify.unify(
+                            _ = try unify.unify(
                                 self.allocator,
                                 self.root_env.common.getIdentStore(),
                                 self.root_env.qualified_module_ident,
@@ -11499,7 +11513,7 @@ pub const Interpreter = struct {
                             );
                         } else if (!lhs_is_flex and rhs_is_flex) {
                             // RHS is flex, LHS is concrete - unify RHS with LHS
-                            try unify.unify(
+                            _ = try unify.unify(
                                 self.allocator,
                                 self.root_env.common.getIdentStore(),
                                 self.root_env.qualified_module_ident,
@@ -11919,7 +11933,19 @@ pub const Interpreter = struct {
                 // (e.g. IntList := [Nil, Cons(I64, IntList)]) - without this, the
                 // backing expression's layout computation would fail on self-references.
                 if (backing_info.nominal) |nominal_rt_var| {
-                    try self.getRuntimeLayout(nominal_rt_var);
+                    const nominal_layout = try self.getRuntimeLayout(nominal_rt_var);
+                    switch (nominal_layout.tag) {
+                        .scalar,
+                        .box,
+                        .box_of_zst,
+                        .list,
+                        .list_of_zst,
+                        .struct_,
+                        .tag_union,
+                        .closure,
+                        .zst,
+                        => {},
+                    }
                 }
                 try work_stack.push(.{ .eval_expr = .{
                     .expr_idx = nom.backing_expr,
@@ -12568,12 +12594,12 @@ pub const Interpreter = struct {
                     const inv_ct_var = can.ModuleEnv.varFrom(arg_idx);
                     const inv_resolved = self.env.types.resolveVar(inv_ct_var);
                     const inv_key = ModuleVarKey{ .module = self.env, .var_ = inv_resolved.var_ };
-                    self.translate_cache.remove(inv_key);
+                    if (self.translate_cache.remove(inv_key)) {} else {}
                 }
                 {
                     const ret_ct_resolved = self.env.types.resolveVar(can.ModuleEnv.varFrom(expr_idx));
                     const ret_key = ModuleVarKey{ .module = self.env, .var_ = ret_ct_resolved.var_ };
-                    self.translate_cache.remove(ret_key);
+                    if (self.translate_cache.remove(ret_key)) {} else {}
                 }
 
                 // Compute argument runtime type variables
@@ -12615,7 +12641,7 @@ pub const Interpreter = struct {
                 // call_ret_rt_var (fresh translation) because the function's return var
                 // has concrete type args while call_ret_rt_var may have rigid type args.
                 const effective_ret_var = if (poly_entry) |entry| blk: {
-                    try unify.unifyInContext(
+                    const unify_result = try unify.unifyInContext(
                         self.allocator,
                         self.root_env.common.getIdentStore(),
                         self.root_env.qualified_module_ident,
@@ -12629,6 +12655,7 @@ pub const Interpreter = struct {
                         entry.return_var,
                         .none,
                     );
+                    if (unify_result.isProblem()) return error.TypeMismatch;
 
                     // Use the function's return type - it has properly instantiated type args
                     break :blk entry.return_var;
@@ -15207,7 +15234,7 @@ pub const Interpreter = struct {
                     defer union_names.deinit();
                     var union_layouts = std.array_list.AlignedManaged(layout.Layout, null).init(self.allocator);
                     defer union_layouts.deinit();
-                    var union_indices = std.AutoHashMap(u32, usize).init(self.allocator);
+                    var union_indices = std.AutoHashMap(u64, usize).init(self.allocator);
                     defer union_indices.deinit();
 
                     // Pop field values from stack (in reverse order since last evaluated is on top)
@@ -15283,13 +15310,15 @@ pub const Interpreter = struct {
                             const info = base_accessor.field_layouts.get(idx);
                             const field_layout = self.runtime_layout_store.getLayout(info.layout);
                             const translated_name = info.name;
-                            const key: u32 = @bitCast(translated_name);
+                            const ident_bits: u32 = @as(u32, @bitCast(translated_name.ident));
+                            const key: u64 = (@as(u64, translated_name.module_idx) << 32) |
+                                @as(u64, ident_bits);
                             if (union_indices.get(key)) |idx_ptr| {
                                 union_layouts.items[idx_ptr] = field_layout;
-                                union_names.items[idx_ptr] = translated_name;
+                                union_names.items[idx_ptr] = translated_name.ident;
                             } else {
                                 try union_layouts.append(field_layout);
-                                try union_names.append(translated_name);
+                                try union_names.append(translated_name.ident);
                                 try union_indices.put(key, union_layouts.items.len - 1);
                             }
                         }
@@ -15299,13 +15328,16 @@ pub const Interpreter = struct {
                     // Translate field names from self.env's identifier store to runtime_layout_store.getEnv()'s
                     // identifier store. This is necessary because field names may come from different modules
                     // (e.g., app module), but rendering uses root_env (same as runtime_layout_store.getEnv()).
+                    const field_module_idx = self.runtime_layout_store.moduleIdxForEnv(self.runtime_layout_store.getMutableEnv().?);
                     for (rc.all_fields, 0..) |field_idx_enum, idx| {
                         const f = self.env.store.getRecordField(field_idx_enum);
                         const field_layout = field_values[idx].layout;
                         // Translate field name to runtime layout store's identifier space
                         const field_name_str = self.env.getIdent(f.name);
                         const translated_name = try self.runtime_layout_store.getMutableEnv().?.insertIdent(base_pkg.Ident.for_text(field_name_str));
-                        const key: u32 = @bitCast(translated_name);
+                        const ident_bits: u32 = @as(u32, @bitCast(translated_name));
+                        const key: u64 = (@as(u64, field_module_idx) << 32) |
+                            @as(u64, ident_bits);
                         if (union_indices.get(key)) |idx_ptr| {
                             union_layouts.items[idx_ptr] = field_layout;
                             union_names.items[idx_ptr] = translated_name;
@@ -15338,7 +15370,7 @@ pub const Interpreter = struct {
                         var idx: usize = 0;
                         while (idx < base_accessor.getFieldCount()) : (idx += 1) {
                             const info = base_accessor.field_layouts.get(idx);
-                            const dest_field_idx = accessor.findFieldIndex(info.name) orelse return error.TypeMismatch;
+                            const dest_field_idx = accessor.findFieldIndex(info.name.ident) orelse return error.TypeMismatch;
                             const field_rt = try self.runtime_types.fresh();
                             const base_field_value = try base_accessor.getFieldByIndex(idx, field_rt);
                             try accessor.setFieldByIndex(dest_field_idx, base_field_value, roc_ops);
@@ -16818,7 +16850,9 @@ pub const Interpreter = struct {
                         if (!try self.patternMatchesBind(param, arg_values[idx], param_rt_var, roc_ops, &self.bindings, null)) {
                             // Pattern match failed - cleanup and error
                             self.env = saved_env;
-                            self.active_closures.pop();
+                            if (self.active_closures.pop()) |closure_val| {
+                                closure_val.decref(&self.runtime_layout_store, roc_ops);
+                            }
                             func_val.decref(&self.runtime_layout_store, roc_ops);
                             for (arg_values) |arg| arg.decref(&self.runtime_layout_store, roc_ops);
                             if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
@@ -18374,7 +18408,7 @@ pub const Interpreter = struct {
                         // Unify the method's first parameter with the receiver type
                         const method_params = self.runtime_types.sliceVars(func_info.args);
                         if (method_params.len >= 1) {
-                            try unify.unifyInContext(
+                            const unify_result = try unify.unifyInContext(
                                 self.allocator,
                                 self.root_env.common.getIdentStore(),
                                 self.root_env.qualified_module_ident,
@@ -18388,6 +18422,7 @@ pub const Interpreter = struct {
                                 da.receiver_rt_var,
                                 .none,
                             );
+                            if (unify_result.isProblem()) return error.TypeMismatch;
                         }
 
                         // Use the call site's return type - it has the correct concrete types
@@ -18416,7 +18451,9 @@ pub const Interpreter = struct {
                     if (!try self.patternMatchesBind(params[0], receiver_value, da.receiver_rt_var, roc_ops, &self.bindings, null)) {
                         // Pattern match failed - cleanup and error
                         self.env = saved_env;
-                        self.active_closures.pop();
+                        if (self.active_closures.pop()) |closure_val| {
+                            closure_val.decref(&self.runtime_layout_store, roc_ops);
+                        }
                         method_func.decref(&self.runtime_layout_store, roc_ops);
                         receiver_value.decref(&self.runtime_layout_store, roc_ops);
                         return error.TypeMismatch;
@@ -18657,7 +18694,7 @@ pub const Interpreter = struct {
                                 // Create a fresh copy of the argument's type to avoid corrupting the original
                                 const arg_resolved = self.runtime_types.resolveVar(all_args[unify_idx].rt_var);
                                 const arg_copy = try self.runtime_types.freshFromContent(arg_resolved.desc.content);
-                                try unify.unifyInContext(
+                                const unify_result = unify.unifyInContext(
                                     self.allocator,
                                     self.root_env.common.getIdentStore(),
                                     self.root_env.qualified_module_ident,
@@ -18670,7 +18707,10 @@ pub const Interpreter = struct {
                                     param_vars[unify_idx],
                                     arg_copy,
                                     .none,
-                                ) catch {};
+                                ) catch null;
+                                if (unify_result) |result| {
+                                    if (result.isProblem()) {}
+                                }
                             }
                             // Return type is now properly instantiated through unification
                             break :blk info.ret;
@@ -18778,7 +18818,7 @@ pub const Interpreter = struct {
                     // Create a copy of the receiver's type to avoid corrupting the original
                     const recv_resolved = self.runtime_types.resolveVar(dac.receiver_rt_var);
                     const recv_copy = try self.runtime_types.freshFromContent(recv_resolved.desc.content);
-                    try unify.unifyInContext(
+                    const unify_result = unify.unifyInContext(
                         self.allocator,
                         self.root_env.common.getIdentStore(),
                         self.root_env.qualified_module_ident,
@@ -18791,12 +18831,16 @@ pub const Interpreter = struct {
                         fn_args[0],
                         recv_copy,
                         .none,
-                    ) catch {};
+                    ) catch null;
+                    if (unify_result) |result| {
+                        if (result.isProblem()) {}
+                    }
                 }
 
                 if (should_instantiate_method) {
                     // Instantiate the method type (replaces rigid vars with fresh flex vars)
-                    try self.instantiateType(lambda_rt_var, &method_subst_map);
+                    const instantiated_lambda_rt_var = try self.instantiateType(lambda_rt_var, &method_subst_map);
+                    if (self.runtime_types.resolveVar(instantiated_lambda_rt_var).desc.content == .structure) {} else {}
 
                     // Save and update rigid_subst AND empty_scope.
                     // Both are needed: rigid_subst for runtime type resolution in getRuntimeLayout,
@@ -18843,7 +18887,9 @@ pub const Interpreter = struct {
                 if (!try self.patternMatchesBind(params[0], receiver_value, receiver_param_rt_var, roc_ops, &self.bindings, null)) {
                     // Pattern match failed - cleanup and error
                     self.env = saved_env;
-                    self.active_closures.pop();
+                    if (self.active_closures.pop()) |closure_val| {
+                        closure_val.decref(&self.runtime_layout_store, roc_ops);
+                    }
                     method_func.decref(&self.runtime_layout_store, roc_ops);
                     receiver_value.decref(&self.runtime_layout_store, roc_ops);
                     for (arg_values) |arg| arg.decref(&self.runtime_layout_store, roc_ops);
@@ -18870,7 +18916,9 @@ pub const Interpreter = struct {
                     if (!try self.patternMatchesBind(params[1 + idx], arg, param_rt_var, roc_ops, &self.bindings, null)) {
                         // Pattern match failed - cleanup and error
                         self.env = saved_env;
-                        self.active_closures.pop();
+                        if (self.active_closures.pop()) |closure_val| {
+                            closure_val.decref(&self.runtime_layout_store, roc_ops);
+                        }
                         method_func.decref(&self.runtime_layout_store, roc_ops);
                         for (arg_values[idx..]) |remaining_arg| remaining_arg.decref(&self.runtime_layout_store, roc_ops);
                         if (saved_rigid_subst) |*saved| saved.deinit();

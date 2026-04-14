@@ -309,15 +309,15 @@ pub fn extractModuleDocs(gpa: Allocator, module_env: *const ModuleEnv, package_n
                 errdefer gpa.free(short_name);
 
                 var method_entry = entry.*; // Copy entry
-                gpa.free(method_entry.name); // Free old qualified name
                 method_entry.name = short_name; // Use short name
 
                 // Add to parent's children
                 try appendChildEntry(gpa, parent, method_entry);
 
                 // Remove from top-level list (preserving source order)
-                gpa.free(entry.children); // Free empty children array
-                entries_list.orderedRemove(i);
+                const removed = entries_list.orderedRemove(i);
+                gpa.free(removed.children);
+                gpa.free(removed.name);
                 continue; // Don't increment i, check same position again
             }
         }
@@ -457,7 +457,6 @@ fn reparentBuiltinChildren(gpa: Allocator, entries_list: *std.ArrayList(DocModel
                 const short_name = try gpa.dupe(u8, method_short_name);
 
                 var method_entry = entry.*;
-                gpa.free(method_entry.name);
                 method_entry.name = short_name;
 
                 // Check if remainder has more dots — if so, use reparentDottedChildInto
@@ -474,8 +473,9 @@ fn reparentBuiltinChildren(gpa: Allocator, entries_list: *std.ArrayList(DocModel
                 }
 
                 // Remove from top-level list (preserving source order)
-                gpa.free(entry.children);
-                entries_list.orderedRemove(j);
+                const removed = entries_list.orderedRemove(j);
+                gpa.free(removed.children);
+                gpa.free(removed.name);
                 continue;
             }
         }

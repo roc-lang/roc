@@ -393,7 +393,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
             var builder = DeferredFrameBuilder.init();
             builder.setCalleeSavedMask(self.callee_saved_used);
             builder.setStackSize(stack_size);
-            try builder.emitPrologue(&self.emit);
+            _ = try builder.emitPrologue(&self.emit);
         }
 
         /// Emit function epilogue and return
@@ -964,7 +964,7 @@ test "Linux x64 prologue saves callee-saved registers with MOV" {
 
     // System V: 9 caller-saved, need 11 total to use 2 callee-saved
     for (0..11) |i| {
-        try cg.allocGeneralFor(@intCast(i));
+        _ = try cg.allocGeneralFor(@intCast(i));
     }
 
     // Now emit prologue - it should include MOV saves for callee-saved regs
@@ -990,7 +990,7 @@ test "Windows x64 prologue saves callee-saved registers with MOV" {
 
     // Windows: 7 caller-saved, need 9 total to use 2 callee-saved
     for (0..9) |i| {
-        try cg.allocGeneralFor(@intCast(i));
+        _ = try cg.allocGeneralFor(@intCast(i));
     }
 
     // Now emit prologue
@@ -1012,7 +1012,7 @@ test "free register returns it to correct pool" {
 
     // Exhaust caller-saved to get a callee-saved one (System V: 9 caller-saved)
     for (1..10) |i| {
-        try cg.allocGeneralFor(@intCast(i));
+        _ = try cg.allocGeneralFor(@intCast(i));
     }
     const callee_reg = try cg.allocGeneralFor(10);
     try std.testing.expect(SystemV.isCalleeSaved(callee_reg));
@@ -1034,7 +1034,7 @@ test "epilogue restores callee-saved registers with MOV" {
 
     // Use some callee-saved registers (System V: 9 caller-saved)
     for (0..11) |i| {
-        try cg.allocGeneralFor(@intCast(i));
+        _ = try cg.allocGeneralFor(@intCast(i));
     }
 
     // Emit prologue and epilogue
@@ -1084,7 +1084,7 @@ test "stack frame is 16-byte aligned" {
         cg.reset();
 
         // Allocate stack space
-        cg.allocStackSlot(@intCast(size));
+        _ = cg.allocStackSlot(@intCast(size));
 
         // The total frame size should be 16-byte aligned
         // stack_offset is negative, so we check -stack_offset
@@ -1104,8 +1104,8 @@ test "getStackSize returns 16-byte aligned size" {
     defer cg.deinit();
 
     // Allocate some space
-    cg.allocStackSlot(10); // Not aligned
-    cg.allocStackSlot(5); // More unaligned
+    _ = cg.allocStackSlot(10); // Not aligned
+    _ = cg.allocStackSlot(5); // More unaligned
 
     // getStackSize should return aligned value
     const stack_size = cg.getStackSize();

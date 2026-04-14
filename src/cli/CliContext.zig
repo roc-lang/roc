@@ -73,8 +73,8 @@ pub const Io = struct {
         const stderr_file = std.fs.File.stderr();
 
         // Enable ANSI escape sequences for colored output (needed on Windows)
-        stdout_file.getOrEnableAnsiEscapeSupport();
-        stderr_file.getOrEnableAnsiEscapeSupport();
+        _ = stdout_file.getOrEnableAnsiEscapeSupport();
+        _ = stderr_file.getOrEnableAnsiEscapeSupport();
 
         self.stdout_writer = stdout_file.writer(&self.stdout_buffer);
         self.stderr_writer = stderr_file.writer(&self.stderr_buffer);

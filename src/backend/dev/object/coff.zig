@@ -653,7 +653,7 @@ test "create minimal coff object" {
     try writer.setCode(&[_]u8{0xC3});
 
     // Add a symbol for the function
-    try writer.addSymbol(.{
+    _ = try writer.addSymbol(.{
         .name = "test_func",
         .section = .text,
         .offset = 0,
@@ -705,7 +705,7 @@ test "coff with long symbol name" {
     try writer.setCode(&[_]u8{0xC3});
 
     // Add a symbol with a name longer than 8 characters
-    try writer.addSymbol(.{
+    _ = try writer.addSymbol(.{
         .name = "this_is_a_very_long_symbol_name",
         .section = .text,
         .offset = 0,
@@ -730,7 +730,7 @@ test "coff aarch64" {
     // ARM64 ret instruction
     try writer.setCode(&[_]u8{ 0xC0, 0x03, 0x5F, 0xD6 });
 
-    try writer.addSymbol(.{
+    _ = try writer.addSymbol(.{
         .name = "test_func",
         .section = .text,
         .offset = 0,

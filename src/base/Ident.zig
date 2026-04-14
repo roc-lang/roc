@@ -414,7 +414,13 @@ pub const Store = struct {
             .reassignable = false,
         };
 
-        try self.attributes.append(gpa, attributes);
+        const expected_idx = self.attributes.items.items.len;
+        const attributes_idx = try self.attributes.append(gpa, attributes);
+        if (comptime builtin.mode == .Debug) {
+            std.debug.assert(@intFromEnum(attributes_idx) == expected_idx);
+        } else if (@intFromEnum(attributes_idx) != expected_idx) {
+            unreachable;
+        }
 
         const result = Idx{
             .attributes = attributes,
@@ -576,7 +582,8 @@ test "Ident.Store empty CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
-    try original.serialize(arena_allocator, &writer);
+    const serialized = try original.serialize(arena_allocator, &writer);
+    try std.testing.expect(@intFromPtr(serialized) != 0);
 
     // Write to file
     try writer.writeGather(arena_allocator, file);
@@ -645,7 +652,8 @@ test "Ident.Store basic CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
-    try original.serialize(arena_allocator, &writer);
+    const serialized = try original.serialize(arena_allocator, &writer);
+    try std.testing.expect(@intFromPtr(serialized) != 0);
 
     // Write to file
     try writer.writeGather(arena_allocator, file);
@@ -729,7 +737,8 @@ test "Ident.Store with genUnique CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
-    try original.serialize(arena_allocator, &writer);
+    const serialized = try original.serialize(arena_allocator, &writer);
+    try std.testing.expect(@intFromPtr(serialized) != 0);
 
     // Write to file
     try writer.writeGather(arena_allocator, file);
@@ -771,8 +780,10 @@ test "Ident.Store CompactWriter roundtrip" {
     var original = try Ident.Store.initCapacity(gpa, 5);
     defer original.deinit(gpa);
 
-    try original.insert(gpa, Ident.for_text("test1"));
-    try original.insert(gpa, Ident.for_text("test2"));
+    const idx1 = try original.insert(gpa, Ident.for_text("test1"));
+    const idx2 = try original.insert(gpa, Ident.for_text("test2"));
+    try std.testing.expect(@intFromEnum(@as(SmallStringInterner.Idx, @enumFromInt(@as(u32, idx1.idx)))) <
+        @intFromEnum(@as(SmallStringInterner.Idx, @enumFromInt(@as(u32, idx2.idx)))));
 
     // Create a temp file
     var tmp_dir = std.testing.tmpDir(.{});
@@ -789,7 +800,8 @@ test "Ident.Store CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
-    try original.serialize(arena_allocator, &writer);
+    const serialized = try original.serialize(arena_allocator, &writer);
+    try std.testing.expect(@intFromPtr(serialized) != 0);
 
     // Write to file
     try writer.writeGather(arena_allocator, file);
@@ -870,7 +882,8 @@ test "Ident.Store comprehensive CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
-    try original.serialize(arena_allocator, &writer);
+    const serialized = try original.serialize(arena_allocator, &writer);
+    try std.testing.expect(@intFromPtr(serialized) != 0);
 
     // Write to file
     try writer.writeGather(arena_allocator, file);

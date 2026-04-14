@@ -1,6 +1,7 @@
 //! Stores Layout values by index.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const tracy = @import("tracy");
 const base = @import("base");
 const collections = @import("collections");
@@ -32,6 +33,14 @@ const LayoutGraph = graph_mod.Graph;
 const GraphNodeId = graph_mod.NodeId;
 const GraphRef = graph_mod.Ref;
 const RefcountedVisitState = enum(u2) { active, no, yes };
+
+fn assertAppendIdx(expected: usize, idx: anytype) void {
+    if (comptime builtin.mode == .Debug) {
+        std.debug.assert(@intFromEnum(idx) == expected);
+    } else if (@intFromEnum(idx) != expected) {
+        unreachable;
+    }
+}
 
 /// Errors that can occur during layout computation
 /// Stores Layout instances by Idx.
@@ -83,7 +92,7 @@ pub const Store = struct {
         return switch (scalar.tag) {
             .str => .str,
             .int => @enumFromInt(2 + @intFromEnum(scalar.data.int)),
-            .frac => @enumFromInt(@as(u32, 12) + @intFromEnum(scalar.data.frac)),
+            .frac => @enumFromInt(@as(u32, 12) + (@intFromEnum(scalar.data.frac) - @intFromEnum(@TypeOf(scalar.data.frac).f32))),
             .opaque_ptr => .opaque_ptr,
         };
     }
@@ -101,37 +110,117 @@ pub const Store = struct {
         // Reserve canonical tag-union metadata index 0 for the shared two-nullary enum
         // representation. `layout.Idx.bool` is just a stable handle to this ordinary
         // tag-union layout so control-flow code can reference it conveniently.
-        try tag_union_variants.append(allocator, .{ .payload_layout = .zst });
-        try tag_union_variants.append(allocator, .{ .payload_layout = .zst });
-        try tag_union_data.append(allocator, .{
-            .size = 1,
-            .discriminant_offset = 0,
-            .discriminant_size = 1,
-            .variants = .{
-                .start = 0,
-                .count = 2,
-            },
-        });
+        {
+            const expected_idx = tag_union_variants.len();
+            const idx = try tag_union_variants.append(allocator, .{ .payload_layout = .zst });
+            assertAppendIdx(expected_idx, idx);
+        }
+        {
+            const expected_idx = tag_union_variants.len();
+            const idx = try tag_union_variants.append(allocator, .{ .payload_layout = .zst });
+            assertAppendIdx(expected_idx, idx);
+        }
+        {
+            const expected_idx = tag_union_data.items.items.len;
+            const idx = try tag_union_data.append(allocator, .{
+                .size = 1,
+                .discriminant_offset = 0,
+                .discriminant_size = 1,
+                .variants = .{
+                    .start = 0,
+                    .count = 2,
+                },
+            });
+            assertAppendIdx(expected_idx, idx);
+        }
 
         // Pre-populate primitive type layouts in order matching the Idx enum.
         // Changing the order of these can break things!
-        try layouts.append(allocator, Layout.boolType());
-        try layouts.append(allocator, Layout.str());
-        try layouts.append(allocator, Layout.int(.u8));
-        try layouts.append(allocator, Layout.int(.i8));
-        try layouts.append(allocator, Layout.int(.u16));
-        try layouts.append(allocator, Layout.int(.i16));
-        try layouts.append(allocator, Layout.int(.u32));
-        try layouts.append(allocator, Layout.int(.i32));
-        try layouts.append(allocator, Layout.int(.u64));
-        try layouts.append(allocator, Layout.int(.i64));
-        try layouts.append(allocator, Layout.int(.u128));
-        try layouts.append(allocator, Layout.int(.i128));
-        try layouts.append(allocator, Layout.frac(.f32));
-        try layouts.append(allocator, Layout.frac(.f64));
-        try layouts.append(allocator, Layout.frac(.dec));
-        try layouts.append(allocator, Layout.opaquePtr());
-        try layouts.append(allocator, Layout.zst());
+        {
+            const expected_idx = layouts.items.items.len;
+            const idx = try layouts.append(allocator, Layout.boolType());
+            assertAppendIdx(expected_idx, idx);
+        }
+        {
+            const expected_idx = layouts.items.items.len;
+            const idx = try layouts.append(allocator, Layout.str());
+            assertAppendIdx(expected_idx, idx);
+        }
+        {
+            const expected_idx = layouts.items.items.len;
+            const idx = try layouts.append(allocator, Layout.int(.u8));
+            assertAppendIdx(expected_idx, idx);
+        }
+        {
+            const expected_idx = layouts.items.items.len;
+            const idx = try layouts.append(allocator, Layout.int(.i8));
+            assertAppendIdx(expected_idx, idx);
+        }
+        {
+            const expected_idx = layouts.items.items.len;
+            const idx = try layouts.append(allocator, Layout.int(.u16));
+            assertAppendIdx(expected_idx, idx);
+        }
+        {
+            const expected_idx = layouts.items.items.len;
+            const idx = try layouts.append(allocator, Layout.int(.i16));
+            assertAppendIdx(expected_idx, idx);
+        }
+        {
+            const expected_idx = layouts.items.items.len;
+            const idx = try layouts.append(allocator, Layout.int(.u32));
+            assertAppendIdx(expected_idx, idx);
+        }
+        {
+            const expected_idx = layouts.items.items.len;
+            const idx = try layouts.append(allocator, Layout.int(.i32));
+            assertAppendIdx(expected_idx, idx);
+        }
+        {
+            const expected_idx = layouts.items.items.len;
+            const idx = try layouts.append(allocator, Layout.int(.u64));
+            assertAppendIdx(expected_idx, idx);
+        }
+        {
+            const expected_idx = layouts.items.items.len;
+            const idx = try layouts.append(allocator, Layout.int(.i64));
+            assertAppendIdx(expected_idx, idx);
+        }
+        {
+            const expected_idx = layouts.items.items.len;
+            const idx = try layouts.append(allocator, Layout.int(.u128));
+            assertAppendIdx(expected_idx, idx);
+        }
+        {
+            const expected_idx = layouts.items.items.len;
+            const idx = try layouts.append(allocator, Layout.int(.i128));
+            assertAppendIdx(expected_idx, idx);
+        }
+        {
+            const expected_idx = layouts.items.items.len;
+            const idx = try layouts.append(allocator, Layout.frac(.f32));
+            assertAppendIdx(expected_idx, idx);
+        }
+        {
+            const expected_idx = layouts.items.items.len;
+            const idx = try layouts.append(allocator, Layout.frac(.f64));
+            assertAppendIdx(expected_idx, idx);
+        }
+        {
+            const expected_idx = layouts.items.items.len;
+            const idx = try layouts.append(allocator, Layout.frac(.dec));
+            assertAppendIdx(expected_idx, idx);
+        }
+        {
+            const expected_idx = layouts.items.items.len;
+            const idx = try layouts.append(allocator, Layout.opaquePtr());
+            assertAppendIdx(expected_idx, idx);
+        }
+        {
+            const expected_idx = layouts.items.items.len;
+            const idx = try layouts.append(allocator, Layout.zst());
+            assertAppendIdx(expected_idx, idx);
+        }
 
         std.debug.assert(layouts.len() == num_primitives);
 
@@ -332,17 +421,21 @@ pub const Store = struct {
 
         const fields_start = self.struct_fields.items.len;
         for (fields) |field| {
-            try self.struct_fields.append(self.allocator, field);
+            const expected_idx = self.struct_fields.items.len;
+            const idx = try self.struct_fields.append(self.allocator, field);
+            assertAppendIdx(expected_idx, idx);
         }
 
         const struct_idx = StructIdx{ .int_idx = @intCast(self.struct_data.len()) };
-        try self.struct_data.append(self.allocator, .{
+        const expected_idx = self.struct_data.items.items.len;
+        const struct_data_idx = try self.struct_data.append(self.allocator, .{
             .size = total_size,
             .fields = .{
                 .start = @intCast(fields_start),
                 .count = @intCast(fields.len),
             },
         });
+        assertAppendIdx(expected_idx, struct_data_idx);
 
         const layout_idx = try self.reserveLayout(Layout.struct_(alignment, struct_idx));
         try self.rememberScratchInternKey(layout_idx);
@@ -368,21 +461,27 @@ pub const Store = struct {
 
         const variants_start: u32 = @intCast(self.tag_union_variants.len());
         for (variant_layouts) |variant_layout_idx| {
-            try self.tag_union_variants.append(self.allocator, .{
+            const expected_idx = self.tag_union_variants.len();
+            const idx = try self.tag_union_variants.append(self.allocator, .{
                 .payload_layout = variant_layout_idx,
             });
+            assertAppendIdx(expected_idx, idx);
         }
 
         const tag_union_data_idx: u32 = @intCast(self.tag_union_data.len());
-        try self.tag_union_data.append(self.allocator, .{
-            .size = total_size,
-            .discriminant_offset = discriminant_offset,
-            .discriminant_size = discriminant_size,
-            .variants = .{
-                .start = variants_start,
-                .count = @intCast(variant_layouts.len),
-            },
-        });
+        {
+            const expected_idx = self.tag_union_data.items.items.len;
+            const idx = try self.tag_union_data.append(self.allocator, .{
+                .size = total_size,
+                .discriminant_offset = discriminant_offset,
+                .discriminant_size = discriminant_size,
+                .variants = .{
+                    .start = variants_start,
+                    .count = @intCast(variant_layouts.len),
+                },
+            });
+            assertAppendIdx(expected_idx, idx);
+        }
 
         const layout_idx = try self.reserveLayout(Layout.tagUnion(alignment, .{ .int_idx = @intCast(tag_union_data_idx) }));
         try self.rememberScratchInternKey(layout_idx);
@@ -570,17 +669,21 @@ pub const Store = struct {
 
         const fields_start = self.struct_fields.items.len;
         for (temp_fields.items) |field| {
-            try self.struct_fields.append(self.allocator, field);
+            const expected_idx = self.struct_fields.items.len;
+            const idx = try self.struct_fields.append(self.allocator, field);
+            assertAppendIdx(expected_idx, idx);
         }
 
         const struct_idx = StructIdx{ .int_idx = @intCast(self.struct_data.len()) };
-        try self.struct_data.append(self.allocator, .{
+        const expected_idx = self.struct_data.items.items.len;
+        const struct_data_idx = try self.struct_data.append(self.allocator, .{
             .size = total_size,
             .fields = .{
                 .start = @intCast(fields_start),
                 .count = @intCast(temp_fields.items.len),
             },
         });
+        assertAppendIdx(expected_idx, struct_data_idx);
 
         return Layout.struct_(std.mem.Alignment.fromByteUnits(max_alignment), struct_idx);
     }
@@ -616,21 +719,27 @@ pub const Store = struct {
 
         const variants_start: u32 = @intCast(self.tag_union_variants.len());
         for (variant_layouts) |variant_layout_idx| {
-            try self.tag_union_variants.append(self.allocator, .{
+            const expected_idx = self.tag_union_variants.len();
+            const idx = try self.tag_union_variants.append(self.allocator, .{
                 .payload_layout = variant_layout_idx,
             });
+            assertAppendIdx(expected_idx, idx);
         }
 
         const tag_union_data_idx: u32 = @intCast(self.tag_union_data.len());
-        try self.tag_union_data.append(self.allocator, .{
-            .size = total_size,
-            .discriminant_offset = discriminant_offset,
-            .discriminant_size = discriminant_size,
-            .variants = .{
-                .start = variants_start,
-                .count = @intCast(variant_layouts.len),
-            },
-        });
+        {
+            const expected_idx = self.tag_union_data.items.items.len;
+            const idx = try self.tag_union_data.append(self.allocator, .{
+                .size = total_size,
+                .discriminant_offset = discriminant_offset,
+                .discriminant_size = discriminant_size,
+                .variants = .{
+                    .start = variants_start,
+                    .count = @intCast(variant_layouts.len),
+                },
+            });
+            assertAppendIdx(expected_idx, idx);
+        }
 
         return Layout.tagUnion(tag_union_alignment, .{ .int_idx = @intCast(tag_union_data_idx) });
     }
@@ -1250,7 +1359,12 @@ pub const Store = struct {
         };
 
         for (graph.nodes.items, 0..) |_, i| {
-            try finalizer.finalizeNode(@enumFromInt(i));
+            const finalized = try finalizer.finalizeNode(@enumFromInt(i));
+            if (comptime builtin.mode == .Debug) {
+                std.debug.assert(finalized == value_layouts[i]);
+            } else if (finalized != value_layouts[i]) {
+                unreachable;
+            }
         }
 
         for (graph.nodes.items, 0..) |_, i| {

@@ -1239,7 +1239,7 @@ fn processSnapshotContent(
             // For app modules, numeric defaults were deferred by canonicalizeAndTypeCheckModule.
             // Since snapshot tests don't have platform requirements, finalize them here.
             if (can_ir.defer_numeric_defaults) {
-                try checker.verifyNumericDefaults();
+                try checker.finalizeNumericDefaults();
             }
             break :blk checker;
         },
@@ -1266,7 +1266,7 @@ fn processSnapshotContent(
             if (can_ir.defer_numeric_defaults) {
                 try checker.checkFileSkipNumericDefaults();
                 // Finalize numeric defaults now since there's no platform requirements check
-                try checker.verifyNumericDefaults();
+                try checker.finalizeNumericDefaults();
             } else {
                 try checker.checkFile();
             }
@@ -1343,7 +1343,7 @@ fn processSnapshotContent(
             defer comptime_evaluator.deinit();
 
             // First evaluate any top-level defs
-            try comptime_evaluator.evalAll();
+            _ = try comptime_evaluator.evalAll();
 
             // Then evaluate and fold the standalone expression if present
             if (Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx)) |expr_idx| {
@@ -3091,7 +3091,7 @@ fn validateMonoOutput(allocator: Allocator, mono_source: []const u8, source_path
             return false;
         };
         // Finalize numeric defaults now since there's no platform requirements check
-        checker.verifyNumericDefaults() catch |err| {
+        checker.finalizeNumericDefaults() catch |err| {
             std.log.err("MONO VALIDATION ERROR in {s}: Numeric defaults finalization failed: {}", .{ source_path, err });
             return false;
         };
@@ -4502,7 +4502,7 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
     var parts = std.mem.splitSequence(u8, content.source, "»");
 
     // Skip the first part (before the first »)
-    parts.next();
+    _ = parts.next();
 
     while (parts.next()) |part| {
         // Trim whitespace and newlines

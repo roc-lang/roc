@@ -1335,7 +1335,7 @@ pub const PackageEnv = struct {
             io,
         );
         defer comptime_evaluator.deinit();
-        try comptime_evaluator.evalAll();
+        _ = try comptime_evaluator.evalAll();
 
         module_envs_map.deinit();
 

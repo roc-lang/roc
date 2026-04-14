@@ -80,7 +80,7 @@ pub const BuildEnvHandle = struct {
         if (!self.debug) return;
         if (self.owners.get(owner)) |count| {
             if (count <= 1) {
-                self.owners.remove(owner);
+                _ = self.owners.remove(owner);
             } else {
                 self.owners.put(self.allocator, owner, count - 1) catch {};
             }

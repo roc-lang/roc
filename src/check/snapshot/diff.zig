@@ -509,7 +509,7 @@ fn compareFieldNames(
                 } });
             } else {
                 // No typo found, add to missing fields (with placeholder content)
-                fields.append(gpa, .{ .name = exp_name_idx, .content = .first }) catch {};
+                _ = fields.append(gpa, .{ .name = exp_name_idx, .content = .first }) catch {};
             }
         }
     }
@@ -534,7 +534,7 @@ fn addMissingFields(
 
     const start_idx: u32 = fields.len();
     for (exp_names) |name| {
-        fields.append(gpa, .{ .name = name, .content = .first }) catch {};
+        _ = fields.append(gpa, .{ .name = name, .content = .first }) catch {};
     }
 
     hints.append(.{ .fields_missing = .{
@@ -632,7 +632,7 @@ fn gatherTagsFromUnion(
     // Add immediate tags
     const union_tags = snap_store.sliceTags(union_.tags);
     for (union_tags.items(.name), union_tags.items(.args), union_tags.items(.formatted)) |name, args, formatted| {
-        tags.append(gpa, .{ .name = name, .args = args, .formatted = formatted }) catch {};
+        _ = tags.append(gpa, .{ .name = name, .args = args, .formatted = formatted }) catch {};
     }
 
     var ext: TagExt = .other;
@@ -646,7 +646,7 @@ fn gatherTagsFromUnion(
                 .tag_union => |ext_union| {
                     const ext_tags = snap_store.sliceTags(ext_union.tags);
                     for (ext_tags.items(.name), ext_tags.items(.args), ext_tags.items(.formatted)) |name, args, formatted| {
-                        tags.append(gpa, .{ .name = name, .args = args, .formatted = formatted }) catch {};
+                        _ = tags.append(gpa, .{ .name = name, .args = args, .formatted = formatted }) catch {};
                     }
                     ext_idx = ext_union.ext;
                 },

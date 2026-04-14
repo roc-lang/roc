@@ -316,7 +316,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                 .flags = 0,
             };
             posix.sigaction(posix.SIG.INT, &default_action, null);
-            std.c.raise(posix.SIG.INT);
+            _ = std.c.raise(posix.SIG.INT);
         }
 
         fn launchChild(slot: *?ChildSlot, specs: []const Spec, test_idx: usize) bool {
@@ -460,7 +460,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                 }
                 if (n_poll == 0) break;
 
-                posix.poll(poll_fds[0..n_poll], 500) catch 0;
+                _ = posix.poll(poll_fds[0..n_poll], 500) catch 0;
 
                 for (poll_fds[0..n_poll], 0..) |pfd, pi| {
                     const slot_idx = poll_map[pi];

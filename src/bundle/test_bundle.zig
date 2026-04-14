@@ -353,7 +353,8 @@ test "empty directories are preserved" {
     try bundle.unbundle(&stream_reader, dst_tmp.dir, &allocator_copy, filename, null);
 
     // Verify file exists
-    try dst_tmp.dir.statFile("readme.txt");
+    const stat = try dst_tmp.dir.statFile("readme.txt");
+    try testing.expectEqual(std.fs.File.Kind.file, stat.kind);
 
     // Document that empty directories are NOT preserved
     // This is a known limitation of the current implementation
@@ -1210,7 +1211,8 @@ test "CLI unbundle with no args defaults to all .tar.zst files" {
     try testing.expectEqual(@as(usize, 3), archive_names.items.len);
     for (archive_names.items) |name| {
         try testing.expect(std.mem.endsWith(u8, name, ".tar.zst"));
-        try tmp_dir.statFile(name);
+        const stat = try tmp_dir.statFile(name);
+        try testing.expectEqual(std.fs.File.Kind.file, stat.kind);
     }
 
     // Simulate unbundle with no args - should extract all .tar.zst files
@@ -1234,6 +1236,7 @@ test "CLI unbundle with no args defaults to all .tar.zst files" {
 
 test "download URL validation" {
     const testing = std.testing;
+    const expected_hash = "4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf";
 
     // Create a temp dir for testing (won't actually download)
     var tmp = testing.tmpDir(.{});
@@ -1242,44 +1245,36 @@ test "download URL validation" {
     // Valid HTTPS URLs
     {
         const url = "https://example.com/path/to/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst";
-        download.validateUrl(url) catch |err| {
-            try testing.expect(false); // Should not error
-            std.debug.print("Unexpected error: {any}\n", .{err});
-        };
+        const hash = try download.validateUrl(url);
+        try testing.expectEqualStrings(expected_hash, hash);
     }
 
     // Valid localhost IPv4 URL
     {
         const url = "http://127.0.0.1:8000/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst";
-        download.validateUrl(url) catch |err| {
-            try testing.expect(false); // Should not error
-            std.debug.print("Unexpected error: {any}\n", .{err});
-        };
+        const hash = try download.validateUrl(url);
+        try testing.expectEqualStrings(expected_hash, hash);
     }
 
     // Valid localhost IPv6 URL with port
     {
         const url = "http://[::1]:8000/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst";
-        download.validateUrl(url) catch |err| {
-            try testing.expect(false); // Should not error
-            std.debug.print("Unexpected error: {any}\n", .{err});
-        };
+        const hash = try download.validateUrl(url);
+        try testing.expectEqualStrings(expected_hash, hash);
     }
 
     // Valid localhost IPv6 URL without port
     {
         const url = "http://[::1]/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst";
-        download.validateUrl(url) catch |err| {
-            try testing.expect(false); // Should not error
-            std.debug.print("Unexpected error: {any}\n", .{err});
-        };
+        const hash = try download.validateUrl(url);
+        try testing.expectEqualStrings(expected_hash, hash);
     }
 
     // Valid: localhost hostname (will be resolved and verified during download)
     {
         const url = "http://localhost:8000/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst";
         const hash = try download.validateUrl(url);
-        try testing.expectEqualStrings("4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf", hash);
+        try testing.expectEqualStrings(expected_hash, hash);
     }
 
     // Invalid: HTTP (not localhost IP)

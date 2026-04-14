@@ -12,6 +12,15 @@ const target_is_native = build_options.target_is_native;
 const use_real_fsevents = target_is_macos and target_is_native;
 const use_stubs = !use_real_fsevents;
 
+fn bumpEventCount(comptime Global: type) void {
+    const previous = Global.event_count.fetchAdd(1, .seq_cst);
+    if (comptime builtin.mode == .Debug) {
+        std.debug.assert(previous != std.math.maxInt(u32));
+    } else if (previous == std.math.maxInt(u32)) {
+        unreachable;
+    }
+}
+
 // macOS FSEvents type declarations (always needed for struct definitions)
 const FSEventStreamRef = *anyopaque;
 const CFRunLoopRef = *anyopaque;
@@ -516,7 +525,12 @@ pub const Watcher = struct {
         // Run the run loop with periodic checks for stop signal
         while (!self.should_stop.load(.seq_cst)) {
             // Run for 0.1 seconds at a time to check should_stop periodically
-            CFRunLoopRunInMode(getKCFRunLoopDefaultMode(), 0.1, false);
+            const run_result = CFRunLoopRunInMode(getKCFRunLoopDefaultMode(), 0.1, false);
+            if (comptime builtin.mode == .Debug) {
+                std.debug.assert(run_result >= 0);
+            } else if (run_result < 0) {
+                unreachable;
+            }
         }
 
         // Clean up after run loop exits
@@ -1045,7 +1059,7 @@ test "basic file watching" {
 
     const callback = struct {
         fn cb(event: WatchEvent) void {
-            global.event_count.fetchAdd(1, .seq_cst);
+            bumpEventCount(global);
             global.mutex.lock();
             defer global.mutex.unlock();
             global.last_path = event.path;
@@ -1089,7 +1103,7 @@ test "recursive directory watching" {
 
     const callback = struct {
         fn cb(_: WatchEvent) void {
-            global.event_count.fetchAdd(1, .seq_cst);
+            bumpEventCount(global);
         }
     }.cb;
 
@@ -1125,7 +1139,7 @@ test "multiple directories watching" {
 
     const callback = struct {
         fn cb(_: WatchEvent) void {
-            global.event_count.fetchAdd(1, .seq_cst);
+            bumpEventCount(global);
         }
     }.cb;
 
@@ -1162,7 +1176,7 @@ test "file modification detection" {
 
     const callback = struct {
         fn cb(_: WatchEvent) void {
-            global.event_count.fetchAdd(1, .seq_cst);
+            bumpEventCount(global);
         }
     }.cb;
 
@@ -1194,7 +1208,7 @@ test "rapid file creation" {
 
     const callback = struct {
         fn cb(_: WatchEvent) void {
-            global.event_count.fetchAdd(1, .seq_cst);
+            bumpEventCount(global);
         }
     }.cb;
 
@@ -1239,7 +1253,7 @@ test "directory creation and file addition" {
 
     const callback = struct {
         fn cb(_: WatchEvent) void {
-            global.event_count.fetchAdd(1, .seq_cst);
+            bumpEventCount(global);
         }
     }.cb;
 
@@ -1279,7 +1293,7 @@ test "start stop restart" {
 
     const callback = struct {
         fn cb(_: WatchEvent) void {
-            global.event_count.fetchAdd(1, .seq_cst);
+            bumpEventCount(global);
         }
     }.cb;
 
@@ -1327,7 +1341,7 @@ test "thread safety" {
 
     const callback = struct {
         fn cb(event: WatchEvent) void {
-            global.event_count.fetchAdd(1, .seq_cst);
+            bumpEventCount(global);
             global.mutex.lock();
             defer global.mutex.unlock();
             global.events.append(allocator, allocator.dupe(u8, event.path) catch return) catch return;
@@ -1395,7 +1409,7 @@ test "file rename detection" {
 
     const callback = struct {
         fn cb(_: WatchEvent) void {
-            global.event_count.fetchAdd(1, .seq_cst);
+            bumpEventCount(global);
         }
     }.cb;
 
@@ -1435,7 +1449,7 @@ test "windows unicode filename handling" {
 
     const callback = struct {
         fn cb(event: WatchEvent) void {
-            global.event_count.fetchAdd(1, .seq_cst);
+            bumpEventCount(global);
             global.mutex.lock();
             defer global.mutex.unlock();
             global.last_path = event.path;
@@ -1512,7 +1526,7 @@ test "windows long path handling" {
 
     const callback = struct {
         fn cb(_: WatchEvent) void {
-            global.event_count.fetchAdd(1, .seq_cst);
+            bumpEventCount(global);
         }
     }.cb;
 

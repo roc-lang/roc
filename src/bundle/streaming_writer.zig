@@ -4,6 +4,7 @@
 //! simultaneously computing BLAKE3 hashes for data integrity verification.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const c = @cImport({
     @cDefine("ZSTD_STATIC_LINKING_ONLY", "1");
     @cInclude("zstd.h");
@@ -37,9 +38,15 @@ pub const CompressingHashWriter = struct {
         };
 
         const ctx = c.ZSTD_createCCtx_advanced(custom_mem) orelse return std.mem.Allocator.Error.OutOfMemory;
-        errdefer c.ZSTD_freeCCtx(ctx);
+        errdefer _ = c.ZSTD_freeCCtx(ctx);
 
-        c.ZSTD_CCtx_setParameter(ctx, c.ZSTD_c_compressionLevel, compression_level);
+        const rc = c.ZSTD_CCtx_setParameter(ctx, c.ZSTD_c_compressionLevel, compression_level);
+        if (c.ZSTD_isError(rc) != 0) {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("ZSTD_CCtx_setParameter failed: {s}", .{c.ZSTD_getErrorName(rc)});
+            }
+            unreachable;
+        }
 
         const out_buffer_size = c.ZSTD_CStreamOutSize();
         const out_buffer = try allocator_ptr.alloc(u8, out_buffer_size);
@@ -70,7 +77,7 @@ pub const CompressingHashWriter = struct {
     }
 
     pub fn deinit(self: *Self) void {
-        c.ZSTD_freeCCtx(self.ctx);
+        _ = c.ZSTD_freeCCtx(self.ctx);
         self.allocator_ptr.free(self.out_buffer);
         self.allocator_ptr.free(self.interface.buffer);
     }
@@ -78,7 +85,7 @@ pub const CompressingHashWriter = struct {
     fn flush(w: *std.io.Writer) WriterError!void {
         const self: *Self = @alignCast(@fieldParentPtr("interface", w));
         if (self.finished and w.end != 0) return WriterError.WriteFailed;
-        self.compressAndHash(w.buffer[0..w.end], false) catch return error.WriteFailed;
+        _ = self.compressAndHash(w.buffer[0..w.end], false) catch return error.WriteFailed;
         w.end = 0;
         return;
     }
@@ -86,7 +93,7 @@ pub const CompressingHashWriter = struct {
     fn drain(w: *std.io.Writer, data: []const []const u8, splat: usize) WriterError!usize {
         const self: *Self = @alignCast(@fieldParentPtr("interface", w));
         if (self.finished) return WriterError.WriteFailed;
-        self.compressAndHash(w.buffer[0..w.end], false) catch return error.WriteFailed;
+        _ = self.compressAndHash(w.buffer[0..w.end], false) catch return error.WriteFailed;
         w.end = 0;
         if (data.len == 0) return 0;
 
@@ -128,7 +135,7 @@ pub const CompressingHashWriter = struct {
 
     pub fn finish(self: *Self) WriterError!void {
         if (self.finished) return;
-        self.compressAndHash(self.interface.buffer[0..self.interface.end], true) catch return error.WriteFailed;
+        _ = self.compressAndHash(self.interface.buffer[0..self.interface.end], true) catch return error.WriteFailed;
         self.interface.end = 0;
         self.finished = true;
     }

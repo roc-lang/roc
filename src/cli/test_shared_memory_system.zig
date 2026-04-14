@@ -176,8 +176,8 @@ test "integration - shared memory setup and parsing" {
                 extern "c" fn munmap(addr: *anyopaque, len: usize) c_int;
                 extern "c" fn close(fd: c_int) c_int;
             };
-            posix.munmap(shm_handle.ptr, shm_handle.mapped_size);
-            posix.close(shm_handle.fd);
+            std.debug.assert(posix.munmap(shm_handle.ptr, shm_handle.mapped_size) == 0);
+            _ = posix.close(shm_handle.fd);
         }
     }
 
@@ -236,8 +236,8 @@ test "integration - compilation pipeline for different platforms" {
                     extern "c" fn munmap(addr: *anyopaque, len: usize) c_int;
                     extern "c" fn close(fd: c_int) c_int;
                 };
-                posix.munmap(shm_handle.ptr, shm_handle.mapped_size);
-                posix.close(shm_handle.fd);
+                std.debug.assert(posix.munmap(shm_handle.ptr, shm_handle.mapped_size) == 0);
+                _ = posix.close(shm_handle.fd);
             }
         }
 
@@ -288,8 +288,8 @@ test "integration - error handling for non-existent file" {
                     extern "c" fn munmap(addr: *anyopaque, len: usize) c_int;
                     extern "c" fn close(fd: c_int) c_int;
                 };
-                posix.munmap(shm_handle.ptr, shm_handle.mapped_size);
-                posix.close(shm_handle.fd);
+                std.debug.assert(posix.munmap(shm_handle.ptr, shm_handle.mapped_size) == 0);
+                _ = posix.close(shm_handle.fd);
             }
         }
         // This shouldn't happen with a non-existent file
@@ -353,8 +353,8 @@ test "integration - automatic module dependency ordering" {
                 extern "c" fn munmap(addr: *anyopaque, len: usize) c_int;
                 extern "c" fn close(fd: c_int) c_int;
             };
-            posix.munmap(shm_handle.ptr, shm_handle.mapped_size);
-            posix.close(shm_handle.fd);
+            std.debug.assert(posix.munmap(shm_handle.ptr, shm_handle.mapped_size) == 0);
+            _ = posix.close(shm_handle.fd);
         }
     }
 
@@ -411,8 +411,8 @@ test "integration - transitive module imports (module A imports module B)" {
                 extern "c" fn munmap(addr: *anyopaque, len: usize) c_int;
                 extern "c" fn close(fd: c_int) c_int;
             };
-            posix.munmap(shm_handle.ptr, shm_handle.mapped_size);
-            posix.close(shm_handle.fd);
+            std.debug.assert(posix.munmap(shm_handle.ptr, shm_handle.mapped_size) == 0);
+            _ = posix.close(shm_handle.fd);
         }
     }
 
@@ -476,8 +476,8 @@ test "integration - diamond dependency pattern (A imports B and C, both import D
                 extern "c" fn munmap(addr: *anyopaque, len: usize) c_int;
                 extern "c" fn close(fd: c_int) c_int;
             };
-            posix.munmap(shm_handle.ptr, shm_handle.mapped_size);
-            posix.close(shm_handle.fd);
+            std.debug.assert(posix.munmap(shm_handle.ptr, shm_handle.mapped_size) == 0);
+            _ = posix.close(shm_handle.fd);
         }
     }
 
@@ -530,8 +530,8 @@ test "integration - direct Core and Utils calls from app" {
                 extern "c" fn munmap(addr: *anyopaque, len: usize) c_int;
                 extern "c" fn close(fd: c_int) c_int;
             };
-            posix.munmap(shm_handle.ptr, shm_handle.mapped_size);
-            posix.close(shm_handle.fd);
+            std.debug.assert(posix.munmap(shm_handle.ptr, shm_handle.mapped_size) == 0);
+            _ = posix.close(shm_handle.fd);
         }
     }
 

@@ -5,6 +5,7 @@
 //! different phases of compilation.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const collections = @import("collections");
 
 const Ident = @import("Ident.zig");
@@ -259,14 +260,28 @@ pub fn calcLineStarts(self: *CommonEnv, gpa: std.mem.Allocator) !void {
     }
 
     // the first line starts at offset 0
-    try self.line_starts.append(gpa, 0);
+    {
+        const expected_idx = self.line_starts.items.items.len;
+        const idx = try self.line_starts.append(gpa, 0);
+        if (comptime builtin.mode == .Debug) {
+            std.debug.assert(@intFromEnum(idx) == expected_idx);
+        } else if (@intFromEnum(idx) != expected_idx) {
+            unreachable;
+        }
+    }
 
     // find all newlines in the source, save their offset
     var pos: u32 = 0;
     for (self.getSourceAll()) |c| {
         if (c == '\n') {
             // next line starts after the newline in the current position
-            try self.line_starts.append(gpa, pos + 1);
+            const expected_idx = self.line_starts.items.items.len;
+            const idx = try self.line_starts.append(gpa, pos + 1);
+            if (comptime builtin.mode == .Debug) {
+                std.debug.assert(@intFromEnum(idx) == expected_idx);
+            } else if (@intFromEnum(idx) != expected_idx) {
+                unreachable;
+            }
         }
         pos += 1;
     }
@@ -308,12 +323,36 @@ test "CommonEnv.Serialized roundtrip" {
     const hello_idx = try original.insertIdent(gpa, Ident.for_text("hello"));
     const world_idx = try original.insertIdent(gpa, Ident.for_text("world"));
 
-    try original.insertString(gpa, "test string");
+    const test_string_idx = try original.insertString(gpa, "test string");
     try original.addExposedById(gpa, hello_idx);
 
-    try original.line_starts.append(gpa, 0);
-    try original.line_starts.append(gpa, 10);
-    try original.line_starts.append(gpa, 20);
+    {
+        const expected_idx = original.line_starts.items.items.len;
+        const idx = try original.line_starts.append(gpa, 0);
+        if (comptime builtin.mode == .Debug) {
+            std.debug.assert(@intFromEnum(idx) == expected_idx);
+        } else if (@intFromEnum(idx) != expected_idx) {
+            unreachable;
+        }
+    }
+    {
+        const expected_idx = original.line_starts.items.items.len;
+        const idx = try original.line_starts.append(gpa, 10);
+        if (comptime builtin.mode == .Debug) {
+            std.debug.assert(@intFromEnum(idx) == expected_idx);
+        } else if (@intFromEnum(idx) != expected_idx) {
+            unreachable;
+        }
+    }
+    {
+        const expected_idx = original.line_starts.items.items.len;
+        const idx = try original.line_starts.append(gpa, 20);
+        if (comptime builtin.mode == .Debug) {
+            std.debug.assert(@intFromEnum(idx) == expected_idx);
+        } else if (@intFromEnum(idx) != expected_idx) {
+            unreachable;
+        }
+    }
 
     // Create a CompactWriter
     var writer = CompactWriter.init();
@@ -336,7 +375,8 @@ test "CommonEnv.Serialized roundtrip" {
     const file_size = try tmp_file.getEndPos();
     const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(file_size));
     defer gpa.free(buffer);
-    try tmp_file.pread(buffer, 0);
+    const read_len = try tmp_file.pread(buffer, 0);
+    try testing.expectEqual(buffer.len, read_len);
 
     // The Serialized struct is at the beginning of the buffer
     const deserialized_ptr = @as(*CommonEnv.Serialized, @ptrCast(@alignCast(buffer.ptr)));
@@ -345,6 +385,7 @@ test "CommonEnv.Serialized roundtrip" {
     // Verify the data was preserved
     try testing.expectEqualStrings("hello", env.getIdent(hello_idx));
     try testing.expectEqualStrings("world", env.getIdent(world_idx));
+    try testing.expectEqualStrings("test string", env.getString(test_string_idx));
 
     try testing.expectEqual(@as(usize, 1), env.exposed_items.count());
     try testing.expectEqual(@as(usize, 3), env.line_starts.len());
@@ -386,7 +427,8 @@ test "CommonEnv.Serialized roundtrip with empty data" {
     const file_size = try tmp_file.getEndPos();
     const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(file_size));
     defer gpa.free(buffer);
-    try tmp_file.pread(buffer, 0);
+    const read_len = try tmp_file.pread(buffer, 0);
+    try testing.expectEqual(buffer.len, read_len);
 
     // The Serialized struct is at the beginning of the buffer
     const deserialized_ptr = @as(*CommonEnv.Serialized, @ptrCast(@alignCast(buffer.ptr)));
@@ -469,7 +511,8 @@ test "CommonEnv.Serialized roundtrip with large data" {
     const file_size = try tmp_file.getEndPos();
     const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(file_size));
     defer gpa.free(buffer);
-    try tmp_file.pread(buffer, 0);
+    const read_len = try tmp_file.pread(buffer, 0);
+    try testing.expectEqual(buffer.len, read_len);
 
     // The Serialized struct is at the beginning of the buffer
     const deserialized_ptr = @as(*CommonEnv.Serialized, @ptrCast(@alignCast(buffer.ptr)));
@@ -546,7 +589,8 @@ test "CommonEnv.Serialized roundtrip with special characters" {
     const file_size = try tmp_file.getEndPos();
     const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(file_size));
     defer gpa.free(buffer);
-    try tmp_file.pread(buffer, 0);
+    const read_len = try tmp_file.pread(buffer, 0);
+    try testing.expectEqual(buffer.len, read_len);
 
     // The Serialized struct is at the beginning of the buffer
     const deserialized_ptr = @as(*CommonEnv.Serialized, @ptrCast(@alignCast(buffer.ptr)));

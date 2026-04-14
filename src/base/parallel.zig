@@ -53,7 +53,10 @@ fn workerThread(comptime T: type, ctx: WorkerContext(T)) void {
             if (i >= ctx.work_item_count) break;
 
             // Clear arena between work items
-            arena.reset(.retain_capacity);
+            const reset_ok = arena.reset(.retain_capacity);
+            if (!reset_ok) {
+                // Reset still succeeded functionally; retain_capacity failed.
+            }
 
             ctx.worker_fn(arena.allocator(), ctx.context, i);
         }

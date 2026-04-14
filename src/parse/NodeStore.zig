@@ -85,12 +85,18 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
         .scratch_requires_entries = try base.Scratch(AST.RequiresEntry.Idx).init(gpa),
     };
 
-    try store.nodes.append(gpa, .{
+    const expected_idx = store.nodes.items.len;
+    const idx = try store.nodes.append(gpa, .{
         .tag = .root,
         .main_token = 0,
         .data = .{ .lhs = 0, .rhs = 0 },
         .region = .{ .start = 0, .end = 0 },
     });
+    if (comptime builtin.mode == .Debug) {
+        std.debug.assert(@intFromEnum(idx) == expected_idx);
+    } else if (@intFromEnum(idx) != expected_idx) {
+        unreachable;
+    }
     return store;
 }
 

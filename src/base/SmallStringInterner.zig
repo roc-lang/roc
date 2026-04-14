@@ -7,6 +7,7 @@
 //! arrays with values corresponding 1-to-1 to interned values, e.g. regions.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const collections = @import("collections");
 
 const CompactWriter = collections.CompactWriter;
@@ -35,6 +36,23 @@ pub const Idx = enum(u32) {
     _,
 };
 
+fn assertAppendIndex(expected: usize, idx: collections.SafeList(u8).Idx) void {
+    if (comptime builtin.mode == .Debug) {
+        std.debug.assert(@intFromEnum(idx) == expected);
+    } else if (@intFromEnum(idx) != expected) {
+        unreachable;
+    }
+}
+
+fn assertAppendRange(expected_start: usize, expected_len: u32, range: collections.SafeList(u8).Range) void {
+    if (comptime builtin.mode == .Debug) {
+        std.debug.assert(@intFromEnum(range.start) == expected_start);
+        std.debug.assert(range.count == expected_len);
+    } else if (@intFromEnum(range.start) != expected_start or range.count != expected_len) {
+        unreachable;
+    }
+}
+
 /// Initialize a `SmallStringInterner` with the specified capacity.
 pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.Error!SmallStringInterner {
     // TODO: tune this. Rough assumption that average small string is 4 bytes.
@@ -55,7 +73,11 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
     self.bytes = try collections.SafeList(u8).initCapacity(gpa, capacity * bytes_per_string);
 
     // Start with at least one byte to ensure Idx.unused (0) never points to valid data
-    try self.bytes.append(gpa, 0);
+    {
+        const expected_idx = self.bytes.items.items.len;
+        const idx = try self.bytes.append(gpa, 0);
+        assertAppendIndex(expected_idx, idx);
+    }
 
     // Initialize hash table with all zeros (Idx.unused)
     self.hash_table = try collections.SafeList(Idx).initCapacity(gpa, hash_table_capacity);
@@ -221,8 +243,16 @@ pub fn insert(self: *SmallStringInterner, gpa: std.mem.Allocator, string: []cons
 fn insertAt(self: *SmallStringInterner, gpa: std.mem.Allocator, string: []const u8, slot: u64) std.mem.Allocator.Error!Idx {
     const new_offset: Idx = @enumFromInt(self.bytes.len());
 
-    try self.bytes.appendSlice(gpa, string);
-    try self.bytes.append(gpa, 0);
+    {
+        const expected_start = self.bytes.items.items.len;
+        const range = try self.bytes.appendSlice(gpa, string);
+        assertAppendRange(expected_start, @intCast(string.len), range);
+    }
+    {
+        const expected_idx = self.bytes.items.items.len;
+        const idx = try self.bytes.append(gpa, 0);
+        assertAppendIndex(expected_idx, idx);
+    }
 
     // Add to hash table
     self.hash_table.items.items[@intCast(slot)] = new_offset;
@@ -344,7 +374,8 @@ test "SmallStringInterner empty CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
-    try original.serialize(arena_allocator, &writer);
+    const serialized = try original.serialize(arena_allocator, &writer);
+    try std.testing.expect(@intFromPtr(serialized) != 0);
 
     // Write to file
     try writer.writeGather(arena_allocator, file);
@@ -355,7 +386,8 @@ test "SmallStringInterner empty CompactWriter roundtrip" {
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
 
-    try file.read(buffer);
+    const bytes_read = try file.readAll(buffer);
+    try std.testing.expectEqual(buffer.len, bytes_read);
 
     // Cast and relocate - empty interner should still work
     // The SmallStringInterner struct is at the beginning of the buffer
@@ -414,7 +446,8 @@ test "SmallStringInterner basic CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
-    try original.serialize(arena_allocator, &writer);
+    const serialized = try original.serialize(arena_allocator, &writer);
+    try std.testing.expect(@intFromPtr(serialized) != 0);
 
     // Write to file
     try writer.writeGather(arena_allocator, file);
@@ -425,7 +458,8 @@ test "SmallStringInterner basic CompactWriter roundtrip" {
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
 
-    try file.read(buffer);
+    const bytes_read = try file.readAll(buffer);
+    try std.testing.expectEqual(buffer.len, bytes_read);
 
     // Cast and relocate
     const deserialized = @as(*SmallStringInterner, @ptrCast(@alignCast(buffer.ptr)));
@@ -487,7 +521,8 @@ test "SmallStringInterner with populated hashmap CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
-    try original.serialize(arena_allocator, &writer);
+    const serialized = try original.serialize(arena_allocator, &writer);
+    try std.testing.expect(@intFromPtr(serialized) != 0);
 
     // Write to file
     try writer.writeGather(arena_allocator, file);
@@ -498,7 +533,8 @@ test "SmallStringInterner with populated hashmap CompactWriter roundtrip" {
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
 
-    try file.read(buffer);
+    const bytes_read = try file.readAll(buffer);
+    try std.testing.expectEqual(buffer.len, bytes_read);
 
     // Cast and relocate
     const deserialized = @as(*SmallStringInterner, @ptrCast(@alignCast(buffer.ptr)));
@@ -529,8 +565,9 @@ test "SmallStringInterner CompactWriter roundtrip" {
     var original = try SmallStringInterner.initCapacity(gpa, 5);
     defer original.deinit(gpa);
 
-    try original.insert(gpa, "test1");
-    try original.insert(gpa, "test2");
+    const idx1 = try original.insert(gpa, "test1");
+    const idx2 = try original.insert(gpa, "test2");
+    try std.testing.expect(@intFromEnum(idx1) < @intFromEnum(idx2));
 
     // Create a temp file
     var tmp_dir = std.testing.tmpDir(.{});
@@ -547,7 +584,8 @@ test "SmallStringInterner CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
-    try original.serialize(arena_allocator, &writer);
+    const serialized = try original.serialize(arena_allocator, &writer);
+    try std.testing.expect(@intFromPtr(serialized) != 0);
 
     // Write to file
     try writer.writeGather(arena_allocator, file);
@@ -558,7 +596,8 @@ test "SmallStringInterner CompactWriter roundtrip" {
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
 
-    try file.read(buffer);
+    const bytes_read = try file.readAll(buffer);
+    try std.testing.expectEqual(buffer.len, bytes_read);
 
     // Cast and relocate
     const deserialized = @as(*SmallStringInterner, @ptrCast(@alignCast(buffer.ptr)));
@@ -613,7 +652,8 @@ test "SmallStringInterner edge cases CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
-    try original.serialize(arena_allocator, &writer);
+    const serialized = try original.serialize(arena_allocator, &writer);
+    try std.testing.expect(@intFromPtr(serialized) != 0);
 
     // Write to file
     try writer.writeGather(arena_allocator, file);
@@ -624,7 +664,8 @@ test "SmallStringInterner edge cases CompactWriter roundtrip" {
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
 
-    try file.read(buffer);
+    const bytes_read = try file.readAll(buffer);
+    try std.testing.expectEqual(buffer.len, bytes_read);
 
     // Cast and relocate
     const deserialized = @as(*SmallStringInterner, @ptrCast(@alignCast(buffer.ptr)));

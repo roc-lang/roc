@@ -4861,10 +4861,10 @@ test "check type - mutually recursive functions - type mismatch error" {
 test "check can - recursive non-function top-level cycle is rejected before type checking" {
     const source =
         \\force : ({} -> I64) -> I64
-        \\force = \eval -> eval {}
+        \\force = |thunk| thunk(0)
         \\
-        \\t1 = \_ -> force (\_ -> t2)
-        \\t2 = t1 {}
+        \\t1 = |_| force(|_| t2)
+        \\t2 = t1(0)
     ;
 
     var test_env = try TestEnv.init("Test", source);

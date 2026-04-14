@@ -654,7 +654,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                     const name_text = ctx.env.getIdent(f.name);
                     try out.appendSlice(name_text);
                     try out.appendSlice(": ");
-                    const idx = acc.findFieldIndex(name_text) orelse {
+                    const idx = acc.findFieldIndex(f.name) orelse {
                         std.debug.panic("Record field not found in layout: type says field '{s}' exists but layout doesn't have it", .{name_text});
                     };
                     const field_rt = try ctx.runtime_types.fresh();

@@ -1,3 +1,3 @@
 test {
-@import("test/mono_emit_test.zig");
+    _ = @import("test/mono_emit_test.zig");
 }

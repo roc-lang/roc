@@ -1,6 +1,7 @@
 //! Monomorphic type graph used by the first cor-style lowering pass.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 
 pub const TypeId = enum(u32) { _ };
@@ -450,7 +451,12 @@ pub const Store = struct {
         try self.buildCanonicalKey(root);
         try self.rememberScratchInternKey(root);
         try self.canonical_by_raw.put(root, root);
-        active.remove(root);
+        const removed = active.remove(root);
+        if (comptime builtin.mode == .Debug) {
+            std.debug.assert(removed);
+        } else if (!removed) {
+            unreachable;
+        }
         return root;
     }
 
@@ -549,7 +555,7 @@ pub const Store = struct {
         try self.buildCanonicalKey(root);
         try self.rememberScratchInternKey(root);
         try self.canonical_by_raw.put(root, root);
-        active.remove(root);
+        _ = active.remove(root);
         return root;
     }
 

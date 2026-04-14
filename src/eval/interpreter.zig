@@ -171,7 +171,7 @@ const InterpreterRocEnv = struct {
         const msg = roc_crashed.utf8_bytes[0..roc_crashed.len];
         if (self.crash_message) |old| self.allocator.free(old);
         self.crash_message = self.allocator.dupe(u8, msg) catch null;
-        const active_jmp_buf = self.active_jmp_buf orelse blk: {
+        const active_jmp_buf = self.active_jmp_buf orelse {
             std.debug.print(
                 "LIR/interpreter invariant violated: roc_crashed fired without an active jump buffer\n",
                 .{},
@@ -360,7 +360,7 @@ pub const Interpreter = struct {
         unreachable;
     }
 
-    fn invariantFailed(_: *LirInterpreter, comptime fmt: []const u8, args: anytype) noreturn {
+    fn invariantFailed(_: *const LirInterpreter, comptime fmt: []const u8, args: anytype) noreturn {
         if (builtin.mode == .Debug) {
             std.debug.print(fmt, args);
             std.debug.print("\n", .{});
@@ -369,7 +369,7 @@ pub const Interpreter = struct {
         unreachable;
     }
 
-    fn invariantFailedError(self: *LirInterpreter, comptime fmt: []const u8, args: anytype) Error {
+    fn invariantFailedError(self: *const LirInterpreter, comptime fmt: []const u8, args: anytype) Error {
         self.invariantFailed(fmt, args);
     }
 
@@ -1039,6 +1039,13 @@ pub const Interpreter = struct {
     fn initFrame(self: *LirInterpreter, proc_id: LirProcSpecId, proc_spec: LirProcSpec) Error!Frame {
         const locals = try self.allocator.alloc(LocalSlot, self.store.locals.items.len);
         @memset(locals, .{ .assigned = false, .val = Value.zst });
+        for (locals, 0..) |*slot, idx| {
+            const local_id: LocalId = @enumFromInt(@as(u32, @intCast(idx)));
+            const layout_idx = self.store.getLocal(local_id).layout_idx;
+            if (self.layout_store.getLayout(layout_idx).tag == .zst) {
+                slot.assigned = true;
+            }
+        }
 
         var frame = Frame{
             .proc_id = proc_id,

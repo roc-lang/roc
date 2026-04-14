@@ -79,7 +79,7 @@ fn findViaCompiler(arena: std.mem.Allocator) !?LibcInfo {
         // TODO: Do we need to do something with this process' stdout,
         // or is this only here to continue to the next iteration?
         // Could be that it was forgotten before I refactored it and now to intent is lost.
-        process.Child.run(.{
+        _ = process.Child.run(.{
             .allocator = arena,
             .argv = &[_][]const u8{ compiler, ld_cmd },
         }) catch continue;

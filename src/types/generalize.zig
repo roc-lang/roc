@@ -163,7 +163,7 @@ pub const Generalizer = struct {
         for (self.tmp_var_pool.slice(), 0..) |vars_at_rank, group_rank_int| {
             const group_rank: Rank = @enumFromInt(group_rank_int);
             for (vars_at_rank.items) |var_| {
-                try self.adjustRank(var_, group_rank, vars_to_generalize);
+                _ = try self.adjustRank(var_, group_rank, vars_to_generalize);
             }
         }
 
@@ -198,6 +198,7 @@ pub const Generalizer = struct {
         // Clear the rank we just processed from the main pool
         var_pool.ranks.items[rank_to_generalize_int].clearRetainingCapacity();
     }
+
 
     // adjust rank //
 

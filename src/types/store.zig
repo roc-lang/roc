@@ -260,14 +260,22 @@ pub const Store = struct {
     pub fn freshFromContent(self: *Self, content: Content) std.mem.Allocator.Error!Var {
         const trace = tracy.traceNamed(@src(), "typesStore.freshFromContent");
         defer trace.end();
-        const desc_idx = try self.descs.insert(self.gpa, .{ .content = content, .rank = Rank.outermost });
+        const desc_idx = try self.descs.insert(self.gpa, .{
+            .content = content,
+            .rank = Rank.outermost,
+            .from_numeral_origin = false,
+        });
         const slot_idx = try self.slots.insert(self.gpa, .{ .root = desc_idx });
         return Self.slotIdxToVar(slot_idx);
     }
 
     /// Create a new variable with the given content and rank
     pub fn freshFromContentWithRank(self: *Self, content: Content, rank: Rank) std.mem.Allocator.Error!Var {
-        const desc_idx = try self.descs.insert(self.gpa, .{ .content = content, .rank = rank });
+        const desc_idx = try self.descs.insert(self.gpa, .{
+            .content = content,
+            .rank = rank,
+            .from_numeral_origin = false,
+        });
         const slot_idx = try self.slots.insert(self.gpa, .{ .root = desc_idx });
         return Self.slotIdxToVar(slot_idx);
     }
@@ -286,9 +294,20 @@ pub const Store = struct {
         return Self.slotIdxToVar(slot_idx);
     }
 
+    pub fn markFromNumeralOrigin(self: *Self, var_: Var) void {
+        const resolved = self.resolveVar(var_);
+        var desc = self.descs.get(resolved.desc_idx);
+        desc.from_numeral_origin = true;
+        self.descs.set(resolved.desc_idx, desc);
+    }
+
     /// Create a new variable with the provided content assuming there is capacity
     pub fn appendFromContentAssumeCapacity(self: *Self, content: Content, rank: Rank) Var {
-        const desc_idx = self.descs.appendAssumeCapacity(.{ .content = content, .rank = rank });
+        const desc_idx = self.descs.appendAssumeCapacity(.{
+            .content = content,
+            .rank = rank,
+            .from_numeral_origin = false,
+        });
         const slot_idx = self.slots.appendAssumeCapacity(.{ .root = desc_idx });
         return Self.slotIdxToVar(slot_idx);
     }
@@ -1342,7 +1361,8 @@ test "Store empty CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(gpa);
 
-    try original.serialize(gpa, &writer);
+    const serialized = try original.serialize(gpa, &writer);
+    try std.testing.expect(@intFromPtr(serialized) != 0);
 
     // Write to file
     try writer.writeGather(gpa, file);
@@ -1353,7 +1373,8 @@ test "Store empty CompactWriter roundtrip" {
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(file_size));
     defer gpa.free(buffer);
 
-    try file.read(buffer);
+    const bytes_read = try file.readAll(buffer);
+    try std.testing.expectEqual(buffer.len, bytes_read);
 
     // Cast and relocate
     const deserialized = @as(*Store, @ptrCast(@alignCast(buffer.ptr)));
@@ -1399,7 +1420,8 @@ test "Store basic CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(gpa);
 
-    try original.serialize(gpa, &writer);
+    const serialized = try original.serialize(gpa, &writer);
+    try std.testing.expect(@intFromPtr(serialized) != 0);
 
     // Write to file
     try writer.writeGather(gpa, file);
@@ -1410,7 +1432,8 @@ test "Store basic CompactWriter roundtrip" {
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(file_size));
     defer gpa.free(buffer);
 
-    try file.read(buffer);
+    const bytes_read = try file.readAll(buffer);
+    try std.testing.expectEqual(buffer.len, bytes_read);
 
     // Cast and relocate
     const deserialized = @as(*Store, @ptrCast(@alignCast(buffer.ptr)));
@@ -1493,7 +1516,8 @@ test "Store comprehensive CompactWriter roundtrip" {
     };
     defer writer.deinit(gpa);
 
-    try original.serialize(gpa, &writer);
+    const serialized = try original.serialize(gpa, &writer);
+    try std.testing.expect(@intFromPtr(serialized) != 0);
 
     // Write to file
     try writer.writeGather(gpa, file);
@@ -1504,7 +1528,8 @@ test "Store comprehensive CompactWriter roundtrip" {
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(file_size));
     defer gpa.free(buffer);
 
-    try file.read(buffer);
+    const bytes_read = try file.readAll(buffer);
+    try std.testing.expectEqual(buffer.len, bytes_read);
 
     // Cast and relocate - Store is at the beginning of the buffer
     const deserialized = @as(*Store, @ptrCast(@alignCast(buffer.ptr)));
@@ -1621,7 +1646,8 @@ test "SlotStore.Serialized roundtrip" {
     const file_size = try file.getEndPos();
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(file_size));
     defer gpa.free(buffer);
-    try file.read(buffer);
+    const bytes_read = try file.readAll(buffer);
+    try std.testing.expectEqual(buffer.len, bytes_read);
 
     // Deserialize - find the Serialized struct at the beginning of the buffer
     const deser_ptr = @as(*SlotStore.Serialized, @ptrCast(@alignCast(buffer.ptr)));
@@ -1683,7 +1709,8 @@ test "DescStore.Serialized roundtrip" {
     const file_size = try file.getEndPos();
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(file_size));
     defer gpa.free(buffer);
-    try file.read(buffer);
+    const bytes_read = try file.readAll(buffer);
+    try std.testing.expectEqual(buffer.len, bytes_read);
 
     // Deserialize - find the Serialized struct at the beginning of the buffer
     const deser_ptr = @as(*DescStore.Serialized, @ptrCast(@alignCast(buffer.ptr)));
@@ -1733,7 +1760,8 @@ test "Store.Serialized roundtrip" {
     const file_size = try file.getEndPos();
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(file_size));
     defer gpa.free(buffer);
-    try file.read(buffer);
+    const bytes_read = try file.readAll(buffer);
+    try std.testing.expectEqual(buffer.len, bytes_read);
 
     // Deserialize - Store.Serialized is at the beginning of the buffer
     const deser_ptr = @as(*Store.Serialized, @ptrCast(@alignCast(buffer.ptr)));
@@ -1769,12 +1797,14 @@ test "Store multiple instances CompactWriter roundtrip" {
     // Populate differently
     const var1_1 = try store1.fresh();
     const var1_2 = try store1.freshFromContent(Content{ .structure = .empty_record });
-    try store1.freshRedirect(var1_1);
+    const redirect1_1 = try store1.freshRedirect(var1_1);
+    try std.testing.expectEqual(Slot{ .redirect = var1_1 }, store1.getSlot(redirect1_1));
 
     const var2_1 = try store2.fresh();
     const var2_2 = try store2.fresh();
     const func_content = try store2.mkFuncEffectful(&[_]Var{var2_1}, var2_2);
-    try store2.freshFromContent(func_content);
+    const func_var = try store2.freshFromContent(func_content);
+    try std.testing.expect(store2.resolveVar(func_var).desc.content.unwrapFunc() != null);
 
     // store3 left empty
 
@@ -1794,13 +1824,16 @@ test "Store multiple instances CompactWriter roundtrip" {
     defer writer.deinit(gpa);
 
     const offset1 = writer.total_bytes; // Store1 starts at current position
-    try store1.serialize(gpa, &writer);
+    const serialized1 = try store1.serialize(gpa, &writer);
+    try std.testing.expect(@intFromPtr(serialized1) != 0);
 
     const offset2 = writer.total_bytes; // Store2 starts at current position
-    try store2.serialize(gpa, &writer);
+    const serialized2 = try store2.serialize(gpa, &writer);
+    try std.testing.expect(@intFromPtr(serialized2) != 0);
 
     const offset3 = writer.total_bytes; // Store3 starts at current position
-    try store3.serialize(gpa, &writer);
+    const serialized3 = try store3.serialize(gpa, &writer);
+    try std.testing.expect(@intFromPtr(serialized3) != 0);
 
     // Write to file
     try writer.writeGather(gpa, file);
@@ -1811,7 +1844,8 @@ test "Store multiple instances CompactWriter roundtrip" {
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(file_size));
     defer gpa.free(buffer);
 
-    try file.read(buffer);
+    const bytes_read = try file.readAll(buffer);
+    try std.testing.expectEqual(buffer.len, bytes_read);
 
     // Cast and relocate all three
     const deserialized1 = @as(*Store, @ptrCast(@alignCast(buffer.ptr + offset1)));
@@ -1849,7 +1883,7 @@ test "SlotStore and DescStore serialization and deserialization" {
 
     // Create redirects to populate SlotStore with redirects
     const redirect1 = try original.freshRedirect(var1);
-    try original.freshRedirect(var2);
+    const redirect2 = try original.freshRedirect(var2);
     const redirect3 = try original.freshRedirect(redirect1); // Chain of redirects
 
     // Verify SlotStore has both root and redirect entries
@@ -1873,7 +1907,8 @@ test "SlotStore and DescStore serialization and deserialization" {
     var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
-    try original.serialize(arena_allocator, &writer);
+    const serialized = try original.serialize(arena_allocator, &writer);
+    try std.testing.expect(@intFromPtr(serialized) != 0);
 
     // Write to file
     try writer.writeGather(arena_allocator, file);
@@ -1884,7 +1919,8 @@ test "SlotStore and DescStore serialization and deserialization" {
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(file_size));
     defer gpa.free(buffer);
 
-    try file.read(buffer);
+    const bytes_read = try file.readAll(buffer);
+    try std.testing.expectEqual(buffer.len, bytes_read);
 
     // Cast and relocate - Store struct is at the beginning of the buffer
     const deserialized = @as(*Store, @ptrCast(@alignCast(buffer.ptr)));
@@ -1912,6 +1948,9 @@ test "SlotStore and DescStore serialization and deserialization" {
 
     const resolved_redirect3 = deserialized.resolveVar(redirect3);
     try std.testing.expectEqual(resolved1.desc_idx, resolved_redirect3.desc_idx);
+
+    const resolved_redirect2 = deserialized.resolveVar(redirect2);
+    try std.testing.expectEqual(resolved2.desc_idx, resolved_redirect2.desc_idx);
 }
 
 test "Store with path compression CompactWriter roundtrip" {
@@ -1927,7 +1966,8 @@ test "Store with path compression CompactWriter roundtrip" {
     const a = try original.freshRedirect(b);
 
     // Compress the path
-    original.resolveVarAndCompressPath(a);
+    const resolved = original.resolveVarAndCompressPath(a);
+    try std.testing.expectEqual(c, resolved.var_);
 
     // Verify path is compressed
     try std.testing.expectEqual(Slot{ .redirect = c }, original.getSlot(a));
@@ -1948,7 +1988,8 @@ test "Store with path compression CompactWriter roundtrip" {
     };
     defer writer.deinit(gpa);
 
-    try original.serialize(gpa, &writer);
+    const serialized = try original.serialize(gpa, &writer);
+    try std.testing.expect(@intFromPtr(serialized) != 0);
 
     // Write to file
     try writer.writeGather(gpa, file);
@@ -1959,7 +2000,8 @@ test "Store with path compression CompactWriter roundtrip" {
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(file_size));
     defer gpa.free(buffer);
 
-    try file.read(buffer);
+    const bytes_read = try file.readAll(buffer);
+    try std.testing.expectEqual(buffer.len, bytes_read);
 
     // Cast and relocate - Store is at the beginning of the buffer
     const deserialized = @as(*Store, @ptrCast(@alignCast(buffer.ptr)));

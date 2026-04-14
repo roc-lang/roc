@@ -1,6 +1,7 @@
 //! Lower solved lambda-set types into executable lambdamono types.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const solved = @import("lambdasolved");
 const mono = @import("type.zig");
@@ -160,7 +161,12 @@ fn lowerTypeRec(
     if (mono_cache.provisional.get(id)) |provisional| {
         if (mono_types.isFullyResolved(provisional)) {
             const canonical = try mono_types.canonicalizeResolved(provisional);
-            mono_cache.provisional.remove(id);
+            const removed = mono_cache.provisional.remove(id);
+            if (comptime builtin.mode == .Debug) {
+                std.debug.assert(removed);
+            } else if (!removed) {
+                unreachable;
+            }
             try mono_cache.resolved.put(id, canonical);
             return canonical;
         }
@@ -236,7 +242,12 @@ fn lowerTypeRec(
     };
 
     mono_types.setType(placeholder, lowered);
-    mono_cache.active.remove(id);
+    const removed = mono_cache.active.remove(id);
+    if (comptime builtin.mode == .Debug) {
+        std.debug.assert(removed);
+    } else if (!removed) {
+        unreachable;
+    }
     if (mono_types.isFullyResolved(placeholder)) {
         const canonical = try mono_types.canonicalizeResolved(placeholder);
         try mono_cache.resolved.put(id, canonical);

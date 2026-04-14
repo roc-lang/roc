@@ -988,7 +988,7 @@ pub const Cursor = struct {
                     },
                     else => {
                         self.pos -= 1;
-                        self.chompUTF8CodepointWithValidation();
+                        if (self.chompUTF8CodepointWithValidation()) |_| {} else {}
                         state = .Enough;
                     },
                 },
@@ -1226,7 +1226,10 @@ pub const Tokenizer = struct {
                         } else if (n >= 0x80 and n <= 0xff) {
                             self.cursor.pos += 1;
                             const text_start = self.cursor.pos;
-                            self.cursor.chompIdentGeneral();
+                            const ok = self.cursor.chompIdentGeneral();
+                            if (!ok) {
+                                // malformed unicode ident remains malformed
+                            }
                             try self.pushTokenInternedHere(gpa, .MalformedDotUnicodeIdent, start, text_start);
                         } else if (n == open_curly) {
                             self.cursor.pos += 1;
@@ -1571,7 +1574,12 @@ pub const Tokenizer = struct {
 
                 // first byte of a UTF-8 sequence
                 0x80...0xff => {
-                    self.cursor.chompIdentGeneral();
+                    const valid = self.cursor.chompIdentGeneral();
+                    if (comptime @import("builtin").mode == .Debug) {
+                        std.debug.assert(!valid);
+                    } else if (valid) {
+                        unreachable;
+                    }
                     try self.pushTokenInternedHere(gpa, .MalformedUnicodeIdent, start, start);
                 },
 
@@ -1657,7 +1665,7 @@ pub const Tokenizer = struct {
                 return;
             } else {
                 // Handle UTF-8 sequences with printable character validation
-                self.cursor.chompUTF8CodepointWithValidation();
+                if (self.cursor.chompUTF8CodepointWithValidation()) |_| {} else {}
 
                 const escape = c == '\\';
                 if (escape) {

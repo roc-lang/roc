@@ -317,10 +317,13 @@ fn runInterpreter(allocator: std.mem.Allocator, lowered: *const LoweredProgram) 
     );
     defer interp.deinit();
 
-    interp.eval(.{ .proc_id = lowered.main_proc }) catch |err| switch (err) {
-        error.Crash => {},
+    const eval_result = interp.eval(.{ .proc_id = lowered.main_proc }) catch |err| switch (err) {
+        error.Crash => return runtime_env.snapshot(allocator),
         else => return err,
     };
+    switch (eval_result) {
+        .value => |_| {},
+    }
 
     return runtime_env.snapshot(allocator);
 }

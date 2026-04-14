@@ -586,7 +586,7 @@ const TarjanState = struct {
 
             while (true) {
                 const w = self.stack.pop() orelse unreachable; // Stack should not be empty
-                self.on_stack.remove(w);
+                std.debug.assert(self.on_stack.remove(w));
                 try scc_defs.append(self.allocator, w);
 
                 if (@intFromEnum(w) == @intFromEnum(v)) break;

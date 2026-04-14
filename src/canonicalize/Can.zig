@@ -665,7 +665,7 @@ fn ensureTypeDeclPlaceholderOnly(
                 },
             };
 
-            try self.env.addStatement(new_stmt, region);
+            _ = try self.env.addStatement(new_stmt, region);
         }
     } else {
         const placeholder_cir_type_decl = switch (type_decl.kind) {
@@ -705,7 +705,7 @@ fn predeclareAssociatedTypePlaceholders(
         if (stmt != .type_decl) continue;
 
         const type_decl = stmt.type_decl;
-        try self.ensureTypeDeclPlaceholderOnly(type_decl, parent_name, relative_parent_name) orelse continue;
+        _ = try self.ensureTypeDeclPlaceholderOnly(type_decl, parent_name, relative_parent_name) orelse continue;
     }
 }
 
@@ -999,7 +999,7 @@ fn processTypeDeclFirstPass(
 
     // Remove from exposed_type_texts since the type is now fully defined
     const type_text = self.env.getIdent(type_header.name);
-    self.exposed_type_texts.remove(type_text);
+    _ = self.exposed_type_texts.remove(type_text);
 
     // Process associated items completely (both symbol introduction and canonicalization)
     // This eliminates the need for a separate third pass
@@ -1117,7 +1117,7 @@ fn processTypeDeclFirstPassWithExisting(
 
     // Remove from exposed_type_texts since the type is now fully defined
     const type_text = self.env.getIdent(type_header.name);
-    self.exposed_type_texts.remove(type_text);
+    _ = self.exposed_type_texts.remove(type_text);
 
     // Process associated items
     if (!defer_associated_blocks) {
@@ -1576,7 +1576,11 @@ fn canonicalizeAssociatedDecl(
 
                 // Introduce it into BOTH the current scope (for sibling references)
                 // and the parent scope (for external references after scope exit)
-                try self.scopeIntroduceInternal(self.env.gpa, .ident, qualified_ident, new_pattern_idx, false, true);
+                try self.handleScopeIntroduceResult(
+                    try self.scopeIntroduceInternal(self.env.gpa, .ident, qualified_ident, new_pattern_idx, false, true),
+                    qualified_ident,
+                    pattern_region,
+                );
 
                 // Also introduce into parent scope so it persists after associated block scope exits
                 if (self.scopes.items.len >= 2) {
@@ -1635,7 +1639,11 @@ fn canonicalizeAssociatedDeclWithAnno(
 
                 // Introduce it into BOTH the current scope (for sibling references)
                 // and the parent scope (for external references after scope exit)
-                try self.scopeIntroduceInternal(self.env.gpa, .ident, qualified_ident, new_pattern_idx, false, true);
+                try self.handleScopeIntroduceResult(
+                    try self.scopeIntroduceInternal(self.env.gpa, .ident, qualified_ident, new_pattern_idx, false, true),
+                    qualified_ident,
+                    pattern_region,
+                );
 
                 // Also introduce into parent scope so it persists after associated block scope exits
                 if (self.scopes.items.len >= 2) {
@@ -2732,7 +2740,8 @@ pub fn canonicalizeFile(
                                     var scc = std.ArrayList(usize){};
                                     while (true) {
                                         const w = stack.pop() orelse unreachable;
-                                        on_stack.remove(w);
+                                        const removed = on_stack.remove(w);
+                                        std.debug.assert(removed);
                                         try scc.append(gpa, w);
                                         if (w == v) break;
                                     }
@@ -2752,7 +2761,7 @@ pub fn canonicalizeFile(
                                     try result.is_recursive.append(gpa, is_recursive);
                                 }
 
-                                call_stack.pop();
+                                _ = call_stack.pop() orelse unreachable;
                             },
                         }
                     }
@@ -2801,7 +2810,7 @@ pub fn canonicalizeFile(
         const stmt = self.parse_ir.store.getStatement(stmt_id);
         switch (stmt) {
             .import => |import_stmt| {
-                try self.canonicalizeImportStatement(import_stmt);
+                _ = try self.canonicalizeImportStatement(import_stmt);
             },
             .decl => |decl| {
                 try self.canonicalizeStmtDecl(decl, null);
@@ -3345,7 +3354,7 @@ fn canonicalizeStmtDecl(self: *Self, decl: AST.Statement.Decl, mb_last_anno: ?Ty
             try self.env.setExposedNodeIndexById(idx, def_idx_u16);
         }
 
-        self.exposed_ident_texts.remove(ident_text);
+        _ = self.exposed_ident_texts.remove(ident_text);
     }
 }
 
@@ -3457,7 +3466,37 @@ fn introduceExistingPatternBindingsIntoScope(
 ) std.mem.Allocator.Error!void {
     for (pattern_bindings) |pattern_idx| {
         const ident_idx = self.boundPatternIdent(pattern_idx) orelse continue;
-        try self.scopeIntroduceInternal(self.env.gpa, .ident, ident_idx, pattern_idx, false, true);
+        const pattern_region = self.env.store.getPatternRegion(pattern_idx);
+        try self.handleScopeIntroduceResult(
+            try self.scopeIntroduceInternal(self.env.gpa, .ident, ident_idx, pattern_idx, false, true),
+            ident_idx,
+            pattern_region,
+        );
+    }
+}
+
+fn handleScopeIntroduceResult(
+    self: *Self,
+    result: Scope.IntroduceResult,
+    ident: base.Ident.Idx,
+    region: base.Region,
+) std.mem.Allocator.Error!void {
+    switch (result) {
+        .success => {},
+        .shadowing_warning => |shadowed_pattern_idx| {
+            const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
+            try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
+                .ident = ident,
+                .region = region,
+                .original_region = original_region,
+            } });
+        },
+        .top_level_var_error, .var_across_function_boundary, .var_reassignment_ok => {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("unexpected scope introduce result", .{});
+            }
+            unreachable;
+        },
     }
 }
 
@@ -3632,10 +3671,8 @@ fn addPlatformProvidesItems(
             const token_region = self.parse_ir.tokens.resolve(@intCast(field.name));
             const ident_text = self.parse_ir.env.source[token_region.start.offset..token_region.end.offset];
             const region = self.parse_ir.tokenizedRegionToRegion(field.region);
-            try self.exposed_ident_texts.getOrPut(gpa, ident_text);
-            if (self.exposed_ident_texts.getPtr(ident_text)) |ptr| {
-                ptr.* = region;
-            }
+            const exposed_entry = try self.exposed_ident_texts.getOrPut(gpa, ident_text);
+            exposed_entry.value_ptr.* = region;
 
             // Extract FFI symbol from the string value and store as a provides entry
             if (field.value) |value_idx| {
@@ -3660,7 +3697,7 @@ fn addPlatformProvidesItems(
 
                 if (ffi_symbol_text) |ffi_text| {
                     const ffi_string_idx = try self.env.insertString(ffi_text);
-                    try self.env.provides_entries.append(gpa, .{
+                    _ = try self.env.provides_entries.append(gpa, .{
                         .ident = ident_idx,
                         .ffi_symbol = ffi_string_idx,
                     });
@@ -3723,7 +3760,7 @@ fn processRequiresEntries(self: *Self, requires_entries: AST.RequiresEntry.Span)
             } }, alias_region);
 
             // Introduce the rigid (model) into the type variable scope
-            try self.scopeIntroduceTypeVar(rigid_name, rigid_anno_idx);
+            handleTypeVarIntroduceResult(try self.scopeIntroduceTypeVar(rigid_name, rigid_anno_idx));
 
             // IMPORTANT: Also introduce Model as a type alias in the module-level scope.
             // This allows platform functions to use `Box(Model)` in their type signatures.
@@ -3755,7 +3792,7 @@ fn processRequiresEntries(self: *Self, requires_entries: AST.RequiresEntry.Span)
             });
 
             // Store the alias mapping for use during type checking
-            try self.env.for_clause_aliases.append(self.env.gpa, .{
+            _ = try self.env.for_clause_aliases.append(self.env.gpa, .{
                 .alias_name = alias_name,
                 .rigid_name = rigid_name,
                 .alias_stmt_idx = alias_stmt_idx,
@@ -3783,7 +3820,7 @@ fn processRequiresEntries(self: *Self, requires_entries: AST.RequiresEntry.Span)
         const type_anno_idx = try self.canonicalizeTypeAnnoHelp(entry.type_anno, &type_anno_ctx);
 
         // Store the required type in the module env
-        try self.env.requires_types.append(self.env.gpa, .{
+        _ = try self.env.requires_types.append(self.env.gpa, .{
             .ident = entrypoint_name,
             .type_anno = type_anno_idx,
             .region = entry_region,
@@ -3902,7 +3939,10 @@ fn importAliased(
 
     // 8. Add the module to the current scope so it can be used in qualified lookups
     const current_scope = self.currentScope();
-    try current_scope.introduceImportedModule(self.env.gpa, module_name_text, module_import_idx);
+    switch (try current_scope.introduceImportedModule(self.env.gpa, module_name_text, module_import_idx)) {
+        .success => {},
+        .already_imported => {},
+    }
 
     // 9. Check that this module actually exists, and if not report an error
     // Only check if module_envs is provided - when it's null, we don't know what modules
@@ -3923,7 +3963,7 @@ fn importAliased(
     // If this import satisfies an exposed type requirement (e.g., platform re-exporting
     // an imported module), remove it from exposed_type_texts so we don't report
     // "EXPOSED BUT NOT DEFINED" for re-exported imports.
-    self.exposed_type_texts.remove(module_name_text);
+    _ = self.exposed_type_texts.remove(module_name_text);
 
     return import_idx;
 }
@@ -3967,7 +4007,10 @@ fn importUnaliased(
 
     // 5. Add the module to the current scope so it can be used in qualified lookups
     const current_scope = self.currentScope();
-    try current_scope.introduceImportedModule(self.env.gpa, module_name_text, module_import_idx);
+    switch (try current_scope.introduceImportedModule(self.env.gpa, module_name_text, module_import_idx)) {
+        .success => {},
+        .already_imported => {},
+    }
 
     // 6. Check that this module actually exists, and if not report an error
     // Only check if module_envs is provided - when it's null, we don't know what modules
@@ -3988,7 +4031,7 @@ fn importUnaliased(
     // If this import satisfies an exposed type requirement (e.g., platform re-exporting
     // an imported module), remove it from exposed_type_texts so we don't report
     // "EXPOSED BUT NOT DEFINED" for re-exported imports.
-    self.exposed_type_texts.remove(module_name_text);
+    _ = self.exposed_type_texts.remove(module_name_text);
 
     return import_idx;
 }
@@ -4232,11 +4275,17 @@ fn registerImportModuleAlias(
     // 4. Introduce the module alias into the current scope (without exposed items or diagnostics)
     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
     const is_package_qualified = import_stmt.qualifier_tok != null;
-    try current_scope.introduceModuleAlias(self.env.gpa, alias, module_name, is_package_qualified, null);
+    const alias_result = try current_scope.introduceModuleAlias(self.env.gpa, alias, module_name, is_package_qualified, null);
+    switch (alias_result) {
+        .success, .shadowing_warning, .already_in_scope => {},
+    }
 
     // 5. Store the import index mapping and add to scope for qualified lookups
     try self.import_indices.put(self.env.gpa, module_name_text, module_import_idx);
-    try current_scope.introduceImportedModule(self.env.gpa, module_name_text, module_import_idx);
+    switch (try current_scope.introduceImportedModule(self.env.gpa, module_name_text, module_import_idx)) {
+        .success => {},
+        .already_imported => {},
+    }
 }
 
 /// Resolve the module alias name from either explicit alias or module name
@@ -6565,7 +6614,11 @@ pub fn canonicalizeExpr(
                 }, region);
 
                 // Introduce the pattern into scope
-                try self.scopeIntroduceInternal(self.env.gpa, .ident, ok_val_ident, ok_assign_pattern_idx, false, true);
+                try self.handleScopeIntroduceResult(
+                    try self.scopeIntroduceInternal(self.env.gpa, .ident, ok_val_ident, ok_assign_pattern_idx, false, true),
+                    ok_val_ident,
+                    region,
+                );
 
                 // Create pattern span for Ok tag argument
                 const ok_patterns_start = self.env.store.scratchPatternTop();
@@ -6635,7 +6688,11 @@ pub fn canonicalizeExpr(
                 }, region);
 
                 // Introduce the pattern into scope
-                try self.scopeIntroduceInternal(self.env.gpa, .ident, err_val_ident, err_assign_pattern_idx, false, true);
+                try self.handleScopeIntroduceResult(
+                    try self.scopeIntroduceInternal(self.env.gpa, .ident, err_val_ident, err_assign_pattern_idx, false, true),
+                    err_val_ident,
+                    region,
+                );
 
                 // Create pattern span for Err tag argument
                 const err_patterns_start = self.env.store.scratchPatternTop();
@@ -7330,7 +7387,11 @@ fn canonicalizeDoubleQuestionOp(
         }, region);
 
         // Introduce the pattern into scope
-        try self.scopeIntroduceInternal(self.env.gpa, .ident, ok_val_ident, ok_assign_pattern_idx, false, true);
+        try self.handleScopeIntroduceResult(
+            try self.scopeIntroduceInternal(self.env.gpa, .ident, ok_val_ident, ok_assign_pattern_idx, false, true),
+            ok_val_ident,
+            region,
+        );
 
         // Create pattern span for Ok tag argument
         const ok_patterns_start = self.env.store.scratchPatternTop();
@@ -7817,11 +7878,19 @@ fn buildInnerMap2WithTuple(
     const patterns_start = self.env.store.scratch.?.patterns.top();
 
     const p1 = try self.env.addPattern(Pattern{ .assign = .{ .ident = name1 } }, region);
-    try self.scopeIntroduceInternal(self.env.gpa, .ident, name1, p1, false, true);
+    try self.handleScopeIntroduceResult(
+        try self.scopeIntroduceInternal(self.env.gpa, .ident, name1, p1, false, true),
+        name1,
+        region,
+    );
     try self.env.store.scratch.?.patterns.append(p1);
 
     const p2 = try self.env.addPattern(Pattern{ .assign = .{ .ident = name2 } }, region);
-    try self.scopeIntroduceInternal(self.env.gpa, .ident, name2, p2, false, true);
+    try self.handleScopeIntroduceResult(
+        try self.scopeIntroduceInternal(self.env.gpa, .ident, name2, p2, false, true),
+        name2,
+        region,
+    );
     try self.env.store.scratch.?.patterns.append(p2);
 
     const args_span = try self.env.store.patternSpanFrom(patterns_start);
@@ -7869,7 +7938,11 @@ fn buildIntermediateMap2(
 
     // First parameter: simple assign pattern
     const p_new = try self.env.addPattern(Pattern{ .assign = .{ .ident = new_name } }, region);
-    try self.scopeIntroduceInternal(self.env.gpa, .ident, new_name, p_new, false, true);
+    try self.handleScopeIntroduceResult(
+        try self.scopeIntroduceInternal(self.env.gpa, .ident, new_name, p_new, false, true),
+        new_name,
+        region,
+    );
     try self.env.store.scratch.?.patterns.append(p_new);
     try self.used_patterns.put(self.env.gpa, p_new, {});
 
@@ -7911,7 +7984,11 @@ fn buildTuplePattern(self: *Self, region: base.Region, names: []const Ident.Idx)
 
     for (names) |name| {
         const elem_pattern = try self.env.addPattern(Pattern{ .assign = .{ .ident = name } }, region);
-        try self.scopeIntroduceInternal(self.env.gpa, .ident, name, elem_pattern, false, true);
+        try self.handleScopeIntroduceResult(
+            try self.scopeIntroduceInternal(self.env.gpa, .ident, name, elem_pattern, false, true),
+            name,
+            region,
+        );
         try self.env.store.scratch.?.patterns.append(elem_pattern);
     }
 
@@ -7933,7 +8010,11 @@ fn buildFinalRecordLambda(self: *Self, region: base.Region, field_names: []const
 
     for (field_names, 0..) |name, i| {
         const p = try self.env.addPattern(Pattern{ .assign = .{ .ident = name } }, region);
-        try self.scopeIntroduceInternal(self.env.gpa, .ident, name, p, false, true);
+        try self.handleScopeIntroduceResult(
+            try self.scopeIntroduceInternal(self.env.gpa, .ident, name, p, false, true),
+            name,
+            region,
+        );
         try self.env.store.scratch.?.patterns.append(p);
         param_patterns[i] = p;
         try self.used_patterns.put(self.env.gpa, p, {});
@@ -7970,7 +8051,11 @@ fn buildFinalLambdaWithTupleDestructure(self: *Self, region: base.Region, field_
 
     // First parameter: simple assign pattern for first field
     const p_first = try self.env.addPattern(Pattern{ .assign = .{ .ident = field_names[0] } }, region);
-    try self.scopeIntroduceInternal(self.env.gpa, .ident, field_names[0], p_first, false, true);
+    try self.handleScopeIntroduceResult(
+        try self.scopeIntroduceInternal(self.env.gpa, .ident, field_names[0], p_first, false, true),
+        field_names[0],
+        region,
+    );
     try self.env.store.scratch.?.patterns.append(p_first);
     try self.used_patterns.put(self.env.gpa, p_first, {});
 
@@ -9511,7 +9596,7 @@ fn enterFunction(self: *Self, region: Region) std.mem.Allocator.Error!void {
 
 /// Exit a function boundary by popping from the stack
 fn exitFunction(self: *Self) void {
-    self.function_regions.pop();
+    _ = self.function_regions.pop();
 }
 
 /// Get the current function region (the function we're currently in)
@@ -9963,7 +10048,7 @@ fn canonicalizeTypeAnnoHelp(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_c
                         } }, region);
 
                         // Add to scope
-                        try self.scopeIntroduceTypeVar(name_ident, new_anno_idx);
+                        handleTypeVarIntroduceResult(try self.scopeIntroduceTypeVar(name_ident, new_anno_idx));
 
                         return new_anno_idx;
                     } else {
@@ -10021,7 +10106,7 @@ fn canonicalizeTypeAnnoHelp(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_c
                         } }, region);
 
                         // Add to scope
-                        try self.scopeIntroduceTypeVar(name_ident, new_anno_idx);
+                        handleTypeVarIntroduceResult(try self.scopeIntroduceTypeVar(name_ident, new_anno_idx));
 
                         return new_anno_idx;
                     } else {
@@ -11214,7 +11299,7 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
             );
 
             // Introduce the var with function boundary tracking
-            try self.scopeIntroduceVar(var_name, pattern_idx, region, true, Pattern.Idx);
+            _ = try self.scopeIntroduceVar(var_name, pattern_idx, region, true, Pattern.Idx);
 
             // Create var statement
             const stmt_idx = try self.env.addStatement(Statement{ .s_var = .{
@@ -11397,7 +11482,11 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
 
                 // Introduce the type var alias into scope for use in `Thing.method()` calls
                 const current_scope = &self.scopes.items[self.scopes.items.len - 1];
-                try current_scope.introduceTypeVarAlias(self.env.gpa, alias_name, type_var_ident, type_var_anno, stmt_idx, null);
+                switch (try current_scope.introduceTypeVarAlias(self.env.gpa, alias_name, type_var_ident, type_var_anno, stmt_idx, null)) {
+                    .success => {},
+                    .shadowing_warning => {},
+                    .already_in_scope => {},
+                }
 
                 // Where clauses are not allowed
                 if (type_decl.where) |_| {
@@ -11563,7 +11652,7 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                                 // Placeholders are always added to both placeholder_idents and scope
                                 const existing_pattern = current_scope.idents.get(name_ident) orelse unreachable;
                                 // Remove from placeholder tracking since we're making it real
-                                self.placeholder_idents.remove(name_ident);
+                                _ = self.placeholder_idents.remove(name_ident);
                                 break :placeholder_check existing_pattern;
                             } else create_new: {
                                 // No placeholder - create new pattern and introduce to scope
@@ -11642,7 +11731,7 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                             );
 
                             // Introduce the var with function boundary tracking
-                            try self.scopeIntroduceVar(name_ident, pattern_idx, var_region, true, Pattern.Idx);
+                            _ = try self.scopeIntroduceVar(name_ident, pattern_idx, var_region, true, Pattern.Idx);
 
                             // Create the annotation structure
                             const annotation = CIR.Annotation{
@@ -11676,7 +11765,7 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                                     };
                                     break :placeholder_check_var try self.env.addPattern(pattern, region);
                                 };
-                                self.placeholder_idents.remove(name_ident);
+                                _ = self.placeholder_idents.remove(name_ident);
                                 break :placeholder_check_var existing_pattern;
                             } else create_new_var: {
                                 const pattern = Pattern{
@@ -11748,7 +11837,7 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                                 };
                                 break :placeholder_check2 try self.env.addPattern(pattern, region);
                             };
-                            self.placeholder_idents.remove(name_ident);
+                            _ = self.placeholder_idents.remove(name_ident);
                             break :placeholder_check2 existing_pattern;
                         } else create_new2: {
                             const pattern = Pattern{
@@ -11820,7 +11909,7 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                         };
                         break :placeholder_check3 try self.env.addPattern(pattern, region);
                     };
-                    self.placeholder_idents.remove(name_ident);
+                    _ = self.placeholder_idents.remove(name_ident);
                     break :placeholder_check3 existing_pattern;
                 } else create_new3: {
                     const pattern = Pattern{
@@ -11879,7 +11968,7 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
         .import => |import_stmt| {
             // After we process import statements, there's no need to include
             // then in the canonicalize IR
-            try self.canonicalizeImportStatement(import_stmt);
+            _ = try self.canonicalizeImportStatement(import_stmt);
         },
         .@"for" => |for_stmt| {
             const region = self.parse_ir.tokenizedRegionToRegion(for_stmt.region);
@@ -12191,6 +12280,12 @@ fn scopeIntroduceTypeVar(self: *Self, name_ident: Ident.Idx, type_var_anno: Type
     return .success;
 }
 
+fn handleTypeVarIntroduceResult(result: TypeVarIntroduceResult) void {
+    switch (result) {
+        .success, .already_in_scope => {},
+    }
+}
+
 // scope //
 
 /// Enter a new scope level
@@ -12322,7 +12417,7 @@ fn introduceTypeParametersFromHeader(self: *Self, header_idx: CIR.TypeHeader.Idx
     for (self.env.store.sliceTypeAnnos(header.args)) |param_idx| {
         const param = self.env.store.getTypeAnno(param_idx);
         if (param == .rigid_var) {
-            try self.scopeIntroduceTypeVar(param.rigid_var.name, param_idx);
+            handleTypeVarIntroduceResult(try self.scopeIntroduceTypeVar(param.rigid_var.name, param_idx));
         }
     }
 }
@@ -12841,7 +12936,7 @@ fn updatePlaceholder(
     }
     // Remove from placeholder tracking since it's now a real definition
     if (self.placeholder_idents.count() > 0) {
-        self.placeholder_idents.remove(ident_idx);
+        _ = self.placeholder_idents.remove(ident_idx);
     }
     try scope.idents.put(self.env.gpa, ident_idx, pattern_idx);
 }
@@ -13170,7 +13265,10 @@ fn getOrCreateAutoImport(self: *Self, module_name_text: []const u8) std.mem.Allo
 
     // Also add to current scope so scopeLookupImportedModule can find it
     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
-    try current_scope.introduceImportedModule(self.env.gpa, module_name_text, new_import_idx);
+    switch (try current_scope.introduceImportedModule(self.env.gpa, module_name_text, new_import_idx)) {
+        .success => {},
+        .already_imported => {},
+    }
 
     return new_import_idx;
 }
@@ -13230,7 +13328,7 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx, type
                                 } }, region);
 
                                 // Add to scope
-                                try self.scopeIntroduceTypeVar(var_ident, new_anno_idx);
+                                handleTypeVarIntroduceResult(try self.scopeIntroduceTypeVar(var_ident, new_anno_idx));
 
                                 break :blk new_anno_idx;
                             },
@@ -13313,7 +13411,7 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx, type
                                 } }, region);
 
                                 // Add to scope
-                                try self.scopeIntroduceTypeVar(var_ident, new_anno_idx);
+                                handleTypeVarIntroduceResult(try self.scopeIntroduceTypeVar(var_ident, new_anno_idx));
 
                                 break :blk new_anno_idx;
                             },
@@ -13390,13 +13488,16 @@ fn createAnnotationFromTypeAnno(
 fn processTypeImports(self: *Self, module_name: Ident.Idx, alias_name: Ident.Idx) std.mem.Allocator.Error!void {
     // Set up the module alias for qualified lookups (type imports are not package-qualified)
     const scope = self.currentScope();
-    try scope.introduceModuleAlias(
+    const alias_result = try scope.introduceModuleAlias(
         self.env.gpa,
         alias_name,
         module_name,
         false, // Type imports are not package-qualified
         null, // No parent lookup function for now
     );
+    switch (alias_result) {
+        .success, .shadowing_warning, .already_in_scope => {},
+    }
 }
 
 /// Try to handle field access as a type variable alias dispatch.
@@ -13533,7 +13634,7 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
 
         // Module not imported and not auto-imported
         const region = self.parse_ir.tokenizedRegionToRegion(field_access.region);
-        try self.env.pushMalformed(Expr.Idx, Diagnostic{ .module_not_imported = .{
+        _ = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .module_not_imported = .{
             .module_name = module_name,
             .region = region,
         } });
@@ -13968,7 +14069,7 @@ fn injectEchoPlatform(self: *Self) std.mem.Allocator.Error!void {
     }, synthetic_region);
     // Ensure types array has entries for the hosted lambda expression
     while (self.env.types.len() <= @intFromEnum(expr_idx)) {
-        try self.env.types.fresh();
+        _ = try self.env.types.fresh();
     }
 
     // Build CIR type annotation: echo! : Str => {}
@@ -13992,7 +14093,11 @@ fn injectEchoPlatform(self: *Self) std.mem.Allocator.Error!void {
     try self.env.store.addScratchDef(def_idx);
 
     // Introduce echo! into scope so the body can reference it
-    try self.scopeIntroduceInternal(self.env.gpa, .ident, echo_ident, pattern_idx, false, true);
+    try self.handleScopeIntroduceResult(
+        try self.scopeIntroduceInternal(self.env.gpa, .ident, echo_ident, pattern_idx, false, true),
+        echo_ident,
+        synthetic_region,
+    );
 }
 
 /// Build the type annotation `Str => {}` for the echo! hosted function.

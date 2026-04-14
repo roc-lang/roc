@@ -28,6 +28,8 @@ const LoadedModule = struct {
         // Only free the hashmap that was allocated during deserialization
         // Most other data (like the SafeList contents) points into the buffer
         self.env.imports.map.deinit(self.gpa);
+        // Free any runtime insert buffers allocated after deserialization.
+        self.env.common.idents.interner.deinit(self.gpa);
 
         // Free the buffer (the env points into this buffer for most data)
         self.gpa.free(self.buffer);

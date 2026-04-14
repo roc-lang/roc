@@ -536,6 +536,12 @@ test "NodeStore round trip - Diagnostics" {
     });
 
     try diagnostics.append(gpa, CIR.Diagnostic{
+        .erroneous_value_expr = .{
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
         .qualified_ident_does_not_exist = .{
             .ident = rand_ident_idx(),
             .region = rand_region(),
