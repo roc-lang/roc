@@ -40,7 +40,7 @@ pub fn echoHostedFn(opaque_ops: *anyopaque, _: [*]u8, roc_str: *RocStr) callconv
         };
         js.js_echo(message.ptr, message.len);
     } else {
-        const stdout_file: std.fs.File = .stdout();
+        const stdout_file: std.Io.File = .stdout();
         stdout_file.writeAll(message) catch |err| handleStdoutError(err);
         stdout_file.writeAll("\n") catch |err| handleStdoutError(err);
     }
@@ -126,7 +126,7 @@ pub fn makeDefaultRocOps(env: *DefaultRocOpsEnv, hosted_fns: []host_abi.HostedFn
                 // No-op on wasm — no stderr available
             } else {
                 const msg = dbg_args.utf8_bytes[0..dbg_args.len];
-                const stderr_file: std.fs.File = .stderr();
+                const stderr_file: std.Io.File = .stderr();
                 stderr_file.writeAll("[dbg] ") catch {};
                 stderr_file.writeAll(msg) catch {};
                 stderr_file.writeAll("\n") catch {};
@@ -139,7 +139,7 @@ pub fn makeDefaultRocOps(env: *DefaultRocOpsEnv, hosted_fns: []host_abi.HostedFn
                 // No-op on wasm — no stderr available
             } else {
                 const msg = expect_args.utf8_bytes[0..expect_args.len];
-                const stderr_file: std.fs.File = .stderr();
+                const stderr_file: std.Io.File = .stderr();
                 stderr_file.writeAll("Expect failed: ") catch {};
                 stderr_file.writeAll(msg) catch {};
                 stderr_file.writeAll("\n") catch {};
@@ -150,7 +150,7 @@ pub fn makeDefaultRocOps(env: *DefaultRocOpsEnv, hosted_fns: []host_abi.HostedFn
                 @trap();
             } else {
                 const msg = crash_args.utf8_bytes[0..crash_args.len];
-                const stderr_file: std.fs.File = .stderr();
+                const stderr_file: std.Io.File = .stderr();
                 stderr_file.writeAll("Roc crashed: ") catch {};
                 stderr_file.writeAll(msg) catch {};
                 stderr_file.writeAll("\n") catch {};

@@ -576,7 +576,7 @@ fn appMatchesFilter(roc_file: []const u8, app_filter: ?[]const u8) bool {
 fn platformContainsApp(platform: PlatformConfig, app_filter: []const u8) bool {
     switch (platform.test_apps) {
         .single => |app_name| {
-            var buf: [std.fs.max_path_bytes]u8 = undefined;
+            var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
             const full_path = std.fmt.bufPrint(&buf, "{s}/{s}", .{ platform.base_dir, app_name }) catch return false;
             return appMatchesFilter(full_path, app_filter);
         },

@@ -27,7 +27,7 @@ fn runDevBackendHostSelfTest(
     allocator: std.mem.Allocator,
     roc_file: []const u8,
     self_test_flag: []const u8,
-) !std.process.Child.RunResult {
+) !std.process.RunResult {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
@@ -53,7 +53,7 @@ fn runDevBackendHostSelfTest(
     try env_map.put("ROC_CACHE_DIR", cache_path);
     try env_map.put("ZIG_LOCAL_CACHE_DIR", zig_local_cache_path);
 
-    const build_result = try std.process.Child.run(.{
+    const build_result = try std.process.run(.{
         .allocator = allocator,
         .argv = &[_][]const u8{
             util.roc_binary_path,
@@ -86,7 +86,7 @@ fn runDevBackendHostSelfTest(
         },
     }
 
-    return try std.process.Child.run(.{
+    return try std.process.run(.{
         .allocator = allocator,
         .argv = &[_][]const u8{
             output_path,
@@ -732,13 +732,13 @@ test "fx platform run from different cwd" {
     const allocator = testing.allocator;
 
     // Get absolute path to roc binary since we'll change cwd
-    const roc_abs_path = try std.fs.cwd().realpathAlloc(allocator, util.roc_binary_path);
+    const roc_abs_path = try std.Io.Dir.cwd().realpathAlloc(allocator, util.roc_binary_path);
     defer allocator.free(roc_abs_path);
     var env_map = try util.buildIsolatedTestEnvMap(allocator, null);
     defer env_map.deinit();
 
     // Run roc from the test/fx directory with a relative path to app.roc
-    const run_result = try std.process.Child.run(.{
+    const run_result = try std.process.run(.{
         .allocator = allocator,
         .argv = &[_][]const u8{
             roc_abs_path,
@@ -1256,7 +1256,7 @@ test "fx platform inline expect fails in dev backend binary" {
     try util.checkSuccess(build_result);
 
     // Run the built binary
-    const run_result = try std.process.Child.run(.{
+    const run_result = try std.process.run(.{
         .allocator = allocator,
         .argv = &[_][]const u8{"./issue8517"},
     });

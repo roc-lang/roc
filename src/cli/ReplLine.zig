@@ -225,7 +225,7 @@ pub fn deinit(self: *ReplLine) void {
 const CommandError =
     error{ DeleteEmptyLineBuffer, NewLine, ExitRepl } ||
     Allocator.Error ||
-    std.fs.File.ReadError ||
+    std.Io.File.ReadError ||
     std.Io.Writer.Error;
 
 const CommandFn = *const fn (*LineState) CommandError!void;
@@ -236,7 +236,7 @@ const LineState = struct {
     prompt: []const u8,
     prompt_width: usize,
     out: *std.Io.Writer,
-    in: std.fs.File,
+    in: std.Io.File,
     col_offset: usize,
     line_buffer: std.ArrayList(u8),
     bytes_read: usize,
@@ -389,7 +389,7 @@ fn findCommandFn(state: *LineState) CommandFn {
 pub const ReadLineError =
     error{InvalidUtf8} ||
     Allocator.Error ||
-    std.fs.File.ReadError ||
+    std.Io.File.ReadError ||
     std.Io.Writer.Error ||
     CommandError ||
     switch (SUPPORTED_OS) {
@@ -399,9 +399,9 @@ pub const ReadLineError =
 
 /// Reads a line of input from stdin with line editing and history support.
 /// Falls back to simple line reading when stdin is not a TTY (e.g., piped input).
-pub fn readLine(self: *ReplLine, outlive: Allocator, prompt: []const u8, stdin: std.fs.File) ReadLineError![]u8 {
+pub fn readLine(self: *ReplLine, outlive: Allocator, prompt: []const u8, stdin: std.Io.File) ReadLineError![]u8 {
     var stdout_buffer: [1024]u8 = undefined;
-    var stdout_writer = std.fs.File.stdout().writerStreaming(&stdout_buffer);
+    var stdout_writer = std.Io.File.stdout().writerStreaming(&stdout_buffer);
 
     // Use simple line reading for non-TTY input (pipes, redirects, tests)
     if (!stdin.isTty()) {
@@ -412,7 +412,7 @@ pub fn readLine(self: *ReplLine, outlive: Allocator, prompt: []const u8, stdin: 
 }
 
 /// Simple line reading for non-TTY input (no raw mode, no escape sequences).
-fn readLineSimple(outlive: Allocator, prompt: []const u8, out: *std.Io.Writer, in: std.fs.File) ReadLineError![]u8 {
+fn readLineSimple(outlive: Allocator, prompt: []const u8, out: *std.Io.Writer, in: std.Io.File) ReadLineError![]u8 {
     // Print the prompt
     try out.writeAll(prompt);
     try out.flush();
@@ -442,7 +442,7 @@ fn readLineSimple(outlive: Allocator, prompt: []const u8, out: *std.Io.Writer, i
     return try line_buffer.toOwnedSlice(outlive);
 }
 
-fn helper(self: *ReplLine, outlive: Allocator, prompt: []const u8, out: *std.Io.Writer, in: std.fs.File) ![]u8 {
+fn helper(self: *ReplLine, outlive: Allocator, prompt: []const u8, out: *std.Io.Writer, in: std.Io.File) ![]u8 {
     var arena_allocator = std.heap.ArenaAllocator.init(outlive);
     defer arena_allocator.deinit();
     const temp = arena_allocator.allocator();

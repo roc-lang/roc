@@ -86,7 +86,7 @@ fn readFdInfoFromCommandLine(allocator: std.mem.Allocator) CoordinationError!FdI
 /// POSIX: Read fd and size from temporary file
 fn readFdInfoFromFile(allocator: std.mem.Allocator) CoordinationError!FdInfo {
     // Get our own executable path
-    const exe_path = std.fs.selfExePathAlloc(allocator) catch {
+    const exe_path = std.Io.Dir.selfExePathAlloc(allocator) catch {
         std.log.err("Failed to get executable path", .{});
         return error.FdInfoReadFailed;
     };
@@ -128,7 +128,7 @@ fn readFdInfoFromFile(allocator: std.mem.Allocator) CoordinationError!FdInfo {
     defer allocator.free(fd_file_path);
 
     // Read the file
-    const file = std.fs.cwd().openFile(fd_file_path, .{}) catch {
+    const file = std.Io.Dir.cwd().openFile(fd_file_path, .{}) catch {
         std.log.err("Failed to open fd file at '{s}'", .{fd_file_path});
         return error.FileNotFound;
     };
@@ -199,7 +199,7 @@ pub fn writeFdInfo(
         defer allocator.free(coord_file_path);
 
         // Write the coordination file
-        const file = std.fs.cwd().createFile(coord_file_path, .{}) catch |err| {
+        const file = std.Io.Dir.cwd().createFile(coord_file_path, .{}) catch |err| {
             std.log.err("Failed to create coordination file at '{s}': {}", .{ coord_file_path, err });
             return err;
         };

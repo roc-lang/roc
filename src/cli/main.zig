@@ -442,7 +442,7 @@ pub fn createUniqueTempDir(ctx: *CliContext) ![]const u8 {
 
     // Ensure the roc/{version} directory exists
     // makePath automatically handles PathAlreadyExists internally
-    try std.fs.cwd().makePath(version_temp_dir);
+    try std.Io.Dir.cwd().makePath(version_temp_dir);
 
     // Try to create a unique subdirectory with random suffix
     var attempt: u8 = 0;
@@ -451,7 +451,7 @@ pub fn createUniqueTempDir(ctx: *CliContext) ![]const u8 {
         const dir_path = try std.fs.path.join(ctx.arena, &.{ version_temp_dir, random_suffix });
 
         // Try to create the directory
-        std.fs.cwd().makeDir(dir_path) catch |err| switch (err) {
+        std.Io.Dir.cwd().makeDir(dir_path) catch |err| switch (err) {
             error.PathAlreadyExists => {
                 // Directory already exists, try again with a new random suffix
                 continue;
@@ -483,7 +483,7 @@ pub fn writeFdCoordinationFile(ctx: *CliContext, temp_exe_path: []const u8, shm_
     const fd_file_path = try std.fmt.allocPrint(ctx.arena, "{s}.txt", .{dir_path});
 
     // Create the file (exclusive - fail if exists to detect collisions)
-    const fd_file = std.fs.cwd().createFile(fd_file_path, .{ .exclusive = true }) catch |err| {
+    const fd_file = std.Io.Dir.cwd().createFile(fd_file_path, .{ .exclusive = true }) catch |err| {
         // Error is handled by caller with ctx.fail()
         return err;
     };
@@ -505,7 +505,7 @@ pub fn createTempDirStructure(allocs: *Allocators, exe_path: []const u8, exe_dis
 
     // Ensure the roc/{version} directory exists
     // makePath automatically handles PathAlreadyExists internally
-    try std.fs.cwd().makePath(version_temp_dir);
+    try std.Io.Dir.cwd().makePath(version_temp_dir);
 
     // Try to create a unique subdirectory with random suffix
     var attempt: u8 = 0;
@@ -517,7 +517,7 @@ pub fn createTempDirStructure(allocs: *Allocators, exe_path: []const u8, exe_dis
         const dir_name_with_txt = try std.fmt.allocPrint(allocs.arena, "{s}.txt", .{temp_dir_path});
 
         // Try to create the directory
-        std.fs.cwd().makeDir(temp_dir_path) catch |err| switch (err) {
+        std.Io.Dir.cwd().makeDir(temp_dir_path) catch |err| switch (err) {
             error.PathAlreadyExists => {
                 // Directory already exists, try again with a new random suffix
                 continue;
@@ -528,15 +528,15 @@ pub fn createTempDirStructure(allocs: *Allocators, exe_path: []const u8, exe_dis
         };
 
         // Try to create the fd file
-        const fd_file = std.fs.cwd().createFile(dir_name_with_txt, .{ .exclusive = true }) catch |err| switch (err) {
+        const fd_file = std.Io.Dir.cwd().createFile(dir_name_with_txt, .{ .exclusive = true }) catch |err| switch (err) {
             error.PathAlreadyExists => {
                 // File already exists, remove the directory and try again
-                std.fs.cwd().deleteDir(temp_dir_path) catch {};
+                std.Io.Dir.cwd().deleteDir(temp_dir_path) catch {};
                 continue;
             },
             else => {
                 // Clean up directory on other errors
-                std.fs.cwd().deleteDir(temp_dir_path) catch {};
+                std.Io.Dir.cwd().deleteDir(temp_dir_path) catch {};
                 return err;
             },
         };
@@ -559,7 +559,7 @@ pub fn createTempDirStructure(allocs: *Allocators, exe_path: []const u8, exe_dis
         createHardlink(allocs, exe_path, temp_exe_path) catch {
             // If hardlinking fails for any reason, fall back to copying
             // Common reasons: cross-device link, permissions, file already exists
-            try std.fs.cwd().copyFile(exe_path, std.fs.cwd(), temp_exe_path, .{});
+            try std.Io.Dir.cwd().copyFile(exe_path, std.Io.Dir.cwd(), temp_exe_path, .{});
         };
 
         return temp_exe_path;
@@ -697,9 +697,9 @@ fn mainArgs(allocs: *Allocators, args: []const []const u8) !void {
     try switch (parsed_args) {
         .run => |run_args| {
             if (std.mem.eql(u8, run_args.path, "main.roc")) {
-                std.fs.cwd().access(run_args.path, .{}) catch |err| switch (err) {
+                std.Io.Dir.cwd().access(run_args.path, .{}) catch |err| switch (err) {
                     error.FileNotFound => {
-                        const cwd_path = std.fs.cwd().realpathAlloc(allocs.arena, ".") catch |real_err| {
+                        const cwd_path = std.Io.Dir.cwd().realpathAlloc(allocs.arena, ".") catch |real_err| {
                             ctx.io.stderr().print(
                                 "Error: No app file specified and default 'main.roc' was not found. Additionally, the current directory could not be resolved: {}\n",
                                 .{real_err},
@@ -879,7 +879,7 @@ fn generatePlatformHostShim(
     defer ctx.gpa.free(bitcode);
 
     // Write bitcode to file
-    const bc_file = std.fs.cwd().createFile(bitcode_path, .{}) catch |err| {
+    const bc_file = std.Io.Dir.cwd().createFile(bitcode_path, .{}) catch |err| {
         return ctx.fail(.{ .file_write_failed = .{ .path = bitcode_path, .err = err } });
     };
     defer bc_file.close();
@@ -916,7 +916,7 @@ fn generatePlatformHostShim(
 fn ensureCompilerCacheDirExists(path: []const u8) !void {
     // This helper is only for compiler-owned internal cache directories.
     // User-facing output paths should still fail normally if the parent directory is missing.
-    std.fs.cwd().makePath(path) catch |err| switch (err) {
+    std.Io.Dir.cwd().makePath(path) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
     };
@@ -1118,7 +1118,7 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
 
     // Check if the interpreter executable already exists in cache
     const cache_exists = if (args.no_cache) false else blk: {
-        std.fs.accessAbsolute(exe_cache_path, .{}) catch {
+        std.Io.Dir.accessAbsolute(exe_cache_path, .{}) catch {
             break :blk false;
         };
         break :blk true;
@@ -1130,7 +1130,7 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
         createHardlink(ctx, exe_cache_path, exe_path) catch |err| {
             // If hardlinking fails, fall back to copying
             std.log.debug("Hardlink from cache failed, copying: {}", .{err});
-            std.fs.cwd().copyFile(exe_cache_path, std.fs.cwd(), exe_path, .{}) catch |copy_err| {
+            std.Io.Dir.cwd().copyFile(exe_cache_path, std.Io.Dir.cwd(), exe_path, .{}) catch |copy_err| {
                 return ctx.fail(.{ .file_write_failed = .{
                     .path = exe_path,
                     .err = copy_err,
@@ -1257,14 +1257,14 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
         // After building, hardlink to cache for future runs
         // Force-hardlink (delete existing first) since hash collision means identical content
         std.log.debug("Caching executable to: {s}", .{exe_cache_path});
-        std.fs.cwd().deleteFile(exe_cache_path) catch |err| switch (err) {
+        std.Io.Dir.cwd().deleteFile(exe_cache_path) catch |err| switch (err) {
             error.FileNotFound => {}, // OK, doesn't exist
             else => std.log.debug("Could not delete existing cache file: {}", .{err}),
         };
         createHardlink(ctx, exe_path, exe_cache_path) catch |err| {
             // If hardlinking fails, fall back to copying
             std.log.debug("Hardlink to cache failed, copying: {}", .{err});
-            std.fs.cwd().copyFile(exe_path, std.fs.cwd(), exe_cache_path, .{}) catch |copy_err| {
+            std.Io.Dir.cwd().copyFile(exe_path, std.Io.Dir.cwd(), exe_cache_path, .{}) catch |copy_err| {
                 // Non-fatal - just means future runs won't be cached
                 std.log.debug("Failed to copy to cache: {}", .{copy_err});
             };
@@ -1317,7 +1317,7 @@ fn classifyNativeRunTermination(term: std.process.Child.Term, warning_count: usi
 /// Returns null if the file is not a default_app.
 fn readDefaultAppSource(ctx: *CliContext, file_path: []const u8) ?[]const u8 {
     const max_source_size = 256 * 1024 * 1024; // 256 MB
-    const source = std.fs.cwd().readFileAlloc(ctx.gpa, file_path, max_source_size) catch return null;
+    const source = std.Io.Dir.cwd().readFileAlloc(ctx.gpa, file_path, max_source_size) catch return null;
 
     const module_name = base.module_path.getModuleNameAlloc(ctx.arena, file_path) catch {
         ctx.gpa.free(source);
@@ -1488,7 +1488,7 @@ fn runWithWindowsHandleInheritance(ctx: *CliContext, exe_path: []const u8, shm_h
         } }),
     };
 
-    const cwd = std.fs.cwd().realpathAlloc(ctx.arena, ".") catch {
+    const cwd = std.Io.Dir.cwd().realpathAlloc(ctx.arena, ".") catch {
         return ctx.fail(.{ .directory_not_found = .{
             .path = ".",
         } });
@@ -1680,7 +1680,7 @@ fn runWithPosixFdInheritance(ctx: *CliContext, exe_path: []const u8, shm_handle:
 
     // Run the interpreter as a child process from the temp directory
     var child = std.process.Child.init(argv, ctx.gpa);
-    child.cwd = std.fs.cwd().realpathAlloc(ctx.arena, ".") catch {
+    child.cwd = std.Io.Dir.cwd().realpathAlloc(ctx.arena, ".") catch {
         return ctx.fail(.{ .directory_not_found = .{
             .path = ".",
         } });
@@ -2083,7 +2083,7 @@ pub fn resolvePlatformPaths(ctx: *CliContext, roc_file_path: []const u8) CliErro
 /// Takes a CliContext which provides allocators and error reporting.
 fn extractPlatformSpecFromApp(ctx: *CliContext, app_file_path: []const u8) ![]const u8 {
     // Read the app file
-    var source = std.fs.cwd().readFileAlloc(ctx.gpa, app_file_path, std.math.maxInt(usize)) catch |err| {
+    var source = std.Io.Dir.cwd().readFileAlloc(ctx.gpa, app_file_path, std.math.maxInt(usize)) catch |err| {
         return ctx.fail(switch (err) {
             error.FileNotFound => .{ .file_not_found = .{
                 .path = app_file_path,
@@ -2214,7 +2214,7 @@ fn resolvePlatformSpecToPaths(ctx: *CliContext, platform_spec: []const u8, base_
         } });
     };
 
-    std.fs.cwd().access(resolved_path, .{}) catch {
+    std.Io.Dir.cwd().access(resolved_path, .{}) catch {
         return ctx.fail(.{ .platform_not_found = .{
             .app_path = base_dir,
             .platform_path = resolved_path,
@@ -2295,7 +2295,7 @@ fn resolveUrlBundle(ctx: *CliContext, url: []const u8) (CliError || error{OutOfM
 
     // 3. Check if already cached
     const already_cached = blk: {
-        var d = std.fs.cwd().openDir(package_dir_path, .{}) catch |err| switch (err) {
+        var d = std.Io.Dir.cwd().openDir(package_dir_path, .{}) catch |err| switch (err) {
             error.FileNotFound => break :blk false,
             else => return ctx.fail(.{ .directory_not_found = .{ .path = package_dir_path } }),
         };
@@ -2316,7 +2316,7 @@ fn resolveUrlBundle(ctx: *CliContext, url: []const u8) (CliError || error{OutOfM
         };
 
         // Create package directory
-        std.fs.cwd().makeDir(package_dir_path) catch |make_err| switch (make_err) {
+        std.Io.Dir.cwd().makeDir(package_dir_path) catch |make_err| switch (make_err) {
             error.PathAlreadyExists => {}, // Race condition, another process created it
             else => {
                 return ctx.fail(.{ .directory_create_failed = .{
@@ -2329,7 +2329,7 @@ fn resolveUrlBundle(ctx: *CliContext, url: []const u8) (CliError || error{OutOfM
         // Download and extract (path-based, no Dir handle needed)
         var gpa_copy = ctx.gpa;
         download.downloadAndExtract(&gpa_copy, url, package_dir_path) catch |download_err| {
-            std.fs.cwd().deleteTree(package_dir_path) catch {};
+            std.Io.Dir.cwd().deleteTree(package_dir_path) catch {};
             return ctx.fail(.{ .download_failed = .{
                 .url = url,
                 .err = download_err,
@@ -2341,7 +2341,7 @@ fn resolveUrlBundle(ctx: *CliContext, url: []const u8) (CliError || error{OutOfM
 
     // Bundles must have a main.roc entry point
     const source_path = try std.fs.path.join(ctx.arena, &.{ package_dir_path, "main.roc" });
-    std.fs.cwd().access(source_path, .{}) catch {
+    std.Io.Dir.cwd().access(source_path, .{}) catch {
         return ctx.fail(.{ .platform_source_not_found = .{
             .platform_path = package_dir_path,
             .searched_paths = &.{source_path},
@@ -2356,6 +2356,88 @@ fn resolveUrlBundle(ctx: *CliContext, url: []const u8) (CliError || error{OutOfM
 fn resolveUrlPlatform(ctx: *CliContext, url: []const u8) (CliError || error{OutOfMemory})!PlatformPaths {
     const source_path = try resolveUrlBundle(ctx, url);
     return PlatformPaths{ .platform_source_path = source_path };
+
+/// Extract all entrypoint names from platform header provides record into ArrayList
+/// TODO: Replace this with proper BuildEnv solution in the future
+fn extractEntrypointsFromPlatform(ctx: *CliContext, roc_file_path: []const u8, entrypoints: *std.array_list.Managed([]const u8)) !void {
+    // Read the Roc file
+    var source = std.Io.Dir.cwd().readFileAlloc(ctx.gpa, roc_file_path, std.math.maxInt(usize)) catch return error.NoPlatformFound;
+    source = base.source_utils.normalizeLineEndingsRealloc(ctx.gpa, source) catch |err| {
+        ctx.gpa.free(source);
+        return err;
+    };
+    defer ctx.gpa.free(source);
+
+    // Extract module name from the file path (strip .roc extension)
+    const module_name = try base.module_path.getModuleNameAlloc(ctx.arena, roc_file_path);
+
+    // Create ModuleEnv
+    var env = ModuleEnv.init(ctx.gpa, source) catch return error.ParseFailed;
+    defer env.deinit();
+
+    env.common.source = source;
+    env.module_name = module_name;
+    try env.common.calcLineStarts(ctx.gpa);
+
+    // Parse the source code as a full module
+    var allocators2: Allocators = undefined;
+    allocators2.initInPlace(ctx.gpa);
+    defer allocators2.deinit();
+
+    const parse_ast = parse.parse(&allocators2, &env.common) catch return error.ParseFailed;
+    defer parse_ast.deinit();
+
+    // Look for platform header in the AST
+    const file_node = parse_ast.store.getFile();
+    const header = parse_ast.store.getHeader(file_node.header);
+
+    // Check if this is a platform file with a platform header
+    switch (header) {
+        .platform => |platform_header| {
+            // Get the provides collection and its record fields
+            const provides_coll = parse_ast.store.getCollection(platform_header.provides);
+            const provides_fields = parse_ast.store.recordFieldSlice(.{ .span = provides_coll.span });
+
+            // Extract FFI symbol names from provides clause
+            // Format: `provides { roc_identifier: "ffi_symbol_name" }`
+            // The string value specifies the symbol name exported to the host (becomes roc__<symbol>)
+            for (provides_fields) |field_idx| {
+                const field = parse_ast.store.getRecordField(field_idx);
+
+                // Require explicit string value for symbol name
+                const symbol_name = if (field.value) |value_idx| blk: {
+                    const value_expr = parse_ast.store.getExpr(value_idx);
+                    switch (value_expr) {
+                        .string => |str_like| {
+                            const parts = parse_ast.store.exprSlice(str_like.parts);
+                            if (parts.len > 0) {
+                                const first_part = parse_ast.store.getExpr(parts[0]);
+                                switch (first_part) {
+                                    .string_part => |sp| break :blk parse_ast.resolve(sp.token),
+                                    else => {},
+                                }
+                            }
+                            return error.InvalidProvidesEntry;
+                        },
+                        .string_part => |str_part| break :blk parse_ast.resolve(str_part.token),
+                        else => {
+                            return error.InvalidProvidesEntry;
+                        },
+                    }
+                } else {
+                    return error.InvalidProvidesEntry;
+                };
+                try entrypoints.append(try ctx.arena.dupe(u8, symbol_name));
+            }
+
+            if (provides_fields.len == 0) {
+                return error.NoEntrypointFound;
+            }
+        },
+        else => {
+            return error.NotPlatformFile;
+        },
+    }
 }
 
 /// Extract the embedded roc_shim library to the specified path for the given target.
@@ -2365,7 +2447,7 @@ fn resolveUrlPlatform(ctx: *CliContext, url: []const u8) (CliError || error{OutO
 pub fn extractReadRocFilePathShimLibrary(_: *CliContext, output_path: []const u8, target: ?RocTarget) !void {
     if (builtin.is_test) {
         // In test mode, create an empty file to avoid embedding issues
-        const shim_file = try std.fs.cwd().createFile(output_path, .{});
+        const shim_file = try std.Io.Dir.cwd().createFile(output_path, .{});
         defer shim_file.close();
         return;
     }
@@ -2377,7 +2459,7 @@ pub fn extractReadRocFilePathShimLibrary(_: *CliContext, output_path: []const u8
         ShimLibraries.native;
 
     // Write the embedded shim library to the output path
-    const shim_file = try std.fs.cwd().createFile(output_path, .{});
+    const shim_file = try std.Io.Dir.cwd().createFile(output_path, .{});
     defer shim_file.close();
 
     try shim_file.writeAll(shim_data);
@@ -2450,7 +2532,7 @@ fn discoverAndAddBundleModules(
     stderr: anytype,
 ) !void {
     // Resolve the entry point to an absolute path
-    const abs_entry = std.fs.cwd().realpathAlloc(ctx.gpa, first_roc_file) catch |err| {
+    const abs_entry = std.Io.Dir.cwd().realpathAlloc(ctx.gpa, first_roc_file) catch |err| {
         try stderr.print("Error: Could not resolve path '{s}': {}\n", .{ first_roc_file, err });
         return err;
     };
@@ -2492,7 +2574,7 @@ fn discoverAndAddBundleModules(
     defer bundled_set.deinit();
 
     for (file_paths.items) |rel_path| {
-        const abs_path = std.fs.cwd().realpathAlloc(ctx.gpa, rel_path) catch continue;
+        const abs_path = std.Io.Dir.cwd().realpathAlloc(ctx.gpa, rel_path) catch continue;
         defer ctx.gpa.free(abs_path);
         try bundled_set.put(try ctx.arena.dupe(u8, abs_path), {});
     }
@@ -2616,7 +2698,7 @@ pub fn rocBundle(ctx: *CliContext, args: cli_args.BundleArgs) !void {
     const start_time = std.time.nanoTimestamp();
 
     // Get current working directory
-    const cwd = std.fs.cwd();
+    const cwd = std.Io.Dir.cwd();
 
     // Determine output directory
     var output_dir = if (args.output_dir) |dir|
@@ -2626,10 +2708,10 @@ pub fn rocBundle(ctx: *CliContext, args: cli_args.BundleArgs) !void {
     defer if (args.output_dir != null) output_dir.close();
 
     // Create a temporary directory for the output file
-    var tmp_dir = try std.fs.cwd().makeOpenPath(".roc_bundle_tmp", .{});
+    var tmp_dir = try std.Io.Dir.cwd().makeOpenPath(".roc_bundle_tmp", .{});
     defer {
         tmp_dir.close();
-        std.fs.cwd().deleteTree(".roc_bundle_tmp") catch {};
+        std.Io.Dir.cwd().deleteTree(".roc_bundle_tmp") catch {};
     }
 
     // Collect all files to bundle
@@ -2828,7 +2910,7 @@ pub fn rocBundle(ctx: *CliContext, args: cli_args.BundleArgs) !void {
     const compressed_size = compressed_stat.size;
 
     // Move the temp file to the final location
-    try std.fs.rename(tmp_dir, temp_filename, output_dir, final_filename);
+    try std.Io.Dir.rename(tmp_dir, temp_filename, output_dir, final_filename);
 
     // Calculate elapsed time
     const end_time = std.time.nanoTimestamp();
@@ -2853,7 +2935,7 @@ pub fn rocBundle(ctx: *CliContext, args: cli_args.BundleArgs) !void {
 fn rocUnbundle(ctx: *CliContext, args: cli_args.UnbundleArgs) !void {
     const stdout = ctx.io.stdout();
     const stderr = ctx.io.stderr();
-    const cwd = std.fs.cwd();
+    const cwd = std.Io.Dir.cwd();
 
     var had_errors = false;
 
@@ -3310,7 +3392,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         switch (item) {
             .file_path => |path| {
                 const full_path = try std.fs.path.join(ctx.arena, &.{ platform_dir, files_dir, target_name, path });
-                std.fs.cwd().access(full_path, .{}) catch {
+                std.Io.Dir.cwd().access(full_path, .{}) catch {
                     renderValidationError(ctx.gpa, .{ .missing_target_file = .{
                         .target = target,
                         .link_type = link_type,
@@ -3630,7 +3712,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         switch (item) {
             .file_path => |path| {
                 const full_path = try std.fs.path.join(ctx.arena, &.{ platform_dir, files_dir, target_name, path });
-                std.fs.cwd().access(full_path, .{}) catch {
+                std.Io.Dir.cwd().access(full_path, .{}) catch {
                     renderValidationError(ctx.gpa, .{ .missing_target_file = .{
                         .target = target,
                         .link_type = link_type,
@@ -3652,7 +3734,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
 
     const shim_filename = try std.fmt.allocPrint(ctx.arena, "libroc_interpreter_shim_{s}.a", .{target_name});
     const shim_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, shim_filename });
-    std.fs.cwd().access(shim_path, .{}) catch {
+    std.Io.Dir.cwd().access(shim_path, .{}) catch {
         extractReadRocFilePathShimLibrary(ctx, shim_path, target) catch |err| {
             return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
         };
@@ -3758,7 +3840,7 @@ fn dumpLinkerInputs(ctx: *CliContext, link_config: linker.LinkConfig) !void {
     const dir_name = try std.fmt.allocPrint(ctx.arena, "roc-linker-debug-{d}", .{timestamp});
     const dump_dir = try std.fs.path.join(ctx.arena, &.{ "/tmp", dir_name });
 
-    std.fs.cwd().makePath(dump_dir) catch |err| {
+    std.Io.Dir.cwd().makePath(dump_dir) catch |err| {
         try stderr.print("Failed to create debug dump directory '{s}': {}\n", .{ dump_dir, err });
         return err;
     };
@@ -3771,7 +3853,7 @@ fn dumpLinkerInputs(ctx: *CliContext, link_config: linker.LinkConfig) !void {
         const basename = std.fs.path.basename(src);
         const dest_name = try std.fmt.allocPrint(ctx.arena, "pre_{d}_{s}", .{ i, basename });
         const dest_path = try std.fs.path.join(ctx.arena, &.{ dump_dir, dest_name });
-        std.fs.cwd().copyFile(src, std.fs.cwd(), dest_path, .{}) catch |err| {
+        std.Io.Dir.cwd().copyFile(src, std.Io.Dir.cwd(), dest_path, .{}) catch |err| {
             try stderr.print("Warning: Failed to copy '{s}': {}\n", .{ src, err });
             continue;
         };
@@ -3783,7 +3865,7 @@ fn dumpLinkerInputs(ctx: *CliContext, link_config: linker.LinkConfig) !void {
         const basename = std.fs.path.basename(src);
         const dest_name = try std.fmt.allocPrint(ctx.arena, "obj_{d}_{s}", .{ i, basename });
         const dest_path = try std.fs.path.join(ctx.arena, &.{ dump_dir, dest_name });
-        std.fs.cwd().copyFile(src, std.fs.cwd(), dest_path, .{}) catch |err| {
+        std.Io.Dir.cwd().copyFile(src, std.Io.Dir.cwd(), dest_path, .{}) catch |err| {
             try stderr.print("Warning: Failed to copy '{s}': {}\n", .{ src, err });
             continue;
         };
@@ -3795,7 +3877,7 @@ fn dumpLinkerInputs(ctx: *CliContext, link_config: linker.LinkConfig) !void {
         const basename = std.fs.path.basename(src);
         const dest_name = try std.fmt.allocPrint(ctx.arena, "post_{d}_{s}", .{ i, basename });
         const dest_path = try std.fs.path.join(ctx.arena, &.{ dump_dir, dest_name });
-        std.fs.cwd().copyFile(src, std.fs.cwd(), dest_path, .{}) catch |err| {
+        std.Io.Dir.cwd().copyFile(src, std.Io.Dir.cwd(), dest_path, .{}) catch |err| {
             try stderr.print("Warning: Failed to copy '{s}': {}\n", .{ src, err });
             continue;
         };
@@ -3845,7 +3927,7 @@ fn dumpLinkerInputs(ctx: *CliContext, link_config: linker.LinkConfig) !void {
     });
 
     const readme_path = try std.fs.path.join(ctx.arena, &.{ dump_dir, "README.txt" });
-    const readme_file = std.fs.cwd().createFile(readme_path, .{}) catch |err| {
+    const readme_file = std.Io.Dir.cwd().createFile(readme_path, .{}) catch |err| {
         try stderr.print("Warning: Failed to create README.txt: {}\n", .{err});
         return;
     };
@@ -4510,7 +4592,7 @@ fn rocGlue(ctx: *CliContext, args: cli_args.GlueArgs) glue.GlueError!void {
     const temp_dir = createUniqueTempDir(ctx) catch {
         return error.TempDirCreation;
     };
-    defer std.fs.cwd().deleteTree(temp_dir) catch {};
+    defer std.Io.Dir.cwd().deleteTree(temp_dir) catch {};
     return glue.rocGlue(ctx.gpa, ctx.io.stderr(), ctx.io.stdout(), .{
         .glue_spec = args.glue_spec,
         .output_dir = args.output_dir,
@@ -4541,7 +4623,7 @@ fn rocFormat(ctx: *CliContext, args: cli_args.FormatArgs) !void {
         defer unformatted_files.deinit(ctx.gpa);
 
         for (args.paths) |path| {
-            var result = try fmt.formatPath(ctx.gpa, ctx.arena, std.fs.cwd(), path, true);
+            var result = try fmt.formatPath(ctx.gpa, ctx.arena, std.Io.Dir.cwd(), path, true);
             defer result.deinit();
             if (result.unformatted_files) |files| {
                 try unformatted_files.appendSlice(ctx.gpa, files.items);
@@ -4567,7 +4649,7 @@ fn rocFormat(ctx: *CliContext, args: cli_args.FormatArgs) !void {
     } else {
         var success_count: usize = 0;
         for (args.paths) |path| {
-            const result = try fmt.formatPath(ctx.gpa, ctx.arena, std.fs.cwd(), path, false);
+            const result = try fmt.formatPath(ctx.gpa, ctx.arena, std.Io.Dir.cwd(), path, false);
             success_count += result.success;
             failure_count += result.failure;
         }
@@ -4688,7 +4770,7 @@ const DrainedReport = struct {
 const CheckTimingInfo = if (builtin.target.cpu.arch == .wasm32) struct {} else TimingInfo;
 
 /// Error set for BuildEnv.build operations
-const BuildAppError = std.mem.Allocator.Error || std.fs.File.OpenError || std.fs.File.ReadError || std.fs.File.WriteError || std.Thread.SpawnError || error{
+const BuildAppError = std.mem.Allocator.Error || std.Io.File.OpenError || std.Io.File.ReadError || std.Io.File.WriteError || std.Thread.SpawnError || error{
     // Custom BuildEnv errors
     ExpectedAppHeader,
     ExpectedPlatformString,
@@ -5219,7 +5301,7 @@ fn handleConnection(ctx: *CliContext, connection: std.net.Server.Connection, doc
     const file_path = try resolveFilePath(ctx, docs_dir, path);
 
     // Try to open and serve the file
-    const file = std.fs.cwd().openFile(file_path, .{}) catch |err| {
+    const file = std.Io.Dir.cwd().openFile(file_path, .{}) catch |err| {
         switch (err) {
             error.FileNotFound => try sendResponse(connection.stream, "404 Not Found", "text/plain", "File Not Found"),
             else => try sendResponse(connection.stream, "500 Internal Server Error", "text/plain", "Internal Server Error"),
@@ -5469,7 +5551,7 @@ fn generateDocs(
     try std.fs.cwd().deleteTree(base_output_dir);
 
     // Create output directory
-    std.fs.cwd().makePath(base_output_dir) catch |err| switch (err) {
+    std.Io.Dir.cwd().makePath(base_output_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
     };

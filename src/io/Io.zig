@@ -377,7 +377,7 @@ pub fn testing() Self {
 // --- OS implementations ---
 const OsImpl = if (is_freestanding) struct {} else struct {
     fn osReadFile(_: ?*anyopaque, path: []const u8, allocator: Allocator) ReadError![]u8 {
-        const file = std.fs.cwd().openFile(path, .{}) catch |err| return switch (err) {
+        const file = std.Io.Dir.cwd().openFile(path, .{}) catch |err| return switch (err) {
             error.FileNotFound => error.FileNotFound,
             error.AccessDenied => error.AccessDenied,
             else => error.IoError,
@@ -429,7 +429,7 @@ const OsImpl = if (is_freestanding) struct {} else struct {
     }
 
     fn osListDir(_: ?*anyopaque, path: []const u8, allocator: Allocator) ListError![]FileEntry {
-        var dir = std.fs.cwd().openDir(path, .{ .iterate = true }) catch |err| return switch (err) {
+        var dir = std.Io.Dir.cwd().openDir(path, .{ .iterate = true }) catch |err| return switch (err) {
             error.FileNotFound => error.FileNotFound,
             error.AccessDenied => error.AccessDenied,
             else => error.IoError,
@@ -476,7 +476,7 @@ const OsImpl = if (is_freestanding) struct {} else struct {
     }
 
     fn osCanonicalize(_: ?*anyopaque, path: []const u8, allocator: Allocator) CanonicalizeError![]const u8 {
-        return std.fs.realpathAlloc(allocator, path) catch |err| return switch (err) {
+        return std.Io.Dir.realpathAlloc(allocator, path) catch |err| return switch (err) {
             error.FileNotFound => error.FileNotFound,
             error.AccessDenied => error.AccessDenied,
             error.OutOfMemory => error.OutOfMemory,
@@ -485,14 +485,14 @@ const OsImpl = if (is_freestanding) struct {} else struct {
     }
 
     fn osMakePath(_: ?*anyopaque, path: []const u8) MakePathError!void {
-        std.fs.cwd().makePath(path) catch |err| return switch (err) {
+        std.Io.Dir.cwd().makePath(path) catch |err| return switch (err) {
             error.AccessDenied => error.AccessDenied,
             else => error.IoError,
         };
     }
 
     fn osRename(_: ?*anyopaque, old_path: []const u8, new_path: []const u8) RenameError!void {
-        std.fs.cwd().rename(old_path, new_path) catch |err| return switch (err) {
+        std.Io.Dir.cwd().rename(old_path, new_path) catch |err| return switch (err) {
             error.FileNotFound => error.FileNotFound,
             error.AccessDenied => error.AccessDenied,
             else => error.IoError,
@@ -515,28 +515,28 @@ const OsImpl = if (is_freestanding) struct {} else struct {
     }
 
     fn osWriteStdout(_: ?*anyopaque, data: []const u8) StdioError!void {
-        std.fs.File.stdout().writeAll(data) catch |err| return switch (err) {
+        std.Io.File.stdout().writeAll(data) catch |err| return switch (err) {
             error.BrokenPipe => error.BrokenPipe,
             else => error.IoError,
         };
     }
 
     fn osWriteStderr(_: ?*anyopaque, data: []const u8) StdioError!void {
-        std.fs.File.stderr().writeAll(data) catch |err| return switch (err) {
+        std.Io.File.stderr().writeAll(data) catch |err| return switch (err) {
             error.BrokenPipe => error.BrokenPipe,
             else => error.IoError,
         };
     }
 
     fn osReadStdin(_: ?*anyopaque, buf: []u8) StdioError!usize {
-        return std.fs.File.stdin().read(buf) catch |err| return switch (err) {
+        return std.Io.File.stdin().read(buf) catch |err| return switch (err) {
             error.BrokenPipe => error.BrokenPipe,
             else => error.IoError,
         };
     }
 
     fn osIsTty(_: ?*anyopaque) bool {
-        return std.fs.File.stdout().isTty();
+        return std.Io.File.stdout().isTty();
     }
 };
 

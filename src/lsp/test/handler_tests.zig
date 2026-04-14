@@ -8,7 +8,7 @@ const transport_module = @import("../transport.zig");
 /// Get the path to the test platform for creating valid Roc files
 fn platformPath(allocator: std.mem.Allocator) ![]u8 {
     // Resolve from repo root to ensure absolute path
-    const repo_root = try std.fs.cwd().realpathAlloc(allocator, ".");
+    const repo_root = try std.Io.Dir.cwd().realpathAlloc(allocator, ".");
     defer allocator.free(repo_root);
     const path = try std.fs.path.join(allocator, &.{ repo_root, "test", "str", "platform", "main.roc" });
     // Convert backslashes to forward slashes for cross-platform Roc source compatibility
@@ -32,7 +32,7 @@ fn collectResponses(allocator: std.mem.Allocator, bytes: []const u8) ![][]u8 {
     const WriterType = @TypeOf(sink.writer());
     var transport = transport_module.Transport(ReaderType, WriterType).init(allocator, reader.reader(), sink.writer(), null);
 
-    var responses = std.ArrayList([]u8){};
+    var responses : std.ArrayList([]u8) = .empty;
     errdefer {
         for (responses.items) |body| allocator.free(body);
         responses.deinit(allocator);
@@ -118,7 +118,7 @@ test "formatting handler formats simple expression" {
     const exit_msg = try frame(allocator, exit_body);
     defer allocator.free(exit_msg);
 
-    var builder = std.ArrayList(u8){};
+    var builder : std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);
@@ -226,7 +226,7 @@ test "document symbol handler extracts function declarations" {
     const exit_msg = try frame(allocator, exit_body);
     defer allocator.free(exit_msg);
 
-    var builder = std.ArrayList(u8){};
+    var builder : std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);
@@ -325,7 +325,7 @@ test "document symbol handler returns empty for empty document" {
     const exit_msg = try frame(allocator, exit_body);
     defer allocator.free(exit_msg);
 
-    var builder = std.ArrayList(u8){};
+    var builder : std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);
@@ -421,7 +421,7 @@ test "folding range handler finds bracket ranges" {
     const exit_msg = try frame(allocator, exit_body);
     defer allocator.free(exit_msg);
 
-    var builder = std.ArrayList(u8){};
+    var builder : std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);
@@ -521,7 +521,7 @@ test "selection range handler returns range hierarchy" {
     const exit_msg = try frame(allocator, exit_body);
     defer allocator.free(exit_msg);
 
-    var builder = std.ArrayList(u8){};
+    var builder : std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);
@@ -633,7 +633,7 @@ test "document highlight handler finds variable occurrences" {
     const exit_msg = try frame(allocator, exit_body);
     defer allocator.free(exit_msg);
 
-    var builder = std.ArrayList(u8){};
+    var builder : std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);
@@ -731,7 +731,7 @@ test "document highlight handler returns empty for non-identifier" {
     const exit_msg = try frame(allocator, exit_body);
     defer allocator.free(exit_msg);
 
-    var builder = std.ArrayList(u8){};
+    var builder : std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);
@@ -829,7 +829,7 @@ test "definition handler finds local variable definition" {
     const exit_msg = try frame(allocator, exit_body);
     defer allocator.free(exit_msg);
 
-    var builder = std.ArrayList(u8){};
+    var builder : std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);
@@ -938,7 +938,7 @@ test "definition handler returns null for undefined symbol" {
     const exit_msg = try frame(allocator, exit_body);
     defer allocator.free(exit_msg);
 
-    var builder = std.ArrayList(u8){};
+    var builder : std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);
@@ -1036,7 +1036,7 @@ test "hover handler returns type info for type annotation" {
     const exit_msg = try frame(allocator, exit_body);
     defer allocator.free(exit_msg);
 
-    var builder = std.ArrayList(u8){};
+    var builder : std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);
@@ -1138,7 +1138,7 @@ test "definition handler navigates to builtin type from type annotation" {
     const exit_msg = try frame(allocator, exit_body);
     defer allocator.free(exit_msg);
 
-    var builder = std.ArrayList(u8){};
+    var builder : std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);
@@ -1256,7 +1256,7 @@ test "document symbols works after goto definition (regression test)" {
     const exit_msg = try frame(allocator, exit_body);
     defer allocator.free(exit_msg);
 
-    var builder = std.ArrayList(u8){};
+    var builder : std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);
@@ -1382,7 +1382,7 @@ test "multiple goto definition calls don't break document symbols" {
     const exit_msg = try frame(allocator, exit_body);
     defer allocator.free(exit_msg);
 
-    var builder = std.ArrayList(u8){};
+    var builder : std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);
@@ -1485,7 +1485,7 @@ test "document symbol handler returns symbols with correct names" {
     defer allocator.free(initialized_msg);
 
     // Escape the source for JSON
-    var escaped_source = std.ArrayList(u8){};
+    var escaped_source : std.ArrayList(u8) = .empty;
     defer escaped_source.deinit(allocator);
     for (roc_source) |c| {
         switch (c) {
@@ -1524,7 +1524,7 @@ test "document symbol handler returns symbols with correct names" {
     const exit_msg = try frame(allocator, exit_body);
     defer allocator.free(exit_msg);
 
-    var builder = std.ArrayList(u8){};
+    var builder : std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);
@@ -1628,7 +1628,7 @@ test "document symbol handler works independently of check" {
     defer allocator.free(initialized_msg);
 
     // Escape the source for JSON
-    var escaped_source = std.ArrayList(u8){};
+    var escaped_source : std.ArrayList(u8) = .empty;
     defer escaped_source.deinit(allocator);
     for (roc_source) |c| {
         switch (c) {
@@ -1669,7 +1669,7 @@ test "document symbol handler works independently of check" {
     const exit_msg = try frame(allocator, exit_body);
     defer allocator.free(exit_msg);
 
-    var builder = std.ArrayList(u8){};
+    var builder : std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);
@@ -1776,7 +1776,7 @@ test "completion handler returns module definitions" {
     const exit_msg = try frame(allocator, exit_body);
     defer allocator.free(exit_msg);
 
-    var builder = std.ArrayList(u8){};
+    var builder : std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);
@@ -1886,7 +1886,7 @@ test "completion handler returns module members after dot" {
     const exit_msg = try frame(allocator, exit_body);
     defer allocator.free(exit_msg);
 
-    var builder = std.ArrayList(u8){};
+    var builder : std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);
@@ -1997,7 +1997,7 @@ test "completion handler returns module names in expression context" {
     const exit_msg = try frame(allocator, exit_body);
     defer allocator.free(exit_msg);
 
-    var builder = std.ArrayList(u8){};
+    var builder : std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);
@@ -2114,7 +2114,7 @@ test "completion handler returns types after colon" {
     const exit_msg = try frame(allocator, exit_body);
     defer allocator.free(exit_msg);
 
-    var builder = std.ArrayList(u8){};
+    var builder : std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);
@@ -2235,7 +2235,7 @@ test "completion handler returns List module members after List dot" {
     const exit_msg = try frame(allocator, exit_body);
     defer allocator.free(exit_msg);
 
-    var builder = std.ArrayList(u8){};
+    var builder : std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);
@@ -2352,7 +2352,7 @@ test "completion handler returns local variables in block scope" {
     const exit_msg = try frame(allocator, exit_body);
     defer allocator.free(exit_msg);
 
-    var builder = std.ArrayList(u8){};
+    var builder : std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);
@@ -2454,7 +2454,7 @@ test "completion handler returns lambda parameters" {
     const exit_msg = try frame(allocator, exit_body);
     defer allocator.free(exit_msg);
 
-    var builder = std.ArrayList(u8){};
+    var builder : std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);
@@ -2555,7 +2555,7 @@ test "completion handler returns top-level definitions" {
     const exit_msg = try frame(allocator, exit_body);
     defer allocator.free(exit_msg);
 
-    var builder = std.ArrayList(u8){};
+    var builder : std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);
@@ -2656,7 +2656,7 @@ test "completion handler returns record fields after dot" {
     const exit_msg = try frame(allocator, exit_body);
     defer allocator.free(exit_msg);
 
-    var builder = std.ArrayList(u8){};
+    var builder : std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);

@@ -12,7 +12,7 @@ pub fn Transport(comptime ReaderType: type, comptime WriterType: type) type {
         allocator: std.mem.Allocator,
         reader: ReaderType,
         writer: WriterType,
-        log_file: ?std.fs.File = null,
+        log_file: ?std.Io.File = null,
 
         pub const ReadMessageError = ReaderError || std.mem.Allocator.Error || error{
             EndOfStream,
@@ -27,7 +27,7 @@ pub fn Transport(comptime ReaderType: type, comptime WriterType: type) type {
         const max_header_line = 8 * 1024;
         const max_payload_size: usize = 16 * 1024 * 1024;
 
-        pub fn init(allocator: std.mem.Allocator, reader: ReaderType, writer: WriterType, log_file: ?std.fs.File) Self {
+        pub fn init(allocator: std.mem.Allocator, reader: ReaderType, writer: WriterType, log_file: ?std.Io.File) Self {
             return .{
                 .allocator = allocator,
                 .reader = reader,
@@ -44,7 +44,7 @@ pub fn Transport(comptime ReaderType: type, comptime WriterType: type) type {
         }
 
         pub fn readMessage(self: *Self) ReadMessageError![]u8 {
-            var line_buffer = std.ArrayList(u8){};
+            var line_buffer : std.ArrayList(u8) = .empty;
             defer line_buffer.deinit(self.allocator);
 
             var content_length: ?usize = null;

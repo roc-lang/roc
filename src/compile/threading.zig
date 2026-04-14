@@ -14,8 +14,8 @@ pub const is_freestanding = builtin.target.os.tag == .freestanding;
 /// Native `std.Thread` on supported targets, empty struct on freestanding.
 pub const Thread = if (!is_freestanding) std.Thread else struct {};
 
-/// Native `std.Thread.Mutex` on supported targets, no-op stub on freestanding.
-pub const Mutex = if (!is_freestanding) std.Thread.Mutex else struct {
+/// Native `std.Io.Mutex` on supported targets, no-op stub on freestanding.
+pub const Mutex = if (!is_freestanding) std.Io.Mutex else struct {
     pub fn lock(_: *@This()) void {}
     pub fn unlock(_: *@This()) void {}
 };

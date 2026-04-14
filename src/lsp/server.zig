@@ -79,7 +79,7 @@ pub fn Server(comptime ReaderType: type, comptime WriterType: type) type {
         state: State = .waiting_for_initialize,
         doc_store: DocumentStore,
         syntax_checker: SyntaxChecker,
-        log_file: ?std.fs.File = null,
+        log_file: ?std.Io.File = null,
         debug: DebugFlags,
 
         pub const server_name = "roc-lsp";
@@ -98,7 +98,7 @@ pub fn Server(comptime ReaderType: type, comptime WriterType: type) type {
             allocator: std.mem.Allocator,
             reader: ReaderType,
             writer: WriterType,
-            log_file: ?std.fs.File,
+            log_file: ?std.Io.File,
             debug_options: DebugOptions,
         ) !Self {
             const flags = DebugFlags{
@@ -309,20 +309,20 @@ pub fn Server(comptime ReaderType: type, comptime WriterType: type) type {
 
 /// Launches the LSP server wired to stdin/stdout, optionally mirroring traffic to disk.
 pub fn runWithStdIo(allocator: std.mem.Allocator, debug: DebugOptions) !void {
-    var stdin_file = std.fs.File.stdin();
-    var stdout_file = std.fs.File.stdout();
+    var stdin_file = std.Io.File.stdin();
+    var stdout_file = std.Io.File.stdout();
 
     var stdin_buffer: [4096]u8 = undefined;
     var stdout_buffer: [4096]u8 = undefined;
     const reader = stdin_file.readerStreaming(&stdin_buffer);
     const writer = stdout_file.writerStreaming(&stdout_buffer);
 
-    var log_file: ?std.fs.File = null;
+    var log_file: ?std.Io.File = null;
     const enable_logging = debug.transport or debug.build or debug.syntax or debug.server;
     if (enable_logging) {
         const log_info = try createLogFile(allocator);
         log_file = log_info.file;
-        const stderr_file = std.fs.File.stderr();
+        const stderr_file = std.Io.File.stderr();
         stderr_file.writeAll("roc-lsp logging to ") catch {};
         stderr_file.writeAll(log_info.path) catch {};
         stderr_file.writeAll("\n") catch {};
@@ -346,7 +346,7 @@ pub fn runWithStdIo(allocator: std.mem.Allocator, debug: DebugOptions) !void {
 }
 
 const LogFileInfo = struct {
-    file: std.fs.File,
+    file: std.Io.File,
     path: []u8,
 };
 
@@ -356,12 +356,12 @@ fn createLogFile(allocator: std.mem.Allocator) !LogFileInfo {
     const filename = try allocator.dupe(u8, "roc-lsp-debug.log");
     defer allocator.free(filename);
     const absolute_path = try std.fs.path.resolve(allocator, &.{ dir_path, filename });
-    const file = std.fs.createFileAbsolute(absolute_path, .{
+    const file = std.Io.Dir.createFileAbsolute(absolute_path, .{
         .truncate = false,
         .read = true,
         .mode = 0o600,
     }) catch |err| switch (err) {
-        error.PathAlreadyExists => try std.fs.openFileAbsolute(absolute_path, .{
+        error.PathAlreadyExists => try std.Io.Dir.openFileAbsolute(absolute_path, .{
             .mode = .read_write,
         }),
         else => return err,

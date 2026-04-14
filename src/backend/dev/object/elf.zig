@@ -173,14 +173,14 @@ pub const ElfWriter = struct {
         var self = Self{
             .allocator = allocator,
             .arch = arch,
-            .text = .{},
-            .data = .{},
-            .rodata = .{},
-            .symbols = .{},
-            .text_relocs = .{},
-            .rodata_relocs = .{},
-            .strtab = .{},
-            .shstrtab = .{},
+            .text = .empty,
+            .data = .empty,
+            .rodata = .empty,
+            .symbols = .empty,
+            .text_relocs = .empty,
+            .rodata_relocs = .empty,
+            .strtab = .empty,
+            .shstrtab = .empty,
         };
 
         // Initialize string tables with null byte
@@ -307,7 +307,7 @@ pub const ElfWriter = struct {
         const shname_shstrtab = try self.addString(&self.shstrtab, ".shstrtab");
 
         // Build symbol table
-        var symtab: std.ArrayList(u8) = .{};
+        var symtab: std.ArrayList(u8) = .empty;
         defer symtab.deinit(self.allocator);
 
         // First symbol is always null
@@ -351,7 +351,7 @@ pub const ElfWriter = struct {
         }
 
         // Build relocation tables
-        var rela_text: std.ArrayList(u8) = .{};
+        var rela_text: std.ArrayList(u8) = .empty;
         defer rela_text.deinit(self.allocator);
 
         for (self.text_relocs.items) |rel| {
@@ -367,7 +367,7 @@ pub const ElfWriter = struct {
             try rela_text.appendSlice(self.allocator, std.mem.asBytes(&elf_rela));
         }
 
-        var rela_rodata: std.ArrayList(u8) = .{};
+        var rela_rodata: std.ArrayList(u8) = .empty;
         defer rela_rodata.deinit(self.allocator);
 
         for (self.rodata_relocs.items) |rel| {
@@ -610,7 +610,7 @@ test "create minimal elf object" {
         .is_function = true,
     });
 
-    var output: std.ArrayList(u8) = .{};
+    var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
 
     try writer.write(&output);
@@ -638,7 +638,7 @@ test "elf with external symbol" {
     // Add relocation for the call
     try writer.addTextRelocation(1, ext_idx, -4);
 
-    var output: std.ArrayList(u8) = .{};
+    var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
 
     try writer.write(&output);

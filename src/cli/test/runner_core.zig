@@ -37,6 +37,28 @@ pub const TestStats = struct {
     }
 };
 
+fn createIsolatedTestCacheDir(allocator: Allocator) ![]u8 {
+    const cache_dir_id = next_cache_dir_id.fetchAdd(1, .monotonic);
+    const cache_leaf = try std.fmt.allocPrint(allocator, "{d}-{d}", .{
+        @as(u64, @intCast(std.time.nanoTimestamp())),
+        cache_dir_id,
+    });
+    defer allocator.free(cache_leaf);
+
+    const cwd_path = try std.Io.Dir.cwd().realpathAlloc(allocator, ".");
+    defer allocator.free(cwd_path);
+
+    const cache_rel = try std.fs.path.join(allocator, &.{ ".zig-cache", "roc-test-cache", cache_leaf });
+    defer allocator.free(cache_rel);
+
+    std.Io.Dir.cwd().makePath(cache_rel) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return err,
+    };
+
+    return std.fs.path.join(allocator, &.{ cwd_path, cache_rel });
+}
+
 fn runRocChildWithOutputLimit(allocator: Allocator, argv: []const []const u8, max_output_bytes: usize) !std.process.Child.RunResult {
     var env_map = try std.process.getEnvMap(allocator);
     defer env_map.deinit();
@@ -49,7 +71,7 @@ fn runRocChildWithOutputLimit(allocator: Allocator, argv: []const []const u8, ma
     try env_map.put("ROC_CACHE_DIR", cache_dirs.roc_cache_dir);
     try env_map.put("ZIG_LOCAL_CACHE_DIR", cache_dirs.zig_local_cache_dir);
 
-    return std.process.Child.run(.{
+    return std.process.run(.{
         .allocator = allocator,
         .argv = argv,
         .env_map = &env_map,
@@ -153,7 +175,7 @@ pub fn runNative(
     allocator: Allocator,
     exe_path: []const u8,
 ) !TestResult {
-    const result = std.process.Child.run(.{
+    const result = std.process.run(.{
         .allocator = allocator,
         .argv = &[_][]const u8{exe_path},
     }) catch |err| {
@@ -283,7 +305,7 @@ fn runWithIoSpecBuildAndExec(
     const exe_path = try std.fmt.allocPrint(allocator, "./{s}", .{output_name});
     defer allocator.free(exe_path);
 
-    const result = std.process.Child.run(.{
+    const result = std.process.run(.{
         .allocator = allocator,
         .argv = &[_][]const u8{
             exe_path,
@@ -401,7 +423,7 @@ pub fn verifyPlatformFiles(
     const libhost_path = try std.fmt.allocPrint(allocator, "{s}/platform/targets/{s}/libhost.a", .{ platform_dir, target });
     defer allocator.free(libhost_path);
 
-    if (std.fs.cwd().access(libhost_path, .{})) |_| {
+    if (std.Io.Dir.cwd().access(libhost_path, .{})) |_| {
         return true;
     } else |_| {
         return false;
@@ -423,7 +445,7 @@ pub fn shouldSkipTarget(target: []const u8) bool {
 
 /// Clean up a generated file.
 pub fn cleanup(path: []const u8) void {
-    std.fs.cwd().deleteFile(path) catch {};
+    std.Io.Dir.cwd().deleteFile(path) catch {};
 }
 
 /// Print a section header.
@@ -470,7 +492,7 @@ fn hasMemoryErrors(stderr: []const u8) ?[]const u8 {
     return null;
 }
 
-fn handleProcessResult(result: std.process.Child.RunResult, output_name: []const u8) TestResult {
+fn handleProcessResult(result: std.process.RunResult, output_name: []const u8) TestResult {
     // Check for memory errors in stderr (GPA errors or Roc runtime leak detection)
     if (hasMemoryErrors(result.stderr)) |msg| {
         std.debug.print("FAIL ({s})\n", .{msg});
@@ -483,7 +505,7 @@ fn handleProcessResult(result: std.process.Child.RunResult, output_name: []const
         .Exited => |code| {
             if (code == 0) {
                 // Verify executable was created
-                if (std.fs.cwd().access(output_name, .{})) |_| {
+                if (std.Io.Dir.cwd().access(output_name, .{})) |_| {
                     std.debug.print("OK\n", .{});
                     // Clean up
                     cleanup(output_name);
@@ -511,7 +533,7 @@ fn handleProcessResult(result: std.process.Child.RunResult, output_name: []const
     }
 }
 
-fn handleProcessResultNoCleanup(result: std.process.Child.RunResult, output_name: []const u8) TestResult {
+fn handleProcessResultNoCleanup(result: std.process.RunResult, output_name: []const u8) TestResult {
     // Check for memory errors in stderr (GPA errors or Roc runtime leak detection)
     if (hasMemoryErrors(result.stderr)) |msg| {
         std.debug.print("FAIL ({s})\n", .{msg});
@@ -523,7 +545,7 @@ fn handleProcessResultNoCleanup(result: std.process.Child.RunResult, output_name
         .Exited => |code| {
             if (code == 0) {
                 // Verify executable was created
-                if (std.fs.cwd().access(output_name, .{})) |_| {
+                if (std.Io.Dir.cwd().access(output_name, .{})) |_| {
                     std.debug.print("OK\n", .{});
                     // Don't clean up - caller will handle
                     return .passed;

@@ -1383,7 +1383,7 @@ pub const BuildEnv = struct {
 
         // Check if already cached
         const already_cached = blk: {
-            var d = std.fs.cwd().openDir(package_dir_path, .{}) catch |err| switch (err) {
+            var d = std.Io.Dir.cwd().openDir(package_dir_path, .{}) catch |err| switch (err) {
                 error.FileNotFound => break :blk false,
                 else => {
                     if (comptime !is_freestanding) {
@@ -1403,7 +1403,7 @@ pub const BuildEnv = struct {
             }
 
             // Create cache directory structure
-            std.fs.cwd().makePath(cache_dir_path) catch |make_err| {
+            std.Io.Dir.cwd().makePath(cache_dir_path) catch |make_err| {
                 if (comptime !is_freestanding) {
                     std.log.err("Failed to create cache directory: {}", .{make_err});
                 }
@@ -1411,7 +1411,7 @@ pub const BuildEnv = struct {
             };
 
             // Create package directory
-            std.fs.cwd().makeDir(package_dir_path) catch |make_err| switch (make_err) {
+            std.Io.Dir.cwd().makeDir(package_dir_path) catch |make_err| switch (make_err) {
                 error.PathAlreadyExists => {}, // Race condition, another process created it
                 else => {
                     if (comptime !is_freestanding) {
@@ -1423,7 +1423,7 @@ pub const BuildEnv = struct {
 
             // Download and extract via io vtable (path-based, no Dir handle needed)
             self.filesystem.fetchUrl(self.gpa, url, package_dir_path) catch |fetch_err| {
-                std.fs.cwd().deleteTree(package_dir_path) catch {};
+                std.Io.Dir.cwd().deleteTree(package_dir_path) catch {};
                 if (comptime !is_freestanding) {
                     std.log.err("Failed to download package: {} (url: {s})", .{ fetch_err, url });
                 }
@@ -1439,7 +1439,7 @@ pub const BuildEnv = struct {
         const source_path = std.fs.path.join(self.gpa, &.{ package_dir_path, "main.roc" }) catch {
             return error.OutOfMemory;
         };
-        std.fs.cwd().access(source_path, .{}) catch {
+        std.Io.Dir.cwd().access(source_path, .{}) catch {
             self.gpa.free(source_path);
             if (comptime !is_freestanding) {
                 std.log.err("No main.roc found in package at {s}", .{package_dir_path});

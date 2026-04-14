@@ -47,7 +47,7 @@ pub fn handler(comptime ServerType: type) type {
             if (uri_util.uriToPath(self.allocator, params.textDocument.uri)) |path| {
                 defer self.allocator.free(path);
                 // Get absolute path
-                if (std.fs.cwd().realpathAlloc(self.allocator, path)) |abs_path| {
+                if (std.Io.Dir.cwd().realpathAlloc(self.allocator, path)) |abs_path| {
                     defer self.allocator.free(abs_path);
                     // Get imported modules from the syntax checker's cached build
                     if (self.syntax_checker.getImportedModuleEnvs(abs_path)) |maybe_envs| {

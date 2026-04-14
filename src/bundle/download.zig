@@ -57,7 +57,7 @@ pub fn validateUrl(url: []const u8) DownloadError![]const u8 {
 pub fn download(
     allocator: *std.mem.Allocator,
     url: []const u8,
-    extract_dir: std.fs.Dir,
+    extract_dir: std.Io.Dir,
 ) DownloadError!void {
     // Validate URL and extract hash
     const base58_hash = try validateUrl(url);

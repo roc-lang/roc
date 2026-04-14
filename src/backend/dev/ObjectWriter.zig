@@ -247,7 +247,7 @@ test "generate x86_64 linux object" {
         },
     };
 
-    var output: std.ArrayList(u8) = .{};
+    var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
 
     try generateObjectFile(
@@ -283,7 +283,7 @@ test "generate x86_64 macos object" {
         },
     };
 
-    var output: std.ArrayList(u8) = .{};
+    var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
 
     try generateObjectFile(
@@ -319,7 +319,7 @@ test "generate aarch64 linux object" {
         },
     };
 
-    var output: std.ArrayList(u8) = .{};
+    var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
 
     try generateObjectFile(
@@ -354,7 +354,7 @@ test "generate x86_64 windows object" {
         },
     };
 
-    var output: std.ArrayList(u8) = .{};
+    var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
 
     try generateObjectFile(
@@ -390,7 +390,7 @@ test "generate aarch64 windows object" {
         },
     };
 
-    var output: std.ArrayList(u8) = .{};
+    var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
 
     try generateObjectFile(

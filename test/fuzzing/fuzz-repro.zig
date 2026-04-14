@@ -63,7 +63,7 @@ pub fn main() !void {
         }
         // No input data, just read from stdin.
         std.debug.print("Reading bytes for repro from stdin\n", .{});
-        const bytes = try std.fs.File.stdin().readToEndAlloc(gpa, @intCast(MAX_SIZE));
+        const bytes = try std.Io.File.stdin().readToEndAlloc(gpa, @intCast(MAX_SIZE));
         defer gpa.free(bytes);
 
         fuzz_test.zig_fuzz_init();
@@ -81,7 +81,7 @@ pub fn main() !void {
     } else {
         // Read file pointed to by arg.
         std.debug.print("Reading bytes for repro from {s}\n", .{data.?});
-        const file = try std.fs.cwd().openFile(data.?, .{});
+        const file = try std.Io.Dir.cwd().openFile(data.?, .{});
         defer file.close();
         const bytes = try file.readToEndAlloc(gpa, @intCast(MAX_SIZE));
         defer gpa.free(bytes);

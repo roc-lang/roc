@@ -84,11 +84,11 @@ fn extractFoldingRanges(allocator: std.mem.Allocator, source: []const u8) ![]Fol
     const line_offsets = buildLineOffsets(source);
 
     // Track bracket positions for folding
-    var ranges = std.ArrayList(FoldingRange){};
+    var ranges : std.ArrayList(FoldingRange) = .empty;
     errdefer ranges.deinit(allocator);
 
     // Stack to track opening bracket positions
-    var bracket_stack = std.ArrayList(BracketInfo){};
+    var bracket_stack : std.ArrayList(BracketInfo) = .empty;
     defer bracket_stack.deinit(allocator);
 
     // Parse to get tokens

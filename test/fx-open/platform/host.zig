@@ -25,7 +25,7 @@ fn rocAllocFn(roc_alloc: *builtins.host_abi.RocAlloc, env: *anyopaque) callconv(
     const result = allocator.rawAlloc(total_size, align_enum, @returnAddress());
 
     const base_ptr = result orelse {
-        const stderr: std.fs.File = .stderr();
+        const stderr: std.Io.File = .stderr();
         var buf: [256]u8 = undefined;
         const msg = std.fmt.bufPrint(&buf, "\x1b[31mHost error:\x1b[0m allocation failed for size={d} align={d}\n", .{
             total_size,
@@ -98,7 +98,7 @@ fn rocReallocFn(roc_realloc: *builtins.host_abi.RocRealloc, env: *anyopaque) cal
     // Perform reallocation
     const old_slice = @as([*]u8, @ptrCast(old_base_ptr))[0..old_total_size];
     const new_slice = allocator.realloc(old_slice, new_total_size) catch {
-        const stderr: std.fs.File = .stderr();
+        const stderr: std.Io.File = .stderr();
         stderr.writeAll("\x1b[31mHost error:\x1b[0m reallocation failed, out of memory\n") catch {};
         std.process.exit(1);
     };
@@ -134,7 +134,7 @@ fn rocExpectFailedFn(roc_expect: *const builtins.host_abi.RocExpectFailed, env: 
 fn rocCrashedFn(roc_crashed: *const builtins.host_abi.RocCrashed, env: *anyopaque) callconv(.c) noreturn {
     _ = env;
     const message = roc_crashed.utf8_bytes[0..roc_crashed.len];
-    const stderr: std.fs.File = .stderr();
+    const stderr: std.Io.File = .stderr();
     var buf: [256]u8 = undefined;
     var w = stderr.writer(&buf);
     w.interface.print("\n\x1b[31mRoc crashed:\x1b[0m {s}\n", .{message}) catch {};
@@ -165,7 +165,7 @@ fn __main() callconv(.c) void {}
 // C compatible main for runtime
 fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
     const exit_code = platform_main(argc, argv) catch |err| {
-        const stderr: std.fs.File = .stderr();
+        const stderr: std.Io.File = .stderr();
         stderr.writeAll("HOST ERROR: ") catch {};
         stderr.writeAll(@errorName(err)) catch {};
         stderr.writeAll("\n") catch {};
@@ -184,7 +184,7 @@ const RocOps = builtins.host_abi.RocOps;
 /// Returns {} and takes Str as argument
 fn hostedStderrLine(_: *anyopaque, _: *anyopaque, args: *const extern struct { str: RocStr }) callconv(.c) void {
     const message = args.str.asSlice();
-    const stderr: std.fs.File = .stderr();
+    const stderr: std.Io.File = .stderr();
     stderr.writeAll(message) catch {};
     stderr.writeAll("\n") catch {};
 }
@@ -195,7 +195,7 @@ fn hostedStderrLine(_: *anyopaque, _: *anyopaque, args: *const extern struct { s
 fn hostedStdinLine(ops: *RocOps, result: *RocStr, _: *anyopaque) callconv(.c) void {
     // Read a line from stdin
     var buffer: [4096]u8 = undefined;
-    const stdin_file: std.fs.File = .stdin();
+    const stdin_file: std.Io.File = .stdin();
     const bytes_read = stdin_file.read(&buffer) catch {
         // Return empty string on error
         result.* = RocStr.empty();
@@ -231,7 +231,7 @@ fn hostedStdinLine(ops: *RocOps, result: *RocStr, _: *anyopaque) callconv(.c) vo
 /// Returns {} and takes Str as argument
 fn hostedStdoutLine(_: *anyopaque, _: *anyopaque, args: *const extern struct { str: RocStr }) callconv(.c) void {
     const message = args.str.asSlice();
-    const stdout: std.fs.File = .stdout();
+    const stdout: std.Io.File = .stdout();
     stdout.writeAll(message) catch {};
     stdout.writeAll("\n") catch {};
 }

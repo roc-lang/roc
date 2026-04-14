@@ -16,14 +16,14 @@ const Allocator = std.mem.Allocator;
 
 const is_windows = builtin.target.os.tag == .windows;
 
-var stderr_file_writer: std.fs.File.Writer = .{
-    .interface = std.fs.File.Writer.initInterface(&.{}),
-    .file = if (is_windows) undefined else std.fs.File.stderr(),
+var stderr_file_writer: std.Io.File.Writer = .{
+    .interface = std.Io.File.Writer.initInterface(&.{}),
+    .file = if (is_windows) undefined else std.Io.File.stderr(),
     .mode = .streaming,
 };
 
 fn stderrWriter() *std.Io.Writer {
-    if (is_windows) stderr_file_writer.file = std.fs.File.stderr();
+    if (is_windows) stderr_file_writer.file = std.Io.File.stderr();
     return &stderr_file_writer.interface;
 }
 
@@ -164,7 +164,7 @@ pub fn benchTokenizer(gpa: Allocator, path: []const u8) !void {
 
 fn collectRocFiles(gpa: Allocator, path: []const u8, roc_files: *std.array_list.Managed(RocFile)) !void {
     // Check if path is a file or directory
-    const stat = std.fs.cwd().statFile(path) catch |err| {
+    const stat = std.Io.Dir.cwd().statFile(path) catch |err| {
         fatal("Failed to access '{s}': {}", .{ path, err });
     };
 
@@ -186,7 +186,7 @@ fn collectRocFiles(gpa: Allocator, path: []const u8, roc_files: *std.array_list.
 }
 
 fn addRocFile(gpa: Allocator, file_path: []const u8, roc_files: *std.array_list.Managed(RocFile)) !void {
-    const file = std.fs.cwd().openFile(file_path, .{}) catch |err| {
+    const file = std.Io.Dir.cwd().openFile(file_path, .{}) catch |err| {
         std.debug.print("Warning: Failed to open file '{s}': {}\n", .{ file_path, err });
         return;
     };
@@ -208,7 +208,7 @@ fn addRocFile(gpa: Allocator, file_path: []const u8, roc_files: *std.array_list.
 }
 
 fn findRocFiles(gpa: Allocator, dir_path: []const u8, roc_files: *std.array_list.Managed(RocFile)) !void {
-    var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch |err| {
+    var dir = std.Io.Dir.cwd().openDir(dir_path, .{ .iterate = true }) catch |err| {
         fatal("Failed to open directory '{s}': {}", .{ dir_path, err });
     };
     defer dir.close();

@@ -13,8 +13,8 @@ const TAR_EXTENSION = ".tar.zst";
 const STREAM_BUFFER_SIZE: usize = 64 * 1024; // 64KB buffer for streaming operations
 // Buffer size for stdlib zstd decompressor: window_len + block_size_max for tar extraction
 const DECOMPRESS_BUFFER_SIZE: usize = zstd.default_window_len + zstd.block_size_max;
-// Max path bytes - use 4096 on WASM/freestanding, std.fs.max_path_bytes elsewhere
-const MAX_PATH_BYTES: usize = if (builtin.os.tag == .freestanding) 4096 else std.fs.max_path_bytes;
+// Max path bytes - use 4096 on WASM/freestanding, std.Io.Dir.max_path_bytes elsewhere
+const MAX_PATH_BYTES: usize = if (builtin.os.tag == .freestanding) 4096 else std.Io.Dir.max_path_bytes;
 
 /// Errors that can occur during the unbundle operation.
 pub const UnbundleError = error{
@@ -93,17 +93,17 @@ pub const ExtractWriter = struct {
 
 /// Directory-based extract writer for filesystem extraction
 pub const DirExtractWriter = struct {
-    dir: std.fs.Dir,
+    dir: std.Io.Dir,
     allocator: std.mem.Allocator,
     open_files: std.array_list.Managed(FileWriterEntry),
 
     const FileWriterEntry = struct {
-        file: std.fs.File,
+        file: std.Io.File,
         buffer: [4096]u8,
-        writer: std.fs.File.Writer,
+        writer: std.Io.File.Writer,
     };
 
-    pub fn init(dir: std.fs.Dir, allocator: std.mem.Allocator) DirExtractWriter {
+    pub fn init(dir: std.Io.Dir, allocator: std.mem.Allocator) DirExtractWriter {
         return .{
             .dir = dir,
             .allocator = allocator,
@@ -661,7 +661,7 @@ pub fn validateBase58Hash(base58_str: []const u8) !?[32]u8 {
 pub fn unbundle(
     allocator: std.mem.Allocator,
     input_reader: *std.Io.Reader,
-    extract_dir: std.fs.Dir,
+    extract_dir: std.Io.Dir,
     filename: []const u8,
     error_context: ?*ErrorContext,
 ) UnbundleError!void {

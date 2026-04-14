@@ -24,7 +24,7 @@ pub fn main() !void {
     const gpa = gpa_impl.allocator();
 
     var stdout_buffer: [4096]u8 = undefined;
-    var stdout_state = std.fs.File.stdout().writer(&stdout_buffer);
+    var stdout_state = std.Io.File.stdout().writer(&stdout_buffer);
     const stdout = &stdout_state.interface;
 
     try stdout.print("Checking test wiring in src/ directory...\n\n", .{});
@@ -159,7 +159,7 @@ fn walkTree(
     test_files: *PathList,
     mod_files: *PathList,
 ) !void {
-    var dir = try std.fs.cwd().openDir(dir_path, .{ .iterate = true });
+    var dir = try std.Io.Dir.cwd().openDir(dir_path, .{ .iterate = true });
     defer dir.close();
 
     var it = dir.iterate();
@@ -236,7 +236,7 @@ fn fileHasTestDecl(allocator: Allocator, path: []const u8) !bool {
 }
 
 fn readSourceFile(allocator: Allocator, path: []const u8) ![:0]u8 {
-    return try std.fs.cwd().readFileAllocOptions(
+    return try std.Io.Dir.cwd().readFileAllocOptions(
         allocator,
         path,
         max_file_bytes,
@@ -408,7 +408,7 @@ fn findNearestMod(allocator: Allocator, file_path: []const u8) !?[]u8 {
 }
 
 fn fileExists(path: []const u8) bool {
-    _ = std.fs.cwd().statFile(path) catch return false;
+    _ = std.Io.Dir.cwd().statFile(path) catch return false;
     return true;
 }
 

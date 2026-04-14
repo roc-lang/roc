@@ -113,7 +113,7 @@ fn emitMergedBitcodeToObjectFile(
 
     if (std.process.getEnvVarOwned(std.heap.page_allocator, "ROC_LLVM_KEEP_BITCODE")) |keep_path| {
         defer std.heap.page_allocator.free(keep_path);
-        std.fs.cwd().writeFile(.{
+        std.Io.Dir.cwd().writeFile(.{
             .sub_path = keep_path,
             .data = bitcode_bytes,
         }) catch {};
@@ -266,7 +266,7 @@ pub fn compileToObject(allocator: Allocator, bitcode: []const u32, options: Comp
     try emitMergedBitcodeToObjectFile(bitcode, options, temp_path);
 
     // Read the object file back into memory
-    const object_bytes = std.fs.cwd().readFileAlloc(
+    const object_bytes = std.Io.Dir.cwd().readFileAlloc(
         allocator,
         std.mem.sliceTo(temp_path, 0),
         10 * 1024 * 1024, // 10MB max
@@ -274,14 +274,14 @@ pub fn compileToObject(allocator: Allocator, bitcode: []const u32, options: Comp
 
     if (std.process.getEnvVarOwned(allocator, "ROC_LLVM_KEEP_OBJECT")) |keep_path| {
         defer allocator.free(keep_path);
-        std.fs.cwd().writeFile(.{
+        std.Io.Dir.cwd().writeFile(.{
             .sub_path = keep_path,
             .data = object_bytes,
         }) catch {};
     } else |_| {}
 
     // Clean up temp file
-    std.fs.cwd().deleteFile(std.mem.sliceTo(temp_path, 0)) catch {};
+    std.Io.Dir.cwd().deleteFile(std.mem.sliceTo(temp_path, 0)) catch {};
 
     return object_bytes;
 }
@@ -291,13 +291,13 @@ pub fn compileToObject(allocator: Allocator, bitcode: []const u32, options: Comp
 pub fn compileToSharedLibrary(allocator: Allocator, bitcode: []const u32, options: CompileOptions) Error![:0]const u8 {
     const object_path = createTempPath(allocator, objectExtension()) catch return Error.TempFileError;
     defer {
-        std.fs.cwd().deleteFile(std.mem.sliceTo(object_path, 0)) catch {};
+        std.Io.Dir.cwd().deleteFile(std.mem.sliceTo(object_path, 0)) catch {};
         allocator.free(object_path);
     }
 
     const shared_lib_path = createTempPath(allocator, sharedLibraryExtension()) catch return Error.TempFileError;
     errdefer {
-        std.fs.cwd().deleteFile(std.mem.sliceTo(shared_lib_path, 0)) catch {};
+        std.Io.Dir.cwd().deleteFile(std.mem.sliceTo(shared_lib_path, 0)) catch {};
         allocator.free(shared_lib_path);
     }
 
@@ -309,9 +309,9 @@ pub fn compileToSharedLibrary(allocator: Allocator, bitcode: []const u32, option
 
     if (std.process.getEnvVarOwned(allocator, "ROC_LLVM_KEEP_OBJECT")) |keep_path| {
         defer allocator.free(keep_path);
-        std.fs.cwd().copyFile(
+        std.Io.Dir.cwd().copyFile(
             std.mem.sliceTo(object_path, 0),
-            std.fs.cwd(),
+            std.Io.Dir.cwd(),
             keep_path,
             .{},
         ) catch {};
@@ -321,9 +321,9 @@ pub fn compileToSharedLibrary(allocator: Allocator, bitcode: []const u32, option
 
     if (std.process.getEnvVarOwned(allocator, "ROC_LLVM_KEEP_DYLIB")) |keep_path| {
         defer allocator.free(keep_path);
-        std.fs.cwd().copyFile(
+        std.Io.Dir.cwd().copyFile(
             std.mem.sliceTo(shared_lib_path, 0),
-            std.fs.cwd(),
+            std.Io.Dir.cwd(),
             keep_path,
             .{},
         ) catch {};
@@ -396,7 +396,7 @@ fn linkSharedLibraryMacos(
     object_path: [:0]const u8,
     shared_lib_path: [:0]const u8,
 ) Error!void {
-    const result = std.process.Child.run(.{
+    const result = std.process.run(.{
         .allocator = allocator,
         .argv = &.{
             "cc",

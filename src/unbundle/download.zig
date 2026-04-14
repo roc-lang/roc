@@ -33,25 +33,25 @@ fn generateRandomSuffix(buf: *[RANDOM_SUFFIX_LEN]u8) void {
 
 /// Get a handle to the system temp directory.
 /// Checks TMPDIR (Unix), TEMP, TMP environment variables, falls back to /tmp on Unix.
-fn getTempDir() !std.fs.Dir {
+fn getTempDir() !std.Io.Dir {
     // Check TMPDIR first (standard on Unix)
     if (std.posix.getenv("TMPDIR")) |tmpdir| {
-        return std.fs.cwd().openDir(tmpdir, .{}) catch return error.FileError;
+        return std.Io.Dir.cwd().openDir(tmpdir, .{}) catch return error.FileError;
     }
 
     // Check TEMP (common on Windows)
     if (std.posix.getenv("TEMP")) |temp| {
-        return std.fs.cwd().openDir(temp, .{}) catch return error.FileError;
+        return std.Io.Dir.cwd().openDir(temp, .{}) catch return error.FileError;
     }
 
     // Check TMP (fallback on Windows)
     if (std.posix.getenv("TMP")) |tmp| {
-        return std.fs.cwd().openDir(tmp, .{}) catch return error.FileError;
+        return std.Io.Dir.cwd().openDir(tmp, .{}) catch return error.FileError;
     }
 
     // Fall back to /tmp on Unix-like systems
     if (comptime builtin.os.tag != .windows) {
-        return std.fs.cwd().openDir("/tmp", .{}) catch return error.FileError;
+        return std.Io.Dir.cwd().openDir("/tmp", .{}) catch return error.FileError;
     }
 
     return error.FileError;
@@ -115,7 +115,7 @@ pub fn downloadAndExtract(
     url: []const u8,
     dest_path: []const u8,
 ) DownloadError!void {
-    var extract_dir = std.fs.cwd().openDir(dest_path, .{}) catch return error.FileError;
+    var extract_dir = std.Io.Dir.cwd().openDir(dest_path, .{}) catch return error.FileError;
     defer extract_dir.close();
 
     // Validate URL and extract hash
@@ -172,7 +172,7 @@ pub fn downloadAndExtract(
 fn downloadToFile(
     allocator: *std.mem.Allocator,
     url: []const u8,
-    dir: std.fs.Dir,
+    dir: std.Io.Dir,
     filename_prefix: []const u8,
     filename_out: []u8,
 ) DownloadError![]const u8 {

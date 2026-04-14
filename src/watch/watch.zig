@@ -666,7 +666,7 @@ pub const Watcher = struct {
 
                             // Check if there are already .roc files in the new directory
                             // This handles the case where files are created immediately after the directory
-                            var dir = std.fs.openDirAbsolute(new_dir, .{ .iterate = true }) catch break;
+                            var dir = std.Io.Dir.openDirAbsolute(new_dir, .{ .iterate = true }) catch break;
                             defer dir.close();
                             var it = dir.iterate();
                             while (it.next() catch null) |entry| {
@@ -707,7 +707,7 @@ pub const Watcher = struct {
         const wd_key = try std.fmt.allocPrint(self.allocator, "{d}", .{wd});
         try self.impl.path_cache.put(wd_key, try self.allocator.dupe(u8, path));
 
-        var dir = try std.fs.openDirAbsolute(path, .{ .iterate = true });
+        var dir = try std.Io.Dir.openDirAbsolute(path, .{ .iterate = true });
         defer dir.close();
 
         var it = dir.iterate();
@@ -982,7 +982,7 @@ pub const Watcher = struct {
             // Convert filename from UTF-16 to UTF-8
             const filename_utf16 = @as([*]const u16, @ptrCast(@alignCast(&buffer[offset + @sizeOf(std.os.windows.FILE_NOTIFY_INFORMATION)])))[0 .. info.FileNameLength / 2];
 
-            var filename_utf8_buf: [std.fs.max_path_bytes]u8 = undefined;
+            var filename_utf8_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
             const filename_utf8_len = std.unicode.utf16LeToUtf8(filename_utf8_buf[0..], filename_utf16) catch {
                 // Skip this file if we can't convert the name
                 if (info.NextEntryOffset == 0) break;
@@ -1054,7 +1054,7 @@ test "basic file watching" {
     const global = struct {
         var event_count: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
         var last_path: ?[]const u8 = null;
-        var mutex: std.Thread.Mutex = .{};
+        var mutex: std.Io.Mutex = .{};
     };
 
     const callback = struct {
@@ -1333,7 +1333,7 @@ test "thread safety" {
 
     const global = struct {
         var event_count: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
-        var mutex: std.Thread.Mutex = .{};
+        var mutex: std.Io.Mutex = .{};
         var events: std.ArrayList([]const u8) = .empty;
     };
 
@@ -1444,7 +1444,7 @@ test "windows unicode filename handling" {
     const global = struct {
         var event_count: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
         var last_path: ?[]const u8 = null;
-        var mutex: std.Thread.Mutex = .{};
+        var mutex: std.Io.Mutex = .{};
     };
 
     const callback = struct {

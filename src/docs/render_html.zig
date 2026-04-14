@@ -391,12 +391,12 @@ pub fn renderPackageDocs(
     broken_links_out: ?*std.ArrayListUnmanaged(BrokenLink),
 ) !void {
     // Ensure the output directory exists
-    std.fs.cwd().makePath(output_dir_path) catch |err| switch (err) {
+    std.Io.Dir.cwd().makePath(output_dir_path) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
     };
 
-    var output_dir = try std.fs.cwd().openDir(output_dir_path, .{});
+    var output_dir = try std.Io.Dir.cwd().openDir(output_dir_path, .{});
     defer output_dir.close();
 
     var ctx = try RenderContext.init(package_docs, gpa);
@@ -426,13 +426,13 @@ pub fn renderPackageDocs(
     }
 }
 
-fn writeStaticAssets(dir: std.fs.Dir) !void {
+fn writeStaticAssets(dir: std.Io.Dir) !void {
     try dir.writeFile(.{ .sub_path = "styles.css", .data = embedded_css });
     try dir.writeFile(.{ .sub_path = "search.js", .data = embedded_js });
     try dir.writeFile(.{ .sub_path = "favicon.svg", .data = embedded_favicon });
 }
 
-fn writePackageIndex(ctx: *const RenderContext, gpa: Allocator, dir: std.fs.Dir) !void {
+fn writePackageIndex(ctx: *const RenderContext, gpa: Allocator, dir: std.Io.Dir) !void {
     const file = try dir.createFile("index.html", .{});
     defer file.close();
     var buf: [4096]u8 = undefined;
@@ -468,7 +468,7 @@ fn writePackageIndex(ctx: *const RenderContext, gpa: Allocator, dir: std.fs.Dir)
     try bw.interface.flush();
 }
 
-fn writeModulePage(ctx: *const RenderContext, gpa: Allocator, dir: std.fs.Dir, mod: *const DocModel.ModuleDocs) !void {
+fn writeModulePage(ctx: *const RenderContext, gpa: Allocator, dir: std.Io.Dir, mod: *const DocModel.ModuleDocs) !void {
     // Create module subdirectory
     dir.makeDir(mod.name) catch |err| switch (err) {
         error.PathAlreadyExists => {},
