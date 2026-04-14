@@ -49,8 +49,8 @@
             .lazy = true,
         },
         .bytebox = .{
-            .url = "git+https://github.com/rdunnington/bytebox.git#95ec0c8ddb9c95ded2e97f02748bc14bff189f6f",
-            .hash = "bytebox-0.0.1-SXc2sZE5DwBGj-RgYk7yO60U9Uv0I5b5W2nO8m-TTRus",
+            .url = "git+https://github.com/rdunnington/bytebox.git#69adbd45745263deb9827e6bde3d4aca1e87abdc",
+            .hash = "bytebox-0.0.1-SXc2sbFWDwC8l73xqej-DebtRdhngUarf4NzoQnDDgfg",
         },
         .zstd = .{
             .url = "git+https://github.com/allyourcodebase/zstd?ref=1.5.7-1#e1a501be57f42c541e8a5597e4b59a074dfd09a3", // 1.5.7-1
