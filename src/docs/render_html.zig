@@ -511,9 +511,8 @@ fn renderEntryTree(
             // Determine CSS classes
             const type_class = if (node.is_type) "entry-type" else "entry-value";
 
-            // Render entry as styled div (not a heading element)
             try writeIndent(w, base);
-            try w.writeAll("<div class=\"entry ");
+            try w.writeAll("<article class=\"entry ");
             try w.writeAll(type_class);
             try w.writeAll("\" id=\"");
             try writeHtmlEscaped(w, node.full_path);
@@ -587,12 +586,12 @@ fn renderEntryTree(
             }
 
             try writeIndent(w, base);
-            try w.writeAll("</div>\n");
+            try w.writeAll("</article>\n");
         }
     } else if (node.children.items.len > 0) {
         // Non-leaf group node — render a group header and recurse at deeper depth
         try writeIndent(w, base);
-        try w.writeAll("<div class=\"entry-group\" id=\"");
+        try w.writeAll("<section class=\"entry-group\" id=\"");
         try writeHtmlEscaped(w, node.full_path);
         try w.writeAll("\">\n");
         const heading_level: u8 = @intCast(@min(depth + 1, 6));
@@ -604,7 +603,7 @@ fn renderEntryTree(
             try renderEntryTree(w, ctx, child, depth + 1);
         }
         try writeIndent(w, base);
-        try w.writeAll("</div>\n");
+        try w.writeAll("</section>\n");
     }
 }
 
