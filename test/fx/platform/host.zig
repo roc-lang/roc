@@ -359,9 +359,9 @@ const RocAllocation = struct {
     alignment: std.mem.Alignment,
 };
 
-/// Host environment - contains GeneralPurposeAllocator for leak detection
+/// Host environment - contains DebugAllocator for leak detection
 const HostEnv = struct {
-    gpa: std.heap.GeneralPurposeAllocator(.{ .safety = true }),
+    gpa: std.heap.DebugAllocator(.{ .safety = true }),
     test_state: TestState,
     /// Track Roc allocations for cleanup on test failure
     roc_allocations: std.ArrayListUnmanaged(RocAllocation) = .{},
@@ -978,7 +978,7 @@ fn platform_main(test_spec: ?[]const u8, test_verbose: bool) !c_int {
     installRuntimeSignalHandlers();
 
     var host_env = HostEnv{
-        .gpa = std.heap.GeneralPurposeAllocator(.{ .safety = true }){},
+        .gpa = std.heap.DebugAllocator(.{ .safety = true }){},
         .test_state = TestState.init(),
     };
 

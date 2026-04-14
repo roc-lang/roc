@@ -735,7 +735,7 @@ pub const Store = struct {
                         compressed_slot_idx = Self.varToSlotIdx(next_redirect_var);
                         compressed_slot = self.slots.get(compressed_slot_idx);
                     },
-                    .root => |_| break,
+                    .root => break,
                 }
             }
         }

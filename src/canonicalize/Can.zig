@@ -3956,7 +3956,7 @@ fn convertASTExposesToCIR(
                 .lower_ident => |ident| .{ ident.ident, ident.as, false },
                 .upper_ident => |ident| .{ ident.ident, ident.as, false },
                 .upper_ident_star => |star_ident| .{ star_ident.ident, null, true },
-                .malformed => |_| continue, // Skip malformed exposed items
+                .malformed => continue, // Skip malformed exposed items
             };
 
             // Resolve the main identifier name
@@ -9457,7 +9457,7 @@ fn scopeIntroduceVar(
                 },
             });
         },
-        .var_across_function_boundary => |_| {
+        .var_across_function_boundary => {
             // Generate crash expression for var reassignment across function boundary
             return try self.env.pushMalformed(T, Diagnostic{ .var_across_function_boundary = .{
                 .region = region,
@@ -11655,7 +11655,7 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
         .file_import => |fi| {
             try self.canonicalizeFileImport(fi);
         },
-        .malformed => |_| {
+        .malformed => {
             // Stmt was malformed, parse reports this error, so do nothing here
             mb_canonicailzed_stmt = null;
         },

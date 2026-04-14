@@ -713,7 +713,7 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
             try store.extra_data.append(store.gpa, @intFromEnum(app.@"fn"));
             node.main_token = @as(u32, @intCast(fn_ed_idx));
         },
-        .record_updater => |_| {},
+        .record_updater => {},
         .field_access => |fa| {
             node.tag = .field_access;
             node.region = fa.region;

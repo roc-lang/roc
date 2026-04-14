@@ -695,7 +695,7 @@ const Formatter = struct {
                 }
                 _ = try fmt.formatExpr(r.expr);
             },
-            .@"break" => |_| {
+            .@"break" => {
                 try fmt.pushAll("break");
             },
             .malformed => {
@@ -1499,7 +1499,7 @@ const Formatter = struct {
                 }
                 _ = try fmt.formatExpr(f.body);
             },
-            .ellipsis => |_| {
+            .ellipsis => {
                 try fmt.pushAll("...");
             },
             .record_builder => |rb| {

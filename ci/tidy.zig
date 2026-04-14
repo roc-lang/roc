@@ -33,7 +33,7 @@ const TermColor = struct {
 };
 
 pub fn main() !void {
-    var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa_impl = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_impl.deinit();
     const gpa = gpa_impl.allocator();
 

@@ -1696,8 +1696,8 @@ pub const Store = struct {
                 .alias => |alias| {
                     current_ext = self.getTypesStore().getAliasBackingVar(alias);
                 },
-                .flex => |_| break,
-                .rigid => |_| break,
+                .flex => break,
+                .rigid => break,
                 else => unreachable,
             }
         }

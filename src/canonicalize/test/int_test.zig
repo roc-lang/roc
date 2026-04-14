@@ -524,7 +524,7 @@ test "hexadecimal integer literals" {
         .{ .literal = "-0x8000000000000001", .expected_value = @as(i128, -9223372036854775809) },
     };
 
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+    var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
     var builtin_ctx = try BuiltinTestContext.init(gpa);
@@ -589,7 +589,7 @@ test "binary integer literals" {
         .{ .literal = "-0b1000000000000001", .expected_value = -32769 },
     };
 
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+    var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
     var builtin_ctx = try BuiltinTestContext.init(gpa);
@@ -654,7 +654,7 @@ test "octal integer literals" {
         .{ .literal = "-0o100001", .expected_value = -32769 },
     };
 
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+    var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
     var builtin_ctx = try BuiltinTestContext.init(gpa);
@@ -719,7 +719,7 @@ test "integer literals with uppercase base prefixes" {
         .{ .literal = "0XaBcD", .expected_value = 43981 },
     };
 
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+    var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
     var builtin_ctx = try BuiltinTestContext.init(gpa);
@@ -757,7 +757,7 @@ test "integer literals with uppercase base prefixes" {
 }
 
 test "numeric literal patterns use pattern idx as type var" {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+    var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
 
@@ -810,7 +810,7 @@ test "numeric literal patterns use pattern idx as type var" {
 }
 
 test "pattern numeric literal value edge cases" {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+    var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
 

@@ -417,7 +417,7 @@ fn parseWasmResponseJson(allocator: std.mem.Allocator, response_json_slice: []co
 
 /// Initialize WASM module and interface
 ///
-/// - `gpa` allocator is the GeneralPurposeAllocator, intended for bytebox VM.
+/// - `gpa` allocator is the DebugAllocator, intended for bytebox VM.
 /// - `arena` allocator is the ArenaAllocator, used for other test harness allocations.
 /// - `wasm_path` is the path to the WASM file to load.
 fn setupWasm(gpa: std.mem.Allocator, arena: std.mem.Allocator, wasm_path: []const u8) !WasmInterface {
@@ -914,7 +914,7 @@ fn createSimpleTest(allocator: std.mem.Allocator, name: []const u8, code: []cons
 
 pub fn main() !void {
     // Setup gpa allocator used for bytebox WASM VM
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
 
     // Setup arena allocator usrd for test harness

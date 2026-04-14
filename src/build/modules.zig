@@ -80,6 +80,7 @@ fn wrapperTestCount(b: *Build, module_type: ModuleType, module: *Module) usize {
         pending.items.len -= 1;
         total += scanFileForWrappers(
             allocator,
+            b.graph.io,
             entry,
             &pending,
             &seen,
@@ -92,17 +93,18 @@ fn wrapperTestCount(b: *Build, module_type: ModuleType, module: *Module) usize {
 
 fn scanFileForWrappers(
     allocator: std.mem.Allocator,
+    io: std.Io,
     entry: FileToScan,
     pending: *std.ArrayList(FileToScan),
     seen: *std.StringHashMap(void),
     has_aggregators: bool,
 ) usize {
     const path = entry.path;
-    const source = std.fs.cwd().readFileAllocOptions(
-        allocator,
+    const source = std.Io.Dir.cwd().readFileAllocOptions(
+        io,
         path,
-        wrapper_scan_max_bytes,
-        null,
+        allocator,
+        .limited(wrapper_scan_max_bytes),
         .@"1",
         0,
     ) catch |err| {
@@ -659,8 +661,8 @@ pub const RocModules = struct {
             // Watch module needs Core Foundation and FSEvents on macOS (only when not cross-compiling)
             // These frameworks provide the FSEvents API for proper event-driven file system monitoring on macOS.
             if (module_type == .watch and target.result.os.tag == .macos and targetMatchesHost(target)) {
-                test_step.linkFramework("CoreFoundation");
-                test_step.linkFramework("CoreServices");
+                test_step.root_module.linkFramework("CoreFoundation", .{});
+                test_step.root_module.linkFramework("CoreServices", .{});
             }
 
             // Add only the necessary dependencies for each module test
@@ -669,7 +671,7 @@ pub const RocModules = struct {
             // Link zstd for bundle module (unbundle uses stdlib zstd)
             if (module_type == .bundle) {
                 if (zstd) |z| {
-                    test_step.linkLibrary(z.artifact("zstd"));
+                    test_step.root_module.linkLibrary(z.artifact("zstd"));
                 }
             }
 

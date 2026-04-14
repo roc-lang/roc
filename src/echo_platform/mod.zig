@@ -232,7 +232,7 @@ fn sanitizeUtf8(input: []const u8, allocator: std.mem.Allocator) []const u8 {
 
 const testing = std.testing;
 // sanitizeUtf8 uses allocator.resize which page_allocator supports but
-// testing.allocator (GeneralPurposeAllocator) does not handle well with
+// testing.allocator (DebugAllocator) does not handle well with
 // sub-slice frees. Use page_allocator to match production behavior.
 const test_allocator = std.heap.page_allocator;
 

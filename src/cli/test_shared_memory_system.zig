@@ -11,7 +11,7 @@ const CliContext = cli_context.CliContext;
 const Io = cli_context.Io;
 
 test "platform resolution - basic cli platform" {
-    var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa_impl = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_impl.deinit();
     var allocs: Allocators = undefined;
     allocs.initInPlace(gpa_impl.allocator());
@@ -49,7 +49,7 @@ test "platform resolution - basic cli platform" {
 }
 
 test "platform resolution - no platform in file" {
-    var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa_impl = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_impl.deinit();
     var allocs: Allocators = undefined;
     allocs.initInPlace(gpa_impl.allocator());
@@ -82,7 +82,7 @@ test "platform resolution - no platform in file" {
 }
 
 test "platform resolution - file not found" {
-    var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa_impl = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_impl.deinit();
     var allocs: Allocators = undefined;
     allocs.initInPlace(gpa_impl.allocator());
@@ -99,7 +99,7 @@ test "platform resolution - file not found" {
 }
 
 test "platform resolution - insecure HTTP URL rejected" {
-    var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa_impl = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_impl.deinit();
     var allocs: Allocators = undefined;
     allocs.initInPlace(gpa_impl.allocator());
@@ -142,7 +142,7 @@ test "integration - shared memory setup and parsing" {
         return;
     }
 
-    var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa_impl = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_impl.deinit();
     var allocs: Allocators = undefined;
     allocs.initInPlace(gpa_impl.allocator());
@@ -193,7 +193,7 @@ test "integration - compilation pipeline for different platforms" {
         return;
     }
 
-    var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa_impl = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_impl.deinit();
     var allocs: Allocators = undefined;
     allocs.initInPlace(gpa_impl.allocator());
@@ -252,7 +252,7 @@ test "integration - error handling for non-existent file" {
         return;
     }
 
-    var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa_impl = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_impl.deinit();
     var allocs: Allocators = undefined;
     allocs.initInPlace(gpa_impl.allocator());
@@ -316,7 +316,7 @@ test "integration - automatic module dependency ordering" {
         return;
     }
 
-    var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa_impl = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_impl.deinit();
     var allocs: Allocators = undefined;
     allocs.initInPlace(gpa_impl.allocator());
@@ -374,7 +374,7 @@ test "integration - transitive module imports (module A imports module B)" {
         return;
     }
 
-    var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa_impl = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_impl.deinit();
     var allocs: Allocators = undefined;
     allocs.initInPlace(gpa_impl.allocator());
@@ -439,7 +439,7 @@ test "integration - diamond dependency pattern (A imports B and C, both import D
         return;
     }
 
-    var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa_impl = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_impl.deinit();
     var allocs: Allocators = undefined;
     allocs.initInPlace(gpa_impl.allocator());
@@ -494,7 +494,7 @@ test "integration - direct Core and Utils calls from app" {
         return;
     }
 
-    var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa_impl = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_impl.deinit();
     var allocs: Allocators = undefined;
     allocs.initInPlace(gpa_impl.allocator());

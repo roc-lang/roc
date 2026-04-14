@@ -681,7 +681,7 @@ pub fn main() !void {
                 \\Options:
                 \\  --verbose       Enable verbose logging
                 \\  --html          Generate HTML output files
-                \\  --debug         Use GeneralPurposeAllocator for debugging (default: c_allocator)
+                \\  --debug         Use DebugAllocator for debugging (default: c_allocator)
                 \\  --trace-eval    Enable interpreter trace output (only works with single REPL snapshot)
                 \\  --linecol       Include line/column information in output
                 \\  --threads <n>   Number of threads to use (0 = auto-detect, 1 = single-threaded). Default: 0.

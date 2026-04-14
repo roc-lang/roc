@@ -64,7 +64,7 @@ fn parseAndCanonicalizeSource(
 }
 
 test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT EXPOSED, and working imports" {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+    var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const allocator = gpa_state.allocator();
 
@@ -205,7 +205,7 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
 }
 
 test "import validation - no module_envs provided" {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+    var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const allocator = gpa_state.allocator();
 
@@ -258,7 +258,7 @@ test "import validation - no module_envs provided" {
 }
 
 test "import interner - Import.Idx functionality" {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+    var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const allocator = gpa_state.allocator();
     // Parse source code with multiple imports, including duplicates
@@ -317,7 +317,7 @@ test "import interner - Import.Idx functionality" {
 }
 
 test "import interner - comprehensive usage example" {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+    var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const allocator = gpa_state.allocator();
     // Parse source with imports used in different contexts
@@ -378,7 +378,7 @@ test "import interner - comprehensive usage example" {
 }
 
 test "module scopes - imports work in module scope" {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+    var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const allocator = gpa_state.allocator();
     // Parse source with imports used in module scope
@@ -420,7 +420,7 @@ test "module scopes - imports work in module scope" {
 }
 
 test "module-qualified lookups with e_lookup_external" {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+    var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const allocator = gpa_state.allocator();
     // Parse source with module-qualified lookups
@@ -461,7 +461,7 @@ test "module-qualified lookups with e_lookup_external" {
 }
 
 test "exposed_items - tracking CIR node indices for exposed items" {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+    var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const allocator = gpa_state.allocator();
 
@@ -529,7 +529,7 @@ test "exposed_items - tracking CIR node indices for exposed items" {
 }
 
 test "export count safety - ensures safe u16 casting" {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+    var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const allocator = gpa_state.allocator();
 

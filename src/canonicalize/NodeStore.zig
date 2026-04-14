@@ -1696,7 +1696,7 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
                 .body = @intFromEnum(s.body),
             } });
         },
-        .s_break => |_| {
+        .s_break => {
             node.tag = .statement_break;
         },
         .s_return => |s| {
@@ -1836,7 +1836,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 .elems_len = e.elems.span.len,
             } });
         },
-        .e_empty_list => |_| {
+        .e_empty_list => {
             node.tag = .expr_empty_list;
         },
         .e_tuple => |e| {
@@ -1994,7 +1994,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 .expr = @intFromEnum(d.expr),
             } });
         },
-        .e_ellipsis => |_| {
+        .e_ellipsis => {
             node.tag = .expr_ellipsis;
         },
         .e_anno_only => |anno| {
@@ -2101,7 +2101,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 .fields_ext_idx = fields_ext_idx,
             } });
         },
-        .e_empty_record => |_| {
+        .e_empty_record => {
             node.tag = .expr_empty_record;
         },
         .e_zero_argument_tag => |e| {
@@ -2544,7 +2544,7 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
                 .name = @intFromEnum(tv.ref),
             } });
         },
-        .underscore => |_| {
+        .underscore => {
             node.tag = .ty_underscore;
         },
         .lookup => |t| {

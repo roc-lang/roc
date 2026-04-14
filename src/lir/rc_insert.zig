@@ -816,7 +816,7 @@ pub const RcInsertPass = struct {
                     .callable_proc = ll.callable_proc,
                 } }, region);
             },
-            .hosted_call => |_| expr_id,
+            .hosted_call => expr_id,
             else => expr_id,
         };
 

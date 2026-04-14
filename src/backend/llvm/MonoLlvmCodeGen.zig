@@ -5570,7 +5570,7 @@ pub const MonoLlvmCodeGen = struct {
                 .decl, .mutate => |b| {
                     const stmt_expr = self.store.getExpr(b.expr);
                     switch (stmt_expr) {
-                        .lambda => |_| {
+                        .lambda => {
                             const val = try self.generateExpr(b.expr);
                             try self.bindPattern(b.pattern, val);
                             const pattern = self.store.getPattern(b.pattern);

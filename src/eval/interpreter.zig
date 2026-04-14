@@ -7601,7 +7601,7 @@ pub const Interpreter = struct {
         defer trace.end();
         const pat = self.env.store.getPattern(pattern_idx);
         switch (pat) {
-            .assign => |_| {
+            .assign => {
                 // Bind entire value to this pattern.
                 // Prefer value_rt_var when it provides more concrete type info than value.rt_var.
                 // This is critical for method receivers on polymorphic opaque types (issue #9049):

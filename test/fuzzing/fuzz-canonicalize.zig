@@ -54,7 +54,7 @@ pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
 pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
     // We reinitialize the gpa on every loop of the fuzzer.
     // This enables the gpa to do leak checking on each iteration.
-    var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa_impl = std.heap.DebugAllocator(.{}){};
     defer {
         _ = gpa_impl.deinit();
     }
