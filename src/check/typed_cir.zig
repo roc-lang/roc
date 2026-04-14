@@ -221,6 +221,10 @@ pub const Module = struct {
         return self.env().store.getNodeRegion(idx);
     }
 
+    pub fn getSource(self: @This(), region: base.Region) []const u8 {
+        return self.env().getSource(region);
+    }
+
     pub fn sliceDefs(self: @This(), span: CIR.Def.Span) []const CIR.Def.Idx {
         return self.env().store.sliceDefs(span);
     }

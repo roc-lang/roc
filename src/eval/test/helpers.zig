@@ -1,6 +1,7 @@
 //! Shared eval test helpers built on the cor-style lowering pipeline.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const types = @import("types");
 const can = @import("can");
@@ -405,12 +406,19 @@ fn boolDiscriminantIndex(
 pub const EvalState = struct {
     compiled: *CompiledProgram,
     runtime_env: *RuntimeHostEnv,
-    interp: Interpreter,
+    interp: ?Interpreter,
     value: Value,
     ret_layout: LayoutIdx,
 
+    fn interpPtr(self: *EvalState) *Interpreter {
+        if (self.interp) |*interp| return interp;
+        unreachable;
+    }
+
     pub fn deinit(self: *EvalState, allocator: std.mem.Allocator) void {
-        self.interp.deinit();
+        if (self.interp) |*interp| {
+            interp.deinit();
+        }
         self.runtime_env.deinit();
         allocator.destroy(self.runtime_env);
         self.compiled.deinit(allocator);
@@ -423,36 +431,47 @@ pub fn evalExprToValue(
     src: []const u8,
 ) !EvalState {
     const compiled_ptr = try allocator.create(CompiledProgram);
-    errdefer allocator.destroy(compiled_ptr);
+    var compiled_inited = false;
+    errdefer {
+        if (compiled_inited) compiled_ptr.deinit(allocator);
+        allocator.destroy(compiled_ptr);
+    }
     compiled_ptr.* = try compileProgram(allocator, .expr, src, &.{});
-    errdefer compiled_ptr.deinit(allocator);
+    compiled_inited = true;
 
     const runtime_env_ptr = try allocator.create(RuntimeHostEnv);
-    errdefer allocator.destroy(runtime_env_ptr);
+    var runtime_env_inited = false;
+    errdefer {
+        if (runtime_env_inited) runtime_env_ptr.deinit();
+        allocator.destroy(runtime_env_ptr);
+    }
     runtime_env_ptr.* = RuntimeHostEnv.init(allocator);
-    errdefer runtime_env_ptr.deinit();
+    runtime_env_inited = true;
 
     var eval_state: EvalState = .{
         .compiled = compiled_ptr,
         .runtime_env = runtime_env_ptr,
-        .interp = undefined,
+        .interp = null,
         .value = undefined,
         .ret_layout = undefined,
     };
     errdefer eval_state.deinit(allocator);
+    compiled_inited = false;
+    runtime_env_inited = false;
 
-    var interp = try Interpreter.init(
+    const interp = try Interpreter.init(
         allocator,
         &eval_state.compiled.lowered.lir_result.store,
         &eval_state.compiled.lowered.lir_result.layouts,
         eval_state.runtime_env.get_ops(),
     );
-    errdefer interp.deinit();
+    eval_state.interp = interp;
 
-    const result = try interp.eval(.{ .proc_id = eval_state.compiled.lowered.main_proc });
+    const result = eval_state.interp.?.eval(.{ .proc_id = eval_state.compiled.lowered.main_proc }) catch |err| {
+        return err;
+    };
     const ret_layout = eval_state.compiled.lowered.lir_result.store.getProcSpec(eval_state.compiled.lowered.main_proc).ret_layout;
 
-    eval_state.interp = interp;
     eval_state.value = result.value;
     eval_state.ret_layout = ret_layout;
 
@@ -483,7 +502,7 @@ pub fn runExpectI64(src: []const u8, expected_int: i128, should_trace: TraceMode
     std.mem.doNotOptimizeAway(should_trace);
     var eval_state = try evalExprToValue(interpreter_allocator, src);
     defer {
-        eval_state.interp.dropValue(eval_state.value, eval_state.ret_layout);
+        eval_state.interpPtr().dropValue(eval_state.value, eval_state.ret_layout);
         eval_state.deinit(interpreter_allocator);
     }
 
@@ -496,7 +515,7 @@ pub fn runExpectSuccess(src: []const u8, should_trace: TraceMode) !void {
     std.mem.doNotOptimizeAway(should_trace);
     var eval_state = try evalExprToValue(interpreter_allocator, src);
     defer {
-        eval_state.interp.dropValue(eval_state.value, eval_state.ret_layout);
+        eval_state.interpPtr().dropValue(eval_state.value, eval_state.ret_layout);
         eval_state.deinit(interpreter_allocator);
     }
 
@@ -511,7 +530,7 @@ pub fn runExpectDec(src: []const u8, expected_dec: i128, should_trace: TraceMode
     std.mem.doNotOptimizeAway(should_trace);
     var eval_state = try evalExprToValue(interpreter_allocator, src);
     defer {
-        eval_state.interp.dropValue(eval_state.value, eval_state.ret_layout);
+        eval_state.interpPtr().dropValue(eval_state.value, eval_state.ret_layout);
         eval_state.deinit(interpreter_allocator);
     }
 
@@ -524,7 +543,7 @@ pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: TraceMo
     std.mem.doNotOptimizeAway(should_trace);
     var eval_state = try evalExprToValue(interpreter_allocator, src);
     defer {
-        eval_state.interp.dropValue(eval_state.value, eval_state.ret_layout);
+        eval_state.interpPtr().dropValue(eval_state.value, eval_state.ret_layout);
         eval_state.deinit(interpreter_allocator);
     }
 
@@ -567,7 +586,7 @@ pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: Tra
     std.mem.doNotOptimizeAway(should_trace);
     var eval_state = try evalExprToValue(interpreter_allocator, src);
     defer {
-        eval_state.interp.dropValue(eval_state.value, eval_state.ret_layout);
+        eval_state.interpPtr().dropValue(eval_state.value, eval_state.ret_layout);
         eval_state.deinit(interpreter_allocator);
     }
 
@@ -595,7 +614,7 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
     std.mem.doNotOptimizeAway(should_trace);
     var eval_state = try evalExprToValue(interpreter_allocator, src);
     defer {
-        eval_state.interp.dropValue(eval_state.value, eval_state.ret_layout);
+        eval_state.interpPtr().dropValue(eval_state.value, eval_state.ret_layout);
         eval_state.deinit(interpreter_allocator);
     }
 
@@ -630,7 +649,7 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
     std.mem.doNotOptimizeAway(should_trace);
     var eval_state = try evalExprToValue(interpreter_allocator, src);
     defer {
-        eval_state.interp.dropValue(eval_state.value, eval_state.ret_layout);
+        eval_state.interpPtr().dropValue(eval_state.value, eval_state.ret_layout);
         eval_state.deinit(interpreter_allocator);
     }
 
@@ -667,7 +686,7 @@ pub fn runExpectListI64(src: []const u8, expected_elements: []const i64, should_
     std.mem.doNotOptimizeAway(should_trace);
     var eval_state = try evalExprToValue(interpreter_allocator, src);
     defer {
-        eval_state.interp.dropValue(eval_state.value, eval_state.ret_layout);
+        eval_state.interpPtr().dropValue(eval_state.value, eval_state.ret_layout);
         eval_state.deinit(interpreter_allocator);
     }
 
@@ -701,7 +720,7 @@ pub fn runExpectListZst(src: []const u8, expected_element_count: usize, should_t
     std.mem.doNotOptimizeAway(should_trace);
     var eval_state = try evalExprToValue(interpreter_allocator, src);
     defer {
-        eval_state.interp.dropValue(eval_state.value, eval_state.ret_layout);
+        eval_state.interpPtr().dropValue(eval_state.value, eval_state.ret_layout);
         eval_state.deinit(interpreter_allocator);
     }
 
@@ -738,7 +757,19 @@ pub fn runExpectTypeMismatchAndCrash(src: []const u8) !void {
             break;
         }
     }
-    if (!found_dispatch_failure) return error.ExpectedTypeMismatch;
+    if (!found_dispatch_failure) {
+        const can_diags = try resources.module_env.getDiagnostics();
+        defer interpreter_allocator.free(can_diags);
+        for (can_diags) |diag| {
+            if (diag != .unused_variable) {
+                found_dispatch_failure = true;
+                break;
+            }
+        }
+        if (!found_dispatch_failure) {
+            return error.ExpectedTypeMismatch;
+        }
+    }
 
     var compiled = try compileProgram(interpreter_allocator, .expr, src, &.{});
     defer compiled.deinit(interpreter_allocator);

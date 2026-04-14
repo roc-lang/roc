@@ -1849,10 +1849,10 @@ const Lowerer = struct {
             .var_ => |symbol| blk: {
                 break :blk try self.specializeVarExpr(inst, mono_cache, venv, symbol, ty, default_ty);
             },
-            .int_lit => |value| .{ .ty = default_ty, .data = .{ .int_lit = value } },
-            .frac_f32_lit => |value| .{ .ty = default_ty, .data = .{ .frac_f32_lit = value } },
-            .frac_f64_lit => |value| .{ .ty = default_ty, .data = .{ .frac_f64_lit = value } },
-            .dec_lit => |value| .{ .ty = default_ty, .data = .{ .dec_lit = value } },
+            .int_lit => |value| .{ .ty = default_ty, .data = try self.specializeIntLiteral(default_ty, value) },
+            .frac_f32_lit => |value| .{ .ty = default_ty, .data = try self.specializeF32Literal(default_ty, value) },
+            .frac_f64_lit => |value| .{ .ty = default_ty, .data = try self.specializeF64Literal(default_ty, value) },
+            .dec_lit => |value| .{ .ty = default_ty, .data = try self.specializeDecLiteral(default_ty, value) },
             .str_lit => |value| .{ .ty = default_ty, .data = .{ .str_lit = value } },
             .bool_lit => |value| .{ .ty = default_ty, .data = .{ .bool_lit = value } },
             .unit => .{ .ty = default_ty, .data = .unit },
@@ -2022,6 +2022,113 @@ const Lowerer = struct {
             .for_ => |for_expr| .{ .ty = default_ty, .data = .{ .for_ = try self.specializeForExpr(inst, mono_cache, venv, for_expr) } },
         };
         return try self.output.addExpr(.{ .ty = specialized.ty, .data = specialized.data });
+    }
+
+    const dec_scale_i128: i128 = 1_000_000_000_000_000_000;
+
+    fn specializeIntLiteral(
+        self: *Lowerer,
+        target_ty: type_mod.TypeId,
+        value: i128,
+    ) std.mem.Allocator.Error!ast.Expr.Data {
+        return switch (self.types.getType(target_ty)) {
+            .primitive => |prim| switch (prim) {
+                .dec => .{ .dec_lit = try self.decFromWholeInt(value) },
+                .f32 => .{ .frac_f32_lit = @as(f32, @floatFromInt(value)) },
+                .f64 => .{ .frac_f64_lit = @as(f64, @floatFromInt(value)) },
+                .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128 => .{ .int_lit = value },
+                .bool, .str, .erased => debugPanicFmt(
+                    "lambdamono numeric literal invariant violated: int literal lowered to non-numeric primitive {s}",
+                    .{@tagName(prim)},
+                ),
+            },
+            else => debugPanicFmt(
+                "lambdamono numeric literal invariant violated: int literal lowered to unsupported target type {d} ({s})",
+                .{ @intFromEnum(target_ty), @tagName(self.types.getTypePreservingNominal(target_ty)) },
+            ),
+        };
+    }
+
+    fn specializeDecLiteral(
+        self: *Lowerer,
+        target_ty: type_mod.TypeId,
+        scaled_value: i128,
+    ) std.mem.Allocator.Error!ast.Expr.Data {
+        return switch (self.types.getType(target_ty)) {
+            .primitive => |prim| switch (prim) {
+                .dec => .{ .dec_lit = scaled_value },
+                .f32 => .{ .frac_f32_lit = @floatCast(self.decToF64(scaled_value)) },
+                .f64 => .{ .frac_f64_lit = self.decToF64(scaled_value) },
+                .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128 => blk: {
+                    if (@rem(scaled_value, dec_scale_i128) != 0) {
+                        debugPanic(
+                            "lambdamono numeric literal invariant violated: decimal literal lowered to integer target with fractional component",
+                        );
+                    }
+                    break :blk .{ .int_lit = @divExact(scaled_value, dec_scale_i128) };
+                },
+                .bool, .str, .erased => debugPanicFmt(
+                    "lambdamono numeric literal invariant violated: decimal literal lowered to non-numeric primitive {s}",
+                    .{@tagName(prim)},
+                ),
+            },
+            else => debugPanicFmt(
+                "lambdamono numeric literal invariant violated: decimal literal lowered to unsupported target type {d} ({s})",
+                .{ @intFromEnum(target_ty), @tagName(self.types.getTypePreservingNominal(target_ty)) },
+            ),
+        };
+    }
+
+    fn specializeF32Literal(
+        self: *Lowerer,
+        target_ty: type_mod.TypeId,
+        value: f32,
+    ) std.mem.Allocator.Error!ast.Expr.Data {
+        return switch (self.types.getType(target_ty)) {
+            .primitive => |prim| switch (prim) {
+                .f32 => .{ .frac_f32_lit = value },
+                else => debugPanicFmt(
+                    "lambdamono numeric literal invariant violated: f32 literal lowered to non-f32 target {s}",
+                    .{@tagName(prim)},
+                ),
+            },
+            else => debugPanicFmt(
+                "lambdamono numeric literal invariant violated: f32 literal lowered to unsupported target type {d} ({s})",
+                .{ @intFromEnum(target_ty), @tagName(self.types.getTypePreservingNominal(target_ty)) },
+            ),
+        };
+    }
+
+    fn specializeF64Literal(
+        self: *Lowerer,
+        target_ty: type_mod.TypeId,
+        value: f64,
+    ) std.mem.Allocator.Error!ast.Expr.Data {
+        return switch (self.types.getType(target_ty)) {
+            .primitive => |prim| switch (prim) {
+                .f64 => .{ .frac_f64_lit = value },
+                else => debugPanicFmt(
+                    "lambdamono numeric literal invariant violated: f64 literal lowered to non-f64 target {s}",
+                    .{@tagName(prim)},
+                ),
+            },
+            else => debugPanicFmt(
+                "lambdamono numeric literal invariant violated: f64 literal lowered to unsupported target type {d} ({s})",
+                .{ @intFromEnum(target_ty), @tagName(self.types.getTypePreservingNominal(target_ty)) },
+            ),
+        };
+    }
+
+    fn decFromWholeInt(_: *Lowerer, value: i128) std.mem.Allocator.Error!i128 {
+        const result = @mulWithOverflow(value, dec_scale_i128);
+        if (result[1] != 0) {
+            debugPanic("lambdamono numeric literal invariant violated: Dec whole-int literal overflowed i128 representation");
+        }
+        return result[0];
+    }
+
+    fn decToF64(_: *Lowerer, value: i128) f64 {
+        return @as(f64, @floatFromInt(value)) / @as(f64, @floatFromInt(dec_scale_i128));
     }
 
     fn specializeInspectExpr(

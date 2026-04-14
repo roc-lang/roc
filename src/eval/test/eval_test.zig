@@ -3382,7 +3382,7 @@ test "polymorphic tag union: erroneous match in block crashes at runtime" {
         \\{
         \\    get_err : [Ok(a), Err(e)] -> e
         \\    get_err = |result| {
-        \\        unused = 0
+        \\        _unused = 0
         \\        match result {
         \\            Ok(_) => ""
         \\            Err(e) => e

@@ -1367,13 +1367,25 @@ const ProcLowerer = struct {
             },
             .get_union_id => |value| blk: {
                 const source_local = try self.lowerVar(value);
-                if (self.parent.layouts.getLayout(self.localLayout(source_local)).tag == .zst) {
+                const source_layout = self.parent.layouts.getLayout(self.localLayout(source_local));
+                if (source_layout.tag == .zst) {
                     break :blk try self.parent.store.addCFStmt(.{ .assign_literal = .{
                         .target = target,
                         .result = .fresh,
                         .value = .{ .i64_literal = .{ .value = 0, .layout_idx = self.localLayout(target) } },
                         .next = next,
                     } });
+                }
+                if (source_layout.tag == .tag_union) {
+                    const tu_data = self.parent.layouts.getTagUnionData(source_layout.data.tag_union.idx);
+                    if (tu_data.discriminant_size == 0) {
+                        break :blk try self.parent.store.addCFStmt(.{ .assign_literal = .{
+                            .target = target,
+                            .result = .fresh,
+                            .value = .{ .i64_literal = .{ .value = 0, .layout_idx = self.localLayout(target) } },
+                            .next = next,
+                        } });
+                    }
                 }
                 break :blk try self.parent.store.addCFStmt(.{ .assign_ref = .{
                     .target = target,

@@ -2092,6 +2092,7 @@ Builtin :: [].{
 			} else {
 				False
 			}
+			is_eq : F32, F32 -> Bool
 			is_negative : F32 -> Bool
 			is_negative = |self| self < 0
 			is_positive : F32 -> Bool
@@ -2169,6 +2170,7 @@ Builtin :: [].{
 			} else {
 				False
 			}
+			is_eq : F64, F64 -> Bool
 			is_negative : F64 -> Bool
 			is_negative = |self| self < 0
 			is_positive : F64 -> Bool

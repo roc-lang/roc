@@ -542,8 +542,11 @@ fn runCrashTest(
     const can_diags = try compiled.resources.module_env.getDiagnostics();
     defer allocator.free(can_diags);
     const type_problems = compiled.resources.checker.problems.problems.items.len;
-    const has_problems = can_diags.len + type_problems > 0;
-
+    var can_errors: usize = 0;
+    for (can_diags) |diag| {
+        if (canDiagnosticIsError(diag)) can_errors += 1;
+    }
+    const has_problems = can_errors + type_problems > 0;
     if (require_problems and !has_problems) {
         return .{
             .status = .fail,
@@ -557,6 +560,15 @@ fn runCrashTest(
     }
 
     if (!require_problems and has_problems) {
+        if (@import("builtin").mode == .Debug) {
+            std.debug.print("runCrashTest compile-time problems:\n", .{});
+            for (can_diags) |diag| {
+                std.debug.print("  can: {s}\n", .{@tagName(diag)});
+            }
+            for (compiled.resources.checker.problems.problems.items) |problem| {
+                std.debug.print("  type: {s}\n", .{@tagName(problem)});
+            }
+        }
         return .{
             .status = .fail,
             .message = "unexpected compile-time problems in runtime crash test",
@@ -641,6 +653,22 @@ fn runCrashTest(
         return .{ .status = .fail, .timings = final_timings, .backends = backends };
     }
     return .{ .status = .pass, .timings = final_timings, .backends = backends };
+}
+
+fn canDiagnosticIsError(diag: anytype) bool {
+    return switch (diag) {
+        .shadowing_warning,
+        .unused_variable,
+        .used_underscore_variable,
+        .type_shadowed_warning,
+        .unused_type_var_name,
+        .type_var_marked_unused,
+        .underscore_in_type_declaration,
+        .module_header_deprecated,
+        .deprecated_number_suffix,
+        => false,
+        else => true,
+    };
 }
 
 //

@@ -887,8 +887,10 @@ const Lowerer = struct {
         return msg;
     }
 
+
     fn markExprRuntimeError(self: *Lowerer, expr_id: ast.ExprId, expected_ty: TypeVarId) std.mem.Allocator.Error!void {
         const msg = try self.runtimeErrorMessage();
+        // runtime_error is emitted by design when type checking found an error
         const idx = @intFromEnum(expr_id);
         var expr = self.output.exprs.items[idx];
         expr.ty = expected_ty;
@@ -969,23 +971,21 @@ const Lowerer = struct {
                 const left_tags = self.types.sliceTags(tag_union.tags);
                 const right_tags = self.types.sliceTags(right.tag_union.tags);
                 for (left_tags) |left_tag| {
-                    if (findTagByName(right_tags, left_tag.name)) |right_tag| {
-                        const left_args = self.types.sliceTypeVarSpan(left_tag.args);
-                        const right_args = self.types.sliceTypeVarSpan(right_tag.args);
-                        if (left_args.len != right_args.len) return false;
-                        for (left_args, 0..) |left_arg, i| {
-                            if (!self.typesCompatibleRec(left_arg, right_args[i], visited)) return false;
-                        }
+                    const right_tag = findTagByName(right_tags, left_tag.name) orelse return false;
+                    const left_args = self.types.sliceTypeVarSpan(left_tag.args);
+                    const right_args = self.types.sliceTypeVarSpan(right_tag.args);
+                    if (left_args.len != right_args.len) return false;
+                    for (left_args, 0..) |left_arg, i| {
+                        if (!self.typesCompatibleRec(left_arg, right_args[i], visited)) return false;
                     }
                 }
                 for (right_tags) |right_tag| {
-                    if (findTagByName(left_tags, right_tag.name)) |left_tag| {
-                        const left_args = self.types.sliceTypeVarSpan(left_tag.args);
-                        const right_args = self.types.sliceTypeVarSpan(right_tag.args);
-                        if (left_args.len != right_args.len) return false;
-                        for (left_args, 0..) |left_arg, i| {
-                            if (!self.typesCompatibleRec(left_arg, right_args[i], visited)) return false;
-                        }
+                    const left_tag = findTagByName(left_tags, right_tag.name) orelse return false;
+                    const left_args = self.types.sliceTypeVarSpan(left_tag.args);
+                    const right_args = self.types.sliceTypeVarSpan(right_tag.args);
+                    if (left_args.len != right_args.len) return false;
+                    for (left_args, 0..) |left_arg, i| {
+                        if (!self.typesCompatibleRec(left_arg, right_args[i], visited)) return false;
                     }
                 }
                 return true;

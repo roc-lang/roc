@@ -1230,6 +1230,14 @@ pub const Interpreter = struct {
                     current = expect_stmt.next;
                 },
                 .runtime_error => {
+                    if (builtin.mode == .Debug) {
+                        std.debug.print(
+                            "LIR/interpreter runtime_error in proc {d} at stmt {d}\n",
+                            .{ @intFromEnum(frame.proc_id), @intFromEnum(current) },
+                        );
+                        self.debugDumpProc(frame.proc_id);
+                        self.debugPrintStmtChain(current, 12);
+                    }
                     return self.runtimeError("RuntimeError");
                 },
                 .incref => |inc| {
@@ -1265,6 +1273,21 @@ pub const Interpreter = struct {
                         self.store.getLocal(switch_stmt.cond).layout_idx,
                     );
                     const branches = self.store.getCFSwitchBranches(switch_stmt.branches);
+                    if (trace.enabled) {
+                        trace.log(
+                            "switch: cond_local={d} layout={any} value={d} branches={d} default={d}",
+                            .{
+                                @intFromEnum(switch_stmt.cond),
+                                self.store.getLocal(switch_stmt.cond).layout_idx,
+                                cond_value,
+                                branches.len,
+                                @intFromEnum(switch_stmt.default_branch),
+                            },
+                        );
+                        for (branches) |branch| {
+                            trace.log("  branch value={d} body={d}", .{ branch.value, @intFromEnum(branch.body) });
+                        }
+                    }
                     var target = switch_stmt.default_branch;
                     for (branches) |branch| {
                         if (branch.value == cond_value) {
@@ -1366,6 +1389,250 @@ pub const Interpreter = struct {
         }
     }
 
+    fn debugDumpProc(self: *LirInterpreter, proc_id: LirProcSpecId) void {
+        if (builtin.mode != .Debug) return;
+        const proc_spec = self.store.getProcSpec(proc_id);
+        const body = proc_spec.body orelse {
+            std.debug.print("  proc {d} has no body\n", .{ @intFromEnum(proc_id) });
+            return;
+        };
+
+        std.debug.print(
+            "  proc {d} body={d} ret_layout={d}\n",
+            .{ @intFromEnum(proc_id), @intFromEnum(body), @intFromEnum(proc_spec.ret_layout) },
+        );
+        const local_count = self.store.locals.items.len;
+        if (local_count > 0) {
+            std.debug.print("  locals:\n", .{});
+            for (self.store.locals.items, 0..) |local, idx| {
+                const layout_idx = local.layout_idx;
+                const layout_val = self.layout_store.getLayout(layout_idx);
+                std.debug.print(
+                    "    local {d}: layout={d} tag={s}",
+                    .{ idx, @intFromEnum(layout_idx), @tagName(layout_val.tag) },
+                );
+                if (layout_val.tag == .tag_union) {
+                    const tu_info = self.layout_store.getTagUnionInfo(layout_val);
+                    std.debug.print(" variants={d}", .{tu_info.variants.len});
+                }
+                std.debug.print("\n", .{});
+            }
+        }
+
+        var visited = std.AutoHashMap(CFStmtId, void).init(self.allocator);
+        defer visited.deinit();
+        var stack = std.ArrayListUnmanaged(CFStmtId){};
+        defer stack.deinit(self.allocator);
+        stack.append(self.allocator, body) catch return;
+
+        while (stack.items.len > 0) {
+            const stmt_id = stack.pop().?;
+            if (visited.contains(stmt_id)) continue;
+            visited.put(stmt_id, {}) catch return;
+            const stmt = self.store.getCFStmt(stmt_id);
+            switch (stmt) {
+                .assign_symbol => |assign| {
+                    std.debug.print("    {d}: assign_symbol target={d} next={d}\n", .{
+                        @intFromEnum(stmt_id),
+                        @intFromEnum(assign.target),
+                        @intFromEnum(assign.next),
+                    });
+                    stack.append(self.allocator, assign.next) catch return;
+                },
+                .assign_ref => |assign| {
+                    std.debug.print("    {d}: assign_ref target={d} next={d}\n", .{
+                        @intFromEnum(stmt_id),
+                        @intFromEnum(assign.target),
+                        @intFromEnum(assign.next),
+                    });
+                    stack.append(self.allocator, assign.next) catch return;
+                },
+                .assign_literal => |assign| {
+                    std.debug.print("    {d}: assign_literal target={d} next={d}\n", .{
+                        @intFromEnum(stmt_id),
+                        @intFromEnum(assign.target),
+                        @intFromEnum(assign.next),
+                    });
+                    stack.append(self.allocator, assign.next) catch return;
+                },
+                .assign_call => |assign| {
+                    std.debug.print("    {d}: assign_call proc={d} target={d} next={d}\n", .{
+                        @intFromEnum(stmt_id),
+                        @intFromEnum(assign.proc),
+                        @intFromEnum(assign.target),
+                        @intFromEnum(assign.next),
+                    });
+                    stack.append(self.allocator, assign.next) catch return;
+                },
+                .assign_call_indirect => |assign| {
+                    std.debug.print("    {d}: assign_call_indirect target={d} next={d}\n", .{
+                        @intFromEnum(stmt_id),
+                        @intFromEnum(assign.target),
+                        @intFromEnum(assign.next),
+                    });
+                    stack.append(self.allocator, assign.next) catch return;
+                },
+                .assign_low_level => |assign| {
+                    std.debug.print("    {d}: assign_low_level target={d} op={s} next={d}\n", .{
+                        @intFromEnum(stmt_id),
+                        @intFromEnum(assign.target),
+                        @tagName(assign.op),
+                        @intFromEnum(assign.next),
+                    });
+                    stack.append(self.allocator, assign.next) catch return;
+                },
+                .assign_list => |assign| {
+                    std.debug.print("    {d}: assign_list target={d} next={d}\n", .{
+                        @intFromEnum(stmt_id),
+                        @intFromEnum(assign.target),
+                        @intFromEnum(assign.next),
+                    });
+                    stack.append(self.allocator, assign.next) catch return;
+                },
+                .assign_struct => |assign| {
+                    std.debug.print("    {d}: assign_struct target={d} next={d}\n", .{
+                        @intFromEnum(stmt_id),
+                        @intFromEnum(assign.target),
+                        @intFromEnum(assign.next),
+                    });
+                    stack.append(self.allocator, assign.next) catch return;
+                },
+                .assign_tag => |assign| {
+                    std.debug.print("    {d}: assign_tag target={d} discrim={d} next={d}\n", .{
+                        @intFromEnum(stmt_id),
+                        @intFromEnum(assign.target),
+                        assign.discriminant,
+                        @intFromEnum(assign.next),
+                    });
+                    stack.append(self.allocator, assign.next) catch return;
+                },
+                .set_local => |assign| {
+                    std.debug.print("    {d}: set_local target={d} value={d} next={d}\n", .{
+                        @intFromEnum(stmt_id),
+                        @intFromEnum(assign.target),
+                        @intFromEnum(assign.value),
+                        @intFromEnum(assign.next),
+                    });
+                    stack.append(self.allocator, assign.next) catch return;
+                },
+                .debug => |debug_stmt| {
+                    std.debug.print("    {d}: debug next={d}\n", .{
+                        @intFromEnum(stmt_id),
+                        @intFromEnum(debug_stmt.next),
+                    });
+                    stack.append(self.allocator, debug_stmt.next) catch return;
+                },
+                .expect => |expect_stmt| {
+                    std.debug.print("    {d}: expect cond={d} next={d}\n", .{
+                        @intFromEnum(stmt_id),
+                        @intFromEnum(expect_stmt.condition),
+                        @intFromEnum(expect_stmt.next),
+                    });
+                    stack.append(self.allocator, expect_stmt.next) catch return;
+                },
+                .runtime_error => {
+                    std.debug.print("    {d}: runtime_error\n", .{ @intFromEnum(stmt_id) });
+                },
+                .incref => |inc| {
+                    std.debug.print("    {d}: incref value={d} next={d}\n", .{
+                        @intFromEnum(stmt_id),
+                        @intFromEnum(inc.value),
+                        @intFromEnum(inc.next),
+                    });
+                    stack.append(self.allocator, inc.next) catch return;
+                },
+                .decref => |dec| {
+                    std.debug.print("    {d}: decref value={d} next={d}\n", .{
+                        @intFromEnum(stmt_id),
+                        @intFromEnum(dec.value),
+                        @intFromEnum(dec.next),
+                    });
+                    stack.append(self.allocator, dec.next) catch return;
+                },
+                .free => |dec| {
+                    std.debug.print("    {d}: free value={d} next={d}\n", .{
+                        @intFromEnum(stmt_id),
+                        @intFromEnum(dec.value),
+                        @intFromEnum(dec.next),
+                    });
+                    stack.append(self.allocator, dec.next) catch return;
+                },
+                .switch_stmt => |switch_stmt| {
+                    std.debug.print("    {d}: switch cond={d} default={d}\n", .{
+                        @intFromEnum(stmt_id),
+                        @intFromEnum(switch_stmt.cond),
+                        @intFromEnum(switch_stmt.default_branch),
+                    });
+                    stack.append(self.allocator, switch_stmt.default_branch) catch return;
+                    const branches = self.store.getCFSwitchBranches(switch_stmt.branches);
+                    for (branches) |branch| {
+                        std.debug.print("        branch {d} -> {d}\n", .{
+                            branch.value,
+                            @intFromEnum(branch.body),
+                        });
+                        stack.append(self.allocator, branch.body) catch return;
+                    }
+                },
+                .borrow_scope => |scope| {
+                    std.debug.print("    {d}: borrow_scope body={d} remainder={d}\n", .{
+                        @intFromEnum(stmt_id),
+                        @intFromEnum(scope.body),
+                        @intFromEnum(scope.remainder),
+                    });
+                    stack.append(self.allocator, scope.body) catch return;
+                    stack.append(self.allocator, scope.remainder) catch return;
+                },
+                .scope_exit => |scope| {
+                    std.debug.print("    {d}: scope_exit id={d}\n", .{
+                        @intFromEnum(stmt_id),
+                        @intFromEnum(scope.id),
+                    });
+                },
+                .for_list => |for_list| {
+                    std.debug.print("    {d}: for_list elem={d} iterable={d} body={d} next={d}\n", .{
+                        @intFromEnum(stmt_id),
+                        @intFromEnum(for_list.elem),
+                        @intFromEnum(for_list.iterable),
+                        @intFromEnum(for_list.body),
+                        @intFromEnum(for_list.next),
+                    });
+                    stack.append(self.allocator, for_list.body) catch return;
+                    stack.append(self.allocator, for_list.next) catch return;
+                },
+                .loop_continue => {
+                    std.debug.print("    {d}: loop_continue\n", .{ @intFromEnum(stmt_id) });
+                },
+                .join => |join| {
+                    std.debug.print("    {d}: join body={d} remainder={d}\n", .{
+                        @intFromEnum(stmt_id),
+                        @intFromEnum(join.body),
+                        @intFromEnum(join.remainder),
+                    });
+                    stack.append(self.allocator, join.body) catch return;
+                    stack.append(self.allocator, join.remainder) catch return;
+                },
+                .jump => |jump| {
+                    std.debug.print("    {d}: jump target={d}\n", .{
+                        @intFromEnum(stmt_id),
+                        @intFromEnum(jump.target),
+                    });
+                },
+                .ret => |ret| {
+                    std.debug.print("    {d}: ret value={d}\n", .{
+                        @intFromEnum(stmt_id),
+                        @intFromEnum(ret.value),
+                    });
+                },
+                .crash => |crash| {
+                    std.debug.print("    {d}: crash msg={d}\n", .{
+                        @intFromEnum(stmt_id),
+                        @intFromEnum(crash.msg),
+                    });
+                },
+            }
+        }
+    }
+
     fn collectLocalValues(self: *LirInterpreter, frame: *const Frame, locals: []const LocalId) Error![]Value {
         if (locals.len == 0) return &.{};
         const values = try self.arena.allocator().alloc(Value, locals.len);
@@ -1395,16 +1662,24 @@ pub const Interpreter = struct {
     };
 
     fn readSwitchValue(self: *LirInterpreter, value: Value, layout_idx: layout_mod.Idx) Error!u64 {
-        return switch (self.helper.sizeOf(layout_idx)) {
-            0 => 0,
-            1 => value.read(u8),
-            2 => value.read(u16),
-            4 => value.read(u32),
-            8 => value.read(u64),
-            else => return self.invariantFailedError(
-                "LIR/interpreter invariant violated: switch condition layout {d} is not a supported scalar width",
-                .{@intFromEnum(layout_idx)},
-            ),
+        const layout_val = self.layout_store.getLayout(layout_idx);
+        return switch (layout_val.tag) {
+            .tag_union => {
+                if (self.helper.sizeOf(layout_idx) == 0) return 0;
+                const tu_info = self.layout_store.getTagUnionInfo(layout_val);
+                return tu_info.readDiscriminant(value.ptr);
+            },
+            else => switch (self.helper.sizeOf(layout_idx)) {
+                0 => 0,
+                1 => value.read(u8),
+                2 => value.read(u16),
+                4 => value.read(u32),
+                8 => value.read(u64),
+                else => return self.invariantFailedError(
+                    "LIR/interpreter invariant violated: switch condition layout {d} is not a supported scalar width",
+                    .{@intFromEnum(layout_idx)},
+                ),
+            },
         };
     }
 

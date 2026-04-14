@@ -3123,6 +3123,28 @@ pub fn canonicalizeFile(
     eval_order_ptr.* = eval_order;
     self.env.evaluation_order = eval_order_ptr;
 
+    // Finalize top-level scope diagnostics (forward refs + unused vars).
+    if (self.scopes.items.len > 0) {
+        const top_scope = &self.scopes.items[0];
+        var forward_ref_iter = top_scope.forward_references.iterator();
+        while (forward_ref_iter.next()) |entry| {
+            const ident_idx = entry.key_ptr.*;
+            const forward_ref = entry.value_ptr.*;
+            for (forward_ref.reference_regions.items) |ref_region| {
+                try self.env.pushDiagnostic(Diagnostic{ .ident_not_in_scope = .{
+                    .ident = ident_idx,
+                    .region = ref_region,
+                } });
+            }
+        }
+        try self.checkScopeForUnusedVariables(top_scope);
+    }
+
+    // Capture canonicalization diagnostics for later stages.
+    if (self.env.store.scratch != null) {
+        self.env.diagnostics = try self.env.store.diagnosticSpanFrom(0);
+    }
+
     // Assert that everything is in-sync
     self.env.debugAssertArraysInSync();
 }

@@ -1099,10 +1099,7 @@ fn mkFlexWithFromNumeralConstraint(
     const from_numeral_ident = self.cir.idents.from_numeral;
 
     // Create the flex var first - this represents the target type `a`
-    const flex_rank = if (env.rank() == Rank.generalized or env.rank() == Rank.outermost)
-        env.rank()
-    else
-        env.rank().prev();
+    const flex_rank = env.rank();
     const flex_var = try self.freshFromContentAtRank(.{ .flex = Flex.init() }, env, num_literal_info.region, flex_rank);
     self.types.markFromNumeralOrigin(flex_var);
 
@@ -1901,15 +1898,15 @@ fn findTypeAliasBodyVar(self: *Self, name: Ident.Idx) ?Var {
 ///
 /// When these are looked up, we need to *not* instantiate the alias, so all
 /// references in the module Point to the same var.
-fn isForClauseAliasStatement(self: *Self, stmt_idx: CIR.Statement.Idx) bool {
-    // Slice the for-clause alias statements and check if stmt_idx is in the list
-    for (self.cir.for_clause_aliases.items.items) |for_clause| {
-        if (stmt_idx == for_clause.alias_stmt_idx) {
-            return true;
+    fn isForClauseAliasStatement(self: *Self, stmt_idx: CIR.Statement.Idx) bool {
+        // Slice the for-clause alias statements and check if stmt_idx is in the list
+        for (self.cir.for_clause_aliases.items.items) |for_clause| {
+            if (stmt_idx == for_clause.alias_stmt_idx) {
+                return true;
+            }
         }
+        return false;
     }
-    return false;
-}
 
 // repl //
 
@@ -5111,8 +5108,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
     }
 
     self.var_set.clearRetainingCapacity();
-    if (self.varContainsError(expr_var, &self.var_set) and mb_anno_vars == null) {
-        try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
+    if (mb_anno_vars == null) {
+        if (self.varContainsError(expr_var, &self.var_set)) {
+            try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
+        }
     }
 
     // Check any accumulated static dispatch constraints
@@ -5471,8 +5470,18 @@ fn checkIfElseExpr(
 
     if (expected_branch_ret) |expected_ret| {
         const first_body_var = ModuleEnv.varFrom(first_branch.body);
-        if (!self.isCompatibleWithExpected(first_body_var, expected_ret)) {
+        const branch_ctx = problem.Context{ .if_branch = .{
+            .branch_index = 0,
+            .num_branches = @intCast(branches.len + 1),
+            .is_else = false,
+            .parent_if_expr = if_expr_idx,
+            .last_if_branch = first_branch_idx,
+        } };
+        if (!self.isCompatibleWithExpected(first_body_var, expected_ret, branch_ctx)) {
             try self.markErroneousBranchWithExpected(first_branch.body, expected_ret, env);
+            try self.unifyWith(first_body_var, .err, env);
+        } else {
+            _ = try self.unifyInContext(first_body_var, expected_ret, env, branch_ctx);
         }
     }
 
@@ -5498,8 +5507,18 @@ fn checkIfElseExpr(
         // Check against expected return type BEFORE pairwise unification
         if (expected_branch_ret) |expected_ret| {
             const this_body_var = ModuleEnv.varFrom(branch.body);
-            if (!self.isCompatibleWithExpected(this_body_var, expected_ret)) {
+            const branch_ctx = problem.Context{ .if_branch = .{
+                .branch_index = @intCast(cur_index),
+                .num_branches = num_branches,
+                .is_else = false,
+                .parent_if_expr = if_expr_idx,
+                .last_if_branch = last_if_branch,
+            } };
+            if (!self.isCompatibleWithExpected(this_body_var, expected_ret, branch_ctx)) {
                 try self.markErroneousBranchWithExpected(branch.body, expected_ret, env);
+                try self.unifyWith(this_body_var, .err, env);
+            } else {
+                _ = try self.unifyInContext(this_body_var, expected_ret, env, branch_ctx);
             }
         } else {
             const body_var: Var = ModuleEnv.varFrom(branch.body);
@@ -5513,7 +5532,7 @@ fn checkIfElseExpr(
 
             if (!body_result.isOk()) {
                 // Check remaining branches to catch their individual errors
-                for (branches[cur_index + 1 ..]) |remaining_branch_idx| {
+                for (branches[cur_index + 1 ..], cur_index + 1..) |remaining_branch_idx, remaining_index| {
                     const remaining_branch = self.cir.store.getIfBranch(remaining_branch_idx);
 
                     does_fx = try self.checkExpr(remaining_branch.cond, env, .no_expectation) or does_fx;
@@ -5527,7 +5546,14 @@ fn checkIfElseExpr(
                     // Check against expected return type before setting to .err
                     if (expected_branch_ret) |expected_ret| {
                         const rem_body_var = ModuleEnv.varFrom(remaining_branch.body);
-                        if (!self.isCompatibleWithExpected(rem_body_var, expected_ret)) {
+                        const branch_ctx = problem.Context{ .if_branch = .{
+                            .branch_index = @intCast(remaining_index),
+                            .num_branches = num_branches,
+                            .is_else = false,
+                            .parent_if_expr = if_expr_idx,
+                            .last_if_branch = last_if_branch,
+                        } };
+                        if (!self.isCompatibleWithExpected(rem_body_var, expected_ret, branch_ctx)) {
                             try self.markErroneousBranchWithExpected(remaining_branch.body, expected_ret, env);
                         }
                     }
@@ -5549,8 +5575,18 @@ fn checkIfElseExpr(
     // Check final else against expected return type before pairwise unification
     if (expected_branch_ret) |expected_ret| {
         const final_else_body_var = ModuleEnv.varFrom(if_.final_else);
-        if (!self.isCompatibleWithExpected(final_else_body_var, expected_ret)) {
+        const branch_ctx = problem.Context{ .if_branch = .{
+            .branch_index = num_branches - 1,
+            .num_branches = num_branches,
+            .is_else = true,
+            .parent_if_expr = if_expr_idx,
+            .last_if_branch = last_if_branch,
+        } };
+        if (!self.isCompatibleWithExpected(final_else_body_var, expected_ret, branch_ctx)) {
             try self.markErroneousBranchWithExpected(if_.final_else, expected_ret, env);
+            try self.unifyWith(final_else_body_var, .err, env);
+        } else {
+            _ = try self.unifyInContext(final_else_body_var, expected_ret, env, branch_ctx);
         }
         const if_expr_var: Var = ModuleEnv.varFrom(if_expr_idx);
         _ = try self.unify(if_expr_var, expected_ret, env);
@@ -5662,8 +5698,16 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
     // Check first branch body against expected return type
     if (expected_match_ret) |expected_ret| {
         const first_body_var = ModuleEnv.varFrom(first_branch.value);
-        if (!self.isCompatibleWithExpected(first_body_var, expected_ret)) {
+        const branch_ctx = problem.Context{ .match_branch = .{
+            .branch_index = 0,
+            .num_branches = @intCast(match.branches.span.len),
+            .match_expr = expr_idx,
+        } };
+        if (!self.isCompatibleWithExpected(first_body_var, expected_ret, branch_ctx)) {
             try self.markErroneousBranchWithExpected(first_branch.value, expected_ret, env);
+            try self.unifyWith(first_body_var, .err, env);
+        } else {
+            _ = try self.unifyInContext(first_body_var, expected_ret, env, branch_ctx);
         }
     }
 
@@ -5712,8 +5756,16 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
         // making it impossible to distinguish correct from incorrect branches afterward.
         if (expected_match_ret) |expected_ret| {
             const body_var = ModuleEnv.varFrom(branch.value);
-            if (!self.isCompatibleWithExpected(body_var, expected_ret)) {
+            const branch_ctx = problem.Context{ .match_branch = .{
+                .branch_index = @intCast(branch_cur_index),
+                .num_branches = @intCast(match.branches.span.len),
+                .match_expr = expr_idx,
+            } };
+            if (!self.isCompatibleWithExpected(body_var, expected_ret, branch_ctx)) {
                 try self.markErroneousBranchWithExpected(branch.value, expected_ret, env);
+                try self.unifyWith(body_var, .err, env);
+            } else {
+                _ = try self.unifyInContext(body_var, expected_ret, env, branch_ctx);
             }
         } else {
             const branch_result = try self.unifyInContext(val_var, ModuleEnv.varFrom(branch.value), env, .{ .match_branch = .{
@@ -5752,7 +5804,12 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
                     // Check against expected return type before setting to .err
                     if (expected_match_ret) |expected_ret| {
                         const other_body_var = ModuleEnv.varFrom(other_branch.value);
-                        if (!self.isCompatibleWithExpected(other_body_var, expected_ret)) {
+                        const branch_ctx = problem.Context{ .match_branch = .{
+                            .branch_index = @intCast(other_branch_cur_index),
+                            .num_branches = @intCast(match.branches.span.len),
+                            .match_expr = expr_idx,
+                        } };
+                        if (!self.isCompatibleWithExpected(other_body_var, expected_ret, branch_ctx)) {
                             try self.markErroneousBranchWithExpected(other_branch.value, expected_ret, env);
                         }
                     }
@@ -6185,6 +6242,9 @@ fn reportMissingNominalMethodForBinop(
     }
 
     const nominal_type = resolved_lhs.desc.content.structure.nominal_type;
+    if (method_name.eql(self.cir.idents.is_eq) and self.nominalSupportsImplicitIsEq(nominal_type)) {
+        return false;
+    }
     const original_env = self.getNominalOriginEnv(nominal_type);
     const method_ident = original_env.lookupMethodIdentFromEnvConst(self.cir, nominal_type.ident.ident_idx, method_name) orelse {
         try self.reportMissingNominalMethodForBinopConstraint(lhs_var, rhs_var, expr_var, method_name, env, region, expr_idx);
@@ -7109,6 +7169,205 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     // in ComptimeEvaluator.validateDeferredNumericLiterals()
                 }
                 break :dispatch_resolution;
+            } else if (dispatcher_content == .alias) {
+                const alias = dispatcher_content.alias;
+
+                // Get the module ident that this alias type was defined in
+                const original_module_ident = alias.origin_module;
+                const is_this_module = original_module_ident.eql(self.builtin_ctx.module_name);
+
+                const original_env: *const ModuleEnv = blk: {
+                    if (is_this_module) {
+                        break :blk self.cir;
+                    } else if (original_module_ident.eql(self.cir.idents.builtin_module)) {
+                        if (self.builtin_ctx.builtin_module) |builtin_env| {
+                            break :blk builtin_env;
+                        } else {
+                            break :blk self.cir;
+                        }
+                    } else {
+                        for (self.imported_modules) |imported_env| {
+                            const imported_name = if (!imported_env.qualified_module_ident.isNone())
+                                imported_env.getIdent(imported_env.qualified_module_ident)
+                            else
+                                imported_env.module_name;
+                            const imported_module_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text(imported_name));
+                            if (imported_module_ident.eql(original_module_ident)) {
+                                break :blk imported_env;
+                            }
+                        }
+
+                        std.debug.panic(
+                            "Unable to find module environment for type {s} from module {s}",
+                            .{ self.cir.getIdent(alias.ident.ident_idx), self.cir.getIdent(original_module_ident) },
+                        );
+                    }
+                };
+
+                const region = self.getRegionAt(deferred_constraint.var_);
+                const constraints_range = deferred_constraint.constraints;
+                const constraints_len = constraints_range.len();
+                const constraints_start: usize = @intFromEnum(constraints_range.start);
+                var constraint_i: usize = 0;
+                while (constraint_i < constraints_len) : (constraint_i += 1) {
+                    const constraint = self.types.static_dispatch_constraints.items.items[constraints_start + constraint_i];
+                    const constraint_fn_resolved = self.types.resolveVar(constraint.fn_var).desc.content;
+                    if (constraint_fn_resolved == .err) continue;
+
+                    if (constraint.fn_name.eql(self.cir.idents.is_eq)) {
+                        const method_ident = original_env.lookupMethodIdentFromTwoEnvsConst(
+                            original_env,
+                            alias.ident.ident_idx,
+                            self.cir,
+                            constraint.fn_name,
+                        );
+                        if (method_ident == null) {
+                            const backing_var = self.types.getAliasBackingVar(alias);
+                            if (self.varSupportsIsEq(backing_var)) {
+                                try self.satisfyImplicitEqualityConstraint(
+                                    deferred_constraint.var_,
+                                    constraint.fn_var,
+                                    env,
+                                    region,
+                                );
+                            } else {
+                                try self.reportEqualityError(
+                                    deferred_constraint.var_,
+                                    constraint,
+                                    env,
+                                );
+                            }
+                            continue;
+                        }
+                    }
+
+                    const method_ident = original_env.lookupMethodIdentFromTwoEnvsConst(
+                        original_env,
+                        alias.ident.ident_idx,
+                        self.cir,
+                        constraint.fn_name,
+                    ) orelse {
+                        try self.reportConstraintError(
+                            deferred_constraint.var_,
+                            constraint,
+                            .{ .missing_method = .nominal },
+                            env,
+                            is_numeric_default_pass,
+                        );
+                        continue;
+                    };
+
+                    const node_idx_in_original_env = original_env.getExposedNodeIndexById(method_ident) orelse {
+                        try self.reportConstraintError(
+                            deferred_constraint.var_,
+                            constraint,
+                            .{ .missing_method = .nominal },
+                            env,
+                            is_numeric_default_pass,
+                        );
+                        continue;
+                    };
+
+                    const def_idx: CIR.Def.Idx = @enumFromInt(@as(u32, @intCast(node_idx_in_original_env)));
+                    const def_var: Var = ModuleEnv.varFrom(def_idx);
+
+                    var cycle_method_expr_var: ?Var = null;
+                    if (is_this_module) {
+                        const def = original_env.store.getDef(def_idx);
+                        const mb_processing_def = self.top_level_ptrns.get(def.pattern);
+                        if (mb_processing_def) |processing_def| {
+                            std.debug.assert(processing_def.def_idx == def_idx);
+                            switch (processing_def.status) {
+                                .not_processed => {
+                                    var sub_env = try self.env_pool.acquire();
+                                    errdefer self.env_pool.release(sub_env);
+
+                                    try sub_env.var_pool.pushRank();
+                                    std.debug.assert(sub_env.rank() == .outermost);
+
+                                    try self.checkDef(processing_def.def_idx, &sub_env);
+
+                                    if (self.defer_generalize) {
+                                        std.debug.assert(self.cycle_root_def != null);
+
+                                        try self.deferred_cycle_envs.append(self.gpa, sub_env);
+                                        const def_expr_var = ModuleEnv.varFrom(def.expr);
+                                        cycle_method_expr_var = def_expr_var;
+                                    } else {
+                                        std.debug.assert(sub_env.rank() == .outermost);
+                                        self.env_pool.release(sub_env);
+                                    }
+                                },
+                                .processing => {
+                                    if (!isFunctionDef(&self.cir.store, self.cir.store.getExpr(def.expr))) {
+                                        if (builtin.mode == .Debug) {
+                                            std.debug.panic(
+                                                "frontend invariant violated: recursive non-function top-level method/value def {d} reached type checking",
+                                                .{@intFromEnum(processing_def.def_idx)},
+                                            );
+                                        } else unreachable;
+                                    }
+
+                                    cycle_method_expr_var = try self.fresh(env, region);
+
+                                    if (self.current_processing_def) |current_def| {
+                                        if (current_def != processing_def.def_idx) {
+                                            if (self.cycle_root_def == null) {
+                                                std.debug.assert(!self.defer_generalize);
+                                                std.debug.assert(self.deferred_cycle_envs.items.len == 0);
+                                                std.debug.assert(self.deferred_def_unifications.items.len == 0);
+                                                self.cycle_root_def = processing_def.def_idx;
+                                            }
+                                            self.defer_generalize = true;
+                                        }
+                                    }
+                                },
+                                .processed => {},
+                            }
+                        }
+                    }
+
+                    const method_var = if (cycle_method_expr_var) |expr_var_for_method| blk: {
+                        break :blk expr_var_for_method;
+                    } else if (is_this_module) blk: {
+                        if (self.types.resolveVar(def_var).desc.rank == .generalized)
+                            break :blk try self.instantiateVar(def_var, env, .use_last_var)
+                        else
+                            break :blk def_var;
+                    } else blk: {
+                        const copied_var = try self.copyVar(def_var, original_env, region);
+                        break :blk try self.instantiateVar(copied_var, env, .{ .explicit = region });
+                    };
+
+                    const constraint_fn = constraint_fn_resolved.unwrapFunc() orelse {
+                        _ = try self.unifyInContext(method_var, constraint.fn_var, env, .{
+                            .method_type = .{
+                                .constraint_var = constraint.fn_var,
+                                .dispatcher_name = alias.ident.ident_idx,
+                                .method_name = constraint.fn_name,
+                            },
+                        });
+                        try self.unifyWith(deferred_constraint.var_, .err, env);
+                        continue;
+                    };
+
+                    const fn_result = try self.unifyInContext(method_var, constraint.fn_var, env, .{
+                        .method_type = .{
+                            .constraint_var = deferred_constraint.var_,
+                            .dispatcher_name = alias.ident.ident_idx,
+                            .method_name = constraint.fn_name,
+                        },
+                    });
+                    if (fn_result.isProblem()) {
+                        var args_iter = self.types.iterVars(constraint_fn.args);
+                        while (args_iter.next()) |arg| {
+                            try self.unifyWith(arg, .err, env);
+                        }
+                        try self.unifyWith(deferred_constraint.var_, .err, env);
+                        try self.unifyWith(constraint_fn.ret, .err, env);
+                    }
+                }
+                break :dispatch_resolution;
             } else if (dispatcher_content == .structure and
                 (dispatcher_content.structure == .record or
                     dispatcher_content.structure == .tuple or
@@ -7469,7 +7728,7 @@ fn checkFlexVarConstraintCompatibility(self: *Self, var_: Var, env: *Env, is_num
         };
     }
 
-    fn isCompatibleWithExpected(self: *Self, body_var: Var, expected_var: Var) bool {
+    fn isCompatibleWithExpected(self: *Self, body_var: Var, expected_var: Var, ctx: problem.Context) bool {
         const body = self.types.resolveVar(body_var);
         const expected = self.types.resolveVar(expected_var);
 
@@ -7478,12 +7737,6 @@ fn checkFlexVarConstraintCompatibility(self: *Self, var_: Var, env: *Env, is_num
 
         // If either is .err, assume compatible (don't add additional errors)
         if (body.desc.content == .err or expected.desc.content == .err) return true;
-
-        var temp_problems = ProblemStore.initCapacity(self.cir.gpa, 4) catch return true;
-        defer temp_problems.deinit(self.cir.gpa);
-
-        var temp_snapshots = SnapshotStore.initCapacity(self.cir.gpa, 4) catch return true;
-        defer temp_snapshots.deinit();
 
         const from_numeral_count = self.types.from_numeral_flex_count;
         var store_snapshot = self.types.snapshot() catch return true;
@@ -7498,14 +7751,14 @@ fn checkFlexVarConstraintCompatibility(self: *Self, var_: Var, env: *Env, is_num
             self.cir.getIdentStoreConst(),
             self.cir.qualified_module_ident,
             self.types,
-            &temp_problems,
-            &temp_snapshots,
+            &self.problems,
+            &self.snapshots,
             &self.type_writer,
             &self.unify_scratch,
             &self.occurs_scratch,
             expected_var,
             body_var,
-            .none,
+            ctx,
         ) catch return true;
 
         return probe_result.isOk();
@@ -7577,9 +7830,7 @@ fn flatTypeContainsError(self: *Self, flat_type: FlatType, visited: *std.AutoHas
 }
 
 fn has_can_error_diagnostics(self: *Self) bool {
-    if (self.cir.store.scratch == null) return false;
-    const all_diagnostics = self.cir.store.diagnosticSpanFrom(0) catch return false;
-    const diagnostics = self.cir.store.sliceDiagnostics(all_diagnostics);
+    const diagnostics = self.cir.store.sliceDiagnostics(self.cir.diagnostics);
     for (diagnostics) |diagnostic_idx| {
         const diagnostic = self.cir.store.getDiagnostic(diagnostic_idx);
         switch (diagnostic) {

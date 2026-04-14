@@ -364,7 +364,6 @@ pub fn parseCheckModule(
     } else {
         try checker.checkFile();
     }
-
     return .{
         .module_env = module_env,
         .parse_ast = parse_ast,
