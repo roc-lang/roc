@@ -316,7 +316,10 @@ pub const RcInsertPass = struct {
             .struct_access => |sa| try self.validateExprTreeIds(sa.struct_expr),
             .tag_payload_access => |tpa| try self.validateExprTreeIds(tpa.value),
             .nominal => |nominal| try self.validateExprTreeIds(nominal.backing_expr),
-            .dbg => |dbg_expr| try self.validateExprTreeIds(dbg_expr.expr),
+            .dbg => |dbg_expr| {
+                try self.validateExprTreeIds(dbg_expr.expr);
+                try self.validateExprTreeIds(dbg_expr.formatted);
+            },
             .expect => |expect_expr| {
                 try self.validateExprTreeIds(expect_expr.cond);
                 try self.validateExprTreeIds(expect_expr.body);
@@ -1147,14 +1150,17 @@ pub const RcInsertPass = struct {
             },
             .dbg => |d| {
                 const new_expr_raw = try self.materializeRcCellLoadOperands(d.expr);
+                const new_formatted_raw = try self.materializeRcCellLoadOperands(d.formatted);
                 var prelude = std.ArrayList(LirStmt).empty;
                 defer prelude.deinit(self.allocator);
                 const new_expr = try self.materializeRcCellLoadOperand(new_expr_raw, region, &prelude);
+                const new_formatted = try self.materializeRcCellLoadOperand(new_formatted_raw, region, &prelude);
                 const rebuilt = try self.store.addExpr(.{ .dbg = .{
                     .expr = new_expr,
+                    .formatted = new_formatted,
                     .result_layout = d.result_layout,
                 } }, region);
-                if (new_expr == d.expr and prelude.items.len == 0) return expr_id;
+                if (new_expr == d.expr and new_formatted == d.formatted and prelude.items.len == 0) return expr_id;
                 return self.wrapPreludeAroundExpr(rebuilt, d.result_layout, region, prelude.items);
             },
             .expect => |e| {
@@ -1506,9 +1512,11 @@ pub const RcInsertPass = struct {
             },
             .dbg => |d| {
                 const new_expr = try self.normalizeBorrowedLoopSources(d.expr);
-                if (new_expr == d.expr) return expr_id;
+                const new_formatted = try self.normalizeBorrowedLoopSources(d.formatted);
+                if (new_expr == d.expr and new_formatted == d.formatted) return expr_id;
                 return self.store.addExpr(.{ .dbg = .{
                     .expr = new_expr,
+                    .formatted = new_formatted,
                     .result_layout = d.result_layout,
                 } }, region);
             },
@@ -1799,7 +1807,10 @@ pub const RcInsertPass = struct {
             .struct_access => |sa| try self.uniquifyBindingPatterns(sa.struct_expr),
             .nominal => |n| try self.uniquifyBindingPatterns(n.backing_expr),
             .early_return => |ret| try self.uniquifyBindingPatterns(ret.expr),
-            .dbg => |d| try self.uniquifyBindingPatterns(d.expr),
+            .dbg => |d| {
+                try self.uniquifyBindingPatterns(d.expr);
+                try self.uniquifyBindingPatterns(d.formatted);
+            },
             .expect => |e| {
                 try self.uniquifyBindingPatterns(e.cond);
                 try self.uniquifyBindingPatterns(e.body);
@@ -1969,6 +1980,7 @@ pub const RcInsertPass = struct {
             },
             .dbg => |d| {
                 try self.countUsesInto(d.expr, target);
+                try self.countUsesInto(d.formatted, target);
             },
             .expect => |e| {
                 try self.countUsesInto(e.cond, target);
@@ -2196,7 +2208,10 @@ pub const RcInsertPass = struct {
             },
             .nominal => |n| try self.countConsumedUsesInto(n.backing_expr, target),
             .early_return => |ret| try self.countConsumedValueInto(ret.expr, target),
-            .dbg => |d| try self.countConsumedUsesInto(d.expr, target),
+            .dbg => |d| {
+                try self.countConsumedUsesInto(d.expr, target);
+                try self.countConsumedUsesInto(d.formatted, target);
+            },
             .expect => |e| {
                 try self.countConsumedValueInto(e.cond, target);
                 try self.countConsumedUsesInto(e.body, target);
@@ -2410,7 +2425,10 @@ pub const RcInsertPass = struct {
             },
             .nominal => |n| try self.countBorrowOwnerDemandUsesInto(n.backing_expr, target),
             .early_return => |ret| try self.countBorrowOwnerDemandValueInto(ret.expr, target),
-            .dbg => |d| try self.countBorrowOwnerDemandUsesInto(d.expr, target),
+            .dbg => |d| {
+                try self.countBorrowOwnerDemandUsesInto(d.expr, target);
+                try self.countBorrowOwnerDemandUsesInto(d.formatted, target);
+            },
             .expect => |e| {
                 try self.countBorrowOwnerDemandValueInto(e.cond, target);
                 try self.countBorrowOwnerDemandUsesInto(e.body, target);
@@ -2900,9 +2918,11 @@ pub const RcInsertPass = struct {
             },
             .dbg => |d| {
                 const new_expr = try self.processExpr(d.expr);
-                if (new_expr == d.expr) return expr_id;
+                const new_formatted = try self.processExpr(d.formatted);
+                if (new_expr == d.expr and new_formatted == d.formatted) return expr_id;
                 return self.store.addExpr(.{ .dbg = .{
                     .expr = new_expr,
+                    .formatted = new_formatted,
                     .result_layout = d.result_layout,
                 } }, region);
             },
@@ -4342,7 +4362,7 @@ pub const RcInsertPass = struct {
             .struct_access => |sa| return self.exprMutatesSymbol(sa.struct_expr, symbol),
             .nominal => |nominal| return self.exprMutatesSymbol(nominal.backing_expr, symbol),
             .early_return => |ret| return self.exprMutatesSymbol(ret.expr, symbol),
-            .dbg => |dbg_expr| return self.exprMutatesSymbol(dbg_expr.expr, symbol),
+            .dbg => |dbg_expr| return try self.exprMutatesSymbol(dbg_expr.expr, symbol) or try self.exprMutatesSymbol(dbg_expr.formatted, symbol),
             .int_to_str => |its| return self.exprMutatesSymbol(its.value, symbol),
             .float_to_str => |fts| return self.exprMutatesSymbol(fts.value, symbol),
             .dec_to_str => |dec_expr| return self.exprMutatesSymbol(dec_expr, symbol),
@@ -4452,7 +4472,10 @@ pub const RcInsertPass = struct {
             .struct_access => |sa| try self.collectExprBoundSymbols(sa.struct_expr, set),
             .nominal => |n| try self.collectExprBoundSymbols(n.backing_expr, set),
             .early_return => |ret| try self.collectExprBoundSymbols(ret.expr, set),
-            .dbg => |d| try self.collectExprBoundSymbols(d.expr, set),
+            .dbg => |d| {
+                try self.collectExprBoundSymbols(d.expr, set);
+                try self.collectExprBoundSymbols(d.formatted, set);
+            },
             .low_level => |ll| {
                 const args = self.store.getExprSpan(ll.args);
                 for (args) |arg_id| try self.collectExprBoundSymbols(arg_id, set);
@@ -5919,6 +5942,9 @@ fn countRcOps(store: *const LirExprStore, expr_id: LirExprId) RcOpCounts {
             const sub = countRcOps(store, d.expr);
             increfs += sub.increfs;
             decrefs += sub.decrefs;
+            const fmt_sub = countRcOps(store, d.formatted);
+            increfs += fmt_sub.increfs;
+            decrefs += fmt_sub.decrefs;
         },
         .expect => |e| {
             const cond_sub = countRcOps(store, e.cond);
@@ -6064,7 +6090,7 @@ fn countDecrefsForSymbol(store: *const LirExprStore, expr_id: LirExprId, symbol:
         .struct_access => |sa| countDecrefsForSymbol(store, sa.struct_expr, symbol),
         .nominal => |n| countDecrefsForSymbol(store, n.backing_expr, symbol),
         .early_return => |ret| countDecrefsForSymbol(store, ret.expr, symbol),
-        .dbg => |d| countDecrefsForSymbol(store, d.expr, symbol),
+        .dbg => |d| countDecrefsForSymbol(store, d.expr, symbol) + countDecrefsForSymbol(store, d.formatted, symbol),
         .str_concat => |parts| blk: {
             var total: u32 = 0;
             for (store.getExprSpan(parts)) |part_id| {
@@ -6163,7 +6189,7 @@ fn countIncrefsForSymbol(store: *const LirExprStore, expr_id: LirExprId, symbol:
         .struct_access => |sa| countIncrefsForSymbol(store, sa.struct_expr, symbol),
         .nominal => |n| countIncrefsForSymbol(store, n.backing_expr, symbol),
         .early_return => |ret| countIncrefsForSymbol(store, ret.expr, symbol),
-        .dbg => |d| countIncrefsForSymbol(store, d.expr, symbol),
+        .dbg => |d| countIncrefsForSymbol(store, d.expr, symbol) + countIncrefsForSymbol(store, d.formatted, symbol),
         .str_concat => |parts| blk: {
             var total: u32 = 0;
             for (store.getExprSpan(parts)) |part_id| {
@@ -6272,7 +6298,10 @@ fn findFirstIfThenElseExpr(store: *const LirExprStore, expr_id: LirExprId) ?LirE
         .tag_payload_access => |tpa| return findFirstIfThenElseExpr(store, tpa.value),
         .nominal => |n| return findFirstIfThenElseExpr(store, n.backing_expr),
         .early_return => |ret| return findFirstIfThenElseExpr(store, ret.expr),
-        .dbg => |d| return findFirstIfThenElseExpr(store, d.expr),
+        .dbg => |d| {
+            if (findFirstIfThenElseExpr(store, d.expr)) |found| return found;
+            return findFirstIfThenElseExpr(store, d.formatted);
+        },
         .expect => |e| {
             if (findFirstIfThenElseExpr(store, e.cond)) |found| return found;
             return findFirstIfThenElseExpr(store, e.body);
@@ -6371,7 +6400,10 @@ fn findFirstWhileExpr(store: *const LirExprStore, expr_id: LirExprId) ?LirExprId
         .tag_payload_access => |tpa| return findFirstWhileExpr(store, tpa.value),
         .nominal => |n| return findFirstWhileExpr(store, n.backing_expr),
         .early_return => |ret| return findFirstWhileExpr(store, ret.expr),
-        .dbg => |d| return findFirstWhileExpr(store, d.expr),
+        .dbg => |d| {
+            if (findFirstWhileExpr(store, d.expr)) |found| return found;
+            return findFirstWhileExpr(store, d.formatted);
+        },
         .expect => |e| {
             if (findFirstWhileExpr(store, e.cond)) |found| return found;
             return findFirstWhileExpr(store, e.body);

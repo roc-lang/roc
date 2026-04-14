@@ -144,6 +144,9 @@ pub const BuiltinFn = enum {
     str_from_utf8,
     str_escape_and_quote,
 
+    // Debug
+    roc_dbg,
+
     // List operations
     list_with_capacity,
     list_append_unsafe,
@@ -230,6 +233,9 @@ pub const BuiltinFn = enum {
             .str_from_utf8_lossy => "roc_builtins_str_from_utf8_lossy",
             .str_from_utf8 => "roc_builtins_str_from_utf8",
             .str_escape_and_quote => "roc_builtins_str_escape_and_quote",
+
+            // Debug
+            .roc_dbg => "roc_builtins_roc_dbg",
 
             // List operations
             .list_with_capacity => "roc_builtins_list_with_capacity",
@@ -461,6 +467,13 @@ fn wrapStrFromUtf8(out: [*]u8, list_bytes: ?[*]u8, list_len: usize, list_cap: us
     const list = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
     const result = strFromUtf8C(list, .Immutable, roc_ops);
     @as(*FromUtf8Try, @ptrCast(@alignCast(out))).* = result;
+}
+
+/// Wrapper: call roc_dbg with a formatted RocStr
+fn wrapRocDbg(str_bytes: ?[*]u8, str_len: usize, str_cap: usize, roc_ops: *RocOps) callconv(.c) void {
+    const s = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
+    const slice = s.asSlice();
+    roc_ops.dbg(slice);
 }
 
 /// Wrapper: escape special characters and wrap in double quotes for Str.inspect
@@ -9983,10 +9996,29 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return .{ .immediate_i64 = 0 };
         }
 
-        /// Generate code for dbg expression (prints and returns value)
+        /// Generate code for dbg expression (prints formatted value via roc_dbg, returns inner value)
         fn generateDbg(self: *Self, dbg_expr: anytype) Allocator.Error!ValueLocation {
-            // dbg evaluates its expression and returns the value.
-            // Debug printing is handled by the interpreter side in tests.
+            // Evaluate the formatted string expression
+            const formatted_loc = try self.generateExpr(dbg_expr.formatted);
+            const str_off = try self.ensureOnStack(formatted_loc, roc_str_size);
+
+            // Call wrapRocDbg(str_bytes, str_len, str_cap, roc_ops)
+            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addMemArg(frame_ptr, str_off);
+            try builder.addMemArg(frame_ptr, str_off + 8);
+            try builder.addMemArg(frame_ptr, str_off + 16);
+            try builder.addRegArg(roc_ops_reg);
+            try self.callBuiltin(&builder, @intFromPtr(&wrapRocDbg), .roc_dbg);
+
+            // When the dbg expression's result type is zero-sized (e.g., when dbg
+            // is the last expression in a unit-returning function), the inner value
+            // is not needed as a return value.
+            if (self.getLayoutSize(dbg_expr.result_layout) == 0) {
+                return .{ .immediate_i64 = 0 };
+            }
+
+            // Evaluate and return the original value expression
             return try self.generateExpr(dbg_expr.expr);
         }
 

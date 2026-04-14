@@ -2647,7 +2647,7 @@ fn lowerExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator.Error!LirExprId {
                 .ret_layout = ret_layout,
             } }, region);
         },
-        .dbg_expr => |d| self.lowerDbg(d, mir_expr_id, region),
+        .dbg_expr => |d| self.lowerDbg(d, mono_idx, region),
         .expect => |e| self.lowerExpect(e, mono_idx, region),
         .for_loop => |f| self.lowerForLoop(f, mono_idx, region),
         .while_loop => |w| self.lowerWhileLoop(w, mono_idx, region),
@@ -5189,12 +5189,19 @@ fn lowerLowLevel(self: *Self, ll: anytype, mir_expr_id: MIR.ExprId, region: Regi
     return acc.finish(adapted_result, ret_layout, region);
 }
 
-fn lowerDbg(self: *Self, d: anytype, _: MIR.ExprId, region: Region) Allocator.Error!LirExprId {
-    const result_layout = try self.runtimeValueLayoutFromMirExpr(d.expr);
+fn lowerDbg(self: *Self, d: anytype, mono_idx: Monotype.Idx, region: Region) Allocator.Error!LirExprId {
+    // Use the dbg expression's own monotype for the result layout, not the inner
+    // expression's. The dbg expression's type is determined by the type checker and
+    // may differ from the inner expression's type (e.g., when dbg is the last
+    // expression in a unit-returning function, the dbg has type {} while the inner
+    // expression has the type of the debugged value).
+    const result_layout = try self.layoutFromMonotype(mono_idx);
     const lir_expr = try self.lowerExpr(d.expr);
+    const lir_formatted = try self.lowerExpr(d.formatted);
 
     return self.lir_store.addExpr(.{ .dbg = .{
         .expr = lir_expr,
+        .formatted = lir_formatted,
         .result_layout = result_layout,
     } }, region);
 }
@@ -7225,8 +7232,11 @@ test "lambdaSetForExpr unwraps dbg_expr wrapper" {
     } }, i64_mono, Region.zero());
     const proc_id = try testMirProc(&env.mir_store, allocator, sym_arg, func_mono, params, body, i64_mono);
     const proc_expr = try env.mir_store.addExpr(allocator, .{ .proc_ref = proc_id }, func_mono, Region.zero());
+    const str_mono = env.mir_store.monotype_store.primIdx(.str);
+    const formatted_str = try env.mir_store.addExpr(allocator, .{ .str = try env.mir_store.strings.insert(allocator, "<dbg>") }, str_mono, Region.zero());
     const dbg_expr = try env.mir_store.addExpr(allocator, .{ .dbg_expr = .{
         .expr = proc_expr,
+        .formatted = formatted_str,
     } }, func_mono, Region.zero());
 
     const members = try env.lambda_set_store.addMembers(allocator, &.{.{
@@ -7433,12 +7443,15 @@ test "MIR dbg_expr lowers to LIR dbg" {
     const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
 
     // Build MIR: dbg(42)
+    const str_mono = env.mir_store.monotype_store.primIdx(.str);
     const inner_expr = try env.mir_store.addExpr(allocator, .{ .int = .{
         .value = .{ .bytes = @bitCast(@as(i128, 42)), .kind = .i128 },
     } }, i64_mono, Region.zero());
+    const formatted_str = try env.mir_store.addExpr(allocator, .{ .str = try env.mir_store.strings.insert(allocator, "42") }, str_mono, Region.zero());
 
     const dbg_expr = try env.mir_store.addExpr(allocator, .{ .dbg_expr = .{
         .expr = inner_expr,
+        .formatted = formatted_str,
     } }, i64_mono, Region.zero());
     var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store, &env.lambda_set_store, env.module_env.idents.true_tag);
     defer translator.deinit();

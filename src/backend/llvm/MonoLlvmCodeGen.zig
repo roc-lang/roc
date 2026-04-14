@@ -5403,7 +5403,7 @@ pub const MonoLlvmCodeGen = struct {
                 }
                 break :blk count;
             },
-            .dbg => |d| self.countBreakEdges(d.expr),
+            .dbg => |d| self.countBreakEdges(d.expr) + self.countBreakEdges(d.formatted),
             .expect => |e| self.countBreakEdges(e.body),
             .nominal => |nom| self.countBreakEdges(nom.backing_expr),
             .lambda, .while_loop, .for_loop => 0,
