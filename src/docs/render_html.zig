@@ -138,13 +138,17 @@ fn writePackageIndex(ctx: *const RenderContext, gpa: Allocator, dir: std.fs.Dir)
     var bw = file.writer(&buf);
     const w = &bw.interface;
 
-    try writeHtmlHead(w, "Docs", "");
+    var index_title_buf: [256]u8 = undefined;
+    const index_title = std.fmt.bufPrint(&index_title_buf, "{s} Docs", .{ctx.package_docs.name}) catch ctx.package_docs.name;
+    try writeHtmlHead(w, index_title, "");
     try writeBodyOpen(w);
     try renderSidebar(w, ctx, gpa, "");
 
     // Main content
     try writeMainOpen(w, ctx, gpa, "");
-    try w.writeAll("        <h1 class=\"module-name\">Docs</h1>\n");
+    try w.writeAll("        <h1 class=\"module-name\">");
+    try writeHtmlEscaped(w, ctx.package_docs.name);
+    try w.writeAll("</h1>\n");
 
     // Module list
     try w.writeAll("        <ul class=\"index-module-links\">\n");
@@ -721,7 +725,9 @@ fn renderSidebar(w: Writer, ctx: *const RenderContext, gpa: Allocator, base: []c
     try w.writeAll("</a>\n");
     try w.writeAll("            <h1 class=\"pkg-full-name\"><a href=\"");
     try w.writeAll(base);
-    try w.writeAll("\">Docs</a></h1>\n");
+    try w.writeAll("\">");
+    try writeHtmlEscaped(w, ctx.package_docs.name);
+    try w.writeAll("</a></h1>\n");
     try w.writeAll("        </div>\n");
 
     try w.writeAll("        <div class=\"module-links-container\">\n");
