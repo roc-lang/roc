@@ -60,18 +60,15 @@ const Args = struct {
     app_filter: ?[]const u8,
     opt: ?[]const u8,
     verbose: bool,
-    /// Raw args buffer - caller must free via std.process.argsFree
-    raw_args: [][:0]u8,
 };
 
 /// Entry point for the unified test platform runner.
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
     var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const args = try parseArgs(allocator);
-    defer std.process.argsFree(allocator, args.raw_args);
+    const args = try parseArgs(init.minimal.args);
 
     // Look up the platform
     const platform = platform_config.findPlatform(args.platform_name) orelse {
@@ -509,30 +506,34 @@ fn runValgrindTests(
     }
 }
 
-fn parseArgs(allocator: Allocator) !Args {
-    const raw_args = try std.process.argsAlloc(allocator);
+fn parseArgs(process_args: std.process.Args) !Args {
+    var iter = std.process.Args.Iterator.init(process_args);
 
-    if (raw_args.len < 3) {
+    // Skip argv[0] (program name)
+    _ = iter.next();
+
+    const roc_binary = iter.next() orelse {
         printUsage();
         std.process.exit(1);
-    }
+    };
+
+    const platform_name = iter.next() orelse {
+        printUsage();
+        std.process.exit(1);
+    };
 
     var args = Args{
-        .roc_binary = raw_args[1],
-        .platform_name = raw_args[2],
+        .roc_binary = roc_binary,
+        .platform_name = platform_name,
         .target_filter = null,
         .mode = .all,
         .app_filter = null,
         .opt = null,
         .verbose = false,
-        .raw_args = raw_args,
     };
 
     // Parse options
-    var i: usize = 3;
-    while (i < raw_args.len) : (i += 1) {
-        const arg = raw_args[i];
-
+    while (iter.next()) |arg| {
         if (std.mem.startsWith(u8, arg, "--target=")) {
             args.target_filter = arg["--target=".len..];
         } else if (std.mem.startsWith(u8, arg, "--mode=")) {

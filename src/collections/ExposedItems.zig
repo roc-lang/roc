@@ -240,8 +240,9 @@ test "ExposedItems empty CompactWriter roundtrip" {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const file = try tmp_dir.dir.createFile("test_empty_exposed.dat", .{ .read = true });
-    defer file.close();
+    const io = std.testing.io;
+    const file = try tmp_dir.dir.createFile(io, "test_empty_exposed.dat", .{ .read = true });
+    defer file.close(io);
 
     // Serialize using CompactWriter
     var writer = CompactWriter.init();
@@ -250,15 +251,13 @@ test "ExposedItems empty CompactWriter roundtrip" {
     _ = try original.serialize(allocator, &writer);
 
     // Write to file
-    try writer.writeGather(allocator, file);
+    try writer.writeGather(allocator, file, io);
 
     // Read back
-    try file.seekTo(0);
-    const file_size = try file.getEndPos();
-    const buffer = try allocator.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(file_size));
+    const buffer = try allocator.alignedAlloc(u8, std.mem.Alignment.@"16", writer.total_bytes);
     defer allocator.free(buffer);
 
-    _ = try file.read(buffer);
+    _ = try file.readPositionalAll(io, buffer, 0);
 
     // Cast and relocate
     const deserialized = @as(*ExposedItems, @ptrCast(@alignCast(buffer.ptr + writer.total_bytes - @sizeOf(ExposedItems))));
@@ -297,8 +296,9 @@ test "ExposedItems basic CompactWriter roundtrip" {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const file = try tmp_dir.dir.createFile("test_basic_exposed.dat", .{ .read = true });
-    defer file.close();
+    const io = std.testing.io;
+    const file = try tmp_dir.dir.createFile(io, "test_basic_exposed.dat", .{ .read = true });
+    defer file.close(io);
 
     // Serialize using CompactWriter
     var writer = CompactWriter.init();
@@ -307,15 +307,13 @@ test "ExposedItems basic CompactWriter roundtrip" {
     _ = try original.serialize(allocator, &writer);
 
     // Write to file
-    try writer.writeGather(allocator, file);
+    try writer.writeGather(allocator, file, io);
 
     // Read back
-    try file.seekTo(0);
-    const file_size = try file.getEndPos();
-    const buffer = try allocator.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(@alignOf(ExposedItems.Serialized)), @intCast(file_size));
+    const buffer = try allocator.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(@alignOf(ExposedItems.Serialized)), writer.total_bytes);
     defer allocator.free(buffer);
 
-    _ = try file.read(buffer);
+    _ = try file.readPositionalAll(io, buffer, 0);
 
     // The serialized ExposedItems.Serialized struct is at the beginning of the buffer
     // (appendAlloc is called first in serialize)
@@ -354,8 +352,9 @@ test "ExposedItems with duplicates CompactWriter roundtrip" {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const file = try tmp_dir.dir.createFile("test_duplicates_exposed.dat", .{ .read = true });
-    defer file.close();
+    const io = std.testing.io;
+    const file = try tmp_dir.dir.createFile(io, "test_duplicates_exposed.dat", .{ .read = true });
+    defer file.close(io);
 
     // Serialize
     var writer = CompactWriter.init();
@@ -364,15 +363,13 @@ test "ExposedItems with duplicates CompactWriter roundtrip" {
     _ = try original.serialize(allocator, &writer);
 
     // Write to file
-    try writer.writeGather(allocator, file);
+    try writer.writeGather(allocator, file, io);
 
     // Read back
-    try file.seekTo(0);
-    const file_size = try file.getEndPos();
-    const buffer = try allocator.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(@alignOf(ExposedItems.Serialized)), @intCast(file_size));
+    const buffer = try allocator.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(@alignOf(ExposedItems.Serialized)), writer.total_bytes);
     defer allocator.free(buffer);
 
-    _ = try file.read(buffer);
+    _ = try file.readPositionalAll(io, buffer, 0);
 
     // The serialized ExposedItems.Serialized struct is at the beginning of the buffer
     // (appendAlloc is called first in serialize)
@@ -420,8 +417,9 @@ test "ExposedItems comprehensive CompactWriter roundtrip" {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const file = try tmp_dir.dir.createFile("test_comprehensive_exposed.dat", .{ .read = true });
-    defer file.close();
+    const io = std.testing.io;
+    const file = try tmp_dir.dir.createFile(io, "test_comprehensive_exposed.dat", .{ .read = true });
+    defer file.close(io);
 
     // Serialize
     var writer = CompactWriter.init();
@@ -430,16 +428,14 @@ test "ExposedItems comprehensive CompactWriter roundtrip" {
     _ = try original.serialize(allocator, &writer);
 
     // Write to file
-    try writer.writeGather(allocator, file);
+    try writer.writeGather(allocator, file, io);
 
     // Read back
-    try file.seekTo(0);
-    const file_size = try file.getEndPos();
     const serialized_align = @alignOf(ExposedItems);
-    const buffer = try allocator.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(serialized_align), @intCast(file_size));
+    const buffer = try allocator.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(serialized_align), writer.total_bytes);
     defer allocator.free(buffer);
 
-    _ = try file.read(buffer);
+    _ = try file.readPositionalAll(io, buffer, 0);
 
     // Cast to Serialized type and deserialize
     const serialized_ptr: *ExposedItems.Serialized = @ptrCast(@alignCast(buffer.ptr));
@@ -488,10 +484,11 @@ test "ExposedItems edge cases CompactWriter roundtrip" {
         exposed.ensureSorted(allocator);
 
         // Create a temp file
+        const io = std.testing.io;
         var tmp_dir = testing.tmpDir(.{});
         defer tmp_dir.cleanup();
-        const file = try tmp_dir.dir.createFile("test_single.dat", .{ .read = true });
-        defer file.close();
+        const file = try tmp_dir.dir.createFile(io, "test_single.dat", .{ .read = true });
+        defer file.close(io);
 
         var writer = CompactWriter.init();
         defer writer.deinit(allocator);
@@ -499,15 +496,13 @@ test "ExposedItems edge cases CompactWriter roundtrip" {
         _ = try exposed.serialize(allocator, &writer);
 
         // Test writeGather
-        try writer.writeGather(allocator, file);
+        try writer.writeGather(allocator, file, io);
 
         // Read back and verify
-        try file.seekTo(0);
-        const file_size = try file.getEndPos();
-        const buffer = try allocator.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(@alignOf(ExposedItems.Serialized)), @intCast(file_size));
+        const buffer = try allocator.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(@alignOf(ExposedItems.Serialized)), writer.total_bytes);
         defer allocator.free(buffer);
 
-        _ = try file.read(buffer);
+        _ = try file.readPositionalAll(io, buffer, 0);
 
         const serialized_ptr = @as(*ExposedItems.Serialized, @ptrCast(@alignCast(buffer.ptr)));
         const deserialized = serialized_ptr.deserializeInto(@intFromPtr(buffer.ptr));

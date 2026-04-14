@@ -376,14 +376,14 @@ else
 
 /// Try to create shared memory, falling back to a smaller size if the system
 /// has overcommit disabled and rejects the initial allocation.
-fn createSharedMemoryWithFallback(page_size: usize) !SharedMemoryAllocator {
+fn createSharedMemoryWithFallback(io: std.Io, page_size: usize) !SharedMemoryAllocator {
     // Try the preferred size first
-    if (SharedMemoryAllocator.create(SHARED_MEMORY_SIZE, page_size)) |shm| {
+    if (SharedMemoryAllocator.create(io, SHARED_MEMORY_SIZE, page_size)) |shm| {
         return shm;
     } else |_| {}
 
     // Fall back to smaller size for systems with overcommit disabled
-    return SharedMemoryAllocator.create(SHARED_MEMORY_FALLBACK_SIZE, page_size);
+    return SharedMemoryAllocator.create(io, SHARED_MEMORY_FALLBACK_SIZE, page_size);
 }
 
 /// Cross-platform hardlink creation
@@ -2272,7 +2272,7 @@ pub fn setupSharedMemoryWithCoordinator(ctx: *CliContext, roc_file_path: []const
     // Create shared memory with SharedMemoryAllocator, trying progressively smaller
     // sizes if larger ones fail (e.g., due to valgrind or overcommit-disabled Linux)
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
-    var shm = try createSharedMemoryWithFallback(page_size);
+    var shm = try createSharedMemoryWithFallback(std.Io.default(), page_size);
     // Don't defer deinit here - we need to keep the shared memory alive
 
     const shm_allocator = shm.allocator();
@@ -3339,7 +3339,7 @@ fn resolveUrlPlatform(ctx: *CliContext, url: []const u8) (CliError || error{OutO
 
         // Download and extract (path-based, no Dir handle needed)
         var gpa_copy = ctx.gpa;
-        download.downloadAndExtract(&gpa_copy, url, package_dir_path) catch |download_err| {
+        download.downloadAndExtract(&gpa_copy, std.Io.default(), url, package_dir_path) catch |download_err| {
             std.Io.Dir.cwd().deleteTree(package_dir_path) catch {};
             return ctx.fail(.{ .download_failed = .{
                 .url = url,
@@ -3763,6 +3763,7 @@ pub fn rocBundle(ctx: *CliContext, args: cli_args.BundleArgs) !void {
         &iter,
         @intCast(args.compression_level),
         &allocator_copy,
+        std.Io.default(),
         &temp_writer.interface,
         cwd,
         null, // path_prefix parameter - null means no stripping
@@ -3864,6 +3865,7 @@ fn rocUnbundle(ctx: *CliContext, args: cli_args.UnbundleArgs) !void {
             ctx.gpa,
             &archive_reader.interface,
             output_dir,
+            std.Io.default(),
             basename,
             &error_ctx,
         ) catch |err| {
@@ -6208,7 +6210,7 @@ fn rocFormat(ctx: *CliContext, args: cli_args.FormatArgs) !void {
 
     const stdout = ctx.io.stdout();
     if (args.stdin) {
-        fmt.formatStdin(ctx.gpa) catch |err| return err;
+        fmt.formatStdin(ctx.gpa, std.Options.debug_io) catch |err| return err;
         return;
     }
 
@@ -6222,7 +6224,7 @@ fn rocFormat(ctx: *CliContext, args: cli_args.FormatArgs) !void {
         defer unformatted_files.deinit(ctx.gpa);
 
         for (args.paths) |path| {
-            var result = try fmt.formatPath(ctx.gpa, ctx.arena, std.Io.Dir.cwd(), path, true);
+            var result = try fmt.formatPath(ctx.gpa, ctx.arena, std.Io.Dir.cwd(), path, true, std.Options.debug_io);
             defer result.deinit();
             if (result.unformatted_files) |files| {
                 try unformatted_files.appendSlice(ctx.gpa, files.items);
@@ -6248,7 +6250,7 @@ fn rocFormat(ctx: *CliContext, args: cli_args.FormatArgs) !void {
     } else {
         var success_count: usize = 0;
         for (args.paths) |path| {
-            const result = try fmt.formatPath(ctx.gpa, ctx.arena, std.Io.Dir.cwd(), path, false);
+            const result = try fmt.formatPath(ctx.gpa, ctx.arena, std.Io.Dir.cwd(), path, false, std.Options.debug_io);
             success_count += result.success;
             failure_count += result.failure;
         }
@@ -7216,7 +7218,7 @@ fn generateDocs(
     // Generate HTML documentation site
     // TODO: support --format md and --format json output formats
     const render_html = docs.render_html;
-    render_html.renderPackageDocs(ctx.gpa, &package_docs, base_output_dir) catch |err| {
+    render_html.renderPackageDocs(ctx.gpa, std.Io.default(), &package_docs, base_output_dir) catch |err| {
         std.debug.print("Error: failed to generate HTML docs: {}\n", .{err});
         return err;
     };

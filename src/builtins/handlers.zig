@@ -200,7 +200,7 @@ fn handleExceptionWindows(exception_info: *EXCEPTION_POINTERS) callconv(.winapi)
 }
 
 /// The POSIX SIGSEGV/SIGBUS signal handler function
-fn handleSegvSignal(_: i32, info: *const posix.siginfo_t, _: ?*anyopaque) callconv(.c) void {
+fn handleSegvSignal(_: posix.SIG, info: *const posix.siginfo_t, _: ?*anyopaque) callconv(.c) void {
     // Get the fault address - access differs by platform
     const fault_addr: usize = getFaultAddress(info);
 
@@ -233,7 +233,7 @@ fn handleSegvSignal(_: i32, info: *const posix.siginfo_t, _: ?*anyopaque) callco
 }
 
 /// The POSIX SIGFPE signal handler function (division by zero, etc.)
-fn handleFpeSignal(_: i32, _: *const posix.siginfo_t, _: ?*anyopaque) callconv(.c) void {
+fn handleFpeSignal(_: posix.SIG, _: *const posix.siginfo_t, _: ?*anyopaque) callconv(.c) void {
     if (arithmetic_error_callback) |callback| {
         callback();
     }

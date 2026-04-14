@@ -298,23 +298,23 @@ test "CommonEnv.Serialized roundtrip" {
     defer writer.deinit(gpa);
 
     // Create temp file
+    const io = std.testing.io;
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
-    const tmp_file = try tmp_dir.dir.createFile("test.compact", .{ .read = true });
-    defer tmp_file.close();
+    const tmp_file = try tmp_dir.dir.createFile(io, "test.compact", .{ .read = true });
+    defer tmp_file.close(io);
 
     // Serialize using the proper Serialized struct pattern
     const serialized = try writer.appendAlloc(gpa, CommonEnv.Serialized);
     try serialized.serialize(&original, gpa, &writer);
 
     // Write to file
-    try writer.writeGather(gpa, tmp_file);
+    try writer.writeGather(gpa, tmp_file, io);
 
     // Read back with proper alignment
-    const file_size = try tmp_file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(file_size));
+    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, writer.total_bytes);
     defer gpa.free(buffer);
-    _ = try tmp_file.pread(buffer, 0);
+    _ = try tmp_file.readPositionalAll(io, buffer, 0);
 
     // The Serialized struct is at the beginning of the buffer
     const deserialized_ptr = @as(*CommonEnv.Serialized, @ptrCast(@alignCast(buffer.ptr)));
@@ -350,21 +350,21 @@ test "CommonEnv.Serialized roundtrip with empty data" {
     // Create temp file
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
-    const tmp_file = try tmp_dir.dir.createFile("test_empty.compact", .{ .read = true });
-    defer tmp_file.close();
+    const io = std.testing.io;
+    const tmp_file = try tmp_dir.dir.createFile(io, "test_empty.compact", .{ .read = true });
+    defer tmp_file.close(io);
 
     // Serialize using the proper Serialized struct pattern
     const serialized = try writer.appendAlloc(gpa, CommonEnv.Serialized);
     try serialized.serialize(&original, gpa, &writer);
 
     // Write to file
-    try writer.writeGather(gpa, tmp_file);
+    try writer.writeGather(gpa, tmp_file, io);
 
     // Read back with proper alignment
-    const file_size = try tmp_file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(file_size));
+    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, writer.total_bytes);
     defer gpa.free(buffer);
-    _ = try tmp_file.pread(buffer, 0);
+    _ = try tmp_file.readPositionalAll(io, buffer, 0);
 
     // The Serialized struct is at the beginning of the buffer
     const deserialized_ptr = @as(*CommonEnv.Serialized, @ptrCast(@alignCast(buffer.ptr)));
@@ -386,7 +386,9 @@ test "CommonEnv.Serialized roundtrip with large data" {
     defer source_builder.deinit();
 
     for (0..100) |i| {
-        try source_builder.writer().print("Line {}: This is a test line with some content\n", .{i});
+        const line = try std.fmt.allocPrint(gpa, "Line {}: This is a test line with some content\n", .{i});
+        defer gpa.free(line);
+        try source_builder.appendSlice(line);
     }
     const source = source_builder.items;
 
@@ -401,7 +403,9 @@ test "CommonEnv.Serialized roundtrip with large data" {
     for (0..50) |i| {
         var ident_name = std.array_list.Managed(u8).init(gpa);
         defer ident_name.deinit();
-        try ident_name.writer().print("ident_{}", .{i});
+        const name = try std.fmt.allocPrint(gpa, "ident_{}", .{i});
+        defer gpa.free(name);
+        try ident_name.appendSlice(name);
         const idx = try original.insertIdent(gpa, Ident.for_text(ident_name.items));
         try ident_indices.append(idx);
     }
@@ -413,7 +417,9 @@ test "CommonEnv.Serialized roundtrip with large data" {
     for (0..25) |i| {
         var string_content = std.array_list.Managed(u8).init(gpa);
         defer string_content.deinit();
-        try string_content.writer().print("string_literal_{}", .{i});
+        const str = try std.fmt.allocPrint(gpa, "string_literal_{}", .{i});
+        defer gpa.free(str);
+        try string_content.appendSlice(str);
         const idx = try original.insertString(gpa, string_content.items);
         try string_indices.append(idx);
     }
@@ -433,21 +439,21 @@ test "CommonEnv.Serialized roundtrip with large data" {
     // Create temp file
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
-    const tmp_file = try tmp_dir.dir.createFile("test_large.compact", .{ .read = true });
-    defer tmp_file.close();
+    const io = std.testing.io;
+    const tmp_file = try tmp_dir.dir.createFile(io, "test_large.compact", .{ .read = true });
+    defer tmp_file.close(io);
 
     // Serialize using the proper Serialized struct pattern
     const serialized = try writer.appendAlloc(gpa, CommonEnv.Serialized);
     try serialized.serialize(&original, gpa, &writer);
 
     // Write to file
-    try writer.writeGather(gpa, tmp_file);
+    try writer.writeGather(gpa, tmp_file, io);
 
     // Read back with proper alignment
-    const file_size = try tmp_file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(file_size));
+    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, writer.total_bytes);
     defer gpa.free(buffer);
-    _ = try tmp_file.pread(buffer, 0);
+    _ = try tmp_file.readPositionalAll(io, buffer, 0);
 
     // The Serialized struct is at the beginning of the buffer
     const deserialized_ptr = @as(*CommonEnv.Serialized, @ptrCast(@alignCast(buffer.ptr)));
@@ -510,21 +516,21 @@ test "CommonEnv.Serialized roundtrip with special characters" {
     // Create temp file
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
-    const tmp_file = try tmp_dir.dir.createFile("test_special.compact", .{ .read = true });
-    defer tmp_file.close();
+    const io = std.testing.io;
+    const tmp_file = try tmp_dir.dir.createFile(io, "test_special.compact", .{ .read = true });
+    defer tmp_file.close(io);
 
     // Serialize using the proper Serialized struct pattern
     const serialized = try writer.appendAlloc(gpa, CommonEnv.Serialized);
     try serialized.serialize(&original, gpa, &writer);
 
     // Write to file
-    try writer.writeGather(gpa, tmp_file);
+    try writer.writeGather(gpa, tmp_file, io);
 
     // Read back with proper alignment
-    const file_size = try tmp_file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(file_size));
+    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, writer.total_bytes);
     defer gpa.free(buffer);
-    _ = try tmp_file.pread(buffer, 0);
+    _ = try tmp_file.readPositionalAll(io, buffer, 0);
 
     // The Serialized struct is at the beginning of the buffer
     const deserialized_ptr = @as(*CommonEnv.Serialized, @ptrCast(@alignCast(buffer.ptr)));

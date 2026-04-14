@@ -138,22 +138,17 @@ pub fn emptyScratch(store: *NodeStore) void {
     store.scratch_requires_entries.clearFrom(0);
 }
 
-const StderrWriter = std.io.GenericWriter(std.Io.File, std.Io.File.WriteError, struct {
-    fn write(file: std.Io.File, bytes: []const u8) std.Io.File.WriteError!usize {
-        return file.write(bytes);
-    }
-}.write);
-
 /// Prints debug information about all nodes and scratch buffers in the store.
 pub fn debug(store: *NodeStore) void {
     if (comptime builtin.target.os.tag != .freestanding) {
-        const stderr_writer: StderrWriter = .{ .context = std.Io.File.stderr() };
-        store.debugTo(stderr_writer.any()) catch {};
+        var buf: [4096]u8 = undefined;
+        var stderr_writer = std.Io.File.stderr().writer(std.Options.debug_io, &buf);
+        store.debugTo(&stderr_writer.interface) catch {};
     }
 }
 
 /// Writes debug information about all nodes and scratch buffers to the given writer.
-pub fn debugTo(store: *NodeStore, writer: std.io.AnyWriter) !void {
+pub fn debugTo(store: *NodeStore, writer: *std.Io.Writer) !void {
     try writer.print("\n==> IR.NodeStore DEBUG <==\n", .{});
     try writer.print("Nodes:\n", .{});
     var nodes_iter = store.nodes.iterIndices();

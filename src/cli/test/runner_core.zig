@@ -39,19 +39,23 @@ pub const TestStats = struct {
 
 fn createIsolatedTestCacheDir(allocator: Allocator) ![]u8 {
     const cache_dir_id = next_cache_dir_id.fetchAdd(1, .monotonic);
+    // Get a nanosecond timestamp for uniqueness across runs
+    var ts: std.c.timespec = undefined;
+    _ = std.c.clock_gettime(.MONOTONIC, &ts);
+    const nano_ts: u64 = @intCast(ts.sec * std.time.ns_per_s + ts.nsec);
     const cache_leaf = try std.fmt.allocPrint(allocator, "{d}-{d}", .{
-        @as(u64, @intCast(std.time.nanoTimestamp())),
+        nano_ts,
         cache_dir_id,
     });
     defer allocator.free(cache_leaf);
 
-    const cwd_path = try std.Io.Dir.cwd().realpathAlloc(allocator, ".");
+    const cwd_path = try std.Io.Dir.cwd().realPathFileAlloc(run_io, ".", allocator);
     defer allocator.free(cwd_path);
 
     const cache_rel = try std.fs.path.join(allocator, &.{ ".zig-cache", "roc-test-cache", cache_leaf });
     defer allocator.free(cache_rel);
 
-    std.Io.Dir.cwd().createDirPath(cache_rel) catch |err| switch (err) {
+    std.Io.Dir.cwd().createDirPath(run_io, cache_rel) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
     };
@@ -59,8 +63,12 @@ fn createIsolatedTestCacheDir(allocator: Allocator) ![]u8 {
     return std.fs.path.join(allocator, &.{ cwd_path, cache_rel });
 }
 
+const run_io = std.Options.debug_io;
+
 fn runRocChild(allocator: Allocator, argv: []const []const u8) !std.process.RunResult {
-    var env_map = try std.process.getEnvMap(allocator);
+    const env_ptr: [*:null]const ?[*:0]const u8 = @ptrCast(std.c.environ);
+    const environ: std.process.Environ = .{ .block = .{ .slice = std.mem.sliceTo(env_ptr, null) } };
+    var env_map = try environ.createMap(allocator);
     defer env_map.deinit();
 
     // Give every child build/run its own persistent cache root so test runner processes
@@ -69,10 +77,9 @@ fn runRocChild(allocator: Allocator, argv: []const []const u8) !std.process.RunR
     defer allocator.free(cache_dir);
     try env_map.put("ROC_CACHE_DIR", cache_dir);
 
-    return std.process.run(.{
-        .allocator = allocator,
+    return std.process.run(allocator, run_io, .{
         .argv = argv,
-        .env_map = &env_map,
+        .environ_map = &env_map,
     });
 }
 
@@ -168,8 +175,7 @@ pub fn runNative(
     allocator: Allocator,
     exe_path: []const u8,
 ) !TestResult {
-    const result = std.process.run(.{
-        .allocator = allocator,
+    const result = std.process.run(allocator, run_io, .{
         .argv = &[_][]const u8{exe_path},
     }) catch |err| {
         std.debug.print("FAIL (spawn error: {})\n", .{err});
@@ -186,7 +192,7 @@ pub fn runNative(
     }
 
     switch (result.term) {
-        .Exited => |code| {
+        .exited => |code| {
             if (code == 0) {
                 std.debug.print("OK\n", .{});
                 // Print first few lines of output
@@ -202,7 +208,7 @@ pub fn runNative(
                 return .failed;
             }
         },
-        .Signal => |sig| {
+        .signal => |sig| {
             std.debug.print("FAIL (signal {d})\n", .{sig});
             return .failed;
         },
@@ -251,7 +257,7 @@ pub fn runWithIoSpec(
     }
 
     switch (result.term) {
-        .Exited => |code| {
+        .exited => |code| {
             if (code == 0) {
                 std.debug.print("OK\n", .{});
                 return .passed;
@@ -263,7 +269,7 @@ pub fn runWithIoSpec(
                 return .failed;
             }
         },
-        .Signal => |sig| {
+        .signal => |sig| {
             std.debug.print("FAIL (signal {d})\n", .{sig});
             return .failed;
         },
@@ -298,8 +304,7 @@ fn runWithIoSpecBuildAndExec(
     const exe_path = try std.fmt.allocPrint(allocator, "./{s}", .{output_name});
     defer allocator.free(exe_path);
 
-    const result = std.process.run(.{
-        .allocator = allocator,
+    const result = std.process.run(allocator, run_io, .{
         .argv = &[_][]const u8{
             exe_path,
             "--test",
@@ -324,7 +329,7 @@ fn runWithIoSpecBuildAndExec(
     }
 
     switch (result.term) {
-        .Exited => |code| {
+        .exited => |code| {
             if (code == 0) {
                 std.debug.print("OK\n", .{});
                 return .passed;
@@ -336,7 +341,7 @@ fn runWithIoSpecBuildAndExec(
                 return .failed;
             }
         },
-        .Signal => |sig| {
+        .signal => |sig| {
             std.debug.print("FAIL (signal {d})\n", .{sig});
             return .failed;
         },
@@ -373,7 +378,7 @@ pub fn runWithValgrind(
     defer allocator.free(result.stderr);
 
     switch (result.term) {
-        .Exited => |code| {
+        .exited => |code| {
             if (code == 0) {
                 std.debug.print("OK\n", .{});
                 return .passed;
@@ -385,7 +390,7 @@ pub fn runWithValgrind(
                 return .failed;
             }
         },
-        .Signal => |sig| {
+        .signal => |sig| {
             std.debug.print("FAIL (signal {d})\n", .{sig});
             return .failed;
         },
@@ -405,7 +410,7 @@ pub fn verifyPlatformFiles(
     const libhost_path = try std.fmt.allocPrint(allocator, "{s}/platform/targets/{s}/libhost.a", .{ platform_dir, target });
     defer allocator.free(libhost_path);
 
-    if (std.Io.Dir.cwd().access(libhost_path, .{})) |_| {
+    if (std.Io.Dir.cwd().access(std.Options.debug_io, libhost_path, .{})) |_| {
         return true;
     } else |_| {
         return false;
@@ -427,7 +432,7 @@ pub fn shouldSkipTarget(target: []const u8) bool {
 
 /// Clean up a generated file.
 pub fn cleanup(path: []const u8) void {
-    std.Io.Dir.cwd().deleteFile(path) catch {};
+    std.Io.Dir.cwd().deleteFile(run_io, path) catch {};
 }
 
 /// Print a section header.
@@ -484,10 +489,10 @@ fn handleProcessResult(result: std.process.RunResult, output_name: []const u8) T
     }
 
     switch (result.term) {
-        .Exited => |code| {
+        .exited => |code| {
             if (code == 0) {
                 // Verify executable was created
-                if (std.Io.Dir.cwd().access(output_name, .{})) |_| {
+                if (std.Io.Dir.cwd().access(run_io, output_name, .{})) |_| {
                     std.debug.print("OK\n", .{});
                     // Clean up
                     cleanup(output_name);
@@ -504,7 +509,7 @@ fn handleProcessResult(result: std.process.RunResult, output_name: []const u8) T
                 return .failed;
             }
         },
-        .Signal => |sig| {
+        .signal => |sig| {
             std.debug.print("FAIL (signal {d})\n", .{sig});
             return .failed;
         },
@@ -524,10 +529,10 @@ fn handleProcessResultNoCleanup(result: std.process.RunResult, output_name: []co
     }
 
     switch (result.term) {
-        .Exited => |code| {
+        .exited => |code| {
             if (code == 0) {
                 // Verify executable was created
-                if (std.Io.Dir.cwd().access(output_name, .{})) |_| {
+                if (std.Io.Dir.cwd().access(run_io, output_name, .{})) |_| {
                     std.debug.print("OK\n", .{});
                     // Don't clean up - caller will handle
                     return .passed;
@@ -543,7 +548,7 @@ fn handleProcessResultNoCleanup(result: std.process.RunResult, output_name: []co
                 return .failed;
             }
         },
-        .Signal => |sig| {
+        .signal => |sig| {
             std.debug.print("FAIL (signal {d})\n", .{sig});
             return .failed;
         },

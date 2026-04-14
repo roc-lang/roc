@@ -87,23 +87,24 @@ const RenderContext = struct {
 /// Creates directories and writes all files under `output_dir_path`.
 pub fn renderPackageDocs(
     gpa: Allocator,
+    io: std.Io,
     package_docs: *const DocModel.PackageDocs,
     output_dir_path: []const u8,
 ) !void {
     // Ensure the output directory exists
-    std.Io.Dir.cwd().createDirPath(output_dir_path) catch |err| switch (err) {
+    std.Io.Dir.cwd().createDirPath(io, output_dir_path) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
     };
 
-    var output_dir = try std.Io.Dir.cwd().openDir(output_dir_path, .{});
-    defer output_dir.close();
+    var output_dir = try std.Io.Dir.cwd().openDir(io, output_dir_path, .{});
+    defer output_dir.close(io);
 
     var ctx = RenderContext.init(package_docs, gpa);
     defer ctx.deinit(gpa);
 
     // Write static assets
-    try writeStaticAssets(output_dir);
+    try writeStaticAssets(io, output_dir);
 
     if (package_docs.modules.len == 1) {
         // Single module: write module content directly to root index.html
@@ -111,33 +112,33 @@ pub fn renderPackageDocs(
         const mod = &package_docs.modules[0];
         ctx.current_module = mod.name;
         ctx.current_module_entries = mod.entries;
-        try writeModulePageToDir(&ctx, gpa, output_dir, mod, "");
+        try writeModulePageToDir(&ctx, gpa, io, output_dir, mod, "");
         ctx.current_module = null;
         ctx.current_module_entries = null;
     } else {
         // Multiple modules: write package index and per-module pages
-        try writePackageIndex(&ctx, gpa, output_dir);
+        try writePackageIndex(&ctx, gpa, io, output_dir);
 
         for (package_docs.modules) |*mod| {
             ctx.current_module = mod.name;
             ctx.current_module_entries = mod.entries;
-            try writeModulePage(&ctx, gpa, output_dir, mod);
+            try writeModulePage(&ctx, gpa, io, output_dir, mod);
         }
         ctx.current_module = null;
         ctx.current_module_entries = null;
     }
 }
 
-fn writeStaticAssets(dir: std.Io.Dir) !void {
-    try dir.writeFile(.{ .sub_path = "styles.css", .data = embedded_css });
-    try dir.writeFile(.{ .sub_path = "search.js", .data = embedded_js });
+fn writeStaticAssets(io: std.Io, dir: std.Io.Dir) !void {
+    try dir.writeFile(io, .{ .sub_path = "styles.css", .data = embedded_css });
+    try dir.writeFile(io, .{ .sub_path = "search.js", .data = embedded_js });
 }
 
-fn writePackageIndex(ctx: *const RenderContext, gpa: Allocator, dir: std.Io.Dir) !void {
-    const file = try dir.createFile("index.html", .{});
-    defer file.close();
+fn writePackageIndex(ctx: *const RenderContext, gpa: Allocator, io: std.Io, dir: std.Io.Dir) !void {
+    const file = try dir.createFile(io, "index.html", .{});
+    defer file.close(io);
     var buf: [4096]u8 = undefined;
-    var bw = file.writer(&buf);
+    var bw = file.writer(io, &buf);
     const w = &bw.interface;
 
     var index_title_buf: [256]u8 = undefined;
@@ -169,26 +170,26 @@ fn writePackageIndex(ctx: *const RenderContext, gpa: Allocator, dir: std.Io.Dir)
     try bw.interface.flush();
 }
 
-fn writeModulePage(ctx: *const RenderContext, gpa: Allocator, dir: std.Io.Dir, mod: *const DocModel.ModuleDocs) !void {
+fn writeModulePage(ctx: *const RenderContext, gpa: Allocator, io: std.Io, dir: std.Io.Dir, mod: *const DocModel.ModuleDocs) !void {
     // Create module subdirectory
-    dir.makeDir(mod.name) catch |err| switch (err) {
+    dir.createDirPath(io, mod.name) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
     };
 
-    var sub_dir = try dir.openDir(mod.name, .{});
-    defer sub_dir.close();
+    var sub_dir = try dir.openDir(io, mod.name, .{});
+    defer sub_dir.close(io);
 
-    try writeModulePageToDir(ctx, gpa, sub_dir, mod, "../");
+    try writeModulePageToDir(ctx, gpa, io, sub_dir, mod, "../");
 }
 
 /// Write a module's documentation page as index.html in the given directory.
 /// `base` is the relative path prefix for static assets (e.g. "" for root, "../" for subdirs).
-fn writeModulePageToDir(ctx: *const RenderContext, gpa: Allocator, dir: std.fs.Dir, mod: *const DocModel.ModuleDocs, base: []const u8) !void {
-    const file = try dir.createFile("index.html", .{});
-    defer file.close();
+fn writeModulePageToDir(ctx: *const RenderContext, gpa: Allocator, io: std.Io, dir: std.Io.Dir, mod: *const DocModel.ModuleDocs, base: []const u8) !void {
+    const file = try dir.createFile(io, "index.html", .{});
+    defer file.close(io);
     var buf: [4096]u8 = undefined;
-    var bw = file.writer(&buf);
+    var bw = file.writer(io, &buf);
     const w = &bw.interface;
 
     var title_buf: [256]u8 = undefined;
