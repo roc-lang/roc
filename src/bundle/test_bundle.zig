@@ -319,8 +319,8 @@ test "empty directories are preserved" {
     const src_dir = src_tmp.dir;
 
     // Create empty directories
-    try src_dir.makePath("empty_dir");
-    try src_dir.makePath("nested/empty");
+    try src_dir.createDirPath("empty_dir");
+    try src_dir.createDirPath("nested/empty");
 
     // Create one file to ensure bundle isn't empty
     {
@@ -380,7 +380,7 @@ test "bundle and unbundle roundtrip" {
         try file.writeAll("This is file2 content.");
     }
 
-    try src_dir.makePath("subdir1");
+    try src_dir.createDirPath("subdir1");
     {
         const file = try src_dir.createFile("subdir1/nested1.txt", .{});
         defer file.close();
@@ -392,7 +392,7 @@ test "bundle and unbundle roundtrip" {
         try file.writeAll("Another nested file");
     }
 
-    try src_dir.makePath("subdir2/deeply/nested");
+    try src_dir.createDirPath("subdir2/deeply/nested");
     {
         const file = try src_dir.createFile("subdir2/deeply/nested/deep.txt", .{});
         defer file.close();
@@ -476,7 +476,7 @@ test "bundle and unbundle over socket stream" {
         try file.writeAll("This is socket test file 2!");
     }
 
-    try src_dir.makePath("nested");
+    try src_dir.createDirPath("nested");
     {
         const file = try src_dir.createFile("nested/deep.txt", .{});
         defer file.close();
@@ -692,8 +692,8 @@ test "bundle with path prefix stripping" {
     const src_dir = src_tmp.dir;
 
     // Create a deep directory structure
-    try src_dir.makePath("foo/bar/src");
-    try src_dir.makePath("foo/bar/src/utils");
+    try src_dir.createDirPath("foo/bar/src");
+    try src_dir.createDirPath("foo/bar/src/utils");
 
     // Create test files with the prefix
     {
@@ -870,7 +870,7 @@ test "unbundle with existing directory error" {
     const dir_name = filename[0 .. filename.len - 8]; // Remove .tar.zst
 
     // Create a directory with the same name
-    try tmp_dir.makePath(dir_name);
+    try tmp_dir.createDirPath(dir_name);
 
     // Try to unbundle - should fail because directory exists
     const bundle_file = try tmp_dir.openFile(filename, .{});
@@ -1058,7 +1058,7 @@ test "double roundtrip bundle -> unbundle -> bundle -> unbundle" {
     // Create all test files
     for (test_files) |test_file| {
         if (std.fs.path.dirname(test_file.path)) |dir| {
-            try initial_dir.makePath(dir);
+            try initial_dir.createDirPath(dir);
         }
         const file = try initial_dir.createFile(test_file.path, .{});
         defer file.close();
@@ -1414,7 +1414,7 @@ test "download from local server" {
         try file.writeAll("# Test Project\n\nThis is a test README.");
     }
     {
-        try tmp.dir.makePath("src");
+        try tmp.dir.createDirPath("src");
         const file = try tmp.dir.createFile("src/main.roc", .{});
         defer file.close();
         try file.writeAll("app \"test\"\n    packages {}\n    imports []\n    provides [main] to pf\n\nmain = \"Hello!\"");
@@ -1589,7 +1589,7 @@ test "unbundleStream with BufferExtractWriter (WASM simulation)" {
         try file.writeAll("app \"hello\" provides [main] to \"./platform\"\n\nmain = \"Hello!\"\n");
     }
     {
-        try src_dir.makePath("platform");
+        try src_dir.createDirPath("platform");
         const file = try src_dir.createFile("platform/main.roc", .{});
         defer file.close();
         try file.writeAll("platform \"test\" requires { main : Str }\n");

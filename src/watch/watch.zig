@@ -1499,7 +1499,7 @@ test "windows long path handling" {
             try current_path.append(allocator, std.fs.path.sep);
         }
         try current_path.appendSlice(allocator, component);
-        try temp_dir.dir.makePath(current_path.items);
+        try temp_dir.dir.createDirPath(current_path.items);
     }
 
     // Open the deepest directory

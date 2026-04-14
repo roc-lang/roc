@@ -3327,7 +3327,7 @@ test "issue 9281: dev evaluator stack overflow with nested recursive opaque type
     defer test_allocator.free(platform_header_path);
     std.mem.replaceScalar(u8, platform_header_path, '\\', '/');
 
-    try tmp_dir.dir.makePath("pkg");
+    try tmp_dir.dir.createDirPath("pkg");
     try tmp_dir.dir.writeFile(.{
         .sub_path = "pkg/main.roc",
         .data = "package [Inner, Outer] {}\n",

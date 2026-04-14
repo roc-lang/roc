@@ -51,7 +51,7 @@ fn createIsolatedTestCacheDir(allocator: Allocator) ![]u8 {
     const cache_rel = try std.fs.path.join(allocator, &.{ ".zig-cache", "roc-test-cache", cache_leaf });
     defer allocator.free(cache_rel);
 
-    std.Io.Dir.cwd().makePath(cache_rel) catch |err| switch (err) {
+    std.Io.Dir.cwd().createDirPath(cache_rel) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
     };

@@ -91,7 +91,7 @@ pub fn renderPackageDocs(
     output_dir_path: []const u8,
 ) !void {
     // Ensure the output directory exists
-    std.Io.Dir.cwd().makePath(output_dir_path) catch |err| switch (err) {
+    std.Io.Dir.cwd().createDirPath(output_dir_path) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
     };

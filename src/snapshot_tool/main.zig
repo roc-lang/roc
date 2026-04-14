@@ -751,7 +751,7 @@ pub fn main() !void {
 
     if (config.maybe_fuzz_corpus_path != null) {
         log("copying SOURCE from snapshots to: {s}", .{config.maybe_fuzz_corpus_path.?});
-        try std.Io.Dir.cwd().makePath(config.maybe_fuzz_corpus_path.?);
+        try std.Io.Dir.cwd().createDirPath(config.maybe_fuzz_corpus_path.?);
     }
     const snapshots_dir = "test/snapshots";
 
@@ -3640,7 +3640,7 @@ fn processDocsSnapshot(
         @as(u64, @intCast(@intFromPtr(output_path.ptr))),
     }) catch return false;
 
-    std.Io.Dir.cwd().makePath(tmp_dir_name) catch |err| {
+    std.Io.Dir.cwd().createDirPath(tmp_dir_name) catch |err| {
         std.log.err("Failed to create temp directory {s}: {}", .{ tmp_dir_name, err });
         return false;
     };
@@ -3945,7 +3945,7 @@ fn processDevObjectSnapshot(
         @as(u64, @intCast(@intFromPtr(output_path.ptr))),
     }) catch return false;
 
-    std.Io.Dir.cwd().makePath(tmp_dir_name) catch |err| {
+    std.Io.Dir.cwd().createDirPath(tmp_dir_name) catch |err| {
         std.log.err("Failed to create temp directory {s}: {}", .{ tmp_dir_name, err });
         return false;
     };

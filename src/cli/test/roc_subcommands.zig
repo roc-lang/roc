@@ -663,7 +663,7 @@ test "roc build --opt=dev executable runs correctly for test/int/app.roc" {
 
     const cache_path = try std.fs.path.join(gpa, &.{ tmp_path, "xdg-cache" });
     defer gpa.free(cache_path);
-    try tmp_dir.dir.makePath("xdg-cache");
+    try tmp_dir.dir.createDirPath("xdg-cache");
 
     const output_arg = try std.fmt.allocPrint(gpa, "--output={s}", .{output_path});
     defer gpa.free(output_arg);

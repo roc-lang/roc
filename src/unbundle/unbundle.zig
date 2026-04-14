@@ -137,7 +137,7 @@ pub const DirExtractWriter = struct {
 
         // Ensure parent directories exist
         if (std.fs.path.dirname(path)) |parent| {
-            self.dir.makePath(parent) catch return error.FileCreateFailed;
+            self.dir.createDirPath(parent) catch return error.FileCreateFailed;
         }
 
         const file = self.dir.createFile(path, .{}) catch return error.FileCreateFailed;
@@ -176,7 +176,7 @@ pub const DirExtractWriter = struct {
 
     fn makeDir(ptr: *anyopaque, path: []const u8) ExtractWriter.MakeDirError!void {
         const self: *DirExtractWriter = @ptrCast(@alignCast(ptr));
-        self.dir.makePath(path) catch return error.DirectoryCreateFailed;
+        self.dir.createDirPath(path) catch return error.DirectoryCreateFailed;
     }
 };
 

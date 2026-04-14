@@ -61,7 +61,7 @@ fn handleRocStackOverflow() noreturn {
         @trap();
     } else if (comptime builtin.os.tag != .wasi) {
         _ = posix.write(posix.STDERR_FILENO, STACK_OVERFLOW_MESSAGE) catch {};
-        posix.exit(134);
+        std.process.exit(134);
     } else {
         std.process.exit(134);
     }
@@ -100,7 +100,7 @@ fn handleRocAccessViolation(fault_addr: usize) noreturn {
         const addr_str = builtins.handlers.formatHex(fault_addr, &addr_buf);
         _ = posix.write(posix.STDERR_FILENO, addr_str) catch {};
         _ = posix.write(posix.STDERR_FILENO, "\n\n") catch {};
-        posix.exit(139);
+        std.process.exit(139);
     }
 }
 
@@ -126,7 +126,7 @@ fn handleRocArithmeticError() noreturn {
         kernel32.ExitProcess(136);
     } else if (comptime builtin.os.tag != .wasi) {
         _ = posix.write(posix.STDERR_FILENO, DIVISION_BY_ZERO_MESSAGE) catch {};
-        posix.exit(136); // 128 + 8 (SIGFPE)
+        std.process.exit(136); // 128 + 8 (SIGFPE)
     } else {
         std.process.exit(136);
     }
@@ -882,7 +882,7 @@ fn platform_main(args: [][*:0]u8) !c_int {
             };
 
             // Create output directory if needed
-            std.Io.Dir.cwd().makePath(out_dir) catch |err| {
+            std.Io.Dir.cwd().createDirPath(out_dir) catch |err| {
                 stderr.writeAll("Error: Could not create output directory: ") catch {};
                 var err_buf: [256]u8 = undefined;
                 const err_msg = std.fmt.bufPrint(&err_buf, "{}\n", .{err}) catch "unknown error\n";

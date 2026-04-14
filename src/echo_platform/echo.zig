@@ -174,7 +174,7 @@ fn echoCanonicalize(ctx_ptr: ?*anyopaque, path: []const u8, gpa: Allocator) Io.C
     return echoGetCtx(ctx_ptr).fallback.canonicalize(path, gpa);
 }
 fn echoMakePath(ctx_ptr: ?*anyopaque, path: []const u8) Io.MakePathError!void {
-    return echoGetCtx(ctx_ptr).fallback.makePath(path);
+    return echoGetCtx(ctx_ptr).fallback.createDirPath(path);
 }
 fn echoRename(ctx_ptr: ?*anyopaque, old: []const u8, new: []const u8) Io.RenameError!void {
     return echoGetCtx(ctx_ptr).fallback.rename(old, new);

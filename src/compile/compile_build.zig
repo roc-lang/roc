@@ -1668,7 +1668,7 @@ pub const BuildEnv = struct {
             std.log.info("Downloading package from {s}...", .{url});
 
             // Create cache directory structure
-            std.Io.Dir.cwd().makePath(cache_dir_path) catch |make_err| {
+            std.Io.Dir.cwd().createDirPath(cache_dir_path) catch |make_err| {
                 std.log.err("Failed to create cache directory: {}", .{make_err});
                 return error.FileError;
             };

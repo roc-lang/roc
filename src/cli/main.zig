@@ -453,7 +453,7 @@ pub fn createUniqueTempDir(ctx: *CliContext) ![]const u8 {
 
     // Ensure the roc/{version} directory exists
     // makePath automatically handles PathAlreadyExists internally
-    try std.Io.Dir.cwd().makePath(version_temp_dir);
+    try std.Io.Dir.cwd().createDirPath(version_temp_dir);
 
     // Try to create a unique subdirectory with random suffix
     var attempt: u8 = 0;
@@ -516,7 +516,7 @@ pub fn createTempDirStructure(allocs: *Allocators, exe_path: []const u8, exe_dis
 
     // Ensure the roc/{version} directory exists
     // makePath automatically handles PathAlreadyExists internally
-    try std.Io.Dir.cwd().makePath(version_temp_dir);
+    try std.Io.Dir.cwd().createDirPath(version_temp_dir);
 
     // Try to create a unique subdirectory with random suffix
     var attempt: u8 = 0;
@@ -893,7 +893,7 @@ fn generatePlatformHostShim(ctx: *CliContext, cache_dir: []const u8, entrypoint_
 fn ensureCompilerCacheDirExists(path: []const u8) !void {
     // This helper is only for compiler-owned internal cache directories.
     // User-facing output paths should still fail normally if the parent directory is missing.
-    std.Io.Dir.cwd().makePath(path) catch |err| switch (err) {
+    std.Io.Dir.cwd().createDirPath(path) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
     };
@@ -4998,7 +4998,7 @@ fn dumpLinkerInputs(ctx: *CliContext, link_config: linker.LinkConfig) !void {
     const dir_name = try std.fmt.allocPrint(ctx.arena, "roc-linker-debug-{d}", .{timestamp});
     const dump_dir = try std.fs.path.join(ctx.arena, &.{ "/tmp", dir_name });
 
-    std.Io.Dir.cwd().makePath(dump_dir) catch |err| {
+    std.Io.Dir.cwd().createDirPath(dump_dir) catch |err| {
         try stderr.print("Failed to create debug dump directory '{s}': {}\n", .{ dump_dir, err });
         return err;
     };
@@ -7208,7 +7208,7 @@ fn generateDocs(
     try std.fs.cwd().deleteTree(base_output_dir);
 
     // Create output directory
-    std.Io.Dir.cwd().makePath(base_output_dir) catch |err| switch (err) {
+    std.Io.Dir.cwd().createDirPath(base_output_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
     };

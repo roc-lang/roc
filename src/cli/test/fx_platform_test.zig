@@ -39,7 +39,7 @@ fn runDevBackendHostSelfTest(
 
     const cache_path = try std.fs.path.join(allocator, &.{ tmp_path, "roc-cache" });
     defer allocator.free(cache_path);
-    try tmp_dir.dir.makePath("roc-cache");
+    try tmp_dir.dir.createDirPath("roc-cache");
 
     const output_arg = try std.fmt.allocPrint(allocator, "--output={s}", .{output_path});
     defer allocator.free(output_arg);

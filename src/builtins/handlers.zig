@@ -226,9 +226,9 @@ fn handleSegvSignal(_: i32, info: *const posix.siginfo_t, _: ?*anyopaque) callco
 
     // If no callback was set, exit with appropriate code
     if (likely_stack_overflow) {
-        posix.exit(134); // 128 + 6 (SIGABRT-like)
+        std.process.exit(134); // 128 + 6 (SIGABRT-like)
     } else {
-        posix.exit(139); // 128 + 11 (SIGSEGV)
+        std.process.exit(139); // 128 + 11 (SIGSEGV)
     }
 }
 
@@ -239,7 +239,7 @@ fn handleFpeSignal(_: i32, _: *const posix.siginfo_t, _: ?*anyopaque) callconv(.
     }
 
     // If no callback was set, exit with SIGFPE code
-    posix.exit(136); // 128 + 8 (SIGFPE)
+    std.process.exit(136); // 128 + 8 (SIGFPE)
 }
 
 /// Get the fault address from siginfo_t (platform-specific)

@@ -467,7 +467,7 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
     }
 
     // Create output directory if needed
-    std.Io.Dir.cwd().makePath(args.output_dir) catch {
+    std.Io.Dir.cwd().createDirPath(args.output_dir) catch {
         stderr.print("Error: Could not create output directory: {s}\n", .{args.output_dir}) catch {};
         return error.CompilationFailed;
     };

@@ -43,7 +43,7 @@ fn handleStackOverflow() noreturn {
     } else if (comptime builtin.os.tag != .freestanding) {
         // POSIX: use direct write syscall for signal-safety
         _ = posix.write(posix.STDERR_FILENO, STACK_OVERFLOW_MESSAGE) catch {};
-        posix.exit(134);
+        std.process.exit(134);
     } else {
         // WASI fallback
         std.process.exit(134);
@@ -72,7 +72,7 @@ fn handleArithmeticError() noreturn {
         kernel32.ExitProcess(136);
     } else if (comptime builtin.os.tag != .freestanding) {
         _ = posix.write(posix.STDERR_FILENO, ARITHMETIC_ERROR_MESSAGE) catch {};
-        posix.exit(136); // 128 + 8 (SIGFPE)
+        std.process.exit(136); // 128 + 8 (SIGFPE)
     } else {
         std.process.exit(136);
     }
@@ -112,7 +112,7 @@ fn handleAccessViolation(fault_addr: usize) noreturn {
         const addr_str = handlers.formatHex(fault_addr, &addr_buf);
         _ = posix.write(posix.STDERR_FILENO, addr_str) catch {};
         _ = posix.write(posix.STDERR_FILENO, "\n\nPlease report this issue at: https://github.com/roc-lang/roc/issues\n\n") catch {};
-        posix.exit(139);
+        std.process.exit(139);
     }
 }
 
@@ -212,7 +212,7 @@ fn testStackOverflowPosix() !void {
         posix.close(pipe_read);
 
         // Redirect stderr to the pipe
-        posix.dup2(pipe_write, posix.STDERR_FILENO) catch posix.exit(99);
+        posix.dup2(pipe_write, posix.STDERR_FILENO) catch std.process.exit(99);
         posix.close(pipe_write);
 
         // Install the handler and trigger stack overflow

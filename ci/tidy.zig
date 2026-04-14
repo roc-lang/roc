@@ -516,7 +516,7 @@ fn tidyMarkdownTitle(file: SourceFile, errors: *Errors) void {
 const DeadFilesDetector = struct {
     const FileName = [64]u8;
     const FileState = struct { import_count: u32, definition_count: u32 };
-    const FileMap = std.AutoArrayHashMap(FileName, FileState);
+    const FileMap = std.AutoArrayHashMapUnmanaged(FileName, FileState);
 
     files: FileMap,
 

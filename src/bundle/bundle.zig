@@ -526,7 +526,7 @@ pub const DirExtractWriter = struct {
 
     fn makeDir(ptr: *anyopaque, path: []const u8) anyerror!void {
         const self = @as(*DirExtractWriter, @ptrCast(@alignCast(ptr)));
-        try self.dir.makePath(path);
+        try self.dir.createDirPath(path);
     }
 
     fn streamFile(ptr: *anyopaque, path: []const u8, reader: *std.Io.Reader, size: usize) anyerror!void {
@@ -534,7 +534,7 @@ pub const DirExtractWriter = struct {
 
         // Create parent directories if needed
         if (std.fs.path.dirname(path)) |dir_name| {
-            try self.dir.makePath(dir_name);
+            try self.dir.createDirPath(dir_name);
         }
 
         const file = try self.dir.createFile(path, .{});

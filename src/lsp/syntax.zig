@@ -1371,7 +1371,7 @@ pub const SyntaxChecker = struct {
             } else |_| {
                 // Create parent dirs and write embedded source
                 if (std.fs.path.dirname(builtin_cache_path)) |dir| {
-                    std.Io.Dir.cwd().makePath(dir) catch {};
+                    std.Io.Dir.cwd().createDirPath(dir) catch {};
                 }
                 const file = std.Io.Dir.cwd().createFile(builtin_cache_path, .{}) catch {
                     self.allocator.free(builtin_cache_path);

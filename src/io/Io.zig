@@ -103,7 +103,7 @@ pub fn canonicalize(self: Self, path: []const u8, allocator: Allocator) Canonica
 
 /// Create all directories in `path` recursively (like `mkdir -p`).
 pub fn makePath(self: Self, path: []const u8) MakePathError!void {
-    return self.vtable.makePath(self.ctx, path);
+    return self.vtable.createDirPath(self.ctx, path);
 }
 
 /// Atomically rename `old_path` to `new_path`.
@@ -482,7 +482,7 @@ fn osCanonicalize(_: ?*anyopaque, path: []const u8, allocator: Allocator) Canoni
 }
 
 fn osMakePath(_: ?*anyopaque, path: []const u8) MakePathError!void {
-    std.Io.Dir.cwd().makePath(path) catch |err| return switch (err) {
+    std.Io.Dir.cwd().createDirPath(path) catch |err| return switch (err) {
         error.AccessDenied => error.AccessDenied,
         else => error.IoError,
     };
@@ -724,7 +724,7 @@ test "freestanding stubs return expected errors" {
     try std.testing.expect(!fs.fileExists("x"));
     try std.testing.expectError(error.FileNotFound, fs.stat("x"));
     try std.testing.expectError(error.FileNotFound, fs.listDir("x", std.testing.allocator));
-    try std.testing.expectError(error.AccessDenied, fs.makePath("x"));
+    try std.testing.expectError(error.AccessDenied, fs.createDirPath("x"));
     try std.testing.expectError(error.AccessDenied, fs.rename("x", "y"));
     try std.testing.expectError(error.IoError, fs.writeStdout("hi"));
     try std.testing.expectError(error.IoError, fs.writeStderr("hi"));
