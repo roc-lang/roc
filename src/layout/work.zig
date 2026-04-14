@@ -203,8 +203,8 @@ pub const Work = struct {
         self.resolved_tuple_fields.deinit(allocator);
         self.pending_tag_union_variants.deinit(allocator);
         self.resolved_tag_union_variants.deinit(allocator);
-        self.in_progress_vars.deinit();
-        self.in_progress_nominals.deinit();
+        self.in_progress_vars.deinit(allocator);
+        self.in_progress_nominals.deinit(allocator);
     }
 
     // NOTE: We do NOT have a clearRetainingCapacity function because all work fields
